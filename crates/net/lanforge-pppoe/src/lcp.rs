@@ -1,7 +1,9 @@
 use crate::config::AuthMethod;
 use crate::error::PppoeError;
 use crate::session::PppoeSession;
+use rand::random;
 use std::time::Duration;
+use tokio::time::{timeout, Instant};
 use tracing::debug;
 
 pub const PPP_LCP: u16 = 0xc021;
@@ -22,44 +24,43 @@ pub const LCP_OPT_MRU: u8 = 1;
 pub const LCP_OPT_AUTH: u8 = 3;
 pub const LCP_OPT_MAGIC: u8 = 5;
 
-#[derive(Debug, Clone)]
-pub struct LcpOption {
+#[derive(Debug, Clone, Copy)]
+pub struct LcpOption<'a> {
     pub opt_type: u8,
-    pub data: Vec<u8>,
+    pub data: &'a [u8],
 }
 
 #[derive(Debug, Clone)]
-pub struct LcpPacket {
+pub struct LcpPacket<'a> {
     pub code: u8,
     pub id: u8,
-    pub options: Vec<LcpOption>,
+    pub options: Vec<LcpOption<'a>>,
 }
 
-impl LcpPacket {
+impl<'a> LcpPacket<'a> {
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        let mut opts_buf = Vec::new();
-        for opt in &self.options {
-            opts_buf.push(opt.opt_type);
-            #[allow(clippy::cast_possible_truncation)]
-            let len = (opt.data.len() + 2) as u8;
-            opts_buf.push(len);
-            opts_buf.extend_from_slice(&opt.data);
-        }
-
-        let mut pkt = Vec::with_capacity(6 + opts_buf.len());
+        let opts_len: usize = self.options.iter().map(|o| 2 + o.data.len()).sum();
+        let mut pkt = Vec::with_capacity(6 + opts_len);
         pkt.extend_from_slice(&PPP_LCP.to_be_bytes());
         pkt.push(self.code);
         pkt.push(self.id);
         #[allow(clippy::cast_possible_truncation)]
-        let len = (4 + opts_buf.len()) as u16;
+        let len = (4 + opts_len) as u16;
         pkt.extend_from_slice(&len.to_be_bytes());
-        pkt.extend_from_slice(&opts_buf);
+
+        for opt in &self.options {
+            pkt.push(opt.opt_type);
+            #[allow(clippy::cast_possible_truncation)]
+            let l = (opt.data.len() + 2) as u8;
+            pkt.push(l);
+            pkt.extend_from_slice(opt.data);
+        }
         pkt
     }
 
     #[must_use]
-    pub fn parse(bytes: &[u8]) -> Option<Self> {
+    pub fn parse(bytes: &'a [u8]) -> Option<Self> {
         let data = if bytes.len() >= 2 && bytes[0] == 0xff && bytes[1] == 0x03 {
             &bytes[2..]
         } else {
@@ -96,7 +97,7 @@ impl LcpPacket {
 
             options.push(LcpOption {
                 opt_type,
-                data: data[offset + 2..offset + opt_len].to_vec(),
+                data: &data[offset + 2..offset + opt_len],
             });
             offset += opt_len;
         }
@@ -118,7 +119,7 @@ pub async fn negotiate_lcp(
     desired_mru: u16,
     desired_auth: AuthMethod,
 ) -> Result<LcpNegotiated, PppoeError> {
-    let local_magic: u32 = rand::random();
+    let local_magic: u32 = random();
     let mut req_id = 1u8;
 
     let mut my_ack_received = false;
@@ -128,15 +129,17 @@ pub async fn negotiate_lcp(
     let mut negotiated_mru = desired_mru;
     let mut negotiated_auth = AuthMethod::None;
 
-    let mut req_packet = build_conf_req(req_id, desired_mru, local_magic);
+    let mru_bytes = desired_mru.to_be_bytes();
+    let magic_bytes = local_magic.to_be_bytes();
 
+    let mut req_packet = build_conf_req(req_id, &mru_bytes, &magic_bytes);
     session.send_ppp_frame(&req_packet.encode()).await?;
 
-    let timeout = Duration::from_secs(10);
-    let start = tokio::time::Instant::now();
+    let lcp_timeout = Duration::from_secs(10);
+    let start = Instant::now();
     let mut buf = [0u8; 1500];
 
-    while start.elapsed() < timeout {
+    while start.elapsed() < lcp_timeout {
         if my_ack_received && peer_ack_sent {
             debug!(
                 mru = negotiated_mru,
@@ -151,12 +154,11 @@ pub async fn negotiate_lcp(
             });
         }
 
-        let Ok(Ok(n)) =
-            tokio::time::timeout(Duration::from_secs(1), session.recv_ppp_frame(&mut buf)).await
+        let Ok(Ok(n)) = timeout(Duration::from_secs(1), session.recv_ppp_frame(&mut buf)).await
         else {
             // Timeout, retransmit
             req_id = req_id.wrapping_add(1);
-            req_packet = build_conf_req(req_id, negotiated_mru, local_magic);
+            req_packet = build_conf_req(req_id, &mru_bytes, &magic_bytes);
             session.send_ppp_frame(&req_packet.encode()).await?;
             continue;
         };
@@ -185,7 +187,7 @@ pub async fn negotiate_lcp(
                 if packet.id == req_id {
                     handle_conf_nak(&packet, &mut negotiated_mru);
                     req_id = req_id.wrapping_add(1);
-                    req_packet = build_conf_req(req_id, negotiated_mru, local_magic);
+                    req_packet = build_conf_req(req_id, &mru_bytes, &magic_bytes);
                     session.send_ppp_frame(&req_packet.encode()).await?;
                 }
             }
@@ -218,24 +220,24 @@ pub async fn negotiate_lcp(
     Err(PppoeError::LcpFailed("LCP negotiation timed out".into()))
 }
 
-fn build_conf_req(id: u8, mru: u16, local_magic: u32) -> LcpPacket {
+fn build_conf_req<'a>(id: u8, mru_bytes: &'a [u8; 2], magic_bytes: &'a [u8; 4]) -> LcpPacket<'a> {
     LcpPacket {
         code: LCP_CONF_REQ,
         id,
         options: vec![
             LcpOption {
                 opt_type: LCP_OPT_MRU,
-                data: mru.to_be_bytes().to_vec(),
+                data: mru_bytes,
             },
             LcpOption {
                 opt_type: LCP_OPT_MAGIC,
-                data: local_magic.to_be_bytes().to_vec(),
+                data: magic_bytes,
             },
         ],
     }
 }
 
-fn handle_conf_nak(packet: &LcpPacket, negotiated_mru: &mut u16) {
+fn handle_conf_nak(packet: &LcpPacket<'_>, negotiated_mru: &mut u16) {
     for opt in &packet.options {
         if opt.opt_type == LCP_OPT_MRU && opt.data.len() == 2 {
             *negotiated_mru = u16::from_be_bytes([opt.data[0], opt.data[1]]);
@@ -244,72 +246,95 @@ fn handle_conf_nak(packet: &LcpPacket, negotiated_mru: &mut u16) {
 }
 
 async fn handle_conf_req(
-    packet: LcpPacket,
+    packet: LcpPacket<'_>,
     session: &PppoeSession,
     desired_auth: AuthMethod,
     peer_magic: &mut u32,
     negotiated_auth: &mut AuthMethod,
 ) -> Result<bool, PppoeError> {
-    let mut ack_opts = Vec::new();
-    let mut rej_opts = Vec::new();
+    let mut nak_options = Vec::new();
+    let mut rej_options = Vec::new();
+    let mut ack_options = Vec::new();
 
-    for opt in packet.options {
+    for opt in &packet.options {
         match opt.opt_type {
             LCP_OPT_MAGIC => {
                 if opt.data.len() == 4 {
-                    *peer_magic =
-                        u32::from_be_bytes([opt.data[0], opt.data[1], opt.data[2], opt.data[3]]);
-                    ack_opts.push(opt);
-                }
-            }
-            LCP_OPT_AUTH => {
-                if desired_auth == AuthMethod::None {
-                    // Explicitly reject authentication option if auth is disabled
-                    rej_opts.push(opt);
-                } else if opt.data.len() >= 2 {
-                    let proto = u16::from_be_bytes([opt.data[0], opt.data[1]]);
-                    if proto == PPP_PAP && desired_auth == AuthMethod::Pap {
-                        *negotiated_auth = AuthMethod::Pap;
-                        ack_opts.push(opt);
-                    } else if proto == PPP_CHAP
-                        && opt.data.len() >= 3
-                        && opt.data[2] == CHAP_ALG_MD5
-                        && desired_auth == AuthMethod::ChapMd5
-                    {
-                        *negotiated_auth = AuthMethod::ChapMd5;
-                        ack_opts.push(opt);
-                    } else {
-                        rej_opts.push(opt);
-                    }
+                    *peer_magic = u32::from_be_bytes([
+                        opt.data[0],
+                        opt.data[1],
+                        opt.data[2],
+                        opt.data[3],
+                    ]);
+                    ack_options.push(*opt);
                 } else {
-                    rej_opts.push(opt);
+                    rej_options.push(*opt);
                 }
             }
             LCP_OPT_MRU => {
-                ack_opts.push(opt);
+                if opt.data.len() == 2 {
+                    ack_options.push(*opt);
+                } else {
+                    rej_options.push(*opt);
+                }
+            }
+            LCP_OPT_AUTH if opt.data.len() >= 2 => {
+                let proto = u16::from_be_bytes([opt.data[0], opt.data[1]]);
+                if proto == PPP_PAP && desired_auth == AuthMethod::Pap {
+                    *negotiated_auth = AuthMethod::Pap;
+                    ack_options.push(*opt);
+                } else if proto == PPP_CHAP
+                    && opt.data.len() >= 3
+                    && opt.data[2] == CHAP_ALG_MD5
+                    && desired_auth == AuthMethod::ChapMd5
+                {
+                    *negotiated_auth = AuthMethod::ChapMd5;
+                    ack_options.push(*opt);
+                } else if desired_auth == AuthMethod::ChapMd5 {
+                    let chap_nak_data: &'static [u8] = &[0xc2, 0x23, 0x05];
+                    nak_options.push(LcpOption {
+                        opt_type: LCP_OPT_AUTH,
+                        data: chap_nak_data,
+                    });
+                } else if desired_auth == AuthMethod::Pap {
+                    let pap_nak_data: &'static [u8] = &[0xc0, 0x23];
+                    nak_options.push(LcpOption {
+                        opt_type: LCP_OPT_AUTH,
+                        data: pap_nak_data,
+                    });
+                } else {
+                    rej_options.push(*opt);
+                }
             }
             _ => {
-                rej_opts.push(opt);
+                rej_options.push(*opt);
             }
         }
     }
 
-    if rej_opts.is_empty() {
-        let ack = LcpPacket {
-            code: LCP_CONF_ACK,
-            id: packet.id,
-            options: ack_opts,
-        };
-        session.send_ppp_frame(&ack.encode()).await?;
-        debug!("Sent LCP Configure-Ack to peer");
-        Ok(true)
-    } else {
-        let rej = LcpPacket {
+    if !rej_options.is_empty() {
+        let resp = LcpPacket {
             code: LCP_CONF_REJ,
             id: packet.id,
-            options: rej_opts,
+            options: rej_options,
         };
-        session.send_ppp_frame(&rej.encode()).await?;
+        session.send_ppp_frame(&resp.encode()).await?;
         Ok(false)
+    } else if !nak_options.is_empty() {
+        let resp = LcpPacket {
+            code: LCP_CONF_NAK,
+            id: packet.id,
+            options: nak_options,
+        };
+        session.send_ppp_frame(&resp.encode()).await?;
+        Ok(false)
+    } else {
+        let resp = LcpPacket {
+            code: LCP_CONF_ACK,
+            id: packet.id,
+            options: ack_options,
+        };
+        session.send_ppp_frame(&resp.encode()).await?;
+        Ok(true)
     }
 }

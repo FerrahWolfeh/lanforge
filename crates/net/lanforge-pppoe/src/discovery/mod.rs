@@ -1,122 +1,18 @@
+pub mod frame;
+
 use crate::error::PppoeError;
+use frame::{
+    CODE_PADI, CODE_PADO, CODE_PADR, CODE_PADS, CODE_PADT, ETH_P_PPP_DISC, PppoeDiscoveryFrame,
+    Tag, TAG_AC_COOKIE, TAG_AC_NAME, TAG_HOST_UNIQ, TAG_SERVICE_NAME,
+};
 use lanforge_types::identifiers::MacAddr;
 use nix::sys::socket::{AddressFamily, SockFlag, SockProtocol, SockType, socket};
+use std::ffi::CString;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::time::Duration;
 use tokio::io::unix::AsyncFd;
 use tracing::debug;
 
-pub const ETH_P_PPP_DISC: u16 = 0x8863;
-
-pub const CODE_PADI: u8 = 0x09;
-pub const CODE_PADO: u8 = 0x07;
-pub const CODE_PADR: u8 = 0x19;
-pub const CODE_PADS: u8 = 0x65;
-pub const CODE_PADT: u8 = 0xa7;
-
-pub const TAG_SERVICE_NAME: u16 = 0x0101;
-pub const TAG_AC_NAME: u16 = 0x0102;
-pub const TAG_HOST_UNIQ: u16 = 0x0103;
-pub const TAG_AC_COOKIE: u16 = 0x0104;
-
-#[derive(Debug, Clone)]
-pub struct Tag {
-    pub tag_type: u16,
-    pub value: Vec<u8>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PppoeDiscoveryFrame {
-    pub dst_mac: MacAddr,
-    pub src_mac: MacAddr,
-    pub code: u8,
-    pub session_id: u16,
-    pub tags: Vec<Tag>,
-}
-
-impl PppoeDiscoveryFrame {
-    #[must_use]
-    pub fn encode(&self) -> Vec<u8> {
-        let mut payload = Vec::new();
-        for tag in &self.tags {
-            payload.extend_from_slice(&tag.tag_type.to_be_bytes());
-            #[allow(clippy::cast_possible_truncation)]
-            let len = tag.value.len() as u16;
-            payload.extend_from_slice(&len.to_be_bytes());
-            payload.extend_from_slice(&tag.value);
-        }
-
-        let mut packet = Vec::with_capacity(14 + 6 + payload.len());
-        packet.extend_from_slice(&self.dst_mac.0);
-        packet.extend_from_slice(&self.src_mac.0);
-        packet.extend_from_slice(&ETH_P_PPP_DISC.to_be_bytes());
-        packet.push(0x11); // Ver: 1, Type: 1
-        packet.push(self.code);
-        packet.extend_from_slice(&self.session_id.to_be_bytes());
-        #[allow(clippy::cast_possible_truncation)]
-        let payload_len = payload.len() as u16;
-        packet.extend_from_slice(&payload_len.to_be_bytes());
-        packet.extend_from_slice(&payload);
-        packet
-    }
-
-    #[must_use]
-    pub fn parse(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() < 20 {
-            return None;
-        }
-
-        let dst_mac = MacAddr(bytes[0..6].try_into().ok()?);
-        let src_mac = MacAddr(bytes[6..12].try_into().ok()?);
-
-        let ethertype = u16::from_be_bytes([bytes[12], bytes[13]]);
-        if ethertype != ETH_P_PPP_DISC {
-            return None;
-        }
-
-        let ver_type = bytes[14];
-        if ver_type != 0x11 {
-            return None;
-        }
-
-        let code = bytes[15];
-        let session_id = u16::from_be_bytes([bytes[16], bytes[17]]);
-        let payload_len = u16::from_be_bytes([bytes[18], bytes[19]]) as usize;
-
-        if bytes.len() < 20 + payload_len {
-            return None;
-        }
-
-        let mut tags = Vec::new();
-        let mut offset = 20;
-        let end = 20 + payload_len;
-
-        while offset + 4 <= end {
-            let tag_type = u16::from_be_bytes([bytes[offset], bytes[offset + 1]]);
-            let tag_len = u16::from_be_bytes([bytes[offset + 2], bytes[offset + 3]]) as usize;
-            offset += 4;
-
-            if offset + tag_len > end {
-                break;
-            }
-
-            let value = bytes[offset..offset + tag_len].to_vec();
-            offset += tag_len;
-
-            tags.push(Tag { tag_type, value });
-        }
-
-        Some(Self {
-            dst_mac,
-            src_mac,
-            code,
-            session_id,
-            tags,
-        })
-    }
-}
-
-#[derive(Debug)]
 pub struct DiscoveryResult {
     pub ac_mac: MacAddr,
     pub ac_name: Option<String>,
@@ -175,7 +71,7 @@ impl PppoeDiscovery {
             &async_fd,
             self.local_mac,
             ac_mac,
-            ac_cookie,
+            ac_cookie.as_deref(),
             &host_uniq,
             self.service_name.as_deref(),
         )
@@ -232,7 +128,7 @@ async fn exchange_padi(
     service_name: Option<&str>,
     ac_name_filter: Option<&str>,
 ) -> Result<(MacAddr, Option<String>, Option<Vec<u8>>), PppoeError> {
-    let service_name_bytes = service_name.map_or_else(Vec::new, |s| s.as_bytes().to_vec());
+    let service_name_bytes = service_name.map_or_else(|| &[] as &[u8], str::as_bytes);
     let padi_frame = PppoeDiscoveryFrame {
         dst_mac: MacAddr([0xff; 6]),
         src_mac: local_mac,
@@ -245,7 +141,7 @@ async fn exchange_padi(
             },
             Tag {
                 tag_type: TAG_HOST_UNIQ,
-                value: host_uniq.to_vec(),
+                value: host_uniq,
             },
         ],
     };
@@ -285,9 +181,11 @@ async fn exchange_padi(
                             let mut frame_ac_cookie = None;
                             for tag in &frame.tags {
                                 if tag.tag_type == TAG_AC_COOKIE {
-                                    frame_ac_cookie = Some(tag.value.clone());
+                                    frame_ac_cookie = Some(tag.value.to_vec());
                                 } else if tag.tag_type == TAG_AC_NAME {
-                                    frame_ac_name = String::from_utf8(tag.value.clone()).ok();
+                                    frame_ac_name = std::str::from_utf8(tag.value)
+                                        .ok()
+                                        .map(ToString::to_string);
                                 }
                             }
 
@@ -326,11 +224,11 @@ async fn exchange_padr(
     async_fd: &AsyncFd<OwnedFd>,
     local_mac: MacAddr,
     ac_mac: MacAddr,
-    ac_cookie: Option<Vec<u8>>,
+    ac_cookie: Option<&[u8]>,
     host_uniq: &[u8; 4],
     service_name: Option<&str>,
 ) -> Result<u16, PppoeError> {
-    let service_name_bytes = service_name.map_or_else(Vec::new, |s| s.as_bytes().to_vec());
+    let service_name_bytes = service_name.map_or_else(|| &[] as &[u8], str::as_bytes);
     let mut padr_tags = vec![
         Tag {
             tag_type: TAG_SERVICE_NAME,
@@ -338,7 +236,7 @@ async fn exchange_padr(
         },
         Tag {
             tag_type: TAG_HOST_UNIQ,
-            value: host_uniq.to_vec(),
+            value: host_uniq,
         },
     ];
     if let Some(cookie) = ac_cookie {
@@ -421,7 +319,7 @@ pub fn send_padt(
         Some(SockProtocol::EthAll),
     )?;
 
-    let c_ifname = std::ffi::CString::new(ifname)
+    let c_ifname = CString::new(ifname)
         .map_err(|_| PppoeError::NegotiationFailed("Invalid interface name for CString".into()))?;
     let ifindex = unsafe { libc::if_nametoindex(c_ifname.as_ptr()) };
     if ifindex == 0 {
@@ -448,39 +346,4 @@ pub fn send_padt(
     }
     debug!(session_id, "Sent PPPoE PADT frame to server");
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_discovery_frame_encode_parse() {
-        let frame = PppoeDiscoveryFrame {
-            dst_mac: MacAddr([0x01, 0x02, 0x03, 0x04, 0x05, 0x06]),
-            src_mac: MacAddr([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]),
-            code: CODE_PADI,
-            session_id: 0,
-            tags: vec![
-                Tag {
-                    tag_type: TAG_SERVICE_NAME,
-                    value: vec![],
-                },
-                Tag {
-                    tag_type: TAG_HOST_UNIQ,
-                    value: vec![1, 2, 3, 4],
-                },
-            ],
-        };
-
-        let encoded = frame.encode();
-        let parsed = PppoeDiscoveryFrame::parse(&encoded).expect("parse frame");
-
-        assert_eq!(parsed.dst_mac, frame.dst_mac);
-        assert_eq!(parsed.src_mac, frame.src_mac);
-        assert_eq!(parsed.code, CODE_PADI);
-        assert_eq!(parsed.session_id, 0);
-        assert_eq!(parsed.tags.len(), 2);
-        assert_eq!(parsed.tags[1].value, vec![1, 2, 3, 4]);
-    }
 }

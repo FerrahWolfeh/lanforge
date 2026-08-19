@@ -1,22 +1,28 @@
 use crate::auth::authenticate;
 use crate::config::{PppoeConfig, PppoeCredentials};
-use crate::discovery::{self, PppoeDiscovery};
+use crate::discovery::{send_padt, PppoeDiscovery};
+use crate::ebpf::EbpfSession;
 use crate::error::PppoeError;
 use crate::ipcp::negotiate_ipcp;
 use crate::keepalive::run_keepalive;
-use crate::kernel::{configure_interface, handoff_to_kernel};
+use crate::kernel::{configure_interface, deconfigure_interface, handoff_to_kernel};
 use crate::lcp::negotiate_lcp;
+use crate::nftables::{apply_nftables_tuning, cleanup_nftables_tuning};
 use crate::session::PppoeSession;
 use lanforge_core::bus::{LanforgeEvent, PppoeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceDependency};
-use lanforge_types::system::{PppoeSessionState, PppoeStatusResponse};
-use lanforge_types::update::DeviceUpdate;
-use std::time::Duration;
-use tracing::{info, warn};
-
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::pppoe::PppoeDataplane;
+use lanforge_types::system::{PppoeSessionState, PppoeStatusResponse, ServiceAction};
+use lanforge_types::update::DeviceUpdate;
+use pnet::datalink::interfaces;
+use std::borrow::Cow;
+use std::path::Path;
+use std::time::Duration;
+use tokio::time::sleep;
+use tracing::{info, warn};
 
 #[lanforge_macros::lanforge_service(
     id = "pppoe",
@@ -47,7 +53,7 @@ impl PppoeService {
     }
 
     fn get_interface_details(&self) -> Result<(u32, MacAddr), PppoeError> {
-        let ifaces = pnet::datalink::interfaces();
+        let ifaces = interfaces();
         for iface in ifaces {
             if iface.name == self.cfg.wan_iface
                 && let Some(mac) = iface.mac
@@ -129,12 +135,12 @@ impl PppoeService {
 
             // 6. Handoff to data plane & Configure network interface
             let (interface_name, control_fd, _ebpf_session, _kernel_session) =
-                if self.cfg.dataplane == lanforge_types::network::pppoe::PppoeDataplane::Ebpf {
+                if self.cfg.dataplane == PppoeDataplane::Ebpf {
                     info!(
                         wan_iface = %self.cfg.wan_iface,
                         "Attaching eBPF Generic XDP + TC fast-path data plane"
                     );
-                    let ebpf_sess = crate::ebpf::EbpfSession::attach(
+                    let ebpf_sess = EbpfSession::attach(
                         ifindex,
                         &self.cfg.wan_iface,
                         disc_res.session_id,
@@ -184,7 +190,7 @@ impl PppoeService {
 
             // Apply nftables router performance tuning rules if enabled
             if self.cfg.nftables.enabled {
-                let lan_ifaces: Vec<String> = pnet::datalink::interfaces()
+                let lan_ifaces: Vec<String> = interfaces()
                     .into_iter()
                     .filter(|i| {
                         !i.is_loopback()
@@ -194,7 +200,7 @@ impl PppoeService {
                     .map(|i| i.name)
                     .collect();
 
-                if let Err(e) = crate::nftables::apply_nftables_tuning(
+                if let Err(e) = apply_nftables_tuning(
                     &self.cfg.nftables,
                     &interface_name,
                     &lan_ifaces,
@@ -269,27 +275,25 @@ impl PppoeService {
         .await;
 
         if self.cfg.nftables.enabled {
-            crate::nftables::cleanup_nftables_tuning(&self.cfg.nftables.table_name).await;
+            cleanup_nftables_tuning(&self.cfg.nftables.table_name).await;
         }
 
-        crate::kernel::deconfigure_interface(
+        deconfigure_interface(
             &self.cfg.wan_iface,
-            self.cfg.dataplane == lanforge_types::network::pppoe::PppoeDataplane::Ebpf,
+            self.cfg.dataplane == PppoeDataplane::Ebpf,
             None,
         )
         .await;
 
-        if let Some((wan_mac, ac_mac, session_id)) = self.active_session.take() {
-            if self.cfg.send_padt_on_shutdown {
-                let _ = discovery::send_padt(
-                    &self.cfg.wan_iface,
-                    wan_mac,
-                    ac_mac,
-                    session_id,
-                );
-            } else {
-                info!("Skipping PPPoE PADT frame on shutdown (send_padt_on_shutdown = false)");
-            }
+        if let Some((wan_mac, ac_mac, session_id)) = self.active_session.take()
+            && self.cfg.send_padt_on_shutdown
+        {
+            let _ = send_padt(
+                &self.cfg.wan_iface,
+                wan_mac,
+                ac_mac,
+                session_id,
+            );
         }
 
         let reason = match &flow_res {
@@ -318,8 +322,7 @@ fn is_shutdown_or_stop_event(event: &LanforgeEvent) -> bool {
             if id == "pppoe"
                 && matches!(
                     action,
-                    lanforge_types::system::ServiceAction::Stop
-                        | lanforge_types::system::ServiceAction::Restart
+                    ServiceAction::Stop | ServiceAction::Restart
                 ) =>
         {
             true
@@ -333,7 +336,7 @@ impl AsyncService for PppoeService {
         &[ServiceDependency::Interfaces]
     }
 
-    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
+    fn stats(&self, ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
         let (state_str, local_ip, ppp_iface) = ctx.with_state(|state| {
             state.interfaces.pppoe_status.as_ref().map_or_else(
                 || {
@@ -351,27 +354,21 @@ impl AsyncService for PppoeService {
             )
         });
         vec![
+            (Cow::Borrowed("wan_iface"), self.cfg.wan_iface.clone()),
+            (Cow::Borrowed("username"), self.cfg.username.clone()),
+            (Cow::Borrowed("state"), state_str),
+            (Cow::Borrowed("local_ip"), local_ip),
+            (Cow::Borrowed("ppp_interface"), ppp_iface),
             (
-                std::borrow::Cow::Borrowed("wan_iface"),
-                self.cfg.wan_iface.clone(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("username"),
-                self.cfg.username.clone(),
-            ),
-            (std::borrow::Cow::Borrowed("state"), state_str),
-            (std::borrow::Cow::Borrowed("local_ip"), local_ip),
-            (std::borrow::Cow::Borrowed("ppp_interface"), ppp_iface),
-            (
-                std::borrow::Cow::Borrowed("reconnect_attempts"),
+                Cow::Borrowed("reconnect_attempts"),
                 self.attempt.to_string(),
             ),
         ]
     }
 
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
-        if self.cfg.dataplane == lanforge_types::network::pppoe::PppoeDataplane::Kernel
-            && !std::path::Path::new("/dev/ppp").exists()
+        if self.cfg.dataplane == PppoeDataplane::Kernel
+            && !Path::new("/dev/ppp").exists()
         {
             warn!(
                 service = "PPPoE",
@@ -386,7 +383,7 @@ impl AsyncService for PppoeService {
             return Ok(());
         }
 
-        let mut bus_rx = ctx.bus().subscribe();
+        let mut bus_rx = ctx.bus().subscribe_system();
 
         'main_loop: loop {
             if !ctx.is_running() {
@@ -429,7 +426,7 @@ impl AsyncService for PppoeService {
 
                             let delay = Duration::from_secs(self.cfg.reconnect_delay_secs);
                             tokio::select! {
-                                () = tokio::time::sleep(delay) => {}
+                                () = sleep(delay) => {}
                                 res = bus_rx.recv() => {
                                     if let Ok(timed) = res
                                         && is_shutdown_or_stop_event(&timed.event)
@@ -458,7 +455,7 @@ impl AsyncService for PppoeService {
                 session_id,
                 "Sending PPPoE PADT frame during service cleanup"
             );
-            let _ = discovery::send_padt(
+            let _ = send_padt(
                 &self.cfg.wan_iface,
                 wan_mac,
                 ac_mac,
@@ -466,11 +463,11 @@ impl AsyncService for PppoeService {
             );
         }
         if self.cfg.nftables.enabled {
-            crate::nftables::cleanup_nftables_tuning(&self.cfg.nftables.table_name).await;
+            cleanup_nftables_tuning(&self.cfg.nftables.table_name).await;
         }
-        crate::kernel::deconfigure_interface(
+        deconfigure_interface(
             &self.cfg.wan_iface,
-            self.cfg.dataplane == lanforge_types::network::pppoe::PppoeDataplane::Ebpf,
+            self.cfg.dataplane == PppoeDataplane::Ebpf,
             None,
         )
         .await;

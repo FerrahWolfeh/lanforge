@@ -1,70 +1,83 @@
 use crate::error::PppoeError;
-use crate::lcp::{LCP_ECHO_REP, LCP_ECHO_REQ, LCP_TERM_ACK, LCP_TERM_REQ, PPP_LCP};
-use lanforge_core::bus::{LanforgeEvent, PppoeEvent, SystemEvent};
-
+use crate::lcp::{LCP_CONF_REQ, LCP_ECHO_REP, LCP_ECHO_REQ, LCP_TERM_ACK, LCP_TERM_REQ, PPP_LCP};
+use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
+use lanforge_types::system::ServiceAction;
+use nix::unistd::{read, write};
 use std::os::fd::OwnedFd;
 use std::time::Duration;
 use tokio::io::unix::AsyncFd;
-use tokio::time::MissedTickBehavior;
-use tracing::{debug, warn};
+use tokio::time::interval;
+use tracing::{debug, info, warn};
+
+pub const PPP_IP: u16 = 0x0021;
+pub const PPP_IPV6: u16 = 0x0057;
 
 pub async fn run_keepalive(
-    control_fd: &OwnedFd,
+    chan_fd: &OwnedFd,
     ctx: &LanforgeContext,
     local_magic: u32,
-    _peer_magic: u32,
-    echo_interval_secs: u64,
+    peer_magic: u32,
+    interval_secs: u64,
     max_failures: u32,
 ) -> Result<(), PppoeError> {
-    let chan_fd_clone = control_fd.try_clone()?;
-    let async_chan_fd = AsyncFd::new(chan_fd_clone)?;
-    let mut bus_rx = ctx.bus().subscribe();
+    let async_chan_fd = AsyncFd::new(chan_fd.try_clone()?)?;
+    let mut echo_id: u8 = 0;
+    let mut failed_echoes: u32 = 0;
 
-    let mut req_id = 1u8;
-    let mut consecutive_failures = 0u32;
-    let mut interval_timer = tokio::time::interval(Duration::from_secs(echo_interval_secs));
-    interval_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    // Skip initial immediate tick so first Echo-Request is sent after the full interval
-    interval_timer.tick().await;
+    let check_interval = Duration::from_secs(interval_secs.max(1));
+    let mut interval_timer = interval(check_interval);
 
-    debug!(
-        echo_interval_secs,
-        max_failures,
-        "Keepalive monitoring loop initialized, waiting for first interval tick"
-    );
-
-    let mut buf = [0u8; 1500];
+    let mut bus_rx = ctx.bus().subscribe_system();
+    let mut read_buf = [0u8; 1500];
 
     loop {
         if !ctx.is_running() {
+            debug!("Lanforge context stopped, exiting keepalive loop");
             return Ok(());
         }
 
         tokio::select! {
             _ = interval_timer.tick() => {
-                send_echo_request(
-                    ctx,
-                    &async_chan_fd,
-                    &mut req_id,
-                    &mut consecutive_failures,
-                    local_magic,
-                    max_failures,
-                ).await?;
-            }
+                if interval_secs > 0 {
+                    echo_id = echo_id.wrapping_add(1);
+                    if let Err(e) = send_echo_request(
+                        chan_fd,
+                        echo_id,
+                        local_magic,
+                    ) {
+                        warn!(error = %e, "Failed to send LCP Echo-Request");
+                    }
 
-            _ = async_chan_fd.readable() => {
-                if let Some(err) = process_readable_chan_fd(
-                    ctx,
-                    &async_chan_fd,
-                    &mut buf,
-                    local_magic,
-                    &mut consecutive_failures,
-                ).await? {
-                    return Err(err);
+                    failed_echoes += 1;
+                    if max_failures > 0 && failed_echoes > max_failures {
+                        return Err(PppoeError::KeepAliveTimeout);
+                    }
                 }
             }
 
+            guard_res = async_chan_fd.readable() => {
+                let mut guard = guard_res?;
+                match read(chan_fd, &mut read_buf) {
+                    Ok(n) if n > 0 => {
+                        guard.clear_ready();
+                        handle_incoming_frame(
+                            chan_fd,
+                            &read_buf[..n],
+                            local_magic,
+                            peer_magic,
+                            &mut failed_echoes,
+                        );
+                    }
+                    Ok(_) | Err(nix::errno::Errno::EWOULDBLOCK) => {
+                        guard.clear_ready();
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "PPPoE channel read error during keepalive");
+                        return Err(PppoeError::Nix(e));
+                    }
+                }
+            }
 
             res = bus_rx.recv() => {
                 let Ok(event) = res else { continue; };
@@ -77,8 +90,7 @@ pub async fn run_keepalive(
                         if id == "pppoe"
                             && matches!(
                                 action,
-                                lanforge_types::system::ServiceAction::Stop
-                                    | lanforge_types::system::ServiceAction::Restart
+                                ServiceAction::Stop | ServiceAction::Restart
                             ) =>
                     {
                         debug!("ServiceControl {:?} received during keepalive loop", action);
@@ -91,247 +103,136 @@ pub async fn run_keepalive(
     }
 }
 
-async fn send_echo_request(
-    ctx: &LanforgeContext,
-    async_chan_fd: &AsyncFd<OwnedFd>,
-    req_id: &mut u8,
-    consecutive_failures: &mut u32,
-    local_magic: u32,
-    max_failures: u32,
-) -> Result<(), PppoeError> {
-    *consecutive_failures += 1;
-    if *consecutive_failures > 1 {
-        let _ = ctx
-            .bus()
-            .publish(LanforgeEvent::Pppoe(PppoeEvent::KeepaliveWarning {
-                consecutive_failures: *consecutive_failures,
-                max_failures,
-            }));
-    }
-    if *consecutive_failures > max_failures {
-        warn!(
-            failures = *consecutive_failures,
-            max_failures,
-            "LCP echo keepalive timed out (no Echo-Reply from peer), link considered dead"
-        );
-        return Err(PppoeError::KeepAliveTimeout);
-    }
+fn send_echo_request(fd: &OwnedFd, id: u8, magic: u32) -> Result<(), PppoeError> {
+    let mut pkt = [0u8; 10];
+    pkt[0..2].copy_from_slice(&PPP_LCP.to_be_bytes());
+    pkt[2] = LCP_ECHO_REQ;
+    pkt[3] = id;
+    pkt[4..6].copy_from_slice(&8u16.to_be_bytes());
+    pkt[6..10].copy_from_slice(&magic.to_be_bytes());
 
-    *req_id = req_id.wrapping_add(1);
-    // RFC 1661 Sec 5.8: LCP Echo-Request format (10 bytes total: 2-byte PPP proto + 4-byte LCP header + 4-byte magic)
-    let mut pkt_bytes = Vec::with_capacity(10);
-    pkt_bytes.extend_from_slice(&PPP_LCP.to_be_bytes());
-    pkt_bytes.push(LCP_ECHO_REQ);
-    pkt_bytes.push(*req_id);
-    pkt_bytes.extend_from_slice(&8u16.to_be_bytes());
-    pkt_bytes.extend_from_slice(&local_magic.to_be_bytes());
-
-    let mut guard = async_chan_fd.writable().await?;
-    match nix::unistd::write(async_chan_fd.get_ref(), &pkt_bytes) {
-        Ok(n) => {
-            debug!(
-                req_id = *req_id,
-                failures = *consecutive_failures,
-                bytes_written = n,
-                "Sent LCP Echo-Request to peer"
-            );
-        }
-        Err(e) => {
-            warn!(error = %e, "Failed to write LCP Echo-Request to ppp_chan_fd");
-        }
+    let n = write(fd, &pkt)?;
+    if n != 10 {
+        return Err(PppoeError::NegotiationFailed(
+            "Short write on LCP Echo-Request".into(),
+        ));
     }
-    guard.clear_ready();
     Ok(())
 }
 
-async fn process_readable_chan_fd(
-    ctx: &LanforgeContext,
-    async_chan_fd: &AsyncFd<OwnedFd>,
-    buf: &mut [u8],
+fn handle_incoming_frame(
+    fd: &OwnedFd,
+    frame: &[u8],
     local_magic: u32,
-    consecutive_failures: &mut u32,
-) -> Result<Option<PppoeError>, PppoeError> {
-    let Ok(mut guard) = async_chan_fd.readable().await else {
-        return Ok(None);
-    };
-    let n = match nix::unistd::read(async_chan_fd.get_ref(), buf) {
-        Ok(n) => n,
-        Err(e) => {
-            warn!(error = %e, "Error reading from ppp_chan_fd");
-            guard.clear_ready();
-            return Ok(None);
-        }
-    };
-    guard.clear_ready();
-
-    if n == 0 {
-        warn!("ppp_chan_fd returned EOF (0 bytes read). PPPoE channel disconnected!");
-        return Ok(Some(PppoeError::KeepAliveTimeout));
-    }
-
-    handle_lcp_frame(
-        ctx,
-        async_chan_fd,
-        &buf[..n],
-        local_magic,
-        consecutive_failures,
-    )
-    .await
-}
-
-async fn send_protocol_reject(
-    async_chan_fd: &AsyncFd<OwnedFd>,
-    proto: u16,
-    data: &[u8],
+    _peer_magic: u32,
+    failed_echoes: &mut u32,
 ) {
-    if (proto & 0x8000) != 0 && proto != 0x8021 && proto != 0x8057 {
-        let mut rej = Vec::with_capacity(6 + data.len());
-        rej.extend_from_slice(&PPP_LCP.to_be_bytes());
-        rej.push(8 /* LCP_PROT_REJ */);
-        rej.push(1 /* id */);
-        #[allow(clippy::cast_possible_truncation)]
-        let rej_len = (4 + data.len()) as u16;
-        rej.extend_from_slice(&rej_len.to_be_bytes());
-        rej.extend_from_slice(data);
-        if let Ok(mut wguard) = async_chan_fd.writable().await {
-            let _ = nix::unistd::write(async_chan_fd.get_ref(), &rej);
-            wguard.clear_ready();
-            debug!(
-                proto = %format!("0x{proto:04x}"),
-                "Sent LCP Protocol-Reject for unsupported protocol"
-            );
-        }
-    }
-}
-
-struct LcpPacket<'a> {
-    code: u8,
-    id: u8,
-    len: usize,
-    data: &'a [u8],
-}
-
-async fn handle_lcp_code(
-    ctx: &LanforgeContext,
-    async_chan_fd: &AsyncFd<OwnedFd>,
-    pkt: &LcpPacket<'_>,
-    local_magic: u32,
-    consecutive_failures: &mut u32,
-) -> Result<Option<PppoeError>, PppoeError> {
-    match pkt.code {
-        LCP_ECHO_REP => {
-            if *consecutive_failures > 0 {
-                let _ = ctx
-                    .bus()
-                    .publish(LanforgeEvent::Pppoe(PppoeEvent::KeepaliveRestored));
-            }
-            *consecutive_failures = 0;
-            debug!(id = pkt.id, "Received LCP Echo-Reply from peer");
-        }
-        LCP_ECHO_REQ => {
-            let mut reply = Vec::with_capacity(2 + pkt.len);
-            reply.extend_from_slice(&PPP_LCP.to_be_bytes());
-            reply.push(LCP_ECHO_REP);
-            reply.push(pkt.id);
-            #[allow(clippy::cast_possible_truncation)]
-            reply.extend_from_slice(&(pkt.len as u16).to_be_bytes());
-            reply.extend_from_slice(&local_magic.to_be_bytes());
-            if pkt.len > 8 {
-                reply.extend_from_slice(&pkt.data[10..2 + pkt.len]);
-            }
-
-            if let Ok(mut wguard) = async_chan_fd.writable().await {
-                let _ = nix::unistd::write(async_chan_fd.get_ref(), &reply);
-                wguard.clear_ready();
-                debug!(id = pkt.id, "Received LCP Echo-Request from peer, sent Echo-Reply");
-            }
-        }
-        LCP_TERM_REQ => {
-            let mut ack = Vec::with_capacity(6);
-            ack.extend_from_slice(&PPP_LCP.to_be_bytes());
-            ack.push(LCP_TERM_ACK);
-            ack.push(pkt.id);
-            ack.extend_from_slice(&4u16.to_be_bytes());
-
-            if let Ok(mut wguard) = async_chan_fd.writable().await {
-                let _ = nix::unistd::write(async_chan_fd.get_ref(), &ack);
-                wguard.clear_ready();
-            }
-            warn!(id = pkt.id, "Peer sent LCP Terminate-Request!");
-            return Ok(Some(PppoeError::LcpFailed(
-                "Peer terminated LCP session".into(),
-            )));
-        }
-        _ => {
-            debug!(code = pkt.code, id = pkt.id, len = pkt.len, "Received other LCP frame code");
-        }
-    }
-
-    Ok(None)
-}
-
-async fn handle_lcp_frame(
-    ctx: &LanforgeContext,
-    async_chan_fd: &AsyncFd<OwnedFd>,
-    raw_buf: &[u8],
-    local_magic: u32,
-    consecutive_failures: &mut u32,
-) -> Result<Option<PppoeError>, PppoeError> {
-    let data = if raw_buf.len() >= 2 && raw_buf[0] == 0xff && raw_buf[1] == 0x03 {
-        &raw_buf[2..]
+    let data = if frame.len() >= 2 && frame[0] == 0xff && frame[1] == 0x03 {
+        &frame[2..]
     } else {
-        raw_buf
+        frame
     };
 
     if data.len() < 2 {
-        tracing::trace!(len = raw_buf.len(), "Read short packet from ppp_chan_fd");
-        return Ok(None);
+        return;
     }
 
     let proto = u16::from_be_bytes([data[0], data[1]]);
-    if proto != PPP_LCP {
+    if proto == PPP_LCP {
+        handle_lcp_frame(fd, &data[2..], local_magic, failed_echoes);
+    } else if proto == PPP_IP || proto == PPP_IPV6 {
         debug!(
-            proto = %format!("0x{proto:04x}"),
-            len = raw_buf.len(),
-            "Received non-LCP PPP frame on chan_fd"
+            proto = format_args!("{proto:#06x}"),
+            len = data.len(),
+            "Data plane packet received on control channel"
         );
-        send_protocol_reject(async_chan_fd, proto, data).await;
-        return Ok(None);
-    }
-
-    if data.len() < 6 {
-        debug!(len = data.len(), "Received truncated LCP frame");
-        return Ok(None);
-    }
-
-    let code = data[2];
-    let id = data[3];
-    let len = u16::from_be_bytes([data[4], data[5]]) as usize;
-
-    if data.len() < 2 + len {
+    } else {
         debug!(
-            code,
-            id,
-            len,
-            actual = data.len() - 2,
-            "Received LCP frame with incomplete length"
+            proto = format_args!("{proto:#06x}"),
+            "Unknown PPP protocol received, sending Protocol-Reject"
         );
-        return Ok(None);
+        send_protocol_reject(fd, proto, data);
+    }
+}
+
+fn handle_lcp_frame(
+    fd: &OwnedFd,
+    lcp_data: &[u8],
+    local_magic: u32,
+    failed_echoes: &mut u32,
+) {
+    if lcp_data.len() < 4 {
+        return;
     }
 
-    let pkt = LcpPacket {
-        code,
-        id,
-        len,
-        data,
-    };
+    let code = lcp_data[0];
+    let id = lcp_data[1];
+    let len = u16::from_be_bytes([lcp_data[2], lcp_data[3]]) as usize;
 
-    handle_lcp_code(
-        ctx,
-        async_chan_fd,
-        &pkt,
-        local_magic,
-        consecutive_failures,
-    )
-    .await
+    if lcp_data.len() < len || len < 4 {
+        return;
+    }
+
+    let payload = &lcp_data[4..len];
+
+    match code {
+        LCP_ECHO_REP => {
+            *failed_echoes = 0;
+            debug!(id, "Received LCP Echo-Reply from BRAS");
+        }
+        LCP_ECHO_REQ => {
+            let mut rep = [0u8; 512];
+            let rep_len = 6 + payload.len().min(500);
+            rep[0..2].copy_from_slice(&PPP_LCP.to_be_bytes());
+            rep[2] = LCP_ECHO_REP;
+            rep[3] = id;
+            #[allow(clippy::cast_possible_truncation)]
+            let l = (4 + payload.len().min(500)) as u16;
+            rep[4..6].copy_from_slice(&l.to_be_bytes());
+
+            if payload.len() >= 4 {
+                rep[6..10].copy_from_slice(&local_magic.to_be_bytes());
+                if payload.len() > 4 {
+                    let extra = (payload.len() - 4).min(496);
+                    rep[10..10 + extra].copy_from_slice(&payload[4..4 + extra]);
+                }
+            }
+            let _ = write(fd, &rep[..rep_len]);
+        }
+        LCP_TERM_REQ => {
+            info!(id, "Peer sent LCP Terminate-Request, sending Terminate-Ack");
+            let mut ack = [0u8; 6];
+            ack[0..2].copy_from_slice(&PPP_LCP.to_be_bytes());
+            ack[2] = LCP_TERM_ACK;
+            ack[3] = id;
+            ack[4..6].copy_from_slice(&4u16.to_be_bytes());
+            let _ = write(fd, &ack);
+        }
+        LCP_TERM_ACK => {
+            debug!(id, "Peer acknowledged LCP termination");
+        }
+        LCP_CONF_REQ => {
+            debug!(id, "Peer renegotiating LCP in active session");
+        }
+        _ => {
+            debug!(code, id, "Unhandled LCP packet in keepalive phase");
+        }
+    }
+}
+
+fn send_protocol_reject(fd: &OwnedFd, rejected_proto: u16, original_data: &[u8]) {
+    let mut rej = [0u8; 512];
+    let extra_len = original_data.len().min(500);
+    let total_len = 6 + 2 + extra_len;
+
+    rej[0..2].copy_from_slice(&PPP_LCP.to_be_bytes());
+    rej[2] = 0x08; // Protocol-Reject
+    rej[3] = 1; // ID
+    #[allow(clippy::cast_possible_truncation)]
+    let len = (4 + 2 + extra_len) as u16;
+    rej[4..6].copy_from_slice(&len.to_be_bytes());
+    rej[6..8].copy_from_slice(&rejected_proto.to_be_bytes());
+    rej[8..8 + extra_len].copy_from_slice(&original_data[..extra_len]);
+
+    let _ = write(fd, &rej[..total_len]);
 }

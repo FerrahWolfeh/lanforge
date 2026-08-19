@@ -3,6 +3,7 @@ use crate::session::PppoeSession;
 use lanforge_types::identifiers::MacAddr;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
+use tokio::time::{timeout, Instant};
 use tracing::{debug, warn};
 
 pub const PPP_IPCP: u16 = 0x8021;
@@ -77,12 +78,12 @@ pub async fn negotiate_ipcp(
 }
 
 fn build_ipcp_req(id: u8, ip: Ipv4Addr, dns1: Ipv4Addr, dns2: Ipv4Addr, req_dns: bool) -> Vec<u8> {
-    let mut pkt = Vec::new();
+    let mut pkt = Vec::with_capacity(32);
     pkt.extend_from_slice(&PPP_IPCP.to_be_bytes());
     pkt.push(0x01); // Configure-Request
     pkt.push(id);
 
-    let mut opts = Vec::new();
+    let mut opts = Vec::with_capacity(24);
     // Opt 3: IP Address
     opts.push(IPCP_OPT_IP);
     opts.push(6);
@@ -119,12 +120,11 @@ fn build_ipcp_ack(id: u8, data: &[u8], len: usize) -> Vec<u8> {
 fn parse_ipcp_nak(
     data: &[u8],
     len: usize,
-    my_ip: &mut Ipv4Addr,
-    dns1: &mut Ipv4Addr,
-    dns2: &mut Ipv4Addr,
-    dns_addrs: &mut Vec<IpAddr>,
+    assigned_ip: &mut Ipv4Addr,
+    assigned_dns1: &mut Ipv4Addr,
+    assigned_dns2: &mut Ipv4Addr,
 ) {
-    let mut offset = 6;
+    let mut offset = 4;
     let end = 2 + len;
     while offset + 2 <= end {
         let opt_type = data[offset];
@@ -132,53 +132,35 @@ fn parse_ipcp_nak(
         if opt_len < 2 || offset + opt_len > end {
             break;
         }
-        if opt_len == 6 {
-            let ip = Ipv4Addr::new(
+
+        if opt_type == IPCP_OPT_IP && opt_len == 6 {
+            *assigned_ip = Ipv4Addr::new(
                 data[offset + 2],
                 data[offset + 3],
                 data[offset + 4],
                 data[offset + 5],
             );
-            match opt_type {
-                IPCP_OPT_IP => *my_ip = ip,
-                IPCP_OPT_DNS1 => {
-                    *dns1 = ip;
-                    if !ip.is_unspecified() && !dns_addrs.contains(&IpAddr::V4(ip)) {
-                        dns_addrs.push(IpAddr::V4(ip));
-                    }
-                }
-                IPCP_OPT_DNS2 => {
-                    *dns2 = ip;
-                    if !ip.is_unspecified() && !dns_addrs.contains(&IpAddr::V4(ip)) {
-                        dns_addrs.push(IpAddr::V4(ip));
-                    }
-                }
-                _ => {}
-            }
+        } else if opt_type == IPCP_OPT_DNS1 && opt_len == 6 {
+            *assigned_dns1 = Ipv4Addr::new(
+                data[offset + 2],
+                data[offset + 3],
+                data[offset + 4],
+                data[offset + 5],
+            );
+        } else if opt_type == IPCP_OPT_DNS2 && opt_len == 6 {
+            *assigned_dns2 = Ipv4Addr::new(
+                data[offset + 2],
+                data[offset + 3],
+                data[offset + 4],
+                data[offset + 5],
+            );
         }
         offset += opt_len;
     }
 }
 
-fn check_dns_rejected(data: &[u8], len: usize) -> bool {
-    let mut offset = 6;
-    let end = 2 + len;
-    while offset + 2 <= end {
-        let opt_type = data[offset];
-        let opt_len = data[offset + 1] as usize;
-        if opt_len < 2 || offset + opt_len > end {
-            break;
-        }
-        if opt_type == IPCP_OPT_DNS1 || opt_type == IPCP_OPT_DNS2 {
-            return true;
-        }
-        offset += opt_len;
-    }
-    false
-}
-
-fn parse_ipcp_req_peer_ip(data: &[u8], len: usize) -> Option<Ipv4Addr> {
-    let mut offset = 6;
+fn parse_peer_ip(data: &[u8], len: usize) -> Option<Ipv4Addr> {
+    let mut offset = 4;
     let end = 2 + len;
     while offset + 2 <= end {
         let opt_type = data[offset];
@@ -199,46 +181,56 @@ fn parse_ipcp_req_peer_ip(data: &[u8], len: usize) -> Option<Ipv4Addr> {
     None
 }
 
+#[allow(clippy::too_many_lines)]
 async fn negotiate_ipv4cp(
     session: &PppoeSession,
 ) -> Result<(Ipv4Addr, Ipv4Addr, Vec<IpAddr>), PppoeError> {
     let mut req_id = 1u8;
-    let mut my_ip = Ipv4Addr::UNSPECIFIED;
-    let mut peer_ip = Ipv4Addr::UNSPECIFIED;
-    let mut dns1 = Ipv4Addr::UNSPECIFIED;
-    let mut dns2 = Ipv4Addr::UNSPECIFIED;
-    let mut dns_addrs = Vec::new();
+    let mut assigned_ip = Ipv4Addr::UNSPECIFIED;
+    let mut assigned_dns1 = Ipv4Addr::UNSPECIFIED;
+    let mut assigned_dns2 = Ipv4Addr::UNSPECIFIED;
+    let mut req_dns = true;
 
-    let mut my_ack_rcvd = false;
+    let mut my_ack_received = false;
     let mut peer_ack_sent = false;
+    let mut peer_ip = Ipv4Addr::UNSPECIFIED;
 
-    let mut request_dns = true;
+    let mut req_pkt = build_ipcp_req(
+        req_id,
+        assigned_ip,
+        assigned_dns1,
+        assigned_dns2,
+        req_dns,
+    );
+    session.send_ppp_frame(&req_pkt).await?;
 
-    session
-        .send_ppp_frame(&build_ipcp_req(req_id, my_ip, dns1, dns2, request_dns))
-        .await?;
-
-    let timeout = Duration::from_secs(10);
-    let start = tokio::time::Instant::now();
+    let ipcp_timeout = Duration::from_secs(10);
+    let start = Instant::now();
     let mut buf = [0u8; 1500];
 
-    while start.elapsed() < timeout {
-        if my_ack_rcvd && peer_ack_sent {
-            debug!(
-                local = %my_ip,
-                peer = %peer_ip,
-                "IPCP negotiation complete"
-            );
-            return Ok((my_ip, peer_ip, dns_addrs));
+    while start.elapsed() < ipcp_timeout {
+        if my_ack_received && peer_ack_sent {
+            let mut dns = Vec::new();
+            if assigned_dns1 != Ipv4Addr::UNSPECIFIED {
+                dns.push(IpAddr::V4(assigned_dns1));
+            }
+            if assigned_dns2 != Ipv4Addr::UNSPECIFIED {
+                dns.push(IpAddr::V4(assigned_dns2));
+            }
+            return Ok((assigned_ip, peer_ip, dns));
         }
 
-        let Ok(Ok(n)) =
-            tokio::time::timeout(Duration::from_secs(1), session.recv_ppp_frame(&mut buf)).await
+        let Ok(Ok(n)) = timeout(Duration::from_secs(1), session.recv_ppp_frame(&mut buf)).await
         else {
             req_id = req_id.wrapping_add(1);
-            session
-                .send_ppp_frame(&build_ipcp_req(req_id, my_ip, dns1, dns2, request_dns))
-                .await?;
+            req_pkt = build_ipcp_req(
+                req_id,
+                assigned_ip,
+                assigned_dns1,
+                assigned_dns2,
+                req_dns,
+            );
+            session.send_ppp_frame(&req_pkt).await?;
             continue;
         };
 
@@ -260,131 +252,99 @@ async fn negotiate_ipv4cp(
         let code = data[2];
         let id = data[3];
         let len = u16::from_be_bytes([data[4], data[5]]) as usize;
+
         if data.len() < 2 + len {
             continue;
         }
 
-        debug!(code, id, len, "Received IPCP frame");
-
         match code {
-            0x02 => {
-                // Configure-Ack
-                if id == req_id {
-                    my_ack_rcvd = true;
-                    debug!("Received IPCP Configure-Ack");
-                }
-            }
-            0x03 => {
-                // Configure-Nak — server providing allocated IP and/or DNS
-                if id == req_id {
-                    parse_ipcp_nak(
-                        data,
-                        len,
-                        &mut my_ip,
-                        &mut dns1,
-                        &mut dns2,
-                        &mut dns_addrs,
-                    );
-                    req_id = req_id.wrapping_add(1);
-                    session
-                        .send_ppp_frame(&build_ipcp_req(req_id, my_ip, dns1, dns2, request_dns))
-                        .await?;
-                }
-            }
-            0x04 => {
-                // Configure-Reject — server rejected DNS options
-                if id == req_id {
-                    if check_dns_rejected(data, len) {
-                        request_dns = false;
-                    }
-                    req_id = req_id.wrapping_add(1);
-                    session
-                        .send_ppp_frame(&build_ipcp_req(req_id, my_ip, dns1, dns2, request_dns))
-                        .await?;
-                }
-            }
             0x01 => {
-                // Configure-Request from peer
-                if let Some(ip) = parse_ipcp_req_peer_ip(data, len) {
-                    peer_ip = ip;
+                // Configure-Request from peer (BRAS)
+                if let Some(pip) = parse_peer_ip(data, len) {
+                    peer_ip = pip;
                 }
-
                 let ack_pkt = build_ipcp_ack(id, data, len);
                 session.send_ppp_frame(&ack_pkt).await?;
                 peer_ack_sent = true;
+            }
+            0x02 if id == req_id => {
+                // Configure-Ack from peer
+                my_ack_received = true;
+            }
+            0x03 if id == req_id => {
+                // Configure-Nak from peer (giving us our IP / DNS)
+                parse_ipcp_nak(
+                    data,
+                    len,
+                    &mut assigned_ip,
+                    &mut assigned_dns1,
+                    &mut assigned_dns2,
+                );
+                req_id = req_id.wrapping_add(1);
+                req_pkt = build_ipcp_req(
+                    req_id,
+                    assigned_ip,
+                    assigned_dns1,
+                    assigned_dns2,
+                    req_dns,
+                );
+                session.send_ppp_frame(&req_pkt).await?;
+            }
+            0x04 if id == req_id => {
+                // Configure-Reject from peer (e.g. DNS options not supported)
+                req_dns = false;
+                req_id = req_id.wrapping_add(1);
+                req_pkt = build_ipcp_req(
+                    req_id,
+                    assigned_ip,
+                    assigned_dns1,
+                    assigned_dns2,
+                    req_dns,
+                );
+                session.send_ppp_frame(&req_pkt).await?;
             }
             _ => {}
         }
     }
 
-    Err(PppoeError::IpcpFailed("IPCP negotiation timed out".into()))
-}
-
-#[must_use]
-pub fn ifid_to_link_local(ifid: [u8; 8]) -> Ipv6Addr {
-    let mut bytes = [0u8; 16];
-    bytes[0] = 0xfe;
-    bytes[1] = 0x80;
-    bytes[8..16].copy_from_slice(&ifid);
-    Ipv6Addr::from(bytes)
+    Err(PppoeError::IpcpFailed("IPv4 IPCP negotiation timed out".into()))
 }
 
 async fn negotiate_ipv6cp(
     session: &PppoeSession,
-    mac: MacAddr,
+    local_mac: MacAddr,
 ) -> Result<(Ipv6Addr, Option<Ipv6Addr>), PppoeError> {
-    // Generate EUI-64 Interface Identifier from MAC
+    let local_ll = mac_to_eui64_link_local(local_mac);
     let mut local_ifid = [0u8; 8];
-    local_ifid[0] = mac.0[0] ^ 0x02; // Flip local/universal bit
-    local_ifid[1] = mac.0[1];
-    local_ifid[2] = mac.0[2];
-    local_ifid[3] = 0xff;
-    local_ifid[4] = 0xfe;
-    local_ifid[5] = mac.0[3];
-    local_ifid[6] = mac.0[4];
-    local_ifid[7] = mac.0[5];
+    local_ifid.copy_from_slice(&local_ll.octets()[8..16]);
 
-    let mut req_id = 1u8;
+    let req_id = 1u8;
+    let mut req_pkt = Vec::with_capacity(16);
+    req_pkt.extend_from_slice(&PPP_IPV6CP.to_be_bytes());
+    req_pkt.push(0x01); // Conf-Req
+    req_pkt.push(req_id);
+    req_pkt.extend_from_slice(&14u16.to_be_bytes());
+    req_pkt.push(IPV6CP_OPT_IFID);
+    req_pkt.push(10);
+    req_pkt.extend_from_slice(&local_ifid);
 
-    let send_req = |id: u8| {
-        let mut pkt = Vec::new();
-        pkt.extend_from_slice(&PPP_IPV6CP.to_be_bytes());
-        pkt.push(0x01); // Configure-Request
-        pkt.push(id);
+    session.send_ppp_frame(&req_pkt).await?;
 
-        let mut opts = Vec::new();
-        opts.push(IPV6CP_OPT_IFID);
-        opts.push(10);
-        opts.extend_from_slice(&local_ifid);
+    let mut my_ack_received = false;
+    let mut peer_ack_sent = false;
+    let mut peer_ll = None;
 
-        #[allow(clippy::cast_possible_truncation)]
-        let len = (4 + opts.len()) as u16;
-        pkt.extend_from_slice(&len.to_be_bytes());
-        pkt.extend_from_slice(&opts);
-        pkt
-    };
-
-    session.send_ppp_frame(&send_req(req_id)).await?;
-
-    let timeout = Duration::from_secs(10);
-    let start = tokio::time::Instant::now();
+    let timeout_dur = Duration::from_secs(3);
+    let start = Instant::now();
     let mut buf = [0u8; 1500];
 
-    let mut my_ack = false;
-    let mut peer_ack = false;
-    let mut peer_v6_ll = None;
-
-    while start.elapsed() < timeout {
-        if my_ack && peer_ack {
-            debug!("IPv6CP negotiation complete");
-            return Ok((ifid_to_link_local(local_ifid), peer_v6_ll));
+    while start.elapsed() < timeout_dur {
+        if my_ack_received && peer_ack_sent {
+            return Ok((local_ll, peer_ll));
         }
 
-        let Ok(Ok(n)) =
-            tokio::time::timeout(Duration::from_secs(1), session.recv_ppp_frame(&mut buf)).await
+        let Ok(Ok(n)) = timeout(Duration::from_secs(1), session.recv_ppp_frame(&mut buf)).await
         else {
-            req_id = req_id.wrapping_add(1);
-            session.send_ppp_frame(&send_req(req_id)).await?;
             continue;
         };
 
@@ -406,46 +366,47 @@ async fn negotiate_ipv6cp(
         let code = data[2];
         let id = data[3];
         let len = u16::from_be_bytes([data[4], data[5]]) as usize;
+
         if data.len() < 2 + len {
             continue;
         }
 
         match code {
-            0x02 => {
-                if id == req_id {
-                    my_ack = true;
-                }
-            }
             0x01 => {
-                // Parse peer IFID option
-                let mut offset = 6;
-                let end = 2 + len;
-                while offset + 2 <= end {
-                    let opt_type = data[offset];
-                    let opt_len = data[offset + 1] as usize;
-                    if opt_len < 2 || offset + opt_len > end {
-                        break;
-                    }
-                    if opt_type == IPV6CP_OPT_IFID && opt_len == 10 {
-                        let mut p_ifid = [0u8; 8];
-                        p_ifid.copy_from_slice(&data[offset + 2..offset + 10]);
-                        peer_v6_ll = Some(ifid_to_link_local(p_ifid));
-                    }
-                    offset += opt_len;
+                // Configure-Request from peer
+                if len >= 14 && data[6] == IPV6CP_OPT_IFID && data[7] == 10 {
+                    let mut peer_bytes = [0u8; 16];
+                    peer_bytes[0] = 0xfe;
+                    peer_bytes[1] = 0x80;
+                    peer_bytes[8..16].copy_from_slice(&data[8..16]);
+                    peer_ll = Some(Ipv6Addr::from(peer_bytes));
                 }
 
                 let mut ack_pkt = Vec::with_capacity(len + 2);
                 ack_pkt.extend_from_slice(&PPP_IPV6CP.to_be_bytes());
-                ack_pkt.push(0x02);
+                ack_pkt.push(0x02); // Ack
                 ack_pkt.push(id);
                 ack_pkt.extend_from_slice(&data[4..2 + len]);
-
                 session.send_ppp_frame(&ack_pkt).await?;
-                peer_ack = true;
+                peer_ack_sent = true;
+            }
+            0x02 => {
+                // Configure-Ack
+                if id == req_id {
+                    my_ack_received = true;
+                }
+            }
+            0x04 => {
+                // Configure-Reject
+                return Err(PppoeError::IpcpFailed("IPv6CP rejected by peer".into()));
             }
             _ => {}
         }
     }
 
-    Err(PppoeError::Ipv6cpFailed("IPv6CP incomplete".into()))
+    if my_ack_received {
+        Ok((local_ll, peer_ll))
+    } else {
+        Err(PppoeError::IpcpFailed("IPv6CP timed out".into()))
+    }
 }

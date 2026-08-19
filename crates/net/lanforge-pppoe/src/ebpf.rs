@@ -1,9 +1,10 @@
 use crate::error::PppoeError;
 use aya::maps::HashMap;
-use aya::programs::tc::TcAttachType;
+use aya::programs::tc::{qdisc_add_clsact, TcAttachType};
 use aya::programs::{SchedClassifier, Xdp, XdpFlags};
 use aya::{Ebpf, Pod};
 use std::net::Ipv4Addr;
+use std::process::Command;
 use tracing::{debug, info};
 
 #[repr(C)]
@@ -76,7 +77,7 @@ impl EbpfSession {
         }
 
         // Add clsact qdisc if not already present
-        let _ = aya::programs::tc::qdisc_add_clsact(ifname);
+        let _ = qdisc_add_clsact(ifname);
 
         debug!(ifname, "Attaching TC PPPoE egress encapsulator and MSS clamper");
         if let Some(prog) = bpf.program_mut("pppoe_egress_encap") {
@@ -151,17 +152,17 @@ impl EbpfSession {
         }
 
         // 1. Detach XDP program from physical interface
-        let _ = std::process::Command::new("ip")
+        let _ = Command::new("ip")
             .args(["link", "set", "dev", &self.ifname, "xdp", "off"])
             .output();
 
         // 2. Remove TC clsact qdisc from physical interface
-        let _ = std::process::Command::new("tc")
+        let _ = Command::new("tc")
             .args(["qdisc", "del", "dev", &self.ifname, "clsact"])
             .output();
 
         // 3. Restore standard hardware TSO/GSO/TX offloads
-        let _ = std::process::Command::new("ethtool")
+        let _ = Command::new("ethtool")
             .args([
                 "-K",
                 &self.ifname,
@@ -183,4 +184,3 @@ impl Drop for EbpfSession {
         self.detach();
     }
 }
-

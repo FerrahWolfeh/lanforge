@@ -1,6 +1,8 @@
 use crate::error::PppoeError;
 use lanforge_types::identifiers::MacAddr;
+use nix::errno::Errno;
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socket};
+use nix::unistd::{read, write};
 use std::ffi::CString;
 use std::os::fd::{AsRawFd, OwnedFd};
 use tokio::io::unix::AsyncFd;
@@ -63,7 +65,7 @@ impl PppoeSession {
         };
 
         if res < 0 {
-            return Err(PppoeError::Nix(nix::errno::Errno::last()));
+            return Err(PppoeError::Nix(Errno::last()));
         }
 
         let async_fd = AsyncFd::new(fd)?;
@@ -73,7 +75,7 @@ impl PppoeSession {
 
     pub async fn send_ppp_frame(&self, frame: &[u8]) -> Result<(), PppoeError> {
         let mut guard = self.async_fd.writable().await?;
-        let n = nix::unistd::write(self.async_fd.get_ref(), frame)?;
+        let n = write(self.async_fd.get_ref(), frame)?;
         guard.clear_ready();
         if n != frame.len() {
             return Err(PppoeError::NegotiationFailed(
@@ -86,12 +88,12 @@ impl PppoeSession {
     pub async fn recv_ppp_frame(&self, buf: &mut [u8]) -> Result<usize, PppoeError> {
         loop {
             let mut guard = self.async_fd.readable().await?;
-            match nix::unistd::read(self.async_fd.get_ref(), buf) {
+            match read(self.async_fd.get_ref(), buf) {
                 Ok(n) => {
                     guard.clear_ready();
                     return Ok(n);
                 }
-                Err(nix::errno::Errno::EWOULDBLOCK) => {
+                Err(Errno::EWOULDBLOCK) => {
                     guard.clear_ready();
                 }
                 Err(e) => return Err(PppoeError::Nix(e)),
