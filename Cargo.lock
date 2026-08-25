@@ -2881,6 +2881,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "lanforge-lab"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "clap",
+ "color-eyre",
+ "colored",
+ "crossterm",
+ "dhcproto",
+ "lanforge-core",
+ "lanforge-dhcp",
+ "lanforge-discovery",
+ "lanforge-dns",
+ "lanforge-dns-wire",
+ "lanforge-ra",
+ "lanforge-types",
+ "libc",
+ "parking_lot",
+ "pnet",
+ "rand 0.10.2",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "socket2",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "lanforge-macros"
 version = "1.0.2"
 dependencies = [
@@ -5745,6 +5776,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-log"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee855f1f400bd0e5c02d150ae5de3840039a3f54b025156404e34c23c03f47c3"
+dependencies = [
+ "log",
+ "once_cell",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5755,9 +5797,11 @@ dependencies = [
  "once_cell",
  "regex-automata",
  "sharded-slab",
+ "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
+ "tracing-log",
 ]
 
 [[package]]
