@@ -11,6 +11,7 @@ description: Interactive lab testbed, simulation engine, and automated regressio
 
 - **Rootless Direct Mode (Default):** Runs unprivileged against local test ports (`127.0.0.1:1067` for DHCP, `127.0.0.1:1053` for DNS). Zero `sudo` required.
 - **Kernel Netns Mode:** Full L2/L3 isolation with Linux network namespaces and `veth` pairs when run as root (`sudo lanforge-lab --mode netns`).
+- **Privilege Guards:** Root-only features (`--mode netns`, `run ra`, and TUI RA actions) are strictly guarded with descriptive errors and TUI lockout when running unprivileged.
 - **Headless Mode (`--json`):** Returns machine-readable JSON outputs with latency metrics ($p50, p95, p99$) and standard exit codes (`0` for success, `1` for assertion failure).
 - **Interactive TUI:** Full graphical terminal dashboard (`ratatui`) for manual experimentation.
 

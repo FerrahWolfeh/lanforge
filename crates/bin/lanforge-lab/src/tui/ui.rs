@@ -25,10 +25,17 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
     let status_color = if app.is_busy { Color::Yellow } else { Color::Green };
     let status_text = if app.is_busy { "BUSY" } else { "READY" };
 
+    let (priv_badge_text, priv_badge_style) = if app.is_root {
+        (" [ROOT: YES]", Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD))
+    } else {
+        (" [ROOTLESS]", Style::default().fg(Color::DarkGray))
+    };
+
     let header_text = vec![Line::from(vec![
         Span::styled("⚡ Lanforge Virtual Lab Workbench ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         Span::raw("| Mode: "),
         Span::styled(&app.mode_str, Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+        Span::styled(priv_badge_text, priv_badge_style),
         Span::raw(" | DHCP: "),
         Span::styled(app.dhcp_server.to_string(), Style::default().fg(Color::Yellow)),
         Span::raw(" | DNS: "),
@@ -68,17 +75,34 @@ fn render_menu(f: &mut Frame, area: Rect, app: &App) {
         .enumerate()
         .map(|(i, action)| {
             let is_selected = i == app.selected_index;
-            let style = if is_selected {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
+            let is_locked = action.requires_root() && !app.is_root;
+
+            let (title_str, style) = match (is_selected, is_locked) {
+                (true, true) => (
+                    format!(" ▸ {} 🔒 (Root Only)", action.title()),
+                    Style::default()
+                        .fg(Color::LightRed)
+                        .bg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                (true, false) => (
+                    format!(" ▸ {}", action.title()),
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                (false, true) => (
+                    format!("   {} 🔒 [ROOT]", action.title()),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                (false, false) => (
+                    format!("   {}", action.title()),
+                    Style::default().fg(Color::White),
+                ),
             };
 
-            let prefix = if is_selected { " ▸ " } else { "   " };
-            ListItem::new(format!("{prefix}{}", action.title())).style(style)
+            ListItem::new(title_str).style(style)
         })
         .collect();
 
@@ -92,13 +116,35 @@ fn render_menu(f: &mut Frame, area: Rect, app: &App) {
 
     // 2. Action Description Box
     let current_action = app.current_action();
-    let desc_text = vec![
-        Line::from(vec![Span::styled(
-            current_action.title(),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(Span::raw(current_action.description())),
-    ];
+    let is_locked = current_action.requires_root() && !app.is_root;
+
+    let desc_text = if is_locked {
+        vec![
+            Line::from(vec![
+                Span::styled(
+                    current_action.title(),
+                    Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  🔒 [ROOT REQUIRED]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(Span::styled(
+                "⛔ Root privileges (CAP_NET_RAW) required. Disabled in unprivileged mode.",
+                Style::default().fg(Color::LightRed),
+            )),
+            Line::from(Span::styled(
+                current_action.description(),
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]
+    } else {
+        vec![
+            Line::from(vec![Span::styled(
+                current_action.title(),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )]),
+            Line::from(Span::raw(current_action.description())),
+        ]
+    };
 
     let desc = Paragraph::new(desc_text)
         .block(
@@ -123,6 +169,8 @@ fn render_logs(f: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(Color::Green)
             } else if entry.starts_with('✖') {
                 Style::default().fg(Color::Red)
+            } else if entry.starts_with('ℹ') {
+                Style::default().fg(Color::Yellow)
             } else {
                 Style::default().fg(Color::Gray)
             };
@@ -148,13 +196,22 @@ fn render_logs(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(logs_widget, area);
 }
 
-fn render_footer(f: &mut Frame, area: Rect, _app: &App) {
+fn render_footer(f: &mut Frame, area: Rect, app: &App) {
+    let current_action = app.current_action();
+    let is_locked = current_action.requires_root() && !app.is_root;
+
+    let exec_span = if is_locked {
+        Span::styled(" [Enter] 🔒 Disabled ", Style::default().fg(Color::Black).bg(Color::DarkGray))
+    } else {
+        Span::styled(" [Enter] ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD))
+    };
+
     let keybindings = Line::from(vec![
         Span::styled(" [1..7] ", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)),
         Span::raw(" Quick Run  "),
         Span::styled(" [↑/↓] ", Style::default().fg(Color::Black).bg(Color::White)),
         Span::raw(" Select  "),
-        Span::styled(" [Enter] ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD)),
+        exec_span,
         Span::raw(" Execute  "),
         Span::styled(" [c] ", Style::default().fg(Color::Black).bg(Color::White)),
         Span::raw(" Clear Logs  "),

@@ -28,6 +28,9 @@ pub enum LabError {
     #[error("Assertion failed: {0}")]
     Assertion(String),
 
+    #[error("Root privileges required: {0}")]
+    RootRequired(String),
+
     #[error("Operation cancelled")]
     Cancelled,
 }

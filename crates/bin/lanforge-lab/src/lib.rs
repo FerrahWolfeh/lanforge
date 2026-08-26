@@ -35,3 +35,9 @@ pub use netns::{NetnsConfig, NetnsManager};
 pub use report::{
     DhcpStormReport, DnsFloodReport, DnsQueryResult, DoraResult, RaDecodedInfo, SuiteReport,
 };
+
+/// Returns whether the current process has root privileges (EUID 0).
+#[must_use]
+pub fn is_root() -> bool {
+    unsafe { libc::geteuid() == 0 }
+}

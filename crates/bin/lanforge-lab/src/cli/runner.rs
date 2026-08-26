@@ -19,6 +19,23 @@ impl CliRunner {
         dns_server: std::net::SocketAddr,
         iface: Option<String>,
     ) -> Result<(), LabError> {
+        if args.scenario.requires_root() && !crate::is_root() {
+            if args.json {
+                let err_obj = serde_json::json!({
+                    "scenario": "ra",
+                    "success": false,
+                    "error": "Root privileges (CAP_NET_RAW / sudo) required for IPv6 Router Advertisement (RA) inspection"
+                });
+                println!("{}", serde_json::to_string_pretty(&err_obj)?);
+            } else {
+                println!("\n{}", "=== Router Advertisement (RA) Result ===".bold().red());
+                println!("{}", "✖ Error: Root privileges (CAP_NET_RAW) required. Run with sudo.".red().bold());
+            }
+            return Err(LabError::RootRequired(
+                "IPv6 Router Advertisement (RA) requires root privileges (CAP_NET_RAW). Run with sudo.".to_string(),
+            ));
+        }
+
         let harness = Self::init_harness(mode, dhcp_server, dns_server, iface.as_deref())?;
 
         match args.scenario {
@@ -198,6 +215,12 @@ impl CliRunner {
         dns_server: std::net::SocketAddr,
         iface: Option<&str>,
     ) -> Result<LabHarness, LabError> {
+        if mode.requires_root() && !crate::is_root() {
+            return Err(LabError::RootRequired(
+                "Kernel Network Namespace (netns) mode requires root privileges (run with 'sudo' or use '--mode direct').".to_string(),
+            ));
+        }
+
         let harness = match mode {
             ModeArg::Auto => LabHarness::auto()?,
             ModeArg::Direct => LabHarness::setup_direct()?,

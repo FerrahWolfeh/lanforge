@@ -55,6 +55,11 @@ impl LabAction {
             Self::RunSuite => "Execute automated regression test suite across all subsystems",
         }
     }
+
+    #[must_use]
+    pub const fn requires_root(self) -> bool {
+        matches!(self, Self::Ipv6Ra)
+    }
 }
 
 /// TUI State Manager.
@@ -63,6 +68,7 @@ pub struct App {
     pub logs: Arc<Mutex<VecDeque<String>>>,
     pub running: bool,
     pub is_busy: bool,
+    pub is_root: bool,
     pub status_message: String,
     pub dhcp_server: SocketAddr,
     pub dns_server: SocketAddr,
@@ -72,14 +78,19 @@ pub struct App {
 impl App {
     #[must_use]
     pub fn new(dhcp_server: SocketAddr, dns_server: SocketAddr, mode_str: String) -> Self {
+        let is_root = crate::is_root();
         let logs = Arc::new(Mutex::new(VecDeque::with_capacity(200)));
         logs.lock().push_back("● Lanforge Lab Workbench initialized. Press [1..7] or Enter to run an action.".to_string());
+        if !is_root {
+            logs.lock().push_back("ℹ Running in unprivileged (rootless) mode. Root-only features (IPv6 RA) are disabled.".to_string());
+        }
 
         Self {
             selected_index: 0,
             logs,
             running: true,
             is_busy: false,
+            is_root,
             status_message: "Ready".to_string(),
             dhcp_server,
             dns_server,
@@ -115,6 +126,15 @@ impl App {
     /// Triggers the specified action asynchronously.
     pub fn trigger_action(&mut self, action: LabAction, harness: Arc<LabHarness>) {
         if self.is_busy {
+            return;
+        }
+
+        if action.requires_root() && !self.is_root {
+            self.status_message = format!("Blocked: {} requires root (sudo)", action.title());
+            self.add_log(format!(
+                "✖ [GUARD] '{}' requires root privileges (CAP_NET_RAW). Re-run lanforge-lab with sudo.",
+                action.title()
+            ));
             return;
         }
 

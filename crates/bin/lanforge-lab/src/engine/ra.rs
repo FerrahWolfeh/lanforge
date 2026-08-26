@@ -26,8 +26,14 @@ impl RaEngine {
 
     /// Sends a Router Solicitation (RS) and awaits a Router Advertisement (RA).
     ///
-    /// Requires `CAP_NET_RAW` (or root). Returns `Err(LabError::Socket)` if unprivileged.
+    /// Requires `CAP_NET_RAW` (or root). Returns `Err(LabError::RootRequired)` if unprivileged.
     pub async fn send_rs_and_await_ra(&self) -> Result<RaDecodedInfo, LabError> {
+        if !crate::is_root() {
+            return Err(LabError::RootRequired(
+                "IPv6 Router Advertisement (RA) requires root privileges (CAP_NET_RAW). Run with sudo.".to_string(),
+            ));
+        }
+
         let sock = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))
             .map_err(|e| LabError::Socket(format!("Raw ICMPv6 socket requires CAP_NET_RAW: {e}")))?;
 

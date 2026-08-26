@@ -49,14 +49,14 @@ impl NetnsManager {
     /// Checks if the current process has `root/CAP_NET_ADMIN` privileges.
     #[must_use]
     pub fn has_privileges() -> bool {
-        unsafe { libc::geteuid() == 0 }
+        crate::is_root()
     }
 
     /// Sets up the virtual network namespace and veth pair.
     pub fn setup(&mut self) -> Result<(), LabError> {
         if !Self::has_privileges() {
-            return Err(LabError::Netns(
-                "Root privileges (sudo / CAP_NET_ADMIN) required to create netns/veth".to_string(),
+            return Err(LabError::RootRequired(
+                "Kernel Network Namespace (netns) mode requires root privileges (sudo / CAP_NET_ADMIN).".to_string(),
             ));
         }
 
