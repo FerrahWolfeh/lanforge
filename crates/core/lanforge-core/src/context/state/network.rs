@@ -59,6 +59,8 @@ pub struct NetworkState {
     pub v6_pools: HashMap<u32, DhcpPoolStats>,
     /// Active `PPPoE` WAN state.
     pub pppoe_status: Option<lanforge_types::system::PppoeStatusResponse>,
+    /// Active `RA` (Router Advertisement) state.
+    pub ra_status: Option<lanforge_types::system::RaStatusResponse>,
 }
 
 impl NetworkState {
@@ -67,8 +69,10 @@ impl NetworkState {
         self.v4_pool = None;
         self.v6_pools.clear();
         self.pppoe_status = None;
+        self.ra_status = None;
     }
 }
+
 
 /// Serializes a map with integer keys.
 ///

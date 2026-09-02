@@ -320,3 +320,86 @@ pub struct DnsslConfig {
     /// If `None`, hosts will typically derive a default lifetime value.
     pub lifetime: Option<u32>,
 }
+
+/// Default router priority (RFC 4191 §2.1).
+/// Influences which router is preferred when multiple are present on the network.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum RouterPriority {
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+
+impl RouterPriority {
+    /// Priority bits in the RA flags byte (bits 3–4).
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        match self {
+            Self::Low => 0b0001_1000,
+            Self::Medium => 0b0000_0000,
+            Self::High => 0b0000_1000,
+        }
+    }
+}
+
+/// Full runtime configuration for the Router Advertisement service.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RaServerConfig {
+    /// Whether the RA service is enabled.
+    pub enabled: bool,
+    /// Interface name (e.g. "eth0").
+    pub iface: Option<String>,
+    /// Managed address configuration flag (M): `DHCPv6` is available for address configuration.
+    pub managed: bool,
+    /// Other stateful configuration flag (O): `DHCPv6` is available for other configuration (DNS, NTP).
+    pub other_config: bool,
+
+    /// Default hop limit suggested to LAN hosts.
+    pub hop_limit: u8,
+    /// Router priority preference (RFC 4191).
+    pub priority: RouterPriority,
+    /// Max interval between periodic unsolicited Router Advertisements (RFC 4861 §6.2.1), in seconds.
+    pub max_interval_secs: u64,
+    /// Min interval between periodic unsolicited Router Advertisements (RFC 4861 §6.2.1), in seconds.
+    pub min_interval_secs: Option<u64>,
+    /// Router lifetime (seconds) indicating lifetime as a default router.
+    pub lifetime_secs: Option<u64>,
+    /// Reachable time in milliseconds (0 = unspecified).
+    pub reachable_time_ms: u32,
+    /// Retransmission timer in milliseconds (0 = unspecified).
+    pub retrans_timer_ms: u32,
+    /// Link MTU option (RFC 4861 §4.6.4).
+    pub mtu: Option<u32>,
+    /// IPv6 prefixes to advertise.
+    pub prefixes: Vec<RAPrefix>,
+    /// Recursive DNS server addresses (RFC 8106).
+    pub rdnss: Vec<RdnssConfig>,
+    /// DNS search list suffixes (RFC 8106).
+    pub dnssl: Vec<DnsslConfig>,
+}
+
+impl Default for RaServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            iface: None,
+            managed: false,
+            other_config: false,
+            hop_limit: 64,
+            priority: RouterPriority::Medium,
+            max_interval_secs: 200,
+            min_interval_secs: None,
+            lifetime_secs: None,
+            reachable_time_ms: 0,
+            retrans_timer_ms: 0,
+            mtu: None,
+            prefixes: Vec::new(),
+            rdnss: Vec::new(),
+            dnssl: Vec::new(),
+        }
+    }
+}
+

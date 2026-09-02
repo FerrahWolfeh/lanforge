@@ -58,7 +58,9 @@ impl TimedEvent {
                 | NetworkEvent::WolTriggered { .. }
                 | NetworkEvent::RsReceived { .. }
                 | NetworkEvent::LeaseRenewRequested { .. }
-                | NetworkEvent::LeaseReleaseRequested { .. } => true,
+                | NetworkEvent::LeaseReleaseRequested { .. }
+                | NetworkEvent::RaTriggerRequested => true,
+
             },
             LanforgeEvent::System(e) => matches!(
                 e,

@@ -1,8 +1,11 @@
 use lanforge_types::{
-    events::TimedEvent, network::pppoe::PppoeConfig, system::PppoeStatusResponse,
+    events::TimedEvent,
+    network::{pppoe::PppoeConfig, ra::RaServerConfig},
+    system::{PppoeStatusResponse, RaStatusResponse},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
 
 pub mod auth;
 pub mod common;
@@ -85,7 +88,12 @@ pub enum Response {
     PppoeStatus(Box<PppoeStatusResponse>),
     /// PPPoE configuration response.
     PppoeConfig(Box<PppoeConfig>),
+    /// Router Advertisement server status and metrics response.
+    RaStatus(Box<RaStatusResponse>),
+    /// Router Advertisement runtime configuration response.
+    RaConfig(Box<RaServerConfig>),
     /// User account details response.
+
     User(UserResponse),
     /// List of user accounts response.
     UserList(UserListResponse),

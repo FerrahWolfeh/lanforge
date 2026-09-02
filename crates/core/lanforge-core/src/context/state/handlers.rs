@@ -771,6 +771,15 @@ impl State {
         EventVec::new()
     }
 
+    pub(crate) fn handle_ra_status_updated(
+        &mut self,
+        status: Option<lanforge_types::system::RaStatusResponse>,
+    ) -> EventVec {
+        self.interfaces.ra_status = status;
+        EventVec::new()
+    }
+
+
     pub(crate) fn handle_device_interface_seen(
         &mut self,
         mac: MacAddr,

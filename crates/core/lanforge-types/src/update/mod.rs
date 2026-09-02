@@ -204,4 +204,8 @@ pub enum DeviceUpdate {
     PppoeStatusUpdated {
         status: Option<crate::system::PppoeStatusResponse>,
     },
+    RaStatusUpdated {
+        status: Option<crate::system::RaStatusResponse>,
+    },
 }
+

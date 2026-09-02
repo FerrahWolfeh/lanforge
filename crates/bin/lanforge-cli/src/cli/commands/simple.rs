@@ -497,7 +497,14 @@ fn render_watch_event(e: &TimedEvent, device_map: &HashMap<String, String>, verb
                     target
                 );
             }
+            NetworkEvent::RaTriggerRequested => {
+                println!(
+                    " [{time_str}] {}",
+                    "RA TRIGGER REQUESTED".bold().magenta()
+                );
+            }
         },
+
         LanforgeEvent::System(sys_evt) => {
             println!(
                 " [{time_str}] {} {:?}",

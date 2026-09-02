@@ -19,6 +19,7 @@
 	import KeyIcon from "@lucide/svelte/icons/key";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import LayersIcon from "@lucide/svelte/icons/layers";
+	import RadioIcon from "@lucide/svelte/icons/radio";
 
 	const navGroups = [
 		{
@@ -45,8 +46,14 @@
 					href: "/network/pppoe",
 					icon: PlugZapIcon,
 				},
+				{
+					label: "IPv6 RA",
+					href: "/network/ra",
+					icon: RadioIcon,
+				},
 			],
 		},
+
 		{
 			label: "DNS",
 			items: [

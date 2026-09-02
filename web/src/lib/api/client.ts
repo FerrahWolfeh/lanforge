@@ -40,8 +40,11 @@ import type {
 	StatusResponse,
 	UserInfo,
 	PppoeConfig,
-	PppoeStatusResponse
+	PppoeStatusResponse,
+	RaServerConfig,
+	RaStatusResponse
 } from './types';
+
 
 // ---------------------------------------------------------------------------
 // Core transport
@@ -450,8 +453,18 @@ export const pppoeReconnect = () => post<void>('/pppoe/reconnect');
 export const pppoeDisconnect = () => post<void>('/pppoe/disconnect');
 
 // ---------------------------------------------------------------------------
+// Router Advertisement (RA)
+// ---------------------------------------------------------------------------
+
+export const raStatus = () => get<RaStatusResponse>('/ra/status');
+export const raConfig = () => get<RaServerConfig>('/ra/config');
+export const raUpdateConfig = (cfg: RaServerConfig) => post<void>('/ra/config', cfg);
+export const raTrigger = () => post<void>('/ra/trigger');
+
+// ---------------------------------------------------------------------------
 // Setup & Onboarding
 // ---------------------------------------------------------------------------
+
 
 export const getSetupStatus = () => get<SetupStatusResponse>('/system/setup-status');
 export const submitSetup = (payload: SetupPayload) => post<SetupResponse>('/system/setup', payload);

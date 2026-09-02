@@ -92,6 +92,41 @@ impl ClientContext {
         Response::PppoeStatus(Box::new(status))
     }
 
+    pub async fn handle_ra_status(&self) -> Response {
+        let ra_status = self.ctx.read().interfaces.ra_status.clone();
+        let status = ra_status.unwrap_or_else(|| {
+            let target_ifindex = self.ctx.target_ifindex().unwrap_or(0);
+            let if_ips = self.ctx.get_interface_state(target_ifindex);
+            let cfg = self.ctx.get_ra_server_config();
+            lanforge_types::system::RaStatusResponse {
+                enabled: self
+                    .ctx
+                    .get_status()
+                    .map(|s| s.ra_enabled)
+                    .unwrap_or(false),
+                interface: cfg.iface.clone(),
+                link_local: if_ips.link_local,
+                active_gua_prefix: if_ips.gua,
+                active_ula_prefix: if_ips.ula,
+                prefixes: cfg.prefixes.clone(),
+                rdnss: cfg.rdnss.clone(),
+                dnssl: cfg.dnssl.clone(),
+                managed: cfg.managed,
+                other_config: cfg.other_config,
+                hop_limit: cfg.hop_limit,
+                priority: cfg.priority,
+                max_interval_secs: cfg.max_interval_secs,
+                min_interval_secs: cfg.min_interval_secs.unwrap_or_else(|| (cfg.max_interval_secs / 3).max(3)),
+                router_lifetime_secs: cfg.lifetime_secs.unwrap_or(cfg.max_interval_secs * 3),
+                mtu: cfg.mtu,
+                uptime_secs: Some(self.uptime_secs),
+                ..Default::default()
+            }
+        });
+        Response::RaStatus(Box::new(status))
+    }
+
+
     #[must_use]
     pub fn gather_db_status(&self) -> DbStatus {
         let status = self.ctx.get_status().unwrap_or_default();

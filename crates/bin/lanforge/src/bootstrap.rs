@@ -129,11 +129,28 @@ impl Bootstrapper {
             }
         }
         #[cfg(feature = "ra")]
-        ctx.update_ra_config(
-            cfg.ra_toml.prefixes.clone(),
-            cfg.ra_toml.rdnss.clone(),
-            cfg.ra_toml.dnssl.clone(),
-        );
+        {
+            let ra_cfg = cfg.to_ra_config();
+            let ra_srv = lanforge_types::network::ra::RaServerConfig {
+                enabled: cfg.ra_toml.enabled,
+                iface: Some(ra_cfg.iface),
+                managed: ra_cfg.managed,
+                other_config: ra_cfg.other_config,
+                hop_limit: ra_cfg.hop_limit,
+                priority: ra_cfg.priority,
+                max_interval_secs: ra_cfg.max_interval.as_secs(),
+                min_interval_secs: ra_cfg.min_interval.map(|d| d.as_secs()),
+                lifetime_secs: ra_cfg.lifetime.map(|d| d.as_secs()),
+                reachable_time_ms: ra_cfg.reachable_time,
+                retrans_timer_ms: ra_cfg.retrans_timer,
+                mtu: ra_cfg.mtu,
+                prefixes: cfg.ra_toml.prefixes.clone(),
+                rdnss: cfg.ra_toml.rdnss.clone(),
+                dnssl: cfg.ra_toml.dnssl.clone(),
+            };
+            ctx.update_ra_server_config(ra_srv);
+        }
+
         ctx.set_status(cfg.to_system_status());
 
         ctx.set_status(cfg.to_system_status());

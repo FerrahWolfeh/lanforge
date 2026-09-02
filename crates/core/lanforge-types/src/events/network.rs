@@ -29,4 +29,6 @@ pub enum NetworkEvent {
         mac: MacAddr,
         target: Option<LeaseTarget>,
     },
+    RaTriggerRequested,
 }
+

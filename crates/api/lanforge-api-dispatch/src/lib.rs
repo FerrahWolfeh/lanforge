@@ -18,8 +18,10 @@ use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{BlockingMode, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::pppoe::PppoeConfig;
-use lanforge_types::system::PppoeStatusResponse;
+use lanforge_types::network::ra::RaServerConfig;
+use lanforge_types::system::{PppoeStatusResponse, RaStatusResponse};
 use lanforge_types::update::LeaseTarget;
+
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -728,6 +730,39 @@ impl LanforgeRpc for ClientContext {
             _ => Err(RpcCallError::InvalidResponseType),
         }
     }
+
+    async fn ra_status(&self) -> Result<Box<RaStatusResponse>, RpcCallError> {
+        match self.handle_ra_status().await {
+            Response::RaStatus(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn ra_config(&self) -> Result<RaServerConfig, RpcCallError> {
+        match self.handle_ra_config().await {
+            Response::RaConfig(cfg) => Ok(*cfg),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn update_ra_config(&self, cfg: RaServerConfig) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_update_ra_config(cfg).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn ra_trigger(&self) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_ra_trigger().await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
 
     async fn user_create(
         &self,

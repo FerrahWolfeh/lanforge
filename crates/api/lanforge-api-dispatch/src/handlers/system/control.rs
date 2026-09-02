@@ -1,7 +1,11 @@
 use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess};
-use lanforge_core::bus::{LanforgeEvent, SystemEvent};
-use lanforge_types::{network::pppoe::PppoeConfig, system::ServiceAction};
+use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
+use lanforge_types::{
+    network::{pppoe::PppoeConfig, ra::RaServerConfig},
+    system::ServiceAction,
+};
+
 
 impl ClientContext {
     pub async fn handle_service_control(&self, id: String, action: ServiceAction) -> Response {
@@ -91,4 +95,34 @@ impl ClientContext {
             message: "PPPoE configuration updated successfully".to_string(),
         })
     }
+
+    pub async fn handle_ra_config(&self) -> Response {
+        let cfg = self.ctx.get_ra_server_config();
+        Response::RaConfig(Box::new(cfg))
+    }
+
+    pub async fn handle_update_ra_config(&self, cfg: RaServerConfig) -> Response {
+        // Save dynamic RA components to database
+        let _ = self.db.save_ra_prefixes(&cfg.prefixes).await;
+        let _ = self.db.save_ra_rdnss(&cfg.rdnss).await;
+        let _ = self.db.save_ra_dnssl(&cfg.dnssl).await;
+
+        self.ctx.update_ra_server_config(cfg);
+
+        Response::Success(SimpleSuccess {
+            message: "Router Advertisement configuration updated successfully".to_string(),
+        })
+    }
+
+    pub async fn handle_ra_trigger(&self) -> Response {
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Network(NetworkEvent::RaTriggerRequested));
+
+        Response::Success(SimpleSuccess {
+            message: "Immediate Router Advertisement burst triggered".to_string(),
+        })
+    }
 }
+

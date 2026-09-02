@@ -8,8 +8,9 @@ use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
-use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
+use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
 use lanforge_types::update::DeviceUpdate;
+
 
 use crate::bus::{DnsEvent, LanforgeEvent, SystemEvent};
 use crate::context::LanforgeContext;
@@ -98,6 +99,22 @@ impl LanforgeContext {
             .bus_ref()
             .publish(LanforgeEvent::System(SystemEvent::ConfigRaChanged));
     }
+
+    /// Updates the full RA server configuration and publishes the change event.
+    pub fn update_ra_server_config(&self, config: RaServerConfig) {
+        {
+            let mut cfg = self.inner.config.write();
+            cfg.ra_prefixes.clone_from(&config.prefixes);
+            cfg.ra_rdnss.clone_from(&config.rdnss);
+            cfg.ra_dnssl.clone_from(&config.dnssl);
+            cfg.ra_config = Some(config);
+
+        }
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::System(SystemEvent::ConfigRaChanged));
+    }
+
 
     /// Updates the configured DNS upstreams and publishes the change event.
     pub fn update_dns_upstreams(&self, upstreams: Vec<UpstreamTarget>) {

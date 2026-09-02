@@ -789,3 +789,75 @@ export interface PppoeStatusResponse {
 	reconnect_attempts: number;
 	last_error: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Router Advertisement (RA)
+// ---------------------------------------------------------------------------
+
+export type RouterPriority = 'low' | 'medium' | 'high';
+
+export interface RaPrefix {
+	prefix: string;
+	on_link?: boolean;
+	autonomous?: boolean;
+	valid_lifetime?: number | null;
+	preferred_lifetime?: number | null;
+	router_address?: boolean;
+}
+
+export interface RdnssConfig {
+	addresses: string[];
+	lifetime?: number | null;
+}
+
+export interface DnsslConfig {
+	domains: string[];
+	lifetime?: number | null;
+}
+
+export interface RaServerConfig {
+	enabled: boolean;
+	iface?: string | null;
+	managed: boolean;
+	other_config: boolean;
+	hop_limit: number;
+	priority: RouterPriority;
+	max_interval_secs: number;
+	min_interval_secs?: number | null;
+	lifetime_secs?: number | null;
+	reachable_time_ms: number;
+	retrans_timer_ms: number;
+	mtu?: number | null;
+	prefixes: RaPrefix[];
+	rdnss: RdnssConfig[];
+	dnssl: DnsslConfig[];
+}
+
+export interface RaStatusResponse {
+	enabled: boolean;
+	interface: string | null;
+	link_local: string | null;
+	active_gua_prefix: string | null;
+	active_ula_prefix: string | null;
+	prefixes: RaPrefix[];
+	rdnss: RdnssConfig[];
+	dnssl: DnsslConfig[];
+	deprecated_prefixes: [string, number][];
+	sent_multicast_ras: number;
+	sent_unicast_ras: number;
+	received_solicitations: number;
+	ignored_solicitations: number;
+	last_ra_sent_secs_ago: number | null;
+	last_rs_received_secs_ago: number | null;
+	next_ra_in_secs: number | null;
+	managed: boolean;
+	other_config: boolean;
+	hop_limit: number;
+	priority: RouterPriority;
+	max_interval_secs: number;
+	min_interval_secs: number;
+	router_lifetime_secs: number;
+	mtu: number | null;
+	uptime_secs: number | null;
+}
+

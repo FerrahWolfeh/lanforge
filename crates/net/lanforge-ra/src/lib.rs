@@ -56,10 +56,12 @@ pub mod packet;
 pub use config::*;
 use lanforge_core::context::LanforgeContext;
 use lanforge_types::network::ra::{
-    DnsslConfig, ICMPV6_TYPE_RS, MAX_INITIAL_RTR_ADVERT_INTERVAL, MAX_INITIAL_RTR_ADVERTISEMENTS,
-    MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS, RAPrefix, RdnssConfig,
+    ICMPV6_TYPE_RS, MAX_INITIAL_RTR_ADVERT_INTERVAL, MAX_INITIAL_RTR_ADVERTISEMENTS,
+    MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS,
 };
-use lanforge_types::system::RunResult;
+use lanforge_types::system::{RaStatusResponse, RunResult};
+use lanforge_types::update::DeviceUpdate;
+
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
 use crate::error::NetworkError;
@@ -85,10 +87,10 @@ const ICMP6_FILTER: libc::c_int = 1;
 // Runtime State — Handles RFC-compliant timing
 // ---------------------------------------------------------------------------
 
-/// Runtime timing state for the RA service.
+/// Runtime timing state and live metrics for the RA service.
 ///
 /// Tracks RFC 4861 startup burst counters, last multicast/unicast timestamps,
-/// and rate limiting logic. Designed to be used independently of the service struct.
+/// packet metrics, and rate limiting logic. Designed to be used independently of the service struct.
 ///
 /// # RFC 4861 Timing Rules
 ///
@@ -108,6 +110,21 @@ pub struct RaState {
     last_ula: Option<Ipv6Addr>,
     /// Deprecated prefixes: (Prefix, `deprecation_end`, `valid_end`)
     pub(crate) deprecated_prefixes: Vec<(Ipv6Addr, Instant, Instant)>,
+    /// Total multicast RAs sent to `ff02::1`
+    pub(crate) sent_multicast_ras: u64,
+
+    /// Total unicast RAs sent directly to clients
+    pub(crate) sent_unicast_ras: u64,
+    /// Total Router Solicitations received
+    pub(crate) received_solicitations: u64,
+    /// Total Router Solicitations ignored due to rate limit
+    pub(crate) ignored_solicitations: u64,
+    /// Instant when the last RA was sent
+    pub(crate) last_ra_sent: Option<Instant>,
+    /// Instant when the last RS was received
+    pub(crate) last_rs_received: Option<Instant>,
+    /// Instant when the service was initialized
+    pub(crate) start_time: Instant,
 }
 
 impl RaState {
@@ -119,6 +136,13 @@ impl RaState {
             last_gua: None,
             last_ula: None,
             deprecated_prefixes: Vec::new(),
+            sent_multicast_ras: 0,
+            sent_unicast_ras: 0,
+            received_solicitations: 0,
+            ignored_solicitations: 0,
+            last_ra_sent: None,
+            last_rs_received: None,
+            start_time: Instant::now(),
         }
     }
 
@@ -153,13 +177,82 @@ impl RaState {
     }
 
     pub(crate) fn record_multicast(&mut self) {
-        self.last_multicast_ra = Some(Instant::now());
+        let now = Instant::now();
+        self.last_multicast_ra = Some(now);
+        self.last_ra_sent = Some(now);
         self.initial_sent = self.initial_sent.saturating_add(1);
+        self.sent_multicast_ras = self.sent_multicast_ras.saturating_add(1);
     }
 
     pub(crate) fn record_unicast(&mut self, dst: Ipv6Addr) {
-        self.unicast_rl.insert(dst, Instant::now());
+        let now = Instant::now();
+        self.unicast_rl.insert(dst, now);
+        self.last_ra_sent = Some(now);
+        self.sent_unicast_ras = self.sent_unicast_ras.saturating_add(1);
     }
+
+    pub(crate) fn record_solicitation_received(&mut self) {
+        self.received_solicitations = self.received_solicitations.saturating_add(1);
+        self.last_rs_received = Some(Instant::now());
+    }
+
+    pub(crate) const fn record_solicitation_ignored(&mut self) {
+        self.ignored_solicitations = self.ignored_solicitations.saturating_add(1);
+    }
+
+
+    pub(crate) fn build_status(
+        &self,
+        cfg: &RaConfig,
+        ctx: &LanforgeContext,
+        next_ra_at: Option<Instant>,
+    ) -> RaStatusResponse {
+        let target_ifindex = ctx.target_ifindex().unwrap_or(0);
+        let if_ips = ctx.get_interface_state(target_ifindex);
+        let now = Instant::now();
+
+        let deprecated_list: Vec<(Ipv6Addr, u32)> = self
+            .deprecated_prefixes
+            .iter()
+            .map(|&(ip, _, valid_end)| {
+                let remaining = if valid_end > now {
+                    u32::try_from((valid_end - now).as_secs()).unwrap_or(u32::MAX)
+                } else {
+                    0
+                };
+                (ip, remaining)
+            })
+            .collect();
+
+        RaStatusResponse {
+            enabled: true,
+            interface: Some(cfg.iface.clone()),
+            link_local: if_ips.link_local,
+            active_gua_prefix: if_ips.gua,
+            active_ula_prefix: if_ips.ula,
+            prefixes: cfg.prefixes.clone(),
+            rdnss: cfg.rdnss.clone(),
+            dnssl: cfg.dnssl.clone(),
+            deprecated_prefixes: deprecated_list,
+            sent_multicast_ras: self.sent_multicast_ras,
+            sent_unicast_ras: self.sent_unicast_ras,
+            received_solicitations: self.received_solicitations,
+            ignored_solicitations: self.ignored_solicitations,
+            last_ra_sent_secs_ago: self.last_ra_sent.map(|t| t.elapsed().as_secs()),
+            last_rs_received_secs_ago: self.last_rs_received.map(|t| t.elapsed().as_secs()),
+            next_ra_in_secs: next_ra_at.map(|t| if t > now { (t - now).as_secs() } else { 0 }),
+            managed: cfg.managed,
+            other_config: cfg.other_config,
+            hop_limit: cfg.hop_limit,
+            priority: cfg.priority,
+            max_interval_secs: cfg.max_interval.as_secs(),
+            min_interval_secs: cfg.effective_min_interval().as_secs(),
+            router_lifetime_secs: cfg.effective_router_lifetime().as_secs(),
+            mtu: cfg.mtu,
+            uptime_secs: Some(self.start_time.elapsed().as_secs()),
+        }
+    }
+
 
     pub(crate) fn update_prefix_and_deprecate(
         &mut self,
@@ -285,17 +378,7 @@ impl RaService {
         }
     }
 
-    async fn run_server(
-        &self,
-        prefixes: Vec<RAPrefix>,
-        rdnss: Vec<RdnssConfig>,
-        dnssl: Vec<DnsslConfig>,
-    ) -> Result<RunResult, CoreError> {
-        let mut current_cfg = self.cfg.clone();
-        current_cfg.prefixes = prefixes;
-        current_cfg.rdnss = rdnss;
-        current_cfg.dnssl = dnssl;
-
+    async fn run_server(&self, current_cfg: RaConfig) -> Result<RunResult, CoreError> {
         current_cfg
             .validate()
             .map_err(|e| CoreError::Generic(e.to_string()))?;
@@ -332,6 +415,12 @@ impl RaService {
 
         let mut next_ra_at = Instant::now() + state.next_interval(&current_cfg);
 
+        // Update live status in context
+        let initial_status = state.build_status(&current_cfg, &self.ctx, Some(next_ra_at));
+        let _ = self.ctx.apply(DeviceUpdate::RaStatusUpdated {
+            status: Some(initial_status),
+        });
+
         let mut buf = [0u8; 1500];
         let mut handle = self.ctx.service_handle_network();
 
@@ -358,7 +447,7 @@ impl RaService {
 
                 // 2. Packet processing (RS)
                 res = async_socket.readable() => {
-                    self.handle_rs_packet(res, &mut buf, &current_cfg, ctx, &mut state).await?;
+                    self.handle_rs_packet(res, &mut buf, &current_cfg, ctx, &mut state, next_ra_at).await?;
                 }
 
                 // 3. EventBus signals
@@ -378,6 +467,11 @@ impl RaService {
                             state.initial_sent = 0;
                             next_ra_at = Instant::now();
                         }
+                        LanforgeEvent::Network(NetworkEvent::RaTriggerRequested) => {
+                            info!("RA: Immediate advertisement burst requested via API");
+                            state.initial_sent = 0;
+                            next_ra_at = Instant::now();
+                        }
                     });
                 }
             }
@@ -391,9 +485,10 @@ impl AsyncService for RaService {
     }
 
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
+        let ra_status = ctx.read().interfaces.ra_status.clone();
         let if_state = ctx.get_interface_state(ctx.target_ifindex().unwrap_or(0));
         let prefixes = ctx.get_ra_prefixes();
-        vec![
+        let mut list = vec![
             (
                 std::borrow::Cow::Borrowed("iface"),
                 self.cfg.iface.clone(),
@@ -422,32 +517,63 @@ impl AsyncService for RaService {
                 std::borrow::Cow::Borrowed("ula_prefix"),
                 if_state.ula.map_or_else(|| "none".to_string(), |u| u.to_string()),
             ),
-        ]
+        ];
+        if let Some(ref st) = ra_status {
+            list.push((
+                std::borrow::Cow::Borrowed("sent_multicast"),
+                st.sent_multicast_ras.to_string(),
+            ));
+            list.push((
+                std::borrow::Cow::Borrowed("sent_unicast"),
+                st.sent_unicast_ras.to_string(),
+            ));
+            list.push((
+                std::borrow::Cow::Borrowed("received_rs"),
+                st.received_solicitations.to_string(),
+            ));
+            list.push((
+                std::borrow::Cow::Borrowed("ignored_rs"),
+                st.ignored_solicitations.to_string(),
+            ));
+        }
+        list
     }
 
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         loop {
-            let prefixes = ctx.get_ra_prefixes();
-            let rdnss = ctx.get_ra_rdnss();
-            let dnssl = ctx.get_ra_dnssl();
-
-            if prefixes.is_empty() {
-                warn!("RA: Service enabled but no prefixes configured — server idle");
+            let ra_server_cfg = ctx.get_ra_server_config();
+            if !ra_server_cfg.enabled {
+                info!("RA: Service disabled via runtime config — server idle");
+                let _ = ctx.apply(DeviceUpdate::RaStatusUpdated { status: None });
                 match self.wait_for_config_change_or_shutdown().await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,
                 }
             }
 
-            match self.run_server(prefixes, rdnss, dnssl).await? {
+            let mut current_cfg = self.cfg.clone();
+            current_cfg.update_from_server_config(&ra_server_cfg);
+
+            if current_cfg.prefixes.is_empty() {
+                warn!("RA: Service enabled but no prefixes configured — server idle");
+                let _ = ctx.apply(DeviceUpdate::RaStatusUpdated { status: None });
+                match self.wait_for_config_change_or_shutdown().await? {
+                    RunResult::Shutdown => break,
+                    RunResult::ConfigChanged => continue,
+                }
+            }
+
+            match self.run_server(current_cfg).await? {
                 RunResult::Shutdown => break,
                 RunResult::ConfigChanged => {}
             }
         }
 
+        let _ = ctx.apply(DeviceUpdate::RaStatusUpdated { status: None });
         Ok(())
     }
 }
+
 
 /// Thread-safe context for Router Advertisement operations.
 #[derive(Clone, Copy)]
@@ -480,6 +606,10 @@ impl RaService {
             let interval = state.next_interval(cfg);
             *next_ra_at = Instant::now() + interval;
             debug!("Next periodic RA in {:.1}s", interval.as_secs_f64());
+            let status = state.build_status(cfg, ctx.lctx, Some(*next_ra_at));
+            let _ = ctx.lctx.apply(DeviceUpdate::RaStatusUpdated {
+                status: Some(status),
+            });
         }
     }
 
@@ -491,6 +621,7 @@ impl RaService {
         cfg: &RaConfig,
         ctx: RaContext<'_>,
         state: &mut RaState,
+        next_ra_at: Instant,
     ) -> Result<(), CoreError> {
         let mut guard = res.map_err(CoreError::Io)?;
         let res = guard
@@ -503,6 +634,7 @@ impl RaService {
                 if n > 0 {
                     let data = &buf[..n];
                     if data.first() == Some(&ICMPV6_TYPE_RS) {
+                        state.record_solicitation_received();
                         let rs_src: Option<Ipv6Addr> = src_sa.as_socket().and_then(|s| match s {
                             SocketAddr::V6(v6) => Some(*v6.ip()),
                             SocketAddr::V4(_) => None,
@@ -547,7 +679,10 @@ impl RaService {
                                     state.record_multicast();
                                 }
                             }
-                            _ => debug!("RS discarded: rate limit active"),
+                            _ => {
+                                debug!("RS discarded: rate limit active");
+                                state.record_solicitation_ignored();
+                            }
                         }
 
                         // Passive discovery: se conseguirmos o MAC do cara que pediu o RA,
@@ -561,6 +696,11 @@ impl RaService {
                                 .bus()
                                 .publish(LanforgeEvent::Network(NetworkEvent::RsReceived { mac }));
                         }
+
+                        let status = state.build_status(cfg, ctx.lctx, Some(next_ra_at));
+                        let _ = ctx.lctx.apply(DeviceUpdate::RaStatusUpdated {
+                            status: Some(status),
+                        });
                     }
                 }
             }
@@ -571,6 +711,7 @@ impl RaService {
         }
         Ok(())
     }
+
 }
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]

@@ -409,6 +409,31 @@ impl HttpWrappedResponse for lanforge_types::system::PppoeStatusResponse {
     }
 }
 
+impl HttpWrappedResponse for lanforge_types::system::RaStatusResponse {
+    type Wrapper = HttpDataResponse<lanforge_types::system::RaStatusResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for lanforge_types::network::ra::RaServerConfig {
+    type Wrapper = HttpDataResponse<lanforge_types::network::ra::RaServerConfig>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+
 pub use lanforge_types::system::{
     NetworkInterfaceInfo, SetupPayload, SetupResponse, SetupStatusResponse, SetupWanConfig,
 };

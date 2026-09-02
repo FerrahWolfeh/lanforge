@@ -7,7 +7,8 @@
 
 use crate::error::NetworkError;
 use lanforge_macros::ServiceConfig;
-use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
+pub use lanforge_types::network::ra::RouterPriority;
+use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -34,28 +35,6 @@ pub const LIFETIME_INFINITY: u32 = u32::MAX;
 // Configuration Types
 // ---------------------------------------------------------------------------
 
-/// Default router priority (RFC 4191 §2.1).
-/// Influences which router is preferred when multiple are present on the network.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RouterPriority {
-    Low,
-    #[default]
-    Medium,
-    High,
-}
-
-impl RouterPriority {
-    /// Priority bits in the RA flags byte (bits 3–4).
-    #[must_use]
-    pub const fn bits(self) -> u8 {
-        match self {
-            Self::Low => 0b0001_1000,
-            Self::Medium => 0b0000_0000,
-            Self::High => 0b0000_1000,
-        }
-    }
-}
 
 /// Full RA service configuration for an interface.
 ///
@@ -170,7 +149,53 @@ impl Default for RaConfig {
     }
 }
 
+impl From<RaServerConfig> for RaConfig {
+    fn from(cfg: RaServerConfig) -> Self {
+        Self {
+            iface: cfg.iface.unwrap_or_else(|| "end0".into()),
+            managed: cfg.managed,
+            other_config: cfg.other_config,
+            hop_limit: cfg.hop_limit,
+            priority: cfg.priority,
+            max_interval: Duration::from_secs(cfg.max_interval_secs),
+            min_interval: cfg.min_interval_secs.map(Duration::from_secs),
+            lifetime: cfg.lifetime_secs.map(Duration::from_secs),
+            reachable_time: cfg.reachable_time_ms,
+            retrans_timer: cfg.retrans_timer_ms,
+            mtu: cfg.mtu,
+            prefixes: cfg.prefixes,
+            rdnss: cfg.rdnss,
+            dnssl: cfg.dnssl,
+        }
+    }
+}
+
 impl RaConfig {
+    /// Updates RA runtime parameters from a `RaServerConfig`.
+    pub fn update_from_server_config(&mut self, cfg: &RaServerConfig) {
+        if let Some(ref iface) = cfg.iface {
+            self.iface.clone_from(iface);
+        }
+
+        self.managed = cfg.managed;
+        self.other_config = cfg.other_config;
+        self.hop_limit = cfg.hop_limit;
+        self.priority = cfg.priority;
+        self.max_interval = Duration::from_secs(cfg.max_interval_secs);
+        self.min_interval = cfg.min_interval_secs.map(Duration::from_secs);
+        self.lifetime = cfg.lifetime_secs.map(Duration::from_secs);
+        self.reachable_time = cfg.reachable_time_ms;
+        self.retrans_timer = cfg.retrans_timer_ms;
+        self.mtu = cfg.mtu;
+        self.prefixes.clone_from(&cfg.prefixes);
+        self.rdnss.clone_from(&cfg.rdnss);
+        self.dnssl.clone_from(&cfg.dnssl);
+    }
+
+}
+
+impl RaConfig {
+
     /// Calculates effective `MinRtrAdvInterval` respecting the limits of RFC 4861 §6.2.1.
     #[must_use]
     pub fn effective_min_interval(&self) -> Duration {

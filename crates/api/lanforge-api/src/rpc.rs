@@ -20,10 +20,12 @@ use lanforge_types::{
             upstream::UpstreamProtocol,
         },
         pppoe::PppoeConfig,
+        ra::RaServerConfig,
     },
-    system::{PppoeStatusResponse, ServiceAction},
+    system::{PppoeStatusResponse, RaStatusResponse, ServiceAction},
     update::LeaseTarget,
 };
+
 
 use std::{
     future::Future,
@@ -284,7 +286,20 @@ pub trait LanforgeRpc {
         &self,
         cfg: PppoeConfig,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn ra_status(
+        &self,
+    ) -> impl Future<Output = Result<Box<RaStatusResponse>, RpcCallError>> + Send;
+    fn ra_config(
+        &self,
+    ) -> impl Future<Output = Result<RaServerConfig, RpcCallError>> + Send;
+
+    fn update_ra_config(
+        &self,
+        cfg: RaServerConfig,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn ra_trigger(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn user_create(
+
         &self,
         username: String,
         password: String,

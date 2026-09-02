@@ -343,7 +343,15 @@ fn format_network_event(now: &str, event: &NetworkEvent, _ascii: bool) {
                 "Lease Release Requested:".white()
             );
         }
+        NetworkEvent::RaTriggerRequested => {
+            println!(
+                "[{now}] {} {}",
+                "RA".magenta().bold(),
+                "Immediate advertisement burst requested".white()
+            );
+        }
     }
+
 }
 
 fn format_storage_event(now: &str, event: &StorageEvent, _ascii: bool) {

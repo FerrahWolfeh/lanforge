@@ -1,9 +1,14 @@
 use crate::identifiers::MacAddr;
-use crate::network::{Ipv6Prefix, dns::upstream::UpstreamTarget};
+use crate::network::{
+    Ipv6Prefix,
+    dns::upstream::UpstreamTarget,
+    ra::{DnsslConfig, RAPrefix, RdnssConfig, RouterPriority},
+};
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::borrow::Cow;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
 
 /// Global system status and runtime configuration snapshot.
 ///
@@ -280,3 +285,66 @@ pub struct SetupResponse {
     pub username: String,
     pub message: String,
 }
+
+/// Status, metrics, and active configuration response payload for Router Advertisement (RA) server.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct RaStatusResponse {
+    /// Whether the RA service is running/enabled.
+    pub enabled: bool,
+    /// Network interface name (e.g. "eth0").
+    pub interface: Option<String>,
+    /// Link-local IPv6 address of the interface.
+    pub link_local: Option<Ipv6Addr>,
+    /// Current detected or active Global Unicast Address (GUA) prefix.
+    pub active_gua_prefix: Option<Ipv6Addr>,
+    /// Current detected or active Unique Local Address (ULA) prefix.
+    pub active_ula_prefix: Option<Ipv6Addr>,
+    /// Prefixes currently being advertised.
+    pub prefixes: Vec<RAPrefix>,
+    /// Recursive DNS servers currently being advertised (RFC 8106).
+    pub rdnss: Vec<RdnssConfig>,
+    /// DNS search lists currently being advertised (RFC 8106).
+    pub dnssl: Vec<DnsslConfig>,
+    /// Deprecated prefixes currently advertised with decremented lifetimes: (prefix, `remaining_valid_secs`).
+    pub deprecated_prefixes: Vec<(Ipv6Addr, u32)>,
+
+    // Packet counters
+    /// Total multicast RAs sent to `ff02::1`.
+    pub sent_multicast_ras: u64,
+
+    /// Total unicast RAs sent directly to soliciting clients.
+    pub sent_unicast_ras: u64,
+    /// Total Router Solicitations (RS) received from hosts.
+    pub received_solicitations: u64,
+    /// Total Router Solicitations ignored/dropped due to RFC 4861 rate limits.
+    pub ignored_solicitations: u64,
+
+    // Timing & Activity
+    /// Seconds elapsed since the last RA was sent.
+    pub last_ra_sent_secs_ago: Option<u64>,
+    /// Seconds elapsed since the last RS was received.
+    pub last_rs_received_secs_ago: Option<u64>,
+    /// Estimated seconds until next scheduled periodic RA.
+    pub next_ra_in_secs: Option<u64>,
+
+    // Operating flags & parameters
+    /// Managed address configuration flag (M).
+    pub managed: bool,
+    /// Other configuration flag (O).
+    pub other_config: bool,
+    /// Suggested hop limit.
+    pub hop_limit: u8,
+    /// Router priority preference (RFC 4191).
+    pub priority: RouterPriority,
+    /// Max interval between periodic unsolicited Router Advertisements (seconds).
+    pub max_interval_secs: u64,
+    /// Effective min interval between periodic unsolicited Router Advertisements (seconds).
+    pub min_interval_secs: u64,
+    /// Router lifetime (seconds; 0 = not a default router).
+    pub router_lifetime_secs: u64,
+    /// Announced link MTU.
+    pub mtu: Option<u32>,
+    /// Service uptime in seconds.
+    pub uptime_secs: Option<u64>,
+}
+

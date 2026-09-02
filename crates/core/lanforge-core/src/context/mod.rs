@@ -64,8 +64,9 @@ use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
-use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
+use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
 use lanforge_types::system::{ServiceBanner, ServiceState, SystemStatus};
+
 use parking_lot::RwLock;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -183,7 +184,10 @@ pub struct DynamicConfig {
     pub ra_rdnss: Vec<RdnssConfig>,
     /// Configured RA DNSSL.
     pub ra_dnssl: Vec<DnsslConfig>,
+    /// Full RA server runtime configuration.
+    pub ra_config: Option<RaServerConfig>,
     /// Configured DNS upstreams.
+
     pub dns_upstreams: Vec<UpstreamTarget>,
     /// Configured DNS rewrites.
     pub dns_rewrites: Vec<RewriteRule>,
@@ -508,6 +512,28 @@ impl LanforgeContext {
     pub fn get_ra_dnssl(&self) -> Vec<DnsslConfig> {
         self.inner.config.read().ra_dnssl.clone()
     }
+
+    #[must_use]
+    pub fn get_ra_server_config(&self) -> RaServerConfig {
+        let cfg = self.inner.config.read();
+        cfg.ra_config.as_ref().map_or_else(
+            || RaServerConfig {
+                prefixes: cfg.ra_prefixes.clone(),
+                rdnss: cfg.ra_rdnss.clone(),
+                dnssl: cfg.ra_dnssl.clone(),
+                ..Default::default()
+            },
+            |ra_cfg| {
+                let mut c = ra_cfg.clone();
+                c.prefixes.clone_from(&cfg.ra_prefixes);
+                c.rdnss.clone_from(&cfg.ra_rdnss);
+                c.dnssl.clone_from(&cfg.ra_dnssl);
+                c
+            },
+        )
+    }
+
+
 
     #[must_use]
     pub fn get_dns_upstreams(&self) -> Vec<UpstreamTarget> {
