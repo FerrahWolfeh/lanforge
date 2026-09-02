@@ -442,10 +442,6 @@ impl Bootstrapper {
             }
         }
 
-        // 2c. Check/reconcile DHCPv4 topology sanity against physical interface
-        #[cfg(feature = "dhcp")]
-        Self::reconcile_dhcp_v4_topology_sanity(&db, cfg).await?;
-
         // 3. Check/seed/load RA Prefixes
         #[cfg(feature = "ra")]
         {
@@ -501,6 +497,10 @@ impl Bootstrapper {
             warn!("Falha ao carregar DB ({e}), iniciando do zero");
             State::new()
         });
+
+        // 2c. Check/reconcile DHCPv4 topology sanity against physical interface and host identity
+        #[cfg(feature = "dhcp")]
+        Self::reconcile_dhcp_v4_topology_sanity(&db, cfg, &table).await?;
 
         let reverse_resolvers_count = match db.load_dns_reverse_resolvers().await {
             Ok(resolvers) => {
@@ -610,9 +610,11 @@ impl Bootstrapper {
     }
 
     #[cfg(feature = "dhcp")]
+    #[allow(clippy::too_many_lines)]
     async fn reconcile_dhcp_v4_topology_sanity(
         db: &LanforgeDb,
         cfg: &mut Config,
+        table: &State,
     ) -> Result<()> {
         let all_ifaces = interfaces();
         let target_iface = all_ifaces
@@ -636,22 +638,49 @@ impl Bootstrapper {
         let iface_ip = v4.ip();
         let iface_mask = v4.mask();
 
+        // Check if the previous host device in state was registered as the gateway
+        let prev_host_ip = iface
+            .mac
+            .and_then(|m| {
+                let mac = MacAddr(m.octets());
+                table.devices.get(&mac).and_then(|d| d.v4.ip())
+            })
+            .or_else(|| {
+                table
+                    .devices
+                    .values()
+                    .find(|d| d.origin == Origin::System)
+                    .and_then(|d| d.v4.ip())
+            });
+
         // 1. Audit & Auto-Heal DHCP Options in DB
         if let Ok(Some(mut opts)) = db.load_dhcp_options().await {
             let mut opts_modified = false;
 
-            if let Some(r) = opts.v4.router {
-                if !v4.contains(r) {
-                    warn!(
-                        "DHCPv4 Startup Sanity: Database gateway '{r}' is outside interface '{}' subnet ({}/{}). Auto-healing database to {iface_ip}.",
-                        cfg.system.iface, v4.network(), v4.prefix()
-                    );
+            match opts.v4.router {
+                None => {
+                    info!("DHCPv4 Startup Sanity: Gateway unconfigured / auto — advertising interface IP {iface_ip}.");
                     opts.v4.router = Some(iface_ip);
                     opts_modified = true;
                 }
-            } else {
-                opts.v4.router = Some(iface_ip);
-                opts_modified = true;
+                Some(r) => {
+                    let was_self = prev_host_ip.is_some_and(|prev| prev == r);
+
+                    if was_self && r != iface_ip {
+                        info!(
+                            "DHCPv4 Startup Sanity: Host interface IP changed from {r} to {iface_ip}. Auto-migrating gateway to {iface_ip}."
+                        );
+                        opts.v4.router = Some(iface_ip);
+                        opts_modified = true;
+                    } else if !v4.contains(r) {
+                        warn!(
+                            "DHCPv4 Startup Sanity: Database gateway '{r}' is outside interface '{}' subnet ({}/{}). Auto-healing database to {iface_ip}.",
+                            cfg.system.iface, v4.network(), v4.prefix()
+                        );
+                        opts.v4.router = Some(iface_ip);
+                        opts_modified = true;
+                    }
+                }
             }
 
             if opts.v4.subnet_mask != Some(iface_mask) {
