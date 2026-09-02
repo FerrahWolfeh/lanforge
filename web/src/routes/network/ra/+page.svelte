@@ -29,6 +29,8 @@
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
+	import { fly, scale } from "svelte/transition";
+	import { cubicOut } from "svelte/easing";
 
 	import RadioIcon from "@lucide/svelte/icons/radio";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -53,6 +55,7 @@
 	let triggering = $state(false);
 	let refreshInterval: ReturnType<typeof setInterval> | null = null;
 	let availableInterfaces = $state<NetworkInterfaceInfo[]>([]);
+	let activeTab = $state("status");
 
 	// Derived list of selectable interfaces ensuring currently selected iface is present
 	let interfaceOptions = $derived.by(() => {
@@ -431,7 +434,10 @@
 				<h1 class="text-2xl font-bold tracking-tight">IPv6 Router Advertisement</h1>
 				{#if status?.enabled}
 					<Badge variant="outline" class="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 font-medium">
-						<span class="size-1.5 rounded-full bg-emerald-500 animate-pulse mr-1.5"></span>
+						<span class="relative flex size-2 mr-1.5">
+							<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+							<span class="relative inline-flex rounded-full size-2 bg-emerald-500"></span>
+						</span>
 						Active
 					</Badge>
 				{:else}
@@ -451,6 +457,7 @@
 				size="sm"
 				onclick={() => loadAll()}
 				disabled={loading}
+				class="transition-transform duration-150 active:scale-95 transform-gpu"
 			>
 				<RefreshCwIcon class={loading ? "animate-spin" : ""} data-icon="inline-start" />
 				Refresh
@@ -461,6 +468,7 @@
 				size="sm"
 				onclick={handleTriggerBurst}
 				disabled={triggering || !status?.enabled}
+				class="transition-transform duration-150 active:scale-95 transform-gpu shadow-sm"
 			>
 				<ZapIcon class={triggering ? "animate-pulse" : ""} data-icon="inline-start" />
 				Trigger RA Burst
@@ -586,14 +594,14 @@
 		</div>
 
 		<!-- Tabs Layout -->
-		<Tabs.Root value="status" class="w-full flex flex-col gap-6">
+		<Tabs.Root bind:value={activeTab} class="w-full flex flex-col gap-6">
 			<div class="flex items-center justify-between">
 				<Tabs.List class="grid grid-cols-2 w-[320px]">
-					<Tabs.Trigger value="status" class="flex items-center gap-2">
+					<Tabs.Trigger value="status" class="flex items-center gap-2 transition-all duration-150 transform-gpu">
 						<RadioIcon class="size-4" />
 						Live State
 					</Tabs.Trigger>
-					<Tabs.Trigger value="config" class="flex items-center gap-2">
+					<Tabs.Trigger value="config" class="flex items-center gap-2 transition-all duration-150 transform-gpu">
 						<SlidersIcon class="size-4" />
 						Configuration
 						{#if isDirty}
@@ -604,656 +612,718 @@
 			</div>
 
 			<!-- TAB 1: Live Status & Active Options -->
-			<Tabs.Content value="status" class="flex flex-col gap-6">
-				<!-- Active Prefixes -->
-				<Card.Root>
-					<Card.Header class="pb-3">
-						<Card.Title class="text-base flex items-center justify-between">
-							<span class="flex items-center gap-2">
-								<GlobeIcon class="size-4 text-primary" />
-								Active Advertised Prefixes
-							</span>
-							<Badge variant="outline" class="font-normal text-xs">
-								{(status?.prefixes ?? []).length} Announced
-							</Badge>
-						</Card.Title>
-						<Card.Description>
-							Autonomous SLAAC prefixes and on-link routing prefixes broadcast to LAN hosts.
-						</Card.Description>
-					</Card.Header>
-					<Card.Content>
-						{#if (status?.prefixes ?? []).length === 0}
-							<div class="p-8 text-center text-muted-foreground text-sm flex flex-col items-center justify-center gap-2">
-								<AlertCircleIcon class="size-8 text-muted-foreground/50" />
-								<span>No prefixes actively advertised. Check configuration or delegated WAN IPv6 state.</span>
-							</div>
-						{:else}
-							<div class="rounded-md border overflow-x-auto">
-								<Table.Root>
-									<Table.Header>
-										<Table.Row>
-											<Table.Head>Prefix Subnet</Table.Head>
-											<Table.Head>SLAAC (A-Flag)</Table.Head>
-											<Table.Head>On-Link (L-Flag)</Table.Head>
-											<Table.Head>Valid Lifetime</Table.Head>
-											<Table.Head>Preferred Lifetime</Table.Head>
-										</Table.Row>
-									</Table.Header>
-									<Table.Body>
-										{#each status?.prefixes ?? [] as pref, i (getPrefixKey(pref, i))}
-											<Table.Row>
-												<Table.Cell class="font-mono font-medium">
-													{#if pref.source === "auto_gua"}
-														<div class="flex items-center gap-1.5">
-															<span>{status?.active_gua_prefix ? `${status.active_gua_prefix}/${pref.prefix_len || 64}` : "dynamic_gua"}</span>
-															<Badge variant="secondary" class="text-[10px] px-1 py-0 font-normal">GUA</Badge>
-														</div>
-													{:else if pref.source === "ula" && !pref.address}
-														<div class="flex items-center gap-1.5">
-															<span>{status?.active_ula_prefix ? `${status.active_ula_prefix}/${pref.prefix_len || 64}` : "dynamic_ula"}</span>
-															<Badge variant="secondary" class="text-[10px] px-1 py-0 font-normal">ULA</Badge>
-														</div>
-													{:else}
-														<div class="flex items-center gap-1.5">
-															<span>{pref.address ? `${pref.address}/${pref.prefix_len || 64}` : `${pref.source} (/${pref.prefix_len || 64})`}</span>
-															<Badge variant="outline" class="text-[10px] px-1 py-0 font-normal capitalize">{pref.source}</Badge>
-														</div>
-													{/if}
-												</Table.Cell>
-												<Table.Cell>
-													{#if pref.autonomous ?? true}
-														<Badge variant="outline" class="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-xs">
-															Enabled (A=1)
-														</Badge>
-													{:else}
-														<Badge variant="secondary" class="text-xs">Disabled (A=0)</Badge>
-													{/if}
-												</Table.Cell>
-												<Table.Cell>
-													{#if pref.on_link ?? true}
-														<Badge variant="outline" class="bg-blue-500/10 text-blue-600 border-blue-500/20 text-xs">
-															On-Link (L=1)
-														</Badge>
-													{:else}
-														<Badge variant="secondary" class="text-xs">Off-Link (L=0)</Badge>
-													{/if}
-												</Table.Cell>
-												<Table.Cell class="text-muted-foreground text-xs font-mono">
-													{pref.valid_lifetime ? `${pref.valid_lifetime}` : "Default (30 days)"}
-												</Table.Cell>
-												<Table.Cell class="text-muted-foreground text-xs font-mono">
-													{pref.preferred_lifetime ? `${pref.preferred_lifetime}` : "Default (7 days)"}
-												</Table.Cell>
-											</Table.Row>
-										{/each}
-									</Table.Body>
-								</Table.Root>
-							</div>
-						{/if}
+			<Tabs.Content value="status" class="flex flex-col gap-6 focus-visible:outline-none">
+				{#if activeTab === "status"}
+					<div in:fly={{ y: 12, duration: 240, easing: cubicOut }} class="flex flex-col gap-6 transform-gpu will-change-[transform,opacity]">
+						<!-- Active Prefixes -->
 
-						{#if (status?.deprecated_prefixes ?? []).length > 0}
-							<div class="mt-4 p-4 rounded-lg bg-amber-500/10 border border-amber-500/20 flex flex-col gap-2">
-								<div class="flex items-center gap-2 text-amber-600 font-semibold text-sm">
-									<AlertCircleIcon class="size-4" />
-									<span>Deprecated Prefixes (RFC 9096 Graceful Invalidation)</span>
-								</div>
-								<p class="text-xs text-amber-700 dark:text-amber-400">
-									The following obsolete prefixes are broadcast with Preferred Lifetime = 0 to rapidly revoke them from client routing tables:
-								</p>
-								<div class="flex flex-wrap gap-2 pt-1">
-									{#each status?.deprecated_prefixes ?? [] as [pfx, remaining], i (`deprecated-${i}-${pfx}`)}
-										<Badge variant="outline" class="font-mono text-xs border-amber-500/30 text-amber-600 bg-background">
-											{pfx} ({remaining}s remaining)
-										</Badge>
-									{/each}
-								</div>
-							</div>
-						{/if}
-					</Card.Content>
-				</Card.Root>
-
-				<!-- DNS & Timing Parameters Grid -->
-				<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-					<!-- Card: RDNSS and DNSSL -->
 					<Card.Root>
 						<Card.Header class="pb-3">
-							<Card.Title class="text-base flex items-center gap-2">
-								<ServerIcon class="size-4 text-primary" />
-								DNS Options Announced (RFC 8106)
+							<Card.Title class="text-base flex items-center justify-between">
+								<span class="flex items-center gap-2">
+									<GlobeIcon class="size-4 text-primary" />
+									Active Advertised Prefixes
+								</span>
+								<Badge variant="outline" class="font-normal text-xs">
+									{(status?.prefixes ?? []).length} Announced
+								</Badge>
 							</Card.Title>
 							<Card.Description>
-								Recursive DNS servers (RDNSS) and search lists (DNSSL) distributed in RA packets.
+								Autonomous SLAAC prefixes and on-link routing prefixes broadcast to LAN hosts.
 							</Card.Description>
 						</Card.Header>
-						<Card.Content class="flex flex-col gap-4">
-							<div class="flex flex-col gap-2">
-								<Label class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">RDNSS Servers</Label>
-								{#if (status?.rdnss ?? []).flatMap(r => r.servers || []).length === 0}
-									<span class="text-xs text-muted-foreground italic">None configured (clients fall back to local link-local or DHCPv6)</span>
-								{:else}
-									<div class="flex flex-wrap gap-1.5">
-										{#each (status?.rdnss ?? []).flatMap(r => r.servers || []) as addr, i (`rdnss-${i}-${addr}`)}
-											<Badge variant="secondary" class="font-mono text-xs">
-												{addr}
-											</Badge>
-										{/each}
-									</div>
-								{/if}
-							</div>
-
-							<Separator />
-
-							<div class="flex flex-col gap-2">
-								<Label class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">DNSSL Search Domains</Label>
-								{#if (status?.dnssl ?? []).flatMap(d => d.domains || []).length === 0}
-									<span class="text-xs text-muted-foreground italic">None configured</span>
-								{:else}
-									<div class="flex flex-wrap gap-1.5">
-										{#each (status?.dnssl ?? []).flatMap(d => d.domains || []) as domain, i (`dnssl-${i}-${domain}`)}
-											<Badge variant="outline" class="text-xs">
-												{domain}
-											</Badge>
-										{/each}
-									</div>
-								{/if}
-							</div>
-						</Card.Content>
-					</Card.Root>
-
-					<!-- Card: Active Protocol Parameters -->
-					<Card.Root>
-						<Card.Header class="pb-3">
-							<Card.Title class="text-base flex items-center gap-2">
-								<SlidersIcon class="size-4 text-primary" />
-								Protocol Parameters
-							</Card.Title>
-							<Card.Description>
-								Timing intervals, hop limit, and router priority currently enforced by daemon.
-							</Card.Description>
-						</Card.Header>
-						<Card.Content class="flex flex-col gap-2.5 text-sm">
-							<div class="flex justify-between items-center">
-								<span class="text-muted-foreground">Managed Flag (M):</span>
-								<Badge variant={status?.managed ? "default" : "secondary"}>
-									{status?.managed ? "True (DHCPv6)" : "False (SLAAC)"}
-								</Badge>
-							</div>
-							<div class="flex justify-between items-center">
-								<span class="text-muted-foreground">Other Config Flag (O):</span>
-								<Badge variant={status?.other_config ? "default" : "secondary"}>
-									{status?.other_config ? "True (Stateless DHCPv6)" : "False"}
-								</Badge>
-							</div>
-							<div class="flex justify-between items-center">
-								<span class="text-muted-foreground">Router Priority:</span>
-								<Badge variant="outline" class="capitalize font-mono">
-									{status?.priority ?? "medium"}
-								</Badge>
-							</div>
-							<div class="flex justify-between items-center">
-								<span class="text-muted-foreground">Adv. Interval Range:</span>
-								<span class="font-mono text-xs">{status?.min_interval_secs ?? 66}s – {status?.max_interval_secs ?? 200}s</span>
-							</div>
-							<div class="flex justify-between items-center">
-								<span class="text-muted-foreground">Default Router Lifetime:</span>
-								<span class="font-mono text-xs">{status?.router_lifetime_secs ?? 600}s</span>
-							</div>
-							<div class="flex justify-between items-center">
-								<span class="text-muted-foreground">Current Hop Limit:</span>
-								<span class="font-mono text-xs">{status?.hop_limit ?? 64}</span>
-							</div>
-							<div class="flex justify-between items-center">
-								<span class="text-muted-foreground">Link MTU:</span>
-								<span class="font-mono text-xs">{status?.mtu ?? "Unspecified (Interface MTU)"}</span>
-							</div>
-						</Card.Content>
-					</Card.Root>
-				</div>
-			</Tabs.Content>
-
-			<!-- TAB 2: Runtime Configuration (2-Column Responsive Layout) -->
-			<Tabs.Content value="config" class="flex flex-col gap-6">
-				<div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-					<!-- Left Column: Core Identity, Flags & Prefixes -->
-					<div class="lg:col-span-7 flex flex-col gap-6">
-						<!-- General Service Settings -->
-						<Card.Root>
-							<Card.Header class="pb-3">
-								<Card.Title class="text-base">Service & Operation</Card.Title>
-								<Card.Description>
-									Target network interface, operational toggle, and address auto-configuration modes.
-								</Card.Description>
-							</Card.Header>
-							<Card.Content class="flex flex-col gap-5">
-								<div class="flex items-center justify-between">
-									<div class="flex flex-col gap-0.5">
-										<Label class="text-sm font-medium">Service Enabled</Label>
-										<p class="text-xs text-muted-foreground">
-											ICMPv6 listener and periodic broadcast engine.
-										</p>
-									</div>
-									<Switch bind:checked={formEnabled} />
+						<Card.Content>
+							{#if (status?.prefixes ?? []).length === 0}
+								<div class="p-8 text-center text-muted-foreground text-sm flex flex-col items-center justify-center gap-2">
+									<AlertCircleIcon class="size-8 text-muted-foreground/50" />
+									<span>No prefixes actively advertised. Check configuration or delegated WAN IPv6 state.</span>
 								</div>
-
-								<Separator />
-
-								<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-									<div class="flex flex-col gap-1.5">
-										<Label class="text-xs font-medium">Network Interface</Label>
-										{#if interfaceOptions.length > 0}
-											<Select.Root
-												type="single"
-												value={formIface}
-												onValueChange={(val) => {
-													if (val) formIface = val;
-												}}
-											>
-												<Select.Trigger class="h-9 text-xs font-mono">
-													{formIface || "Select interface..."}
-												</Select.Trigger>
-												<Select.Content>
-													{#each interfaceOptions as iface (iface.name)}
-														<Select.Item value={iface.name} class="text-xs">
-															<div class="flex items-center justify-between w-full gap-3">
-																<div class="flex items-center gap-2">
-																	<span class="font-mono font-medium">{iface.name}</span>
-																	{#if iface.carrier_up}
-																		<span class="size-1.5 rounded-full bg-emerald-500" title="Link active"></span>
-																	{:else}
-																		<span class="size-1.5 rounded-full bg-muted-foreground/40" title="Link down"></span>
-																	{/if}
-																</div>
-																<div class="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-																	{#if iface.is_physical}
-																		<Badge variant="secondary" class="text-[9px] px-1 py-0 font-normal">Physical</Badge>
-																	{/if}
-																	{#if iface.ips && iface.ips.length > 0}
-																		<span class="truncate max-w-[110px] font-mono text-[10px]">{iface.ips[0]}</span>
-																	{/if}
-																</div>
-															</div>
-														</Select.Item>
-													{/each}
-												</Select.Content>
-											</Select.Root>
-										{:else}
-											<Input
-												id="ra-iface"
-												bind:value={formIface}
-												placeholder="end0"
-												class="h-9 font-mono text-xs"
-											/>
-										{/if}
-										<p class="text-[11px] text-muted-foreground">LAN interface for raw ICMPv6 socket.</p>
-									</div>
-
-									<div class="flex flex-col gap-1.5">
-										<Label class="text-xs font-medium">Router Priority (RFC 4191)</Label>
-										<Select.Root
-											type="single"
-											value={formPriority}
-											onValueChange={(val) => (formPriority = (val as RouterPriority) ?? "medium")}
-										>
-											<Select.Trigger class="h-9 text-xs capitalize">
-												{formPriority}
-											</Select.Trigger>
-											<Select.Content>
-												<Select.Item value="high" class="text-xs">High (Preferred Default)</Select.Item>
-												<Select.Item value="medium" class="text-xs">Medium (Standard)</Select.Item>
-												<Select.Item value="low" class="text-xs">Low (Secondary / Backup)</Select.Item>
-											</Select.Content>
-										</Select.Root>
-										<p class="text-[11px] text-muted-foreground">Client default router preference.</p>
-									</div>
-								</div>
-
-								<Separator />
-
-								<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-									<div class="flex items-start justify-between gap-3 p-3 rounded-lg border bg-muted/20">
-										<div class="flex flex-col gap-0.5">
-											<Label class="text-xs font-semibold">Managed (M-Flag)</Label>
-											<p class="text-[11px] text-muted-foreground">
-												Force stateful DHCPv6 for IP addresses instead of SLAAC.
-											</p>
-										</div>
-										<Switch bind:checked={formManaged} />
-									</div>
-
-									<div class="flex items-start justify-between gap-3 p-3 rounded-lg border bg-muted/20">
-										<div class="flex flex-col gap-0.5">
-											<Label class="text-xs font-semibold">Other Config (O-Flag)</Label>
-											<p class="text-[11px] text-muted-foreground">
-												Instruct hosts to fetch DNS and NTP via DHCPv6.
-											</p>
-										</div>
-										<Switch bind:checked={formOtherConfig} />
-									</div>
-								</div>
-							</Card.Content>
-						</Card.Root>
-
-						<!-- Prefix Information Options (PIO) Manager -->
-						<Card.Root>
-							<Card.Header class="pb-3">
-								<Card.Title class="text-base">Prefix Information Options (PIO)</Card.Title>
-								<Card.Description>
-									Announced IPv6 prefixes. Use <span class="font-mono text-foreground font-semibold">dynamic_gua</span> for WAN delegated prefix, and <span class="font-mono text-foreground font-semibold">dynamic_ula</span> for internal subnets.
-								</Card.Description>
-							</Card.Header>
-							<Card.Content class="flex flex-col gap-4">
-								<div class="flex flex-col sm:flex-row items-end gap-3 p-3 rounded-lg border bg-muted/40">
-									<div class="flex-1 flex flex-col gap-1.5 w-full">
-										<Label for="new-prefix" class="text-xs font-medium">Add Prefix Subnet</Label>
-										<Input
-											id="new-prefix"
-											bind:value={newPrefixStr}
-											placeholder="dynamic_gua, dynamic_ula, or 2001:db8:1::/64"
-											class="h-9 font-mono text-xs"
-										/>
-									</div>
-
-									<div class="flex items-center gap-4">
-										<div class="flex items-center gap-1.5">
-											<Switch id="auto-slaac" bind:checked={newPrefixAutonomous} />
-											<Label for="auto-slaac" class="text-xs">SLAAC (A)</Label>
-										</div>
-										<div class="flex items-center gap-1.5">
-											<Switch id="on-link" bind:checked={newPrefixOnLink} />
-											<Label for="on-link" class="text-xs">On-link (L)</Label>
-										</div>
-									</div>
-
-									<Button size="sm" variant="secondary" onclick={addPrefix} class="h-9">
-										<PlusIcon class="size-4" data-icon="inline-start" />
-										Add
-									</Button>
-								</div>
-
-								<div class="rounded-md border overflow-hidden">
+							{:else}
+								<div class="rounded-md border overflow-x-auto">
 									<Table.Root>
 										<Table.Header>
 											<Table.Row>
-												<Table.Head>Prefix</Table.Head>
-												<Table.Head>SLAAC (A)</Table.Head>
-												<Table.Head>On-Link (L)</Table.Head>
-												<Table.Head class="text-right">Action</Table.Head>
+												<Table.Head>Prefix Subnet</Table.Head>
+												<Table.Head>SLAAC (A-Flag)</Table.Head>
+												<Table.Head>On-Link (L-Flag)</Table.Head>
+												<Table.Head>Valid Lifetime</Table.Head>
+												<Table.Head>Preferred Lifetime</Table.Head>
 											</Table.Row>
 										</Table.Header>
 										<Table.Body>
-											{#if formPrefixes.length === 0}
+											{#each status?.prefixes ?? [] as pref, i (getPrefixKey(pref, i))}
 												<Table.Row>
-													<Table.Cell colspan={4} class="text-center text-xs text-muted-foreground py-6">
-														No prefixes defined. RA daemon will stay idle.
+													<Table.Cell class="font-mono font-medium">
+														{#if pref.source === "auto_gua"}
+															<div class="flex items-center gap-1.5">
+																<span>{status?.active_gua_prefix ? `${status.active_gua_prefix}/${pref.prefix_len || 64}` : "dynamic_gua"}</span>
+																<Badge variant="secondary" class="text-[10px] px-1 py-0 font-normal">GUA</Badge>
+															</div>
+														{:else if pref.source === "ula" && !pref.address}
+															<div class="flex items-center gap-1.5">
+																<span>{status?.active_ula_prefix ? `${status.active_ula_prefix}/${pref.prefix_len || 64}` : "dynamic_ula"}</span>
+																<Badge variant="secondary" class="text-[10px] px-1 py-0 font-normal">ULA</Badge>
+															</div>
+														{:else}
+															<div class="flex items-center gap-1.5">
+																<span>{pref.address ? `${pref.address}/${pref.prefix_len || 64}` : `${pref.source} (/${pref.prefix_len || 64})`}</span>
+																<Badge variant="outline" class="text-[10px] px-1 py-0 font-normal capitalize">{pref.source}</Badge>
+															</div>
+														{/if}
+													</Table.Cell>
+													<Table.Cell>
+														{#if pref.autonomous ?? true}
+															<Badge variant="outline" class="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 text-xs">
+																Enabled (A=1)
+															</Badge>
+														{:else}
+															<Badge variant="secondary" class="text-xs">Disabled (A=0)</Badge>
+														{/if}
+													</Table.Cell>
+													<Table.Cell>
+														{#if pref.on_link ?? true}
+															<Badge variant="outline" class="bg-blue-500/10 text-blue-600 border-blue-500/20 text-xs">
+																On-Link (L=1)
+															</Badge>
+														{:else}
+															<Badge variant="secondary" class="text-xs">Off-Link (L=0)</Badge>
+														{/if}
+													</Table.Cell>
+													<Table.Cell class="text-muted-foreground text-xs font-mono">
+														{pref.valid_lifetime ? `${pref.valid_lifetime}` : "Default (30 days)"}
+													</Table.Cell>
+													<Table.Cell class="text-muted-foreground text-xs font-mono">
+														{pref.preferred_lifetime ? `${pref.preferred_lifetime}` : "Default (7 days)"}
 													</Table.Cell>
 												</Table.Row>
-											{:else}
-												{#each formPrefixes as pref, i (getPrefixKey(pref, i))}
-													<Table.Row>
-														<Table.Cell class="font-mono text-xs font-medium">
-															{formatPrefixLabel(pref)}
-														</Table.Cell>
-														<Table.Cell>
-															<Switch
-																checked={pref.autonomous ?? true}
-																onCheckedChange={(c) => (pref.autonomous = c)}
-															/>
-														</Table.Cell>
-														<Table.Cell>
-															<Switch
-																checked={pref.on_link ?? true}
-																onCheckedChange={(c) => (pref.on_link = c)}
-															/>
-														</Table.Cell>
-														<Table.Cell class="text-right">
-															<Button
-																variant="ghost"
-																size="icon"
-																class="size-8 text-destructive hover:text-destructive"
-																onclick={() => removePrefix(i)}
-															>
-																<Trash2Icon class="size-4" />
-															</Button>
-														</Table.Cell>
-													</Table.Row>
-												{/each}
-											{/if}
+											{/each}
 										</Table.Body>
 									</Table.Root>
 								</div>
-							</Card.Content>
-						</Card.Root>
-					</div>
+							{/if}
 
-					<!-- Right Column: Timers & DNS -->
-					<div class="lg:col-span-5 flex flex-col gap-6">
-						<!-- Timing & Intervals -->
-						<Card.Root>
-							<Card.Header class="pb-3">
-								<Card.Title class="text-base">Timing & Intervals</Card.Title>
-								<Card.Description>
-									Broadcast cadence, router lifetime, and interface parameters.
-								</Card.Description>
-							</Card.Header>
-							<Card.Content class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-								<div class="flex flex-col gap-1.5">
-									<Label for="ra-max-interval" class="text-xs font-medium">Max Adv Interval (s)</Label>
-									<Input
-										id="ra-max-interval"
-										type="number"
-										min="4"
-										max="1800"
-										bind:value={formMaxInterval}
-										class="h-9 font-mono text-xs"
-									/>
-									<p class="text-[10px] text-muted-foreground">Default 200s.</p>
-								</div>
-
-								<div class="flex flex-col gap-1.5">
-									<Label for="ra-min-interval" class="text-xs font-medium">Min Adv Interval (s)</Label>
-									<Input
-										id="ra-min-interval"
-										type="number"
-										min="3"
-										placeholder="Auto (~66s)"
-										value={formMinInterval ?? ""}
-										oninput={(e) => {
-											const val = e.currentTarget.value;
-											formMinInterval = val ? Number(val) : null;
-										}}
-										class="h-9 font-mono text-xs"
-									/>
-									<p class="text-[10px] text-muted-foreground">1/3 of max interval.</p>
-								</div>
-
-								<div class="flex flex-col gap-1.5">
-									<Label for="ra-lifetime" class="text-xs font-medium">Router Lifetime (s)</Label>
-									<Input
-										id="ra-lifetime"
-										type="number"
-										min="0"
-										max="9000"
-										placeholder="Auto (3x max)"
-										value={formLifetime ?? ""}
-										oninput={(e) => {
-											const val = e.currentTarget.value;
-											formLifetime = val ? Number(val) : null;
-										}}
-										class="h-9 font-mono text-xs"
-									/>
-									<p class="text-[10px] text-muted-foreground">0 = non-default router.</p>
-								</div>
-
-								<div class="flex flex-col gap-1.5">
-									<Label for="ra-hop-limit" class="text-xs font-medium">Suggested Hop Limit</Label>
-									<Input
-										id="ra-hop-limit"
-										type="number"
-										min="0"
-										max="255"
-										bind:value={formHopLimit}
-										class="h-9 font-mono text-xs"
-									/>
-									<p class="text-[10px] text-muted-foreground">Default 64.</p>
-								</div>
-
-								<div class="flex flex-col gap-1.5">
-									<Label for="ra-mtu" class="text-xs font-medium">Advertised MTU</Label>
-									<Input
-										id="ra-mtu"
-										type="number"
-										min="1280"
-										max="9000"
-										placeholder="Interface MTU"
-										value={formMtu ?? ""}
-										oninput={(e) => {
-											const val = e.currentTarget.value;
-											formMtu = val ? Number(val) : null;
-										}}
-										class="h-9 font-mono text-xs"
-									/>
-									<p class="text-[10px] text-muted-foreground">E.g. 1492 for PPPoE.</p>
-								</div>
-
-								<div class="flex flex-col gap-1.5">
-									<Label for="ra-reachable" class="text-xs font-medium">Reachable Time (ms)</Label>
-									<Input
-										id="ra-reachable"
-										type="number"
-										min="0"
-										bind:value={formReachableTime}
-										class="h-9 font-mono text-xs"
-									/>
-									<p class="text-[10px] text-muted-foreground">0 = unspecified.</p>
-								</div>
-							</Card.Content>
-						</Card.Root>
-
-						<!-- DNS Servers (RDNSS) -->
-						<Card.Root>
-							<Card.Header class="pb-3">
-								<Card.Title class="text-base">Recursive DNS (RDNSS)</Card.Title>
-								<Card.Description>
-									IPv6 DNS nameservers advertised directly via RA.
-								</Card.Description>
-							</Card.Header>
-							<Card.Content class="flex flex-col gap-3">
-								<div class="flex gap-2">
-									<Input
-										bind:value={newRdnssAddr}
-										placeholder="2001:4860:4860::8888 or fe80::1"
-										class="h-9 font-mono text-xs"
-										onkeydown={(e) => e.key === "Enter" && addRdnss()}
-									/>
-									<Button size="sm" variant="secondary" onclick={addRdnss} class="h-9">
-										<PlusIcon class="size-4" data-icon="inline-start" />
-										Add
-									</Button>
-								</div>
-
-								<div class="flex flex-wrap gap-1.5 pt-1">
-									{#if formRdnss.length === 0}
-										<span class="text-xs text-muted-foreground italic">No specific servers added.</span>
-									{:else}
-										{#each formRdnss as addr, i (`form-rdnss-${i}-${addr}`)}
-											<Badge variant="secondary" class="font-mono text-xs flex items-center gap-1.5 py-1">
-												<span>{addr}</span>
-												<button
-													type="button"
-													class="text-muted-foreground hover:text-destructive transition-colors ml-1"
-													onclick={() => removeRdnss(i)}
-												>
-													&times;
-												</button>
+							{#if (status?.deprecated_prefixes ?? []).length > 0}
+								<div class="mt-4 p-4 rounded-lg bg-amber-500/10 border border-amber-500/20 flex flex-col gap-2">
+									<div class="flex items-center gap-2 text-amber-600 font-semibold text-sm">
+										<AlertCircleIcon class="size-4" />
+										<span>Deprecated Prefixes (RFC 9096 Graceful Invalidation)</span>
+									</div>
+									<p class="text-xs text-amber-700 dark:text-amber-400">
+										The following obsolete prefixes are broadcast with Preferred Lifetime = 0 to rapidly revoke them from client routing tables:
+									</p>
+									<div class="flex flex-wrap gap-2 pt-1">
+										{#each status?.deprecated_prefixes ?? [] as [pfx, remaining], i (`deprecated-${i}-${pfx}`)}
+											<Badge variant="outline" class="font-mono text-xs border-amber-500/30 text-amber-600 bg-background">
+												{pfx} ({remaining}s remaining)
 											</Badge>
 										{/each}
+									</div>
+								</div>
+							{/if}
+						</Card.Content>
+					</Card.Root>
+
+					<!-- DNS & Timing Parameters Grid -->
+					<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+						<!-- Card: RDNSS and DNSSL -->
+						<Card.Root>
+							<Card.Header class="pb-3">
+								<Card.Title class="text-base flex items-center gap-2">
+									<ServerIcon class="size-4 text-primary" />
+									DNS Options Announced (RFC 8106)
+								</Card.Title>
+								<Card.Description>
+									Recursive DNS servers (RDNSS) and search lists (DNSSL) distributed in RA packets.
+								</Card.Description>
+							</Card.Header>
+							<Card.Content class="flex flex-col gap-4">
+								<div class="flex flex-col gap-2">
+									<Label class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">RDNSS Servers</Label>
+									{#if (status?.rdnss ?? []).flatMap(r => r.servers || []).length === 0}
+										<span class="text-xs text-muted-foreground italic">None configured (clients fall back to local link-local or DHCPv6)</span>
+									{:else}
+										<div class="flex flex-wrap gap-1.5">
+											{#each (status?.rdnss ?? []).flatMap(r => r.servers || []) as addr, i (`rdnss-${i}-${addr}`)}
+												<Badge variant="secondary" class="font-mono text-xs">
+													{addr}
+												</Badge>
+											{/each}
+										</div>
+									{/if}
+								</div>
+
+								<Separator />
+
+								<div class="flex flex-col gap-2">
+									<Label class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">DNSSL Search Domains</Label>
+									{#if (status?.dnssl ?? []).flatMap(d => d.domains || []).length === 0}
+										<span class="text-xs text-muted-foreground italic">None configured</span>
+									{:else}
+										<div class="flex flex-wrap gap-1.5">
+											{#each (status?.dnssl ?? []).flatMap(d => d.domains || []) as domain, i (`dnssl-${i}-${domain}`)}
+												<Badge variant="outline" class="text-xs">
+													{domain}
+												</Badge>
+											{/each}
+										</div>
 									{/if}
 								</div>
 							</Card.Content>
 						</Card.Root>
 
-						<!-- Domain Search List (DNSSL) -->
+						<!-- Card: Active Protocol Parameters -->
 						<Card.Root>
 							<Card.Header class="pb-3">
-								<Card.Title class="text-base">Domain Search List (DNSSL)</Card.Title>
+								<Card.Title class="text-base flex items-center gap-2">
+									<SlidersIcon class="size-4 text-primary" />
+									Protocol Parameters
+								</Card.Title>
 								<Card.Description>
-									DNS search suffix domains distributed to IPv6 clients.
+									Timing intervals, hop limit, and router priority currently enforced by daemon.
 								</Card.Description>
 							</Card.Header>
-							<Card.Content class="flex flex-col gap-3">
-								<div class="flex gap-2">
-									<Input
-										bind:value={newDnsslDomain}
-										placeholder="lan or home.arpa"
-										class="h-9 font-mono text-xs"
-										onkeydown={(e) => e.key === "Enter" && addDnssl()}
-									/>
-									<Button size="sm" variant="secondary" onclick={addDnssl} class="h-9">
-										<PlusIcon class="size-4" data-icon="inline-start" />
-										Add
-									</Button>
+							<Card.Content class="flex flex-col gap-2.5 text-sm">
+								<div class="flex justify-between items-center">
+									<span class="text-muted-foreground">Managed Flag (M):</span>
+									<Badge variant={status?.managed ? "default" : "secondary"}>
+										{status?.managed ? "True (DHCPv6)" : "False (SLAAC)"}
+									</Badge>
 								</div>
-
-								<div class="flex flex-wrap gap-1.5 pt-1">
-									{#if formDnssl.length === 0}
-										<span class="text-xs text-muted-foreground italic">No search domains added.</span>
-									{:else}
-										{#each formDnssl as dom, i (`form-dnssl-${i}-${dom}`)}
-											<Badge variant="outline" class="text-xs flex items-center gap-1.5 py-1">
-												<span>{dom}</span>
-												<button
-													type="button"
-													class="text-muted-foreground hover:text-destructive transition-colors ml-1"
-													onclick={() => removeDnssl(i)}
-												>
-													&times;
-												</button>
-											</Badge>
-										{/each}
-									{/if}
+								<div class="flex justify-between items-center">
+									<span class="text-muted-foreground">Other Config Flag (O):</span>
+									<Badge variant={status?.other_config ? "default" : "secondary"}>
+										{status?.other_config ? "True (Stateless DHCPv6)" : "False"}
+									</Badge>
+								</div>
+								<div class="flex justify-between items-center">
+									<span class="text-muted-foreground">Router Priority:</span>
+									<Badge variant="outline" class="capitalize font-mono">
+										{status?.priority ?? "medium"}
+									</Badge>
+								</div>
+								<div class="flex justify-between items-center">
+									<span class="text-muted-foreground">Adv. Interval Range:</span>
+									<span class="font-mono text-xs">{status?.min_interval_secs ?? 66}s – {status?.max_interval_secs ?? 200}s</span>
+								</div>
+								<div class="flex justify-between items-center">
+									<span class="text-muted-foreground">Default Router Lifetime:</span>
+									<span class="font-mono text-xs">{status?.router_lifetime_secs ?? 600}s</span>
+								</div>
+								<div class="flex justify-between items-center">
+									<span class="text-muted-foreground">Current Hop Limit:</span>
+									<span class="font-mono text-xs">{status?.hop_limit ?? 64}</span>
+								</div>
+								<div class="flex justify-between items-center">
+									<span class="text-muted-foreground">Link MTU:</span>
+									<span class="font-mono text-xs">{status?.mtu ?? "Unspecified (Interface MTU)"}</span>
 								</div>
 							</Card.Content>
 						</Card.Root>
 					</div>
 				</div>
-
-				<!-- Save Action Bar -->
-				<div class="flex items-center justify-between p-4 rounded-xl border bg-card/60 gap-4 mt-2">
-					<div class="flex items-center gap-2">
-						{#if isDirty}
-							<span class="size-2 rounded-full bg-amber-500 animate-pulse"></span>
-							<span class="text-xs font-medium text-amber-600 dark:text-amber-400">Unsaved configuration changes detected</span>
-						{:else}
-							<span class="size-2 rounded-full bg-emerald-500"></span>
-							<span class="text-xs text-muted-foreground">Configuration is synchronized with active daemon</span>
-						{/if}
-					</div>
-
-					<div class="flex items-center gap-2">
-						{#if isDirty}
-							<Button
-								variant="outline"
-								size="sm"
-								onclick={handleDiscard}
-								disabled={saving}
-							>
-								<RotateCcwIcon data-icon="inline-start" />
-								Discard Changes
-							</Button>
-						{/if}
-
-						<Button
-							variant={isDirty ? "default" : "secondary"}
-							size="sm"
-							onclick={handleSaveConfig}
-							disabled={!isDirty || saving}
-						>
-							<SaveIcon class={saving ? "animate-spin" : ""} data-icon="inline-start" />
-							{saving ? "Applying..." : "Save Configuration"}
-						</Button>
-					</div>
-				</div>
+				{/if}
 			</Tabs.Content>
+
+
+			<!-- TAB 2: Runtime Configuration (2-Column Responsive Layout) -->
+			<Tabs.Content value="config" class="flex flex-col gap-6 focus-visible:outline-none">
+				{#if activeTab === "config"}
+					<div in:fly={{ y: 12, duration: 240, easing: cubicOut }} class="flex flex-col gap-6 transform-gpu will-change-[transform,opacity]">
+						<div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+						<!-- Left Column: Core Identity, Flags & Prefixes -->
+						<div class="lg:col-span-7 flex flex-col gap-6">
+							<!-- General Service Settings -->
+							<Card.Root>
+								<Card.Header class="pb-3">
+									<Card.Title class="text-base">Service & Operation</Card.Title>
+									<Card.Description>
+										Target network interface, operational toggle, and address auto-configuration modes.
+									</Card.Description>
+								</Card.Header>
+								<Card.Content class="flex flex-col gap-5">
+									<div class="flex items-center justify-between">
+										<div class="flex flex-col gap-0.5">
+											<Label class="text-sm font-medium">Service Enabled</Label>
+											<p class="text-xs text-muted-foreground">
+												ICMPv6 listener and periodic broadcast engine.
+											</p>
+										</div>
+										<Switch bind:checked={formEnabled} />
+									</div>
+
+									<Separator />
+
+									<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+										<div class="flex flex-col gap-1.5">
+											<Label class="text-xs font-medium">Network Interface</Label>
+											{#if interfaceOptions.length > 0}
+												<Select.Root
+													type="single"
+													value={formIface}
+													onValueChange={(val) => {
+														if (val) formIface = val;
+													}}
+												>
+													<Select.Trigger class="h-9 text-xs font-mono">
+														{formIface || "Select interface..."}
+													</Select.Trigger>
+													<Select.Content>
+														{#each interfaceOptions as iface (iface.name)}
+															<Select.Item value={iface.name} class="text-xs">
+																<div class="flex items-center justify-between w-full gap-3">
+																	<div class="flex items-center gap-2">
+																		<span class="font-mono font-medium">{iface.name}</span>
+																		{#if iface.carrier_up}
+																			<span class="size-1.5 rounded-full bg-emerald-500" title="Link active"></span>
+																		{:else}
+																			<span class="size-1.5 rounded-full bg-muted-foreground/40" title="Link down"></span>
+																		{/if}
+																	</div>
+																	<div class="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+																		{#if iface.is_physical}
+																			<Badge variant="secondary" class="text-[9px] px-1 py-0 font-normal">Physical</Badge>
+																		{/if}
+																		{#if iface.ips && iface.ips.length > 0}
+																			<span class="truncate max-w-[110px] font-mono text-[10px]">{iface.ips[0]}</span>
+																		{/if}
+																	</div>
+																</div>
+															</Select.Item>
+														{/each}
+													</Select.Content>
+												</Select.Root>
+											{:else}
+												<Input
+													id="ra-iface"
+													bind:value={formIface}
+													placeholder="end0"
+													class="h-9 font-mono text-xs"
+												/>
+											{/if}
+											<p class="text-[11px] text-muted-foreground">LAN interface for raw ICMPv6 socket.</p>
+										</div>
+
+										<div class="flex flex-col gap-1.5">
+											<Label class="text-xs font-medium">Router Priority (RFC 4191)</Label>
+											<Select.Root
+												type="single"
+												value={formPriority}
+												onValueChange={(val) => (formPriority = (val as RouterPriority) ?? "medium")}
+											>
+												<Select.Trigger class="h-9 text-xs capitalize">
+													{formPriority}
+												</Select.Trigger>
+												<Select.Content>
+													<Select.Item value="high" class="text-xs">High (Preferred Default)</Select.Item>
+													<Select.Item value="medium" class="text-xs">Medium (Standard)</Select.Item>
+													<Select.Item value="low" class="text-xs">Low (Secondary / Backup)</Select.Item>
+												</Select.Content>
+											</Select.Root>
+											<p class="text-[11px] text-muted-foreground">Client default router preference.</p>
+										</div>
+									</div>
+
+									<Separator />
+
+									<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+										<div class="flex items-start justify-between gap-3 p-3 rounded-lg border bg-muted/20">
+											<div class="flex flex-col gap-0.5">
+												<Label class="text-xs font-semibold">Managed (M-Flag)</Label>
+												<p class="text-[11px] text-muted-foreground">
+													Force stateful DHCPv6 for IP addresses instead of SLAAC.
+												</p>
+											</div>
+											<Switch bind:checked={formManaged} />
+										</div>
+
+										<div class="flex items-start justify-between gap-3 p-3 rounded-lg border bg-muted/20">
+											<div class="flex flex-col gap-0.5">
+												<Label class="text-xs font-semibold">Other Config (O-Flag)</Label>
+												<p class="text-[11px] text-muted-foreground">
+													Instruct hosts to fetch DNS and NTP via DHCPv6.
+												</p>
+											</div>
+											<Switch bind:checked={formOtherConfig} />
+										</div>
+									</div>
+								</Card.Content>
+							</Card.Root>
+
+							<!-- Prefix Information Options (PIO) Manager -->
+							<Card.Root>
+								<Card.Header class="pb-3">
+									<Card.Title class="text-base">Prefix Information Options (PIO)</Card.Title>
+									<Card.Description>
+										Announced IPv6 prefixes. Use <span class="font-mono text-foreground font-semibold">dynamic_gua</span> for WAN delegated prefix, and <span class="font-mono text-foreground font-semibold">dynamic_ula</span> for internal subnets.
+									</Card.Description>
+								</Card.Header>
+								<Card.Content class="flex flex-col gap-4">
+									<div class="flex flex-col sm:flex-row items-end gap-3 p-3 rounded-lg border bg-muted/40">
+										<div class="flex-1 flex flex-col gap-1.5 w-full">
+											<Label for="new-prefix" class="text-xs font-medium">Add Prefix Subnet</Label>
+											<Input
+												id="new-prefix"
+												bind:value={newPrefixStr}
+												placeholder="dynamic_gua, dynamic_ula, or 2001:db8:1::/64"
+												class="h-9 font-mono text-xs"
+											/>
+										</div>
+
+										<div class="flex items-center gap-4">
+											<div class="flex items-center gap-1.5">
+												<Switch id="auto-slaac" bind:checked={newPrefixAutonomous} />
+												<Label for="auto-slaac" class="text-xs">SLAAC (A)</Label>
+											</div>
+											<div class="flex items-center gap-1.5">
+												<Switch id="on-link" bind:checked={newPrefixOnLink} />
+												<Label for="on-link" class="text-xs">On-link (L)</Label>
+											</div>
+										</div>
+
+										<Button
+											size="sm"
+											variant="secondary"
+											onclick={addPrefix}
+											class="h-9 transition-transform duration-150 active:scale-95 transform-gpu"
+										>
+											<PlusIcon class="size-4" data-icon="inline-start" />
+											Add
+										</Button>
+									</div>
+
+									<div class="rounded-md border overflow-hidden">
+										<Table.Root>
+											<Table.Header>
+												<Table.Row>
+													<Table.Head>Prefix</Table.Head>
+													<Table.Head>SLAAC (A)</Table.Head>
+													<Table.Head>On-Link (L)</Table.Head>
+													<Table.Head class="text-right">Action</Table.Head>
+												</Table.Row>
+											</Table.Header>
+											<Table.Body>
+												{#if formPrefixes.length === 0}
+													<Table.Row>
+														<Table.Cell colspan={4} class="text-center text-xs text-muted-foreground py-6">
+															No prefixes defined. RA daemon will stay idle.
+														</Table.Cell>
+													</Table.Row>
+												{:else}
+													{#each formPrefixes as pref, i (getPrefixKey(pref, i))}
+														<Table.Row class="transition-colors">
+															<Table.Cell class="font-mono text-xs font-medium">
+																{formatPrefixLabel(pref)}
+															</Table.Cell>
+															<Table.Cell>
+																<Switch
+																	checked={pref.autonomous ?? true}
+																	onCheckedChange={(c) => (pref.autonomous = c)}
+																/>
+															</Table.Cell>
+															<Table.Cell>
+																<Switch
+																	checked={pref.on_link ?? true}
+																	onCheckedChange={(c) => (pref.on_link = c)}
+																/>
+															</Table.Cell>
+															<Table.Cell class="text-right">
+																<Button
+																	variant="ghost"
+																	size="icon"
+																	class="size-8 text-destructive hover:text-destructive transition-transform duration-150 active:scale-90 transform-gpu"
+																	onclick={() => removePrefix(i)}
+																>
+																	<Trash2Icon class="size-4" />
+																</Button>
+															</Table.Cell>
+														</Table.Row>
+													{/each}
+												{/if}
+											</Table.Body>
+										</Table.Root>
+									</div>
+								</Card.Content>
+							</Card.Root>
+						</div>
+
+						<!-- Right Column: Timers & DNS -->
+						<div class="lg:col-span-5 flex flex-col gap-6">
+							<!-- Timing & Intervals -->
+							<Card.Root>
+								<Card.Header class="pb-3">
+									<Card.Title class="text-base">Timing & Intervals</Card.Title>
+									<Card.Description>
+										Broadcast cadence, router lifetime, and interface parameters.
+									</Card.Description>
+								</Card.Header>
+								<Card.Content class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+									<div class="flex flex-col gap-1.5">
+										<Label for="ra-max-interval" class="text-xs font-medium">Max Adv Interval (s)</Label>
+										<Input
+											id="ra-max-interval"
+											type="number"
+											min="4"
+											max="1800"
+											bind:value={formMaxInterval}
+											class="h-9 font-mono text-xs"
+										/>
+										<p class="text-[10px] text-muted-foreground">Default 200s.</p>
+									</div>
+
+									<div class="flex flex-col gap-1.5">
+										<Label for="ra-min-interval" class="text-xs font-medium">Min Adv Interval (s)</Label>
+										<Input
+											id="ra-min-interval"
+											type="number"
+											min="3"
+											placeholder="Auto (~66s)"
+											value={formMinInterval ?? ""}
+											oninput={(e) => {
+												const val = e.currentTarget.value;
+												formMinInterval = val ? Number(val) : null;
+											}}
+											class="h-9 font-mono text-xs"
+										/>
+										<p class="text-[10px] text-muted-foreground">1/3 of max interval.</p>
+									</div>
+
+									<div class="flex flex-col gap-1.5">
+										<Label for="ra-lifetime" class="text-xs font-medium">Router Lifetime (s)</Label>
+										<Input
+											id="ra-lifetime"
+											type="number"
+											min="0"
+											max="9000"
+											placeholder="Auto (3x max)"
+											value={formLifetime ?? ""}
+											oninput={(e) => {
+												const val = e.currentTarget.value;
+												formLifetime = val ? Number(val) : null;
+											}}
+											class="h-9 font-mono text-xs"
+										/>
+										<p class="text-[10px] text-muted-foreground">0 = non-default router.</p>
+									</div>
+
+									<div class="flex flex-col gap-1.5">
+										<Label for="ra-hop-limit" class="text-xs font-medium">Suggested Hop Limit</Label>
+										<Input
+											id="ra-hop-limit"
+											type="number"
+											min="0"
+											max="255"
+											bind:value={formHopLimit}
+											class="h-9 font-mono text-xs"
+										/>
+										<p class="text-[10px] text-muted-foreground">Default 64.</p>
+									</div>
+
+									<div class="flex flex-col gap-1.5">
+										<Label for="ra-mtu" class="text-xs font-medium">Advertised MTU</Label>
+										<Input
+											id="ra-mtu"
+											type="number"
+											min="1280"
+											max="9000"
+											placeholder="Interface MTU"
+											value={formMtu ?? ""}
+											oninput={(e) => {
+												const val = e.currentTarget.value;
+												formMtu = val ? Number(val) : null;
+											}}
+											class="h-9 font-mono text-xs"
+										/>
+										<p class="text-[10px] text-muted-foreground">E.g. 1492 for PPPoE.</p>
+									</div>
+
+									<div class="flex flex-col gap-1.5">
+										<Label for="ra-reachable" class="text-xs font-medium">Reachable Time (ms)</Label>
+										<Input
+											id="ra-reachable"
+											type="number"
+											min="0"
+											bind:value={formReachableTime}
+											class="h-9 font-mono text-xs"
+										/>
+										<p class="text-[10px] text-muted-foreground">0 = unspecified.</p>
+									</div>
+								</Card.Content>
+							</Card.Root>
+
+							<!-- DNS Servers (RDNSS) -->
+							<Card.Root>
+								<Card.Header class="pb-3">
+									<Card.Title class="text-base">Recursive DNS (RDNSS)</Card.Title>
+									<Card.Description>
+										IPv6 DNS nameservers advertised directly via RA.
+									</Card.Description>
+								</Card.Header>
+								<Card.Content class="flex flex-col gap-3">
+									<div class="flex gap-2">
+										<Input
+											bind:value={newRdnssAddr}
+											placeholder="2001:4860:4860::8888 or fe80::1"
+											class="h-9 font-mono text-xs"
+											onkeydown={(e) => e.key === "Enter" && addRdnss()}
+										/>
+										<Button
+											size="sm"
+											variant="secondary"
+											onclick={addRdnss}
+											class="h-9 transition-transform duration-150 active:scale-95 transform-gpu"
+										>
+											<PlusIcon class="size-4" data-icon="inline-start" />
+											Add
+										</Button>
+									</div>
+
+									<div class="flex flex-wrap gap-1.5 pt-1">
+										{#if formRdnss.length === 0}
+											<span class="text-xs text-muted-foreground italic">No specific servers added.</span>
+										{:else}
+											{#each formRdnss as addr, i (`form-rdnss-${i}-${addr}`)}
+												<span transition:scale={{ duration: 150, start: 0.85, easing: cubicOut }} class="inline-flex">
+													<Badge
+														variant="secondary"
+														class="font-mono text-xs flex items-center gap-1.5 py-1"
+													>
+														<span>{addr}</span>
+														<button
+															type="button"
+															class="text-muted-foreground hover:text-destructive transition-colors ml-1"
+															onclick={() => removeRdnss(i)}
+														>
+															&times;
+														</button>
+													</Badge>
+												</span>
+											{/each}
+										{/if}
+									</div>
+								</Card.Content>
+							</Card.Root>
+
+							<!-- Domain Search List (DNSSL) -->
+							<Card.Root>
+								<Card.Header class="pb-3">
+									<Card.Title class="text-base">Domain Search List (DNSSL)</Card.Title>
+									<Card.Description>
+										DNS search suffix domains distributed to IPv6 clients.
+									</Card.Description>
+								</Card.Header>
+								<Card.Content class="flex flex-col gap-3">
+									<div class="flex gap-2">
+										<Input
+											bind:value={newDnsslDomain}
+											placeholder="lan or home.arpa"
+											class="h-9 font-mono text-xs"
+											onkeydown={(e) => e.key === "Enter" && addDnssl()}
+										/>
+										<Button
+											size="sm"
+											variant="secondary"
+											onclick={addDnssl}
+											class="h-9 transition-transform duration-150 active:scale-95 transform-gpu"
+										>
+											<PlusIcon class="size-4" data-icon="inline-start" />
+											Add
+										</Button>
+									</div>
+
+									<div class="flex flex-wrap gap-1.5 pt-1">
+										{#if formDnssl.length === 0}
+											<span class="text-xs text-muted-foreground italic">No search domains added.</span>
+										{:else}
+											{#each formDnssl as dom, i (`form-dnssl-${i}-${dom}`)}
+												<span transition:scale={{ duration: 150, start: 0.85, easing: cubicOut }} class="inline-flex">
+													<Badge
+														variant="outline"
+														class="text-xs flex items-center gap-1.5 py-1"
+													>
+														<span>{dom}</span>
+														<button
+															type="button"
+															class="text-muted-foreground hover:text-destructive transition-colors ml-1"
+															onclick={() => removeDnssl(i)}
+														>
+															&times;
+														</button>
+													</Badge>
+												</span>
+											{/each}
+										{/if}
+									</div>
+								</Card.Content>
+							</Card.Root>
+						</div>
+					</div>
+
+					<!-- Synced Daemon Footer Status -->
+					{#if !isDirty}
+						<div class="flex items-center justify-between p-3.5 rounded-xl border bg-card/40 gap-4 mt-2">
+							<div class="flex items-center gap-2">
+								<span class="size-2 rounded-full bg-emerald-500"></span>
+								<span class="text-xs text-muted-foreground">Configuration is synchronized with active daemon</span>
+							</div>
+							<Button
+								variant="secondary"
+								size="sm"
+								disabled={true}
+								class="h-8 text-xs opacity-50"
+							>
+								<SaveIcon class="size-3.5" data-icon="inline-start" />
+								Synchronized
+							</Button>
+						</div>
+					{/if}
+				</div>
+				{/if}
+			</Tabs.Content>
+
 		</Tabs.Root>
+	{/if}
+
+	<!-- Floating GPU-Accelerated Save/Discard Action Island -->
+	{#if isDirty}
+		<div
+			transition:fly={{ y: 24, duration: 220, easing: cubicOut }}
+			class="sticky bottom-4 z-30 flex items-center justify-between p-3.5 sm:p-4 rounded-xl border bg-card/90 backdrop-blur-md shadow-2xl border-primary/40 transform-gpu will-change-[transform,opacity] gap-4"
+		>
+			<div class="flex items-center gap-2.5">
+				<span class="relative flex size-2.5">
+					<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+					<span class="relative inline-flex rounded-full size-2.5 bg-amber-500"></span>
+				</span>
+				<div class="flex flex-col sm:flex-row sm:items-center sm:gap-2">
+					<span class="text-xs font-semibold text-foreground">Unsaved RA Changes</span>
+					<span class="text-[11px] text-muted-foreground hidden sm:inline">Configuration differs from active runtime parameters</span>
+				</div>
+			</div>
+
+			<div class="flex items-center gap-2 shrink-0">
+				<Button
+					variant="outline"
+					size="sm"
+					onclick={handleDiscard}
+					disabled={saving}
+					class="h-8 text-xs transition-transform duration-150 active:scale-95 transform-gpu"
+				>
+					<RotateCcwIcon data-icon="inline-start" class="size-3.5" />
+					Discard
+				</Button>
+
+				<Button
+					variant="default"
+					size="sm"
+					onclick={handleSaveConfig}
+					disabled={saving}
+					class="h-8 text-xs shadow-sm transition-all duration-150 hover:shadow-primary/20 hover:shadow-md active:scale-95 transform-gpu"
+				>
+					<SaveIcon class={saving ? "animate-spin size-3.5" : "size-3.5"} data-icon="inline-start" />
+					{saving ? "Applying..." : "Save Configuration"}
+				</Button>
+			</div>
+		</div>
 	{/if}
 </div>
