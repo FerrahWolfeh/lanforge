@@ -11,6 +11,8 @@ use lanforge_discovery::refresh_interface;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
 #[cfg(feature = "dhcp")]
+use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
+#[cfg(feature = "dhcp")]
 use lanforge_types::network::dhcp::{
     DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, TftpOptions,
 };
@@ -440,6 +442,10 @@ impl Bootstrapper {
             }
         }
 
+        // 2c. Check/reconcile DHCPv4 topology sanity against physical interface
+        #[cfg(feature = "dhcp")]
+        Self::reconcile_dhcp_v4_topology_sanity(&db, cfg).await?;
+
         // 3. Check/seed/load RA Prefixes
         #[cfg(feature = "ra")]
         {
@@ -601,6 +607,103 @@ impl Bootstrapper {
                 Origin::System,
             );
         }
+    }
+
+    #[cfg(feature = "dhcp")]
+    async fn reconcile_dhcp_v4_topology_sanity(
+        db: &LanforgeDb,
+        cfg: &mut Config,
+    ) -> Result<()> {
+        let all_ifaces = interfaces();
+        let target_iface = all_ifaces
+            .iter()
+            .find(|i| !cfg.system.iface.is_empty() && i.name == cfg.system.iface)
+            .or_else(|| all_ifaces.iter().find(|i| !i.is_loopback()));
+
+        let Some(iface) = target_iface else {
+            return Ok(());
+        };
+
+        let iface_v4 = iface.ips.iter().find_map(|ip| match ip {
+            IpNetwork::V4(v4) => Some(*v4),
+            IpNetwork::V6(_) => None,
+        });
+
+        let Some(v4) = iface_v4 else {
+            return Ok(());
+        };
+
+        let iface_ip = v4.ip();
+        let iface_mask = v4.mask();
+
+        // 1. Audit & Auto-Heal DHCP Options in DB
+        if let Ok(Some(mut opts)) = db.load_dhcp_options().await {
+            let mut opts_modified = false;
+
+            if let Some(r) = opts.v4.router {
+                if !v4.contains(r) {
+                    warn!(
+                        "DHCPv4 Startup Sanity: Database gateway '{r}' is outside interface '{}' subnet ({}/{}). Auto-healing database to {iface_ip}.",
+                        cfg.system.iface, v4.network(), v4.prefix()
+                    );
+                    opts.v4.router = Some(iface_ip);
+                    opts_modified = true;
+                }
+            } else {
+                opts.v4.router = Some(iface_ip);
+                opts_modified = true;
+            }
+
+            if opts.v4.subnet_mask != Some(iface_mask) {
+                warn!(
+                    "DHCPv4 Startup Sanity: Database subnet mask {:?} does not match interface '{}' mask {iface_mask}. Auto-healing database.",
+                    opts.v4.subnet_mask, cfg.system.iface
+                );
+                opts.v4.subnet_mask = Some(iface_mask);
+                opts_modified = true;
+            }
+
+            if opts_modified {
+                if let Err(e) = db.save_dhcp_options(&opts).await {
+                    warn!("DHCPv4 Startup Sanity: Failed to persist auto-healed DHCP options to DB: {e}");
+                } else {
+                    info!("DHCPv4 Startup Sanity: Auto-healed DHCP options saved to database.");
+                }
+            }
+        }
+
+        // 2. Audit & Auto-Heal DHCP Pools in DB
+        if !cfg.dhcpv4_toml.pools.is_empty() {
+            let any_in_subnet = cfg.dhcpv4_toml.pools.iter().any(|p| {
+                v4.contains(p.range_start) && v4.contains(p.range_end)
+            });
+
+            if !any_in_subnet {
+                warn!(
+                    "DHCPv4 Startup Sanity: Stored DHCPv4 pools are outside interface '{}' subnet ({}). Auto-healing dynamic pools in database.",
+                    cfg.system.iface, v4
+                );
+                let derived = derive_dhcp_defaults_from_v4(&v4);
+                let healed_pool = Dhcpv4Pool {
+                    name: Some("Auto-Healed LAN Scope".to_string()),
+                    range_start: derived.range_start,
+                    range_end: derived.range_end,
+                    lease_time: Some(cfg.dhcpv4_toml.lease_time),
+                    router: Some(derived.router),
+                    subnet_mask: Some(derived.subnet_mask),
+                    dns_servers: vec![derived.router],
+                    ..Default::default()
+                };
+                cfg.dhcpv4_toml.pools = vec![healed_pool];
+                if let Err(e) = db.save_dhcp_v4_pools(&cfg.dhcpv4_toml.pools).await {
+                    warn!("DHCPv4 Startup Sanity: Failed to persist auto-healed pools to DB: {e}");
+                } else {
+                    info!("DHCPv4 Startup Sanity: Auto-healed dynamic pools saved to database.");
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn find_target_interface(cfg: &mut Config) -> Result<u32> {

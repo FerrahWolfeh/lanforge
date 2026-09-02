@@ -30,6 +30,7 @@ pub mod config;
 pub mod io;
 pub mod pool;
 pub mod raw;
+pub mod sanity;
 pub mod server;
 
 use dhcproto::v4::{DhcpOption, Message, MessageType, Opcode, OptionCode};
@@ -212,7 +213,6 @@ impl Dhcpv4Service {
 
         if let Some(r) = options.v4.router {
             current_cfg.router = r;
-            current_cfg.server_id = r;
         }
         if let Some(m) = options.v4.subnet_mask {
             current_cfg.subnet_mask = m;
@@ -240,12 +240,18 @@ impl Dhcpv4Service {
         }
         current_cfg.pools = pools;
 
+        // Audit network topology against physical interface and auto-heal if needed
+        sanity::audit_and_auto_heal_dhcpv4(&mut current_cfg);
+
         let mut server = DhcpServer::new(current_cfg.clone(), self.ctx.clone());
         let transport = Dhcpv4Transport::new(&current_cfg.iface, current_cfg.port)?;
 
         // Pre-allocate static reservations to avoid collisions with dynamic pool
         let registry = self.ctx.get_static_registry();
         server.pool.reserve_statics(registry.v4_ips());
+        // Ensure server_id and router are never leased dynamically to clients
+        server.pool.decline(current_cfg.server_id);
+        server.pool.decline(current_cfg.router);
 
         // Sanity check: audit and reconcile all dynamic leases loaded from DB/previous config.
         // Static leases (fixed IPs) are untouched; stale dynamic leases outside active pools/subnet

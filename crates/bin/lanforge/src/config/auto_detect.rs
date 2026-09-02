@@ -3,6 +3,8 @@
 //! Provides hardware-aware LAN interface detection (excluding Docker/Podman/WANs),
 //! dynamic RFC 4193 IPv6 ULA prefix generation, and subnet-aware DHCP defaults.
 
+#[cfg(feature = "dhcp")]
+use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
 use lanforge_types::network::Ipv6Prefix;
 use pnet::datalink::interfaces;
 use pnet::ipnetwork::IpNetwork;
@@ -289,27 +291,23 @@ pub fn derive_dhcp_defaults(iface_name: &str) -> DerivedDhcpDefaults {
     if let Some(iface) = target {
         for ip in &iface.ips {
             if let IpNetwork::V4(v4) = ip {
-                let addr = v4.ip();
-                let mask = v4.mask();
-                let octets = addr.octets();
-
-                // If on /24 subnet
-                if mask == Ipv4Addr::new(255, 255, 255, 0) {
-                    let base0 = octets[0];
-                    let base1 = octets[1];
-                    let base2 = octets[2];
-
-                    let router = if octets[3] == 1 {
-                        addr
-                    } else {
-                        Ipv4Addr::new(base0, base1, base2, 1)
-                    };
-
+                #[cfg(feature = "dhcp")]
+                {
+                    let d = derive_dhcp_defaults_from_v4(v4);
                     return DerivedDhcpDefaults {
-                        router,
-                        range_start: Ipv4Addr::new(base0, base1, base2, 100),
-                        range_end: Ipv4Addr::new(base0, base1, base2, 240),
-                        subnet_mask: mask,
+                        router: d.router,
+                        range_start: d.range_start,
+                        range_end: d.range_end,
+                        subnet_mask: d.subnet_mask,
+                    };
+                }
+                #[cfg(not(feature = "dhcp"))]
+                {
+                    return DerivedDhcpDefaults {
+                        router: v4.ip(),
+                        range_start: v4.ip(),
+                        range_end: v4.ip(),
+                        subnet_mask: v4.mask(),
                     };
                 }
             }
