@@ -4,13 +4,15 @@
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import ServerIcon from "@lucide/svelte/icons/server";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
+	import LayersIcon from "@lucide/svelte/icons/layers";
 
 	let { children } = $props();
 
 	const tabs = [
 		{ label: "Active Leases", href: "/dhcp/leases", icon: NetworkIcon },
 		{ label: "Pool Utilization", href: "/dhcp/pools", icon: ActivityIcon },
-		{ label: "Options & Scopes", href: "/dhcp/options", icon: SlidersIcon },
+		{ label: "Address Scopes", href: "/dhcp/scopes", icon: LayersIcon },
+		{ label: "Server Options", href: "/dhcp/server", icon: SlidersIcon },
 	];
 
 	function isTabActive(href: string) {

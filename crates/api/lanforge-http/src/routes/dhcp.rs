@@ -43,6 +43,7 @@ pub fn router() -> Router<AppState> {
         .route("/leases", get(handle_leases))
         .route("/leases/{mac}/renew", post(handle_renew))
         .route("/leases/{mac}/release", post(handle_release))
+        .route("/reconcile", post(handle_reconcile))
 }
 
 async fn handle_pools(State(state): State<AppState>) -> impl IntoResponse {
@@ -100,4 +101,9 @@ async fn handle_release(
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_lease_release(mac, payload.target).await, Success => NoContent)
+}
+
+async fn handle_reconcile(State(state): State<AppState>) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_dhcp_reconcile().await, DhcpReconcile)
 }

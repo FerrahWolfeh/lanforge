@@ -37,7 +37,7 @@ const MAX_LEASE_TIME: u32 = 30 * 24 * 60 * 60; // 30 dias em segundos
 use dhcproto::v4::{self, DhcpOption, HType, Message, MessageType, Opcode, UnknownOption};
 use dhcproto::{Decodable, Decoder, Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
-use lanforge_types::device::Device;
+use lanforge_types::device::{Device, IPv4State};
 use lanforge_types::identifiers::MacAddr;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
@@ -249,6 +249,24 @@ impl DhcpServer {
             return self.send_nak(msg, "No IP address specified");
         };
 
+        // RFC 2131 §4.3.2 SANITY CHECK:
+        // A client is permitted to request `wanted` IF:
+        // 1. It is a static host reservation explicitly assigned to this MAC.
+        // 2. OR `wanted` falls within active dynamic pools and aligns with the subnet mask & gateway.
+        // Otherwise, the address is invalid for this subnet/pool; reply with DHCPNAK to force the
+        // client back to INIT state so it broadcasts DHCPDISCOVER and receives a valid lease.
+        let is_static_for_client = self.ctx.get_static_registry().v4.get(&wanted) == Some(&mac)
+            || self
+                .ctx
+                .get_device(&mac)
+                .as_deref()
+                .is_some_and(|d| matches!(d.v4, IPv4State::Static(ip) if ip == wanted));
+
+        if !is_static_for_client && !self.pool.is_valid_dynamic_ip(wanted, self.cfg.subnet_mask, Some(self.cfg.router)) {
+            warn!("DHCPv4: {identity} requested {wanted} which is outside configured pools or on a mismatched subnet; sending DHCPNAK");
+            return self.send_nak(msg, "Requested IP address is not valid for this subnet or dynamic pool");
+        }
+
         // Try to allocate
         let Some(assigned_ip) = self.pool.allocate(&self.ctx, mac, Some(wanted)) else {
             warn!("DHCPv4: {identity} requested {wanted} but it is not available");
@@ -257,6 +275,7 @@ impl DhcpServer {
 
         if assigned_ip != wanted {
             warn!("DHCPv4: {identity} requested {wanted} but was assigned {assigned_ip} instead");
+            self.pool.release(&assigned_ip);
             return self.send_nak(msg, "Requested IP not available");
         }
 
@@ -382,6 +401,7 @@ impl DhcpServer {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn build_reply(&self, request: &Message, msg_type: MessageType, yiaddr: Ipv4Addr) -> Vec<u8> {
         let mut reply = Message::default();
 
@@ -408,26 +428,55 @@ impl DhcpServer {
             let dev = self.ctx.get_device(&mac);
             let is_static = dev.as_ref().is_some_and(|d| d.is_static());
 
+            let pool_opt = self.pool.pool_for_ip(yiaddr);
+            let pool_router = pool_opt.and_then(|p| p.router).unwrap_or(self.cfg.router);
+            let pool_mask = pool_opt.and_then(|p| p.subnet_mask).unwrap_or(self.cfg.subnet_mask);
+            let pool_dns = pool_opt.map_or(&self.cfg.dns, |p| {
+                if p.dns_servers.is_empty() {
+                    &self.cfg.dns
+                } else {
+                    &p.dns_servers
+                }
+            });
+            let pool_domain = pool_opt
+                .and_then(|p| p.domain_name.as_ref())
+                .or(self.cfg.domain_name.as_ref());
+            let pool_search = pool_opt.map_or(&self.cfg.search_domains, |p| {
+                if p.search_domains.is_empty() {
+                    &self.cfg.search_domains
+                } else {
+                    &p.search_domains
+                }
+            });
+            let pool_ntp = pool_opt.map_or(&self.cfg.ntp_servers, |p| {
+                if p.ntp_servers.is_empty() {
+                    &self.cfg.ntp_servers
+                } else {
+                    &p.ntp_servers
+                }
+            });
+
+            let effective_lease_time = pool_opt
+                .and_then(|p| p.lease_time)
+                .unwrap_or(self.cfg.lease_time);
             let lease_time = if is_static {
                 u32::MAX
             } else {
-                self.cfg.lease_time
+                effective_lease_time
             };
 
             opts.insert(DhcpOption::AddressLeaseTime(lease_time));
-            opts.insert(DhcpOption::SubnetMask(self.cfg.subnet_mask));
-            opts.insert(DhcpOption::Router(vec![self.cfg.router]));
-            opts.insert(DhcpOption::DomainNameServer(self.cfg.dns.clone()));
+            opts.insert(DhcpOption::SubnetMask(pool_mask));
+            opts.insert(DhcpOption::Router(vec![pool_router]));
+            opts.insert(DhcpOption::DomainNameServer(pool_dns.clone()));
 
-            if let Some(ref domain) = self.cfg.domain_name {
+            if let Some(domain) = pool_domain {
                 opts.insert(DhcpOption::DomainName(domain.clone()));
             }
 
-            if !self.cfg.search_domains.is_empty() {
+            if !pool_search.is_empty() {
                 // Option 119: Domain Search List (RFC 3397)
-                let names: Vec<Name> = self
-                    .cfg
-                    .search_domains
+                let names: Vec<Name> = pool_search
                     .iter()
                     .filter_map(|d| Name::from_str(d).ok())
                     .collect();
@@ -437,7 +486,7 @@ impl DhcpServer {
             let (t1, t2) = if is_static {
                 (u32::MAX, u32::MAX)
             } else {
-                let safe_lease_time = std::cmp::min(self.cfg.lease_time, MAX_LEASE_TIME);
+                let safe_lease_time = std::cmp::min(effective_lease_time, MAX_LEASE_TIME);
                 (safe_lease_time / 2, safe_lease_time.saturating_mul(7) / 8)
             };
             opts.insert(DhcpOption::Renewal(t1));
@@ -453,9 +502,9 @@ impl DhcpServer {
             }
 
             // NTP Servers (Option 42)
-            if !self.cfg.ntp_servers.is_empty() {
-                let mut ntp_bytes = Vec::with_capacity(self.cfg.ntp_servers.len() * 4);
-                for ip in &self.cfg.ntp_servers {
+            if !pool_ntp.is_empty() {
+                let mut ntp_bytes = Vec::with_capacity(pool_ntp.len() * 4);
+                for ip in pool_ntp {
                     ntp_bytes.extend_from_slice(&ip.octets());
                 }
                 opts.insert(DhcpOption::Unknown(UnknownOption::new(
@@ -465,7 +514,7 @@ impl DhcpServer {
             }
 
             // Hybrid PXE / HTTP Boot Support
-            self.add_boot_options(request, opts);
+            self.add_boot_options(request, opts, pool_opt);
 
             // Custom Options
             self.add_custom_options(opts);
@@ -479,7 +528,12 @@ impl DhcpServer {
         buf
     }
 
-    fn add_boot_options(&self, request: &Message, opts: &mut v4::DhcpOptions) {
+    fn add_boot_options(
+        &self,
+        request: &Message,
+        opts: &mut v4::DhcpOptions,
+        pool_opt: Option<&lanforge_types::network::dhcp::Dhcpv4Pool>,
+    ) {
         let vendor_class = Self::get_vendor_class(request);
         let arch = Self::get_arch(request);
 
@@ -495,6 +549,7 @@ impl DhcpServer {
         let boot_file = dev
             .as_ref()
             .and_then(|d| d.boot_file.clone())
+            .or_else(|| pool_opt.and_then(|p| p.boot_file.clone()))
             .or_else(|| self.cfg.boot_file.clone());
 
         if let Some(file) = boot_file {
@@ -506,7 +561,10 @@ impl DhcpServer {
             } else {
                 // Traditional PXE: Option 67 is a filename
                 opts.insert(DhcpOption::BootfileName(file.into_bytes()));
-                if let Some(tftp) = &self.cfg.tftp_server {
+                let tftp = pool_opt
+                    .and_then(|p| p.tftp_server.as_ref())
+                    .or(self.cfg.tftp_server.as_ref());
+                if let Some(tftp) = tftp {
                     opts.insert(DhcpOption::TFTPServerName(tftp.as_bytes().to_vec()));
                 } else {
                     opts.insert(DhcpOption::TFTPServerName(
@@ -810,6 +868,64 @@ mod tests {
     }
 
     #[test]
+    fn request_out_of_pool_or_wrong_subnet_ip_yields_nak() {
+        let (mut srv, ctx) = dummy_server();
+        let mac = dummy_mac();
+
+        // 1. Client requests an out-of-pool IP from an old network (10.0.100.50)
+        let stale_ip = Ipv4Addr::new(10, 0, 100, 50);
+        let raw_msg = build_raw_msg(MessageType::Request, mac, Some(stale_ip), None, None);
+        let res = srv.handle_packet(&raw_msg, None);
+
+        match res {
+            HandleResult::Reply {
+                packet, broadcast, ..
+            } => {
+                let reply = decode_reply(&packet);
+                assert_eq!(
+                    reply.opts().get(v4::OptionCode::MessageType),
+                    Some(&DhcpOption::MessageType(MessageType::Nak)),
+                    "Must NAK out-of-pool / out-of-subnet requested IP"
+                );
+                assert!(broadcast, "NAKs must be broadcast");
+            }
+            HandleResult::Ignore | HandleResult::Release { .. } => {
+                panic!("Expected NAK for out-of-pool requested IP")
+            }
+        }
+
+        // 2. But if that out-of-pool IP is a static reservation for this MAC, it must be honored!
+        let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
+            mac,
+            update: CliHostUpdate {
+                hostname: FieldUpdate::Set("static-device".to_string()),
+                duid: FieldUpdate::NoChange,
+                v4_static: FieldUpdate::Set(stale_ip),
+                v6_suffix: FieldUpdate::NoChange,
+                origin: Origin::Static,
+                boot_file: FieldUpdate::NoChange,
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
+            },
+        });
+
+        let res_static = srv.handle_packet(&raw_msg, None);
+        match res_static {
+            HandleResult::Reply { packet, .. } => {
+                let reply = decode_reply(&packet);
+                assert_eq!(
+                    reply.opts().get(v4::OptionCode::MessageType),
+                    Some(&DhcpOption::MessageType(MessageType::Ack)),
+                    "Must ACK static reservation even if outside dynamic pool"
+                );
+            }
+            HandleResult::Ignore | HandleResult::Release { .. } => {
+                panic!("Expected ACK for static reservation")
+            }
+        }
+    }
+
+    #[test]
     fn release_frees_allocated_ip() {
         let (mut srv, ctx) = dummy_server();
         let mac = dummy_mac();
@@ -942,7 +1058,7 @@ mod tests {
         let mut reply_opts = v4::DhcpOptions::new();
 
         // 1. Global config only
-        srv.add_boot_options(&request, &mut reply_opts);
+        srv.add_boot_options(&request, &mut reply_opts, None);
         assert_eq!(
             reply_opts.get(66.into()),
             Some(&DhcpOption::TFTPServerName(b"1.2.3.4".to_vec()))
@@ -968,7 +1084,7 @@ mod tests {
         });
 
         let mut reply_opts = v4::DhcpOptions::new();
-        srv.add_boot_options(&request, &mut reply_opts);
+        srv.add_boot_options(&request, &mut reply_opts, None);
         assert_eq!(
             reply_opts.get(v4::OptionCode::BootfileName),
             Some(&DhcpOption::BootfileName(b"custom.efi".to_vec()))
@@ -979,7 +1095,7 @@ mod tests {
             .opts_mut()
             .insert(DhcpOption::ClientSystemArchitecture(Architecture::from(16))); // UEFI HTTP
         let mut reply_opts = v4::DhcpOptions::new();
-        srv.add_boot_options(&request, &mut reply_opts);
+        srv.add_boot_options(&request, &mut reply_opts, None);
         assert!(
             reply_opts.get(v4::OptionCode::ClassIdentifier).is_some(),
             "Missing Class Identifier (Option 60)"

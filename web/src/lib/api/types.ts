@@ -463,6 +463,19 @@ export interface DhcpOptionsResponse {
 	options: DhcpOptionsConfig;
 }
 
+export interface InvalidatedLeaseInfo {
+	mac: string;
+	ip: string;
+	hostname: string | null;
+	reason: string;
+}
+
+export interface DhcpReconcileResponse {
+	invalidated_v4_leases: InvalidatedLeaseInfo[];
+	valid_v4_leases: number;
+	preserved_static_leases: number;
+}
+
 export interface LeasesResponse {
 	leases: LeaseEntry[];
 }

@@ -146,8 +146,14 @@ impl IpPool {
                     return Some(*ip);
                 }
                 IPv4State::Dynamic(lease) => {
-                    self.remove_from_available(lease.ip);
-                    return Some(lease.ip);
+                    if self.is_in_range(lease.ip) {
+                        self.remove_from_available(lease.ip);
+                        return Some(lease.ip);
+                    }
+                    tracing::warn!(
+                        "DHCPv4: Sticky dynamic lease {} for {mac} is outside active pools; will reallocate.",
+                        lease.ip
+                    );
                 }
                 IPv4State::None => {}
             }
@@ -278,6 +284,41 @@ impl IpPool {
         self.pools
             .iter()
             .any(|p| ip >= p.range_start && ip <= p.range_end)
+    }
+
+    /// Returns the pool configuration matching the given IP address, if any.
+    #[must_use]
+    pub fn pool_for_ip(&self, ip: Ipv4Addr) -> Option<&Dhcpv4Pool> {
+        self.pools
+            .iter()
+            .find(|p| ip >= p.range_start && ip <= p.range_end)
+    }
+
+    /// Checks if a dynamic IP address is valid:
+    /// 1. Falls within one of the active dynamic pool ranges.
+    /// 2. Matches the subnet mask and router/gateway configuration.
+    #[must_use]
+    pub fn is_valid_dynamic_ip(
+        &self,
+        ip: Ipv4Addr,
+        server_mask: Ipv4Addr,
+        server_router: Option<Ipv4Addr>,
+    ) -> bool {
+        let Some(pool) = self.pool_for_ip(ip) else {
+            return false;
+        };
+
+        let mask = pool.subnet_mask.unwrap_or(server_mask);
+        let router = pool.router.or(server_router);
+
+        if let Some(r) = router {
+            let mask_u32 = u32::from(mask);
+            if (u32::from(ip) & mask_u32) != (u32::from(r) & mask_u32) {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
@@ -458,5 +499,70 @@ mod tests {
         assert_eq!(used, 1);
         assert_eq!(available, 5);
         assert_eq!(util, (1.0 / 6.0) * 100.0);
+    }
+
+    #[test]
+    fn test_sticky_dynamic_lease_outside_pool_is_ignored() {
+        let (mut p, ctx) = pool(); // Pool is 192.168.0.100..=192.168.0.105
+
+        // Simulate an obsolete dynamic lease from old /16 network (10.0.100.50)
+        let stale_ip = Ipv4Addr::new(10, 0, 100, 50);
+        let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
+            mac: mac(1),
+            ip: stale_ip,
+            expires: SystemTime::now() + Duration::from_hours(1),
+        });
+
+        // Allocate should ignore the stale dynamic lease and allocate a valid IP inside pool!
+        let allocated = p.allocate(&ctx, mac(1), None).unwrap();
+        assert_ne!(allocated, stale_ip, "Must not honor stale dynamic lease outside pool");
+        assert!(p.is_in_range(allocated), "Must allocate within active pool");
+    }
+
+    #[test]
+    fn test_static_lease_outside_pool_is_always_honored() {
+        let (mut p, ctx) = pool(); // Pool is 192.168.0.100..=192.168.0.105
+
+        // Simulate a static host reservation outside the pool
+        let static_outside_ip = Ipv4Addr::new(192, 168, 0, 10);
+        let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
+            mac: mac(2),
+            update: CliHostUpdate {
+                hostname: FieldUpdate::Set("nas".to_string()),
+                duid: FieldUpdate::NoChange,
+                v4_static: FieldUpdate::Set(static_outside_ip),
+                v6_suffix: FieldUpdate::NoChange,
+                origin: Origin::Static,
+                boot_file: FieldUpdate::NoChange,
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
+            },
+        });
+
+        // Allocate MUST honor static lease even outside pool
+        let allocated = p.allocate(&ctx, mac(2), None).unwrap();
+        assert_eq!(allocated, static_outside_ip, "Static lease outside pool must always be honored");
+    }
+
+    #[test]
+    fn test_is_valid_dynamic_ip_subnet_alignment() {
+        let p = IpPool::new(vec![Dhcpv4Pool {
+            range_start: Ipv4Addr::new(10, 0, 1, 100),
+            range_end: Ipv4Addr::new(10, 0, 1, 200),
+            ..Default::default()
+        }]);
+
+        let mask_22 = Ipv4Addr::new(255, 255, 252, 0); // /22: 10.0.0.0 - 10.0.3.255
+        let gw_22 = Ipv4Addr::new(10, 0, 3, 1);
+
+        // In range and matches /22 subnet
+        assert!(p.is_valid_dynamic_ip(Ipv4Addr::new(10, 0, 1, 150), mask_22, Some(gw_22)));
+
+        // Outside pool range entirely
+        assert!(!p.is_valid_dynamic_ip(Ipv4Addr::new(10, 0, 100, 50), mask_22, Some(gw_22)));
+
+        // In pool range but gateway is in a completely different subnet
+        let mismatched_gw = Ipv4Addr::new(192, 168, 1, 1);
+        assert!(!p.is_valid_dynamic_ip(Ipv4Addr::new(10, 0, 1, 150), mask_22, Some(mismatched_gw)));
     }
 }

@@ -16,6 +16,7 @@ import type {
 	DhcpPoolEntry,
 	DhcpPoolsConfigResponse,
 	DhcpPoolsResponse,
+	DhcpReconcileResponse,
 	Dhcpv4PoolConfig,
 	Dhcpv6PoolConfig,
 	DnsAdblockStatusResponse,
@@ -394,6 +395,11 @@ export const leaseRenew = (mac: string, target?: LeaseTarget) =>
 
 export const leaseRelease = (mac: string, target?: LeaseTarget) =>
 	post<void>(`/dhcp/leases/${encodeURIComponent(mac)}/release`, target !== undefined ? { target } : {});
+
+export const dhcpReconcile = async (): Promise<DhcpReconcileResponse> => {
+	const res = await post<any>('/dhcp/reconcile', {});
+	return res?.data ?? res;
+};
 
 // ---------------------------------------------------------------------------
 // Database

@@ -1,17 +1,19 @@
 use crate::api::{
-    AuthTokenResponse, AuthTokensResponse, DevicesResponse, DhcpPoolsResponse,
-    DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse,
-    DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
-    DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
-    EventKind, HostConfigEntry, HostsResponse, LeasesResponse, RpcCallError,
-    ServiceBannersResponse, SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess,
-    StatusResponse, SystemConfigExport, SystemConfigImportResponse, TransientHostsResponse,
-    UserListResponse, UserResponse, WhoisResponse,
+    AuthTokenResponse, AuthTokensResponse, DevicesResponse, DhcpOptionsResponse,
+    DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockStatusResponse,
+    DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse,
+    DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse,
+    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry,
+    HostsResponse, LeasesResponse, RpcCallError, ServiceBannersResponse, SetupPayload,
+    SetupResponse, SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
+    SystemConfigImportResponse, TransientHostsResponse, UserListResponse, UserResponse,
+    WhoisResponse,
 };
 use lanforge_macros::lanforge_rpc;
 use lanforge_types::{
     identifiers::MacAddr,
     network::{
+        dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool},
         dns::{
             DnsRecordType,
             adblock::{AdblockUrlKind, BlockingMode, RewriteRule},
@@ -87,6 +89,22 @@ pub trait LanforgeRpc {
         target: Option<LeaseTarget>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn dhcp_pools(&self) -> impl Future<Output = Result<DhcpPoolsResponse, RpcCallError>> + Send;
+    fn dhcp_options(&self) -> impl Future<Output = Result<DhcpOptionsResponse, RpcCallError>> + Send;
+    fn update_dhcp_options(
+        &self,
+        options: DhcpOptionsConfig,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn dhcp_pools_config(
+        &self,
+    ) -> impl Future<Output = Result<DhcpPoolsConfigResponse, RpcCallError>> + Send;
+    fn update_dhcp_pools_config(
+        &self,
+        v4_pools: Vec<Dhcpv4Pool>,
+        v6_pools: Vec<Dhcpv6Pool>,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn dhcp_reconcile(
+        &self,
+    ) -> impl Future<Output = Result<DhcpReconcileResponse, RpcCallError>> + Send;
     fn db_vacuum(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn db_log_clean(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn db_prune(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;

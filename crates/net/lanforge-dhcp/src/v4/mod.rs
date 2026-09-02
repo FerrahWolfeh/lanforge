@@ -48,7 +48,7 @@ use server::{DhcpServer, HandleResult};
 use std::net::Ipv4Addr;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 pub use config::Dhcpv4Config;
 use crate::traits::DhcpPool;
@@ -189,40 +189,68 @@ impl Dhcpv4Service {
             };
             if matches!(
                 timed_event.event,
-                LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed)
+                LanforgeEvent::System(
+                    SystemEvent::ConfigDhcpV4Changed | SystemEvent::ConfigDhcpOptionsChanged
+                )
             ) {
                 return Ok(RunResult::ConfigChanged);
             }
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn run_server(
         &self,
         pools: Vec<Dhcpv4Pool>,
     ) -> Result<RunResult, CoreError> {
         let mut current_cfg = self.cfg.clone();
+        let options = self.ctx.get_dhcp_options();
+        if !options.v4.enabled {
+            warn!("DHCPv4: Service disabled via options configuration — server idle");
+            return self.wait_for_config_change_or_shutdown().await;
+        }
+
+        if let Some(r) = options.v4.router {
+            current_cfg.router = r;
+            current_cfg.server_id = r;
+        }
+        if let Some(m) = options.v4.subnet_mask {
+            current_cfg.subnet_mask = m;
+        }
+        if !options.v4.dns_servers.is_empty() {
+            current_cfg.dns = options.v4.dns_servers;
+        }
+        if let Some(d) = options.v4.domain_name {
+            current_cfg.domain_name = Some(d);
+        }
+        if !options.v4.search_domains.is_empty() {
+            current_cfg.search_domains = options.v4.search_domains;
+        }
+        if !options.v4.ntp_servers.is_empty() {
+            current_cfg.ntp_servers = options.v4.ntp_servers;
+        }
+        if options.v4.lease_time > 0 {
+            current_cfg.lease_time = options.v4.lease_time;
+        }
+        if let Some(t) = options.v4.tftp_server {
+            current_cfg.tftp_server = Some(t);
+        }
+        if let Some(b) = options.v4.boot_file {
+            current_cfg.boot_file = Some(b);
+        }
         current_cfg.pools = pools;
 
         let mut server = DhcpServer::new(current_cfg.clone(), self.ctx.clone());
+        let transport = Dhcpv4Transport::new(&current_cfg.iface, current_cfg.port)?;
 
         // Pre-allocate static reservations to avoid collisions with dynamic pool
         let registry = self.ctx.get_static_registry();
         server.pool.reserve_statics(registry.v4_ips());
 
-        // Seed with active dynamic leases from context
-        let active_dynamic_ips: Vec<Ipv4Addr> = self.ctx.with_state(|state| {
-            state
-                .devices
-                .values()
-                .filter_map(|dev| match &dev.v4 {
-                    IPv4State::Dynamic(lease) => Some(lease.ip),
-                    _ => None,
-                })
-                .collect()
-        });
-        server.pool.reserve_statics(active_dynamic_ips);
-
-        let transport = Dhcpv4Transport::new(&current_cfg.iface, current_cfg.port)?;
+        // Sanity check: audit and reconcile all dynamic leases loaded from DB/previous config.
+        // Static leases (fixed IPs) are untouched; stale dynamic leases outside active pools/subnet
+        // are invalidated and clients are prompted to re-authenticate via RFC 3203 FORCERENEW.
+        self.reconcile_dynamic_leases(&mut server, &transport, &current_cfg);
 
         let (total, used, available, util_pct) = server.pool.stats();
         let range_start = current_cfg
@@ -268,7 +296,9 @@ impl Dhcpv4Service {
                     };
                     if matches!(
                         timed_event.event,
-                        LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed)
+                        LanforgeEvent::System(
+                            SystemEvent::ConfigDhcpV4Changed | SystemEvent::ConfigDhcpOptionsChanged
+                        )
                     ) {
                         return Ok(RunResult::ConfigChanged);
                     }
@@ -276,6 +306,7 @@ impl Dhcpv4Service {
                 }
                 _ = cleanup_timer.tick() => {
                     server.pool.cleanup_quarantine(Instant::now());
+                    self.reconcile_dynamic_leases(&mut server, &transport, &current_cfg);
                     let (total, used, available, util_pct) = server.pool.stats();
                     let range_start = current_cfg.range_start.or_else(|| current_cfg.pools.first().map(|p| p.range_start)).unwrap_or(Ipv4Addr::UNSPECIFIED);
                     let range_end = current_cfg.range_end.or_else(|| current_cfg.pools.first().map(|p| p.range_end)).unwrap_or(Ipv4Addr::UNSPECIFIED);
@@ -295,6 +326,7 @@ impl Dhcpv4Service {
 }
 
 impl Dhcpv4Service {
+    #[allow(clippy::too_many_lines)]
     fn handle_incoming_packet(
         &self,
         data: &[u8],
@@ -470,5 +502,80 @@ impl Dhcpv4Service {
                 }
             }
         });
+    }
+
+    /// Audits and reconciles all in-memory and database dynamic leases against the active pools
+    /// and subnet configuration.
+    ///
+    /// - Static leases with fixed IPs (inside or outside pools) are NEVER touched.
+    /// - Dynamic leases outside active pools or with mismatched subnet/router are invalidated
+    ///   via `DeviceUpdate::LeaseReleased`, removing them from limbo.
+    /// - A proactive RFC 3203 `FORCERENEW` packet is injected via raw L2 to prompt the client
+    ///   to immediately renew/re-authenticate into the valid pool range.
+    /// - Only verified valid dynamic leases are seeded into the pool allocation bitmap.
+    fn reconcile_dynamic_leases(
+        &self,
+        server: &mut DhcpServer,
+        transport: &Dhcpv4Transport,
+        cfg: &Dhcpv4Config,
+    ) {
+        let dynamic_leases: Vec<(MacAddr, Ipv4Addr, String)> = self.ctx.with_state(|state| {
+            state
+                .devices
+                .values()
+                .filter_map(|dev| match &dev.v4 {
+                    IPv4State::Dynamic(lease) => {
+                        Some((dev.mac, lease.ip, dev.hostname.name.clone()))
+                    }
+                    // Static reservations (fixed IPs inside or outside pool ranges) MUST NOT be touched
+                    IPv4State::Static(_) | IPv4State::None => None,
+                })
+                .collect()
+        });
+
+        let mut valid_dynamic_ips = Vec::new();
+
+        for (mac, ip, hostname) in dynamic_leases {
+            if server.pool.is_valid_dynamic_ip(ip, cfg.subnet_mask, Some(cfg.router)) {
+                valid_dynamic_ips.push(ip);
+            } else {
+                let name = if hostname.is_empty() { "unknown" } else { &hostname };
+                let reason = if server.pool.is_in_range(ip) {
+                    format!(
+                        "IP {ip} does not match subnet mask {} or gateway {}",
+                        cfg.subnet_mask, cfg.router
+                    )
+                } else {
+                    format!("IP {ip} is outside active dynamic pool ranges")
+                };
+
+                warn!(
+                    "DHCPv4 SANITY CHECK: Invalidating stale dynamic lease {ip} for {mac} ({name}) — {reason}"
+                );
+
+                // 1. Proactively notify the client to re-authenticate (RFC 3203 FORCERENEW)
+                let packet = server.build_forcerenew(mac, ip);
+                if let Err(e) = transport.send_reply(
+                    &packet,
+                    cfg.server_id,
+                    false,
+                    ip,
+                    Ipv4Addr::UNSPECIFIED,
+                    mac,
+                    cfg.port,
+                ) {
+                    debug!("DHCPv4: Could not send FORCERENEW to {ip} ({mac}): {e}");
+                }
+
+                // 2. Invalidate lease in State and DB so it no longer lingers in limbo
+                let _ = self.ctx.apply(DeviceUpdate::LeaseReleased {
+                    mac,
+                    target: LeaseTarget::V4,
+                });
+            }
+        }
+
+        // Reserve only valid dynamic leases in the pool
+        server.pool.reserve_statics(valid_dynamic_ips);
     }
 }

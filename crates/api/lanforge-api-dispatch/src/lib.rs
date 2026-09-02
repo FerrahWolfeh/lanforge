@@ -1,18 +1,19 @@
 pub mod handlers;
 
 use lanforge_api::api::{
-    AuthTokenResponse, DevicesResponse, DhcpPoolsResponse, DnsAdblockUrlsResponse,
-    DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse,
-    DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse,
-    DnsStatsResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry, HostsResponse,
-    LeasesResponse, Response, RpcCallError, SetupPayload, SetupResponse, SetupStatusResponse,
-    SimpleSuccess, StatusResponse, SystemConfigExport, SystemConfigImportResponse,
-    TransientHostsResponse, WhoisResponse,
+    AuthTokenResponse, DevicesResponse, DhcpOptionsResponse, DhcpPoolsConfigResponse,
+    DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse,
+    DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse,
+    DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse,
+    DnsUpstreamsResponse, EventKind, HostConfigEntry, HostsResponse, LeasesResponse, Response,
+    RpcCallError, SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess, StatusResponse,
+    SystemConfigExport, SystemConfigImportResponse, TransientHostsResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpc;
 use lanforge_core::context::LanforgeContext;
 use lanforge_db_core::{DatabaseStore, LogStore};
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{BlockingMode, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
@@ -196,6 +197,53 @@ impl LanforgeRpc for ClientContext {
     async fn dhcp_pools(&self) -> Result<DhcpPoolsResponse, RpcCallError> {
         match self.handle_dhcp_pools().await {
             Response::DhcpPools(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn dhcp_options(&self) -> Result<DhcpOptionsResponse, RpcCallError> {
+        match self.handle_get_dhcp_options().await {
+            Response::DhcpOptions(r) => Ok(*r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn update_dhcp_options(
+        &self,
+        options: DhcpOptionsConfig,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_update_dhcp_options(options).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn dhcp_pools_config(&self) -> Result<DhcpPoolsConfigResponse, RpcCallError> {
+        match self.handle_get_dhcp_pools_config().await {
+            Response::DhcpPoolsConfig(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn update_dhcp_pools_config(
+        &self,
+        v4_pools: Vec<Dhcpv4Pool>,
+        v6_pools: Vec<Dhcpv6Pool>,
+    ) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_update_dhcp_pools_config(v4_pools, v6_pools).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn dhcp_reconcile(&self) -> Result<DhcpReconcileResponse, RpcCallError> {
+        match self.handle_dhcp_reconcile().await {
+            Response::DhcpReconcile(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }

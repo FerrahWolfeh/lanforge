@@ -75,10 +75,10 @@ pub struct DeviceEntry {
     /// Discovered category (e.g., "printer", "media").
     pub class: DeviceClass,
     /// Ingress network interface where the device was observed (e.g., "lan0.100").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub iface: Option<String>,
     /// Inferred 802.1Q VLAN ID if observed on a VLAN subinterface (e.g., 100 for "lan0.100").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub vlan_id: Option<u16>,
 }
 

@@ -132,3 +132,35 @@ impl HttpWrappedResponse for DhcpPoolsConfigResponse {
         wrapper.data
     }
 }
+
+/// Response returned following a DHCP lease sanity check and reconciliation audit.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DhcpReconcileResponse {
+    /// Stale dynamic leases that were invalidated and removed from state/DB.
+    pub invalidated_v4_leases: Vec<InvalidatedLeaseInfo>,
+    /// Number of verified valid dynamic leases remaining in pool.
+    pub valid_v4_leases: usize,
+    /// Number of static reservations untouched.
+    pub preserved_static_leases: usize,
+}
+
+/// Details about an invalidated dynamic lease.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct InvalidatedLeaseInfo {
+    pub mac: MacAddr,
+    pub ip: std::net::Ipv4Addr,
+    pub hostname: Option<String>,
+    pub reason: String,
+}
+
+impl HttpWrappedResponse for DhcpReconcileResponse {
+    type Wrapper = HttpDataResponse<DhcpReconcileResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}

@@ -18,6 +18,7 @@
 	import LockIcon from "@lucide/svelte/icons/lock";
 	import KeyIcon from "@lucide/svelte/icons/key";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
+	import LayersIcon from "@lucide/svelte/icons/layers";
 
 	const navGroups = [
 		{
@@ -65,9 +66,10 @@
 			items: [
 				{ label: "Leases", href: "/dhcp/leases", icon: NetworkIcon },
 				{ label: "Pools", href: "/dhcp/pools", icon: ActivityIcon },
+				{ label: "Scopes", href: "/dhcp/scopes", icon: LayersIcon },
 				{
-					label: "Options & Scopes",
-					href: "/dhcp/options",
+					label: "Server Options",
+					href: "/dhcp/server",
 					icon: SlidersIcon,
 				},
 			],

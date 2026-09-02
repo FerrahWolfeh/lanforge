@@ -97,4 +97,6 @@ pub enum Response {
     SetupStatus(SetupStatusResponse),
     /// Setup completion response.
     Setup(SetupResponse),
+    /// DHCP lease sanity check and reconciliation response.
+    DhcpReconcile(DhcpReconcileResponse),
 }

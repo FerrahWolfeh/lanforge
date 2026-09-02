@@ -7,17 +7,19 @@ use directories::ProjectDirs;
 use tokio::net::UnixStream;
 
 use lanforge_api::api::{
-    AuthTokenResponse, AuthTokensResponse, DevicesResponse, DhcpPoolsResponse,
-    DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse,
-    DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
-    DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
-    HostConfigEntry, HostsResponse, HttpErrorResponse, HttpWrappedResponse, LeasesResponse,
-    ServiceBannersResponse, SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess,
-    StatusResponse, SystemConfigExport, SystemConfigImportResponse, TransientHostsResponse,
-    UserListResponse, UserResponse, WhoisResponse,
+    AuthTokenResponse, AuthTokensResponse, DevicesResponse, DhcpOptionsResponse,
+    DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockStatusResponse,
+    DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse,
+    DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse,
+    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, HostConfigEntry, HostsResponse,
+    HttpErrorResponse, HttpWrappedResponse, LeasesResponse, ServiceBannersResponse, SetupPayload,
+    SetupResponse, SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
+    SystemConfigImportResponse, TransientHostsResponse, UserListResponse, UserResponse,
+    WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::auth::ApiScopes;
+use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::DnsRecordType;
 use lanforge_types::network::dns::adblock::AdblockUrlKind;
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
@@ -623,6 +625,39 @@ impl LanforgeClient {
 
     pub async fn dhcp_pools(&self) -> Result<DhcpPoolsResponse> {
         dispatch!(self, get => "/dhcp/pools", dhcp_pools())
+    }
+
+    pub async fn dhcp_options(&self) -> Result<DhcpOptionsResponse> {
+        dispatch!(self, get => "/dhcp/options", dhcp_options())
+    }
+
+    pub async fn update_dhcp_options(&self, options: DhcpOptionsConfig) -> Result<SimpleSuccess> {
+        dispatch!(self, put => "/dhcp/options", options, update_dhcp_options(options))
+    }
+
+    pub async fn dhcp_pools_config(&self) -> Result<DhcpPoolsConfigResponse> {
+        dispatch!(self, get => "/dhcp/pools/config", dhcp_pools_config())
+    }
+
+    pub async fn update_dhcp_pools_config(
+        &self,
+        v4_pools: Vec<Dhcpv4Pool>,
+        v6_pools: Vec<Dhcpv6Pool>,
+    ) -> Result<SimpleSuccess> {
+        #[derive(serde::Serialize)]
+        struct UpdatePoolsReq {
+            v4_pools: Vec<Dhcpv4Pool>,
+            v6_pools: Vec<Dhcpv6Pool>,
+        }
+        let req = UpdatePoolsReq {
+            v4_pools: v4_pools.clone(),
+            v6_pools: v6_pools.clone(),
+        };
+        dispatch!(self, put => "/dhcp/pools/config", req, update_dhcp_pools_config(v4_pools, v6_pools))
+    }
+
+    pub async fn dhcp_reconcile(&self) -> Result<DhcpReconcileResponse> {
+        dispatch!(self, post => "/dhcp/reconcile", serde_json::json!({}), dhcp_reconcile())
     }
 
     // --- Hosts Management ---
