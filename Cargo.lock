@@ -2986,6 +2986,7 @@ version = "0.7.0"
 dependencies = [
  "lanforge-macros",
  "serde",
+ "serde_json",
  "smallvec",
 ]
 

@@ -14,3 +14,7 @@ lanforge-macros = { workspace = true }
 
 serde = { workspace = true, features = ["rc"] }
 smallvec = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+

@@ -26,6 +26,32 @@ use crate::network::Ipv6AddrOrSuffix;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 
+/// Deserializes an optional value from a string, treating empty or whitespace-only strings as `None`.
+pub fn empty_string_as_none<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    let opt = Option::<String>::deserialize(deserializer)?;
+    match opt.as_deref().map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(s) => s.parse::<T>().map(Some).map_err(serde::de::Error::custom),
+    }
+}
+
+/// Deserializes an optional string, treating empty or whitespace-only strings as `None`.
+pub fn empty_string_as_none_str<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(deserializer)?;
+    match opt.as_deref().map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(s) => Ok(Some(s.to_string())),
+    }
+}
+
 /// Configuration for a single `DHCPv4` address pool.
 ///
 /// Defines a contiguous range of IPv4 addresses that the `DHCPv4` server is permitted to lease
@@ -46,23 +72,23 @@ use std::net::Ipv4Addr;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Dhcpv4Pool {
     /// Optional descriptive name for this scope.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "empty_string_as_none_str")]
     pub name: Option<String>,
     /// Start of the dynamic IP range (inclusive).
     pub range_start: Ipv4Addr,
     /// End of the dynamic IP range (inclusive).
     pub range_end: Ipv4Addr,
     /// Subnet mask override for this pool.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "empty_string_as_none")]
     pub subnet_mask: Option<Ipv4Addr>,
     /// Gateway / Router (Option 3) override for this pool.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "empty_string_as_none")]
     pub router: Option<Ipv4Addr>,
     /// DNS servers (Option 6) override for this pool.
     #[serde(default)]
     pub dns_servers: Vec<Ipv4Addr>,
     /// Domain name (Option 15) override for this pool.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "empty_string_as_none_str")]
     pub domain_name: Option<String>,
     /// Domain search list (Option 119) override for this pool.
     #[serde(default)]
@@ -74,10 +100,10 @@ pub struct Dhcpv4Pool {
     #[serde(default)]
     pub lease_time: Option<u32>,
     /// Boot file name (Option 67) override.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "empty_string_as_none_str")]
     pub boot_file: Option<String>,
     /// TFTP next-server (Option 66 / siaddr) override.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "empty_string_as_none_str")]
     pub tftp_server: Option<String>,
 }
 
@@ -109,12 +135,14 @@ impl Default for Dhcpv4Pool {
 #[serde(default)]
 pub struct Dhcpv6Pool {
     /// Optional descriptive name for this scope.
+    #[serde(default, deserialize_with = "empty_string_as_none_str")]
     pub name: Option<String>,
     /// Lower bound suffix or full address for the pool range (inclusive).
     pub range_start: Option<Ipv6AddrOrSuffix>,
     /// Upper bound suffix or full address for the pool range (inclusive).
     pub range_end: Option<Ipv6AddrOrSuffix>,
     /// Static CIDR address or prefix (alternative to range-based pools).
+    #[serde(default, deserialize_with = "empty_string_as_none_str")]
     pub address: Option<String>,
     /// DNS recursive servers (Option 23) override for this pool.
     pub dns_servers: Vec<std::net::Ipv6Addr>,
@@ -125,6 +153,7 @@ pub struct Dhcpv6Pool {
     /// Custom lease time for this pool in seconds.
     pub lease_time: Option<u32>,
     /// Boot file URL (Option 59) override.
+    #[serde(default, deserialize_with = "empty_string_as_none_str")]
     pub boot_file: Option<String>,
 }
 
@@ -134,13 +163,18 @@ pub struct Dhcpv6Pool {
 pub struct Dhcpv4Options {
     pub enabled: bool,
     pub lease_time: u32,
+    #[serde(default, deserialize_with = "empty_string_as_none")]
     pub router: Option<Ipv4Addr>,
+    #[serde(default, deserialize_with = "empty_string_as_none")]
     pub subnet_mask: Option<Ipv4Addr>,
     pub dns_servers: Vec<Ipv4Addr>,
+    #[serde(default, deserialize_with = "empty_string_as_none_str")]
     pub domain_name: Option<String>,
     pub search_domains: Vec<String>,
     pub ntp_servers: Vec<Ipv4Addr>,
+    #[serde(default, deserialize_with = "empty_string_as_none_str")]
     pub tftp_server: Option<String>,
+    #[serde(default, deserialize_with = "empty_string_as_none_str")]
     pub boot_file: Option<String>,
     pub raw_options: std::collections::HashMap<u8, String>,
 }
@@ -229,3 +263,45 @@ pub struct DhcpOptionsConfig {
     pub v6: Dhcpv6Options,
     pub tftp: TftpOptions,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dhcpv4_pool_empty_string_deserialization() {
+        let json = r#"{
+            "range_start": "192.168.1.100",
+            "range_end": "192.168.1.200",
+            "name": "",
+            "router": "",
+            "subnet_mask": "  ",
+            "domain_name": "",
+            "boot_file": "",
+            "tftp_server": ""
+        }"#;
+        let pool: Dhcpv4Pool = serde_json::from_str(json).unwrap();
+        assert_eq!(pool.name, None);
+        assert_eq!(pool.router, None);
+        assert_eq!(pool.subnet_mask, None);
+        assert_eq!(pool.domain_name, None);
+        assert_eq!(pool.boot_file, None);
+        assert_eq!(pool.tftp_server, None);
+    }
+
+    #[test]
+    fn test_dhcpv4_options_empty_string_deserialization() {
+        let json = r#"{
+            "router": "",
+            "subnet_mask": "",
+            "domain_name": "",
+            "boot_file": ""
+        }"#;
+        let opts: Dhcpv4Options = serde_json::from_str(json).unwrap();
+        assert_eq!(opts.router, None);
+        assert_eq!(opts.subnet_mask, None);
+        assert_eq!(opts.domain_name, None);
+        assert_eq!(opts.boot_file, None);
+    }
+}
+

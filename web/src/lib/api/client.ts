@@ -387,8 +387,26 @@ export const dhcpPoolsConfigGet = async (): Promise<DhcpPoolsConfigResponse> => 
 	};
 };
 
-export const dhcpPoolsConfigUpdate = (v4_pools: Dhcpv4PoolConfig[], v6_pools: Dhcpv6PoolConfig[]) =>
-	put<void>('/dhcp/pools/config', { v4_pools, v6_pools });
+export const dhcpPoolsConfigUpdate = (v4_pools: Dhcpv4PoolConfig[], v6_pools: Dhcpv6PoolConfig[]) => {
+	const sanitizedV4 = v4_pools.map((p) => ({
+		...p,
+		name: p.name?.trim() || null,
+		router: p.router?.trim() || null,
+		subnet_mask: p.subnet_mask?.trim() || null,
+		domain_name: p.domain_name?.trim() || null,
+		boot_file: p.boot_file?.trim() || null,
+		tftp_server: p.tftp_server?.trim() || null,
+		lease_time: p.lease_time ? Number(p.lease_time) : null,
+	}));
+	const sanitizedV6 = v6_pools.map((p) => ({
+		...p,
+		name: p.name?.trim() || null,
+		address: p.address?.trim() || null,
+		boot_file: p.boot_file?.trim() || null,
+		lease_time: p.lease_time ? Number(p.lease_time) : null,
+	}));
+	return put<void>('/dhcp/pools/config', { v4_pools: sanitizedV4, v6_pools: sanitizedV6 });
+};
 
 export const leaseRenew = (mac: string, target?: LeaseTarget) =>
 	post<void>(`/dhcp/leases/${encodeURIComponent(mac)}/renew`, target !== undefined ? { target } : {});
