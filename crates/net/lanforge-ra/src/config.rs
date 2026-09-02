@@ -111,6 +111,7 @@ pub struct RaConfig {
 #[serde(default)]
 pub struct RaServiceConfig {
     pub enabled: bool,
+    pub iface: Option<String>,
     pub managed: Option<bool>,
     pub other_config: Option<bool>,
     pub hop_limit: Option<u8>,
@@ -130,7 +131,7 @@ pub struct RaServiceConfig {
 impl RaServiceConfig {
     pub fn to_ra_config(&self, iface: String) -> RaConfig {
         RaConfig {
-            iface,
+            iface: self.iface.clone().unwrap_or(iface),
             managed: self.managed.unwrap_or(false),
             other_config: self.other_config.unwrap_or(false),
             hop_limit: self.hop_limit.unwrap_or(64),

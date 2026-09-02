@@ -149,6 +149,9 @@ pub struct Device {
     pub status: DeviceStatus,
 
     pub boot_file: Option<String>,
+    /// Ingress network interface where the device was observed (e.g., "lan0.100").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iface: Option<String>,
 }
 
 impl Device {
@@ -171,9 +174,17 @@ impl Device {
             dns_fallback: format!("host-{}", mac.to_string().replace(':', "")).to_ascii_lowercase(),
             class: DeviceClass::None,
             status: DeviceStatus::Offline,
-
             boot_file: None,
+            iface: None,
         }
+    }
+
+    /// Infers the 802.1Q VLAN ID if the interface name contains a dot (e.g. "lan0.100" -> 100).
+    #[must_use]
+    pub fn vlan_id(&self) -> Option<u16> {
+        self.iface.as_deref().and_then(|name| {
+            name.split('.').nth(1)?.parse().ok()
+        })
     }
 
     pub fn associate_duid(&mut self, duid: Duid, _iaid: u32) -> Option<NetworkChange> {

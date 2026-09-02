@@ -2319,6 +2319,7 @@ impl PppoeConfigStore for PostgresDatabase {
                         bypass_vowifi: nft_bypass_vowifi,
                         masquerade: nft_masquerade,
                         custom_rules_file: nft_custom_rules_file,
+                        lan_ifaces: Vec::new(),
                     },
                 }))
             } else {

@@ -40,6 +40,7 @@ fn test_root_flag_methods() {
     assert!(!ScenarioArg::Dhcp.requires_root());
     assert!(!ScenarioArg::Dns.requires_root());
     assert!(!ScenarioArg::Discovery.requires_root());
+    assert!(!ScenarioArg::Vlan.requires_root());
 
     assert!(LabAction::Ipv6Ra.requires_root());
     assert!(!LabAction::DhcpDora.requires_root());

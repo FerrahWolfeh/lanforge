@@ -90,6 +90,9 @@ impl State {
             DeviceUpdate::PruneZombies => self.handle_prune_zombies(),
             DeviceUpdate::RebuildDnsIndices => self.handle_rebuild_dns_indices(),
             DeviceUpdate::ClassHint { mac, class } => self.handle_class_hint(mac, class),
+            DeviceUpdate::DeviceInterfaceSeen { mac, iface } => {
+                self.handle_device_interface_seen(mac, iface)
+            }
             DeviceUpdate::Reset => self.handle_reset(),
             DeviceUpdate::NeighborBatch { entries } => self.handle_neighbor_batch(entries),
             DeviceUpdate::TransientHostResolved {

@@ -14,7 +14,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceDependency};
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::pppoe::PppoeDataplane;
+use lanforge_types::network::pppoe::{PppoeDataplane, PppoeNftablesConfig};
 use lanforge_types::system::{PppoeSessionState, PppoeStatusResponse, ServiceAction};
 use lanforge_types::update::DeviceUpdate;
 use pnet::datalink::interfaces;
@@ -190,15 +190,14 @@ impl PppoeService {
 
             // Apply nftables router performance tuning rules if enabled
             if self.cfg.nftables.enabled {
-                let lan_ifaces: Vec<String> = interfaces()
-                    .into_iter()
-                    .filter(|i| {
-                        !i.is_loopback()
-                            && i.name != self.cfg.wan_iface
-                            && !i.name.starts_with("ppp")
-                    })
-                    .map(|i| i.name)
-                    .collect();
+                let configured_lan = self.ctx.get_status().map(|s| s.lan_iface);
+                let all_ifaces: Vec<String> = interfaces().into_iter().map(|i| i.name).collect();
+                let lan_ifaces = resolve_lan_ifaces(
+                    &self.cfg.nftables,
+                    configured_lan.as_deref(),
+                    &self.cfg.wan_iface,
+                    &all_ifaces,
+                );
 
                 if let Err(e) = apply_nftables_tuning(
                     &self.cfg.nftables,
@@ -475,3 +474,100 @@ impl AsyncService for PppoeService {
         Ok(())
     }
 }
+
+/// Checks if an interface name represents a virtual, container, or tunnel device.
+fn is_virtual_or_tunnel_iface(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.starts_with("docker")
+        || lower.starts_with("podman")
+        || lower.starts_with("cni")
+        || lower.starts_with("flannel")
+        || lower.starts_with("calico")
+        || lower.starts_with("virbr")
+        || lower.starts_with("lxdbr")
+        || lower.starts_with("veth")
+        || lower.starts_with("tun")
+        || lower.starts_with("tap")
+        || lower.starts_with("wg")
+        || lower.starts_with("tailscale")
+        || lower.starts_with("dummy")
+        || lower.starts_with("macvlan")
+        || lower.starts_with("ipvlan")
+        || lower.starts_with("br-")
+}
+
+/// Resolves the LAN interface names to include in the flowtable ruleset.
+///
+/// Priority:
+/// 1. Explicitly configured `nftables.lan_ifaces`
+/// 2. Primary LAN interface reported by `LanforgeContext` system status
+/// 3. Filtered physical interfaces from the host (excluding loopback, WAN, PPP, tunnels, containers)
+#[must_use]
+pub(crate) fn resolve_lan_ifaces(
+    nft_cfg: &PppoeNftablesConfig,
+    configured_lan: Option<&str>,
+    wan_iface: &str,
+    available_ifaces: &[String],
+) -> Vec<String> {
+    if !nft_cfg.lan_ifaces.is_empty() {
+        return nft_cfg.lan_ifaces.clone();
+    }
+    if let Some(lan) = configured_lan {
+        let trimmed = lan.trim();
+        if !trimmed.is_empty() {
+            return vec![trimmed.to_string()];
+        }
+    }
+    available_ifaces
+        .iter()
+        .filter(|name| {
+            let n = name.as_str();
+            n != "lo"
+                && n != wan_iface
+                && !n.starts_with("ppp")
+                && !is_virtual_or_tunnel_iface(n)
+        })
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_lan_ifaces_explicit() {
+        let mut nft_cfg = PppoeNftablesConfig::default();
+        nft_cfg.lan_ifaces = vec!["enp2s0".to_string()];
+        let available = vec!["enp1s0".to_string(), "enp2s0".to_string(), "podman1".to_string()];
+        let resolved = resolve_lan_ifaces(&nft_cfg, Some("eth99"), "enp1s0", &available);
+        assert_eq!(resolved, vec!["enp2s0"]);
+    }
+
+    #[test]
+    fn test_resolve_lan_ifaces_from_context() {
+        let nft_cfg = PppoeNftablesConfig::default();
+        let available = vec!["enp1s0".to_string(), "enp2s0".to_string(), "podman1".to_string()];
+        let resolved = resolve_lan_ifaces(&nft_cfg, Some("enp2s0"), "enp1s0", &available);
+        assert_eq!(resolved, vec!["enp2s0"]);
+    }
+
+    #[test]
+    fn test_resolve_lan_ifaces_fallback_filters_virtual() {
+        let nft_cfg = PppoeNftablesConfig::default();
+        let available = vec![
+            "lo".to_string(),
+            "enp1s0".to_string(),
+            "ppp0".to_string(),
+            "enp2s0".to_string(),
+            "podman1".to_string(),
+            "tailscale0".to_string(),
+            "veth1234".to_string(),
+            "docker0".to_string(),
+            "wg0".to_string(),
+        ];
+        let resolved = resolve_lan_ifaces(&nft_cfg, None, "enp1s0", &available);
+        assert_eq!(resolved, vec!["enp2s0"]);
+    }
+}
+

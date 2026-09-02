@@ -20,8 +20,8 @@ use std::net::Ipv6Addr;
 pub struct Dhcpv6Config {
     /// Whether the `DHCPv6` service is enabled.
     pub enabled: bool,
-    /// Network interface to listen on.
-    #[serde(skip)]
+    /// Network interface to listen on. If omitted, defaults to system LAN interface.
+    #[serde(default)]
     pub iface: String,
     /// Lease time in seconds.
     pub lease_time: u32,

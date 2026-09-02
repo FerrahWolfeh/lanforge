@@ -77,6 +77,7 @@ pub struct PppoeNftablesConfig {
     pub bypass_vowifi: bool,
     pub masquerade: bool,
     pub custom_rules_file: Option<String>,
+    pub lan_ifaces: Vec<String>,
 }
 
 impl Default for PppoeNftablesConfig {
@@ -90,6 +91,7 @@ impl Default for PppoeNftablesConfig {
             bypass_vowifi: true,
             masquerade: true,
             custom_rules_file: None,
+            lan_ifaces: Vec::new(),
         }
     }
 }

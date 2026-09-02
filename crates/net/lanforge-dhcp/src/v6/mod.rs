@@ -678,6 +678,15 @@ fn apply_learned_state(
                 }
             }
         }
+
+        if let Some(mac) = opt_mac
+            && !config.iface.is_empty()
+        {
+            let _ = ctx.apply(DeviceUpdate::DeviceInterfaceSeen {
+                mac,
+                iface: config.iface.clone(),
+            });
+        }
     }
 
     // 2. Process IA_PD (Prefix Delegation)

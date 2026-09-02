@@ -100,3 +100,21 @@ pub struct SuiteReport {
     pub dns_results: Vec<DnsQueryResult>,
     pub all_passed: bool,
 }
+
+/// Result of a simulated 802.1Q VLAN sandbox test.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VlanSimulationResult {
+    pub vlan_id: u16,
+    pub iface: String,
+    pub client_mac: String,
+    pub hostname: Option<String>,
+    pub success: bool,
+    pub assigned_ip: Option<Ipv4Addr>,
+    pub subnet_mask: Option<Ipv4Addr>,
+    pub router: Option<Ipv4Addr>,
+    pub dns_servers: Vec<Ipv4Addr>,
+    pub lease_time_secs: Option<u32>,
+    pub total_time_ms: f64,
+    pub segment_matches: bool,
+    pub error: Option<String>,
+}

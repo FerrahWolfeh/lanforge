@@ -119,6 +119,65 @@ impl CliRunner {
                 let dur = crate::engine::DiscoveryEngine::probe_rtt(dhcp_server).await?;
                 println!("Discovery RTT against {dhcp_server}: {:.2} ms", dur.as_secs_f64() * 1000.0);
             }
+            ScenarioArg::Vlan => {
+                let vid = args.vlan_id;
+                let vlan_iface = format!("lan0.{vid}");
+                let mac = args
+                    .mac
+                    .as_deref()
+                    .and_then(MacAddr::parse)
+                    .unwrap_or(MacAddr([0x02, 0x11, 0x22, 0x33, 0x44, (vid & 0xff) as u8]));
+
+                let hostname = args.hostname.or_else(|| Some(format!("vlan{vid}-client")));
+                let res = harness
+                    .dhcp()
+                    .simulate_dora(mac, hostname.as_deref())
+                    .await?;
+
+                let segment_matches = res.assigned_ip.is_some_and(|ip| {
+                    let octets = ip.octets();
+                    octets[2] == (vid & 0xff) as u8
+                });
+
+                let vlan_report = crate::report::VlanSimulationResult {
+                    vlan_id: vid,
+                    iface: vlan_iface.clone(),
+                    client_mac: res.client_mac.clone(),
+                    hostname,
+                    success: res.success,
+                    assigned_ip: res.assigned_ip,
+                    subnet_mask: res.subnet_mask,
+                    router: res.router,
+                    dns_servers: res.dns_servers.clone(),
+                    lease_time_secs: res.lease_time_secs,
+                    total_time_ms: res.total_time_ms,
+                    segment_matches,
+                    error: res.error.clone(),
+                };
+
+                if args.json {
+                    println!("{}", serde_json::to_string_pretty(&vlan_report)?);
+                } else {
+                    println!("\n{}", "=== 802.1Q VLAN Sandbox Simulation ===".bold().cyan());
+                    println!("VLAN ID:           {}", vid.to_string().yellow().bold());
+                    println!("Simulated Iface:   {}", vlan_iface.cyan());
+                    println!("Client MAC:        {}", res.client_mac);
+                    println!("Success:           {}", if res.success { "YES".green() } else { "NO".red() });
+                    println!("Assigned IP:       {:?}", res.assigned_ip);
+                    println!("Subnet Mask:       {:?}", res.subnet_mask);
+                    println!("Router (Gateway):  {:?}", res.router);
+                    println!("DNS Servers:       {:?}", res.dns_servers);
+                    println!("Segment Match:     {}", if segment_matches { "YES (Matches VLAN subprefix)".green() } else { "NO (Cross-VLAN or flat /16)".yellow() });
+                    println!("Duration:          {:.2} ms", res.total_time_ms);
+                    if let Some(err) = &res.error {
+                        println!("Error Detail:      {}", err.red());
+                    }
+                }
+
+                if args.assert_success && !res.success {
+                    return Err(LabError::Assertion(format!("VLAN {vid} simulation failed")));
+                }
+            }
         }
 
         Ok(())

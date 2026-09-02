@@ -62,6 +62,19 @@ use tracing::{debug, error, info, warn};
 
 type NetlinkMessageStream = broadcast::Receiver<(NetlinkMessage<RouteNetlinkMessage>, SocketAddr)>;
 
+fn ifindex_to_name(ifindex: u32) -> Option<String> {
+    let mut buf = [0u8; libc::IF_NAMESIZE];
+    let res = unsafe { libc::if_indextoname(ifindex, buf.as_mut_ptr().cast()) };
+    if res.is_null() {
+        None
+    } else {
+        std::ffi::CStr::from_bytes_until_nul(&buf)
+            .ok()
+            .and_then(|cs| cs.to_str().ok())
+            .map(String::from)
+    }
+}
+
 /// Unified neighbor discovery (NDP/ARP) and active ICMP ping engine.
 ///
 /// Maintains synchronization with the `LanforgeContext` by applying
@@ -78,25 +91,25 @@ pub struct DiscoveryService {
     cfg: MonitorConfig,
     handle: Handle,
     messages: NetlinkMessageStream,
-    target_ifindex: u32,
+    target_ifindexes: Vec<u32>,
     ctx: LanforgeContext,
 }
 
 impl DiscoveryService {
-    /// Creates a new `DiscoveryService` for the given interface.
+    /// Creates a new `DiscoveryService` for the given interfaces.
     #[must_use]
     pub const fn new(
         cfg: MonitorConfig,
         handle: Handle,
         messages: NetlinkMessageStream,
-        target_ifindex: u32,
+        target_ifindexes: Vec<u32>,
         ctx: LanforgeContext,
     ) -> Self {
         Self {
             cfg,
             handle,
             messages,
-            target_ifindex,
+            target_ifindexes,
             ctx,
         }
     }
@@ -146,8 +159,8 @@ impl AsyncService for DiscoveryService {
         });
         vec![
             (
-                std::borrow::Cow::Borrowed("target_ifindex"),
-                self.target_ifindex.to_string(),
+                std::borrow::Cow::Borrowed("target_ifindexes"),
+                format!("{:?}", self.target_ifindexes),
             ),
             (
                 std::borrow::Cow::Borrowed("ping_enabled"),
@@ -169,24 +182,33 @@ impl AsyncService for DiscoveryService {
     }
 
     async fn init(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
-        let if_state = ctx.get_interface_state(self.target_ifindex);
+        let primary_ifindex = self.target_ifindexes.first().copied().unwrap_or(0);
+        let if_state = ctx.get_interface_state(primary_ifindex);
         let current_gua = if_state.gua;
         let current_ula = if_state.ula;
 
         debug!("DiscoveryService: Performing initial neighbor bootstrap...");
         let mut bootstrap_events = Vec::new();
 
-        match get_ipv4_neighbors(&self.handle, Some(self.target_ifindex)).await {
-            Ok(evs) => bootstrap_events.extend(evs),
-            Err(e) => error!("DiscoveryService: Failed to dump IPv4 neighbors: {e}"),
-        }
+        for &ifindex in &self.target_ifindexes {
+            match get_ipv4_neighbors(&self.handle, Some(ifindex)).await {
+                Ok(evs) => bootstrap_events.extend(evs),
+                Err(e) => error!("DiscoveryService: Failed to dump IPv4 neighbors on ifindex {ifindex}: {e}"),
+            }
 
-        match get_ipv6_neighbors(&self.handle, "", Some(self.target_ifindex)).await {
-            Ok(evs) => bootstrap_events.extend(evs),
-            Err(e) => error!("DiscoveryService: Failed to dump IPv6 neighbors: {e}"),
+            match get_ipv6_neighbors(&self.handle, "", Some(ifindex)).await {
+                Ok(evs) => bootstrap_events.extend(evs),
+                Err(e) => error!("DiscoveryService: Failed to dump IPv6 neighbors on ifindex {ifindex}: {e}"),
+            }
         }
 
         for event in bootstrap_events {
+            let ifindex = event.ifindex();
+            if let Some(mac) = event.mac()
+                && let Some(ifname) = ifindex_to_name(ifindex)
+            {
+                let _ = ctx.apply(DeviceUpdate::DeviceInterfaceSeen { mac, iface: ifname });
+            }
             if let Some(update) =
                 event.to_device_update(current_gua.as_ref(), current_ula.as_ref())
             {
@@ -344,7 +366,8 @@ impl AsyncService for DiscoveryService {
         let mut bus_rx = ctx.bus().subscribe();
 
         // Initialize prefixes from current context state
-        let if_state = ctx.get_interface_state(self.target_ifindex);
+        let primary_ifindex = self.target_ifindexes.first().copied().unwrap_or(0);
+        let if_state = ctx.get_interface_state(primary_ifindex);
         let mut current_gua: Option<Ipv6Addr> = if_state.gua;
         let mut current_ula: Option<Ipv6Addr> = if_state.ula;
 
@@ -368,30 +391,32 @@ impl AsyncService for DiscoveryService {
                     if let NetlinkPayload::InnerMessage(
                         RouteNetlinkMessage::NewAddress(addr) | RouteNetlinkMessage::DelAddress(addr),
                     ) = &msg.payload
-                        && addr.header.index == self.target_ifindex
+                        && self.target_ifindexes.contains(&addr.header.index)
                     {
+                        let event_ifindex = addr.header.index;
                         debug!(
-                            "DiscoveryService: Address event on ifindex {}, refreshing interface...",
-                            addr.header.index
+                            "DiscoveryService: Address event on ifindex {event_ifindex}, refreshing interface..."
                         );
                         if let Err(e) = crate::interface::refresh_interface(
                             &self.handle,
-                            self.target_ifindex,
+                            event_ifindex,
                             ctx,
                         )
                         .await
                         {
                             warn!(
-                                "DiscoveryService: Failed to refresh interface {}: {e}",
-                                addr.header.index
+                                "DiscoveryService: Failed to refresh interface {event_ifindex}: {e}"
                             );
                         }
                     }
 
                     // B. Handle Neighbor Events
                     if let Some(event) = extract_neigh_info(&msg)
-                        && event.ifindex() == self.target_ifindex {
-                            if let NeighborEvent::Added { mac, ip, is_active, .. } = event {
+                        && self.target_ifindexes.contains(&event.ifindex()) {
+                            if let NeighborEvent::Added { mac, ip, is_active, ifindex } = event {
+                                if let Some(ifname) = ifindex_to_name(ifindex) {
+                                    let _ = ctx.apply(DeviceUpdate::DeviceInterfaceSeen { mac, iface: ifname });
+                                }
                                 // Optimization: Batch Added events during scans/bursts
                                 pending_batch.push((mac, ip, is_active));
                                 if pending_batch.len() >= 50 {

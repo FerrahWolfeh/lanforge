@@ -73,6 +73,10 @@ pub struct RunArgs {
     #[arg(long)]
     pub hostname: Option<String>,
 
+    /// 802.1Q VLAN ID for VLAN simulation (e.g. 10 or 100).
+    #[arg(long, default_value = "100")]
+    pub vlan_id: u16,
+
     /// Output results as JSON.
     #[arg(long)]
     pub json: bool,
@@ -88,6 +92,7 @@ pub enum ScenarioArg {
     Dns,
     Ra,
     Discovery,
+    Vlan,
 }
 
 impl ScenarioArg {

@@ -356,7 +356,9 @@ impl Config {
         let mut cfg = self.dhcpv4_toml.clone();
 
         cfg.enabled = self.dhcpv4_enabled;
-        cfg.iface.clone_from(&self.system.iface);
+        if cfg.iface.is_empty() {
+            cfg.iface.clone_from(&self.system.iface);
+        }
         cfg.server_id = cfg.router;
 
         if cfg.domain_name.is_none() {
@@ -374,7 +376,9 @@ impl Config {
         let mut cfg = self.dhcpv6_toml.clone();
 
         cfg.enabled = self.dhcpv6_enabled;
-        cfg.iface.clone_from(&self.system.iface);
+        if cfg.iface.is_empty() {
+            cfg.iface.clone_from(&self.system.iface);
+        }
 
         let mut prefix_detected = None;
         #[cfg(feature = "ra")]

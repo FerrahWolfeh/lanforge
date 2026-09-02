@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 pub struct MonitorConfig {
     /// Whether the neighbor monitor is enabled.
     pub enabled: bool,
+    /// Network interfaces to monitor for ARP/NDP discovery (e.g. `["lan0", "lan0.10", "lan0.100"]`).
+    /// If empty, defaults to the primary system interface.
+    #[serde(default)]
+    pub ifaces: Vec<String>,
     /// Pacing between ARP/NDP probes during a subnet scan (milliseconds).
     pub scan_pacing_ms: u64,
 
@@ -29,6 +33,7 @@ impl Default for MonitorConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            ifaces: Vec::new(),
             scan_pacing_ms: 10,
             batch_interval_ms: 100,
             stale_timeout_secs: 3600, // 1 hour

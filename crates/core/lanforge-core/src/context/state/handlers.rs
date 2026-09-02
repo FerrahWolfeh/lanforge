@@ -770,4 +770,17 @@ impl State {
         self.interfaces.pppoe_status = status;
         EventVec::new()
     }
+
+    pub(crate) fn handle_device_interface_seen(
+        &mut self,
+        mac: MacAddr,
+        iface: String,
+    ) -> EventVec {
+        self.mutate_device(mac, |dev| {
+            if dev.iface.as_deref() != Some(&iface) {
+                dev.iface = Some(iface);
+            }
+            None
+        })
+    }
 }

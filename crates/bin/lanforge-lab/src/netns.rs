@@ -11,6 +11,7 @@ pub struct NetnsConfig {
     pub client_iface: String,
     pub host_ipv4: String,
     pub client_ipv4: String,
+    pub vlans: Vec<u16>,
 }
 
 impl Default for NetnsConfig {
@@ -21,6 +22,7 @@ impl Default for NetnsConfig {
             client_iface: "veth-lf-cli".to_string(),
             host_ipv4: "192.168.100.1/24".to_string(),
             client_ipv4: "192.168.100.2/24".to_string(),
+            vlans: Vec::new(),
         }
     }
 }
@@ -110,6 +112,49 @@ impl NetnsManager {
             "ip",
             &["link", "set", &self.cfg.client_iface, "up"],
         )?;
+
+        // 6. Configure 802.1Q VLAN sub-interfaces if requested
+        for &vid in &self.cfg.vlans {
+            let host_vlan = format!("{}.{vid}", self.cfg.host_iface);
+            let cli_vlan = format!("{}.{vid}", self.cfg.client_iface);
+            let vid_str = vid.to_string();
+
+            debug!("Netns: Creating 802.1Q VLAN {vid} subinterfaces ({host_vlan} <-> {cli_vlan})...");
+            Self::run_cmd(
+                "ip",
+                &[
+                    "link",
+                    "add",
+                    "link",
+                    &self.cfg.host_iface,
+                    "name",
+                    &host_vlan,
+                    "type",
+                    "vlan",
+                    "id",
+                    &vid_str,
+                ],
+            )?;
+            Self::run_cmd("ip", &["link", "set", &host_vlan, "up"])?;
+
+            Self::run_cmd_in_netns(
+                &self.cfg.netns_name,
+                "ip",
+                &[
+                    "link",
+                    "add",
+                    "link",
+                    &self.cfg.client_iface,
+                    "name",
+                    &cli_vlan,
+                    "type",
+                    "vlan",
+                    "id",
+                    &vid_str,
+                ],
+            )?;
+            Self::run_cmd_in_netns(&self.cfg.netns_name, "ip", &["link", "set", &cli_vlan, "up"])?;
+        }
 
         self.active = true;
         info!(

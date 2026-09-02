@@ -93,6 +93,8 @@ impl ClientContext {
             last_seen: duration_since_epoch_u64(dev.last_seen),
             learning_method: dev.learning_method(),
             class: dev.class,
+            iface: dev.iface.clone(),
+            vlan_id: dev.vlan_id(),
             duid: dev.duid.clone(),
             display_v4: dev.display_v4(),
             display_v6: dev.display_v6(gua_prefix, ula_prefix),

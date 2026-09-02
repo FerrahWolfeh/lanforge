@@ -390,6 +390,13 @@ impl Dhcpv4Service {
                                 expires,
                             });
 
+                            if !self.cfg.iface.is_empty() {
+                                let _ = self.ctx.apply(DeviceUpdate::DeviceInterfaceSeen {
+                                    mac,
+                                    iface: self.cfg.iface.clone(),
+                                });
+                            }
+
                             if let Some(hostname) = req_hostname
                                 && !hostname.is_empty()
                             {

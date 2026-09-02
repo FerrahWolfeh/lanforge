@@ -28,6 +28,8 @@ leases_db = "/var/lib/lanforge/leases.db"
 [ra]
 # Enables sending Router Advertisements for IPv6 autoconfiguration.
 enabled = true
+# Optional interface override (e.g., "lan0.100"). Defaults to [system].iface.
+# iface = "lan0.100"
 
 # Defines the "Managed Configuration" (M) flag. If true, clients must use DHCPv6 for addresses.
 managed = true
@@ -66,6 +68,9 @@ lifetime = 600
 [dhcp.v4]
 # Enables the DHCPv4 service.
 enabled = true
+
+# Optional interface override (e.g., "lan0.100"). Defaults to [system].iface.
+# iface = "lan0.100"
 
 # Start and end of the address pool for dynamic allocation.
 range_start = "192.168.100.1"
@@ -149,6 +154,14 @@ v4_ip = "192.168.0.2"
 v6_suffix = "::1057:cafe"
 
 
+# [monitor] - Passive ARP/NDP Neighbor Discovery & Active Ping Sweeper
+[monitor]
+# Enables the passive neighbor monitor.
+enabled = true
+# Optional list of interfaces to monitor (e.g. ["lan0", "lan0.10", "lan0.100"]).
+# If omitted or empty, defaults to [system].iface.
+# ifaces = ["lan0", "lan0.10", "lan0.100"]
+
 # [pppoe] - Integrated PPPoE WAN Concentrator & Fast-Path
 [pppoe]
 # Enables the PPPoE client service for WAN broadband connectivity.
@@ -194,4 +207,8 @@ flow_offload = true
 mss_clamping = true
 bypass_dns = true
 bypass_vowifi = true
+# Set to false if system firewall (e.g. firewalld in external zone) handles masquerade
 masquerade = true
+# LAN interfaces participating in flowtable offloading (defaults to system.iface if omitted)
+# lan_ifaces = ["enp2s0"]
+

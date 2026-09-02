@@ -331,6 +331,8 @@ export interface DeviceEntry {
 	ipv6_addrs: Ipv6Entry[];
 	learning_method: string;
 	class: string;
+	iface?: string | null;
+	vlan_id?: number | null;
 }
 
 export interface DevicesResponse {
@@ -735,6 +737,7 @@ export interface PppoeNftablesConfig {
 	bypass_vowifi: boolean;
 	masquerade: boolean;
 	custom_rules_file: string | null;
+	lan_ifaces?: string[];
 }
 
 export interface PppoeConfig {

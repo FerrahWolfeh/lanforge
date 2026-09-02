@@ -172,6 +172,26 @@ impl Daemon {
         let log_db = self.bootstrap.log_db.clone();
         let ctx = self.ctx.clone();
 
+        let monitored_ifindexes = {
+            let mut indexes = Vec::new();
+            if cfg.monitor_toml.ifaces.is_empty() {
+                indexes.push(target_ifindex);
+            } else {
+                let host_ifaces = pnet::datalink::interfaces();
+                for ifname in &cfg.monitor_toml.ifaces {
+                    if let Some(iface) = host_ifaces.iter().find(|i| &i.name == ifname) {
+                        indexes.push(iface.index);
+                    } else {
+                        tracing::warn!("Discovery: Configured monitor interface '{ifname}' not found on host");
+                    }
+                }
+                if indexes.is_empty() {
+                    indexes.push(target_ifindex);
+                }
+            }
+            indexes
+        };
+
         #[cfg(feature = "discovery")]
         if !cfg.monitor_toml.enabled {
             tracing::warn!(
@@ -187,7 +207,7 @@ impl Daemon {
 
             // 2. Network Discovery & Interface Monitoring
             #[cfg(feature = "discovery")]
-            async [ctx, rt_handle, messages, cfg] if cfg.monitor_toml.enabled => DiscoveryService::new(cfg.monitor_toml.clone(), rt_handle, messages.subscribe(), target_ifindex, ctx),
+            async [ctx, rt_handle, messages, cfg] if cfg.monitor_toml.enabled => DiscoveryService::new(cfg.monitor_toml.clone(), rt_handle, messages.subscribe(), monitored_ifindexes.clone(), ctx),
 
             // 3. IPv6 Protocol Services (RA)
             #[cfg(feature = "ra")]

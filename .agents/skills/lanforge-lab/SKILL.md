@@ -1,16 +1,17 @@
 ---
 name: lanforge-lab
-description: Interactive lab testbed, simulation engine, and automated regression harness for Lanforge (DHCP, DNS, IPv6 RA, and Discovery). Use to test network behaviors, simulate clients, and run benchmarks without root permissions.
+description: Interactive lab testbed, simulation engine, and automated regression harness for Lanforge (DHCP, DNS, IPv6 RA, 802.1Q VLANs, and Discovery). Use to test network behaviors, simulate clients, and run benchmarks without root permissions.
 ---
 
 # Lanforge Lab (`lanforge-lab`)
 
-`lanforge-lab` is the built-in laboratory workbench and simulation engine for Lanforge. It allows agents and developers to test, benchmark, and verify network services (DHCPv4, DNS, IPv6 RA, mDNS, and Discovery) without risking home network disruption or requiring root/sudo privileges for standard test runs.
+`lanforge-lab` is the built-in laboratory workbench and simulation engine for Lanforge. It allows agents and developers to test, benchmark, and verify network services (DHCPv4, DNS, IPv6 RA, mDNS, 802.1Q VLANs, and Discovery) without risking home network disruption or requiring root/sudo privileges for standard test runs.
 
 ## Key Capabilities
 
 - **Rootless Direct Mode (Default):** Runs unprivileged against local test ports (`127.0.0.1:1067` for DHCP, `127.0.0.1:1053` for DNS). Zero `sudo` required.
-- **Kernel Netns Mode:** Full L2/L3 isolation with Linux network namespaces and `veth` pairs when run as root (`sudo lanforge-lab --mode netns`).
+- **802.1Q VLAN Sandbox:** Simulates clients on specific VLAN sub-interfaces (`lan0.10`, `lan0.100`) and asserts subnet/pool segment isolation.
+- **Kernel Netns Mode:** Full L2/L3 isolation with Linux network namespaces, `veth` pairs, and 802.1Q tagged subinterfaces when run as root (`sudo lanforge-lab --mode netns`).
 - **Privilege Guards:** Root-only features (`--mode netns`, `run ra`, and TUI RA actions) are strictly guarded with descriptive errors and TUI lockout when running unprivileged.
 - **Headless Mode (`--json`):** Returns machine-readable JSON outputs with latency metrics ($p50, p95, p99$) and standard exit codes (`0` for success, `1` for assertion failure).
 - **Interactive TUI:** Full graphical terminal dashboard (`ratatui`) for manual experimentation.
@@ -60,6 +61,20 @@ cargo run --bin lanforge-lab -- bench dhcp-storm --clients 100 --concurrency 10 
 
 # DNS Flood (e.g. 5,000 QPS for 3 seconds)
 cargo run --bin lanforge-lab -- bench dns-flood --qps 5000 --duration 3 --json
+```
+
+### 5. 802.1Q VLAN Sandbox Simulation
+Simulates clients connecting through specific 802.1Q VLAN subinterfaces (e.g. `lan0.100` or `lan0.10`), verifying DHCP pool allocation and segment matching:
+
+```bash
+# Simulate a client connecting to VLAN 100 with JSON output
+cargo run --bin lanforge-lab -- run vlan --vlan-id 100 --json
+
+# Simulate a client connecting to VLAN 10 with custom MAC and hostname
+cargo run --bin lanforge-lab -- run vlan --vlan-id 10 --mac 02:11:22:33:44:0a --hostname "nas-client" --json
+
+# Run VLAN simulation with strict assertion (fails if lease is not granted)
+cargo run --bin lanforge-lab -- run vlan --vlan-id 100 --assert-success
 ```
 
 ---

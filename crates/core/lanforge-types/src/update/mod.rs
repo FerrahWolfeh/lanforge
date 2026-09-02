@@ -161,6 +161,10 @@ pub enum DeviceUpdate {
         mac: MacAddr,
         class: DeviceClass,
     },
+    DeviceInterfaceSeen {
+        mac: MacAddr,
+        iface: String,
+    },
     Reset,
     NeighborBatch {
         entries: Vec<(MacAddr, IpAddr, bool)>,
