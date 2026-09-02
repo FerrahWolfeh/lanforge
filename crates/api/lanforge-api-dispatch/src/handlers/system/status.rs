@@ -80,7 +80,7 @@ impl ClientContext {
 
     pub async fn handle_pppoe_status(&self) -> Response {
         let pppoe_status = self.ctx.read().interfaces.pppoe_status.clone();
-        let status = pppoe_status.unwrap_or_else(|| lanforge_types::system::PppoeStatusResponse {
+        let mut status = pppoe_status.unwrap_or_else(|| lanforge_types::system::PppoeStatusResponse {
             enabled: self
                 .ctx
                 .get_status()
@@ -89,8 +89,19 @@ impl ClientContext {
             state: lanforge_types::system::PppoeSessionState::Disconnected,
             ..Default::default()
         });
+        if status.auth.is_none() {
+            status.auth = self
+                .db
+                .load_pppoe_config()
+                .await
+                .ok()
+                .flatten()
+                .map(|cfg| cfg.auth);
+        }
+
         Response::PppoeStatus(Box::new(status))
     }
+
 
     pub async fn handle_ra_status(&self) -> Response {
         let ra_status = self.ctx.read().interfaces.ra_status.clone();

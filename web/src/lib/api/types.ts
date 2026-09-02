@@ -788,7 +788,9 @@ export interface PppoeStatusResponse {
 	uptime_secs: number | null;
 	reconnect_attempts: number;
 	last_error: string | null;
+	auth?: PppoeAuthMethod | null;
 }
+
 
 // ---------------------------------------------------------------------------
 // Router Advertisement (RA)

@@ -220,7 +220,9 @@ pub struct PppoeStatusResponse {
     pub uptime_secs: Option<u64>,
     pub reconnect_attempts: u32,
     pub last_error: Option<String>,
+    pub auth: Option<crate::network::pppoe::AuthMethod>,
 }
+
 
 /// Discovered network interface information for setup and topology display.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

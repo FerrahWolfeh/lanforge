@@ -16,12 +16,14 @@
 		pppoeUpdateConfig,
 		pppoeReconnect,
 		pppoeDisconnect,
+		getSetupStatus,
 	} from "$lib/api/client";
 	import type {
 		PppoeConfig,
 		PppoeStatusResponse,
 		PppoeDataplane,
 		PppoeAuthMethod,
+		NetworkInterfaceInfo,
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
@@ -55,6 +57,24 @@
 	let disconnecting = $state(false);
 	let showPassword = $state(false);
 	let showEbpfWarningDialog = $state(false);
+	let availableInterfaces = $state<NetworkInterfaceInfo[]>([]);
+
+	// Derived list of selectable interfaces ensuring currently selected iface is present
+	let interfaceOptions = $derived.by(() => {
+		const list = [...availableInterfaces];
+		if (formWanIface && !list.some((i) => i.name === formWanIface)) {
+			list.unshift({
+				name: formWanIface,
+				mac: null,
+				is_physical: false,
+				is_up: true,
+				carrier_up: true,
+				ips: [],
+				bus_type: "configured",
+			});
+		}
+		return list;
+	});
 
 	// Editable form fields (cloned from config)
 	let formEnabled = $state(false);
@@ -81,23 +101,45 @@
 	let formNftBypassVowifi = $state(true);
 	let formNftMasquerade = $state(true);
 
+	function formatAuthMethod(auth: PppoeAuthMethod | string | null | undefined): string {
+		if (!auth) return "None";
+		switch (auth.toLowerCase()) {
+			case "chap_md5":
+			case "chapmd5":
+			case "chap":
+				return "CHAP-MD5";
+			case "pap":
+				return "PAP";
+			case "none":
+				return "None";
+			default:
+				return auth.toUpperCase();
+		}
+	}
+
 	async function loadAll() {
 		loading = true;
 		try {
-			const [s, c] = await Promise.all([
+			const [s, c, setupRes] = await Promise.all([
 				pppoeStatus().catch(() => null),
 				pppoeConfig().catch(() => null),
+				getSetupStatus().catch(() => null),
 			]);
 			status = s;
 			config = c;
 
+			if (setupRes?.interfaces) {
+				availableInterfaces = setupRes.interfaces;
+			}
+
 			if (c) {
 				formEnabled = c.enabled;
 				formDataplane = c.dataplane ?? "kernel";
-				formWanIface = c.wan_iface;
+				formWanIface = c.wan_iface || (availableInterfaces[0]?.name || "eth1");
 				formUsername = c.username;
 				formPassword = c.password;
-				formAuth = c.auth;
+				const rawAuth = String(c.auth || "chap_md5").toLowerCase();
+				formAuth = (rawAuth === "chapmd5" ? "chap_md5" : rawAuth) as PppoeAuthMethod;
 				formServiceName = c.service_name ?? "";
 				formAcName = c.ac_name ?? "";
 				formMru = c.mru;
@@ -143,7 +185,7 @@
 				discovery_padi_timeout_secs: Number(formPadiTimeout) || 3,
 				nftables: {
 					enabled: formNftEnabled,
-					table_name: config?.nftables?.table_name ?? "lanforge",
+					table_name: config?.nftables?.table_name ?? "lanforge_pppoe",
 					flow_offload: formNftFlowOffload,
 					mss_clamping: formNftMssClamping,
 					bypass_dns: formNftBypassDns,
@@ -154,10 +196,10 @@
 			};
 
 			await pppoeUpdateConfig(payload);
-			toast.success("PPPoE configuration saved successfully");
+			toast.success("PPPoE configuration saved and reloaded");
 			await loadAll();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to save PPPoE configuration");
+		} catch {
+			toast.error("Failed to save PPPoE configuration");
 		} finally {
 			saving = false;
 		}
@@ -167,10 +209,10 @@
 		reconnecting = true;
 		try {
 			await pppoeReconnect();
-			toast.success("Reconnection triggered");
-			setTimeout(loadAll, 2000);
+			toast.success("PPPoE reconnection triggered");
+			await loadAll();
 		} catch {
-			toast.error("Failed to trigger reconnection");
+			toast.error("Failed to trigger PPPoE reconnection");
 		} finally {
 			reconnecting = false;
 		}
@@ -180,47 +222,56 @@
 		disconnecting = true;
 		try {
 			await pppoeDisconnect();
-			toast.success("Disconnection triggered");
-			setTimeout(loadAll, 2000);
+			toast.success("PPPoE disconnection triggered");
+			await loadAll();
 		} catch {
-			toast.error("Failed to trigger disconnection");
+			toast.error("Failed to disconnect PPPoE session");
 		} finally {
 			disconnecting = false;
 		}
 	}
 
-	function formatUptime(secs?: number | null): string {
-		if (secs === undefined || secs === null) return "—";
-		const d = Math.floor(secs / 86400);
-		const h = Math.floor((secs % 86400) / 3600);
-		const m = Math.floor((secs % 3600) / 60);
-		if (d > 0) return `${d}d ${h}h ${m}m`;
-		if (h > 0) return `${h}h ${m}m`;
-		return `${m}m ${secs % 60}s`;
+	function handleDataplaneSelect(mode: PppoeDataplane) {
+		if (mode === "ebpf" && formDataplane !== "ebpf") {
+			showEbpfWarningDialog = true;
+		} else {
+			formDataplane = mode;
+		}
+	}
+
+	function formatUptime(seconds: number | null | undefined): string {
+		if (!seconds) return "0s";
+		const days = Math.floor(seconds / 86400);
+		const hours = Math.floor((seconds % 86400) / 3600);
+		const minutes = Math.floor((seconds % 3600) / 60);
+		const sec = seconds % 60;
+
+		if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+		if (hours > 0) return `${hours}h ${minutes}m`;
+		if (minutes > 0) return `${minutes}m ${sec}s`;
+		return `${sec}s`;
 	}
 
 	onMount(loadAll);
 </script>
 
-<div class="container mx-auto space-y-6 p-4 md:p-8">
+<div class="container mx-auto flex flex-col gap-6 p-4 md:p-8">
 	<!-- Page Header -->
 	<div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-		<div>
-			<div class="flex items-center gap-3">
-				<div class="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
-					<PlugZapIcon class="h-6 w-6" />
-				</div>
-				<div>
-					<h1 class="text-2xl font-bold tracking-tight">PPPoE WAN Concentrator</h1>
-					<p class="text-sm text-muted-foreground">
-						Carrier broadband link orchestration, credentials, MSS clamping, and eBPF Fast-Path.
-					</p>
-				</div>
+		<div class="flex items-center gap-3">
+			<div class="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+				<PlugZapIcon class="size-6" />
+			</div>
+			<div class="flex flex-col gap-0.5">
+				<h1 class="text-2xl font-bold tracking-tight">PPPoE WAN Concentrator</h1>
+				<p class="text-sm text-muted-foreground">
+					Carrier broadband link orchestration, credentials, MSS clamping, and eBPF Fast-Path.
+				</p>
 			</div>
 		</div>
 		<div class="flex items-center gap-2">
 			<Button variant="outline" size="sm" onclick={loadAll} disabled={loading}>
-				<RefreshCwIcon class="mr-2 h-4 w-4 {loading ? 'animate-spin' : ''}" />
+				<RefreshCwIcon class={loading ? "animate-spin" : ""} data-icon="inline-start" />
 				Refresh
 			</Button>
 			<Button
@@ -229,16 +280,16 @@
 				onclick={handleReconnect}
 				disabled={reconnecting || loading}
 			>
-				<RefreshCwIcon class="mr-2 h-4 w-4 {reconnecting ? 'animate-spin' : ''}" />
+				<RefreshCwIcon class={reconnecting ? "animate-spin" : ""} data-icon="inline-start" />
 				Reconnect
 			</Button>
 			<Button
 				variant="destructive"
 				size="sm"
 				onclick={handleDisconnect}
-				disabled={disconnecting || loading || status?.state === 'disconnected'}
+				disabled={disconnecting || loading || status?.state === "disconnected"}
 			>
-				<XCircleIcon class="mr-2 h-4 w-4" />
+				<XCircleIcon data-icon="inline-start" />
 				Disconnect
 			</Button>
 		</div>
@@ -259,30 +310,30 @@
 					<Card.Description class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
 						<span>Session State</span>
 						{#if status?.state === "connected"}
-							<span class="flex h-2 w-2 rounded-full bg-emerald-500 ring-4 ring-emerald-500/20 animate-pulse"></span>
+							<span class="flex size-2 rounded-full bg-emerald-500 ring-4 ring-emerald-500/20 animate-pulse"></span>
 						{:else if status?.state === "authenticating" || status?.state === "reconnecting"}
-							<span class="flex h-2 w-2 rounded-full bg-amber-500 ring-4 ring-amber-500/20 animate-pulse"></span>
+							<span class="flex size-2 rounded-full bg-amber-500 ring-4 ring-amber-500/20 animate-pulse"></span>
 						{:else}
-							<span class="flex h-2 w-2 rounded-full bg-destructive/60"></span>
+							<span class="flex size-2 rounded-full bg-destructive/60"></span>
 						{/if}
 					</Card.Description>
 					<Card.Title class="flex items-center gap-2 text-xl font-bold">
 						{#if status?.state === "connected"}
-							<CheckCircleIcon class="h-5 w-5 text-emerald-500" />
+							<CheckCircleIcon class="size-5 text-emerald-500" />
 							<span class="capitalize text-emerald-600 dark:text-emerald-400">Connected</span>
 						{:else if status?.state === "reconnecting"}
-							<RefreshCwIcon class="h-5 w-5 animate-spin text-amber-500" />
+							<RefreshCwIcon class="size-5 animate-spin text-amber-500" />
 							<span class="capitalize text-amber-600 dark:text-amber-400">Reconnecting</span>
 						{:else if status?.state === "authenticating"}
-							<KeyIcon class="h-5 w-5 animate-pulse text-amber-500" />
+							<KeyIcon class="size-5 animate-pulse text-amber-500" />
 							<span class="capitalize text-amber-600 dark:text-amber-400">Authenticating</span>
 						{:else}
-							<XCircleIcon class="h-5 w-5 text-muted-foreground" />
+							<XCircleIcon class="size-5 text-muted-foreground" />
 							<span class="capitalize text-muted-foreground">Disconnected</span>
 						{/if}
 					</Card.Title>
 				</Card.Header>
-				<Card.Content class="text-xs text-muted-foreground space-y-1">
+				<Card.Content class="text-xs text-muted-foreground flex flex-col gap-1.5">
 					<div class="flex justify-between">
 						<span>Virtual / WAN Iface:</span>
 						<span class="font-mono text-foreground font-semibold">
@@ -299,64 +350,58 @@
 							<span class="font-semibold">{status.reconnect_attempts}</span>
 						</div>
 					{/if}
+					{#if status?.last_error}
+						<div class="rounded-md bg-destructive/10 p-1.5 text-[11px] text-destructive flex items-center gap-1 mt-1">
+							<AlertCircleIcon class="size-3 shrink-0" />
+							<span class="truncate">{status.last_error}</span>
+						</div>
+					{/if}
 				</Card.Content>
 			</Card.Root>
 
-			<!-- Data Plane & Acceleration Card -->
+			<!-- Network IP Configuration Card -->
 			<Card.Root>
 				<Card.Header class="pb-2">
 					<Card.Description class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
-						<span>Data Plane Engine</span>
-						{#if status?.dataplane === "ebpf"}
-							<Badge variant="destructive" class="bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/30">
-								eBPF (Experimental)
-							</Badge>
-						{:else}
-							<Badge variant="secondary">
-								Kernel Standard
-							</Badge>
-						{/if}
+						<span>Assigned IP Lease</span>
+						<GlobeIcon class="size-4 text-muted-foreground" />
 					</Card.Description>
-					<Card.Title class="text-xl font-bold flex items-center gap-2">
-						{#if status?.dataplane === "ebpf"}
-							<ZapIcon class="h-5 w-5 text-amber-500" />
-							<span>Generic XDP + TC</span>
+					<Card.Title class="flex items-center gap-2 text-xl font-bold font-mono">
+						{#if status?.local_ip}
+							<span class="text-foreground">{status.local_ip}</span>
 						{:else}
-							<CpuIcon class="h-5 w-5 text-muted-foreground" />
-							<span>ppp_generic (Linux)</span>
+							<span class="text-muted-foreground text-base font-normal">Waiting for IPCP...</span>
 						{/if}
 					</Card.Title>
 				</Card.Header>
-				<Card.Content class="text-xs text-muted-foreground space-y-1">
+				<Card.Content class="text-xs text-muted-foreground flex flex-col gap-1.5">
 					<div class="flex justify-between">
-						<span>Assigned WAN IP:</span>
-						<span class="font-mono text-foreground font-semibold">{status?.local_ip ?? "—"}</span>
-					</div>
-					<div class="flex justify-between">
-						<span>Peer Gateway IP:</span>
+						<span>Gateway (Peer IP):</span>
 						<span class="font-mono text-foreground font-semibold">{status?.peer_ip ?? "—"}</span>
 					</div>
 					<div class="flex justify-between">
-						<span>Session ID / MRU:</span>
-						<span class="font-medium text-foreground">
-							{status?.session_id ? `0x${status.session_id.toString(16).toUpperCase()}` : "—"} / {status?.mru ?? formMru}
-						</span>
+						<span>Negotiated MRU:</span>
+						<span class="font-mono text-foreground font-semibold">{status?.mru ? `${status.mru} bytes` : "—"}</span>
+					</div>
+					<div class="flex justify-between">
+						<span>Session ID:</span>
+						<span class="font-mono text-foreground">{status?.session_id ? `0x${status.session_id.toString(16).padStart(4, "0")}` : "—"}</span>
 					</div>
 				</Card.Content>
 			</Card.Root>
 
-			<!-- Uplink / Access Concentrator Card -->
+			<!-- AC & Remote Details Card -->
 			<Card.Root>
 				<Card.Header class="pb-2">
-					<Card.Description class="text-xs font-semibold uppercase tracking-wider">
-						Broadband Uplink Details
+					<Card.Description class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
+						<span>Access Concentrator</span>
+						<ServerIcon class="size-4 text-muted-foreground" />
 					</Card.Description>
-					<Card.Title class="text-xl font-bold flex items-center gap-2 truncate">
-						<RadioIcon class="h-5 w-5 text-muted-foreground shrink-0" />
-						<span class="truncate">{status?.ac_name ?? "Auto-Discovered AC"}</span>
+					<Card.Title class="truncate text-lg font-bold text-foreground" title={status?.ac_name ?? "None"}>
+						{status?.ac_name || (status?.state === "connected" ? "ISP Concentrator" : "Searching...")}
 					</Card.Title>
 				</Card.Header>
-				<Card.Content class="text-xs text-muted-foreground space-y-1">
+				<Card.Content class="text-xs text-muted-foreground flex flex-col gap-1.5">
 					<div class="flex justify-between">
 						<span>AC MAC Address:</span>
 						<span class="font-mono text-foreground font-semibold">{status?.ac_mac ?? "—"}</span>
@@ -367,9 +412,11 @@
 							{status?.dns_servers?.length ? status.dns_servers.join(", ") : "None"}
 						</span>
 					</div>
-					<div class="flex justify-between">
+					<div class="flex justify-between items-center">
 						<span>Auth Method:</span>
-						<span class="font-medium uppercase text-foreground">{formAuth}</span>
+						<Badge variant="outline" class="font-medium text-[11px]">
+							{formatAuthMethod(status?.auth ?? config?.auth ?? formAuth)}
+						</Badge>
 					</div>
 				</Card.Content>
 			</Card.Root>
@@ -380,9 +427,9 @@
 	<Card.Root class="border-primary/20 bg-muted/20">
 		<Card.Header>
 			<div class="flex items-center justify-between">
-				<div>
+				<div class="flex flex-col gap-1">
 					<Card.Title class="text-lg font-bold flex items-center gap-2">
-						<ZapIcon class="h-5 w-5 text-primary" />
+						<ZapIcon class="size-5 text-primary" />
 						Data Plane Architecture Selection
 					</Card.Title>
 					<Card.Description>
@@ -391,110 +438,89 @@
 				</div>
 			</div>
 		</Card.Header>
-		<Card.Content class="space-y-4">
+		<Card.Content class="flex flex-col gap-4">
 			<div class="grid gap-4 md:grid-cols-2">
-				<!-- Linux Kernel Standard -->
-				<button
-					type="button"
-					class="flex flex-col text-left rounded-xl border p-4 transition-all {formDataplane === 'kernel' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border hover:border-muted-foreground/40'}"
-					onclick={() => (formDataplane = "kernel")}
+				<!-- Linux Kernel Mode Option -->
+				<div
+					class="relative cursor-pointer rounded-xl border p-4 transition-all hover:bg-card/50 flex flex-col gap-2 {formDataplane === 'kernel' ? 'border-primary bg-primary/5 shadow-sm' : 'border-border/60'}"
+					onclick={() => formDataplane = 'kernel'}
+					role="button"
+					tabindex="0"
+					onkeydown={(e) => e.key === 'Enter' && (formDataplane = 'kernel')}
 				>
-					<div class="flex items-center justify-between w-full mb-2">
-						<div class="flex items-center gap-2">
-							<CpuIcon class="h-5 w-5 text-muted-foreground" />
-							<span class="font-bold text-foreground">Linux Kernel Standard (ppp_generic)</span>
+					<div class="flex items-center justify-between">
+						<div class="flex items-center gap-2 font-semibold">
+							<CpuIcon class="size-4 text-blue-500" />
+							<span>Standard Linux Kernel</span>
 						</div>
-						{#if formDataplane === "kernel"}
-							<Badge variant="default">Selected</Badge>
+						{#if formDataplane === 'kernel'}
+							<Badge variant="default" class="bg-primary text-primary-foreground text-xs">Active Mode</Badge>
+						{:else}
+							<Badge variant="outline" class="text-xs">Recommended</Badge>
 						{/if}
 					</div>
-					<p class="text-xs text-muted-foreground">
-						Traditional Linux kernel driver handoff via <code class="text-foreground">/dev/ppp</code> ioctl calls. Creates a point-to-point virtual interface (<code class="text-foreground">ppp0</code>). High stability and full Linux networking compatibility.
+					<p class="text-xs text-muted-foreground leading-relaxed">
+						Uses upstream <code class="rounded bg-muted px-1 py-0.5 text-[11px] font-mono">/dev/ppp</code> and standard <code class="rounded bg-muted px-1 py-0.5 text-[11px] font-mono">ppp_generic</code> drivers. Highly stable, universal hardware compatibility, standard routing, and transparent traffic accounting.
 					</p>
-					<div class="mt-3 flex items-center gap-3 text-[11px] text-muted-foreground font-medium">
-						<span class="text-emerald-600 dark:text-emerald-400">✓ Production Recommended</span>
-						<span>• Standard Routing Table</span>
-					</div>
-				</button>
-
-				<!-- eBPF Fast-Path -->
-				<button
-					type="button"
-					class="flex flex-col text-left rounded-xl border p-4 transition-all {formDataplane === 'ebpf' ? 'border-amber-500 bg-amber-500/5 ring-1 ring-amber-500' : 'border-border hover:border-muted-foreground/40'}"
-					onclick={() => {
-						if (formDataplane !== "ebpf") {
-							showEbpfWarningDialog = true;
-						}
-					}}
-				>
-					<div class="flex items-center justify-between w-full mb-2">
-						<div class="flex items-center gap-2">
-							<ZapIcon class="h-5 w-5 text-amber-500" />
-							<span class="font-bold text-foreground">eBPF Fast-Path (Generic XDP + TC)</span>
-						</div>
-						<div class="flex items-center gap-1.5">
-							<Badge variant="destructive" class="bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/30 text-[10px] uppercase tracking-wider">
-								Experimental
-							</Badge>
-							{#if formDataplane === "ebpf"}
-								<Badge variant="default" class="bg-amber-600 hover:bg-amber-700">Selected</Badge>
-							{/if}
-						</div>
-					</div>
-					<p class="text-xs text-muted-foreground">
-						Experimental in-kernel bytecode fast-path bypassing <code class="text-foreground">ppp_mutex</code>. Executes decapsulation at Generic XDP and encapsulation at TC Egress. Note: highly experimental and prone to stability bugs.
-					</p>
-					<div class="mt-3 flex items-center gap-3 text-[11px] text-amber-600 dark:text-amber-400 font-medium">
-						<span>⚠️ Unstable / Active Research</span>
-						<span>• In-Place MSS Clamping</span>
-						<span>• Generic XDP Hook</span>
-					</div>
-				</button>
-			</div>
-
-			<!-- Warning Banner when eBPF is active in form -->
-			{#if formDataplane === "ebpf"}
-				<div class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-900 dark:text-amber-200">
-					<div class="flex items-start gap-3">
-						<AlertTriangleIcon class="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
-						<div class="space-y-1 text-sm">
-							<p class="font-bold text-amber-800 dark:text-amber-300">
-								Warning: eBPF PPPoE Fast-Path is highly experimental
-							</p>
-							<p class="text-xs text-amber-700 dark:text-amber-300/80 leading-relaxed">
-								The eBPF data plane implementation is prone to stability issues, packet drops, and compatibility quirks with certain NIC drivers and ISP configurations. It is not recommended for production environments. Use <strong>Linux Kernel Standard (ppp_generic)</strong> for a reliable broadband connection.
-							</p>
-						</div>
+					<div class="flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
+						<CheckCircleIcon class="size-3.5" />
+						Full support for Flowtable offload and PMTU Clamping
 					</div>
 				</div>
-			{/if}
+
+				<!-- eBPF Fast-Path Option -->
+				<div
+					class="relative cursor-pointer rounded-xl border p-4 transition-all hover:bg-card/50 flex flex-col gap-2 {formDataplane === 'ebpf' ? 'border-amber-500 bg-amber-500/5 shadow-sm' : 'border-border/60'}"
+					onclick={() => handleDataplaneSelect('ebpf')}
+					role="button"
+					tabindex="0"
+					onkeydown={(e) => e.key === 'Enter' && handleDataplaneSelect('ebpf')}
+				>
+					<div class="flex items-center justify-between">
+						<div class="flex items-center gap-2 font-semibold text-amber-600 dark:text-amber-400">
+							<ZapIcon class="size-4 text-amber-500" />
+							<span>eBPF Fast-Path (Generic XDP + TC)</span>
+						</div>
+						{#if formDataplane === 'ebpf'}
+							<Badge variant="outline" class="border-amber-500 text-amber-600 text-xs">Active Experimental</Badge>
+						{:else}
+							<Badge variant="secondary" class="text-xs">Experimental</Badge>
+						{/if}
+					</div>
+					<p class="text-xs text-muted-foreground leading-relaxed">
+						Zero-copy packet decapsulation using eBPF TC filters attached directly to the physical WAN interface. Extreme throughput and sub-millisecond line-rate routing with minimal CPU overhead.
+					</p>
+					<div class="flex items-center gap-1.5 text-[11px] text-amber-600 dark:text-amber-400 font-medium">
+						<AlertTriangleIcon class="size-3.5" />
+						Requires eBPF kernel support (Generic XDP SKB mode)
+					</div>
+				</div>
+			</div>
 		</Card.Content>
 	</Card.Root>
 
-	<!-- eBPF Confirmation Dialog -->
+	<!-- eBPF Experimental Warning Dialog -->
 	<AlertDialog.Root bind:open={showEbpfWarningDialog}>
 		<AlertDialog.Content>
 			<AlertDialog.Header>
-				<AlertDialog.Title class="flex items-center gap-2 text-amber-600 dark:text-amber-400">
-					<AlertTriangleIcon class="h-5 w-5" />
-					Enable Experimental eBPF Data Plane?
+				<AlertDialog.Title class="flex items-center gap-2 text-amber-600">
+					<AlertTriangleIcon class="size-5" />
+					Experimental eBPF Architecture
 				</AlertDialog.Title>
-				<AlertDialog.Description class="space-y-2 text-left pt-2">
+				<AlertDialog.Description class="flex flex-col gap-2 text-left pt-2">
 					<p>
-						The <strong>eBPF PPPoE data plane</strong> is currently experimental and prone to <strong>severe bugs, connection dropouts, and stability issues</strong>.
+						eBPF Fast-Path bypasses standard Linux networking stack using TC filters and Generic XDP.
 					</p>
 					<p>
-						XDP bypasses standard Linux networking structures, which may cause unexpected behavior with routing, firewall rules, or keepalive management.
-					</p>
-					<p class="font-semibold text-foreground">
-						Are you sure you want to switch to the experimental eBPF mode?
+						While offering ultra-low CPU utilization, it requires an up-to-date Linux Kernel (5.15+) and specialized network driver hooks. If your kernel lacks BPF features, the daemon will automatically fallback to standard kernel mode.
 					</p>
 				</AlertDialog.Description>
 			</AlertDialog.Header>
 			<AlertDialog.Footer>
-				<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+				<AlertDialog.Cancel onclick={() => (showEbpfWarningDialog = false)}>
+					Cancel
+				</AlertDialog.Cancel>
 				<AlertDialog.Action
-					class="bg-amber-600 hover:bg-amber-700 text-white"
 					onclick={() => {
 						formDataplane = "ebpf";
 						showEbpfWarningDialog = false;
@@ -507,18 +533,18 @@
 	</AlertDialog.Root>
 
 	<!-- Detailed Configuration Tabs -->
-	<Tabs.Root value="credentials" class="space-y-4">
+	<Tabs.Root value="credentials" class="flex flex-col gap-4">
 		<Tabs.List class="grid w-full grid-cols-3 md:w-[480px]">
-			<Tabs.Trigger value="credentials" class="gap-2">
-				<KeyIcon class="h-4 w-4" />
+			<Tabs.Trigger value="credentials" class="flex items-center gap-2">
+				<KeyIcon class="size-4" />
 				<span>Credentials</span>
 			</Tabs.Trigger>
-			<Tabs.Trigger value="link" class="gap-2">
-				<SlidersIcon class="h-4 w-4" />
+			<Tabs.Trigger value="link" class="flex items-center gap-2">
+				<SlidersIcon class="size-4" />
 				<span>Link & Timers</span>
 			</Tabs.Trigger>
-			<Tabs.Trigger value="nftables" class="gap-2">
-				<ShieldIcon class="h-4 w-4" />
+			<Tabs.Trigger value="nftables" class="flex items-center gap-2">
+				<ShieldIcon class="size-4" />
 				<span>nftables Tuning</span>
 			</Tabs.Trigger>
 		</Tabs.List>
@@ -532,10 +558,10 @@
 						Configure the physical Ethernet port, subscriber credentials, and authentication protocol.
 					</Card.Description>
 				</Card.Header>
-				<Card.Content class="space-y-6">
+				<Card.Content class="flex flex-col gap-6">
 					<!-- Service Enable Switch -->
 					<div class="flex items-center justify-between rounded-xl border p-4">
-						<div class="space-y-0.5">
+						<div class="flex flex-col gap-0.5">
 							<Label class="text-base font-semibold">Enable PPPoE Service</Label>
 							<p class="text-xs text-muted-foreground">
 								When enabled, Lanforge automatically discovers the Access Concentrator and maintains the session.
@@ -545,51 +571,101 @@
 					</div>
 
 					<div class="grid gap-4 md:grid-cols-2">
-						<div class="space-y-2">
-							<Label for="wan_iface">Physical WAN Interface</Label>
-							<Input
-								id="wan_iface"
-								bind:value={formWanIface}
-								placeholder="e.g. eth1, end1, eno1"
-							/>
+						<!-- WAN Physical Interface Select -->
+						<div class="flex flex-col gap-2">
+							<Label class="text-xs font-medium">Physical WAN Interface</Label>
+							{#if interfaceOptions.length > 0}
+								<Select.Root
+									type="single"
+									value={formWanIface}
+									onValueChange={(val) => {
+										if (val) formWanIface = val;
+									}}
+								>
+									<Select.Trigger class="h-9 text-xs font-mono">
+										{formWanIface || "Select WAN interface..."}
+									</Select.Trigger>
+									<Select.Content>
+										{#each interfaceOptions as iface (iface.name)}
+											<Select.Item value={iface.name} class="text-xs">
+												<div class="flex items-center justify-between w-full gap-3">
+													<div class="flex items-center gap-2">
+														<span class="font-mono font-medium">{iface.name}</span>
+														{#if iface.carrier_up}
+															<span class="size-1.5 rounded-full bg-emerald-500" title="Carrier connected"></span>
+														{:else}
+															<span class="size-1.5 rounded-full bg-muted-foreground/40" title="Disconnected"></span>
+														{/if}
+													</div>
+													<div class="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+														{#if iface.is_physical}
+															<Badge variant="secondary" class="text-[9px] px-1 py-0 font-normal">Physical</Badge>
+														{/if}
+														{#if iface.ips && iface.ips.length > 0}
+															<span class="truncate max-w-[120px] font-mono text-[10px]">{iface.ips[0]}</span>
+														{/if}
+													</div>
+												</div>
+											</Select.Item>
+										{/each}
+									</Select.Content>
+								</Select.Root>
+							{:else}
+								<Input
+									id="wan_iface"
+									bind:value={formWanIface}
+									placeholder="e.g. eth1, end1, eno1"
+									class="h-9 font-mono text-xs"
+								/>
+							{/if}
 							<p class="text-[11px] text-muted-foreground">
 								The physical port connected to your fiber ONT, modem, or upstream switch.
 							</p>
 						</div>
 
-						<div class="space-y-2">
-							<Label for="auth_method">Authentication Protocol</Label>
-							<select
-								id="auth_method"
-								bind:value={formAuth}
-								class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+						<!-- Authentication Protocol Select -->
+						<div class="flex flex-col gap-2">
+							<Label class="text-xs font-medium">Authentication Protocol</Label>
+							<Select.Root
+								type="single"
+								value={formAuth}
+								onValueChange={(val) => {
+									if (val) formAuth = val as PppoeAuthMethod;
+								}}
 							>
-								<option value="chap_md5">CHAP-MD5 (Recommended)</option>
-								<option value="pap">PAP (Plaintext Password)</option>
-								<option value="none">None (Unauthenticated)</option>
-							</select>
+								<Select.Trigger class="h-9 text-xs">
+									{formatAuthMethod(formAuth)}
+								</Select.Trigger>
+								<Select.Content>
+									<Select.Item value="chap_md5" class="text-xs">CHAP-MD5 (Recommended)</Select.Item>
+									<Select.Item value="pap" class="text-xs">PAP (Plaintext Password)</Select.Item>
+									<Select.Item value="none" class="text-xs">None (Unauthenticated)</Select.Item>
+								</Select.Content>
+							</Select.Root>
 							<p class="text-[11px] text-muted-foreground">
 								Most ISPs require CHAP-MD5 authentication.
 							</p>
 						</div>
 
-						<div class="space-y-2">
-							<Label for="username">PPPoE Username</Label>
+						<div class="flex flex-col gap-2">
+							<Label for="username" class="text-xs font-medium">PPPoE Username</Label>
 							<Input
 								id="username"
 								bind:value={formUsername}
 								placeholder="user@isp.com"
+								class="h-9 text-xs"
 							/>
 						</div>
 
-						<div class="space-y-2">
-							<Label for="password">PPPoE Password</Label>
+						<div class="flex flex-col gap-2">
+							<Label for="password" class="text-xs font-medium">PPPoE Password</Label>
 							<div class="relative">
 								<Input
 									id="password"
 									type={showPassword ? "text" : "password"}
 									bind:value={formPassword}
 									placeholder="••••••••"
+									class="h-9 text-xs pr-10"
 								/>
 								<button
 									type="button"
@@ -597,29 +673,31 @@
 									onclick={() => (showPassword = !showPassword)}
 								>
 									{#if showPassword}
-										<EyeOffIcon class="h-4 w-4" />
+										<EyeOffIcon class="size-4" />
 									{:else}
-										<EyeIcon class="h-4 w-4" />
+										<EyeIcon class="size-4" />
 									{/if}
 								</button>
 							</div>
 						</div>
 
-						<div class="space-y-2">
-							<Label for="service_name">Service Name (Optional)</Label>
+						<div class="flex flex-col gap-2">
+							<Label for="service_name" class="text-xs font-medium">Service Name (Optional)</Label>
 							<Input
 								id="service_name"
 								bind:value={formServiceName}
 								placeholder="Leave empty for any"
+								class="h-9 text-xs"
 							/>
 						</div>
 
-						<div class="space-y-2">
-							<Label for="ac_name">Access Concentrator Name (Optional)</Label>
+						<div class="flex flex-col gap-2">
+							<Label for="ac_name" class="text-xs font-medium">Access Concentrator Name (Optional)</Label>
 							<Input
 								id="ac_name"
 								bind:value={formAcName}
 								placeholder="Leave empty for any"
+								class="h-9 text-xs"
 							/>
 						</div>
 					</div>
@@ -636,83 +714,89 @@
 						Fine-tune packet sizing, discovery retry timeouts, and LCP keepalive echo intervals.
 					</Card.Description>
 				</Card.Header>
-				<Card.Content class="space-y-6">
+				<Card.Content class="flex flex-col gap-6">
 					<div class="grid gap-4 md:grid-cols-2">
-						<div class="space-y-2">
-							<Label for="mru">Maximum Receive Unit (MRU / MTU)</Label>
+						<div class="flex flex-col gap-2">
+							<Label for="mru" class="text-xs font-medium">Maximum Receive Unit (MRU / MTU)</Label>
 							<Input
 								id="mru"
 								type="number"
 								min="576"
 								max="1500"
 								bind:value={formMru}
+								class="h-9 font-mono text-xs"
 							/>
 							<p class="text-[11px] text-muted-foreground">
 								Standard PPPoE MTU is 1492 (1500 Ethernet - 8 PPPoE bytes).
 							</p>
 						</div>
 
-						<div class="space-y-2">
-							<Label for="reconnect_delay">Reconnect Delay (Seconds)</Label>
+						<div class="flex flex-col gap-2">
+							<Label for="reconnect_delay" class="text-xs font-medium">Reconnect Delay (Seconds)</Label>
 							<Input
 								id="reconnect_delay"
 								type="number"
 								min="1"
 								max="300"
 								bind:value={formReconnectDelay}
+								class="h-9 font-mono text-xs"
 							/>
 							<p class="text-[11px] text-muted-foreground">
 								Pause before attempting discovery after a session drop.
 							</p>
 						</div>
 
-						<div class="space-y-2">
-							<Label for="echo_interval">LCP Echo Keepalive Interval (s)</Label>
+						<div class="flex flex-col gap-2">
+							<Label for="echo_interval" class="text-xs font-medium">LCP Echo Keepalive Interval (s)</Label>
 							<Input
 								id="echo_interval"
 								type="number"
 								min="1"
 								max="120"
 								bind:value={formEchoInterval}
+								class="h-9 font-mono text-xs"
 							/>
 							<p class="text-[11px] text-muted-foreground">
 								Frequency of LCP Echo-Requests sent to the Access Concentrator.
 							</p>
 						</div>
 
-						<div class="space-y-2">
-							<Label for="echo_failures">LCP Echo Max Failures</Label>
+						<div class="flex flex-col gap-2">
+							<Label for="echo_failures" class="text-xs font-medium">LCP Echo Max Failures</Label>
 							<Input
 								id="echo_failures"
 								type="number"
 								min="1"
 								max="20"
 								bind:value={formEchoMaxFailures}
+								class="h-9 font-mono text-xs"
 							/>
 							<p class="text-[11px] text-muted-foreground">
 								Consecutive unanswered echoes before declaring session dead.
 							</p>
 						</div>
 
-						<div class="space-y-2">
-							<Label for="padi_retries">Discovery PADI Retries</Label>
+						<div class="flex flex-col gap-2">
+							<Label for="padi_retries" class="text-xs font-medium">Discovery PADI Retries</Label>
 							<Input
 								id="padi_retries"
 								type="number"
 								min="1"
 								max="20"
 								bind:value={formPadiRetries}
+								class="h-9 font-mono text-xs"
 							/>
 						</div>
 
-						<div class="space-y-2">
-							<Label for="padi_timeout">PADI Timeout per Retry (s)</Label>
+						<div class="flex flex-col gap-2">
+							<Label for="padi_timeout" class="text-xs font-medium">PADI Timeout per Retry (s)</Label>
 							<Input
 								id="padi_timeout"
 								type="number"
 								min="1"
 								max="30"
 								bind:value={formPadiTimeout}
+								class="h-9 font-mono text-xs"
 							/>
 						</div>
 					</div>
@@ -720,7 +804,7 @@
 					<Separator />
 
 					<div class="flex items-center justify-between">
-						<div class="space-y-0.5">
+						<div class="flex flex-col gap-0.5">
 							<Label class="text-sm font-semibold">Send PADT Frame on Shutdown</Label>
 							<p class="text-xs text-muted-foreground">
 								Explicitly notifies the BRAS to terminate the session on service stop. (Disable for fast-reconnect debugging).
@@ -741,9 +825,9 @@
 						Automatic router optimizations, TCP MSS clamping, Flowtable fast-path, and VoWiFi bypass.
 					</Card.Description>
 				</Card.Header>
-				<Card.Content class="space-y-4">
+				<Card.Content class="flex flex-col gap-4">
 					<div class="flex items-center justify-between rounded-xl border p-4">
-						<div class="space-y-0.5">
+						<div class="flex flex-col gap-0.5">
 							<Label class="text-base font-semibold">Apply nftables Router Tuning</Label>
 							<p class="text-xs text-muted-foreground">
 								Automatically applies optimized firewall rules, fast routing, and connection tracking filters.
@@ -754,7 +838,7 @@
 
 					<div class="grid gap-4 md:grid-cols-2">
 						<div class="flex items-center justify-between rounded-xl border p-3">
-							<div class="space-y-0.5">
+							<div class="flex flex-col gap-0.5">
 								<Label class="text-sm font-medium">Flowtable Offloading</Label>
 								<p class="text-[11px] text-muted-foreground">
 									Fast-path established TCP/UDP flows directly in software flowtable.
@@ -764,7 +848,7 @@
 						</div>
 
 						<div class="flex items-center justify-between rounded-xl border p-3">
-							<div class="space-y-0.5">
+							<div class="flex flex-col gap-0.5">
 								<Label class="text-sm font-medium">TCP MSS Clamping (1452)</Label>
 								<p class="text-[11px] text-muted-foreground">
 									Prevents PMTU discovery blackholes on 1492 MTU links.
@@ -774,7 +858,7 @@
 						</div>
 
 						<div class="flex items-center justify-between rounded-xl border p-3">
-							<div class="space-y-0.5">
+							<div class="flex flex-col gap-0.5">
 								<Label class="text-sm font-medium">DNS Port 53 / 853 Bypass</Label>
 								<p class="text-[11px] text-muted-foreground">
 									Bypasses flowtable for DNS to ensure local resolver analytics and adblock function accurately.
@@ -784,7 +868,7 @@
 						</div>
 
 						<div class="flex items-center justify-between rounded-xl border p-3">
-							<div class="space-y-0.5">
+							<div class="flex flex-col gap-0.5">
 								<Label class="text-sm font-medium">VoWiFi / IPsec (Ports 500 / 4500) Bypass</Label>
 								<p class="text-[11px] text-muted-foreground">
 									Keeps Wi-Fi Calling tunnels alive without flowtable aging disconnects.
@@ -794,7 +878,7 @@
 						</div>
 
 						<div class="flex items-center justify-between rounded-xl border p-3">
-							<div class="space-y-0.5">
+							<div class="flex flex-col gap-0.5">
 								<Label class="text-sm font-medium">Outbound NAT Masquerade</Label>
 								<p class="text-[11px] text-muted-foreground">
 									Enables source NAT masquerading for all LAN clients routing through WAN.
@@ -815,10 +899,10 @@
 		</Button>
 		<Button onclick={handleSave} disabled={saving || loading}>
 			{#if saving}
-				<RefreshCwIcon class="mr-2 h-4 w-4 animate-spin" />
+				<RefreshCwIcon class="animate-spin" data-icon="inline-start" />
 				Saving...
 			{:else}
-				<CheckCircleIcon class="mr-2 h-4 w-4" />
+				<CheckCircleIcon data-icon="inline-start" />
 				Save Configuration
 			{/if}
 		</Button>

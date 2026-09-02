@@ -227,7 +227,9 @@ impl PppoeService {
                 uptime_secs: Some(0),
                 reconnect_attempts: self.attempt,
                 last_error: None,
+                auth: Some(lcp_res.auth_method),
             };
+
             let _ = self.ctx.apply(DeviceUpdate::PppoeStatusUpdated {
                 status: Some(pppoe_status),
             });
