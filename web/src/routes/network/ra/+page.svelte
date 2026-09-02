@@ -15,6 +15,7 @@
 		raConfig,
 		raUpdateConfig,
 		raTrigger,
+		getSetupStatus,
 	} from "$lib/api/client";
 	import type {
 		RaServerConfig,
@@ -24,6 +25,7 @@
 		RdnssConfig,
 		DnsslConfig,
 		PrefixSource,
+		NetworkInterfaceInfo,
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
@@ -50,6 +52,24 @@
 	let saving = $state(false);
 	let triggering = $state(false);
 	let refreshInterval: ReturnType<typeof setInterval> | null = null;
+	let availableInterfaces = $state<NetworkInterfaceInfo[]>([]);
+
+	// Derived list of selectable interfaces ensuring currently selected iface is present
+	let interfaceOptions = $derived.by(() => {
+		const list = [...availableInterfaces];
+		if (formIface && !list.some((i) => i.name === formIface)) {
+			list.unshift({
+				name: formIface,
+				mac: null,
+				is_physical: false,
+				is_up: true,
+				carrier_up: true,
+				ips: [],
+				bus_type: "configured",
+			});
+		}
+		return list;
+	});
 
 	// Editable form fields
 	let formEnabled = $state(true);
@@ -79,7 +99,7 @@
 
 	function syncFormFromConfig(c: RaServerConfig) {
 		formEnabled = c.enabled;
-		formIface = c.iface ?? "end0";
+		formIface = c.iface ?? (availableInterfaces[0]?.name || "end0");
 		formManaged = c.managed;
 		formOtherConfig = c.other_config;
 		formHopLimit = c.hop_limit;
@@ -114,11 +134,15 @@
 	async function loadAll(silent = false) {
 		if (!silent) loading = true;
 		try {
-			const [s, c] = await Promise.all([
+			const [s, c, setupRes] = await Promise.all([
 				raStatus().catch(() => null),
 				raConfig().catch(() => null),
+				getSetupStatus().catch(() => null),
 			]);
 			status = s;
+			if (setupRes?.interfaces) {
+				availableInterfaces = setupRes.interfaces;
+			}
 			if (c && (!config || !silent)) {
 				config = c;
 				syncFormFromConfig(c);
@@ -130,6 +154,7 @@
 			if (!silent) loading = false;
 		}
 	}
+
 
 	async function handleSaveConfig() {
 		saving = true;
@@ -741,10 +766,54 @@
 
 						<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 							<div class="flex flex-col gap-1.5">
-								<Label for="ra-iface" class="text-xs font-medium">Network Interface</Label>
-								<Input id="ra-iface" bind:value={formIface} placeholder="end0" class="h-9 font-mono text-xs" />
+								<Label class="text-xs font-medium">Network Interface</Label>
+								{#if interfaceOptions.length > 0}
+									<Select.Root
+										type="single"
+										value={formIface}
+										onValueChange={(val) => {
+											if (val) formIface = val;
+										}}
+									>
+										<Select.Trigger class="h-9 text-xs font-mono">
+											{formIface || "Select interface..."}
+										</Select.Trigger>
+										<Select.Content>
+											{#each interfaceOptions as iface (iface.name)}
+												<Select.Item value={iface.name} class="text-xs">
+													<div class="flex items-center justify-between w-full gap-3">
+														<div class="flex items-center gap-2">
+															<span class="font-mono font-medium">{iface.name}</span>
+															{#if iface.carrier_up}
+																<span class="size-1.5 rounded-full bg-emerald-500" title="Link active"></span>
+															{:else}
+																<span class="size-1.5 rounded-full bg-muted-foreground/40" title="Link down"></span>
+															{/if}
+														</div>
+														<div class="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+															{#if iface.is_physical}
+																<Badge variant="secondary" class="text-[9px] px-1 py-0 font-normal">Physical</Badge>
+															{/if}
+															{#if iface.ips && iface.ips.length > 0}
+																<span class="truncate max-w-[120px] font-mono text-[10px]">{iface.ips[0]}</span>
+															{/if}
+														</div>
+													</div>
+												</Select.Item>
+											{/each}
+										</Select.Content>
+									</Select.Root>
+								{:else}
+									<Input
+										id="ra-iface"
+										bind:value={formIface}
+										placeholder="end0"
+										class="h-9 font-mono text-xs"
+									/>
+								{/if}
 								<p class="text-[11px] text-muted-foreground">LAN interface to bind raw ICMPv6 socket to.</p>
 							</div>
+
 
 							<div class="flex flex-col gap-1.5">
 								<Label class="text-xs font-medium">Router Priority (RFC 4191)</Label>
