@@ -97,6 +97,53 @@
 	let newRdnssAddr = $state("");
 	let newDnsslDomain = $state("");
 
+	// Track dirty state
+	let isDirty = $derived.by(() => {
+		if (!config) return false;
+		if (formEnabled !== config.enabled) return true;
+		const defaultIface = availableInterfaces[0]?.name || "end0";
+		if (formIface !== (config.iface ?? defaultIface)) return true;
+		if (formManaged !== config.managed) return true;
+		if (formOtherConfig !== config.other_config) return true;
+		if (Number(formHopLimit) !== config.hop_limit) return true;
+		if (formPriority !== config.priority) return true;
+		if (Number(formMaxInterval) !== config.max_interval_secs) return true;
+		if ((formMinInterval ? Number(formMinInterval) : null) !== (config.min_interval_secs ?? null)) return true;
+		if ((formLifetime ? Number(formLifetime) : null) !== (config.lifetime_secs ?? null)) return true;
+		if (Number(formReachableTime) !== config.reachable_time_ms) return true;
+		if (Number(formRetransTimer) !== config.retrans_timer_ms) return true;
+		if ((formMtu ? Number(formMtu) : null) !== (config.mtu ?? null)) return true;
+
+		// Prefixes check
+		const cfgPrefixes = config.prefixes || [];
+		if (formPrefixes.length !== cfgPrefixes.length) return true;
+		for (let i = 0; i < formPrefixes.length; i++) {
+			const a = formPrefixes[i];
+			const b = cfgPrefixes[i];
+			if (a.source !== b.source) return true;
+			if ((a.address ?? null) !== (b.address ?? null)) return true;
+			if (a.prefix_len !== b.prefix_len) return true;
+			if ((a.autonomous ?? true) !== (b.autonomous ?? true)) return true;
+			if ((a.on_link ?? true) !== (b.on_link ?? true)) return true;
+		}
+
+		// RDNSS check
+		const cfgRdnss = (config.rdnss || []).flatMap((r) => r.servers || []);
+		if (formRdnss.length !== cfgRdnss.length) return true;
+		for (let i = 0; i < formRdnss.length; i++) {
+			if (formRdnss[i] !== cfgRdnss[i]) return true;
+		}
+
+		// DNSSL check
+		const cfgDnssl = (config.dnssl || []).flatMap((d) => d.domains || []);
+		if (formDnssl.length !== cfgDnssl.length) return true;
+		for (let i = 0; i < formDnssl.length; i++) {
+			if (formDnssl[i] !== cfgDnssl[i]) return true;
+		}
+
+		return false;
+	});
+
 	function syncFormFromConfig(c: RaServerConfig) {
 		formEnabled = c.enabled;
 		formIface = c.iface ?? (availableInterfaces[0]?.name || "end0");
@@ -155,8 +202,8 @@
 		}
 	}
 
-
 	async function handleSaveConfig() {
+		if (!isDirty) return;
 		saving = true;
 		try {
 			const rdnssObj: RdnssConfig[] = formRdnss.length > 0
@@ -375,9 +422,9 @@
 	});
 </script>
 
-<div class="flex flex-col gap-6 p-6 max-w-7xl mx-auto w-full">
+<div class="flex flex-col gap-6 w-full">
 	<!-- Page Header -->
-	<div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+	<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
 		<div class="flex flex-col gap-1">
 			<div class="flex items-center gap-2">
 				<RadioIcon class="size-6 text-primary" />
@@ -422,95 +469,113 @@
 	</div>
 
 	{#if loading && !status}
-		<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-			<Skeleton class="h-32 w-full rounded-xl" />
-			<Skeleton class="h-32 w-full rounded-xl" />
-			<Skeleton class="h-32 w-full rounded-xl" />
+		<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+			<Skeleton class="h-28 w-full rounded-xl" />
+			<Skeleton class="h-28 w-full rounded-xl" />
+			<Skeleton class="h-28 w-full rounded-xl" />
+			<Skeleton class="h-28 w-full rounded-xl" />
 		</div>
 		<Skeleton class="h-96 w-full rounded-xl" />
 	{:else}
-		<!-- Overview Metric Cards -->
-		<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-			<!-- Card 1: Operational State -->
+		<!-- Overview Metric Cards (Responsive 4-column layout) -->
+		<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+			<!-- Card 1: Operational Interface -->
 			<Card.Root>
 				<Card.Header class="pb-2">
-					<Card.Description class="flex items-center justify-between">
-						<span>Operational State</span>
+					<Card.Description class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
+						<span>Interface</span>
 						<NetworkIcon class="size-4 text-muted-foreground" />
 					</Card.Description>
-					<Card.Title class="text-lg font-semibold flex items-center gap-2">
+					<Card.Title class="text-base font-bold font-mono">
 						{status?.interface ?? "Not bound"}
 					</Card.Title>
 				</Card.Header>
-				<Card.Content class="flex flex-col gap-1.5 text-xs text-muted-foreground">
+				<Card.Content class="flex flex-col gap-1 text-xs text-muted-foreground">
 					<div class="flex justify-between items-center">
 						<span>Link-Local:</span>
-						<span class="font-mono text-foreground">{status?.link_local ?? "—"}</span>
+						<span class="font-mono text-foreground truncate max-w-[150px]" title={status?.link_local ?? "—"}>
+							{status?.link_local ?? "—"}
+						</span>
 					</div>
 					<div class="flex justify-between items-center">
-						<span>GUA Delegated:</span>
-						<span class="font-mono text-foreground">{status?.active_gua_prefix ?? "—"}</span>
-					</div>
-					<div class="flex justify-between items-center">
-						<span>ULA Dynamic:</span>
-						<span class="font-mono text-foreground">{status?.active_ula_prefix ?? "—"}</span>
+						<span>Service State:</span>
+						<span class="font-medium text-foreground">{status?.enabled ? "Announcing" : "Idle"}</span>
 					</div>
 				</Card.Content>
 			</Card.Root>
 
-			<!-- Card 2: Packet Telemetry -->
+			<!-- Card 2: Prefixes State -->
 			<Card.Root>
 				<Card.Header class="pb-2">
-					<Card.Description class="flex items-center justify-between">
+					<Card.Description class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
+						<span>Prefix Subnets</span>
+						<GlobeIcon class="size-4 text-muted-foreground" />
+					</Card.Description>
+					<Card.Title class="text-base font-bold">
+						<span>{(status?.prefixes ?? []).length} Announced</span>
+					</Card.Title>
+				</Card.Header>
+				<Card.Content class="flex flex-col gap-1 text-xs text-muted-foreground">
+					<div class="flex justify-between items-center">
+						<span>GUA Delegated:</span>
+						<span class="font-mono text-foreground truncate max-w-[150px]" title={status?.active_gua_prefix ?? "—"}>
+							{status?.active_gua_prefix ?? "—"}
+						</span>
+					</div>
+					<div class="flex justify-between items-center">
+						<span>ULA Dynamic:</span>
+						<span class="font-mono text-foreground truncate max-w-[150px]" title={status?.active_ula_prefix ?? "—"}>
+							{status?.active_ula_prefix ?? "—"}
+						</span>
+					</div>
+				</Card.Content>
+			</Card.Root>
+
+			<!-- Card 3: Packet Telemetry -->
+			<Card.Root>
+				<Card.Header class="pb-2">
+					<Card.Description class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
 						<span>Packet Telemetry</span>
 						<ActivityIcon class="size-4 text-muted-foreground" />
 					</Card.Description>
-					<Card.Title class="text-lg font-semibold flex items-center gap-2">
+					<Card.Title class="text-base font-bold flex items-center gap-2">
 						<span>{(status?.sent_multicast_ras ?? 0) + (status?.sent_unicast_ras ?? 0)}</span>
-						<span class="text-xs font-normal text-muted-foreground">Total RAs Sent</span>
+						<span class="text-xs font-normal text-muted-foreground">Total RAs</span>
 					</Card.Title>
 				</Card.Header>
-				<Card.Content class="flex flex-col gap-1.5 text-xs text-muted-foreground">
+				<Card.Content class="flex flex-col gap-1 text-xs text-muted-foreground">
 					<div class="flex justify-between items-center">
-						<span>Multicast (ff02::1):</span>
-						<span class="font-mono font-medium text-foreground">{status?.sent_multicast_ras ?? 0}</span>
+						<span>Multicast / Unicast:</span>
+						<span class="font-mono font-medium text-foreground">{status?.sent_multicast_ras ?? 0} / {status?.sent_unicast_ras ?? 0}</span>
 					</div>
 					<div class="flex justify-between items-center">
-						<span>Unicast Responses:</span>
-						<span class="font-mono font-medium text-foreground">{status?.sent_unicast_ras ?? 0}</span>
-					</div>
-					<div class="flex justify-between items-center">
-						<span>Solicitations (RS):</span>
+						<span>RS Solicitations:</span>
 						<span class="font-mono font-medium text-foreground">
 							{status?.received_solicitations ?? 0}
 							{#if (status?.ignored_solicitations ?? 0) > 0}
-								<span class="text-amber-500 font-normal">({status?.ignored_solicitations} dropped)</span>
+								<span class="text-amber-500 font-normal">({status?.ignored_solicitations} drop)</span>
 							{/if}
 						</span>
 					</div>
 				</Card.Content>
 			</Card.Root>
 
-			<!-- Card 3: Timing & Schedule -->
+			<!-- Card 4: Timing & Schedule -->
 			<Card.Root>
 				<Card.Header class="pb-2">
-					<Card.Description class="flex items-center justify-between">
-						<span>Timers & Convergence</span>
+					<Card.Description class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
+						<span>Convergence</span>
 						<ClockIcon class="size-4 text-muted-foreground" />
 					</Card.Description>
-					<Card.Title class="text-lg font-semibold flex items-center gap-2">
-						<span>{formatCountdown(status?.next_ra_in_secs)}</span>
-						<span class="text-xs font-normal text-muted-foreground">Next Periodic RA</span>
+					<Card.Title class="text-base font-bold flex items-center gap-2">
+						<span class="text-primary">{formatCountdown(status?.next_ra_in_secs)}</span>
+						<span class="text-xs font-normal text-muted-foreground">Next RA</span>
 					</Card.Title>
 				</Card.Header>
-				<Card.Content class="flex flex-col gap-1.5 text-xs text-muted-foreground">
+				<Card.Content class="flex flex-col gap-1 text-xs text-muted-foreground">
 					<div class="flex justify-between items-center">
-						<span>Last RA Sent:</span>
-						<span class="text-foreground">{formatSeconds(status?.last_ra_sent_secs_ago)}</span>
-					</div>
-					<div class="flex justify-between items-center">
-						<span>Last RS Received:</span>
-						<span class="text-foreground">{formatSeconds(status?.last_rs_received_secs_ago)}</span>
+						<span>Last Sent / Recv:</span>
+						<span class="text-foreground text-[11px]">{formatSeconds(status?.last_ra_sent_secs_ago)} / {formatSeconds(status?.last_rs_received_secs_ago)}</span>
 					</div>
 					<div class="flex justify-between items-center">
 						<span>Service Uptime:</span>
@@ -522,22 +587,27 @@
 
 		<!-- Tabs Layout -->
 		<Tabs.Root value="status" class="w-full flex flex-col gap-6">
-			<Tabs.List class="grid grid-cols-2 max-w-md">
-				<Tabs.Trigger value="status" class="flex items-center gap-2">
-					<RadioIcon class="size-4" />
-					Live State
-				</Tabs.Trigger>
-				<Tabs.Trigger value="config" class="flex items-center gap-2">
-					<SlidersIcon class="size-4" />
-					Configuration
-				</Tabs.Trigger>
-			</Tabs.List>
+			<div class="flex items-center justify-between">
+				<Tabs.List class="grid grid-cols-2 w-[320px]">
+					<Tabs.Trigger value="status" class="flex items-center gap-2">
+						<RadioIcon class="size-4" />
+						Live State
+					</Tabs.Trigger>
+					<Tabs.Trigger value="config" class="flex items-center gap-2">
+						<SlidersIcon class="size-4" />
+						Configuration
+						{#if isDirty}
+							<span class="size-2 rounded-full bg-amber-500 animate-pulse"></span>
+						{/if}
+					</Tabs.Trigger>
+				</Tabs.List>
+			</div>
 
 			<!-- TAB 1: Live Status & Active Options -->
 			<Tabs.Content value="status" class="flex flex-col gap-6">
 				<!-- Active Prefixes -->
 				<Card.Root>
-					<Card.Header>
+					<Card.Header class="pb-3">
 						<Card.Title class="text-base flex items-center justify-between">
 							<span class="flex items-center gap-2">
 								<GlobeIcon class="size-4 text-primary" />
@@ -558,13 +628,13 @@
 								<span>No prefixes actively advertised. Check configuration or delegated WAN IPv6 state.</span>
 							</div>
 						{:else}
-							<div class="rounded-md border">
+							<div class="rounded-md border overflow-x-auto">
 								<Table.Root>
 									<Table.Header>
 										<Table.Row>
-											<Table.Head>Prefix</Table.Head>
-											<Table.Head>SLAAC (Autonomous)</Table.Head>
-											<Table.Head>On-Link</Table.Head>
+											<Table.Head>Prefix Subnet</Table.Head>
+											<Table.Head>SLAAC (A-Flag)</Table.Head>
+											<Table.Head>On-Link (L-Flag)</Table.Head>
 											<Table.Head>Valid Lifetime</Table.Head>
 											<Table.Head>Preferred Lifetime</Table.Head>
 										</Table.Row>
@@ -643,10 +713,10 @@
 				</Card.Root>
 
 				<!-- DNS & Timing Parameters Grid -->
-				<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+				<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
 					<!-- Card: RDNSS and DNSSL -->
 					<Card.Root>
-						<Card.Header>
+						<Card.Header class="pb-3">
 							<Card.Title class="text-base flex items-center gap-2">
 								<ServerIcon class="size-4 text-primary" />
 								DNS Options Announced (RFC 8106)
@@ -692,7 +762,7 @@
 
 					<!-- Card: Active Protocol Parameters -->
 					<Card.Root>
-						<Card.Header>
+						<Card.Header class="pb-3">
 							<Card.Title class="text-base flex items-center gap-2">
 								<SlidersIcon class="size-4 text-primary" />
 								Protocol Parameters
@@ -741,427 +811,447 @@
 				</div>
 			</Tabs.Content>
 
-			<!-- TAB 2: Runtime Configuration -->
+			<!-- TAB 2: Runtime Configuration (2-Column Responsive Layout) -->
 			<Tabs.Content value="config" class="flex flex-col gap-6">
-				<!-- General Settings -->
-				<Card.Root>
-					<Card.Header>
-						<Card.Title class="text-base">General Service Settings</Card.Title>
-						<Card.Description>
-							Global operational state and primary flags controlling client IPv6 address auto-configuration.
-						</Card.Description>
-					</Card.Header>
-					<Card.Content class="flex flex-col gap-6">
-						<div class="flex items-center justify-between">
-							<div class="flex flex-col gap-0.5">
-								<Label class="text-sm font-medium">Service Enabled</Label>
-								<p class="text-xs text-muted-foreground">
-									Start the ICMPv6 listener and periodic broadcast engine on target interface.
-								</p>
-							</div>
-							<Switch bind:checked={formEnabled} />
-						</div>
+				<div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+					<!-- Left Column: Core Identity, Flags & Prefixes -->
+					<div class="lg:col-span-7 flex flex-col gap-6">
+						<!-- General Service Settings -->
+						<Card.Root>
+							<Card.Header class="pb-3">
+								<Card.Title class="text-base">Service & Operation</Card.Title>
+								<Card.Description>
+									Target network interface, operational toggle, and address auto-configuration modes.
+								</Card.Description>
+							</Card.Header>
+							<Card.Content class="flex flex-col gap-5">
+								<div class="flex items-center justify-between">
+									<div class="flex flex-col gap-0.5">
+										<Label class="text-sm font-medium">Service Enabled</Label>
+										<p class="text-xs text-muted-foreground">
+											ICMPv6 listener and periodic broadcast engine.
+										</p>
+									</div>
+									<Switch bind:checked={formEnabled} />
+								</div>
 
-						<Separator />
+								<Separator />
 
-						<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-							<div class="flex flex-col gap-1.5">
-								<Label class="text-xs font-medium">Network Interface</Label>
-								{#if interfaceOptions.length > 0}
-									<Select.Root
-										type="single"
-										value={formIface}
-										onValueChange={(val) => {
-											if (val) formIface = val;
-										}}
-									>
-										<Select.Trigger class="h-9 text-xs font-mono">
-											{formIface || "Select interface..."}
-										</Select.Trigger>
-										<Select.Content>
-											{#each interfaceOptions as iface (iface.name)}
-												<Select.Item value={iface.name} class="text-xs">
-													<div class="flex items-center justify-between w-full gap-3">
-														<div class="flex items-center gap-2">
-															<span class="font-mono font-medium">{iface.name}</span>
-															{#if iface.carrier_up}
-																<span class="size-1.5 rounded-full bg-emerald-500" title="Link active"></span>
-															{:else}
-																<span class="size-1.5 rounded-full bg-muted-foreground/40" title="Link down"></span>
-															{/if}
-														</div>
-														<div class="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-															{#if iface.is_physical}
-																<Badge variant="secondary" class="text-[9px] px-1 py-0 font-normal">Physical</Badge>
-															{/if}
-															{#if iface.ips && iface.ips.length > 0}
-																<span class="truncate max-w-[120px] font-mono text-[10px]">{iface.ips[0]}</span>
-															{/if}
-														</div>
-													</div>
-												</Select.Item>
-											{/each}
-										</Select.Content>
-									</Select.Root>
-								{:else}
+								<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+									<div class="flex flex-col gap-1.5">
+										<Label class="text-xs font-medium">Network Interface</Label>
+										{#if interfaceOptions.length > 0}
+											<Select.Root
+												type="single"
+												value={formIface}
+												onValueChange={(val) => {
+													if (val) formIface = val;
+												}}
+											>
+												<Select.Trigger class="h-9 text-xs font-mono">
+													{formIface || "Select interface..."}
+												</Select.Trigger>
+												<Select.Content>
+													{#each interfaceOptions as iface (iface.name)}
+														<Select.Item value={iface.name} class="text-xs">
+															<div class="flex items-center justify-between w-full gap-3">
+																<div class="flex items-center gap-2">
+																	<span class="font-mono font-medium">{iface.name}</span>
+																	{#if iface.carrier_up}
+																		<span class="size-1.5 rounded-full bg-emerald-500" title="Link active"></span>
+																	{:else}
+																		<span class="size-1.5 rounded-full bg-muted-foreground/40" title="Link down"></span>
+																	{/if}
+																</div>
+																<div class="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+																	{#if iface.is_physical}
+																		<Badge variant="secondary" class="text-[9px] px-1 py-0 font-normal">Physical</Badge>
+																	{/if}
+																	{#if iface.ips && iface.ips.length > 0}
+																		<span class="truncate max-w-[110px] font-mono text-[10px]">{iface.ips[0]}</span>
+																	{/if}
+																</div>
+															</div>
+														</Select.Item>
+													{/each}
+												</Select.Content>
+											</Select.Root>
+										{:else}
+											<Input
+												id="ra-iface"
+												bind:value={formIface}
+												placeholder="end0"
+												class="h-9 font-mono text-xs"
+											/>
+										{/if}
+										<p class="text-[11px] text-muted-foreground">LAN interface for raw ICMPv6 socket.</p>
+									</div>
+
+									<div class="flex flex-col gap-1.5">
+										<Label class="text-xs font-medium">Router Priority (RFC 4191)</Label>
+										<Select.Root
+											type="single"
+											value={formPriority}
+											onValueChange={(val) => (formPriority = (val as RouterPriority) ?? "medium")}
+										>
+											<Select.Trigger class="h-9 text-xs capitalize">
+												{formPriority}
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Item value="high" class="text-xs">High (Preferred Default)</Select.Item>
+												<Select.Item value="medium" class="text-xs">Medium (Standard)</Select.Item>
+												<Select.Item value="low" class="text-xs">Low (Secondary / Backup)</Select.Item>
+											</Select.Content>
+										</Select.Root>
+										<p class="text-[11px] text-muted-foreground">Client default router preference.</p>
+									</div>
+								</div>
+
+								<Separator />
+
+								<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+									<div class="flex items-start justify-between gap-3 p-3 rounded-lg border bg-muted/20">
+										<div class="flex flex-col gap-0.5">
+											<Label class="text-xs font-semibold">Managed (M-Flag)</Label>
+											<p class="text-[11px] text-muted-foreground">
+												Force stateful DHCPv6 for IP addresses instead of SLAAC.
+											</p>
+										</div>
+										<Switch bind:checked={formManaged} />
+									</div>
+
+									<div class="flex items-start justify-between gap-3 p-3 rounded-lg border bg-muted/20">
+										<div class="flex flex-col gap-0.5">
+											<Label class="text-xs font-semibold">Other Config (O-Flag)</Label>
+											<p class="text-[11px] text-muted-foreground">
+												Instruct hosts to fetch DNS and NTP via DHCPv6.
+											</p>
+										</div>
+										<Switch bind:checked={formOtherConfig} />
+									</div>
+								</div>
+							</Card.Content>
+						</Card.Root>
+
+						<!-- Prefix Information Options (PIO) Manager -->
+						<Card.Root>
+							<Card.Header class="pb-3">
+								<Card.Title class="text-base">Prefix Information Options (PIO)</Card.Title>
+								<Card.Description>
+									Announced IPv6 prefixes. Use <span class="font-mono text-foreground font-semibold">dynamic_gua</span> for WAN delegated prefix, and <span class="font-mono text-foreground font-semibold">dynamic_ula</span> for internal subnets.
+								</Card.Description>
+							</Card.Header>
+							<Card.Content class="flex flex-col gap-4">
+								<div class="flex flex-col sm:flex-row items-end gap-3 p-3 rounded-lg border bg-muted/40">
+									<div class="flex-1 flex flex-col gap-1.5 w-full">
+										<Label for="new-prefix" class="text-xs font-medium">Add Prefix Subnet</Label>
+										<Input
+											id="new-prefix"
+											bind:value={newPrefixStr}
+											placeholder="dynamic_gua, dynamic_ula, or 2001:db8:1::/64"
+											class="h-9 font-mono text-xs"
+										/>
+									</div>
+
+									<div class="flex items-center gap-4">
+										<div class="flex items-center gap-1.5">
+											<Switch id="auto-slaac" bind:checked={newPrefixAutonomous} />
+											<Label for="auto-slaac" class="text-xs">SLAAC (A)</Label>
+										</div>
+										<div class="flex items-center gap-1.5">
+											<Switch id="on-link" bind:checked={newPrefixOnLink} />
+											<Label for="on-link" class="text-xs">On-link (L)</Label>
+										</div>
+									</div>
+
+									<Button size="sm" variant="secondary" onclick={addPrefix} class="h-9">
+										<PlusIcon class="size-4" data-icon="inline-start" />
+										Add
+									</Button>
+								</div>
+
+								<div class="rounded-md border overflow-hidden">
+									<Table.Root>
+										<Table.Header>
+											<Table.Row>
+												<Table.Head>Prefix</Table.Head>
+												<Table.Head>SLAAC (A)</Table.Head>
+												<Table.Head>On-Link (L)</Table.Head>
+												<Table.Head class="text-right">Action</Table.Head>
+											</Table.Row>
+										</Table.Header>
+										<Table.Body>
+											{#if formPrefixes.length === 0}
+												<Table.Row>
+													<Table.Cell colspan={4} class="text-center text-xs text-muted-foreground py-6">
+														No prefixes defined. RA daemon will stay idle.
+													</Table.Cell>
+												</Table.Row>
+											{:else}
+												{#each formPrefixes as pref, i (getPrefixKey(pref, i))}
+													<Table.Row>
+														<Table.Cell class="font-mono text-xs font-medium">
+															{formatPrefixLabel(pref)}
+														</Table.Cell>
+														<Table.Cell>
+															<Switch
+																checked={pref.autonomous ?? true}
+																onCheckedChange={(c) => (pref.autonomous = c)}
+															/>
+														</Table.Cell>
+														<Table.Cell>
+															<Switch
+																checked={pref.on_link ?? true}
+																onCheckedChange={(c) => (pref.on_link = c)}
+															/>
+														</Table.Cell>
+														<Table.Cell class="text-right">
+															<Button
+																variant="ghost"
+																size="icon"
+																class="size-8 text-destructive hover:text-destructive"
+																onclick={() => removePrefix(i)}
+															>
+																<Trash2Icon class="size-4" />
+															</Button>
+														</Table.Cell>
+													</Table.Row>
+												{/each}
+											{/if}
+										</Table.Body>
+									</Table.Root>
+								</div>
+							</Card.Content>
+						</Card.Root>
+					</div>
+
+					<!-- Right Column: Timers & DNS -->
+					<div class="lg:col-span-5 flex flex-col gap-6">
+						<!-- Timing & Intervals -->
+						<Card.Root>
+							<Card.Header class="pb-3">
+								<Card.Title class="text-base">Timing & Intervals</Card.Title>
+								<Card.Description>
+									Broadcast cadence, router lifetime, and interface parameters.
+								</Card.Description>
+							</Card.Header>
+							<Card.Content class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+								<div class="flex flex-col gap-1.5">
+									<Label for="ra-max-interval" class="text-xs font-medium">Max Adv Interval (s)</Label>
 									<Input
-										id="ra-iface"
-										bind:value={formIface}
-										placeholder="end0"
+										id="ra-max-interval"
+										type="number"
+										min="4"
+										max="1800"
+										bind:value={formMaxInterval}
 										class="h-9 font-mono text-xs"
 									/>
-								{/if}
-								<p class="text-[11px] text-muted-foreground">LAN interface to bind raw ICMPv6 socket to.</p>
-							</div>
-
-
-							<div class="flex flex-col gap-1.5">
-								<Label class="text-xs font-medium">Router Priority (RFC 4191)</Label>
-								<Select.Root
-									type="single"
-									value={formPriority}
-									onValueChange={(val) => (formPriority = (val as RouterPriority) ?? "medium")}
-								>
-									<Select.Trigger class="h-9 text-xs capitalize">
-										{formPriority}
-									</Select.Trigger>
-									<Select.Content>
-										<Select.Item value="high" class="text-xs">High (Preferred Default Router)</Select.Item>
-										<Select.Item value="medium" class="text-xs">Medium (Default)</Select.Item>
-										<Select.Item value="low" class="text-xs">Low (Secondary / Backup)</Select.Item>
-									</Select.Content>
-								</Select.Root>
-								<p class="text-[11px] text-muted-foreground">Influences client default router preference.</p>
-							</div>
-						</div>
-
-						<Separator />
-
-						<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-							<div class="flex items-start justify-between gap-4">
-								<div class="flex flex-col gap-0.5">
-									<Label class="text-sm font-medium">Managed Flag (M-Flag)</Label>
-									<p class="text-xs text-muted-foreground">
-										Instructs hosts to use stateful DHCPv6 for IP addresses instead of SLAAC.
-									</p>
+									<p class="text-[10px] text-muted-foreground">Default 200s.</p>
 								</div>
-								<Switch bind:checked={formManaged} />
-							</div>
 
-							<div class="flex items-start justify-between gap-4">
-								<div class="flex flex-col gap-0.5">
-									<Label class="text-sm font-medium">Other Config Flag (O-Flag)</Label>
-									<p class="text-xs text-muted-foreground">
-										Instructs hosts to query DHCPv6 for non-address parameters (DNS, NTP, domain search).
-									</p>
+								<div class="flex flex-col gap-1.5">
+									<Label for="ra-min-interval" class="text-xs font-medium">Min Adv Interval (s)</Label>
+									<Input
+										id="ra-min-interval"
+										type="number"
+										min="3"
+										placeholder="Auto (~66s)"
+										value={formMinInterval ?? ""}
+										oninput={(e) => {
+											const val = e.currentTarget.value;
+											formMinInterval = val ? Number(val) : null;
+										}}
+										class="h-9 font-mono text-xs"
+									/>
+									<p class="text-[10px] text-muted-foreground">1/3 of max interval.</p>
 								</div>
-								<Switch bind:checked={formOtherConfig} />
-							</div>
-						</div>
-					</Card.Content>
-				</Card.Root>
 
-				<!-- Timing & Lifetime Parameters -->
-				<Card.Root>
-					<Card.Header>
-						<Card.Title class="text-base">Timing & Intervals (RFC 4861 §6.2.1)</Card.Title>
-						<Card.Description>
-							Broadcast intervals, client default gateway lifetime, and neighbor discovery timers.
-						</Card.Description>
-					</Card.Header>
-					<Card.Content class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-						<div class="flex flex-col gap-1.5">
-							<Label for="ra-max-interval" class="text-xs font-medium">Max Adv Interval (s)</Label>
-							<Input
-								id="ra-max-interval"
-								type="number"
-								min="4"
-								max="1800"
-								bind:value={formMaxInterval}
-								class="h-9 font-mono text-xs"
-							/>
-							<p class="text-[11px] text-muted-foreground">Maximum time between periodic RAs (default 200s).</p>
-						</div>
-
-						<div class="flex flex-col gap-1.5">
-							<Label for="ra-min-interval" class="text-xs font-medium">Min Adv Interval (s)</Label>
-							<Input
-								id="ra-min-interval"
-								type="number"
-								min="3"
-								placeholder="Automatic (1/3 of max)"
-								value={formMinInterval ?? ""}
-								oninput={(e) => {
-									const val = e.currentTarget.value;
-									formMinInterval = val ? Number(val) : null;
-								}}
-								class="h-9 font-mono text-xs"
-							/>
-							<p class="text-[11px] text-muted-foreground">Leave empty for automatic RFC 4861 ratio.</p>
-						</div>
-
-						<div class="flex flex-col gap-1.5">
-							<Label for="ra-lifetime" class="text-xs font-medium">Router Lifetime (s)</Label>
-							<Input
-								id="ra-lifetime"
-								type="number"
-								min="0"
-								max="9000"
-								placeholder="Automatic (3x max)"
-								value={formLifetime ?? ""}
-								oninput={(e) => {
-									const val = e.currentTarget.value;
-									formLifetime = val ? Number(val) : null;
-								}}
-								class="h-9 font-mono text-xs"
-							/>
-							<p class="text-[11px] text-muted-foreground">0 = do not use as default router.</p>
-						</div>
-
-						<div class="flex flex-col gap-1.5">
-							<Label for="ra-hop-limit" class="text-xs font-medium">Suggested Hop Limit</Label>
-							<Input
-								id="ra-hop-limit"
-								type="number"
-								min="0"
-								max="255"
-								bind:value={formHopLimit}
-								class="h-9 font-mono text-xs"
-							/>
-							<p class="text-[11px] text-muted-foreground">Default is 64. 0 = unspecified.</p>
-						</div>
-
-						<div class="flex flex-col gap-1.5">
-							<Label for="ra-mtu" class="text-xs font-medium">Advertised MTU</Label>
-							<Input
-								id="ra-mtu"
-								type="number"
-								min="1280"
-								max="9000"
-								placeholder="Automatic"
-								value={formMtu ?? ""}
-								oninput={(e) => {
-									const val = e.currentTarget.value;
-									formMtu = val ? Number(val) : null;
-								}}
-								class="h-9 font-mono text-xs"
-							/>
-							<p class="text-[11px] text-muted-foreground">Useful for 1492 over PPPoE.</p>
-						</div>
-
-						<div class="flex flex-col gap-1.5">
-							<Label for="ra-reachable" class="text-xs font-medium">Reachable Time (ms)</Label>
-							<Input
-								id="ra-reachable"
-								type="number"
-								min="0"
-								bind:value={formReachableTime}
-								class="h-9 font-mono text-xs"
-							/>
-							<p class="text-[11px] text-muted-foreground">0 = unspecified by this router.</p>
-						</div>
-					</Card.Content>
-				</Card.Root>
-
-				<!-- Prefix Information Options (PIO) Manager -->
-				<Card.Root>
-					<Card.Header>
-						<Card.Title class="text-base">Prefix Information Options (PIO)</Card.Title>
-						<Card.Description>
-							Announced IPv6 prefixes. Use <span class="font-mono text-foreground font-semibold">dynamic_gua</span> for WAN DHCPv6-PD delegated prefix, and <span class="font-mono text-foreground font-semibold">dynamic_ula</span> for stable internal addresses.
-						</Card.Description>
-					</Card.Header>
-					<Card.Content class="flex flex-col gap-4">
-						<div class="flex flex-col sm:flex-row items-end gap-3 p-3 rounded-lg border bg-muted/40">
-							<div class="flex-1 flex flex-col gap-1.5 w-full">
-								<Label for="new-prefix" class="text-xs font-medium">Add Prefix</Label>
-								<Input
-									id="new-prefix"
-									bind:value={newPrefixStr}
-									placeholder="dynamic_gua or 2001:db8:1::/64"
-									class="h-9 font-mono text-xs"
-								/>
-							</div>
-
-							<div class="flex items-center gap-4">
-								<div class="flex items-center gap-2">
-									<Switch id="auto-slaac" bind:checked={newPrefixAutonomous} />
-									<Label for="auto-slaac" class="text-xs">SLAAC (A)</Label>
+								<div class="flex flex-col gap-1.5">
+									<Label for="ra-lifetime" class="text-xs font-medium">Router Lifetime (s)</Label>
+									<Input
+										id="ra-lifetime"
+										type="number"
+										min="0"
+										max="9000"
+										placeholder="Auto (3x max)"
+										value={formLifetime ?? ""}
+										oninput={(e) => {
+											const val = e.currentTarget.value;
+											formLifetime = val ? Number(val) : null;
+										}}
+										class="h-9 font-mono text-xs"
+									/>
+									<p class="text-[10px] text-muted-foreground">0 = non-default router.</p>
 								</div>
-								<div class="flex items-center gap-2">
-									<Switch id="on-link" bind:checked={newPrefixOnLink} />
-									<Label for="on-link" class="text-xs">On-link (L)</Label>
+
+								<div class="flex flex-col gap-1.5">
+									<Label for="ra-hop-limit" class="text-xs font-medium">Suggested Hop Limit</Label>
+									<Input
+										id="ra-hop-limit"
+										type="number"
+										min="0"
+										max="255"
+										bind:value={formHopLimit}
+										class="h-9 font-mono text-xs"
+									/>
+									<p class="text-[10px] text-muted-foreground">Default 64.</p>
 								</div>
-							</div>
 
-							<Button size="sm" variant="secondary" onclick={addPrefix} class="h-9">
-								<PlusIcon class="size-4" data-icon="inline-start" />
-								Add
-							</Button>
-						</div>
+								<div class="flex flex-col gap-1.5">
+									<Label for="ra-mtu" class="text-xs font-medium">Advertised MTU</Label>
+									<Input
+										id="ra-mtu"
+										type="number"
+										min="1280"
+										max="9000"
+										placeholder="Interface MTU"
+										value={formMtu ?? ""}
+										oninput={(e) => {
+											const val = e.currentTarget.value;
+											formMtu = val ? Number(val) : null;
+										}}
+										class="h-9 font-mono text-xs"
+									/>
+									<p class="text-[10px] text-muted-foreground">E.g. 1492 for PPPoE.</p>
+								</div>
 
-						<div class="rounded-md border overflow-hidden">
-							<Table.Root>
-								<Table.Header>
-									<Table.Row>
-										<Table.Head>Prefix</Table.Head>
-										<Table.Head>SLAAC (A-flag)</Table.Head>
-										<Table.Head>On-Link (L-flag)</Table.Head>
-										<Table.Head class="text-right">Actions</Table.Head>
-									</Table.Row>
-								</Table.Header>
-								<Table.Body>
-									{#if formPrefixes.length === 0}
-										<Table.Row>
-											<Table.Cell colspan={4} class="text-center text-xs text-muted-foreground py-6">
-												No prefixes defined. RA daemon will stay idle.
-											</Table.Cell>
-										</Table.Row>
+								<div class="flex flex-col gap-1.5">
+									<Label for="ra-reachable" class="text-xs font-medium">Reachable Time (ms)</Label>
+									<Input
+										id="ra-reachable"
+										type="number"
+										min="0"
+										bind:value={formReachableTime}
+										class="h-9 font-mono text-xs"
+									/>
+									<p class="text-[10px] text-muted-foreground">0 = unspecified.</p>
+								</div>
+							</Card.Content>
+						</Card.Root>
+
+						<!-- DNS Servers (RDNSS) -->
+						<Card.Root>
+							<Card.Header class="pb-3">
+								<Card.Title class="text-base">Recursive DNS (RDNSS)</Card.Title>
+								<Card.Description>
+									IPv6 DNS nameservers advertised directly via RA.
+								</Card.Description>
+							</Card.Header>
+							<Card.Content class="flex flex-col gap-3">
+								<div class="flex gap-2">
+									<Input
+										bind:value={newRdnssAddr}
+										placeholder="2001:4860:4860::8888 or fe80::1"
+										class="h-9 font-mono text-xs"
+										onkeydown={(e) => e.key === "Enter" && addRdnss()}
+									/>
+									<Button size="sm" variant="secondary" onclick={addRdnss} class="h-9">
+										<PlusIcon class="size-4" data-icon="inline-start" />
+										Add
+									</Button>
+								</div>
+
+								<div class="flex flex-wrap gap-1.5 pt-1">
+									{#if formRdnss.length === 0}
+										<span class="text-xs text-muted-foreground italic">No specific servers added.</span>
 									{:else}
-										{#each formPrefixes as pref, i (getPrefixKey(pref, i))}
-											<Table.Row>
-												<Table.Cell class="font-mono text-xs font-medium">
-													{formatPrefixLabel(pref)}
-												</Table.Cell>
-												<Table.Cell>
-													<Switch
-														checked={pref.autonomous ?? true}
-														onCheckedChange={(c) => (pref.autonomous = c)}
-													/>
-												</Table.Cell>
-												<Table.Cell>
-													<Switch
-														checked={pref.on_link ?? true}
-														onCheckedChange={(c) => (pref.on_link = c)}
-													/>
-												</Table.Cell>
-												<Table.Cell class="text-right">
-													<Button
-														variant="ghost"
-														size="icon"
-														class="size-8 text-destructive hover:text-destructive"
-														onclick={() => removePrefix(i)}
-													>
-														<Trash2Icon class="size-4" />
-													</Button>
-												</Table.Cell>
-											</Table.Row>
+										{#each formRdnss as addr, i (`form-rdnss-${i}-${addr}`)}
+											<Badge variant="secondary" class="font-mono text-xs flex items-center gap-1.5 py-1">
+												<span>{addr}</span>
+												<button
+													type="button"
+													class="text-muted-foreground hover:text-destructive transition-colors ml-1"
+													onclick={() => removeRdnss(i)}
+												>
+													&times;
+												</button>
+											</Badge>
 										{/each}
 									{/if}
-								</Table.Body>
-							</Table.Root>
-						</div>
-					</Card.Content>
-				</Card.Root>
+								</div>
+							</Card.Content>
+						</Card.Root>
 
-				<!-- RDNSS and DNSSL Config -->
-				<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-					<!-- RDNSS Input -->
-					<Card.Root>
-						<Card.Header>
-							<Card.Title class="text-base">Recursive DNS Servers (RDNSS)</Card.Title>
-							<Card.Description>
-								IPv6 addresses of recursive DNS nameservers advertised directly via RA.
-							</Card.Description>
-						</Card.Header>
-						<Card.Content class="flex flex-col gap-3">
-							<div class="flex gap-2">
-								<Input
-									bind:value={newRdnssAddr}
-									placeholder="2001:4860:4860::8888 or fe80::1"
-									class="h-9 font-mono text-xs"
-									onkeydown={(e) => e.key === "Enter" && addRdnss()}
-								/>
-								<Button size="sm" variant="secondary" onclick={addRdnss} class="h-9">
-									<PlusIcon class="size-4" data-icon="inline-start" />
-									Add
-								</Button>
-							</div>
+						<!-- Domain Search List (DNSSL) -->
+						<Card.Root>
+							<Card.Header class="pb-3">
+								<Card.Title class="text-base">Domain Search List (DNSSL)</Card.Title>
+								<Card.Description>
+									DNS search suffix domains distributed to IPv6 clients.
+								</Card.Description>
+							</Card.Header>
+							<Card.Content class="flex flex-col gap-3">
+								<div class="flex gap-2">
+									<Input
+										bind:value={newDnsslDomain}
+										placeholder="lan or home.arpa"
+										class="h-9 font-mono text-xs"
+										onkeydown={(e) => e.key === "Enter" && addDnssl()}
+									/>
+									<Button size="sm" variant="secondary" onclick={addDnssl} class="h-9">
+										<PlusIcon class="size-4" data-icon="inline-start" />
+										Add
+									</Button>
+								</div>
 
-							<div class="flex flex-wrap gap-2 pt-2">
-								{#if formRdnss.length === 0}
-									<span class="text-xs text-muted-foreground italic">No specific RDNSS servers added.</span>
-								{:else}
-									{#each formRdnss as addr, i (`form-rdnss-${i}-${addr}`)}
-										<Badge variant="secondary" class="font-mono text-xs flex items-center gap-1.5 py-1">
-											<span>{addr}</span>
-											<button
-												type="button"
-												class="text-muted-foreground hover:text-destructive transition-colors ml-1"
-												onclick={() => removeRdnss(i)}
-											>
-												&times;
-											</button>
-										</Badge>
-									{/each}
-								{/if}
-							</div>
-						</Card.Content>
-					</Card.Root>
-
-					<!-- DNSSL Input -->
-					<Card.Root>
-						<Card.Header>
-							<Card.Title class="text-base">Domain Search List (DNSSL)</Card.Title>
-							<Card.Description>
-								DNS search suffix domains distributed to IPv6 clients.
-							</Card.Description>
-						</Card.Header>
-						<Card.Content class="flex flex-col gap-3">
-							<div class="flex gap-2">
-								<Input
-									bind:value={newDnsslDomain}
-									placeholder="lan or home.arpa"
-									class="h-9 font-mono text-xs"
-									onkeydown={(e) => e.key === "Enter" && addDnssl()}
-								/>
-								<Button size="sm" variant="secondary" onclick={addDnssl} class="h-9">
-									<PlusIcon class="size-4" data-icon="inline-start" />
-									Add
-								</Button>
-							</div>
-
-							<div class="flex flex-wrap gap-2 pt-2">
-								{#if formDnssl.length === 0}
-									<span class="text-xs text-muted-foreground italic">No search domains added.</span>
-								{:else}
-									{#each formDnssl as dom, i (`form-dnssl-${i}-${dom}`)}
-										<Badge variant="outline" class="text-xs flex items-center gap-1.5 py-1">
-											<span>{dom}</span>
-											<button
-												type="button"
-												class="text-muted-foreground hover:text-destructive transition-colors ml-1"
-												onclick={() => removeDnssl(i)}
-											>
-												&times;
-											</button>
-										</Badge>
-									{/each}
-								{/if}
-							</div>
-						</Card.Content>
-					</Card.Root>
+								<div class="flex flex-wrap gap-1.5 pt-1">
+									{#if formDnssl.length === 0}
+										<span class="text-xs text-muted-foreground italic">No search domains added.</span>
+									{:else}
+										{#each formDnssl as dom, i (`form-dnssl-${i}-${dom}`)}
+											<Badge variant="outline" class="text-xs flex items-center gap-1.5 py-1">
+												<span>{dom}</span>
+												<button
+													type="button"
+													class="text-muted-foreground hover:text-destructive transition-colors ml-1"
+													onclick={() => removeDnssl(i)}
+												>
+													&times;
+												</button>
+											</Badge>
+										{/each}
+									{/if}
+								</div>
+							</Card.Content>
+						</Card.Root>
+					</div>
 				</div>
 
 				<!-- Save Action Bar -->
-				<div class="flex items-center justify-end gap-3 pt-2">
-					<Button
-						variant="outline"
-						onclick={handleDiscard}
-						disabled={saving}
-					>
-						<RotateCcwIcon data-icon="inline-start" />
-						Discard Changes
-					</Button>
+				<div class="flex items-center justify-between p-4 rounded-xl border bg-card/60 gap-4 mt-2">
+					<div class="flex items-center gap-2">
+						{#if isDirty}
+							<span class="size-2 rounded-full bg-amber-500 animate-pulse"></span>
+							<span class="text-xs font-medium text-amber-600 dark:text-amber-400">Unsaved configuration changes detected</span>
+						{:else}
+							<span class="size-2 rounded-full bg-emerald-500"></span>
+							<span class="text-xs text-muted-foreground">Configuration is synchronized with active daemon</span>
+						{/if}
+					</div>
 
-					<Button
-						variant="default"
-						onclick={handleSaveConfig}
-						disabled={saving}
-					>
-						<SaveIcon class={saving ? "animate-spin" : ""} data-icon="inline-start" />
-						{saving ? "Applying..." : "Save Configuration"}
-					</Button>
+					<div class="flex items-center gap-2">
+						{#if isDirty}
+							<Button
+								variant="outline"
+								size="sm"
+								onclick={handleDiscard}
+								disabled={saving}
+							>
+								<RotateCcwIcon data-icon="inline-start" />
+								Discard Changes
+							</Button>
+						{/if}
+
+						<Button
+							variant={isDirty ? "default" : "secondary"}
+							size="sm"
+							onclick={handleSaveConfig}
+							disabled={!isDirty || saving}
+						>
+							<SaveIcon class={saving ? "animate-spin" : ""} data-icon="inline-start" />
+							{saving ? "Applying..." : "Save Configuration"}
+						</Button>
+					</div>
 				</div>
 			</Tabs.Content>
 		</Tabs.Root>

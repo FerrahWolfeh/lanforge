@@ -47,6 +47,8 @@
 	import EyeOffIcon from "@lucide/svelte/icons/eye-off";
 	import ArrowRightLeftIcon from "@lucide/svelte/icons/arrow-right-left";
 	import RadioIcon from "@lucide/svelte/icons/radio";
+	import SaveIcon from "@lucide/svelte/icons/save";
+	import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
 
 	// Page state
 	let status = $state<PppoeStatusResponse | null>(null);
@@ -117,6 +119,66 @@
 		}
 	}
 
+	// Dirty tracking
+	let isDirty = $derived.by(() => {
+		if (!config) return false;
+		if (formEnabled !== config.enabled) return true;
+		if (formDataplane !== (config.dataplane ?? "kernel")) return true;
+		const defaultWan = availableInterfaces[0]?.name || "eth1";
+		if (formWanIface !== (config.wan_iface || defaultWan)) return true;
+		if (formUsername !== config.username) return true;
+		if (formPassword !== config.password) return true;
+
+		const cfgAuth = String(config.auth || "chap_md5").toLowerCase();
+		const normCfgAuth = (cfgAuth === "chapmd5" ? "chap_md5" : cfgAuth);
+		if (formAuth !== normCfgAuth) return true;
+
+		if (formServiceName !== (config.service_name ?? "")) return true;
+		if (formAcName !== (config.ac_name ?? "")) return true;
+		if (Number(formMru) !== config.mru) return true;
+		if (Number(formEchoInterval) !== config.lcp_echo_interval_secs) return true;
+		if (Number(formEchoMaxFailures) !== config.lcp_echo_max_failures) return true;
+		if (Number(formReconnectDelay) !== config.reconnect_delay_secs) return true;
+		if (formSendPadt !== config.send_padt_on_shutdown) return true;
+		if (Number(formPadiRetries) !== config.discovery_padi_retries) return true;
+		if (Number(formPadiTimeout) !== config.discovery_padi_timeout_secs) return true;
+
+		if (formNftEnabled !== (config.nftables?.enabled ?? true)) return true;
+		if (formNftFlowOffload !== (config.nftables?.flow_offload ?? true)) return true;
+		if (formNftMssClamping !== (config.nftables?.mss_clamping ?? true)) return true;
+		if (formNftBypassDns !== (config.nftables?.bypass_dns ?? true)) return true;
+		if (formNftBypassVowifi !== (config.nftables?.bypass_vowifi ?? true)) return true;
+		if (formNftMasquerade !== (config.nftables?.masquerade ?? true)) return true;
+
+		return false;
+	});
+
+	function syncFormFromConfig(c: PppoeConfig) {
+		formEnabled = c.enabled;
+		formDataplane = c.dataplane ?? "kernel";
+		formWanIface = c.wan_iface || (availableInterfaces[0]?.name || "eth1");
+		formUsername = c.username;
+		formPassword = c.password;
+		const rawAuth = String(c.auth || "chap_md5").toLowerCase();
+		formAuth = (rawAuth === "chapmd5" ? "chap_md5" : rawAuth) as PppoeAuthMethod;
+		formServiceName = c.service_name ?? "";
+		formAcName = c.ac_name ?? "";
+		formMru = c.mru;
+		formEchoInterval = c.lcp_echo_interval_secs;
+		formEchoMaxFailures = c.lcp_echo_max_failures;
+		formReconnectDelay = c.reconnect_delay_secs;
+		formSendPadt = c.send_padt_on_shutdown;
+		formPadiRetries = c.discovery_padi_retries;
+		formPadiTimeout = c.discovery_padi_timeout_secs;
+
+		formNftEnabled = c.nftables?.enabled ?? true;
+		formNftFlowOffload = c.nftables?.flow_offload ?? true;
+		formNftMssClamping = c.nftables?.mss_clamping ?? true;
+		formNftBypassDns = c.nftables?.bypass_dns ?? true;
+		formNftBypassVowifi = c.nftables?.bypass_vowifi ?? true;
+		formNftMasquerade = c.nftables?.masquerade ?? true;
+	}
+
 	async function loadAll() {
 		loading = true;
 		try {
@@ -133,29 +195,7 @@
 			}
 
 			if (c) {
-				formEnabled = c.enabled;
-				formDataplane = c.dataplane ?? "kernel";
-				formWanIface = c.wan_iface || (availableInterfaces[0]?.name || "eth1");
-				formUsername = c.username;
-				formPassword = c.password;
-				const rawAuth = String(c.auth || "chap_md5").toLowerCase();
-				formAuth = (rawAuth === "chapmd5" ? "chap_md5" : rawAuth) as PppoeAuthMethod;
-				formServiceName = c.service_name ?? "";
-				formAcName = c.ac_name ?? "";
-				formMru = c.mru;
-				formEchoInterval = c.lcp_echo_interval_secs;
-				formEchoMaxFailures = c.lcp_echo_max_failures;
-				formReconnectDelay = c.reconnect_delay_secs;
-				formSendPadt = c.send_padt_on_shutdown;
-				formPadiRetries = c.discovery_padi_retries;
-				formPadiTimeout = c.discovery_padi_timeout_secs;
-
-				formNftEnabled = c.nftables?.enabled ?? true;
-				formNftFlowOffload = c.nftables?.flow_offload ?? true;
-				formNftMssClamping = c.nftables?.mss_clamping ?? true;
-				formNftBypassDns = c.nftables?.bypass_dns ?? true;
-				formNftBypassVowifi = c.nftables?.bypass_vowifi ?? true;
-				formNftMasquerade = c.nftables?.masquerade ?? true;
+				syncFormFromConfig(c);
 			}
 		} catch {
 			toast.error("Failed to load PPPoE configuration");
@@ -164,7 +204,15 @@
 		}
 	}
 
+	function handleDiscard() {
+		if (config) {
+			syncFormFromConfig(config);
+			toast.info("Changes reverted to active configuration");
+		}
+	}
+
 	async function handleSave() {
+		if (!isDirty) return;
 		saving = true;
 		try {
 			const payload: PppoeConfig = {
@@ -255,9 +303,9 @@
 	onMount(loadAll);
 </script>
 
-<div class="container mx-auto flex flex-col gap-6 p-4 md:p-8">
+<div class="flex flex-col gap-6 w-full">
 	<!-- Page Header -->
-	<div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+	<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
 		<div class="flex items-center gap-3">
 			<div class="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
 				<PlugZapIcon class="size-6" />
@@ -295,15 +343,15 @@
 		</div>
 	</div>
 
-	<!-- Status Overview Grid -->
+	<!-- Status Overview Grid (Responsive 3-Column Layout) -->
 	{#if loading && !status}
-		<div class="grid gap-4 md:grid-cols-3">
-			<Skeleton class="h-32 rounded-xl" />
-			<Skeleton class="h-32 rounded-xl" />
-			<Skeleton class="h-32 rounded-xl" />
+		<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+			<Skeleton class="h-28 rounded-xl" />
+			<Skeleton class="h-28 rounded-xl" />
+			<Skeleton class="h-28 rounded-xl" />
 		</div>
 	{:else}
-		<div class="grid gap-4 md:grid-cols-3">
+		<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 			<!-- Session State Card -->
 			<Card.Root class="relative overflow-hidden">
 				<Card.Header class="pb-2">
@@ -317,7 +365,7 @@
 							<span class="flex size-2 rounded-full bg-destructive/60"></span>
 						{/if}
 					</Card.Description>
-					<Card.Title class="flex items-center gap-2 text-xl font-bold">
+					<Card.Title class="flex items-center gap-2 text-lg font-bold">
 						{#if status?.state === "connected"}
 							<CheckCircleIcon class="size-5 text-emerald-500" />
 							<span class="capitalize text-emerald-600 dark:text-emerald-400">Connected</span>
@@ -333,7 +381,7 @@
 						{/if}
 					</Card.Title>
 				</Card.Header>
-				<Card.Content class="text-xs text-muted-foreground flex flex-col gap-1.5">
+				<Card.Content class="text-xs text-muted-foreground flex flex-col gap-1">
 					<div class="flex justify-between">
 						<span>Virtual / WAN Iface:</span>
 						<span class="font-mono text-foreground font-semibold">
@@ -366,15 +414,15 @@
 						<span>Assigned IP Lease</span>
 						<GlobeIcon class="size-4 text-muted-foreground" />
 					</Card.Description>
-					<Card.Title class="flex items-center gap-2 text-xl font-bold font-mono">
+					<Card.Title class="flex items-center gap-2 text-lg font-bold font-mono">
 						{#if status?.local_ip}
 							<span class="text-foreground">{status.local_ip}</span>
 						{:else}
-							<span class="text-muted-foreground text-base font-normal">Waiting for IPCP...</span>
+							<span class="text-muted-foreground text-sm font-normal">Waiting for IPCP...</span>
 						{/if}
 					</Card.Title>
 				</Card.Header>
-				<Card.Content class="text-xs text-muted-foreground flex flex-col gap-1.5">
+				<Card.Content class="text-xs text-muted-foreground flex flex-col gap-1">
 					<div class="flex justify-between">
 						<span>Gateway (Peer IP):</span>
 						<span class="font-mono text-foreground font-semibold">{status?.peer_ip ?? "—"}</span>
@@ -397,24 +445,24 @@
 						<span>Access Concentrator</span>
 						<ServerIcon class="size-4 text-muted-foreground" />
 					</Card.Description>
-					<Card.Title class="truncate text-lg font-bold text-foreground" title={status?.ac_name ?? "None"}>
+					<Card.Title class="truncate text-base font-bold text-foreground" title={status?.ac_name ?? "None"}>
 						{status?.ac_name || (status?.state === "connected" ? "ISP Concentrator" : "Searching...")}
 					</Card.Title>
 				</Card.Header>
-				<Card.Content class="text-xs text-muted-foreground flex flex-col gap-1.5">
+				<Card.Content class="text-xs text-muted-foreground flex flex-col gap-1">
 					<div class="flex justify-between">
 						<span>AC MAC Address:</span>
 						<span class="font-mono text-foreground font-semibold">{status?.ac_mac ?? "—"}</span>
 					</div>
 					<div class="flex justify-between">
 						<span>ISP DNS Fallback:</span>
-						<span class="font-mono text-foreground truncate max-w-[160px]" title={status?.dns_servers?.join(", ")}>
+						<span class="font-mono text-foreground truncate max-w-[140px]" title={status?.dns_servers?.join(", ")}>
 							{status?.dns_servers?.length ? status.dns_servers.join(", ") : "None"}
 						</span>
 					</div>
 					<div class="flex justify-between items-center">
 						<span>Auth Method:</span>
-						<Badge variant="outline" class="font-medium text-[11px]">
+						<Badge variant="outline" class="font-medium text-[10px]">
 							{formatAuthMethod(status?.auth ?? config?.auth ?? formAuth)}
 						</Badge>
 					</div>
@@ -425,20 +473,16 @@
 
 	<!-- Data Plane Mode Selector -->
 	<Card.Root class="border-primary/20 bg-muted/20">
-		<Card.Header>
-			<div class="flex items-center justify-between">
-				<div class="flex flex-col gap-1">
-					<Card.Title class="text-lg font-bold flex items-center gap-2">
-						<ZapIcon class="size-5 text-primary" />
-						Data Plane Architecture Selection
-					</Card.Title>
-					<Card.Description>
-						Choose how PPPoE packets are processed and routed through the network subsystem.
-					</Card.Description>
-				</div>
-			</div>
+		<Card.Header class="pb-3">
+			<Card.Title class="text-base font-bold flex items-center gap-2">
+				<ZapIcon class="size-5 text-primary" />
+				Data Plane Architecture Selection
+			</Card.Title>
+			<Card.Description>
+				Choose how PPPoE packets are processed and routed through the network subsystem.
+			</Card.Description>
 		</Card.Header>
-		<Card.Content class="flex flex-col gap-4">
+		<Card.Content>
 			<div class="grid gap-4 md:grid-cols-2">
 				<!-- Linux Kernel Mode Option -->
 				<div
@@ -449,7 +493,7 @@
 					onkeydown={(e) => e.key === 'Enter' && (formDataplane = 'kernel')}
 				>
 					<div class="flex items-center justify-between">
-						<div class="flex items-center gap-2 font-semibold">
+						<div class="flex items-center gap-2 font-semibold text-sm">
 							<CpuIcon class="size-4 text-blue-500" />
 							<span>Standard Linux Kernel</span>
 						</div>
@@ -477,7 +521,7 @@
 					onkeydown={(e) => e.key === 'Enter' && handleDataplaneSelect('ebpf')}
 				>
 					<div class="flex items-center justify-between">
-						<div class="flex items-center gap-2 font-semibold text-amber-600 dark:text-amber-400">
+						<div class="flex items-center gap-2 font-semibold text-sm text-amber-600 dark:text-amber-400">
 							<ZapIcon class="size-4 text-amber-500" />
 							<span>eBPF Fast-Path (Generic XDP + TC)</span>
 						</div>
@@ -507,7 +551,7 @@
 					<AlertTriangleIcon class="size-5" />
 					Experimental eBPF Architecture
 				</AlertDialog.Title>
-				<AlertDialog.Description class="flex flex-col gap-2 text-left pt-2">
+				<AlertDialog.Description class="flex flex-col gap-2 text-left pt-2 text-xs">
 					<p>
 						eBPF Fast-Path bypasses standard Linux networking stack using TC filters and Generic XDP.
 					</p>
@@ -534,10 +578,13 @@
 
 	<!-- Detailed Configuration Tabs -->
 	<Tabs.Root value="credentials" class="flex flex-col gap-4">
-		<Tabs.List class="grid w-full grid-cols-3 md:w-[480px]">
+		<Tabs.List class="grid w-full grid-cols-3 sm:w-[480px]">
 			<Tabs.Trigger value="credentials" class="flex items-center gap-2">
 				<KeyIcon class="size-4" />
 				<span>Credentials</span>
+				{#if isDirty}
+					<span class="size-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+				{/if}
 			</Tabs.Trigger>
 			<Tabs.Trigger value="link" class="flex items-center gap-2">
 				<SlidersIcon class="size-4" />
@@ -552,17 +599,17 @@
 		<!-- Tab 1: Credentials & Interface -->
 		<Tabs.Content value="credentials">
 			<Card.Root>
-				<Card.Header>
-					<Card.Title>ISP Authentication & Uplink Interface</Card.Title>
+				<Card.Header class="pb-3">
+					<Card.Title class="text-base">ISP Authentication & Uplink Interface</Card.Title>
 					<Card.Description>
 						Configure the physical Ethernet port, subscriber credentials, and authentication protocol.
 					</Card.Description>
 				</Card.Header>
-				<Card.Content class="flex flex-col gap-6">
+				<Card.Content class="flex flex-col gap-5">
 					<!-- Service Enable Switch -->
 					<div class="flex items-center justify-between rounded-xl border p-4">
 						<div class="flex flex-col gap-0.5">
-							<Label class="text-base font-semibold">Enable PPPoE Service</Label>
+							<Label class="text-sm font-semibold">Enable PPPoE Service</Label>
 							<p class="text-xs text-muted-foreground">
 								When enabled, Lanforge automatically discovers the Access Concentrator and maintains the session.
 							</p>
@@ -570,9 +617,9 @@
 						<Switch bind:checked={formEnabled} />
 					</div>
 
-					<div class="grid gap-4 md:grid-cols-2">
+					<div class="grid gap-4 sm:grid-cols-2">
 						<!-- WAN Physical Interface Select -->
-						<div class="flex flex-col gap-2">
+						<div class="flex flex-col gap-1.5">
 							<Label class="text-xs font-medium">Physical WAN Interface</Label>
 							{#if interfaceOptions.length > 0}
 								<Select.Root
@@ -619,12 +666,12 @@
 								/>
 							{/if}
 							<p class="text-[11px] text-muted-foreground">
-								The physical port connected to your fiber ONT, modem, or upstream switch.
+								Port connected to your fiber ONT, modem, or upstream switch.
 							</p>
 						</div>
 
 						<!-- Authentication Protocol Select -->
-						<div class="flex flex-col gap-2">
+						<div class="flex flex-col gap-1.5">
 							<Label class="text-xs font-medium">Authentication Protocol</Label>
 							<Select.Root
 								type="single"
@@ -647,7 +694,7 @@
 							</p>
 						</div>
 
-						<div class="flex flex-col gap-2">
+						<div class="flex flex-col gap-1.5">
 							<Label for="username" class="text-xs font-medium">PPPoE Username</Label>
 							<Input
 								id="username"
@@ -657,7 +704,7 @@
 							/>
 						</div>
 
-						<div class="flex flex-col gap-2">
+						<div class="flex flex-col gap-1.5">
 							<Label for="password" class="text-xs font-medium">PPPoE Password</Label>
 							<div class="relative">
 								<Input
@@ -681,7 +728,7 @@
 							</div>
 						</div>
 
-						<div class="flex flex-col gap-2">
+						<div class="flex flex-col gap-1.5">
 							<Label for="service_name" class="text-xs font-medium">Service Name (Optional)</Label>
 							<Input
 								id="service_name"
@@ -691,7 +738,7 @@
 							/>
 						</div>
 
-						<div class="flex flex-col gap-2">
+						<div class="flex flex-col gap-1.5">
 							<Label for="ac_name" class="text-xs font-medium">Access Concentrator Name (Optional)</Label>
 							<Input
 								id="ac_name"
@@ -708,16 +755,16 @@
 		<!-- Tab 2: Link & Timers -->
 		<Tabs.Content value="link">
 			<Card.Root>
-				<Card.Header>
-					<Card.Title>Link Parameters, MTU & Keepalive Timers</Card.Title>
+				<Card.Header class="pb-3">
+					<Card.Title class="text-base">Link Parameters, MTU & Keepalive Timers</Card.Title>
 					<Card.Description>
 						Fine-tune packet sizing, discovery retry timeouts, and LCP keepalive echo intervals.
 					</Card.Description>
 				</Card.Header>
 				<Card.Content class="flex flex-col gap-6">
-					<div class="grid gap-4 md:grid-cols-2">
-						<div class="flex flex-col gap-2">
-							<Label for="mru" class="text-xs font-medium">Maximum Receive Unit (MRU / MTU)</Label>
+					<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+						<div class="flex flex-col gap-1.5">
+							<Label for="mru" class="text-xs font-medium">Max Receive Unit (MRU / MTU)</Label>
 							<Input
 								id="mru"
 								type="number"
@@ -726,13 +773,13 @@
 								bind:value={formMru}
 								class="h-9 font-mono text-xs"
 							/>
-							<p class="text-[11px] text-muted-foreground">
-								Standard PPPoE MTU is 1492 (1500 Ethernet - 8 PPPoE bytes).
+							<p class="text-[10px] text-muted-foreground">
+								Standard PPPoE MTU is 1492 (1500 - 8 bytes).
 							</p>
 						</div>
 
-						<div class="flex flex-col gap-2">
-							<Label for="reconnect_delay" class="text-xs font-medium">Reconnect Delay (Seconds)</Label>
+						<div class="flex flex-col gap-1.5">
+							<Label for="reconnect_delay" class="text-xs font-medium">Reconnect Delay (s)</Label>
 							<Input
 								id="reconnect_delay"
 								type="number"
@@ -741,13 +788,13 @@
 								bind:value={formReconnectDelay}
 								class="h-9 font-mono text-xs"
 							/>
-							<p class="text-[11px] text-muted-foreground">
-								Pause before attempting discovery after a session drop.
+							<p class="text-[10px] text-muted-foreground">
+								Pause before attempting discovery after a drop.
 							</p>
 						</div>
 
-						<div class="flex flex-col gap-2">
-							<Label for="echo_interval" class="text-xs font-medium">LCP Echo Keepalive Interval (s)</Label>
+						<div class="flex flex-col gap-1.5">
+							<Label for="echo_interval" class="text-xs font-medium">LCP Echo Interval (s)</Label>
 							<Input
 								id="echo_interval"
 								type="number"
@@ -756,12 +803,12 @@
 								bind:value={formEchoInterval}
 								class="h-9 font-mono text-xs"
 							/>
-							<p class="text-[11px] text-muted-foreground">
-								Frequency of LCP Echo-Requests sent to the Access Concentrator.
+							<p class="text-[10px] text-muted-foreground">
+								Frequency of keepalive Echo-Requests.
 							</p>
 						</div>
 
-						<div class="flex flex-col gap-2">
+						<div class="flex flex-col gap-1.5">
 							<Label for="echo_failures" class="text-xs font-medium">LCP Echo Max Failures</Label>
 							<Input
 								id="echo_failures"
@@ -771,12 +818,12 @@
 								bind:value={formEchoMaxFailures}
 								class="h-9 font-mono text-xs"
 							/>
-							<p class="text-[11px] text-muted-foreground">
-								Consecutive unanswered echoes before declaring session dead.
+							<p class="text-[10px] text-muted-foreground">
+								Consecutive unanswered echoes before drop.
 							</p>
 						</div>
 
-						<div class="flex flex-col gap-2">
+						<div class="flex flex-col gap-1.5">
 							<Label for="padi_retries" class="text-xs font-medium">Discovery PADI Retries</Label>
 							<Input
 								id="padi_retries"
@@ -786,10 +833,11 @@
 								bind:value={formPadiRetries}
 								class="h-9 font-mono text-xs"
 							/>
+							<p class="text-[10px] text-muted-foreground">Max initiation attempts.</p>
 						</div>
 
-						<div class="flex flex-col gap-2">
-							<Label for="padi_timeout" class="text-xs font-medium">PADI Timeout per Retry (s)</Label>
+						<div class="flex flex-col gap-1.5">
+							<Label for="padi_timeout" class="text-xs font-medium">PADI Timeout (s)</Label>
 							<Input
 								id="padi_timeout"
 								type="number"
@@ -798,6 +846,7 @@
 								bind:value={formPadiTimeout}
 								class="h-9 font-mono text-xs"
 							/>
+							<p class="text-[10px] text-muted-foreground">Timeout per initiation retry.</p>
 						</div>
 					</div>
 
@@ -807,7 +856,7 @@
 						<div class="flex flex-col gap-0.5">
 							<Label class="text-sm font-semibold">Send PADT Frame on Shutdown</Label>
 							<p class="text-xs text-muted-foreground">
-								Explicitly notifies the BRAS to terminate the session on service stop. (Disable for fast-reconnect debugging).
+								Explicitly notifies the BRAS to terminate the session on service stop.
 							</p>
 						</div>
 						<Switch bind:checked={formSendPadt} />
@@ -819,8 +868,8 @@
 		<!-- Tab 3: nftables Tuning -->
 		<Tabs.Content value="nftables">
 			<Card.Root>
-				<Card.Header>
-					<Card.Title>Kernel Router Performance & nftables Tuning</Card.Title>
+				<Card.Header class="pb-3">
+					<Card.Title class="text-base">Kernel Router Performance & nftables Tuning</Card.Title>
 					<Card.Description>
 						Automatic router optimizations, TCP MSS clamping, Flowtable fast-path, and VoWiFi bypass.
 					</Card.Description>
@@ -836,12 +885,12 @@
 						<Switch bind:checked={formNftEnabled} />
 					</div>
 
-					<div class="grid gap-4 md:grid-cols-2">
+					<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
 						<div class="flex items-center justify-between rounded-xl border p-3">
 							<div class="flex flex-col gap-0.5">
-								<Label class="text-sm font-medium">Flowtable Offloading</Label>
-								<p class="text-[11px] text-muted-foreground">
-									Fast-path established TCP/UDP flows directly in software flowtable.
+								<Label class="text-xs font-medium">Flowtable Offloading</Label>
+								<p class="text-[10px] text-muted-foreground">
+									Fast-path TCP/UDP flows in software flowtable.
 								</p>
 							</div>
 							<Switch bind:checked={formNftFlowOffload} disabled={!formNftEnabled} />
@@ -849,9 +898,9 @@
 
 						<div class="flex items-center justify-between rounded-xl border p-3">
 							<div class="flex flex-col gap-0.5">
-								<Label class="text-sm font-medium">TCP MSS Clamping (1452)</Label>
-								<p class="text-[11px] text-muted-foreground">
-									Prevents PMTU discovery blackholes on 1492 MTU links.
+								<Label class="text-xs font-medium">TCP MSS Clamping (1452)</Label>
+								<p class="text-[10px] text-muted-foreground">
+									Prevents PMTU discovery blackholes.
 								</p>
 							</div>
 							<Switch bind:checked={formNftMssClamping} disabled={!formNftEnabled} />
@@ -859,9 +908,9 @@
 
 						<div class="flex items-center justify-between rounded-xl border p-3">
 							<div class="flex flex-col gap-0.5">
-								<Label class="text-sm font-medium">DNS Port 53 / 853 Bypass</Label>
-								<p class="text-[11px] text-muted-foreground">
-									Bypasses flowtable for DNS to ensure local resolver analytics and adblock function accurately.
+								<Label class="text-xs font-medium">DNS Port 53 / 853 Bypass</Label>
+								<p class="text-[10px] text-muted-foreground">
+									Ensures local resolver analytics remain accurate.
 								</p>
 							</div>
 							<Switch bind:checked={formNftBypassDns} disabled={!formNftEnabled} />
@@ -869,9 +918,9 @@
 
 						<div class="flex items-center justify-between rounded-xl border p-3">
 							<div class="flex flex-col gap-0.5">
-								<Label class="text-sm font-medium">VoWiFi / IPsec (Ports 500 / 4500) Bypass</Label>
-								<p class="text-[11px] text-muted-foreground">
-									Keeps Wi-Fi Calling tunnels alive without flowtable aging disconnects.
+								<Label class="text-xs font-medium">VoWiFi / IPsec Bypass</Label>
+								<p class="text-[10px] text-muted-foreground">
+									Keeps Wi-Fi Calling tunnels alive without drops.
 								</p>
 							</div>
 							<Switch bind:checked={formNftBypassVowifi} disabled={!formNftEnabled} />
@@ -879,9 +928,9 @@
 
 						<div class="flex items-center justify-between rounded-xl border p-3">
 							<div class="flex flex-col gap-0.5">
-								<Label class="text-sm font-medium">Outbound NAT Masquerade</Label>
-								<p class="text-[11px] text-muted-foreground">
-									Enables source NAT masquerading for all LAN clients routing through WAN.
+								<Label class="text-xs font-medium">Outbound NAT Masquerade</Label>
+								<p class="text-[10px] text-muted-foreground">
+									Enables source NAT masquerading for LAN clients.
 								</p>
 							</div>
 							<Switch bind:checked={formNftMasquerade} disabled={!formNftEnabled} />
@@ -893,18 +942,39 @@
 	</Tabs.Root>
 
 	<!-- Save Action Footer Bar -->
-	<div class="flex items-center justify-end gap-3 pt-4 border-t">
-		<Button variant="outline" onclick={loadAll} disabled={saving || loading}>
-			Discard Changes
-		</Button>
-		<Button onclick={handleSave} disabled={saving || loading}>
-			{#if saving}
-				<RefreshCwIcon class="animate-spin" data-icon="inline-start" />
-				Saving...
+	<div class="flex items-center justify-between p-4 rounded-xl border bg-card/60 gap-4 mt-2">
+		<div class="flex items-center gap-2">
+			{#if isDirty}
+				<span class="size-2 rounded-full bg-amber-500 animate-pulse"></span>
+				<span class="text-xs font-medium text-amber-600 dark:text-amber-400">Unsaved configuration changes detected</span>
 			{:else}
-				<CheckCircleIcon data-icon="inline-start" />
-				Save Configuration
+				<span class="size-2 rounded-full bg-emerald-500"></span>
+				<span class="text-xs text-muted-foreground">Configuration is synchronized with active daemon</span>
 			{/if}
-		</Button>
+		</div>
+
+		<div class="flex items-center gap-2">
+			{#if isDirty}
+				<Button
+					variant="outline"
+					size="sm"
+					onclick={handleDiscard}
+					disabled={saving || loading}
+				>
+					<RotateCcwIcon data-icon="inline-start" />
+					Discard Changes
+				</Button>
+			{/if}
+
+			<Button
+				variant={isDirty ? "default" : "secondary"}
+				size="sm"
+				onclick={handleSave}
+				disabled={!isDirty || saving || loading}
+			>
+				<SaveIcon class={saving ? "animate-spin" : ""} data-icon="inline-start" />
+				{saving ? "Saving..." : "Save Configuration"}
+			</Button>
+		</div>
 	</div>
 </div>
