@@ -795,18 +795,21 @@ export interface PppoeStatusResponse {
 // ---------------------------------------------------------------------------
 
 export type RouterPriority = 'low' | 'medium' | 'high';
+export type PrefixSource = 'static' | 'ula' | 'auto_gua';
 
 export interface RaPrefix {
-	prefix: string;
+	source: PrefixSource;
+	address?: string | null;
+	prefix_len: number;
 	on_link?: boolean;
 	autonomous?: boolean;
-	valid_lifetime?: number | null;
-	preferred_lifetime?: number | null;
-	router_address?: boolean;
+	router_addr?: boolean;
+	valid_lifetime?: string | number | null;
+	preferred_lifetime?: string | number | null;
 }
 
 export interface RdnssConfig {
-	addresses: string[];
+	servers: string[];
 	lifetime?: number | null;
 }
 
@@ -814,6 +817,7 @@ export interface DnsslConfig {
 	domains: string[];
 	lifetime?: number | null;
 }
+
 
 export interface RaServerConfig {
 	enabled: boolean;

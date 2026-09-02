@@ -23,6 +23,7 @@
 		RaPrefix,
 		RdnssConfig,
 		DnsslConfig,
+		PrefixSource,
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
@@ -31,13 +32,11 @@
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import ZapIcon from "@lucide/svelte/icons/zap";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
-	import ShieldIcon from "@lucide/svelte/icons/shield";
 	import ClockIcon from "@lucide/svelte/icons/clock";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import NetworkIcon from "@lucide/svelte/icons/network";
 	import ServerIcon from "@lucide/svelte/icons/server";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
-	import CheckCircleIcon from "@lucide/svelte/icons/check-circle";
 	import AlertCircleIcon from "@lucide/svelte/icons/alert-circle";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
@@ -96,7 +95,7 @@
 		// Flatten RDNSS addresses
 		const rdnssList: string[] = [];
 		for (const r of c.rdnss || []) {
-			for (const addr of r.addresses) {
+			for (const addr of r.servers || []) {
 				if (!rdnssList.includes(addr)) rdnssList.push(addr);
 			}
 		}
@@ -105,7 +104,7 @@
 		// Flatten DNSSL domains
 		const dnsslList: string[] = [];
 		for (const d of c.dnssl || []) {
-			for (const dom of d.domains) {
+			for (const dom of d.domains || []) {
 				if (!dnsslList.includes(dom)) dnsslList.push(dom);
 			}
 		}
@@ -136,7 +135,7 @@
 		saving = true;
 		try {
 			const rdnssObj: RdnssConfig[] = formRdnss.length > 0
-				? [{ addresses: formRdnss, lifetime: null }]
+				? [{ servers: formRdnss, lifetime: null }]
 				: [];
 			const dnsslObj: DnsslConfig[] = formDnssl.length > 0
 				? [{ domains: formDnssl, lifetime: null }]
@@ -193,24 +192,77 @@
 		}
 	}
 
+	function formatPrefixLabel(pref: RaPrefix): string {
+		if (pref.source === "auto_gua") {
+			return status?.active_gua_prefix
+				? `${status.active_gua_prefix}/${pref.prefix_len || 64}`
+				: `dynamic_gua (/${pref.prefix_len || 64})`;
+		}
+		if (pref.source === "ula" && !pref.address) {
+			return status?.active_ula_prefix
+				? `${status.active_ula_prefix}/${pref.prefix_len || 64}`
+				: `dynamic_ula (/${pref.prefix_len || 64})`;
+		}
+		if (pref.address) {
+			return `${pref.address}/${pref.prefix_len || 64}`;
+		}
+		return `${pref.source} (/${pref.prefix_len || 64})`;
+	}
+
+	function getPrefixKey(pref: RaPrefix, index: number): string {
+		return `${index}-${pref.source}-${pref.address ?? "auto"}-${pref.prefix_len}`;
+	}
+
 	function addPrefix() {
 		const p = newPrefixStr.trim();
 		if (!p) {
 			toast.error("Prefix cannot be empty");
 			return;
 		}
-		if (formPrefixes.some((x) => x.prefix === p)) {
+
+		let source: PrefixSource = "static";
+		let address: string | null = p;
+		let prefixLen = 64;
+
+		if (p.toLowerCase() === "dynamic_gua" || p.toLowerCase() === "auto_gua") {
+			source = "auto_gua";
+			address = null;
+		} else if (p.toLowerCase() === "dynamic_ula" || p.toLowerCase() === "auto_ula") {
+			source = "ula";
+			address = null;
+		} else if (p.includes("/")) {
+			const parts = p.split("/");
+			address = parts[0];
+			prefixLen = Number(parts[1]) || 64;
+			if (address.toLowerCase().startsWith("fd") || address.toLowerCase().startsWith("fc")) {
+				source = "ula";
+			}
+		} else if (p.toLowerCase().startsWith("fd") || p.toLowerCase().startsWith("fc")) {
+			source = "ula";
+		}
+
+		const isDuplicate = formPrefixes.some((x) => {
+			if (x.source !== source) return false;
+			if (source === "auto_gua" || (source === "ula" && !x.address)) return true;
+			return x.address?.toLowerCase() === address?.toLowerCase() && x.prefix_len === prefixLen;
+		});
+
+		if (isDuplicate) {
 			toast.error("Prefix already configured");
 			return;
 		}
+
 		formPrefixes = [
 			...formPrefixes,
 			{
-				prefix: p,
+				source,
+				address,
+				prefix_len: prefixLen,
 				autonomous: newPrefixAutonomous,
 				on_link: newPrefixOnLink,
-				valid_lifetime: null,
-				preferred_lifetime: null,
+				router_addr: false,
+				valid_lifetime: "2592000",
+				preferred_lifetime: "604800",
 			},
 		];
 		newPrefixStr = "";
@@ -493,21 +545,24 @@
 										</Table.Row>
 									</Table.Header>
 									<Table.Body>
-										{#each status?.prefixes ?? [] as pref (pref.prefix)}
+										{#each status?.prefixes ?? [] as pref, i (getPrefixKey(pref, i))}
 											<Table.Row>
 												<Table.Cell class="font-mono font-medium">
-													{#if pref.prefix === "dynamic_gua"}
+													{#if pref.source === "auto_gua"}
 														<div class="flex items-center gap-1.5">
-															<span>{status?.active_gua_prefix ? `${status.active_gua_prefix}/64` : "dynamic_gua"}</span>
+															<span>{status?.active_gua_prefix ? `${status.active_gua_prefix}/${pref.prefix_len || 64}` : "dynamic_gua"}</span>
 															<Badge variant="secondary" class="text-[10px] px-1 py-0 font-normal">GUA</Badge>
 														</div>
-													{:else if pref.prefix === "dynamic_ula"}
+													{:else if pref.source === "ula" && !pref.address}
 														<div class="flex items-center gap-1.5">
-															<span>{status?.active_ula_prefix ? `${status.active_ula_prefix}/64` : "dynamic_ula"}</span>
+															<span>{status?.active_ula_prefix ? `${status.active_ula_prefix}/${pref.prefix_len || 64}` : "dynamic_ula"}</span>
 															<Badge variant="secondary" class="text-[10px] px-1 py-0 font-normal">ULA</Badge>
 														</div>
 													{:else}
-														<span>{pref.prefix}</span>
+														<div class="flex items-center gap-1.5">
+															<span>{pref.address ? `${pref.address}/${pref.prefix_len || 64}` : `${pref.source} (/${pref.prefix_len || 64})`}</span>
+															<Badge variant="outline" class="text-[10px] px-1 py-0 font-normal capitalize">{pref.source}</Badge>
+														</div>
 													{/if}
 												</Table.Cell>
 												<Table.Cell>
@@ -529,10 +584,10 @@
 													{/if}
 												</Table.Cell>
 												<Table.Cell class="text-muted-foreground text-xs font-mono">
-													{pref.valid_lifetime ? `${pref.valid_lifetime}s` : "Default (30 days)"}
+													{pref.valid_lifetime ? `${pref.valid_lifetime}` : "Default (30 days)"}
 												</Table.Cell>
 												<Table.Cell class="text-muted-foreground text-xs font-mono">
-													{pref.preferred_lifetime ? `${pref.preferred_lifetime}s` : "Default (7 days)"}
+													{pref.preferred_lifetime ? `${pref.preferred_lifetime}` : "Default (7 days)"}
 												</Table.Cell>
 											</Table.Row>
 										{/each}
@@ -551,7 +606,7 @@
 									The following obsolete prefixes are broadcast with Preferred Lifetime = 0 to rapidly revoke them from client routing tables:
 								</p>
 								<div class="flex flex-wrap gap-2 pt-1">
-									{#each status?.deprecated_prefixes ?? [] as [pfx, remaining]}
+									{#each status?.deprecated_prefixes ?? [] as [pfx, remaining], i (`deprecated-${i}-${pfx}`)}
 										<Badge variant="outline" class="font-mono text-xs border-amber-500/30 text-amber-600 bg-background">
 											{pfx} ({remaining}s remaining)
 										</Badge>
@@ -578,11 +633,11 @@
 						<Card.Content class="flex flex-col gap-4">
 							<div class="flex flex-col gap-2">
 								<Label class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">RDNSS Servers</Label>
-								{#if (status?.rdnss ?? []).flatMap(r => r.addresses).length === 0}
+								{#if (status?.rdnss ?? []).flatMap(r => r.servers || []).length === 0}
 									<span class="text-xs text-muted-foreground italic">None configured (clients fall back to local link-local or DHCPv6)</span>
 								{:else}
 									<div class="flex flex-wrap gap-1.5">
-										{#each (status?.rdnss ?? []).flatMap(r => r.addresses) as addr}
+										{#each (status?.rdnss ?? []).flatMap(r => r.servers || []) as addr, i (`rdnss-${i}-${addr}`)}
 											<Badge variant="secondary" class="font-mono text-xs">
 												{addr}
 											</Badge>
@@ -595,11 +650,11 @@
 
 							<div class="flex flex-col gap-2">
 								<Label class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">DNSSL Search Domains</Label>
-								{#if (status?.dnssl ?? []).flatMap(d => d.domains).length === 0}
+								{#if (status?.dnssl ?? []).flatMap(d => d.domains || []).length === 0}
 									<span class="text-xs text-muted-foreground italic">None configured</span>
 								{:else}
 									<div class="flex flex-wrap gap-1.5">
-										{#each (status?.dnssl ?? []).flatMap(d => d.domains) as domain}
+										{#each (status?.dnssl ?? []).flatMap(d => d.domains || []) as domain, i (`dnssl-${i}-${domain}`)}
 											<Badge variant="outline" class="text-xs">
 												{domain}
 											</Badge>
@@ -894,10 +949,10 @@
 											</Table.Cell>
 										</Table.Row>
 									{:else}
-										{#each formPrefixes as pref, i}
+										{#each formPrefixes as pref, i (getPrefixKey(pref, i))}
 											<Table.Row>
 												<Table.Cell class="font-mono text-xs font-medium">
-													{pref.prefix}
+													{formatPrefixLabel(pref)}
 												</Table.Cell>
 												<Table.Cell>
 													<Switch
@@ -958,7 +1013,7 @@
 								{#if formRdnss.length === 0}
 									<span class="text-xs text-muted-foreground italic">No specific RDNSS servers added.</span>
 								{:else}
-									{#each formRdnss as addr, i}
+									{#each formRdnss as addr, i (`form-rdnss-${i}-${addr}`)}
 										<Badge variant="secondary" class="font-mono text-xs flex items-center gap-1.5 py-1">
 											<span>{addr}</span>
 											<button
@@ -1001,7 +1056,7 @@
 								{#if formDnssl.length === 0}
 									<span class="text-xs text-muted-foreground italic">No search domains added.</span>
 								{:else}
-									{#each formDnssl as dom, i}
+									{#each formDnssl as dom, i (`form-dnssl-${i}-${dom}`)}
 										<Badge variant="outline" class="text-xs flex items-center gap-1.5 py-1">
 											<span>{dom}</span>
 											<button
