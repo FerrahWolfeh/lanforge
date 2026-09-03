@@ -42,7 +42,10 @@ import type {
 	PppoeConfig,
 	PppoeStatusResponse,
 	RaServerConfig,
-	RaStatusResponse
+	RaStatusResponse,
+	DbMetrics,
+	SystemConfigExport,
+	SystemConfigImportResponse
 } from './types';
 
 
@@ -167,7 +170,8 @@ const getRaw = <T>(
 const post = <T>(path: string, body?: unknown) => request<T>('POST', path, body);
 const put = <T>(path: string, body?: unknown) => request<T>('PUT', path, body);
 const patch = <T>(path: string, body?: unknown) => request<T>('PATCH', path, body);
-const del = <T>(path: string, body?: unknown) => request<T>('DELETE', path, body);
+const del = <T>(path: string, body?: unknown, extraHeaders?: Record<string, string>) =>
+	request<T>('DELETE', path, body, extraHeaders);
 
 // ---------------------------------------------------------------------------
 // Auth
@@ -423,13 +427,17 @@ export const dhcpReconcile = async (): Promise<DhcpReconcileResponse> => {
 };
 
 // ---------------------------------------------------------------------------
-// Database
+// Database & Configuration
 // ---------------------------------------------------------------------------
 
+export const dbStats = () => get<DbMetrics>('/db/stats');
 export const dbVacuum = () => post<void>('/db/vacuum');
 export const dbPrune = () => post<void>('/db/prune');
 export const dbLogClean = () => post<void>('/db/log-clean');
-export const dbReset = () => del<void>('/db', undefined);
+export const dbReset = () => del<void>('/db', undefined, { 'x-confirm': 'wipe' });
+export const exportSystemConfig = () => get<SystemConfigExport>('/system/config');
+export const importSystemConfig = (config: SystemConfigExport) =>
+	post<SystemConfigImportResponse>('/system/config', config);
 
 // ---------------------------------------------------------------------------
 // Users

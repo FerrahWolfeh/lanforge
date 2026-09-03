@@ -13,6 +13,8 @@ use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
+use lanforge_types::network::DnsReverseResolver;
+use lanforge_types::network::dhcp::DhcpOptionsConfig;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +77,10 @@ pub struct FileConfigExport {
     pub ra_rdnss: Option<Vec<RdnssConfig>>,
     pub ra_dnssl: Option<Vec<DnsslConfig>>,
     pub pppoe_config: Option<PppoeConfig>,
+    #[serde(default)]
+    pub dhcp_options: Option<DhcpOptionsConfig>,
+    #[serde(default)]
+    pub dns_reverse_resolvers: Option<Vec<DnsReverseResolver>>,
     #[serde(default)]
     pub overwrite: bool,
 }
@@ -180,6 +186,8 @@ async fn execute_export(
         ra_rdnss: config.ra_rdnss,
         ra_dnssl: config.ra_dnssl,
         pppoe_config: config.pppoe_config,
+        dhcp_options: config.dhcp_options,
+        dns_reverse_resolvers: config.dns_reverse_resolvers,
         overwrite: config.overwrite,
     };
 
@@ -237,6 +245,8 @@ async fn execute_import(
         ra_rdnss: file_export.ra_rdnss,
         ra_dnssl: file_export.ra_dnssl,
         pppoe_config: file_export.pppoe_config,
+        dhcp_options: file_export.dhcp_options,
+        dns_reverse_resolvers: file_export.dns_reverse_resolvers,
         overwrite,
     };
 
@@ -272,11 +282,14 @@ async fn execute_import(
             lanforge_api::api::ImportSection::RaRdnss => "RA RDNSS options",
             lanforge_api::api::ImportSection::RaDnssl => "RA DNSSL options",
             lanforge_api::api::ImportSection::PppoeConfig => "PPPoE configuration",
+            lanforge_api::api::ImportSection::DhcpOptions => "DHCP options",
+            lanforge_api::api::ImportSection::DnsReverseResolvers => "DNS reverse resolvers",
         };
         if res.success {
             if res.count > 0
                 || res.section == lanforge_api::api::ImportSection::DnsAdblockConfig
                 || res.section == lanforge_api::api::ImportSection::PppoeConfig
+                || res.section == lanforge_api::api::ImportSection::DhcpOptions
             {
                 println!("  · Imported {} {}", res.count, name);
             }

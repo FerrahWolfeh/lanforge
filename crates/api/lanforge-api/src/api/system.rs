@@ -253,6 +253,9 @@ use lanforge_types::network::dns::{
     adblock::{AdblockDbConfig, RewriteRule},
 };
 
+use lanforge_types::network::DnsReverseResolver;
+use lanforge_types::network::dhcp::DhcpOptionsConfig;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ExportedApiToken {
     pub token: String,
@@ -265,7 +268,6 @@ pub struct ExportedApiToken {
 
 /// Unified system configuration export aggregating all persistent database tables.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
-#[serde(deny_unknown_fields)]
 pub struct SystemConfigExport {
     pub hosts: Vec<HostConfigEntry>,
     pub dns_rewrites: Vec<RewriteRule>,
@@ -280,6 +282,10 @@ pub struct SystemConfigExport {
     pub ra_rdnss: Option<Vec<RdnssConfig>>,
     pub ra_dnssl: Option<Vec<DnsslConfig>>,
     pub pppoe_config: Option<PppoeConfig>,
+    #[serde(default)]
+    pub dhcp_options: Option<DhcpOptionsConfig>,
+    #[serde(default)]
+    pub dns_reverse_resolvers: Option<Vec<DnsReverseResolver>>,
     #[serde(default)]
     pub overwrite: bool,
 }
@@ -348,6 +354,8 @@ pub enum ImportSection {
     RaRdnss,
     RaDnssl,
     PppoeConfig,
+    DhcpOptions,
+    DnsReverseResolvers,
 }
 
 impl ImportSection {
@@ -367,6 +375,8 @@ impl ImportSection {
             Self::RaRdnss => "ra_rdnss",
             Self::RaDnssl => "ra_dnssl",
             Self::PppoeConfig => "pppoe_config",
+            Self::DhcpOptions => "dhcp_options",
+            Self::DnsReverseResolvers => "dns_reverse_resolvers",
         }
     }
 }

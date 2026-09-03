@@ -98,6 +98,7 @@
 	function isActive(href: string) {
 		const p = $page.url.pathname;
 		if (href === "/") return p === "/";
+		if (href === "/system") return p === "/system" || p === "/system/";
 		return p === href || p.startsWith(href + "/");
 	}
 </script>

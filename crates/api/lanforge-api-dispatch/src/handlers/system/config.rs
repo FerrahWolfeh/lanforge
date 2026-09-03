@@ -82,13 +82,15 @@ impl ClientContext {
             Err(_) => None,
         };
 
-        // 8. Dynamic Configs (pools, prefixes, pppoe)
+        // 8. Dynamic Configs (pools, prefixes, pppoe, options, reverse resolvers)
         let dhcp_v4_pools = self.db.load_dhcp_v4_pools().await.ok();
         let dhcp_v6_pools = self.db.load_dhcp_v6_pools().await.ok();
         let ra_prefixes = self.db.load_ra_prefixes().await.ok();
         let ra_rdnss = self.db.load_ra_rdnss().await.ok();
         let ra_dnssl = self.db.load_ra_dnssl().await.ok();
         let pppoe_config = self.db.load_pppoe_config().await.ok().flatten();
+        let dhcp_options = self.db.load_dhcp_options().await.ok().flatten();
+        let dns_reverse_resolvers = self.db.load_dns_reverse_resolvers().await.ok();
 
         Response::SystemConfig(Box::new(SystemConfigExport {
             hosts,
@@ -104,6 +106,8 @@ impl ClientContext {
             ra_rdnss,
             ra_dnssl,
             pppoe_config,
+            dhcp_options,
+            dns_reverse_resolvers,
             overwrite: false,
         }))
     }
@@ -123,6 +127,8 @@ impl ClientContext {
             ra_rdnss,
             ra_dnssl,
             pppoe_config,
+            dhcp_options,
+            dns_reverse_resolvers,
             overwrite,
         } = config;
 
@@ -208,6 +214,7 @@ impl ClientContext {
             let _ = self.db.save_ra_prefixes(&[]).await;
             let _ = self.db.save_ra_rdnss(&[]).await;
             let _ = self.db.save_ra_dnssl(&[]).await;
+            let _ = self.db.clear_dns_reverse_resolvers().await;
         }
 
         // 1. Import hosts
@@ -555,6 +562,50 @@ impl ClientContext {
                 success: pppoe_success,
                 count: if pppoe_success { 1 } else { 0 },
                 error: pppoe_err,
+            });
+        }
+
+        if let Some(opts) = dhcp_options {
+            let mut opts_success = true;
+            let mut opts_err = None;
+            if let Err(e) = self.db.save_dhcp_options(&opts).await {
+                opts_success = false;
+                total_success = false;
+                opts_err = Some(e.to_string());
+            } else {
+                self.ctx.update_dhcp_options(opts);
+            }
+            results.push(ImportResult {
+                section: ImportSection::DhcpOptions,
+                success: opts_success,
+                count: if opts_success { 1 } else { 0 },
+                error: opts_err,
+            });
+        }
+
+        if let Some(resolvers) = dns_reverse_resolvers {
+            let mut res_count = 0;
+            let mut res_success = true;
+            let mut res_err = None;
+            for r in resolvers {
+                if let Err(e) = self.db.add_dns_reverse_resolver(&r.subnet, &r.resolver).await {
+                    res_success = false;
+                    res_err = Some(e.to_string());
+                } else {
+                    let _ = self.ctx.apply(lanforge_types::update::DeviceUpdate::AddReverseResolver {
+                        resolver: r,
+                    });
+                    res_count += 1;
+                }
+            }
+            if !res_success {
+                total_success = false;
+            }
+            results.push(ImportResult {
+                section: ImportSection::DnsReverseResolvers,
+                success: res_success,
+                count: res_count,
+                error: res_err,
             });
         }
 

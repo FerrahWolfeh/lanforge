@@ -701,17 +701,17 @@ export interface SetupStatusResponse {
 
 export type SetupWanConfig =
 	| {
-			mode: 'pppoe';
-			interface: string;
-			username: string;
-			password: string;
-			vlan_id?: number | null;
-			mtu?: number | null;
-	  }
+		mode: 'pppoe';
+		interface: string;
+		username: string;
+		password: string;
+		vlan_id?: number | null;
+		mtu?: number | null;
+	}
 	| {
-			mode: 'system_gateway';
-			gateway_ip: string;
-	  };
+		mode: 'system_gateway';
+		gateway_ip: string;
+	};
 
 export interface SetupPayload {
 	admin_username: string;
@@ -865,5 +865,71 @@ export interface RaStatusResponse {
 	router_lifetime_secs: number;
 	mtu: number | null;
 	uptime_secs: number | null;
+}
+
+// ---------------------------------------------------------------------------
+// Database & System Configuration
+// ---------------------------------------------------------------------------
+
+export interface DbMetrics {
+	last_flush_ts: number;
+	flush_count: number;
+	devices_written: number;
+	last_error: boolean | number;
+}
+
+export interface ExportedApiToken {
+	token: string;
+	name: string;
+	created_at: number;
+	last_used?: number | null;
+	scopes: string;
+	expires_at?: number | null;
+}
+
+export interface DnsUpstreamConfig {
+	addr: string;
+	protocol: string;
+	domain?: string | null;
+}
+
+export interface AdblockDbConfig {
+	enabled: boolean;
+	blocking_mode: string;
+	blocking_ip_v4?: string | null;
+	blocking_ip_v6?: string | null;
+	refresh_hours: number;
+	refresh_at_night: boolean;
+}
+
+export interface SystemConfigExport {
+	hosts: HostConfigEntry[];
+	dns_rewrites: RewriteRule[];
+	dns_upstreams: DnsUpstreamConfig[];
+	dns_adblock_config: AdblockDbConfig;
+	dns_adblock_urls: DnsAdblockUrlEntry[];
+	dns_allowlist: AllowlistEntry[];
+	api_tokens?: ExportedApiToken[] | null;
+	dhcp_v4_pools?: Dhcpv4PoolConfig[] | null;
+	dhcp_v6_pools?: Dhcpv6PoolConfig[] | null;
+	ra_prefixes?: RaPrefix[] | null;
+	ra_rdnss?: RdnssConfig[] | null;
+	ra_dnssl?: DnsslConfig[] | null;
+	pppoe_config?: PppoeConfig | null;
+	dhcp_options?: DhcpOptionsConfig | null;
+	dns_reverse_resolvers?: ReverseResolverEntry[] | null;
+	overwrite?: boolean;
+}
+
+export interface ImportResult {
+	section: string;
+	success: boolean;
+	count: number;
+	error?: string | null;
+}
+
+export interface SystemConfigImportResponse {
+	results: ImportResult[];
+	total_success: boolean;
 }
 
