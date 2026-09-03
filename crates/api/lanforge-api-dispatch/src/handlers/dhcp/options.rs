@@ -23,6 +23,9 @@ impl ClientContext {
             };
         }
         self.ctx.update_dhcp_options(options);
+        if self.db.is_in_memory() {
+            let _ = self.flush_static_config_to_toml().await;
+        }
         Response::Success(SimpleSuccess {
             message: "DHCP & TFTP options updated successfully".to_string(),
         })
@@ -74,6 +77,9 @@ impl ClientContext {
         }
         self.ctx.update_dhcp_v4_pools(v4_pools);
         self.ctx.update_dhcp_v6_pools(v6_pools);
+        if self.db.is_in_memory() {
+            let _ = self.flush_static_config_to_toml().await;
+        }
         Response::Success(SimpleSuccess {
             message: "DHCP pools configuration updated successfully".to_string(),
         })

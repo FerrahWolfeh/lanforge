@@ -113,6 +113,12 @@ impl LanforgeDb {
         })
     }
 
+    /// Returns true if running in mock/in-memory mode.
+    #[must_use]
+    pub fn is_in_memory(&self) -> bool {
+        matches!(self.inner, DbEngine::Mock(_))
+    }
+
     // --- DeviceStore ---
 
     pub async fn save_table(&self, table: &State) -> Result<(), DbError> {
@@ -952,6 +958,10 @@ impl LanforgeDb {
 }
 
 impl DeviceStore for LanforgeDb {
+    fn is_in_memory(&self) -> bool {
+        self.is_in_memory()
+    }
+
     fn load_all_devices(&self) -> BoxFuture<'_, Result<Vec<Device>, DbError>> {
         Box::pin(async move { self.load_all_devices().await })
     }

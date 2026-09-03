@@ -17,6 +17,7 @@ pub fn router() -> Router<AppState> {
         .route("/prune", post(handle_prune))
         .route("/log-clean", post(handle_log_clean))
         .route("/stats", get(handle_stats))
+        .route("/engine", post(handle_switch_engine))
         .route("/", delete(handle_reset))
 }
 
@@ -58,4 +59,12 @@ async fn handle_reset(State(state): State<AppState>, headers: HeaderMap) -> impl
 
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_db_reset().await, Success => NoContent)
+}
+
+async fn handle_switch_engine(
+    State(state): State<AppState>,
+    Json(payload): Json<lanforge_api::api::DbEngineSwitchRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_db_switch_engine(payload).await, Success)
 }

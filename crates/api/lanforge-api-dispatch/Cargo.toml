@@ -12,6 +12,7 @@ lanforge-api = { workspace = true }
 lanforge-dns = { workspace = true }
 lanforge-dns-wire = { workspace = true }
 lanforge-macros = { workspace = true }
+toml = { workspace = true }
 
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 serde = { workspace = true }

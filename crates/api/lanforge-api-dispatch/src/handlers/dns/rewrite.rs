@@ -92,6 +92,9 @@ impl ClientContext {
             .await
             .map_err(|e| e.to_string())?;
         self.ctx.update_dns_rewrites(rewrites);
+        if self.db.is_in_memory() {
+            let _ = self.flush_static_config_to_toml().await;
+        }
         Ok(())
     }
 }

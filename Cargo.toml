@@ -84,6 +84,7 @@ argon2 = { version = "0.6.0" }
 password-hash = { version = "0.6.1" }
 hex = "0.4.3"
 base64 = "0.23.1"
+toml = "1.1.2"
 
 [profile.release]
 opt-level = "z"

@@ -120,6 +120,7 @@ impl Bootstrapper {
         let cfg = Arc::new(cfg);
 
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
+        ctx.set_config_path(&cfg.config_path);
         #[cfg(feature = "dhcp")]
         {
             ctx.update_dhcp_v4_pools(cfg.dhcpv4_toml.pools.clone());

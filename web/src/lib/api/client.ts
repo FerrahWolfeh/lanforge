@@ -45,7 +45,8 @@ import type {
 	RaStatusResponse,
 	DbMetrics,
 	SystemConfigExport,
-	SystemConfigImportResponse
+	SystemConfigImportResponse,
+	DbEngineSwitchRequest
 } from './types';
 
 
@@ -438,6 +439,8 @@ export const dbReset = () => del<void>('/db', undefined, { 'x-confirm': 'wipe' }
 export const exportSystemConfig = () => get<SystemConfigExport>('/system/config');
 export const importSystemConfig = (config: SystemConfigExport) =>
 	post<SystemConfigImportResponse>('/system/config', config);
+export const switchDbEngine = (req: DbEngineSwitchRequest) =>
+	post<void>('/db/engine', req);
 
 // ---------------------------------------------------------------------------
 // Users

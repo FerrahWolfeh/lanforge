@@ -86,6 +86,10 @@ impl ClientContext {
             };
         }
 
+        if self.db.is_in_memory() {
+            let _ = self.flush_static_config_to_toml().await;
+        }
+
         Response::Success(SimpleSuccess {
             message: "Host configuration added/updated".to_string(),
         })
@@ -180,6 +184,10 @@ impl ClientContext {
             };
         }
 
+        if self.db.is_in_memory() {
+            let _ = self.flush_static_config_to_toml().await;
+        }
+
         Response::Success(SimpleSuccess {
             message: "Host field updated".to_string(),
         })
@@ -195,6 +203,10 @@ impl ClientContext {
 
         // 2. Apply to memory context
         let _ = self.ctx.apply(DeviceUpdate::Remove(mac));
+
+        if self.db.is_in_memory() {
+            let _ = self.flush_static_config_to_toml().await;
+        }
 
         Response::Success(SimpleSuccess {
             message: "Host configuration removed".to_string(),

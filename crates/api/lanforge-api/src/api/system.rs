@@ -471,3 +471,33 @@ impl HttpWrappedResponse for SetupResponse {
         wrapper.data
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DbEngineSwitchRequest {
+    pub engine: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub max_connections: Option<u32>,
+    #[serde(default)]
+    pub min_connections: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DbEngineSwitchResponse {
+    pub success: bool,
+    pub engine: String,
+    pub message: String,
+}
+
+impl HttpWrappedResponse for DbEngineSwitchResponse {
+    type Wrapper = HttpDataResponse<DbEngineSwitchResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}

@@ -91,6 +91,11 @@ pub struct UserEntry {
 
 /// Handles storage and retrieval of devices and DHCP/SLAAC leases.
 pub trait DeviceStore: Send + Sync {
+    /// Returns true if this store is running in an in-memory/mock mode.
+    fn is_in_memory(&self) -> bool {
+        false
+    }
+
     /// Loads all devices stored in the database.
     fn load_all_devices(&self) -> BoxFuture<'_, Result<Vec<Device>, DbError>>;
 

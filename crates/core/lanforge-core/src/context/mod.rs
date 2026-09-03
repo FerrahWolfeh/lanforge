@@ -247,6 +247,8 @@ struct LanforgeContextInner {
     start_time: Instant,
     /// Database worker metrics.
     db_metrics: DbWorkerMetrics,
+    /// Path to the active TOML configuration file on disk.
+    config_path: RwLock<Option<std::path::PathBuf>>,
 }
 
 #[allow(clippy::missing_panics_doc)] // Temporary
@@ -298,8 +300,20 @@ impl LanforgeContext {
             service_starts: RwLock::new(HashMap::new()),
             start_time: Instant::now(),
             db_metrics: DbWorkerMetrics::default(),
+            config_path: RwLock::new(None),
         });
         Self { inner }
+    }
+
+    /// Sets the path to the active TOML configuration file.
+    pub fn set_config_path(&self, path: impl Into<std::path::PathBuf>) {
+        *self.inner.config_path.write() = Some(path.into());
+    }
+
+    /// Returns the path to the active TOML configuration file, if set.
+    #[must_use]
+    pub fn config_path(&self) -> Option<std::path::PathBuf> {
+        self.inner.config_path.read().clone()
     }
 
     /// Returns the uptime of this context in seconds.

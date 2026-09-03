@@ -19,12 +19,14 @@
 		dbReset,
 		exportSystemConfig,
 		importSystemConfig,
+		switchDbEngine,
 	} from "$lib/api/client";
 	import type {
 		StatusResponse,
 		DbMetrics,
 		SystemConfigExport,
 		SystemConfigImportResponse,
+		DbEngineSwitchRequest,
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
@@ -571,6 +573,52 @@ min_connections = ${formMinConnections || 2}`;
 	function handleDiscardForm() {
 		syncFormFromStatus();
 		toast.info("Settings reverted to active daemon parameters");
+	}
+
+	let applyingEngineSwitch = $state(false);
+
+	async function handleApplyEngineSwitch() {
+		applyingEngineSwitch = true;
+		try {
+			const targetUrl =
+				formEngine === "postgres"
+					? formMode === "raw"
+						? formUrl
+						: `postgres://${formUser}:${formPassword}@${formHost}:${formPort}/${formDatabase}`
+					: undefined;
+
+			const payload: DbEngineSwitchRequest = {
+				engine: formEngine,
+				url: targetUrl,
+				max_connections: Number(formMaxConnections),
+				min_connections: Number(formMinConnections),
+			};
+
+			await switchDbEngine(payload);
+
+			toast.success(
+				formEngine === "postgres"
+					? "Switched to PostgreSQL. Soft-rebooting daemon..."
+					: "Switched to In-Memory mode. Static config flushed to TOML. Soft-rebooting...",
+				{
+					description:
+						"The daemon is soft-rebooting internal services with the new storage engine.",
+					duration: 6000,
+				},
+			);
+
+			baselineForm = serializeForm();
+
+			setTimeout(() => {
+				loadAll(true);
+			}, 2500);
+		} catch (e: any) {
+			toast.error("Failed to switch storage engine", {
+				description: e?.message || "Internal server error",
+			});
+		} finally {
+			applyingEngineSwitch = false;
+		}
 	}
 </script>
 
@@ -1471,10 +1519,18 @@ min_connections = ${formMinConnections || 2}`;
 										variant="default"
 										size="sm"
 										class="h-8 gap-1.5 text-xs shadow-sm"
-										onclick={copyTomlSample}
+										onclick={handleApplyEngineSwitch}
+										disabled={applyingEngineSwitch}
 									>
-										<CopyIcon class="size-3.5" />
-										Copy & Apply via Config
+										{#if applyingEngineSwitch}
+											<RefreshCwIcon
+												class="size-3.5 animate-spin"
+											/>
+											Migrating &amp; Rebooting...
+										{:else}
+											<CheckCircleIcon class="size-3.5" />
+											Save &amp; Switch Engine
+										{/if}
 									</Button>
 								</div>
 							</div>

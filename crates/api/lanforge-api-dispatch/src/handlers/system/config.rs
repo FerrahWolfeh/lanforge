@@ -588,13 +588,19 @@ impl ClientContext {
             let mut res_success = true;
             let mut res_err = None;
             for r in resolvers {
-                if let Err(e) = self.db.add_dns_reverse_resolver(&r.subnet, &r.resolver).await {
+                if let Err(e) = self
+                    .db
+                    .add_dns_reverse_resolver(&r.subnet, &r.resolver)
+                    .await
+                {
                     res_success = false;
                     res_err = Some(e.to_string());
                 } else {
-                    let _ = self.ctx.apply(lanforge_types::update::DeviceUpdate::AddReverseResolver {
-                        resolver: r,
-                    });
+                    let _ =
+                        self.ctx
+                            .apply(lanforge_types::update::DeviceUpdate::AddReverseResolver {
+                                resolver: r,
+                            });
                     res_count += 1;
                 }
             }
@@ -623,6 +629,10 @@ impl ClientContext {
             )
         {
             self.ctx.update_ra_config(prefixes, rdnss, dnssl);
+        }
+
+        if self.db.is_in_memory() {
+            let _ = self.flush_static_config_to_toml().await;
         }
 
         Response::SystemConfigImport(SystemConfigImportResponse {

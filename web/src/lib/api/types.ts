@@ -878,6 +878,13 @@ export interface DbMetrics {
 	last_error: boolean | number;
 }
 
+export interface DbEngineSwitchRequest {
+	engine: 'postgres' | 'memory';
+	url?: string;
+	max_connections?: number;
+	min_connections?: number;
+}
+
 export interface ExportedApiToken {
 	token: string;
 	name: string;
