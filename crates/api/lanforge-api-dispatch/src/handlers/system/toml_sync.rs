@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::ClientContext;
 use lanforge_api::api::SystemConfigExport;
@@ -377,9 +377,7 @@ impl ClientContext {
         let candidates = ["/etc/lanforge/lanforge.toml", "lanforge.toml"];
         for c in candidates {
             let p = Path::new(c);
-            if let Some(parent) = p.parent()
-                && (parent.as_os_str().is_empty() || parent.exists())
-            {
+            if p.exists() {
                 return Some(p.to_path_buf());
             }
         }
@@ -397,7 +395,7 @@ impl ClientContext {
             Some(p) => p,
             None => {
                 let err = "No writable configuration path found for lanforge.toml".to_string();
-                warn!("{err}");
+                debug!("{err}");
                 return Err(err);
             }
         };

@@ -12,10 +12,11 @@ impl ClientContext {
         let target_path = match self.resolve_config_path() {
             Some(p) => p,
             None => {
-                return Response::Error {
-                    error: "No writable configuration file path found for lanforge.toml"
-                        .to_string(),
-                };
+                if std::path::Path::new("/etc/lanforge").exists() {
+                    std::path::PathBuf::from("/etc/lanforge/lanforge.toml")
+                } else {
+                    std::path::PathBuf::from("lanforge.toml")
+                }
             }
         };
 
