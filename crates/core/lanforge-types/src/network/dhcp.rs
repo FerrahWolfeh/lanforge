@@ -27,6 +27,11 @@ use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 
 /// Deserializes an optional value from a string, treating empty or whitespace-only strings as `None`.
+///
+/// # Errors
+///
+/// Returns an error if the input cannot be deserialized or the non-empty string
+/// cannot be parsed as `T`.
 pub fn empty_string_as_none<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -41,6 +46,10 @@ where
 }
 
 /// Deserializes an optional string, treating empty or whitespace-only strings as `None`.
+///
+/// # Errors
+///
+/// Returns an error if the input cannot be deserialized as an optional string.
 pub fn empty_string_as_none_str<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -304,4 +313,3 @@ mod tests {
         assert_eq!(opts.boot_file, None);
     }
 }
-

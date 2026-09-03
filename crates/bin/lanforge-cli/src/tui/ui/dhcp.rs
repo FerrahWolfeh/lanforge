@@ -177,7 +177,7 @@ pub fn render(f: &mut ratatui::Frame, area: Rect, app: &mut TuiApp) {
                     let prefix = pool
                         .prefix
                         .map_or_else(|| "-".to_string(), |ip| ip.to_string());
-                    let len = pool.prefix_len.map_or(64, |l| l);
+                    let len = pool.prefix_len.unwrap_or(64);
                     format!("{prefix}/{len}")
                 };
                 pool_lines.push(Line::from(vec![

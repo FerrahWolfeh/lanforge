@@ -1,3 +1,4 @@
+use std::future::{Future, ready};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -134,15 +135,17 @@ where
 {
     type Rejection = HttpError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> HttpResult<Self> {
+    fn from_request_parts(parts: &mut Parts, state: &S) -> impl Future<Output = HttpResult<Self>> {
         let auth_manager = AuthManager::from_ref(state);
-        let token = extract_token_str(&parts.headers).ok_or_else(|| {
-            HttpError::Auth("Missing Authorization header or session cookie".into())
-        })?;
+        let result = extract_token_str(&parts.headers)
+            .ok_or_else(|| HttpError::Auth("Missing Authorization header or session cookie".into()))
+            .and_then(|token| {
+                auth_manager
+                    .validate_token(token)
+                    .map_err(|_| HttpError::Auth("Invalid or expired token".into()))
+            });
 
-        auth_manager
-            .validate_token(token)
-            .map_err(|_| HttpError::Auth("Invalid or expired token".into()))
+        ready(result)
     }
 }
 

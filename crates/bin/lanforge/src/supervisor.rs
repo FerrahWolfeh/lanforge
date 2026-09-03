@@ -85,14 +85,20 @@ where
                     ctx.clear_service_start(id);
                     return;
                 }
-                warn!("Supervisor: {} failed waiting for dependency {:?}: {e}", description, dep);
+                warn!(
+                    "Supervisor: {} failed waiting for dependency {:?}: {e}",
+                    description, dep
+                );
                 deps_satisfied = false;
                 break;
             }
         }
         if !deps_satisfied {
             ctx.set_service_state(id, ServiceState::Error);
-            if handle_backoff(ctx, &meta, &mut consecutive_failures, &mut bus_rx).await.is_none() {
+            if handle_backoff(ctx, &meta, &mut consecutive_failures, &mut bus_rx)
+                .await
+                .is_none()
+            {
                 return;
             }
             continue;
@@ -100,12 +106,23 @@ where
 
         // 2. Resource Initialization Phase
         if let Err(err) = service.init(ctx).await {
-            let Some(backoff_needed) = evaluate_service_exit(Err(err), ctx, id, &description, start, &mut consecutive_failures) else {
+            let Some(backoff_needed) = evaluate_service_exit(
+                Err(err),
+                ctx,
+                id,
+                &description,
+                start,
+                &mut consecutive_failures,
+            ) else {
                 let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
                 let _ = service.on_shutdown();
                 return;
             };
-            if backoff_needed && handle_backoff(ctx, &meta, &mut consecutive_failures, &mut bus_rx).await.is_none() {
+            if backoff_needed
+                && handle_backoff(ctx, &meta, &mut consecutive_failures, &mut bus_rx)
+                    .await
+                    .is_none()
+            {
                 let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
                 let _ = service.on_shutdown();
                 return;
@@ -163,7 +180,10 @@ where
             ServiceRunOutcome::Shutdown => {
                 let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
                 if let Err(e) = service.on_shutdown() {
-                    error!("Error during async service '{}' on_shutdown: {e}", meta.display_name);
+                    error!(
+                        "Error during async service '{}' on_shutdown: {e}",
+                        meta.display_name
+                    );
                 }
                 ctx.set_service_state(id, ServiceState::Inactive);
                 ctx.clear_service_start(id);
@@ -172,7 +192,10 @@ where
             ServiceRunOutcome::Control(action) => {
                 let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
                 if let Err(e) = service.on_shutdown() {
-                    error!("Error during async service '{}' on_shutdown: {e}", meta.display_name);
+                    error!(
+                        "Error during async service '{}' on_shutdown: {e}",
+                        meta.display_name
+                    );
                 }
                 match action {
                     ServiceAction::Stop => {
@@ -196,16 +219,33 @@ where
             }
             ServiceRunOutcome::Exited(res) => {
                 let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
-                let Some(backoff_needed) = evaluate_service_exit(res, ctx, id, &description, start, &mut consecutive_failures) else {
+                let Some(backoff_needed) = evaluate_service_exit(
+                    res,
+                    ctx,
+                    id,
+                    &description,
+                    start,
+                    &mut consecutive_failures,
+                ) else {
                     if let Err(e) = service.on_shutdown() {
-                        error!("Error during async service '{}' on_shutdown: {e}", meta.display_name);
+                        error!(
+                            "Error during async service '{}' on_shutdown: {e}",
+                            meta.display_name
+                        );
                     }
                     return;
                 };
 
-                if backoff_needed && handle_backoff(ctx, &meta, &mut consecutive_failures, &mut bus_rx).await.is_none() {
+                if backoff_needed
+                    && handle_backoff(ctx, &meta, &mut consecutive_failures, &mut bus_rx)
+                        .await
+                        .is_none()
+                {
                     if let Err(e) = service.on_shutdown() {
-                        error!("Error during async service '{}' on_shutdown: {e}", meta.display_name);
+                        error!(
+                            "Error during async service '{}' on_shutdown: {e}",
+                            meta.display_name
+                        );
                     }
                     return;
                 }
@@ -444,9 +484,9 @@ mod tests {
         }
     }
     impl lanforge_core::service::AsyncService for TestAsyncService {
-        async fn serve(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
+        fn serve(&mut self, _ctx: &LanforgeContext) -> impl Future<Output = Result<(), CoreError>> {
             self.attempts.fetch_add(1, Ordering::Relaxed);
-            Err(CoreError::Generic("always fails".into()))
+            std::future::ready(Err(CoreError::Generic("always fails".into())))
         }
     }
 
@@ -617,9 +657,9 @@ mod tests {
         }
     }
     impl lanforge_core::service::AsyncService for RapidOkService {
-        async fn serve(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
+        fn serve(&mut self, _ctx: &LanforgeContext) -> impl Future<Output = Result<(), CoreError>> {
             self.attempts.fetch_add(1, Ordering::Relaxed);
-            Ok(()) // Rapid exit with success
+            std::future::ready(Ok(())) // Rapid exit with success
         }
     }
 
@@ -773,10 +813,8 @@ mod tests {
 
         let ctx_clone = ctx.clone();
         let handle = tokio::spawn(async move {
-            supervise_async(&ctx_clone, move || {
-                CleanupService {
-                    cleanup_completed: cleanup_clone.clone(),
-                }
+            supervise_async(&ctx_clone, move || CleanupService {
+                cleanup_completed: cleanup_clone.clone(),
             })
             .await;
         });
@@ -849,10 +887,7 @@ mod tests {
 
         let ctx_clone = ctx.clone();
         let handle = tokio::spawn(async move {
-            supervise_async(&ctx_clone, move || {
-                HangingService
-            })
-            .await;
+            supervise_async(&ctx_clone, move || HangingService).await;
         });
 
         // Wait for service to be online

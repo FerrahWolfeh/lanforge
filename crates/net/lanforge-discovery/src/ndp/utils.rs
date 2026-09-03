@@ -20,9 +20,9 @@ use futures::TryStreamExt;
 use lanforge_types::{identifiers::MacAddr, network::NeighborEvent};
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use rtnetlink::{
-    Handle, IpVersion,
+    Handle,
     packet_route::{
-        RouteNetlinkMessage,
+        AddressFamily, RouteNetlinkMessage,
         neighbour::{NeighbourAddress, NeighbourAttribute, NeighbourMessage, NeighbourState},
     },
 };
@@ -36,7 +36,7 @@ pub async fn lookup_mac_for_ipv6(handle: &Handle, ip: &Ipv6Addr) -> Option<MacAd
     let mut stream = handle
         .neighbours()
         .get()
-        .set_family(IpVersion::V6)
+        .set_address_family(AddressFamily::Inet6)
         .execute();
 
     while let Ok(Some(msg)) = stream.try_next().await {
@@ -210,7 +210,7 @@ pub async fn get_ipv6_neighbors(
     let mut stream = handle
         .neighbours()
         .get()
-        .set_family(IpVersion::V6)
+        .set_address_family(AddressFamily::Inet6)
         .execute();
 
     let prefix_data = split_prefix_and_length(target_prefix);
@@ -265,7 +265,7 @@ pub async fn get_ipv4_neighbors(
     let mut stream = handle
         .neighbours()
         .get()
-        .set_family(IpVersion::V4)
+        .set_address_family(AddressFamily::Inet)
         .execute();
 
     while let Some(msg) = stream.try_next().await? {

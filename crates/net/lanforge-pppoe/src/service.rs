@@ -1,6 +1,6 @@
 use crate::auth::authenticate;
 use crate::config::{PppoeConfig, PppoeCredentials};
-use crate::discovery::{send_padt, PppoeDiscovery};
+use crate::discovery::{PppoeDiscovery, send_padt};
 use crate::ebpf::EbpfSession;
 use crate::error::PppoeError;
 use crate::ipcp::negotiate_ipcp;
@@ -199,12 +199,8 @@ impl PppoeService {
                     &all_ifaces,
                 );
 
-                if let Err(e) = apply_nftables_tuning(
-                    &self.cfg.nftables,
-                    &interface_name,
-                    &lan_ifaces,
-                )
-                .await
+                if let Err(e) =
+                    apply_nftables_tuning(&self.cfg.nftables, &interface_name, &lan_ifaces).await
                 {
                     warn!(error = %e, "Failed to apply nftables performance tuning rules");
                 }
@@ -289,12 +285,7 @@ impl PppoeService {
         if let Some((wan_mac, ac_mac, session_id)) = self.active_session.take()
             && self.cfg.send_padt_on_shutdown
         {
-            let _ = send_padt(
-                &self.cfg.wan_iface,
-                wan_mac,
-                ac_mac,
-                session_id,
-            );
+            let _ = send_padt(&self.cfg.wan_iface, wan_mac, ac_mac, session_id);
         }
 
         let reason = match &flow_res {
@@ -320,11 +311,7 @@ fn is_shutdown_or_stop_event(event: &LanforgeEvent) -> bool {
     match event {
         LanforgeEvent::System(SystemEvent::Shutdown) => true,
         LanforgeEvent::System(SystemEvent::ServiceControl { id, action })
-            if id == "pppoe"
-                && matches!(
-                    action,
-                    ServiceAction::Stop | ServiceAction::Restart
-                ) =>
+            if id == "pppoe" && matches!(action, ServiceAction::Stop | ServiceAction::Restart) =>
         {
             true
         }
@@ -347,11 +334,14 @@ impl AsyncService for PppoeService {
                         "none".to_string(),
                     )
                 },
-                |p| (
-                    format!("{:?}", p.state),
-                    p.local_ip.map_or_else(|| "none".to_string(), |ip| ip.to_string()),
-                    p.interface.clone().unwrap_or_else(|| "none".to_string()),
-                ),
+                |p| {
+                    (
+                        format!("{:?}", p.state),
+                        p.local_ip
+                            .map_or_else(|| "none".to_string(), |ip| ip.to_string()),
+                        p.interface.clone().unwrap_or_else(|| "none".to_string()),
+                    )
+                },
             )
         });
         vec![
@@ -368,9 +358,7 @@ impl AsyncService for PppoeService {
     }
 
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
-        if self.cfg.dataplane == PppoeDataplane::Kernel
-            && !Path::new("/dev/ppp").exists()
-        {
+        if self.cfg.dataplane == PppoeDataplane::Kernel && !Path::new("/dev/ppp").exists() {
             warn!(
                 service = "PPPoE",
                 "/dev/ppp device unavailable (ppp_generic kernel module missing). Disabling PPPoE service."
@@ -456,12 +444,7 @@ impl AsyncService for PppoeService {
                 session_id,
                 "Sending PPPoE PADT frame during service cleanup"
             );
-            let _ = send_padt(
-                &self.cfg.wan_iface,
-                wan_mac,
-                ac_mac,
-                session_id,
-            );
+            let _ = send_padt(&self.cfg.wan_iface, wan_mac, ac_mac, session_id);
         }
         if self.cfg.nftables.enabled {
             cleanup_nftables_tuning(&self.cfg.nftables.table_name).await;
@@ -524,10 +507,7 @@ pub(crate) fn resolve_lan_ifaces(
         .iter()
         .filter(|name| {
             let n = name.as_str();
-            n != "lo"
-                && n != wan_iface
-                && !n.starts_with("ppp")
-                && !is_virtual_or_tunnel_iface(n)
+            n != "lo" && n != wan_iface && !n.starts_with("ppp") && !is_virtual_or_tunnel_iface(n)
         })
         .cloned()
         .collect()
@@ -539,9 +519,15 @@ mod tests {
 
     #[test]
     fn test_resolve_lan_ifaces_explicit() {
-        let mut nft_cfg = PppoeNftablesConfig::default();
-        nft_cfg.lan_ifaces = vec!["enp2s0".to_string()];
-        let available = vec!["enp1s0".to_string(), "enp2s0".to_string(), "podman1".to_string()];
+        let nft_cfg = PppoeNftablesConfig {
+            lan_ifaces: vec!["enp2s0".to_string()],
+            ..Default::default()
+        };
+        let available = vec![
+            "enp1s0".to_string(),
+            "enp2s0".to_string(),
+            "podman1".to_string(),
+        ];
         let resolved = resolve_lan_ifaces(&nft_cfg, Some("eth99"), "enp1s0", &available);
         assert_eq!(resolved, vec!["enp2s0"]);
     }
@@ -549,7 +535,11 @@ mod tests {
     #[test]
     fn test_resolve_lan_ifaces_from_context() {
         let nft_cfg = PppoeNftablesConfig::default();
-        let available = vec!["enp1s0".to_string(), "enp2s0".to_string(), "podman1".to_string()];
+        let available = vec![
+            "enp1s0".to_string(),
+            "enp2s0".to_string(),
+            "podman1".to_string(),
+        ];
         let resolved = resolve_lan_ifaces(&nft_cfg, Some("enp2s0"), "enp1s0", &available);
         assert_eq!(resolved, vec!["enp2s0"]);
     }
@@ -572,4 +562,3 @@ mod tests {
         assert_eq!(resolved, vec!["enp2s0"]);
     }
 }
-

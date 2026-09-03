@@ -1,10 +1,10 @@
 use crate::error::PppoeError;
 use futures::TryStreamExt;
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socket};
+use rtnetlink::RouteMessageBuilder;
 use rtnetlink::packet_route::address::{AddressAttribute, AddressHeaderFlags, AddressScope};
 use rtnetlink::packet_route::neighbour::{NeighbourAttribute, NeighbourState};
 use rtnetlink::packet_route::route::RouteScope;
-use rtnetlink::{IpVersion, RouteMessageBuilder};
 use std::ffi::CString;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::fd::AsRawFd;
@@ -39,11 +39,7 @@ pub fn setup_interface_ifreq(
     // Set MTU:
     // - For virtual ppp interfaces (e.g. ppp0), MTU is the negotiated PPPoE MRU (1492).
     // - For physical/Ethernet interfaces in eBPF mode (e.g. wan0), the physical interface MTU must be 1500.
-    let dev_mtu = if ifname.starts_with("ppp") {
-        mtu
-    } else {
-        1500
-    };
+    let dev_mtu = if ifname.starts_with("ppp") { mtu } else { 1500 };
     let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
     for (i, &b) in bytes[..len].iter().enumerate() {
         ifr.ifr_name[i] = b as libc::c_char;
@@ -141,11 +137,7 @@ pub async fn assign_ipv4_address(ifindex: u32, local: Ipv4Addr, peer: Option<Ipv
     }
 }
 
-pub async fn add_ipv4_peer_route(
-    ifindex: u32,
-    peer: Ipv4Addr,
-    local: Option<Ipv4Addr>,
-) {
+pub async fn add_ipv4_peer_route(ifindex: u32, peer: Ipv4Addr, local: Option<Ipv4Addr>) {
     match rtnetlink::new_connection() {
         Err(e) => warn!(error = %e, "Failed to open rtnetlink connection for peer route"),
         Ok((conn, handle, _)) => {
@@ -263,13 +255,12 @@ pub async fn add_ipv6_link_local(
     }
 }
 
-pub async fn deconfigure_routes_and_addrs(
-    ifname: &str,
-    is_ebpf: bool,
-    peer_ip: Option<Ipv4Addr>,
-) {
+pub async fn deconfigure_routes_and_addrs(ifname: &str, is_ebpf: bool, peer_ip: Option<Ipv4Addr>) {
     if is_ebpf && !ifname.starts_with("ppp") {
-        debug!(ifname, "Deconfiguring eBPF physical interface routes and IP addresses via rtnetlink");
+        debug!(
+            ifname,
+            "Deconfiguring eBPF physical interface routes and IP addresses via rtnetlink"
+        );
 
         let Ok(c_ifname) = CString::new(ifname) else {
             return;
@@ -299,7 +290,7 @@ pub async fn deconfigure_routes_and_addrs(
                 let mut neigh_stream = handle
                     .neighbours()
                     .get()
-                    .set_family(IpVersion::V4)
+                    .set_address_family(rtnetlink::packet_route::AddressFamily::Inet)
                     .execute();
                 while let Ok(Some(msg)) = neigh_stream.try_next().await {
                     if msg.header.ifindex == ifindex {
@@ -316,7 +307,11 @@ pub async fn deconfigure_routes_and_addrs(
             let _ = handle.route().del(default_v6).execute().await;
 
             // 4. Flush global IPv4 / IPv6 addresses
-            let mut addr_stream = handle.address().get().set_link_index_filter(ifindex).execute();
+            let mut addr_stream = handle
+                .address()
+                .get()
+                .set_link_index_filter(ifindex)
+                .execute();
             while let Ok(Some(addr_msg)) = addr_stream.try_next().await {
                 if addr_msg.header.scope == AddressScope::Universe {
                     let _ = handle.address().del(addr_msg).execute().await;

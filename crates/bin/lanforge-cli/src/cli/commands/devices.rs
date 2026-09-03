@@ -150,13 +150,13 @@ fn DeviceRow(props: &DeviceRowProps) -> impl Into<AnyElement<'_>> {
                 Text(content: format!("{}", dev.mac), color: Color::Cyan)
             }
             View(width: 18) {
-                Text(content: format!("{}", dev.display_v4), color: Color::Green)
+                Text(content: dev.display_v4.clone(), color: Color::Green)
             }
             View(width: 31) {
                 Text(content: truncate(&dev.display_v6, 30), color: Color::Yellow)
             }
             View(width: 10) {
-                Text(content: format!("{}", last_seen_compact), color: Color::DarkGrey)
+                Text(content: last_seen_compact, color: Color::DarkGrey)
             }
         }
     }
@@ -239,7 +239,7 @@ fn HostRow(props: &HostRowProps) -> impl Into<AnyElement<'_>> {
                 Text(content: format!("{}", host.mac), color: Color::Cyan)
             }
             View(width: 18) {
-                Text(content: format!("{}", v4_str), color: Color::Green)
+                Text(content: v4_str, color: Color::Green)
             }
             View(width: 20) {
                 Text(content: truncate(&v6_str, 20), color: Color::Yellow)
@@ -371,7 +371,7 @@ fn GroupedDeviceRow(props: &GroupedRowProps) -> impl Into<AnyElement<'_>> {
                         Text(content: "—", color: Color::DarkGrey)
                     }
                     View(width: 10) {
-                        Text(content: format!("{}", last_seen_compact), color: Color::DarkGrey)
+                        Text(content:last_seen_compact, color: Color::DarkGrey)
                     }
                 }
                 #(interfaces.iter().enumerate().map(|(idx, dev)| {
@@ -396,13 +396,13 @@ fn GroupedDeviceRow(props: &GroupedRowProps) -> impl Into<AnyElement<'_>> {
                                 Text(content: format!("{}", dev.mac), color: Color::Cyan)
                             }
                             View(width: 18) {
-                                Text(content: format!("{}", dev.display_v4), color: Color::Green)
+                                Text(content: dev.display_v4.clone(), color: Color::Green)
                             }
                             View(width: 31) {
                                 Text(content: truncate(&dev.display_v6, 30), color: Color::Yellow)
                             }
                             View(width: 10) {
-                                Text(content: format!("{}", child_seen), color: Color::DarkGrey)
+                                Text(content: child_seen, color: Color::DarkGrey)
                             }
                         }
                     }

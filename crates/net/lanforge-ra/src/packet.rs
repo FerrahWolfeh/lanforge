@@ -249,11 +249,11 @@ pub fn icmpv6_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, payload: &[u8]) -> u16 {
     acc += len & 0xFFFF;
     acc += 58u32; // next-header = ICMPv6
 
-    let mut iter = payload.chunks_exact(2);
-    for chunk in iter.by_ref() {
+    let iter = payload.as_chunks::<2>();
+    for chunk in iter.0 {
         acc += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
     }
-    if let [tail] = iter.remainder() {
+    if let [tail] = iter.1 {
         acc += u32::from(*tail) << 8; // right-aligned zero padding
     }
 

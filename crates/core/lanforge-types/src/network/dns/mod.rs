@@ -475,7 +475,7 @@ impl Display for DnsRData {
                         4 => {
                             // ipv4hint
                             let mut ips = Vec::new();
-                            for chunk in val.chunks_exact(4) {
+                            for chunk in val.as_chunks::<4>().0 {
                                 let ip = Ipv4Addr::new(chunk[0], chunk[1], chunk[2], chunk[3]);
                                 ips.push(ip.to_string());
                             }
@@ -486,7 +486,7 @@ impl Display for DnsRData {
                         6 => {
                             // ipv6hint
                             let mut ips = Vec::new();
-                            for chunk in val.chunks_exact(16) {
+                            for chunk in val.as_chunks::<16>().0 {
                                 let mut b = [0u8; 16];
                                 b.copy_from_slice(chunk);
                                 let ip = Ipv6Addr::from(b);

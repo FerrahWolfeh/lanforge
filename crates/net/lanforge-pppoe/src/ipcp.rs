@@ -4,7 +4,7 @@ use crate::session::PppoeSession;
 use lanforge_types::identifiers::MacAddr;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
-use tokio::time::{timeout, Instant};
+use tokio::time::{Instant, timeout};
 use tracing::{debug, info, warn};
 
 pub const PPP_IPCP: u16 = 0x8021;
@@ -103,7 +103,7 @@ fn build_ipv6cp_ack(id: u8, data: &[u8], len: usize) -> Vec<u8> {
     ack_pkt
 }
 
-pub fn parse_ipcp_nak(
+pub const fn parse_ipcp_nak(
     data: &[u8],
     len: usize,
     assigned_ip: &mut Ipv4Addr,
@@ -147,7 +147,7 @@ pub fn parse_ipcp_nak(
 }
 
 #[must_use]
-pub fn parse_peer_ip(data: &[u8], len: usize) -> Option<Ipv4Addr> {
+pub const fn parse_peer_ip(data: &[u8], len: usize) -> Option<Ipv4Addr> {
     let mut offset = 6;
     let end = 2 + len;
     while offset + 2 <= end {
@@ -419,7 +419,10 @@ pub async fn negotiate_ipcp(
                 }
             }
             _ => {
-                debug!(proto = format_args!("{proto:#06x}"), "Ignored packet during IPCP phase");
+                debug!(
+                    proto = format_args!("{proto:#06x}"),
+                    "Ignored packet during IPCP phase"
+                );
             }
         }
     }
