@@ -556,6 +556,15 @@ fn format_dns_event<'a>(event: &'a DnsEvent, spans: &mut Vec<Span<'a>>) {
             ));
             spans.push(Span::raw("Adblock configuration updated."));
         }
+        DnsEvent::ConfigAdblockRulesChanged => {
+            spans.push(Span::styled(
+                "DNS  ",
+                Style::default()
+                    .fg(theme::MOCHA_TEAL)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw("Adblock custom rules updated."));
+        }
         DnsEvent::ConfigUpstreamsChanged => {
             spans.push(Span::styled(
                 "DNS  ",

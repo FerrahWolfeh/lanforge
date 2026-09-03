@@ -135,6 +135,14 @@ pub struct DnsAdblockUrlsResponse {
     pub urls: Vec<AdblockUrlEntry>,
 }
 
+pub use lanforge_types::network::dns::adblock::AdblockRuleEntry;
+
+/// Response containing custom adblock rules.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DnsAdblockRulesResponse {
+    pub rules: Vec<AdblockRuleEntry>,
+}
+
 /// A configured DNS upstream entry.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct DnsUpstreamConfig {
@@ -245,6 +253,18 @@ impl HttpWrappedResponse for DnsAdblockStatusResponse {
 
 impl HttpWrappedResponse for DnsAdblockUrlsResponse {
     type Wrapper = HttpDataResponse<DnsAdblockUrlsResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for DnsAdblockRulesResponse {
+    type Wrapper = HttpDataResponse<DnsAdblockRulesResponse>;
 
     fn wrap(self) -> Self::Wrapper {
         HttpDataResponse { data: self }

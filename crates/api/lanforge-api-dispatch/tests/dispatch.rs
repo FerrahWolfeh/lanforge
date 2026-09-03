@@ -176,6 +176,16 @@ async fn test_dispatch_system_config_import_export() {
         } else {
             vec![]
         },
+        dns_adblock_rules: if cfg!(feature = "adblock") {
+            Some(vec![lanforge_types::network::dns::adblock::AdblockRuleEntry {
+                id: None,
+                domain: "custom-blocked.com".to_string(),
+                action: "block".to_string(),
+                enabled: true,
+            }])
+        } else {
+            None
+        },
         overwrite: true,
         ..Default::default()
     };
@@ -223,6 +233,12 @@ async fn test_dispatch_system_config_import_export() {
 
             assert_eq!(cfg.dns_allowlist.len(), 1);
             assert_eq!(cfg.dns_allowlist[0].domain, "allowed-import.lan");
+
+            let rules = cfg.dns_adblock_rules.as_ref().expect("rules present");
+            assert_eq!(rules.len(), 1);
+            assert_eq!(rules[0].domain, "custom-blocked.com");
+            assert_eq!(rules[0].action, "block");
+            assert!(rules[0].enabled);
         } else {
             assert_eq!(cfg.dns_adblock_urls.len(), 0);
             assert_eq!(cfg.dns_allowlist.len(), 0);

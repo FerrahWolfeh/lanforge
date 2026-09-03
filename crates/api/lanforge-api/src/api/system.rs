@@ -250,7 +250,7 @@ use crate::api::devices::HostConfigEntry;
 use crate::api::dns::{AllowlistEntry, DnsUpstreamConfig};
 use lanforge_types::network::dns::{
     AdblockUrlEntry,
-    adblock::{AdblockDbConfig, RewriteRule},
+    adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule},
 };
 
 use lanforge_types::network::DnsReverseResolver;
@@ -275,6 +275,8 @@ pub struct SystemConfigExport {
     pub dns_adblock_config: AdblockDbConfig,
     pub dns_adblock_urls: Vec<AdblockUrlEntry>,
     pub dns_allowlist: Vec<AllowlistEntry>,
+    #[serde(default)]
+    pub dns_adblock_rules: Option<Vec<AdblockRuleEntry>>,
     pub api_tokens: Option<Vec<ExportedApiToken>>,
     pub dhcp_v4_pools: Option<Vec<Dhcpv4Pool>>,
     pub dhcp_v6_pools: Option<Vec<Dhcpv6Pool>>,
@@ -347,6 +349,7 @@ pub enum ImportSection {
     DnsAdblockConfig,
     DnsAdblockUrls,
     DnsAllowlist,
+    DnsAdblockRules,
     ApiTokens,
     DhcpV4Pools,
     DhcpV6Pools,
@@ -368,6 +371,7 @@ impl ImportSection {
             Self::DnsAdblockConfig => "dns_adblock_config",
             Self::DnsAdblockUrls => "dns_adblock_urls",
             Self::DnsAllowlist => "dns_allowlist",
+            Self::DnsAdblockRules => "dns_adblock_rules",
             Self::ApiTokens => "api_tokens",
             Self::DhcpV4Pools => "dhcp_v4_pools",
             Self::DhcpV6Pools => "dhcp_v6_pools",

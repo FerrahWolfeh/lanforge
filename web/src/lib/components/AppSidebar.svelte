@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as Sidebar from "$lib/components/ui/sidebar";
 	import * as Tooltip from "$lib/components/ui/tooltip";
+	import * as Collapsible from "$lib/components/ui/collapsible";
 	import { page } from "$app/stores";
 	import LayoutDashboardIcon from "@lucide/svelte/icons/layout-dashboard";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
@@ -20,6 +21,7 @@
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import RadioIcon from "@lucide/svelte/icons/radio";
+	import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 
 	const navGroups = [
 		{
@@ -60,7 +62,18 @@
 				{ label: "Resolver", href: "/dns/resolver", icon: GlobeIcon },
 				{ label: "Query Log", href: "/dns/log", icon: ListIcon },
 				{ label: "Cache", href: "/dns/cache", icon: DatabaseIcon },
-				{ label: "Adblock", href: "/dns/adblock", icon: ShieldIcon },
+				{
+					label: "Adblock",
+					href: "/dns/adblock",
+					icon: ShieldIcon,
+					children: [
+						{ label: "Overview", href: "/dns/adblock" },
+						{ label: "Blocklists", href: "/dns/adblock/lists" },
+						{ label: "Custom Rules", href: "/dns/adblock/rules" },
+						{ label: "Blocked Services", href: "/dns/adblock/services" },
+						{ label: "Settings", href: "/dns/adblock/settings" },
+					],
+				},
 				{
 					label: "Custom Rewrites",
 					href: "/dns/rewrites",
@@ -101,6 +114,12 @@
 		if (href === "/system") return p === "/system" || p === "/system/";
 		return p === href || p.startsWith(href + "/");
 	}
+
+	function isSubActive(href: string) {
+		const p = $page.url.pathname;
+		if (href === "/dns/adblock") return p === "/dns/adblock" || p === "/dns/adblock/";
+		return p === href || p.startsWith(href + "/");
+	}
 </script>
 
 <Sidebar.Root collapsible="icon">
@@ -132,19 +151,57 @@
 				<Sidebar.GroupContent>
 					<Sidebar.Menu>
 						{#each group.items as item (item.href)}
-							<Sidebar.MenuItem>
-								<Sidebar.MenuButton
-									isActive={isActive(item.href)}
-									tooltipContent={item.label}
-								>
-									{#snippet child({ props })}
-										<a href={item.href} {...props}>
-											<item.icon />
-											<span>{item.label}</span>
-										</a>
-									{/snippet}
-								</Sidebar.MenuButton>
-							</Sidebar.MenuItem>
+							{#if item.children}
+								{@const isChildActive = item.children.some((c) => isSubActive(c.href))}
+								<Collapsible.Root open={isChildActive} class="group/collapsible">
+									<Sidebar.MenuItem>
+										<Collapsible.Trigger class="w-full">
+											{#snippet child({ props })}
+												<Sidebar.MenuButton
+													{...props}
+													isActive={isChildActive}
+													tooltipContent={item.label}
+												>
+													<item.icon />
+													<span>{item.label}</span>
+													<ChevronRightIcon
+														class="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90"
+													/>
+												</Sidebar.MenuButton>
+											{/snippet}
+										</Collapsible.Trigger>
+										<Collapsible.Content>
+											<Sidebar.MenuSub>
+												{#each item.children as sub (sub.href)}
+													<Sidebar.MenuSubItem>
+														<Sidebar.MenuSubButton isActive={isSubActive(sub.href)}>
+															{#snippet child({ props })}
+																<a href={sub.href} {...props}>
+																	<span>{sub.label}</span>
+																</a>
+															{/snippet}
+														</Sidebar.MenuSubButton>
+													</Sidebar.MenuSubItem>
+												{/each}
+											</Sidebar.MenuSub>
+										</Collapsible.Content>
+									</Sidebar.MenuItem>
+								</Collapsible.Root>
+							{:else}
+								<Sidebar.MenuItem>
+									<Sidebar.MenuButton
+										isActive={isActive(item.href)}
+										tooltipContent={item.label}
+									>
+										{#snippet child({ props })}
+											<a href={item.href} {...props}>
+												<item.icon />
+												<span>{item.label}</span>
+											</a>
+										{/snippet}
+									</Sidebar.MenuButton>
+								</Sidebar.MenuItem>
+							{/if}
 						{/each}
 					</Sidebar.Menu>
 				</Sidebar.GroupContent>

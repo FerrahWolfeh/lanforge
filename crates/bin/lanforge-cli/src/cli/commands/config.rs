@@ -10,7 +10,7 @@ use lanforge_api::api::devices::HostConfigEntry;
 use lanforge_api::api::dns::{AllowlistEntry, DnsUpstreamConfig};
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::network::DnsReverseResolver;
@@ -70,6 +70,8 @@ pub struct FileConfigExport {
     pub dns_adblock_config: AdblockDbConfig,
     pub dns_adblock_urls: Vec<AdblockUrlEntry>,
     pub dns_allowlist: Vec<AllowlistEntry>,
+    #[serde(default)]
+    pub dns_adblock_rules: Option<Vec<AdblockRuleEntry>>,
     pub api_tokens: Option<EncryptedApiTokens>,
     pub dhcp_v4_pools: Option<Vec<Dhcpv4Pool>>,
     pub dhcp_v6_pools: Option<Vec<Dhcpv6Pool>>,
@@ -179,6 +181,7 @@ async fn execute_export(
         dns_adblock_config: config.dns_adblock_config,
         dns_adblock_urls: config.dns_adblock_urls,
         dns_allowlist: config.dns_allowlist,
+        dns_adblock_rules: config.dns_adblock_rules,
         api_tokens: api_tokens_section,
         dhcp_v4_pools: config.dhcp_v4_pools,
         dhcp_v6_pools: config.dhcp_v6_pools,
@@ -238,6 +241,7 @@ async fn execute_import(
         dns_adblock_config: file_export.dns_adblock_config,
         dns_adblock_urls: file_export.dns_adblock_urls,
         dns_allowlist: file_export.dns_allowlist,
+        dns_adblock_rules: file_export.dns_adblock_rules,
         api_tokens,
         dhcp_v4_pools: file_export.dhcp_v4_pools,
         dhcp_v6_pools: file_export.dhcp_v6_pools,
@@ -275,6 +279,7 @@ async fn execute_import(
             lanforge_api::api::ImportSection::DnsAdblockConfig => "DNS adblock config",
             lanforge_api::api::ImportSection::DnsAdblockUrls => "DNS adblock URLs",
             lanforge_api::api::ImportSection::DnsAllowlist => "DNS allowlist entries",
+            lanforge_api::api::ImportSection::DnsAdblockRules => "DNS adblock rules",
             lanforge_api::api::ImportSection::ApiTokens => "API tokens",
             lanforge_api::api::ImportSection::DhcpV4Pools => "DHCPv4 pools",
             lanforge_api::api::ImportSection::DhcpV6Pools => "DHCPv6 pools",

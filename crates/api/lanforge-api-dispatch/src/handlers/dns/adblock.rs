@@ -3,7 +3,8 @@ use crate::ClientContext;
 use lanforge_api::api::Response;
 #[cfg(feature = "adblock")]
 use lanforge_api::api::{
-    AdblockUrlEntry, DnsAdblockStatusResponse, DnsAdblockUrlsResponse, Response, SimpleSuccess,
+    AdblockRuleEntry, AdblockUrlEntry, DnsAdblockRulesResponse, DnsAdblockStatusResponse,
+    DnsAdblockUrlsResponse, Response, SimpleSuccess,
 };
 
 #[cfg(feature = "adblock")]
@@ -276,6 +277,137 @@ impl ClientContext {
         _blocking_ip_v4: Option<Ipv4Addr>,
         _blocking_ip_v6: Option<Ipv6Addr>,
     ) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
+    }
+
+    #[cfg(feature = "adblock")]
+    pub async fn handle_dns_adblock_rules(&self) -> Response {
+        match self.db.load_adblock_rules().await {
+            Ok(rows) => {
+                let rules = rows
+                    .into_iter()
+                    .map(|(id, domain, action, enabled)| AdblockRuleEntry {
+                        id: Some(id),
+                        domain,
+                        action,
+                        enabled,
+                    })
+                    .collect();
+                Response::DnsAdblockRules(DnsAdblockRulesResponse { rules })
+            }
+            Err(e) => Response::Error {
+                error: e.to_string(),
+            },
+        }
+    }
+
+    #[cfg(not(feature = "adblock"))]
+    pub async fn handle_dns_adblock_rules(&self) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
+    }
+
+    #[cfg(feature = "adblock")]
+    pub async fn handle_dns_adblock_rule_add(&self, domain: String, action: String) -> Response {
+        match self.db.add_adblock_rule(&domain, &action).await {
+            Ok(id) => {
+                if let Ok(rows) = self.db.load_adblock_rules().await {
+                    let rules = rows
+                        .into_iter()
+                        .map(|(id, domain, action, enabled)| AdblockRuleEntry {
+                            id: Some(id),
+                            domain,
+                            action,
+                            enabled,
+                        })
+                        .collect();
+                    self.ctx.update_dns_adblock_rules(rules);
+                }
+                Response::Success(SimpleSuccess {
+                    message: format!("Adblock rule added for domain '{domain}' with action '{action}' (id: {id})"),
+                })
+            }
+            Err(e) => Response::Error {
+                error: e.to_string(),
+            },
+        }
+    }
+
+    #[cfg(not(feature = "adblock"))]
+    pub async fn handle_dns_adblock_rule_add(&self, _domain: String, _action: String) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
+    }
+
+    #[cfg(feature = "adblock")]
+    pub async fn handle_dns_adblock_rule_remove(&self, id: i64) -> Response {
+        match self.db.remove_adblock_rule(id).await {
+            Ok(()) => {
+                if let Ok(rows) = self.db.load_adblock_rules().await {
+                    let rules = rows
+                        .into_iter()
+                        .map(|(id, domain, action, enabled)| AdblockRuleEntry {
+                            id: Some(id),
+                            domain,
+                            action,
+                            enabled,
+                        })
+                        .collect();
+                    self.ctx.update_dns_adblock_rules(rules);
+                }
+                Response::Success(SimpleSuccess {
+                    message: format!("Adblock rule {id} removed"),
+                })
+            }
+            Err(e) => Response::Error {
+                error: e.to_string(),
+            },
+        }
+    }
+
+    #[cfg(not(feature = "adblock"))]
+    pub async fn handle_dns_adblock_rule_remove(&self, _id: i64) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
+    }
+
+    #[cfg(feature = "adblock")]
+    pub async fn handle_dns_adblock_rule_status(&self, id: i64, enabled: bool) -> Response {
+        match self.db.update_adblock_rule_status(id, enabled).await {
+            Ok(()) => {
+                if let Ok(rows) = self.db.load_adblock_rules().await {
+                    let rules = rows
+                        .into_iter()
+                        .map(|(id, domain, action, enabled)| AdblockRuleEntry {
+                            id: Some(id),
+                            domain,
+                            action,
+                            enabled,
+                        })
+                        .collect();
+                    self.ctx.update_dns_adblock_rules(rules);
+                }
+                Response::Success(SimpleSuccess {
+                    message: format!("Adblock rule {id} status updated to enabled={enabled}"),
+                })
+            }
+            Err(e) => Response::Error {
+                error: e.to_string(),
+            },
+        }
+    }
+
+    #[cfg(not(feature = "adblock"))]
+    pub async fn handle_dns_adblock_rule_status(&self, _id: i64, _enabled: bool) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
                 .to_string(),

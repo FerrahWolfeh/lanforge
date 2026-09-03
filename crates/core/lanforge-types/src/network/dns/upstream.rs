@@ -66,11 +66,51 @@ pub struct UpstreamTarget {
 
 /// An upstream target resolver.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[serde(from = "UpstreamEntryDe", into = "UpstreamEntryDe")]
 pub struct UpstreamEntry {
     /// The target resolver.
     pub target: UpstreamTarget,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum UpstreamEntryDe {
+    Target { target: UpstreamTarget },
+    Detailed {
+        addr: SocketAddr,
+        protocol: UpstreamProtocol,
+        #[serde(default)]
+        domain: Option<String>,
+    },
+}
+
+impl From<UpstreamEntryDe> for UpstreamEntry {
+    fn from(de: UpstreamEntryDe) -> Self {
+        match de {
+            UpstreamEntryDe::Target { target } => Self { target },
+            UpstreamEntryDe::Detailed {
+                addr,
+                protocol,
+                domain,
+            } => Self {
+                target: UpstreamTarget {
+                    addr,
+                    protocol,
+                    hostname: domain,
+                },
+            },
+        }
+    }
+}
+
+impl From<UpstreamEntry> for UpstreamEntryDe {
+    fn from(entry: UpstreamEntry) -> Self {
+        Self::Target {
+            target: entry.target,
+        }
+    }
+}
+
 
 impl FromStr for UpstreamTarget {
     type Err = String;

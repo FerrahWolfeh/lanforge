@@ -32,6 +32,7 @@ pub use blocklist::DiskBlocklist;
 pub struct AdBlocker {
     pub blocklist: RwLock<Option<Arc<DiskBlocklist>>>,
     pub allowlist: RwLock<Arc<HashSet<Box<str>>>>,
+    pub custom_blocks: RwLock<Arc<HashSet<Box<str>>>>,
     pub timer: Arc<AdblockTimerState>,
     pub config: RwLock<Arc<AdblockRuntimeConfig>>,
     per_ip_stats: DashMap<IpAddr, AtomicU64>,
@@ -78,6 +79,7 @@ impl AdBlocker {
         Self {
             blocklist: RwLock::new(None),
             allowlist: RwLock::new(Arc::new(HashSet::new())),
+            custom_blocks: RwLock::new(Arc::new(HashSet::new())),
             timer: Arc::new(AdblockTimerState::new(enabled)),
             config: RwLock::new(Arc::new(AdblockRuntimeConfig::default())),
             per_ip_stats: DashMap::new(),
@@ -120,6 +122,12 @@ impl AdBlocker {
             let allow = self.allowlist.read();
             if Self::match_allow(&allow, qname) {
                 return false;
+            }
+        }
+        {
+            let custom_blocks = self.custom_blocks.read();
+            if Self::match_allow(&custom_blocks, qname) {
+                return true;
             }
         }
         let block = self.blocklist.read();
@@ -188,6 +196,13 @@ impl AdBlocker {
         debug!("Adblock: allowlist updated with {} entries", count);
     }
 
+    pub fn replace_custom_blocks(&self, new_blocks: HashSet<String>) {
+        let count = new_blocks.len();
+        let boxed_set: HashSet<Box<str>> = new_blocks.into_iter().map(Box::from).collect();
+        *self.custom_blocks.write() = Arc::new(boxed_set);
+        debug!("Adblock: custom blocks updated with {} entries", count);
+    }
+
     pub fn replace_config(
         &self,
         mode: BlockingMode,
@@ -198,9 +213,18 @@ impl AdBlocker {
         debug!("Adblock: runtime config updated (mode: {:?})", mode);
     }
 
-    pub fn add_block(&self, _domain: &str) {
-        // We no longer support manual ad-hoc blocks in the DiskBlocklist for now,
-        // as it is read-only from mmap. Manual blocks should be added to config.
+    pub fn add_block(&self, domain: &str) {
+        let mut list_lock = self.custom_blocks.write();
+        let mut new_set = (**list_lock).clone();
+        new_set.insert(Box::from(domain.to_lowercase()));
+        *list_lock = Arc::new(new_set);
+    }
+
+    pub fn remove_block(&self, domain: &str) {
+        let mut list_lock = self.custom_blocks.write();
+        let mut new_set = (**list_lock).clone();
+        new_set.remove(domain.to_lowercase().as_str());
+        *list_lock = Arc::new(new_set);
     }
 
     pub fn add_allow(&self, domain: &str) {
@@ -210,9 +234,18 @@ impl AdBlocker {
         *list_lock = Arc::new(new_set);
     }
 
+    pub fn remove_allow(&self, domain: &str) {
+        let mut list_lock = self.allowlist.write();
+        let mut new_set = (**list_lock).clone();
+        new_set.remove(domain.to_lowercase().as_str());
+        *list_lock = Arc::new(new_set);
+    }
+
     #[must_use]
     pub fn blocklist_size(&self) -> usize {
-        self.blocklist.read().as_ref().map_or(0, |bl| bl.len())
+        let disk_size = self.blocklist.read().as_ref().map_or(0, |bl| bl.len());
+        let custom_size = self.custom_blocks.read().len();
+        disk_size + custom_size
     }
 
     #[must_use]

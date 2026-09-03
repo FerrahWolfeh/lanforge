@@ -9,6 +9,8 @@ use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::AdblockUrlKind;
 #[cfg(feature = "adblock")]
+use std::collections::HashSet;
+#[cfg(feature = "adblock")]
 use std::{path::Path, time::Instant};
 use std::{
     sync::{Arc, atomic::Ordering},
@@ -180,16 +182,36 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     }
                 }
 
+                // Compile allowlist: remote allowlist URLs + manual allowlist + allow rules
+                let mut full_allowlist = HashSet::new();
                 if !allowlist_urls.is_empty() {
                     info!(
                         sources = allowlist_urls.len(),
                         "Adblock: downloading allowlist sources"
                     );
                     match filter.load_from_urls("allowlist", &allowlist_urls).await {
-                        Ok(new_allow) => filter.replace_allowlist(new_allow),
+                        Ok(new_allow) => full_allowlist.extend(new_allow),
                         Err(e) => error!(error = %e, "Adblock: failed to download allowlist sources"),
                     }
                 }
+                for domain in ctx.ctx.get_dns_allowlist() {
+                    full_allowlist.insert(domain.to_lowercase());
+                }
+                for rule in ctx.ctx.get_dns_adblock_rules() {
+                    if rule.enabled && rule.is_allow() {
+                        full_allowlist.insert(rule.domain.to_lowercase());
+                    }
+                }
+                filter.replace_allowlist(full_allowlist);
+
+                // Compile custom manual blocklist
+                let mut custom_blocks = HashSet::new();
+                for rule in ctx.ctx.get_dns_adblock_rules() {
+                    if rule.enabled && rule.is_block() {
+                        custom_blocks.insert(rule.domain.to_lowercase());
+                    }
+                }
+                filter.replace_custom_blocks(custom_blocks);
 
                 // Ensure enabled after first successful load (if it was intended to be enabled)
                 if !filter.is_enabled() && filter.blocklist_size() > 0 && db_cfg.enabled {
@@ -227,6 +249,31 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                 LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged) => {
                                     info!("Adblock: config changed, reloading");
                                     break;
+                                }
+                                LanforgeEvent::Dns(DnsEvent::ConfigAllowlistChanged | DnsEvent::ConfigAdblockRulesChanged) => {
+                                    info!("Adblock: custom rules/allowlist changed, updating in-memory filter");
+                                    let mut allow_set = HashSet::new();
+                                    for domain in ctx.ctx.get_dns_allowlist() {
+                                        allow_set.insert(domain.to_lowercase());
+                                    }
+                                    let mut block_set = HashSet::new();
+                                    for rule in ctx.ctx.get_dns_adblock_rules() {
+                                        if rule.enabled {
+                                            if rule.is_allow() {
+                                                allow_set.insert(rule.domain.to_lowercase());
+                                            } else if rule.is_block() {
+                                                block_set.insert(rule.domain.to_lowercase());
+                                            }
+                                        }
+                                    }
+                                    filter.replace_allowlist(allow_set);
+                                    filter.replace_custom_blocks(block_set);
+                                }
+                                LanforgeEvent::Dns(DnsEvent::AdblockBlock(domain)) => {
+                                    filter.add_block(&domain);
+                                }
+                                LanforgeEvent::Dns(DnsEvent::AdblockAllow(domain)) => {
+                                    filter.add_allow(&domain);
                                 }
                                 _ => continue, // Ignore other events
                             }

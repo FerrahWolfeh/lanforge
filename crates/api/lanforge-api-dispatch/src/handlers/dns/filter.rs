@@ -7,26 +7,32 @@ use lanforge_api::api::{DnsAllowlistResponse, Response, SimpleSuccess};
 
 #[cfg(feature = "adblock")]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
-#[cfg(feature = "adblock")]
-use lanforge_types::network::dns::DnsRecordType;
 
 impl ClientContext {
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_block(&self, domain: String) -> Response {
-        match self
-            .db
-            .upsert_dns_rewrite(&domain, DnsRecordType::A, "0.0.0.0")
-            .await
-        {
-            Ok(()) => {
+        match self.db.add_adblock_rule(&domain, "block").await {
+            Ok(_) => {
+                if let Ok(rows) = self.db.load_adblock_rules().await {
+                    let rules = rows
+                        .into_iter()
+                        .map(|(id, domain, action, enabled)| {
+                            lanforge_types::network::dns::adblock::AdblockRuleEntry {
+                                id: Some(id),
+                                domain,
+                                action,
+                                enabled,
+                            }
+                        })
+                        .collect();
+                    self.ctx.update_dns_adblock_rules(rules);
+                }
                 let _ = self
                     .ctx
                     .bus()
-                    .publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
+                    .publish(LanforgeEvent::Dns(DnsEvent::AdblockBlock(domain.clone())));
                 Response::Success(SimpleSuccess {
-                    message: format!(
-                        "Domain '{domain}' blocked persistently via rewrite to 0.0.0.0"
-                    ),
+                    message: format!("Domain '{domain}' blocked in adblock rules"),
                 })
             }
             Err(e) => Response::Error {

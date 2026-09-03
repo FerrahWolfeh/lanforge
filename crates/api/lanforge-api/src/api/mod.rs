@@ -68,6 +68,8 @@ pub enum Response {
     DnsAllowlist(DnsAllowlistResponse),
     /// List of adblock source URLs.
     DnsAdblockUrls(DnsAdblockUrlsResponse),
+    /// List of custom adblock rules.
+    DnsAdblockRules(DnsAdblockRulesResponse),
     /// Response for a generated API token.
     AuthToken(AuthTokenResponse),
     /// List of all API tokens.

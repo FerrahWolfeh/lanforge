@@ -42,3 +42,5 @@ hotpath = [
 [dev-dependencies]
 lanforge-dhcp = { workspace = true }
 lanforge-db = { workspace = true }
+tempfile = { workspace = true }
+

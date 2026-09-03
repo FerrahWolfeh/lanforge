@@ -56,6 +56,7 @@ pub struct MockDbState {
     pub last_gua_prefix: RwLock<Option<std::net::Ipv6Addr>>,
     pub pppoe_config: RwLock<Option<PppoeConfig>>,
     pub users: RwLock<Vec<UserEntry>>,
+    pub adblock_rules: RwLock<Vec<(i64, String, String, bool)>>,
 }
 
 impl Default for MockDbState {
@@ -79,6 +80,7 @@ impl Default for MockDbState {
             last_gua_prefix: RwLock::new(None),
             pppoe_config: RwLock::new(None),
             users: RwLock::new(Vec::new()),
+            adblock_rules: RwLock::new(Vec::new()),
         }
     }
 }
@@ -534,23 +536,48 @@ impl LanforgeDb {
     }
 
     pub async fn load_adblock_rules(&self) -> Result<Vec<(i64, String, String, bool)>, DbError> {
-        delegate_db_call!(self, load_adblock_rules(), mock => Ok(Vec::new()))
+        delegate_db_call!(self, load_adblock_rules(), mock => {
+            Ok(mock.adblock_rules.read().clone())
+        })
     }
 
     pub async fn add_adblock_rule(&self, domain: &str, action: &str) -> Result<i64, DbError> {
-        delegate_db_call!(self, add_adblock_rule(domain, action), mock => Ok(1))
+        delegate_db_call!(self, add_adblock_rule(domain, action), mock => {
+            let mut rules = mock.adblock_rules.write();
+            if let Some(existing) = rules.iter_mut().find(|r| r.1 == domain) {
+                existing.2 = action.to_string();
+                existing.3 = true;
+                Ok(existing.0)
+            } else {
+                let id = (rules.len() as i64) + 1;
+                rules.push((id, domain.to_string(), action.to_string(), true));
+                Ok(id)
+            }
+        })
     }
 
     pub async fn remove_adblock_rule(&self, id: i64) -> Result<(), DbError> {
-        delegate_db_call!(self, remove_adblock_rule(id), mock => Ok(()))
+        delegate_db_call!(self, remove_adblock_rule(id), mock => {
+            mock.adblock_rules.write().retain(|r| r.0 != id);
+            Ok(())
+        })
     }
 
     pub async fn update_adblock_rule_status(&self, id: i64, enabled: bool) -> Result<(), DbError> {
-        delegate_db_call!(self, update_adblock_rule_status(id, enabled), mock => Ok(()))
+        delegate_db_call!(self, update_adblock_rule_status(id, enabled), mock => {
+            let mut rules = mock.adblock_rules.write();
+            if let Some(rule) = rules.iter_mut().find(|r| r.0 == id) {
+                rule.3 = enabled;
+            }
+            Ok(())
+        })
     }
 
     pub async fn clear_adblock_rules(&self) -> Result<(), DbError> {
-        delegate_db_call!(self, clear_adblock_rules(), mock => Ok(()))
+        delegate_db_call!(self, clear_adblock_rules(), mock => {
+            mock.adblock_rules.write().clear();
+            Ok(())
+        })
     }
 
     // --- ApiTokenStore ---

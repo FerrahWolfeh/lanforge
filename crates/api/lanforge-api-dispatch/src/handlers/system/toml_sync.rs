@@ -5,6 +5,7 @@ use tracing::{error, info, warn};
 
 use crate::ClientContext;
 use lanforge_api::api::SystemConfigExport;
+use lanforge_types::network::dns::adblock::AdblockUrlKind;
 
 /// Atomically writes content to a file using a temporary file in the same directory.
 pub fn write_toml_atomically(path: &Path, content: &str) -> Result<(), std::io::Error> {
@@ -173,9 +174,60 @@ pub fn generate_toml_from_export(
     out.push_str("[dns]\n");
     out.push_str("enabled = true\n");
     out.push_str(&format!(
-        "adblock_enabled = {}\n\n",
+        "adblock_enabled = {}\n",
         export.dns_adblock_config.enabled
     ));
+    out.push_str(&format!(
+        "blocking_mode = \"{}\"\n",
+        export.dns_adblock_config.blocking_mode
+    ));
+    if let Some(ip) = export.dns_adblock_config.blocking_ip_v4 {
+        out.push_str(&format!("blocking_ip_v4 = \"{ip}\"\n"));
+    }
+    if let Some(ip) = export.dns_adblock_config.blocking_ip_v6 {
+        out.push_str(&format!("blocking_ip_v6 = \"{ip}\"\n"));
+    }
+    out.push_str(&format!(
+        "adblock_refresh_hours = {}\n",
+        export.dns_adblock_config.refresh_hours
+    ));
+    out.push_str(&format!(
+        "adblock_refresh_at_night = {}\n",
+        export.dns_adblock_config.refresh_at_night
+    ));
+
+    let block_urls: Vec<String> = export
+        .dns_adblock_urls
+        .iter()
+        .filter(|u| u.kind == AdblockUrlKind::Blocklist)
+        .map(|u| format!("\"{}\"", u.url))
+        .collect();
+    if !block_urls.is_empty() {
+        out.push_str(&format!("adblock_urls = [{}]\n", block_urls.join(", ")));
+    }
+
+    let allow_urls: Vec<String> = export
+        .dns_adblock_urls
+        .iter()
+        .filter(|u| u.kind == AdblockUrlKind::Allowlist)
+        .map(|u| format!("\"{}\"", u.url))
+        .collect();
+    if !allow_urls.is_empty() {
+        out.push_str(&format!(
+            "adblock_allowlist_urls = [{}]\n",
+            allow_urls.join(", ")
+        ));
+    }
+
+    let allowlist_domains: Vec<String> = export
+        .dns_allowlist
+        .iter()
+        .map(|a| format!("\"{}\"", a.domain))
+        .collect();
+    if !allowlist_domains.is_empty() {
+        out.push_str(&format!("allowlist = [{}]\n", allowlist_domains.join(", ")));
+    }
+    out.push('\n');
 
     // 5b. [[dns.rewrites]]
     for rw in &export.dns_rewrites {
@@ -188,12 +240,27 @@ pub fn generate_toml_from_export(
     // 5c. [[dns.upstreams]]
     for up in &export.dns_upstreams {
         out.push_str("[[dns.upstreams]]\n");
-        out.push_str(&format!("addr = \"{}\"\n", up.addr));
-        out.push_str(&format!("protocol = \"{}\"\n", up.protocol));
-        if let Some(ref dom) = up.domain {
-            out.push_str(&format!("domain = \"{dom}\"\n"));
+        let prefix = match up.protocol {
+            lanforge_types::network::dns::upstream::UpstreamProtocol::Udp => "udp://",
+            lanforge_types::network::dns::upstream::UpstreamProtocol::Tls => "tls://",
+            lanforge_types::network::dns::upstream::UpstreamProtocol::Quic => "quic://",
+            lanforge_types::network::dns::upstream::UpstreamProtocol::Https => "https://",
+        };
+        let target_str = match &up.domain {
+            Some(d) => format!("{prefix}{d}@{}", up.addr),
+            None => format!("{prefix}{}", up.addr),
+        };
+        out.push_str(&format!("target = \"{target_str}\"\n\n"));
+    }
+
+    // 5d. [[dns.adblock_rules]]
+    if let Some(ref rules) = export.dns_adblock_rules {
+        for rule in rules {
+            out.push_str("[[dns.adblock_rules]]\n");
+            out.push_str(&format!("domain = \"{}\"\n", rule.domain));
+            out.push_str(&format!("action = \"{}\"\n", rule.action));
+            out.push_str(&format!("enabled = {}\n\n", rule.enabled));
         }
-        out.push('\n');
     }
 
     // 6. [ra]
@@ -383,14 +450,82 @@ mod tests {
     }
 
     #[test]
-    fn test_write_toml_atomically() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let target = dir.path().join("sub").join("lanforge.toml");
+    fn test_generate_toml_from_export_adblock_roundtrip() {
+        use lanforge_types::network::dns::{
+            AdblockUrlEntry,
+            adblock::{AdblockDbConfig, AdblockRuleEntry, AdblockUrlKind, BlockingMode},
+            upstream::UpstreamProtocol,
+        };
 
-        let content = "[database]\nurl = \"memory\"\n";
-        write_toml_atomically(&target, content).expect("atomic write must succeed");
+        let export = SystemConfigExport {
+            dns_adblock_config: AdblockDbConfig {
+                enabled: true,
+                blocking_mode: BlockingMode::NxDomain,
+                blocking_ip_v4: None,
+                blocking_ip_v6: None,
+                refresh_hours: 6,
+                refresh_at_night: false,
+            },
+            dns_adblock_urls: vec![
+                AdblockUrlEntry {
+                    id: Some(1),
+                    url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts".to_string(),
+                    kind: AdblockUrlKind::Blocklist,
+                },
+                AdblockUrlEntry {
+                    id: Some(2),
+                    url: "https://example.com/allowlist.txt".to_string(),
+                    kind: AdblockUrlKind::Allowlist,
+                },
+            ],
+            dns_allowlist: vec![lanforge_api::api::AllowlistEntry {
+                id: 1,
+                domain: "safe-subdomain.example.com".to_string(),
+            }],
+            dns_adblock_rules: Some(vec![
+                AdblockRuleEntry {
+                    id: Some(1),
+                    domain: "tracking.bad.com".to_string(),
+                    action: "block".to_string(),
+                    enabled: true,
+                },
+                AdblockRuleEntry {
+                    id: Some(2),
+                    domain: "goodsite.org".to_string(),
+                    action: "allow".to_string(),
+                    enabled: false,
+                },
+            ]),
+            dns_upstreams: vec![lanforge_api::api::DnsUpstreamConfig {
+                addr: "1.1.1.1:53".parse().unwrap(),
+                protocol: UpstreamProtocol::Udp,
+                domain: Some("cloudflare".to_string()),
+            }],
+            ..Default::default()
+        };
 
-        let read_back = fs::read_to_string(&target).expect("read back");
-        assert_eq!(read_back, content);
+        let toml_str = generate_toml_from_export(&export, "memory", None);
+
+        assert!(toml_str.contains("adblock_enabled = true"));
+        assert!(toml_str.contains("blocking_mode = \"nxdomain\""));
+        assert!(toml_str.contains("adblock_refresh_hours = 6"));
+        assert!(toml_str.contains("adblock_refresh_at_night = false"));
+        assert!(toml_str.contains("adblock_urls = [\"https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts\"]"));
+        assert!(toml_str.contains("adblock_allowlist_urls = [\"https://example.com/allowlist.txt\"]"));
+        assert!(toml_str.contains("allowlist = [\"safe-subdomain.example.com\"]"));
+        assert!(toml_str.contains("[[dns.adblock_rules]]"));
+        assert!(toml_str.contains("domain = \"tracking.bad.com\""));
+        assert!(toml_str.contains("action = \"block\""));
+        assert!(toml_str.contains("enabled = true"));
+        assert!(toml_str.contains("domain = \"goodsite.org\""));
+        assert!(toml_str.contains("action = \"allow\""));
+        assert!(toml_str.contains("enabled = false"));
+        assert!(toml_str.contains("target = \"udp://cloudflare@1.1.1.1:53\""));
+
+        // Ensure it parses back as valid TOML
+        let val: toml::Value = toml::from_str(&toml_str).expect("Generated TOML must be valid");
+        let dns = val.get("dns").expect("dns section present");
+        assert_eq!(dns.get("adblock_enabled").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(dns.get("blocking_mode").and_then(|v| v.as_str()), Some("nxdomain"));
     }
 }

@@ -19,7 +19,7 @@ use lanforge_types::network::dhcp::{
 #[cfg(feature = "dns")]
 use lanforge_types::network::dns::AdblockUrlEntry;
 #[cfg(feature = "dns")]
-use lanforge_types::network::dns::adblock::AdblockUrlKind;
+use lanforge_types::network::dns::adblock::{AdblockRuleEntry, AdblockUrlKind};
 #[cfg(feature = "dns")]
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::{Ipv6AddrOrSuffix, Ipv6Prefix};
@@ -194,6 +194,19 @@ impl Bootstrapper {
                         .collect(),
                 );
             }
+            if let Ok(rules) = db.load_adblock_rules().await {
+                ctx.update_dns_adblock_rules(
+                    rules
+                        .into_iter()
+                        .map(|(id, domain, action, enabled)| AdblockRuleEntry {
+                            id: Some(id),
+                            domain,
+                            action,
+                            enabled,
+                        })
+                        .collect(),
+                );
+            }
         }
 
         let _ = bus.publish(LanforgeEvent::System(SystemEvent::StateReady));
@@ -330,6 +343,21 @@ impl Bootstrapper {
                 refresh_at_night: cfg.dns_toml.adblock_refresh_at_night,
             };
             db.save_adblock_config(&adblock_cfg).await?;
+        }
+
+        // Seed adblock custom rules if empty in DB
+        let adblock_rules = db.load_adblock_rules().await?;
+        if adblock_rules.is_empty() && !cfg.dns_toml.adblock_rules.is_empty() {
+            for rule in &cfg.dns_toml.adblock_rules {
+                let id = db.add_adblock_rule(&rule.domain, &rule.action).await?;
+                if !rule.enabled {
+                    let _ = db.update_adblock_rule_status(id, false).await;
+                }
+            }
+            info!(
+                "Seeded {} Adblock custom rules from configuration into database",
+                cfg.dns_toml.adblock_rules.len()
+            );
         }
 
         Ok(())

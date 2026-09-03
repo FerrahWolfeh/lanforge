@@ -6,9 +6,11 @@
  */
 
 import type {
+	AdblockRuleEntry,
 	AllowlistEntry,
 	AuthStatusResponse,
 	AuthToken,
+	BlockingMode,
 	DeviceEntry,
 	DevicesResponse,
 	DhcpLease,
@@ -326,6 +328,25 @@ export const dnsAdblockUrlAdd = (entry: DnsAdblockUrlEntry) =>
 	post<void>('/dns/adblock/sources', entry);
 export const dnsAdblockUrlRemove = (entry: DnsAdblockUrlEntry) =>
 	del<void>('/dns/adblock/sources', entry);
+export const dnsAdblockConfigSet = (config: {
+	blocking_mode?: BlockingMode;
+	blocking_ip_v4?: string | null;
+	blocking_ip_v6?: string | null;
+}) => post<void>('/dns/adblock/config', config);
+export const dnsAdblockRules = async (): Promise<AdblockRuleEntry[]> => {
+	const res = await get<any>('/dns/adblock/rules');
+	if (!res) return [];
+	if (Array.isArray(res)) return res;
+	if (Array.isArray(res.rules)) return res.rules;
+	if (Array.isArray(res.data)) return res.data;
+	return [];
+};
+export const dnsAdblockRuleAdd = (domain: string, action: 'block' | 'allow') =>
+	post<void>('/dns/adblock/rules', { domain, action });
+export const dnsAdblockRuleRemove = (id: number) =>
+	del<void>(`/dns/adblock/rules/${id}`);
+export const dnsAdblockRuleStatus = (id: number, enabled: boolean) =>
+	put<void>(`/dns/adblock/rules/${id}/status`, { enabled });
 
 // ---------------------------------------------------------------------------
 // DNS — rewrites

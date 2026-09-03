@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
 use lanforge_types::update::DeviceUpdate;
@@ -154,6 +154,14 @@ impl LanforgeContext {
         let _ = self
             .bus_ref()
             .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
+    }
+
+    /// Updates the configured DNS custom adblock rules and publishes the change event.
+    pub fn update_dns_adblock_rules(&self, rules: Vec<AdblockRuleEntry>) {
+        self.inner.config.write().dns_adblock_rules = rules;
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockRulesChanged));
     }
 
     /// Completely resets the in-memory state.

@@ -597,15 +597,21 @@ export type DnsCacheStatsResponse = DnsCacheStatsExtResponse;
 // DNS — adblock
 // ---------------------------------------------------------------------------
 
+export type BlockingMode = 'nxdomain' | 'null_ip' | 'custom_ip' | 'refused';
+
 export interface DnsAdblockStatusResponse {
 	enabled: boolean;
+	disabled_until?: number | null;
+	remaining_secs?: number | null;
 	blocklist_size: number;
 	allowlist_size: number;
-	timer_secs_remaining: number | null;
-	last_updated: string | null;
+	blocking_mode: BlockingMode;
+	blocking_ip_v4?: string | null;
+	blocking_ip_v6?: string | null;
 }
 
 export interface DnsAdblockUrlEntry {
+	id?: number | null;
 	url: string;
 	kind: 'blocklist' | 'allowlist';
 }
@@ -909,6 +915,13 @@ export interface AdblockDbConfig {
 	refresh_at_night: boolean;
 }
 
+export interface AdblockRuleEntry {
+	id?: number;
+	domain: string;
+	action: 'block' | 'allow';
+	enabled: boolean;
+}
+
 export interface SystemConfigExport {
 	hosts: HostConfigEntry[];
 	dns_rewrites: RewriteRule[];
@@ -916,6 +929,7 @@ export interface SystemConfigExport {
 	dns_adblock_config: AdblockDbConfig;
 	dns_adblock_urls: DnsAdblockUrlEntry[];
 	dns_allowlist: AllowlistEntry[];
+	dns_adblock_rules?: AdblockRuleEntry[] | null;
 	api_tokens?: ExportedApiToken[] | null;
 	dhcp_v4_pools?: Dhcpv4PoolConfig[] | null;
 	dhcp_v6_pools?: Dhcpv6PoolConfig[] | null;

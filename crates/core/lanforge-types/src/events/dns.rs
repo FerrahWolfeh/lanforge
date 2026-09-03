@@ -31,6 +31,8 @@ pub enum DnsEvent {
     ConfigAllowlistChanged,
     /// Adblock configuration changed in the database.
     ConfigAdblockChanged,
+    /// Custom adblock rules (blacklist/whitelist) changed in the database.
+    ConfigAdblockRulesChanged,
     /// DNS upstreams changed in the database.
     ConfigUpstreamsChanged,
 }

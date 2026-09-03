@@ -62,7 +62,7 @@ use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
 use lanforge_types::system::{ServiceBanner, ServiceState, SystemStatus};
@@ -197,6 +197,8 @@ pub struct DynamicConfig {
     pub dns_adblock: AdblockDbConfig,
     /// Configured DNS adblock source URLs.
     pub dns_adblock_urls: Vec<AdblockUrlEntry>,
+    /// Configured DNS custom adblock rules (allowlist & blocklist).
+    pub dns_adblock_rules: Vec<AdblockRuleEntry>,
 }
 
 /// Internal state shared behind an `Arc`.
@@ -572,6 +574,11 @@ impl LanforgeContext {
     #[must_use]
     pub fn get_dns_adblock_urls(&self) -> Vec<AdblockUrlEntry> {
         self.inner.config.read().dns_adblock_urls.clone()
+    }
+
+    #[must_use]
+    pub fn get_dns_adblock_rules(&self) -> Vec<AdblockRuleEntry> {
+        self.inner.config.read().dns_adblock_rules.clone()
     }
 
     /// Registers a decoupled status provider.

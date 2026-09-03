@@ -7,7 +7,7 @@
 use crate::resolver::recursive::UpstreamMode;
 use lanforge_macros::ServiceConfig;
 use lanforge_types::network::dns::{
-    adblock::{BlockingMode, RewriteRule},
+    adblock::{AdblockRuleEntry, BlockingMode, RewriteRule},
     upstream::UpstreamEntry,
 };
 use serde::{Deserialize, Serialize};
@@ -56,7 +56,7 @@ pub struct DnsConfig {
     pub listen: SocketAddr,
     /// Upstream resolver targets.
     /// If empty, non-local queries return `REFUSED`.
-    #[serde(skip)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub upstreams: Vec<UpstreamEntry>,
     /// Strategy for choosing an upstream resolver.
     pub upstream_mode: UpstreamMode,
@@ -78,38 +78,37 @@ pub struct DnsConfig {
     pub multi_search_labels: Vec<Vec<Vec<u8>>>,
 
     /// Whether the micro-adblocker is enabled.
-    #[serde(skip)]
     pub adblock_enabled: bool,
     /// Directory to store adblock cache files.
-    #[serde(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adblock_cache_dir: Option<String>,
     /// List of URLs to fetch blocklists from.
-    #[serde(skip)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adblock_urls: Vec<String>,
     /// List of URLs to fetch allowlists from.
-    #[serde(skip)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adblock_allowlist_urls: Vec<String>,
     /// Hours between blocklist refreshes.
-    #[serde(skip)]
     pub adblock_refresh_hours: u32,
     /// Whether to prefer refreshing at night.
-    #[serde(skip)]
     pub adblock_refresh_at_night: bool,
     /// How to respond to blocked queries.
-    #[serde(skip)]
     pub blocking_mode: BlockingMode,
     /// Custom IPv4 address for `BlockingMode::CustomIp`.
-    #[serde(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocking_ip_v4: Option<Ipv4Addr>,
     /// Custom IPv6 address for `BlockingMode::CustomIp`.
-    #[serde(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocking_ip_v6: Option<Ipv6Addr>,
     /// Manual DNS rewrite rules.
-    #[serde(skip)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rewrites: Vec<RewriteRule>,
     /// Domains that are never blocked.
-    #[serde(skip)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowlist: Vec<String>,
+    /// Custom user adblock rules (blacklist / whitelist).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adblock_rules: Vec<AdblockRuleEntry>,
 
     /// How many days a device can be offline before its DNS entry is hidden.
     pub last_seen_threshold_days: u32,
@@ -162,6 +161,7 @@ impl Default for DnsConfig {
             blocking_ip_v6: None,
             rewrites: Vec::new(),
             allowlist: Vec::new(),
+            adblock_rules: Vec::new(),
             last_seen_threshold_days: 7,
             dot_listen: None,
             dot_enabled: false,

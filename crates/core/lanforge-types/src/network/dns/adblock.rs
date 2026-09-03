@@ -277,7 +277,7 @@ impl FromStr for BlockingMode {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "nxdomain" => Ok(Self::NxDomain),
+            "nxdomain" | "nx_domain" => Ok(Self::NxDomain),
             "null_ip" | "nullip" => Ok(Self::NullIp),
             "custom_ip" | "customip" => Ok(Self::CustomIp),
             "refused" => Ok(Self::Refused),
@@ -347,6 +347,33 @@ impl Display for AdblockUrlKind {
             Self::Blocklist => write!(f, "blocklist"),
             Self::Allowlist => write!(f, "allowlist"),
         }
+    }
+}
+
+/// A custom adblock rule (allowlist or manual blocklist).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+pub struct AdblockRuleEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<i64>,
+    pub domain: String,
+    pub action: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+impl AdblockRuleEntry {
+    #[must_use]
+    pub fn is_block(&self) -> bool {
+        self.action.eq_ignore_ascii_case("block")
+    }
+
+    #[must_use]
+    pub fn is_allow(&self) -> bool {
+        self.action.eq_ignore_ascii_case("allow")
     }
 }
 
