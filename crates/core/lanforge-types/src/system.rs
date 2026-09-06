@@ -240,10 +240,78 @@ pub struct NetworkInterfaceInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SetupStatusResponse {
     pub first_run: bool,
+    pub is_provisioned: bool,
     pub detected_lan_iface: String,
     pub detected_gateway: Option<Ipv4Addr>,
     pub detected_ula_prefix: String,
     pub interfaces: Vec<NetworkInterfaceInfo>,
+}
+
+const fn default_subnet_mask() -> Ipv4Addr {
+    Ipv4Addr::new(255, 255, 255, 0)
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+/// Router Advertisement (IPv6 SLAAC) configuration for initial setup.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct SetupRaConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub auto_gua: bool,
+    #[serde(default = "default_true")]
+    pub ula_enabled: bool,
+    #[serde(default)]
+    pub ula_prefix: Option<String>,
+    #[serde(default = "default_true")]
+    pub managed: bool,
+    #[serde(default = "default_true")]
+    pub other_config: bool,
+}
+
+impl Default for SetupRaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_gua: true,
+            ula_enabled: true,
+            ula_prefix: None,
+            managed: true,
+            other_config: true,
+        }
+    }
+}
+
+/// `PPPoE` firewall / nftables tuning options for initial setup.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct SetupPppoeNftables {
+    #[serde(default = "default_true")]
+    pub mss_clamping: bool,
+    #[serde(default)]
+    pub flow_offload: bool,
+    #[serde(default = "default_true")]
+    pub masquerade: bool,
+    #[serde(default = "default_true")]
+    pub bypass_dns: bool,
+    #[serde(default = "default_true")]
+    pub bypass_vowifi: bool,
+}
+
+impl Default for SetupPppoeNftables {
+    fn default() -> Self {
+        Self {
+            mss_clamping: true,
+            flow_offload: false,
+            masquerade: true,
+            bypass_dns: true,
+            bypass_vowifi: true,
+        }
+    }
 }
 
 /// WAN uplink configuration for initial setup.
@@ -258,6 +326,8 @@ pub enum SetupWanConfig {
         vlan_id: Option<u16>,
         #[serde(default)]
         mtu: Option<u16>,
+        #[serde(default)]
+        nftables: Option<SetupPppoeNftables>,
     },
     SystemGateway {
         gateway_ip: Ipv4Addr,
@@ -271,11 +341,19 @@ pub struct SetupPayload {
     pub admin_password: String,
     pub lan_iface: String,
     pub lan_ip: Ipv4Addr,
+    #[serde(default = "default_subnet_mask")]
+    pub subnet_mask: Ipv4Addr,
     pub domain_name: String,
     pub dhcp_enabled: bool,
     pub dhcp_pool_start: Ipv4Addr,
     pub dhcp_pool_end: Ipv4Addr,
+    #[serde(default)]
+    pub dhcp_router: Option<Ipv4Addr>,
     pub adblock_enabled: bool,
+    #[serde(default)]
+    pub upstream_dns: Vec<String>,
+    #[serde(default)]
+    pub ra: Option<SetupRaConfig>,
     pub wan: Option<SetupWanConfig>,
 }
 

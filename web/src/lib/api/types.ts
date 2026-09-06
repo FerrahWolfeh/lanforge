@@ -699,10 +699,28 @@ export interface NetworkInterfaceInfo {
 
 export interface SetupStatusResponse {
 	first_run: boolean;
+	is_provisioned: boolean;
 	detected_lan_iface: string;
 	detected_gateway: string | null;
 	detected_ula_prefix: string;
 	interfaces: NetworkInterfaceInfo[];
+}
+
+export interface SetupPppoeNftables {
+	mss_clamping: boolean;
+	flow_offload: boolean;
+	masquerade: boolean;
+	bypass_dns: boolean;
+	bypass_vowifi: boolean;
+}
+
+export interface SetupRaConfig {
+	enabled: boolean;
+	auto_gua: boolean;
+	ula_enabled: boolean;
+	ula_prefix?: string | null;
+	managed: boolean;
+	other_config: boolean;
 }
 
 export type SetupWanConfig =
@@ -713,6 +731,7 @@ export type SetupWanConfig =
 		password: string;
 		vlan_id?: number | null;
 		mtu?: number | null;
+		nftables?: SetupPppoeNftables | null;
 	}
 	| {
 		mode: 'system_gateway';
@@ -724,11 +743,15 @@ export interface SetupPayload {
 	admin_password: string;
 	lan_iface: string;
 	lan_ip: string;
+	subnet_mask?: string;
 	domain_name: string;
 	dhcp_enabled: boolean;
 	dhcp_pool_start: string;
 	dhcp_pool_end: string;
+	dhcp_router?: string | null;
 	adblock_enabled: boolean;
+	upstream_dns?: string[];
+	ra?: SetupRaConfig | null;
 	wan?: SetupWanConfig | null;
 }
 

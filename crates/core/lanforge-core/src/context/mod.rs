@@ -216,6 +216,8 @@ struct LanforgeContextInner {
     running: AtomicBool,
     /// Database readiness flag.
     db_ready: AtomicBool,
+    /// Recovery mode flag (in-memory fallback without disk persistence).
+    recovery_mode: AtomicBool,
     /// Network interface readiness flag.
     if_ready: AtomicBool,
     /// `PPPoE` session readiness flag.
@@ -285,6 +287,7 @@ impl LanforgeContext {
             target_ifindex,
             running: AtomicBool::new(true),
             db_ready: AtomicBool::new(false),
+            recovery_mode: AtomicBool::new(false),
             if_ready: AtomicBool::new(false),
             pppoe_ready: AtomicBool::new(false),
             shared_services: RwLock::new(HashMap::new()),
@@ -772,6 +775,17 @@ impl LanforgeContext {
     #[must_use]
     pub fn is_db_ready(&self) -> bool {
         self.inner.db_ready.load(Ordering::SeqCst)
+    }
+
+    /// Returns true if the system is running in recovery mode (in-memory fallback due to database unavailability).
+    #[must_use]
+    pub fn is_recovery_mode(&self) -> bool {
+        self.inner.recovery_mode.load(Ordering::Relaxed)
+    }
+
+    /// Sets the recovery mode state.
+    pub fn set_recovery_mode(&self, recovery: bool) {
+        self.inner.recovery_mode.store(recovery, Ordering::Relaxed);
     }
 
     /// Returns true if the network interfaces are ready.

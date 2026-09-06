@@ -449,7 +449,8 @@ impl HttpWrappedResponse for lanforge_types::network::ra::RaServerConfig {
 
 
 pub use lanforge_types::system::{
-    NetworkInterfaceInfo, SetupPayload, SetupResponse, SetupStatusResponse, SetupWanConfig,
+    NetworkInterfaceInfo, SetupPayload, SetupPppoeNftables, SetupRaConfig, SetupResponse,
+    SetupStatusResponse, SetupWanConfig,
 };
 
 impl HttpWrappedResponse for SetupStatusResponse {

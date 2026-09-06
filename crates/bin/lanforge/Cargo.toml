@@ -23,7 +23,6 @@ default = [
     "http",
     "https",
     "uds",
-    "postgres",
     "dns-dot",
     "dns-doh",
     "adblock",
@@ -73,9 +72,6 @@ hotpath-alloc = [
 jemalloc = ["dep:tikv-jemallocator"]
 
 
-# Database Backends
-postgres = ["lanforge-db/postgres"]
-
 # DNS Upstream Protocols (Forwarding)
 dns-dot = ["dns", "lanforge-dns/dot"]
 dns-doq = ["dns", "lanforge-dns/doq"]
@@ -97,13 +93,11 @@ adblock = [
 ring = [
     "rustls/ring",
     "lanforge-dns?/ring",
-    "lanforge-db/ring",
     "lanforge-http?/ring",
 ]
 aws-lc = [
     "rustls/aws-lc-rs",
     "lanforge-dns?/aws-lc",
-    "lanforge-db/aws-lc",
     "lanforge-http?/aws-lc",
 ]
 
@@ -120,7 +114,6 @@ full = [
     "dns-full",
     "dns-doh",
     "adblock",
-    "postgres",
     "webui",
 ]
 
@@ -148,7 +141,6 @@ profile-enterprise = [
     "http",
     "adblock",
     "dns-full",
-    "postgres",
     "webui",
 ]
 

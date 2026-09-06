@@ -258,7 +258,14 @@ impl AsyncService for DbWorker {
     }
 
     async fn init(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
-        info!("Database worker initialized");
+        let mode = if ctx.is_recovery_mode() {
+            "RECOVERY MODE (in-memory)"
+        } else if self.db.is_in_memory() {
+            "in-memory"
+        } else {
+            "PostgreSQL"
+        };
+        info!("Database worker initialized (mode: {mode})");
         ctx.set_db_ready(true);
         let _ = ctx
             .bus()

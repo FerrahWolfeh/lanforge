@@ -46,8 +46,6 @@ pub struct TomlConfig {
     pub tftp: TftpConfig,
     #[cfg(feature = "pppoe")]
     pub pppoe: PppoeConfig,
-    #[serde(default)]
-    pub devices: Vec<StaticDeviceCfg>,
 }
 
 #[cfg(feature = "dhcp")]
@@ -91,17 +89,6 @@ impl Default for SystemCfg {
     }
 }
 
-/// Static device — read from `[[devices]]` in the TOML.
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct StaticDeviceCfg {
-    pub mac: String,
-    pub hostname: String,
-    pub duid: Option<String>,
-    pub v4_ip: Option<String>,
-    pub v6_suffix: Option<String>,
-    pub boot_file: Option<String>,
-}
-
 /// Load and parse the TOML config file, or return defaults if missing.
 pub fn load_toml(path: &str) -> TomlConfig {
     if !Path::new(path).exists() {
@@ -138,8 +125,7 @@ pub fn load_toml(path: &str) -> TomlConfig {
                 }
             };
             info!(
-                "Config: Loaded from '{path}' (devices: {}, RA: {ra_status})",
-                cfg.devices.len()
+                "Config: Loaded from '{path}' (RA: {ra_status})"
             );
             return cfg;
         }
@@ -179,42 +165,10 @@ pub fn load_toml(path: &str) -> TomlConfig {
         tftp: load_section(&value, "tftp"),
         #[cfg(feature = "pppoe")]
         pppoe: load_section(&value, "pppoe"),
-        devices: load_section(&value, "devices"),
     };
 
     info!("[config] Partial config recovery complete");
     cfg
-}
-
-/// Load only the devices section from a TOML file for debugging.
-pub fn load_devices_only(path: &str) -> Vec<StaticDeviceCfg> {
-    if !Path::new(path).exists() {
-        warn!("[config] Devices file '{path}' not found");
-        return Vec::new();
-    }
-
-    match std::fs::read_to_string(path) {
-        Ok(content) => {
-            #[derive(Deserialize)]
-            struct DeviceList {
-                devices: Vec<StaticDeviceCfg>,
-            }
-            if let Ok(list) = toml::from_str::<DeviceList>(&content) {
-                return list.devices;
-            }
-            match toml::from_str::<TomlConfig>(&content) {
-                Ok(cfg) => cfg.devices,
-                Err(e) => {
-                    warn!("[config] Failed to parse devices from '{path}': {e}");
-                    Vec::new()
-                }
-            }
-        }
-        Err(e) => {
-            warn!("[config] Failed to read devices file '{path}': {e}");
-            Vec::new()
-        }
-    }
 }
 
 // Helper for section-by-section loading
@@ -283,7 +237,6 @@ source = "broken" # Invalid variant
         #[cfg(feature = "http")]
         assert_eq!(cfg.http.listen.port(), 8088);
         assert!(!cfg.database.url.contains("sqlite"));
-        assert_eq!(cfg.devices.len(), 1);
     }
 
     #[test]
@@ -302,7 +255,6 @@ source = "broken" # Invalid variant
         #[cfg(feature = "http")]
         assert_eq!(cfg.http.listen.port(), 8088);
         assert!(!cfg.database.url.contains("sqlite"));
-        assert_eq!(cfg.devices.len(), 1);
     }
 
     fn load_section<T: serde::de::DeserializeOwned + Default>(v: &toml::Value, key: &str) -> T {

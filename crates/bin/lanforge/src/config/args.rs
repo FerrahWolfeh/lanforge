@@ -40,8 +40,4 @@ pub struct CliArgs {
     /// Path to the UDS control socket.
     #[arg(long, env = "LANFORGE_CONTROL_SOCKET")]
     pub control_socket: Option<String>,
-
-    /// Path to an additional TOML/JSON file containing static devices (debug).
-    #[arg(long, env = "LANFORGE_DEVICES_FILE")]
-    pub devices_file: Option<String>,
 }

@@ -66,6 +66,12 @@ impl LogDb {
         }
     }
 
+    /// Returns true if running without file persistence (pure in-memory).
+    #[must_use]
+    pub fn is_in_memory(&self) -> bool {
+        self.events_path.is_none()
+    }
+
     /// Opens the log buffer database.
     pub async fn open(url: &str) -> Result<Self, LogBufError> {
         let is_memory = url.contains(":memory:") || url.is_empty();

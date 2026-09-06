@@ -149,16 +149,9 @@ impl Daemon {
         }
 
         // Database checks
-        if cfg.database.url.starts_with("sqlite") {
-            tracing::error!(
-                "SQLite databases are no longer supported. Please use a PostgreSQL connection string."
-            );
-        }
-
-        #[cfg(not(feature = "postgres"))]
-        if cfg.database.url.starts_with("postgres") || cfg.database.url.starts_with("postgresql") {
-            tracing::error!(
-                "Database URL specifies PostgreSQL but feature 'postgres' is not compiled in binary"
+        if cfg.database.url.starts_with("sqlite") || cfg.database.url.starts_with("postgres") || cfg.database.url.starts_with("postgresql") {
+            tracing::warn!(
+                "External SQL databases are no longer supported. Lanforge uses embedded redb storage."
             );
         }
     }

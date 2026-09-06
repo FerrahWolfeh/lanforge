@@ -200,11 +200,3 @@ table_name = "lanforge"
 flow_offload = true
 mss_clamping = true
 masquerade = true
-
-[[devices]]
-# Static device reservation example.
-mac = "00:11:22:33:44:55"
-hostname = "nas"
-v4_ip = "192.168.1.10"
-v6_suffix = "::10"
-# boot_file = "custom-pxe.efi"

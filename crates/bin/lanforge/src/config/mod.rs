@@ -32,7 +32,7 @@ use lanforge_types::network::ra::{DnsslConfig, PrefixSource, RAPrefix};
 use lanforge_types::system::SystemStatus;
 #[cfg(feature = "uds")]
 use lanforge_uds::config::ApiConfig;
-pub use toml::{StaticDeviceCfg, load_devices_only, load_toml};
+pub use toml::load_toml;
 
 use clap::Parser;
 use std::net::SocketAddr;
@@ -89,10 +89,6 @@ pub struct Config {
     pub pppoe_enabled: bool,
     #[cfg(feature = "pppoe")]
     pub pppoe_toml: lanforge_pppoe::config::PppoeConfig,
-
-    // Static devices
-    pub devices: Vec<StaticDeviceCfg>,
-    pub devices_file: Option<String>,
 
     pub config_path: String,
 }
@@ -296,8 +292,6 @@ impl Config {
             pppoe_enabled: toml_cfg.pppoe.enabled,
             #[cfg(feature = "pppoe")]
             pppoe_toml: toml_cfg.pppoe,
-            devices: toml_cfg.devices,
-            devices_file: cli.devices_file.clone(),
             config_path: cli.config.clone(),
         }
     }
@@ -692,8 +686,6 @@ impl Default for Config {
             pppoe_enabled: false,
             #[cfg(feature = "pppoe")]
             pppoe_toml: lanforge_pppoe::config::PppoeConfig::default(),
-            devices: Vec::new(),
-            devices_file: None,
             config_path: "/etc/lanforge/lanforge.toml".to_string(),
         }
     }

@@ -1,6 +1,4 @@
-use lanforge::bootstrap::Bootstrapper;
 use lanforge::config::Config;
-use lanforge::config::toml::StaticDeviceCfg;
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_api_dispatch::ClientContext;
 use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent};
@@ -37,23 +35,14 @@ async fn test_full_db_reset_chain() {
     let mac_dyn = MacAddr::parse("00:00:00:00:00:01").unwrap();
     let mac_static = MacAddr::parse("00:00:00:00:00:02").unwrap();
 
-    let mut cfg = Config {
+    let cfg = Arc::new(Config {
         database: DatabaseConfig {
             url: db_url.clone(),
             log_url: log_db_url.clone(),
             ..Default::default()
         },
         ..Config::default()
-    };
-    cfg.devices.push(StaticDeviceCfg {
-        mac: mac_static.to_string(),
-        hostname: "static-host".to_string(),
-        duid: None,
-        v4_ip: Some("192.168.1.20".to_string()),
-        v6_suffix: None,
-        boot_file: None,
     });
-    let cfg = Arc::new(cfg);
 
     let bus = Arc::new(EventBus::new());
     let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
@@ -129,7 +118,6 @@ async fn test_full_db_reset_chain() {
 
     // 5. Mock Event Loop for DbResetCompleted
     let ctx_loop = ctx.clone();
-    let cfg_loop = cfg.clone();
     let mut bus_rx = bus.subscribe();
     tokio::spawn(async move {
         while let Ok(te) = bus_rx.recv().await {
@@ -139,7 +127,15 @@ async fn test_full_db_reset_chain() {
             ) {
                 ctx_loop.reset();
                 let mut state = ctx_loop.write();
-                Bootstrapper::reload_static_devices_into_state(&mut state, &cfg_loop);
+                state.add_static_device(
+                    mac_static,
+                    "static-host".to_string(),
+                    None,
+                    Some(Ipv4Addr::new(192, 168, 1, 20)),
+                    None,
+                    None,
+                    Origin::Static,
+                );
                 break;
             }
         }

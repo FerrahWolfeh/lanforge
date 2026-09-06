@@ -87,6 +87,7 @@ impl Execute for InitArgs {
                 password: pppoe_pass,
                 vlan_id,
                 mtu: Some(1492),
+                nftables: None,
             })
         } else {
             let default_gw = status.detected_gateway.map_or_else(|| "192.168.1.1".to_string(), |g| g.to_string());
@@ -142,11 +143,15 @@ impl Execute for InitArgs {
             admin_password,
             lan_iface,
             lan_ip,
+            subnet_mask: Ipv4Addr::new(255, 255, 255, 0),
             domain_name,
             dhcp_enabled: true,
             dhcp_pool_start,
             dhcp_pool_end,
+            dhcp_router: Some(lan_ip),
             adblock_enabled,
+            upstream_dns: Vec::new(),
+            ra: None,
             wan: wan_config,
         };
 

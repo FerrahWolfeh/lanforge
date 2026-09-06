@@ -150,7 +150,7 @@ pub struct Device {
 
     pub boot_file: Option<String>,
     /// Ingress network interface where the device was observed (e.g., "lan0.100").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub iface: Option<String>,
 }
 

@@ -150,6 +150,18 @@ async fn handle_setup(
     State(state): State<AppState>,
     Json(payload): Json<lanforge_types::system::SetupPayload>,
 ) -> impl IntoResponse {
+    let is_provisioned = state.db.is_provisioned().unwrap_or(false)
+        || (state.db.count_users().await.unwrap_or(0) > 0);
+    if is_provisioned {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "Forbidden: Lanforge has already completed first-run setup. This endpoint is permanently locked."
+            })),
+        )
+            .into_response();
+    }
+
     let ctx = create_client_ctx(&state);
     let username = payload.admin_username.clone();
     let res = ctx.handle_setup(payload).await;

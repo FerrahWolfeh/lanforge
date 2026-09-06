@@ -698,10 +698,6 @@ impl ClientContext {
             self.ctx.update_ra_config(prefixes, rdnss, dnssl);
         }
 
-        if self.db.is_in_memory() {
-            let _ = self.flush_static_config_to_toml().await;
-        }
-
         Response::SystemConfigImport(SystemConfigImportResponse {
             results,
             total_success,

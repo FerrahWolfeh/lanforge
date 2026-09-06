@@ -4,9 +4,10 @@ use futures::channel::mpsc::UnboundedReceiver;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_db::engine::LanforgeDb;
-use lanforge_db::log_engine::LogDb;
-use lanforge_db::{DhcpConfigStore, PppoeConfigStore, RaConfigStore};
+use lanforge_db::{
+    AdblockStore, DhcpConfigStore, DnsStore, DnsUpstreamStore, LanforgeDb, LogDb,
+    PppoeConfigStore, RaConfigStore, UserStore,
+};
 use lanforge_discovery::refresh_interface;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
@@ -22,7 +23,7 @@ use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockRuleEntry, AdblockUrlKind};
 #[cfg(feature = "dns")]
 use lanforge_types::network::dns::upstream::UpstreamTarget;
-use lanforge_types::network::{Ipv6AddrOrSuffix, Ipv6Prefix};
+use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::update::InterfaceState;
 use netlink_sys::SocketAddr;
 use pnet::datalink::interfaces;
@@ -120,6 +121,9 @@ impl Bootstrapper {
         let cfg = Arc::new(cfg);
 
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
+        if db.is_in_memory() && !cfg.database.is_in_memory() {
+            ctx.set_recovery_mode(true);
+        }
         ctx.set_config_path(&cfg.config_path);
         #[cfg(feature = "dhcp")]
         {
@@ -151,8 +155,6 @@ impl Bootstrapper {
             };
             ctx.update_ra_server_config(ra_srv);
         }
-
-        ctx.set_status(cfg.to_system_status());
 
         ctx.set_status(cfg.to_system_status());
 
@@ -369,10 +371,10 @@ impl Bootstrapper {
             Ok(db) => db,
             Err(e) => {
                 warn!(
-                    "Database: Persistent database unavailable at '{}', running in in-memory mode",
+                    "Database: Persistent database unavailable at '{}' ({e})",
                     lanforge_db::sanitize_db_url(&cfg.database.url)
                 );
-                debug!("Database: Connection error detail: {e}");
+                warn!("Database: Entering RECOVERY MODE — running in-memory without disk persistence");
                 LanforgeDb::open_in_memory().await?
             }
         };
@@ -381,14 +383,38 @@ impl Bootstrapper {
             Ok(ldb) => ldb,
             Err(e) => {
                 warn!(
-                    "Database: Log storage unavailable at '{}', running in in-memory log buffer",
+                    "Database: Log storage unavailable at '{}' ({e}), running in in-memory fallback mode",
                     cfg.database.log_url
                 );
-                debug!("Database: Log open error detail: {e}");
                 LogDb::open_in_memory()
             }
         };
 
+        let is_provisioned = db.is_provisioned().unwrap_or(false)
+            || (db.count_users().await.unwrap_or(0) > 0);
+
+        #[allow(clippy::if_not_else)]
+        if !is_provisioned {
+            warn!("┌─────────────────────────────────────────────────────────────┐");
+            warn!("│  ⚠️  Lanforge PROVISIONING MODE: First-run setup required.  │");
+            warn!("│  Networking services (DHCP, RA, PPPoE) are DORMANT.        │");
+            warn!("│  Open the Web UI to complete initial onboarding setup.      │");
+            warn!("└─────────────────────────────────────────────────────────────┘");
+
+            #[cfg(feature = "ra")]
+            {
+                cfg.ra_enabled = false;
+            }
+            #[cfg(feature = "dhcp")]
+            {
+                cfg.dhcpv4_enabled = false;
+                cfg.dhcpv6_enabled = false;
+            }
+            #[cfg(feature = "pppoe")]
+            {
+                cfg.pppoe_enabled = false;
+            }
+        } else {
         // 1. Check/seed/load DHCPv4 Pools
         #[cfg(feature = "dhcp")]
         {
@@ -528,14 +554,15 @@ impl Bootstrapper {
         #[cfg(feature = "dns")]
         Self::load_dns_config(&db, cfg).await?;
 
-        // 7. Check/seed/load PPPoE Config
-        #[cfg(feature = "pppoe")]
-        {
-            if db.seed_pppoe_if_empty(&cfg.pppoe_toml).await? {
-                info!("Seeded PPPoE configuration from TOML into database");
-            }
-            if let Some(loaded) = db.load_pppoe_config().await? {
-                cfg.pppoe_toml = loaded;
+            // 7. Check/seed/load PPPoE Config
+            #[cfg(feature = "pppoe")]
+            {
+                if db.seed_pppoe_if_empty(&cfg.pppoe_toml).await? {
+                    info!("Seeded PPPoE configuration from TOML into database");
+                }
+                if let Some(loaded) = db.load_pppoe_config().await? {
+                    cfg.pppoe_toml = loaded;
+                }
             }
         }
 
@@ -546,7 +573,9 @@ impl Bootstrapper {
 
         // 2c. Check/reconcile DHCPv4 topology sanity against physical interface and host identity
         #[cfg(feature = "dhcp")]
-        Self::reconcile_dhcp_v4_topology_sanity(&db, cfg, &table).await?;
+        if is_provisioned {
+            Self::reconcile_dhcp_v4_topology_sanity(&db, cfg, &table).await?;
+        }
 
         let reverse_resolvers_count = match db.load_dns_reverse_resolvers().await {
             Ok(resolvers) => {
@@ -560,13 +589,27 @@ impl Bootstrapper {
             }
         };
 
-        let main_db_desc = if cfg.database.is_in_memory() {
-            "in-memory".to_string()
+        let main_db_desc = if db.is_in_memory() {
+            if cfg.database.is_in_memory() {
+                "in-memory".to_string()
+            } else {
+                format!(
+                    "in-memory (RECOVERY MODE, fallback from {})",
+                    lanforge_db::sanitize_db_url(&cfg.database.url)
+                )
+            }
         } else {
             lanforge_db::sanitize_db_url(&cfg.database.url)
         };
-        let log_db_desc = if cfg.database.log_url.contains(":memory:") || cfg.database.log_url.is_empty() {
-            "in-memory".to_string()
+        let log_db_desc = if log_db.is_in_memory() {
+            if cfg.database.log_url.contains(":memory:") || cfg.database.log_url.is_empty() {
+                "in-memory".to_string()
+            } else {
+                format!(
+                    "in-memory (fallback from {})",
+                    lanforge_db::sanitize_db_url(&cfg.database.log_url)
+                )
+            }
         } else {
             lanforge_db::sanitize_db_url(&cfg.database.log_url)
         };
@@ -605,11 +648,21 @@ impl Bootstrapper {
 
         let console_url = format!("http://{host_ip}:{http_port}");
         let is_first_run = db.count_users().await.unwrap_or(0) == 0;
+        let db_desc = if db.is_in_memory() {
+            if cfg.database.is_in_memory() {
+                "in-memory (non-persistent)".to_string()
+            } else {
+                "RECOVERY MODE (in-memory)".to_string()
+            }
+        } else {
+            "redb (persistent)".to_string()
+        };
 
         info!("┌─────────────────────────────────────────────────────────────┐");
         info!("│  ⚡ Lanforge — Router & Network Orchestrator                 │");
         info!("├─────────────────────────────────────────────────────────────┤");
         info!("│  LAN Interface:  {:<42} │", cfg.system.iface);
+        info!("│  Database:       {:<42} │", db_desc);
         info!("│  Web Console:    {:<42} │", console_url);
         if is_first_run {
             let setup_url = format!("{console_url}/setup");
@@ -845,31 +898,5 @@ impl Bootstrapper {
             gua_prefix = %gua_str,
             "Lanforge Daemon ready on interface"
         );
-    }
-
-    /// Reloads static devices from configuration into the provided state table.
-    pub fn reload_static_devices_into_state(table: &mut State, cfg: &Config) {
-        for dev in &cfg.devices {
-            let Some(mac) = MacAddr::parse(&dev.mac) else {
-                warn!("Invalid MAC '{}' in config", dev.mac);
-                continue;
-            };
-            let v4 = dev.v4_ip.as_ref().and_then(|s| s.parse().ok());
-            let duid = dev.duid.as_ref().and_then(|s| s.parse().ok());
-            let v6_suffix = dev
-                .v6_suffix
-                .as_ref()
-                .and_then(|s| Ipv6AddrOrSuffix::parse(s));
-
-            table.add_static_device(
-                mac,
-                dev.hostname.clone(),
-                duid,
-                v4,
-                v6_suffix,
-                dev.boot_file.clone(),
-                Origin::Static,
-            );
-        }
     }
 }

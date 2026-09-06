@@ -96,6 +96,16 @@ pub trait DeviceStore: Send + Sync {
         false
     }
 
+    /// Checks whether the system has completed the onboarding provisioning.
+    fn is_provisioned(&self) -> Result<bool, DbError> {
+        Ok(true)
+    }
+
+    /// Sets the onboarding provisioning state flag.
+    fn set_provisioned(&self, _provisioned: bool) -> Result<(), DbError> {
+        Ok(())
+    }
+
     /// Loads all devices stored in the database.
     fn load_all_devices(&self) -> BoxFuture<'_, Result<Vec<Device>, DbError>>;
 

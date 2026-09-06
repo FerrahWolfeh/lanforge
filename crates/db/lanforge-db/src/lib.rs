@@ -43,8 +43,6 @@
 //! | [`log_engine`] | `LogDb` — transient logs in tmpfs with auto-pruning |
 //! | [`worker`] | `DbWorker` — async service coordinating persistence |
 //! | [`error`] | `LanforgeDbError` — database error hierarchy |
-#[cfg(not(feature = "postgres"))]
-compile_error!("The 'postgres' feature must be enabled for lanforge-db.");
 
 #[warn(clippy::all, clippy::nursery, clippy::pedantic)]
 #[allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
@@ -57,7 +55,11 @@ mod tests;
 pub mod worker;
 
 pub use engine::LanforgeDb;
+pub use error::LanforgeDbError;
 pub use lanforge_db_core::{
-    AdblockStore, ApiTokenStore, DeviceStore, DhcpConfigStore, DnsStore, DnsUpstreamStore,
-    PppoeConfigStore, RaConfigStore, UserStore, sanitize_db_url,
+    AdblockStore, ApiTokenEntry, ApiTokenStore, BoxFuture, DbError, DeviceStore, DhcpConfigStore,
+    DnsStore, DnsUpstreamEntry, DnsUpstreamStore, PppoeConfigStore, RaConfigStore, UserEntry,
+    UserStore, sanitize_db_url,
 };
+pub use log_engine::LogDb;
+pub use worker::DbWorker;

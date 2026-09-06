@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use tracing::{debug, error, info};
+use tracing::debug;
 
 use crate::ClientContext;
 use lanforge_api::api::SystemConfigExport;
@@ -77,11 +77,23 @@ pub fn generate_toml_from_export(
     }
     out.push('\n');
 
-    // 2. [database]
-    out.push_str("[database]\n");
-    out.push_str(&format!("url = \"{db_url}\"\n"));
-    out.push_str("log_url = \"/tmp/lanforge-logs.jsonl\"\n");
-    out.push_str("flush_interval = 60\n\n");
+    // 2. [database] - preserve existing database configuration from file
+    let mut db_preserved = false;
+    if let Some(existing) = existing_content
+        && let Ok(val) = toml::from_str::<toml::Value>(existing)
+        && let Some(db_sec) = val.get("database")
+        && let Ok(sec_str) = toml::to_string(db_sec)
+    {
+        out.push_str(&format!("[database]\n{sec_str}\n"));
+        db_preserved = true;
+    }
+
+    if !db_preserved {
+        out.push_str("[database]\n");
+        out.push_str(&format!("url = \"{db_url}\"\n"));
+        out.push_str("log_url = \"/tmp/lanforge-logs.jsonl\"\n");
+        out.push_str("flush_interval = 60\n\n");
+    }
 
     // 3. [dhcp.v4]
     out.push_str("[dhcp.v4]\n");
@@ -445,40 +457,11 @@ impl ClientContext {
         None
     }
 
-    /// In memory mode, flushes only static and configurable data to the active `lanforge.toml`.
-    /// Volatile runtime state (dynamic devices, DHCP leases, DNS cache) is intentionally omitted.
+    /// Runtime TOML persistence is disabled to prevent configuration corruption.
+    /// The TOML configuration serves as initial bootstrap config until the database is online.
     pub async fn flush_static_config_to_toml(&self) -> Result<PathBuf, String> {
-        if !self.db.is_in_memory() {
-            return Err("System is not running in in-memory mode".to_string());
-        }
-
-        let target_path = match self.resolve_config_path() {
-            Some(p) => p,
-            None => {
-                let err = "No writable configuration path found for lanforge.toml".to_string();
-                debug!("{err}");
-                return Err(err);
-            }
-        };
-
-        let existing_content = fs::read_to_string(&target_path).ok();
-        let export = self.export_system_config_data().await;
-        let toml_str = generate_toml_from_export(&export, "memory", existing_content.as_deref());
-
-        if let Err(e) = write_toml_atomically(&target_path, &toml_str) {
-            let err = format!(
-                "Failed to write configuration to {}: {e}",
-                target_path.display()
-            );
-            error!("{err}");
-            return Err(err);
-        }
-
-        info!(
-            "Ephemeral persistence: successfully flushed static configurations to {}",
-            target_path.display()
-        );
-        Ok(target_path)
+        debug!("Runtime TOML persistence is disabled; TOML configuration is read-only");
+        Err("Runtime TOML persistence is disabled; TOML configuration is read-only".to_string())
     }
 }
 

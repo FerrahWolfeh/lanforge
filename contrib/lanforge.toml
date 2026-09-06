@@ -236,21 +236,3 @@ bypass_vowifi = true
 masquerade = true
 # LAN interfaces participating in flowtable offloading (defaults to system.iface if omitted)
 # lan_ifaces = ["enp2s0"]
-
-
-# Static device reservations (Static Leases)
-[[devices]]
-# Target MAC address for the device.
-mac = "e0:d5:5e:e2:d4:89"
-
-# Friendly name used for the hostname and local DNS resolution.
-hostname = "Archie"
-
-# Fixed IPv4 reserved for this device (optional).
-v4_ip = "192.168.1.50"
-
-# IPv6 suffix (/128) for static reservation within the network's ULA prefix (optional).
-# Format: "::abcd" which will be combined with the configured ULA prefix.
-v6_suffix = "::1057:cafe"
-
-

@@ -1,0 +1,25 @@
+[package]
+name = "lanforge-db-redb"
+version = "0.1.0"
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Lanforge
+lanforge-types = { workspace = true }
+lanforge-db-core = { path = "../lanforge-db-core" }
+lanforge-core = { workspace = true }
+
+# Workspace
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+uuid = { workspace = true }
+parking_lot = { workspace = true }
+redb = { workspace = true }
+tempfile = { workspace = true }

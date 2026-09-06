@@ -6,21 +6,16 @@ edition.workspace = true
 authors.workspace = true
 
 [features]
-default = ["postgres", "ring"]
-postgres = ["dep:lanforge-db-postgres"]
-ring = ["lanforge-db-postgres?/ring"]
-aws-lc = ["lanforge-db-postgres?/aws-lc"]
+default = []
 adblock = ["lanforge-core/adblock"]
 hotpath = [
     "dep:hotpath",
     "lanforge-core/hotpath",
-    "lanforge-db-postgres/hotpath",
 ]
 hotpath-alloc = [
     "hotpath",
     "hotpath/hotpath-alloc",
     "lanforge-core/hotpath-alloc",
-    "lanforge-db-postgres/hotpath-alloc",
 ]
 
 [dependencies]
@@ -30,7 +25,7 @@ lanforge-macros = { workspace = true }
 lanforge-types = { workspace = true }
 lanforge-db-core = { path = "../lanforge-db-core" }
 lanforge-db-logbuf = { path = "../lanforge-db-logbuf" }
-lanforge-db-postgres = { path = "../lanforge-db-postgres", optional = true }
+lanforge-db-redb = { path = "../lanforge-db-redb" }
 
 # Workspace
 thiserror = { workspace = true }
@@ -42,7 +37,6 @@ serde_json = { workspace = true }
 hotpath = { workspace = true, optional = true }
 futures.workspace = true
 parking_lot.workspace = true
-
 
 [dev-dependencies]
 tempfile = "3.27.0"
