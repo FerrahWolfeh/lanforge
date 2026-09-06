@@ -170,6 +170,37 @@ pub fn generate_toml_from_export(
         out.push('\n');
     }
 
+    // 4b. [[dhcp.v6.pools]]
+    if let Some(ref pools) = export.dhcp_v6_pools {
+        for pool in pools {
+            out.push_str("[[dhcp.v6.pools]]\n");
+            if let Some(ref name) = pool.name {
+                out.push_str(&format!("name = \"{name}\"\n"));
+            }
+            if let Some(ref start) = pool.range_start {
+                out.push_str(&format!("range_start = \"{start}\"\n"));
+            }
+            if let Some(ref end) = pool.range_end {
+                out.push_str(&format!("range_end = \"{end}\"\n"));
+            }
+            if let Some(ref addr) = pool.address {
+                out.push_str(&format!("address = \"{addr}\"\n"));
+            }
+            if let Some(lease) = pool.lease_time {
+                out.push_str(&format!("lease_time = {lease}\n"));
+            }
+            if !pool.dns_servers.is_empty() {
+                let d_strs: Vec<String> = pool
+                    .dns_servers
+                    .iter()
+                    .map(|d| format!("\"{d}\""))
+                    .collect();
+                out.push_str(&format!("dns_servers = [{}]\n", d_strs.join(", ")));
+            }
+            out.push('\n');
+        }
+    }
+
     // 5. [dns]
     out.push_str("[dns]\n");
     out.push_str("enabled = true\n");
@@ -333,7 +364,8 @@ pub fn generate_toml_from_export(
         out.push('\n');
     }
 
-    // 9. Preserve auxiliary sections from existing file
+    // 9. Preserve auxiliary sections from existing file or write defaults
+    let mut preserved = std::collections::HashSet::new();
     if let Some(existing) = existing_content
         && let Ok(val) = toml::from_str::<toml::Value>(existing)
     {
@@ -343,8 +375,22 @@ pub fn generate_toml_from_export(
                 && let Ok(sec_str) = toml::to_string(sec)
             {
                 out.push_str(&format!("[{key}]\n{sec_str}\n"));
+                preserved.insert(key);
             }
         }
+    }
+
+    if !preserved.contains("api") {
+        out.push_str("[api]\nenabled = true\nsocket_path = \"/run/lanforge/control.sock\"\n\n");
+    }
+    if !preserved.contains("http") {
+        out.push_str("[http]\nenabled = true\nlisten = \"0.0.0.0:8088\"\nallow_plaintext_http = true\n\n");
+    }
+    if !preserved.contains("monitor") {
+        out.push_str("[monitor]\nenabled = true\nscan_pacing_ms = 10\nstale_timeout_secs = 3600\n\n");
+    }
+    if !preserved.contains("mdns") {
+        out.push_str("[mdns]\nenabled = true\nprobe_interval = 3600\n\n");
     }
 
     out
@@ -360,6 +406,21 @@ impl ClientContext {
         } else {
             SystemConfigExport::default()
         }
+    }
+
+    /// Exports the consolidated configuration as a formatted TOML string.
+    pub async fn export_system_config_toml(&self) -> String {
+        let export = self.export_system_config_data().await;
+        let db_url = if self.db.is_in_memory() {
+            "memory".to_string()
+        } else {
+            std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+                "postgres://lanforge:lanforge@localhost:5432/lanforge".to_string()
+            })
+        };
+        let target_path = self.resolve_config_path();
+        let existing_content = target_path.and_then(|p| fs::read_to_string(p).ok());
+        generate_toml_from_export(&export, &db_url, existing_content.as_deref())
     }
 
     /// Resolves the candidate configuration file path for writes.

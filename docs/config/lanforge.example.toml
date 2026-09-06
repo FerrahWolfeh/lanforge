@@ -1,5 +1,5 @@
 # Lanforge Master Reference Configuration
-# Version: 0.13.0
+# Version: 0.23.0
 # This file documents all available sections and options.
 
 [system]
@@ -17,11 +17,17 @@ debounce_secs = 2
 
 [database]
 # Primary database for leases and persistent device state.
-url = "sqlite:///var/lib/lanforge/lanforge.db"
-# Transient database for logs and metrics.
-log_url = "sqlite:///tmp/lanforge-logs.db"
-# How often to flush in-memory state to disk (seconds).
+# PostgreSQL URL for persistent production deployment:
+url = "postgres://lanforge:lanforge@localhost:5432/lanforge"
+# For single-board computers, embedded devices, or in-memory mode without PostgreSQL:
+# url = "memory"
+# Transient log database/file for audit trails, query logs, and metrics:
+log_url = "/tmp/lanforge-logs.jsonl"
+# How often to flush in-memory state to disk/database (seconds).
 flush_interval = 60
+# Connection pool settings (PostgreSQL only):
+# max_connections = 10
+# min_connections = 2
 
 [api]
 # Enable the Unix Domain Socket control API.
@@ -32,14 +38,14 @@ socket_path = "/run/lanforge/control.sock"
 # tcp_port = 50051
 
 [http]
-# Enable the REST API and Prometheus metrics exporter.
+# Enable the REST API, Web Console, and Prometheus metrics exporter.
 enabled = true
-# Listen address for the HTTP service.
-listen = "0.0.0.0:9090"
+# Listen address for the HTTP service (port 8088 avoids Cockpit/Fedora port 9090 conflicts).
+listen = "0.0.0.0:8088"
 # Enable HTTPS (inherits global system TLS if paths are omitted).
 https_enabled = false
 # Whether plaintext HTTP is explicitly allowed (for local development only).
-allow_plaintext_http = false
+allow_plaintext_http = true
 # Enable DNS-over-HTTPS (DoH).
 doh_enabled = false
 # tls_cert = "/etc/lanforge/certs/http.crt"
@@ -124,7 +130,7 @@ dns_servers = ["fd97:f00d:cafe:3731::1"]
 search_domains = ["lan"]
 
 # HTTP Boot file (Option 59).
-# If a filename is provided, it's auto-expanded to http://[server_ip]:8080/boot/filename
+# If a filename is provided, it's auto-expanded to http://[server_ip]:8088/boot/filename
 # If a full URL (http://...) is provided, it's used as-is.
 # boot_file = "ipxe.efi"
 
@@ -178,6 +184,22 @@ enabled = true
 # Root directory for PXE boot files.
 root_dir = "/var/lib/lanforge/tftp"
 listen_addr = "0.0.0.0:69"
+
+[pppoe]
+# Integrated PPPoE client service for direct WAN broadband dial-in.
+enabled = false
+wan_iface = "eth1"
+username = "user@isp.com"
+password = "secretpassword"
+auth = "chap_md5"
+mru = 1492
+
+[pppoe.nftables]
+enabled = true
+table_name = "lanforge"
+flow_offload = true
+mss_clamping = true
+masquerade = true
 
 [[devices]]
 # Static device reservation example.

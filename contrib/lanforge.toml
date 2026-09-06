@@ -1,27 +1,49 @@
-[general]
+# Lanforge Production Configuration Template
+# Path: /etc/lanforge/lanforge.toml
+
+[system]
 # LAN interface where the daemon listens for requests (e.g., eth0, end0, br0).
-iface_lan = "end0"
+iface = "end0"
 
-# Absolute path to the SQLite database where leases are stored.
-leases_db = "/var/lib/lanforge/leases.db"
-
-# Target IPv6 prefix to identify local devices via SLAAC.
-# If omitted, the system uses the internal default value.
-# target_prefix = "fd97:f00d:cafe:3731"
-
-# Wait time (in seconds) before processing network event sequences.
-# Useful to avoid multiple reconfigurations during rapid state changes.
-# debounce_secs = 2
+# Target IPv6 prefix to identify local devices via SLAAC tracking.
+target_prefix = "fd97:f00d:cafe:3731"
 
 # Global search domains announced to clients (DHCPv4, DHCPv6, RA).
-# The first element is treated as the primary domain name for DHCPv4.
-# search_domains = ["lan", "home.arpa"]
+search_domains = ["lan", "home.arpa"]
 
-# Interval (in minutes) for the network fallback scan, ensuring consistency.
-# fallback_mins = 5
+# Wait time (in seconds) before processing network event sequences (prevents flapping).
+debounce_secs = 2
 
-# UNIX socket path for communication with the CLI (lanforge %command%).
-# control_socket = "/run/lanforge/control.sock"
+# Global TLS certificate and key (inherited by DNS and HTTP).
+# tls_cert = "/etc/lanforge/certs/lanforge.crt"
+# tls_key = "/etc/lanforge/certs/lanforge.key"
+
+[database]
+# Primary database for persistent device state and DHCP leases.
+# PostgreSQL connection URL for robust persistence:
+url = "postgres://lanforge:lanforge@localhost:5432/lanforge"
+# For single-board computers, embedded targets, or in-memory operation without PostgreSQL:
+# url = "memory"
+# Transient log database/file for query logs, metrics, and audit entries:
+log_url = "/tmp/lanforge-logs.jsonl"
+# Flush interval in seconds for persisting in-memory state:
+flush_interval = 60
+
+[api]
+# UNIX socket control API for the CLI (lanforge <command>).
+enabled = true
+socket_path = "/run/lanforge/control.sock"
+
+[http]
+# REST API and Web Console interface.
+enabled = true
+# Listen address (port 8088 avoids Cockpit/Fedora conflict on port 9090).
+listen = "0.0.0.0:8088"
+# Enable HTTPS (inherits global system TLS if cert paths omitted).
+https_enabled = false
+# Allow plaintext HTTP for local network / reverse proxy access.
+allow_plaintext_http = true
+doh_enabled = false
 
 
 # [ra] - Router Advertisement (RFC 4861)
@@ -37,30 +59,38 @@ managed = true
 # Defines the "Other Configuration" (O) flag. If true, clients must use DHCPv6 for options (DNS, etc).
 other_config = true
 
-# Maximum time interval (in seconds) between unsolicited RA transmissions.
-max_interval = 100
+# Maximum time interval (in seconds) between unsolicited RA transmissions (4s to 1800s).
+max_interval = 200
 
-# Router lifetime (in seconds). If omitted, the host will not be used as a gateway.
-router_lifetime = 300
+# Router lifetime (in seconds). If 0, the host will not be used as a gateway.
+lifetime = 600
 
-# MTU value advertised on the link. E.g., 1492 for PPPoE connections.
-mtu = 1492
+# MTU value advertised on the link (e.g., 1500, or 1492 for PPPoE connections).
+mtu = 1500
 
 [[ra.prefix]]
 # Prefix source: "ula" (static defined below) or "auto_gua" (detected from the interface).
 source = "ula"
 # IPv6 address/prefix in CIDR format.
-# To enable Prefix Delegation (IA_PD), use a prefix larger than /64 (e.g., /48 or /56).
-address = "fd97:f00d:cafe:3731::/64"
+address = "fd97:f00d:cafe:3731::"
+on_link = true
+autonomous = true
 
 [[ra.prefix]]
 # Automatically detects the Global Unicast Address (GUA) prefix configured on the interface.
 source = "auto_gua"
+on_link = true
+autonomous = true
 
 [[ra.rdnss]]
 # List of IPv6 DNS resolvers to advertise via Router Advertisement (RFC 8106).
 servers = ["fd97:f00d:cafe:3731::1"]
 # Lifetime (in seconds) of the RDNSS record.
+lifetime = 600
+
+[[ra.dnssl]]
+# Search domains advertised via Router Advertisement.
+domains = ["lan"]
 lifetime = 600
 
 
@@ -72,25 +102,23 @@ enabled = true
 # Optional interface override (e.g., "lan0.100"). Defaults to [system].iface.
 # iface = "lan0.100"
 
-# Start and end of the address pool for dynamic allocation.
-range_start = "192.168.100.1"
-range_end = "192.168.128.254"
-
 # Default lifetime (in seconds) of DHCP leases.
 lease_time = 86400
 
 # Default gateway (Router) advertised to IPv4 clients.
-router = "192.168.254.1"
+router = "192.168.1.1"
 
 # IPv4 DNS servers provided to clients.
-dns = ["192.168.254.1"]
+dns = ["192.168.1.1"]
 
-# Optional subnet mask (default: 255.255.255.0).
-# subnet_mask = "255.255.255.0"
+# Subnet mask (default: 255.255.255.0).
+subnet_mask = "255.255.255.0"
 
-# Local domain name advertised via DHCP (Option 15).
-# @deprecated use [general].search_domains instead.
-# domain_name = "lan"
+# Address pools for dynamic allocation.
+[[dhcp.v4.pools]]
+name = "Primary LAN Scope"
+range_start = "192.168.1.100"
+range_end = "192.168.1.250"
 
 
 # [dhcp.v6] - Stateful DHCPv6 Server
@@ -101,57 +129,54 @@ enabled = true
 # Lease time (in seconds) for IPv6 addresses.
 lease_time = 86400
 
-# Global prefix (ULA)
-ula_prefix = "fd97:f00d:cafe:3731::"
+# DNS servers (Option 23).
+dns_servers = ["fd97:f00d:cafe:3731::1"]
 
-# 1. Floating Pool: Applies to any managed prefix (ULA or detected GUA).
-# Using CIDR format: "::/64" means the server can use any suffix in a /64 prefix.
+# Search domains (Option 24).
+search_domains = ["lan"]
+
+# Suffix-based pools (applies dynamically to active ULA and GUA prefixes).
 [[dhcp.v6.pools]]
-address = "::/64"
-
-# 2. Fixed Pool: Restricts the ULA prefix to a specific range for tighter control.
-# Fixed pools have precedence over floating pools for their matching prefix.
-[[dhcp.v6.pools]]
-range_start = "fd97:f00d:cafe:3731::100"
-range_end = "fd97:f00d:cafe:3731::1fff"
+range_start = "::100"
+range_end = "::1fff"
 
 
-# [dns] - Internal DNS Proxy/Resolver
+# [dns] - Built-in DNS Resolver & Adblocker
 [dns]
 # Enables the built-in DNS resolver for the local network.
 enabled = true
 
-# Address and port where the DNS server will listen (e.g., "0.0.0.0:53").
-listen = "0.0.0.0:5354"
+# Address and port where the DNS server will listen (standard: "0.0.0.0:53").
+listen = "0.0.0.0:53"
 
-# Upstream server to resolve external names (e.g., Unbound, Cloudflare, Google).
-# Commenting this out turns the DNS resolver into an authoritative DNS server for the local domain only.
-upstream = "127.0.0.1:5335"
-
-# Local domain suffix for internal hostname resolution.
-# Host "archie" will be resolved as "archie.lan".
-# @deprecated use [general].search_domains instead.
-search_domain = "lan"
+# Local domain suffixes for internal hostname resolution.
+search_domains = ["lan"]
 
 # TTL (Time To Live) in seconds for local DNS responses.
-# ttl = 60
+ttl = 60
+
+# Days to hide inactive devices from DNS.
+last_seen_threshold_days = 7
+
+# Built-in DNS Adblocker toggle
+adblock_enabled = false
+
+# Note: Operational configurations like Upstream Resolvers, DNS Rewrites,
+# and Adblock settings (blocklists, custom rules, allowlist) can be managed
+# dynamically via Web Console or CLI (`lanforge dns ...`).
 
 
-# Static reservations (Static Leases / Reservations).
-# Add a [[devices]] block for each physical device (identified by MAC).
-[[devices]]
-# Target MAC address for the device.
-mac = "e0:d5:5e:e2:d4:89"
+# [mdns] - mDNS Hostname & Device Discovery Prober
+[mdns]
+enabled = true
+probe_interval = 3600
 
-# Friendly name used for the HOSTNAME and local DNS resolution.
-hostname = "Archie"
 
-# Fixed IPv4 reserved for this device (optional).
-v4_ip = "192.168.0.2"
-
-# IPv6 suffix (/128) for static reservation within the network's ULA prefix (optional).
-# Format: "::abcd" which will be combined with the configured ULA prefix.
-v6_suffix = "::1057:cafe"
+# [tftp] - TFTP Boot Server
+[tftp]
+enabled = false
+root_dir = "/var/lib/lanforge/tftp"
+listen_addr = "0.0.0.0:69"
 
 
 # [monitor] - Passive ARP/NDP Neighbor Discovery & Active Ping Sweeper
@@ -211,4 +236,21 @@ bypass_vowifi = true
 masquerade = true
 # LAN interfaces participating in flowtable offloading (defaults to system.iface if omitted)
 # lan_ifaces = ["enp2s0"]
+
+
+# Static device reservations (Static Leases)
+[[devices]]
+# Target MAC address for the device.
+mac = "e0:d5:5e:e2:d4:89"
+
+# Friendly name used for the hostname and local DNS resolution.
+hostname = "Archie"
+
+# Fixed IPv4 reserved for this device (optional).
+v4_ip = "192.168.1.50"
+
+# IPv6 suffix (/128) for static reservation within the network's ULA prefix (optional).
+# Format: "::abcd" which will be combined with the configured ULA prefix.
+v6_suffix = "::1057:cafe"
+
 

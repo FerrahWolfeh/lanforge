@@ -9,7 +9,7 @@ HOST_IFACE="veth-host"
 LAN_IFACE="veth-lan"
 HOST_IP="192.168.100.1/24"
 LAN_IP="192.168.100.2/24"
-HTTP_PORT="9090"
+HTTP_PORT="8088"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"

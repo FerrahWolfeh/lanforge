@@ -165,6 +165,20 @@ impl TestApp {
         self.call("GET", path, None, true).await
     }
 
+    async fn get_raw(&self, path: &str) -> (StatusCode, String, axum::http::HeaderMap) {
+        let mut builder = Request::builder().method("GET").uri(path);
+        if let Some(token) = &self.token {
+            builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        let req = builder.body(Body::empty()).unwrap();
+        let res = self.router.clone().oneshot(req).await.unwrap();
+        let status = res.status();
+        let headers = res.headers().clone();
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        (status, text, headers)
+    }
+
     async fn post<T: Serialize>(&self, path: &str, body: &T) -> (StatusCode, Value) {
         self.call("POST", path, Some(serde_json::to_vec(body).unwrap()), true)
             .await
@@ -791,6 +805,20 @@ async fn test_system_config_contract() {
         "overwrite=true should wipe previous hosts"
     );
     assert_eq!(body["data"]["hosts"][0]["hostname"], "only-host");
+
+    // Verify TOML export via query parameter and via direct /config/toml route
+    let (toml_status, toml_str, toml_headers) = app.get_raw("/api/v1/config?format=toml").await;
+    assert_eq!(toml_status, StatusCode::OK);
+    assert_eq!(
+        toml_headers.get(header::CONTENT_TYPE).unwrap(),
+        "text/plain; charset=utf-8"
+    );
+    assert!(toml_str.contains("[[devices]]"), "toml should contain [[devices]] section");
+    assert!(toml_str.contains("only-host"), "toml should contain the imported hostname");
+
+    let (toml_status2, toml_str2, _) = app.get_raw("/api/v1/config/toml").await;
+    assert_eq!(toml_status2, StatusCode::OK);
+    assert!(toml_str2.contains("only-host"));
 
     // --- Malformed import bodies (guardrails) ---
     let guardrail_cases: &[(&str, Value, StatusCode)] = &[

@@ -154,7 +154,7 @@ impl Execute for InitArgs {
 
         println!("\n  {} {}", "✔".green().bold(), res.message.green());
         println!("  {} Lanforge network stack is active and operational.\n", "✔".green().bold());
-        println!("  {} http://{}:9090 or http://lanforge.lan:9090\n", "Web Console:".bold().cyan(), lan_ip);
+        println!("  {} http://{}:8088 or http://lanforge.lan:8088\n", "Web Console:".bold().cyan(), lan_ip);
 
         Ok(())
     }

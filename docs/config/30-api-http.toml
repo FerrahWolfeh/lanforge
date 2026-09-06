@@ -12,7 +12,7 @@ socket_path = "/run/lanforge/control.sock"
 [http]
 # REST API and Prometheus metrics exporter.
 enabled = true
-listen = "0.0.0.0:9090"
+listen = "0.0.0.0:8088"
 
 # Secure the API with HTTPS (inherits global system TLS from [system] if paths are omitted).
 https_enabled = true

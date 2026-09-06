@@ -1,6 +1,7 @@
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
+    http::header,
     response::IntoResponse,
     routing::{get, post},
 };
@@ -24,6 +25,12 @@ pub struct ServiceControlPayload {
     pub action: ServiceAction,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ConfigExportQuery {
+    #[serde(default)]
+    pub format: Option<String>,
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/status", get(handle_status))
@@ -38,6 +45,7 @@ pub fn router() -> Router<AppState> {
             "/config",
             get(handle_export_config).post(handle_import_config),
         )
+        .route("/config/toml", get(handle_export_config_toml))
 }
 
 async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
@@ -72,9 +80,42 @@ async fn handle_context_dump(
     )
 }
 
-async fn handle_export_config(State(state): State<AppState>) -> impl IntoResponse {
+async fn handle_export_config(
+    State(state): State<AppState>,
+    Query(params): Query<ConfigExportQuery>,
+) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
+    if params.format.as_deref() == Some("toml") {
+        let toml_str = ctx.export_system_config_toml().await;
+        return (
+            [
+                (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+                (
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"lanforge.toml\"",
+                ),
+            ],
+            toml_str,
+        )
+            .into_response();
+    }
     crate::http_response!(ctx.handle_system_config_export().await, SystemConfig)
+}
+
+async fn handle_export_config_toml(State(state): State<AppState>) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    let toml_str = ctx.export_system_config_toml().await;
+    (
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"lanforge.toml\"",
+            ),
+        ],
+        toml_str,
+    )
+        .into_response()
 }
 
 async fn handle_import_config(

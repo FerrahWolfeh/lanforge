@@ -7,8 +7,14 @@ enabled = true
 # The directory to serve files from.
 root_dir = "/var/lib/lanforge/tftp"
 
-# UDP port to listen on (Default: 69).
-port = 69
+# Address and UDP port to listen on (Default: "0.0.0.0:69").
+listen_addr = "0.0.0.0:69"
 
-# Whether to allow overwriting files (not recommended for PXE).
-read_only = true
+# Default block size for transfers in bytes (Default: 512).
+# block_size = 512
+
+# Timeout for retransmissions in seconds (Default: 5).
+# timeout = 5
+
+# Maximum number of retries per block (Default: 3).
+# max_retries = 3

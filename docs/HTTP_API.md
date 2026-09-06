@@ -12,7 +12,7 @@ The HTTP API serves two consumers: the **CLI remote mode** (current) and a **fut
 https://{host}:{port}/api/v1/
 ```
 
-Port is configurable in `lanforge.toml`. Default: `9090`. TLS is required in production; plaintext HTTP is allowed for local development only and should be explicitly opted-in via config.
+Port is configurable in `lanforge.toml`. Default: `8088`. TLS is required in production; plaintext HTTP is allowed for local development only and should be explicitly opted-in via config.
 
 ---
 

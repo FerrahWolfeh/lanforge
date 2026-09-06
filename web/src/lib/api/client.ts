@@ -170,6 +170,52 @@ const getRaw = <T>(
 	}
 	return requestRaw<T>('GET', url.pathname + url.search);
 };
+
+async function requestText(
+	path: string,
+	params?: Record<string, string | number | boolean | undefined>
+): Promise<string> {
+	const token = getToken();
+	const headers: Record<string, string> = {};
+	if (token) headers['Authorization'] = `Bearer ${token}`;
+
+	const url = new URL(path, 'http://x');
+	if (params) {
+		for (const [k, v] of Object.entries(params)) {
+			if (v !== undefined) url.searchParams.set(k, String(v));
+		}
+	}
+
+	const res = await fetch(`/api/v1${url.pathname + url.search}`, {
+		method: 'GET',
+		headers
+	});
+
+	if (!res.ok) {
+		if (res.status === 401 && path !== '/auth/login' && path !== '/auth/status') {
+			if (typeof localStorage !== 'undefined') {
+				localStorage.removeItem('lf_session');
+			}
+			if (
+				typeof window !== 'undefined' &&
+				window.location.pathname !== '/login' &&
+				window.location.pathname !== '/setup'
+			) {
+				window.location.href = '/login';
+			}
+		}
+		const text = await res.text();
+		throw new ApiError(res.status, text || `HTTP ${res.status}`);
+	}
+
+	return res.text();
+}
+
+const getText = (
+	path: string,
+	params?: Record<string, string | number | boolean | undefined>
+) => requestText(path, params);
+
 const post = <T>(path: string, body?: unknown) => request<T>('POST', path, body);
 const put = <T>(path: string, body?: unknown) => request<T>('PUT', path, body);
 const patch = <T>(path: string, body?: unknown) => request<T>('PATCH', path, body);
@@ -458,6 +504,7 @@ export const dbPrune = () => post<void>('/db/prune');
 export const dbLogClean = () => post<void>('/db/log-clean');
 export const dbReset = () => del<void>('/db', undefined, { 'x-confirm': 'wipe' });
 export const exportSystemConfig = () => get<SystemConfigExport>('/system/config');
+export const exportSystemConfigToml = () => getText('/system/config', { format: 'toml' });
 export const importSystemConfig = (config: SystemConfigExport) =>
 	post<SystemConfigImportResponse>('/system/config', config);
 export const switchDbEngine = (req: DbEngineSwitchRequest) =>

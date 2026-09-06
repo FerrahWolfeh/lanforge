@@ -270,6 +270,41 @@ source = "broken" # Invalid variant
         assert!(!ra.enabled); // Should be default
     }
 
+    #[test]
+    fn test_contrib_example_config_parses_cleanly() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../contrib/lanforge.toml");
+        let content = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("Failed to read contrib/lanforge.toml at {path}: {e}"));
+        let cfg: TomlConfig = toml::from_str(&content)
+            .unwrap_or_else(|e| panic!("Failed to parse contrib/lanforge.toml: {e}"));
+
+        assert_eq!(cfg.system.iface, "end0");
+        assert_eq!(cfg.system.target_prefix, "fd97:f00d:cafe:3731");
+        #[cfg(feature = "http")]
+        assert_eq!(cfg.http.listen.port(), 8088);
+        assert!(!cfg.database.url.contains("sqlite"));
+        assert_eq!(cfg.devices.len(), 1);
+    }
+
+    #[test]
+    fn test_docs_example_config_parses_cleanly() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../docs/config/lanforge.example.toml"
+        );
+        let content = std::fs::read_to_string(path).unwrap_or_else(|e| {
+            panic!("Failed to read docs/config/lanforge.example.toml at {path}: {e}")
+        });
+        let cfg: TomlConfig = toml::from_str(&content)
+            .unwrap_or_else(|e| panic!("Failed to parse docs/config/lanforge.example.toml: {e}"));
+
+        assert_eq!(cfg.system.iface, "end0");
+        #[cfg(feature = "http")]
+        assert_eq!(cfg.http.listen.port(), 8088);
+        assert!(!cfg.database.url.contains("sqlite"));
+        assert_eq!(cfg.devices.len(), 1);
+    }
+
     fn load_section<T: serde::de::DeserializeOwned + Default>(v: &toml::Value, key: &str) -> T {
         v.get(key).map_or_else(T::default, |sec_val| {
             T::deserialize(sec_val.clone()).unwrap_or_default()

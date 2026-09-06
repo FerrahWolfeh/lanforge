@@ -19,11 +19,12 @@ target_prefix = "fd00:cafe:f00d::"
 debounce_secs = 2
 
 [database]
-# Main persistence (SQLite or PostgreSQL supported).
-url = "sqlite:///var/lib/lanforge/lanforge.db"
+# Main persistence (PostgreSQL for production, or "memory" for in-memory mode).
+url = "postgres://lanforge:lanforge@localhost:5432/lanforge"
+# url = "memory"
 
-# Transient log storage (separate from main DB for performance).
-log_url = "sqlite:///tmp/lanforge-logs.db"
+# Transient log storage (JSONL file for query logs and audit metrics).
+log_url = "/tmp/lanforge-logs.jsonl"
 
-# Flushing interval for in-memory state persistence.
+# Flushing interval for in-memory state persistence (seconds).
 flush_interval = 60

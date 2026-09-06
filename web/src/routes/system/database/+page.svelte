@@ -18,6 +18,7 @@
 		dbLogClean,
 		dbReset,
 		exportSystemConfig,
+		exportSystemConfigToml,
 		importSystemConfig,
 		switchDbEngine,
 	} from "$lib/api/client";
@@ -78,6 +79,7 @@
 	let logCleaning = $state(false);
 	let wiping = $state(false);
 	let exporting = $state(false);
+	let exportingToml = $state(false);
 	let importing = $state(false);
 
 	// Maintenance last run tracking
@@ -509,6 +511,32 @@ min_connections = ${formMinConnections || 2}`;
 		}
 	}
 
+	async function handleExportToml() {
+		exportingToml = true;
+		try {
+			const tomlStr = await exportSystemConfigToml();
+			const blob = new Blob([tomlStr], { type: "text/plain;charset=utf-8" });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement("a");
+			const dateStr = new Date().toISOString().slice(0, 10);
+			a.href = url;
+			a.download = `lanforge-${dateStr}.toml`;
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+			URL.revokeObjectURL(url);
+			toast.success("TOML configuration exported", {
+				description: "Saved consolidated lanforge.toml file.",
+			});
+		} catch (e: any) {
+			toast.error("Export failed", {
+				description: e?.message || "Internal server error",
+			});
+		} finally {
+			exportingToml = false;
+		}
+	}
+
 	function handleFileSelected(event: Event) {
 		const target = event.target as HTMLInputElement;
 		if (target.files && target.files.length > 0) {
@@ -685,6 +713,19 @@ min_connections = ${formMinConnections || 2}`;
 					data-icon="inline-start"
 				/>
 				Refresh
+			</Button>
+
+			<Button
+				variant="outline"
+				size="sm"
+				onclick={handleExportToml}
+				disabled={exportingToml}
+				class="transition-transform duration-150 active:scale-95 transform-gpu shadow-sm gap-1.5"
+			>
+				<FileTextIcon
+					class={exportingToml ? "animate-spin size-4" : "size-4"}
+				/>
+				Export TOML
 			</Button>
 
 			<Button
@@ -1746,8 +1787,8 @@ min_connections = ${formMinConnections || 2}`;
 							Export System Configuration
 						</Card.Title>
 						<Card.Description class="text-xs leading-relaxed mt-1">
-							Generate and download an aggregated JSON snapshot of
-							all system-wide configuration tables.
+							Generate and download consolidated configuration as a directly deployable
+							lanforge.toml file or an aggregated JSON persistence snapshot.
 						</Card.Description>
 					</Card.Header>
 					<Card.Content class="space-y-4">
@@ -1811,20 +1852,39 @@ min_connections = ${formMinConnections || 2}`;
 							</ul>
 						</div>
 
-						<Button
-							class="w-full gap-2"
-							onclick={handleExport}
-							disabled={exporting}
-						>
-							<DownloadIcon
-								class={exporting
-									? "animate-spin size-4"
-									: "size-4"}
-							/>
-							{exporting
-								? "Generating Snapshot..."
-								: "Download JSON Snapshot"}
-						</Button>
+						<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+							<Button
+								variant="default"
+								class="gap-2"
+								onclick={handleExportToml}
+								disabled={exportingToml}
+							>
+								<FileTextIcon
+									class={exportingToml
+										? "animate-spin size-4"
+										: "size-4"}
+								/>
+								{exportingToml
+									? "Generating TOML..."
+									: "Download lanforge.toml"}
+							</Button>
+
+							<Button
+								variant="outline"
+								class="gap-2"
+								onclick={handleExport}
+								disabled={exporting}
+							>
+								<DownloadIcon
+									class={exporting
+										? "animate-spin size-4"
+										: "size-4"}
+								/>
+								{exporting
+									? "Generating Snapshot..."
+									: "Download JSON Snapshot"}
+							</Button>
+						</div>
 					</Card.Content>
 				</Card.Root>
 

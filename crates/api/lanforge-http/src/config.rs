@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 pub struct HttpConfig {
     /// Whether the HTTP service is enabled.
     pub enabled: bool,
-    /// Listen address (e.g., "0.0.0.0:9090").
+    /// Listen address (e.g., "0.0.0.0:8088").
     pub listen: SocketAddr,
     /// Whether HTTPS is explicitly enabled.
     pub https_enabled: bool,
@@ -38,7 +38,7 @@ impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            listen: SocketAddr::from(([0, 0, 0, 0], 9090)),
+            listen: SocketAddr::from(([0, 0, 0, 0], 8088)),
             https_enabled: false,
             allow_plaintext_http: true,
             doh_enabled: false,

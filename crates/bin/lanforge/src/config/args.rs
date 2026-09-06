@@ -33,7 +33,7 @@ pub struct CliArgs {
     #[arg(long, env = "LANFORGE_DEBOUNCE_SECS")]
     pub debounce_secs: Option<u64>,
 
-    /// Listen address for the HTTP REST / `WebUI` API (e.g. 0.0.0.0:9090).
+    /// Listen address for the HTTP REST / `WebUI` API (e.g. 0.0.0.0:8088).
     #[arg(long, env = "LANFORGE_HTTP_LISTEN")]
     pub http_listen: Option<String>,
 
