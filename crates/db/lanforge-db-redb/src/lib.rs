@@ -3,23 +3,41 @@
 pub mod device;
 pub mod dhcp;
 pub mod dns;
+pub mod log;
 pub mod tables;
 pub mod user;
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, AtomicU64};
 use parking_lot::RwLock;
 use redb::{Database, ReadableDatabase, ReadableTable};
 use lanforge_db_core::DbError;
-use tables::TABLE_META;
+use tables::{TABLE_CONFIG, TABLE_DEVICES, TABLE_META, TABLE_USERS};
+
+pub use log::BlockedQueryEntry;
 
 #[derive(Clone)]
 pub struct RedbDatabase {
     pub(crate) db: Arc<RwLock<Database>>,
     pub(crate) path: Option<PathBuf>,
+    pub(crate) log_seq: Arc<AtomicU64>,
+    pub(crate) last_prune: Arc<AtomicI64>,
+}
+
+impl fmt::Debug for RedbDatabase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RedbDatabase")
+            .field("path", &self.path)
+            .finish()
+    }
 }
 
 impl RedbDatabase {
+    /// Current database schema version.
+    pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
     /// Opens or creates the `redb` database at the specified file path.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
         let p = path.as_ref();
@@ -27,11 +45,15 @@ impl RedbDatabase {
             std::fs::create_dir_all(parent)?;
         }
         let db = Database::create(p).map_err(|e| DbError::Backend(e.to_string()))?;
-        tracing::info!("Redb database opened at {}", p.display());
-        Ok(Self {
+        tracing::debug!("Redb database opened at {}", p.display());
+        let this = Self {
             db: Arc::new(RwLock::new(db)),
             path: Some(p.to_path_buf()),
-        })
+            log_seq: Arc::new(AtomicU64::new(0)),
+            last_prune: Arc::new(AtomicI64::new(0)),
+        };
+        this.ensure_schema_and_migrate()?;
+        Ok(this)
     }
 
     /// Opens an isolated in-memory temporary database (ideal for tests and recovery).
@@ -39,10 +61,26 @@ impl RedbDatabase {
         let temp = tempfile::NamedTempFile::new()?;
         let path = temp.path().to_path_buf();
         let db = Database::create(&path).map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(Self {
+        let this = Self {
             db: Arc::new(RwLock::new(db)),
             path: None, // Marked None so is_in_memory() returns true
-        })
+            log_seq: Arc::new(AtomicU64::new(0)),
+            last_prune: Arc::new(AtomicI64::new(0)),
+        };
+        this.ensure_schema_and_migrate()?;
+        Ok(this)
+    }
+
+    /// Opens an in-memory database without file persistence.
+    #[must_use]
+    pub fn open_in_memory() -> Self {
+        Self::open_temp().expect("failed to open in-memory redb database")
+    }
+
+    /// Returns the database file path, if any.
+    #[must_use]
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
     /// Returns true if running without file persistence or in temp mode.
@@ -113,6 +151,119 @@ impl RedbDatabase {
         write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(())
     }
+
+    /// Returns the current schema version stored in the database metadata table.
+    /// If unversioned, returns 0.
+    pub fn schema_version(&self) -> Result<u32, DbError> {
+        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let table = match read_txn.open_table(TABLE_META) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(0),
+            Err(e) => return Err(DbError::Backend(e.to_string())),
+        };
+
+        match table.get("schema_version").map_err(|e| DbError::Backend(e.to_string()))? {
+            Some(val) => {
+                let bytes = val.value();
+                if bytes.len() == 4 {
+                    let mut arr = [0u8; 4];
+                    arr.copy_from_slice(bytes);
+                    Ok(u32::from_be_bytes(arr))
+                } else {
+                    Ok(0)
+                }
+            }
+            None => Ok(0),
+        }
+    }
+
+    /// Sets the schema version stored in the metadata table.
+    pub fn set_schema_version(&self, version: u32) -> Result<(), DbError> {
+        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        {
+            let mut table = write_txn
+                .open_table(TABLE_META)
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+            table
+                .insert("schema_version", version.to_be_bytes().as_slice())
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+        }
+        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Checks if the database contains existing data from a legacy pre-versioned database.
+    fn is_legacy_unversioned_database(&self) -> bool {
+        let Ok(read_txn) = self.db.read().begin_read() else {
+            return false;
+        };
+        read_txn.open_table(TABLE_DEVICES).is_ok()
+            || read_txn.open_table(TABLE_CONFIG).is_ok()
+            || read_txn.open_table(TABLE_USERS).is_ok()
+    }
+
+    /// Ensures the database schema is at the current version, creating a backup and running
+    /// any pending migrations if upgrading from an older version.
+    pub fn ensure_schema_and_migrate(&self) -> Result<(), DbError> {
+        self.ensure_schema_and_migrate_to(Self::CURRENT_SCHEMA_VERSION)
+    }
+
+    /// Ensures the database schema is migrated up to `target_version`.
+    pub fn ensure_schema_and_migrate_to(&self, target_version: u32) -> Result<(), DbError> {
+        let current = self.schema_version()?;
+        let effective_version = if current == 0 {
+            if self.is_legacy_unversioned_database() {
+                1
+            } else {
+                self.set_schema_version(target_version)?;
+                return Ok(());
+            }
+        } else {
+            current
+        };
+
+        if effective_version > target_version {
+            return Err(DbError::Validation(format!(
+                "Database schema version {effective_version} is newer than supported version {target_version}. Please update Lanforge to the latest version."
+            )));
+        }
+
+        if effective_version < target_version {
+            if let Some(path) = &self.path
+                && path.exists()
+            {
+                let backup_path = PathBuf::from(format!("{}.v{effective_version}.bak", path.display()));
+                tracing::info!(
+                    "Creating pre-migration database backup from {} to {}",
+                    path.display(),
+                    backup_path.display()
+                );
+                std::fs::copy(path, &backup_path)?;
+            }
+
+            let mut version = effective_version;
+            while version < target_version {
+                self.migrate_step(version)?;
+                version += 1;
+                self.set_schema_version(version)?;
+                tracing::info!("Migrated database schema to version {version}");
+            }
+        } else if current == 0 {
+            self.set_schema_version(target_version)?;
+        }
+
+        Ok(())
+    }
+
+    fn migrate_step(&self, from_version: u32) -> Result<(), DbError> {
+        match from_version {
+            #[cfg(test)]
+            999 => Ok(()),
+            _ => Err(DbError::Validation(format!(
+                "No migration path defined from schema version {from_version}"
+            ))),
+        }
+    }
 }
 
 
@@ -125,11 +276,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_redb_user_crud() {
+        use lanforge_types::auth::UserRole;
         let db = RedbDatabase::open_temp().unwrap();
 
         assert_eq!(db.count_users().await.unwrap(), 0);
-        let user = db.create_user("admin", "hash123", "admin", 1000).await.unwrap();
+        let user = db.create_user("admin", "hash123", UserRole::Admin, 1000).await.unwrap();
         assert_eq!(user.username, "admin");
+        assert_eq!(user.role, UserRole::Admin);
         assert_eq!(db.count_users().await.unwrap(), 1);
 
         let fetched = db.get_user_by_username("admin").await.unwrap().unwrap();
@@ -230,11 +383,13 @@ mod tests {
         use lanforge_db_core::{ApiTokenStore, DnsStore};
         use lanforge_types::auth::{ApiScope, ApiScopes};
         use lanforge_types::network::dns::DnsRecordType;
+        use lanforge_types::network::dns::adblock::RewriteAnswer;
 
         let db = RedbDatabase::open_temp().unwrap();
 
         // DNS Rewrites
-        db.upsert_dns_rewrite("router.lan", DnsRecordType::A, "192.168.1.1").await.unwrap();
+        let ans = RewriteAnswer::A("192.168.1.1".parse().unwrap());
+        db.upsert_dns_rewrite("router.lan", DnsRecordType::A, &ans).await.unwrap();
         let rewrites = db.load_dns_rewrites().await.unwrap();
         assert_eq!(rewrites.len(), 1);
         assert_eq!(rewrites[0].domain, "router.lan");
@@ -256,5 +411,125 @@ mod tests {
 
         db.delete_api_token("secret-token").await.unwrap();
         assert!(db.validate_api_token("secret-token", 1002).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_redb_log_store() {
+        use lanforge_core::bus::{LanforgeEvent, SystemEvent, TimedEvent};
+        use lanforge_db_core::LogStore;
+        use lanforge_types::network::dns::{DnsRecordType, TransportProtocol};
+        use lanforge_types::network::{QueryLogEntry, QueryResult};
+        use std::sync::Arc;
+
+        let db = RedbDatabase::open_in_memory();
+
+        // 1. Record system logs
+        let event1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::ReloadConfig));
+        let event2 = TimedEvent::new(LanforgeEvent::System(SystemEvent::Shutdown));
+        db.record_log(&event1).await.unwrap();
+        db.record_log(&event2).await.unwrap();
+
+        let history = db.get_history(10).await.unwrap();
+        assert_eq!(history.len(), 2);
+
+        // 2. Record DNS queries
+        let query1 = QueryLogEntry {
+            timestamp: 1700000010,
+            src_ip: "192.168.1.50".parse().unwrap(),
+            domain: Arc::from("example.com"),
+            upstream_us: 1200,
+            qtype: DnsRecordType::A,
+            result: QueryResult::Forwarded,
+            cached: false,
+            src_mac: None,
+            answer: Some("93.184.216.34".to_string()),
+            protocol: TransportProtocol::Udp,
+        };
+        let query2 = QueryLogEntry {
+            timestamp: 1700000020,
+            src_ip: "192.168.1.50".parse().unwrap(),
+            domain: Arc::from("bad-ads.net"),
+            upstream_us: 0,
+            qtype: DnsRecordType::A,
+            result: QueryResult::Blocked,
+            cached: false,
+            src_mac: None,
+            answer: None,
+            protocol: TransportProtocol::Udp,
+        };
+        db.record_dns_queries_batch(&[query1, query2]).await.unwrap();
+
+        let (queries, total) = db.get_dns_query_history(10, None).await.unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(queries.len(), 2);
+        assert_eq!(queries[0].domain.as_ref(), "bad-ads.net"); // Latest first
+
+        let top_domains = db.get_dns_top_domains(5).await.unwrap();
+        assert_eq!(top_domains.len(), 2);
+
+        let top_blocked = db.get_dns_top_blocked_domains(5).await.unwrap();
+        assert_eq!(top_blocked.len(), 1);
+        assert_eq!(top_blocked[0].0, "bad-ads.net");
+
+        let query_rate = db.get_dns_query_rate(1700000000).await.unwrap();
+        assert!(!query_rate.is_empty());
+
+        // 3. Clear logs
+        db.clear_logs().await.unwrap();
+        let history_after_clear = db.get_history(10).await.unwrap();
+        assert_eq!(history_after_clear.len(), 0);
+        let (queries_after_clear, total_after_clear) = db.get_dns_query_history(10, None).await.unwrap();
+        assert_eq!(total_after_clear, 0);
+        assert_eq!(queries_after_clear.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_schema_versioning_fresh_and_update() {
+        let db = RedbDatabase::open_temp().unwrap();
+        assert_eq!(db.schema_version().unwrap(), RedbDatabase::CURRENT_SCHEMA_VERSION);
+
+        db.set_schema_version(42).unwrap();
+        assert_eq!(db.schema_version().unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn test_future_schema_version_rejected() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test_future.redb");
+
+        // Create db and artificially bump schema version to future
+        {
+            let db = RedbDatabase::open(&db_path).unwrap();
+            db.set_schema_version(RedbDatabase::CURRENT_SCHEMA_VERSION + 10).unwrap();
+        }
+
+        // Re-opening with current binary must fail with validation error
+        let err = RedbDatabase::open(&db_path).unwrap_err();
+        match err {
+            DbError::Validation(msg) => {
+                assert!(msg.contains("is newer than supported version"));
+            }
+            other => panic!("expected DbError::Validation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_migration_and_backup_creation() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test_migration.redb");
+
+        // 1. Open database and set schema version to 999 (our test migration step)
+        {
+            let db = RedbDatabase::open(&db_path).unwrap();
+            db.set_schema_version(999).unwrap();
+            // Migrate to 1000
+            db.ensure_schema_and_migrate_to(1000).unwrap();
+            assert_eq!(db.schema_version().unwrap(), 1000);
+        }
+
+        // 2. Verify pre-migration backup file was created at <path>.v999.bak
+        let backup_path = temp_dir.path().join("test_migration.redb.v999.bak");
+        assert!(backup_path.exists(), "backup file {backup_path:?} should exist");
+        assert!(std::fs::metadata(&backup_path).unwrap().len() > 0);
     }
 }

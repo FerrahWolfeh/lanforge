@@ -10,7 +10,7 @@ Welcome to the architectural specifications suite for **Lanforge**. This directo
 | :--- | :--- | :--- |
 | **`01-core-domain-and-types.md`** (`docs/spec/01-core-domain-and-types.md`) | `core/lanforge-types` | L0 foundational domain types (`MacAddr`, `Duid`), CoW delta updates (`DeviceUpdate`), and global event schemas (`LanforgeEvent`). |
 | **`02-state-management-and-eventbus.md`** (`docs/spec/02-state-management-and-eventbus.md`) | `core/lanforge-core` | L1 orchestrator, `LanforgeContext`, Copy-on-Write state mutation execution, `EventBus` pub/sub, and `ServiceControl`. |
-| **`03-storage-and-data-persistence.md`** (`docs/spec/03-storage-and-data-persistence.md`) | `db/` | Modular database engine abstraction (SQLite / PostgreSQL), out-of-band `DbWorker` event-driven writes, and SQLx migrations. |
+| **`03-storage-and-data-persistence.md`** (`docs/spec/03-storage-and-data-persistence.md`) | `db/` | Embedded `redb` ACID key-value storage, volatile tmpfs support, and out-of-band `DbWorker` event-driven writes. |
 | **`04-daemon-bootstrap-and-supervisor.md`** (`docs/spec/04-daemon-bootstrap-and-supervisor.md`) | `bin/lanforge` | Daemon startup sequence, configuration parsing, `ServiceSupervisor` readiness monitoring (`signal_ready`), restart backoff, and graceful shutdown. |
 
 ---
@@ -60,5 +60,5 @@ Welcome to the architectural specifications suite for **Lanforge**. This directo
                              v                                                     v
  (6) In-Memory Device Inventory instantly updated        (7) lanforge-dns          (8) lanforge-db (DbWorker)
                                                              (Registers Dyn DNS)     (Asynchronously writes
-                                                             (e.g. host.lan)          lease to SQLite/Postgres)
+                                                             (e.g. host.lan)          lease to redb storage)
 ```

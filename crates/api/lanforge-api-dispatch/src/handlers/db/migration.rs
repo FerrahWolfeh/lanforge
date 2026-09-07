@@ -5,10 +5,11 @@ use std::fs;
 use std::time::Duration;
 use tracing::info;
 
+use lanforge_types::system::StorageMode;
+
 impl ClientContext {
-    /// Switches the database engine between PostgreSQL and in-memory, performing configuration migration.
+    /// Switches the database storage mode between persistent and in-memory, performing configuration migration.
     pub async fn handle_db_switch_engine(&self, req: DbEngineSwitchRequest) -> Response {
-        let engine = req.engine.to_lowercase();
         let target_path = match self.resolve_config_path() {
             Some(p) => p,
             None => {
@@ -20,30 +21,24 @@ impl ClientContext {
             }
         };
 
-        match engine.as_str() {
-            "postgres" | "postgresql" => {
-                let url = match req.url {
-                    Some(ref u) if !u.trim().is_empty() => u.trim().to_string(),
-                    _ => {
-                        return Response::Error {
-                            error: "Database URL is required when switching to PostgreSQL"
-                                .to_string(),
-                        };
+        match req.mode {
+            StorageMode::Persistent => {
+                let url = match req.path {
+                    Some(ref u) if !u.trim().is_empty() => {
+                        let trimmed = u.trim();
+                        trimmed
+                            .strip_prefix("redb://")
+                            .or_else(|| trimmed.strip_prefix("file://"))
+                            .unwrap_or(trimmed)
+                            .to_string()
                     }
+                    _ => "/var/lib/lanforge/config.redb".to_string(),
                 };
-
-                if !url.starts_with("postgres://") && !url.starts_with("postgresql://") {
-                    return Response::Error {
-                        error:
-                            "Invalid PostgreSQL URL scheme. Must start with postgres:// or postgresql://"
-                                .to_string(),
-                    };
-                }
 
                 // 1. Gather all current static configurations
                 let export = self.export_system_config_data().await;
 
-                // 2. Format updated TOML configuration with the new PostgreSQL URL
+                // 2. Format updated TOML configuration with the new storage path
                 let existing_content = fs::read_to_string(&target_path).ok();
                 let toml_str = crate::handlers::system::toml_sync::generate_toml_from_export(
                     &export,
@@ -65,11 +60,11 @@ impl ClientContext {
                 }
 
                 info!(
-                    "Database migration: successfully updated {} with PostgreSQL connection. Triggering soft-reboot...",
+                    "Database migration: successfully updated {} with persistent storage path ({url}). Triggering soft-reboot...",
                     target_path.display()
                 );
 
-                // 4. Trigger soft-reboot to rebind services and run bootstrap seeding into PostgreSQL
+                // 4. Trigger soft-reboot to rebind services and run bootstrap
                 let bus = self.ctx.bus().clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_millis(1000)).await;
@@ -78,12 +73,12 @@ impl ClientContext {
 
                 Response::Success(SimpleSuccess {
                     message: format!(
-                        "Database switched to PostgreSQL. Configuration saved to {}. Daemon is soft-rebooting to connect.",
+                        "Database switched to persistent storage ({url}). Configuration saved to {}. Daemon is soft-rebooting.",
                         target_path.display()
                     ),
                 })
             }
-            "memory" | "none" | "mock" => {
+            StorageMode::InMemory => {
                 // 1. Export the latest static configurations from the active database
                 let export = self.export_system_config_data().await;
 
@@ -127,11 +122,6 @@ impl ClientContext {
                     ),
                 })
             }
-            other => Response::Error {
-                error: format!(
-                    "Unsupported database engine: '{other}'. Supported engines are 'postgres' and 'memory'."
-                ),
-            },
         }
     }
 }

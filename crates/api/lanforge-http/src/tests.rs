@@ -88,13 +88,13 @@ async fn test_handle_login() {
     let ctx = LanforgeContext::new(bus, core_state, None);
     let db = Arc::new(
         LanforgeDb::open(&DatabaseConfig {
-            url: "sqlite::memory:".to_string(),
+            config_path: "memory".to_string(),
             ..Default::default()
         })
         .await
         .unwrap(),
     );
-    let log_db = Arc::new(LogDb::open("sqlite::memory:").await.unwrap());
+    let log_db = Arc::new(LogDb::open_in_memory());
 
     // 1. Test when auth is disabled (auth_password_hash = None)
     let state_no_auth = AppState {

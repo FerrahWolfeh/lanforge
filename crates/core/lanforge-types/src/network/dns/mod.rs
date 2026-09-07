@@ -134,6 +134,38 @@ impl Display for DnsRecordType {
     }
 }
 
+/// Health status of an upstream DNS resolver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum UpstreamStatus {
+    #[default]
+    Healthy,
+    Degraded,
+    Disabled,
+}
+
+impl UpstreamStatus {
+    #[must_use]
+    pub const fn is_healthy(self) -> bool {
+        matches!(self, Self::Healthy)
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Degraded => "degraded",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
+impl std::fmt::Display for UpstreamStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Serializable snapshot of upstream health metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpstreamHealthSnapshot {
@@ -144,7 +176,7 @@ pub struct UpstreamHealthSnapshot {
     pub total_queries: u64,
     pub total_successes: u64,
     pub total_failures: u64,
-    pub status: String,
+    pub status: UpstreamStatus,
     pub last_success_secs_ago: Option<u64>,
 }
 

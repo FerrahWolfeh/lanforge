@@ -13,13 +13,23 @@ pub struct CliArgs {
     )]
     pub config: String,
 
-    /// Database connection URL (e.g. `postgres://lanforge:lanforge@localhost:5432/lanforge`).
-    #[arg(long, env = "LANFORGE_DB_URL")]
-    pub db_url: Option<String>,
+    /// Persistent configuration database path (e.g. `/var/lib/lanforge/config.redb`).
+    #[arg(
+        long = "config-db-path",
+        alias = "db-path",
+        alias = "db-url",
+        env = "LANFORGE_CONFIG_DB_PATH"
+    )]
+    pub config_db_path: Option<String>,
 
-    /// Log database connection URL or file path (e.g. `/tmp/lanforge-logs.jsonl`).
-    #[arg(long, env = "LANFORGE_LOG_DB_URL")]
-    pub log_db_url: Option<String>,
+    /// Volatile runtime database path (e.g. `/run/lanforge/runtime.redb` or `/tmp/lanforge/runtime.redb`).
+    #[arg(
+        long = "runtime-db-path",
+        alias = "log-path",
+        alias = "log-db-url",
+        env = "LANFORGE_RUNTIME_DB_PATH"
+    )]
+    pub runtime_db_path: Option<String>,
 
     /// Main LAN interface (e.g. eth0, enp3s0, br-lan).
     #[arg(short = 'i', long, env = "LANFORGE_IFACE_LAN")]

@@ -179,7 +179,7 @@ lanforge
 │   └── import [-o <file>] [-w] [-p <password>] # Import full db config (optional decryption)
 │
 ├── db
-│   ├── vacuum                      # SQLite VACUUM
+│   ├── vacuum                      # Database compact / vacuum
 │   ├── prune                       # Remove zombie entries
 │   ├── log-clean                   # Clear transient log DB
 │   └── reset                       # FACTORY RESET (double confirm)
@@ -222,7 +222,7 @@ lanforge
 
 4. **INSIGHTS** box (yellow bold title):
    - `Devices` — `{online} / {total} online  ★{static_count}  ·{dynamic_count}`
-   - `SQLite` — `{size}  at {path}` (size in cyan)
+   - `Database` — `{size}  at {path}` (size in cyan)
    - `Last Sync` — `{N}s ago`
 
 5. **CAPABILITIES** box (yellow bold title):

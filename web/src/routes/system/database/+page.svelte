@@ -99,18 +99,9 @@
 	let showImportResultDialog = $state(false);
 
 	// Storage configuration form state
-	let formEngine = $state<"postgres" | "memory">("postgres");
-	let formMode = $state<"structured" | "raw">("structured");
-	let formUrl = $state("");
-	let formHost = $state("localhost");
-	let formPort = $state(5432);
-	let formDatabase = $state("lanforge");
-	let formUser = $state("lanforge");
-	let formPassword = $state("");
-	let showPassword = $state(false);
+	let formStorageType = $state<"persistent" | "volatile">("persistent");
+	let formUrl = $state("/var/lib/lanforge/lanforge.redb");
 	let formFlushInterval = $state(60);
-	let formMaxConnections = $state(10);
-	let formMinConnections = $state(2);
 	let formLogUrl = $state("/tmp/lanforge-logs.jsonl");
 
 	// Derived helpers
@@ -121,12 +112,14 @@
 			path === "memory" ||
 			path === "none" ||
 			path === "mock" ||
+			path.startsWith("/tmp") ||
+			path.startsWith("/run") ||
 			path.includes(":memory:")
 		);
 	});
 
 	const engineLabel = $derived(
-		isInMemory ? "In-Memory (Ephemeral)" : "PostgreSQL",
+		isInMemory ? "Volatile / RAM (tmpfs)" : "Persistent (redb)",
 	);
 
 	// Correctly check health using boolean comparison
@@ -138,69 +131,28 @@
 		return metrics.last_error === 0;
 	});
 
-	function parsePostgresUrl(urlStr: string) {
-		try {
-			if (!urlStr || !urlStr.startsWith("postgres")) return null;
-			const normalized = urlStr.replace(/^postgres(ql)?:\/\//, "http://");
-			const parsed = new URL(normalized);
-			return {
-				host: parsed.hostname || "localhost",
-				port: parsed.port ? Number(parsed.port) : 5432,
-				user: decodeURIComponent(parsed.username || "lanforge"),
-				password: decodeURIComponent(parsed.password || ""),
-				database: parsed.pathname
-					? parsed.pathname.replace(/^\//, "")
-					: "lanforge",
-			};
-		} catch {
-			return null;
-		}
-	}
-
 	let baselineForm = $state<string | null>(null);
 
 	function serializeForm(): string {
 		return JSON.stringify({
-			engine: formEngine,
-			mode: formMode,
+			storageType: formStorageType,
 			url: formUrl.trim(),
-			host: formHost.trim(),
-			port: Number(formPort),
-			db: formDatabase.trim(),
-			user: formUser.trim(),
-			pass: formPassword,
 			flush: Number(formFlushInterval),
-			maxConn: Number(formMaxConnections),
-			minConn: Number(formMinConnections),
 			logUrl: formLogUrl.trim(),
 		});
 	}
 
 	function syncFormFromStatus() {
-		if (isInMemory) {
-			formEngine = "memory";
-			formUrl = "memory";
-			formMode = "raw";
+		const rawPath = systemStatus?.db?.path || "";
+		if (isInMemory || rawPath.startsWith("/tmp") || rawPath.startsWith("/run")) {
+			formStorageType = "volatile";
+			formUrl = rawPath || "/run/lanforge/config.redb";
 		} else {
-			formEngine = "postgres";
-			const rawPath = systemStatus?.db?.path || "";
-			formUrl = rawPath;
-			const parsed = parsePostgresUrl(rawPath);
-			if (parsed) {
-				formHost = parsed.host;
-				formPort = parsed.port;
-				formUser = parsed.user;
-				formPassword = parsed.password;
-				formDatabase = parsed.database;
-				formMode = "structured";
-			} else {
-				formMode = "raw";
-			}
+			formStorageType = "persistent";
+			formUrl = rawPath || "/var/lib/lanforge/config.redb";
 		}
 		formFlushInterval = 60;
-		formMaxConnections = 10;
-		formMinConnections = 2;
-		formLogUrl = "/tmp/lanforge-logs.jsonl";
+		formLogUrl = "/run/lanforge/runtime.redb";
 
 		baselineForm = serializeForm();
 	}
@@ -213,23 +165,17 @@
 
 	// Reactive live generated TOML
 	const computedToml = $derived.by(() => {
-		let urlVal = "memory";
-		if (formEngine === "postgres") {
-			if (formMode === "raw") {
-				urlVal =
-					formUrl ||
-					"postgres://lanforge:secret@localhost:5432/lanforge";
-			} else {
-				const passPart = formPassword ? `:${formPassword}` : "";
-				urlVal = `postgres://${formUser || "lanforge"}${passPart}@${formHost || "localhost"}:${formPort || 5432}/${formDatabase || "lanforge"}`;
-			}
+		let urlVal = formUrl.trim();
+		if (!urlVal) {
+			urlVal =
+				formStorageType === "persistent"
+					? "/var/lib/lanforge/config.redb"
+					: "/run/lanforge/config.redb";
 		}
 		return `[database]
-url = "${urlVal}"
-log_url = "${formLogUrl || "/tmp/lanforge-logs.jsonl"}"
-flush_interval = ${formFlushInterval || 60}
-max_connections = ${formMaxConnections || 10}
-min_connections = ${formMinConnections || 2}`;
+config_path = "${urlVal}"
+runtime_path = "${formLogUrl || "/run/lanforge/runtime.redb"}"
+flush_interval = ${formFlushInterval || 60}`;
 	});
 
 	// Inventory of stored entities
@@ -609,31 +555,23 @@ min_connections = ${formMinConnections || 2}`;
 		applyingEngineSwitch = true;
 		try {
 			const targetUrl =
-				formEngine === "postgres"
-					? formMode === "raw"
-						? formUrl
-						: `postgres://${formUser}:${formPassword}@${formHost}:${formPort}/${formDatabase}`
-					: undefined;
+				formUrl.trim() ||
+				(formStorageType === "persistent"
+					? "/var/lib/lanforge/lanforge.redb"
+					: "/run/lanforge/lanforge.redb");
 
 			const payload: DbEngineSwitchRequest = {
-				engine: formEngine,
+				engine: "redb",
 				url: targetUrl,
-				max_connections: Number(formMaxConnections),
-				min_connections: Number(formMinConnections),
 			};
 
 			await switchDbEngine(payload);
 
-			toast.success(
-				formEngine === "postgres"
-					? "Switched to PostgreSQL. Soft-rebooting daemon..."
-					: "Switched to In-Memory mode. Static config flushed to TOML. Soft-rebooting...",
-				{
-					description:
-						"The daemon is soft-rebooting internal services with the new storage engine.",
-					duration: 6000,
-				},
-			);
+			toast.success("Storage configuration updated. Soft-rebooting daemon...", {
+				description:
+					"The daemon is soft-rebooting internal services with the new storage configuration.",
+				duration: 6000,
+			});
 
 			baselineForm = serializeForm();
 
@@ -641,7 +579,7 @@ min_connections = ${formMinConnections || 2}`;
 				loadAll(true);
 			}, 2500);
 		} catch (e: any) {
-			toast.error("Failed to switch storage engine", {
+			toast.error("Failed to update storage configuration", {
 				description: e?.message || "Internal server error",
 			});
 		} finally {
@@ -674,7 +612,7 @@ min_connections = ${formMinConnections || 2}`;
 							class="border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400 font-medium text-xs gap-1.5"
 						>
 							<AlertTriangleIcon class="size-3" />
-							In-Memory (Ephemeral)
+							Volatile / RAM (tmpfs)
 						</Badge>
 					{:else}
 						<Badge
@@ -689,7 +627,7 @@ min_connections = ${formMinConnections || 2}`;
 									class="relative inline-flex rounded-full size-2 bg-emerald-500"
 								></span>
 							</span>
-							PostgreSQL (Connected)
+							redb (Connected)
 						</Badge>
 					{/if}
 				</div>
@@ -774,14 +712,14 @@ min_connections = ${formMinConnections || 2}`;
 								variant="outline"
 								class="text-[10px] px-1.5 py-0 h-4 font-mono font-normal"
 							>
-								{isInMemory ? "RAM Cache" : "Relational DB"}
+								{isInMemory ? "RAM / tmpfs" : "redb (Disk)"}
 							</Badge>
 						</div>
 						<p
 							class="text-[11px] text-muted-foreground font-mono truncate mt-0.5"
-							title={systemStatus?.db?.path || "in-memory"}
+							title={systemStatus?.db?.path || "redb"}
 						>
-							{systemStatus?.db?.path || "memory (mock)"}
+							{systemStatus?.db?.path || "redb (embedded)"}
 						</p>
 					</div>
 				{/if}
@@ -954,7 +892,7 @@ min_connections = ${formMinConnections || 2}`;
 						<span
 							class="text-[11px] text-muted-foreground truncate mt-0.5"
 						>
-							Check PostgreSQL service logs
+							Check daemon storage logs
 						</span>
 					</div>
 				{/if}
@@ -962,7 +900,7 @@ min_connections = ${formMinConnections || 2}`;
 		</Card.Root>
 	</div>
 
-	<!-- Ephemeral Mode Warning Banner -->
+	<!-- Volatile Mode Banner -->
 	{#if !loading && isInMemory}
 		<Card.Root class="border-amber-500/30 bg-amber-500/5">
 			<Card.Content class="pt-6">
@@ -974,29 +912,27 @@ min_connections = ${formMinConnections || 2}`;
 					</div>
 					<div class="flex flex-col gap-1">
 						<h3 class="text-sm font-semibold text-foreground">
-							Running in Ephemeral In-Memory Mode
+							Running with Volatile / RAM Storage
 						</h3>
 						<p
 							class="text-xs text-muted-foreground leading-relaxed"
 						>
-							The daemon is currently running without a persistent
-							PostgreSQL connection. Dynamic lease assignments,
-							static host mappings, and DNS rules are kept
-							strictly in RAM and will be lost if the daemon
-							process terminates. Configure a PostgreSQL
-							connection in the <button
+							The daemon is currently storing data in volatile memory (tmpfs/RAM). Dynamic lease assignments,
+							static host mappings, and DNS rules will reset if the system reboots. This is ideal for OpenWrt
+							or embedded routers to protect flash storage. To persist across reboots, configure a persistent
+							database path (e.g. <code class="font-mono text-foreground">/var/lib/lanforge/lanforge.redb</code>) in the <button
 								type="button"
 								class="font-medium text-foreground underline hover:text-primary transition-colors cursor-pointer"
 								onclick={() => (activeTab = "settings")}
 								>Storage Settings tab</button
 							>
-							or export a snapshot in
+							or export a backup in
 							<button
 								type="button"
 								class="font-medium text-foreground underline hover:text-primary transition-colors cursor-pointer"
 								onclick={() => (activeTab = "backup")}
 								>Backup &amp; Restore</button
-							> to preserve your state.
+							>.
 						</p>
 					</div>
 				</div>
@@ -1151,7 +1087,7 @@ min_connections = ${formMinConnections || 2}`;
 														<CheckIcon
 															class="size-3 mr-1"
 														/>
-														PostgreSQL
+														Persistent (redb)
 													</Badge>
 												{/if}
 											</Table.Cell>
@@ -1219,226 +1155,100 @@ min_connections = ${formMinConnections || 2}`;
 						</div>
 					</Card.Header>
 					<Card.Content class="space-y-6">
-						<!-- Engine Choice Selector -->
+						<!-- Storage Mode Selector -->
 						<div class="space-y-2">
 							<Label class="text-xs font-semibold"
-								>Database Engine</Label
+								>Storage Persistence Mode</Label
 							>
 							<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
 								<button
 									type="button"
-									class="flex flex-col gap-1 p-3.5 rounded-xl border text-left transition-all {formEngine ===
-									'postgres'
+									class="flex flex-col gap-1 p-3.5 rounded-xl border text-left transition-all {formStorageType ===
+									'persistent'
 										? 'border-primary bg-primary/5 ring-1 ring-primary'
 										: 'border-border hover:bg-muted/40'}"
-									onclick={() => (formEngine = "postgres")}
+									onclick={() => {
+										formStorageType = "persistent";
+										if (formUrl.startsWith("/run") || formUrl.startsWith("/tmp") || formUrl === "memory") {
+											formUrl = "/var/lib/lanforge/lanforge.redb";
+										}
+									}}
 								>
 									<div
 										class="flex items-center justify-between w-full"
 									>
 										<span
 											class="text-sm font-bold text-foreground"
-											>PostgreSQL</span
+											>Persistent Storage (Disk / Flash)</span
 										>
-										{#if formEngine === "postgres"}
+										{#if formStorageType === "persistent"}
 											<CheckIcon
 												class="size-4 text-primary"
 											/>
 										{/if}
 									</div>
 									<p class="text-xs text-muted-foreground">
-										Recommended for production. Long-term
-										persistent storage on external server or
-										container.
+										Default for standard Linux servers, homelabs, and VMs. Preserves all configuration and state across reboots.
 									</p>
 								</button>
 
 								<button
 									type="button"
-									class="flex flex-col gap-1 p-3.5 rounded-xl border text-left transition-all {formEngine ===
-									'memory'
+									class="flex flex-col gap-1 p-3.5 rounded-xl border text-left transition-all {formStorageType ===
+									'volatile'
 										? 'border-amber-500 bg-amber-500/5 ring-1 ring-amber-500'
 										: 'border-border hover:bg-muted/40'}"
-									onclick={() => (formEngine = "memory")}
+									onclick={() => {
+										formStorageType = "volatile";
+										if (formUrl.startsWith("/var/lib")) {
+											formUrl = "/run/lanforge/lanforge.redb";
+										}
+									}}
 								>
 									<div
 										class="flex items-center justify-between w-full"
 									>
 										<span
 											class="text-sm font-bold text-foreground"
-											>In-Memory (Ephemeral)</span
+											>Volatile Storage / RAM (tmpfs)</span
 										>
-										{#if formEngine === "memory"}
+										{#if formStorageType === "volatile"}
 											<CheckIcon
 												class="size-4 text-amber-500"
 											/>
 										{/if}
 									</div>
 									<p class="text-xs text-muted-foreground">
-										Zero external dependencies. Ideal for
-										lightweight testing or stateless
-										homelabs.
+										Recommended for OpenWrt routers and SBCs with fragile SPI flash memory. Stores the redb file in RAM (/run or /tmp).
 									</p>
 								</button>
 							</div>
 						</div>
 
-						{#if formEngine === "postgres"}
-							<Separator />
+						<Separator />
 
-							<!-- Mode Switch: Structured vs URL -->
-							<div class="flex items-center justify-between">
-								<div class="space-y-0.5">
-									<Label class="text-xs font-semibold"
-										>Configuration Mode</Label
-									>
-									<p
-										class="text-[11px] text-muted-foreground"
-									>
-										Choose between structured parameter
-										fields or direct connection URI.
-									</p>
-								</div>
-								<div
-									class="inline-flex rounded-lg border p-0.5 bg-muted/30"
+						<!-- Database Paths and Cadence -->
+						<div class="space-y-4">
+							<div class="space-y-1.5">
+								<Label for="cfg-path" class="text-xs font-semibold"
+									>Database File Path</Label
 								>
-									<button
-										type="button"
-										class="px-3 py-1 rounded-md text-xs font-medium transition-all {formMode ===
-										'structured'
-											? 'bg-background text-foreground shadow-sm'
-											: 'text-muted-foreground hover:text-foreground'}"
-										onclick={() =>
-											(formMode = "structured")}
-									>
-										Structured
-									</button>
-									<button
-										type="button"
-										class="px-3 py-1 rounded-md text-xs font-medium transition-all {formMode ===
-										'raw'
-											? 'bg-background text-foreground shadow-sm'
-											: 'text-muted-foreground hover:text-foreground'}"
-										onclick={() => (formMode = "raw")}
-									>
-										Connection URI
-									</button>
-								</div>
+								<Input
+									id="cfg-path"
+									bind:value={formUrl}
+									placeholder={formStorageType === "persistent"
+										? "/var/lib/lanforge/config.redb"
+										: "/run/lanforge/config.redb"}
+									class="text-xs font-mono"
+								/>
+								<p class="text-[11px] text-muted-foreground">
+									Path to the persistent configuration <code class="text-foreground">redb</code> database file.
+								</p>
 							</div>
 
-							{#if formMode === "structured"}
-								<div
-									class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
-								>
-									<div class="space-y-1.5">
-										<Label for="cfg-host" class="text-xs"
-											>Database Host</Label
-										>
-										<Input
-											id="cfg-host"
-											bind:value={formHost}
-											placeholder="127.0.0.1 or pg.local"
-											class="text-xs font-mono"
-										/>
-									</div>
-									<div class="space-y-1.5">
-										<Label for="cfg-port" class="text-xs"
-											>Port</Label
-										>
-										<Input
-											id="cfg-port"
-											type="number"
-											bind:value={formPort}
-											placeholder="5432"
-											class="text-xs font-mono"
-										/>
-									</div>
-									<div class="space-y-1.5">
-										<Label for="cfg-dbname" class="text-xs"
-											>Database Name</Label
-										>
-										<Input
-											id="cfg-dbname"
-											bind:value={formDatabase}
-											placeholder="lanforge"
-											class="text-xs font-mono"
-										/>
-									</div>
-									<div class="space-y-1.5">
-										<Label for="cfg-user" class="text-xs"
-											>Username</Label
-										>
-										<Input
-											id="cfg-user"
-											bind:value={formUser}
-											placeholder="lanforge"
-											class="text-xs font-mono"
-										/>
-									</div>
-									<div class="space-y-1.5 sm:col-span-2">
-										<Label for="cfg-pass" class="text-xs"
-											>Password</Label
-										>
-										<div class="relative">
-											<Input
-												id="cfg-pass"
-												type={showPassword
-													? "text"
-													: "password"}
-												bind:value={formPassword}
-												placeholder="••••••••••••"
-												class="text-xs font-mono pr-9"
-											/>
-											<button
-												type="button"
-												class="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-												onclick={() =>
-													(showPassword =
-														!showPassword)}
-											>
-												{#if showPassword}
-													<EyeOffIcon
-														class="size-4"
-													/>
-												{:else}
-													<EyeIcon class="size-4" />
-												{/if}
-											</button>
-										</div>
-									</div>
-								</div>
-							{:else}
+							<div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
 								<div class="space-y-1.5">
-									<Label for="cfg-url" class="text-xs"
-										>PostgreSQL Connection URI</Label
-									>
-									<Input
-										id="cfg-url"
-										bind:value={formUrl}
-										placeholder="postgres://lanforge:secret@localhost:5432/lanforge"
-										class="text-xs font-mono"
-									/>
-									<p
-										class="text-[11px] text-muted-foreground"
-									>
-										Supports standard URI query parameters
-										like <code class="text-foreground"
-											>?sslmode=require</code
-										>
-										or
-										<code class="text-foreground"
-											>?host=/run/postgresql</code
-										>.
-									</p>
-								</div>
-							{/if}
-
-							<!-- Tuning parameters -->
-							<div
-								class="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2"
-							>
-								<div class="space-y-1.5">
-									<Label for="cfg-flush" class="text-xs"
+									<Label for="cfg-flush" class="text-xs font-semibold"
 										>Flush Interval (seconds)</Label
 									>
 									<Input
@@ -1449,50 +1259,26 @@ min_connections = ${formMinConnections || 2}`;
 										bind:value={formFlushInterval}
 										class="text-xs font-mono"
 									/>
-									<p
-										class="text-[10px] text-muted-foreground"
-									>
-										Cadence of background state writes
+									<p class="text-[10px] text-muted-foreground">
+										Cadence of background state sync to storage.
 									</p>
 								</div>
 								<div class="space-y-1.5">
-									<Label for="cfg-max-conn" class="text-xs"
-										>Max Connections</Label
+									<Label for="cfg-logpath" class="text-xs font-semibold"
+										>Runtime Database Path</Label
 									>
 									<Input
-										id="cfg-max-conn"
-										type="number"
-										min="2"
-										max="50"
-										bind:value={formMaxConnections}
+										id="cfg-logpath"
+										bind:value={formLogUrl}
+										placeholder="/run/lanforge/runtime.redb"
 										class="text-xs font-mono"
 									/>
-									<p
-										class="text-[10px] text-muted-foreground"
-									>
-										Connection pool upper limit
-									</p>
-								</div>
-								<div class="space-y-1.5">
-									<Label for="cfg-min-conn" class="text-xs"
-										>Min Idle Connections</Label
-									>
-									<Input
-										id="cfg-min-conn"
-										type="number"
-										min="1"
-										max="10"
-										bind:value={formMinConnections}
-										class="text-xs font-mono"
-									/>
-									<p
-										class="text-[10px] text-muted-foreground"
-									>
-										Warm idle connection pool
+									<p class="text-[10px] text-muted-foreground">
+										Path for volatile runtime database (active leases, audit logs, query history in tmpfs).
 									</p>
 								</div>
 							</div>
-						{/if}
+						</div>
 
 						<Separator />
 

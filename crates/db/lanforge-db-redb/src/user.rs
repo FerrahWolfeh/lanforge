@@ -3,7 +3,7 @@
 use crate::RedbDatabase;
 use crate::tables::{TABLE_API_TOKENS, TABLE_USERS};
 use lanforge_db_core::{ApiTokenEntry, ApiTokenStore, BoxFuture, DbError, UserEntry, UserStore};
-use lanforge_types::auth::ApiScopes;
+use lanforge_types::auth::{ApiScopes, UserRole};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
 
 impl UserStore for RedbDatabase {
@@ -11,7 +11,7 @@ impl UserStore for RedbDatabase {
         &'a self,
         username: &'a str,
         password_hash: &'a str,
-        role: &'a str,
+        role: UserRole,
         now: i64,
     ) -> BoxFuture<'a, Result<UserEntry, DbError>> {
         Box::pin(async move {
@@ -20,7 +20,7 @@ impl UserStore for RedbDatabase {
                 id,
                 username: username.to_string(),
                 password_hash: password_hash.to_string(),
-                role: role.to_string(),
+                role,
                 created_at: now,
                 updated_at: now,
                 last_login: None,
@@ -156,7 +156,7 @@ impl UserStore for RedbDatabase {
     fn update_user_role<'a>(
         &'a self,
         username: &'a str,
-        new_role: &'a str,
+        new_role: UserRole,
         now: i64,
     ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
@@ -174,7 +174,7 @@ impl UserStore for RedbDatabase {
 
                     let mut entry: UserEntry = serde_json::from_slice(val.value())
                         .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                    entry.role = new_role.to_string();
+                    entry.role = new_role;
                     entry.updated_at = now;
                     entry
                 };
@@ -269,19 +269,13 @@ impl ApiTokenStore for RedbDatabase {
     ) -> BoxFuture<'a, Result<i64, DbError>> {
         Box::pin(async move {
             let id = self.next_id("api_tokens")?;
-            let scopes_str = scopes
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-                .join(",");
-
             let entry = ApiTokenEntry {
                 id,
                 token: token.to_string(),
                 name: name.to_string(),
                 created_at: now,
                 last_used: None,
-                scopes: scopes_str,
+                scopes: scopes.clone(),
                 expires_at,
             };
 
@@ -339,13 +333,7 @@ impl ApiTokenStore for RedbDatabase {
                     .insert(token, bytes.as_slice())
                     .map_err(|e| DbError::Backend(e.to_string()))?;
 
-                let scopes: ApiScopes = entry
-                    .scopes
-                    .split(',')
-                    .filter_map(|s| s.parse().ok())
-                    .collect();
-
-                Some((entry.name, scopes))
+                Some((entry.name, entry.scopes))
             };
 
             write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
@@ -446,12 +434,7 @@ impl ApiTokenStore for RedbDatabase {
                 let entry: ApiTokenEntry = serde_json::from_slice(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 if entry.name == id_or_name || entry.id.to_string() == id_or_name {
-                    let scopes: ApiScopes = entry
-                        .scopes
-                        .split(',')
-                        .filter_map(|s| s.parse().ok())
-                        .collect();
-                    return Ok(Some((entry.name, scopes, entry.expires_at)));
+                    return Ok(Some((entry.name, entry.scopes, entry.expires_at)));
                 }
             }
             Ok(None)

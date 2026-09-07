@@ -6,8 +6,6 @@ RUN dpkg --add-architecture amd64
 RUN apt-get update && apt-get install --assume-yes \
     libssl-dev:arm64 \
     libzstd-dev:arm64 \
-    libsqlite3-dev:arm64 \
-    libsqlite3-dev:amd64 \
     libssl-dev:amd64 \
     libzstd-dev:amd64
 

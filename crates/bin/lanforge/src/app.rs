@@ -149,7 +149,7 @@ impl Daemon {
         }
 
         // Database checks
-        if cfg.database.url.starts_with("sqlite") || cfg.database.url.starts_with("postgres") || cfg.database.url.starts_with("postgresql") {
+        if cfg.database.config_path.starts_with("sqlite") || cfg.database.config_path.starts_with("postgres") || cfg.database.config_path.starts_with("postgresql") {
             tracing::warn!(
                 "External SQL databases are no longer supported. Lanforge uses embedded redb storage."
             );

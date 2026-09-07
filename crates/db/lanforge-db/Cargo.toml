@@ -24,7 +24,6 @@ lanforge-core = { workspace = true }
 lanforge-macros = { workspace = true }
 lanforge-types = { workspace = true }
 lanforge-db-core = { path = "../lanforge-db-core" }
-lanforge-db-logbuf = { path = "../lanforge-db-logbuf" }
 lanforge-db-redb = { path = "../lanforge-db-redb" }
 
 # Workspace

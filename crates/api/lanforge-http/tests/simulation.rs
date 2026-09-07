@@ -14,13 +14,13 @@ async fn init_test_context() -> (LanforgeContext, Arc<LanforgeDb>, Arc<LogDb>) {
     let table = State::new();
     let db = Arc::new(
         LanforgeDb::open(&DatabaseConfig {
-            url: "sqlite::memory:".to_string(),
+            config_path: "memory".to_string(),
             ..Default::default()
         })
         .await
         .unwrap(),
     );
-    let log_db = Arc::new(LogDb::open("sqlite::memory:").await.unwrap());
+    let log_db = Arc::new(LogDb::open_in_memory());
     (LanforgeContext::new(bus, table, None), db, log_db)
 }
 

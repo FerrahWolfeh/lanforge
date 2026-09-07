@@ -43,7 +43,7 @@ async fn async_main() -> Result<()> {
         .without_time()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn")),
+                .unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 

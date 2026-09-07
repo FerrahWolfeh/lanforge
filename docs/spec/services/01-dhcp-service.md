@@ -53,7 +53,7 @@ Once a lease is granted or renewed, `lanforge-dhcp` broadcasts `LanforgeEvent::D
 ## 3. Subsystem Reactions to DHCP Events
 
 When `lanforge-dhcp` emits DHCP events to the bus:
-- **`lanforge-db` (Persistence):** Captures `LeaseGranted`, `LeaseReleased`, or `LeaseExpired` events and asynchronously updates SQLite/PostgreSQL storage.
+- **`lanforge-db` (Persistence):** Captures `LeaseGranted`, `LeaseReleased`, or `LeaseExpired` events and asynchronously updates `redb` storage.
 - **`lanforge-dns` (Dynamic DNS):** Reacts to `LeaseGranted` events containing hostnames to instantly register dynamic local `.lan` DNS records without daemon restarts.
 - **API & TUI Clients:** Real-time CLI/TUI listeners receive the event over Unix Sockets / HTTP to update active dashboard displays.
 

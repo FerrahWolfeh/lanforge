@@ -186,6 +186,7 @@ clap = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 rand = { workspace = true }
+bytesize = { workspace = true }
 
 # Networking / netlink
 netlink-sys = { workspace = true }

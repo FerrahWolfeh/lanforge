@@ -133,7 +133,7 @@ Endpoints that follow this pattern are marked **HybridStream**.
 
 | Method | Description | Input | Output |
 | :--- | :--- | :--- | :--- |
-| `db_vacuum` | Performs a VACUUM operation on the SQLite database. | No | Empty on success, error on failure |
+| `db_vacuum` | Performs a compact / vacuum operation on the persistent database. | No | Empty on success, error on failure |
 | `db_prune` | Prunes old history and log entries based on retention policy. | No | Empty on success, error on failure |
 | `db_log_clean` | Clears the transient system event log from the database. | No | Empty on success, error on failure |
 | `db_reset` | Wipes the entire database. **DANGEROUS.** | No | Empty on success, error on failure |

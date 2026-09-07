@@ -80,7 +80,7 @@ impl ClientContext {
 
     async fn add_dns_rewrite_internal(&self, rule: &RewriteRule) -> Result<(), String> {
         self.db
-            .upsert_dns_rewrite(&rule.domain, rule.rtype, &rule.answer.to_string())
+            .upsert_dns_rewrite(&rule.domain, rule.rtype, &rule.answer)
             .await
             .map_err(|e| e.to_string())
     }

@@ -19,12 +19,11 @@ target_prefix = "fd00:cafe:f00d::"
 debounce_secs = 2
 
 [database]
-# Main persistence (PostgreSQL for production, or "memory" for in-memory mode).
-url = "postgres://lanforge:lanforge@localhost:5432/lanforge"
-# url = "memory"
+# Persistent configuration database (services, users, static hosts, DNS rewrites).
+config_path = "/var/lib/lanforge/config.redb"
 
-# Transient log storage (JSONL file for query logs and audit metrics).
-log_url = "/tmp/lanforge-logs.jsonl"
+# Volatile runtime database in tmpfs (active leases, query logs, system event history).
+runtime_path = "/run/lanforge/runtime.redb"
 
-# Flushing interval for in-memory state persistence (seconds).
+# Flushing interval for state persistence (seconds).
 flush_interval = 60

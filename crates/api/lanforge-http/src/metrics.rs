@@ -301,7 +301,7 @@ fn append_system_metrics(out: &mut String, status: &SystemStatus, uptime_secs: u
     if !status.db_path.is_empty()
         && let Ok(metadata) = std::fs::metadata(&status.db_path)
     {
-        out.push_str("# HELP lanforge_db_size_bytes Size of the SQLite persistence database\n");
+        out.push_str("# HELP lanforge_db_size_bytes Size of the persistence database\n");
         out.push_str("# TYPE lanforge_db_size_bytes gauge\n");
         let _ = writeln!(
             out,

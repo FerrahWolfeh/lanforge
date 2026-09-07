@@ -22,7 +22,7 @@
 ### Key Architectural Constraints
 - **Zero Inter-Crate Dependencies:** `lanforge-types` does NOT depend on any other crate in the workspace (except procedural macros like `lanforge-macros` or basic utility crates).
 - **Pure Data & Protocols:** Contains serializable domain types (via `serde`), value objects, and protocol contracts without any I/O, network binding, or background execution logic.
-- **Ubiquitous Language:** Defines the canonical representations used consistently across storage (SQLite/PostgreSQL), inter-service buses, APIs (Unix Socket / HTTP), and user interfaces (CLI/TUI).
+- **Ubiquitous Language:** Defines the canonical representations used consistently across storage (redb / volatile tmpfs), inter-service buses, APIs (Unix Socket / HTTP), and user interfaces (CLI/TUI).
 
 ---
 

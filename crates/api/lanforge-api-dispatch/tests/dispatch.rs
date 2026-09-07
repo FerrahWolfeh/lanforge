@@ -14,7 +14,7 @@ use lanforge_types::network::DnsRecordType;
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{
-    AdblockDbConfig, AdblockUrlKind, BlockingMode, RewriteAnswer, RewriteRule,
+    AdblockDbConfig, AdblockRuleAction, AdblockUrlKind, BlockingMode, RewriteAnswer, RewriteRule,
 };
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::update::DeviceUpdate;
@@ -27,13 +27,13 @@ async fn init_test_context() -> ClientContext {
     let table = State::new();
     let db = Arc::new(
         LanforgeDb::open(&DatabaseConfig {
-            url: "sqlite::memory:".to_string(),
+            config_path: "memory".to_string(),
             ..Default::default()
         })
         .await
         .unwrap(),
     );
-    let log_db = Arc::new(LogDb::open("sqlite::memory:").await.unwrap());
+    let log_db = Arc::new(LogDb::open_in_memory());
     let ctx = LanforgeContext::new(bus, table, None);
 
     ClientContext {
@@ -180,7 +180,7 @@ async fn test_dispatch_system_config_import_export() {
             Some(vec![lanforge_types::network::dns::adblock::AdblockRuleEntry {
                 id: None,
                 domain: "custom-blocked.com".to_string(),
-                action: "block".to_string(),
+                action: AdblockRuleAction::Block,
                 enabled: true,
             }])
         } else {
@@ -237,7 +237,7 @@ async fn test_dispatch_system_config_import_export() {
             let rules = cfg.dns_adblock_rules.as_ref().expect("rules present");
             assert_eq!(rules.len(), 1);
             assert_eq!(rules[0].domain, "custom-blocked.com");
-            assert_eq!(rules[0].action, "block");
+            assert_eq!(rules[0].action, AdblockRuleAction::Block);
             assert!(rules[0].enabled);
         } else {
             assert_eq!(cfg.dns_adblock_urls.len(), 0);

@@ -90,8 +90,8 @@ pub fn generate_toml_from_export(
 
     if !db_preserved {
         out.push_str("[database]\n");
-        out.push_str(&format!("url = \"{db_url}\"\n"));
-        out.push_str("log_url = \"/tmp/lanforge-logs.jsonl\"\n");
+        out.push_str(&format!("config_path = \"{db_url}\"\n"));
+        out.push_str("runtime_path = \"/run/lanforge/runtime.redb\"\n");
         out.push_str("flush_interval = 60\n\n");
     }
 
@@ -427,7 +427,7 @@ impl ClientContext {
             "memory".to_string()
         } else {
             std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-                "postgres://lanforge:lanforge@localhost:5432/lanforge".to_string()
+                "/var/lib/lanforge/config.redb".to_string()
             })
         };
         let target_path = self.resolve_config_path();
@@ -476,7 +476,7 @@ mod tests {
         let toml_str = generate_toml_from_export(&export, "memory", None);
 
         assert!(toml_str.contains("[database]"));
-        assert!(toml_str.contains("url = \"memory\""));
+        assert!(toml_str.contains("config_path = \"memory\""));
         assert!(toml_str.contains("[system]"));
         assert!(toml_str.contains("[dns]"));
         assert!(toml_str.contains("adblock_enabled = false"));
@@ -485,7 +485,7 @@ mod tests {
         let val: toml::Value = toml::from_str(&toml_str).expect("Generated TOML must be valid");
         assert_eq!(
             val.get("database")
-                .and_then(|d| d.get("url"))
+                .and_then(|d| d.get("config_path"))
                 .and_then(|u| u.as_str()),
             Some("memory")
         );
@@ -495,7 +495,9 @@ mod tests {
     fn test_generate_toml_from_export_adblock_roundtrip() {
         use lanforge_types::network::dns::{
             AdblockUrlEntry,
-            adblock::{AdblockDbConfig, AdblockRuleEntry, AdblockUrlKind, BlockingMode},
+            adblock::{
+                AdblockDbConfig, AdblockRuleAction, AdblockRuleEntry, AdblockUrlKind, BlockingMode,
+            },
             upstream::UpstreamProtocol,
         };
 
@@ -528,13 +530,13 @@ mod tests {
                 AdblockRuleEntry {
                     id: Some(1),
                     domain: "tracking.bad.com".to_string(),
-                    action: "block".to_string(),
+                    action: AdblockRuleAction::Block,
                     enabled: true,
                 },
                 AdblockRuleEntry {
                     id: Some(2),
                     domain: "goodsite.org".to_string(),
-                    action: "allow".to_string(),
+                    action: AdblockRuleAction::Allow,
                     enabled: false,
                 },
             ]),

@@ -85,7 +85,7 @@ impl ClientContext {
                         name: t.name,
                         created_at: t.created_at,
                         last_used: t.last_used,
-                        scopes: t.scopes.split(',').filter_map(|s| s.parse().ok()).collect(),
+                        scopes: t.scopes,
                         expires_at: t.expires_at,
                     })
                     .collect(),

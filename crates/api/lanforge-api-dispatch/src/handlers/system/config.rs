@@ -26,14 +26,10 @@ impl ClientContext {
         let dns_upstreams = match self.db.load_dns_upstreams().await {
             Ok(rows) => rows
                 .into_iter()
-                .filter_map(|row| {
-                    let addr = row.addr.parse().ok()?;
-                    let protocol = row.protocol.parse().ok()?;
-                    Some(DnsUpstreamConfig {
-                        addr,
-                        protocol,
-                        domain: row.domain,
-                    })
+                .map(|row| DnsUpstreamConfig {
+                    addr: row.addr,
+                    protocol: row.protocol,
+                    domain: row.domain,
                 })
                 .collect(),
             Err(_) => Vec::new(),
@@ -460,7 +456,7 @@ impl ClientContext {
             let mut rules_err = None;
             let mut imported_rules = Vec::new();
             for r in rules {
-                match self.db.add_adblock_rule(&r.domain, &r.action).await {
+                match self.db.add_adblock_rule(&r.domain, r.action).await {
                     Ok(id) => {
                         if !r.enabled {
                             let _ = self.db.update_adblock_rule_status(id, false).await;
@@ -501,11 +497,9 @@ impl ClientContext {
                 .unwrap_or_default()
                 .as_secs() as i64;
             for t in tokens {
-                let scopes: lanforge_types::auth::ApiScopes =
-                    t.scopes.split(',').filter_map(|s| s.parse().ok()).collect();
                 if let Err(e) = self
                     .db
-                    .store_api_token(&t.token, &t.name, &scopes, t.expires_at, now)
+                    .store_api_token(&t.token, &t.name, &t.scopes, t.expires_at, now)
                     .await
                 {
                     tokens_success = false;

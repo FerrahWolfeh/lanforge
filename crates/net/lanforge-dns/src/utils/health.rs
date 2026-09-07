@@ -1,18 +1,9 @@
-use lanforge_types::network::dns::UpstreamHealthSnapshot;
+pub use lanforge_types::network::dns::{UpstreamHealthSnapshot, UpstreamStatus};
 use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Exponential Moving Average alpha factor.
 const RTT_ALPHA: f32 = 0.3;
-
-/// Status of an upstream resolver.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum UpstreamStatus {
-    Healthy,
-    Degraded,
-    Disabled,
-}
 
 /// Atomic performance counters for a single upstream target.
 #[derive(Default)]
@@ -116,7 +107,7 @@ impl UpstreamHealth {
             total_queries: self.total_queries.load(Ordering::Relaxed),
             total_successes: self.total_successes.load(Ordering::Relaxed),
             total_failures: self.total_failures.load(Ordering::Relaxed),
-            status: format!("{:?}", self.status()),
+            status: self.status(),
             last_success_secs_ago: {
                 let ts = self.last_success_ts.load(Ordering::Relaxed);
                 if ts == 0 {

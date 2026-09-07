@@ -27,18 +27,16 @@ async fn test_full_db_reset_chain() {
 
     // 1. Setup temporary environment
     let dir = tempdir().expect("Failed to create temp dir");
-    let db_path = dir.path().join("test.db");
-    let log_db_path = dir.path().join("test_log.db");
-    let db_url = format!("sqlite:{}", db_path.display());
-    let log_db_url = format!("sqlite:{}", log_db_path.display());
+    let db_path = dir.path().join("test.redb");
+    let log_db_path = dir.path().join("test_log.jsonl");
 
     let mac_dyn = MacAddr::parse("00:00:00:00:00:01").unwrap();
     let mac_static = MacAddr::parse("00:00:00:00:00:02").unwrap();
 
     let cfg = Arc::new(Config {
         database: DatabaseConfig {
-            url: db_url.clone(),
-            log_url: log_db_url.clone(),
+            config_path: db_path.display().to_string(),
+            runtime_path: log_db_path.display().to_string(),
             ..Default::default()
         },
         ..Config::default()
@@ -75,7 +73,7 @@ async fn test_full_db_reset_chain() {
             .expect("Failed to open DB"),
     );
     let log_db = Arc::new(
-        LogDb::open(&cfg.database.log_url)
+        LogDb::open(&cfg.database.runtime_path)
             .await
             .expect("Failed to open LogDB"),
     );

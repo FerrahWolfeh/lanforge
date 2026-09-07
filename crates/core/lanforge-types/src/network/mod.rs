@@ -10,6 +10,7 @@ pub mod subnet;
 pub use dns::{
     DnsClass, DnsHeader, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordEntry,
     DnsRecordType, DnsResponseCode, QueryLogEntry, QueryResult, UpstreamHealthSnapshot,
+    UpstreamStatus,
 };
 pub use hostname::{Hostname, HostnameOrigin};
 pub use ip::{

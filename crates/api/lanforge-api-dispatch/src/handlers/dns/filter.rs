@@ -7,11 +7,13 @@ use lanforge_api::api::{DnsAllowlistResponse, Response, SimpleSuccess};
 
 #[cfg(feature = "adblock")]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
+#[cfg(feature = "adblock")]
+use lanforge_types::network::dns::adblock::AdblockRuleAction;
 
 impl ClientContext {
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_block(&self, domain: String) -> Response {
-        match self.db.add_adblock_rule(&domain, "block").await {
+        match self.db.add_adblock_rule(&domain, AdblockRuleAction::Block).await {
             Ok(_) => {
                 if let Ok(rows) = self.db.load_adblock_rules().await {
                     let rules = rows

@@ -236,7 +236,7 @@ source = "broken" # Invalid variant
         assert_eq!(cfg.system.target_prefix, "fd97:f00d:cafe:3731");
         #[cfg(feature = "http")]
         assert_eq!(cfg.http.listen.port(), 8088);
-        assert!(!cfg.database.url.contains("sqlite"));
+        assert!(!cfg.database.config_path.contains("sqlite"));
     }
 
     #[test]
@@ -254,7 +254,7 @@ source = "broken" # Invalid variant
         assert_eq!(cfg.system.iface, "end0");
         #[cfg(feature = "http")]
         assert_eq!(cfg.http.listen.port(), 8088);
-        assert!(!cfg.database.url.contains("sqlite"));
+        assert!(!cfg.database.config_path.contains("sqlite"));
     }
 
     fn load_section<T: serde::de::DeserializeOwned + Default>(v: &toml::Value, key: &str) -> T {

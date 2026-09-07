@@ -16,18 +16,12 @@ debounce_secs = 2
 # tls_key = "/etc/lanforge/certs/lanforge.key"
 
 [database]
-# Primary database for leases and persistent device state.
-# PostgreSQL URL for persistent production deployment:
-url = "postgres://lanforge:lanforge@localhost:5432/lanforge"
-# For single-board computers, embedded devices, or in-memory mode without PostgreSQL:
-# url = "memory"
-# Transient log database/file for audit trails, query logs, and metrics:
-log_url = "/tmp/lanforge-logs.jsonl"
+# Persistent configuration database (services, users, static hosts, DNS rewrites):
+config_path = "/var/lib/lanforge/config.redb"
+# Volatile runtime database in tmpfs (active leases, query logs, system event history):
+runtime_path = "/run/lanforge/runtime.redb"
 # How often to flush in-memory state to disk/database (seconds).
 flush_interval = 60
-# Connection pool settings (PostgreSQL only):
-# max_connections = 10
-# min_connections = 2
 
 [api]
 # Enable the Unix Domain Socket control API.

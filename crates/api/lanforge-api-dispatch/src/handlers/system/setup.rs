@@ -3,12 +3,14 @@ use lanforge_api::api::{
     NetworkInterfaceInfo, Response, SetupPayload, SetupResponse, SetupStatusResponse, SetupWanConfig,
 };
 use lanforge_core::utils::auth::hash_password;
+use lanforge_types::auth::UserRole;
 use lanforge_types::events::{LanforgeEvent, SystemEvent};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
+use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::pppoe::PppoeConfig;
 use pnet::datalink::interfaces;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{error, info};
@@ -103,7 +105,7 @@ impl ClientContext {
         // 1. Create or update root admin user in database
         if let Err(e) = self
             .db
-            .create_user(&username, &password_hash, "admin", now)
+            .create_user(&username, &password_hash, UserRole::Admin, now)
             .await
         {
             // If user already exists, update password
@@ -192,7 +194,16 @@ impl ClientContext {
             for server in &payload.upstream_dns {
                 let s = server.trim();
                 if !s.is_empty() {
-                    let _ = self.db.add_dns_upstream(s, "udp", None).await;
+                    let addr = if let Ok(sa) = s.parse::<SocketAddr>() {
+                        Some(sa)
+                    } else if let Ok(ip) = s.parse::<IpAddr>() {
+                        Some(SocketAddr::new(ip, 53))
+                    } else {
+                        None
+                    };
+                    if let Some(addr) = addr {
+                        let _ = self.db.add_dns_upstream(addr, UpstreamProtocol::Udp, None).await;
+                    }
                 }
             }
         }
@@ -311,8 +322,8 @@ fn generate_setup_toml(
     s.push_str("debounce_secs = 2\n\n");
 
     s.push_str("[database]\n");
-    s.push_str("url = \"/var/lib/lanforge/lanforge.redb\"\n");
-    s.push_str("log_url = \"/tmp/lanforge-logs.json\"\n");
+    s.push_str("config_path = \"/var/lib/lanforge/config.redb\"\n");
+    s.push_str("runtime_path = \"/run/lanforge/runtime.redb\"\n");
     s.push_str("flush_interval = 60\n\n");
 
     s.push_str("[api]\n");

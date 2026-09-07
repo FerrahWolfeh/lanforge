@@ -96,17 +96,17 @@ impl UpstreamStrategy {
 
                 #[cfg(not(feature = "dot"))]
                 if m.target.protocol == UpstreamProtocol::Tls {
-                    snap.status = "Disabled (Feature)".to_string();
+                    snap.status = UpstreamStatus::Disabled;
                 }
 
                 #[cfg(not(feature = "doq"))]
                 if m.target.protocol == UpstreamProtocol::Quic {
-                    snap.status = "Disabled (Feature)".to_string();
+                    snap.status = UpstreamStatus::Disabled;
                 }
 
                 #[cfg(not(feature = "doh-upstream"))]
                 if m.target.protocol == UpstreamProtocol::Https {
-                    snap.status = "Disabled (Feature)".to_string();
+                    snap.status = UpstreamStatus::Disabled;
                 }
 
                 snap
@@ -117,12 +117,12 @@ impl UpstreamStrategy {
         snaps.sort_by(|a, b| {
             a.protocol.tier().cmp(&b.protocol.tier()).then_with(|| {
                 // Keep Healthy at top if possible
-                let status_rank = |s: &str| match s {
-                    "Healthy" => 0,
-                    "Degraded" => 1,
-                    _ => 2,
+                let status_rank = |s: UpstreamStatus| match s {
+                    UpstreamStatus::Healthy => 0,
+                    UpstreamStatus::Degraded => 1,
+                    UpstreamStatus::Disabled => 2,
                 };
-                status_rank(&a.status).cmp(&status_rank(&b.status))
+                status_rank(a.status).cmp(&status_rank(b.status))
             })
         });
 

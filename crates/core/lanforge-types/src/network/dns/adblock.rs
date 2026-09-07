@@ -350,13 +350,60 @@ impl Display for AdblockUrlKind {
     }
 }
 
+/// Action associated with a custom adblock user rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AdblockRuleAction {
+    #[default]
+    Block,
+    Allow,
+}
+
+impl AdblockRuleAction {
+    #[must_use]
+    pub const fn is_block(self) -> bool {
+        matches!(self, Self::Block)
+    }
+
+    #[must_use]
+    pub const fn is_allow(self) -> bool {
+        matches!(self, Self::Allow)
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Block => "block",
+            Self::Allow => "allow",
+        }
+    }
+}
+
+impl std::fmt::Display for AdblockRuleAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for AdblockRuleAction {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "block" => Ok(Self::Block),
+            "allow" => Ok(Self::Allow),
+            other => Err(format!("Unknown rule action: '{other}'. Expected 'block' or 'allow'")),
+        }
+    }
+}
+
 /// A custom adblock rule (allowlist or manual blocklist).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct AdblockRuleEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<i64>,
     pub domain: String,
-    pub action: String,
+    pub action: AdblockRuleAction,
     #[serde(default = "default_true")]
     pub enabled: bool,
 }
@@ -367,13 +414,13 @@ const fn default_true() -> bool {
 
 impl AdblockRuleEntry {
     #[must_use]
-    pub fn is_block(&self) -> bool {
-        self.action.eq_ignore_ascii_case("block")
+    pub const fn is_block(&self) -> bool {
+        self.action.is_block()
     }
 
     #[must_use]
-    pub fn is_allow(&self) -> bool {
-        self.action.eq_ignore_ascii_case("allow")
+    pub const fn is_allow(&self) -> bool {
+        self.action.is_allow()
     }
 }
 

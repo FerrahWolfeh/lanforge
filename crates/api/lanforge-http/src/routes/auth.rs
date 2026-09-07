@@ -11,6 +11,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use lanforge_core::utils::auth::{hash_password, verify_password};
+use lanforge_types::auth::UserRole;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
@@ -240,7 +241,7 @@ pub async fn handle_login(
             let session_token =
                 state
                     .auth
-                    .generate_token_with_ttl(&db_user.username, &db_user.role, ttl_secs)?;
+                    .generate_token_with_ttl(&db_user.username, db_user.role.as_str(), ttl_secs)?;
             return Ok(build_login_response(
                 session_token,
                 db_user.username,
@@ -256,7 +257,7 @@ pub async fn handle_login(
         && let Some(hash) = &state.cfg.auth_password_hash
         && verify_password(hash, &password)
     {
-        let _ = state.db.create_user("admin", hash, "admin", now).await;
+        let _ = state.db.create_user("admin", hash, UserRole::Admin, now).await;
         let session_token = state
             .auth
             .generate_token_with_ttl("admin", "admin", ttl_secs)?;

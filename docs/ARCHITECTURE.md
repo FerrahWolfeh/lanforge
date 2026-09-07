@@ -84,7 +84,7 @@ graph TD
 | `lanforge-dns` (L2) | Recursive/Authoritative resolver. Supports DoT, DoQ, Adblocking, and Upstream Health management. |
 | `lanforge-api` (L2) | Shared API definitions and JSON-RPC over Unix Domain Sockets (UDS). |
 | `lanforge-http` (L2) | REST API, Prometheus exporter, and DNS-over-HTTPS (DoH) entry point. |
-| `lanforge-db` (L2) | Multi-backend persistence (SQLite/PostgreSQL) with SD-card friendly write debouncing. |
+| `lanforge-db` (L2) | Embedded pure-Rust persistence (`redb` / volatile tmpfs) with SD-card friendly write debouncing. |
 | `lanforge-tftp` (L2) | Minimal TFTP server for network bootstrapping (PXE). |
 | `lanforge` (L3) | The main daemon binary. Handles bootstrapping and service orchestration. |
 | `lanforge-cli` (L3) | Comprehensive administrative tool and TUI dashboard. |
@@ -170,7 +170,7 @@ If the `http` feature is enabled, Lanforge exposes a `/metrics` endpoint, allowi
 
 ## 🗺️ Roadmap Recap
 
-- **Stable**: DHCPv4/v6, RA, DNS (DoT/DoQ), UDS API, SQLite Persistence, TUI.
+- **Stable**: DHCPv4/v6, RA, DNS (DoT/DoQ), UDS API, Embedded redb Persistence, TUI.
 - **In Progress**: Advanced Topology Mapping, Enhanced mDNS Scraping.
 - **Planned**: Integrated Web UI, Active Probing Engine.
 - **Phase 6 — Webview**: Embedded visual interface (Next.js/Axum).

@@ -13,7 +13,7 @@ pub struct DbArgs {
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum DbAction {
-    /// Perform a `SQLite` VACUUM operation
+    /// Perform a database compact / vacuum operation
     Vacuum,
     /// Clear the transient system log database
     LogClean,

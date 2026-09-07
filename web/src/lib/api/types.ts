@@ -908,7 +908,7 @@ export interface DbMetrics {
 }
 
 export interface DbEngineSwitchRequest {
-	engine: 'postgres' | 'memory';
+	engine?: 'redb' | 'memory' | string;
 	url?: string;
 	max_connections?: number;
 	min_connections?: number;

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use bytesize::ByteSize;
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
@@ -21,8 +22,6 @@ use lanforge_types::network::dhcp::{
 use lanforge_types::network::dns::AdblockUrlEntry;
 #[cfg(feature = "dns")]
 use lanforge_types::network::dns::adblock::{AdblockRuleEntry, AdblockUrlKind};
-#[cfg(feature = "dns")]
-use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::update::InterfaceState;
 use netlink_sys::SocketAddr;
@@ -162,18 +161,7 @@ impl Bootstrapper {
         #[cfg(feature = "dns")]
         {
             if let Ok(upstreams) = db.load_dns_upstreams().await {
-                let mut list = Vec::new();
-                for row in upstreams {
-                    let proto_lower = row.protocol.to_lowercase();
-                    let prefix = row.domain.as_ref().map_or_else(
-                        || format!("{proto_lower}://"),
-                        |d| format!("{proto_lower}://{d}@"),
-                    );
-                    let full_str = format!("{prefix}{}", row.addr);
-                    if let Ok(target) = <UpstreamTarget as std::str::FromStr>::from_str(&full_str) {
-                        list.push(target);
-                    }
-                }
+                let list = upstreams.into_iter().map(|row| row.to_target()).collect();
                 ctx.update_dns_upstreams(list);
             }
             if let Ok(rewrites) = db.load_dns_rewrites().await {
@@ -281,8 +269,8 @@ impl Bootstrapper {
                 let target = &entry.target;
                 let _ = db
                     .add_dns_upstream(
-                        &target.addr.to_string(),
-                        &target.protocol.to_string(),
+                        target.addr,
+                        target.protocol,
                         target.hostname.as_deref(),
                     )
                     .await?;
@@ -297,7 +285,7 @@ impl Bootstrapper {
         let rewrites = db.load_dns_rewrites().await?;
         if rewrites.is_empty() && !cfg.dns_toml.rewrites.is_empty() {
             for rule in &cfg.dns_toml.rewrites {
-                db.upsert_dns_rewrite(&rule.domain, rule.rtype, &rule.answer.to_string())
+                db.upsert_dns_rewrite(&rule.domain, rule.rtype, &rule.answer)
                     .await?;
             }
             info!(
@@ -351,7 +339,7 @@ impl Bootstrapper {
         let adblock_rules = db.load_adblock_rules().await?;
         if adblock_rules.is_empty() && !cfg.dns_toml.adblock_rules.is_empty() {
             for rule in &cfg.dns_toml.adblock_rules {
-                let id = db.add_adblock_rule(&rule.domain, &rule.action).await?;
+                let id = db.add_adblock_rule(&rule.domain, rule.action).await?;
                 if !rule.enabled {
                     let _ = db.update_adblock_rule_status(id, false).await;
                 }
@@ -367,24 +355,31 @@ impl Bootstrapper {
 
     #[allow(clippy::too_many_lines)]
     async fn init_device_table(cfg: &mut Config) -> Result<(State, LanforgeDb, LogDb)> {
+        let db_target = if cfg.database.is_in_memory() {
+            "in-memory".to_string()
+        } else {
+            lanforge_db::sanitize_db_url(&cfg.database.config_path)
+        };
+        info!("Loading database from {db_target}");
+
         let db = match LanforgeDb::open(&cfg.database).await {
             Ok(db) => db,
             Err(e) => {
                 warn!(
                     "Database: Persistent database unavailable at '{}' ({e})",
-                    lanforge_db::sanitize_db_url(&cfg.database.url)
+                    lanforge_db::sanitize_db_url(&cfg.database.config_path)
                 );
                 warn!("Database: Entering RECOVERY MODE — running in-memory without disk persistence");
                 LanforgeDb::open_in_memory().await?
             }
         };
 
-        let log_db = match LogDb::open(&cfg.database.log_url).await {
+        let log_db = match LogDb::open(&cfg.database.runtime_path).await {
             Ok(ldb) => ldb,
             Err(e) => {
                 warn!(
                     "Database: Log storage unavailable at '{}' ({e}), running in in-memory fallback mode",
-                    cfg.database.log_url
+                    cfg.database.runtime_path
                 );
                 LogDb::open_in_memory()
             }
@@ -577,45 +572,36 @@ impl Bootstrapper {
             Self::reconcile_dhcp_v4_topology_sanity(&db, cfg, &table).await?;
         }
 
-        let reverse_resolvers_count = match db.load_dns_reverse_resolvers().await {
+        match db.load_dns_reverse_resolvers().await {
             Ok(resolvers) => {
-                let count = resolvers.len();
                 table.reverse_resolvers = resolvers;
-                count
             }
             Err(e) => {
                 warn!("Failed to load reverse resolvers from database: {e}");
-                0
             }
-        };
+        }
 
-        let main_db_desc = if db.is_in_memory() {
-            if cfg.database.is_in_memory() {
-                "in-memory".to_string()
-            } else {
-                format!(
-                    "in-memory (RECOVERY MODE, fallback from {})",
-                    lanforge_db::sanitize_db_url(&cfg.database.url)
-                )
-            }
+        let schema = db.schema_version().unwrap_or(1);
+        let size_str = if let Some(path) = db.path() {
+            std::fs::metadata(path).map_or_else(
+                |_| "unknown".to_string(),
+                |m| ByteSize::b(m.len()).to_string(),
+            )
+        } else if cfg.database.is_in_memory() {
+            "in-memory".to_string()
         } else {
-            lanforge_db::sanitize_db_url(&cfg.database.url)
+            "in-memory (recovery mode)".to_string()
         };
+        let device_count = table.devices().count();
+        let user_count = db.count_users().await.unwrap_or(0);
         let log_db_desc = if log_db.is_in_memory() {
-            if cfg.database.log_url.contains(":memory:") || cfg.database.log_url.is_empty() {
-                "in-memory".to_string()
-            } else {
-                format!(
-                    "in-memory (fallback from {})",
-                    lanforge_db::sanitize_db_url(&cfg.database.log_url)
-                )
-            }
+            "in-memory".to_string()
         } else {
-            lanforge_db::sanitize_db_url(&cfg.database.log_url)
+            lanforge_db::sanitize_db_url(&cfg.database.runtime_path)
         };
 
         info!(
-            "Databases initialized (Main: {main_db_desc}, Logs: {log_db_desc}, reverse resolvers: {reverse_resolvers_count})"
+            "Database loaded (schema: {schema}, size: {size_str}, devices: {device_count}, users: {user_count}, runtime: {log_db_desc})"
         );
         Self::inject_self_device(&mut table, cfg);
 
@@ -655,7 +641,12 @@ impl Bootstrapper {
                 "RECOVERY MODE (in-memory)".to_string()
             }
         } else {
-            "redb (persistent)".to_string()
+            let schema = db.schema_version().unwrap_or(1);
+            let size = db
+                .path()
+                .and_then(|p| std::fs::metadata(p).ok())
+                .map_or_else(|| "unknown".to_string(), |m| ByteSize::b(m.len()).to_string());
+            format!("redb (schema v{schema}, {size})")
         };
 
         info!("┌─────────────────────────────────────────────────────────────┐");

@@ -1,19 +1,22 @@
 #![allow(clippy::type_complexity)]
 
 use std::future::Future;
+use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 
 /// Alias for a boxed thread-safe future used for dynamic trait objects.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-use lanforge_types::auth::ApiScopes;
-use lanforge_types::device::{Device, LeaseAction, LeaseHistoryEntry};
+use lanforge_types::auth::{ApiScopes, UserRole};
+use lanforge_types::device::{Device, LeaseAction, LeaseHistoryEntry, LeaseKind};
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
-use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::network::dns::adblock::{
+    AdblockDbConfig, AdblockRuleAction, AdblockUrlKind, RewriteAnswer, RewriteRule,
+};
+use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet, QueryLogEntry};
@@ -25,7 +28,7 @@ pub enum DbError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// A specific database engine backend failure (e.g. Postgres sqlx error).
+    /// A specific database engine backend failure.
     #[error("Database backend failure: {0}")]
     Backend(String),
 
@@ -64,7 +67,7 @@ pub struct ApiTokenEntry {
     pub name: String,
     pub created_at: i64,
     pub last_used: Option<i64>,
-    pub scopes: String,
+    pub scopes: ApiScopes,
     pub expires_at: Option<i64>,
 }
 
@@ -72,9 +75,21 @@ pub struct ApiTokenEntry {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DnsUpstreamEntry {
     pub id: i64,
-    pub addr: String,
-    pub protocol: String,
+    pub addr: SocketAddr,
+    pub protocol: UpstreamProtocol,
     pub domain: Option<String>,
+}
+
+impl DnsUpstreamEntry {
+    /// Converts this entry into an `UpstreamTarget`.
+    #[must_use]
+    pub fn to_target(&self) -> UpstreamTarget {
+        UpstreamTarget {
+            addr: self.addr,
+            protocol: self.protocol,
+            hostname: self.domain.clone(),
+        }
+    }
 }
 
 /// Domain representation of a user stored in the database.
@@ -83,7 +98,7 @@ pub struct UserEntry {
     pub id: i64,
     pub username: String,
     pub password_hash: String,
-    pub role: String,
+    pub role: UserRole,
     pub created_at: i64,
     pub updated_at: i64,
     pub last_login: Option<i64>,
@@ -143,8 +158,8 @@ pub trait DeviceStore: Send + Sync {
     fn record_lease_event<'a>(
         &'a self,
         mac: MacAddr,
-        ip: &'a str,
-        lease_type: &'a str,
+        ip: IpAddr,
+        lease_kind: LeaseKind,
         action: LeaseAction,
     ) -> BoxFuture<'a, Result<(), DbError>>;
 
@@ -165,7 +180,7 @@ pub trait DnsStore: Send + Sync {
         &'a self,
         domain: &'a str,
         rtype: DnsRecordType,
-        answer: &'a str,
+        answer: &'a RewriteAnswer,
     ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Deletes a DNS rewrite rule by its numeric ID.
@@ -271,13 +286,13 @@ pub trait AdblockStore: Send + Sync {
     /// Loads custom adblock user rules.
     fn load_adblock_rules(
         &self,
-    ) -> BoxFuture<'_, Result<Vec<(i64, String, String, bool)>, DbError>>;
+    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockRuleAction, bool)>, DbError>>;
 
     /// Adds a custom adblock user rule (domain and action like block/allow).
     fn add_adblock_rule<'a>(
         &'a self,
         domain: &'a str,
-        action: &'a str,
+        action: AdblockRuleAction,
     ) -> BoxFuture<'a, Result<i64, DbError>>;
 
     /// Removes a custom adblock user rule by ID.
@@ -340,16 +355,16 @@ pub trait DnsUpstreamStore: Send + Sync {
     /// Adds a new upstream DNS server.
     fn add_dns_upstream<'a>(
         &'a self,
-        addr: &'a str,
-        protocol: &'a str,
+        addr: SocketAddr,
+        protocol: UpstreamProtocol,
         domain: Option<&'a str>,
     ) -> BoxFuture<'a, Result<i64, DbError>>;
 
     /// Removes an upstream DNS server.
     fn remove_dns_upstream<'a>(
         &'a self,
-        addr: &'a str,
-        protocol: &'a str,
+        addr: SocketAddr,
+        protocol: UpstreamProtocol,
     ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Clears all registered DNS upstream servers.
@@ -547,7 +562,7 @@ pub trait UserStore: Send + Sync {
         &'a self,
         username: &'a str,
         password_hash: &'a str,
-        role: &'a str,
+        role: UserRole,
         now: i64,
     ) -> BoxFuture<'a, Result<UserEntry, DbError>>;
 
@@ -575,7 +590,7 @@ pub trait UserStore: Send + Sync {
     fn update_user_role<'a>(
         &'a self,
         username: &'a str,
-        new_role: &'a str,
+        new_role: UserRole,
         now: i64,
     ) -> BoxFuture<'a, Result<(), DbError>>;
 
@@ -730,18 +745,7 @@ impl<T> DatabaseStore for T where
 {
 }
 
-/// Helper macro to delegate database operations to the active backend (postgres/mock).
-#[macro_export]
-macro_rules! delegate_db_call {
-    ($self:expr, $method:ident ( $($arg:expr),* ), $mock:ident => $mock_body:expr) => {
-        match &$self.inner {
-            DbEngine::Postgres(db) => db.$method($($arg),*).await,
-            DbEngine::Mock($mock) => $mock_body,
-        }
-    };
-}
-
-/// Masks credentials in a database URL (e.g., `postgres://user:password@host/db` -> `postgres://user:****@host/db`).
+/// Masks credentials in a database URL if present.
 #[must_use]
 pub fn sanitize_db_url(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else {

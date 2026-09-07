@@ -42,7 +42,7 @@ use crate::log_engine::LogDb;
     retries = 5,
     base_backoff = 1,
     max_backoff = 30,
-    describe = format!("Database Worker ({})", self.cfg.url)
+    describe = format!("Database Worker ({})", self.cfg.config_path)
 )]
 pub struct DbWorker {
     cfg: DatabaseConfig,
@@ -263,7 +263,7 @@ impl AsyncService for DbWorker {
         } else if self.db.is_in_memory() {
             "in-memory"
         } else {
-            "PostgreSQL"
+            "redb (persistent)"
         };
         info!("Database worker initialized (mode: {mode})");
         ctx.set_db_ready(true);

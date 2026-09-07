@@ -21,13 +21,13 @@ async fn init_test_context() -> ClientContext {
     let table = State::new();
     let db = Arc::new(
         LanforgeDb::open(&DatabaseConfig {
-            url: "sqlite::memory:".to_string(),
+            config_path: "memory".to_string(),
             ..Default::default()
         })
         .await
         .unwrap(),
     );
-    let log_db = Arc::new(LogDb::open("sqlite::memory:").await.unwrap());
+    let log_db = Arc::new(LogDb::open_in_memory());
     let ctx = LanforgeContext::new(bus, table, None);
 
     ClientContext {

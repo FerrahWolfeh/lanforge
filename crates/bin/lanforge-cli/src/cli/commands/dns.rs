@@ -827,9 +827,7 @@ pub fn render_dns_upstreams(resp: &DnsUpstreamsResponse, ascii: bool) {
     println!("  {:<30} | {:<10} | LATENCY", "UPSTREAM", "STATUS");
     println!("{}", hline.repeat(60));
     for u in &resp.upstreams {
-        let status = if u.status.eq_ignore_ascii_case("healthy")
-            || u.status.eq_ignore_ascii_case("online")
-        {
+        let status = if u.status.is_healthy() {
             "Healthy".green()
         } else {
             "Failing".red()

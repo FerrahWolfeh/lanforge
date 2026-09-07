@@ -274,7 +274,7 @@ fn render_insights(st: &StatusResponse, ascii: bool) {
                     Text(content: format!("{}", st.devices.managed_cli), color: Color::DarkGrey)
                 }
                 View(flex_direction: FlexDirection::Row) {
-                    Text(content: "Postgres   ", color: Color::DarkGrey)
+                    Text(content: "Database   ", color: Color::DarkGrey)
                     Text(content: st.services.db_worker.state.as_ref(), color: match st.services.db_worker.state.as_ref() {
                         "online" | "active" => Color::Green,
                         _ => Color::Red,

@@ -8,7 +8,7 @@
 //!
 //! This crate implements two independent persistence mechanisms:
 //!
-//! - **`LanforgeDb`** — Primary PostgreSQL database for devices, leases, and configuration.
+//! - **`LanforgeDb`** — Primary embedded redb database for devices, leases, and configuration.
 //! - **`LogDb`** — Transient event and DNS query log database (in-memory ring buffer with tmpfs JSONL auto-pruning).
 //!
 //! ## Execution Model
@@ -28,7 +28,7 @@
 //!
 //! ```text
 //! bootstrap.rs
-//!   ├── LanforgeDb::open(url)            → connects to PostgreSQL, runs migrations
+//!   ├── LanforgeDb::open(url)            → opens redb storage, initializes schema
 //!   ├── db.load_all_devices()            → reconstructs State from database
 //!   ├── LanforgeContext::new(bus, state)
 //!   ├── applies TOML overrides          → configuration precedence
@@ -39,7 +39,7 @@
 //!
 //! | Module | Responsibility |
 //! | :--- | :--- |
-//! | [`engine`] | `LanforgeDb` — Postgres database facade for devices, leases, and config |
+//! | [`engine`] | `LanforgeDb` — Embedded redb database facade for devices, leases, and config |
 //! | [`log_engine`] | `LogDb` — transient logs in tmpfs with auto-pruning |
 //! | [`worker`] | `DbWorker` — async service coordinating persistence |
 //! | [`error`] | `LanforgeDbError` — database error hierarchy |

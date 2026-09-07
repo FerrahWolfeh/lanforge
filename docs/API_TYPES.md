@@ -173,7 +173,7 @@ classDiagram
 
 | Method | Parameters | Return Type | Notes |
 | :--- | :--- | :--- | :--- |
-| `db_vacuum` | None | `SimpleSuccess` | Runs `VACUUM` on the SQLite database. |
+| `db_vacuum` | None | `SimpleSuccess` | Runs compact / `VACUUM` on the persistent database. |
 | `db_prune` | None | `SimpleSuccess` | Removes old history and log entries per retention policy. |
 | `db_log_clean` | None | `SimpleSuccess` | Clears the transient system event log from the database. |
 | `db_reset` | None | `SimpleSuccess` | **DANGEROUS.** Wipes the entire database. |
@@ -318,12 +318,12 @@ Represents the compiled feature flags and runtime enabled capabilities of the da
 
 ```json
 {
-  "compiled": ["dns", "upstream_udp_tcp", "upstream_dot", "upstream_doq", "upstream_doh", "doh_downstream", "dhcp_v4", "dhcp_v6", "ra", "ndp_discovery", "mdns_probe", "lldp_probe", "uds", "http", "zstd", "sqlite", "postgresql"],
-  "enabled": ["dns", "upstream_dot", "dhcp_v4", "ra", "uds", "http", "sqlite"]
+  "compiled": ["dns", "upstream_udp_tcp", "upstream_dot", "upstream_doq", "upstream_doh", "doh_downstream", "dhcp_v4", "dhcp_v6", "ra", "ndp_discovery", "mdns_probe", "lldp_probe", "uds", "http", "zstd", "redb", "pppoe"],
+  "enabled": ["dns", "upstream_dot", "dhcp_v4", "ra", "uds", "http", "redb"]
 }
 ```
 
-- **Cap Enum:** `dns`, `upstream_udp_tcp`, `upstream_dot`, `upstream_doq`, `upstream_doh`, `doh_downstream`, `dhcp_v4`, `dhcp_v6`, `ra`, `ndp_discovery`, `mdns_probe`, `lldp_probe`, `uds`, `http`, `zstd`, `sqlite`, `postgresql`.
+- **Cap Enum:** `dns`, `upstream_udp_tcp`, `upstream_dot`, `upstream_doq`, `upstream_doh`, `doh_downstream`, `dhcp_v4`, `dhcp_v6`, `ra`, `ndp_discovery`, `mdns_probe`, `lldp_probe`, `uds`, `http`, `zstd`, `redb`, `pppoe`.
 
 ### ServiceBanner & StatusProvider
 Model for decoupled system monitoring. Each service implements `StatusProvider` to export its current health and metrics.

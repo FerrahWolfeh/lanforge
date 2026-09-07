@@ -25,8 +25,7 @@ impl CompiledCaps {
         compiled.push(Cap::Uds);
         compiled.push(Cap::Http);
         compiled.push(Cap::Zstd);
-        compiled.push(Cap::Sqlite);
-        compiled.push(Cap::Postgresql);
+        compiled.push(Cap::Storage);
         compiled.push(Cap::Pppoe);
 
         // Enabled features (simulated/detected runtime configuration)
@@ -36,7 +35,7 @@ impl CompiledCaps {
         enabled.push(Cap::Ra);
         enabled.push(Cap::Uds);
         enabled.push(Cap::Http);
-        enabled.push(Cap::Sqlite);
+        enabled.push(Cap::Storage);
 
         ServerCapabilities { compiled, enabled }
     }

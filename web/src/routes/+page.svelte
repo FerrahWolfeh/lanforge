@@ -490,7 +490,7 @@
 								variant="secondary"
 								class="text-[10px] uppercase font-mono"
 							>
-								PostgreSQL
+								redb
 							</Badge>
 						</div>
 						<div class="flex items-center justify-between font-mono text-[11px]">

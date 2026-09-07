@@ -1,7 +1,7 @@
 # AGENTS.md
 
 # Lanforge
-A rust-based complete and simplified solution for domestic homelab/openwrt-based LAN orchestration with integrated DHCP, TFTP, RA and DNS servers with special address tracking, sqlite or postgresql long-time data persistence, unix socket and http APIs alongside full fledged cli and tui utilities.
+A rust-based complete and simplified solution for domestic homelab/openwrt-based LAN orchestration with integrated DHCP, TFTP, RA and DNS servers with special address tracking, embedded redb data persistence, unix socket and http APIs alongside full fledged cli and tui utilities.
 
 ## Special concerns about each module crate
 - `core/lanforge-types` (L0) - The foundational crate. Contains core domain types (Device, MacAddr, Duid), shared event definitions (LanforgeEvent), and state update protocols (DeviceUpdate). **Rule:** Must not depend on any other crate except macros and basic utilities.
@@ -40,7 +40,6 @@ A `tokio::sync::broadcast` based bus facilitates inter-service communication.
 - `cargo run --bin lanforge-lab -- run dhcp --json` - Simulate DHCP client DORA cycle headlessly.
 - `cargo run --bin lanforge-lab -- run dns --domain "domain.lan" --json` - Test DNS resolution/adblocking.
 - `cargo add -p <crate>` - Use to add dependencies to specific workspace members.
-- `cargo sqlx prepare` - Run after schema changes if using the `sqlx` features.
 - `pnpm --prefix web dev` - Start local WebUI development server with HMR.
 - `pnpm --prefix web build` - Build production static SPA bundle for embedding.
 - `pnpm --prefix web check` - Verify WebUI types and Svelte templates.

@@ -32,7 +32,7 @@ By maintaining a **unified, reactive identity table** for every device on your n
   - **Rich APIs**: JSON-RPC over Unix Domain Sockets (UDS) and a feature-gated REST/HTTP API.
 
 - **💾 Resilient Persistence**
-  - **Atomic State**: Backed by SQLite or PostgreSQL.
+  - **Atomic State**: Backed by embedded `redb` (or volatile in-memory/tmpfs).
   - **SD-Card Friendly**: Intelligent write-debounce logic minimizes disk I/O, preserving edge hardware longevity.
 
 ---

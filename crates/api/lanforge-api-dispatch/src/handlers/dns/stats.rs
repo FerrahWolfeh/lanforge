@@ -4,8 +4,8 @@ use lanforge_api::api::{
     QueryRateEntry, QueryTypeEntry, Response, SimpleSuccess, TopClientEntry, TopDomainEntry,
 };
 use lanforge_types::network::dns::{
-    DnsRecordType, DnsRequest, DnsResponse,
-    upstream::{UpstreamProtocol, UpstreamTarget},
+    DnsRecordType, DnsRequest, DnsResponse, UpstreamStatus,
+    upstream::UpstreamProtocol,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -61,22 +61,16 @@ impl ClientContext {
         {
             let mapped: Vec<lanforge_types::network::dns::UpstreamHealthSnapshot> =
                 rows.into_iter()
-                    .filter_map(|r| {
-                        let target: std::net::SocketAddr = r.addr.parse().ok()?;
-                        let protocol = r.protocol.parse().unwrap_or(
-                            lanforge_types::network::dns::upstream::UpstreamProtocol::Udp,
-                        );
-                        Some(lanforge_types::network::dns::UpstreamHealthSnapshot {
-                            target,
-                            protocol,
-                            rtt_ewma_us: 1200,
-                            last_rtt_us: 1200,
-                            total_queries: 0,
-                            total_successes: 0,
-                            total_failures: 0,
-                            status: "Healthy".into(),
-                            last_success_secs_ago: Some(0),
-                        })
+                    .map(|r| lanforge_types::network::dns::UpstreamHealthSnapshot {
+                        target: r.addr,
+                        protocol: r.protocol,
+                        rtt_ewma_us: 1200,
+                        last_rtt_us: 1200,
+                        total_queries: 0,
+                        total_successes: 0,
+                        total_failures: 0,
+                        status: UpstreamStatus::Healthy,
+                        last_success_secs_ago: Some(0),
                     })
                     .collect();
             if !mapped.is_empty() {
@@ -95,11 +89,9 @@ impl ClientContext {
         protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> Response {
-        let addr_str = addr.to_string();
-        let proto_str = format!("{:?}", protocol);
         match self
             .db
-            .add_dns_upstream(&addr_str, &proto_str, domain.as_deref())
+            .add_dns_upstream(addr, protocol, domain.as_deref())
             .await
         {
             Ok(_) => {
@@ -121,9 +113,7 @@ impl ClientContext {
         addr: std::net::SocketAddr,
         protocol: UpstreamProtocol,
     ) -> Response {
-        let addr_str = addr.to_string();
-        let proto_str = format!("{:?}", protocol);
-        match self.db.remove_dns_upstream(&addr_str, &proto_str).await {
+        match self.db.remove_dns_upstream(addr, protocol).await {
             Ok(_) => {
                 if let Err(e) = self.reload_dns_upstreams_to_context().await {
                     return Response::Error { error: e };
@@ -144,18 +134,10 @@ impl ClientContext {
             .load_dns_upstreams()
             .await
             .map_err(|e| e.to_string())?;
-        let mut upstreams = Vec::new();
-        for row in rows {
-            let proto_lower = row.protocol.to_lowercase();
-            let prefix = match row.domain {
-                Some(ref d) => format!("{}://{}@", proto_lower, d),
-                None => format!("{}://", proto_lower),
-            };
-            let full_str = format!("{}{}", prefix, row.addr);
-            if let Ok(target) = <UpstreamTarget as std::str::FromStr>::from_str(&full_str) {
-                upstreams.push(target);
-            }
-        }
+        let upstreams = rows
+            .into_iter()
+            .map(|row| row.to_target())
+            .collect();
         self.ctx.update_dns_upstreams(upstreams);
         Ok(())
     }

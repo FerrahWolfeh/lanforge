@@ -194,7 +194,7 @@ pub struct ServiceNdp {
     pub addrs_tracked: usize,
 }
 
-/// Statistics and path information for the `SQLite` database.
+/// Statistics and path information for the persistent database.
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct DbStatus {
     /// Filesystem path to the database file.
@@ -253,6 +253,7 @@ use lanforge_types::network::dns::{
     adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule},
 };
 
+use lanforge_types::auth::ApiScopes;
 use lanforge_types::network::DnsReverseResolver;
 use lanforge_types::network::dhcp::DhcpOptionsConfig;
 
@@ -262,7 +263,7 @@ pub struct ExportedApiToken {
     pub name: String,
     pub created_at: i64,
     pub last_used: Option<i64>,
-    pub scopes: String,
+    pub scopes: ApiScopes,
     pub expires_at: Option<i64>,
 }
 
@@ -477,21 +478,21 @@ impl HttpWrappedResponse for SetupResponse {
     }
 }
 
+use lanforge_types::system::StorageMode;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DbEngineSwitchRequest {
-    pub engine: String,
-    #[serde(default)]
-    pub url: Option<String>,
-    #[serde(default)]
-    pub max_connections: Option<u32>,
-    #[serde(default)]
-    pub min_connections: Option<u32>,
+    #[serde(alias = "engine")]
+    pub mode: StorageMode,
+    #[serde(default, alias = "url")]
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DbEngineSwitchResponse {
     pub success: bool,
-    pub engine: String,
+    #[serde(alias = "engine")]
+    pub mode: StorageMode,
     pub message: String,
 }
 

@@ -7,11 +7,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DatabaseConfig {
-    /// Database path or URL (e.g., "/var/lib/lanforge/lanforge.redb" or "memory").
-    pub url: String,
+    /// Persistent configuration database file path (e.g., "/var/lib/lanforge/config.redb").
+    #[serde(alias = "path", alias = "url")]
+    pub config_path: String,
 
-    /// Transient log database URL / file path (e.g., "/tmp/lanforge-logs.jsonl").
-    pub log_url: String,
+    /// Volatile runtime database file path (e.g., "/run/lanforge/runtime.redb" or "/tmp/lanforge/runtime.redb").
+    #[serde(alias = "runtime_db_path", alias = "log_path", alias = "log_url")]
+    pub runtime_path: String,
 
     /// How often to flush in-memory state to the persistent database (seconds).
     pub flush_interval: u64,
@@ -24,10 +26,10 @@ pub struct DatabaseConfig {
 }
 
 impl DatabaseConfig {
-    /// Returns true if an in-memory database mode was requested or specified.
+    /// Returns true if an in-memory database mode was requested or specified for the config database.
     #[must_use]
     pub fn is_in_memory(&self) -> bool {
-        let u = self.url.trim().to_lowercase();
+        let u = self.config_path.trim().to_lowercase();
         u.is_empty()
             || u == "memory"
             || u == "none"
@@ -37,24 +39,86 @@ impl DatabaseConfig {
             || u.contains(":memory:")
     }
 
-    /// Resolves the redb file path.
+    /// Returns true if an in-memory mode was requested or specified for the runtime database.
     #[must_use]
-    pub fn db_path(&self) -> PathBuf {
-        let trimmed = self.url.trim();
+    pub fn is_runtime_in_memory(&self) -> bool {
+        let u = self.runtime_path.trim().to_lowercase();
+        u.is_empty()
+            || u == "memory"
+            || u == "none"
+            || u == "mock"
+            || u.starts_with("mock:")
+            || u.starts_with("sqlite:")
+            || u.contains(":memory:")
+    }
+
+    /// Resolves the config redb file path.
+    #[must_use]
+    pub fn config_db_path(&self) -> PathBuf {
+        let trimmed = self.config_path.trim();
         let path_str = trimmed
             .strip_prefix("redb://")
             .or_else(|| trimmed.strip_prefix("file://"))
             .unwrap_or(trimmed);
         PathBuf::from(path_str)
     }
+
+    /// Resolves the runtime redb file path.
+    #[must_use]
+    pub fn runtime_db_path(&self) -> PathBuf {
+        let trimmed = self.runtime_path.trim();
+        let path_str = trimmed
+            .strip_prefix("redb://")
+            .or_else(|| trimmed.strip_prefix("file://"))
+            .unwrap_or(trimmed);
+        PathBuf::from(path_str)
+    }
+
+    /// Backwards compatibility accessor for `config_db_path`.
+    #[must_use]
+    pub fn db_path(&self) -> PathBuf {
+        self.config_db_path()
+    }
+
+    /// Backwards compatibility accessor for `config_path`.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.config_path
+    }
+
+    /// Backwards compatibility accessor for `runtime_path`.
+    #[must_use]
+    pub fn log_path(&self) -> &str {
+        &self.runtime_path
+    }
+
+    /// Backwards compatibility accessor for `config_path`.
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.config_path
+    }
+
+    /// Backwards compatibility accessor for `runtime_path`.
+    #[must_use]
+    pub fn log_url(&self) -> &str {
+        &self.runtime_path
+    }
 }
 
 impl Default for DatabaseConfig {
     fn default() -> Self {
+        let config_path = std::env::var("LANFORGE_CONFIG_DB_PATH")
+            .or_else(|_| std::env::var("LANFORGE_DB_PATH"))
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| "/var/lib/lanforge/config.redb".to_string());
+        let runtime_path = std::env::var("LANFORGE_RUNTIME_DB_PATH")
+            .or_else(|_| std::env::var("LANFORGE_LOG_PATH"))
+            .or_else(|_| std::env::var("LANFORGE_LOG_DB_URL"))
+            .unwrap_or_else(|_| "/run/lanforge/runtime.redb".to_string());
+
         Self {
-            url: std::env::var("DATABASE_URL")
-                .unwrap_or_else(|_| "/var/lib/lanforge/lanforge.redb".to_string()),
-            log_url: "/tmp/lanforge-logs.jsonl".to_string(),
+            config_path,
+            runtime_path,
             flush_interval: 60,
             max_connections: 10,
             min_connections: 2,

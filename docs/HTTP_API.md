@@ -325,7 +325,7 @@ Record type is inferred server-side. `rtype` may be passed explicitly to overrid
 
 | Method | Path | RPC | Description |
 |:-------|:-----|:----|:-----------|
-| `POST` | `/api/v1/db/vacuum` | `db_vacuum` | SQLite VACUUM |
+| `POST` | `/api/v1/db/vacuum` | `db_vacuum` | Compact database (vacuum) |
 | `POST` | `/api/v1/db/prune` | `db_prune` | Prune old entries |
 | `POST` | `/api/v1/db/log-clean` | `db_log_clean` | Clear transient event log |
 | `DELETE` | `/api/v1/db` | `db_reset` | **DANGEROUS.** Wipe entire database |

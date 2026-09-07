@@ -239,11 +239,11 @@ impl Config {
             },
             database: {
                 let mut db = toml_cfg.database;
-                if let Some(ref url) = cli.db_url {
-                    db.url.clone_from(url);
+                if let Some(ref path) = cli.config_db_path {
+                    db.config_path.clone_from(path);
                 }
-                if let Some(ref log_url) = cli.log_db_url {
-                    db.log_url.clone_from(log_url);
+                if let Some(ref path) = cli.runtime_db_path {
+                    db.runtime_path.clone_from(path);
                 }
                 db
             },
@@ -505,8 +505,8 @@ impl Config {
     #[must_use]
     pub fn to_system_status(&self) -> SystemStatus {
         SystemStatus {
-            db_path: sanitize_db_url(&self.database.url),
-            log_db_path: sanitize_db_url(&self.database.log_url),
+            db_path: sanitize_db_url(&self.database.config_path),
+            log_db_path: sanitize_db_url(&self.database.runtime_path),
             lan_iface: self.system.iface.clone(),
             ula_prefix: if self.system.target_prefix.starts_with("fe80") {
                 None

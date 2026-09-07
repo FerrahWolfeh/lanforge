@@ -60,7 +60,7 @@ rand = { workspace = true }
 hex = { workspace = true }
 
 # Third party
-bytesize = "2.3.1"
+bytesize = { workspace = true }
 color-eyre = "0.6.5"
 colored = "3.1.1"
 inquire = "0.9.4"

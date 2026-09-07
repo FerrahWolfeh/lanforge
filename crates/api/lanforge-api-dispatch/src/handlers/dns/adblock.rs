@@ -12,6 +12,8 @@ use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 #[cfg(feature = "adblock")]
 use tracing::error;
 
+#[cfg(feature = "adblock")]
+use lanforge_types::network::dns::adblock::AdblockRuleAction;
 use lanforge_types::network::dns::adblock::{AdblockUrlKind, BlockingMode};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -314,7 +316,11 @@ impl ClientContext {
 
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_rule_add(&self, domain: String, action: String) -> Response {
-        match self.db.add_adblock_rule(&domain, &action).await {
+        let rule_action = match action.parse::<AdblockRuleAction>() {
+            Ok(a) => a,
+            Err(e) => return Response::Error { error: e },
+        };
+        match self.db.add_adblock_rule(&domain, rule_action).await {
             Ok(id) => {
                 if let Ok(rows) = self.db.load_adblock_rules().await {
                     let rules = rows

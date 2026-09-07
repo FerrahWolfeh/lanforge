@@ -42,7 +42,7 @@ The `lanforge` binary daemon (`crates/bin/lanforge/`) serves as the entry-point 
 When the daemon starts up:
 
 1. **Configuration & Logging Setup:** Parses configuration parameters from `lanforge.toml`, environment variables, and CLI flags. Initializes `tracing` telemetry and log levels.
-2. **Storage Engine Initialization:** Opens database connection pools (SQLite or PostgreSQL) via `lanforge-db`. Runs pending database schema migrations before starting dependent network daemons.
+2. **Storage Engine Initialization:** Opens embedded `redb` (or volatile RAM fallback) via `lanforge-db`, loading existing state before starting dependent network daemons.
 3. **Core Context Construction:** Instantiates `LanforgeContext`, creating the shared Copy-on-Write (CoW) memory state container and initializing the `tokio::sync::broadcast` `EventBus`.
 4. **API Service Binding:** Starts `lanforge-uds` (Unix Domain Socket server) and `lanforge-http` (HTTP/REST/WebSocket server) so CLI and Web users can interact with the daemon immediately.
 5. **Supervisor Spawn:** Hands over network service descriptors to `ServiceSupervisor`.

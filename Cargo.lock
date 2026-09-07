@@ -2415,6 +2415,7 @@ name = "lanforge"
 version = "0.23.0"
 dependencies = [
  "anyhow",
+ "bytesize",
  "clap",
  "futures",
  "hotpath",
@@ -2565,7 +2566,6 @@ dependencies = [
  "hotpath",
  "lanforge-core",
  "lanforge-db-core",
- "lanforge-db-logbuf",
  "lanforge-db-redb",
  "lanforge-macros",
  "lanforge-types",
@@ -2588,23 +2588,6 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "uuid",
-]
-
-[[package]]
-name = "lanforge-db-logbuf"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "futures",
- "lanforge-core",
- "lanforge-db-core",
- "lanforge-types",
- "parking_lot",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
 ]
 
 [[package]]

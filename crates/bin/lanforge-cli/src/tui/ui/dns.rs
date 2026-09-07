@@ -264,9 +264,7 @@ fn render_upstreams_table(f: &mut Frame, area: Rect, app: &mut TuiApp) {
         u.upstreams
             .iter()
             .map(|s| {
-                let status_color = if s.status.to_lowercase() == "ok"
-                    || s.status.to_lowercase().contains("healthy")
-                {
+                let status_color = if s.status.is_healthy() {
                     theme::ONLINE
                 } else {
                     theme::MOCHA_RED

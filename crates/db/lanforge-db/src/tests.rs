@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
-use lanforge_db_logbuf::LogDb;
+use crate::log_engine::LogDb;
 
 #[tokio::test]
 async fn test_log_db_in_memory() {
@@ -15,11 +15,10 @@ async fn test_log_db_in_memory() {
 
 #[tokio::test]
 async fn test_db_worker_lifecycle_mock() {
-    // Since we mock the DB, we can't test actual Postgres connections unless DATABASE_URL is set.
-    // We will verify the worker setup, start, and graceful shutdown.
+    // Verify the worker setup, start, and graceful shutdown.
     let bus = Arc::new(EventBus::new());
 
-    // We only start the worker if postgres is running, but let's test that the channels connect
+    // Test that the event channels connect
     let mut bus_rx = bus.subscribe();
 
     // Broadcast a shutdown immediately to test clean exit
@@ -41,4 +40,13 @@ async fn test_db_worker_lifecycle_mock() {
         }
     }
     assert!(shutdown_seen);
+}
+
+#[tokio::test]
+async fn test_lanforge_db_schema_version() {
+    let db = crate::LanforgeDb::open_in_memory().await.unwrap();
+    assert_eq!(db.schema_version().unwrap(), 1);
+
+    let log_db = LogDb::open(":memory:").await.unwrap();
+    assert_eq!(log_db.schema_version().unwrap(), 1);
 }

@@ -39,14 +39,14 @@ impl ClientContext {
 
         match self
             .db
-            .create_user(&username, &password_hash, &parsed_role.to_string(), now)
+            .create_user(&username, &password_hash, parsed_role, now)
             .await
         {
             Ok(entry) => Response::User(UserResponse {
                 user: UserInfo {
                     id: entry.id,
                     username: entry.username,
-                    role: parsed_role,
+                    role: entry.role,
                     created_at: entry.created_at,
                     updated_at: entry.updated_at,
                     last_login: entry.last_login,
@@ -69,7 +69,7 @@ impl ClientContext {
                     .map(|u| UserInfo {
                         id: u.id,
                         username: u.username,
-                        role: UserRole::from_str(&u.role).unwrap_or(UserRole::Admin),
+                        role: u.role,
                         created_at: u.created_at,
                         updated_at: u.updated_at,
                         last_login: u.last_login,

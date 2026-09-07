@@ -1,4 +1,4 @@
-//! DnsStore, AdblockStore, and DnsUpstreamStore implementations for `RedbDatabase`.
+use std::net::SocketAddr;
 
 use crate::RedbDatabase;
 use crate::tables::{
@@ -9,8 +9,10 @@ use lanforge_db_core::{
     AdblockStore, BoxFuture, DbError, DnsStore, DnsUpstreamEntry, DnsUpstreamStore,
 };
 use lanforge_types::network::dns::DnsRecordType;
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteAnswer, RewriteRule};
-use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::network::dns::adblock::{
+    AdblockDbConfig, AdblockRuleAction, AdblockUrlKind, RewriteAnswer, RewriteRule,
+};
+use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
 use redb::{ReadableDatabase, ReadableTable};
 
@@ -40,13 +42,9 @@ impl DnsStore for RedbDatabase {
         &'a self,
         domain: &'a str,
         rtype: DnsRecordType,
-        answer: &'a str,
+        answer: &'a RewriteAnswer,
     ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
-            let parsed_answer = answer
-                .parse::<RewriteAnswer>()
-                .map_err(|e| DbError::Validation(format!("Invalid rewrite answer: {e}")))?;
-
             let existing_id = {
                 let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
                 let table = match read_txn.open_table(TABLE_DNS_REWRITES) {
@@ -79,7 +77,7 @@ impl DnsStore for RedbDatabase {
                 id: Some(id),
                 domain: domain.to_string(),
                 rtype,
-                answer: parsed_answer,
+                answer: answer.clone(),
             };
 
             let bytes = serde_json::to_vec(&rule)
@@ -564,7 +562,7 @@ impl AdblockStore for RedbDatabase {
 
     fn load_adblock_rules(
         &self,
-    ) -> BoxFuture<'_, Result<Vec<(i64, String, String, bool)>, DbError>> {
+    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockRuleAction, bool)>, DbError>> {
         Box::pin(async move {
             let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
             let table = match read_txn.open_table(TABLE_ADBLOCK_RULES) {
@@ -576,7 +574,7 @@ impl AdblockStore for RedbDatabase {
             let mut rules = Vec::new();
             for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
                 let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let (domain, action, enabled): (String, String, bool) =
+                let (domain, action, enabled): (String, AdblockRuleAction, bool) =
                     serde_json::from_slice(val.value())
                         .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 rules.push((id.value(), domain, action, enabled));
@@ -589,11 +587,11 @@ impl AdblockStore for RedbDatabase {
     fn add_adblock_rule<'a>(
         &'a self,
         domain: &'a str,
-        action: &'a str,
+        action: AdblockRuleAction,
     ) -> BoxFuture<'a, Result<i64, DbError>> {
         Box::pin(async move {
             let id = self.next_id("adblock_rules")?;
-            let bytes = serde_json::to_vec(&(domain.to_string(), action.to_string(), true))
+            let bytes = serde_json::to_vec(&(domain.to_string(), action, true))
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
@@ -699,16 +697,16 @@ impl DnsUpstreamStore for RedbDatabase {
 
     fn add_dns_upstream<'a>(
         &'a self,
-        addr: &'a str,
-        protocol: &'a str,
+        addr: SocketAddr,
+        protocol: UpstreamProtocol,
         domain: Option<&'a str>,
     ) -> BoxFuture<'a, Result<i64, DbError>> {
         Box::pin(async move {
             let id = self.next_id("dns_upstreams")?;
             let entry = DnsUpstreamEntry {
                 id,
-                addr: addr.to_string(),
-                protocol: protocol.to_string(),
+                addr,
+                protocol,
                 domain: domain.map(ToString::to_string),
             };
 
@@ -732,8 +730,8 @@ impl DnsUpstreamStore for RedbDatabase {
 
     fn remove_dns_upstream<'a>(
         &'a self,
-        addr: &'a str,
-        protocol: &'a str,
+        addr: SocketAddr,
+        protocol: UpstreamProtocol,
     ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;

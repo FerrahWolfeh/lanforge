@@ -1,5 +1,8 @@
 //! `LanforgeDb` facade wrapping `lanforge-db-redb`.
 
+use std::net::{IpAddr, SocketAddr};
+use std::path::Path;
+
 use lanforge_core::context::PersistenceSnapshot;
 use lanforge_core::context::state::State;
 use lanforge_db_core::{
@@ -8,13 +11,15 @@ use lanforge_db_core::{
     UserStore,
 };
 use lanforge_db_redb::RedbDatabase;
-use lanforge_types::auth::ApiScopes;
-use lanforge_types::device::{Device, LeaseAction, LeaseHistoryEntry};
+use lanforge_types::auth::{ApiScopes, UserRole};
+use lanforge_types::device::{Device, DeviceStatus, LeaseAction, LeaseHistoryEntry, LeaseKind};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockUrlKind, RewriteRule};
-use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::network::dns::adblock::{
+    AdblockDbConfig, AdblockRuleAction, AdblockUrlKind, RewriteAnswer, RewriteRule,
+};
+use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
@@ -40,6 +45,7 @@ impl LanforgeDb {
         let path = cfg.db_path();
         match RedbDatabase::open(&path) {
             Ok(db) => Ok(Self { inner: db }),
+            Err(DbError::Validation(e)) => Err(DbError::Validation(e)),
             Err(e) => {
                 tracing::warn!(
                     "Failed to open redb at {}: {e}. Falling back to ./lanforge.redb",
@@ -47,6 +53,7 @@ impl LanforgeDb {
                 );
                 match RedbDatabase::open("./lanforge.redb") {
                     Ok(db) => Ok(Self { inner: db }),
+                    Err(DbError::Validation(e2)) => Err(DbError::Validation(e2)),
                     Err(e2) => {
                         tracing::warn!(
                             "Failed to open local redb at ./lanforge.redb: {e2}. Falling back to in-memory mode."
@@ -71,6 +78,17 @@ impl LanforgeDb {
         self.inner.is_in_memory()
     }
 
+    /// Returns the database file path, if any.
+    #[must_use]
+    pub fn path(&self) -> Option<&Path> {
+        self.inner.path()
+    }
+
+    /// Returns the current schema version of the underlying database.
+    pub fn schema_version(&self) -> Result<u32, DbError> {
+        self.inner.schema_version()
+    }
+
     /// Checks whether the system has completed the initial onboarding provisioning.
     pub fn is_provisioned(&self) -> Result<bool, DbError> {
         self.inner.is_provisioned()
@@ -91,7 +109,8 @@ impl LanforgeDb {
     pub async fn load_table(&self) -> Result<State, DbError> {
         let devices = self.inner.load_all_devices().await?;
         let mut state = State::new();
-        for device in devices {
+        for mut device in devices {
+            device.status = DeviceStatus::Offline;
             state.insert_device(device.mac, device);
         }
         Ok(state)
@@ -201,11 +220,11 @@ impl DeviceStore for LanforgeDb {
     fn record_lease_event<'a>(
         &'a self,
         mac: MacAddr,
-        ip: &'a str,
-        lease_type: &'a str,
+        ip: IpAddr,
+        lease_kind: LeaseKind,
         action: LeaseAction,
     ) -> BoxFuture<'a, Result<(), DbError>> {
-        self.inner.record_lease_event(mac, ip, lease_type, action)
+        self.inner.record_lease_event(mac, ip, lease_kind, action)
     }
 
     fn get_lease_history(
@@ -226,7 +245,7 @@ impl DnsStore for LanforgeDb {
         &'a self,
         domain: &'a str,
         rtype: DnsRecordType,
-        answer: &'a str,
+        answer: &'a RewriteAnswer,
     ) -> BoxFuture<'a, Result<(), DbError>> {
         self.inner.upsert_dns_rewrite(domain, rtype, answer)
     }
@@ -354,14 +373,14 @@ impl AdblockStore for LanforgeDb {
 
     fn load_adblock_rules(
         &self,
-    ) -> BoxFuture<'_, Result<Vec<(i64, String, String, bool)>, DbError>> {
+    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockRuleAction, bool)>, DbError>> {
         self.inner.load_adblock_rules()
     }
 
     fn add_adblock_rule<'a>(
         &'a self,
         domain: &'a str,
-        action: &'a str,
+        action: AdblockRuleAction,
     ) -> BoxFuture<'a, Result<i64, DbError>> {
         self.inner.add_adblock_rule(domain, action)
     }
@@ -435,8 +454,8 @@ impl DnsUpstreamStore for LanforgeDb {
 
     fn add_dns_upstream<'a>(
         &'a self,
-        addr: &'a str,
-        protocol: &'a str,
+        addr: SocketAddr,
+        protocol: UpstreamProtocol,
         domain: Option<&'a str>,
     ) -> BoxFuture<'a, Result<i64, DbError>> {
         self.inner.add_dns_upstream(addr, protocol, domain)
@@ -444,8 +463,8 @@ impl DnsUpstreamStore for LanforgeDb {
 
     fn remove_dns_upstream<'a>(
         &'a self,
-        addr: &'a str,
-        protocol: &'a str,
+        addr: SocketAddr,
+        protocol: UpstreamProtocol,
     ) -> BoxFuture<'a, Result<(), DbError>> {
         self.inner.remove_dns_upstream(addr, protocol)
     }
@@ -549,7 +568,7 @@ impl UserStore for LanforgeDb {
         &'a self,
         username: &'a str,
         password_hash: &'a str,
-        role: &'a str,
+        role: UserRole,
         now: i64,
     ) -> BoxFuture<'a, Result<UserEntry, DbError>> {
         self.inner.create_user(username, password_hash, role, now)
@@ -582,7 +601,7 @@ impl UserStore for LanforgeDb {
     fn update_user_role<'a>(
         &'a self,
         username: &'a str,
-        new_role: &'a str,
+        new_role: UserRole,
         now: i64,
     ) -> BoxFuture<'a, Result<(), DbError>> {
         self.inner.update_user_role(username, new_role, now)

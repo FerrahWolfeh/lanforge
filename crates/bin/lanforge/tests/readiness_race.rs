@@ -16,13 +16,13 @@ use tokio::time::{Duration, timeout};
 
 async fn setup_test_bootstrap() -> BootstrapResult {
     let dir = tempdir().expect("Failed to create temp dir");
-    let db_path = dir.path().join("test.db");
-    let log_db_path = dir.path().join("test_log.db");
+    let db_path = dir.path().join("test.redb");
+    let log_db_path = dir.path().join("test_log.jsonl");
 
     let cfg = Arc::new(Config {
         database: DatabaseConfig {
-            url: format!("sqlite:{}", db_path.display()),
-            log_url: format!("sqlite:{}", log_db_path.display()),
+            config_path: db_path.display().to_string(),
+            runtime_path: log_db_path.display().to_string(),
             ..Default::default()
         },
         ..Config::default()
@@ -30,7 +30,7 @@ async fn setup_test_bootstrap() -> BootstrapResult {
 
     let db = Arc::new(LanforgeDb::open(&cfg.database).await.expect("open db"));
     let log_db = Arc::new(
-        LogDb::open(&cfg.database.log_url)
+        LogDb::open(&cfg.database.runtime_path)
             .await
             .expect("open log_db"),
     );

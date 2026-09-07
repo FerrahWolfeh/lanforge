@@ -6,7 +6,7 @@ use lanforge_db_core::{BoxFuture, DbError, DeviceStore};
 use lanforge_types::device::{Device, LeaseAction, LeaseHistoryEntry, LeaseKind};
 use lanforge_types::identifiers::MacAddr;
 use redb::{ReadableDatabase, ReadableTable};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
 use std::time::SystemTime;
 
 impl DeviceStore for RedbDatabase {
@@ -215,20 +215,14 @@ impl DeviceStore for RedbDatabase {
     fn record_lease_event<'a>(
         &'a self,
         mac: MacAddr,
-        ip: &'a str,
-        lease_type: &'a str,
+        ip: IpAddr,
+        lease_kind: LeaseKind,
         action: LeaseAction,
     ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
-            let parsed_ip: IpAddr = ip.parse().unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-
             let entry = LeaseHistoryEntry {
-                ip: parsed_ip,
-                lease_type: match lease_type {
-                    "v6" => LeaseKind::V6,
-                    "v6_prefix" => LeaseKind::V6Prefix,
-                    _ => LeaseKind::V4,
-                },
+                ip,
+                lease_type: lease_kind,
                 action,
                 timestamp: SystemTime::now(),
             };
