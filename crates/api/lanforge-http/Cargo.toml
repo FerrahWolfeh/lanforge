@@ -1,6 +1,6 @@
 [package]
 name = "lanforge-http"
-version = "0.8.1"
+version = "0.9.0"
 license.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -14,7 +14,7 @@ lanforge-db-core = { workspace = true, optional = true }
 lanforge-dns = { workspace = true, optional = true }
 lanforge-dns-wire = { workspace = true, optional = true }
 lanforge-macros = { workspace = true, optional = true }
-lanforge-types = { workspace = true, optional = true }
+lanforge-types = { workspace = true }
 lanforge-dhcp = { workspace = true, optional = true }
 
 # Workspace
@@ -23,6 +23,7 @@ tokio = { workspace = true, features = ["full"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+socket2 = { workspace = true }
 chrono = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 argon2 = { workspace = true, optional = true }
@@ -83,7 +84,6 @@ server = [
     "dep:lanforge-dns-wire",
     "dep:lanforge-macros",
     "dep:lanforge-core",
-    "dep:lanforge-types",
     "dep:lanforge-dhcp",
     "dep:chrono",
     "dep:rand",

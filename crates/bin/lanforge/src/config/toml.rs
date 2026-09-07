@@ -192,7 +192,7 @@ mod tests {
         #[cfg(feature = "ra")]
         assert!(!default_cfg.ra.enabled);
         #[cfg(feature = "dns")]
-        assert_eq!(default_cfg.dns.listen.to_string(), "0.0.0.0:53");
+        assert_eq!(default_cfg.dns.listen.to_string(), "[::]:53");
     }
 
     #[test]

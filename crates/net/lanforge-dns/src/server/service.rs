@@ -245,17 +245,22 @@ impl AsyncService for DnsService {
         info!(handlers = parallelism, "DNS: Starting service");
 
         let mut workers = Vec::new();
-        let socket = Arc::new(
-            tokio::net::UdpSocket::bind(self.cfg.listen)
-                .await
-                .map_err(CoreError::Io)?,
-        );
-
-        for _ in 0..parallelism {
-            workers.push(crate::server::worker::udp::spawn_udp_worker(
-                Arc::clone(&dns_ctx),
-                Arc::clone(&socket),
+        let addrs = self.cfg.listen.addrs();
+        if addrs.is_empty() {
+            return Err(CoreError::Generic(
+                "No DNS listen addresses configured".to_string(),
             ));
+        }
+
+        for addr in &addrs {
+            let socket = Arc::new(crate::server::transport::net::bind_udp(*addr).map_err(CoreError::Io)?);
+            info!(%addr, "DNS: UDP listening");
+            for _ in 0..parallelism {
+                workers.push(crate::server::worker::udp::spawn_udp_worker(
+                    Arc::clone(&dns_ctx),
+                    Arc::clone(&socket),
+                ));
+            }
         }
 
         let tcp_worker = crate::server::worker::tcp::spawn_tcp_worker(Arc::clone(&dns_ctx));

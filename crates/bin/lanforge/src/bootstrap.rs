@@ -499,7 +499,7 @@ impl Bootstrapper {
                 #[cfg(feature = "tftp")]
                 tftp: TftpOptions {
                     enabled: cfg.tftp_toml.enabled,
-                    listen_addr: cfg.tftp_toml.listen_addr.clone(),
+                    listen_addr: cfg.tftp_toml.listen.to_string(),
                     root_dir: cfg.tftp_toml.root_dir.to_string_lossy().to_string(),
                     block_size: cfg.tftp_toml.block_size,
                     timeout: cfg.tftp_toml.timeout,

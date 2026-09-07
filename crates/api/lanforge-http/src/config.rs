@@ -1,6 +1,5 @@
-use std::net::SocketAddr;
-
 use lanforge_macros::ServiceConfig;
+use lanforge_types::network::ListenConfig;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for the REST API and Metrics HTTP service.
@@ -11,8 +10,8 @@ use serde::{Deserialize, Serialize};
 pub struct HttpConfig {
     /// Whether the HTTP service is enabled.
     pub enabled: bool,
-    /// Listen address (e.g., "0.0.0.0:8088").
-    pub listen: SocketAddr,
+    /// Listen address(es) (e.g., `"[::]:8088"` or `["192.168.1.1:8088", "[fd00::1]:8088"]`).
+    pub listen: ListenConfig,
     /// Whether HTTPS is explicitly enabled.
     pub https_enabled: bool,
     /// Whether plaintext HTTP is explicitly allowed (for local development only).
@@ -38,7 +37,7 @@ impl Default for HttpConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            listen: SocketAddr::from(([0, 0, 0, 0], 8088)),
+            listen: ListenConfig::dual_stack(8088),
             https_enabled: false,
             allow_plaintext_http: true,
             doh_enabled: false,

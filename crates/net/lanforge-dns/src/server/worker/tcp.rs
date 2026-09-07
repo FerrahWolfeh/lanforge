@@ -5,26 +5,31 @@ use lanforge_types::network::dns::TransportProtocol;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tracing::{error, trace};
 
 pub fn spawn_tcp_worker(ctx: Arc<DnsContext>) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let addr = ctx.cfg.listen;
-        let listener = match TcpListener::bind(addr).await {
-            Ok(l) => l,
-            Err(e) => {
-                error!("Failed to bind TCP listener on {}: {}", addr, e);
-                return;
-            }
-        };
+        let addrs = ctx.cfg.listen.addrs();
+        let mut handles = Vec::new();
 
-        loop {
-            match listener.accept().await {
-                Ok((mut stream, src)) => {
-                    let task_ctx = Arc::clone(&ctx);
-                    tokio::spawn(async move {
+        for addr in addrs {
+            let listener = match crate::server::transport::net::bind_tcp(addr) {
+                Ok(l) => l,
+                Err(e) => {
+                    error!("Failed to bind TCP listener on {}: {}", addr, e);
+                    continue;
+                }
+            };
+            tracing::info!(%addr, "DNS: TCP listening");
+
+            let task_ctx = Arc::clone(&ctx);
+            handles.push(tokio::spawn(async move {
+                loop {
+                    match listener.accept().await {
+                        Ok((mut stream, src)) => {
+                            let task_ctx = Arc::clone(&task_ctx);
+                            tokio::spawn(async move {
                         let mut len_buf = [0u8; 2];
                         while stream.read_exact(&mut len_buf).await.is_ok() {
                             let len = u16::from_be_bytes(len_buf) as usize;
@@ -125,10 +130,16 @@ pub fn spawn_tcp_worker(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     });
                 }
                 Err(e) => {
-                    error!("TCP worker accept error: {}", e);
+                    error!("TCP worker accept error on {}: {}", addr, e);
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             }
         }
-    })
+    }));
+}
+
+for h in handles {
+    let _ = h.await;
+}
+})
 }

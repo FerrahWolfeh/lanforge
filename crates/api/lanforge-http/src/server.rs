@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -139,7 +140,6 @@ impl AsyncService for HttpService {
             std::future::pending::<()>().await;
             return Ok(());
         }
-        let addr = cfg.listen;
 
         let state = AppState {
             cfg: cfg.clone(),
@@ -214,44 +214,93 @@ impl AsyncService for HttpService {
             None
         };
 
+        let addrs = cfg.listen.addrs();
+        if addrs.is_empty() {
+            let msg = "HTTP: No listen addresses configured.";
+            error!("{msg}");
+            return Err(CoreError::Generic(msg.to_string()));
+        }
+
+        let (shutdown_tx, _) = tokio::sync::watch::channel(());
         let ctx_shutdown = ctx.clone();
-        let shutdown_signal = async move {
+        let shutdown_tx_clone = shutdown_tx.clone();
+        tokio::spawn(async move {
             let mut rx = ctx_shutdown.bus().subscribe();
             while let Ok(event) = rx.recv().await {
                 if !ctx_shutdown.is_running()
                     || matches!(event.event, LanforgeEvent::System(SystemEvent::Shutdown))
                 {
                     info!("HTTP: shutdown signal received");
+                    let _ = shutdown_tx_clone.send(());
                     break;
                 }
             }
-        };
+        });
 
         if let Some(tls_config) = maybe_tls_config {
-            info!(addr = %addr, "HTTPS: API listening");
-            let config = RustlsConfig::from_config(Arc::new(tls_config));
-            let handle = Handle::new();
-            let shutdown_handle = handle.clone();
-            tokio::spawn(async move {
-                shutdown_signal.await;
-                shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
-            });
+            let config = Arc::new(tls_config);
+            let mut server_tasks = Vec::new();
 
-            axum_server::bind_rustls(addr, config)
-                .handle(handle)
-                .serve(app.into_make_service())
-                .await
-                .map_err(|e| CoreError::Generic(format!("HTTPS server error: {e}")))?;
+            for addr in addrs {
+                let std_listener = bind_tcp_dual_stack(addr)?;
+                info!(addr = %addr, "HTTPS: API listening");
+                let rustls_cfg = RustlsConfig::from_config(Arc::clone(&config));
+                let handle = Handle::new();
+                let shutdown_handle = handle.clone();
+                let mut shutdown_rx = shutdown_tx.subscribe();
+
+                tokio::spawn(async move {
+                    let _ = shutdown_rx.changed().await;
+                    shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
+                });
+
+                let app_service = app.clone().into_make_service();
+                let server = axum_server::from_tcp_rustls(std_listener, rustls_cfg)
+                    .map_err(|e| CoreError::Generic(format!("Failed to create TLS server: {e}")))?;
+                server_tasks.push(tokio::spawn(async move {
+                    server
+                        .handle(handle)
+                        .serve(app_service)
+                        .await
+                        .map_err(|e| CoreError::Generic(format!("HTTPS server error: {e}")))
+                }));
+            }
+
+            for res in futures::future::join_all(server_tasks).await {
+                match res {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => return Err(e),
+                    Err(e) => return Err(CoreError::Generic(format!("HTTPS server task failed: {e}"))),
+                }
+            }
         } else if cfg.allow_plaintext_http {
-            info!(addr = %addr, "HTTP: API listening");
-            let tcp_listener = TcpListener::bind(&addr)
-                .await
-                .map_err(|e| CoreError::Generic(format!("Failed to bind to {addr}: {e}")))?;
+            let mut server_tasks = Vec::new();
 
-            axum::serve(tcp_listener, app)
-                .with_graceful_shutdown(shutdown_signal)
-                .await
-                .map_err(|e| CoreError::Generic(format!("Axum server error: {e}")))?;
+            for addr in addrs {
+                let std_listener = bind_tcp_dual_stack(addr)?;
+                info!(addr = %addr, "HTTP: API listening");
+                let tcp_listener = TcpListener::from_std(std_listener)
+                    .map_err(|e| CoreError::Generic(format!("Failed to bind to {addr}: {e}")))?;
+                let mut shutdown_rx = shutdown_tx.subscribe();
+                let app_clone = app.clone();
+
+                server_tasks.push(tokio::spawn(async move {
+                    axum::serve(tcp_listener, app_clone)
+                        .with_graceful_shutdown(async move {
+                            let _ = shutdown_rx.changed().await;
+                        })
+                        .await
+                        .map_err(|e| CoreError::Generic(format!("Axum server error: {e}")))
+                }));
+            }
+
+            for res in futures::future::join_all(server_tasks).await {
+                match res {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => return Err(e),
+                    Err(e) => return Err(CoreError::Generic(format!("Axum server task failed: {e}"))),
+                }
+            }
         } else {
             let msg = "HTTP: TLS configuration missing and allow_plaintext_http is false. Refusing to start unencrypted server.";
             error!("{msg}");
@@ -259,6 +308,78 @@ impl AsyncService for HttpService {
         }
 
         Ok(())
+    }
+}
+
+fn bind_tcp_dual_stack(addr: SocketAddr) -> Result<std::net::TcpListener, CoreError> {
+    match addr {
+        SocketAddr::V6(v6) if v6.ip().is_unspecified() => {
+            let socket_res = (|| -> std::io::Result<socket2::Socket> {
+                let s = socket2::Socket::new(
+                    socket2::Domain::IPV6,
+                    socket2::Type::STREAM,
+                    Some(socket2::Protocol::TCP),
+                )?;
+                s.set_only_v6(false)?;
+                s.set_reuse_address(true)?;
+                s.set_nonblocking(true)?;
+                s.bind(&socket2::SockAddr::from(addr))?;
+                s.listen(1024)?;
+                Ok(s)
+            })();
+
+            match socket_res {
+                Ok(s) => Ok(s.into()),
+                Err(e) => {
+                    warn!(
+                        "HTTP: IPv6 dual-stack TCP bind to {} failed ({}), falling back to 0.0.0.0:{}",
+                        addr,
+                        e,
+                        v6.port()
+                    );
+                    let v4_addr = SocketAddr::from(([0, 0, 0, 0], v6.port()));
+                    let s = socket2::Socket::new(
+                        socket2::Domain::IPV4,
+                        socket2::Type::STREAM,
+                        Some(socket2::Protocol::TCP),
+                    )
+                    .map_err(CoreError::Io)?;
+                    s.set_reuse_address(true).map_err(CoreError::Io)?;
+                    s.set_nonblocking(true).map_err(CoreError::Io)?;
+                    s.bind(&socket2::SockAddr::from(v4_addr))
+                        .map_err(CoreError::Io)?;
+                    s.listen(1024).map_err(CoreError::Io)?;
+                    Ok(s.into())
+                }
+            }
+        }
+        SocketAddr::V6(_) => {
+            let s = socket2::Socket::new(
+                socket2::Domain::IPV6,
+                socket2::Type::STREAM,
+                Some(socket2::Protocol::TCP),
+            )
+            .map_err(CoreError::Io)?;
+            s.set_only_v6(true).map_err(CoreError::Io)?;
+            s.set_reuse_address(true).map_err(CoreError::Io)?;
+            s.set_nonblocking(true).map_err(CoreError::Io)?;
+            s.bind(&socket2::SockAddr::from(addr)).map_err(CoreError::Io)?;
+            s.listen(1024).map_err(CoreError::Io)?;
+            Ok(s.into())
+        }
+        SocketAddr::V4(_) => {
+            let s = socket2::Socket::new(
+                socket2::Domain::IPV4,
+                socket2::Type::STREAM,
+                Some(socket2::Protocol::TCP),
+            )
+            .map_err(CoreError::Io)?;
+            s.set_reuse_address(true).map_err(CoreError::Io)?;
+            s.set_nonblocking(true).map_err(CoreError::Io)?;
+            s.bind(&socket2::SockAddr::from(addr)).map_err(CoreError::Io)?;
+            s.listen(1024).map_err(CoreError::Io)?;
+            Ok(s.into())
+        }
     }
 }
 

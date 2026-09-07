@@ -3,7 +3,7 @@
 
 [dns]
 enabled = true
-listen = "0.0.0.0:53"
+listen = "[::]:53"
 
 # Multiple search domains for local resolution.
 search_domains = ["lan", "local"]

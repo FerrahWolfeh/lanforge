@@ -7,8 +7,8 @@ enabled = true
 # The directory to serve files from.
 root_dir = "/var/lib/lanforge/tftp"
 
-# Address and UDP port to listen on (Default: "0.0.0.0:69").
-listen_addr = "0.0.0.0:69"
+# Address and UDP port to listen on (Default: "[::]:69").
+listen_addr = "[::]:69"
 
 # Default block size for transfers in bytes (Default: 512).
 # block_size = 512

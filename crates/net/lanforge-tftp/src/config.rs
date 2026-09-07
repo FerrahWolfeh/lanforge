@@ -1,6 +1,5 @@
-//! Configuration for the TFTP server.
-
 use lanforge_macros::ServiceConfig;
+use lanforge_types::network::ListenConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -11,8 +10,9 @@ use std::path::PathBuf;
 pub struct TftpConfig {
     /// Whether the TFTP service is enabled.
     pub enabled: bool,
-    /// Address to listen on (e.g., "0.0.0.0:69").
-    pub listen_addr: String,
+    /// Address(es) to listen on (e.g., `"[::]:69"` or `["192.168.1.1:69", "[fd00::1]:69"]`).
+    #[serde(alias = "listen_addr")]
+    pub listen: ListenConfig,
     /// Root directory for served files.
     pub root_dir: PathBuf,
     /// Default block size for transfers (bytes).
@@ -27,7 +27,7 @@ impl Default for TftpConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            listen_addr: "0.0.0.0:69".to_string(),
+            listen: ListenConfig::dual_stack(69),
             root_dir: "/var/lib/lanforge/tftp".into(),
             block_size: 512,
             timeout: 5,

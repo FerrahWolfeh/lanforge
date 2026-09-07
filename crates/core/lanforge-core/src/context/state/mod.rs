@@ -183,7 +183,7 @@ impl State {
     #[must_use]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn get_by_ip(&self, ip: &IpAddr) -> Option<Arc<Device>> {
-        let mac = self.indices.ip_index.get(ip)?;
+        let mac = self.indices.ip_index.get(&ip.to_canonical())?;
         self.devices.get(mac).cloned()
     }
 
@@ -200,7 +200,7 @@ impl State {
 
     #[must_use]
     pub fn get_mac_by_ip(&self, ip: IpAddr) -> Option<MacAddr> {
-        self.indices.ip_index.get(&ip).copied()
+        self.indices.ip_index.get(&ip.to_canonical()).copied()
     }
 
     #[must_use]

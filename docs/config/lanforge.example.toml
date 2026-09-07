@@ -1,5 +1,5 @@
 # Lanforge Master Reference Configuration
-# Version: 0.24.0
+# Version: 0.25.0
 # This file documents all available sections and options.
 
 [system]
@@ -23,7 +23,7 @@ config_path = "/var/lib/lanforge/config.redb"
 # Volatile runtime database in tmpfs (active leases, query logs, system event history):
 runtime_path = "/run/lanforge/runtime.redb"
 # How often to flush in-memory state to disk/database (seconds).
-flush_interval = 60
+flush_interval_secs = 5
 
 [api]
 # Enable the Unix Domain Socket control API.
@@ -36,8 +36,8 @@ socket_path = "/run/lanforge/control.sock"
 [http]
 # Enable the REST API, Web Console, and Prometheus metrics exporter.
 enabled = true
-# Listen address for the HTTP service (port 8088 avoids Cockpit/Fedora port 9090 conflicts).
-listen = "0.0.0.0:8088"
+# Listen address for the HTTP service (dual-stack wildcard [::]:8088 covers IPv6 and IPv4).
+listen = "[::]:8088"
 # Enable HTTPS (inherits global system TLS if paths are omitted).
 https_enabled = false
 # Whether plaintext HTTP is explicitly allowed (for local development only).
@@ -141,8 +141,8 @@ range_end = "::1fff"
 
 [dns]
 enabled = true
-# Standard DNS listen address (UDP/TCP).
-listen = "0.0.0.0:53"
+# Standard DNS listen address (dual-stack UDP/TCP, or array of addrs).
+listen = "[::]:53"
 # Default TTL for local records.
 ttl = 60
 # Days to hide inactive devices from DNS.
@@ -179,7 +179,7 @@ stale_timeout_secs = 3600
 enabled = true
 # Root directory for PXE boot files.
 root_dir = "/var/lib/lanforge/tftp"
-listen_addr = "0.0.0.0:69"
+listen_addr = "[::]:69"
 
 [pppoe]
 # Integrated PPPoE client service for direct WAN broadband dial-in.

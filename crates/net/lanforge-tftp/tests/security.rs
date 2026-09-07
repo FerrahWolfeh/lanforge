@@ -33,7 +33,7 @@ async fn test_tftp_path_traversal_prevention() {
 
     let cfg = TftpConfig {
         enabled: true,
-        listen_addr: "127.0.0.1:0".into(),
+        listen: "127.0.0.1:0".parse().unwrap(),
         root_dir: tftp_root.clone(),
         block_size: 512,
         timeout: 1,

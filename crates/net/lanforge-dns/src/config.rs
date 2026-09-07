@@ -6,9 +6,12 @@
 
 use crate::resolver::recursive::UpstreamMode;
 use lanforge_macros::ServiceConfig;
-use lanforge_types::network::dns::{
-    adblock::{AdblockRuleEntry, BlockingMode, RewriteRule},
-    upstream::UpstreamEntry,
+use lanforge_types::network::{
+    ListenConfig,
+    dns::{
+        adblock::{AdblockRuleEntry, BlockingMode, RewriteRule},
+        upstream::UpstreamEntry,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -52,8 +55,8 @@ impl Default for QueryLogConfig {
 pub struct DnsConfig {
     /// Whether the DNS service is enabled.
     pub enabled: bool,
-    /// Socket address to listen on for both UDP and TCP (e.g., `0.0.0.0:53`).
-    pub listen: SocketAddr,
+    /// Socket address(es) to listen on for both UDP and TCP (e.g., `[::]:53` or `["192.168.1.1:53", "[fd00::1]:53"]`).
+    pub listen: ListenConfig,
     /// Upstream resolver targets.
     /// If empty, non-local queries return `REFUSED`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -142,7 +145,7 @@ impl Default for DnsConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            listen: "0.0.0.0:53".parse().unwrap(),
+            listen: ListenConfig::dual_stack(53),
             upstreams: Vec::new(),
             upstream_mode: UpstreamMode::Sequential,
             search_domains: vec!["lan".to_string()],

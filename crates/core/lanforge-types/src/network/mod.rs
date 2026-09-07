@@ -2,6 +2,7 @@ pub mod dhcp;
 pub mod dns;
 mod hostname;
 mod ip;
+mod listen;
 mod neighbor;
 pub mod pppoe;
 pub mod ra;
@@ -16,5 +17,6 @@ pub use hostname::{Hostname, HostnameOrigin};
 pub use ip::{
     IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, Ipv6Suffix, classify_ip, classify_ipv6, is_ula,
 };
+pub use listen::ListenConfig;
 pub use neighbor::NeighborEvent;
 pub use subnet::{DnsReverseResolver, IpSubnet};

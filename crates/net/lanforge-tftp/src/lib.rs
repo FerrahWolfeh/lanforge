@@ -28,7 +28,7 @@ pub enum TftpError {
     id = "tftp",
     name = "TFTP Server",
     critical = false,
-    describe = format!("TFTP Server on {}", self.cfg.listen_addr)
+    describe = format!("TFTP Server on {}", self.cfg.listen)
 )]
 #[derive(Clone)]
 pub struct TftpService {
@@ -57,7 +57,7 @@ impl AsyncService for TftpService {
             .bound_addr
             .read()
             .clone()
-            .unwrap_or_else(|| self.cfg.listen_addr.clone());
+            .unwrap_or_else(|| self.cfg.listen.to_string());
         vec![
             (std::borrow::Cow::Borrowed("listen"), listen),
             (
@@ -79,53 +79,83 @@ impl AsyncService for TftpService {
             return Ok(());
         }
 
-        let socket = UdpSocket::bind(&self.cfg.listen_addr).await.map_err(|e| {
-            CoreError::Generic(format!(
-                "Failed to bind TFTP to {}: {}",
-                self.cfg.listen_addr, e
-            ))
-        })?;
+        let addrs = self.cfg.listen.addrs();
+        if addrs.is_empty() {
+            return Err(CoreError::Generic(
+                "No TFTP listen addresses configured".to_string(),
+            ));
+        }
 
-        let local_addr = socket.local_addr().map_err(CoreError::Io)?;
-        self.cfg.listen_addr = local_addr.to_string();
-        *self.bound_addr.write() = Some(local_addr.to_string());
+        let mut actual_bound = Vec::new();
+        let mut sockets = Vec::new();
 
-        info!(addr = %self.cfg.listen_addr, "TFTP: Server listening");
+        for addr in addrs {
+            let socket = bind_udp_dual_stack(addr)?;
+            let local_addr = socket.local_addr().map_err(CoreError::Io)?;
+            actual_bound.push(local_addr.to_string());
+            sockets.push(Arc::new(socket));
+        }
 
-        let mut buf = [0u8; 1024];
-        let socket = Arc::new(socket);
+        let bound_str = actual_bound.join(", ");
+        *self.bound_addr.write() = Some(bound_str.clone());
+        info!(addr = %bound_str, "TFTP: Server listening");
+
+        let (shutdown_tx, _) = tokio::sync::watch::channel(());
+        let shutdown_tx_clone = shutdown_tx.clone();
         let mut bus_rx = ctx.bus().subscribe_system();
 
-        loop {
-            tokio::select! {
-                res = socket.recv_from(&mut buf) => {
-                    match res {
-                        Ok((size, src)) => {
-                            let data = buf[..size].to_vec();
-                            let socket_clone = socket.clone();
-                            let cfg_clone = self.cfg.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = handle_packet(socket_clone, src, data, cfg_clone).await {
-                                    debug!("TFTP error handling request from {}: {}", src, e);
+        let mut reader_handles = Vec::new();
+        for socket in sockets {
+            let cfg_clone = self.cfg.clone();
+            let mut shutdown_rx = shutdown_tx.subscribe();
+            reader_handles.push(tokio::spawn(async move {
+                let mut buf = [0u8; 1024];
+                loop {
+                    tokio::select! {
+                        res = socket.recv_from(&mut buf) => {
+                            match res {
+                                Ok((size, src)) => {
+                                    let data = buf[..size].to_vec();
+                                    let socket_clone = Arc::clone(&socket);
+                                    let cfg = cfg_clone.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = handle_packet(socket_clone, src, data, cfg).await {
+                                            debug!("TFTP error handling request from {}: {}", src, e);
+                                        }
+                                    });
                                 }
-                            });
+                                Err(e) => {
+                                    error!("TFTP socket recv error: {}", e);
+                                }
+                            }
                         }
-                        Err(e) => {
-                            error!("TFTP socket recv error: {}", e);
+                        _ = shutdown_rx.changed() => {
+                            break;
                         }
                     }
                 }
+            }));
+        }
+
+        loop {
+            tokio::select! {
                 event = bus_rx.recv() => {
                     if let Ok(timed) = event {
                         if matches!(timed.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
                             info!("TFTP: shutdown signal received");
+                            let _ = shutdown_tx_clone.send(());
                             break;
                         }
                     } else {
+                        let _ = shutdown_tx_clone.send(());
                         break; // Bus closed
                     }
                 }
             }
+        }
+
+        for h in reader_handles {
+            let _ = h.await;
         }
 
         Ok(())
@@ -202,7 +232,10 @@ async fn handle_rrq(
     let mut buffer = vec![0u8; cfg.block_size as usize];
 
     // TFTP uses a new port for the transfer (TID)
-    let session_socket = UdpSocket::bind("0.0.0.0:0").await?;
+    let session_socket = match src {
+        SocketAddr::V6(_) => UdpSocket::bind("[::]:0").await?,
+        SocketAddr::V4(_) => UdpSocket::bind("0.0.0.0:0").await?,
+    };
 
     loop {
         let n = file.read(&mut buffer).await?;
@@ -248,6 +281,76 @@ async fn handle_rrq(
     Ok(())
 }
 
+fn bind_udp_dual_stack(addr: SocketAddr) -> Result<tokio::net::UdpSocket, CoreError> {
+    match addr {
+        SocketAddr::V6(v6) if v6.ip().is_unspecified() => {
+            let socket_res = (|| -> std::io::Result<socket2::Socket> {
+                let s = socket2::Socket::new(
+                    socket2::Domain::IPV6,
+                    socket2::Type::DGRAM,
+                    Some(socket2::Protocol::UDP),
+                )?;
+                s.set_only_v6(false)?;
+                s.set_nonblocking(true)?;
+                s.bind(&socket2::SockAddr::from(addr))?;
+                Ok(s)
+            })();
+
+            match socket_res {
+                Ok(s) => {
+                    let std_sock: std::net::UdpSocket = s.into();
+                    tokio::net::UdpSocket::from_std(std_sock).map_err(CoreError::Io)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "TFTP: IPv6 dual-stack UDP bind to {} failed ({}), falling back to 0.0.0.0:{}",
+                        addr,
+                        e,
+                        v6.port()
+                    );
+                    let v4_addr = SocketAddr::from(([0, 0, 0, 0], v6.port()));
+                    let s = socket2::Socket::new(
+                        socket2::Domain::IPV4,
+                        socket2::Type::DGRAM,
+                        Some(socket2::Protocol::UDP),
+                    )
+                    .map_err(CoreError::Io)?;
+                    s.set_nonblocking(true).map_err(CoreError::Io)?;
+                    s.bind(&socket2::SockAddr::from(v4_addr))
+                        .map_err(CoreError::Io)?;
+                    let std_sock: std::net::UdpSocket = s.into();
+                    tokio::net::UdpSocket::from_std(std_sock).map_err(CoreError::Io)
+                }
+            }
+        }
+        SocketAddr::V6(_) => {
+            let s = socket2::Socket::new(
+                socket2::Domain::IPV6,
+                socket2::Type::DGRAM,
+                Some(socket2::Protocol::UDP),
+            )
+            .map_err(CoreError::Io)?;
+            s.set_only_v6(true).map_err(CoreError::Io)?;
+            s.set_nonblocking(true).map_err(CoreError::Io)?;
+            s.bind(&socket2::SockAddr::from(addr)).map_err(CoreError::Io)?;
+            let std_sock: std::net::UdpSocket = s.into();
+            tokio::net::UdpSocket::from_std(std_sock).map_err(CoreError::Io)
+        }
+        SocketAddr::V4(_) => {
+            let s = socket2::Socket::new(
+                socket2::Domain::IPV4,
+                socket2::Type::DGRAM,
+                Some(socket2::Protocol::UDP),
+            )
+            .map_err(CoreError::Io)?;
+            s.set_nonblocking(true).map_err(CoreError::Io)?;
+            s.bind(&socket2::SockAddr::from(addr)).map_err(CoreError::Io)?;
+            let std_sock: std::net::UdpSocket = s.into();
+            tokio::net::UdpSocket::from_std(std_sock).map_err(CoreError::Io)
+        }
+    }
+}
+
 async fn send_error(
     socket: &UdpSocket,
     src: SocketAddr,
@@ -275,12 +378,12 @@ mod tests {
         let bus = Arc::new(EventBus::new());
         let ctx = LanforgeContext::new(bus, State::new(), None);
         let cfg = TftpConfig {
-            listen_addr: "127.0.0.1:0".into(),
+            listen: "127.0.0.1:0".parse().unwrap(),
             root_dir: PathBuf::from("/tmp"),
             ..Default::default()
         };
         let service = TftpService::new(ctx, cfg);
-        assert_eq!(service.cfg.listen_addr, "127.0.0.1:0");
+        assert_eq!(service.cfg.listen.to_string(), "127.0.0.1:0");
         assert_eq!(service.cfg.root_dir, PathBuf::from("/tmp"));
     }
 }

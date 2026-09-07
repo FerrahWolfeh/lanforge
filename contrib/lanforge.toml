@@ -36,8 +36,8 @@ socket_path = "/run/lanforge/control.sock"
 [http]
 # REST API and Web Console interface.
 enabled = true
-# Listen address (port 8088 avoids Cockpit/Fedora conflict on port 9090).
-listen = "0.0.0.0:8088"
+# Listen address (dual-stack wildcard [::]:8088 covers IPv6 and IPv4).
+listen = "[::]:8088"
 # Enable HTTPS (inherits global system TLS if cert paths omitted).
 https_enabled = false
 # Allow plaintext HTTP for local network / reverse proxy access.
@@ -145,8 +145,8 @@ range_end = "::1fff"
 # Enables the built-in DNS resolver for the local network.
 enabled = true
 
-# Address and port where the DNS server will listen (standard: "0.0.0.0:53").
-listen = "0.0.0.0:53"
+# Address and port where the DNS server will listen (standard: "[::]:53" dual-stack, or list of addrs).
+listen = "[::]:53"
 
 # Local domain suffixes for internal hostname resolution.
 search_domains = ["lan"]
@@ -175,7 +175,7 @@ probe_interval = 3600
 [tftp]
 enabled = false
 root_dir = "/var/lib/lanforge/tftp"
-listen_addr = "0.0.0.0:69"
+listen_addr = "[::]:69"
 
 
 # [monitor] - Passive ARP/NDP Neighbor Discovery & Active Ping Sweeper

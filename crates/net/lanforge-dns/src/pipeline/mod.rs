@@ -37,7 +37,7 @@ impl<'a> DnsPipelineRequest<'a> {
             data,
             header,
             question,
-            src_ip,
+            src_ip: src_ip.to_canonical(),
             protocol,
         }
     }
