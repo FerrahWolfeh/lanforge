@@ -154,6 +154,8 @@ pub enum ServiceDependency {
     Interfaces,
     /// Wait for `PPPoE` WAN connection to be up (`LanforgeContext::is_pppoe_ready()`).
     PppoeWan,
+    /// Wait for a specific service by ID to be online (`LanforgeContext::get_service_state(id) == ServiceState::Online`).
+    Service(&'static str),
 }
 
 /// Core trait defining a service within the Lanforge system.

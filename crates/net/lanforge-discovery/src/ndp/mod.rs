@@ -44,6 +44,7 @@ use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceDependency};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::NeighborEvent;
+use lanforge_types::system::ServiceState;
 use lanforge_types::update::DeviceUpdate;
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use netlink_sys::SocketAddr;
@@ -144,7 +145,7 @@ impl DiscoveryService {
 
 impl AsyncService for DiscoveryService {
     fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[ServiceDependency::Interfaces]
+        &[ServiceDependency::Database, ServiceDependency::Interfaces]
     }
 
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
@@ -182,6 +183,9 @@ impl AsyncService for DiscoveryService {
     }
 
     async fn init(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+        if !self.cfg.enabled {
+            return Ok(());
+        }
         let primary_ifindex = self.target_ifindexes.first().copied().unwrap_or(0);
         let if_state = ctx.get_interface_state(primary_ifindex);
         let current_gua = if_state.gua;
@@ -221,6 +225,13 @@ impl AsyncService for DiscoveryService {
 
     #[allow(clippy::too_many_lines)]
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+        if !self.cfg.enabled {
+            info!("Discovery service is disabled in configuration.");
+            ctx.set_service_state("monitor", ServiceState::Inactive);
+            std::future::pending::<()>().await;
+            return Ok(());
+        }
+
         // Spin up the integrated ICMP active pinger helper if enabled
         let pinger = if self.cfg.ping_enabled {
             match IcmpPinger::new(ctx.clone()) {

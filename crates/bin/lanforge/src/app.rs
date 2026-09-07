@@ -26,6 +26,8 @@ use lanforge_dns::server::transport::dot::DotService;
 #[cfg(feature = "http")]
 use lanforge_http::HttpService;
 #[cfg(feature = "pppoe")]
+use lanforge_db::PppoeConfigStore;
+#[cfg(feature = "pppoe")]
 use lanforge_pppoe::PppoeService;
 #[cfg(feature = "ra")]
 use lanforge_ra::RaService;
@@ -91,7 +93,14 @@ impl Daemon {
                     self.ctx.reset_lifecycle();
 
                     // 4. Reload configuration from disk
-                    let new_cfg = Arc::new(Config::load());
+                    let mut new_cfg = Config::load();
+                    #[cfg(feature = "pppoe")]
+                    if let Ok(Some(pppoe_db)) = self.bootstrap.db.load_pppoe_config().await {
+                        new_cfg.pppoe_enabled = pppoe_db.enabled;
+                        new_cfg.pppoe_toml = pppoe_db.clone();
+                        self.ctx.update_pppoe_config(pppoe_db);
+                    }
+                    let new_cfg = Arc::new(new_cfg);
                     self.bootstrap.cfg = new_cfg.clone();
 
                     let _ = self
@@ -196,47 +205,47 @@ impl Daemon {
             async [ctx, cfg, db, log_db] => DbWorker::new(cfg.database.clone(), ctx, db, log_db),
 
             #[cfg(feature = "discovery")]
-            async [ctx, cfg] if cfg.mdns_toml.enabled => MdnsProber::new(cfg.mdns_toml.clone(), ctx),
+            async [ctx, cfg] => MdnsProber::new(cfg.mdns_toml.clone(), ctx),
 
             // 2. Network Discovery & Interface Monitoring
             #[cfg(feature = "discovery")]
-            async [ctx, rt_handle, messages, cfg] if cfg.monitor_toml.enabled => DiscoveryService::new(cfg.monitor_toml.clone(), rt_handle, messages.subscribe(), monitored_ifindexes.clone(), ctx),
+            async [ctx, rt_handle, messages, cfg] => DiscoveryService::new(cfg.monitor_toml.clone(), rt_handle, messages.subscribe(), monitored_ifindexes.clone(), ctx),
 
             // 3. IPv6 Protocol Services (RA)
             #[cfg(feature = "ra")]
-            async [ctx, cfg] if cfg.ra_enabled => RaService::new(cfg.to_ra_config(), ctx),
+            async [ctx, cfg] => RaService::new(cfg.to_ra_config(), ctx),
 
             // 4. Address Assignment (DHCPv4, DHCPv6)
             #[cfg(feature = "dhcp")]
-            async [ctx, cfg] if cfg.dhcpv4_enabled => Dhcpv4Service::new(cfg.to_dhcpv4_config(), ctx),
+            async [ctx, cfg] => Dhcpv4Service::new(cfg.to_dhcpv4_config(), ctx),
             #[cfg(feature = "dhcp")]
-            async [ctx, cfg] if cfg.dhcpv6_enabled => Dhcpv6Service::new(cfg.to_dhcpv6_config(), ctx),
+            async [ctx, cfg] => Dhcpv6Service::new(cfg.to_dhcpv6_config(), ctx),
 
             // 5. Application Services (DNS, API, TFTP)
             #[cfg(feature = "dns")]
-            async [ctx, cfg] if cfg.dns_enabled => DnsService::new(cfg.to_dns_config(), ctx),
+            async [ctx, cfg] => DnsService::new(cfg.to_dns_config(), ctx),
 
             #[cfg(all(feature = "dns", feature = "dns-dot"))]
-            async [ctx, cfg] if cfg.dns_enabled && cfg.dns_toml.dot_enabled => DotService::new(Arc::new(cfg.to_dns_config()), ctx),
+            async [ctx, cfg] => DotService::new(Arc::new(cfg.to_dns_config()), ctx),
 
             #[cfg(all(feature = "dns", feature = "dns-doq"))]
-            async [ctx, cfg] if cfg.dns_enabled && cfg.dns_toml.doq_enabled => DoqService::new(Arc::new(cfg.to_dns_config()), ctx),
+            async [ctx, cfg] => DoqService::new(Arc::new(cfg.to_dns_config()), ctx),
 
             #[cfg(feature = "uds")]
-            async [ctx, cfg, db, log_db] if cfg.api_toml.enabled => ControlService::new(Arc::new(cfg.to_api_config()), ctx, db, log_db),
+            async [ctx, cfg, db, log_db] => ControlService::new(Arc::new(cfg.to_api_config()), ctx, db, log_db),
 
             #[cfg(feature = "http")]
-            async [ctx, cfg, db, log_db] if cfg.http_toml.enabled => HttpService::new(Arc::new(cfg.to_http_config()), ctx, db, log_db),
+            async [ctx, cfg, db, log_db] => HttpService::new(Arc::new(cfg.to_http_config()), ctx, db, log_db),
 
             #[cfg(feature = "tftp")]
-            async [ctx, cfg] if cfg.tftp_toml.enabled => TftpService::new(
+            async [ctx, cfg] => TftpService::new(
                 ctx,
                 cfg.tftp_toml.clone(),
             ),
 
             #[cfg(feature = "pppoe")]
-            async [ctx, cfg] if cfg.pppoe_enabled => PppoeService::new(
-                cfg.pppoe_toml.clone(),
+            async [ctx, cfg] => PppoeService::new(
+                ctx.get_pppoe_config().unwrap_or_else(|| cfg.pppoe_toml.clone()),
                 ctx,
             ),
         });

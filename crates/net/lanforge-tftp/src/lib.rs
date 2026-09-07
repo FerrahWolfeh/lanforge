@@ -4,7 +4,8 @@ use crate::config::TftpConfig;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceDependency};
+use lanforge_types::system::ServiceState;
 use parking_lot::RwLock;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -48,6 +49,9 @@ impl TftpService {
 }
 
 impl AsyncService for TftpService {
+    fn dependencies(&self) -> &'static [ServiceDependency] {
+        &[ServiceDependency::Interfaces]
+    }
     fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
         let listen = self
             .bound_addr
@@ -68,6 +72,13 @@ impl AsyncService for TftpService {
     }
 
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+        if !self.cfg.enabled {
+            info!("TFTP service is disabled in configuration.");
+            ctx.set_service_state("tftp", ServiceState::Inactive);
+            std::future::pending::<()>().await;
+            return Ok(());
+        }
+
         let socket = UdpSocket::bind(&self.cfg.listen_addr).await.map_err(|e| {
             CoreError::Generic(format!(
                 "Failed to bind TFTP to {}: {}",
@@ -117,6 +128,12 @@ impl AsyncService for TftpService {
             }
         }
 
+        Ok(())
+    }
+
+    #[allow(clippy::unused_async_trait_impl)]
+    async fn cleanup(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
+        *self.bound_addr.write() = None;
         Ok(())
     }
 }

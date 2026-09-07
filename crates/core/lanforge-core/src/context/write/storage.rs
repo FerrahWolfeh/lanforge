@@ -8,6 +8,7 @@ use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
 use lanforge_types::update::DeviceUpdate;
 
@@ -115,6 +116,10 @@ impl LanforgeContext {
             .publish(LanforgeEvent::System(SystemEvent::ConfigRaChanged));
     }
 
+    /// Updates the dynamic `PPPoE` configuration in context.
+    pub fn update_pppoe_config(&self, config: PppoeConfig) {
+        self.inner.config.write().pppoe = Some(config);
+    }
 
     /// Updates the configured DNS upstreams and publishes the change event.
     pub fn update_dns_upstreams(&self, upstreams: Vec<UpstreamTarget>) {

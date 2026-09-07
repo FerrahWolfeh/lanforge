@@ -199,6 +199,11 @@ impl Bootstrapper {
             }
         }
 
+        #[cfg(feature = "pppoe")]
+        {
+            ctx.update_pppoe_config(cfg.pppoe_toml.clone());
+        }
+
         let _ = bus.publish(LanforgeEvent::System(SystemEvent::StateReady));
 
         // --- PHASE 2: Netlink Setup ---
@@ -556,6 +561,7 @@ impl Bootstrapper {
                     info!("Seeded PPPoE configuration from TOML into database");
                 }
                 if let Some(loaded) = db.load_pppoe_config().await? {
+                    cfg.pppoe_enabled = loaded.enabled;
                     cfg.pppoe_toml = loaded;
                 }
             }

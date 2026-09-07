@@ -1,4 +1,5 @@
 use lanforge_types::network::dns::TransportProtocol;
+use lanforge_types::system::ServiceState;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,7 +40,10 @@ impl DotService {
 
 impl AsyncService for DotService {
     fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[ServiceDependency::Database]
+        &[
+            ServiceDependency::Database,
+            ServiceDependency::Service("dns"),
+        ]
     }
 
     fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
@@ -53,6 +57,9 @@ impl AsyncService for DotService {
 
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         let Some(addr_str) = &self.cfg.dot_listen else {
+            info!("DoT is disabled in configuration.");
+            ctx.set_service_state("dot", ServiceState::Inactive);
+            std::future::pending::<()>().await;
             return Ok(());
         };
 

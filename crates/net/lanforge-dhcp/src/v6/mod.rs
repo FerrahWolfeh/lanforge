@@ -52,7 +52,7 @@ use lanforge_types::device::IPv6State;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::dhcp::Dhcpv6Pool;
-use lanforge_types::system::RunResult;
+use lanforge_types::system::{RunResult, ServiceState};
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
 use std::borrow::Cow;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
@@ -151,12 +151,17 @@ impl AsyncService for Dhcpv6Service {
     }
 
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
-        if !self.config.enabled {
-            info!("DHCPv6 is disabled in config.");
-            return Ok(());
-        }
-
         loop {
+            let options = ctx.get_dhcp_options();
+            if !self.config.enabled || !options.v6.enabled {
+                info!("DHCPv6: Service disabled in configuration — server idle");
+                ctx.set_service_state("dhcpv6", ServiceState::Inactive);
+                match self.wait_for_config_change_or_shutdown().await? {
+                    RunResult::Shutdown => break,
+                    RunResult::ConfigChanged => continue,
+                }
+            }
+
             let pools = ctx.get_dhcp_v6_pools();
 
             if pools.is_empty() {

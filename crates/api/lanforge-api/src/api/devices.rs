@@ -35,6 +35,9 @@ fn deserialize_string_or_empty<'de, D>(deserializer: D) -> Result<String, D::Err
 where
     D: Deserializer<'de>,
 {
+    if !deserializer.is_human_readable() {
+        return String::deserialize(deserializer);
+    }
     let opt = Option::<String>::deserialize(deserializer)?;
     Ok(opt.map(|s| s.trim().to_string()).unwrap_or_default())
 }

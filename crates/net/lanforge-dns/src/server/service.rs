@@ -19,6 +19,7 @@ use lanforge_types::network::dns::{
     DnsRecordEntry, DnsRecordType, DnsRequest, DnsResponse, DnsStatsResponse, TransportProtocol,
     upstream::{UpstreamProtocol, UpstreamTarget},
 };
+use lanforge_types::system::ServiceState;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -228,6 +229,8 @@ impl AsyncService for DnsService {
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         if !self.cfg.enabled {
             info!("DNS Service disabled in config");
+            ctx.set_service_state("dns", ServiceState::Inactive);
+            std::future::pending::<()>().await;
             return Ok(());
         }
 

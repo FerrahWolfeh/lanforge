@@ -86,10 +86,15 @@ impl ClientContext {
             };
         }
 
+        self.ctx.update_pppoe_config(cfg);
+
         let _ = self
             .ctx
             .bus()
-            .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+            .publish(LanforgeEvent::System(SystemEvent::ServiceControl {
+                id: "pppoe".to_string(),
+                action: ServiceAction::Restart,
+            }));
 
         Response::Success(SimpleSuccess {
             message: "PPPoE configuration updated successfully".to_string(),

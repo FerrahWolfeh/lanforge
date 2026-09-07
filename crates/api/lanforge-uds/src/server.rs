@@ -21,6 +21,7 @@ use tokio::net::{TcpListener, UnixListener};
 use tracing::{debug, error, info, warn};
 
 use lanforge_core::service::{AsyncService, ServiceDependency};
+use lanforge_types::system::ServiceState;
 
 #[lanforge_macros::lanforge_service(
     id = "control",
@@ -138,6 +139,12 @@ impl AsyncService for ControlService {
 
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
+        if !cfg.enabled {
+            info!("Control API: Service disabled in configuration.");
+            ctx.set_service_state("control", ServiceState::Inactive);
+            std::future::pending::<()>().await;
+            return Ok(());
+        }
         let listener = Self::setup_unix_listener(&cfg.socket_path)?;
 
         let mut bus_rx = ctx.bus().subscribe();

@@ -32,6 +32,7 @@
 	import WifiIcon from "@lucide/svelte/icons/wifi";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import ServerIcon from "@lucide/svelte/icons/server";
+	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
 
 	let statusData = $state<StatusResponse | null>(null);
 	let dnsData = $state<DnsStatsResponse | null>(null);
@@ -195,7 +196,7 @@
 			tag: "RADVD / SLAAC",
 			proto: "ICMPv6 (NDP)",
 			desc: "Autoconfiguration prefix announcements (GUA/ULA)",
-			href: "/network",
+			href: "/network/ra",
 		},
 		{
 			id: "dhcpv4",
@@ -203,7 +204,7 @@
 			tag: "Dynamic Leases",
 			proto: "UDP Port 67",
 			desc: "IPv4 address allocation with option 3 (gateway) & 6 (DNS)",
-			href: "/dhcp",
+			href: "/dhcp/server",
 		},
 		{
 			id: "dhcpv6",
@@ -211,7 +212,7 @@
 			tag: "Stateful / Stateless",
 			proto: "UDP Port 547",
 			desc: "IPv6 stateful address & prefix delegation",
-			href: "/dhcp",
+			href: "/dhcp/scopes",
 		},
 		{
 			id: "dns",
@@ -219,7 +220,7 @@
 			tag: "DNS Cache & Block",
 			proto: "UDP/TCP Port 53",
 			desc: "Upstream recursive forwarding, cache, & adblock filtering",
-			href: "/dns",
+			href: "/dns/resolver",
 		},
 		{
 			id: "tftp",
@@ -227,7 +228,7 @@
 			tag: "PXE Boot",
 			proto: "UDP Port 69",
 			desc: "Network boot firmware & image distribution server",
-			href: "/system",
+			href: "/system/services",
 		},
 		{
 			id: "pppoe",
@@ -235,7 +236,7 @@
 			tag: "Relay / Tunnel",
 			proto: "PPPoverEthernet",
 			desc: "DSL/FTTH encapsulation & point-to-point tunneling",
-			href: "/system",
+			href: "/network/pppoe",
 		},
 	];
 </script>
@@ -343,9 +344,18 @@
 							>Core Subsystems & Capabilities</Card.Title
 						>
 					</div>
-					<Badge variant="outline" class="font-mono text-[10px] uppercase">
-						All Engines Operational
-					</Badge>
+					<div class="flex items-center gap-2">
+						<Badge variant="outline" class="font-mono text-[10px] uppercase">
+							All Engines Operational
+						</Badge>
+						<a
+							href="/system/services"
+							class="text-xs text-muted-foreground hover:text-primary transition-colors flex items-center gap-1 font-medium"
+						>
+							<span>Services</span>
+							<ArrowRightIcon class="size-3" />
+						</a>
+					</div>
 				</div>
 			</Card.Header>
 			<Card.Content class="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">

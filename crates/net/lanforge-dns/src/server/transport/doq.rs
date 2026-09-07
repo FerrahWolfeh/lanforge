@@ -1,4 +1,5 @@
 use lanforge_types::network::dns::TransportProtocol;
+use lanforge_types::system::ServiceState;
 use quinn::{Endpoint, ServerConfig, TransportConfig};
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,7 +37,10 @@ impl DoqService {
 
 impl AsyncService for DoqService {
     fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[ServiceDependency::Database]
+        &[
+            ServiceDependency::Database,
+            ServiceDependency::Service("dns"),
+        ]
     }
 
     fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
@@ -50,6 +54,9 @@ impl AsyncService for DoqService {
 
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         let Some(addr) = self.cfg.doq_listen else {
+            info!("DoQ is disabled in configuration.");
+            ctx.set_service_state("doq", ServiceState::Inactive);
+            std::future::pending::<()>().await;
             return Ok(());
         };
 

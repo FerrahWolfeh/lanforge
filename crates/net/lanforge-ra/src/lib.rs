@@ -59,7 +59,7 @@ use lanforge_types::network::ra::{
     ICMPV6_TYPE_RS, MAX_INITIAL_RTR_ADVERT_INTERVAL, MAX_INITIAL_RTR_ADVERTISEMENTS,
     MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS,
 };
-use lanforge_types::system::{RaStatusResponse, RunResult};
+use lanforge_types::system::{RaStatusResponse, RunResult, ServiceState};
 use lanforge_types::update::DeviceUpdate;
 
 pub use packet::{build_ra_packet, icmpv6_checksum};
@@ -544,6 +544,7 @@ impl AsyncService for RaService {
             let ra_server_cfg = ctx.get_ra_server_config();
             if !ra_server_cfg.enabled {
                 info!("RA: Service disabled via runtime config — server idle");
+                ctx.set_service_state("ra", ServiceState::Inactive);
                 let _ = ctx.apply(DeviceUpdate::RaStatusUpdated { status: None });
                 match self.wait_for_config_change_or_shutdown().await? {
                     RunResult::Shutdown => break,
@@ -563,6 +564,7 @@ impl AsyncService for RaService {
                 }
             }
 
+            ctx.set_service_state("ra", ServiceState::Online);
             match self.run_server(current_cfg).await? {
                 RunResult::Shutdown => break,
                 RunResult::ConfigChanged => {}

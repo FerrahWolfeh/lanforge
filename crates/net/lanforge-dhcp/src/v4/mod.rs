@@ -43,7 +43,7 @@ use lanforge_types::device::IPv4State;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
-use lanforge_types::system::RunResult;
+use lanforge_types::system::{RunResult, ServiceState};
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
 use server::{DhcpServer, HandleResult};
 use std::net::Ipv4Addr;
@@ -160,6 +160,16 @@ impl AsyncService for Dhcpv4Service {
 
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         loop {
+            let options = ctx.get_dhcp_options();
+            if !self.cfg.enabled || !options.v4.enabled {
+                info!("DHCPv4: Service disabled in configuration — server idle");
+                ctx.set_service_state("dhcpv4", ServiceState::Inactive);
+                match self.wait_for_config_change_or_shutdown().await? {
+                    RunResult::Shutdown => break,
+                    RunResult::ConfigChanged => continue,
+                }
+            }
+
             let pools = ctx.get_dhcp_v4_pools();
 
             if pools.is_empty() {
@@ -170,6 +180,7 @@ impl AsyncService for Dhcpv4Service {
                 }
             }
 
+            ctx.set_service_state("dhcpv4", ServiceState::Online);
             match self.run_server(pools).await? {
                 RunResult::Shutdown => break,
                 RunResult::ConfigChanged => {}

@@ -42,6 +42,7 @@ import type {
 	SetupResponse,
 	SetupStatusResponse,
 	StatusResponse,
+	ServiceBanner,
 	UserInfo,
 	WhoisResponse,
 	PppoeConfig,
@@ -599,6 +600,20 @@ export const raTrigger = () => post<void>('/ra/trigger');
 
 export const getSetupStatus = () => get<SetupStatusResponse>('/system/setup-status');
 export const submitSetup = (payload: SetupPayload) => post<SetupResponse>('/system/setup', payload);
+
+// ---------------------------------------------------------------------------
+// Service Control
+// ---------------------------------------------------------------------------
+
+export const serviceBanners = async (): Promise<ServiceBanner[]> => {
+	const res = await get<{ banners: ServiceBanner[] }>('/service_banners');
+	return res?.banners ?? [];
+};
+
+export const controlService = (
+	id: string,
+	action: 'start' | 'stop' | 'restart' | 'Start' | 'Stop' | 'Restart'
+) => post<void>(`/service/${encodeURIComponent(id)}/control`, { action: action.toLowerCase() });
 
 // ---------------------------------------------------------------------------
 // SSE helpers

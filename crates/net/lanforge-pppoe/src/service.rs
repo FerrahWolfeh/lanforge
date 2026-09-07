@@ -15,7 +15,9 @@ use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceDependency};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::pppoe::{PppoeDataplane, PppoeNftablesConfig};
-use lanforge_types::system::{PppoeSessionState, PppoeStatusResponse, ServiceAction};
+use lanforge_types::system::{
+    PppoeSessionState, PppoeStatusResponse, ServiceAction, ServiceState,
+};
 use lanforge_types::update::DeviceUpdate;
 use pnet::datalink::interfaces;
 use std::borrow::Cow;
@@ -43,7 +45,10 @@ pub struct PppoeService {
 
 impl PppoeService {
     #[must_use]
-    pub const fn new(cfg: PppoeConfig, ctx: LanforgeContext) -> Self {
+    pub fn new(mut cfg: PppoeConfig, ctx: LanforgeContext) -> Self {
+        if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
+            cfg = dynamic_cfg;
+        }
         Self {
             cfg,
             ctx,
@@ -358,6 +363,18 @@ impl AsyncService for PppoeService {
     }
 
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+        if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
+            self.cfg = dynamic_cfg;
+        }
+
+        if !self.cfg.enabled {
+            info!("PPPoE service is disabled in configuration.");
+            ctx.set_service_state("pppoe", ServiceState::Inactive);
+            ctx.set_pppoe_ready(true);
+            std::future::pending::<()>().await;
+            return Ok(());
+        }
+
         if self.cfg.dataplane == PppoeDataplane::Kernel && !Path::new("/dev/ppp").exists() {
             warn!(
                 service = "PPPoE",
@@ -368,7 +385,9 @@ impl AsyncService for PppoeService {
                 .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionDown {
                     reason: "/dev/ppp device unavailable".into(),
                 }));
+            ctx.set_service_state("pppoe", ServiceState::Error);
             ctx.set_pppoe_ready(true);
+            std::future::pending::<()>().await;
             return Ok(());
         }
 

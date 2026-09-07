@@ -138,7 +138,10 @@ export interface StatusResponse {
 export function normalizeServices(status?: StatusResponse | null): ServiceBanner[] {
 	if (!status) return [];
 	if (Array.isArray(status.service_banners) && status.service_banners.length > 0) {
-		return status.service_banners;
+		return status.service_banners.map((b) => ({
+			...b,
+			id: b.id || b.name.toLowerCase().replace(/\s+/g, '_')
+		}));
 	}
 	if (status.services && typeof status.services === 'object') {
 		return Object.entries(status.services).map(([name, item]) => {
@@ -151,7 +154,13 @@ export function normalizeServices(status?: StatusResponse | null): ServiceBanner
 					stats[k] = typeof v === 'object' ? JSON.stringify(v) : String(v);
 				}
 			}
-			return { name, state, uptime_secs, stats };
+			return {
+				id: typeof svc.id === 'string' && svc.id ? svc.id : name.toLowerCase().replace(/\s+/g, '_'),
+				name,
+				state,
+				uptime_secs,
+				stats
+			};
 		});
 	}
 	return [];

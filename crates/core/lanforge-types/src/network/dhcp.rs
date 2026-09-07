@@ -35,9 +35,12 @@ use std::net::Ipv4Addr;
 pub fn empty_string_as_none<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
-    T: std::str::FromStr,
+    T: std::str::FromStr + serde::Deserialize<'de>,
     T::Err: std::fmt::Display,
 {
+    if !deserializer.is_human_readable() {
+        return Option::<T>::deserialize(deserializer);
+    }
     let opt = Option::<String>::deserialize(deserializer)?;
     match opt.as_deref().map(str::trim) {
         None | Some("") => Ok(None),

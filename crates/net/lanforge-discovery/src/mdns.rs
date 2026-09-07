@@ -24,6 +24,7 @@
 use lanforge_macros::ServiceConfig;
 use lanforge_types::device::DeviceClass;
 use lanforge_types::network::{DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType};
+use lanforge_types::system::ServiceState;
 use lanforge_types::update::DeviceUpdate;
 use serde::{Deserialize, Serialize};
 
@@ -38,7 +39,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
 
@@ -110,6 +111,13 @@ impl AsyncService for MdnsProber {
     }
 
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+        if !self.cfg.enabled {
+            info!("mDNS prober is disabled in configuration.");
+            ctx.set_service_state("mdns", ServiceState::Inactive);
+            std::future::pending::<()>().await;
+            return Ok(());
+        }
+
         let (tx, rx) = mpsc::channel(32);
         self.tx = tx.clone();
 

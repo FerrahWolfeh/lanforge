@@ -5,12 +5,20 @@
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { Separator } from "$lib/components/ui/separator";
 	import * as AlertDialog from "$lib/components/ui/alert-dialog";
-	import { status, scan, reload } from "$lib/api/client";
+	import { status, scan, reload, controlService } from "$lib/api/client";
 	import { normalizeServices, type StatusResponse } from "$lib/api/types";
+	import { getServiceMeta } from "$lib/services";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import ZapIcon from "@lucide/svelte/icons/zap";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+	import RotateCwIcon from "@lucide/svelte/icons/rotate-cw";
+	import PlayIcon from "@lucide/svelte/icons/play";
+	import SquareIcon from "@lucide/svelte/icons/square";
+	import SlidersIcon from "@lucide/svelte/icons/sliders";
+	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
+	import ExternalLinkIcon from "@lucide/svelte/icons/external-link";
+	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import HardDriveIcon from "@lucide/svelte/icons/hard-drive";
 	import NetworkIcon from "@lucide/svelte/icons/network";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
@@ -27,6 +35,22 @@
 	let loading = $state(true);
 	let reloading = $state(false);
 	let scanning = $state(false);
+	let actionLoading = $state<Record<string, string | null>>({});
+
+	async function executeServiceAction(id: string, action: "Start" | "Stop" | "Restart") {
+		actionLoading[id] = action;
+		try {
+			await controlService(id, action);
+			toast.success(`Service '${id}' received ${action.toLowerCase()} command`);
+			setTimeout(async () => {
+				await loadStatus();
+				actionLoading[id] = null;
+			}, 750);
+		} catch (err) {
+			actionLoading[id] = null;
+			toast.error(`Failed to ${action.toLowerCase()} service: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
 
 	async function loadStatus() {
 		loading = true;
@@ -358,19 +382,30 @@
 	<!-- Services -->
 	<Card.Root class="md:col-span-2 xl:col-span-3">
 		<Card.Header class="pb-3">
-			<div class="flex items-center justify-between">
+			<div class="flex flex-wrap items-center justify-between gap-2">
 				<div>
 					<Card.Title class="text-base font-semibold">Decoupled Subsystem Services</Card.Title>
 					<Card.Description class="text-xs">
 						Supervised background daemons, transports, and telemetry banners
 					</Card.Description>
 				</div>
-				{#if !loading && serviceList.length > 0}
-					{@const onlineCount = serviceList.filter(s => s.state.toLowerCase() === "online" || s.state.toLowerCase() === "active").length}
-					<Badge variant="outline" class="font-mono text-xs">
-						{onlineCount} / {serviceList.length} Online
-					</Badge>
-				{/if}
+				<div class="flex items-center gap-2">
+					{#if !loading && serviceList.length > 0}
+						{@const onlineCount = serviceList.filter(s => s.state.toLowerCase() === "online" || s.state.toLowerCase() === "active").length}
+						<Badge variant="outline" class="font-mono text-xs">
+							{onlineCount} / {serviceList.length} Online
+						</Badge>
+					{/if}
+					<Button
+						variant="outline"
+						size="sm"
+						href="/system/services"
+						class="text-xs gap-1.5 h-7 px-2.5 font-medium hover:text-primary"
+					>
+						<span>All Services</span>
+						<ArrowRightIcon class="size-3" />
+					</Button>
+				</div>
 			</div>
 		</Card.Header>
 		<Card.Content class="p-0">
@@ -391,38 +426,112 @@
 			{:else}
 				<div class="divide-border divide-y">
 					{#each serviceList as svc (svc.name)}
-						{@const SvcIcon = serviceIcon(svc.name, svc.id)}
+						{@const meta = getServiceMeta(svc.id, svc.name)}
+						{@const SvcIcon = meta.icon}
 						{@const StatusIcon = stateIcon(svc.state)}
+						{@const svcId = svc.id || svc.name.toLowerCase().replace(/\s+/g, "_")}
+						{@const isBusy = !!actionLoading[svcId]}
+						{@const currentAct = actionLoading[svcId]}
+						{@const isInactive = svc.state.toLowerCase() === "inactive" || svc.state.toLowerCase() === "offline"}
+
 						<div class="flex flex-col gap-2.5 px-5 py-3.5 transition-colors hover:bg-muted/30">
-							<div class="flex flex-wrap items-center justify-between gap-2">
-								<div class="flex items-center gap-2.5">
-									<div class="bg-muted flex size-8 items-center justify-center rounded-md border">
-										<SvcIcon class="size-4 text-foreground" />
+							<div class="flex flex-wrap items-center justify-between gap-3">
+								<a
+									href={meta.configHref}
+									class="flex items-center gap-2.5 group/svc flex-1 min-w-[200px]"
+								>
+									<div class="bg-muted flex size-8 items-center justify-center rounded-md border group-hover/svc:border-primary/40 transition-colors">
+										<SvcIcon class="size-4 text-foreground group-hover/svc:text-primary transition-colors" />
 									</div>
 									<div class="flex flex-col">
 										<div class="flex items-center gap-2">
-											<span class="text-foreground text-sm font-semibold capitalize">
-												{svc.name.replace(/_/g, " ")}
+											<span class="text-foreground text-sm font-semibold capitalize group-hover/svc:text-primary transition-colors">
+												{meta.name}
 											</span>
 											{#if svc.id}
 												<span class="bg-muted text-muted-foreground rounded px-1.5 py-0.5 font-mono text-[10px]">
 													{svc.id}
 												</span>
 											{/if}
+											<span class="text-muted-foreground text-[10px] hidden sm:inline">
+												• {meta.tag}
+											</span>
 										</div>
 										<span class="text-muted-foreground text-xs">
 											{#if svc.uptime_secs > 0}
 												Uptime: {formatUptime(svc.uptime_secs)}
 											{:else}
-												Stopped / Offline
+												Stopped / Standby
 											{/if}
 										</span>
 									</div>
+								</a>
+
+								<div class="flex flex-wrap items-center gap-2">
+									<Badge variant={stateBadgeVariant(svc.state)} class="capitalize text-xs gap-1.5">
+										<StatusIcon class={["size-3.5", stateColor(svc.state), svc.state === "starting" ? "animate-spin" : ""].join(" ")} />
+										{svc.state}
+									</Badge>
+
+									<Button
+										variant="outline"
+										size="sm"
+										href={meta.configHref}
+										class="text-xs gap-1 h-7 px-2.5 font-normal"
+									>
+										<SlidersIcon class="size-3" />
+										<span>Configure</span>
+										<ExternalLinkIcon class="size-2.5 text-muted-foreground" />
+									</Button>
+
+									{#if meta.canControl}
+										{#if isInactive}
+											<Button
+												variant="default"
+												size="sm"
+												disabled={isBusy}
+												onclick={() => executeServiceAction(svcId, "Start")}
+												class="text-xs gap-1 h-7 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white"
+											>
+												{#if isBusy && currentAct === "Start"}
+													<Loader2Icon class="size-3 animate-spin" />
+												{:else}
+													<PlayIcon class="size-3 fill-current" />
+												{/if}
+												Start
+											</Button>
+										{:else}
+											<Button
+												variant="secondary"
+												size="sm"
+												disabled={isBusy}
+												onclick={() => executeServiceAction(svcId, "Restart")}
+												class="text-xs gap-1 h-7 px-2"
+											>
+												{#if isBusy && currentAct === "Restart"}
+													<Loader2Icon class="size-3 animate-spin" />
+												{:else}
+													<RotateCwIcon class="size-3" />
+												{/if}
+												Restart
+											</Button>
+											<Button
+												variant="outline"
+												size="sm"
+												disabled={isBusy}
+												onclick={() => executeServiceAction(svcId, "Stop")}
+												class="text-xs gap-1 h-7 px-2 text-destructive hover:bg-destructive/10"
+											>
+												{#if isBusy && currentAct === "Stop"}
+													<Loader2Icon class="size-3 animate-spin" />
+												{:else}
+													<SquareIcon class="size-3 fill-current" />
+												{/if}
+												Stop
+											</Button>
+										{/if}
+									{/if}
 								</div>
-								<Badge variant={stateBadgeVariant(svc.state)} class="capitalize text-xs gap-1.5">
-									<StatusIcon class={["size-3.5", stateColor(svc.state), svc.state === "starting" ? "animate-spin" : ""].join(" ")} />
-									{svc.state}
-								</Badge>
 							</div>
 
 							{#if Object.keys(svc.stats).length > 0}

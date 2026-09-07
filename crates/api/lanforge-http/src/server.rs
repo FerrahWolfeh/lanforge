@@ -23,6 +23,7 @@ use lanforge_core::{
 use lanforge_db_core::{DatabaseStore, LogStore};
 use lanforge_dns::server::transport::tls as tls_utils;
 use lanforge_macros::lanforge_service;
+use lanforge_types::system::ServiceState;
 #[cfg(feature = "webui")]
 use lanforge_webui::WebUiAssets;
 use tokio::net::TcpListener;
@@ -132,6 +133,12 @@ impl AsyncService for HttpService {
     #[allow(clippy::too_many_lines)]
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
+        if !cfg.enabled {
+            info!("HTTP: Service disabled in configuration.");
+            ctx.set_service_state("http", ServiceState::Inactive);
+            std::future::pending::<()>().await;
+            return Ok(());
+        }
         let addr = cfg.listen;
 
         let state = AppState {

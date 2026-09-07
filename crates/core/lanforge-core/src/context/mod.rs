@@ -64,6 +64,7 @@ use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
 use lanforge_types::system::{ServiceBanner, ServiceState, SystemStatus};
 
@@ -199,6 +200,8 @@ pub struct DynamicConfig {
     pub dns_adblock_urls: Vec<AdblockUrlEntry>,
     /// Configured DNS custom adblock rules (allowlist & blocklist).
     pub dns_adblock_rules: Vec<AdblockRuleEntry>,
+    /// Configured `PPPoE` client runtime configuration.
+    pub pppoe: Option<PppoeConfig>,
 }
 
 /// Internal state shared behind an `Arc`.
@@ -552,7 +555,11 @@ impl LanforgeContext {
         )
     }
 
-
+    /// Returns the current dynamic `PPPoE` configuration, if configured.
+    #[must_use]
+    pub fn get_pppoe_config(&self) -> Option<PppoeConfig> {
+        self.inner.config.read().pppoe.clone()
+    }
 
     #[must_use]
     pub fn get_dns_upstreams(&self) -> Vec<UpstreamTarget> {
@@ -720,7 +727,26 @@ impl LanforgeContext {
             ServiceDependency::Database => self.wait_for_db().await,
             ServiceDependency::Interfaces => self.wait_for_interfaces().await,
             ServiceDependency::PppoeWan => self.wait_for_pppoe().await,
+            ServiceDependency::Service(id) => self.wait_for_service(id).await,
         }
+    }
+
+    /// Blocks until the specified service is `Online`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CoreError::Shutdown` if the system shuts down before the service is online.
+    pub async fn wait_for_service(&self, id: &str) -> Result<(), CoreError> {
+        self.wait_for_condition(
+            |ctx| ctx.get_service_state(id) == ServiceState::Online,
+            |event| {
+                matches!(
+                    event,
+                    LanforgeEvent::System(SystemEvent::ServiceReady { name }) if name == id
+                )
+            },
+        )
+        .await
     }
 
     /// Generic async wait helper. Blocks until `is_ready()` returns true

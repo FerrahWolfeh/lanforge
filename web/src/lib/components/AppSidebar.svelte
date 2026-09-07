@@ -22,6 +22,7 @@
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import RadioIcon from "@lucide/svelte/icons/radio";
 	import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
+	import CpuIcon from "@lucide/svelte/icons/cpu";
 
 	const navGroups = [
 		{
@@ -98,6 +99,7 @@
 			label: "System",
 			items: [
 				{ label: "Status", href: "/system", icon: ServerIcon },
+				{ label: "Services", href: "/system/services", icon: CpuIcon },
 				{
 					label: "Database",
 					href: "/system/database",
