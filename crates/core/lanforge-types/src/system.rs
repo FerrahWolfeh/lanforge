@@ -275,6 +275,8 @@ pub struct SetupStatusResponse {
     pub is_provisioned: bool,
     pub detected_lan_iface: String,
     pub detected_gateway: Option<Ipv4Addr>,
+    #[serde(default)]
+    pub detected_subnet_mask: Option<Ipv4Addr>,
     pub detected_ula_prefix: String,
     pub interfaces: Vec<NetworkInterfaceInfo>,
 }

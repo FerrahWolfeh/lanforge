@@ -16,6 +16,7 @@
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import SearchIcon from "@lucide/svelte/icons/search";
 	import CopyIcon from "@lucide/svelte/icons/copy";
+	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import type { DnsUpstreamEntry } from "$lib/api/types";
 
 	let {
@@ -66,23 +67,7 @@
 				  Array.isArray((upstreams as any).upstreams)
 				? (upstreams as any).upstreams
 				: [];
-		if (list.length > 0) return list;
-		return [
-			{
-				target: "1.1.1.1:53",
-				protocol: "UDP",
-				domain: "Global (*)",
-				status: "Healthy (System)",
-				rtt_ewma_us: 1200,
-			},
-			{
-				target: "8.8.8.8:53",
-				protocol: "UDP",
-				domain: "Global (*)",
-				status: "Healthy (System)",
-				rtt_ewma_us: 2100,
-			},
-		] as DnsUpstreamEntry[];
+		return list;
 	});
 </script>
 
@@ -96,6 +81,10 @@
 				<Card.Title class="text-base">Upstream DNS Servers</Card.Title>
 			</div>
 			<div class="flex items-center gap-2">
+				<Button size="sm" variant="ghost" href="/dns/settings" class="gap-1 text-xs text-muted-foreground hover:text-foreground">
+					<SlidersIcon class="size-3.5" />
+					Settings
+				</Button>
 				<!-- Interactive Dig Modal Trigger Button -->
 				<Button size="sm" variant="outline" onclick={onOpenDigModal}>
 					<ZapIcon
@@ -119,19 +108,23 @@
 					<Skeleton class="h-10 w-full" />
 				{/each}
 			</div>
-		{:else}
-			{#if upstreams.length === 0}
-				<div
-					class="bg-indigo-500/10 border-b border-indigo-500/20 px-4 py-2 text-[11px] font-mono text-indigo-300 flex items-center justify-between"
-				>
-					<span>Default system DNS resolvers active</span>
-					<Badge
-						variant="outline"
-						class="text-[9px] uppercase border-indigo-500/30 text-indigo-300"
-						>System Fallback</Badge
-					>
+		{:else if displayUpstreams.length === 0}
+			<div class="flex flex-col items-center justify-center p-8 text-center">
+				<ServerIcon class="size-8 text-muted-foreground/40 mb-2" />
+				<p class="text-sm font-medium text-foreground">No Upstream Servers Configured</p>
+				<p class="text-xs text-muted-foreground mt-1 max-w-xs">
+					Queries for external domains will return REFUSED until upstream servers are added.
+				</p>
+				<div class="flex items-center gap-2 mt-4">
+					<Button size="sm" variant="outline" href="/dns/settings">
+						Open DNS Settings
+					</Button>
+					<Button size="sm" onclick={onAddUpstream}>
+						Add Upstream
+					</Button>
 				</div>
-			{/if}
+			</div>
+		{:else}
 			<div class="max-h-[380px] overflow-auto">
 				<Table.Root>
 					<Table.Header

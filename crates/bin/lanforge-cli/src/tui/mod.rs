@@ -215,6 +215,8 @@ fn handle_tui_key_event(
                                         DnsRecordType::A
                                     } else if answer_str.parse::<Ipv6Addr>().is_ok() {
                                         DnsRecordType::AAAA
+                                    } else if answer_str.starts_with("dev:") {
+                                        DnsRecordType::Device
                                     } else {
                                         DnsRecordType::CNAME
                                     };

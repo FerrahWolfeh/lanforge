@@ -128,6 +128,22 @@ impl ClientContext {
         }
     }
 
+    pub async fn handle_dns_upstream_clear(&self) -> Response {
+        match self.db.clear_dns_upstreams().await {
+            Ok(_) => {
+                if let Err(e) = self.reload_dns_upstreams_to_context().await {
+                    return Response::Error { error: e };
+                }
+                Response::Success(SimpleSuccess {
+                    message: "All upstreams cleared successfully".into(),
+                })
+            }
+            Err(e) => Response::Error {
+                error: format!("Failed to clear upstreams: {e}"),
+            },
+        }
+    }
+
     async fn reload_dns_upstreams_to_context(&self) -> Result<(), String> {
         let rows = self
             .db

@@ -264,6 +264,7 @@ impl Display for RewriteAnswer {
 pub enum BlockingMode {
     /// Return NXDOMAIN (default).
     #[default]
+    #[serde(rename = "nxdomain", alias = "nx_domain")]
     NxDomain,
     /// Return 0.0.0.0 (A) and :: (AAAA).
     NullIp,

@@ -88,11 +88,16 @@ impl Dhcpv4Config {
     pub fn get_effective_pools(&self) -> Vec<Dhcpv4Pool> {
         let mut pools = self.pools.clone();
         if let (Some(start), Some(end)) = (self.range_start, self.range_end) {
-            pools.push(Dhcpv4Pool {
-                range_start: start,
-                range_end: end,
-                ..Default::default()
-            });
+            let already_covered = pools
+                .iter()
+                .any(|p| p.range_start == start && p.range_end == end);
+            if !already_covered {
+                pools.push(Dhcpv4Pool {
+                    range_start: start,
+                    range_end: end,
+                    ..Default::default()
+                });
+            }
         }
         pools
     }

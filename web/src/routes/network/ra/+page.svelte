@@ -319,12 +319,16 @@
 
 	function formatPrefixLabel(pref: RaPrefix): string {
 		if (pref.source === "auto_gua") {
-			return status?.active_gua_prefix
-				? `${status.active_gua_prefix}/${pref.prefix_len || 64}`
+			const cleanGua = status?.active_gua_prefix
+				? status.active_gua_prefix.split("/")[0]
+				: null;
+			return cleanGua
+				? `${cleanGua}/${pref.prefix_len || 64}`
 				: `auto_gua (/${pref.prefix_len || 64})`;
 		}
 		if (pref.address) {
-			return `${pref.address}/${pref.prefix_len || 64}`;
+			const cleanAddr = pref.address.split("/")[0];
+			return `${cleanAddr}/${pref.prefix_len || 64}`;
 		}
 		return `${pref.source} (/${pref.prefix_len || 64})`;
 	}
@@ -1469,10 +1473,11 @@
 																	type="button"
 																	class="text-[11px] font-mono font-medium text-primary hover:underline"
 																	onclick={() => {
-																		newPrefixStr = `${status?.active_ula_prefix}/64`;
+																		const cleanUla = status?.active_ula_prefix?.split("/")[0];
+																		newPrefixStr = `${cleanUla}/64`;
 																	}}
 																>
-																	+ ULA ({status.active_ula_prefix}/64)
+																	+ ULA ({status.active_ula_prefix?.split("/")[0]}/64)
 																</button>
 															{/if}
 														</div>
@@ -1488,6 +1493,9 @@
 															e.key === "Enter" &&
 															addPrefix()}
 													/>
+													<p class="text-[11px] text-muted-foreground">
+														IPv6 SLAAC (RFC 4862) strictly requires a <code class="font-mono text-primary font-semibold">/64</code> subnet prefix length. Formats: <code class="font-mono">fd00:xxxx:xxxx:xxxx::/64</code> (ULA) or <code class="font-mono">auto_gua</code> (dynamic WAN prefix).
+													</p>
 												</div>
 
 												<div

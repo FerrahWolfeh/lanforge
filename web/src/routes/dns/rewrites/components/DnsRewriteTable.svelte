@@ -59,6 +59,7 @@
 	const RECORD_TYPES: DnsRecordType[] = [
 		"A",
 		"AAAA",
+		"DEVICE",
 		"CNAME",
 		"PTR",
 		"TXT",
@@ -73,6 +74,7 @@
 	const typeVariants: Record<string, string> = {
 		A: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20",
 		AAAA: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
+		DEVICE: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20",
 		CNAME: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
 		PTR: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
 		TXT: "bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20",
@@ -272,7 +274,7 @@
 						{@const style =
 							typeVariants[rule.rtype] ||
 							"bg-secondary text-secondary-foreground border-border"}
-						{@const isDevice = ans.startsWith("dev:")}
+						{@const isDevice = ans.startsWith("dev:") || rule.rtype === "DEVICE"}
 						{@const isService =
 							ans.startsWith("srv:") || rule.rtype === "SRV"}
 
@@ -319,6 +321,9 @@
 								<Badge
 									variant="outline"
 									class="px-2 py-0.5 text-[11px] font-mono border font-semibold {style}"
+									title={rule.rtype === "DEVICE"
+										? "Dynamic Dual-Stack A / AAAA Device Binding"
+										: rule.rtype}
 								>
 									{rule.rtype}
 								</Badge>

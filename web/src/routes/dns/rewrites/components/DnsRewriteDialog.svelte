@@ -87,9 +87,10 @@
 				domain = rule.domain;
 				rtype = rule.rtype;
 				const ans = formatRewriteAnswer(rule.answer);
-				if (ans.startsWith("dev:")) {
+				if (ans.startsWith("dev:") || rule.rtype === "DEVICE") {
 					mode = "device";
-					const content = ans.slice(4);
+					rtype = "DEVICE";
+					const content = ans.startsWith("dev:") ? ans.slice(4) : ans;
 					if (content.includes("|")) {
 						const [devId, fb] = content.split("|");
 						selectedDeviceIdentifier = devId;
@@ -139,7 +140,7 @@
 			}
 			const fallback = deviceFallbackIp.trim();
 			const ans = fallback ? `dev:${devId}|${fallback}` : `dev:${devId}`;
-			return { answer: ans, type: rtype };
+			return { answer: ans, type: "DEVICE" };
 		}
 
 		if (mode === "service") {
@@ -319,8 +320,7 @@
 					</div>
 
 					<p class="text-[11px] text-muted-foreground">
-						Lanforge will dynamically resolve this rule to whatever
-						active IP the device holds on the LAN.
+						Creates a <code class="font-mono text-primary font-semibold">DEVICE</code> rewrite record. Lanforge dynamically resolves incoming DNS queries to the device's live IPv4 (<code class="font-mono">A</code>) and IPv6 (<code class="font-mono">AAAA</code>) addresses without needing static CNAME redirection.
 					</p>
 				</Tabs.Content>
 

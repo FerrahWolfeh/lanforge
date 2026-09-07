@@ -24,7 +24,24 @@
 	import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 
-	const navGroups = [
+	interface NavItemChild {
+		label: string;
+		href: string;
+	}
+
+	interface NavItem {
+		label: string;
+		href: string;
+		icon: any;
+		children?: NavItemChild[];
+	}
+
+	interface NavGroup {
+		label: string;
+		items: NavItem[];
+	}
+
+	const navGroups: NavGroup[] = [
 		{
 			label: "Overview",
 			items: [
@@ -58,11 +75,20 @@
 		},
 
 		{
-			label: "DNS",
+			label: "DNS & Security",
 			items: [
-				{ label: "Resolver", href: "/dns/resolver", icon: GlobeIcon },
-				{ label: "Query Log", href: "/dns/log", icon: ListIcon },
-				{ label: "Cache", href: "/dns/cache", icon: DatabaseIcon },
+				{
+					label: "DNS Server",
+					href: "/dns/resolver",
+					icon: GlobeIcon,
+					children: [
+						{ label: "Overview", href: "/dns/resolver" },
+						{ label: "Settings", href: "/dns/settings" },
+						{ label: "Custom Rewrites", href: "/dns/rewrites" },
+						{ label: "Cache", href: "/dns/cache" },
+						{ label: "Query Log", href: "/dns/log" },
+					],
+				},
 				{
 					label: "Adblock",
 					href: "/dns/adblock",
@@ -74,11 +100,6 @@
 						{ label: "Blocked Services", href: "/dns/adblock/services" },
 						{ label: "Settings", href: "/dns/adblock/settings" },
 					],
-				},
-				{
-					label: "Custom Rewrites",
-					href: "/dns/rewrites",
-					icon: RotateCcwIcon,
 				},
 			],
 		},
@@ -119,6 +140,7 @@
 
 	function isSubActive(href: string) {
 		const p = $page.url.pathname;
+		if (href === "/dns/resolver") return p === "/dns/resolver" || p === "/dns/resolver/";
 		if (href === "/dns/adblock") return p === "/dns/adblock" || p === "/dns/adblock/";
 		return p === href || p.startsWith(href + "/");
 	}
@@ -154,7 +176,7 @@
 					<Sidebar.Menu>
 						{#each group.items as item (item.href)}
 							{#if item.children}
-								{@const isChildActive = item.children.some((c) => isSubActive(c.href))}
+								{@const isChildActive = item.children.some((c: NavItemChild) => isSubActive(c.href))}
 								<Collapsible.Root open={isChildActive} class="group/collapsible">
 									<Sidebar.MenuItem>
 										<Collapsible.Trigger class="w-full">

@@ -96,7 +96,15 @@ async function request<T>(
 
 	if (res.status === 204) return undefined as T;
 
-	const json = await res.json();
+	const text = await res.text();
+	let json: any = null;
+	if (text) {
+		try {
+			json = JSON.parse(text);
+		} catch {
+			// not valid json
+		}
+	}
 
 	if (!res.ok) {
 		if (res.status === 401 && path !== '/auth/login' && path !== '/auth/status') {
@@ -107,11 +115,16 @@ async function request<T>(
 				window.location.href = '/login';
 			}
 		}
-		throw new ApiError(res.status, json?.error ?? `HTTP ${res.status}`);
+		const errorMsg = json?.error ?? (typeof json === 'string' ? json : null) ?? text ?? `HTTP ${res.status}`;
+		throw new ApiError(res.status, errorMsg);
+	}
+
+	if (!json && text) {
+		return text as unknown as T;
 	}
 
 	// Unwrap { "data": ... } envelope
-	return ('data' in json ? json.data : json) as T;
+	return (json && 'data' in json ? json.data : json) as T;
 }
 
 async function requestRaw<T>(
@@ -135,7 +148,15 @@ async function requestRaw<T>(
 
 	if (res.status === 204) return undefined as T;
 
-	const json = await res.json();
+	const text = await res.text();
+	let json: any = null;
+	if (text) {
+		try {
+			json = JSON.parse(text);
+		} catch {
+			// not valid json
+		}
+	}
 
 	if (!res.ok) {
 		if (res.status === 401 && path !== '/auth/login' && path !== '/auth/status') {
@@ -146,10 +167,11 @@ async function requestRaw<T>(
 				window.location.href = '/login';
 			}
 		}
-		throw new ApiError(res.status, json?.error ?? `HTTP ${res.status}`);
+		const errorMsg = json?.error ?? (typeof json === 'string' ? json : null) ?? text ?? `HTTP ${res.status}`;
+		throw new ApiError(res.status, errorMsg);
 	}
 
-	return json as T;
+	return (json !== null ? json : text) as T;
 }
 
 const get = <T>(path: string, params?: Record<string, string | number | boolean | undefined>) => {
@@ -360,11 +382,48 @@ export const dnsQueryLog = async (params?: {
 				: list.length;
 	return { entries: list, total: totalCount };
 };
+export function formatDnsAddr(addr: string): string {
+	const trimmed = addr.trim();
+	if (!trimmed) return trimmed;
+	// Already formatted with port?
+	if (trimmed.startsWith('[') && trimmed.includes(']:')) return trimmed;
+	if (trimmed.includes(':') && !trimmed.includes('::') && trimmed.split(':').length === 2 && trimmed.includes('.')) {
+		return trimmed;
+	}
+	// IPv6 address without port
+	if (trimmed.includes(':')) {
+		const cleanIp = trimmed.replace(/^\[/, '').replace(/\]$/, '');
+		return `[${cleanIp}]:53`;
+	}
+	// IPv4 address without port
+	if (trimmed.includes('.')) {
+		return `${trimmed}:53`;
+	}
+	return trimmed;
+}
+
 export const dnsUpstreams = () => get<DnsUpstreamsResponse | DnsUpstreamEntry[]>('/dns/upstreams');
-export const dnsUpstreamAdd = (entry: { addr: string; protocol: string; domain?: string }) =>
-	post<void>('/dns/upstreams', entry);
-export const dnsUpstreamRemove = (entry: { addr: string; protocol: string }) =>
-	del<void>('/dns/upstreams', entry);
+export const dnsUpstreamAdd = (entry: { addr: string; protocol: string; domain?: string }) => {
+	const formattedAddr = formatDnsAddr(entry.addr);
+	const proto = (entry.protocol || 'udp').toLowerCase();
+	const params = new URLSearchParams({ addr: formattedAddr, protocol: proto });
+	if (entry.domain) params.set('domain', entry.domain);
+	return post<void>(`/dns/upstreams?${params.toString()}`, {
+		addr: formattedAddr,
+		protocol: proto,
+		domain: entry.domain
+	});
+};
+export const dnsUpstreamRemove = (entry: { addr: string; protocol: string }) => {
+	const formattedAddr = formatDnsAddr(entry.addr);
+	const proto = (entry.protocol || 'udp').toLowerCase();
+	const params = new URLSearchParams({ addr: formattedAddr, protocol: proto });
+	return del<void>(`/dns/upstreams?${params.toString()}`, {
+		addr: formattedAddr,
+		protocol: proto
+	});
+};
+export const dnsUpstreamClear = () => del<void>('/dns/upstreams/clear');
 
 export const dnsReverseResolverList = async (): Promise<ReverseResolverEntry[]> => {
 	const res = await get<any>('/dns/reverse-resolvers');
@@ -374,10 +433,17 @@ export const dnsReverseResolverList = async (): Promise<ReverseResolverEntry[]> 
 	if (Array.isArray(res.data)) return res.data;
 	return [];
 };
-export const dnsReverseResolverAdd = (subnet: string, resolver_uri: string) =>
-	post<void>('/dns/reverse-resolvers', { subnet, resolver_uri });
-export const dnsReverseResolverRemove = (subnet: string) =>
-	del<void>('/dns/reverse-resolvers', { subnet });
+export const dnsReverseResolverAdd = (subnet: string, resolver_uri: string) => {
+	const s = subnet.trim();
+	const r = resolver_uri.trim();
+	const params = new URLSearchParams({ subnet: s, resolver_uri: r });
+	return post<void>(`/dns/reverse-resolvers?${params.toString()}`, { subnet: s, resolver_uri: r });
+};
+export const dnsReverseResolverRemove = (subnet: string) => {
+	const s = subnet.trim();
+	const params = new URLSearchParams({ subnet: s });
+	return del<void>(`/dns/reverse-resolvers?${params.toString()}`, { subnet: s });
+};
 
 // ---------------------------------------------------------------------------
 // DNS — cache
@@ -422,7 +488,15 @@ export const dnsBlock = (domain: string) => post<void>('/dns/adblock/block', { d
 export const dnsAllow = (domain: string) => post<void>('/dns/adblock/allow', { domain });
 export const dnsUnallow = (target: string) =>
 	del<void>(`/dns/adblock/allow/${encodeURIComponent(target)}`);
-export const dnsAdblockUrls = () => get<DnsAdblockUrlEntry[]>('/dns/adblock/sources');
+export const dnsAdblockUrls = async (): Promise<DnsAdblockUrlEntry[]> => {
+	const res = await get<any>('/dns/adblock/sources');
+	if (!res) return [];
+	if (Array.isArray(res)) return res;
+	if (Array.isArray(res.urls)) return res.urls;
+	if (Array.isArray(res.data)) return res.data;
+	if (Array.isArray(res.data?.urls)) return res.data.urls;
+	return [];
+};
 export const dnsAdblockUrlAdd = (entry: DnsAdblockUrlEntry) =>
 	post<void>('/dns/adblock/sources', entry);
 export const dnsAdblockUrlRemove = (entry: DnsAdblockUrlEntry) =>

@@ -34,6 +34,8 @@ pub enum DnsRecordType {
     SVCB = 64,
     HTTPS = 65,
     ANY = 255,
+    #[serde(rename = "DEVICE", alias = "Device", alias = "dev", alias = "A/AAAA")]
+    Device = 65534,
     Unknown(u16),
 }
 
@@ -54,6 +56,7 @@ impl From<u16> for DnsRecordType {
             64 => Self::SVCB,
             65 => Self::HTTPS,
             255 => Self::ANY,
+            65534 => Self::Device,
             v => Self::Unknown(v),
         }
     }
@@ -76,6 +79,7 @@ impl From<DnsRecordType> for u16 {
             DnsRecordType::SVCB => 64,
             DnsRecordType::HTTPS => 65,
             DnsRecordType::ANY => 255,
+            DnsRecordType::Device => 65534,
             DnsRecordType::Unknown(v) => v,
         }
     }
@@ -100,6 +104,7 @@ impl std::str::FromStr for DnsRecordType {
             "SVCB" => Ok(Self::SVCB),
             "HTTPS" => Ok(Self::HTTPS),
             "ANY" => Ok(Self::ANY),
+            "DEVICE" | "DEV" | "A/AAAA" => Ok(Self::Device),
             _ => {
                 if s.starts_with("TYPE")
                     && let Ok(v) = s[4..].parse::<u16>()
@@ -129,6 +134,7 @@ impl Display for DnsRecordType {
             Self::SVCB => write!(f, "SVCB"),
             Self::HTTPS => write!(f, "HTTPS"),
             Self::ANY => write!(f, "ANY"),
+            Self::Device => write!(f, "DEVICE"),
             Self::Unknown(v) => write!(f, "TYPE{v}"),
         }
     }
@@ -728,5 +734,19 @@ mod tests {
 
         assert_eq!(DnsRecordType::SVCB.to_string(), "SVCB");
         assert_eq!(DnsRecordType::HTTPS.to_string(), "HTTPS");
+
+        assert_eq!(DnsRecordType::from(65534), DnsRecordType::Device);
+        assert_eq!(u16::from(DnsRecordType::Device), 65534);
+        assert_eq!("DEVICE".parse::<DnsRecordType>().unwrap(), DnsRecordType::Device);
+        assert_eq!("dev".parse::<DnsRecordType>().unwrap(), DnsRecordType::Device);
+        assert_eq!("A/AAAA".parse::<DnsRecordType>().unwrap(), DnsRecordType::Device);
+        assert_eq!(DnsRecordType::Device.to_string(), "DEVICE");
+
+        let json = serde_json::to_string(&DnsRecordType::Device).unwrap();
+        assert_eq!(json, "\"DEVICE\"");
+        let deserialized: DnsRecordType = serde_json::from_str("\"DEVICE\"").unwrap();
+        assert_eq!(deserialized, DnsRecordType::Device);
+        let deserialized_alias: DnsRecordType = serde_json::from_str("\"A/AAAA\"").unwrap();
+        assert_eq!(deserialized_alias, DnsRecordType::Device);
     }
 }

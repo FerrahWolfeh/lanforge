@@ -69,7 +69,13 @@
 		loading = true;
 		try {
 			const res = await dnsAdblockUrls();
-			if (res) sources = res;
+			if (Array.isArray(res)) {
+				sources = res;
+			} else if (res && Array.isArray((res as any).urls)) {
+				sources = (res as any).urls;
+			} else {
+				sources = [];
+			}
 		} catch {
 			toast.error("Failed to load adblock source URLs");
 		} finally {

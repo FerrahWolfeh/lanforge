@@ -233,7 +233,7 @@ source = "broken" # Invalid variant
             .unwrap_or_else(|e| panic!("Failed to parse contrib/lanforge.toml: {e}"));
 
         assert_eq!(cfg.system.iface, "end0");
-        assert_eq!(cfg.system.target_prefix, "fd97:f00d:cafe:3731");
+        assert_eq!(cfg.system.target_prefix, "");
         #[cfg(feature = "http")]
         assert_eq!(cfg.http.listen.port(), 8088);
         assert!(!cfg.database.config_path.contains("sqlite"));

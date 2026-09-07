@@ -7,6 +7,7 @@
 export type DnsRecordType =
 	| 'A'
 	| 'AAAA'
+	| 'DEVICE'
 	| 'CNAME'
 	| 'NS'
 	| 'PTR'
@@ -729,6 +730,7 @@ export interface SetupStatusResponse {
 	is_provisioned: boolean;
 	detected_lan_iface: string;
 	detected_gateway: string | null;
+	detected_subnet_mask?: string | null;
 	detected_ula_prefix: string;
 	interfaces: NetworkInterfaceInfo[];
 }

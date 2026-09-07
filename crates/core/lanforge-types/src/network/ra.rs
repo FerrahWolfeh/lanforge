@@ -83,13 +83,61 @@ pub const ICMPV6_TYPE_NA: u8 = 136;
 ///   - `h` (hours, e.g. `"12h"`)
 ///   - `d` (days, e.g. `"7d"`)
 ///   - `w` (weeks, e.g. `"4w"`)
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(try_from = "String", into = "String")]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Hash)]
+#[serde(into = "String")]
 pub enum PrefixLifetime {
     /// Finite lifetime in seconds.
     Secs(u32),
     /// Infinite lifetime (`0xFFFF_FFFF`).
     Infinity,
+}
+
+impl<'de> Deserialize<'de> for PrefixLifetime {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct LifetimeVisitor;
+
+        impl serde::de::Visitor<'_> for LifetimeVisitor {
+            type Value = PrefixLifetime;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an integer number of seconds, or a duration string like '86400', '1d', or 'infinity'")
+            }
+
+            fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                let Ok(val) = u64::try_from(v) else {
+                    return Err(E::custom("lifetime cannot be negative"));
+                };
+                self.visit_u64(val)
+            }
+
+            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                if v >= u64::from(u32::MAX) {
+                    Ok(PrefixLifetime::Infinity)
+                } else {
+                    let secs = u32::try_from(v).unwrap_or(u32::MAX);
+                    Ok(PrefixLifetime::Secs(secs))
+                }
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                PrefixLifetime::from_str(v).map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_any(LifetimeVisitor)
+    }
 }
 
 impl FromStr for PrefixLifetime {
@@ -115,13 +163,6 @@ impl From<PrefixLifetime> for String {
             PrefixLifetime::Infinity => "infinity".to_string(),
             PrefixLifetime::Secs(s) => s.to_string(),
         }
-    }
-}
-
-impl TryFrom<String> for PrefixLifetime {
-    type Error = String;
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::from_str(&value)
     }
 }
 
@@ -229,10 +270,17 @@ impl RAPrefix {
     /// (valid for 24 hours, preferred for 4 hours) with standard flags enabled.
     #[must_use]
     pub fn ula(prefix: &str) -> Self {
+        let trimmed = prefix.trim();
+        let (clean_addr, prefix_len) = if let Some((addr, len_str)) = trimmed.split_once('/') {
+            let len = len_str.parse::<u8>().unwrap_or(64);
+            (addr.to_string(), len)
+        } else {
+            (trimmed.to_string(), 64)
+        };
         Self {
             source: PrefixSource::Ula,
-            address: Some(prefix.to_string()),
-            prefix_len: 64,
+            address: Some(clean_addr),
+            prefix_len,
             on_link: true,
             autonomous: true,
             router_addr: true,
@@ -400,6 +448,39 @@ impl Default for RaServerConfig {
             rdnss: Vec::new(),
             dnssl: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_prefix_lifetime_deserialization_from_number_and_string() {
+        // Deserialization from JSON integer (seconds)
+        let lt_int: PrefixLifetime = serde_json::from_str("86400").unwrap();
+        assert_eq!(lt_int, PrefixLifetime::Secs(86400));
+
+        // Deserialization from JSON string
+        let lt_str: PrefixLifetime = serde_json::from_str("\"86400\"").unwrap();
+        assert_eq!(lt_str, PrefixLifetime::Secs(86400));
+
+        let lt_duration: PrefixLifetime = serde_json::from_str("\"30d\"").unwrap();
+        assert_eq!(lt_duration, PrefixLifetime::Secs(30 * 86400));
+
+        let lt_inf: PrefixLifetime = serde_json::from_str("\"infinity\"").unwrap();
+        assert_eq!(lt_inf, PrefixLifetime::Infinity);
+    }
+
+    #[test]
+    fn test_ra_prefix_ula_strips_cidr() {
+        let pref1 = RAPrefix::ula("fd97:f00d:cafe:3731::/64");
+        assert_eq!(pref1.address.as_deref(), Some("fd97:f00d:cafe:3731::"));
+        assert_eq!(pref1.prefix_len, 64);
+
+        let pref2 = RAPrefix::ula("fd00:1234::");
+        assert_eq!(pref2.address.as_deref(), Some("fd00:1234::"));
+        assert_eq!(pref2.prefix_len, 64);
     }
 }
 

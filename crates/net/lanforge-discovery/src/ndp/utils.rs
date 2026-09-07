@@ -193,7 +193,14 @@ fn split_prefix_and_length(target_prefix: &str) -> Option<(Ipv6Addr, u8)> {
         return None;
     }
     let mut parts = target_prefix.split('/');
-    let ip = parts.next()?.parse::<Ipv6Addr>().ok()?;
+    let raw_ip = parts.next()?.trim();
+    let ip = raw_ip.parse::<Ipv6Addr>().or_else(|_| {
+        if raw_ip.contains("::") {
+            raw_ip.parse::<Ipv6Addr>()
+        } else {
+            format!("{raw_ip}::").parse::<Ipv6Addr>()
+        }
+    }).ok()?;
     let len = parts
         .next()
         .and_then(|s| s.parse::<u8>().ok())

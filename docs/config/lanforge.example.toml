@@ -5,8 +5,10 @@
 [system]
 # LAN interface where the daemon listens for all services.
 iface = "end0"
-# "Target" IPv6 prefix to identify local devices in SLAAC tracking.
-target_prefix = "fd97:f00d:cafe:3731"
+# Target IPv6 SLAAC prefix used by the NDP (Neighbor Discovery Protocol) engine to track and
+# associate IPv6 SLAAC addresses with local LAN devices (e.g., "fd00:abcd:1234:1::/64").
+# If left empty (""), Lanforge automatically generates a unique RFC 4193-compliant random ULA prefix on first launch.
+target_prefix = ""
 # Global search domains used by DHCPv4, DHCPv6, and RA.
 search_domains = ["lan", "home.arpa"]
 # Wait time before processing network events (prevents flapping).

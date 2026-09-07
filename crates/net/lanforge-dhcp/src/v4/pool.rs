@@ -119,16 +119,13 @@ impl IpPool {
     }
 
     fn total_pool_size(&self) -> u32 {
-        self.pools
-            .iter()
-            .map(|p| {
-                if p.range_start <= p.range_end {
-                    u32::from(p.range_end).saturating_sub(u32::from(p.range_start)) + 1
-                } else {
-                    0
-                }
-            })
-            .sum()
+        let mut bitmap = RoaringBitmap::new();
+        for p in &self.pools {
+            if p.range_start <= p.range_end {
+                bitmap.insert_range(u32::from(p.range_start)..=u32::from(p.range_end));
+            }
+        }
+        u32::try_from(bitmap.len()).unwrap_or(0)
     }
 
     /// Allocates an IP for a MAC address.
@@ -499,6 +496,30 @@ mod tests {
         assert_eq!(used, 1);
         assert_eq!(available, 5);
         assert_eq!(util, (1.0 / 6.0) * 100.0);
+    }
+
+    #[test]
+    fn test_pool_stats_with_duplicate_ranges() {
+        // Two identical ranges (simulating legacy range + pool configuration)
+        let p = IpPool::new(vec![
+            Dhcpv4Pool {
+                range_start: Ipv4Addr::new(192, 168, 1, 100),
+                range_end: Ipv4Addr::new(192, 168, 1, 150),
+                ..Default::default()
+            },
+            Dhcpv4Pool {
+                range_start: Ipv4Addr::new(192, 168, 1, 100),
+                range_end: Ipv4Addr::new(192, 168, 1, 150),
+                ..Default::default()
+            },
+        ]);
+
+        let (total, used, available, util) = p.stats();
+        // 100..=150 is 51 unique addresses
+        assert_eq!(total, 51);
+        assert_eq!(used, 0);
+        assert_eq!(available, 51);
+        assert_eq!(util, 0.0);
     }
 
     #[test]

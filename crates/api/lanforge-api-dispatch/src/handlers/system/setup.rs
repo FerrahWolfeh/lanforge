@@ -10,10 +10,24 @@ use lanforge_types::network::dhcp::Dhcpv4Pool;
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::pppoe::PppoeConfig;
 use pnet::datalink::interfaces;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use pnet::ipnetwork::IpNetwork;
+use rand::RngExt;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{error, info};
+
+fn generate_rfc4193_ula_str() -> String {
+    let mut bytes = [0u8; 16];
+    bytes[0] = 0xfd;
+    let mut rng = rand::rng();
+    let mut global_id = [0u8; 5];
+    rng.fill(&mut global_id);
+    bytes[1..6].copy_from_slice(&global_id);
+    bytes[7] = 1; // Subnet ID = 1
+    let addr = Ipv6Addr::from(bytes);
+    format!("{addr}/64")
+}
 
 impl ClientContext {
     /// Inspects the host environment to report first-run readiness and discovered network interfaces.
@@ -32,10 +46,24 @@ impl ClientContext {
         let detected_ula_prefix = status
             .as_ref()
             .and_then(|s| s.ula_prefix.map(|p| p.to_string()))
-            .unwrap_or_else(|| "fd97:f00d:cafe:3731::/64".to_string());
+            .filter(|p| !p.starts_with("fd97:f00d:cafe:3731"))
+            .unwrap_or_else(generate_rfc4193_ula_str);
+
+        let all_interfaces = interfaces();
+        let mut detected_subnet_mask = None;
+        if !detected_lan_iface.is_empty()
+            && let Some(lan) = all_interfaces.iter().find(|i| i.name == detected_lan_iface)
+        {
+            for ip in &lan.ips {
+                if let IpNetwork::V4(v4) = ip {
+                    detected_subnet_mask = Some(v4.mask());
+                    break;
+                }
+            }
+        }
 
         let mut iface_infos = Vec::new();
-        for iface in interfaces() {
+        for iface in all_interfaces {
             if iface.is_loopback() {
                 continue;
             }
@@ -67,6 +95,7 @@ impl ClientContext {
             is_provisioned,
             detected_lan_iface,
             detected_gateway,
+            detected_subnet_mask,
             detected_ula_prefix,
             interfaces: iface_infos,
         })
@@ -164,20 +193,22 @@ impl ClientContext {
         let target_ula = status
             .as_ref()
             .and_then(|s| s.ula_prefix.map(|p| p.to_string()))
-            .unwrap_or_else(|| "fd97:f00d:cafe:3731::/64".to_string());
+            .filter(|p| !p.starts_with("fd97:f00d:cafe:3731"))
+            .unwrap_or_else(generate_rfc4193_ula_str);
 
         if let Some(ra) = payload.ra.as_ref().filter(|ra| ra.enabled) {
             let mut prefixes = Vec::new();
-                if ra.ula_enabled {
-                    let ula = ra.ula_prefix.clone().unwrap_or(target_ula.clone());
-                    prefixes.push(lanforge_types::network::ra::RAPrefix::ula(&ula));
-                }
-                if ra.auto_gua {
-                    prefixes.push(lanforge_types::network::ra::RAPrefix::gua_dynamic());
-                }
-                if let Err(e) = self.db.save_ra_prefixes(&prefixes).await {
-                    error!("Setup: failed to persist RA prefixes: {e}");
-                }
+            if ra.ula_enabled {
+                let raw_ula = ra.ula_prefix.as_deref().unwrap_or(&target_ula);
+                let ula = raw_ula.split('/').next().unwrap_or(raw_ula);
+                prefixes.push(lanforge_types::network::ra::RAPrefix::ula(ula));
+            }
+            if ra.auto_gua {
+                prefixes.push(lanforge_types::network::ra::RAPrefix::gua_dynamic());
+            }
+            if let Err(e) = self.db.save_ra_prefixes(&prefixes).await {
+                error!("Setup: failed to persist RA prefixes: {e}");
+            }
 
                 let dnssl = vec![lanforge_types::network::ra::DnsslConfig {
                     domains: vec![payload.domain_name.clone()],
@@ -317,7 +348,8 @@ fn generate_setup_toml(
     let cleaned_ula = target_ula
         .trim_end_matches("/64")
         .trim_end_matches("::");
-    s.push_str(&format!("target_prefix = \"{cleaned_ula}\"\n"));
+    let ula_prefix_str = format!("{cleaned_ula}::/64");
+    s.push_str(&format!("target_prefix = \"{ula_prefix_str}\"\n"));
     s.push_str(&format!("search_domains = [\"{}\"]\n", payload.domain_name));
     s.push_str("debounce_secs = 2\n\n");
 

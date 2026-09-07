@@ -607,6 +607,8 @@ impl Execute for DnsRewritesArgs {
                     DnsRecordType::A
                 } else if final_answer.parse::<Ipv6Addr>().is_ok() {
                     DnsRecordType::AAAA
+                } else if final_answer.starts_with("dev:") {
+                    DnsRecordType::Device
                 } else {
                     DnsRecordType::CNAME
                 };

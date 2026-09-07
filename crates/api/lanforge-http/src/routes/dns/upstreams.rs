@@ -4,7 +4,7 @@ use axum::{
     Router,
     extract::{Query, State},
     response::IntoResponse,
-    routing::get,
+    routing::{delete, get},
 };
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use serde::Deserialize;
@@ -12,8 +12,30 @@ use serde::Deserialize;
 use crate::routes::create_client_ctx;
 use crate::server::AppState;
 
+fn deserialize_flexible_socket_addr<'de, D>(deserializer: D) -> Result<SocketAddr, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+    let trimmed = s.trim();
+    if let Ok(sa) = trimmed.parse::<SocketAddr>() {
+        return Ok(sa);
+    }
+    if let Ok(ip) = trimmed.parse::<std::net::IpAddr>() {
+        return Ok(SocketAddr::new(ip, 53));
+    }
+    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        let inside = &trimmed[1..trimmed.len() - 1];
+        if let Ok(ip) = inside.parse::<std::net::IpAddr>() {
+            return Ok(SocketAddr::new(ip, 53));
+        }
+    }
+    trimmed.parse::<SocketAddr>().map_err(serde::de::Error::custom)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct UpstreamAddRequest {
+    #[serde(deserialize_with = "deserialize_flexible_socket_addr")]
     pub addr: SocketAddr,
     pub protocol: UpstreamProtocol,
     pub domain: Option<String>,
@@ -21,6 +43,7 @@ pub struct UpstreamAddRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct UpstreamRemoveRequest {
+    #[serde(deserialize_with = "deserialize_flexible_socket_addr")]
     pub addr: SocketAddr,
     pub protocol: UpstreamProtocol,
 }
@@ -44,6 +67,7 @@ pub fn router() -> Router<AppState> {
                 .post(handle_dns_upstream_add)
                 .delete(handle_dns_upstream_remove),
         )
+        .route("/upstreams/clear", delete(handle_dns_upstream_clear))
         .route(
             "/reverse-resolvers",
             get(handle_reverse_resolver_list)
@@ -75,6 +99,14 @@ async fn handle_dns_upstream_remove(
     let ctx = create_client_ctx(&state);
     crate::http_response!(
         ctx.handle_dns_upstream_remove(params.addr, params.protocol).await,
+        Success => NoContent
+    )
+}
+
+async fn handle_dns_upstream_clear(State(state): State<AppState>) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_dns_upstream_clear().await,
         Success => NoContent
     )
 }

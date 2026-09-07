@@ -68,7 +68,8 @@
 		try {
 			const status = await dnsAdblockStatus();
 			if (status) {
-				blockingMode = status.blocking_mode ?? "nxdomain";
+				const mode = (status.blocking_mode as string) === "nx_domain" ? "nxdomain" : status.blocking_mode;
+				blockingMode = mode ?? "nxdomain";
 				customIpV4 = status.blocking_ip_v4 ?? "";
 				customIpV6 = status.blocking_ip_v6 ?? "";
 			}
