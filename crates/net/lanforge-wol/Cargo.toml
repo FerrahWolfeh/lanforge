@@ -1,6 +1,6 @@
 [package]
 name = "lanforge-wol"
-version = "1.0.0"
+version = "1.0.1"
 license.workspace = true
 edition.workspace = true
 authors.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "lanforge-discovery"
-version = "1.0.0"
+version = "1.1.0"
 license.workspace = true
 edition.workspace = true
 authors.workspace = true

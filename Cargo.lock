@@ -2412,7 +2412,7 @@ checksum = "bf36173d4167ed999940f804952e6b08197cae5ad5d572eb4db150ce8ad5d58f"
 
 [[package]]
 name = "lanforge"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "bytesize",
@@ -2450,7 +2450,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-api"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "chrono",
  "futures",
@@ -2466,7 +2466,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-api-dispatch"
-version = "0.30.0"
+version = "0.31.0"
 dependencies = [
  "chrono",
  "futures",
@@ -2493,7 +2493,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-cli"
-version = "2.0.3"
+version = "2.1.0"
 dependencies = [
  "argon2",
  "bytes",
@@ -2542,7 +2542,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-core"
-version = "0.23.0"
+version = "0.24.0"
 dependencies = [
  "argon2",
  "hotpath",
@@ -2559,7 +2559,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-db"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "chrono",
  "futures",
@@ -2580,7 +2580,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-db-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "lanforge-types",
@@ -2592,7 +2592,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-db-redb"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "futures",
@@ -2612,7 +2612,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-dhcp"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "dhcproto",
  "hex",
@@ -2633,7 +2633,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-discovery"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "futures",
  "hotpath",
@@ -2656,7 +2656,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-dns"
-version = "2.4.0"
+version = "2.5.0"
 dependencies = [
  "base64 0.23.1",
  "bloomfilter",
@@ -2703,7 +2703,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-http"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "argon2",
  "async-stream",
@@ -2743,7 +2743,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-lab"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bytes",
  "clap",
@@ -2774,7 +2774,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-macros"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2783,7 +2783,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-pppoe"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aya",
  "futures",
@@ -2807,7 +2807,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-ra"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "hotpath",
  "lanforge-core",
@@ -2824,7 +2824,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-tftp"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "bytes",
  "futures",
@@ -2843,7 +2843,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-types"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "lanforge-macros",
  "serde",
@@ -2853,7 +2853,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-uds"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "futures",
  "hotpath",
@@ -2874,7 +2874,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-webui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mime_guess",
  "rust-embed",
@@ -2882,7 +2882,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-wol"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "lanforge-types",
  "socket2",
