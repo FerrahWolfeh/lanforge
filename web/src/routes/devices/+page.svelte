@@ -47,11 +47,10 @@
 	async function triggerScan() {
 		scanning = true;
 		try {
-			await scan();
-			toast.success("Network ARP/NDP scan initiated");
 			await loadDevices();
+			toast.success("Network devices refreshed");
 		} catch {
-			toast.error("Failed to initiate scan");
+			toast.error("Failed to refresh network devices");
 		} finally {
 			scanning = false;
 		}
@@ -81,9 +80,9 @@
 		detailsOpen = true;
 		loadingDetails = true;
 		try {
-			const fullInfo = await whois(device.mac);
-			if (fullInfo) {
-				selectedDevice = fullInfo;
+			const res = await whois(device.mac);
+			if (res && res.entry) {
+				selectedDevice = res.entry;
 			}
 		} catch {
 			// Fallback to existing record info if whois fails

@@ -67,34 +67,10 @@
 							: [];
 			}
 			if (dev.status === "fulfilled") {
-				const raw: any = dev.value;
-				const devList = Array.isArray(raw)
-					? raw
-					: Array.isArray(raw?.devices)
-						? raw.devices
-						: Array.isArray(raw?.data)
-							? raw.data
-							: [];
-				devicesData = {
-					devices: devList,
-					meta: {
-						total: raw?.meta?.total ?? devList.length,
-						online:
-							raw?.meta?.online ??
-							devList.filter((d: any) => d.online).length,
-						last_scan_secs_ago: 0,
-					},
-				};
+				devicesData = dev.value;
 			}
 			if (hst.status === "fulfilled") {
-				const raw: any = hst.value;
-				hostsData = Array.isArray(raw)
-					? raw
-					: Array.isArray(raw?.hosts)
-						? raw.hosts
-						: Array.isArray(raw?.data)
-							? raw.data
-							: [];
+				hostsData = hst.value;
 			}
 		} finally {
 			loadingData = false;
@@ -104,11 +80,10 @@
 	async function triggerScan() {
 		scanning = true;
 		try {
-			await scan();
-			toast.success("Network ARP & NDP active scan initiated");
 			await loadAll();
+			toast.success("Network status and devices refreshed");
 		} catch {
-			toast.error("Failed to initiate network scan");
+			toast.error("Failed to refresh network data");
 		} finally {
 			scanning = false;
 		}

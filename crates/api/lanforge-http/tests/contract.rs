@@ -430,11 +430,11 @@ async fn test_hosts_contract() {
             StatusCode::UNPROCESSABLE_ENTITY,
         ),
         (
-            "missing hostname",
-            // mac is present but hostname missing — since HostConfigEntry derives Deserialize
-            // and hostname is a non-optional String without #[serde(default)], serde fails with 422.
+            "invalid IPv4 syntax",
             json!({
                 "mac": "aa:bb:cc:dd:ee:02",
+                "hostname": "test",
+                "v4_fixed": "999.999.999.999",
                 "origin": "Static"
             }),
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -445,6 +445,17 @@ async fn test_hosts_contract() {
         let (status, _) = app.post("/api/v1/hosts", body).await;
         assert_eq!(status, *expected, "Hosts guardrail: {desc}");
     }
+
+    // Verify optional origin and hostname defaults (e.g. from WebUI)
+    let host_minimal = json!({
+        "mac": "aa:bb:cc:dd:ee:04"
+    });
+    let (status, _) = app.post("/api/v1/hosts", &host_minimal).await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "host_add with minimal fields (no hostname, no origin) should succeed"
+    );
 
     // --- Edge cases that reach dispatch ---
     // Re-add a host so we can patch it

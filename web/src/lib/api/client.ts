@@ -12,6 +12,7 @@ import type {
 	AuthToken,
 	BlockingMode,
 	DeviceEntry,
+	DevicesMeta,
 	DevicesResponse,
 	DhcpLease,
 	DhcpOptionsConfig,
@@ -31,6 +32,7 @@ import type {
 	DnsUpstreamEntry,
 	DnsUpstreamsResponse,
 	HostConfigEntry,
+	LeaseHistoryEntry,
 	LeaseTarget,
 	LoginRequest,
 	LoginResponse,
@@ -41,6 +43,7 @@ import type {
 	SetupStatusResponse,
 	StatusResponse,
 	UserInfo,
+	WhoisResponse,
 	PppoeConfig,
 	PppoeStatusResponse,
 	RaServerConfig,
@@ -249,14 +252,44 @@ export const shutdown = () => post<void>('/shutdown');
 // Devices
 // ---------------------------------------------------------------------------
 
-export const listDevices = (params?: {
+export const listDevices = async (params?: {
 	filter?: string;
 	sort?: string;
 	limit?: number;
 	offset?: number;
-}) => get<DevicesResponse>('/devices', params);
+	grouped?: boolean;
+}): Promise<DevicesResponse> => {
+	const raw = await getRaw<any>('/devices', params);
+	if (!raw) {
+		return { devices: [], meta: { total: 0, online: 0, last_scan_secs_ago: 0 } };
+	}
+	const devList: DeviceEntry[] = Array.isArray(raw)
+		? raw
+		: Array.isArray(raw.devices)
+			? raw.devices
+			: Array.isArray(raw.data)
+				? raw.data
+				: [];
+	const onlineCount = devList.filter((d) => d.online).length;
+	const meta: DevicesMeta = {
+		total: typeof raw.meta?.total === 'number' ? raw.meta.total : devList.length,
+		online: typeof raw.meta?.online === 'number' ? raw.meta.online : onlineCount,
+		last_scan_secs_ago:
+			typeof raw.meta?.last_scan_secs_ago === 'number' ? raw.meta.last_scan_secs_ago : 0,
+	};
+	return { devices: devList, meta };
+};
 
-export const whois = (target: string) => get<DeviceEntry>(`/devices/${encodeURIComponent(target)}`);
+export const whois = async (target: string): Promise<WhoisResponse> => {
+	const res = await get<any>(`/devices/${encodeURIComponent(target)}`);
+	if (res && typeof res === 'object') {
+		const entry = (res.entry ?? res.data?.entry ?? res) as DeviceEntry;
+		const history = (res.history ?? res.data?.history ?? []) as LeaseHistoryEntry[];
+		return { entry, history };
+	}
+	throw new ApiError(404, `Device not found: ${target}`);
+};
+
 export const purge = (target: string) => del<void>(`/devices/${encodeURIComponent(target)}`);
 export const wol = (target: string) =>
 	post<void>(`/devices/${encodeURIComponent(target)}/wol`);
@@ -265,12 +298,31 @@ export const wol = (target: string) =>
 // Hosts
 // ---------------------------------------------------------------------------
 
-export const hostList = () => get<HostConfigEntry[]>('/hosts');
+export const hostList = async (): Promise<HostConfigEntry[]> => {
+	const res = await get<any>('/hosts');
+	if (!res) return [];
+	if (Array.isArray(res)) return res;
+	if (Array.isArray(res.hosts)) return res.hosts;
+	if (Array.isArray(res.data?.hosts)) return res.data.hosts;
+	if (Array.isArray(res.data)) return res.data;
+	return [];
+};
+
 export const hostAdd = (entry: HostConfigEntry) => post<void>('/hosts', entry);
 export const hostSet = (mac: string, field: string, value: string) =>
 	patch<void>(`/hosts/${mac}`, { field, value });
 export const hostRemove = (mac: string) => del<void>(`/hosts/${mac}`);
-export const hostExport = () => get<HostConfigEntry[]>('/hosts/export');
+
+export const hostExport = async (): Promise<HostConfigEntry[]> => {
+	const res = await get<any>('/hosts/export');
+	if (!res) return [];
+	if (Array.isArray(res)) return res;
+	if (Array.isArray(res.hosts)) return res.hosts;
+	if (Array.isArray(res.data?.hosts)) return res.data.hosts;
+	if (Array.isArray(res.data)) return res.data;
+	return [];
+};
+
 export const hostImport = (entries: HostConfigEntry[]) => post<void>('/hosts/import', entries);
 
 // ---------------------------------------------------------------------------

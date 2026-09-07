@@ -58,24 +58,10 @@
 				listDevices(),
 			]);
 			if (hRes.status === "fulfilled") {
-				const res: any = hRes.value;
-				hosts = Array.isArray(res)
-					? res
-					: Array.isArray(res?.hosts)
-						? res.hosts
-						: Array.isArray(res?.data)
-							? res.data
-							: [];
+				hosts = hRes.value;
 			}
 			if (dRes.status === "fulfilled") {
-				const res: any = dRes.value;
-				discoveredDevices = Array.isArray(res)
-					? res
-					: Array.isArray(res?.devices)
-						? res.devices
-						: Array.isArray(res?.data)
-							? res.data
-							: [];
+				discoveredDevices = dRes.value.devices;
 			}
 		} catch {
 			toast.error("Failed to load static host configurations");
@@ -109,9 +95,13 @@
 
 	function selectDiscoveredDevice(dev: DeviceEntry) {
 		formMac = dev.mac;
-		if (dev.hostname) formHostname = dev.hostname;
-		const v4 = dev.display_v4 || dev.v4?.ip;
-		if (v4) formV4 = v4;
+		if (dev.hostname && dev.hostname !== "—" && !dev.hostname.startsWith("<")) {
+			formHostname = dev.hostname;
+		}
+		const rawV4 = dev.v4?.ip || (dev.display_v4 && dev.display_v4 !== "—" ? dev.display_v4.replace(/\s*\?$/, "") : "");
+		if (rawV4.trim()) formV4 = rawV4.trim();
+		const rawV6 = dev.v6?.ip || (dev.display_v6 && dev.display_v6 !== "—" ? dev.display_v6 : "");
+		if (rawV6.trim()) formV6Suffix = rawV6.trim();
 		toast.info(`Selected ${dev.hostname || dev.mac}`);
 	}
 
@@ -126,10 +116,10 @@
 		try {
 			const entry: HostConfigEntry = {
 				mac: formMac.trim(),
-				hostname: formHostname.trim() || null,
-				v4_fixed: formV4.trim() || null,
-				v4: formV4.trim() || null,
-				v6_suffix: formV6Suffix.trim() || null,
+				hostname: formHostname.trim(),
+				v4_fixed: formV4.trim() || undefined,
+				v6_suffix: formV6Suffix.trim() || undefined,
+				origin: "Static",
 			};
 			await hostAdd(entry);
 			toast.success(
@@ -139,8 +129,8 @@
 			);
 			dialogOpen = false;
 			await loadHostsAndDevices();
-		} catch {
-			toast.error("Failed to save static host rule");
+		} catch (err: any) {
+			toast.error(err?.message || "Failed to save static host rule");
 		} finally {
 			submitting = false;
 		}

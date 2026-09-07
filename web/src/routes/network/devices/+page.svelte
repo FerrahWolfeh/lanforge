@@ -60,20 +60,9 @@
 	async function loadDevices() {
 		loading = true;
 		try {
-			const res: any = await listDevices();
-			const devList: DeviceEntry[] = Array.isArray(res)
-				? res
-				: Array.isArray(res?.devices)
-					? res.devices
-					: Array.isArray(res?.data)
-						? res.data
-						: [];
-			devices = devList;
-			const onlineCount = devList.filter((d) => d.online).length;
-			meta = {
-				total: res?.meta?.total ?? devList.length,
-				online: res?.meta?.online ?? onlineCount,
-			};
+			const res = await listDevices();
+			devices = res.devices;
+			meta = res.meta;
 		} catch {
 			toast.error("Failed to load network devices");
 		} finally {
@@ -84,11 +73,10 @@
 	async function triggerScan() {
 		scanning = true;
 		try {
-			await scan();
-			toast.success("Network ARP/NDP scan initiated");
 			await loadDevices();
+			toast.success("Network devices refreshed");
 		} catch {
-			toast.error("Failed to initiate scan");
+			toast.error("Failed to refresh devices");
 		} finally {
 			scanning = false;
 		}
@@ -119,15 +107,13 @@
 		detailsOpen = true;
 		loadingDetails = true;
 		try {
-			const res: any = await whois(device.mac);
+			const res = await whois(device.mac);
 			if (res) {
-				const entry = res.entry ?? res.data?.entry ?? res;
-				const history = res.history ?? res.data?.history ?? [];
-				if (entry && typeof entry === "object" && entry.mac) {
-					selectedDevice = entry;
+				if (res.entry) {
+					selectedDevice = res.entry;
 				}
-				if (Array.isArray(history)) {
-					whoisHistory = history;
+				if (Array.isArray(res.history)) {
+					whoisHistory = res.history;
 				}
 			}
 		} catch {
@@ -139,9 +125,20 @@
 
 	function openPromoteModal(device: DeviceEntry) {
 		promoteMac = device.mac;
-		promoteHostname = device.hostname || "";
-		promoteV4 = device.display_v4 || device.v4?.ip || "";
-		promoteV6Suffix = device.display_v6 || device.v6?.ip || "";
+		promoteHostname =
+			device.hostname && device.hostname !== "—" && !device.hostname.startsWith("<")
+				? device.hostname
+				: "";
+		const rawV4 =
+			device.v4?.ip ||
+			(device.display_v4 && device.display_v4 !== "—"
+				? device.display_v4.replace(/\s*\?$/, "")
+				: "");
+		promoteV4 = rawV4.trim();
+		const rawV6 =
+			device.v6?.ip ||
+			(device.display_v6 && device.display_v6 !== "—" ? device.display_v6 : "");
+		promoteV6Suffix = rawV6.trim();
 		promoteOpen = true;
 	}
 
@@ -156,17 +153,17 @@
 		try {
 			const entry: HostConfigEntry = {
 				mac: promoteMac.trim(),
-				hostname: promoteHostname.trim() || null,
-				v4_fixed: promoteV4.trim() || null,
-				v4: promoteV4.trim() || null,
-				v6_suffix: promoteV6Suffix.trim() || null,
+				hostname: promoteHostname.trim(),
+				v4_fixed: promoteV4.trim() || undefined,
+				v6_suffix: promoteV6Suffix.trim() || undefined,
+				origin: "Static",
 			};
 			await hostAdd(entry);
 			toast.success(`Promoted ${promoteMac} to static host rule!`);
 			promoteOpen = false;
 			await loadDevices();
-		} catch {
-			toast.error("Failed to promote device to static host");
+		} catch (err: any) {
+			toast.error(err?.message || "Failed to promote device to static host");
 		} finally {
 			promoteSubmitting = false;
 		}

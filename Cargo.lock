@@ -2450,7 +2450,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-api"
-version = "0.32.0"
+version = "0.32.1"
 dependencies = [
  "chrono",
  "futures",
@@ -2466,7 +2466,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-api-dispatch"
-version = "0.31.0"
+version = "0.31.1"
 dependencies = [
  "chrono",
  "futures",
@@ -2874,7 +2874,7 @@ dependencies = [
 
 [[package]]
 name = "lanforge-webui"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "mime_guess",
  "rust-embed",

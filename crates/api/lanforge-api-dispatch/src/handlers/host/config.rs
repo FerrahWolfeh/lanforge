@@ -44,15 +44,23 @@ impl ClientContext {
             None => Device::new(mac),
         };
 
-        dev.hostname = Hostname {
-            name: entry.hostname.clone(),
-            origin: HostnameOrigin::Static,
-        };
-        if let Some(ip) = entry.v4_fixed {
-            dev.v4 = IPv4State::Static(ip);
+        let sanitized_hostname = Hostname::sanitize(&entry.hostname);
+        if !sanitized_hostname.is_empty() {
+            dev.hostname = Hostname {
+                name: sanitized_hostname.clone(),
+                origin: HostnameOrigin::Static,
+            };
         }
+        match entry.v4_fixed {
+            Some(ip) => dev.v4 = IPv4State::Static(ip),
+            None => {
+                if matches!(dev.v4, IPv4State::Static(_)) {
+                    dev.v4 = IPv4State::None;
+                }
+            }
+        }
+        dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
         if let Some(suf) = entry.v6_suffix {
-            dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
             dev.v6.push(IPv6State::Static(suf, SystemTime::now()));
         }
         dev.origin = Origin::Static;
@@ -66,10 +74,15 @@ impl ClientContext {
         }
 
         // 3. Apply to memory context
+        let hostname_update = if sanitized_hostname.is_empty() {
+            FieldUpdate::NoChange
+        } else {
+            FieldUpdate::Set(sanitized_hostname)
+        };
         let update = DeviceUpdate::CliHostUpdated {
             mac,
             update: CliHostUpdate {
-                hostname: entry.hostname.into(),
+                hostname: hostname_update,
                 duid: FieldUpdate::NoChange,
                 v4_static: entry.v4_fixed.into(),
                 v6_suffix: entry.v6_suffix.into(),
@@ -115,23 +128,35 @@ impl ClientContext {
         };
 
         if field == "hostname" {
+            let sanitized = Hostname::sanitize(&value);
             dev.hostname = Hostname {
-                name: value.clone(),
+                name: sanitized.clone(),
                 origin: HostnameOrigin::Static,
             };
-            cli_update.hostname = FieldUpdate::Set(value.clone());
+            cli_update.hostname = FieldUpdate::Set(sanitized);
         } else if field == "duid" {
-            if let Ok(d) = value.parse::<Duid>() {
+            if value.is_empty() {
+                dev.duid = None;
+                cli_update.duid = FieldUpdate::Clear;
+            } else if let Ok(d) = value.parse::<Duid>() {
                 dev.duid = Some(d.clone());
                 cli_update.duid = FieldUpdate::Set(d);
             }
-        } else if field == "v4_static" {
-            if let Ok(ip) = value.parse::<Ipv4Addr>() {
+        } else if field == "v4_static" || field == "v4" || field == "v4_fixed" {
+            if value.is_empty() {
+                if matches!(dev.v4, IPv4State::Static(_)) {
+                    dev.v4 = IPv4State::None;
+                }
+                cli_update.v4_static = FieldUpdate::Clear;
+            } else if let Ok(ip) = value.parse::<Ipv4Addr>() {
                 dev.v4 = IPv4State::Static(ip);
                 cli_update.v4_static = FieldUpdate::Set(ip);
             }
-        } else if field == "v6_suffix" {
-            if let Some(suf) = Ipv6AddrOrSuffix::parse(&value) {
+        } else if field == "v6_suffix" || field == "v6" {
+            if value.is_empty() {
+                dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
+                cli_update.v6_suffix = FieldUpdate::Clear;
+            } else if let Some(suf) = Ipv6AddrOrSuffix::parse(&value) {
                 dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
                 dev.v6.push(IPv6State::Static(suf, SystemTime::now()));
                 cli_update.v6_suffix = FieldUpdate::Set(suf);

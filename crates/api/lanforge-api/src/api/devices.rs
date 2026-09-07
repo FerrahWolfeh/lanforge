@@ -7,8 +7,9 @@ use lanforge_types::{
         LeaseHistoryEntry, Origin, TransientOrigin,
     },
     identifiers::{Duid, MacAddr},
+    network::dhcp::empty_string_as_none,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// A response containing a list of devices and metadata.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -26,18 +27,34 @@ pub struct HostsResponse {
     pub hosts: Vec<HostConfigEntry>,
 }
 
+const fn default_host_origin() -> Origin {
+    Origin::Static
+}
+
+fn deserialize_string_or_empty<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(deserializer)?;
+    Ok(opt.map(|s| s.trim().to_string()).unwrap_or_default())
+}
+
 /// A single entry in the host configuration list.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct HostConfigEntry {
     /// MAC address identifying the device.
     pub mac: MacAddr,
     /// Manually configured hostname.
+    #[serde(default, deserialize_with = "deserialize_string_or_empty")]
     pub hostname: String,
     /// Fixed IPv4 address, if set.
+    #[serde(default, alias = "v4", deserialize_with = "empty_string_as_none")]
     pub v4_fixed: Option<Ipv4Addr>,
     /// IPv6 Interface ID (suffix) or Full address.
+    #[serde(default, deserialize_with = "empty_string_as_none")]
     pub v6_suffix: Option<Ipv6AddrOrSuffix>,
     /// Source of the configuration (e.g., "Toml", "Cli").
+    #[serde(default = "default_host_origin")]
     pub origin: Origin,
 }
 
@@ -391,5 +408,33 @@ mod tests {
         let groups = group_devices(&devices);
 
         assert_eq!(groups.len(), 2);
+    }
+
+    #[test]
+    fn test_host_config_entry_deserialization_tolerance() {
+        // Minimal JSON (only MAC, no origin, no hostname)
+        let json_minimal = r#"{"mac":"00:11:22:33:44:55"}"#;
+        let entry: HostConfigEntry = serde_json::from_str(json_minimal).unwrap();
+        assert_eq!(entry.mac, MacAddr::parse("00:11:22:33:44:55").unwrap());
+        assert_eq!(entry.hostname, "");
+        assert_eq!(entry.origin, Origin::Static);
+        assert_eq!(entry.v4_fixed, None);
+        assert_eq!(entry.v6_suffix, None);
+
+        // JSON with nulls and empty strings
+        let json_nulls = r#"{"mac":"aa:bb:cc:dd:ee:ff","hostname":null,"v4":"","v6_suffix":null}"#;
+        let entry_nulls: HostConfigEntry = serde_json::from_str(json_nulls).unwrap();
+        assert_eq!(entry_nulls.mac, MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap());
+        assert_eq!(entry_nulls.hostname, "");
+        assert_eq!(entry_nulls.origin, Origin::Static);
+        assert_eq!(entry_nulls.v4_fixed, None);
+        assert_eq!(entry_nulls.v6_suffix, None);
+
+        // JSON with v4 alias and whitespace hostname
+        let json_alias = r#"{"mac":"aa:bb:cc:dd:ee:01","hostname":" my-pc ","v4":"192.168.1.50"}"#;
+        let entry_alias: HostConfigEntry = serde_json::from_str(json_alias).unwrap();
+        assert_eq!(entry_alias.hostname, "my-pc");
+        assert_eq!(entry_alias.v4_fixed, Some("192.168.1.50".parse().unwrap()));
+        assert_eq!(entry_alias.origin, Origin::Static);
     }
 }

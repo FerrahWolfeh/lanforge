@@ -32,8 +32,7 @@
 	async function loadHosts() {
 		loading = true;
 		try {
-			const res = await hostList();
-			hosts = Array.isArray(res) ? res : [];
+			hosts = await hostList();
 		} catch {
 			toast.error("Failed to load static host configurations");
 		} finally {
@@ -64,17 +63,17 @@
 		try {
 			const entry: HostConfigEntry = {
 				mac: formMac.trim(),
-				hostname: formHostname.trim() || null,
-				v4_fixed: formV4.trim() || null,
-				v4: formV4.trim() || null,
-				v6_suffix: formV6Suffix.trim() || null,
+				hostname: formHostname.trim(),
+				v4_fixed: formV4.trim() || undefined,
+				v6_suffix: formV6Suffix.trim() || undefined,
+				origin: "Static",
 			};
 			await hostAdd(entry);
 			toast.success(`Static host rule added for ${entry.mac}`);
 			dialogOpen = false;
 			await loadHosts();
-		} catch {
-			toast.error("Failed to add static host rule");
+		} catch (err: any) {
+			toast.error(err?.message || "Failed to add static host rule");
 		} finally {
 			submitting = false;
 		}

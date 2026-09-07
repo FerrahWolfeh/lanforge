@@ -335,9 +335,27 @@ export interface DeviceEntry {
 	vlan_id?: number | null;
 }
 
+export interface DevicesMeta {
+	total: number;
+	online: number;
+	last_scan_secs_ago: number;
+}
+
 export interface DevicesResponse {
 	devices: DeviceEntry[];
-	meta: { total: number; online: number; last_scan_secs_ago: number };
+	meta: DevicesMeta;
+}
+
+export interface LeaseHistoryEntry {
+	ip: string;
+	lease_type: 'V4' | 'V6' | string;
+	action: 'Assigned' | 'Released' | 'Expired' | string;
+	timestamp: { secs_since_epoch: number; nanos_since_epoch: number } | number | string;
+}
+
+export interface WhoisResponse {
+	entry: DeviceEntry;
+	history: LeaseHistoryEntry[];
 }
 
 export interface HostConfigEntry {
@@ -346,7 +364,7 @@ export interface HostConfigEntry {
 	v4?: string | null;
 	v4_fixed?: string | null;
 	v6_suffix?: string | null;
-	origin?: string;
+	origin?: 'Static' | 'Dynamic' | 'System' | string;
 }
 
 export type LeaseKind = 'v4' | 'v6' | 'v6_prefix';
