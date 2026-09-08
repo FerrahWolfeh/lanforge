@@ -1,0 +1,57 @@
+[Unit]
+Description=lanforge — Unified IPv4/IPv6 Network Control Daemon
+Documentation=https://github.com/FerrahWolfeh/lanforge
+After=network.target
+Wants=network.target
+Before=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/lanforged --config /etc/lanforge/lanforge.toml
+Environment=LANFORGE_CONFIG=/etc/lanforge/lanforge.toml
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+
+# Permissions & Identity Model
+# Executado como root para operações de kernel (netlink, raw sockets, nftables, eBPF, /dev/ppp)
+# com grupo primário 'lanforge' para conceder acesso local ao socket de controle a usuários do grupo.
+User=root
+Group=lanforge
+
+# Linux Capabilities Hardening
+# Mantém somente as capacidades essenciais de rede e eBPF, removendo permanentemente todas as outras.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_BPF
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_BPF
+
+# Systemd Directory Management
+# Garante a criação de /run/lanforge e /var/lib/lanforge com permissões 0750 (root:lanforge)
+RuntimeDirectory=lanforge
+RuntimeDirectoryMode=0750
+StateDirectory=lanforge
+StateDirectoryMode=0750
+ConfigurationDirectory=lanforge
+ConfigurationDirectoryMode=0755
+
+# Security Hardening & VFS Sandboxing
+# Protege o sistema de arquivos montando /usr, /boot, /etc como somente-leitura,
+# exceto os diretórios específicos de estado, runtime e configuração do Lanforge.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+# ProtectKernelTunables deve ser 'no' para permitir que o serviço PPPoE configure sysctls de interface (/proc/sys/net/...)
+ProtectKernelTunables=no
+ReadWritePaths=/etc/lanforge /var/lib/lanforge /run/lanforge
+
+# Process Isolation
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+DevicePolicy=closed
+DeviceAllow=/dev/ppp rw
+DeviceAllow=/dev/net/tun rw
+
+[Install]
+WantedBy=multi-user.target

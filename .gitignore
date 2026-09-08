@@ -27,3 +27,6 @@ contrib/configs/
 crates/net/lanforge-pppoe/bpf/include/
 crates/net/lanforge-pppoe/bpf/*.o
 *.bpf.o
+
+# RPM packaging build directory
+packaging/build/
