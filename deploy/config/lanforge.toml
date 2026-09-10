@@ -1,0 +1,201 @@
+# Lanforge Production Configuration Template
+# Path: /etc/lanforge/lanforge.toml
+
+[system]
+# LAN interface where the daemon listens for requests (e.g., eth0, end0, br0).
+iface = "end0"
+
+# Target IPv6 SLAAC prefix used by the NDP engine to track local LAN devices.
+# If left empty (""), Lanforge automatically generates a unique RFC 4193-compliant random ULA prefix on first launch.
+target_prefix = ""
+
+# Global search domains announced to clients (DHCPv4, DHCPv6, RA).
+search_domains = ["lan", "home.arpa"]
+
+# Wait time (in seconds) before processing network event sequences (prevents flapping).
+debounce_secs = 2
+
+# Global TLS certificate and key (inherited by DNS and HTTP).
+# tls_cert = "/etc/lanforge/certs/lanforge.crt"
+# tls_key = "/etc/lanforge/certs/lanforge.key"
+
+[database]
+# Persistent configuration database (services, users, static hosts, DNS rewrites):
+config_path = "/var/lib/lanforge/config.redb"
+# Volatile runtime database in tmpfs (active leases, query logs, system event history):
+runtime_path = "/run/lanforge/runtime.redb"
+# Flush interval in seconds for persisting in-memory state:
+flush_interval = 60
+
+[api]
+# UNIX socket control API for the CLI (lanforge <command>).
+enabled = true
+socket_path = "/run/lanforge/control.sock"
+
+[http]
+# REST API and Web Console interface.
+enabled = true
+# Listen address (dual-stack wildcard [::]:8096 covers IPv6 and IPv4).
+listen = "[::]:8096"
+# Enable HTTPS (inherits global system TLS if cert paths omitted).
+https_enabled = false
+# Allow plaintext HTTP for local network / reverse proxy access.
+allow_plaintext_http = true
+doh_enabled = false
+
+
+# [ra] - Router Advertisement (RFC 4861)
+[ra]
+# Enables sending Router Advertisements for IPv6 autoconfiguration.
+enabled = true
+# Optional interface override (e.g., "lan0.100"). Defaults to [system].iface.
+# iface = "lan0.100"
+
+# Defines the "Managed Configuration" (M) flag. If true, clients must use DHCPv6 for addresses.
+managed = true
+
+# Defines the "Other Configuration" (O) flag. If true, clients must use DHCPv6 for options (DNS, etc).
+other_config = true
+
+# Maximum time interval (in seconds) between unsolicited RA transmissions (4s to 1800s).
+max_interval = 200
+
+# Router lifetime (in seconds). If 0, the host will not be used as a gateway.
+lifetime = 600
+
+# MTU value advertised on the link (e.g., 1500, or 1492 for PPPoE connections).
+mtu = 1500
+
+[[ra.prefix]]
+# Prefix source: "ula" (static defined below) or "auto_gua" (detected from the interface).
+source = "ula"
+# IPv6 address/prefix in CIDR format.
+address = "fd97:f00d:cafe:3731::"
+on_link = true
+autonomous = true
+
+[[ra.prefix]]
+# Automatically detects the Global Unicast Address (GUA) prefix configured on the interface.
+source = "auto_gua"
+on_link = true
+autonomous = true
+
+[[ra.rdnss]]
+# List of IPv6 DNS resolvers to advertise via Router Advertisement (RFC 8106).
+servers = ["fd97:f00d:cafe:3731::1"]
+# Lifetime (in seconds) of the RDNSS record.
+lifetime = 600
+
+[[ra.dnssl]]
+# Search domains advertised via Router Advertisement.
+domains = ["lan"]
+lifetime = 600
+
+
+# [dhcp.v4] - DHCP Server for IPv4
+[dhcp.v4]
+# Enables the DHCPv4 service.
+enabled = true
+
+# Default lifetime (in seconds) of DHCP leases.
+lease_time = 86400
+
+# Default gateway (Router) advertised to IPv4 clients.
+router = "192.168.1.1"
+
+# IPv4 DNS servers provided to clients.
+dns = ["192.168.1.1"]
+
+# Subnet mask (default: 255.255.255.0).
+subnet_mask = "255.255.255.0"
+
+# Address pools for dynamic allocation.
+[[dhcp.v4.pools]]
+name = "Primary LAN Scope"
+range_start = "192.168.1.100"
+range_end = "192.168.1.250"
+
+
+# [dhcp.v6] - Stateful DHCPv6 Server
+[dhcp.v6]
+# Enables the DHCPv6 service (requires managed = true in [ra]).
+enabled = true
+
+# Lease time (in seconds) for IPv6 addresses.
+lease_time = 86400
+
+# DNS servers (Option 23).
+dns_servers = ["fd97:f00d:cafe:3731::1"]
+
+# Search domains (Option 24).
+search_domains = ["lan"]
+
+# Suffix-based pools (applies dynamically to active ULA and GUA prefixes).
+[[dhcp.v6.pools]]
+range_start = "::100"
+range_end = "::1fff"
+
+
+# [dns] - Built-in DNS Resolver & Adblocker
+[dns]
+# Enables the built-in DNS resolver for the local network.
+enabled = true
+
+# Address and port where the DNS server will listen (standard: "[::]:53" dual-stack).
+listen = "[::]:53"
+
+# Local domain suffixes for internal hostname resolution.
+search_domains = ["lan"]
+
+# TTL (Time To Live) in seconds for local DNS responses.
+ttl = 60
+
+# Days to hide inactive devices from DNS.
+last_seen_threshold_days = 7
+
+# Built-in DNS Adblocker toggle
+adblock_enabled = false
+
+
+# [mdns] - mDNS Hostname & Device Discovery Prober
+[mdns]
+enabled = true
+probe_interval = 3600
+
+
+# [tftp] - TFTP Boot Server
+[tftp]
+enabled = false
+root_dir = "/var/lib/lanforge/tftp"
+listen_addr = "[::]:69"
+
+
+# [monitor] - Passive ARP/NDP Neighbor Discovery & Active Ping Sweeper
+[monitor]
+enabled = true
+
+
+# [pppoe] - Integrated PPPoE WAN Concentrator & Fast-Path
+[pppoe]
+enabled = false
+dataplane = "kernel"
+wan_iface = "eth1"
+username = "user@isp.com"
+password = "secretpassword"
+auth = "chap_md5"
+mru = 1492
+lcp_echo_interval_secs = 20
+lcp_echo_max_failures = 5
+reconnect_delay_secs = 10
+send_padt_on_shutdown = true
+discovery_padi_retries = 5
+discovery_padi_timeout_secs = 3
+
+[pppoe.nftables]
+enabled = true
+table_name = "lanforge"
+flow_offload = true
+mss_clamping = true
+bypass_dns = true
+bypass_vowifi = true
+masquerade = true

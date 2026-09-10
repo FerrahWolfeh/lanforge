@@ -86,6 +86,7 @@ password-hash = { version = "0.6.1" }
 hex = "0.4.3"
 base64 = "0.23.1"
 toml = "1.1.2"
+sd-notify = "0.5.0"
 
 [profile.release]
 opt-level = "z"

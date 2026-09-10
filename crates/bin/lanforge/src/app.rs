@@ -1,7 +1,7 @@
 use anyhow::Result;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
-use std::os::unix::net::UnixDatagram;
+use sd_notify::{NotifyState, notify};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
@@ -252,6 +252,7 @@ impl Daemon {
     }
 
     async fn shutdown(self) -> Result<()> {
+        sd_notify_stopping();
         info!("🛑 Starting shutdown sequence...");
         self.ctx.terminate();
         let _ = self
@@ -273,13 +274,15 @@ impl Daemon {
     }
 }
 
-pub fn sd_notify_ready() {
-    if let Ok(path) = std::env::var("NOTIFY_SOCKET") {
-        debug!("systemd: Notifying READY=1 via {}", path);
-        if let Ok(sock) = UnixDatagram::unbound()
-            && sock.connect(path).is_ok()
-        {
-            let _ = sock.send(b"READY=1\n");
-        }
+pub fn sd_notify_ready(status: &str) {
+    if let Err(e) = notify(&[NotifyState::Ready, NotifyState::Status(status)]) {
+        debug!("systemd: sd_notify failed or not running under systemd: {e}");
     }
+}
+
+pub fn sd_notify_stopping() {
+    let _ = notify(&[
+        NotifyState::Stopping,
+        NotifyState::Status("Shutting down..."),
+    ]);
 }

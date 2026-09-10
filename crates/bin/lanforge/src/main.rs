@@ -9,7 +9,10 @@
 use anyhow::Result;
 use lanforge::app::Daemon;
 use lanforge::bootstrap::Bootstrapper;
+use sd_notify::{NotifyState, notify};
+use std::time::Duration;
 use tokio::runtime::Builder;
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 #[cfg(all(feature = "jemalloc", not(feature = "hotpath-alloc")))]
@@ -54,6 +57,24 @@ async fn async_main() -> Result<()> {
         hotpath::tokio_runtime!();
         guard
     };
+
+    // 1.2 Setup Systemd Watchdog ping
+    if let Ok(usec_str) = std::env::var("WATCHDOG_USEC")
+        && let Ok(usec) = usec_str.parse::<u64>()
+    {
+        let interval_ms = (usec / 1000) / 2;
+        if interval_ms > 0 {
+            tokio::spawn(async move {
+                let mut interval =
+                    tokio::time::interval(Duration::from_millis(interval_ms));
+                loop {
+                    interval.tick().await;
+                    let _ = notify(&[NotifyState::Watchdog]);
+                }
+            });
+            info!("Systemd watchdog enabled with interval {interval_ms}ms");
+        }
+    }
 
     // 2. Run Bootstrap
     let (bootstrap, ctx) = Bootstrapper::run().await?;

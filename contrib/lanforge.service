@@ -7,11 +7,15 @@ Before=network-online.target
 
 [Service]
 Type=notify
+NotifyAccess=main
 ExecStart=/usr/bin/lanforged --config /etc/lanforge/lanforge.toml
 Environment=LANFORGE_CONFIG=/etc/lanforge/lanforge.toml
+EnvironmentFile=-/etc/lanforge/lanforge.env
 Restart=on-failure
 RestartSec=5s
-TimeoutStopSec=15s
+TimeoutStartSec=30s
+TimeoutStopSec=20s
+WatchdogSec=30s
 
 # Permissions & Identity Model
 # Executado como root para operações de kernel (netlink, raw sockets, nftables, eBPF, /dev/ppp)

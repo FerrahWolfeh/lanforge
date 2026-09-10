@@ -105,7 +105,12 @@ where
             .ctx
             .bus()
             .publish(LanforgeEvent::System(SystemEvent::SystemReady));
-        sd_notify_ready();
+        let status = format!(
+            "Operational ({} services online on {})",
+            loop_ctx.expected_services.len(),
+            loop_ctx.cfg.system.iface
+        );
+        sd_notify_ready(&status);
         loop_ctx.system_ready_sent = true;
     }
 
@@ -244,7 +249,12 @@ fn handle_bus_event<S: BuildHasher>(
                     .ctx
                     .bus()
                     .publish(LanforgeEvent::System(SystemEvent::SystemReady));
-                sd_notify_ready();
+                let status = format!(
+                    "Operational ({} services online on {})",
+                    l_ctx.expected_services.len(),
+                    l_ctx.cfg.system.iface
+                );
+                sd_notify_ready(&status);
                 l_ctx.system_ready_sent = true;
             }
         }
