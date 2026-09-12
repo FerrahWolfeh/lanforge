@@ -157,30 +157,34 @@
 	<!-- Tabbed Rules View -->
 	<Tabs.Root bind:value={activeTab} class="space-y-4">
 		<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-			<Tabs.List class="h-9">
-				<Tabs.Trigger value="allow" class="gap-1.5 text-xs">
-					<ShieldCheckIcon class="size-3.5 text-emerald-500" />
-					Allowlist (Whitelist)
-					<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-[10px] font-mono">
-						{allowlist.length}
-					</Badge>
-				</Tabs.Trigger>
-				<Tabs.Trigger value="block" class="gap-1.5 text-xs">
-					<ShieldAlertIcon class="size-3.5 text-rose-500" />
-					Custom Blocklist (Blacklist)
-					<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-[10px] font-mono">
-						{customBlocks.length}
-					</Badge>
-				</Tabs.Trigger>
-			</Tabs.List>
+			<div class="overflow-x-auto no-scrollbar w-full sm:w-auto -mx-1 px-1 py-0.5">
+				<Tabs.List class="inline-flex w-max h-9 p-1">
+					<Tabs.Trigger value="allow" class="gap-1.5 text-xs shrink-0">
+						<ShieldCheckIcon class="size-3.5 text-emerald-500" />
+						<span class="hidden sm:inline">Allowlist (Whitelist)</span>
+						<span class="sm:hidden">Allowlist</span>
+						<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-[10px] font-mono">
+							{allowlist.length}
+						</Badge>
+					</Tabs.Trigger>
+					<Tabs.Trigger value="block" class="gap-1.5 text-xs shrink-0">
+						<ShieldAlertIcon class="size-3.5 text-rose-500" />
+						<span class="hidden sm:inline">Custom Blocklist (Blacklist)</span>
+						<span class="sm:hidden">Custom Blocklist</span>
+						<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-[10px] font-mono">
+							{customBlocks.length}
+						</Badge>
+					</Tabs.Trigger>
+				</Tabs.List>
+			</div>
 
-			<div class="flex items-center gap-2">
-				<div class="relative w-48 sm:w-60">
+			<div class="flex items-center gap-2 w-full sm:w-auto">
+				<div class="relative flex-1 sm:w-60 sm:flex-initial">
 					<SearchIcon class="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
 					<Input
 						type="text"
 						placeholder="Search rules..."
-						class="pl-8 h-8 text-xs font-mono"
+						class="pl-8 h-8 text-xs font-mono w-full"
 						bind:value={searchQuery}
 					/>
 				</div>
@@ -188,11 +192,11 @@
 				<Button
 					variant="outline"
 					size="sm"
-					class="h-8 gap-1.5 text-xs"
+					class="h-8 gap-1.5 text-xs shrink-0"
 					onclick={() => (importDialogOpen = true)}
 				>
 					<FileTextIcon class="size-3.5" />
-					Bulk Import
+					<span>Bulk Import</span>
 				</Button>
 			</div>
 		</div>

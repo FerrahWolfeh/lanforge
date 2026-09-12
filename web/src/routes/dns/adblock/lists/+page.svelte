@@ -13,7 +13,6 @@
 	import CheckIcon from "@lucide/svelte/icons/check";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import SearchIcon from "@lucide/svelte/icons/search";
-	import SparklesIcon from "@lucide/svelte/icons/sparkles";
 	import ShieldIcon from "@lucide/svelte/icons/shield";
 	import { toast } from "svelte-sonner";
 	import {
@@ -24,6 +23,7 @@
 	} from "$lib/api/client";
 	import type { DnsAdblockUrlEntry } from "$lib/api/types";
 	import DnsAdblockAddSourceDialog from "./components/DnsAdblockAddSourceDialog.svelte";
+	import DnsAdblockPresetsPopover from "./components/DnsAdblockPresetsPopover.svelte";
 
 	let loading = $state(true);
 	let sources = $state<DnsAdblockUrlEntry[]>([]);
@@ -31,39 +31,6 @@
 	let dialogOpen = $state(false);
 	let copiedUrl = $state<string | null>(null);
 	let updatingAll = $state(false);
-
-	const PRESETS = [
-		{
-			title: "StevenBlack Unified",
-			description: "Standard adware + malware blocking hosts list (~150k rules).",
-			url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
-			badge: "Recommended",
-		},
-		{
-			title: "OISD Basic",
-			description: "High-performance, false-positive resilient internet blocking (~250k rules).",
-			url: "https://big.oisd.nl/domainswg",
-			badge: "Popular",
-		},
-		{
-			title: "Hägezi Multi Normal",
-			description: "Balanced protection against tracker, phishing, and telemetry domains.",
-			url: "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/multi.txt",
-			badge: "Strict",
-		},
-		{
-			title: "AdGuard Mobile & Tracking",
-			description: "Curated AdGuard DNS tracking, in-app ad, and counter list.",
-			url: "https://v.firebog.net/hosts/AdguardDNS.txt",
-			badge: "AdGuard",
-		},
-		{
-			title: "Windows SpyBlocker",
-			description: "Disables telemetry, diagnostics, and background reporting in Windows.",
-			url: "https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/spy.txt",
-			badge: "Privacy",
-		},
-	];
 
 	async function loadSources() {
 		loading = true;
@@ -153,66 +120,6 @@
 </script>
 
 <div class="space-y-6">
-	<!-- Presets Showcase Section -->
-	<Card.Root>
-		<Card.Header class="pb-3 border-b border-border/50">
-			<div class="flex items-center justify-between">
-				<div class="flex items-center gap-2">
-					<SparklesIcon class="size-4 text-amber-500" />
-					<Card.Title class="text-base font-semibold">
-						Community Filter Presets (1-Click Install)
-					</Card.Title>
-				</div>
-				<Badge variant="outline" class="text-xs">Pi-hole & AdGuard Ready</Badge>
-			</div>
-			<Card.Description class="text-xs">
-				Instantly enable battle-tested community blocklists optimized for homelabs and single-board devices.
-			</Card.Description>
-		</Card.Header>
-
-		<Card.Content class="p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-			{#each PRESETS as p (p.url)}
-				{@const installed = sources.some((s) => s.url === p.url)}
-				<div class="flex flex-col justify-between p-3.5 rounded-lg border bg-card/60 gap-3">
-					<div class="flex flex-col gap-1">
-						<div class="flex items-center justify-between gap-2">
-							<span class="font-semibold text-xs text-foreground">{p.title}</span>
-							<Badge variant="secondary" class="text-[10px] px-1.5 py-0">
-								{p.badge}
-							</Badge>
-						</div>
-						<p class="text-[11px] text-muted-foreground line-clamp-2">
-							{p.description}
-						</p>
-					</div>
-
-					<div class="flex items-center justify-between pt-1 border-t border-border/40">
-						<span class="text-[10px] font-mono text-muted-foreground truncate max-w-[170px]" title={p.url}>
-							{p.url.replace(/^https?:\/\//, "")}
-						</span>
-
-						{#if installed}
-							<Badge variant="outline" class="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/20 gap-1">
-								<CheckIcon class="size-3" />
-								Active
-							</Badge>
-						{:else}
-							<Button
-								variant="outline"
-								size="sm"
-								class="h-7 text-xs px-2.5"
-								onclick={() => handleAddPreset(p.url, p.title)}
-							>
-								<PlusIcon class="size-3" />
-								Add List
-							</Button>
-						{/if}
-					</div>
-				</div>
-			{/each}
-		</Card.Content>
-	</Card.Root>
-
 	<!-- Configured Source Lists Table -->
 	<Card.Root>
 		<Card.Header class="pb-3 border-b border-border/50">
@@ -229,8 +136,8 @@
 					</Card.Description>
 				</div>
 
-				<div class="flex items-center gap-2">
-					<div class="relative w-48 sm:w-60">
+				<div class="flex flex-wrap items-center gap-2">
+					<div class="relative w-full sm:w-52">
 						<SearchIcon class="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
 						<Input
 							type="text"
@@ -240,6 +147,8 @@
 						/>
 					</div>
 
+					<DnsAdblockPresetsPopover {sources} onAdd={handleAddPreset} />
+
 					<Button
 						variant="outline"
 						size="sm"
@@ -248,7 +157,7 @@
 						class="h-8 gap-1.5 text-xs"
 					>
 						<RefreshCwIcon class="size-3.5 {updatingAll ? 'animate-spin' : ''}" />
-						Update All
+						<span class="hidden sm:inline">Update All</span>
 					</Button>
 
 					<Button

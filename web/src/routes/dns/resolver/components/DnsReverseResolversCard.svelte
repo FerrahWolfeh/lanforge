@@ -95,8 +95,8 @@
 				</Empty.Header>
 			</Empty.Root>
 		{:else}
-			<div class="max-h-[380px] overflow-auto">
-				<Table.Root>
+			<div class="max-h-[380px] overflow-x-auto">
+				<Table.Root class="min-w-[440px]">
 					<Table.Header
 						class="sticky top-0 z-10 bg-muted/90 backdrop-blur"
 					>

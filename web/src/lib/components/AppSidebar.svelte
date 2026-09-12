@@ -23,6 +23,7 @@
 	import RadioIcon from "@lucide/svelte/icons/radio";
 	import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
+	import HardDriveDownloadIcon from "@lucide/svelte/icons/hard-drive-download";
 
 	interface NavItemChild {
 		label: string;
@@ -62,14 +63,19 @@
 					icon: BookmarkIcon,
 				},
 				{
-					label: "PPPoE WAN",
-					href: "/network/pppoe",
-					icon: PlugZapIcon,
+					label: "Discovery & Monitor",
+					href: "/network/discovery",
+					icon: RadioIcon,
 				},
 				{
 					label: "IPv6 RA",
 					href: "/network/ra",
-					icon: RadioIcon,
+					icon: WifiIcon,
+				},
+				{
+					label: "PPPoE WAN",
+					href: "/network/pppoe",
+					icon: PlugZapIcon,
 				},
 			],
 		},
@@ -77,42 +83,20 @@
 		{
 			label: "DNS & Security",
 			items: [
-				{
-					label: "DNS Server",
-					href: "/dns/resolver",
-					icon: GlobeIcon,
-					children: [
-						{ label: "Overview", href: "/dns/resolver" },
-						{ label: "Settings", href: "/dns/settings" },
-						{ label: "Custom Rewrites", href: "/dns/rewrites" },
-						{ label: "Cache", href: "/dns/cache" },
-						{ label: "Query Log", href: "/dns/log" },
-					],
-				},
-				{
-					label: "Adblock",
-					href: "/dns/adblock",
-					icon: ShieldIcon,
-					children: [
-						{ label: "Overview", href: "/dns/adblock" },
-						{ label: "Blocklists", href: "/dns/adblock/lists" },
-						{ label: "Custom Rules", href: "/dns/adblock/rules" },
-						{ label: "Blocked Services", href: "/dns/adblock/services" },
-						{ label: "Settings", href: "/dns/adblock/settings" },
-					],
-				},
+				{ label: "DNS Resolver", href: "/dns/resolver", icon: GlobeIcon },
+				{ label: "Query Log", href: "/dns/log", icon: ActivityIcon },
+				{ label: "Custom Rewrites", href: "/dns/rewrites", icon: BookmarkIcon },
+				{ label: "Adblock", href: "/dns/adblock", icon: ShieldIcon },
 			],
 		},
 		{
-			label: "DHCP",
+			label: "DHCP & Boot",
 			items: [
-				{ label: "Leases", href: "/dhcp/leases", icon: NetworkIcon },
-				{ label: "Pools", href: "/dhcp/pools", icon: ActivityIcon },
-				{ label: "Scopes", href: "/dhcp/scopes", icon: LayersIcon },
+				{ label: "DHCP Server", href: "/dhcp", icon: ServerIcon },
 				{
-					label: "Server Options",
-					href: "/dhcp/server",
-					icon: SlidersIcon,
+					label: "TFTP Server",
+					href: "/tftp",
+					icon: HardDriveDownloadIcon,
 				},
 			],
 		},

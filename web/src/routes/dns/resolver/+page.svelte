@@ -33,6 +33,8 @@
 	import DnsUpstreamsCard from "./components/DnsUpstreamsCard.svelte";
 	import DnsReverseResolversCard from "./components/DnsReverseResolversCard.svelte";
 	import DnsDigModal from "./components/DnsDigModal.svelte";
+	import DnsTuningModal from "./components/DnsTuningModal.svelte";
+	import SlidersIcon from "@lucide/svelte/icons/sliders";
 
 	let statsData = $state<DnsStatsResponse | null>(null);
 	let analyticsData = $state<DnsAnalyticsResponse | null>(null);
@@ -42,6 +44,7 @@
 
 	// Modals State
 	let digOpen = $state(false);
+	let tuningOpen = $state(false);
 	let upstreamOpen = $state(false);
 	let upstreamSubmitting = $state(false);
 	let formUpstreamAddr = $state("");
@@ -214,17 +217,26 @@
 					DNS Resolver & Analytics
 				</h1>
 				<p class="text-muted-foreground text-xs">
-					High-performance recursive DNS resolver, query disposition
-					analytics, and upstream management
+					Recursive DNS resolver, query cache, and upstream forwarders
 				</p>
 			</div>
 
-			<div class="flex items-center gap-2">
+			<div class="flex flex-wrap items-center gap-2 mt-1 sm:mt-0">
+				<Button
+					variant="outline"
+					size="sm"
+					onclick={() => (tuningOpen = true)}
+					class="text-xs gap-1.5 h-8 border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300 hover:bg-sky-500/20 transition-colors font-medium shadow-xs"
+				>
+					<SlidersIcon class="size-3.5 text-sky-600 dark:text-sky-400" />
+					<span>Tuning & Cache</span>
+				</Button>
 				<Button
 					variant="outline"
 					size="sm"
 					onclick={loadAllData}
 					disabled={loading}
+					class="text-xs h-8"
 				>
 					<RefreshCwIcon
 						class={["size-3.5", loading ? "animate-spin" : ""].join(
@@ -260,6 +272,7 @@
 				onAddUpstream={() => (upstreamOpen = true)}
 				onRemoveUpstream={handleRemoveUpstream}
 				onOpenDigModal={() => (digOpen = true)}
+				onReloadAll={loadAllData}
 			/>
 			<DnsReverseResolversCard
 				{loading}
@@ -270,6 +283,9 @@
 		</div>
 	</div>
 </Tooltip.Provider>
+
+<!-- Resolver Tuning & Cache Modal -->
+<DnsTuningModal bind:open={tuningOpen} {statsData} onReload={loadAllData} />
 
 <!-- Interactive DNS Dig Lookup Modal -->
 <DnsDigModal bind:open={digOpen} />

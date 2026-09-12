@@ -384,9 +384,9 @@
 		<Card.Header class="pb-3">
 			<div class="flex flex-wrap items-center justify-between gap-2">
 				<div>
-					<Card.Title class="text-base font-semibold">Decoupled Subsystem Services</Card.Title>
+					<Card.Title class="text-base font-semibold">Services & Daemons</Card.Title>
 					<Card.Description class="text-xs">
-						Supervised background daemons, transports, and telemetry banners
+						Background services, network listeners, and runtime status
 					</Card.Description>
 				</div>
 				<div class="flex items-center gap-2">

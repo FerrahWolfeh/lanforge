@@ -52,7 +52,7 @@
 		<AppSidebar />
 		<Sidebar.Inset>
 			<Topbar {uptime} />
-			<main class="flex flex-1 flex-col gap-6 p-6">
+			<main class="flex flex-1 flex-col gap-4 sm:gap-6 p-3 sm:p-6 w-full max-w-full min-w-0 overflow-x-hidden">
 				{@render children()}
 			</main>
 		</Sidebar.Inset>

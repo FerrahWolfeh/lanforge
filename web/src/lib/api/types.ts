@@ -368,6 +368,18 @@ export interface WhoisResponse {
 	history: LeaseHistoryEntry[];
 }
 
+export interface TransientHostEntry {
+	ip: string;
+	hostname: string;
+	origin: string;
+	resolved_at: number;
+	last_seen: number;
+}
+
+export interface TransientHostsResponse {
+	hosts: TransientHostEntry[];
+}
+
 export interface HostConfigEntry {
 	mac: string;
 	hostname: string | null;
@@ -518,6 +530,13 @@ export interface DnsStatsResponse {
 	cache_misses: number;
 	blocked_queries: number;
 	cache_entries: number;
+	cache_evictions?: number;
+	cache_capacity?: number;
+	upstream_errors?: number;
+	auth_queries?: number;
+	recursions?: number;
+	resolved_total?: number;
+	failed_total?: number;
 }
 
 export interface TopDomainEntry {

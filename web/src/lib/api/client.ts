@@ -43,6 +43,7 @@ import type {
 	SetupStatusResponse,
 	StatusResponse,
 	ServiceBanner,
+	TransientHostEntry,
 	UserInfo,
 	WhoisResponse,
 	PppoeConfig,
@@ -316,6 +317,14 @@ export const whois = async (target: string): Promise<WhoisResponse> => {
 export const purge = (target: string) => del<void>(`/devices/${encodeURIComponent(target)}`);
 export const wol = (target: string) =>
 	post<void>(`/devices/${encodeURIComponent(target)}/wol`);
+export const transientHostList = async (): Promise<TransientHostEntry[]> => {
+	const res = await get<any>('/devices/transient');
+	if (!res) return [];
+	if (Array.isArray(res)) return res;
+	if (Array.isArray(res.hosts)) return res.hosts;
+	if (Array.isArray(res.data?.hosts)) return res.data.hosts;
+	return [];
+};
 
 // ---------------------------------------------------------------------------
 // Hosts

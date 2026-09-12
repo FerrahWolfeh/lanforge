@@ -212,7 +212,7 @@
 			tag: "Stateful / Stateless",
 			proto: "UDP Port 547",
 			desc: "IPv6 stateful address & prefix delegation",
-			href: "/dhcp/scopes",
+			href: "/dhcp/pools",
 		},
 		{
 			id: "dns",
@@ -228,7 +228,7 @@
 			tag: "PXE Boot",
 			proto: "UDP Port 69",
 			desc: "Network boot firmware & image distribution server",
-			href: "/system/services",
+			href: "/tftp",
 		},
 		{
 			id: "pppoe",
@@ -237,6 +237,14 @@
 			proto: "PPPoverEthernet",
 			desc: "DSL/FTTH encapsulation & point-to-point tunneling",
 			href: "/network/pppoe",
+		},
+		{
+			id: "discovery",
+			name: "Discovery & Monitor",
+			tag: "Passive / mDNS",
+			proto: "Netlink / ARP",
+			desc: "Transient neighbor monitor & active mDNS discovery prober",
+			href: "/network/discovery",
 		},
 	];
 </script>
@@ -255,7 +263,7 @@
 				Router Dashboard
 			</h1>
 			<p class="text-muted-foreground text-sm">
-				Domestic homelab LAN orchestration, DHCP, DNS, & network discovery
+				Network status, DHCP leases, DNS activity, and connected devices
 			</p>
 		</div>
 		<div class="flex items-center gap-2">

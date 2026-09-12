@@ -18,8 +18,10 @@
 		dnsAdblockStatus,
 		dnsAdblockConfigSet,
 		dnsCacheFlush,
+		exportSystemConfig,
+		importSystemConfig,
 	} from "$lib/api/client";
-	import type { BlockingMode, DnsAdblockStatusResponse } from "$lib/api/types";
+	import type { BlockingMode } from "$lib/api/types";
 
 	let loading = $state(true);
 	let saving = $state(false);
@@ -39,39 +41,46 @@
 	}> = [
 		{
 			id: "nxdomain",
-			title: "NXDOMAIN (Recommended)",
-			description: "Responds that the domain does not exist. Prevents client timeouts and connection retries.",
-			badge: "Fastest",
+			title: "NXDOMAIN",
+			description: "Responds that the domain does not exist. Prevents client connection retries.",
+			badge: "Default",
 		},
 		{
 			id: "null_ip",
 			title: "Null IP (0.0.0.0 / ::)",
-			description: "Returns 0.0.0.0 for A queries and :: for AAAA queries. Standard Pi-hole sinkhole behavior.",
-			badge: "Standard",
+			description: "Returns 0.0.0.0 for A queries and :: for AAAA queries.",
+			badge: "Sinkhole",
 		},
 		{
 			id: "custom_ip",
 			title: "Custom IP",
-			description: "Directs blocked traffic to an internal LAN HTTP server hosting a custom block/splash page.",
-			badge: "Advanced",
+			description: "Returns configured IP addresses hosting a local block page.",
+			badge: "Custom",
 		},
 		{
 			id: "refused",
 			title: "REFUSED (RCODE 5)",
-			description: "Explicitly refuses the query. Some clients may treat this as a server failure and try backup resolvers.",
-			badge: "Strict",
+			description: "Refuses the DNS query with RCODE 5.",
+			badge: "RCODE 5",
 		},
 	];
 
 	async function loadConfig() {
 		loading = true;
 		try {
-			const status = await dnsAdblockStatus();
+			const [status, sysCfg] = await Promise.all([
+				dnsAdblockStatus().catch(() => null),
+				exportSystemConfig().catch(() => null),
+			]);
 			if (status) {
 				const mode = (status.blocking_mode as string) === "nx_domain" ? "nxdomain" : status.blocking_mode;
 				blockingMode = mode ?? "nxdomain";
 				customIpV4 = status.blocking_ip_v4 ?? "";
 				customIpV6 = status.blocking_ip_v6 ?? "";
+			}
+			if (sysCfg?.dns_adblock_config) {
+				refreshHours = String(sysCfg.dns_adblock_config.refresh_hours ?? 12);
+				refreshAtNight = sysCfg.dns_adblock_config.refresh_at_night ?? true;
 			}
 		} catch {
 			toast.error("Failed to load adblock configuration");
@@ -94,6 +103,15 @@
 				blocking_ip_v4: customIpV4.trim() || null,
 				blocking_ip_v6: customIpV6.trim() || null,
 			});
+			const sysCfg = await exportSystemConfig().catch(() => null);
+			if (sysCfg?.dns_adblock_config) {
+				sysCfg.dns_adblock_config.refresh_hours = Number(refreshHours) || 12;
+				sysCfg.dns_adblock_config.refresh_at_night = refreshAtNight;
+				sysCfg.dns_adblock_config.blocking_mode = blockingMode;
+				sysCfg.dns_adblock_config.blocking_ip_v4 = customIpV4.trim() || null;
+				sysCfg.dns_adblock_config.blocking_ip_v6 = customIpV6.trim() || null;
+				await importSystemConfig(sysCfg);
+			}
 			toast.success("Adblock configuration saved successfully");
 			await loadConfig();
 		} catch (err: any) {

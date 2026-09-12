@@ -1,471 +1,513 @@
 <script lang="ts">
-	import * as Card from "$lib/components/ui/card";
-	import * as Table from "$lib/components/ui/table";
-	import * as Empty from "$lib/components/ui/empty";
+	import { onMount } from "svelte";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
-	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { toast } from "svelte-sonner";
-	import { onMount } from "svelte";
-	import { dhcpPools, status } from "$lib/api/client";
+	import HelpPopover from "$lib/components/HelpPopover.svelte";
+
+	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+	import SaveIcon from "@lucide/svelte/icons/save";
+	import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
+	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
+	import SlidersIcon from "@lucide/svelte/icons/sliders";
+	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
+
+	import {
+		dhcpPools,
+		dhcpPoolsConfigGet,
+		dhcpPoolsConfigUpdate,
+		dhcpOptionsGet,
+		dhcpReconcile,
+	} from "$lib/api/client";
 	import type {
-		DhcpPoolEntry,
 		DhcpPoolsResponse,
-		StatusResponse,
+		Dhcpv4PoolConfig,
+		Dhcpv6PoolConfig,
 	} from "$lib/api/types";
 
-	// Icons
-	import ActivityIcon from "@lucide/svelte/icons/activity";
-	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-	import LayersIcon from "@lucide/svelte/icons/layers";
-	import ServerIcon from "@lucide/svelte/icons/server";
-	import CheckCircle2Icon from "@lucide/svelte/icons/check-circle-2";
-	import AlertTriangleIcon from "@lucide/svelte/icons/alert-triangle";
-	import NetworkIcon from "@lucide/svelte/icons/network";
-	import GlobeIcon from "@lucide/svelte/icons/globe";
+	import PoolStatsCards from "./components/PoolStatsCards.svelte";
+	import PoolV4Table from "./components/PoolV4Table.svelte";
+	import PoolV6Table from "./components/PoolV6Table.svelte";
+	import PoolV4Dialog from "./components/PoolV4Dialog.svelte";
+	import PoolV6Dialog from "./components/PoolV6Dialog.svelte";
 
-	let poolData = $state<DhcpPoolsResponse>({ v4_pools: [], v6_pools: [] });
-	let daemonStatus = $state<StatusResponse | null>(null);
 	let loading = $state(true);
+	let saving = $state(false);
+	let reconciling = $state(false);
 	let isRefreshing = $state(false);
 
-	async function loadPoolsData(showSpinner = true) {
+	let poolStats = $state<DhcpPoolsResponse>({ v4_pools: [], v6_pools: [] });
+	let v4Pools = $state<Dhcpv4PoolConfig[]>([]);
+	let v6Pools = $state<Dhcpv6PoolConfig[]>([]);
+	let activeUlaPrefix = $state<string | null>(null);
+	let activeGuaPrefix = $state<string | null>(null);
+	let pristinePoolsJson = $state("");
+
+	// Global Fallbacks from server options
+	let globalV4Router = $state("");
+	let globalV4SubnetMask = $state("255.255.255.0");
+	let globalV4LeaseTime = $state(86400);
+	let globalV6LeaseTime = $state(86400);
+
+	// Dialog States
+	let v4ModalOpen = $state(false);
+	let editingV4Index = $state<number | null>(null);
+	let v4Name = $state("");
+	let v4Start = $state("");
+	let v4End = $state("");
+	let v4Router = $state("");
+	let v4SubnetMask = $state("");
+	let v4Dns = $state("");
+	let v4Lease = $state<number | "">(86400);
+	let v4BootFile = $state("");
+	let v4TftpServer = $state("");
+
+	let v6ModalOpen = $state(false);
+	let editingV6Index = $state<number | null>(null);
+	let v6Name = $state("");
+	let v6Start = $state("");
+	let v6End = $state("");
+	let v6Addr = $state("");
+	let v6Dns = $state("");
+	let v6Lease = $state<number | "">(86400);
+	let v6BootFile = $state("");
+
+	function parseList(str: string): string[] {
+		return str
+			.split(",")
+			.map((s) => s.trim())
+			.filter(Boolean);
+	}
+
+	const isDirty = $derived.by(() => {
+		if (loading) return false;
+		const currentStr = JSON.stringify({
+			v4_pools: v4Pools,
+			v6_pools: v6Pools,
+		});
+		return currentStr !== pristinePoolsJson;
+	});
+
+	// Derived metrics
+	const allLivePools = $derived([...poolStats.v4_pools, ...poolStats.v6_pools]);
+	const totalConfiguredCount = $derived(v4Pools.length + v6Pools.length);
+	const totalManagedAddresses = $derived(
+		allLivePools.reduce((acc, p) => acc + (p.total || 0), 0),
+	);
+	const totalUsedAddresses = $derived(
+		allLivePools.reduce((acc, p) => acc + (p.used || 0), 0),
+	);
+	const totalAvailableAddresses = $derived(
+		allLivePools.reduce((acc, p) => acc + (p.available || 0), 0),
+	);
+	const aggregateUtilization = $derived(
+		totalManagedAddresses > 0
+			? Math.round((totalUsedAddresses / totalManagedAddresses) * 1000) / 10
+			: 0,
+	);
+
+	async function loadAllData(showSpinner = true) {
 		if (showSpinner) loading = true;
 		else isRefreshing = true;
 
 		try {
-			const [pRes, sRes] = await Promise.allSettled([
+			const [statsRes, configRes, optsRes] = await Promise.allSettled([
 				dhcpPools(),
-				status(),
+				dhcpPoolsConfigGet(),
+				dhcpOptionsGet(),
 			]);
 
-			if (pRes.status === "fulfilled") {
-				poolData = pRes.value;
+			if (statsRes.status === "fulfilled") {
+				poolStats = statsRes.value;
 			}
-			if (sRes.status === "fulfilled") {
-				daemonStatus = sRes.value;
+			if (configRes.status === "fulfilled") {
+				v4Pools = JSON.parse(JSON.stringify(configRes.value.v4_pools));
+				v6Pools = JSON.parse(JSON.stringify(configRes.value.v6_pools));
+				activeUlaPrefix = configRes.value.active_ula_prefix ?? "fd00::/64";
+				activeGuaPrefix = configRes.value.active_gua_prefix ?? null;
+
+				pristinePoolsJson = JSON.stringify({
+					v4_pools: v4Pools,
+					v6_pools: v6Pools,
+				});
+			}
+			if (optsRes.status === "fulfilled") {
+				globalV4Router = optsRes.value.v4?.router ?? "";
+				globalV4SubnetMask = optsRes.value.v4?.subnet_mask ?? "255.255.255.0";
+				globalV4LeaseTime = optsRes.value.v4?.lease_time ?? 86400;
+				globalV6LeaseTime = optsRes.value.v6?.lease_time ?? 86400;
 			}
 		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to load DHCP pool metrics");
+			toast.error(`Failed to load DHCP pools data: ${err.message}`);
 		} finally {
 			loading = false;
 			isRefreshing = false;
 		}
 	}
 
-	onMount(() => {
-		loadPoolsData();
-	});
-
-	// Derived metrics
-	const allPools = $derived([...poolData.v4_pools, ...poolData.v6_pools]);
-	const totalPoolsCount = $derived(allPools.length);
-	const totalAddresses = $derived(
-		allPools.reduce((acc, p) => acc + (p.total || 0), 0),
-	);
-	const totalUsedAddresses = $derived(
-		allPools.reduce((acc, p) => acc + (p.used || 0), 0),
-	);
-	const totalAvailableAddresses = $derived(
-		allPools.reduce((acc, p) => acc + (p.available || 0), 0),
-	);
-	const aggregateUtilization = $derived(
-		totalAddresses > 0
-			? Math.round((totalUsedAddresses / totalAddresses) * 1000) / 10
-			: 0,
-	);
-
-	function getUtilizationColor(pct: number): {
-		barClass: string;
-		badgeClass: string;
-		label: string;
-	} {
-		if (pct >= 90) {
-			return {
-				barClass: "bg-destructive",
-				badgeClass:
-					"text-destructive border-destructive/30 bg-destructive/10",
-				label: "High",
-			};
+	async function saveScopes() {
+		saving = true;
+		try {
+			await dhcpPoolsConfigUpdate(v4Pools, v6Pools);
+			pristinePoolsJson = JSON.stringify({
+				v4_pools: v4Pools,
+				v6_pools: v6Pools,
+			});
+			toast.success("DHCP address scopes and pools saved successfully");
+			setTimeout(() => loadAllData(false), 500);
+		} catch (err: any) {
+			toast.error(`Failed to save scopes: ${err.message}`);
+		} finally {
+			saving = false;
 		}
-		if (pct >= 75) {
-			return {
-				barClass: "bg-amber-500",
-				badgeClass:
-					"text-amber-500 border-amber-500/30 bg-amber-500/10",
-				label: "Elevated",
-			};
-		}
-		return {
-			barClass: "bg-emerald-500",
-			badgeClass:
-				"text-emerald-500 border-emerald-500/30 bg-emerald-500/10",
-			label: "Normal",
-		};
 	}
+
+	function discardChanges() {
+		loadAllData(true);
+		toast.info("Scope modifications discarded");
+	}
+
+	async function handleReconcile() {
+		reconciling = true;
+		try {
+			const res = await dhcpReconcile();
+			if (res.invalidated_v4_leases.length === 0) {
+				toast.success(
+					`DHCP Reconcile: All leases within range (${res.valid_v4_leases} active, ${res.preserved_static_leases} static preserved)`,
+				);
+			} else {
+				toast.warning(
+					`Reconcile: Invalidated ${res.invalidated_v4_leases.length} out-of-range lease(s). ForceRenew sent.`,
+					{
+						description:
+							res.invalidated_v4_leases
+								.map((l) => `${l.mac} (${l.ip})`)
+								.slice(0, 3)
+								.join(", ") +
+							(res.invalidated_v4_leases.length > 3 ? "..." : ""),
+						duration: 8000,
+					},
+				);
+			}
+			await loadAllData(false);
+		} catch (err: any) {
+			toast.error(`Failed to reconcile leases: ${err.message}`);
+		} finally {
+			reconciling = false;
+		}
+	}
+
+	// IPv4 Modal Handlers
+	function openAddV4() {
+		editingV4Index = null;
+		v4Name = `Pool ${v4Pools.length + 1}`;
+		v4Start = "";
+		v4End = "";
+		v4Router = "";
+		v4SubnetMask = globalV4SubnetMask;
+		v4Dns = "";
+		v4Lease = globalV4LeaseTime;
+		v4BootFile = "";
+		v4TftpServer = "";
+		v4ModalOpen = true;
+	}
+
+	function openEditV4(idx: number) {
+		editingV4Index = idx;
+		const p = v4Pools[idx];
+		v4Name = p.name ?? "";
+		v4Start = p.range_start ?? "";
+		v4End = p.range_end ?? "";
+		v4Router = p.router ?? "";
+		v4SubnetMask = p.subnet_mask ?? globalV4SubnetMask;
+		v4Dns = (p.dns_servers ?? []).join(", ");
+		v4Lease = p.lease_time ?? globalV4LeaseTime;
+		v4BootFile = p.boot_file ?? "";
+		v4TftpServer = p.tftp_server ?? "";
+		v4ModalOpen = true;
+	}
+
+	function submitV4Modal() {
+		if (!v4Start.trim() || !v4End.trim()) {
+			toast.error("Range start and range end IP addresses are required");
+			return;
+		}
+		const pool: Dhcpv4PoolConfig = {
+			name: v4Name.trim() || null,
+			range_start: v4Start.trim(),
+			range_end: v4End.trim(),
+			subnet_mask: v4SubnetMask.trim() || null,
+			router: v4Router.trim() || null,
+			dns_servers: parseList(v4Dns),
+			lease_time: v4Lease ? Number(v4Lease) : null,
+			boot_file: v4BootFile.trim() || null,
+			tftp_server: v4TftpServer.trim() || null,
+		};
+
+		if (editingV4Index !== null) {
+			v4Pools[editingV4Index] = pool;
+			v4Pools = [...v4Pools];
+			toast.info("Updated IPv4 scope. Click 'Save Scopes' to apply.");
+		} else {
+			v4Pools = [...v4Pools, pool];
+			toast.info("Added new IPv4 scope. Click 'Save Scopes' to apply.");
+		}
+		v4ModalOpen = false;
+	}
+
+	function deleteV4(idx: number) {
+		v4Pools = v4Pools.filter((_, i) => i !== idx);
+		toast.info("Removed IPv4 scope. Click 'Save Scopes' to apply.");
+	}
+
+	// IPv6 Modal Handlers
+	function openAddV6() {
+		editingV6Index = null;
+		v6Name = `IPv6 Scope ${v6Pools.length + 1}`;
+		v6Start = "::100";
+		v6End = "::1fff";
+		v6Addr = "";
+		v6Dns = "";
+		v6Lease = globalV6LeaseTime;
+		v6BootFile = "";
+		v6ModalOpen = true;
+	}
+
+	function openEditV6(idx: number) {
+		editingV6Index = idx;
+		const p = v6Pools[idx];
+		v6Name = p.name ?? "";
+		v6Start = p.range_start ?? "";
+		v6End = p.range_end ?? "";
+		v6Addr = p.address ?? "";
+		v6Dns = (p.dns_servers ?? []).join(", ");
+		v6Lease = p.lease_time ?? globalV6LeaseTime;
+		v6BootFile = p.boot_file ?? "";
+		v6ModalOpen = true;
+	}
+
+	function submitV6Modal() {
+		if (!v6Addr.trim() && (!v6Start.trim() || !v6End.trim())) {
+			toast.error("Either start/end suffix or static address/prefix is required");
+			return;
+		}
+		const pool: Dhcpv6PoolConfig = {
+			name: v6Name.trim() || null,
+			range_start: v6Start.trim() || null,
+			range_end: v6End.trim() || null,
+			address: v6Addr.trim() || null,
+			dns_servers: parseList(v6Dns),
+			lease_time: v6Lease ? Number(v6Lease) : null,
+			boot_file: v6BootFile.trim() || null,
+		};
+
+		if (editingV6Index !== null) {
+			v6Pools[editingV6Index] = pool;
+			v6Pools = [...v6Pools];
+			toast.info("Updated IPv6 scope. Click 'Save Scopes' to apply.");
+		} else {
+			v6Pools = [...v6Pools, pool];
+			toast.info("Added new IPv6 scope. Click 'Save Scopes' to apply.");
+		}
+		v6ModalOpen = false;
+	}
+
+	function deleteV6(idx: number) {
+		v6Pools = v6Pools.filter((_, i) => i !== idx);
+		toast.info("Removed IPv6 scope. Click 'Save Scopes' to apply.");
+	}
+
+	onMount(() => {
+		loadAllData(true);
+	});
 </script>
 
-<div class="flex flex-col gap-6">
-	<!-- Top KPI Stats Cards -->
-	<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-		<!-- Total Configured Pools -->
-		<Card.Root>
-			<Card.Header
-				class="flex flex-row items-center justify-between pb-2"
-			>
-				<Card.Title class="text-sm font-medium text-muted-foreground">
-					Configured Pools
-				</Card.Title>
-				<LayersIcon class="h-4 w-4 text-muted-foreground" />
-			</Card.Header>
-			<Card.Content>
-				{#if loading}
-					<Skeleton class="h-8 w-16" />
-				{:else}
-					<div class="text-2xl font-bold">{totalPoolsCount}</div>
-					<p class="text-xs text-muted-foreground mt-1">
-						{poolData.v4_pools.length} IPv4 subnet / {poolData
-							.v6_pools.length} IPv6 prefix pools
-					</p>
-				{/if}
-			</Card.Content>
-		</Card.Root>
+<svelte:head>
+	<title>Scopes & Pools — Lanforge DHCP</title>
+</svelte:head>
 
-		<!-- Total Capacity -->
-		<Card.Root>
-			<Card.Header
-				class="flex flex-row items-center justify-between pb-2"
-			>
-				<Card.Title class="text-sm font-medium text-muted-foreground">
-					Total Managed IPs
-				</Card.Title>
-				<NetworkIcon class="h-4 w-4 text-muted-foreground" />
-			</Card.Header>
-			<Card.Content>
-				{#if loading}
-					<Skeleton class="h-8 w-16" />
-				{:else}
-					<div class="text-2xl font-bold">{totalAddresses}</div>
-					<p class="text-xs text-muted-foreground mt-1">
-						Across all active dynamic ranges
-					</p>
-				{/if}
-			</Card.Content>
-		</Card.Root>
-
-		<!-- Active Allocations -->
-		<Card.Root>
-			<Card.Header
-				class="flex flex-row items-center justify-between pb-2"
-			>
-				<Card.Title class="text-sm font-medium text-muted-foreground">
-					Allocated Addresses
-				</Card.Title>
-				<ActivityIcon class="h-4 w-4 text-muted-foreground" />
-			</Card.Header>
-			<Card.Content>
-				{#if loading}
-					<Skeleton class="h-8 w-16" />
-				{:else}
-					<div class="text-2xl font-bold">{totalUsedAddresses}</div>
-					<p class="text-xs text-muted-foreground mt-1">
-						{totalAvailableAddresses} available for allocation
-					</p>
-				{/if}
-			</Card.Content>
-		</Card.Root>
-
-		<!-- Overall Utilization -->
-		<Card.Root>
-			<Card.Header
-				class="flex flex-row items-center justify-between pb-2"
-			>
-				<Card.Title class="text-sm font-medium text-muted-foreground">
-					Global Utilization
-				</Card.Title>
-				{#if aggregateUtilization >= 90}
-					<AlertTriangleIcon class="h-4 w-4 text-destructive" />
-				{:else}
-					<CheckCircle2Icon class="h-4 w-4 text-emerald-500" />
-				{/if}
-			</Card.Header>
-			<Card.Content>
-				{#if loading}
-					<Skeleton class="h-8 w-16" />
-				{:else}
-					<div class="flex items-center gap-2">
-						<span class="text-2xl font-bold"
-							>{aggregateUtilization}%</span
-						>
-						<Badge
-							variant="outline"
-							class={[
-								"text-xs",
-								getUtilizationColor(aggregateUtilization)
-									.badgeClass,
-							].join(" ")}
-						>
-							{getUtilizationColor(aggregateUtilization).label}
-						</Badge>
-					</div>
-					<div
-						class="h-1.5 w-full overflow-hidden rounded-full bg-muted mt-2"
+<div class="flex flex-col gap-6 w-full">
+	<!-- Action Bar & Scope Meta -->
+	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+		<div>
+			<div class="flex flex-wrap items-center gap-2.5">
+				<span class="text-sm font-semibold text-foreground">Configured Scopes</span>
+				<Badge variant="outline" class="font-mono text-xs">
+					{totalConfiguredCount} {totalConfiguredCount === 1 ? "Scope" : "Scopes"}
+				</Badge>
+				<HelpPopover
+					title="DHCP Parameter Inheritance"
+					description="Dynamic address scopes automatically inherit fallback parameters configured in DHCP Server Options unless overridden per pool."
+				>
+					{#snippet children()}
+						<div class="flex flex-col gap-2 text-xs">
+							<div class="flex justify-between border-b pb-1 border-border/40">
+								<span class="text-muted-foreground">Default Gateway:</span>
+								<code class="font-mono font-bold text-primary">{globalV4Router || "Not set"}</code>
+							</div>
+							<div class="flex justify-between border-b pb-1 border-border/40">
+								<span class="text-muted-foreground">Subnet Mask:</span>
+								<code class="font-mono font-bold text-primary">{globalV4SubnetMask}</code>
+							</div>
+							<div class="pt-1">
+								<Button variant="outline" size="sm" href="/dhcp/server" class="w-full text-xs h-7 gap-1">
+									<SlidersIcon class="size-3" />
+									Configure Global Options
+								</Button>
+							</div>
+						</div>
+					{/snippet}
+				</HelpPopover>
+				{#if isDirty}
+					<Badge
+						variant="outline"
+						class="text-amber-400 border-amber-500/30 bg-amber-500/10 text-xs font-semibold animate-pulse"
 					>
-						<div
-							class={[
-								"h-full transition-all duration-300",
-								getUtilizationColor(aggregateUtilization)
-									.barClass,
-							].join(" ")}
-							style="width: {Math.min(
-								aggregateUtilization,
-								100,
-							)}%"
-						></div>
-					</div>
+						Unsaved Changes
+					</Badge>
 				{/if}
-			</Card.Content>
-		</Card.Root>
-	</div>
-
-	<!-- Pool Detail Cards Section -->
-	<div class="flex flex-col gap-6">
-		<div class="flex items-center justify-between">
-			<div>
-				<h2 class="text-lg font-semibold tracking-tight">
-					Active Address Pools
-				</h2>
-				<p class="text-xs text-muted-foreground">
-					Dynamic IP scopes and prefix delegation ranges currently
-					serviced.
-				</p>
 			</div>
+			<p class="text-muted-foreground text-xs mt-0.5">
+				Dynamic IPv4 subnets, IPv6 prefixes, and real-time lease address capacity.
+			</p>
+		</div>
+
+		<!-- Action Bar -->
+		<div class="flex flex-wrap items-center gap-2">
 			<Button
 				variant="outline"
 				size="sm"
-				onclick={() => loadPoolsData(false)}
+				onclick={() => loadAllData(false)}
 				disabled={loading || isRefreshing}
+				class="h-8 text-xs"
 			>
 				<RefreshCwIcon
-					class={[
-						"mr-2 h-3.5 w-3.5",
-						isRefreshing ? "animate-spin" : "",
-					].join(" ")}
+					data-icon="inline-start"
+					class={`size-3.5 mr-1 ${isRefreshing ? "animate-spin" : ""}`}
 				/>
-				Refresh Metrics
+				Refresh
 			</Button>
+
+			<Button
+				variant="outline"
+				size="sm"
+				onclick={handleReconcile}
+				disabled={reconciling || loading || saving}
+				title="Audit active dynamic leases against current subnet & pools (RFC 3203 ForceRenew)"
+				class="h-8 text-xs"
+			>
+				<ShieldCheckIcon
+					data-icon="inline-start"
+					class={`size-3.5 mr-1 ${reconciling ? "animate-spin text-primary" : "text-emerald-400"}`}
+				/>
+				{reconciling ? "Auditing..." : "Reconcile Leases"}
+			</Button>
+
+			<Button
+				variant="outline"
+				size="sm"
+				href="/dhcp/server"
+				class="h-8 text-xs"
+			>
+				<SlidersIcon data-icon="inline-start" class="size-3.5 mr-1" />
+				Global Options
+			</Button>
+
+			{#if isDirty}
+				<Button
+					variant="ghost"
+					size="sm"
+					onclick={discardChanges}
+					disabled={saving}
+					class="h-8 text-xs"
+				>
+					<RotateCcwIcon data-icon="inline-start" class="size-3.5 mr-1" />
+					Discard
+				</Button>
+				<Button
+					size="sm"
+					onclick={saveScopes}
+					disabled={saving || loading}
+					class="h-8 text-xs shadow-sm"
+				>
+					<SaveIcon
+						data-icon="inline-start"
+						class={`size-3.5 mr-1 ${saving ? "animate-spin" : ""}`}
+					/>
+					Save Scopes
+				</Button>
+			{/if}
 		</div>
-
-		{#if loading}
-			<div class="grid gap-4 md:grid-cols-2">
-				<Skeleton class="h-48 w-full" />
-				<Skeleton class="h-48 w-full" />
-			</div>
-		{:else if allPools.length === 0}
-			<Card.Root>
-				<Card.Content class="py-12">
-					<Empty.Root>
-						<Empty.Media>
-							<LayersIcon
-								class="h-10 w-10 text-muted-foreground/60"
-							/>
-						</Empty.Media>
-						<Empty.Title>No DHCP pools active</Empty.Title>
-						<Empty.Description>
-							No DHCP address pools are currently configured or
-							reporting metrics in Lanforge.
-						</Empty.Description>
-					</Empty.Root>
-				</Card.Content>
-			</Card.Root>
-		{:else}
-			<div class="grid gap-4 md:grid-cols-2">
-				<!-- IPv4 Pools -->
-				{#each poolData.v4_pools as pool, i (pool.range_start || i)}
-					{@const colors = getUtilizationColor(
-						pool.utilization_percent,
-					)}
-					<Card.Root class="overflow-hidden border-border/80">
-						<Card.Header class="pb-3 border-b bg-muted/20">
-							<div class="flex items-center justify-between">
-								<div class="flex items-center gap-2">
-									<Badge
-										variant="outline"
-										class="font-mono text-xs text-blue-500 border-blue-500/30"
-									>
-										IPv4 Pool #{i + 1}
-									</Badge>
-									<span
-										class="text-xs text-muted-foreground font-medium"
-									>
-										Interface: {daemonStatus?.network
-											?.lan_iface || "LAN"}
-									</span>
-								</div>
-								<Badge
-									variant="outline"
-									class={[
-										"font-mono text-xs",
-										colors.badgeClass,
-									].join(" ")}
-								>
-									{pool.utilization_percent.toFixed(1)}% Used
-								</Badge>
-							</div>
-							<Card.Title class="text-base font-mono mt-2">
-								{pool.range_start || "—"} &rarr; {pool.range_end ||
-									"—"}
-							</Card.Title>
-						</Card.Header>
-
-						<Card.Content class="pt-4 space-y-4">
-							<!-- Utilization Bar -->
-							<div class="space-y-1.5">
-								<div
-									class="flex items-center justify-between text-xs text-muted-foreground font-medium"
-								>
-									<span>Used: {pool.used}</span>
-									<span>Available: {pool.available}</span>
-									<span>Total: {pool.total}</span>
-								</div>
-								<div
-									class="h-2 w-full overflow-hidden rounded-full bg-muted"
-								>
-									<div
-										class={[
-											"h-full transition-all duration-300",
-											colors.barClass,
-										].join(" ")}
-										style="width: {Math.min(
-											pool.utilization_percent,
-											100,
-										)}%"
-									></div>
-								</div>
-							</div>
-
-							<!-- Scope Options Badge Row -->
-							<div
-								class="grid grid-cols-2 gap-2 pt-2 border-t text-xs"
-							>
-								<div>
-									<span class="text-muted-foreground"
-										>Gateway:</span
-									>
-									<span
-										class="font-mono font-medium ml-1 text-foreground"
-									>
-										{daemonStatus?.network?.lan_ipv4 ||
-											"192.168.0.1"}
-									</span>
-								</div>
-								<div>
-									<span class="text-muted-foreground"
-										>Default Lease:</span
-									>
-									<span
-										class="font-mono font-medium ml-1 text-foreground"
-										>24 hours</span
-									>
-								</div>
-							</div>
-						</Card.Content>
-					</Card.Root>
-				{/each}
-
-				<!-- IPv6 Pools -->
-				{#each poolData.v6_pools as pool, i (pool.prefix || i)}
-					{@const colors = getUtilizationColor(
-						pool.utilization_percent,
-					)}
-					<Card.Root class="overflow-hidden border-border/80">
-						<Card.Header class="pb-3 border-b bg-muted/20">
-							<div class="flex items-center justify-between">
-								<div class="flex items-center gap-2">
-									<Badge
-										variant="outline"
-										class="font-mono text-xs text-purple-500 border-purple-500/30"
-									>
-										IPv6 Pool #{i + 1}
-									</Badge>
-									<span
-										class="text-xs text-muted-foreground font-medium"
-									>
-										Interface: {daemonStatus?.network
-											?.lan_iface || "LAN"}
-									</span>
-								</div>
-								<Badge
-									variant="outline"
-									class={[
-										"font-mono text-xs",
-										colors.badgeClass,
-									].join(" ")}
-								>
-									{pool.utilization_percent.toFixed(1)}% Used
-								</Badge>
-							</div>
-							<Card.Title class="text-base font-mono mt-2">
-								{pool.prefix || "::"}/{pool.prefix_len ?? 64}
-							</Card.Title>
-						</Card.Header>
-
-						<Card.Content class="pt-4 space-y-4">
-							<!-- Utilization Bar -->
-							<div class="space-y-1.5">
-								<div
-									class="flex items-center justify-between text-xs text-muted-foreground font-medium"
-								>
-									<span>Used: {pool.used}</span>
-									<span>Available: {pool.available}</span>
-									<span>Total: {pool.total}</span>
-								</div>
-								<div
-									class="h-2 w-full overflow-hidden rounded-full bg-muted"
-								>
-									<div
-										class={[
-											"h-full transition-all duration-300",
-											colors.barClass,
-										].join(" ")}
-										style="width: {Math.min(
-											pool.utilization_percent,
-											100,
-										)}%"
-									></div>
-								</div>
-							</div>
-
-							<!-- Scope Options Badge Row -->
-							<div
-								class="grid grid-cols-2 gap-2 pt-2 border-t text-xs"
-							>
-								<div>
-									<span class="text-muted-foreground"
-										>Type:</span
-									>
-									<span
-										class="font-mono font-medium ml-1 text-foreground"
-									>
-										{pool.prefix?.startsWith("fd")
-											? "ULA (Local)"
-											: "GUA (Global)"}
-									</span>
-								</div>
-								<div>
-									<span class="text-muted-foreground"
-										>Prefix Length:</span
-									>
-									<span
-										class="font-mono font-medium ml-1 text-foreground"
-										>/{pool.prefix_len ?? 64}</span
-									>
-								</div>
-							</div>
-						</Card.Content>
-					</Card.Root>
-				{/each}
-			</div>
-		{/if}
 	</div>
+
+	<!-- KPI Stat Cards (4 Cards) -->
+	<PoolStatsCards
+		{loading}
+		{totalConfiguredCount}
+		v4PoolsCount={v4Pools.length}
+		v6PoolsCount={v6Pools.length}
+		{totalManagedAddresses}
+		{totalUsedAddresses}
+		{totalAvailableAddresses}
+		{aggregateUtilization}
+	/>
+
+	<!-- SECTION 1: IPv4 Address Scopes -->
+	<PoolV4Table
+		{v4Pools}
+		{poolStats}
+		{loading}
+		{globalV4Router}
+		{globalV4SubnetMask}
+		{globalV4LeaseTime}
+		onAdd={openAddV4}
+		onEdit={openEditV4}
+		onDelete={deleteV4}
+	/>
+
+	<!-- SECTION 2: IPv6 Address Scopes -->
+	<PoolV6Table
+		{v6Pools}
+		{poolStats}
+		{loading}
+		{globalV6LeaseTime}
+		{activeUlaPrefix}
+		onAdd={openAddV6}
+		onEdit={openEditV6}
+		onDelete={deleteV6}
+	/>
 </div>
+
+<!-- Modal: Add / Edit IPv4 Scope -->
+<PoolV4Dialog
+	bind:open={v4ModalOpen}
+	editingIndex={editingV4Index}
+	bind:v4Name
+	bind:v4Start
+	bind:v4End
+	bind:v4Router
+	bind:v4SubnetMask
+	bind:v4Dns
+	bind:v4Lease
+	bind:v4BootFile
+	bind:v4TftpServer
+	{globalV4Router}
+	{globalV4SubnetMask}
+	{globalV4LeaseTime}
+	onSubmit={submitV4Modal}
+/>
+
+<!-- Modal: Add / Edit IPv6 Scope -->
+<PoolV6Dialog
+	bind:open={v6ModalOpen}
+	editingIndex={editingV6Index}
+	bind:v6Name
+	bind:v6Start
+	bind:v6End
+	bind:v6Addr
+	bind:v6Dns
+	bind:v6Lease
+	bind:v6BootFile
+	{globalV6LeaseTime}
+	onSubmit={submitV6Modal}
+/>

@@ -219,8 +219,8 @@
 	</Card.Header>
 
 	<!-- Table Body with Fixed Scroll Container -->
-	<Card.Content class="p-0 flex-1 min-h-0 overflow-y-auto relative">
-		<Table.Root>
+	<Card.Content class="p-0 flex-1 min-h-0 overflow-auto relative">
+		<Table.Root class="min-w-[600px]">
 			<Table.Header
 				class="sticky top-0 z-10 bg-card/95 backdrop-blur-md border-b shadow-xs"
 			>

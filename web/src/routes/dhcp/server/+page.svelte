@@ -1,34 +1,28 @@
 <script lang="ts">
 	import { onMount } from "svelte";
-	import * as Card from "$lib/components/ui/card";
-	import * as Table from "$lib/components/ui/table";
-	import { Button } from "$lib/components/ui/button";
-	import { Input } from "$lib/components/ui/input";
-	import { Label } from "$lib/components/ui/label";
-	import { Badge } from "$lib/components/ui/badge";
-	import { Switch } from "$lib/components/ui/switch";
-	import { Separator } from "$lib/components/ui/separator";
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { toast } from "svelte-sonner";
-
-	import SlidersIcon from "@lucide/svelte/icons/sliders";
-	import SaveIcon from "@lucide/svelte/icons/save";
-	import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
-	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
-	import PlusIcon from "@lucide/svelte/icons/plus";
-	import Trash2Icon from "@lucide/svelte/icons/trash-2";
-	import NetworkIcon from "@lucide/svelte/icons/network";
-	import GlobeIcon from "@lucide/svelte/icons/globe";
-	import HardDriveIcon from "@lucide/svelte/icons/hard-drive";
-
 	import { dhcpOptionsGet, dhcpOptionsUpdate, dhcpReconcile } from "$lib/api/client";
-	import type { DhcpOptionsConfig } from "$lib/api/types";
+	import type { DhcpOptionsConfig, TftpOptions } from "$lib/api/types";
+
+	import DhcpServerHeader from "./components/DhcpServerHeader.svelte";
+	import DhcpV4OptionsCard from "./components/DhcpV4OptionsCard.svelte";
+	import DhcpV6OptionsCard from "./components/DhcpV6OptionsCard.svelte";
+	import DhcpNetbootCard from "./components/DhcpNetbootCard.svelte";
+	import DhcpRawOptionsCard from "./components/DhcpRawOptionsCard.svelte";
 
 	let loading = $state(true);
 	let saving = $state(false);
 	let reconciling = $state(false);
 	let pristineJson = $state("");
+	let currentTftpConfig = $state<TftpOptions>({
+		enabled: false,
+		listen_addr: "0.0.0.0:69",
+		root_dir: "/var/lib/lanforge/tftp",
+		block_size: 512,
+		timeout: 5,
+		max_retries: 3,
+	});
 
 	// IPv4 Global Settings
 	let v4Enabled = $state(true);
@@ -53,10 +47,6 @@
 	// Custom Raw Options
 	let v4RawOptions = $state<Array<{ code: number; value: string }>>([]);
 	let v6RawOptions = $state<Array<{ code: number; value: string }>>([]);
-	let newRawV4Code = $state<number | "">("");
-	let newRawV4Value = $state("");
-	let newRawV6Code = $state<number | "">("");
-	let newRawV6Value = $state("");
 
 	function parseList(str: string): string[] {
 		return str
@@ -98,14 +88,7 @@
 				boot_file: v6BootFile.trim() || null,
 				raw_options: v6RawMap,
 			},
-			tftp: {
-				enabled: false,
-				listen_addr: "0.0.0.0:69",
-				root_dir: "/var/lib/lanforge/tftp",
-				block_size: 512,
-				timeout: 5,
-				max_retries: 3,
-			},
+			tftp: currentTftpConfig,
 		};
 	}
 
@@ -118,24 +101,19 @@
 	const subnetInfo = $derived.by(() => {
 		const trimmed = v4SubnetMask.trim();
 		const parts = trimmed.split(".").map(Number);
-		if (
-			parts.length === 4 &&
-			parts.every((p) => !isNaN(p) && p >= 0 && p <= 255)
-		) {
+		if (parts.length === 4 && parts.every((p) => !isNaN(p) && p >= 0 && p <= 255)) {
 			const u32 =
 				((parts[0] << 24) |
 					(parts[1] << 16) |
 					(parts[2] << 8) |
 					parts[3]) >>>
 				0;
-			// check contiguous ones
 			let ones = 0;
 			let bit = 31;
 			while (bit >= 0 && (u32 & (1 << bit)) !== 0) {
 				ones++;
 				bit--;
 			}
-			// check remaining bits are zero
 			let valid = true;
 			while (bit >= 0) {
 				if ((u32 & (1 << bit)) !== 0) {
@@ -159,7 +137,6 @@
 		return { valid: false, cidr: "", totalHosts: 0, usableHosts: 0 };
 	});
 
-	// Human-readable lease duration
 	const humanLeaseDuration = $derived.by(() => {
 		const secs = Number(v4LeaseTime) || 0;
 		if (secs <= 0) return "Indefinite / Unspecified";
@@ -210,6 +187,10 @@
 				}),
 			);
 
+			if (opts.tftp) {
+				currentTftpConfig = { ...opts.tftp };
+			}
+
 			pristineJson = JSON.stringify(currentPayload());
 		} catch (err: any) {
 			toast.error(`Failed to load DHCP server options: ${err.message}`);
@@ -224,9 +205,7 @@
 			const payload = currentPayload();
 			await dhcpOptionsUpdate(payload);
 			pristineJson = JSON.stringify(payload);
-			toast.success(
-				"DHCP server options saved and propagated successfully",
-			);
+			toast.success("DHCP server options saved and propagated successfully");
 		} catch (err: any) {
 			toast.error(`Failed to save options: ${err.message}`);
 		} finally {
@@ -268,128 +247,23 @@
 		}
 	}
 
-	function addV4Raw() {
-		if (
-			typeof newRawV4Code === "number" &&
-			newRawV4Code > 0 &&
-			newRawV4Value.trim()
-		) {
-			v4RawOptions = [
-				...v4RawOptions.filter((o) => o.code !== newRawV4Code),
-				{ code: newRawV4Code, value: newRawV4Value.trim() },
-			];
-			newRawV4Code = "";
-			newRawV4Value = "";
-		}
-	}
-
-	function removeV4Raw(idx: number) {
-		v4RawOptions = v4RawOptions.filter((_, i) => i !== idx);
-	}
-
-	function addV6Raw() {
-		if (
-			typeof newRawV6Code === "number" &&
-			newRawV6Code > 0 &&
-			newRawV6Value.trim()
-		) {
-			v6RawOptions = [
-				...v6RawOptions.filter((o) => o.code !== newRawV6Code),
-				{ code: newRawV6Code, value: newRawV6Value.trim() },
-			];
-			newRawV6Code = "";
-			newRawV6Value = "";
-		}
-	}
-
-	function removeV6Raw(idx: number) {
-		v6RawOptions = v6RawOptions.filter((_, i) => i !== idx);
-	}
-
 	onMount(() => {
 		loadOptions();
 	});
 </script>
 
-<div class="flex flex-col gap-6">
+<div class="flex flex-col gap-6 w-full">
 	<!-- Action Header -->
-	<div
-		class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-muted/30 border rounded-xl p-4 shadow-sm"
-	>
-		<div class="flex items-center gap-3">
-			<div class="p-2.5 rounded-lg bg-primary/10 text-primary">
-				<SlidersIcon class="size-6" />
-			</div>
-			<div>
-				<div class="flex items-center gap-2">
-					<h2 class="text-lg font-bold tracking-tight">
-						DHCP Server Options
-					</h2>
-					{#if isDirty}
-						<Badge
-							variant="outline"
-							class="text-amber-500 border-amber-500/30 bg-amber-500/10 text-xs font-semibold animate-pulse"
-						>
-							Unsaved Changes
-						</Badge>
-					{/if}
-				</div>
-				<p class="text-xs text-muted-foreground mt-0.5">
-					Global parameters broadcasted to all DHCP clients on your
-					network link.
-				</p>
-			</div>
-		</div>
-
-		<div class="flex items-center gap-2">
-			<Button
-				variant="outline"
-				size="sm"
-				onclick={reconcileLeases}
-				disabled={reconciling || loading || saving}
-				title="Audit active dynamic leases against current subnet & pools. Invalidates out-of-range leases and prompts clients to re-authenticate (RFC 3203 ForceRenew)."
-			>
-				<ShieldCheckIcon
-					class={`size-4 mr-1.5 ${reconciling ? "animate-spin text-primary" : "text-emerald-500"}`}
-				/>
-				{reconciling ? "Auditing..." : "Reconcile Leases"}
-			</Button>
-
-			<Button
-				variant="outline"
-				size="sm"
-				onclick={loadOptions}
-				disabled={loading || saving || reconciling}
-				title="Reload from server"
-			>
-				<RefreshCwIcon
-					class={`size-4 mr-1.5 ${loading ? "animate-spin" : ""}`}
-				/>
-				Refresh
-			</Button>
-
-			{#if isDirty}
-				<Button
-					variant="ghost"
-					size="sm"
-					onclick={discardChanges}
-					disabled={saving}
-				>
-					<RotateCcwIcon class="size-4 mr-1.5" />
-					Discard
-				</Button>
-			{/if}
-
-			<Button
-				size="sm"
-				onclick={saveOptions}
-				disabled={!isDirty || saving || loading}
-			>
-				<SaveIcon class="size-4 mr-1.5" />
-				{saving ? "Saving..." : "Save Server Options"}
-			</Button>
-		</div>
-	</div>
+	<DhcpServerHeader
+		{isDirty}
+		{loading}
+		{saving}
+		{reconciling}
+		onReconcile={reconcileLeases}
+		onRefresh={loadOptions}
+		onDiscard={discardChanges}
+		onSave={saveOptions}
+	/>
 
 	{#if loading}
 		<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -398,620 +272,39 @@
 		</div>
 	{:else}
 		<!-- 1. PRIMARY IPv4 SERVER OPTIONS -->
-		<Card.Root class="border-border/80 shadow-sm overflow-hidden">
-			<Card.Header class="bg-muted/20 border-b pb-4">
-				<div class="flex items-center justify-between">
-					<div class="flex items-center gap-2.5">
-						<NetworkIcon class="size-5 text-blue-500" />
-						<div>
-							<Card.Title class="text-base font-bold"
-								>IPv4 Network Parameters</Card.Title
-							>
-							<Card.Description class="text-xs">
-								Core DHCPv4 options advertised to all dynamic
-								leases (RFC 2132)
-							</Card.Description>
-						</div>
-					</div>
-
-					<div class="flex items-center gap-2">
-						<Label for="v4-enable-toggle" class="text-xs font-medium"
-							>DHCPv4 Service</Label
-						>
-						<Switch
-							id="v4-enable-toggle"
-							bind:checked={v4Enabled}
-						/>
-					</div>
-				</div>
-			</Card.Header>
-
-			<Card.Content class="p-6 flex flex-col gap-6">
-				<!-- Highlighted: Default Gateway (Option 3) -->
-				<div
-					class="p-4 rounded-xl border border-primary/20 bg-primary/[0.03] flex flex-col gap-3"
-				>
-					<div class="flex items-center justify-between">
-						<div class="flex items-center gap-2">
-							<Label
-								for="v4-router"
-								class="text-sm font-bold text-foreground"
-							>
-								Default Gateway (Option 3 — Router)
-							</Label>
-							{#if v4Router.trim()}
-								<Badge
-									variant="outline"
-									class="text-[10px] text-emerald-500 border-emerald-500/30 bg-emerald-500/10 font-mono"
-								>
-									Active Gateway
-								</Badge>
-							{:else}
-								<Badge
-									variant="outline"
-									class="text-[10px] text-amber-500 border-amber-500/30 bg-amber-500/10 font-mono"
-								>
-									Not Advertised
-								</Badge>
-							{/if}
-						</div>
-					</div>
-
-					<div class="flex flex-col sm:flex-row gap-3">
-						<div class="flex-1">
-							<Input
-								id="v4-router"
-								bind:value={v4Router}
-								placeholder="e.g. 10.0.0.1 or 192.168.1.1"
-								class="font-mono text-sm font-semibold h-10 border-primary/30 focus-visible:ring-primary"
-							/>
-						</div>
-					</div>
-					<p class="text-xs text-muted-foreground">
-						This IP is advertised to all DHCP clients as their
-						default router. Clients send all default/internet
-						traffic through this address.
-					</p>
-				</div>
-
-				<!-- Subnet Mask (Option 1) with CIDR calculation & quick presets -->
-				<div class="flex flex-col gap-2.5">
-					<div class="flex items-center justify-between">
-						<Label for="v4-subnet-mask" class="text-xs font-semibold">
-							Subnet Mask (Option 1)
-						</Label>
-						{#if subnetInfo.valid}
-							<span
-								class="text-xs font-mono font-medium text-primary"
-							>
-								{subnetInfo.cidr} · {subnetInfo.usableHosts.toLocaleString()}
-								usable hosts
-							</span>
-						{/if}
-					</div>
-
-					<div class="flex flex-col sm:flex-row gap-3">
-						<Input
-							id="v4-subnet-mask"
-							bind:value={v4SubnetMask}
-							placeholder="255.255.252.0"
-							class="font-mono text-xs sm:w-64"
-						/>
-
-						<!-- Quick Presets -->
-						<div class="flex flex-wrap items-center gap-1.5">
-							<Button
-								variant="outline"
-								size="sm"
-								class="text-xs h-9 px-2.5"
-								onclick={() => (v4SubnetMask = "255.255.255.0")}
-							>
-								/24 (255.255.255.0)
-							</Button>
-							<Button
-								variant="outline"
-								size="sm"
-								class="text-xs h-9 px-2.5 font-medium border-primary/30"
-								onclick={() => (v4SubnetMask = "255.255.252.0")}
-							>
-								/22 (255.255.252.0)
-							</Button>
-							<Button
-								variant="outline"
-								size="sm"
-								class="text-xs h-9 px-2.5"
-								onclick={() => (v4SubnetMask = "255.255.254.0")}
-							>
-								/23 (255.255.254.0)
-							</Button>
-							<Button
-								variant="outline"
-								size="sm"
-								class="text-xs h-9 px-2.5"
-								onclick={() => (v4SubnetMask = "255.255.0.0")}
-							>
-								/16 (255.255.0.0)
-							</Button>
-						</div>
-					</div>
-					<p class="text-xs text-muted-foreground">
-						Broadcasted network mask. For a /22 subnet, use
-						<code class="font-mono text-primary font-semibold"
-							>255.255.252.0</code
-						>
-						(1,022 usable host addresses).
-					</p>
-				</div>
-
-				<Separator />
-
-				<!-- DNS & Domains -->
-				<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-					<div class="flex flex-col gap-1.5">
-						<Label for="v4-dns" class="text-xs font-semibold"
-							>DNS Resolvers (Option 6)</Label
-						>
-						<Input
-							id="v4-dns"
-							bind:value={v4DnsStr}
-							placeholder="192.168.0.1, 1.1.1.1"
-							class="font-mono text-xs"
-						/>
-						<p class="text-[11px] text-muted-foreground">
-							Comma-separated list of IPv4 DNS servers.
-						</p>
-					</div>
-
-					<div class="flex flex-col gap-1.5">
-						<Label for="v4-domain" class="text-xs font-semibold"
-							>Local Domain Name (Option 15)</Label
-						>
-						<Input
-							id="v4-domain"
-							bind:value={v4DomainName}
-							placeholder="lan, home.arpa"
-							class="font-mono text-xs"
-						/>
-						<p class="text-[11px] text-muted-foreground">
-							Appended to unqualified hostnames on the link.
-						</p>
-					</div>
-
-					<div class="flex flex-col gap-1.5">
-						<Label for="v4-search" class="text-xs font-semibold"
-							>Domain Search List (Option 119)</Label
-						>
-						<Input
-							id="v4-search"
-							bind:value={v4SearchDomainsStr}
-							placeholder="lan, internal.corp"
-							class="font-mono text-xs"
-						/>
-						<p class="text-[11px] text-muted-foreground">
-							Comma-separated list of search domain suffixes.
-						</p>
-					</div>
-
-					<div class="flex flex-col gap-1.5">
-						<Label for="v4-ntp" class="text-xs font-semibold"
-							>NTP Time Servers (Option 42)</Label
-						>
-						<Input
-							id="v4-ntp"
-							bind:value={v4NtpStr}
-							placeholder="162.159.200.1, 216.239.35.0"
-							class="font-mono text-xs"
-						/>
-						<p class="text-[11px] text-muted-foreground">
-							NTP time synchronization IPs for network clients.
-						</p>
-					</div>
-				</div>
-
-				<Separator />
-
-				<!-- Default Lease Lifetime -->
-				<div class="flex flex-col gap-2.5">
-					<div class="flex items-center justify-between">
-						<Label for="v4-lease-time" class="text-xs font-semibold"
-							>Default Lease Duration (Seconds)</Label
-						>
-						<span
-							class="text-xs font-medium text-emerald-500 font-mono"
-						>
-							≈ {humanLeaseDuration}
-						</span>
-					</div>
-
-					<div class="flex flex-col sm:flex-row gap-3">
-						<Input
-							id="v4-lease-time"
-							type="number"
-							bind:value={v4LeaseTime}
-							placeholder="86400"
-							class="font-mono text-xs sm:w-48"
-						/>
-
-						<div class="flex flex-wrap items-center gap-1.5">
-							<Button
-								variant="outline"
-								size="sm"
-								class="text-xs h-9"
-								onclick={() => (v4LeaseTime = 43200)}
-								>12h (43200s)</Button
-							>
-							<Button
-								variant="outline"
-								size="sm"
-								class="text-xs h-9"
-								onclick={() => (v4LeaseTime = 86400)}
-								>24h (86400s)</Button
-							>
-							<Button
-								variant="outline"
-								size="sm"
-								class="text-xs h-9"
-								onclick={() => (v4LeaseTime = 604800)}
-								>7d (604800s)</Button
-							>
-							<Button
-								variant="outline"
-								size="sm"
-								class="text-xs h-9"
-								onclick={() => (v4LeaseTime = 2592000)}
-								>30d (2592000s)</Button
-							>
-						</div>
-					</div>
-				</div>
-			</Card.Content>
-		</Card.Root>
+		<DhcpV4OptionsCard
+			bind:v4Enabled
+			bind:v4Router
+			bind:v4SubnetMask
+			bind:v4DnsStr
+			bind:v4DomainName
+			bind:v4SearchDomainsStr
+			bind:v4NtpStr
+			bind:v4LeaseTime
+			{subnetInfo}
+			{humanLeaseDuration}
+		/>
 
 		<!-- 2. PRIMARY IPv6 SERVER OPTIONS -->
-		<Card.Root class="border-border/80 shadow-sm overflow-hidden">
-			<Card.Header class="bg-muted/20 border-b pb-4">
-				<div class="flex items-center justify-between">
-					<div class="flex items-center gap-2.5">
-						<GlobeIcon class="size-5 text-purple-500" />
-						<div>
-							<Card.Title class="text-base font-bold"
-								>IPv6 Network Parameters</Card.Title
-							>
-							<Card.Description class="text-xs">
-								Global DHCPv6 options advertised to stateful
-								clients (RFC 8415)
-							</Card.Description>
-						</div>
-					</div>
-
-					<div class="flex items-center gap-2">
-						<Label for="v6-enable-toggle" class="text-xs font-medium"
-							>DHCPv6 Service</Label
-						>
-						<Switch
-							id="v6-enable-toggle"
-							bind:checked={v6Enabled}
-						/>
-					</div>
-				</div>
-			</Card.Header>
-
-			<Card.Content class="p-6 flex flex-col gap-6">
-				<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-					<div class="flex flex-col gap-1.5">
-						<Label for="v6-dns" class="text-xs font-semibold"
-							>DNS Recursive Servers (Option 23)</Label
-						>
-						<Input
-							id="v6-dns"
-							bind:value={v6DnsStr}
-							placeholder="fd00::1, 2606:4700:4700::1111"
-							class="font-mono text-xs"
-						/>
-						<p class="text-[11px] text-muted-foreground">
-							Comma-separated list of IPv6 recursive DNS servers.
-						</p>
-					</div>
-
-					<div class="flex flex-col gap-1.5">
-						<Label for="v6-lease" class="text-xs font-semibold"
-							>Lease Duration (Seconds)</Label
-						>
-						<Input
-							id="v6-lease"
-							type="number"
-							bind:value={v6LeaseTime}
-							placeholder="86400"
-							class="font-mono text-xs"
-						/>
-						<p class="text-[11px] text-muted-foreground">
-							Valid lifetime for stateful IPv6 leases.
-						</p>
-					</div>
-
-					<div class="flex flex-col gap-1.5">
-						<Label for="v6-search" class="text-xs font-semibold"
-							>Domain Search List (Option 24)</Label
-						>
-						<Input
-							id="v6-search"
-							bind:value={v6SearchDomainsStr}
-							placeholder="lan, internal.corp"
-							class="font-mono text-xs"
-						/>
-					</div>
-
-					<div class="flex flex-col gap-1.5">
-						<Label for="v6-ntp" class="text-xs font-semibold"
-							>NTP Servers (Option 56)</Label
-						>
-						<Input
-							id="v6-ntp"
-							bind:value={v6NtpStr}
-							placeholder="time.cloudflare.com, time.google.com"
-							class="font-mono text-xs"
-						/>
-					</div>
-				</div>
-			</Card.Content>
-		</Card.Root>
+		<DhcpV6OptionsCard
+			bind:v6Enabled
+			bind:v6LeaseTime
+			bind:v6DnsStr
+			bind:v6SearchDomainsStr
+			bind:v6NtpStr
+		/>
 
 		<!-- 3. PXE & NETWORK BOOT OPTIONS -->
-		<Card.Root class="border-border/80 shadow-sm overflow-hidden">
-			<Card.Header class="bg-muted/20 border-b pb-4">
-				<div class="flex items-center gap-2.5">
-					<HardDriveIcon class="size-5 text-amber-500" />
-					<div>
-						<Card.Title class="text-base font-bold"
-							>Network Boot & TFTP Parameters</Card.Title
-						>
-						<Card.Description class="text-xs">
-							Default PXE and UEFI HTTP netboot options (Option
-							66, 67, 59)
-						</Card.Description>
-					</div>
-				</div>
-			</Card.Header>
-
-			<Card.Content class="p-6">
-				<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-					<div class="flex flex-col gap-1.5">
-						<Label
-							for="v4-tftp-server"
-							class="text-xs font-semibold"
-						>
-							Next-Server / siaddr (Option 66)
-						</Label>
-						<Input
-							id="v4-tftp-server"
-							bind:value={v4TftpServer}
-							placeholder="e.g. 10.0.0.1"
-							class="font-mono text-xs"
-						/>
-						<p class="text-[11px] text-muted-foreground">
-							TFTP server IP advertised to PXE netboot clients.
-						</p>
-					</div>
-
-					<div class="flex flex-col gap-1.5">
-						<Label for="v4-boot-file" class="text-xs font-semibold">
-							Default IPv4 Boot File (Option 67)
-						</Label>
-						<Input
-							id="v4-boot-file"
-							bind:value={v4BootFile}
-							placeholder="ipxe.efi, pxelinux.0"
-							class="font-mono text-xs"
-						/>
-						<p class="text-[11px] text-muted-foreground">
-							Initial Network Bootstrap Program (NBP) file.
-						</p>
-					</div>
-
-					<div class="flex flex-col gap-1.5">
-						<Label for="v6-boot-file" class="text-xs font-semibold">
-							Default IPv6 Boot URL (Option 59)
-						</Label>
-						<Input
-							id="v6-boot-file"
-							bind:value={v6BootFile}
-							placeholder="tftp://[fd00::1]/ipxe.efi"
-							class="font-mono text-xs"
-						/>
-						<p class="text-[11px] text-muted-foreground">
-							DHCPv6 network bootloader URL.
-						</p>
-					</div>
-				</div>
-			</Card.Content>
-		</Card.Root>
+		<DhcpNetbootCard
+			bind:v4TftpServer
+			bind:v4BootFile
+			bind:v6BootFile
+		/>
 
 		<!-- 4. CUSTOM RAW OPTIONS -->
-		<Card.Root class="border-border/80 shadow-sm overflow-hidden">
-			<Card.Header class="bg-muted/20 border-b pb-4">
-				<div class="flex items-center gap-2.5">
-					<SlidersIcon class="size-5 text-emerald-500" />
-					<div>
-						<Card.Title class="text-base font-bold"
-							>Custom Raw DHCP Options</Card.Title
-						>
-						<Card.Description class="text-xs">
-							Inject arbitrary RFC or vendor-specific option code
-							payloads into DHCP packets
-						</Card.Description>
-					</div>
-				</div>
-			</Card.Header>
-
-			<Card.Content class="p-6">
-				<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-					<!-- IPv4 Raw Options -->
-					<div class="flex flex-col gap-3">
-						<div class="flex items-center gap-2">
-							<Badge
-								variant="outline"
-								class="font-mono text-[10px] text-blue-500 border-blue-500/30"
-								>IPv4</Badge
-							>
-							<span class="text-xs font-bold text-foreground"
-								>Raw Option Codes</span
-							>
-						</div>
-
-						{#if v4RawOptions.length > 0}
-							<div
-								class="border rounded-lg overflow-hidden font-mono text-xs"
-							>
-								<Table.Root>
-									<Table.Header class="bg-muted/40">
-										<Table.Row>
-											<Table.Head class="w-28"
-												>Option Code</Table.Head
-											>
-											<Table.Head>Payload</Table.Head>
-											<Table.Head
-												class="w-12 text-right"
-											></Table.Head>
-										</Table.Row>
-									</Table.Header>
-									<Table.Body>
-										{#each v4RawOptions as opt, idx}
-											<Table.Row>
-												<Table.Cell class="font-bold">
-													Option {opt.code}
-												</Table.Cell>
-												<Table.Cell
-													>{opt.value}</Table.Cell
-												>
-												<Table.Cell class="text-right">
-													<Button
-														variant="ghost"
-														size="icon"
-														class="size-6 text-destructive hover:text-destructive"
-														onclick={() =>
-															removeV4Raw(idx)}
-													>
-														<Trash2Icon
-															class="size-3.5"
-														/>
-													</Button>
-												</Table.Cell>
-											</Table.Row>
-										{/each}
-									</Table.Body>
-								</Table.Root>
-							</div>
-						{/if}
-
-						<div class="flex items-center gap-2">
-							<Input
-								type="number"
-								placeholder="Code (e.g. 43)"
-								class="w-32 font-mono text-xs"
-								bind:value={newRawV4Code}
-							/>
-							<Input
-								placeholder="Option payload / string..."
-								class="flex-1 font-mono text-xs"
-								bind:value={newRawV4Value}
-								onkeydown={(e) =>
-									e.key === "Enter" && addV4Raw()}
-							/>
-							<Button
-								size="sm"
-								variant="outline"
-								onclick={addV4Raw}
-							>
-								<PlusIcon class="size-3.5 mr-1" />
-								Add
-							</Button>
-						</div>
-					</div>
-
-					<!-- IPv6 Raw Options -->
-					<div class="flex flex-col gap-3">
-						<div class="flex items-center gap-2">
-							<Badge
-								variant="outline"
-								class="font-mono text-[10px] text-purple-500 border-purple-500/30"
-								>IPv6</Badge
-							>
-							<span class="text-xs font-bold text-foreground"
-								>Raw Option Codes</span
-							>
-						</div>
-
-						{#if v6RawOptions.length > 0}
-							<div
-								class="border rounded-lg overflow-hidden font-mono text-xs"
-							>
-								<Table.Root>
-									<Table.Header class="bg-muted/40">
-										<Table.Row>
-											<Table.Head class="w-28"
-												>Option Code</Table.Head
-											>
-											<Table.Head>Payload</Table.Head>
-											<Table.Head
-												class="w-12 text-right"
-											></Table.Head>
-										</Table.Row>
-									</Table.Header>
-									<Table.Body>
-										{#each v6RawOptions as opt, idx}
-											<Table.Row>
-												<Table.Cell class="font-bold">
-													Option {opt.code}
-												</Table.Cell>
-												<Table.Cell
-													>{opt.value}</Table.Cell
-												>
-												<Table.Cell class="text-right">
-													<Button
-														variant="ghost"
-														size="icon"
-														class="size-6 text-destructive hover:text-destructive"
-														onclick={() =>
-															removeV6Raw(idx)}
-													>
-														<Trash2Icon
-															class="size-3.5"
-														/>
-													</Button>
-												</Table.Cell>
-											</Table.Row>
-										{/each}
-									</Table.Body>
-								</Table.Root>
-							</div>
-						{/if}
-
-						<div class="flex items-center gap-2">
-							<Input
-								type="number"
-								placeholder="Code (e.g. 56)"
-								class="w-32 font-mono text-xs"
-								bind:value={newRawV6Code}
-							/>
-							<Input
-								placeholder="Option payload / string..."
-								class="flex-1 font-mono text-xs"
-								bind:value={newRawV6Value}
-								onkeydown={(e) =>
-									e.key === "Enter" && addV6Raw()}
-							/>
-							<Button
-								size="sm"
-								variant="outline"
-								onclick={addV6Raw}
-							>
-								<PlusIcon class="size-3.5 mr-1" />
-								Add
-							</Button>
-						</div>
-					</div>
-				</div>
-			</Card.Content>
-		</Card.Root>
+		<DhcpRawOptionsCard
+			bind:v4RawOptions
+			bind:v6RawOptions
+		/>
 	{/if}
 </div>

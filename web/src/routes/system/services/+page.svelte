@@ -188,8 +188,7 @@
 		<div>
 			<h1 class="text-foreground text-2xl font-bold tracking-tight">Services & Subsystems</h1>
 			<p class="text-muted-foreground text-sm">
-				Supervise daemon background tasks, view live telemetry, and control runtime lifecycles.
-				To permanently enable or disable a service on boot, click <strong>Configure</strong>.
+				View runtime status, telemetry, and control daemon services. Click <strong>Configure</strong> to change boot defaults.
 			</p>
 		</div>
 		<div class="flex flex-wrap items-center gap-2">
