@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use super::common::{
@@ -28,7 +29,7 @@ pub struct QueryTypeEntry {
 }
 
 /// A single entry in the query rate timeline.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct QueryRateEntry {
     pub timestamp: u64,
     pub count: u64,
@@ -38,6 +39,14 @@ pub struct QueryRateEntry {
     pub forwarded: u64,
     #[serde(default)]
     pub blocked: u64,
+    #[serde(default)]
+    pub local: u64,
+    #[serde(default)]
+    pub rewritten: u64,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub record_types: HashMap<String, u32>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub outcome_types: HashMap<String, HashMap<String, u32>>,
 }
 
 /// A single entry in the protocol distribution list.

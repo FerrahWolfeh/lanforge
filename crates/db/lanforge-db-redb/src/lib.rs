@@ -459,7 +459,7 @@ mod tests {
         };
         db.record_dns_queries_batch(&[query1, query2]).await.unwrap();
 
-        let (queries, total) = db.get_dns_query_history(10, None).await.unwrap();
+        let (queries, total) = db.get_dns_query_history(10, None, None).await.unwrap();
         assert_eq!(total, 2);
         assert_eq!(queries.len(), 2);
         assert_eq!(queries[0].domain.as_ref(), "bad-ads.net"); // Latest first
@@ -478,7 +478,7 @@ mod tests {
         db.clear_logs().await.unwrap();
         let history_after_clear = db.get_history(10).await.unwrap();
         assert_eq!(history_after_clear.len(), 0);
-        let (queries_after_clear, total_after_clear) = db.get_dns_query_history(10, None).await.unwrap();
+        let (queries_after_clear, total_after_clear) = db.get_dns_query_history(10, None, None).await.unwrap();
         assert_eq!(total_after_clear, 0);
         assert_eq!(queries_after_clear.len(), 0);
     }

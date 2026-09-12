@@ -567,6 +567,10 @@ export interface QueryRateEntry {
 	cached?: number;
 	forwarded?: number;
 	blocked?: number;
+	local?: number;
+	rewritten?: number;
+	record_types?: Record<string, number>;
+	outcome_types?: Record<string, Record<string, number>>;
 }
 
 export interface DnsAnalyticsResponse {

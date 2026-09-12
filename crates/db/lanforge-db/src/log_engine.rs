@@ -1,7 +1,7 @@
 //! Log engine backed by embedded `redb` (`runtime.redb`).
 
 use lanforge_core::bus::TimedEvent;
-use lanforge_db_core::{BoxFuture, DbError, LogStore};
+use lanforge_db_core::{BoxFuture, DbError, DnsQueryRateBucket, LogStore};
 use lanforge_db_redb::RedbDatabase;
 use lanforge_types::network::QueryLogEntry;
 use std::net::IpAddr;
@@ -126,8 +126,9 @@ impl LogDb {
         &self,
         limit: usize,
         offset: Option<usize>,
+        client: Option<String>,
     ) -> Result<(Vec<QueryLogEntry>, usize), DbError> {
-        self.inner.get_dns_query_history(limit, offset).await
+        self.inner.get_dns_query_history(limit, offset, client).await
     }
 
     pub async fn get_dns_top_domains(&self, limit: usize) -> Result<Vec<(String, u64)>, DbError> {
@@ -156,7 +157,7 @@ impl LogDb {
         &self,
         since_secs: u64,
         bucket_secs: u64,
-    ) -> Result<Vec<(u64, u64, u64, u64, u64)>, DbError> {
+    ) -> Result<Vec<DnsQueryRateBucket>, DbError> {
         self.inner
             .get_dns_query_rate_detailed(since_secs, bucket_secs)
             .await
@@ -245,8 +246,9 @@ impl LogStore for LogDb {
         &self,
         limit: usize,
         offset: Option<usize>,
+        client: Option<String>,
     ) -> BoxFuture<'_, Result<(Vec<QueryLogEntry>, usize), DbError>> {
-        self.inner.get_dns_query_history(limit, offset)
+        self.inner.get_dns_query_history(limit, offset, client)
     }
 
     fn get_dns_top_domains(
@@ -279,7 +281,7 @@ impl LogStore for LogDb {
         &self,
         since_secs: u64,
         bucket_secs: u64,
-    ) -> BoxFuture<'_, Result<Vec<(u64, u64, u64, u64, u64)>, DbError>> {
+    ) -> BoxFuture<'_, Result<Vec<DnsQueryRateBucket>, DbError>> {
         self.inner.get_dns_query_rate_detailed(since_secs, bucket_secs)
     }
 

@@ -230,15 +230,17 @@ impl ClientContext {
                 .collect(),
             query_rate: detailed_rates
                 .into_iter()
-                .map(
-                    |(timestamp, total, cached, forwarded, blocked)| QueryRateEntry {
-                        timestamp,
-                        count: total,
-                        cached,
-                        forwarded,
-                        blocked,
-                    },
-                )
+                .map(|b| QueryRateEntry {
+                    timestamp: b.timestamp,
+                    count: b.total,
+                    cached: b.cached,
+                    forwarded: b.forwarded,
+                    blocked: b.blocked,
+                    local: b.local,
+                    rewritten: b.rewritten,
+                    record_types: b.record_types,
+                    outcome_types: b.outcome_types,
+                })
                 .collect(),
             top_clients: top_clients
                 .into_iter()
@@ -297,6 +299,7 @@ impl ClientContext {
                     cached: 0,
                     forwarded: 0,
                     blocked: count,
+                    ..Default::default()
                 })
                 .collect(),
         })

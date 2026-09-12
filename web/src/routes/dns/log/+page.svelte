@@ -189,6 +189,17 @@
 	// Filtered list derived state for client-side filtering of live SSE buffer
 	const filteredEntries = $derived.by(() => {
 		let list = entries;
+		if (searchQuery.trim()) {
+			const q = searchQuery.toLowerCase().trim();
+			list = list.filter(
+				(e) =>
+					e.domain.toLowerCase().includes(q) ||
+					e.src_ip.toLowerCase().includes(q) ||
+					(e.src_hostname && e.src_hostname.toLowerCase().includes(q)) ||
+					(e.src_mac && e.src_mac.toLowerCase().includes(q)) ||
+					(e.answer && e.answer.toLowerCase().includes(q)),
+			);
+		}
 		if (selectedType) {
 			list = list.filter((e) => e.qtype === selectedType);
 		}
@@ -201,16 +212,21 @@
 						e.result.toLowerCase().includes("deny"),
 				);
 			} else if (resLow === "cached") {
-				list = list.filter((e) => e.cached);
-			} else if (resLow === "allowed") {
-				list = list.filter(
-					(e) =>
-						!e.result.toLowerCase().includes("block") &&
-						!e.result.toLowerCase().includes("deny"),
-				);
+				list = list.filter((e) => e.cached || e.result.toLowerCase() === "cached");
+			} else if (resLow === "local") {
+				list = list.filter((e) => e.result.toLowerCase() === "local");
 			} else if (resLow === "rewrite") {
 				list = list.filter((e) =>
 					e.result.toLowerCase().includes("rewrite"),
+				);
+			} else if (resLow === "forwarded") {
+				list = list.filter(
+					(e) =>
+						e.result.toLowerCase() === "forwarded" ||
+						(!e.cached &&
+							!e.result.toLowerCase().includes("block") &&
+							e.result.toLowerCase() !== "local" &&
+							!e.result.toLowerCase().includes("rewrite")),
 				);
 			}
 		}

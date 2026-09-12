@@ -1,5 +1,6 @@
 #![allow(clippy::type_complexity)]
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
@@ -614,6 +615,20 @@ pub trait UserStore: Send + Sync {
     fn count_users(&self) -> BoxFuture<'_, Result<i64, DbError>>;
 }
 
+/// Detailed bucket metrics for DNS query activity.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct DnsQueryRateBucket {
+    pub timestamp: u64,
+    pub total: u64,
+    pub cached: u64,
+    pub forwarded: u64,
+    pub blocked: u64,
+    pub local: u64,
+    pub rewritten: u64,
+    pub record_types: HashMap<String, u32>,
+    pub outcome_types: HashMap<String, HashMap<String, u32>>,
+}
+
 /// Handles transient log operations.
 pub trait LogStore: Send + Sync {
     /// Appends a single log event.
@@ -661,6 +676,7 @@ pub trait LogStore: Send + Sync {
         &self,
         limit: usize,
         offset: Option<usize>,
+        client: Option<String>,
     ) -> BoxFuture<'_, Result<(Vec<QueryLogEntry>, usize), DbError>>;
 
     /// Retrieves top domains by query count.
@@ -690,7 +706,7 @@ pub trait LogStore: Send + Sync {
         &self,
         since_secs: u64,
         bucket_secs: u64,
-    ) -> BoxFuture<'_, Result<Vec<(u64, u64, u64, u64, u64)>, DbError>>;
+    ) -> BoxFuture<'_, Result<Vec<DnsQueryRateBucket>, DbError>>;
 
     /// Retrieves top clients by query count.
     fn get_dns_top_clients(
