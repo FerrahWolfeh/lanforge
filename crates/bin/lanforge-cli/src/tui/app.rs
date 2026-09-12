@@ -430,6 +430,7 @@ impl TuiApp {
                 addr: entry.target,
                 protocol: entry.protocol,
                 hostname: None,
+                domain: entry.domain.clone(),
             })
     }
 

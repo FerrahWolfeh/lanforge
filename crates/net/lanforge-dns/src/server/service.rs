@@ -329,6 +329,7 @@ impl AsyncService for DnsService {
                                             addr: SocketAddr::new(ip, 53),
                                             protocol: UpstreamProtocol::Udp,
                                             hostname: None,
+                                            domain: None,
                                         };
                                         match UpstreamManager::new(&target, Arc::clone(&dns_ctx.cache)).await {
                                             Ok(mgr) => upstreams.push(mgr),

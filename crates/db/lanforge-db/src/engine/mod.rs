@@ -465,8 +465,9 @@ impl DnsUpstreamStore for LanforgeDb {
         &'a self,
         addr: SocketAddr,
         protocol: UpstreamProtocol,
+        domain: Option<&'a str>,
     ) -> BoxFuture<'a, Result<(), DbError>> {
-        self.inner.remove_dns_upstream(addr, protocol)
+        self.inner.remove_dns_upstream(addr, protocol, domain)
     }
 
     fn clear_dns_upstreams(&self) -> BoxFuture<'_, Result<(), DbError>> {

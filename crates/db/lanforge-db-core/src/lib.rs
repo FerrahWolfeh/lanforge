@@ -87,7 +87,12 @@ impl DnsUpstreamEntry {
         UpstreamTarget {
             addr: self.addr,
             protocol: self.protocol,
-            hostname: self.domain.clone(),
+            hostname: if self.protocol != UpstreamProtocol::Udp {
+                self.domain.clone()
+            } else {
+                None
+            },
+            domain: self.domain.clone(),
         }
     }
 }
@@ -365,6 +370,7 @@ pub trait DnsUpstreamStore: Send + Sync {
         &'a self,
         addr: SocketAddr,
         protocol: UpstreamProtocol,
+        domain: Option<&'a str>,
     ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Clears all registered DNS upstream servers.

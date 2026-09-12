@@ -141,7 +141,11 @@
 		const addrStr = getUpstreamAddrStr(item);
 		const protoStr = item.protocol || "UDP";
 		try {
-			await dnsUpstreamRemove({ addr: addrStr, protocol: protoStr });
+			await dnsUpstreamRemove({
+				addr: addrStr,
+				protocol: protoStr,
+				domain: item.domain || undefined,
+			});
 			toast.success(`Removed upstream server ${addrStr}`);
 			await loadAllData();
 		} catch {

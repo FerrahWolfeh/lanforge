@@ -98,6 +98,7 @@ impl UpstreamHealth {
         &self,
         target: std::net::SocketAddr,
         protocol: lanforge_types::network::dns::upstream::UpstreamProtocol,
+        domain: Option<String>,
     ) -> UpstreamHealthSnapshot {
         UpstreamHealthSnapshot {
             target,
@@ -120,6 +121,7 @@ impl UpstreamHealth {
                     Some(now.saturating_sub(ts))
                 }
             },
+            domain,
         }
     }
 }

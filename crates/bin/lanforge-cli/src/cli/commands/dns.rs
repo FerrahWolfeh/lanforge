@@ -71,6 +71,7 @@ pub enum DnsUpstreamsAction {
     Remove {
         addr: Option<String>,
         protocol: Option<String>,
+        domain: Option<String>,
     },
     Clear,
 }
@@ -703,12 +704,17 @@ impl Execute for DnsUpstreamsArgs {
                 println!("✓ {}", resp.message);
                 Ok(())
             }
-            DnsUpstreamsAction::Remove { addr, protocol } => {
-                let (final_addr, final_proto) = if let (Some(a), Some(p)) = (addr, protocol) {
+            DnsUpstreamsAction::Remove {
+                addr,
+                protocol,
+                domain,
+            } => {
+                let (final_addr, final_proto, final_domain) = if let (Some(a), Some(p)) = (addr, protocol) {
                     (
                         a.parse()?,
                         p.parse()
                             .map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?,
+                        domain,
                     )
                 } else {
                     let resp = client.dns_upstreams().await?;
@@ -718,21 +724,22 @@ impl Execute for DnsUpstreamsArgs {
                     let items = resp
                         .upstreams
                         .iter()
-                        .map(|u| format!("{} ({})", u.target, u.protocol))
+                        .map(|u| {
+                            let d = u.domain.as_deref().unwrap_or("Global");
+                            format!("{} ({}) [{}]", u.target, u.protocol, d)
+                        })
                         .collect::<Vec<_>>();
                     let choice = prompt_select(
                         "Select upstream to remove:",
                         items.iter().map(String::as_str).collect(),
                     )?;
-                    let parts: Vec<&str> = choice.split_whitespace().collect();
-                    let a = parts[0].parse()?;
-                    let p = parts[1]
-                        .trim_matches(|c| c == '(' || c == ')')
-                        .parse()
-                        .map_err(|e: String| color_eyre::eyre::eyre!("{e}"))?;
-                    (a, p)
+                    let selected = resp.upstreams.iter().find(|u| {
+                        let d = u.domain.as_deref().unwrap_or("Global");
+                        format!("{} ({}) [{}]", u.target, u.protocol, d) == choice
+                    }).ok_or_else(|| color_eyre::eyre::eyre!("Selection not found"))?;
+                    (selected.target, selected.protocol, selected.domain.clone())
                 };
-                let resp = client.dns_upstream_remove(final_addr, final_proto).await?;
+                let resp = client.dns_upstream_remove(final_addr, final_proto, final_domain).await?;
                 println!("✓ {}", resp.message);
                 Ok(())
             }
@@ -745,7 +752,7 @@ impl Execute for DnsUpstreamsArgs {
                 }
                 let resp = client.dns_upstreams().await?;
                 for u in resp.upstreams {
-                    let _ = client.dns_upstream_remove(u.target, u.protocol).await;
+                    let _ = client.dns_upstream_remove(u.target, u.protocol, u.domain).await;
                 }
                 println!("✓ Cleared all DNS upstreams");
                 Ok(())
@@ -826,8 +833,8 @@ pub fn render_dns_analytics(resp: &DnsAnalyticsResponse, ascii: bool) {
 pub fn render_dns_upstreams(resp: &DnsUpstreamsResponse, ascii: bool) {
     let hline = if ascii { "-" } else { "─" };
     println!(" DNS UPSTREAMS HEALTH \n");
-    println!("  {:<30} | {:<10} | LATENCY", "UPSTREAM", "STATUS");
-    println!("{}", hline.repeat(60));
+    println!("  {:<25} | {:<20} | {:<10} | LATENCY", "UPSTREAM", "DOMAIN", "STATUS");
+    println!("{}", hline.repeat(70));
     for u in &resp.upstreams {
         let status = if u.status.is_healthy() {
             "Healthy".green()
@@ -835,7 +842,8 @@ pub fn render_dns_upstreams(resp: &DnsUpstreamsResponse, ascii: bool) {
             "Failing".red()
         };
         let rtt_ms = u.rtt_ewma_us / 1000;
-        println!("  {:<30} | {:<10} | {}ms", u.target, status, rtt_ms);
+        let domain_str = u.domain.as_deref().unwrap_or("Global (*)");
+        println!("  {:<25} | {:<20} | {:<10} | {}ms", u.target, domain_str, status, rtt_ms);
     }
 }
 

@@ -32,6 +32,7 @@ pub struct AnalyticsQuery {
 #[derive(Debug, Deserialize)]
 pub struct DnsQueryRequest {
     pub name: String,
+    #[serde(default, alias = "type", alias = "qtype")]
     pub record_type: Option<DnsRecordType>,
 }
 

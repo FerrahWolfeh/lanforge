@@ -401,6 +401,7 @@ async fn dns_simulation_transient_ip_reverse_dns() {
         addr: upstream_addr,
         protocol: UpstreamProtocol::Udp,
         hostname: None,
+        domain: None,
     };
     let subnet = IpSubnet::from_str("127.0.0.1/32").unwrap();
     let resolver_rule = DnsReverseResolver {

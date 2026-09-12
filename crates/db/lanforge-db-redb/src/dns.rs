@@ -732,6 +732,7 @@ impl DnsUpstreamStore for RedbDatabase {
         &'a self,
         addr: SocketAddr,
         protocol: UpstreamProtocol,
+        domain: Option<&'a str>,
     ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
@@ -748,7 +749,11 @@ impl DnsUpstreamStore for RedbDatabase {
                         let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
                         let entry: DnsUpstreamEntry = serde_json::from_slice(val.value())
                             .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                        if entry.addr == addr && entry.protocol == protocol {
+                        let domain_match = match domain {
+                            Some(d) => entry.domain.as_deref() == Some(d),
+                            None => true,
+                        };
+                        if entry.addr == addr && entry.protocol == protocol && domain_match {
                             found = Some(id.value());
                             break;
                         }

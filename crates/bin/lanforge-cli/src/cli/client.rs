@@ -849,9 +849,11 @@ impl LanforgeClient {
         &self,
         addr: SocketAddr,
         protocol: UpstreamProtocol,
+        domain: Option<String>,
     ) -> Result<SimpleSuccess> {
         let proto_str = format!("{protocol:?}").to_lowercase();
-        dispatch!(self, delete => format!("/dns/upstreams?addr={addr}&protocol={proto_str}"), dns_upstream_remove(addr, protocol))
+        let q = domain.as_deref().map_or_else(String::new, |d| format!("&domain={d}"));
+        dispatch!(self, delete => format!("/dns/upstreams?addr={addr}&protocol={proto_str}{q}"), dns_upstream_remove(addr, protocol, domain))
     }
 
     pub async fn dns_query(

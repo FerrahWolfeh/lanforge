@@ -263,3 +263,143 @@ async fn dns_reload_rewrites_on_the_fly() {
 
     ctx.terminate();
 }
+
+#[tokio::test]
+async fn dns_conditional_split_upstream_routing() {
+    let bus = Arc::new(EventBus::new());
+    let table = State::new();
+    let ctx = LanforgeContext::new(bus, table, None);
+
+    // 1. Start mock global upstream (127.0.0.1:1071)
+    let global_sock = TokioUdpSocket::bind("127.0.0.1:1071").await.unwrap();
+    tokio::spawn(async move {
+        let mut buf = [0u8; 1024];
+        while let Ok((len, src)) = global_sock.recv_from(&mut buf).await {
+            if let Some(req) = WireDecoder::new(&buf[..len]).decode_message() {
+                let mut resp = DnsMessage::new();
+                resp.header.id = req.header.id;
+                resp.header.qr = true;
+                resp.header.qdcount = req.questions.len() as u16;
+                resp.header.ancount = 1;
+                resp.header.rcode = DnsResponseCode::NoError;
+                resp.questions = req.questions.clone();
+                if let Some(q) = req.questions.first() {
+                    resp.answers.push(lanforge_types::network::dns::DnsRecord {
+                        name: q.name.clone(),
+                        rtype: DnsRecordType::A,
+                        rclass: DnsClass::IN,
+                        ttl: 300,
+                        rdata: DnsRData::A(Ipv4Addr::new(8, 8, 8, 8)),
+                    });
+                }
+                let bytes = WireEncoder::new().encode_message(&resp);
+                let _ = global_sock.send_to(&bytes, src).await;
+            }
+        }
+    });
+
+    // 2. Start mock conditional upstream for corp.internal (127.0.0.1:1072)
+    let corp_sock = TokioUdpSocket::bind("127.0.0.1:1072").await.unwrap();
+    tokio::spawn(async move {
+        let mut buf = [0u8; 1024];
+        while let Ok((len, src)) = corp_sock.recv_from(&mut buf).await {
+            if let Some(req) = WireDecoder::new(&buf[..len]).decode_message() {
+                let mut resp = DnsMessage::new();
+                resp.header.id = req.header.id;
+                resp.header.qr = true;
+                resp.header.qdcount = req.questions.len() as u16;
+                resp.header.ancount = 1;
+                resp.header.rcode = DnsResponseCode::NoError;
+                resp.questions = req.questions.clone();
+                if let Some(q) = req.questions.first() {
+                    resp.answers.push(lanforge_types::network::dns::DnsRecord {
+                        name: q.name.clone(),
+                        rtype: DnsRecordType::A,
+                        rclass: DnsClass::IN,
+                        ttl: 300,
+                        rdata: DnsRData::A(Ipv4Addr::new(10, 0, 0, 99)),
+                    });
+                }
+                let bytes = WireEncoder::new().encode_message(&resp);
+                let _ = corp_sock.send_to(&bytes, src).await;
+            }
+        }
+    });
+
+    // 3. Configure upstreams: global + conditional for corp.internal
+    let global_target: UpstreamTarget = "udp://127.0.0.1:1071".parse().unwrap();
+    let corp_target: UpstreamTarget = "udp://127.0.0.1:1072#corp.internal".parse().unwrap();
+    assert_eq!(corp_target.domain.as_deref(), Some("corp.internal"));
+
+    ctx.update_dns_upstreams(vec![global_target, corp_target]);
+
+    // 4. Start Lanforge DNS on 127.0.0.1:1073
+    let cfg = DnsConfig {
+        enabled: true,
+        listen: "127.0.0.1:1073".parse().unwrap(),
+        search_domains: vec!["lan".to_string()],
+        ..Default::default()
+    };
+
+    let mut service = DnsService::new(cfg, ctx.clone());
+    let ctx_service = ctx.clone();
+    ctx.set_db_ready(true);
+
+    tokio::spawn(async move {
+        service.serve(&ctx_service).await.expect("DNS Service failed");
+    });
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // 5. Test resolution using a client socket
+    let client = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
+    client.connect("127.0.0.1:1073").await.unwrap();
+
+    let query_buf = [0u8; 1024];
+
+    // Helper to send query and receive resolved A IP
+    let query_a = |qname: &'static str| {
+        let client_ref = &client;
+        let mut q_buf = query_buf;
+        async move {
+            let mut msg = DnsMessage::new();
+            msg.header.id = 999;
+            msg.header.rd = true;
+            msg.header.qdcount = 1;
+            msg.questions.push(DnsQuestion {
+                name: Arc::from(qname),
+                qtype: DnsRecordType::A,
+                qclass: DnsClass::IN,
+            });
+            let bytes = WireEncoder::new().encode_message(&msg);
+            client_ref.send(&bytes).await.unwrap();
+
+            let n = tokio::time::timeout(Duration::from_secs(3), client_ref.recv(&mut q_buf))
+                .await
+                .expect("DNS query timed out")
+                .unwrap();
+
+            let decoded = WireDecoder::new(&q_buf[..n]).decode_message().unwrap();
+            assert_eq!(decoded.header.rcode, DnsResponseCode::NoError);
+            assert!(!decoded.answers.is_empty(), "No answers returned for {qname}");
+            match decoded.answers[0].rdata {
+                DnsRData::A(ip) => ip,
+                _ => panic!("Expected A record"),
+            }
+        }
+    };
+
+    // A) Global query: google.com -> routes to 127.0.0.1:1071 -> returns 8.8.8.8
+    let ip_global = query_a("google.com").await;
+    assert_eq!(ip_global, Ipv4Addr::new(8, 8, 8, 8));
+
+    // B) Split DNS query: api.corp.internal -> routes to 127.0.0.1:1072 -> returns 10.0.0.99
+    let ip_corp = query_a("api.corp.internal").await;
+    assert_eq!(ip_corp, Ipv4Addr::new(10, 0, 0, 99));
+
+    // C) Non-matching subdomain: other.internal -> routes to global -> returns 8.8.8.8
+    let ip_other = query_a("other.internal").await;
+    assert_eq!(ip_other, Ipv4Addr::new(8, 8, 8, 8));
+
+    ctx.terminate();
+}

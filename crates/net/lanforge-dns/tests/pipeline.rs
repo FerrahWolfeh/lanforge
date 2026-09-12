@@ -204,6 +204,7 @@ async fn pipeline_transient_ip_reverse_dns_cached() {
         addr: "127.0.0.1:9999".parse().unwrap(),
         protocol: UpstreamProtocol::Udp,
         hostname: None,
+        domain: None,
     };
     let subnet = IpSubnet::from_str("100.64.0.0/10").unwrap();
     let resolver_rule = DnsReverseResolver {

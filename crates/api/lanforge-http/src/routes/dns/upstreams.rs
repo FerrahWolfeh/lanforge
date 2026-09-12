@@ -46,6 +46,8 @@ pub struct UpstreamRemoveRequest {
     #[serde(deserialize_with = "deserialize_flexible_socket_addr")]
     pub addr: SocketAddr,
     pub protocol: UpstreamProtocol,
+    #[serde(default)]
+    pub domain: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,7 +100,7 @@ async fn handle_dns_upstream_remove(
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(
-        ctx.handle_dns_upstream_remove(params.addr, params.protocol).await,
+        ctx.handle_dns_upstream_remove(params.addr, params.protocol, params.domain).await,
         Success => NoContent
     )
 }

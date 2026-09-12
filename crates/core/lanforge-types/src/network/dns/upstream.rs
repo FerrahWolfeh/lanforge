@@ -62,6 +62,8 @@ pub struct UpstreamTarget {
     pub protocol: UpstreamProtocol,
     /// Optional hostname for TLS SNI and certificate validation (required for `DoT`).
     pub hostname: Option<String>,
+    /// Optional domain suffix for conditional split-DNS forwarding.
+    pub domain: Option<String>,
 }
 
 /// An upstream target resolver.
@@ -96,7 +98,12 @@ impl From<UpstreamEntryDe> for UpstreamEntry {
                 target: UpstreamTarget {
                     addr,
                     protocol,
-                    hostname: domain,
+                    hostname: if protocol == UpstreamProtocol::Udp {
+                        None
+                    } else {
+                        domain.clone()
+                    },
+                    domain,
                 },
             },
         }
@@ -116,6 +123,10 @@ impl FromStr for UpstreamTarget {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (s, domain) = s
+            .find('#')
+            .map_or((s, None), |idx| (&s[..idx], Some(s[idx + 1..].to_string())));
+
         if let Some(stripped) = s.strip_prefix("tls://") {
             let (hostname, addr_str) = stripped.find('@').map_or_else(
                 || {
@@ -141,6 +152,7 @@ impl FromStr for UpstreamTarget {
                 addr,
                 protocol: UpstreamProtocol::Tls,
                 hostname,
+                domain,
             })
         } else if let Some(stripped) = s.strip_prefix("quic://") {
             let (hostname, addr_str) = stripped.find('@').map_or_else(
@@ -168,6 +180,7 @@ impl FromStr for UpstreamTarget {
                 addr,
                 protocol: UpstreamProtocol::Quic,
                 hostname,
+                domain,
             })
         } else if let Some(stripped) = s.strip_prefix("https://") {
             let (hostname, addr_str) = stripped.find('@').map_or_else(
@@ -195,6 +208,7 @@ impl FromStr for UpstreamTarget {
                 addr,
                 protocol: UpstreamProtocol::Https,
                 hostname,
+                domain,
             })
         } else {
             let addr_str = s.strip_prefix("udp://").unwrap_or(s);
@@ -205,6 +219,7 @@ impl FromStr for UpstreamTarget {
                 addr,
                 protocol: UpstreamProtocol::Udp,
                 hostname: None,
+                domain,
             })
         }
     }
@@ -215,38 +230,37 @@ impl std::fmt::Display for UpstreamTarget {
         match self.protocol {
             UpstreamProtocol::Tls => {
                 if let Some(ref hn) = self.hostname {
-                    write!(f, "tls://{}@{}", hn, self.addr)
+                    write!(f, "tls://{}@{}", hn, self.addr)?;
                 } else {
-                    write!(f, "tls://{}", self.addr)
+                    write!(f, "tls://{}", self.addr)?;
                 }
             }
             UpstreamProtocol::Quic => {
                 if let Some(ref hn) = self.hostname {
-                    write!(f, "quic://{}@{}", hn, self.addr)
+                    write!(f, "quic://{}@{}", hn, self.addr)?;
                 } else {
-                    write!(f, "quic://{}", self.addr)
+                    write!(f, "quic://{}", self.addr)?;
                 }
             }
             UpstreamProtocol::Https => {
                 if let Some(ref hn) = self.hostname {
-                    write!(f, "https://{}@{}", hn, self.addr)
+                    write!(f, "https://{}@{}", hn, self.addr)?;
                 } else {
-                    write!(f, "https://{}", self.addr)
+                    write!(f, "https://{}", self.addr)?;
                 }
             }
-            UpstreamProtocol::Udp => write!(f, "udp://{}", self.addr),
+            UpstreamProtocol::Udp => write!(f, "udp://{}", self.addr)?,
         }
+        if let Some(ref d) = self.domain {
+            write!(f, "#{d}")?;
+        }
+        Ok(())
     }
 }
 
 impl From<UpstreamTarget> for String {
     fn from(target: UpstreamTarget) -> Self {
-        match target.protocol {
-            UpstreamProtocol::Tls => format!("tls://{}", target.addr),
-            UpstreamProtocol::Quic => format!("quic://{}", target.addr),
-            UpstreamProtocol::Https => format!("https://{}", target.addr),
-            UpstreamProtocol::Udp => format!("udp://{}", target.addr),
-        }
+        target.to_string()
     }
 }
 

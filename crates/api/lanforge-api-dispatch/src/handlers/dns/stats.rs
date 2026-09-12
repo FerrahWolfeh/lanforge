@@ -71,6 +71,7 @@ impl ClientContext {
                         total_failures: 0,
                         status: UpstreamStatus::Healthy,
                         last_success_secs_ago: Some(0),
+                        domain: r.domain,
                     })
                     .collect();
             if !mapped.is_empty() {
@@ -112,8 +113,9 @@ impl ClientContext {
         &self,
         addr: std::net::SocketAddr,
         protocol: UpstreamProtocol,
+        domain: Option<String>,
     ) -> Response {
-        match self.db.remove_dns_upstream(addr, protocol).await {
+        match self.db.remove_dns_upstream(addr, protocol, domain.as_deref()).await {
             Ok(_) => {
                 if let Err(e) = self.reload_dns_upstreams_to_context().await {
                     return Response::Error { error: e };

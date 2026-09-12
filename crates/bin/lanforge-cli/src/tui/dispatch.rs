@@ -44,7 +44,7 @@ pub async fn execute_action(client: &LanforgeClient, action: PendingAction) -> A
         PendingAction::DnsUpstreamRemove { target } => {
             handle!(
                 client
-                    .dns_upstream_remove(target.addr, target.protocol)
+                    .dns_upstream_remove(target.addr, target.protocol, target.domain)
                     .await
             )
         }

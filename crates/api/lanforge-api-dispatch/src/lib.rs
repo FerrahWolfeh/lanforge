@@ -344,8 +344,9 @@ impl LanforgeRpc for ClientContext {
         &self,
         addr: std::net::SocketAddr,
         protocol: UpstreamProtocol,
+        domain: Option<String>,
     ) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_dns_upstream_remove(addr, protocol).await {
+        match self.handle_dns_upstream_remove(addr, protocol, domain).await {
             Response::Success(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),

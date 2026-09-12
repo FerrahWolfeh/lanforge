@@ -141,6 +141,7 @@ pub trait LanforgeRpc {
         &self,
         addr: std::net::SocketAddr,
         protocol: UpstreamProtocol,
+        domain: Option<String>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn dns_query(
         &self,

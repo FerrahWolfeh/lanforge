@@ -76,6 +76,7 @@ async fn test_dns_local_shielding_anti_poisoning() {
         addr: upstream_addr,
         protocol: UpstreamProtocol::Udp,
         hostname: None,
+        domain: None,
     };
     let mgr = UpstreamManager::new(&target, dns_ctx.cache.clone())
         .await

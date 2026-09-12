@@ -184,6 +184,8 @@ pub struct UpstreamHealthSnapshot {
     pub total_failures: u64,
     pub status: UpstreamStatus,
     pub last_success_secs_ago: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
 }
 
 /// The result of a DNS query resolution.

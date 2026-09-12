@@ -368,7 +368,7 @@ export const dnsAnalytics = (limit?: number, client?: string) =>
 		...(client && { client })
 	});
 export const dnsQuery = (name: string, type?: string) =>
-	get<unknown>('/dns/query', { name, type });
+	get<unknown>('/dns/query', { name, record_type: type, type });
 export const dnsQueryLog = async (params?: {
 	client?: string;
 	limit?: number;
@@ -423,13 +423,15 @@ export const dnsUpstreamAdd = (entry: { addr: string; protocol: string; domain?:
 		domain: entry.domain
 	});
 };
-export const dnsUpstreamRemove = (entry: { addr: string; protocol: string }) => {
+export const dnsUpstreamRemove = (entry: { addr: string; protocol: string; domain?: string }) => {
 	const formattedAddr = formatDnsAddr(entry.addr);
 	const proto = (entry.protocol || 'udp').toLowerCase();
 	const params = new URLSearchParams({ addr: formattedAddr, protocol: proto });
+	if (entry.domain) params.set('domain', entry.domain);
 	return del<void>(`/dns/upstreams?${params.toString()}`, {
 		addr: formattedAddr,
-		protocol: proto
+		protocol: proto,
+		domain: entry.domain
 	});
 };
 export const dnsUpstreamClear = () => del<void>('/dns/upstreams/clear');
