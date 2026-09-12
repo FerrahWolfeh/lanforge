@@ -71,11 +71,13 @@ pub struct DnsAnalyticsResponse {
 }
 
 /// A single entry in the top clients list.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct TopClientEntry {
     pub ip: String,
     pub hostname: Option<String>,
     pub count: u64,
+    #[serde(default)]
+    pub blocked_count: u64,
 }
 
 /// A response containing status for all configured DNS upstreams.

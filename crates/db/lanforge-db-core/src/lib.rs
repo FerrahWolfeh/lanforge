@@ -708,11 +708,11 @@ pub trait LogStore: Send + Sync {
         bucket_secs: u64,
     ) -> BoxFuture<'_, Result<Vec<DnsQueryRateBucket>, DbError>>;
 
-    /// Retrieves top clients by query count.
+    /// Retrieves top clients by query count (ip, total_count, blocked_count).
     fn get_dns_top_clients(
         &self,
         limit: usize,
-    ) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>>;
+    ) -> BoxFuture<'_, Result<Vec<(String, u64, u64)>, DbError>>;
 
     /// Retrieves query counts by protocol.
     fn get_dns_protocol_stats(&self) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>>;

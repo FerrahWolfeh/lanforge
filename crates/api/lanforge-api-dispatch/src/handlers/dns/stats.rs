@@ -244,7 +244,7 @@ impl ClientContext {
                 .collect(),
             top_clients: top_clients
                 .into_iter()
-                .map(|(ip, count)| {
+                .map(|(ip, count, blocked_count)| {
                     let hostname = self
                         .ctx
                         .get_mac_by_ip(ip.parse().unwrap_or_else(|_| "0.0.0.0".parse().unwrap()))
@@ -254,6 +254,7 @@ impl ClientContext {
                         ip,
                         hostname,
                         count,
+                        blocked_count,
                     }
                 })
                 .collect(),
@@ -288,6 +289,7 @@ impl ClientContext {
                         ip,
                         hostname,
                         count,
+                        blocked_count: count,
                     }
                 })
                 .collect(),

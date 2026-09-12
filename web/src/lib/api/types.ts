@@ -548,6 +548,7 @@ export interface TopClientEntry {
 	ip: string;
 	hostname: string | null;
 	count: number;
+	blocked_count?: number;
 }
 
 export interface QueryTypeEntry {

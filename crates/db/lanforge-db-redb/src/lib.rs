@@ -465,11 +465,16 @@ mod tests {
         assert_eq!(queries[0].domain.as_ref(), "bad-ads.net"); // Latest first
 
         let top_domains = db.get_dns_top_domains(5).await.unwrap();
-        assert_eq!(top_domains.len(), 2);
+        assert_eq!(top_domains.len(), 1);
+        assert_eq!(top_domains[0].0, "example.com");
 
         let top_blocked = db.get_dns_top_blocked_domains(5).await.unwrap();
         assert_eq!(top_blocked.len(), 1);
         assert_eq!(top_blocked[0].0, "bad-ads.net");
+
+        let top_clients = db.get_dns_top_clients(5).await.unwrap();
+        assert_eq!(top_clients.len(), 1);
+        assert_eq!(top_clients[0], ("192.168.1.50".to_string(), 2, 1));
 
         let query_rate = db.get_dns_query_rate(1700000000).await.unwrap();
         assert!(!query_rate.is_empty());

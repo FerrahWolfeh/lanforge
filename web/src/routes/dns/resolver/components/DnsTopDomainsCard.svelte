@@ -81,7 +81,10 @@
 		>
 			<div class="flex items-center gap-2">
 				<GlobeIcon class="size-4 text-sky-400" />
-				<Card.Title class="text-base">Top Resolved Domains</Card.Title>
+				<div>
+					<Card.Title class="text-base">Top Resolved Domains</Card.Title>
+					<p class="text-[11px] text-muted-foreground">Excludes blocked ads &amp; trackers</p>
+				</div>
 			</div>
 			<div class="flex flex-wrap items-center gap-2">
 				<!-- Toggle Segmented Control: Global vs Per Device -->

@@ -492,6 +492,9 @@ impl LogStore for RedbDatabase {
                 let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
                 let entry: QueryLogEntry = serde_json::from_slice(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
+                if matches!(entry.result, QueryResult::Blocked | QueryResult::CachedBlock) {
+                    continue;
+                }
                 *counts.entry(entry.domain.to_string()).or_insert(0) += 1;
             }
 
@@ -525,6 +528,9 @@ impl LogStore for RedbDatabase {
                 let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
                 let entry: QueryLogEntry = serde_json::from_slice(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
+                if matches!(entry.result, QueryResult::Blocked | QueryResult::CachedBlock) {
+                    continue;
+                }
                 if entry.src_ip.to_string() == client
                     || entry.src_mac.as_ref().map(|m| m.to_string()).as_deref() == Some(client)
                 {
@@ -677,7 +683,7 @@ impl LogStore for RedbDatabase {
     fn get_dns_top_clients(
         &self,
         limit: usize,
-    ) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>> {
+    ) -> BoxFuture<'_, Result<Vec<(String, u64, u64)>, DbError>> {
         Box::pin(async move {
             let read_txn = self
                 .db
@@ -690,16 +696,23 @@ impl LogStore for RedbDatabase {
                 Err(e) => return Err(DbError::Backend(e.to_string())),
             };
 
-            let mut counts: std::collections::HashMap<String, u64> =
+            let mut counts: std::collections::HashMap<String, (u64, u64)> =
                 std::collections::HashMap::new();
             for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
                 let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
                 let entry: QueryLogEntry = serde_json::from_slice(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                *counts.entry(entry.src_ip.to_string()).or_insert(0) += 1;
+                let c = counts.entry(entry.src_ip.to_string()).or_insert((0, 0));
+                c.0 += 1;
+                if matches!(entry.result, QueryResult::Blocked | QueryResult::CachedBlock) {
+                    c.1 += 1;
+                }
             }
 
-            let mut vec: Vec<(String, u64)> = counts.into_iter().collect();
+            let mut vec: Vec<(String, u64, u64)> = counts
+                .into_iter()
+                .map(|(ip, (total, blocked))| (ip, total, blocked))
+                .collect();
             vec.sort_by_key(|b| std::cmp::Reverse(b.1));
             vec.truncate(limit);
             Ok(vec)

@@ -163,7 +163,10 @@ impl LogDb {
             .await
     }
 
-    pub async fn get_dns_top_clients(&self, limit: usize) -> Result<Vec<(String, u64)>, DbError> {
+    pub async fn get_dns_top_clients(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, u64, u64)>, DbError> {
         self.inner.get_dns_top_clients(limit).await
     }
 
@@ -288,7 +291,7 @@ impl LogStore for LogDb {
     fn get_dns_top_clients(
         &self,
         limit: usize,
-    ) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>> {
+    ) -> BoxFuture<'_, Result<Vec<(String, u64, u64)>, DbError>> {
         self.inner.get_dns_top_clients(limit)
     }
 
