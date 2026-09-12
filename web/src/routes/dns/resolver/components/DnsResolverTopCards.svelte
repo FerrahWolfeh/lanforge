@@ -18,23 +18,17 @@
 	} = $props();
 
 	const cacheHitPct = $derived.by(() => {
-		if (!statsData || statsData.total_requests === 0) return 0;
+		if (!statsData) return 0;
+		const cacheTotal = statsData.cache_hits + (statsData.cache_misses ?? 0);
+		if (cacheTotal === 0) return 0;
 		return Math.round(
-			(statsData.cache_hits / statsData.total_requests) * 100,
+			(statsData.cache_hits / cacheTotal) * 100,
 		);
 	});
 
 	const cacheMissesCount = $derived.by(() => {
 		if (!statsData) return 0;
-		return (
-			statsData.cache_misses ??
-			Math.max(
-				0,
-				statsData.total_requests -
-					statsData.cache_hits -
-					statsData.blocked_queries,
-			)
-		);
+		return statsData.cache_misses ?? 0;
 	});
 
 	const upstreamStats = $derived.by(() => {
@@ -94,7 +88,7 @@
 						{statsData.total_requests.toLocaleString()}
 					</span>
 					<span class="text-muted-foreground text-xs font-medium">
-						Processed since daemon start
+						Lifetime queries processed
 					</span>
 				</div>
 			{/if}
@@ -130,7 +124,7 @@
 					</span>
 					<span class="text-muted-foreground text-xs font-medium">
 						{statsData.cache_hits.toLocaleString()} hits / {cacheMissesCount.toLocaleString()}
-						misses
+						misses (active session)
 					</span>
 				</div>
 			{/if}
@@ -165,7 +159,7 @@
 						{statsData.blocked_queries.toLocaleString()}
 					</span>
 					<span class="text-muted-foreground text-xs font-medium">
-						Adblock & filter rule matches
+						Lifetime adblock &amp; rule matches
 					</span>
 				</div>
 			{/if}

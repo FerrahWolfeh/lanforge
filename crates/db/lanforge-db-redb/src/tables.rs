@@ -16,3 +16,4 @@ pub const TABLE_LEASE_HISTORY: TableDefinition<&[u8], &[u8]> = TableDefinition::
 pub const TABLE_LOG_EVENTS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("log_events");
 pub const TABLE_DNS_QUERIES: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("dns_queries");
 pub const TABLE_DNS_BLOCKED: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("dns_blocked");
+pub const TABLE_DNS_TELEMETRY: TableDefinition<u64, &[u8]> = TableDefinition::new("dns_telemetry");

@@ -479,6 +479,26 @@ mod tests {
         let query_rate = db.get_dns_query_rate(1700000000).await.unwrap();
         assert!(!query_rate.is_empty());
 
+        let detailed_rates = db.get_dns_query_rate_detailed(1700000000, 900).await.unwrap();
+        assert_eq!(detailed_rates.len(), 1);
+        assert_eq!(detailed_rates[0].total, 2);
+        assert_eq!(detailed_rates[0].forwarded, 1);
+        assert_eq!(detailed_rates[0].blocked, 1);
+
+        // Test Lifetime Stats
+        let initial_lifetime = db.load_dns_lifetime_stats().await.unwrap();
+        assert_eq!(initial_lifetime.total_requests, 0);
+
+        let test_stats = lanforge_types::network::dns::DnsLifetimeStats {
+            total_requests: 1250,
+            blocked_queries: 180,
+            resolved_total: 1070,
+            ..Default::default()
+        };
+        db.save_dns_lifetime_stats(&test_stats).await.unwrap();
+        let loaded = db.load_dns_lifetime_stats().await.unwrap();
+        assert_eq!(loaded, test_stats);
+
         // 3. Clear logs
         db.clear_logs().await.unwrap();
         let history_after_clear = db.get_history(10).await.unwrap();

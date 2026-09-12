@@ -18,6 +18,7 @@ use lanforge_core::bus::{
 };
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::QueryLogEntry;
+use lanforge_types::network::dns::{DnsRequest, DnsResponse};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -105,7 +106,8 @@ impl DbWorker {
             }
         }
 
-        if !self.dns_log_buffer.is_empty() {
+        let had_dns_queries = !self.dns_log_buffer.is_empty();
+        if had_dns_queries {
             if let Err(e) = log_db.record_dns_queries_batch(&self.dns_log_buffer).await {
                 error!("Failed to flush DNS log batch: {e}");
                 had_error = true;
@@ -114,7 +116,16 @@ impl DbWorker {
             }
         }
 
-        // 2. Flush Main DB
+        // 2. Flush DNS Lifetime Stats (only when new queries were processed)
+        if had_dns_queries
+            && let Some(handle) = self.ctx.dns_handle()
+            && let Ok(DnsResponse::LifetimeStats(stats)) = handle.send_request(DnsRequest::LifetimeStats).await
+            && let Err(e) = log_db.save_dns_lifetime_stats(&stats).await
+        {
+            error!("Failed to flush DNS lifetime stats: {e}");
+        }
+
+        // 3. Flush Main DB
         if !self.dirty && self.dirty_macs.is_empty() && self.purged_macs.is_empty() {
             metrics.last_flush_ts.store(now, Ordering::Relaxed);
             metrics.flush_count.fetch_add(1, Ordering::Relaxed);
@@ -368,6 +379,11 @@ impl AsyncService for DbWorker {
                         LanforgeEvent::System(SystemEvent::Shutdown) => {
                             info!("Database worker shutting down...");
                             self.flush_batch(&db, &log_db).await;
+                            if let Some(handle) = self.ctx.dns_handle()
+                                && let Ok(DnsResponse::LifetimeStats(stats)) = handle.send_request(DnsRequest::LifetimeStats).await
+                            {
+                                let _ = log_db.save_dns_lifetime_stats(&stats).await;
+                            }
                             break_loop = true;
                         }
                         #[cfg(feature = "adblock")]

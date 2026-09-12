@@ -3,6 +3,7 @@
 use lanforge_core::bus::TimedEvent;
 use lanforge_db_core::{BoxFuture, DbError, DnsQueryRateBucket, LogStore};
 use lanforge_db_redb::RedbDatabase;
+use lanforge_types::network::dns::DnsLifetimeStats;
 use lanforge_types::network::QueryLogEntry;
 use std::net::IpAddr;
 use std::path::Path;
@@ -194,6 +195,14 @@ impl LogDb {
     ) -> Result<Vec<(u64, u64)>, DbError> {
         self.inner.get_dns_blocked_query_rate(since_secs).await
     }
+
+    pub async fn load_dns_lifetime_stats(&self) -> Result<DnsLifetimeStats, DbError> {
+        self.inner.load_dns_lifetime_stats().await
+    }
+
+    pub async fn save_dns_lifetime_stats(&self, stats: &DnsLifetimeStats) -> Result<(), DbError> {
+        self.inner.save_dns_lifetime_stats(stats).await
+    }
 }
 
 impl LogStore for LogDb {
@@ -318,5 +327,16 @@ impl LogStore for LogDb {
         since_secs: u64,
     ) -> BoxFuture<'_, Result<Vec<(u64, u64)>, DbError>> {
         self.inner.get_dns_blocked_query_rate(since_secs)
+    }
+
+    fn load_dns_lifetime_stats(&self) -> BoxFuture<'_, Result<DnsLifetimeStats, DbError>> {
+        self.inner.load_dns_lifetime_stats()
+    }
+
+    fn save_dns_lifetime_stats<'a>(
+        &'a self,
+        stats: &'a DnsLifetimeStats,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
+        self.inner.save_dns_lifetime_stats(stats)
     }
 }

@@ -1,10 +1,12 @@
 //! LogStore implementation for `RedbDatabase`.
 
 use crate::RedbDatabase;
-use crate::tables::{TABLE_DNS_BLOCKED, TABLE_DNS_QUERIES, TABLE_LOG_EVENTS};
+use crate::tables::{
+    TABLE_CONFIG, TABLE_DNS_BLOCKED, TABLE_DNS_QUERIES, TABLE_DNS_TELEMETRY, TABLE_LOG_EVENTS,
+};
 use lanforge_core::bus::TimedEvent;
 use lanforge_db_core::{BoxFuture, DbError, DnsQueryRateBucket, LogStore};
-use lanforge_types::network::dns::TransportProtocol;
+use lanforge_types::network::dns::{DnsLifetimeStats, TransportProtocol};
 use lanforge_types::network::{QueryLogEntry, QueryResult};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
 use std::net::IpAddr;
@@ -209,6 +211,92 @@ impl LogStore for RedbDatabase {
                         .insert((ts, seq), bytes.as_slice())
                         .map_err(|e| DbError::Backend(e.to_string()))?;
                 }
+
+                // Pre-aggregate telemetry buckets (15-minute / 900s buckets)
+                if let Ok(mut table_telemetry) = write_txn.open_table(TABLE_DNS_TELEMETRY) {
+                    let mut cached_buckets: std::collections::HashMap<u64, DnsQueryRateBucket> =
+                        std::collections::HashMap::with_capacity(2);
+
+                    for entry in entries {
+                        let bucket_ts = (entry.timestamp / 900) * 900;
+                        let bucket = match cached_buckets.get_mut(&bucket_ts) {
+                            Some(b) => b,
+                            None => {
+                                let loaded = match table_telemetry
+                                    .get(bucket_ts)
+                                    .map_err(|e| DbError::Backend(e.to_string()))?
+                                {
+                                    Some(val) => serde_json::from_slice(val.value()).unwrap_or_else(|_| {
+                                        DnsQueryRateBucket {
+                                            timestamp: bucket_ts,
+                                            ..Default::default()
+                                        }
+                                    }),
+                                    None => DnsQueryRateBucket {
+                                        timestamp: bucket_ts,
+                                        ..Default::default()
+                                    },
+                                };
+                                cached_buckets.entry(bucket_ts).or_insert(loaded)
+                            }
+                        };
+
+                        bucket.total += 1;
+                        let outcome_key = match entry.result {
+                            QueryResult::Blocked | QueryResult::CachedBlock => {
+                                bucket.blocked += 1;
+                                "blocked"
+                            }
+                            QueryResult::Cached => {
+                                bucket.cached += 1;
+                                "cached"
+                            }
+                            QueryResult::Local => {
+                                bucket.local += 1;
+                                "local"
+                            }
+                            QueryResult::Rewritten => {
+                                bucket.rewritten += 1;
+                                "rewritten"
+                            }
+                            _ => {
+                                bucket.forwarded += 1;
+                                "forwarded"
+                            }
+                        };
+
+                        let static_qtype = entry.qtype.as_static_str();
+                        let qtype_str: std::borrow::Cow<'_, str> = match static_qtype {
+                            Some(s) => std::borrow::Cow::Borrowed(s),
+                            None => std::borrow::Cow::Owned(entry.qtype.to_string()),
+                        };
+
+                        if let Some(count) = bucket.record_types.get_mut(qtype_str.as_ref()) {
+                            *count += 1;
+                        } else {
+                            bucket.record_types.insert(qtype_str.clone().into_owned(), 1);
+                        }
+
+                        let submap = if let Some(m) = bucket.outcome_types.get_mut(outcome_key) {
+                            m
+                        } else {
+                            bucket.outcome_types.entry(outcome_key.to_string()).or_default()
+                        };
+                        if let Some(count) = submap.get_mut(qtype_str.as_ref()) {
+                            *count += 1;
+                        } else {
+                            submap.insert(qtype_str.into_owned(), 1);
+                        }
+                    }
+
+                    for (bucket_ts, bucket) in cached_buckets {
+                        let val_bytes = serde_json::to_vec(&bucket)
+                            .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+                        table_telemetry
+                            .insert(bucket_ts, val_bytes.as_slice())
+                            .map_err(|e| DbError::Backend(e.to_string()))?;
+                    }
+                }
             }
             write_txn
                 .commit()
@@ -242,6 +330,7 @@ impl LogStore for RedbDatabase {
                 let _ = write_txn.delete_table(TABLE_LOG_EVENTS);
                 let _ = write_txn.delete_table(TABLE_DNS_QUERIES);
                 let _ = write_txn.delete_table(TABLE_DNS_BLOCKED);
+                let _ = write_txn.delete_table(TABLE_DNS_TELEMETRY);
             }
             write_txn
                 .commit()
@@ -355,6 +444,22 @@ impl LogStore for RedbDatabase {
                         for k in excess_keys {
                             let _ = table.remove(k);
                         }
+                    }
+                }
+
+                // 4. Prune TABLE_DNS_TELEMETRY (keep up to 30 days of 15-minute buckets)
+                if let Ok(mut table) = write_txn.open_table(TABLE_DNS_TELEMETRY) {
+                    let telemetry_cutoff = cutoff.saturating_sub(23 * 86400); // 30 days total retention
+                    let mut to_delete = Vec::new();
+                    for item in table
+                        .range(..telemetry_cutoff)
+                        .map_err(|e| DbError::Backend(e.to_string()))?
+                    {
+                        let (k, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+                        to_delete.push(k.value());
+                    }
+                    for k in to_delete {
+                        let _ = table.remove(k);
                     }
                 }
             }
@@ -618,6 +723,58 @@ impl LogStore for RedbDatabase {
                 .read()
                 .begin_read()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
+
+            let bsize = if bucket_secs == 0 { 900 } else { bucket_secs };
+
+            // 1. Try reading from pre-aggregated TABLE_DNS_TELEMETRY first
+            if let Ok(table_telemetry) = read_txn.open_table(TABLE_DNS_TELEMETRY) {
+                let rounded_since = (since_secs / 900) * 900;
+                let mut buckets: Vec<DnsQueryRateBucket> = Vec::new();
+
+                for item in table_telemetry
+                    .range(rounded_since..)
+                    .map_err(|e| DbError::Backend(e.to_string()))?
+                {
+                    let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+                    if let Ok(b) = serde_json::from_slice::<DnsQueryRateBucket>(val.value()) {
+                        buckets.push(b);
+                    }
+                }
+
+                if !buckets.is_empty() {
+                    buckets.sort_by_key(|b| b.timestamp);
+                    if bsize == 900 {
+                        return Ok(buckets);
+                    }
+                    let mut reaggregated: std::collections::BTreeMap<u64, DnsQueryRateBucket> =
+                        std::collections::BTreeMap::new();
+                    for b in buckets {
+                        let target_ts = (b.timestamp / bsize) * bsize;
+                        let target = reaggregated.entry(target_ts).or_insert_with(|| DnsQueryRateBucket {
+                            timestamp: target_ts,
+                            ..Default::default()
+                        });
+                        target.total += b.total;
+                        target.cached += b.cached;
+                        target.forwarded += b.forwarded;
+                        target.blocked += b.blocked;
+                        target.local += b.local;
+                        target.rewritten += b.rewritten;
+                        for (k, v) in b.record_types {
+                            *target.record_types.entry(k).or_insert(0) += v;
+                        }
+                        for (outcome, map) in b.outcome_types {
+                            let out_map = target.outcome_types.entry(outcome).or_default();
+                            for (rtype, cnt) in map {
+                                *out_map.entry(rtype).or_insert(0) += cnt;
+                            }
+                        }
+                    }
+                    return Ok(reaggregated.into_values().collect());
+                }
+            }
+
+            // 2. Fallback to scanning raw TABLE_DNS_QUERIES
             let table = match read_txn.open_table(TABLE_DNS_QUERIES) {
                 Ok(t) => t,
                 Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
@@ -855,6 +1012,60 @@ impl LogStore for RedbDatabase {
             let mut vec: Vec<(u64, u64)> = buckets.into_iter().collect();
             vec.sort_by_key(|a| a.0);
             Ok(vec)
+        })
+    }
+
+    fn load_dns_lifetime_stats(&self) -> BoxFuture<'_, Result<DnsLifetimeStats, DbError>> {
+        Box::pin(async move {
+            let read_txn = self
+                .db
+                .read()
+                .begin_read()
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+            let table = match read_txn.open_table(TABLE_CONFIG) {
+                Ok(t) => t,
+                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(DnsLifetimeStats::default()),
+                Err(e) => return Err(DbError::Backend(e.to_string())),
+            };
+
+            match table
+                .get("dns_lifetime_stats")
+                .map_err(|e| DbError::Backend(e.to_string()))?
+            {
+                Some(val) => {
+                    let stats: DnsLifetimeStats = serde_json::from_slice(val.value())
+                        .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
+                    Ok(stats)
+                }
+                None => Ok(DnsLifetimeStats::default()),
+            }
+        })
+    }
+
+    fn save_dns_lifetime_stats<'a>(
+        &'a self,
+        stats: &'a DnsLifetimeStats,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
+        Box::pin(async move {
+            let bytes = serde_json::to_vec(stats)
+                .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+            let write_txn = self
+                .db
+                .read()
+                .begin_write()
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+            {
+                let mut table = write_txn
+                    .open_table(TABLE_CONFIG)
+                    .map_err(|e| DbError::Backend(e.to_string()))?;
+                table
+                    .insert("dns_lifetime_stats", bytes.as_slice())
+                    .map_err(|e| DbError::Backend(e.to_string()))?;
+            }
+            write_txn
+                .commit()
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+            Ok(())
         })
     }
 }

@@ -15,8 +15,9 @@ use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceDependency};
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_types::network::dns::{
-    DnsCacheEntry, DnsCacheResponse, DnsCacheStatsExtResponse, DnsClass, DnsMessage, DnsQuestion,
-    DnsRecordEntry, DnsRecordType, DnsRequest, DnsResponse, DnsStatsResponse, TransportProtocol,
+    DnsCacheEntry, DnsCacheResponse, DnsCacheStatsExtResponse, DnsClass, DnsLifetimeStats,
+    DnsMessage, DnsQuestion, DnsRecordEntry, DnsRecordType, DnsRequest, DnsResponse,
+    DnsStatsResponse, TransportProtocol,
     upstream::{UpstreamProtocol, UpstreamTarget},
 };
 use lanforge_types::system::ServiceState;
@@ -49,7 +50,12 @@ pub struct DnsService {
 impl DnsService {
     #[must_use]
     pub fn new(cfg: DnsConfig, ctx: LanforgeContext) -> Self {
-        let stats = Arc::new(DnsStats::new());
+        Self::with_lifetime(cfg, ctx, DnsLifetimeStats::default())
+    }
+
+    #[must_use]
+    pub fn with_lifetime(cfg: DnsConfig, ctx: LanforgeContext, lifetime: DnsLifetimeStats) -> Self {
+        let stats = Arc::new(DnsStats::with_lifetime(&lifetime));
         ctx.register_service_state("dns::stats", Arc::clone(&stats));
         Self {
             cfg: Arc::new(cfg),
@@ -443,6 +449,9 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                 cache_capacity: stats.cache_capacity.load(Ordering::Relaxed),
                 cache_evictions: stats.cache_evictions.load(Ordering::Relaxed),
             })
+        }
+        DnsRequest::LifetimeStats => {
+            DnsResponse::LifetimeStats(dns_ctx.stats.lifetime_snapshot())
         }
         DnsRequest::Upstreams => DnsResponse::Upstreams(dns_ctx.recursive.snapshots()),
         DnsRequest::UpstreamAdd { .. } => {

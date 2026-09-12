@@ -13,7 +13,7 @@ use lanforge_types::device::{Device, LeaseAction, LeaseHistoryEntry, LeaseKind};
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
-use lanforge_types::network::dns::DnsRecordType;
+use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType};
 use lanforge_types::network::dns::adblock::{
     AdblockDbConfig, AdblockRuleAction, AdblockUrlKind, RewriteAnswer, RewriteRule,
 };
@@ -734,6 +734,19 @@ pub trait LogStore: Send + Sync {
         &self,
         since_secs: u64,
     ) -> BoxFuture<'_, Result<Vec<(u64, u64)>, DbError>>;
+
+    /// Loads persistent cumulative DNS lifetime statistics.
+    fn load_dns_lifetime_stats(&self) -> BoxFuture<'_, Result<DnsLifetimeStats, DbError>> {
+        Box::pin(async move { Ok(DnsLifetimeStats::default()) })
+    }
+
+    /// Saves persistent cumulative DNS lifetime statistics.
+    fn save_dns_lifetime_stats<'a>(
+        &'a self,
+        _stats: &'a DnsLifetimeStats,
+    ) -> BoxFuture<'a, Result<(), DbError>> {
+        Box::pin(async move { Ok(()) })
+    }
 }
 
 /// Composite supertrait combining all persistence store traits into a single backend interface.

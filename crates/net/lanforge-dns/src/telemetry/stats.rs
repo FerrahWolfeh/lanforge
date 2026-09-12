@@ -1,6 +1,6 @@
 //! DNS service statistics using atomic counters.
 
-use lanforge_types::network::dns::TransportProtocol;
+use lanforge_types::network::dns::{DnsLifetimeStats, TransportProtocol};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -32,6 +32,50 @@ impl DnsStats {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub fn with_lifetime(lifetime: &DnsLifetimeStats) -> Self {
+        Self {
+            requests_total: AtomicU64::new(lifetime.total_requests),
+            cache_hits: AtomicU64::new(0),
+            cache_misses: AtomicU64::new(0),
+            upstream_errors: AtomicU64::new(lifetime.upstream_errors),
+            auth_queries: AtomicU64::new(lifetime.auth_queries),
+            recursions: AtomicU64::new(lifetime.recursions),
+            resolved_total: AtomicU64::new(lifetime.resolved_total),
+            failed_total: AtomicU64::new(lifetime.failed_total),
+            #[cfg(feature = "adblock")]
+            blocked_queries: AtomicU64::new(lifetime.blocked_queries),
+            cache_entries: AtomicU64::new(0),
+            cache_capacity: AtomicU64::new(0),
+            cache_evictions: AtomicU64::new(0),
+            proto_udp: AtomicU64::new(lifetime.proto_udp),
+            proto_tcp: AtomicU64::new(lifetime.proto_tcp),
+            proto_dot: AtomicU64::new(lifetime.proto_dot),
+            proto_doq: AtomicU64::new(lifetime.proto_doq),
+            proto_doh: AtomicU64::new(lifetime.proto_doh),
+        }
+    }
+
+    pub fn lifetime_snapshot(&self) -> DnsLifetimeStats {
+        DnsLifetimeStats {
+            total_requests: self.requests_total.load(Ordering::Relaxed),
+            #[cfg(feature = "adblock")]
+            blocked_queries: self.blocked_queries.load(Ordering::Relaxed),
+            #[cfg(not(feature = "adblock"))]
+            blocked_queries: 0,
+            resolved_total: self.resolved_total.load(Ordering::Relaxed),
+            failed_total: self.failed_total.load(Ordering::Relaxed),
+            upstream_errors: self.upstream_errors.load(Ordering::Relaxed),
+            auth_queries: self.auth_queries.load(Ordering::Relaxed),
+            recursions: self.recursions.load(Ordering::Relaxed),
+            proto_udp: self.proto_udp.load(Ordering::Relaxed),
+            proto_tcp: self.proto_tcp.load(Ordering::Relaxed),
+            proto_dot: self.proto_dot.load(Ordering::Relaxed),
+            proto_doq: self.proto_doq.load(Ordering::Relaxed),
+            proto_doh: self.proto_doh.load(Ordering::Relaxed),
+        }
     }
 
     pub fn inc_requests(&self) {

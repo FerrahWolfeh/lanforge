@@ -62,7 +62,7 @@ impl Daemon {
             let sto_rx = self.ctx.bus().subscribe_storage();
 
             self.validate_features();
-            self.spawn_services();
+            self.spawn_services().await;
             let expected = self.registry.registered_ids();
 
             match run_event_loop(
@@ -165,7 +165,7 @@ impl Daemon {
         }
     }
 
-    fn spawn_services(&mut self) {
+    async fn spawn_services(&mut self) {
         let cfg = self.bootstrap.cfg.clone();
         let target_ifindex = self.bootstrap.target_ifindex;
         let rt_handle = self.bootstrap.rt_handle.clone();
@@ -201,6 +201,9 @@ impl Daemon {
             );
         }
 
+        #[cfg(feature = "dns")]
+        let dns_lifetime = log_db.load_dns_lifetime_stats().await.unwrap_or_default();
+
         lanforge_core::spawn_services!(self.registry, &self.ctx, {
             async [ctx, cfg, db, log_db] => DbWorker::new(cfg.database.clone(), ctx, db, log_db),
 
@@ -223,7 +226,7 @@ impl Daemon {
 
             // 5. Application Services (DNS, API, TFTP)
             #[cfg(feature = "dns")]
-            async [ctx, cfg] => DnsService::new(cfg.to_dns_config(), ctx),
+            async [ctx, cfg, dns_lifetime] => DnsService::with_lifetime(cfg.to_dns_config(), ctx, dns_lifetime),
 
             #[cfg(all(feature = "dns", feature = "dns-dot"))]
             async [ctx, cfg] => DotService::new(Arc::new(cfg.to_dns_config()), ctx),

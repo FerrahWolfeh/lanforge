@@ -117,25 +117,38 @@ impl std::str::FromStr for DnsRecordType {
     }
 }
 
+impl DnsRecordType {
+    #[must_use]
+    pub const fn as_static_str(&self) -> Option<&'static str> {
+        match self {
+            Self::A => Some("A"),
+            Self::NS => Some("NS"),
+            Self::CNAME => Some("CNAME"),
+            Self::SOA => Some("SOA"),
+            Self::PTR => Some("PTR"),
+            Self::HINFO => Some("HINFO"),
+            Self::MX => Some("MX"),
+            Self::TXT => Some("TXT"),
+            Self::AAAA => Some("AAAA"),
+            Self::SRV => Some("SRV"),
+            Self::OPT => Some("OPT"),
+            Self::SVCB => Some("SVCB"),
+            Self::HTTPS => Some("HTTPS"),
+            Self::ANY => Some("ANY"),
+            Self::Device => Some("DEVICE"),
+            Self::Unknown(_) => None,
+        }
+    }
+}
+
 impl Display for DnsRecordType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::A => write!(f, "A"),
-            Self::NS => write!(f, "NS"),
-            Self::CNAME => write!(f, "CNAME"),
-            Self::SOA => write!(f, "SOA"),
-            Self::PTR => write!(f, "PTR"),
-            Self::HINFO => write!(f, "HINFO"),
-            Self::MX => write!(f, "MX"),
-            Self::TXT => write!(f, "TXT"),
-            Self::AAAA => write!(f, "AAAA"),
-            Self::SRV => write!(f, "SRV"),
-            Self::OPT => write!(f, "OPT"),
-            Self::SVCB => write!(f, "SVCB"),
-            Self::HTTPS => write!(f, "HTTPS"),
-            Self::ANY => write!(f, "ANY"),
-            Self::Device => write!(f, "DEVICE"),
-            Self::Unknown(v) => write!(f, "TYPE{v}"),
+        if let Some(s) = self.as_static_str() {
+            f.write_str(s)
+        } else if let Self::Unknown(v) = self {
+            write!(f, "TYPE{v}")
+        } else {
+            Ok(())
         }
     }
 }
@@ -583,6 +596,28 @@ impl Display for DnsRecordEntry {
 
 use std::collections::HashMap;
 
+/// Persistent lifetime DNS server statistics across daemon restarts (excludes transient cache metrics).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct DnsLifetimeStats {
+    pub total_requests: u64,
+    pub blocked_queries: u64,
+    pub resolved_total: u64,
+    pub failed_total: u64,
+    pub upstream_errors: u64,
+    pub auth_queries: u64,
+    pub recursions: u64,
+    #[serde(default)]
+    pub proto_udp: u64,
+    #[serde(default)]
+    pub proto_tcp: u64,
+    #[serde(default)]
+    pub proto_dot: u64,
+    #[serde(default)]
+    pub proto_doq: u64,
+    #[serde(default)]
+    pub proto_doh: u64,
+}
+
 /// A snapshot of DNS resolver statistics.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct DnsStatsResponse {
@@ -693,6 +728,7 @@ pub enum DnsRequest {
         blocking_ip_v6: Option<Ipv6Addr>,
     },
     Stats,
+    LifetimeStats,
 }
 
 /// Response returned from the core DNS handle.
@@ -712,6 +748,7 @@ pub enum DnsResponse {
     AdblockUrlRemove(Result<(), String>),
     AdblockConfigSet(Result<(), String>),
     Stats(DnsStatsResponse),
+    LifetimeStats(DnsLifetimeStats),
 }
 
 #[cfg(test)]
