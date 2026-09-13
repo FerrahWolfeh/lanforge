@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use lanforge_dns_wire::{WireEncoder, WireDecoder};
 use lanforge_types::network::{
-    DnsHeader, DnsQuestion, DnsRecord, DnsRData, DnsRecordType, DnsClass, DnsResponseCode, DnsMessage
+    DnsClass, DnsHeader, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType,
+    DnsResponseCode, DnsSoaData, DnsSvcbData,
 };
 
 #[derive(Arbitrary, Debug)]
@@ -150,7 +151,7 @@ impl From<FuzzDnsRData> for DnsRData {
             },
             FuzzDnsRData::NS(s) => DnsRData::NS(Arc::from(s)),
             FuzzDnsRData::TXT(list) => DnsRData::TXT(list.into_iter().map(Arc::from).collect()),
-            FuzzDnsRData::SOA { mname, rname, serial, refresh, retry, expire, minimum } => DnsRData::SOA {
+            FuzzDnsRData::SOA { mname, rname, serial, refresh, retry, expire, minimum } => DnsRData::SOA(Box::new(DnsSoaData {
                 mname: Arc::from(mname),
                 rname: Arc::from(rname),
                 serial,
@@ -158,7 +159,7 @@ impl From<FuzzDnsRData> for DnsRData {
                 retry,
                 expire,
                 minimum,
-            },
+            })),
             FuzzDnsRData::SRV { priority, weight, port, target } => DnsRData::SRV {
                 priority,
                 weight,
@@ -166,16 +167,16 @@ impl From<FuzzDnsRData> for DnsRData {
                 target: Arc::from(target),
             },
             FuzzDnsRData::OPT { options } => DnsRData::OPT { options },
-            FuzzDnsRData::HTTPS { svc_priority, svc_domain, params } => DnsRData::HTTPS {
+            FuzzDnsRData::HTTPS { svc_priority, svc_domain, params } => DnsRData::HTTPS(Box::new(DnsSvcbData {
                 svc_priority,
                 svc_domain: Arc::from(svc_domain),
                 params,
-            },
-            FuzzDnsRData::SVCB { svc_priority, svc_domain, params } => DnsRData::SVCB {
+            })),
+            FuzzDnsRData::SVCB { svc_priority, svc_domain, params } => DnsRData::SVCB(Box::new(DnsSvcbData {
                 svc_priority,
                 svc_domain: Arc::from(svc_domain),
                 params,
-            },
+            })),
             FuzzDnsRData::Unknown(bytes) => DnsRData::Unknown(bytes),
         }
     }

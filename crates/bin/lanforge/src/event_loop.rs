@@ -258,14 +258,14 @@ fn handle_bus_event<S: BuildHasher>(
                 l_ctx.system_ready_sent = true;
             }
         }
-        LanforgeEvent::Network(NetworkEvent::PrefixChanged { gua, ula, .. })
-            if (l_ctx.state.current_gua != gua || l_ctx.state.current_ula != ula) =>
+        LanforgeEvent::Network(NetworkEvent::PrefixChanged(details))
+            if (l_ctx.state.current_gua != details.gua || l_ctx.state.current_ula != details.ula) =>
         {
-            info!("IPv6 Prefix update (Event): GUA={:?}, ULA={:?}", gua, ula);
-            l_ctx.state.current_gua = gua;
-            l_ctx.state.current_ula = ula;
+            info!("IPv6 Prefix update (Event): GUA={:?}, ULA={:?}", details.gua, details.ula);
+            l_ctx.state.current_gua = details.gua;
+            l_ctx.state.current_ula = details.ula;
             let db = l_ctx.db.clone();
-            let new_gua = gua;
+            let new_gua = details.gua;
             tokio::spawn(async move {
                 if let Err(e) = db.save_last_gua_prefix(new_gua).await {
                     warn!("Failed to persist last_gua_prefix to DB: {e}");

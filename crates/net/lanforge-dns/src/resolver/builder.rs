@@ -5,6 +5,7 @@ use crate::server::DnsContext;
 use lanforge_dns_wire::{WireEncoder, WireOptScanner};
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode,
+    DnsSoaData,
 };
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -121,7 +122,7 @@ impl<'a> ResponseBuilder<'a> {
             rtype: DnsRecordType::SOA,
             rclass: DnsClass::IN,
             ttl: 3600,
-            rdata: DnsRData::SOA {
+            rdata: DnsRData::SOA(Box::new(DnsSoaData {
                 mname: self.ctx.soa_master_ns.clone(),
                 rname: self.ctx.soa_mailbox.clone(),
                 serial: 1,
@@ -129,7 +130,7 @@ impl<'a> ResponseBuilder<'a> {
                 retry: 3600,
                 expire: 1_209_600,
                 minimum: 3600,
-            },
+            })),
         });
         resp.header.nscount += 1;
     }

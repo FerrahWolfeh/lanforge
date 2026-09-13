@@ -131,13 +131,13 @@ pub struct Device {
     )]
     pub managed_at: Option<SystemTime>,
     pub v4: IPv4State,
-    pub v6: SmallVec<[IPv6State; 2]>,
+    pub v6: Vec<IPv6State>,
     pub v6_prefixes: Vec<V6PrefixLease>,
     #[serde(
         serialize_with = "serialize_seen_v4",
         deserialize_with = "deserialize_seen_v4"
     )]
-    pub seen_v4: SmallVec<[(Ipv4Addr, SystemTime); 2]>,
+    pub seen_v4: Vec<(Ipv4Addr, SystemTime)>,
     #[serde(
         serialize_with = "serialize_time",
         deserialize_with = "deserialize_time"
@@ -172,9 +172,9 @@ impl Device {
             origin: Origin::Dynamic,
             managed_at: None,
             v4: IPv4State::None,
-            v6: SmallVec::new(),
+            v6: Vec::new(),
             v6_prefixes: Vec::new(),
-            seen_v4: SmallVec::new(),
+            seen_v4: Vec::new(),
             last_seen: SystemTime::UNIX_EPOCH,
             duid: None,
             dns_fallback: format!(
@@ -225,11 +225,11 @@ impl Device {
                 }
             }
             _ => {
-                self.v4 = IPv4State::Dynamic(V4Lease {
+                self.v4 = IPv4State::Dynamic(Box::new(V4Lease {
                     ip,
                     expires,
                     last_seen: now,
-                });
+                }));
                 self.last_seen = self.calculate_last_seen();
                 changed = true;
             }
@@ -726,9 +726,9 @@ impl Device {
         &self,
         gua_prefix: Option<Ipv6Addr>,
         ula_prefix: Option<Ipv6Addr>,
-    ) -> SmallVec<[IpAddr; 32]> {
+    ) -> SmallVec<[IpAddr; 8]> {
         use crate::network::{Ipv6AddrOrSuffix, classify_ip};
-        let mut addrs: SmallVec<[IpAddr; 32]> = SmallVec::new();
+        let mut addrs: SmallVec<[IpAddr; 8]> = SmallVec::new();
         let mut push_unique = |ip: IpAddr| {
             if !addrs.contains(&ip) {
                 addrs.push(ip);

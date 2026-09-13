@@ -462,7 +462,7 @@ impl RaService {
                         return Ok(RunResult::ConfigChanged);
                     }
                     lanforge_core::match_event!(timed_event, {
-                        LanforgeEvent::Network(NetworkEvent::PrefixChanged { .. }) => {
+                        LanforgeEvent::Network(NetworkEvent::PrefixChanged(..)) => {
                             info!("RA: Prefix change detected — sending immediate RA burst");
                             state.initial_sent = 0;
                             next_ra_at = Instant::now();

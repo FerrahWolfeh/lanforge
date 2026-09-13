@@ -84,6 +84,59 @@ impl std::fmt::Display for LeaseTarget {
     }
 }
 
+/// Details of an assigned or renewed `DHCPv6` lease.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct V6LeaseUpdate {
+    pub mac: Option<MacAddr>,
+    pub duid: Duid,
+    pub iaid: u32,
+    pub ip: Ipv6Addr,
+    pub expires: SystemTime,
+}
+
+/// Details of a delegated `DHCPv6` prefix (`IA_PD`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct V6PrefixUpdate {
+    pub mac: Option<MacAddr>,
+    pub duid: Duid,
+    pub iaid: u32,
+    pub prefix: Ipv6Addr,
+    pub len: u8,
+    pub expires: SystemTime,
+}
+
+/// Dynamic, non-persisted transient host resolution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransientHostUpdate {
+    pub ip: IpAddr,
+    pub hostname: Hostname,
+    pub origin: TransientOrigin,
+}
+
+/// `DHCPv4` address pool utilization update.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DhcpV4PoolUpdate {
+    pub range_start: Ipv4Addr,
+    pub range_end: Ipv4Addr,
+    pub subnet_mask: Ipv4Addr,
+    pub total: u32,
+    pub used: u32,
+    pub available: u32,
+    pub utilization_percent: f32,
+}
+
+/// `DHCPv6` address pool utilization update.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DhcpV6PoolUpdate {
+    pub pool_id: u32,
+    pub prefix: Ipv6Addr,
+    pub prefix_len: u8,
+    pub total: u32,
+    pub used: u32,
+    pub available: u32,
+    pub utilization_percent: f32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DeviceUpdate {
     V4LeaseGranted {
@@ -91,21 +144,8 @@ pub enum DeviceUpdate {
         ip: Ipv4Addr,
         expires: SystemTime,
     },
-    V6LeaseGranted {
-        mac: Option<MacAddr>,
-        duid: Duid,
-        iaid: u32,
-        ip: Ipv6Addr,
-        expires: SystemTime,
-    },
-    V6PrefixAssigned {
-        mac: Option<MacAddr>,
-        duid: Duid,
-        iaid: u32,
-        prefix: Ipv6Addr,
-        len: u8,
-        expires: SystemTime,
-    },
+    V6LeaseGranted(Box<V6LeaseUpdate>),
+    V6PrefixAssigned(Box<V6PrefixUpdate>),
     SlaacObserved {
         mac: MacAddr,
         addr: Ipv6Addr,
@@ -181,11 +221,7 @@ pub enum DeviceUpdate {
     NeighborBatch {
         entries: Vec<(MacAddr, IpAddr, bool)>,
     },
-    TransientHostResolved {
-        ip: IpAddr,
-        hostname: Hostname,
-        origin: TransientOrigin,
-    },
+    TransientHostResolved(Box<TransientHostUpdate>),
     AddReverseResolver {
         resolver: Box<DnsReverseResolver>,
     },
@@ -195,24 +231,8 @@ pub enum DeviceUpdate {
     SetReverseResolvers {
         resolvers: Vec<DnsReverseResolver>,
     },
-    DhcpV4PoolUpdated {
-        range_start: Ipv4Addr,
-        range_end: Ipv4Addr,
-        subnet_mask: Ipv4Addr,
-        total: u32,
-        used: u32,
-        available: u32,
-        utilization_percent: f32,
-    },
-    DhcpV6PoolUpdated {
-        pool_id: u32,
-        prefix: Ipv6Addr,
-        prefix_len: u8,
-        total: u32,
-        used: u32,
-        available: u32,
-        utilization_percent: f32,
-    },
+    DhcpV4PoolUpdated(Box<DhcpV4PoolUpdate>),
+    DhcpV6PoolUpdated(Box<DhcpV6PoolUpdate>),
     PppoeStatusUpdated {
         status: Option<Box<crate::system::PppoeStatusResponse>>,
     },

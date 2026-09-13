@@ -83,7 +83,7 @@ impl LanforgeContext {
                     .dhcp_v4_leases
                     .fetch_add(1, Ordering::Relaxed);
             }
-            DeviceUpdate::V6LeaseGranted { .. } => {
+            DeviceUpdate::V6LeaseGranted(_) => {
                 self.inner
                     .event_counters
                     .dhcp_v6_leases

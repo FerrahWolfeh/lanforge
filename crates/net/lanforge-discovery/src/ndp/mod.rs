@@ -466,9 +466,9 @@ impl AsyncService for DiscoveryService {
                         break;
                     }
                     lanforge_core::match_event!(timed_event, {
-                        LanforgeEvent::Network(NetworkEvent::PrefixChanged { gua, ula, .. }) => {
-                            current_gua = *gua;
-                            current_ula = *ula;
+                        LanforgeEvent::Network(NetworkEvent::PrefixChanged(details)) => {
+                            current_gua = details.gua;
+                            current_ula = details.ula;
                         }
                     });
                 }

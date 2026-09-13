@@ -44,7 +44,7 @@ use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
 use lanforge_types::system::{RunResult, ServiceState};
-use lanforge_types::update::{DeviceUpdate, LeaseTarget};
+use lanforge_types::update::{DeviceUpdate, DhcpV4PoolUpdate, LeaseTarget};
 use server::{DhcpServer, HandleResult};
 use std::net::Ipv4Addr;
 use std::sync::atomic::Ordering;
@@ -278,15 +278,17 @@ impl Dhcpv4Service {
             .range_end
             .or_else(|| current_cfg.pools.first().map(|p| p.range_end))
             .unwrap_or(Ipv4Addr::UNSPECIFIED);
-        let _ = self.ctx.apply(DeviceUpdate::DhcpV4PoolUpdated {
-            range_start,
-            range_end,
-            subnet_mask: current_cfg.subnet_mask,
-            total,
-            used,
-            available,
-            utilization_percent: util_pct,
-        });
+        let _ = self.ctx.apply(DeviceUpdate::DhcpV4PoolUpdated(Box::new(
+            DhcpV4PoolUpdate {
+                range_start,
+                range_end,
+                subnet_mask: current_cfg.subnet_mask,
+                total,
+                used,
+                available,
+                utilization_percent: util_pct,
+            },
+        )));
 
         let mut buf = [0u8; 1500];
         let mut handle = self.ctx.service_handle();
@@ -327,15 +329,17 @@ impl Dhcpv4Service {
                     let (total, used, available, util_pct) = server.pool.stats();
                     let range_start = current_cfg.range_start.or_else(|| current_cfg.pools.first().map(|p| p.range_start)).unwrap_or(Ipv4Addr::UNSPECIFIED);
                     let range_end = current_cfg.range_end.or_else(|| current_cfg.pools.first().map(|p| p.range_end)).unwrap_or(Ipv4Addr::UNSPECIFIED);
-                    let _ = self.ctx.apply(DeviceUpdate::DhcpV4PoolUpdated {
-                        range_start,
-                        range_end,
-                        subnet_mask: current_cfg.subnet_mask,
-                        total,
-                        used,
-                        available,
-                        utilization_percent: util_pct,
-                    });
+                    let _ = self.ctx.apply(DeviceUpdate::DhcpV4PoolUpdated(Box::new(
+                        DhcpV4PoolUpdate {
+                            range_start,
+                            range_end,
+                            subnet_mask: current_cfg.subnet_mask,
+                            total,
+                            used,
+                            available,
+                            utilization_percent: util_pct,
+                        },
+                    )));
                 }
             }
         }

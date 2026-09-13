@@ -37,7 +37,7 @@ use lanforge_types::network::dns::{
     DnsAdblockStatusResponse, DnsCacheResponse, DnsCacheStatsExtResponse, DnsRequest, DnsResponse,
     DnsStatsResponse,
 };
-use lanforge_types::update::DeviceUpdate;
+use lanforge_types::update::{DeviceUpdate, DhcpV4PoolUpdate};
 use lanforge_uds::{ControlService, config::ApiConfig};
 
 async fn start_test_daemon(socket_path: String) -> LanforgeContext {
@@ -284,15 +284,17 @@ async fn test_communication_dhcp_and_leases() {
     });
 
     // Publish a mock pool update
-    let _ = ctx.apply(DeviceUpdate::DhcpV4PoolUpdated {
-        range_start: "192.168.1.100".parse().unwrap(),
-        range_end: "192.168.1.200".parse().unwrap(),
-        subnet_mask: "255.255.255.0".parse().unwrap(),
-        total: 101,
-        used: 10,
-        available: 91,
-        utilization_percent: 9.9,
-    });
+    let _ = ctx.apply(DeviceUpdate::DhcpV4PoolUpdated(Box::new(
+        DhcpV4PoolUpdate {
+            range_start: "192.168.1.100".parse().unwrap(),
+            range_end: "192.168.1.200".parse().unwrap(),
+            subnet_mask: "255.255.255.0".parse().unwrap(),
+            total: 101,
+            used: 10,
+            available: 91,
+            utilization_percent: 9.9,
+        },
+    )));
 
     // 1. DHCP Pools
     let pools_cmd = DhcpArgs {

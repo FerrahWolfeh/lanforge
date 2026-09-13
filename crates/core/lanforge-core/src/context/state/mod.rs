@@ -40,21 +40,21 @@ impl State {
             DeviceUpdate::V4LeaseGranted { mac, ip, expires } => {
                 self.handle_v4_lease_granted(mac, ip, expires)
             }
-            DeviceUpdate::V6LeaseGranted {
-                mac,
-                duid,
-                iaid,
-                ip,
-                expires,
-            } => self.handle_v6_lease_granted(mac, duid, iaid, ip, expires),
-            DeviceUpdate::V6PrefixAssigned {
-                mac,
-                duid,
-                iaid,
-                prefix,
-                len,
-                expires,
-            } => self.handle_v6_prefix_assigned(mac, duid, iaid, prefix, len, expires),
+            DeviceUpdate::V6LeaseGranted(update) => self.handle_v6_lease_granted(
+                update.mac,
+                update.duid,
+                update.iaid,
+                update.ip,
+                update.expires,
+            ),
+            DeviceUpdate::V6PrefixAssigned(update) => self.handle_v6_prefix_assigned(
+                update.mac,
+                update.duid,
+                update.iaid,
+                update.prefix,
+                update.len,
+                update.expires,
+            ),
             DeviceUpdate::SlaacObserved {
                 mac,
                 addr,
@@ -101,11 +101,9 @@ impl State {
             }
             DeviceUpdate::Reset => self.handle_reset(),
             DeviceUpdate::NeighborBatch { entries } => self.handle_neighbor_batch(entries),
-            DeviceUpdate::TransientHostResolved {
-                ip,
-                hostname,
-                origin,
-            } => self.handle_transient_host_resolved(ip, hostname, origin),
+            DeviceUpdate::TransientHostResolved(update) => {
+                self.handle_transient_host_resolved(update.ip, update.hostname, update.origin)
+            }
             DeviceUpdate::AddReverseResolver { resolver } => {
                 self.handle_add_reverse_resolver(*resolver)
             }
@@ -115,8 +113,8 @@ impl State {
             DeviceUpdate::SetReverseResolvers { resolvers } => {
                 self.handle_set_reverse_resolvers(resolvers)
             }
-            DeviceUpdate::DhcpV4PoolUpdated { .. } => self.handle_dhcp_v4_pool_updated(&update),
-            DeviceUpdate::DhcpV6PoolUpdated { .. } => self.handle_dhcp_v6_pool_updated(&update),
+            DeviceUpdate::DhcpV4PoolUpdated(ref update) => self.handle_dhcp_v4_pool_updated(update),
+            DeviceUpdate::DhcpV6PoolUpdated(ref update) => self.handle_dhcp_v6_pool_updated(update),
             DeviceUpdate::PppoeStatusUpdated { status } => self.handle_pppoe_status_updated(status),
             DeviceUpdate::RaStatusUpdated { status } => self.handle_ra_status_updated(status),
         }

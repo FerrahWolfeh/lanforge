@@ -448,19 +448,14 @@ fn render_watch_event(e: &TimedEvent, device_map: &HashMap<String, String>, verb
             }
         },
         LanforgeEvent::Network(net_evt) => match net_evt {
-            NetworkEvent::PrefixChanged {
-                gua,
-                ula,
-                preferred,
-                valid,
-            } => {
+            NetworkEvent::PrefixChanged(details) => {
                 println!(
                     " [{time_str}] {} GUA={:?} ULA={:?} (pref={}s, valid={}s)",
                     "PREFIX CHANGED".bold().magenta(),
-                    gua,
-                    ula,
-                    preferred,
-                    valid
+                    details.gua,
+                    details.ula,
+                    details.preferred,
+                    details.valid
                 );
             }
             NetworkEvent::InterfaceUpdated { ifindex } => {

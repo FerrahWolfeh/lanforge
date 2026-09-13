@@ -1,0 +1,166 @@
+use lanforge_types::auth::*;
+use lanforge_types::device::core::*;
+use lanforge_types::device::history::*;
+use lanforge_types::device::state::*;
+use lanforge_types::device::transient::*;
+use lanforge_types::dhcp::*;
+use lanforge_types::events::device::*;
+use lanforge_types::events::dns::*;
+use lanforge_types::events::network::*;
+use lanforge_types::events::pppoe::*;
+use lanforge_types::events::storage::*;
+use lanforge_types::events::system::*;
+use lanforge_types::events::*;
+use lanforge_types::identifiers::*;
+use lanforge_types::network::dhcp::*;
+use lanforge_types::network::dns::upstream::*;
+use lanforge_types::network::dns::*;
+use lanforge_types::network::pppoe::*;
+use lanforge_types::network::ra::*;
+use lanforge_types::network::subnet::*;
+use lanforge_types::network::*;
+use lanforge_types::system::*;
+use lanforge_types::update::*;
+use std::mem::{align_of, size_of};
+
+fn print_size<T>(name: &str) {
+    println!("{:<35} {:>5} B  (align: {:>2})", name, size_of::<T>(), align_of::<T>());
+}
+
+#[test]
+fn test_print_all_struct_sizes() {
+    println!("\n=== CORE IDENTIFIERS ===");
+    print_size::<MacAddr>("MacAddr");
+    print_size::<Duid>("Duid");
+    print_size::<DeviceIdentifier>("DeviceIdentifier");
+
+    println!("\n=== DEVICE DOMAIN ===");
+    print_size::<DeviceStatus>("DeviceStatus");
+    print_size::<Origin>("Origin");
+    print_size::<DeviceClass>("DeviceClass");
+    print_size::<LearningMethod>("LearningMethod");
+    print_size::<HostnameOrigin>("HostnameOrigin");
+    print_size::<Hostname>("Hostname");
+    print_size::<V4Lease>("V4Lease");
+    print_size::<V6Lease>("V6Lease");
+    print_size::<V6PrefixLease>("V6PrefixLease");
+    print_size::<IPv4State>("IPv4State");
+    print_size::<IPv6State>("IPv6State");
+    print_size::<V6ObservationOrigin>("V6ObservationOrigin");
+    print_size::<Device>("Device");
+    print_size::<TransientHost>("TransientHost");
+    print_size::<TransientOrigin>("TransientOrigin");
+    print_size::<LeaseHistoryEntry>("LeaseHistoryEntry");
+    print_size::<LeaseAction>("LeaseAction");
+    print_size::<LeaseKind>("LeaseKind");
+
+    println!("\n=== NETWORK TYPES ===");
+    print_size::<Ipv6Suffix>("Ipv6Suffix");
+    print_size::<Ipv6AddrOrSuffix>("Ipv6AddrOrSuffix");
+    print_size::<IpClassification>("IpClassification");
+    print_size::<Ipv6Prefix>("Ipv6Prefix");
+    print_size::<IpSubnet>("IpSubnet");
+    print_size::<DnsReverseResolver>("DnsReverseResolver");
+    print_size::<ListenConfig>("ListenConfig");
+    print_size::<NeighborEvent>("NeighborEvent");
+
+    println!("\n=== ROUTER ADVERTISEMENT (RA) ===");
+    print_size::<PrefixLifetime>("PrefixLifetime");
+    print_size::<PrefixSource>("PrefixSource");
+    print_size::<RAPrefix>("RAPrefix");
+    print_size::<RdnssConfig>("RdnssConfig");
+    print_size::<DnsslConfig>("DnsslConfig");
+    print_size::<RouterPriority>("RouterPriority");
+    print_size::<RaServerConfig>("RaServerConfig");
+
+    println!("\n=== DHCP & TFTP ===");
+    print_size::<Dhcpv4Pool>("Dhcpv4Pool");
+    print_size::<Dhcpv6Pool>("Dhcpv6Pool");
+    print_size::<Dhcpv4Options>("Dhcpv4Options");
+    print_size::<Dhcpv6Options>("Dhcpv6Options");
+    print_size::<TftpOptions>("TftpOptions");
+    print_size::<DhcpOptionsConfig>("DhcpOptionsConfig");
+    print_size::<Dhcpv4StatsSnapshot>("Dhcpv4StatsSnapshot");
+    print_size::<Dhcpv6StatsSnapshot>("Dhcpv6StatsSnapshot");
+
+    println!("\n=== PPPoE ===");
+    print_size::<AuthMethod>("AuthMethod");
+    print_size::<PppoeDataplane>("PppoeDataplane");
+    print_size::<PppoeNftablesConfig>("PppoeNftablesConfig");
+    print_size::<PppoeConfig>("PppoeConfig");
+    print_size::<PppoeSessionState>("PppoeSessionState");
+    print_size::<PppoeStatusResponse>("PppoeStatusResponse");
+
+    println!("\n=== DNS TYPES ===");
+    print_size::<DnsRecordType>("DnsRecordType");
+    print_size::<UpstreamStatus>("UpstreamStatus");
+    print_size::<UpstreamProtocol>("UpstreamProtocol");
+    print_size::<UpstreamTarget>("UpstreamTarget");
+    print_size::<UpstreamHealthSnapshot>("UpstreamHealthSnapshot");
+    print_size::<QueryResult>("QueryResult");
+    print_size::<TransportProtocol>("TransportProtocol");
+    print_size::<QueryLogEntry>("QueryLogEntry");
+    print_size::<DnsRecordEntry>("DnsRecordEntry");
+    print_size::<DnsResponseCode>("DnsResponseCode");
+    print_size::<DnsClass>("DnsClass");
+    print_size::<DnsHeader>("DnsHeader");
+    print_size::<DnsQuestion>("DnsQuestion");
+    print_size::<DnsRData>("DnsRData");
+    print_size::<DnsRecord>("DnsRecord");
+    print_size::<DnsMessage>("DnsMessage");
+    print_size::<DnsLifetimeStats>("DnsLifetimeStats");
+    print_size::<DnsStatsResponse>("DnsStatsResponse");
+    print_size::<DnsCacheEntry>("DnsCacheEntry");
+    print_size::<DnsCacheResponse>("DnsCacheResponse");
+    print_size::<DnsAdblockStatusResponse>("DnsAdblockStatusResponse");
+    print_size::<AdblockUrlEntry>("AdblockUrlEntry");
+    print_size::<DnsCacheStatsExtResponse>("DnsCacheStatsExtResponse");
+    print_size::<DnsRequest>("DnsRequest");
+    print_size::<DnsResponse>("DnsResponse");
+
+    println!("\n=== EVENTS & UPDATES ===");
+    print_size::<NetworkChange>("NetworkChange");
+    print_size::<AdminChange>("AdminChange");
+    print_size::<DeviceEvent>("DeviceEvent");
+    print_size::<NetworkEvent>("NetworkEvent");
+    print_size::<SystemEvent>("SystemEvent");
+    print_size::<StorageEvent>("StorageEvent");
+    print_size::<DnsEvent>("DnsEvent");
+    print_size::<PppoeEvent>("PppoeEvent");
+    print_size::<PppoeSessionUp>("PppoeSessionUp");
+    print_size::<LanforgeEvent>("LanforgeEvent");
+    print_size::<TimedEvent>("TimedEvent");
+    print_size::<EventVec>("EventVec");
+    print_size::<LeaseTarget>("LeaseTarget");
+    print_size::<StaticEntry>("StaticEntry");
+    print_size::<CliHostUpdate>("CliHostUpdate");
+    print_size::<InterfaceState>("InterfaceState");
+    print_size::<V6LeaseUpdate>("V6LeaseUpdate");
+    print_size::<V6PrefixUpdate>("V6PrefixUpdate");
+    print_size::<TransientHostUpdate>("TransientHostUpdate");
+    print_size::<DhcpV4PoolUpdate>("DhcpV4PoolUpdate");
+    print_size::<DhcpV6PoolUpdate>("DhcpV6PoolUpdate");
+    print_size::<DeviceUpdate>("DeviceUpdate");
+
+    println!("\n=== SYSTEM & AUTH ===");
+    print_size::<SystemStatus>("SystemStatus");
+    print_size::<StorageMode>("StorageMode");
+    print_size::<Cap>("Cap");
+    print_size::<ServerCapabilities>("ServerCapabilities");
+    print_size::<ServiceState>("ServiceState");
+    print_size::<ServiceBanner>("ServiceBanner");
+    print_size::<ServiceAction>("ServiceAction");
+    print_size::<RunResult>("RunResult");
+    print_size::<NetworkInterfaceInfo>("NetworkInterfaceInfo");
+    print_size::<SetupStatusResponse>("SetupStatusResponse");
+    print_size::<SetupRaConfig>("SetupRaConfig");
+    print_size::<SetupPppoeNftables>("SetupPppoeNftables");
+    print_size::<SetupWanConfig>("SetupWanConfig");
+    print_size::<SetupPayload>("SetupPayload");
+    print_size::<SetupResponse>("SetupResponse");
+    print_size::<RaStatusResponse>("RaStatusResponse");
+    print_size::<ApiScope>("ApiScope");
+    print_size::<ApiScopes>("ApiScopes");
+    print_size::<UserRole>("UserRole");
+    print_size::<UserInfo>("UserInfo");
+}

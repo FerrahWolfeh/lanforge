@@ -269,23 +269,23 @@ fn format_network_event(now: &str, event: &NetworkEvent, _ascii: bool) {
                 mac.to_string().bright_yellow()
             );
         }
-        NetworkEvent::PrefixChanged {
-            gua,
-            preferred,
-            valid,
-            ula,
-        } => {
-            if let Some(u) = ula {
+        NetworkEvent::PrefixChanged(details) => {
+            if let Some(u) = details.ula {
                 println!(
-                    "[{now}] {} {} {u:?} (pref={preferred}, valid={valid})",
+                    "[{now}] {} {} {u:?} (pref={}, valid={})",
                     "NET".magenta().bold(),
-                    "ULA Prefix changed:".white()
+                    "ULA Prefix changed:".white(),
+                    details.preferred,
+                    details.valid
                 );
             } else {
                 println!(
-                    "[{now}] {} {} {gua:?} (pref={preferred}, valid={valid})",
+                    "[{now}] {} {} {:?} (pref={}, valid={})",
                     "NET".magenta().bold(),
-                    "GUA Prefix changed:".white()
+                    "GUA Prefix changed:".white(),
+                    details.gua,
+                    details.preferred,
+                    details.valid
                 );
             }
         }

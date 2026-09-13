@@ -817,7 +817,7 @@ mod tests {
     use lanforge_types::{
         device::{Ipv6Suffix, Origin},
         network::dhcp::Dhcpv6Pool,
-        update::{CliHostUpdate, DeviceUpdate, FieldUpdate},
+        update::{CliHostUpdate, DeviceUpdate, FieldUpdate, V6LeaseUpdate},
     };
 
     use crate::test_utils::init_test_context;
@@ -841,13 +841,13 @@ mod tests {
         iaid: u32,
         ip: Ipv6Addr,
     ) {
-        let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
+        let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
             mac,
             duid: Duid::new(duid.to_vec()),
             iaid,
             ip,
             expires: SystemTime::now() + Duration::from_hours(1),
-        });
+        })));
     }
 
     fn release_mac(ctx: &LanforgeContext, mac: MacAddr) {

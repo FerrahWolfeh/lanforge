@@ -629,11 +629,11 @@ fn format_network_event<'a>(event: &'a NetworkEvent, spans: &mut Vec<Span<'a>>) 
             .add_modifier(Modifier::BOLD),
     ));
     match event {
-        NetworkEvent::PrefixChanged { gua, ula, .. } => {
-            if let Some(u) = ula {
+        NetworkEvent::PrefixChanged(details) => {
+            if let Some(u) = details.ula {
                 spans.push(Span::raw("ULA Prefix changed: "));
                 spans.push(Span::styled(u.to_string(), Style::default().fg(theme::IP)));
-            } else if let Some(g) = gua {
+            } else if let Some(g) = details.gua {
                 spans.push(Span::raw("GUA Prefix changed: "));
                 spans.push(Span::styled(g.to_string(), Style::default().fg(theme::IP)));
             }

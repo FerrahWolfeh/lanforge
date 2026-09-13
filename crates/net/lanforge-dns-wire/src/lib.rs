@@ -7,6 +7,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 
 use lanforge_types::network::dns::adblock::{DnsService, DnsServiceProtocol};
+use lanforge_types::network::dns::{DnsSoaData, DnsSvcbData};
 use lanforge_types::network::{
     DnsClass, DnsHeader, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType,
     DnsResponseCode,
@@ -951,7 +952,7 @@ impl<'a> WireDecoder<'a> {
                     self.data[self.pos + 19],
                 ]);
                 self.pos += 20;
-                Some(DnsRData::SOA {
+                Some(DnsRData::SOA(Box::new(DnsSoaData {
                     mname,
                     rname,
                     serial,
@@ -959,7 +960,7 @@ impl<'a> WireDecoder<'a> {
                     retry,
                     expire,
                     minimum,
-                })
+                })))
             }
             DnsRecordType::TXT => {
                 let mut pos = start;
@@ -1025,17 +1026,17 @@ impl<'a> WireDecoder<'a> {
                     self.pos += vlen;
                 }
                 if rtype == DnsRecordType::HTTPS {
-                    Some(DnsRData::HTTPS {
+                    Some(DnsRData::HTTPS(Box::new(DnsSvcbData {
                         svc_priority,
                         svc_domain,
                         params,
-                    })
+                    })))
                 } else {
-                    Some(DnsRData::SVCB {
+                    Some(DnsRData::SVCB(Box::new(DnsSvcbData {
                         svc_priority,
                         svc_domain,
                         params,
-                    })
+                    })))
                 }
             }
             _ => Some(DnsRData::Unknown(self.data[start..start + rdlen].to_vec())),
@@ -1155,22 +1156,14 @@ impl WireEncoder {
             DnsRData::CNAME(name) => self.encode_name(name),
             DnsRData::PTR(name) => self.encode_name(name),
             DnsRData::NS(name) => self.encode_name(name),
-            DnsRData::SOA {
-                mname,
-                rname,
-                serial,
-                refresh,
-                retry,
-                expire,
-                minimum,
-            } => {
-                self.encode_name(mname);
-                self.encode_name(rname);
-                self.buf.extend_from_slice(&serial.to_be_bytes());
-                self.buf.extend_from_slice(&refresh.to_be_bytes());
-                self.buf.extend_from_slice(&retry.to_be_bytes());
-                self.buf.extend_from_slice(&expire.to_be_bytes());
-                self.buf.extend_from_slice(&minimum.to_be_bytes());
+            DnsRData::SOA(soa) => {
+                self.encode_name(&soa.mname);
+                self.encode_name(&soa.rname);
+                self.buf.extend_from_slice(&soa.serial.to_be_bytes());
+                self.buf.extend_from_slice(&soa.refresh.to_be_bytes());
+                self.buf.extend_from_slice(&soa.retry.to_be_bytes());
+                self.buf.extend_from_slice(&soa.expire.to_be_bytes());
+                self.buf.extend_from_slice(&soa.minimum.to_be_bytes());
             }
             DnsRData::TXT(txts) => {
                 for s in txts {
@@ -1205,19 +1198,10 @@ impl WireEncoder {
                     self.buf.extend_from_slice(data);
                 }
             }
-            DnsRData::HTTPS {
-                svc_priority,
-                svc_domain,
-                params,
-            }
-            | DnsRData::SVCB {
-                svc_priority,
-                svc_domain,
-                params,
-            } => {
-                self.buf.extend_from_slice(&svc_priority.to_be_bytes());
-                self.encode_name(svc_domain);
-                for (key, val) in params {
+            DnsRData::HTTPS(data) | DnsRData::SVCB(data) => {
+                self.buf.extend_from_slice(&data.svc_priority.to_be_bytes());
+                self.encode_name(&data.svc_domain);
+                for (key, val) in &data.params {
                     self.buf.extend_from_slice(&key.to_be_bytes());
                     self.buf.extend_from_slice(
                         &(u16::try_from(val.len()).unwrap_or(u16::MAX)).to_be_bytes(),

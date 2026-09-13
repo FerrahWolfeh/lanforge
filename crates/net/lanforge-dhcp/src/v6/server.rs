@@ -1162,7 +1162,7 @@ mod tests {
     use lanforge_types::{
         device::{Device, Ipv6AddrOrSuffix, Origin},
         network::{Ipv6Suffix, dhcp::Dhcpv6Pool},
-        update::{CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState},
+        update::{CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, V6LeaseUpdate},
     };
     use std::{collections::HashMap, time::Duration};
     use std::{net::Ipv6Addr, time::SystemTime};
@@ -1623,13 +1623,13 @@ mod tests {
         let iaid = 777;
 
         // 1. DUID legit has the lease in context
-        let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
+        let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
             mac: Some(dummy_mac()),
             duid: duid_legit,
             iaid,
             ip,
             expires: SystemTime::now() + Duration::from_hours(1),
-        });
+        })));
 
         // 2. DUID rogue tries to release the IP
         let mut msg = Message::new(MessageType::Release);
@@ -1676,13 +1676,13 @@ mod tests {
         let iaid = 777;
 
         // 1. DUID legit has the lease
-        let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
+        let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
             mac: Some(dummy_mac()),
             duid: duid_legit,
             iaid,
             ip,
             expires: SystemTime::now() + Duration::from_hours(1),
-        });
+        })));
 
         // 2. DUID rogue declines the IP
         let mut msg = Message::new(MessageType::Decline);

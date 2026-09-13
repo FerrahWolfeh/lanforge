@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::{Duration, SystemTime};
 
-use crate::bus::{AdminChange, DeviceEvent, EventVec, LanforgeEvent, NetworkChange, NetworkEvent};
+use crate::bus::{
+    AdminChange, DeviceEvent, EventVec, LanforgeEvent, NetworkChange, NetworkEvent,
+    PrefixChangeDetails,
+};
 use crate::context::state::network::DhcpPoolStats;
 use crate::context::state::{
     CliHostUpdate, DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State, StaticEntry,
@@ -13,7 +16,7 @@ use lanforge_types::device::{
 };
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet, Ipv6AddrOrSuffix};
-use lanforge_types::update::DeviceUpdate;
+use lanforge_types::update::{DhcpV4PoolUpdate, DhcpV6PoolUpdate};
 
 impl State {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -465,12 +468,14 @@ impl State {
 
         if prefix_changed {
             self.rebuild_indices();
-            events.push(LanforgeEvent::Network(NetworkEvent::PrefixChanged {
-                gua: merged.gua,
-                ula: merged.ula,
-                preferred: merged.gua_preferred,
-                valid: merged.gua_valid,
-            }));
+            events.push(LanforgeEvent::Network(NetworkEvent::PrefixChanged(
+                Box::new(PrefixChangeDetails {
+                    gua: merged.gua,
+                    ula: merged.ula,
+                    preferred: merged.gua_preferred,
+                    valid: merged.gua_valid,
+                }),
+            )));
         }
 
         // Update the System device (the host itself) if it exists
@@ -511,7 +516,7 @@ impl State {
                 if dev.v6.len() != new_v6.len()
                     || dev.v6.iter().zip(new_v6.iter()).any(|(a, b)| a != b)
                 {
-                    dev.v6 = new_v6.into();
+                    dev.v6 = new_v6;
                     changed = true;
                 }
 
@@ -740,56 +745,32 @@ impl State {
         EventVec::new()
     }
 
-    pub(crate) fn handle_dhcp_v4_pool_updated(&mut self, update: &DeviceUpdate) -> EventVec {
-        let DeviceUpdate::DhcpV4PoolUpdated {
-            range_start,
-            range_end,
-            subnet_mask: _,
-            total,
-            used,
-            available,
-            utilization_percent,
-        } = update
-        else {
-            return EventVec::new();
-        };
+    pub(crate) fn handle_dhcp_v4_pool_updated(&mut self, update: &DhcpV4PoolUpdate) -> EventVec {
         self.interfaces.v4_pool = Some(DhcpPoolStats {
-            range_start: Some(IpAddr::V4(*range_start)),
-            range_end: Some(IpAddr::V4(*range_end)),
+            range_start: Some(IpAddr::V4(update.range_start)),
+            range_end: Some(IpAddr::V4(update.range_end)),
             prefix: None,
             prefix_len: None,
-            total: *total,
-            used: *used,
-            available: *available,
-            utilization_percent: *utilization_percent,
+            total: update.total,
+            used: update.used,
+            available: update.available,
+            utilization_percent: update.utilization_percent,
         });
         EventVec::new()
     }
 
-    pub(crate) fn handle_dhcp_v6_pool_updated(&mut self, update: &DeviceUpdate) -> EventVec {
-        let DeviceUpdate::DhcpV6PoolUpdated {
-            pool_id,
-            prefix,
-            prefix_len,
-            total,
-            used,
-            available,
-            utilization_percent,
-        } = update
-        else {
-            return EventVec::new();
-        };
+    pub(crate) fn handle_dhcp_v6_pool_updated(&mut self, update: &DhcpV6PoolUpdate) -> EventVec {
         self.interfaces.v6_pools.insert(
-            *pool_id,
+            update.pool_id,
             DhcpPoolStats {
                 range_start: None,
                 range_end: None,
-                prefix: Some(IpAddr::V6(*prefix)),
-                prefix_len: Some(*prefix_len),
-                total: *total,
-                used: *used,
-                available: *available,
-                utilization_percent: *utilization_percent,
+                prefix: Some(IpAddr::V6(update.prefix)),
+                prefix_len: Some(update.prefix_len),
+                total: update.total,
+                used: update.used,
+                available: update.available,
+                utilization_percent: update.utilization_percent,
             },
         );
         EventVec::new()

@@ -5,7 +5,7 @@ use lanforge_types::device::TransientOrigin;
 use lanforge_types::network::dns::TransportProtocol;
 use lanforge_types::network::dns::{DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType};
 use lanforge_types::network::{Hostname, HostnameOrigin, IpSubnet};
-use lanforge_types::update::DeviceUpdate;
+use lanforge_types::update::{DeviceUpdate, TransientHostUpdate};
 
 use crate::error::DnsError;
 use crate::resolver::recursive::UpstreamManager;
@@ -226,11 +226,13 @@ async fn resolve_reverse_ptr_background(
                             name,
                             origin: HostnameOrigin::Static,
                         };
-                        let update = DeviceUpdate::TransientHostResolved {
-                            ip,
-                            hostname: hostname.clone(),
-                            origin,
-                        };
+                        let update = DeviceUpdate::TransientHostResolved(Box::new(
+                            TransientHostUpdate {
+                                ip,
+                                hostname: hostname.clone(),
+                                origin,
+                            },
+                        ));
                         if ctx_core.apply(update) {
                             tracing::info!(
                                 "✅ DNS: Resolved transient host {} -> {}",

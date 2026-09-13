@@ -53,7 +53,9 @@ use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::dhcp::Dhcpv6Pool;
 use lanforge_types::system::{RunResult, ServiceState};
-use lanforge_types::update::{DeviceUpdate, LeaseTarget};
+use lanforge_types::update::{
+    DeviceUpdate, DhcpV6PoolUpdate, LeaseTarget, V6LeaseUpdate, V6PrefixUpdate,
+};
 use std::borrow::Cow;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::atomic::Ordering;
@@ -373,15 +375,17 @@ impl Dhcpv6Service {
         for (i, (prefix, prefix_len, total, used, available, utilization_percent)) in
             stats.into_iter().enumerate()
         {
-            let _ = self.ctx.apply(DeviceUpdate::DhcpV6PoolUpdated {
-                pool_id: u32::try_from(i).unwrap_or(0),
-                prefix,
-                prefix_len,
-                total,
-                used,
-                available,
-                utilization_percent,
-            });
+            let _ = self.ctx.apply(DeviceUpdate::DhcpV6PoolUpdated(Box::new(
+                DhcpV6PoolUpdate {
+                    pool_id: u32::try_from(i).unwrap_or(0),
+                    prefix,
+                    prefix_len,
+                    total,
+                    used,
+                    available,
+                    utilization_percent,
+                },
+            )));
         }
     }
 
@@ -522,13 +526,8 @@ impl Dhcpv6Service {
                     }
                 }
             }
-            LanforgeEvent::Network(NetworkEvent::PrefixChanged {
-                gua,
-                ula: _,
-                preferred,
-                valid,
-            }) => {
-                self.handle_prefix_change(server, transport, *gua, *preferred, *valid);
+            LanforgeEvent::Network(NetworkEvent::PrefixChanged(details)) => {
+                self.handle_prefix_change(server, transport, details.gua, details.preferred, details.valid);
             }
             LanforgeEvent::Device(DeviceEvent::LeaseRenew {
                 mac,
@@ -660,25 +659,27 @@ fn apply_learned_state(
             // One or more IPs assigned
             for ip in assigned_ip_addrs {
                 if let Some(duid) = learned_duid {
-                    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
+                    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
                         mac: opt_mac,
                         duid: duid.clone(),
                         iaid,
                         ip,
                         expires,
-                    });
+                    })));
                 } else if let Some(mac) = opt_mac {
                     // Search for DUID in our table if not provided in packet
                     if let Some(device) = ctx.get_device(&mac)
                         && let Some(duid) = device.duid.clone()
                     {
-                        let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
-                            mac: Some(mac),
-                            duid,
-                            iaid,
-                            ip,
-                            expires,
-                        });
+                        let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(
+                            V6LeaseUpdate {
+                                mac: Some(mac),
+                                duid,
+                                iaid,
+                                ip,
+                                expires,
+                            },
+                        )));
                     }
                 }
             }
@@ -701,14 +702,14 @@ fn apply_learned_state(
             .and_then(|duid| server.pool.lookup_prefix(ctx, duid, iaid));
 
         if let (Some(duid), Some((prefix, len))) = (learned_duid, assigned_prefix) {
-            let _ = ctx.apply(DeviceUpdate::V6PrefixAssigned {
+            let _ = ctx.apply(DeviceUpdate::V6PrefixAssigned(Box::new(V6PrefixUpdate {
                 mac: opt_mac,
                 duid: duid.clone(),
                 iaid,
                 prefix,
                 len,
                 expires,
-            });
+            })));
         }
     }
 

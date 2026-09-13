@@ -37,7 +37,7 @@ impl LocalResolver {
         &self,
         hostname: &str,
         qtype: DnsRecordType,
-    ) -> Option<SmallVec<[IpAddr; 32]>> {
+    ) -> Option<SmallVec<[IpAddr; 8]>> {
         if let Some(mac) = lanforge_types::identifiers::MacAddr::parse(hostname)
             && let Some(device) = self.ctx.get_device(&mac)
         {
@@ -65,7 +65,7 @@ impl LocalResolver {
         &self,
         id: &lanforge_types::identifiers::DeviceIdentifier,
         qtype: DnsRecordType,
-    ) -> Option<SmallVec<[IpAddr; 32]>> {
+    ) -> Option<SmallVec<[IpAddr; 8]>> {
         match id {
             lanforge_types::identifiers::DeviceIdentifier::Mac(mac) => {
                 if let Some(device) = self.ctx.get_device(mac) {
@@ -121,7 +121,7 @@ impl LocalResolver {
         &self,
         device: &Device,
         qtype: DnsRecordType,
-    ) -> Option<SmallVec<[IpAddr; 32]>> {
+    ) -> Option<SmallVec<[IpAddr; 8]>> {
         if !matches!(
             qtype,
             DnsRecordType::A | DnsRecordType::AAAA | DnsRecordType::ANY
@@ -195,7 +195,7 @@ impl LocalResolver {
     }
 
     #[must_use]
-    pub fn collect_device_ips(&self, device: &Device) -> SmallVec<[IpAddr; 32]> {
+    pub fn collect_device_ips(&self, device: &Device) -> SmallVec<[IpAddr; 8]> {
         let (sys_gua, sys_ula) = self
             .ctx
             .target_ifindex()

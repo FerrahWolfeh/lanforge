@@ -13,7 +13,7 @@ pub use self::device::{
     AdminChange, DeviceEvent, DhcpV4MessageType, DhcpV6MessageType, NetworkChange,
 };
 pub use self::dns::DnsEvent;
-pub use self::network::NetworkEvent;
+pub use self::network::{NetworkEvent, PrefixChangeDetails};
 pub use self::pppoe::{PppoeEvent, PppoeSessionUp};
 pub use self::storage::StorageEvent;
 pub use self::system::SystemEvent;
@@ -53,7 +53,7 @@ impl TimedEvent {
                 DeviceEvent::NetworkActivity { .. } => false,
             },
             LanforgeEvent::Network(e) => match e {
-                NetworkEvent::PrefixChanged { .. }
+                NetworkEvent::PrefixChanged(..)
                 | NetworkEvent::InterfaceUpdated { .. }
                 | NetworkEvent::WolTriggered { .. }
                 | NetworkEvent::RsReceived { .. }

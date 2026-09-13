@@ -429,6 +429,26 @@ pub struct DnsQuestion {
     pub qclass: DnsClass,
 }
 
+/// Detailed SOA (Start of Authority) record fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DnsSoaData {
+    pub mname: Arc<str>,
+    pub rname: Arc<str>,
+    pub serial: u32,
+    pub refresh: i32,
+    pub retry: i32,
+    pub expire: i32,
+    pub minimum: u32,
+}
+
+/// Detailed SVCB / HTTPS service binding record fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DnsSvcbData {
+    pub svc_priority: u16,
+    pub svc_domain: Arc<str>,
+    pub params: Vec<(u16, Vec<u8>)>,
+}
+
 /// DNS Resource Data variants.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DnsRData {
@@ -442,15 +462,7 @@ pub enum DnsRData {
     },
     NS(Arc<str>),
     TXT(Vec<Arc<str>>),
-    SOA {
-        mname: Arc<str>,
-        rname: Arc<str>,
-        serial: u32,
-        refresh: i32,
-        retry: i32,
-        expire: i32,
-        minimum: u32,
-    },
+    SOA(Box<DnsSoaData>),
     SRV {
         priority: u16,
         weight: u16,
@@ -460,16 +472,8 @@ pub enum DnsRData {
     OPT {
         options: Vec<(u16, Vec<u8>)>,
     },
-    HTTPS {
-        svc_priority: u16,
-        svc_domain: Arc<str>,
-        params: Vec<(u16, Vec<u8>)>,
-    },
-    SVCB {
-        svc_priority: u16,
-        svc_domain: Arc<str>,
-        params: Vec<(u16, Vec<u8>)>,
-    },
+    HTTPS(Box<DnsSvcbData>),
+    SVCB(Box<DnsSvcbData>),
     Unknown(Vec<u8>),
 }
 
@@ -484,21 +488,12 @@ impl Display for DnsRData {
                 exchange,
             } => write!(f, "{preference} {exchange}"),
             Self::TXT(txt) => write!(f, "{}", txt.join(" ")),
-            Self::SOA { mname, .. } => write!(f, "SOA {mname}"),
+            Self::SOA(soa) => write!(f, "SOA {}", soa.mname),
             Self::SRV { target, port, .. } => write!(f, "{target}:{port}"),
             Self::OPT { .. } => write!(f, "EDNS"),
-            Self::HTTPS {
-                svc_priority,
-                svc_domain,
-                params,
-            }
-            | Self::SVCB {
-                svc_priority,
-                svc_domain,
-                params,
-            } => {
-                let mut parts = vec![format!("{svc_priority} {svc_domain}")];
-                for (key, val) in params {
+            Self::HTTPS(data) | Self::SVCB(data) => {
+                let mut parts = vec![format!("{} {}", data.svc_priority, data.svc_domain)];
+                for (key, val) in &data.params {
                     match *key {
                         1 => {
                             // alpn

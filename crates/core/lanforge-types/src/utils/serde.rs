@@ -2,7 +2,6 @@
 use crate::utils::{secs_to_system_time, system_time_to_secs};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serializer};
-use smallvec::SmallVec;
 use std::net::Ipv4Addr;
 use std::time::SystemTime;
 
@@ -55,7 +54,7 @@ where
 
 pub fn deserialize_seen_v4<'de, D>(
     deserializer: D,
-) -> Result<SmallVec<[(Ipv4Addr, SystemTime); 2]>, D::Error>
+) -> Result<Vec<(Ipv4Addr, SystemTime)>, D::Error>
 where
     D: Deserializer<'de>,
 {

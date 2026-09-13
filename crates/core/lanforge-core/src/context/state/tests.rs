@@ -7,7 +7,9 @@ use lanforge_types::device::Device;
 use lanforge_types::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease};
 use lanforge_types::events::{DeviceEvent, LanforgeEvent, NetworkChange};
 use lanforge_types::identifiers::{Duid, MacAddr};
-use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate, LeaseTarget};
+use lanforge_types::update::{
+    CliHostUpdate, DeviceUpdate, FieldUpdate, LeaseTarget, V6LeaseUpdate, V6PrefixUpdate,
+};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -126,13 +128,13 @@ fn apply_update_slaac_excludes_managed_addr() {
     let expires = SystemTime::now() + Duration::from_hours(1);
 
     // 1. Grant a DHCPv6 lease
-    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
+    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
         mac: Some(mac),
         duid: Duid::new(vec![1, 2, 3]),
         iaid: 1,
         ip,
         expires,
-    });
+    })));
 
     // 2. Observe the same IP via SLAAC
     // A tabela reconstrói índices de DNS automaticamente no final de apply_update (changed=true)
@@ -162,13 +164,13 @@ fn apply_update_lease_released() {
         ip: "192.168.1.10".parse().unwrap(),
         expires: now,
     });
-    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
+    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
         mac: Some(mac),
         duid: Duid::new(vec![1]),
         iaid: 1,
         ip: "fd97::1".parse().unwrap(),
         expires: now,
-    });
+    })));
 
     let dev = ctx.get_device(&mac).unwrap();
     assert!(matches!(dev.v4, IPv4State::Dynamic(_)));
@@ -260,13 +262,13 @@ fn expire_stale_removes_old_v4_keeps_fresh_v6() {
         ip: "192.168.0.2".parse().unwrap(),
         expires: past,
     });
-    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
+    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
         mac: Some(mac),
         duid: Duid::new(vec![1]),
         iaid: 1,
         ip: "fd00::1".parse().unwrap(),
         expires: future,
-    });
+    })));
 
     // expire_stale is a method on LanforgeContext
     ctx.expire_stale(Duration::from_mins(10));
@@ -315,13 +317,13 @@ fn test_orphaned_v6_promotion() {
     let expires = SystemTime::now() + Duration::from_hours(1);
 
     // 1. Lease concedido sem MAC (órfão)
-    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
+    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
         mac: None,
         duid: duid.clone(),
         iaid: 100,
         ip,
         expires,
-    });
+    })));
 
     // Não deve existir device ainda
     assert!(ctx.get_device(&mac).is_none());
@@ -456,55 +458,55 @@ fn test_multiple_iaids_and_prefixes() {
     let future = now + Duration::from_hours(1);
 
     // 1. Atribui primeiro IP (IAID 10)
-    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
+    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
         mac: Some(mac),
         duid: duid.clone(),
         iaid: 10,
         ip: "fd00::10".parse().unwrap(),
         expires: future,
-    });
+    })));
 
     // 2. Atribui segundo IP (IAID 20)
-    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
+    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
         mac: Some(mac),
         duid: duid.clone(),
         iaid: 20,
         ip: "fd00::20".parse().unwrap(),
         expires: future,
-    });
+    })));
 
     // 3. Atribui primeiro prefixo (IAID 100)
-    let _ = ctx.apply(DeviceUpdate::V6PrefixAssigned {
+    let _ = ctx.apply(DeviceUpdate::V6PrefixAssigned(Box::new(V6PrefixUpdate {
         mac: Some(mac),
         duid: duid.clone(),
         iaid: 100,
         prefix: "2001:db8:1::".parse().unwrap(),
         len: 64,
         expires: future,
-    });
+    })));
 
     // 4. Atribui segundo prefixo (IAID 200)
-    let _ = ctx.apply(DeviceUpdate::V6PrefixAssigned {
+    let _ = ctx.apply(DeviceUpdate::V6PrefixAssigned(Box::new(V6PrefixUpdate {
         mac: Some(mac),
         duid: duid.clone(),
         iaid: 200,
         prefix: "2001:db8:2::".parse().unwrap(),
         len: 64,
         expires: future,
-    });
+    })));
 
     let dev = ctx.get_device(&mac).unwrap();
     assert_eq!(dev.v6.len(), 2, "Deve ter 2 endereços dinâmicos");
     assert_eq!(dev.v6_prefixes.len(), 2, "Deve ter 2 prefixos");
 
     // 5. Atualiza um deles (mesmo IAID, novo IP) -> Deve substituir
-    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
+    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
         mac: Some(mac),
         duid: duid.clone(),
         iaid: 10,
         ip: "fd00::11".parse().unwrap(),
         expires: future,
-    });
+    })));
 
     let dev = ctx.get_device(&mac).unwrap();
     assert_eq!(
@@ -521,14 +523,14 @@ fn test_multiple_iaids_and_prefixes() {
 
     // 6. Expiração parcial
     let past = now - Duration::from_secs(10);
-    let _ = ctx.apply(DeviceUpdate::V6PrefixAssigned {
+    let _ = ctx.apply(DeviceUpdate::V6PrefixAssigned(Box::new(V6PrefixUpdate {
         mac: Some(mac),
         duid,
         iaid: 100,
         prefix: "2001:db8:1::".parse().unwrap(),
         len: 64,
         expires: past,
-    });
+    })));
 
     ctx.expire_stale(Duration::from_mins(10));
     let dev = ctx.get_device(&mac).unwrap();
@@ -550,13 +552,13 @@ fn apply_update_duid_associated_resolves_orphan() {
     let expires = SystemTime::now() + Duration::from_hours(1);
 
     // 1. Recebe um lease sem MAC (órfão)
-    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted {
+    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
         mac: None,
         duid: duid.clone(),
         iaid,
         ip,
         expires,
-    });
+    })));
 
     assert!(ctx.read().discovery.orphaned_v6.contains_key(&ip));
     assert!(ctx.get_device(&mac).is_none());

@@ -2,14 +2,17 @@ use crate::{identifiers::MacAddr, update::LeaseTarget};
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PrefixChangeDetails {
+    pub gua: Option<Ipv6Addr>,
+    pub ula: Option<Ipv6Addr>,
+    pub preferred: u32,
+    pub valid: u32,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum NetworkEvent {
-    PrefixChanged {
-        gua: Option<Ipv6Addr>,
-        ula: Option<Ipv6Addr>,
-        preferred: u32,
-        valid: u32,
-    },
+    PrefixChanged(Box<PrefixChangeDetails>),
     InterfaceUpdated {
         ifindex: u32,
     },

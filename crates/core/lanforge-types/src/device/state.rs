@@ -51,13 +51,13 @@ pub struct V6PrefixLease {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum IPv4State {
     Static(Ipv4Addr),
-    Dynamic(V4Lease),
+    Dynamic(Box<V4Lease>),
     None,
 }
 
 impl IPv4State {
     #[must_use]
-    pub const fn ip(&self) -> Option<Ipv4Addr> {
+    pub fn ip(&self) -> Option<Ipv4Addr> {
         match self {
             Self::Static(ip) => Some(*ip),
             Self::Dynamic(lease) => Some(lease.ip),
