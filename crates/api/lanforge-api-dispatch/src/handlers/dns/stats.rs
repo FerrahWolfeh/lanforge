@@ -216,6 +216,28 @@ impl ClientContext {
             .await
             .unwrap_or_default();
 
+        let resolve_hostname = |ip_str: &str| {
+            let parsed_ip = ip_str.parse().unwrap_or_else(|_| "0.0.0.0".parse().unwrap());
+            let mac = self.ctx.get_mac_by_ip(parsed_ip);
+            mac.and_then(|m| {
+                if let Some(d) = self.ctx.get_device(&m) {
+                    let name = d.display_hostname();
+                    if name != "?" && !name.is_empty() {
+                        return Some(name.to_string());
+                    }
+                    if !d.dns_fallback.is_empty() {
+                        return Some(d.dns_fallback.clone());
+                    }
+                }
+                self.ctx.with_state(|s| {
+                    s.static_entries
+                        .get(&m)
+                        .filter(|e| !e.hostname.is_empty())
+                        .map(|e| e.hostname.clone())
+                })
+            })
+        };
+
         Response::DnsAnalytics(DnsAnalyticsResponse {
             top_domains: top_domains
                 .into_iter()
@@ -245,11 +267,7 @@ impl ClientContext {
             top_clients: top_clients
                 .into_iter()
                 .map(|(ip, count, blocked_count)| {
-                    let hostname = self
-                        .ctx
-                        .get_mac_by_ip(ip.parse().unwrap_or_else(|_| "0.0.0.0".parse().unwrap()))
-                        .and_then(|m| self.ctx.get_device(&m))
-                        .map(|d| d.display_hostname().to_string());
+                    let hostname = resolve_hostname(&ip);
                     TopClientEntry {
                         ip,
                         hostname,
@@ -280,11 +298,7 @@ impl ClientContext {
             top_blocked_clients: top_blocked_clients
                 .into_iter()
                 .map(|(ip, count)| {
-                    let hostname = self
-                        .ctx
-                        .get_mac_by_ip(ip.parse().unwrap_or_else(|_| "0.0.0.0".parse().unwrap()))
-                        .and_then(|m| self.ctx.get_device(&m))
-                        .map(|d| d.display_hostname().to_string());
+                    let hostname = resolve_hostname(&ip);
                     TopClientEntry {
                         ip,
                         hostname,

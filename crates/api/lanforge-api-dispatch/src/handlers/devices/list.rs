@@ -95,6 +95,8 @@ impl ClientContext {
             class: dev.class,
             iface: dev.iface.clone(),
             vlan_id: dev.vlan_id(),
+            ignore_dns_log: dev.ignore_dns_log,
+            ignored_log_domains: dev.ignored_log_domains.clone(),
             duid: dev.duid.clone(),
             display_v4: dev.display_v4(),
             display_v6: dev.display_v6(gua_prefix, ula_prefix),

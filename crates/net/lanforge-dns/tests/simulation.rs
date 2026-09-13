@@ -409,7 +409,7 @@ async fn dns_simulation_transient_ip_reverse_dns() {
         resolver: resolver_target,
     };
     let _ = ctx.apply(DeviceUpdate::AddReverseResolver {
-        resolver: resolver_rule,
+        resolver: Box::new(resolver_rule),
     });
 
     // 3. Start DNS Service

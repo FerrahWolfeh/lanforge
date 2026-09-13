@@ -53,7 +53,7 @@ async fn test_full_db_reset_chain() {
     });
     let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac: mac_static,
-        update: CliHostUpdate {
+        update: Box::new(CliHostUpdate {
             hostname: FieldUpdate::Set("static-host".to_string()),
             duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::Set("192.168.1.20".parse::<Ipv4Addr>().unwrap()),
@@ -62,7 +62,7 @@ async fn test_full_db_reset_chain() {
             boot_file: FieldUpdate::NoChange,
             dns_fallback: FieldUpdate::NoChange,
             class: FieldUpdate::NoChange,
-        },
+        }),
     });
 
     // 3. Spawn DbWorker

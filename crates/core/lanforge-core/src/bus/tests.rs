@@ -118,7 +118,7 @@ async fn cli_host_update_publishes_events() {
 
     let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        update: CliHostUpdate {
+        update: Box::new(CliHostUpdate {
             hostname: FieldUpdate::Set("cli-host".to_string()),
             duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::NoChange,
@@ -127,7 +127,7 @@ async fn cli_host_update_publishes_events() {
             boot_file: FieldUpdate::NoChange,
             dns_fallback: FieldUpdate::NoChange,
             class: FieldUpdate::NoChange,
-        },
+        }),
     });
 
     let mut events = vec![];
@@ -148,7 +148,7 @@ async fn cli_host_update_publishes_events() {
 
     let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        update: CliHostUpdate {
+        update: Box::new(CliHostUpdate {
             hostname: FieldUpdate::NoChange,
             duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::Set("1.2.3.4".parse().unwrap()),
@@ -157,7 +157,7 @@ async fn cli_host_update_publishes_events() {
             boot_file: FieldUpdate::NoChange,
             dns_fallback: FieldUpdate::NoChange,
             class: FieldUpdate::NoChange,
-        },
+        }),
     });
 
     let mut events = vec![];

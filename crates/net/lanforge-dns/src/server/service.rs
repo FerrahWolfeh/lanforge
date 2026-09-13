@@ -325,14 +325,14 @@ impl AsyncService for DnsService {
                                     info!("DNS: Cache invalidated after upstream reload");
                                 }
                             }
-                            lanforge_core::bus::LanforgeEvent::Pppoe(lanforge_core::bus::PppoeEvent::SessionUp { dns, .. }) => {
+                            lanforge_core::bus::LanforgeEvent::Pppoe(lanforge_core::bus::PppoeEvent::SessionUp(ref session)) => {
                                 // Auto-adopt ISP DNS upstreams if user has not configured custom static upstreams
-                                if ctx.get_dns_upstreams().is_empty() && !dns.is_empty() {
-                                    info!(count = dns.len(), "DNS: Auto-adopting ISP DNS upstreams from PPPoE WAN session");
+                                if ctx.get_dns_upstreams().is_empty() && !session.dns.is_empty() {
+                                    info!(count = session.dns.len(), "DNS: Auto-adopting ISP DNS upstreams from PPPoE WAN session");
                                     let mut upstreams = Vec::new();
-                                    for ip in dns {
+                                    for ip in &session.dns {
                                         let target = UpstreamTarget {
-                                            addr: SocketAddr::new(ip, 53),
+                                            addr: SocketAddr::new(*ip, 53),
                                             protocol: UpstreamProtocol::Udp,
                                             hostname: None,
                                             domain: None,
@@ -647,36 +647,41 @@ async fn resolve_diagnostic_internal(
         format!("{:?}", last.result)
     } else {
         // Fallback logic matching pipeline order
-        #[cfg(feature = "adblock")]
-        let is_blocked = dns_ctx
-            .filter
-            .as_ref()
-            .is_some_and(|f| f.should_block(name));
-        #[cfg(not(feature = "adblock"))]
-        let is_blocked = false;
+        let mut qname = question.qname_raw().to_vec();
+        qname.make_ascii_lowercase();
+        let key = CacheKey {
+            qname,
+            qtype: u16::from(qtype),
+            qclass: 1, // IN
+        };
 
-        if is_blocked {
-            "Blocked".to_string()
+        if let Some(entry) = dns_ctx.cache.cache.get(&key) {
+            if entry.is_block {
+                "CachedBlock".to_string()
+            } else {
+                "Cached".to_string()
+            }
         } else if dns_ctx.rewrites.resolve_rewrite(name).is_some() {
             "Rewritten".to_string()
+        } else if dns_ctx.local.resolve_local(name, qtype).is_some()
+            || (qtype == DnsRecordType::PTR
+                && dns_ctx
+                    .local
+                    .resolve_ptr(name)
+                    .is_ok_and(|res| res.is_some()))
+        {
+            "Local".to_string()
         } else {
-            let mut qname = name.as_bytes().to_vec();
-            qname.make_ascii_lowercase();
-            let key = CacheKey {
-                qname,
-                qtype: u16::from(qtype),
-                qclass: 1, // IN
-            };
-            if dns_ctx.cache.cache.get(&key).is_some() {
-                "Cached".to_string()
-            } else if dns_ctx.local.resolve_local(name, qtype).is_some()
-                || (qtype == DnsRecordType::PTR
-                    && dns_ctx
-                        .local
-                        .resolve_ptr(name)
-                        .is_ok_and(|res| res.is_some()))
-            {
-                "Local".to_string()
+            #[cfg(feature = "adblock")]
+            let is_blocked = dns_ctx
+                .filter
+                .as_ref()
+                .is_some_and(|f| f.should_block(name));
+            #[cfg(not(feature = "adblock"))]
+            let is_blocked = false;
+
+            if is_blocked {
+                "Blocked".to_string()
             } else {
                 "Forwarded".to_string()
             }

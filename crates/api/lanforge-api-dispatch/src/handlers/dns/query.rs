@@ -59,15 +59,28 @@ impl ClientContext {
                 entries: queries
                     .into_iter()
                     .map(|q| {
-                        let src_hostname = self
-                            .ctx
-                            .get_mac_by_ip(q.src_ip)
-                            .and_then(|m| self.ctx.get_device(&m))
-                            .map(|d| d.display_hostname().to_string());
+                        let mac = q.src_mac.or_else(|| self.ctx.get_mac_by_ip(q.src_ip));
+                        let src_hostname = mac.and_then(|m| {
+                            if let Some(d) = self.ctx.get_device(&m) {
+                                let name = d.display_hostname();
+                                if name != "?" && !name.is_empty() {
+                                    return Some(name.to_string());
+                                }
+                                if !d.dns_fallback.is_empty() {
+                                    return Some(d.dns_fallback.clone());
+                                }
+                            }
+                            self.ctx.with_state(|s| {
+                                s.static_entries
+                                    .get(&m)
+                                    .filter(|e| !e.hostname.is_empty())
+                                    .map(|e| e.hostname.clone())
+                            })
+                        });
                         DnsQueryLogEntry {
                             timestamp: q.timestamp,
                             src_ip: q.src_ip.to_string(),
-                            src_mac: q.src_mac.map(|m| m.to_string()),
+                            src_mac: mac.map(|m| m.to_string()),
                             src_hostname,
                             domain: q.domain.to_string(),
                             qtype: q.qtype,

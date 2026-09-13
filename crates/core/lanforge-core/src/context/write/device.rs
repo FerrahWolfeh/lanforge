@@ -62,12 +62,9 @@ impl LanforgeContext {
             })
         };
 
-        if found_mac.is_some() {
-            self.write()
-                .find_mac_by_hostname_jit(hostname, last_seen_threshold)
-        } else {
-            None
-        }
+        found_mac.inspect(|&mac| {
+            self.write().promote_device_to_index(mac);
+        })
     }
 
     /// Adds a static device to the registry (test-only helper).
@@ -85,7 +82,7 @@ impl LanforgeContext {
     ) {
         let _ = self.apply(DeviceUpdate::CliHostUpdated {
             mac,
-            update: CliHostUpdate {
+            update: Box::new(CliHostUpdate {
                 hostname: FieldUpdate::from(Some(hostname)),
                 duid: FieldUpdate::from(duid),
                 v4_static: FieldUpdate::from(v4_static),
@@ -94,7 +91,7 @@ impl LanforgeContext {
                 boot_file: FieldUpdate::from(boot_file),
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,
-            },
+            }),
         });
     }
 

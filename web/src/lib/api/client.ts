@@ -368,7 +368,7 @@ export const dnsAnalytics = (limit?: number, client?: string) =>
 		...(client && { client })
 	});
 export const dnsQuery = (name: string, type?: string) =>
-	get<unknown>('/dns/query', { name, record_type: type, type });
+	get<unknown>('/dns/query', { name, ...(type && { record_type: type }) });
 export const dnsQueryLog = async (params?: {
 	client?: string;
 	limit?: number;

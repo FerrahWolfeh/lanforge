@@ -12,7 +12,7 @@ pub enum SystemEvent {
     SystemReady,
     ReloadConfig,
     ConfigUpdate { password_hash: String },
-    ServiceStatusBanner(ServiceBanner),
+    ServiceStatusBanner(Box<ServiceBanner>),
     ServiceControl { id: String, action: ServiceAction },
     ConfigDhcpV4Changed,
     ConfigDhcpV6Changed,

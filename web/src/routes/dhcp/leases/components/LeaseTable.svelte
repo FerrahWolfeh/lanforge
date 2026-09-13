@@ -32,6 +32,20 @@
 		onWol?: (mac: string) => void;
 	} = $props();
 
+	import DataTablePagination from "$lib/components/DataTablePagination.svelte";
+
+	let pageIndex = $state(0);
+	let pageSize = $state(15);
+
+	$effect(() => {
+		leases;
+		pageIndex = 0;
+	});
+
+	const paginatedLeases = $derived(
+		leases.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize)
+	);
+
 	function formatDuration(secs: number): string {
 		if (secs <= 0) return "Expired";
 		if (secs < 60) return `${secs}s`;
@@ -75,7 +89,7 @@
 		{:else}
 			<!-- Mobile View (< sm): Touch-friendly stacked cards -->
 			<div class="flex flex-col divide-y divide-border/60 sm:hidden">
-				{#each leases as lease (lease.mac + lease.address + lease.kind)}
+				{#each paginatedLeases as lease (lease.mac + lease.address + lease.kind)}
 					{@const isExpiring = lease.remaining_secs > 0 && lease.remaining_secs < 3600}
 					{@const isExpired = lease.remaining_secs <= 0}
 					<div class="p-3.5 flex flex-col gap-2 hover:bg-muted/20 transition-colors">
@@ -174,7 +188,7 @@
 						</Table.Row>
 					</Table.Header>
 					<Table.Body class="font-mono text-xs">
-						{#each leases as lease (lease.mac + lease.address + lease.kind)}
+						{#each paginatedLeases as lease (lease.mac + lease.address + lease.kind)}
 							{@const isExpiring = lease.remaining_secs > 0 && lease.remaining_secs < 3600}
 							{@const isExpired = lease.remaining_secs <= 0}
 							<Table.Row class="hover:bg-muted/50 transition-colors">
@@ -288,6 +302,13 @@
 					</Table.Body>
 				</Table.Root>
 			</div>
+
+			<DataTablePagination
+				bind:pageIndex
+				bind:pageSize
+				totalItems={leases.length}
+				itemName="leases"
+			/>
 		{/if}
 	</Card.Content>
 </Card.Root>

@@ -400,7 +400,7 @@ impl AsyncService for DbWorker {
                             }
                         }
                         LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)) => {
-                            self.dns_log_buffer.push(entry.clone());
+                            self.dns_log_buffer.push((**entry).clone());
                             if self.dns_log_buffer.len() >= 100 {
                                 if let Err(e) = log_db.record_dns_queries_batch(&self.dns_log_buffer).await {
                                     error!("Immediate DNS query log flush error: {e}");

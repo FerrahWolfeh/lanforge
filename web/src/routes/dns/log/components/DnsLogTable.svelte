@@ -23,6 +23,7 @@
 	import { dnsBlock, dnsAllow } from "$lib/api/client";
 	import type { DnsQueryLogEntry, DnsRecordType } from "$lib/api/types";
 	import DnsLogDetailDialog from "./DnsLogDetailDialog.svelte";
+	import DataTablePagination from "$lib/components/DataTablePagination.svelte";
 
 	let {
 		loading = false,
@@ -77,6 +78,7 @@
 		{ value: "forwarded", label: "Forwarded" },
 		{ value: "local", label: "Local" },
 		{ value: "cached", label: "Cached" },
+		{ value: "cachedblock", label: "Cached Block" },
 		{ value: "rewrite", label: "Rewritten" },
 		{ value: "blocked", label: "Blocked" },
 	];
@@ -166,6 +168,17 @@
 
 	function getResultBadge(result: string, cached: boolean) {
 		const lower = (result || "").toLowerCase();
+		if (
+			lower === "cachedblock" ||
+			lower === "cached_block" ||
+			(lower.includes("block") && cached) ||
+			(lower.includes("cached") && lower.includes("block"))
+		) {
+			return {
+				label: "Cached Block",
+				class: "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20",
+			};
+		}
 		if (lower.includes("block") || lower.includes("deny")) {
 			return {
 				label: "Blocked",
@@ -363,9 +376,6 @@
 							entry.result,
 							entry.cached,
 						)}
-						{@const clientDisplay =
-							entry.src_hostname ?? entry.src_ip}
-
 						<Table.Row
 							class="hover:bg-muted/50 transition-colors cursor-pointer group"
 							onclick={() => inspectRecord(entry)}
@@ -378,20 +388,43 @@
 							</Table.Cell>
 
 							<!-- Client -->
-							<Table.Cell class="font-mono text-xs">
-								<div
-									class="flex items-center gap-1.5"
-									title={entry.src_ip}
-								>
-									<LaptopIcon
-										class="h-3.5 w-3.5 text-muted-foreground shrink-0"
-									/>
-									<span
-										class="truncate max-w-[150px] text-foreground"
+							<Table.Cell class="text-xs">
+								{#if entry.src_hostname}
+									<div
+										class="flex flex-col min-w-0"
+										title={`${entry.src_hostname} (${entry.src_ip})`}
 									>
-										{clientDisplay}
-									</span>
-								</div>
+										<div class="flex items-center gap-1.5">
+											<LaptopIcon
+												class="h-3.5 w-3.5 text-primary shrink-0"
+											/>
+											<span
+												class="truncate max-w-[150px] font-medium text-foreground text-xs"
+											>
+												{entry.src_hostname}
+											</span>
+										</div>
+										<span
+											class="text-[10px] font-mono text-muted-foreground truncate pl-5"
+										>
+											{entry.src_ip}
+										</span>
+									</div>
+								{:else}
+									<div
+										class="flex items-center gap-1.5"
+										title={entry.src_ip}
+									>
+										<LaptopIcon
+											class="h-3.5 w-3.5 text-muted-foreground shrink-0"
+										/>
+										<span
+											class="truncate max-w-[150px] font-mono text-foreground text-xs"
+										>
+											{entry.src_ip}
+										</span>
+									</div>
+								{/if}
 							</Table.Cell>
 
 							<!-- Domain Name -->
@@ -552,35 +585,14 @@
 	</Card.Content>
 
 	<!-- Fixed Pinned Pagination Footer -->
-	<div
-		class="flex items-center justify-between px-4 py-2.5 border-t bg-card shrink-0 z-10"
-	>
-		<p class="text-xs text-muted-foreground">
-			Page {currentPage} of {totalPages}
-		</p>
-		<div class="flex items-center gap-1">
-			<Button
-				variant="outline"
-				size="sm"
-				disabled={offset === 0 || loading}
-				onclick={() => onPageChange(Math.max(0, offset - limit))}
-				class="h-8 gap-1 px-2.5 text-xs"
-			>
-				<ChevronLeftIcon class="h-3.5 w-3.5" />
-				Previous
-			</Button>
-			<Button
-				variant="outline"
-				size="sm"
-				disabled={offset + limit >= total || loading}
-				onclick={() => onPageChange(offset + limit)}
-				class="h-8 gap-1 px-2.5 text-xs"
-			>
-				Next
-				<ChevronRightIcon class="h-3.5 w-3.5" />
-			</Button>
-		</div>
-	</div>
+	<DataTablePagination
+		pageIndex={Math.floor(offset / limit)}
+		pageSize={limit}
+		totalItems={total}
+		itemName="queries"
+		disabled={loading}
+		onPageChange={(newIdx) => onPageChange(newIdx * limit)}
+	/>
 </Card.Root>
 
 <!-- Inspection Dialog -->

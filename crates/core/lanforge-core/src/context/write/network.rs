@@ -20,6 +20,9 @@ impl LanforgeContext {
             gua_valid: valid,
             ..Default::default()
         };
-        self.apply(DeviceUpdate::InterfaceIpsChanged { ifindex, state })
+        self.apply(DeviceUpdate::InterfaceIpsChanged {
+            ifindex,
+            state: Box::new(state),
+        })
     }
 }

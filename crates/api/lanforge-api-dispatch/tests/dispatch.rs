@@ -86,6 +86,8 @@ async fn test_dispatch_hosts_crud() {
         v4_fixed: Some("192.168.1.100".parse().unwrap()),
         v6_suffix: None,
         origin: Origin::Static,
+        ignore_dns_log: false,
+        ignored_log_domains: Vec::new(),
     };
     let add_res = client_ctx.handle_host_add(entry).await;
     assert!(matches!(add_res, Response::Success(_)));
@@ -139,6 +141,8 @@ async fn test_dispatch_system_config_import_export() {
             v4_fixed: Some("192.168.10.50".parse().unwrap()),
             v6_suffix: None,
             origin: Origin::Static,
+            ignore_dns_log: false,
+            ignored_log_domains: Vec::new(),
         }],
         dns_rewrites: vec![RewriteRule {
             id: None,
@@ -288,6 +292,8 @@ async fn test_dispatch_host_set_invalid_ip_ignored() {
         v4_fixed: Some("192.168.1.100".parse().unwrap()),
         v6_suffix: None,
         origin: Origin::Static,
+        ignore_dns_log: false,
+        ignored_log_domains: Vec::new(),
     };
     let add_res = client_ctx.handle_host_add(entry).await;
     assert!(matches!(add_res, Response::Success(_)));
@@ -322,6 +328,8 @@ async fn test_dispatch_system_config_import_overwrite() {
         v4_fixed: Some("192.168.1.10".parse().unwrap()),
         v6_suffix: None,
         origin: Origin::Static,
+        ignore_dns_log: false,
+        ignored_log_domains: Vec::new(),
     };
     let _ = client_ctx.handle_host_add(entry1).await;
 
@@ -332,6 +340,8 @@ async fn test_dispatch_system_config_import_overwrite() {
         v4_fixed: Some("192.168.1.20".parse().unwrap()),
         v6_suffix: None,
         origin: Origin::Static,
+        ignore_dns_log: false,
+        ignored_log_domains: Vec::new(),
     };
 
     // Case A: Import with overwrite = false
@@ -371,6 +381,8 @@ async fn test_dispatch_system_config_import_overwrite() {
         v4_fixed: Some("192.168.1.30".parse().unwrap()),
         v6_suffix: None,
         origin: Origin::Static,
+        ignore_dns_log: false,
+        ignored_log_domains: Vec::new(),
     };
     let import_cfg_overwrite = SystemConfigExport {
         hosts: vec![new_entry_3],
@@ -468,6 +480,8 @@ async fn test_static_host_deletion_should_purge_all_leases() {
         v4_fixed: Some("192.168.1.100".parse().unwrap()),
         v6_suffix: None,
         origin: Origin::Static,
+        ignore_dns_log: false,
+        ignored_log_domains: Vec::new(),
     };
     let add_res = client_ctx.handle_host_add(entry).await;
     assert!(matches!(add_res, Response::Success(_)));
@@ -515,6 +529,8 @@ async fn test_static_host_creation_creates_all_leases_for_specific_mac() {
         v4_fixed: Some("192.168.1.100".parse().unwrap()),
         v6_suffix: Some(v6_suffix),
         origin: Origin::Static,
+        ignore_dns_log: false,
+        ignored_log_domains: Vec::new(),
     };
     let add_res = client_ctx.handle_host_add(entry).await;
     assert!(matches!(add_res, Response::Success(_)));

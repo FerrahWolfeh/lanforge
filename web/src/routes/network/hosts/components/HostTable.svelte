@@ -26,6 +26,20 @@
 		onDelete?: (mac: string) => void;
 	} = $props();
 
+	import DataTablePagination from "$lib/components/DataTablePagination.svelte";
+
+	let pageIndex = $state(0);
+	let pageSize = $state(15);
+
+	$effect(() => {
+		hosts;
+		pageIndex = 0;
+	});
+
+	const paginatedHosts = $derived(
+		hosts.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize)
+	);
+
 	function copyText(text: string, label: string) {
 		navigator.clipboard.writeText(text);
 		toast.success(`Copied ${label}`);
@@ -58,7 +72,7 @@
 		{:else}
 			<!-- Mobile View (< sm): Touch-friendly stacked cards -->
 			<div class="flex flex-col divide-y divide-border/60 sm:hidden">
-				{#each hosts as host (host.mac)}
+				{#each paginatedHosts as host (host.mac)}
 					<div class="p-3.5 flex flex-col gap-2 hover:bg-muted/20 transition-colors">
 						<div class="flex items-center justify-between gap-2">
 							<div class="flex items-center gap-2 min-w-0">
@@ -68,6 +82,15 @@
 								<Badge variant="outline" class="text-[9px] uppercase font-mono px-1 py-0">
 									{host.origin || "Config"}
 								</Badge>
+								{#if host.ignore_dns_log}
+									<Badge variant="secondary" class="text-[9px] uppercase font-mono px-1 py-0 text-muted-foreground border-border/50">
+										DNS Muted
+									</Badge>
+								{:else if host.ignored_log_domains && host.ignored_log_domains.length > 0}
+									<Badge variant="outline" class="text-[9px] font-mono px-1 py-0 text-muted-foreground">
+										{host.ignored_log_domains.length} {host.ignored_log_domains.length === 1 ? "domain" : "domains"} muted
+									</Badge>
+								{/if}
 							</div>
 
 							<!-- Actions Dropdown -->
@@ -132,11 +155,22 @@
 						</Table.Row>
 					</Table.Header>
 					<Table.Body class="font-mono text-xs">
-						{#each hosts as host (host.mac)}
+						{#each paginatedHosts as host (host.mac)}
 							<Table.Row class="hover:bg-muted/50 transition-colors">
 								<!-- Hostname -->
 								<Table.Cell class="font-sans font-semibold text-foreground text-xs sm:text-sm">
-									{host.hostname || "—"}
+									<div class="flex items-center gap-1.5 flex-wrap">
+										<span>{host.hostname || "—"}</span>
+										{#if host.ignore_dns_log}
+											<Badge variant="secondary" class="text-[9px] font-mono px-1 py-0 text-muted-foreground border-border/50">
+												DNS Muted
+											</Badge>
+										{:else if host.ignored_log_domains && host.ignored_log_domains.length > 0}
+											<Badge variant="outline" class="text-[9px] font-mono px-1 py-0 text-muted-foreground" title={host.ignored_log_domains.join(", ")}>
+												{host.ignored_log_domains.length} {host.ignored_log_domains.length === 1 ? "domain" : "domains"} muted
+											</Badge>
+										{/if}
+									</div>
 								</Table.Cell>
 
 								<!-- MAC -->
@@ -198,6 +232,13 @@
 					</Table.Body>
 				</Table.Root>
 			</div>
+
+			<DataTablePagination
+				bind:pageIndex
+				bind:pageSize
+				totalItems={hosts.length}
+				itemName="hosts"
+			/>
 		{/if}
 	</Card.Content>
 </Card.Root>

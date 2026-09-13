@@ -206,13 +206,37 @@
 		if (selectedResult) {
 			const resLow = selectedResult.toLowerCase();
 			if (resLow === "blocked") {
-				list = list.filter(
-					(e) =>
-						e.result.toLowerCase().includes("block") ||
-						e.result.toLowerCase().includes("deny"),
-				);
+				list = list.filter((e) => {
+					const r = e.result.toLowerCase();
+					const isBlock = r.includes("block") || r.includes("deny");
+					const isCached =
+						e.cached ||
+						r.includes("cached") ||
+						r === "cachedblock" ||
+						r === "cached_block";
+					return isBlock && !isCached;
+				});
+			} else if (resLow === "cachedblock" || resLow === "cached_block") {
+				list = list.filter((e) => {
+					const r = e.result.toLowerCase();
+					return (
+						r === "cachedblock" ||
+						r === "cached_block" ||
+						(e.cached && (r.includes("block") || r.includes("deny"))) ||
+						(r.includes("cached") && r.includes("block"))
+					);
+				});
 			} else if (resLow === "cached") {
-				list = list.filter((e) => e.cached || e.result.toLowerCase() === "cached");
+				list = list.filter((e) => {
+					const r = e.result.toLowerCase();
+					const isBlock = r.includes("block") || r.includes("deny");
+					return (
+						(e.cached || r === "cached") &&
+						!isBlock &&
+						r !== "cachedblock" &&
+						r !== "cached_block"
+					);
+				});
 			} else if (resLow === "local") {
 				list = list.filter((e) => e.result.toLowerCase() === "local");
 			} else if (resLow === "rewrite") {
@@ -220,14 +244,17 @@
 					e.result.toLowerCase().includes("rewrite"),
 				);
 			} else if (resLow === "forwarded") {
-				list = list.filter(
-					(e) =>
-						e.result.toLowerCase() === "forwarded" ||
+				list = list.filter((e) => {
+					const r = e.result.toLowerCase();
+					return (
+						r === "forwarded" ||
 						(!e.cached &&
-							!e.result.toLowerCase().includes("block") &&
-							e.result.toLowerCase() !== "local" &&
-							!e.result.toLowerCase().includes("rewrite")),
-				);
+							!r.includes("block") &&
+							!r.includes("deny") &&
+							r !== "local" &&
+							!r.includes("rewrite"))
+					);
+				});
 			}
 		}
 		return list;

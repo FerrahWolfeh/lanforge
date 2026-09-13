@@ -35,7 +35,7 @@ impl ClientContext {
         }
 
         let _ = self.ctx.apply(DeviceUpdate::AddReverseResolver {
-            resolver: DnsReverseResolver { subnet, resolver },
+            resolver: Box::new(DnsReverseResolver { subnet, resolver }),
         });
 
         Response::Success(SimpleSuccess {

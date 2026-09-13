@@ -1185,7 +1185,7 @@ mod tests {
         };
 
         // Use instance apply instead of global singleton
-        let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged { ifindex: 0, state });
+        let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged { ifindex: 0, state: Box::new(state) });
 
         let cfg = Dhcpv6Config {
             enabled: true,
@@ -1591,7 +1591,7 @@ mod tests {
         // Register it so srv.ctx can find it
         let _ = srv.ctx.apply(DeviceUpdate::CliHostUpdated {
             mac,
-            update: CliHostUpdate {
+            update: Box::new(CliHostUpdate {
                 hostname: FieldUpdate::Set("host".to_string()),
                 duid: FieldUpdate::NoChange,
                 v4_static: FieldUpdate::NoChange,
@@ -1600,7 +1600,7 @@ mod tests {
                 boot_file: FieldUpdate::Set("http://custom/boot.efi".to_string()),
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,
-            },
+            }),
         });
 
         let identity = DeviceIdentity::new(mac, None, None);
@@ -1790,7 +1790,7 @@ mod tests {
         // Test static lease (infinite lifetime)
         let _ = srv.ctx.apply(DeviceUpdate::CliHostUpdated {
             mac,
-            update: CliHostUpdate {
+            update: Box::new(CliHostUpdate {
                 hostname: FieldUpdate::Set("static-v6".to_string()),
                 duid: FieldUpdate::Set(client_duid.clone()),
                 v4_static: FieldUpdate::NoChange,
@@ -1801,7 +1801,7 @@ mod tests {
                 boot_file: FieldUpdate::NoChange,
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,
-            },
+            }),
         });
 
         let mut resp_vec = Vec::with_capacity(1024);

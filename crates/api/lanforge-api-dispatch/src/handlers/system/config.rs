@@ -660,7 +660,7 @@ impl ClientContext {
                     let _ =
                         self.ctx
                             .apply(lanforge_types::update::DeviceUpdate::AddReverseResolver {
-                                resolver: r,
+                                resolver: Box::new(r),
                             });
                     res_count += 1;
                 }

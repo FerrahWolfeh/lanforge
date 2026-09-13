@@ -58,9 +58,9 @@ pub struct NetworkState {
     )]
     pub v6_pools: HashMap<u32, DhcpPoolStats>,
     /// Active `PPPoE` WAN state.
-    pub pppoe_status: Option<lanforge_types::system::PppoeStatusResponse>,
+    pub pppoe_status: Option<Box<lanforge_types::system::PppoeStatusResponse>>,
     /// Active `RA` (Router Advertisement) state.
-    pub ra_status: Option<lanforge_types::system::RaStatusResponse>,
+    pub ra_status: Option<Box<lanforge_types::system::RaStatusResponse>>,
 }
 
 impl NetworkState {

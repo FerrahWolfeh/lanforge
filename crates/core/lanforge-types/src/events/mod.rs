@@ -14,12 +14,12 @@ pub use self::device::{
 };
 pub use self::dns::DnsEvent;
 pub use self::network::NetworkEvent;
-pub use self::pppoe::PppoeEvent;
+pub use self::pppoe::{PppoeEvent, PppoeSessionUp};
 pub use self::storage::StorageEvent;
 pub use self::system::SystemEvent;
 
-/// Reusable event collection that avoids heap allocation for the common case (up to 8 events).
-pub type EventVec = SmallVec<[LanforgeEvent; 8]>;
+/// Reusable event collection that avoids heap allocation for the common case (up to 4 events).
+pub type EventVec = SmallVec<[LanforgeEvent; 4]>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TimedEvent {

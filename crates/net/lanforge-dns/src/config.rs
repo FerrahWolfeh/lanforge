@@ -32,6 +32,9 @@ pub struct QueryLogConfig {
     pub retention_hours: u32,
     /// Maximum entries in the database.
     pub max_entries: u32,
+    /// Clients (MAC address, IP address, or hostname) to ignore from query logs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignore_clients: Vec<String>,
 }
 
 impl Default for QueryLogConfig {
@@ -43,6 +46,7 @@ impl Default for QueryLogConfig {
             flush_interval_secs: 30,
             retention_hours: 168, // 7 days
             max_entries: 500_000,
+            ignore_clients: Vec::new(),
         }
     }
 }

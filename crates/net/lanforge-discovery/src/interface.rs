@@ -65,7 +65,7 @@ pub async fn refresh_interface(
     // Update global context table
     let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
         ifindex,
-        state: state.clone(),
+        state: Box::new(state.clone()),
     });
 
     Ok(state)

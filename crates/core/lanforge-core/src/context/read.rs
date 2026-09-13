@@ -122,7 +122,7 @@ impl LanforgeContext {
 
     /// Produz um registro validado das configurações estáticas.
     #[must_use]
-    pub fn get_static_registry(&self) -> StaticRegistry {
+    pub fn get_static_registry(&self) -> Arc<StaticRegistry> {
         self.read().get_static_registry()
     }
 

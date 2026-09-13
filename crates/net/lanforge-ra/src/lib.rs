@@ -418,7 +418,7 @@ impl RaService {
         // Update live status in context
         let initial_status = state.build_status(&current_cfg, &self.ctx, Some(next_ra_at));
         let _ = self.ctx.apply(DeviceUpdate::RaStatusUpdated {
-            status: Some(initial_status),
+            status: Some(Box::new(initial_status)),
         });
 
         let mut buf = [0u8; 1500];
@@ -610,7 +610,7 @@ impl RaService {
             debug!("Next periodic RA in {:.1}s", interval.as_secs_f64());
             let status = state.build_status(cfg, ctx.lctx, Some(*next_ra_at));
             let _ = ctx.lctx.apply(DeviceUpdate::RaStatusUpdated {
-                status: Some(status),
+                status: Some(Box::new(status)),
             });
         }
     }
@@ -701,7 +701,7 @@ impl RaService {
 
                         let status = state.build_status(cfg, ctx.lctx, Some(next_ra_at));
                         let _ = ctx.lctx.apply(DeviceUpdate::RaStatusUpdated {
-                            status: Some(status),
+                            status: Some(Box::new(status)),
                         });
                     }
                 }
@@ -966,7 +966,7 @@ mod tests {
         };
         let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
             ifindex: 1,
-            state: initial_iface,
+            state: Box::new(initial_iface),
         });
 
         // 3. Initialize RaState and run the check
@@ -992,7 +992,7 @@ mod tests {
         };
         let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
             ifindex: 1,
-            state: rotated_iface,
+            state: Box::new(rotated_iface),
         });
 
         // Get the updated interface state

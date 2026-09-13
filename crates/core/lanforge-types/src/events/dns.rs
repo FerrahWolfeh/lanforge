@@ -2,6 +2,7 @@
 use std::net::IpAddr;
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use crate::network::QueryLogEntry;
 
@@ -21,7 +22,7 @@ pub enum DnsEvent {
     #[cfg(feature = "adblock")]
     QueryBlocked { src_addr: IpAddr, domain: String },
     /// A DNS query was resolved.
-    QueryResolved(QueryLogEntry),
+    QueryResolved(Arc<QueryLogEntry>),
     /// Flush the DNS cache.
     #[default]
     CacheFlush,

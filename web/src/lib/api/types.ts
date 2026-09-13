@@ -343,6 +343,8 @@ export interface DeviceEntry {
 	class: string;
 	iface?: string | null;
 	vlan_id?: number | null;
+	ignore_dns_log?: boolean;
+	ignored_log_domains?: string[];
 }
 
 export interface DevicesMeta {
@@ -387,6 +389,8 @@ export interface HostConfigEntry {
 	v4_fixed?: string | null;
 	v6_suffix?: string | null;
 	origin?: 'Static' | 'Dynamic' | 'System' | string;
+	ignore_dns_log?: boolean;
+	ignored_log_domains?: string[];
 }
 
 export type LeaseKind = 'v4' | 'v6' | 'v6_prefix';

@@ -11,8 +11,10 @@
 	import ClockIcon from "@lucide/svelte/icons/clock";
 	import LaptopIcon from "@lucide/svelte/icons/laptop";
 	import GaugeIcon from "@lucide/svelte/icons/gauge";
+	import EyeOffIcon from "@lucide/svelte/icons/eye-off";
+	import BellOffIcon from "@lucide/svelte/icons/bell-off";
 	import { toast } from "svelte-sonner";
-	import { dnsBlock, dnsAllow, dnsQuery } from "$lib/api/client";
+	import { dnsBlock, dnsAllow, dnsQuery, hostSet } from "$lib/api/client";
 	import type { DnsQueryLogEntry } from "$lib/api/types";
 
 	let {
@@ -133,12 +135,51 @@
 		open = false;
 	}
 
+	async function handleSilenceDomainForClient() {
+		if (!entry || !entry.src_mac) return;
+		actionLoading = true;
+		const dom = cleanDomain(entry.domain);
+		try {
+			await hostSet(entry.src_mac, "add_ignored_log_domain", dom);
+			toast.success(`Silenced ${dom} in logs for ${entry.src_hostname || entry.src_mac}`);
+			open = false;
+		} catch (err: any) {
+			toast.error(err?.message ?? "Failed to silence domain for this client");
+		} finally {
+			actionLoading = false;
+		}
+	}
+
+	async function handleSilenceClientEntirely() {
+		if (!entry || !entry.src_mac) return;
+		actionLoading = true;
+		try {
+			await hostSet(entry.src_mac, "ignore_dns_log", "true");
+			toast.success(`Silenced all DNS logs for ${entry.src_hostname || entry.src_mac}`);
+			open = false;
+		} catch (err: any) {
+			toast.error(err?.message ?? "Failed to silence client in logs");
+		} finally {
+			actionLoading = false;
+		}
+	}
+
 	const domainClean = $derived(entry ? cleanDomain(entry.domain) : "");
 	const answerClean = $derived(entry ? cleanAnswer(entry.answer) : "");
 	const clientLabel = $derived.by(() => {
 		if (!entry) return "—";
 		if (entry.src_hostname) return `${entry.src_hostname} (${entry.src_ip})`;
 		return entry.src_ip;
+	});
+	const isCachedBlock = $derived.by(() => {
+		if (!entry) return false;
+		const r = entry.result.toLowerCase();
+		return (
+			r === "cachedblock" ||
+			r === "cached_block" ||
+			(entry.cached && (r.includes("block") || r.includes("deny"))) ||
+			(r.includes("cached") && r.includes("block"))
+		);
 	});
 </script>
 
@@ -225,10 +266,16 @@
 							<div class="flex flex-wrap items-center gap-2 min-w-0 flex-1">
 								<Badge
 									variant="outline"
-									class="text-[11px] font-mono border font-medium uppercase shrink-0 {entry.result.toLowerCase().includes('block') ? 'bg-rose-500/10 text-rose-500 border-rose-500/20' : entry.cached ? 'bg-blue-500/10 text-blue-500 border-blue-500/20' : 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'}"
+									class="text-[11px] font-mono border font-medium uppercase shrink-0 {isCachedBlock
+										? 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20'
+										: entry.result.toLowerCase().includes('block')
+											? 'bg-rose-500/10 text-rose-500 border-rose-500/20'
+											: entry.cached
+												? 'bg-blue-500/10 text-blue-500 border-blue-500/20'
+												: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'}"
 								>
-									{entry.result}
-									{#if entry.cached}
+									{isCachedBlock ? "CachedBlock" : entry.result}
+									{#if entry.cached && !isCachedBlock}
 										(Cached)
 									{/if}
 								</Badge>
@@ -318,6 +365,38 @@
 						</Button>
 					</div>
 				</div>
+
+				<!-- Log Noise Suppression (Device-targeted) -->
+				{#if entry.src_mac}
+					<div class="rounded-lg border p-3 bg-muted/20 space-y-2">
+						<span class="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block">
+							Log Noise Suppression ({entry.src_hostname || entry.src_mac})
+						</span>
+						<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+							<Button
+								variant="outline"
+								size="sm"
+								class="h-8 text-xs justify-start gap-1.5"
+								disabled={actionLoading}
+								onclick={handleSilenceDomainForClient}
+							>
+								<EyeOffIcon class="h-3.5 w-3.5 text-purple-400" />
+								<span class="truncate">Silence domain for client</span>
+							</Button>
+
+							<Button
+								variant="outline"
+								size="sm"
+								class="h-8 text-xs justify-start gap-1.5"
+								disabled={actionLoading}
+								onclick={handleSilenceClientEntirely}
+							>
+								<BellOffIcon class="h-3.5 w-3.5 text-purple-400" />
+								<span class="truncate">Mute all logs from client</span>
+							</Button>
+						</div>
+					</div>
+				{/if}
 
 				<!-- Test Query Output Drawer -->
 				{#if testQueryResult}

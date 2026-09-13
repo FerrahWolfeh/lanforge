@@ -38,6 +38,10 @@ pub struct StaticEntry {
     pub v6_suffix: Option<Ipv6AddrOrSuffix>,
     pub boot_file: Option<String>,
     pub origin: Origin,
+    #[serde(default)]
+    pub ignore_dns_log: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignored_log_domains: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -132,7 +136,15 @@ pub enum DeviceUpdate {
     },
     CliHostUpdated {
         mac: MacAddr,
-        update: CliHostUpdate,
+        update: Box<CliHostUpdate>,
+    },
+    IgnoreDnsLogSet {
+        mac: MacAddr,
+        ignore: bool,
+    },
+    IgnoredLogDomainsSet {
+        mac: MacAddr,
+        domains: Vec<String>,
     },
     HostRemoved {
         mac: MacAddr,
@@ -153,7 +165,7 @@ pub enum DeviceUpdate {
     },
     InterfaceIpsChanged {
         ifindex: u32,
-        state: InterfaceState,
+        state: Box<InterfaceState>,
     },
     PruneZombies,
     RebuildDnsIndices,
@@ -175,7 +187,7 @@ pub enum DeviceUpdate {
         origin: TransientOrigin,
     },
     AddReverseResolver {
-        resolver: DnsReverseResolver,
+        resolver: Box<DnsReverseResolver>,
     },
     RemoveReverseResolver {
         subnet: IpSubnet,
@@ -202,10 +214,10 @@ pub enum DeviceUpdate {
         utilization_percent: f32,
     },
     PppoeStatusUpdated {
-        status: Option<crate::system::PppoeStatusResponse>,
+        status: Option<Box<crate::system::PppoeStatusResponse>>,
     },
     RaStatusUpdated {
-        status: Option<crate::system::RaStatusResponse>,
+        status: Option<Box<crate::system::RaStatusResponse>>,
     },
 }
 

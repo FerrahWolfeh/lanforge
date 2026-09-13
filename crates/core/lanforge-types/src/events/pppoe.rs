@@ -3,18 +3,21 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PppoeSessionUp {
+    pub interface: String,
+    pub ac_mac: Option<MacAddr>,
+    pub ac_name: Option<String>,
+    pub session_id: u16,
+    pub mru: u16,
+    pub ipv4: Option<Ipv4Addr>,
+    pub ipv4_peer: Option<Ipv4Addr>,
+    pub dns: Vec<IpAddr>,
+    pub ipv6_link_local: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum PppoeEvent {
-    SessionUp {
-        interface: String,
-        ac_mac: Option<MacAddr>,
-        ac_name: Option<String>,
-        session_id: u16,
-        mru: u16,
-        ipv4: Option<Ipv4Addr>,
-        ipv4_peer: Option<Ipv4Addr>,
-        dns: Vec<IpAddr>,
-        ipv6_link_local: bool,
-    },
+    SessionUp(Box<PppoeSessionUp>),
     SessionDown {
         reason: String,
     },

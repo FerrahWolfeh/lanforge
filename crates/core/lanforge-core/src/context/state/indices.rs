@@ -34,11 +34,14 @@ impl Indices {
 
     pub fn index_device(&mut self, mac: MacAddr, dev: &Device) {
         if !dev.hostname.name.is_empty() {
-            self.name_index
-                .insert(dev.hostname.name.to_ascii_lowercase(), mac);
+            let key = if dev.hostname.name.bytes().any(|b| b.is_ascii_uppercase()) {
+                dev.hostname.name.to_ascii_lowercase()
+            } else {
+                dev.hostname.name.clone()
+            };
+            self.name_index.insert(key, mac);
         }
-        self.name_index
-            .insert(dev.dns_fallback.to_ascii_lowercase(), mac);
+        self.name_index.insert(dev.dns_fallback.clone(), mac);
 
         if let Some(duid) = &dev.duid {
             self.duid_index.insert(duid.clone(), mac);
@@ -59,11 +62,14 @@ impl Indices {
 
     pub fn unindex_device(&mut self, dev: &Device) {
         if !dev.hostname.name.is_empty() {
-            self.name_index
-                .remove(&dev.hostname.name.to_ascii_lowercase());
+            if dev.hostname.name.bytes().any(|b| b.is_ascii_uppercase()) {
+                self.name_index
+                    .remove(&dev.hostname.name.to_ascii_lowercase());
+            } else {
+                self.name_index.remove(dev.hostname.name.as_str());
+            }
         }
-        self.name_index
-            .remove(&dev.dns_fallback.to_ascii_lowercase());
+        self.name_index.remove(dev.dns_fallback.as_str());
 
         if let Some(duid) = &dev.duid {
             self.duid_index.remove(duid);

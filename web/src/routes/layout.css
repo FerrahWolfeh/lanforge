@@ -29,12 +29,12 @@
 	--chart-3: oklch(0.596 0.145 163.225);
 	--chart-4: oklch(0.508 0.118 165.612);
 	--chart-5: oklch(0.432 0.095 166.913);
-	--radius: 0rem;
+	--radius: 0.625rem;
 	--sidebar: oklch(0.985 0 0);
 	--sidebar-foreground: oklch(0.145 0 0);
 	--sidebar-primary: oklch(0.511 0.262 276.966);
 	--sidebar-primary-foreground: oklch(0.962 0.018 272.314);
-	--sidebar-accent: oklch(0.97 0 0);
+	--sidebar-accent: oklch(0.95 0 0);
 	--sidebar-accent-foreground: oklch(0.205 0 0);
 	--sidebar-border: oklch(0.922 0 0);
 	--sidebar-ring: oklch(0.708 0 0);
@@ -47,8 +47,8 @@
 	--card-foreground: oklch(0.985 0 0);
 	--popover: oklch(0.205 0 0);
 	--popover-foreground: oklch(0.985 0 0);
-	--primary: oklch(0.398 0.195 277.366);
-	--primary-foreground: oklch(0.962 0.018 272.314);
+	--primary: oklch(0.58 0.22 277);
+	--primary-foreground: oklch(0.985 0 0);
 	--secondary: oklch(0.274 0.006 286.033);
 	--secondary-foreground: oklch(0.985 0 0);
 	--muted: oklch(0.269 0 0);
@@ -64,11 +64,11 @@
 	--chart-3: oklch(0.596 0.145 163.225);
 	--chart-4: oklch(0.508 0.118 165.612);
 	--chart-5: oklch(0.432 0.095 166.913);
-	--sidebar: oklch(0.205 0 0);
+	--sidebar: oklch(0.185 0 0);
 	--sidebar-foreground: oklch(0.985 0 0);
 	--sidebar-primary: oklch(0.585 0.233 277.117);
 	--sidebar-primary-foreground: oklch(0.962 0.018 272.314);
-	--sidebar-accent: oklch(0.269 0 0);
+	--sidebar-accent: oklch(0.24 0 0);
 	--sidebar-accent-foreground: oklch(0.985 0 0);
 	--sidebar-border: oklch(1 0 0 / 10%);
 	--sidebar-ring: oklch(0.556 0 0);
@@ -120,10 +120,32 @@
 	* {
 		@apply border-border outline-ring/50;
 	}
-	body {
-		@apply bg-background text-foreground;
-	}
 	html {
 		@apply font-sans;
+		-webkit-font-smoothing: antialiased;
+		-moz-osx-font-smoothing: grayscale;
+		text-rendering: optimizeLegibility;
 	}
+	body {
+		@apply bg-background text-foreground;
+		overscroll-behavior-y: none;
+	}
+}
+
+/* GPU & Compositor performance hints for buttery-smooth 60/120fps animations */
+.gpu-accelerated {
+	transform: translateZ(0);
+	backface-visibility: hidden;
+}
+
+.sidebar-compositor {
+	will-change: width;
+	transform: translateZ(0);
+	backface-visibility: hidden;
+}
+
+.page-content-compositor {
+	will-change: transform, opacity;
+	transform: translateZ(0);
+	backface-visibility: hidden;
 }

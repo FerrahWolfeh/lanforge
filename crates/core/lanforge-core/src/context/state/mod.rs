@@ -11,7 +11,7 @@ pub mod tests;
 
 use crate::bus::{AdminChange, DeviceEvent, LanforgeEvent, NetworkChange};
 use lanforge_types::device::{
-    Device, DeviceClass, DeviceStatus, Ipv6AddrOrSuffix, Origin, TransientHost,
+    Device, DeviceClass, DeviceStatus, IPv6State, Ipv6AddrOrSuffix, Origin, TransientHost,
 };
 use lanforge_types::events::EventVec;
 use lanforge_types::identifiers::{Duid, MacAddr};
@@ -76,7 +76,13 @@ impl State {
                 self.handle_duid_associated(mac, duid, iaid)
             }
             DeviceUpdate::CliHostUpdated { mac, update } => {
-                self.handle_cli_host_updated(mac, update)
+                self.handle_cli_host_updated(mac, *update)
+            }
+            DeviceUpdate::IgnoreDnsLogSet { mac, ignore } => {
+                self.handle_ignore_dns_log_set(mac, ignore)
+            }
+            DeviceUpdate::IgnoredLogDomainsSet { mac, domains } => {
+                self.handle_ignored_log_domains_set(mac, domains)
             }
             DeviceUpdate::HostRemoved { mac }
             | DeviceUpdate::Remove(mac)
@@ -101,7 +107,7 @@ impl State {
                 origin,
             } => self.handle_transient_host_resolved(ip, hostname, origin),
             DeviceUpdate::AddReverseResolver { resolver } => {
-                self.handle_add_reverse_resolver(resolver)
+                self.handle_add_reverse_resolver(*resolver)
             }
             DeviceUpdate::RemoveReverseResolver { subnet } => {
                 self.handle_remove_reverse_resolver(subnet)
@@ -137,6 +143,8 @@ pub struct State {
     pub transient_hosts: HashMap<IpAddr, TransientHost>,
     #[serde(skip)]
     pub reverse_resolvers: Vec<DnsReverseResolver>,
+    #[serde(skip)]
+    pub static_registry: Arc<StaticRegistry>,
 }
 
 impl State {
@@ -148,16 +156,54 @@ impl State {
         }
     }
 
+    #[must_use]
+    pub fn active_ula_prefix(&self) -> Option<Ipv6Addr> {
+        self.interfaces
+            .interface_ips
+            .values()
+            .find_map(|i| i.ula)
+            .or_else(|| self.interfaces.ra_status.as_ref().and_then(|ra| ra.active_ula_prefix))
+    }
+
+    #[must_use]
+    pub fn active_gua_prefix(&self) -> Option<Ipv6Addr> {
+        self.interfaces
+            .interface_ips
+            .values()
+            .find_map(|i| i.gua)
+            .or_else(|| self.interfaces.ra_status.as_ref().and_then(|ra| ra.active_gua_prefix))
+    }
+
     pub fn index_device(&mut self, mac: MacAddr, dev: &Device) {
         if self.indexing_enabled || dev.is_static() {
             self.indices.index_device(mac, dev);
+            let ula_prefix = self.active_ula_prefix();
+            let gua_prefix = self.active_gua_prefix();
+
+            for state in &dev.v6 {
+                if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(suf), _) = state {
+                    for prefix in [ula_prefix, gua_prefix].into_iter().flatten() {
+                        let full_ip = suf.resolve(prefix);
+                        self.indices.ip_index.insert(IpAddr::V6(full_ip), mac);
+                    }
+                }
+            }
         }
     }
 
     pub fn unindex_device(&mut self, dev: &Device) {
-        // We always allow unindexing to be safe, but we can also gate it if we want.
-        // Usually it's better to always unindex to avoid stale entries.
         self.indices.unindex_device(dev);
+        let ula_prefix = self.active_ula_prefix();
+        let gua_prefix = self.active_gua_prefix();
+
+        for state in &dev.v6 {
+            if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(suf), _) = state {
+                for prefix in [ula_prefix, gua_prefix].into_iter().flatten() {
+                    let full_ip = suf.resolve(prefix);
+                    self.indices.ip_index.remove(&IpAddr::V6(full_ip));
+                }
+            }
+        }
     }
 
     // --- Getters ---
@@ -183,8 +229,8 @@ impl State {
     #[must_use]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn get_by_ip(&self, ip: &IpAddr) -> Option<Arc<Device>> {
-        let mac = self.indices.ip_index.get(&ip.to_canonical())?;
-        self.devices.get(mac).cloned()
+        let mac = self.get_mac_by_ip(*ip)?;
+        self.devices.get(&mac).cloned()
     }
 
     #[must_use]
@@ -200,11 +246,61 @@ impl State {
 
     #[must_use]
     pub fn get_mac_by_ip(&self, ip: IpAddr) -> Option<MacAddr> {
-        self.indices.ip_index.get(&ip.to_canonical()).copied()
+        let canonical = ip.to_canonical();
+        if let Some(mac) = self.indices.ip_index.get(&canonical).copied() {
+            return Some(mac);
+        }
+
+        match canonical {
+            IpAddr::V4(v4) => {
+                if let Some(mac) = self.static_registry.v4.get(&v4) {
+                    return Some(*mac);
+                }
+            }
+            IpAddr::V6(v6) => {
+                // 1. Check discovery NDP cache
+                if let Some((mac, _)) = self.discovery.ndp_cache.get(&v6) {
+                    return Some(*mac);
+                }
+
+                // 2. Check static entries (v6_suffix)
+                for (suf, mac) in &self.static_registry.v6 {
+                    if suf.matches(v6) {
+                        return Some(*mac);
+                    }
+                }
+
+                // 3. Check devices' v6 states
+                for dev in self.devices.values() {
+                    for state in &dev.v6 {
+                        match state {
+                            IPv6State::Static(suf, _) => {
+                                if suf.matches(v6) {
+                                    return Some(dev.mac);
+                                }
+                            }
+                            IPv6State::Slaac(addr, _)
+                            | IPv6State::LinkLocal(addr, _)
+                            | IPv6State::Discovery(addr, _) => {
+                                if *addr == v6 {
+                                    return Some(dev.mac);
+                                }
+                            }
+                            IPv6State::Dynamic(lease) => {
+                                if lease.ip == v6 {
+                                    return Some(dev.mac);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
     }
 
-    #[must_use]
-    pub fn get_static_registry(&self) -> StaticRegistry {
+    pub fn rebuild_static_registry(&mut self) {
         let mut registry = StaticRegistry::default();
         let mut entries: Vec<_> = self.static_entries.values().collect();
         entries.sort_by_key(|e| e.mac); // Stable order
@@ -217,7 +313,12 @@ impl State {
                 registry.v6.entry(*v6).or_insert(entry.mac);
             }
         }
-        registry
+        self.static_registry = Arc::new(registry);
+    }
+
+    #[must_use]
+    pub fn get_static_registry(&self) -> Arc<StaticRegistry> {
+        self.static_registry.clone()
     }
 
     #[must_use]
@@ -255,6 +356,7 @@ impl State {
 
     pub fn add_static_entry(&mut self, mac: MacAddr, entry: StaticEntry) {
         self.static_entries.insert(mac, entry);
+        self.rebuild_static_registry();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -270,7 +372,7 @@ impl State {
     ) {
         self.apply_update(DeviceUpdate::CliHostUpdated {
             mac,
-            update: CliHostUpdate {
+            update: Box::new(CliHostUpdate {
                 hostname: hostname.into(),
                 duid: duid.into(),
                 v4_static: v4_static.into(),
@@ -279,14 +381,14 @@ impl State {
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,
                 origin,
-            },
+            }),
         });
     }
 
     pub fn insert_device(&mut self, mac: MacAddr, dev: Device) {
         let dev = Arc::new(dev);
         self.unindex_device(&dev);
-        self.indices.index_device(mac, &dev);
+        self.index_device(mac, &dev);
         self.devices.insert(mac, dev);
     }
 
@@ -299,8 +401,18 @@ impl State {
 
     pub fn rebuild_indices(&mut self) {
         self.indices.clear();
+        let ula_prefix = self.active_ula_prefix();
+        let gua_prefix = self.active_gua_prefix();
         for (mac, dev) in &self.devices {
             self.indices.index_device(*mac, dev);
+            for state in &dev.v6 {
+                if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(suf), _) = state {
+                    for prefix in [ula_prefix, gua_prefix].into_iter().flatten() {
+                        let full_ip = suf.resolve(prefix);
+                        self.indices.ip_index.insert(IpAddr::V6(full_ip), *mac);
+                    }
+                }
+            }
         }
     }
 
@@ -454,6 +566,15 @@ impl State {
         events
     }
 
+    pub fn promote_device_to_index(&mut self, mac: MacAddr) {
+        if let Some(dev) = self.devices.get(&mac).cloned() {
+            let prev_enabled = self.indexing_enabled;
+            self.indexing_enabled = true;
+            self.index_device(mac, &dev);
+            self.indexing_enabled = prev_enabled;
+        }
+    }
+
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn find_mac_by_hostname_jit(
         &mut self,
@@ -462,29 +583,26 @@ impl State {
     ) -> Option<MacAddr> {
         let now = SystemTime::now();
 
-        let found = self.devices.iter().find(|(_, dev)| {
+        let found_mac = self.devices.iter().find_map(|(mac, dev)| {
             if let (Some(threshold), Ok(elapsed)) =
                 (last_seen_threshold, now.duration_since(dev.last_seen))
                 && elapsed > threshold
             {
-                return false;
+                return None;
             }
 
-            dev.hostname.name.eq_ignore_ascii_case(hostname)
+            if dev.hostname.name.eq_ignore_ascii_case(hostname)
                 || dev.dns_fallback.eq_ignore_ascii_case(hostname)
+            {
+                Some(*mac)
+            } else {
+                None
+            }
         });
 
-        if let Some((mac, dev)) = found {
-            let mac = *mac;
-            let dev = dev.clone();
-            let prev_enabled = self.indexing_enabled;
-            self.indexing_enabled = true;
-            self.index_device(mac, &dev);
-            self.indexing_enabled = prev_enabled;
-            return Some(mac);
-        }
-
-        None
+        found_mac.inspect(|&mac| {
+            self.promote_device_to_index(mac);
+        })
     }
 }
 

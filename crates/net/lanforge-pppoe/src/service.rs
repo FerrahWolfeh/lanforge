@@ -232,24 +232,26 @@ impl PppoeService {
             };
 
             let _ = self.ctx.apply(DeviceUpdate::PppoeStatusUpdated {
-                status: Some(pppoe_status),
+                status: Some(Box::new(pppoe_status)),
             });
 
             // 7. Publish SessionUp event and signal service readiness
             let _ = self
                 .ctx
                 .bus()
-                .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp {
-                    interface: interface_name.clone(),
-                    ac_mac: Some(disc_res.ac_mac),
-                    ac_name: disc_res.ac_name.clone(),
-                    session_id: disc_res.session_id,
-                    mru: lcp_res.mru,
-                    ipv4: ipcp_res.local_ip,
-                    ipv4_peer: ipcp_res.peer_ip,
-                    dns: ipcp_res.dns,
-                    ipv6_link_local: ipcp_res.local_v6_ll.is_some(),
-                }));
+                .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(
+                    lanforge_types::events::PppoeSessionUp {
+                        interface: interface_name.clone(),
+                        ac_mac: Some(disc_res.ac_mac),
+                        ac_name: disc_res.ac_name.clone(),
+                        session_id: disc_res.session_id,
+                        mru: lcp_res.mru,
+                        ipv4: ipcp_res.local_ip,
+                        ipv4_peer: ipcp_res.peer_ip,
+                        dns: ipcp_res.dns,
+                        ipv6_link_local: ipcp_res.local_v6_ll.is_some(),
+                    },
+                ))));
 
             // Signal supervisor that PPPoE WAN interface is UP and ready
             self.ctx.set_pppoe_ready(true);

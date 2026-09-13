@@ -394,7 +394,7 @@ mod tests {
         // Simulate reserved IP in global context
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(99),
-            update: CliHostUpdate {
+            update: Box::new(CliHostUpdate {
                 hostname: FieldUpdate::Set("test".to_string()),
                 duid: FieldUpdate::NoChange,
                 v4_static: FieldUpdate::Set(reserved_ip),
@@ -403,7 +403,7 @@ mod tests {
                 boot_file: FieldUpdate::NoChange,
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,
-            },
+            }),
         });
 
         p.decline(declined_ip);
@@ -548,7 +548,7 @@ mod tests {
         let static_outside_ip = Ipv4Addr::new(192, 168, 0, 10);
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(2),
-            update: CliHostUpdate {
+            update: Box::new(CliHostUpdate {
                 hostname: FieldUpdate::Set("nas".to_string()),
                 duid: FieldUpdate::NoChange,
                 v4_static: FieldUpdate::Set(static_outside_ip),
@@ -557,7 +557,7 @@ mod tests {
                 boot_file: FieldUpdate::NoChange,
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,
-            },
+            }),
         });
 
         // Allocate MUST honor static lease even outside pool

@@ -55,7 +55,7 @@ where
 
 pub fn deserialize_seen_v4<'de, D>(
     deserializer: D,
-) -> Result<SmallVec<[(Ipv4Addr, SystemTime); 4]>, D::Error>
+) -> Result<SmallVec<[(Ipv4Addr, SystemTime); 2]>, D::Error>
 where
     D: Deserializer<'de>,
 {

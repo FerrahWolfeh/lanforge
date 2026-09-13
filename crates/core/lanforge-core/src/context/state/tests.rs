@@ -357,7 +357,7 @@ fn test_cli_host_updated_sync() {
     // 2. Update via CLI (Hostname + Static V4)
     let changed = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        update: CliHostUpdate {
+        update: Box::new(CliHostUpdate {
             hostname: FieldUpdate::Set("cli-host".to_string()),
             duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::Set("192.168.1.10".parse().unwrap()),
@@ -366,7 +366,7 @@ fn test_cli_host_updated_sync() {
             boot_file: FieldUpdate::NoChange,
             dns_fallback: FieldUpdate::NoChange,
             class: FieldUpdate::NoChange,
-        },
+        }),
     });
 
     assert!(changed);
@@ -394,7 +394,7 @@ fn test_cli_host_updated_sync() {
     // 4. Partial update (Only hostname)
     let changed = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        update: CliHostUpdate {
+        update: Box::new(CliHostUpdate {
             hostname: FieldUpdate::Set("new-name".to_string()),
             duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::NoChange, // No change
@@ -403,7 +403,7 @@ fn test_cli_host_updated_sync() {
             boot_file: FieldUpdate::NoChange,
             dns_fallback: FieldUpdate::NoChange,
             class: FieldUpdate::NoChange,
-        },
+        }),
     });
 
     assert!(changed);
@@ -738,24 +738,24 @@ fn test_primary_v6_priority() {
     );
 
     // 4. Dynamic GUA > SLAAC ULA
-    dev.v6.push(IPv6State::Dynamic(V6Lease {
+    dev.v6.push(IPv6State::Dynamic(Box::new(V6Lease {
         ip: lease_gua,
         iaid: 1,
         expires: SystemTime::now(),
         last_seen: SystemTime::now(),
-    }));
+    })));
     assert_eq!(
         dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
         Some(lease_gua)
     );
 
     // 3. Dynamic ULA > Dynamic GUA
-    dev.v6.push(IPv6State::Dynamic(V6Lease {
+    dev.v6.push(IPv6State::Dynamic(Box::new(V6Lease {
         ip: lease_ula,
         iaid: 2,
         expires: SystemTime::now(),
         last_seen: SystemTime::now(),
-    }));
+    })));
     assert_eq!(
         dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
         Some(lease_ula)
@@ -905,7 +905,7 @@ fn test_handle_ip_offline_static_ula_persistence() {
     // 1. Add device with Static ULA and SLAAC
     let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        update: CliHostUpdate {
+        update: Box::new(CliHostUpdate {
             hostname: FieldUpdate::NoChange,
             duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::NoChange,
@@ -917,7 +917,7 @@ fn test_handle_ip_offline_static_ula_persistence() {
             boot_file: FieldUpdate::NoChange,
             dns_fallback: FieldUpdate::NoChange,
             class: FieldUpdate::NoChange,
-        },
+        }),
     });
 
     let _ = ctx.apply(DeviceUpdate::SlaacObserved {
@@ -1118,7 +1118,7 @@ fn test_hostname_origin_priority() {
     // 3. CLI update overrides MDNS hint (Static > Mdns)
     let changed = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        update: CliHostUpdate {
+        update: Box::new(CliHostUpdate {
             hostname: FieldUpdate::Set("static-host".to_string()),
             duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::NoChange,
@@ -1127,7 +1127,7 @@ fn test_hostname_origin_priority() {
             boot_file: FieldUpdate::NoChange,
             dns_fallback: FieldUpdate::NoChange,
             class: FieldUpdate::NoChange,
-        },
+        }),
     });
     assert!(changed);
     assert_eq!(ctx.get_device(&mac).unwrap().hostname.name, "static-host");
@@ -1154,7 +1154,7 @@ fn test_apply_v4_lease_ignores_static() {
     // Set static IPv4 configuration
     let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        update: CliHostUpdate {
+        update: Box::new(CliHostUpdate {
             hostname: FieldUpdate::NoChange,
             duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::Set(static_ip),
@@ -1163,7 +1163,7 @@ fn test_apply_v4_lease_ignores_static() {
             boot_file: FieldUpdate::NoChange,
             dns_fallback: FieldUpdate::NoChange,
             class: FieldUpdate::NoChange,
-        },
+        }),
     });
 
     let dev = ctx.get_device(&mac).unwrap();
@@ -1182,4 +1182,54 @@ fn test_apply_v4_lease_ignores_static() {
     assert!(!changed);
     let dev = ctx.get_device(&mac).unwrap();
     assert!(matches!(dev.v4, IPv4State::Static(ip) if ip == static_ip));
+}
+
+
+#[test]
+fn test_get_mac_by_ip_ula_and_suffix_resolution() {
+    let ctx = setup();
+    let mac = MacAddr::parse("11:22:33:44:55:66").unwrap();
+    let suf = Ipv6AddrOrSuffix::parse("::42").unwrap();
+
+    // 1. Add static device with v6_suffix ::42
+    ctx.add_static_device(
+        mac,
+        "my-host".to_string(),
+        None,
+        None,
+        Some(suf),
+        None,
+        Origin::Static,
+    );
+
+    // 2. Set interface ULA prefix
+    let ula_prefix: Ipv6Addr = "fd12:3456:789a:1::".parse().unwrap();
+    let if_state = lanforge_types::update::InterfaceState {
+        ula: Some(ula_prefix),
+        ..Default::default()
+    };
+    let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+        ifindex: 1,
+        state: Box::new(if_state),
+    });
+
+    // 3. Querying the resolved ULA IP fd12:3456:789a:1::42 should hit index
+    let resolved_ula: IpAddr = "fd12:3456:789a:1::42".parse().unwrap();
+    assert_eq!(ctx.get_mac_by_ip(resolved_ula), Some(mac));
+
+    // Device lookup by IP
+    let dev = ctx.get_by_ip(&resolved_ula).unwrap();
+    assert_eq!(dev.mac, mac);
+    assert_eq!(dev.display_hostname(), "my-host");
+
+    // 4. Querying an arbitrary custom ULA with the same suffix ::42 hits the suffix fallback
+    let custom_ula: IpAddr = "fd00:beef:cafe:1::42".parse().unwrap();
+    assert_eq!(ctx.get_mac_by_ip(custom_ula), Some(mac));
+
+    // 5. Querying an IPv6 from NDP cache hits NDP resolution
+    let ndp_ip: Ipv6Addr = "fe80::9999".parse().unwrap();
+    let _ = ctx.apply(DeviceUpdate::NeighborBatch {
+        entries: vec![(mac, IpAddr::V6(ndp_ip), true)],
+    });
+    assert_eq!(ctx.get_mac_by_ip(IpAddr::V6(ndp_ip)), Some(mac));
 }

@@ -358,7 +358,7 @@ async fn execute_log(
                             result: format!("{:?}", q.result),
                             upstream_us: q.upstream_us,
                             cached: q.cached,
-                            answer: q.answer,
+                            answer: q.answer.clone(),
                         };
                         render_dns_log_entry(&entry, client.ascii);
                     }
@@ -389,7 +389,7 @@ async fn execute_log(
                         result: format!("{:?}", q.result),
                         upstream_us: q.upstream_us,
                         cached: q.cached,
-                        answer: q.answer,
+                        answer: q.answer.clone(),
                     };
                     render_dns_log_entry(&entry, client.ascii);
                 }

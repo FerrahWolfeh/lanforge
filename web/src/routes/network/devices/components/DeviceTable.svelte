@@ -32,6 +32,20 @@
 		onPurge?: (mac: string) => void;
 	} = $props();
 
+	import DataTablePagination from "$lib/components/DataTablePagination.svelte";
+
+	let pageIndex = $state(0);
+	let pageSize = $state(15);
+
+	$effect(() => {
+		devices;
+		pageIndex = 0;
+	});
+
+	const paginatedDevices = $derived(
+		devices.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize)
+	);
+
 	function formatLastSeen(ts: string | number | undefined): string {
 		if (!ts) return "—";
 		let ms = typeof ts === "string" ? Date.parse(ts) : ts;
@@ -79,7 +93,7 @@
 		{:else}
 			<!-- Mobile View (< sm): Touch-friendly stacked cards -->
 			<div class="flex flex-col divide-y divide-border/60 sm:hidden">
-				{#each devices as dev (dev.mac)}
+				{#each paginatedDevices as dev (dev.mac)}
 					<div class="p-3.5 flex flex-col gap-2.5 hover:bg-muted/20 transition-colors">
 						<div class="flex items-center justify-between gap-2">
 							<div class="flex items-center gap-2 min-w-0">
@@ -182,7 +196,7 @@
 						</Table.Row>
 					</Table.Header>
 					<Table.Body class="font-mono text-xs">
-						{#each devices as dev (dev.mac)}
+						{#each paginatedDevices as dev (dev.mac)}
 							<Table.Row>
 								<!-- Status -->
 								<Table.Cell class="font-sans">
@@ -298,6 +312,13 @@
 					</Table.Body>
 				</Table.Root>
 			</div>
+
+			<DataTablePagination
+				bind:pageIndex
+				bind:pageSize
+				totalItems={devices.length}
+				itemName="devices"
+			/>
 		{/if}
 	</Card.Content>
 </Card.Root>

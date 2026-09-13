@@ -1,232 +1,187 @@
 <script lang="ts">
-	import * as Sidebar from "$lib/components/ui/sidebar";
-	import * as Tooltip from "$lib/components/ui/tooltip";
-	import * as Collapsible from "$lib/components/ui/collapsible";
-	import { page } from "$app/stores";
+	import { page } from "$app/state";
+	import { sidebarState } from "$lib/stores/sidebar.svelte";
+	import NavUser from "./NavUser.svelte";
+	import type { Component } from "svelte";
+
 	import LayoutDashboardIcon from "@lucide/svelte/icons/layout-dashboard";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
-	import ServerIcon from "@lucide/svelte/icons/server";
-	import NetworkIcon from "@lucide/svelte/icons/network";
 	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
-	import ShieldIcon from "@lucide/svelte/icons/shield";
-	import ListIcon from "@lucide/svelte/icons/list";
-	import DatabaseIcon from "@lucide/svelte/icons/database";
-	import ActivityIcon from "@lucide/svelte/icons/activity";
-	import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
-	import GlobeIcon from "@lucide/svelte/icons/globe";
+	import RadioIcon from "@lucide/svelte/icons/radio";
 	import WifiIcon from "@lucide/svelte/icons/wifi";
 	import PlugZapIcon from "@lucide/svelte/icons/plug-zap";
-	import LockIcon from "@lucide/svelte/icons/lock";
-	import KeyIcon from "@lucide/svelte/icons/key";
-	import SlidersIcon from "@lucide/svelte/icons/sliders";
-	import LayersIcon from "@lucide/svelte/icons/layers";
-	import RadioIcon from "@lucide/svelte/icons/radio";
-	import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
-	import CpuIcon from "@lucide/svelte/icons/cpu";
+	import GlobeIcon from "@lucide/svelte/icons/globe";
+	import ActivityIcon from "@lucide/svelte/icons/activity";
+	import ShieldIcon from "@lucide/svelte/icons/shield";
+	import ServerIcon from "@lucide/svelte/icons/server";
 	import HardDriveDownloadIcon from "@lucide/svelte/icons/hard-drive-download";
+	import LayersIcon from "@lucide/svelte/icons/layers";
+	import DatabaseIcon from "@lucide/svelte/icons/database";
 
-	interface NavItemChild {
-		label: string;
-		href: string;
+	interface Props {
+		onNavigate?: () => void;
 	}
 
 	interface NavItem {
-		label: string;
+		title: string;
 		href: string;
-		icon: any;
-		children?: NavItemChild[];
+		icon: Component<Record<string, unknown>>;
 	}
 
 	interface NavGroup {
-		label: string;
+		header: string;
 		items: NavItem[];
 	}
 
+	let { onNavigate }: Props = $props();
+
+	const currentPath = $derived(page.url.pathname as string);
+	const isCollapsed = $derived(onNavigate ? false : sidebarState.isCollapsed);
+
 	const navGroups: NavGroup[] = [
 		{
-			label: "Overview",
+			header: "OVERVIEW",
 			items: [
-				{ label: "Dashboard", href: "/", icon: LayoutDashboardIcon },
+				{ title: "Dashboard", href: "/", icon: LayoutDashboardIcon },
 			],
 		},
 		{
-			label: "Network",
+			header: "NETWORK",
 			items: [
-				{
-					label: "Devices",
-					href: "/network/devices",
-					icon: MonitorIcon,
-				},
-				{
-					label: "Static Hosts",
-					href: "/network/hosts",
-					icon: BookmarkIcon,
-				},
-				{
-					label: "Discovery & Monitor",
-					href: "/network/discovery",
-					icon: RadioIcon,
-				},
-				{
-					label: "IPv6 RA",
-					href: "/network/ra",
-					icon: WifiIcon,
-				},
-				{
-					label: "PPPoE WAN",
-					href: "/network/pppoe",
-					icon: PlugZapIcon,
-				},
-			],
-		},
-
-		{
-			label: "DNS & Security",
-			items: [
-				{ label: "DNS Resolver", href: "/dns/resolver", icon: GlobeIcon },
-				{ label: "Query Log", href: "/dns/log", icon: ActivityIcon },
-				{ label: "Custom Rewrites", href: "/dns/rewrites", icon: BookmarkIcon },
-				{ label: "Adblock", href: "/dns/adblock", icon: ShieldIcon },
+				{ title: "Devices", href: "/network/devices", icon: MonitorIcon },
+				{ title: "Static Hosts", href: "/network/hosts", icon: BookmarkIcon },
+				{ title: "Discovery & Monitor", href: "/network/discovery", icon: RadioIcon },
+				{ title: "IPv6 RA", href: "/network/ra", icon: WifiIcon },
+				{ title: "PPPoE WAN", href: "/network/pppoe", icon: PlugZapIcon },
 			],
 		},
 		{
-			label: "DHCP & Boot",
+			header: "DNS & SECURITY",
 			items: [
-				{ label: "DHCP Server", href: "/dhcp", icon: ServerIcon },
-				{
-					label: "TFTP Server",
-					href: "/tftp",
-					icon: HardDriveDownloadIcon,
-				},
+				{ title: "DNS Resolver", href: "/dns/resolver", icon: GlobeIcon },
+				{ title: "Query Log", href: "/dns/log", icon: ActivityIcon },
+				{ title: "Custom Rewrites", href: "/dns/rewrites", icon: BookmarkIcon },
+				{ title: "Adblock", href: "/dns/adblock", icon: ShieldIcon },
 			],
 		},
 		{
-			label: "System",
+			header: "DHCP & BOOT",
 			items: [
-				{ label: "Status", href: "/system", icon: ServerIcon },
-				{ label: "Services", href: "/system/services", icon: CpuIcon },
-				{
-					label: "Database",
-					href: "/system/database",
-					icon: DatabaseIcon,
-				},
-				{ label: "Auth & Tokens", href: "/system/auth", icon: KeyIcon },
+				{ title: "DHCP Server", href: "/dhcp/leases", icon: ServerIcon },
+				{ title: "TFTP Server", href: "/tftp", icon: HardDriveDownloadIcon },
+			],
+		},
+		{
+			header: "SYSTEM",
+			items: [
+				{ title: "System Status", href: "/system", icon: ServerIcon },
+				{ title: "Services", href: "/system/services", icon: LayersIcon },
+				{ title: "Database", href: "/system/database", icon: DatabaseIcon },
 			],
 		},
 	];
 
-	function isActive(href: string) {
-		const p = $page.url.pathname;
-		if (href === "/") return p === "/";
-		if (href === "/system") return p === "/system" || p === "/system/";
-		return p === href || p.startsWith(href + "/");
-	}
-
-	function isSubActive(href: string) {
-		const p = $page.url.pathname;
-		if (href === "/dns/resolver") return p === "/dns/resolver" || p === "/dns/resolver/";
-		if (href === "/dns/adblock") return p === "/dns/adblock" || p === "/dns/adblock/";
-		return p === href || p.startsWith(href + "/");
+	function isActive(href: string): boolean {
+		if (href === "/") return currentPath === "/";
+		if (href === "/system") return currentPath === "/system" || currentPath === "/system/";
+		if (href.startsWith("/dhcp")) return currentPath.startsWith("/dhcp");
+		if (href.startsWith("/dns/adblock")) return currentPath.startsWith("/dns/adblock");
+		if (href === "/dns/resolver") return currentPath === "/dns" || currentPath.startsWith("/dns/resolver");
+		return currentPath === href || currentPath.startsWith(href + "/");
 	}
 </script>
 
-<Sidebar.Root collapsible="icon">
-	<Sidebar.Header>
-		<Sidebar.Menu>
-			<Sidebar.MenuItem>
-				<Sidebar.MenuButton size="lg" tooltipContent="Lanforge">
-					{#snippet child({ props })}
+<aside
+	class="sidebar-compositor flex h-full flex-col bg-sidebar text-sidebar-foreground transition-[width] duration-300 ease-in-out overflow-hidden select-none {isCollapsed ? 'w-16' : 'w-64'}"
+>
+	<!-- Brand Header -->
+	<div class="flex h-16 shrink-0 items-center border-b border-sidebar-border/80 px-3 overflow-hidden">
+		<a
+			href="/"
+			class="flex items-center transition-opacity hover:opacity-90 overflow-hidden w-full"
+			onclick={onNavigate}
+			aria-label="Lanforge Home"
+		>
+			<div class="size-10 shrink-0 flex items-center justify-center">
+				<div class="size-8 rounded-xl bg-primary flex items-center justify-center text-primary-foreground shadow-xs">
+					<WifiIcon class="size-4.5" />
+				</div>
+			</div>
+			<div
+				class="flex flex-col leading-tight overflow-hidden whitespace-nowrap transition-[opacity,max-width,transform] duration-300 ease-in-out {isCollapsed
+					? 'opacity-0 max-w-0 pointer-events-none -translate-x-2'
+					: 'opacity-100 max-w-[170px] translate-x-0'}"
+			>
+				<span class="text-sm font-bold tracking-tight text-foreground flex items-center font-sans">
+					Lanforge
+				</span>
+				<span class="text-[10px] text-muted-foreground font-normal">
+					Network Orchestrator
+				</span>
+			</div>
+		</a>
+	</div>
+
+	<!-- Navigation Groups -->
+	<div class="flex-1 overflow-y-auto px-3 py-4 space-y-4">
+		{#each navGroups as group, groupIdx}
+			<div>
+				<!-- Group Header with smooth collapse animation -->
+				<div
+					class="overflow-hidden transition-[opacity,max-height,margin] duration-300 ease-in-out {isCollapsed
+						? 'opacity-0 max-h-0 mb-0 pointer-events-none'
+						: 'opacity-100 max-h-8 mb-1.5 px-2'}"
+				>
+					<div class="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase whitespace-nowrap font-mono">
+						{group.header}
+					</div>
+				</div>
+
+				{#if groupIdx > 0}
+					<div
+						class="transition-[opacity,border-color,margin] duration-300 ease-in-out {isCollapsed
+							? 'my-2 border-t border-sidebar-border/60 mx-1 opacity-100'
+							: 'opacity-0 h-0 border-0 m-0'}"
+					></div>
+				{/if}
+
+				<nav class="space-y-1">
+					{#each group.items as item}
+						{@const active = isActive(item.href)}
+						{@const Icon = item.icon}
+
 						<a
-							href="/"
-							{...props}
-							class={[props.class, "gap-3"].join(" ")}
+							href={item.href}
+							onclick={onNavigate}
+							title={isCollapsed ? item.title : undefined}
+							class="flex items-center h-10 w-full rounded-xl text-xs font-medium overflow-hidden transition-[background-color,color,box-shadow] duration-150 ease-out transform-gpu will-change-[background-color,color] {active
+								? 'bg-primary text-primary-foreground font-semibold shadow-xs'
+								: 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}"
+							aria-label={item.title}
 						>
-							<WifiIcon class="text-primary" />
-							<span class="font-semibold tracking-tight"
-								>Lanforge</span
+							<div class="size-10 shrink-0 flex items-center justify-center">
+								<Icon
+									class="size-4 shrink-0 transition-colors duration-150 ease-out {active
+										? 'text-primary-foreground'
+										: 'text-muted-foreground'}"
+								/>
+							</div>
+							<span
+								class="truncate whitespace-nowrap transition-[opacity,max-width,transform] duration-300 ease-in-out {isCollapsed
+									? 'opacity-0 max-w-0 pointer-events-none -translate-x-2'
+									: 'opacity-100 max-w-[170px] translate-x-0'}"
 							>
+								{item.title}
+							</span>
 						</a>
-					{/snippet}
-				</Sidebar.MenuButton>
-			</Sidebar.MenuItem>
-		</Sidebar.Menu>
-	</Sidebar.Header>
-
-	<Sidebar.Content>
-		{#each navGroups as group (group.label)}
-			<Sidebar.Group>
-				<Sidebar.GroupLabel>{group.label}</Sidebar.GroupLabel>
-				<Sidebar.GroupContent>
-					<Sidebar.Menu>
-						{#each group.items as item (item.href)}
-							{#if item.children}
-								{@const isChildActive = item.children.some((c: NavItemChild) => isSubActive(c.href))}
-								<Collapsible.Root open={isChildActive} class="group/collapsible">
-									<Sidebar.MenuItem>
-										<Collapsible.Trigger class="w-full">
-											{#snippet child({ props })}
-												<Sidebar.MenuButton
-													{...props}
-													isActive={isChildActive}
-													tooltipContent={item.label}
-												>
-													<item.icon />
-													<span>{item.label}</span>
-													<ChevronRightIcon
-														class="ml-auto transition-transform duration-200 group-data-[state=open]/collapsible:rotate-90"
-													/>
-												</Sidebar.MenuButton>
-											{/snippet}
-										</Collapsible.Trigger>
-										<Collapsible.Content>
-											<Sidebar.MenuSub>
-												{#each item.children as sub (sub.href)}
-													<Sidebar.MenuSubItem>
-														<Sidebar.MenuSubButton isActive={isSubActive(sub.href)}>
-															{#snippet child({ props })}
-																<a href={sub.href} {...props}>
-																	<span>{sub.label}</span>
-																</a>
-															{/snippet}
-														</Sidebar.MenuSubButton>
-													</Sidebar.MenuSubItem>
-												{/each}
-											</Sidebar.MenuSub>
-										</Collapsible.Content>
-									</Sidebar.MenuItem>
-								</Collapsible.Root>
-							{:else}
-								<Sidebar.MenuItem>
-									<Sidebar.MenuButton
-										isActive={isActive(item.href)}
-										tooltipContent={item.label}
-									>
-										{#snippet child({ props })}
-											<a href={item.href} {...props}>
-												<item.icon />
-												<span>{item.label}</span>
-											</a>
-										{/snippet}
-									</Sidebar.MenuButton>
-								</Sidebar.MenuItem>
-							{/if}
-						{/each}
-					</Sidebar.Menu>
-				</Sidebar.GroupContent>
-			</Sidebar.Group>
+					{/each}
+				</nav>
+			</div>
 		{/each}
-	</Sidebar.Content>
+	</div>
 
-	<Sidebar.Footer>
-		<Sidebar.Menu>
-			<Sidebar.MenuItem>
-				<Sidebar.MenuButton size="sm">
-					<WifiIcon class="text-muted-foreground" />
-					<span class="text-muted-foreground text-xs">lanforged</span>
-				</Sidebar.MenuButton>
-			</Sidebar.MenuItem>
-		</Sidebar.Menu>
-	</Sidebar.Footer>
-
-	<Sidebar.Rail />
-</Sidebar.Root>
+	<!-- Footer: NavUser with User/Daemon status and Logout -->
+	<div class="border-t border-sidebar-border/80 px-3 py-2 shrink-0 overflow-hidden">
+		<NavUser {onNavigate} />
+	</div>
+</aside>

@@ -161,14 +161,26 @@
 
 		<!-- Dig Query Formatted Output -->
 		{#if digResult}
-			{@const isBlocked = digResult.result === "Blocked" || digResult.result === "CachedBlock"}
+			{@const isCachedBlock =
+				digResult.result === "CachedBlock" ||
+				digResult.result?.toLowerCase() === "cachedblock" ||
+				digResult.result?.toLowerCase() === "cached_block"}
+			{@const isBlocked =
+				isCachedBlock ||
+				digResult.result === "Blocked" ||
+				digResult.result?.toLowerCase().includes("block")}
 			{@const records = Array.isArray(digResult.records) ? digResult.records : []}
 
 			<div class="flex flex-col gap-3 rounded-xl border border-border/70 bg-card p-3.5 shadow-sm mt-1">
 				<!-- Header Status -->
 				<div class="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2.5">
 					<div class="flex items-center gap-2">
-						{#if isBlocked}
+						{#if isCachedBlock}
+							<div class="flex size-6 items-center justify-center rounded-full bg-orange-500/15 text-orange-500">
+								<ShieldAlertIcon class="size-3.5" />
+							</div>
+							<span class="font-semibold text-orange-500 text-xs">Sinkholed (Cached Block)</span>
+						{:else if isBlocked}
 							<div class="flex size-6 items-center justify-center rounded-full bg-rose-500/15 text-rose-500">
 								<ShieldAlertIcon class="size-3.5" />
 							</div>
@@ -194,7 +206,14 @@
 						>
 							{digResult.authoritative ? "Authoritative" : "Non-Authoritative"}
 						</Badge>
-						<Badge variant="secondary" class="h-5 px-1.5 text-[10px]">
+						<Badge
+							variant="secondary"
+							class={isCachedBlock
+								? "h-5 px-1.5 text-[10px] bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/20"
+								: isBlocked
+									? "h-5 px-1.5 text-[10px] bg-rose-500/10 text-rose-500 border border-rose-500/20"
+									: "h-5 px-1.5 text-[10px]"}
+						>
 							{digResult.result || "Resolved"}
 						</Badge>
 					</div>
@@ -202,8 +221,16 @@
 
 				<!-- Blocked Warning -->
 				{#if isBlocked}
-					<div class="rounded-lg border border-rose-500/25 bg-rose-500/10 p-2.5 text-xs text-rose-600 dark:text-rose-400">
-						<p class="font-medium">Domain blocked by Lanforge Adblock.</p>
+					<div
+						class="rounded-lg border p-2.5 text-xs {isCachedBlock
+							? 'border-orange-500/25 bg-orange-500/10 text-orange-600 dark:text-orange-400'
+							: 'border-rose-500/25 bg-rose-500/10 text-rose-600 dark:text-rose-400'}"
+					>
+						<p class="font-medium">
+							{isCachedBlock
+								? "Domain blocked by Lanforge Adblock (served from cache)."
+								: "Domain blocked by Lanforge Adblock."}
+						</p>
 						<p class="text-[11px] opacity-80 mt-0.5">Queries to this domain are intercepted and resolved to 0.0.0.0 or NXDOMAIN by active blocklist rules.</p>
 					</div>
 				{/if}

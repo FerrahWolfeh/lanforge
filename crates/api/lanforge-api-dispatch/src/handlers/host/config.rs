@@ -28,6 +28,8 @@ impl ClientContext {
                         _ => None,
                     }),
                     origin: dev.origin,
+                    ignore_dns_log: dev.ignore_dns_log,
+                    ignored_log_domains: dev.ignored_log_domains.clone(),
                 })
                 .collect()
         });
@@ -65,6 +67,8 @@ impl ClientContext {
         }
         dev.origin = Origin::Static;
         dev.managed_at = Some(SystemTime::now());
+        dev.ignore_dns_log = entry.ignore_dns_log;
+        dev.ignored_log_domains = entry.ignored_log_domains.clone();
 
         // 2. Synchronous database write
         if let Err(e) = self.db.upsert_device(&dev).await {
@@ -81,16 +85,16 @@ impl ClientContext {
         };
         let update = DeviceUpdate::CliHostUpdated {
             mac,
-            update: CliHostUpdate {
+            update: Box::new(CliHostUpdate {
                 hostname: hostname_update,
                 duid: FieldUpdate::NoChange,
                 v4_static: entry.v4_fixed.into(),
                 v6_suffix: entry.v6_suffix.into(),
                 boot_file: FieldUpdate::NoChange,
-                origin: Origin::Static,
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,
-            },
+                origin: Origin::Static,
+            }),
         };
 
         if !self.ctx.apply(update) {
@@ -98,6 +102,14 @@ impl ClientContext {
                 error: "Failed to apply device update in memory".to_string(),
             };
         }
+        let _ = self.ctx.apply(DeviceUpdate::IgnoreDnsLogSet {
+            mac,
+            ignore: entry.ignore_dns_log,
+        });
+        let _ = self.ctx.apply(DeviceUpdate::IgnoredLogDomainsSet {
+            mac,
+            domains: entry.ignored_log_domains,
+        });
 
         Response::Success(SimpleSuccess {
             message: "Host configuration added/updated".to_string(),
@@ -105,16 +117,10 @@ impl ClientContext {
     }
 
     pub async fn handle_host_set(&self, mac: MacAddr, field: String, value: String) -> Response {
-        let dev_arc = match self.ctx.get_device(&mac) {
-            Some(d) => d,
-            None => {
-                return Response::Error {
-                    error: format!("Device not found: {mac}"),
-                };
-            }
+        let mut dev = match self.ctx.get_device(&mac) {
+            Some(d) => (*d).clone(),
+            None => Device::new(mac),
         };
-
-        let mut dev = (*dev_arc).clone();
 
         let mut cli_update = CliHostUpdate {
             hostname: FieldUpdate::NoChange,
@@ -177,6 +183,89 @@ impl ClientContext {
         } else if field == "dns_fallback" {
             dev.dns_fallback = value.clone();
             cli_update.dns_fallback = FieldUpdate::Set(value);
+        } else if field == "ignore_dns_log" {
+            let ign = value.parse::<bool>().unwrap_or(false);
+            dev.ignore_dns_log = ign;
+            dev.origin = Origin::Static;
+            dev.managed_at = Some(SystemTime::now());
+
+            if let Err(e) = self.db.upsert_device(&dev).await {
+                return Response::Error {
+                    error: format!("Database write failed: {e}"),
+                };
+            }
+            let _ = self.ctx.apply(DeviceUpdate::IgnoreDnsLogSet {
+                mac,
+                ignore: ign,
+            });
+            return Response::Success(SimpleSuccess {
+                message: "Host configuration updated".to_string(),
+            });
+        } else if field == "ignored_log_domains" {
+            let domains: Vec<String> = if value.trim().starts_with('[') {
+                serde_json::from_str(&value).unwrap_or_default()
+            } else {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(ToString::to_string)
+                    .collect()
+            };
+            dev.ignored_log_domains.clone_from(&domains);
+            dev.origin = Origin::Static;
+            dev.managed_at = Some(SystemTime::now());
+
+            if let Err(e) = self.db.upsert_device(&dev).await {
+                return Response::Error {
+                    error: format!("Database write failed: {e}"),
+                };
+            }
+            let _ = self.ctx.apply(DeviceUpdate::IgnoredLogDomainsSet {
+                mac,
+                domains,
+            });
+            return Response::Success(SimpleSuccess {
+                message: "Host configuration updated".to_string(),
+            });
+        } else if field == "add_ignored_log_domain" {
+            let dom = value.trim().to_ascii_lowercase();
+            if !dom.is_empty() && !dev.ignored_log_domains.iter().any(|d| d.eq_ignore_ascii_case(&dom)) {
+                dev.ignored_log_domains.push(dom);
+            }
+            dev.origin = Origin::Static;
+            dev.managed_at = Some(SystemTime::now());
+
+            if let Err(e) = self.db.upsert_device(&dev).await {
+                return Response::Error {
+                    error: format!("Database write failed: {e}"),
+                };
+            }
+            let _ = self.ctx.apply(DeviceUpdate::IgnoredLogDomainsSet {
+                mac,
+                domains: dev.ignored_log_domains.clone(),
+            });
+            return Response::Success(SimpleSuccess {
+                message: "Host configuration updated".to_string(),
+            });
+        } else if field == "remove_ignored_log_domain" {
+            let dom = value.trim().to_ascii_lowercase();
+            dev.ignored_log_domains.retain(|d| !d.eq_ignore_ascii_case(&dom));
+            dev.origin = Origin::Static;
+            dev.managed_at = Some(SystemTime::now());
+
+            if let Err(e) = self.db.upsert_device(&dev).await {
+                return Response::Error {
+                    error: format!("Database write failed: {e}"),
+                };
+            }
+            let _ = self.ctx.apply(DeviceUpdate::IgnoredLogDomainsSet {
+                mac,
+                domains: dev.ignored_log_domains.clone(),
+            });
+            return Response::Success(SimpleSuccess {
+                message: "Host configuration updated".to_string(),
+            });
         } else {
             return Response::Error {
                 error: format!("Unknown field: {field}"),
@@ -196,7 +285,7 @@ impl ClientContext {
         // 3. Apply to memory context
         let update = DeviceUpdate::CliHostUpdated {
             mac,
-            update: cli_update,
+            update: Box::new(cli_update),
         };
 
         if !self.ctx.apply(update) {

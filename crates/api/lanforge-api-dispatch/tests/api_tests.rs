@@ -52,7 +52,7 @@ async fn test_host_list_returns_static_and_cli_only() {
     let mac_cli = MacAddr::parse("00:00:00:00:00:01").unwrap();
     let _ = ctx_handle.apply(DeviceUpdate::CliHostUpdated {
         mac: mac_cli,
-        update: CliHostUpdate {
+        update: Box::new(CliHostUpdate {
             duid: FieldUpdate::NoChange,
             hostname: FieldUpdate::Set("cli-host".to_string()),
             v4_static: FieldUpdate::NoChange,
@@ -61,7 +61,7 @@ async fn test_host_list_returns_static_and_cli_only() {
             boot_file: FieldUpdate::NoChange,
             dns_fallback: FieldUpdate::NoChange,
             class: FieldUpdate::NoChange,
-        },
+        }),
     });
 
     // 2. Add a Dynamic device
@@ -76,7 +76,7 @@ async fn test_host_list_returns_static_and_cli_only() {
     let mac_static = MacAddr::parse("00:00:00:00:00:03").unwrap();
     let _ = ctx_handle.apply(DeviceUpdate::CliHostUpdated {
         mac: mac_static,
-        update: CliHostUpdate {
+        update: Box::new(CliHostUpdate {
             duid: FieldUpdate::NoChange,
             hostname: FieldUpdate::Set("static-host".to_string()),
             v4_static: FieldUpdate::Set("192.168.1.5".parse::<Ipv4Addr>().unwrap()),
@@ -85,7 +85,7 @@ async fn test_host_list_returns_static_and_cli_only() {
             boot_file: FieldUpdate::NoChange,
             dns_fallback: FieldUpdate::NoChange,
             class: FieldUpdate::NoChange,
-        },
+        }),
     });
 
     // 4. handle_hosts (called by HostList) should return ONLY CLI and Static

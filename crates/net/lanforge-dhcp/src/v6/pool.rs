@@ -1037,7 +1037,7 @@ mod tests {
         let static_suffix = Ipv6AddrOrSuffix::parse("::cafe").unwrap();
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(1),
-            update: CliHostUpdate {
+            update: Box::new(CliHostUpdate {
                 hostname: FieldUpdate::Set("test".to_string()),
                 duid: FieldUpdate::NoChange,
                 v4_static: FieldUpdate::NoChange,
@@ -1046,7 +1046,7 @@ mod tests {
                 boot_file: FieldUpdate::NoChange,
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,
-            },
+            }),
         });
 
         let ips = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
@@ -1092,7 +1092,7 @@ mod tests {
         // 1. Setup static device
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(1),
-            update: CliHostUpdate {
+            update: Box::new(CliHostUpdate {
                 hostname: FieldUpdate::Set("test".to_string()),
                 duid: FieldUpdate::NoChange,
                 v4_static: FieldUpdate::NoChange,
@@ -1101,7 +1101,7 @@ mod tests {
                 boot_file: FieldUpdate::NoChange,
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,
-            },
+            }),
         });
 
         // 2. Allocate first time
@@ -1235,7 +1235,7 @@ mod tests {
         // 2. Set static suffix later
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(1),
-            update: CliHostUpdate {
+            update: Box::new(CliHostUpdate {
                 hostname: FieldUpdate::Set("test".to_string()),
                 duid: FieldUpdate::NoChange,
                 v4_static: FieldUpdate::NoChange,
@@ -1244,7 +1244,7 @@ mod tests {
                 boot_file: FieldUpdate::NoChange,
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,
-            },
+            }),
         });
 
         // 3. Re-allocate -> must return static address, NOT the sticky dynamic one
@@ -1264,7 +1264,7 @@ mod tests {
         // Setup static device
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac: mac(1),
-            update: CliHostUpdate {
+            update: Box::new(CliHostUpdate {
                 hostname: FieldUpdate::Set("test".to_string()),
                 duid: FieldUpdate::NoChange,
                 v4_static: FieldUpdate::NoChange,
@@ -1273,7 +1273,7 @@ mod tests {
                 boot_file: FieldUpdate::NoChange,
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,
-            },
+            }),
         });
 
         // Allocate -> must return suffix on both ULA and GUA

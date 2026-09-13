@@ -253,6 +253,8 @@ fn handle_tui_key_event(
                                     v4_fixed,
                                     v6_suffix,
                                     origin: Origin::Static,
+                                    ignore_dns_log: false,
+                                    ignored_log_domains: Vec::new(),
                                 };
                                 Some(PendingAction::HostAdd { entry })
                             }
@@ -815,7 +817,7 @@ async fn run_dns_log_stream(client: Arc<LanforgeClient>, tx: mpsc::Sender<AppEve
                                     result: format!("{:?}", q.result),
                                     upstream_us: q.upstream_us,
                                     cached: q.cached,
-                                    answer: q.answer,
+                                    answer: q.answer.clone(),
                                 };
                                 let _ = tx.send(AppEvent::DnsLiveQuery(entry)).await;
                             }
@@ -849,7 +851,7 @@ async fn run_dns_log_stream(client: Arc<LanforgeClient>, tx: mpsc::Sender<AppEve
                             result: format!("{:?}", q.result),
                             upstream_us: q.upstream_us,
                             cached: q.cached,
-                            answer: q.answer,
+                            answer: q.answer.clone(),
                         };
                         let _ = tx.send(AppEvent::DnsLiveQuery(entry)).await;
                     }

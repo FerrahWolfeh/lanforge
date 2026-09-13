@@ -307,11 +307,40 @@ impl State {
                     }),
                     boot_file: dev.boot_file.clone(),
                     origin: update.origin,
+                    ignore_dns_log: dev.ignore_dns_log,
+                    ignored_log_domains: dev.ignored_log_domains.clone(),
                 },
             );
+            self.rebuild_static_registry();
         }
 
         events
+    }
+
+    pub(crate) fn handle_ignore_dns_log_set(&mut self, mac: MacAddr, ignore: bool) -> EventVec {
+        self.mutate_device(mac, |dev| {
+            dev.ignore_dns_log = ignore;
+            None
+        });
+        if let Some(entry) = self.static_entries.get_mut(&mac) {
+            entry.ignore_dns_log = ignore;
+        }
+        EventVec::new()
+    }
+
+    pub(crate) fn handle_ignored_log_domains_set(
+        &mut self,
+        mac: MacAddr,
+        domains: Vec<String>,
+    ) -> EventVec {
+        self.mutate_device(mac, |dev| {
+            dev.ignored_log_domains.clone_from(&domains);
+            None
+        });
+        if let Some(entry) = self.static_entries.get_mut(&mac) {
+            entry.ignored_log_domains = domains;
+        }
+        EventVec::new()
     }
 
     pub(crate) fn handle_host_removed(&mut self, mac: MacAddr) -> EventVec {
@@ -321,6 +350,7 @@ impl State {
                 self.indices.duid_index.remove(duid);
             }
             self.static_entries.remove(&mac);
+            self.rebuild_static_registry();
             return vec![LanforgeEvent::Device(DeviceEvent::Purged { mac })].into();
         }
         EventVec::new()
@@ -434,6 +464,7 @@ impl State {
         .into();
 
         if prefix_changed {
+            self.rebuild_indices();
             events.push(LanforgeEvent::Network(NetworkEvent::PrefixChanged {
                 gua: merged.gua,
                 ula: merged.ula,
@@ -561,6 +592,7 @@ impl State {
     pub(crate) fn handle_reset(&mut self) -> EventVec {
         self.devices.clear();
         self.static_entries.clear();
+        self.rebuild_static_registry();
         self.indices.clear();
         self.discovery.clear();
         self.interfaces.clear();
@@ -765,7 +797,7 @@ impl State {
 
     pub(crate) fn handle_pppoe_status_updated(
         &mut self,
-        status: Option<lanforge_types::system::PppoeStatusResponse>,
+        status: Option<Box<lanforge_types::system::PppoeStatusResponse>>,
     ) -> EventVec {
         self.interfaces.pppoe_status = status;
         EventVec::new()
@@ -773,9 +805,14 @@ impl State {
 
     pub(crate) fn handle_ra_status_updated(
         &mut self,
-        status: Option<lanforge_types::system::RaStatusResponse>,
+        status: Option<Box<lanforge_types::system::RaStatusResponse>>,
     ) -> EventVec {
+        let old_ula = self.interfaces.ra_status.as_ref().and_then(|r| r.active_ula_prefix);
+        let new_ula = status.as_ref().and_then(|r| r.active_ula_prefix);
         self.interfaces.ra_status = status;
+        if old_ula != new_ula {
+            self.rebuild_indices();
+        }
         EventVec::new()
     }
 

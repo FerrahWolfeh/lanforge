@@ -1,20 +1,68 @@
 <script lang="ts">
 	import "./layout.css";
 	import favicon from "$lib/assets/favicon.svg";
+	import { page } from "$app/state";
+	import { fly } from "svelte/transition";
+	import { cubicOut } from "svelte/easing";
+	import { ModeWatcher } from "mode-watcher";
+	import { Toaster } from "$lib/components/ui/sonner";
+	import { auth } from "$lib/stores/auth.svelte";
+	import { sidebarState } from "$lib/stores/sidebar.svelte";
+	import { status } from "$lib/api/client";
 	import AppSidebar from "$lib/components/AppSidebar.svelte";
 	import Topbar from "$lib/components/Topbar.svelte";
-	import * as Sidebar from "$lib/components/ui/sidebar";
-	import { Toaster } from "$lib/components/ui/sonner";
-	import { ModeWatcher } from "mode-watcher";
-	import { auth } from "$lib/stores/auth.svelte";
-	import { status } from "$lib/api/client";
-	import { onMount } from "svelte";
-	import { page } from "$app/stores";
 
 	let { children } = $props();
 	let uptime = $state(0);
 
-	const isAuthPage = $derived($page.url.pathname === "/login" || $page.url.pathname === "/setup");
+	const isAuthPage = $derived(page.url.pathname === "/login" || page.url.pathname === "/setup");
+
+	const tabTitleMap: Record<string, string> = {
+		"/": "Dashboard",
+		"/network/devices": "Devices",
+		"/network/hosts": "Static Hosts",
+		"/network/discovery": "Discovery & Monitor",
+		"/network/ra": "IPv6 RA",
+		"/network/pppoe": "PPPoE",
+		"/dns/resolver": "DNS Resolver",
+		"/dns/log": "Query Log",
+		"/dns/rewrites": "DNS Rewrites",
+		"/dns/adblock": "Adblock",
+		"/dns/adblock/lists": "Adblock Lists",
+		"/dns/adblock/rules": "Adblock Rules",
+		"/dns/adblock/services": "Blocked Services",
+		"/dns/adblock/settings": "Adblock Settings",
+		"/dhcp": "DHCP Server",
+		"/dhcp/leases": "DHCP Leases",
+		"/dhcp/pools": "DHCP Pools",
+		"/dhcp/server": "DHCP Server",
+		"/tftp": "TFTP Server",
+		"/system": "System Status",
+		"/system/services": "Services",
+		"/system/database": "Database",
+		"/system/database/settings": "Storage Settings",
+		"/system/database/maintenance": "Maintenance",
+		"/system/database/backup": "Backups",
+		"/login": "Login",
+		"/setup": "Setup",
+	};
+
+	const currentTabTitle = $derived(
+		tabTitleMap[page.url.pathname]
+			? `${tabTitleMap[page.url.pathname]} — Lanforge`
+			: "Lanforge"
+	);
+
+	function handleKeydown(event: KeyboardEvent) {
+		if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") {
+			const target = event.target as HTMLElement;
+			if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+				return;
+			}
+			event.preventDefault();
+			sidebarState.toggle();
+		}
+	}
 
 	$effect(() => {
 		if (isAuthPage) return;
@@ -38,25 +86,44 @@
 	});
 </script>
 
+<svelte:window onkeydown={handleKeydown} />
+
 <svelte:head>
 	<link rel="icon" href={favicon} />
-	<title>Lanforge</title>
+	<title>{currentTabTitle}</title>
 </svelte:head>
 
 <ModeWatcher defaultMode="system" />
 
 {#if isAuthPage}
-	{@render children()}
+	<main class="min-h-screen w-full bg-background text-foreground">
+		{@render children()}
+	</main>
 {:else}
-	<Sidebar.Provider>
-		<AppSidebar />
-		<Sidebar.Inset>
+	<!-- Main Application Shell (Sidebar Inset Layout) -->
+	<div id="app-shell" class="flex h-screen w-full overflow-hidden bg-sidebar text-sidebar-foreground">
+		<!-- Desktop Sidebar (Permanently mounted and static) -->
+		<div class="hidden lg:flex lg:shrink-0">
+			<AppSidebar />
+		</div>
+
+		<!-- Main Inset Content Area (Floating Elevated Panel Card) -->
+		<div
+			class="flex flex-1 flex-col overflow-hidden min-h-0 lg:my-2.5 lg:mr-2.5 lg:rounded-2xl lg:border lg:border-sidebar-border/80 bg-background text-foreground lg:shadow-xs transition-all duration-300"
+		>
 			<Topbar {uptime} />
-			<main class="flex flex-1 flex-col gap-4 sm:gap-6 p-3 sm:p-6 w-full max-w-full min-w-0 overflow-x-hidden">
-				{@render children()}
+			<main class="flex-1 overflow-y-auto p-3 sm:p-6 flex flex-col min-h-0">
+				{#key page.url.pathname}
+					<div
+						in:fly={{ y: 8, duration: 200, easing: cubicOut }}
+						class="page-content-compositor w-full flex-1 flex flex-col min-h-0"
+					>
+						{@render children()}
+					</div>
+				{/key}
 			</main>
-		</Sidebar.Inset>
-	</Sidebar.Provider>
+		</div>
+	</div>
 {/if}
 
 <Toaster richColors />

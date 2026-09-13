@@ -131,13 +131,13 @@ pub struct Device {
     )]
     pub managed_at: Option<SystemTime>,
     pub v4: IPv4State,
-    pub v6: SmallVec<[IPv6State; 4]>,
-    pub v6_prefixes: SmallVec<[V6PrefixLease; 2]>,
+    pub v6: SmallVec<[IPv6State; 2]>,
+    pub v6_prefixes: Vec<V6PrefixLease>,
     #[serde(
         serialize_with = "serialize_seen_v4",
         deserialize_with = "deserialize_seen_v4"
     )]
-    pub seen_v4: SmallVec<[(Ipv4Addr, SystemTime); 4]>,
+    pub seen_v4: SmallVec<[(Ipv4Addr, SystemTime); 2]>,
     #[serde(
         serialize_with = "serialize_time",
         deserialize_with = "deserialize_time"
@@ -152,6 +152,12 @@ pub struct Device {
     /// Ingress network interface where the device was observed (e.g., "lan0.100").
     #[serde(default)]
     pub iface: Option<String>,
+    /// Whether DNS query logging should be suppressed for this device.
+    #[serde(default)]
+    pub ignore_dns_log: bool,
+    /// Specific domains or wildcards (e.g. `*.sonarr.tv`) to suppress from DNS query logs for this device.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignored_log_domains: Vec<String>,
 }
 
 impl Device {
@@ -167,15 +173,20 @@ impl Device {
             managed_at: None,
             v4: IPv4State::None,
             v6: SmallVec::new(),
-            v6_prefixes: SmallVec::new(),
+            v6_prefixes: Vec::new(),
             seen_v4: SmallVec::new(),
             last_seen: SystemTime::UNIX_EPOCH,
             duid: None,
-            dns_fallback: format!("host-{}", mac.to_string().replace(':', "")).to_ascii_lowercase(),
+            dns_fallback: format!(
+                "host-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                mac.0[0], mac.0[1], mac.0[2], mac.0[3], mac.0[4], mac.0[5]
+            ),
             class: DeviceClass::None,
             status: DeviceStatus::Offline,
             boot_file: None,
             iface: None,
+            ignore_dns_log: false,
+            ignored_log_domains: Vec::new(),
         }
     }
 
@@ -258,8 +269,8 @@ impl Device {
             .find(|s| matches!(s, IPv6State::Dynamic(l) if l.iaid == iaid));
 
         if let Some(IPv6State::Dynamic(lease)) = existing {
-            if lease != &new_lease {
-                *lease = new_lease;
+            if **lease != new_lease {
+                **lease = new_lease;
                 changed = true;
             }
         } else if !self
@@ -267,7 +278,7 @@ impl Device {
             .iter()
             .any(|s| matches!(s, IPv6State::Dynamic(l) if l.ip == ip && l.iaid == iaid))
         {
-            self.v6.push(IPv6State::Dynamic(new_lease));
+            self.v6.push(IPv6State::Dynamic(Box::new(new_lease)));
             changed = true;
         }
 

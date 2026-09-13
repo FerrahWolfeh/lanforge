@@ -212,7 +212,7 @@ async fn pipeline_transient_ip_reverse_dns_cached() {
         resolver: resolver_target,
     };
     let _ = ctx_instance.apply(DeviceUpdate::AddReverseResolver {
-        resolver: resolver_rule,
+        resolver: Box::new(resolver_rule),
     });
 
     let dns_ctx = mock_dns_context(ctx_instance, cfg).await;

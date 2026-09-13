@@ -101,7 +101,7 @@ async fn complex_ipv6_merging_logic() {
     // 2. Add a static IPv6 suffix via CLI
     let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac,
-        update: CliHostUpdate {
+        update: Box::new(CliHostUpdate {
             hostname: FieldUpdate::NoChange,
             duid: FieldUpdate::NoChange,
             v4_static: FieldUpdate::NoChange,
@@ -110,7 +110,7 @@ async fn complex_ipv6_merging_logic() {
             boot_file: FieldUpdate::NoChange,
             dns_fallback: FieldUpdate::NoChange,
             class: FieldUpdate::NoChange,
-        },
+        }),
     });
 
     // 3. Add an observed SLAAC address
@@ -146,4 +146,140 @@ async fn complex_ipv6_merging_logic() {
     assert!(found_ula_static, "Missing static ULA");
     assert!(found_gua_static, "Missing static GUA");
     assert!(found_observed, "Missing observed SLAAC");
+}
+
+#[tokio::test]
+async fn dns_suppresses_logging_for_ignored_client() {
+    use lanforge_dns::server::DnsLogEvent;
+    use lanforge_types::network::dns::{QueryResult, TransportProtocol};
+    use std::sync::Arc;
+
+    let ctx = init_test_context();
+    let mut cfg = mock_config();
+    cfg.query_log.ignore_clients = vec!["10.0.0.99".to_string(), "ignored-host".to_string()];
+    let dns_ctx = mock_dns_context(ctx.clone(), cfg).await;
+
+    let mac1 = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x10]);
+    let ip1 = Ipv4Addr::new(10, 0, 0, 10);
+    register_test_device(&ctx, "authelia-container", mac1, ip1);
+
+    let mac2 = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x20]);
+    let ip2 = Ipv4Addr::new(10, 0, 0, 20);
+    register_test_device(&ctx, "normal-pc", mac2, ip2);
+
+    let query_log = dns_ctx.query_log.as_ref().unwrap();
+
+    // 1. Initially, device1 is logged normally
+    dns_ctx.record_log(DnsLogEvent {
+        src_ip: IpAddr::V4(ip1),
+        src_mac: Some(mac1),
+        domain: Arc::from("example.com"),
+        qtype: DnsRecordType::A,
+        result: QueryResult::Forwarded,
+        upstream_us: 10,
+        cached: false,
+        answer: None,
+        protocol: TransportProtocol::Udp,
+    });
+    assert_eq!(query_log.len(), 1);
+
+    // 2. Mark device1 with ignore_dns_log = true
+    let _ = ctx.apply(DeviceUpdate::IgnoreDnsLogSet {
+        mac: mac1,
+        ignore: true,
+    });
+
+    // 3. New query from device1 should be suppressed!
+    dns_ctx.record_log(DnsLogEvent {
+        src_ip: IpAddr::V4(ip1),
+        src_mac: Some(mac1),
+        domain: Arc::from("example.com"),
+        qtype: DnsRecordType::A,
+        result: QueryResult::Forwarded,
+        upstream_us: 10,
+        cached: false,
+        answer: None,
+        protocol: TransportProtocol::Udp,
+    });
+    assert_eq!(query_log.len(), 1, "Expected device1 queries to be suppressed");
+
+    // 4. Query from device2 should still be logged
+    dns_ctx.record_log(DnsLogEvent {
+        src_ip: IpAddr::V4(ip2),
+        src_mac: Some(mac2),
+        domain: Arc::from("example.com"),
+        qtype: DnsRecordType::A,
+        result: QueryResult::Forwarded,
+        upstream_us: 10,
+        cached: false,
+        answer: None,
+        protocol: TransportProtocol::Udp,
+    });
+    assert_eq!(query_log.len(), 2, "Expected normal device to be logged");
+
+    // 5. Query from IP in cfg.query_log.ignore_clients should also be suppressed
+    dns_ctx.record_log(DnsLogEvent {
+        src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 99)),
+        src_mac: None,
+        domain: Arc::from("example.com"),
+        qtype: DnsRecordType::A,
+        result: QueryResult::Forwarded,
+        upstream_us: 10,
+        cached: false,
+        answer: None,
+        protocol: TransportProtocol::Udp,
+    });
+    assert_eq!(query_log.len(), 2, "Expected ignored IP to be suppressed");
+
+    // 6. Test device-specific domain pattern suppression
+    let mac3 = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x30]);
+    let ip3 = Ipv4Addr::new(10, 0, 0, 30);
+    register_test_device(&ctx, "sonarr-container", mac3, ip3);
+
+    let _ = ctx.apply(DeviceUpdate::IgnoredLogDomainsSet {
+        mac: mac3,
+        domains: vec!["*.sonarr.tv".to_string(), "api.servarr.com".to_string()],
+    });
+
+    // 6a. Sonarr calling skyhook.sonarr.tv -> Suppressed!
+    dns_ctx.record_log(DnsLogEvent {
+        src_ip: IpAddr::V4(ip3),
+        src_mac: Some(mac3),
+        domain: Arc::from("skyhook.sonarr.tv"),
+        qtype: DnsRecordType::A,
+        result: QueryResult::Forwarded,
+        upstream_us: 10,
+        cached: false,
+        answer: None,
+        protocol: TransportProtocol::Udp,
+    });
+    assert_eq!(query_log.len(), 2, "Expected *.sonarr.tv to be suppressed for Sonarr");
+
+    // 6b. Sonarr calling github.com -> Logged!
+    dns_ctx.record_log(DnsLogEvent {
+        src_ip: IpAddr::V4(ip3),
+        src_mac: Some(mac3),
+        domain: Arc::from("github.com"),
+        qtype: DnsRecordType::A,
+        result: QueryResult::Forwarded,
+        upstream_us: 10,
+        cached: false,
+        answer: None,
+        protocol: TransportProtocol::Udp,
+    });
+    assert_eq!(query_log.len(), 3, "Expected github.com to be logged for Sonarr");
+
+    // 6c. Another device (device2) calling skyhook.sonarr.tv -> Logged!
+    dns_ctx.record_log(DnsLogEvent {
+        src_ip: IpAddr::V4(ip2),
+        src_mac: Some(mac2),
+        domain: Arc::from("skyhook.sonarr.tv"),
+        qtype: DnsRecordType::A,
+        result: QueryResult::Forwarded,
+        upstream_us: 10,
+        cached: false,
+        answer: None,
+        protocol: TransportProtocol::Udp,
+    });
+    assert_eq!(query_log.len(), 4, "Expected skyhook.sonarr.tv to be logged for device2");
 }

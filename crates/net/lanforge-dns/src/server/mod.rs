@@ -58,12 +58,69 @@ pub struct DnsLogEvent {
     pub protocol: TransportProtocol,
 }
 
+/// Checks if a domain matches an exact or wildcard pattern (e.g. `*.sonarr.tv`) without heap allocation.
+#[must_use]
+pub fn matches_domain_pattern(domain: &str, pattern: &str) -> bool {
+    let d = domain.trim_end_matches('.').to_ascii_lowercase();
+    let p = pattern.trim_end_matches('.').to_ascii_lowercase();
+    if let Some(suffix) = p.strip_prefix("*.") {
+        if d == suffix {
+            return true;
+        }
+        if d.ends_with(suffix) && d.as_bytes().get(d.len().saturating_sub(suffix.len() + 1)) == Some(&b'.') {
+            return true;
+        }
+        false
+    } else {
+        d == p
+    }
+}
+
 impl DnsContext {
     pub fn record_log(&self, event: DnsLogEvent) {
         // Noise filtering
         if event.domain.is_empty() || event.domain.as_ref() == "." || event.domain.as_ref() == ":0"
         {
             return;
+        }
+
+        // Check if device is configured to suppress DNS logging
+        let mac = event.src_mac.or_else(|| self.ctx.get_mac_by_ip(event.src_ip));
+        if let Some(mac) = mac
+            && let Some(dev) = self.ctx.get_device(&mac)
+        {
+            if dev.ignore_dns_log {
+                return;
+            }
+            if !dev.ignored_log_domains.is_empty() {
+                let domain = event.domain.as_ref();
+                for pattern in &dev.ignored_log_domains {
+                    if matches_domain_pattern(domain, pattern) {
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Check ignore_clients in QueryLogConfig (by IP, MAC, or hostname)
+        if !self.cfg.query_log.ignore_clients.is_empty() {
+            let ip_str = event.src_ip.to_string();
+            let mac_str = mac.map(|m| m.to_string());
+            for ignored in &self.cfg.query_log.ignore_clients {
+                if ignored.eq_ignore_ascii_case(&ip_str) {
+                    return;
+                }
+                if let Some(ref m) = mac_str
+                    && ignored.eq_ignore_ascii_case(m)
+                {
+                    return;
+                }
+                if let Some(dev) = mac.and_then(|m| self.ctx.get_device(&m))
+                    && ignored.eq_ignore_ascii_case(&dev.hostname.name)
+                {
+                    return;
+                }
+            }
         }
 
         if let Some(log) = &self.query_log {
@@ -86,7 +143,7 @@ impl DnsContext {
 
             let _ = self
                 .bus
-                .publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)));
+                .publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(std::sync::Arc::new(entry))));
         }
     }
 }

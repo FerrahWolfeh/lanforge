@@ -712,7 +712,7 @@ impl LanforgeContext {
     /// Returns `CoreError` if the wait condition cannot be met or the system shuts down.
     pub async fn wait_for_pppoe(&self) -> Result<(), CoreError> {
         self.wait_for_condition(Self::is_pppoe_ready, |event| {
-            matches!(event, LanforgeEvent::Pppoe(PppoeEvent::SessionUp { .. }))
+            matches!(event, LanforgeEvent::Pppoe(PppoeEvent::SessionUp(_)))
         })
         .await
     }

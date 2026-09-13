@@ -59,6 +59,12 @@ pub struct HostConfigEntry {
     /// Source of the configuration (e.g., "Toml", "Cli").
     #[serde(default = "default_host_origin")]
     pub origin: Origin,
+    /// Whether DNS query logging is suppressed for this host.
+    #[serde(default)]
+    pub ignore_dns_log: bool,
+    /// Specific domains or wildcards to suppress from DNS query logs for this host.
+    #[serde(default)]
+    pub ignored_log_domains: Vec<String>,
 }
 
 /// A single device discovered on the network.
@@ -100,6 +106,12 @@ pub struct DeviceEntry {
     /// Inferred 802.1Q VLAN ID if observed on a VLAN subinterface (e.g., 100 for "lan0.100").
     #[serde(default)]
     pub vlan_id: Option<u16>,
+    /// Whether DNS query logging is suppressed for this device.
+    #[serde(default)]
+    pub ignore_dns_log: bool,
+    /// Specific domains or wildcards to suppress from DNS query logs for this device.
+    #[serde(default)]
+    pub ignored_log_domains: Vec<String>,
 }
 
 /// A single IPv6 address entry with its type category.
@@ -423,6 +435,7 @@ mod tests {
         assert_eq!(entry.origin, Origin::Static);
         assert_eq!(entry.v4_fixed, None);
         assert_eq!(entry.v6_suffix, None);
+        assert!(!entry.ignore_dns_log);
 
         // JSON with nulls and empty strings
         let json_nulls = r#"{"mac":"aa:bb:cc:dd:ee:ff","hostname":null,"v4":"","v6_suffix":null}"#;

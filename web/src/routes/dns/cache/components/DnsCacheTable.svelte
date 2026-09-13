@@ -22,6 +22,7 @@
 	import { dnsBlock, dnsAllow } from "$lib/api/client";
 	import type { DnsCacheEntry, DnsRecordType } from "$lib/api/types";
 	import DnsCacheRecordDialog from "./DnsCacheRecordDialog.svelte";
+	import DataTablePagination from "$lib/components/DataTablePagination.svelte";
 
 	let {
 		loading = false,
@@ -480,35 +481,14 @@
 	</Card.Content>
 
 	<!-- Fixed Pinned Pagination Footer -->
-	<div
-		class="flex items-center justify-between px-4 py-2.5 border-t bg-card shrink-0 z-10"
-	>
-		<p class="text-xs text-muted-foreground">
-			Page {currentPage} of {totalPages}
-		</p>
-		<div class="flex items-center gap-1">
-			<Button
-				variant="outline"
-				size="sm"
-				disabled={offset === 0 || loading}
-				onclick={() => onPageChange(Math.max(0, offset - limit))}
-				class="h-8 gap-1 px-2.5 text-xs"
-			>
-				<ChevronLeftIcon class="h-3.5 w-3.5" />
-				Previous
-			</Button>
-			<Button
-				variant="outline"
-				size="sm"
-				disabled={offset + limit >= total || loading}
-				onclick={() => onPageChange(offset + limit)}
-				class="h-8 gap-1 px-2.5 text-xs"
-			>
-				Next
-				<ChevronRightIcon class="h-3.5 w-3.5" />
-			</Button>
-		</div>
-	</div>
+	<DataTablePagination
+		pageIndex={Math.floor(offset / limit)}
+		pageSize={limit}
+		totalItems={total}
+		itemName="cache entries"
+		disabled={loading}
+		onPageChange={(newIdx) => onPageChange(newIdx * limit)}
+	/>
 </Card.Root>
 
 <!-- Inspection Dialog -->

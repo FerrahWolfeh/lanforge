@@ -897,7 +897,7 @@ mod tests {
         // 2. But if that out-of-pool IP is a static reservation for this MAC, it must be honored!
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac,
-            update: CliHostUpdate {
+            update: Box::new(CliHostUpdate {
                 hostname: FieldUpdate::Set("static-device".to_string()),
                 duid: FieldUpdate::NoChange,
                 v4_static: FieldUpdate::Set(stale_ip),
@@ -906,7 +906,7 @@ mod tests {
                 boot_file: FieldUpdate::NoChange,
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,
-            },
+            }),
         });
 
         let res_static = srv.handle_packet(&raw_msg, None);
@@ -1071,7 +1071,7 @@ mod tests {
         // 2. Per-device override
         let _ = srv.ctx.apply(DeviceUpdate::CliHostUpdated {
             mac,
-            update: CliHostUpdate {
+            update: Box::new(CliHostUpdate {
                 hostname: FieldUpdate::Set("host".to_string()),
                 duid: FieldUpdate::NoChange,
                 v4_static: FieldUpdate::NoChange,
@@ -1080,7 +1080,7 @@ mod tests {
                 boot_file: FieldUpdate::Set("custom.efi".to_string()),
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,
-            },
+            }),
         });
 
         let mut reply_opts = v4::DhcpOptions::new();
@@ -1297,7 +1297,7 @@ mod tests {
         let static_ip = Ipv4Addr::new(192, 168, 1, 10);
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac,
-            update: CliHostUpdate {
+            update: Box::new(CliHostUpdate {
                 hostname: FieldUpdate::Set("static-host".to_string()),
                 duid: FieldUpdate::NoChange,
                 v4_static: FieldUpdate::Set(static_ip),
@@ -1306,7 +1306,7 @@ mod tests {
                 boot_file: FieldUpdate::NoChange,
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,
-            },
+            }),
         });
 
         // Request lease

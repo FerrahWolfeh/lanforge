@@ -1,20 +1,56 @@
 <script lang="ts">
-	import * as Sidebar from "$lib/components/ui/sidebar";
-	import { Badge } from "$lib/components/ui/badge";
-	import { Button } from "$lib/components/ui/button";
+	import { page } from "$app/state";
+	import { sidebarState } from "$lib/stores/sidebar.svelte";
+	import * as Sheet from "$lib/components/ui/sheet";
 	import * as Tooltip from "$lib/components/ui/tooltip";
-	import { logout } from "$lib/api/client";
-	import { auth } from "$lib/stores/auth.svelte";
-	import { goto } from "$app/navigation";
-	import SunIcon from "@lucide/svelte/icons/sun";
-	import MoonIcon from "@lucide/svelte/icons/moon";
-	import LogOutIcon from "@lucide/svelte/icons/log-out";
-	import UserIcon from "@lucide/svelte/icons/user";
-	import { mode, toggleMode } from "mode-watcher";
+	import AppSidebar from "./AppSidebar.svelte";
+	import ModeToggle from "./ModeToggle.svelte";
+	import MenuIcon from "@lucide/svelte/icons/menu";
+	import PanelLeftIcon from "@lucide/svelte/icons/panel-left";
 
 	let { uptime = $bindable(0) }: { uptime?: number } = $props();
+	let isMobileOpen = $state(false);
 
-	const isDark = $derived(mode.current === "dark");
+	const titleMap: Record<string, string> = {
+		"/": "Dashboard",
+		"/network/devices": "Network Devices",
+		"/network/hosts": "Static Host Reservations",
+		"/network/discovery": "Network Discovery & Monitor",
+		"/network/ra": "IPv6 Router Advertisements",
+		"/network/pppoe": "PPPoE WAN Client",
+		"/dns/resolver": "DNS Resolver",
+		"/dns/log": "DNS Query Log",
+		"/dns/rewrites": "Custom DNS Rewrites",
+		"/dns/adblock": "Adblock & Domain Filtering",
+		"/dns/adblock/lists": "Adblock Lists",
+		"/dns/adblock/rules": "Adblock Custom Rules",
+		"/dns/adblock/services": "Blocked Services",
+		"/dns/adblock/settings": "Adblock Settings",
+		"/dhcp": "DHCP Server",
+		"/dhcp/leases": "DHCP Active Leases",
+		"/dhcp/pools": "DHCP Scopes & Pools",
+		"/dhcp/server": "DHCP Server Options",
+		"/tftp": "TFTP Server",
+		"/system": "System Status",
+		"/system/services": "System Services",
+		"/system/database": "Database & Persistence",
+		"/system/database/settings": "Database Storage Settings",
+		"/system/database/maintenance": "Database Maintenance",
+		"/system/database/backup": "Database Backup & Restore",
+	};
+
+	const currentTitle = $derived(
+		titleMap[page.url.pathname] ??
+		(page.url.pathname.startsWith("/dhcp")
+			? "DHCP Server"
+			: page.url.pathname.startsWith("/dns")
+			? "DNS & Security"
+			: page.url.pathname.startsWith("/network")
+			? "Network"
+			: page.url.pathname.startsWith("/system")
+			? "System"
+			: "Lanforge")
+	);
 
 	function formatUptime(secs: number): string {
 		if (secs < 60) return `${secs}s`;
@@ -23,98 +59,93 @@
 		const m = Math.floor((secs % 3600) / 60);
 		return m > 0 ? `${h}h ${m}m` : `${h}h`;
 	}
-
-	async function handleLogout() {
-		try {
-			await logout();
-		} catch {
-			// daemon may be unreachable
-		}
-		auth.clear();
-		goto("/login");
-	}
 </script>
 
 <header
-	class="bg-background/80 border-border sticky top-0 z-10 flex h-14 items-center gap-3 border-b px-4 backdrop-blur-sm"
+	class="gpu-accelerated sticky top-0 z-30 flex h-16 w-full shrink-0 items-center justify-between border-b border-border/70 bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60 lg:px-6 lg:rounded-t-2xl"
 >
-	<!-- Sidebar toggle -->
-	<Sidebar.Trigger class="-ml-1" />
+	<div class="flex items-center gap-3 min-w-0">
+		<!-- Desktop Sidebar Toggle Button -->
+		<div class="hidden lg:flex">
+			<Tooltip.Provider>
+				<Tooltip.Root>
+					<Tooltip.Trigger
+						class="inline-flex items-center justify-center rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-accent-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
+						onclick={() => sidebarState.toggle()}
+						aria-label="Toggle sidebar"
+					>
+						<PanelLeftIcon class="size-5" />
+					</Tooltip.Trigger>
+					<Tooltip.Content side="bottom" sideOffset={6} class="text-xs font-medium">
+						{sidebarState.isCollapsed ? "Expand sidebar (Ctrl+B)" : "Collapse sidebar (Ctrl+B)"}
+					</Tooltip.Content>
+				</Tooltip.Root>
+			</Tooltip.Provider>
+		</div>
 
-	<!-- Separator -->
-	<div class="bg-border h-5 w-px" aria-hidden="true"></div>
+		<!-- Mobile Menu Sheet -->
+		<div class="lg:hidden">
+			<Sheet.Root bind:open={isMobileOpen}>
+				<Sheet.Trigger
+					class="inline-flex items-center justify-center rounded-lg p-2 text-muted-foreground hover:bg-accent hover:text-accent-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					aria-label="Open navigation menu"
+				>
+					<MenuIcon class="size-5" />
+				</Sheet.Trigger>
+				<Sheet.Content side="left" class="p-0 w-64 bg-sidebar border-r border-sidebar-border text-sidebar-foreground">
+					<Sheet.Header class="sr-only">
+						<Sheet.Title>Navigation Menu</Sheet.Title>
+					</Sheet.Header>
+					<AppSidebar onNavigate={() => (isMobileOpen = false)} />
+				</Sheet.Content>
+			</Sheet.Root>
+		</div>
 
-	<!-- Daemon Status Indicator -->
-	<Tooltip.Provider>
-		<Tooltip.Root>
-			<Tooltip.Trigger>
-				<div class="flex items-center gap-1.5">
+		<!-- Visual Separator for Desktop -->
+		<div class="hidden lg:block h-4 w-px bg-border/70"></div>
+
+		<!-- Current Page Title -->
+		<h1 class="text-base font-semibold tracking-tight text-foreground lg:text-lg font-sans truncate">
+			{currentTitle}
+		</h1>
+	</div>
+
+	<!-- Right Controls: Status indicator, Uptime, ModeToggle -->
+	<div class="flex items-center gap-2.5 shrink-0">
+		<!-- Daemon Status Tooltip -->
+		<Tooltip.Provider>
+			<Tooltip.Root>
+				<Tooltip.Trigger
+					class="flex items-center gap-2 px-2.5 py-1 rounded-lg hover:bg-accent/60 transition-colors border border-border/40"
+				>
 					<span
 						class={[
-							"size-2 rounded-full",
+							"size-2 rounded-full transition-all",
 							uptime > 0
-								? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]"
-								: "bg-zinc-600",
+								? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)] animate-pulse"
+								: "bg-zinc-500",
 						].join(" ")}
 					></span>
-					<span class="text-muted-foreground hidden text-xs sm:block">
+					<span class="text-xs font-medium text-muted-foreground hidden sm:inline">
 						{uptime > 0 ? "Live" : "Offline"}
 					</span>
-				</div>
-			</Tooltip.Trigger>
-			<Tooltip.Content>
-				<p class="text-xs">
-					{uptime > 0
-						? "Daemon active & connected"
-						: "Daemon offline"}
-				</p>
-			</Tooltip.Content>
-		</Tooltip.Root>
-	</Tooltip.Provider>
+				</Tooltip.Trigger>
+				<Tooltip.Content side="bottom" sideOffset={6} class="text-xs font-medium">
+					{uptime > 0 ? "Daemon active & connected" : "Daemon offline or unreachable"}
+				</Tooltip.Content>
+			</Tooltip.Root>
+		</Tooltip.Provider>
 
-	<!-- Uptime -->
-	{#if uptime > 0}
-		<span class="text-muted-foreground hidden text-xs sm:block">
-			up {formatUptime(uptime)}
-		</span>
-	{/if}
-
-	<!-- Right utilities -->
-	<div class="ml-auto flex items-center gap-2">
-		<!-- Dark mode toggle -->
-		<Button variant="ghost" size="icon" onclick={toggleMode}>
-			{#if isDark}
-				<SunIcon class="size-4" />
-			{:else}
-				<MoonIcon class="size-4" />
-			{/if}
-			<span class="sr-only">Toggle theme</span>
-		</Button>
-
-		<!-- User badge / logout dropdown placeholder -->
-		<div class="flex items-center gap-2 pl-2">
-			<div
-				class="bg-primary/10 flex size-7 items-center justify-center rounded-full"
+		<!-- Uptime Badge -->
+		{#if uptime > 0}
+			<span
+				class="text-muted-foreground hidden md:inline text-xs font-mono bg-muted/60 px-2 py-0.5 rounded-md border border-border/40"
 			>
-				<UserIcon class="text-primary size-4" />
-			</div>
-			<div class="hidden flex-col sm:flex">
-				<span class="text-xs font-semibold leading-tight"
-					>{auth.user?.username ?? "admin"}</span
-				>
-				<span class="text-muted-foreground text-[10px] uppercase"
-					>{auth.user?.role ?? "Admin"}</span
-				>
-			</div>
+				up {formatUptime(uptime)}
+			</span>
+		{/if}
 
-			<Button
-				variant="ghost"
-				size="icon"
-				onclick={handleLogout}
-				title="Log out"
-			>
-				<LogOutIcon class="size-4" />
-			</Button>
-		</div>
+		<!-- Theme Toggle -->
+		<ModeToggle />
 	</div>
 </header>

@@ -117,10 +117,24 @@ fn handle_dns_logs_follow(
     async_stream::try_stream! {
         while let Ok(event) = rx.recv().await {
             if let LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)) = &event.event {
-                let src_hostname = ctx_inner
-                    .get_mac_by_ip(entry.src_ip)
-                    .and_then(|m| ctx_inner.get_device(&m))
-                    .map(|d| d.display_hostname().to_string());
+                let mac = entry.src_mac.or_else(|| ctx_inner.get_mac_by_ip(entry.src_ip));
+                let src_hostname = mac.and_then(|m| {
+                    if let Some(d) = ctx_inner.get_device(&m) {
+                        let name = d.display_hostname();
+                        if name != "?" && !name.is_empty() {
+                            return Some(name.to_string());
+                        }
+                        if !d.dns_fallback.is_empty() {
+                            return Some(d.dns_fallback.clone());
+                        }
+                    }
+                    ctx_inner.with_state(|s| {
+                        s.static_entries
+                            .get(&m)
+                            .filter(|e| !e.hostname.is_empty())
+                            .map(|e| e.hostname.clone())
+                    })
+                });
 
                 if let Some(f) = &filter
                     && &entry.src_ip.to_string() != f
@@ -129,7 +143,37 @@ fn handle_dns_logs_follow(
                     continue;
                 }
 
-                if let Ok(json) = serde_json::to_string(&event) {
+                let payload = serde_json::json!({
+                    "timestamp": entry.timestamp,
+                    "src_ip": entry.src_ip.to_string(),
+                    "src_mac": mac.map(|m| m.to_string()),
+                    "src_hostname": src_hostname,
+                    "domain": entry.domain.as_ref(),
+                    "qtype": entry.qtype,
+                    "result": format!("{:?}", entry.result),
+                    "upstream_us": entry.upstream_us,
+                    "cached": entry.cached,
+                    "answer": entry.answer,
+                    "protocol": entry.protocol,
+                    "event": {
+                        "Dns": {
+                            "QueryResolved": {
+                                "timestamp": entry.timestamp,
+                                "src_ip": entry.src_ip.to_string(),
+                                "src_mac": mac.map(|m| m.to_string()),
+                                "src_hostname": src_hostname,
+                                "domain": entry.domain.as_ref(),
+                                "qtype": entry.qtype,
+                                "result": format!("{:?}", entry.result),
+                                "upstream_us": entry.upstream_us,
+                                "cached": entry.cached,
+                                "answer": entry.answer,
+                            }
+                        }
+                    }
+                });
+
+                if let Ok(json) = serde_json::to_string(&payload) {
                     yield Event::default().data(json);
                 }
             }

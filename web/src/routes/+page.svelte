@@ -253,16 +253,16 @@
 	<title>Dashboard — Lanforge</title>
 </svelte:head>
 
-<div class="flex flex-col gap-6">
+<div class="flex flex-col gap-5 sm:gap-6">
 	<!-- Page Header -->
 	<div
-		class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
+		class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
 	>
 		<div>
-			<h1 class="text-foreground text-2xl font-bold tracking-tight">
+			<h1 class="text-foreground text-xl sm:text-2xl font-bold tracking-tight">
 				Router Dashboard
 			</h1>
-			<p class="text-muted-foreground text-sm">
+			<p class="text-muted-foreground text-xs sm:text-sm mt-0.5">
 				Network status, DHCP leases, DNS activity, and connected devices
 			</p>
 		</div>
@@ -272,21 +272,22 @@
 				size="sm"
 				onclick={loadAll}
 				disabled={loadingData}
+				class="h-8 text-xs gap-1.5"
 			>
 				<RefreshCwIcon
 					data-icon="inline-start"
-					class={loadingData ? "animate-spin" : ""}
+					class={loadingData ? "animate-spin size-3.5" : "size-3.5"}
 				/>
 				Refresh
 			</Button>
-			<Button size="sm" onclick={triggerScan} disabled={scanning}>
+			<Button size="sm" onclick={triggerScan} disabled={scanning} class="h-8 text-xs gap-1.5">
 				{#if scanning}
 					<span
 						class="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent"
 						data-icon="inline-start"
 					></span>
 				{:else}
-					<ZapIcon data-icon="inline-start" />
+					<ZapIcon data-icon="inline-start" class="size-3.5" />
 				{/if}
 				Scan Network
 			</Button>
@@ -294,12 +295,12 @@
 	</div>
 
 	<!-- Top Stat Cards (4 Core Router Metrics) -->
-	<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+	<div class="grid grid-cols-1 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
 		{#each statCards as card (card.label)}
 			<Card.Root
 				class="relative overflow-hidden transition-all hover:border-zinc-700"
 			>
-				<Card.Content class="flex flex-col gap-3 p-5">
+				<Card.Content class="flex flex-col gap-2.5 p-4 sm:p-5">
 					<div class="flex items-center justify-between">
 						<span
 							class="text-muted-foreground text-xs font-semibold uppercase tracking-wider"
@@ -324,7 +325,7 @@
 					{:else}
 						<div class="flex flex-col gap-0.5">
 							<span
-								class="text-foreground text-3xl font-bold tabular-nums tracking-tight"
+								class="text-foreground text-2xl sm:text-3xl font-bold tabular-nums tracking-tight"
 							>
 								{card.value}
 							</span>
@@ -344,16 +345,20 @@
 	<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
 		<!-- Left Main Panel: Router Core Subsystems -->
 		<Card.Root class="flex flex-col lg:col-span-2">
-			<Card.Header class="pb-3 border-b border-border/50">
-				<div class="flex items-center justify-between">
-					<div class="flex items-center gap-2">
-						<ActivityIcon class="size-4 text-emerald-400" />
-						<Card.Title class="text-base"
-							>Core Subsystems & Capabilities</Card.Title
-						>
+			<Card.Header class="p-4 py-3 border-b border-border/50">
+				<div class="flex items-center justify-between gap-2 min-w-0">
+					<div class="flex items-center gap-2 min-w-0">
+						<ActivityIcon class="size-4 text-emerald-400 shrink-0" />
+						<Card.Title class="text-sm sm:text-base font-semibold truncate">
+							Core Subsystems<span class="hidden md:inline">&nbsp;& Capabilities</span>
+						</Card.Title>
 					</div>
-					<div class="flex items-center gap-2">
-						<Badge variant="outline" class="font-mono text-[10px] uppercase">
+					<div class="flex items-center gap-2 shrink-0">
+						<span
+							class="size-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)] sm:hidden"
+							title="All engines operational"
+						></span>
+						<Badge variant="outline" class="hidden sm:inline-flex font-mono text-[10px] uppercase">
 							All Engines Operational
 						</Badge>
 						<a
@@ -413,10 +418,10 @@
 
 		<!-- Right Main Panel: Network Vitals & Host Overview -->
 		<Card.Root class="flex flex-col lg:col-span-1">
-			<Card.Header class="pb-3 border-b border-border/50">
-				<div class="flex items-center gap-2">
-					<CpuIcon class="size-4 text-purple-400" />
-					<Card.Title class="text-base">Network & Vitals</Card.Title>
+			<Card.Header class="p-4 py-3 border-b border-border/50">
+				<div class="flex items-center gap-2 min-w-0">
+					<CpuIcon class="size-4 text-purple-400 shrink-0" />
+					<Card.Title class="text-sm sm:text-base font-semibold truncate">Network & Vitals</Card.Title>
 				</div>
 			</Card.Header>
 			<Card.Content class="flex flex-1 flex-col gap-4 p-5 text-xs">

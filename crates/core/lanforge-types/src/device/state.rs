@@ -74,7 +74,7 @@ impl IPv4State {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum IPv6State {
     Static(Ipv6AddrOrSuffix, SystemTime),
-    Dynamic(V6Lease),
+    Dynamic(Box<V6Lease>),
     Slaac(Ipv6Addr, SystemTime),
     LinkLocal(Ipv6Addr, SystemTime),
     Discovery(Ipv6Addr, SystemTime),

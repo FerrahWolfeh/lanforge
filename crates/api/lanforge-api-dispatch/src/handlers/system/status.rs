@@ -80,7 +80,7 @@ impl ClientContext {
 
     pub async fn handle_pppoe_status(&self) -> Response {
         let pppoe_status = self.ctx.read().interfaces.pppoe_status.clone();
-        let mut status = pppoe_status.unwrap_or_else(|| lanforge_types::system::PppoeStatusResponse {
+        let mut status = pppoe_status.unwrap_or_else(|| Box::new(lanforge_types::system::PppoeStatusResponse {
             enabled: self
                 .ctx
                 .get_status()
@@ -88,7 +88,7 @@ impl ClientContext {
                 .unwrap_or(false),
             state: lanforge_types::system::PppoeSessionState::Disconnected,
             ..Default::default()
-        });
+        }));
         if status.auth.is_none() {
             status.auth = self
                 .db
@@ -99,7 +99,7 @@ impl ClientContext {
                 .map(|cfg| cfg.auth);
         }
 
-        Response::PppoeStatus(Box::new(status))
+        Response::PppoeStatus(status)
     }
 
 
@@ -109,7 +109,7 @@ impl ClientContext {
             let target_ifindex = self.ctx.target_ifindex().unwrap_or(0);
             let if_ips = self.ctx.get_interface_state(target_ifindex);
             let cfg = self.ctx.get_ra_server_config();
-            lanforge_types::system::RaStatusResponse {
+            Box::new(lanforge_types::system::RaStatusResponse {
                 enabled: self
                     .ctx
                     .get_status()
@@ -132,9 +132,9 @@ impl ClientContext {
                 mtu: cfg.mtu,
                 uptime_secs: Some(self.uptime_secs),
                 ..Default::default()
-            }
+            })
         });
-        Response::RaStatus(Box::new(status))
+        Response::RaStatus(status)
     }
 
 

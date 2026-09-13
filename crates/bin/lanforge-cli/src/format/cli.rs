@@ -22,22 +22,16 @@ impl CliFormat for LanforgeEvent {
 
 fn format_pppoe_event(now: &str, event: &PppoeEvent, _ascii: bool) {
     match event {
-        PppoeEvent::SessionUp {
-            interface,
-            ac_name,
-            ipv4,
-            dns,
-            ..
-        } => {
-            let ip_str = ipv4.map_or_else(|| "none".to_string(), |ip| ip.to_string());
-            let ac_str = ac_name.as_deref().unwrap_or("unknown AC");
+        PppoeEvent::SessionUp(session) => {
+            let ip_str = session.ipv4.map_or_else(|| "none".to_string(), |ip| ip.to_string());
+            let ac_str = session.ac_name.as_deref().unwrap_or("unknown AC");
             println!(
                 "[{now}] {} PPPoE Session UP on {} via {} (IP: {}, DNS count: {})",
                 "PPPOE".magenta().bold(),
-                interface.cyan(),
+                session.interface.cyan(),
                 ac_str.yellow(),
                 ip_str.yellow(),
-                dns.len()
+                session.dns.len()
             );
         }
         PppoeEvent::SessionDown { reason } => {

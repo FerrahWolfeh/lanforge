@@ -166,7 +166,7 @@ fn test_dhcp_static_reservation_simulation() {
     // Register static reservation in context
     let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
         mac: static_mac,
-        update: CliHostUpdate {
+        update: Box::new(CliHostUpdate {
             hostname: Some("static-server".to_string()).into(),
             duid: None.into(),
             v4_static: Some(reserved_ip).into(),
@@ -175,7 +175,7 @@ fn test_dhcp_static_reservation_simulation() {
             dns_fallback: None.into(),
             class: None.into(),
             origin: Origin::Static,
-        },
+        }),
     });
 
     let cfg = create_test_config();

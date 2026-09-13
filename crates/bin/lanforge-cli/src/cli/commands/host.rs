@@ -141,6 +141,8 @@ async fn execute_add(
             .map(|s| s.parse::<Ipv6AddrOrSuffix>().map_err(|e| eyre!("{e}")))
             .transpose()?,
         origin: Origin::Static,
+        ignore_dns_log: false,
+        ignored_log_domains: Vec::new(),
     };
     let resp = client.host_add(entry).await?;
     print_success!(resp.message);
