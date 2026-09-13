@@ -6,6 +6,7 @@ use crate::bus::{
     AdminChange, DeviceEvent, EventVec, LanforgeEvent, NetworkChange, NetworkEvent,
     PrefixChangeDetails,
 };
+use crate::context::state::cache::DiscoveryStore;
 use crate::context::state::network::DhcpPoolStats;
 use crate::context::state::{
     CliHostUpdate, DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State, StaticEntry,
@@ -37,13 +38,14 @@ impl State {
         iaid: u32,
         ip: Ipv6Addr,
         expires: SystemTime,
+        discovery: &DiscoveryStore,
     ) -> EventVec {
         let m = if let Some(m) = mac {
             m
         } else if let Some(m) = self.indices.duid_index.get(&duid) {
             *m
         } else {
-            self.discovery.orphaned_v6.insert(ip, (duid, iaid, expires));
+            discovery.insert_orphan(ip, duid, iaid, expires);
             return EventVec::new();
         };
 
@@ -91,12 +93,11 @@ impl State {
         mac: MacAddr,
         ip: Ipv6Addr,
         is_active: bool,
+        discovery: &DiscoveryStore,
     ) -> EventVec {
-        self.discovery
-            .ndp_cache
-            .insert(ip, (mac, SystemTime::now()));
+        discovery.insert_ndp(ip, mac);
 
-        let orphaned = self.discovery.orphaned_v6.remove(&ip);
+        let orphaned = discovery.remove_orphan(&ip);
         let orphaned_info = orphaned.clone();
 
         let mut events = self.mutate_device(mac, |dev| {
@@ -200,6 +201,7 @@ impl State {
         mac: Option<MacAddr>,
         duid: Duid,
         iaid: u32,
+        discovery: &DiscoveryStore,
     ) -> EventVec {
         let mac = if let Some(m) = mac {
             m
@@ -209,21 +211,7 @@ impl State {
             return EventVec::new();
         };
 
-        // Find all orphans for this DUID
-        let orphans: Vec<_> = self
-            .discovery
-            .orphaned_v6
-            .iter()
-            .filter(|(_, (d, _, _))| d == &duid)
-            .map(|(ip, _)| *ip)
-            .collect();
-
-        let mut orphan_data = Vec::new();
-        for ip in orphans {
-            if let Some(data) = self.discovery.orphaned_v6.remove(&ip) {
-                orphan_data.push((ip, data));
-            }
-        }
+        let orphan_data = discovery.remove_orphans_by_duid(&duid);
 
         self.mutate_device(mac, |dev| {
             let mut last_change = dev.associate_duid(duid, iaid);
@@ -391,9 +379,9 @@ impl State {
         })
     }
 
-    pub(crate) fn handle_ip_deleted(&mut self, ip: IpAddr) -> EventVec {
+    pub(crate) fn handle_ip_deleted(&mut self, ip: IpAddr, discovery: &DiscoveryStore) -> EventVec {
         let mac = self.indices.ip_index.get(&ip).copied();
-        if let Some(mac) = mac {
+        mac.map_or_else(EventVec::new, |mac| {
             let events = self.mutate_device(mac, |dev| {
                 if dev.delete_ip(ip) {
                     Some(NetworkChange::IpDeleted { ip })
@@ -404,13 +392,11 @@ impl State {
 
             // Cleanup discovery caches
             if let IpAddr::V6(v6) = ip {
-                self.discovery.ndp_cache.remove(&v6);
+                let _ = discovery.remove_ndp(&v6);
             }
 
             events
-        } else {
-            EventVec::new()
-        }
+        })
     }
 
     pub(crate) fn handle_ip_offline(&mut self, ip: IpAddr) -> EventVec {
@@ -536,7 +522,7 @@ impl State {
         events
     }
 
-    pub(crate) fn handle_prune_zombies(&mut self) -> EventVec {
+    pub(crate) fn handle_prune_zombies(&mut self, discovery: &DiscoveryStore) -> EventVec {
         let max_age = Duration::from_hours(1);
         let mut removed = Vec::new();
         self.devices.retain(|mac, dev| {
@@ -549,16 +535,11 @@ impl State {
         });
 
         // Prune discovery caches
-        let now = SystemTime::now();
         let cache_max_age = Duration::from_hours(2);
-        self.discovery
-            .ndp_cache
-            .retain(|_, (_, time)| now.duration_since(*time).is_ok_and(|d| d < cache_max_age));
-        self.discovery
-            .orphaned_v6
-            .retain(|_, (_, _, time)| now.duration_since(*time).is_ok_and(|d| d < cache_max_age));
+        discovery.prune_stale(cache_max_age);
 
         // Prune transient hosts older than 4 hours
+        let now = SystemTime::now();
         let transient_max_age = Duration::from_hours(4);
         self.transient_hosts.retain(|_, host| {
             now.duration_since(host.last_seen)
@@ -594,12 +575,12 @@ impl State {
         })
     }
 
-    pub(crate) fn handle_reset(&mut self) -> EventVec {
+    pub(crate) fn handle_reset(&mut self, discovery: &DiscoveryStore) -> EventVec {
         self.devices.clear();
         self.static_entries.clear();
         self.rebuild_static_registry();
         self.indices.clear();
-        self.discovery.clear();
+        discovery.clear();
         self.interfaces.clear();
         self.transient_hosts.clear();
         self.reverse_resolvers.clear();
@@ -610,6 +591,7 @@ impl State {
     pub(crate) fn handle_neighbor_batch(
         &mut self,
         entries: Vec<(MacAddr, IpAddr, bool)>,
+        discovery: &DiscoveryStore,
     ) -> EventVec {
         if entries.is_empty() {
             return EventVec::new();
@@ -639,9 +621,7 @@ impl State {
             // Update discovery cache
             for (_, ip, _) in &entries {
                 if let IpAddr::V6(v6) = ip {
-                    self.discovery
-                        .ndp_cache
-                        .insert(*v6, (first_mac, SystemTime::now()));
+                    discovery.insert_ndp(*v6, first_mac);
                 }
             }
             return events;
@@ -677,9 +657,7 @@ impl State {
 
             for (ip, _) in &updates {
                 if let IpAddr::V6(v6) = ip {
-                    self.discovery
-                        .ndp_cache
-                        .insert(*v6, (mac, SystemTime::now()));
+                    discovery.insert_ndp(*v6, mac);
                 }
             }
         }

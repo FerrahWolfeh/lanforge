@@ -68,7 +68,8 @@ use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
 use lanforge_types::system::{ServiceBanner, ServiceState, SystemStatus};
 
-use parking_lot::RwLock;
+use arc_swap::ArcSwap;
+use parking_lot::{Mutex, RwLock};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -211,8 +212,12 @@ pub struct DynamicConfig {
 struct LanforgeContextInner {
     /// The event bus for broadcasting state changes.
     bus: Arc<EventBus>,
-    /// The device and interface state, protected by an `RwLock`.
-    state: RwLock<state::State>,
+    /// The device and interface state, protected by an `ArcSwap` for wait-free reads.
+    state: ArcSwap<state::State>,
+    /// Serializes state mutations without blocking readers.
+    writer_mutex: Mutex<()>,
+    /// Volatile network discovery store (NDP cache, orphaned v6 leases).
+    discovery: Arc<state::cache::DiscoveryStore>,
     /// The network interface index to monitor for RA/DHCP.
     target_ifindex: Option<u32>,
     /// System running flag — set to false on shutdown.
@@ -286,7 +291,9 @@ impl LanforgeContext {
     pub fn new(bus: Arc<EventBus>, state: State, target_ifindex: Option<u32>) -> Self {
         let inner = Arc::new(LanforgeContextInner {
             bus,
-            state: RwLock::new(state),
+            state: ArcSwap::from_pointee(state),
+            writer_mutex: Mutex::new(()),
+            discovery: Arc::new(state::cache::DiscoveryStore::default()),
             target_ifindex,
             running: AtomicBool::new(true),
             db_ready: AtomicBool::new(false),
@@ -311,6 +318,25 @@ impl LanforgeContext {
             config_path: RwLock::new(None),
         });
         Self { inner }
+    }
+
+    /// Returns a reference to the volatile discovery store.
+    #[must_use]
+    pub fn discovery(&self) -> &Arc<state::cache::DiscoveryStore> {
+        &self.inner.discovery
+    }
+
+    /// Executes a closure with exclusive write access to the state via Copy-on-Write.
+    pub fn with_state_mut<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut State) -> R,
+    {
+        let _guard = self.inner.writer_mutex.lock();
+        let current = self.inner.state.load_full();
+        let mut new_state = (*current).clone();
+        let result = f(&mut new_state);
+        self.inner.state.store(Arc::new(new_state));
+        result
     }
 
     /// Sets the path to the active TOML configuration file.

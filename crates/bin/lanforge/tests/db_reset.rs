@@ -124,16 +124,17 @@ async fn test_full_db_reset_chain() {
                 LanforgeEvent::Storage(StorageEvent::DbResetCompleted)
             ) {
                 ctx_loop.reset();
-                let mut state = ctx_loop.write();
-                state.add_static_device(
-                    mac_static,
-                    "static-host".to_string(),
-                    None,
-                    Some(Ipv4Addr::new(192, 168, 1, 20)),
-                    None,
-                    None,
-                    Origin::Static,
-                );
+                ctx_loop.with_state_mut(|state| {
+                    state.add_static_device(
+                        mac_static,
+                        "static-host".to_string(),
+                        None,
+                        Some(Ipv4Addr::new(192, 168, 1, 20)),
+                        None,
+                        None,
+                        Origin::Static,
+                    );
+                });
                 break;
             }
         }

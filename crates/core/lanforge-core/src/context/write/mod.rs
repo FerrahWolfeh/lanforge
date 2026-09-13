@@ -9,16 +9,11 @@ use lanforge_types::{
     events::EventVec,
     update::DeviceUpdate,
 };
-use parking_lot::RwLockWriteGuard;
-use std::{net::IpAddr, sync::atomic::Ordering};
+use std::{net::IpAddr, sync::Arc, sync::atomic::Ordering};
 
-use crate::context::{LanforgeContext, state::State};
+use crate::context::LanforgeContext;
 
 impl LanforgeContext {
-    /// Provides direct write access to the underlying device state.
-    pub fn write(&self) -> RwLockWriteGuard<'_, State> {
-        self.inner.state.write()
-    }
     /// Applies a state mutation to the context.
     #[must_use]
     pub fn apply(&self, update: DeviceUpdate) -> bool {
@@ -39,8 +34,12 @@ impl LanforgeContext {
 
         // 3. Apply to State
         let events = {
-            let mut state = self.inner.state.write();
-            state.apply_update(update)
+            let _guard = self.inner.writer_mutex.lock();
+            let current = self.inner.state.load_full();
+            let mut new_state = (*current).clone();
+            let events = new_state.apply_update(update, &self.inner.discovery);
+            self.inner.state.store(Arc::new(new_state));
+            events
         };
 
         if events.is_empty() {
@@ -119,7 +118,7 @@ impl LanforgeContext {
         match update {
             DeviceUpdate::ArpSeen { mac, ip, is_active } => {
                 let should_skip = {
-                    let state = self.inner.state.read();
+                    let state = self.inner.state.load();
                     state.devices.get(&mac).is_some_and(|dev| {
                         let recently_seen =
                             dev.last_seen.elapsed().unwrap_or_default() < Device::ACTIVITY_DEBOUNCE;
@@ -135,7 +134,7 @@ impl LanforgeContext {
             }
             DeviceUpdate::NdpSeen { mac, ip, is_active } => {
                 let should_skip = {
-                    let state = self.inner.state.read();
+                    let state = self.inner.state.load();
                     state.devices.get(&mac).is_some_and(|dev| {
                         let recently_seen =
                             dev.last_seen.elapsed().unwrap_or_default() < Device::ACTIVITY_DEBOUNCE;
@@ -155,7 +154,7 @@ impl LanforgeContext {
                 is_active,
             } => {
                 let should_skip = {
-                    let state = self.inner.state.read();
+                    let state = self.inner.state.load();
                     state.devices.get(&mac).is_some_and(|dev| {
                         let recently_seen =
                             dev.last_seen.elapsed().unwrap_or_default() < Device::ACTIVITY_DEBOUNCE;
@@ -179,7 +178,7 @@ impl LanforgeContext {
                 }
             }
             DeviceUpdate::NeighborBatch { mut entries } => {
-                let state = self.inner.state.read();
+                let state = self.inner.state.load();
                 entries.retain(|(mac, ip, _)| {
                     state.devices.get(mac).is_none_or(|dev| {
                         let recently_seen =

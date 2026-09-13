@@ -20,10 +20,8 @@ use std::net::Ipv4Addr;
 impl LanforgeContext {
     /// Triggers the background garbage collection process.
     pub fn expire_stale(&self, interval: Duration) {
-        let events = {
-            let mut state = self.inner.state.write();
-            state.expire_stale(interval)
-        };
+        let events = self.with_state_mut(|state| state.expire_stale(interval));
+        self.inner.discovery.prune_stale(Duration::from_hours(2));
 
         if !events.is_empty() {
             let bus = self.bus_ref();
@@ -63,7 +61,7 @@ impl LanforgeContext {
         };
 
         found_mac.inspect(|&mac| {
-            self.write().promote_device_to_index(mac);
+            self.with_state_mut(|state| state.promote_device_to_index(mac));
         })
     }
 
@@ -107,9 +105,11 @@ impl LanforgeContext {
         F: FnOnce(&mut Device) -> R,
     {
         let mut res = None;
-        self.write().mutate_device(mac, |dev| {
-            res = Some(f(dev));
-            None // No event emitted by this helper itself
+        self.with_state_mut(|state| {
+            state.mutate_device(mac, |dev| {
+                res = Some(f(dev));
+                None // No event emitted by this helper itself
+            });
         });
         res.expect("mutation failed")
     }
@@ -117,12 +117,12 @@ impl LanforgeContext {
     /// Sets whether indexing is enabled (test-only helper).
     #[cfg(test)]
     pub fn set_indexing_enabled(&self, enabled: bool) {
-        self.write().set_indexing_enabled(enabled);
+        self.with_state_mut(|state| state.set_indexing_enabled(enabled));
     }
 
     /// Inserts a device directly (test-only helper).
     #[cfg(test)]
     pub fn insert_device(&self, mac: MacAddr, dev: Device) {
-        self.write().insert_device(mac, dev);
+        self.with_state_mut(|state| state.insert_device(mac, dev));
     }
 }

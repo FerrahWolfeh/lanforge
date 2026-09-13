@@ -53,7 +53,7 @@ use lanforge_types::{
     network::dns::upstream::UpstreamTarget,
     update::InterfaceState,
 };
-use parking_lot::RwLockReadGuard;
+use arc_swap::Guard;
 
 use crate::{
     context::state::State,
@@ -62,20 +62,27 @@ use crate::{
 
 impl LanforgeContext {
     /// Provides direct read access to the underlying device state.
-    pub fn read(&self) -> RwLockReadGuard<'_, State> {
-        self.inner.state.read()
+    #[must_use]
+    pub fn read(&self) -> Guard<Arc<State>> {
+        self.inner.state.load()
+    }
+
+    /// Captures a point-in-time snapshot of the authoritative state behind an `Arc`.
+    #[must_use]
+    pub fn snapshot(&self) -> Arc<State> {
+        self.inner.state.load_full()
     }
 
     /// Executes a read-only closure with direct access to the State.
-    /// Single lock acquisition for the entire closure scope.
+    /// Wait-free load without holding any lock.
     ///
     /// **Prefer this over individual getter methods** when performing
-    /// multiple lookups in a single operation to avoid repeated lock acquisitions.
+    /// multiple lookups in a single operation.
     pub fn with_state<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&State) -> R,
     {
-        f(&self.read())
+        f(&self.inner.state.load())
     }
 
     /// Retrieves a device by its MAC address.
@@ -93,7 +100,8 @@ impl LanforgeContext {
     /// Retrieves a device by any of its assigned IP addresses.
     #[must_use]
     pub fn get_by_ip(&self, ip: &IpAddr) -> Option<Arc<Device>> {
-        self.read().get_by_ip(ip)
+        let mac = self.get_mac_by_ip(*ip)?;
+        self.get_device(&mac)
     }
 
     /// Retrieves a device by its DUID.
@@ -108,16 +116,26 @@ impl LanforgeContext {
         self.read().get_mac_by_duid(duid)
     }
 
-    /// Helper to find a MAC address by its IP in the DNS index.
+    /// Helper to find a MAC address by its IP in the authoritative index or discovery store.
     #[must_use]
     pub fn get_mac_by_ip(&self, ip: IpAddr) -> Option<MacAddr> {
-        self.read().get_mac_by_ip(ip)
+        let state = self.read();
+        let canonical = ip.to_canonical();
+        if let Some(mac) = state.indices.ip_index.get(&canonical).copied() {
+            return Some(mac);
+        }
+        if let IpAddr::V6(v6) = canonical
+            && let Some(mac) = self.inner.discovery.get_mac(&v6)
+        {
+            return Some(mac);
+        }
+        state.get_mac_by_ip(ip)
     }
 
     /// Helper to find a MAC address from the raw NDP cache.
     #[must_use]
     pub fn get_mac_from_ndp_cache(&self, ip: &Ipv6Addr) -> Option<MacAddr> {
-        self.read().get_mac_from_ndp_cache(ip)
+        self.inner.discovery.get_mac(ip)
     }
 
     /// Produz um registro validado das configurações estáticas.

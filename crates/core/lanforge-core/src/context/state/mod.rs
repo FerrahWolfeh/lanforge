@@ -25,7 +25,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-pub use self::cache::DiscoveryCache;
+pub use self::cache::{DiscoveryCache, DiscoveryStore};
 pub use self::indices::Indices;
 pub use self::network::NetworkState;
 
@@ -35,7 +35,7 @@ pub use self::network::NetworkState;
 
 impl State {
     #[allow(clippy::too_many_lines)]
-    pub fn apply_update(&mut self, update: DeviceUpdate) -> EventVec {
+    pub fn apply_update(&mut self, update: DeviceUpdate, discovery: &DiscoveryStore) -> EventVec {
         match update {
             DeviceUpdate::V4LeaseGranted { mac, ip, expires } => {
                 self.handle_v4_lease_granted(mac, ip, expires)
@@ -46,6 +46,7 @@ impl State {
                 update.iaid,
                 update.ip,
                 update.expires,
+                discovery,
             ),
             DeviceUpdate::V6PrefixAssigned(update) => self.handle_v6_prefix_assigned(
                 update.mac,
@@ -61,7 +62,7 @@ impl State {
                 is_active,
             } => self.handle_slaac_observed(mac, addr, is_active),
             DeviceUpdate::NdpSeen { mac, ip, is_active } => {
-                self.handle_ndp_seen(mac, ip, is_active)
+                self.handle_ndp_seen(mac, ip, is_active, discovery)
             }
             DeviceUpdate::ArpSeen { mac, ip, is_active } => {
                 self.handle_arp_seen(mac, ip, is_active)
@@ -73,7 +74,7 @@ impl State {
                 self.handle_hostname_hint_mdns(mac, &hostname)
             }
             DeviceUpdate::DuidAssociated { mac, duid, iaid } => {
-                self.handle_duid_associated(mac, duid, iaid)
+                self.handle_duid_associated(mac, duid, iaid, discovery)
             }
             DeviceUpdate::CliHostUpdated { mac, update } => {
                 self.handle_cli_host_updated(mac, *update)
@@ -88,19 +89,19 @@ impl State {
             | DeviceUpdate::Remove(mac)
             | DeviceUpdate::Purge(mac) => self.handle_host_removed(mac),
             DeviceUpdate::LeaseReleased { mac, target } => self.handle_lease_released(mac, target),
-            DeviceUpdate::IpDeleted { ip } => self.handle_ip_deleted(ip),
+            DeviceUpdate::IpDeleted { ip } => self.handle_ip_deleted(ip, discovery),
             DeviceUpdate::IpOffline { ip } => self.handle_ip_offline(ip),
             DeviceUpdate::InterfaceIpsChanged { ifindex, state } => {
                 self.handle_interface_ips_changed(ifindex, &state)
             }
-            DeviceUpdate::PruneZombies => self.handle_prune_zombies(),
+            DeviceUpdate::PruneZombies => self.handle_prune_zombies(discovery),
             DeviceUpdate::RebuildDnsIndices => self.handle_rebuild_dns_indices(),
             DeviceUpdate::ClassHint { mac, class } => self.handle_class_hint(mac, class),
             DeviceUpdate::DeviceInterfaceSeen { mac, iface } => {
                 self.handle_device_interface_seen(mac, iface)
             }
-            DeviceUpdate::Reset => self.handle_reset(),
-            DeviceUpdate::NeighborBatch { entries } => self.handle_neighbor_batch(entries),
+            DeviceUpdate::Reset => self.handle_reset(discovery),
+            DeviceUpdate::NeighborBatch { entries } => self.handle_neighbor_batch(entries, discovery),
             DeviceUpdate::TransientHostResolved(update) => {
                 self.handle_transient_host_resolved(update.ip, update.hostname, update.origin)
             }
@@ -131,7 +132,6 @@ pub struct State {
     pub devices: HashMap<MacAddr, Arc<Device>>,
     pub static_entries: HashMap<MacAddr, StaticEntry>,
     pub indices: Indices,
-    pub discovery: DiscoveryCache,
     pub interfaces: NetworkState,
 
     #[serde(skip)]
@@ -256,12 +256,7 @@ impl State {
                 }
             }
             IpAddr::V6(v6) => {
-                // 1. Check discovery NDP cache
-                if let Some((mac, _)) = self.discovery.ndp_cache.get(&v6) {
-                    return Some(*mac);
-                }
-
-                // 2. Check static entries (v6_suffix)
+                // 1. Check static entries (v6_suffix)
                 for (suf, mac) in &self.static_registry.v6 {
                     if suf.matches(v6) {
                         return Some(*mac);
@@ -343,11 +338,6 @@ impl State {
             .unwrap_or_default()
     }
     #[must_use]
-    pub fn get_mac_from_ndp_cache(&self, ip: &Ipv6Addr) -> Option<MacAddr> {
-        self.discovery.ndp_cache.get(ip).map(|(m, _)| *m)
-    }
-
-    #[must_use]
     pub fn get_duid_by_mac(&self, mac: MacAddr) -> Option<&Duid> {
         self.devices.get(&mac).and_then(|d| d.duid.as_ref())
     }
@@ -368,9 +358,9 @@ impl State {
         boot_file: Option<String>,
         origin: Origin,
     ) {
-        self.apply_update(DeviceUpdate::CliHostUpdated {
+        self.handle_cli_host_updated(
             mac,
-            update: Box::new(CliHostUpdate {
+            CliHostUpdate {
                 hostname: hostname.into(),
                 duid: duid.into(),
                 v4_static: v4_static.into(),
@@ -379,8 +369,8 @@ impl State {
                 dns_fallback: FieldUpdate::NoChange,
                 class: FieldUpdate::NoChange,
                 origin,
-            }),
-        });
+            },
+        );
     }
 
     pub fn insert_device(&mut self, mac: MacAddr, dev: Device) {

@@ -244,7 +244,7 @@ fn apply_update_ndp_seen_not_dirty() {
         ip,
         is_active: true
     }));
-    assert_eq!(ctx.read().get_mac_from_ndp_cache(&ip), Some(mac));
+    assert_eq!(ctx.get_mac_from_ndp_cache(&ip), Some(mac));
 }
 
 // --- expire_stale ---
@@ -327,7 +327,7 @@ fn test_orphaned_v6_promotion() {
 
     // Não deve existir device ainda
     assert!(ctx.get_device(&mac).is_none());
-    assert!(!ctx.read().discovery.orphaned_v6.is_empty());
+    assert!(!ctx.discovery().orphaned_v6.is_empty());
 
     // 2. NDP visto para o mesmo IP -> Promove
     let changed = ctx.apply(DeviceUpdate::NdpSeen {
@@ -341,7 +341,7 @@ fn test_orphaned_v6_promotion() {
     let dev = ctx.get_device(&mac).expect("Device deve existir");
     assert_eq!(dev.duid.as_ref(), Some(&duid));
     assert_eq!(dev.v6[0].ip().unwrap(), ip);
-    assert!(ctx.read().discovery.orphaned_v6.is_empty());
+    assert!(ctx.discovery().orphaned_v6.is_empty());
 }
 
 #[test]
@@ -438,14 +438,14 @@ fn test_ip_deleted_cleanup() {
             .iter()
             .any(|s| matches!(s, IPv6State::Slaac(a, _) if *a == ip))
     );
-    assert_eq!(ctx.read().get_mac_from_ndp_cache(&ip), Some(mac));
+    assert_eq!(ctx.get_mac_from_ndp_cache(&ip), Some(mac));
 
     // 2. Delete IP
     let changed = ctx.apply(DeviceUpdate::IpDeleted { ip: ip.into() });
     assert!(changed);
 
     // 3. Verify cleanup (device becomes unworthy and is dropped)
-    assert!(ctx.read().get_mac_from_ndp_cache(&ip).is_none());
+    assert!(ctx.get_mac_from_ndp_cache(&ip).is_none());
     assert!(ctx.get_device(&mac).is_none());
 }
 
@@ -560,7 +560,7 @@ fn apply_update_duid_associated_resolves_orphan() {
         expires,
     })));
 
-    assert!(ctx.read().discovery.orphaned_v6.contains_key(&ip));
+    assert!(ctx.discovery().orphaned_v6.contains_key(&ip));
     assert!(ctx.get_device(&mac).is_none());
 
     // 2. Recebe associação DUID+IAID+MAC (ex: via Solicit que precedeu o Request, ou via DB)
@@ -572,7 +572,7 @@ fn apply_update_duid_associated_resolves_orphan() {
 
     assert!(changed);
     assert!(
-        !ctx.read().discovery.orphaned_v6.contains_key(&ip),
+        !ctx.discovery().orphaned_v6.contains_key(&ip),
         "Órfão deveria ter sido resolvido"
     );
 

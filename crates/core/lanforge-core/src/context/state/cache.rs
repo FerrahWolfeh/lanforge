@@ -1,129 +1,89 @@
+use dashmap::DashMap;
 use lanforge_types::identifiers::{Duid, MacAddr};
-use serde::ser::SerializeMap;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::net::Ipv6Addr;
 use std::time::{Duration, SystemTime};
 
-/// Global discovery caches for transient network observations.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct DiscoveryCache {
+/// Global discovery store for volatile/ephemeral network observations.
+///
+/// Uses concurrent sharded maps ([`DashMap`]) so that high-frequency discovery
+/// traffic (such as NDP and link-local observations) does not acquire the central
+/// authoritative state lock or invalidate CPU cache lines for DNS resolvers.
+#[derive(Debug, Default)]
+pub struct DiscoveryStore {
     /// NDP (Neighbor Discovery Protocol) cache for IPv6 link-local observations.
-    #[serde(
-        serialize_with = "serialize_ndp_cache",
-        deserialize_with = "deserialize_ndp_cache"
-    )]
-    pub ndp_cache: HashMap<Ipv6Addr, (MacAddr, SystemTime)>,
+    pub ndp_cache: DashMap<Ipv6Addr, (MacAddr, SystemTime)>,
     /// IPv6 leases that haven't been resolved to a MAC yet.
-    #[serde(
-        serialize_with = "serialize_orphaned_v6",
-        deserialize_with = "deserialize_orphaned_v6"
-    )]
-    pub orphaned_v6: HashMap<Ipv6Addr, (Duid, u32, SystemTime)>,
+    pub orphaned_v6: DashMap<Ipv6Addr, (Duid, u32, SystemTime)>,
 }
 
-impl DiscoveryCache {
-    pub fn clear(&mut self) {
+/// Legacy type alias for backwards compatibility.
+pub type DiscoveryCache = DiscoveryStore;
+
+impl DiscoveryStore {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Clears both the NDP cache and orphaned IPv6 leases.
+    pub fn clear(&self) {
         self.ndp_cache.clear();
         self.orphaned_v6.clear();
     }
-}
 
-// --- Serialization Helpers ---
-
-/// Serializes the NDP cache.
-///
-/// # Errors
-///
-/// Returns a serialization error if the cache cannot be serialized.
-pub fn serialize_ndp_cache<S, H>(
-    cache: &HashMap<Ipv6Addr, (MacAddr, SystemTime), H>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-    H: std::hash::BuildHasher,
-{
-    let mut map = serializer.serialize_map(Some(cache.len()))?;
-    for (ip, (mac, time)) in cache {
-        let elapsed = time
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default();
-        map.serialize_entry(ip, &(*mac, elapsed.as_secs()))?;
+    /// Retrieves a MAC address from the NDP cache for the given IPv6 address.
+    #[must_use]
+    pub fn get_mac(&self, ip: &Ipv6Addr) -> Option<MacAddr> {
+        self.ndp_cache.get(ip).map(|entry| entry.0)
     }
-    map.end()
-}
 
-/// Deserializes the NDP cache.
-///
-/// # Errors
-///
-/// Returns a deserialization error if the input data is invalid.
-pub fn deserialize_ndp_cache<'de, D>(
-    deserializer: D,
-) -> Result<HashMap<Ipv6Addr, (MacAddr, SystemTime)>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let raw = HashMap::<Ipv6Addr, (MacAddr, u64)>::deserialize(deserializer)?;
-    Ok(raw
-        .into_iter()
-        .map(|(ip, (mac, secs))| {
-            (
-                ip,
-                (mac, SystemTime::UNIX_EPOCH + Duration::from_secs(secs)),
-            )
-        })
-        .collect())
-}
-
-/// Serializes orphaned `DHCPv6` leases.
-///
-/// # Errors
-///
-/// Returns a serialization error if the data cannot be serialized.
-pub fn serialize_orphaned_v6<S, H>(
-    orphaned: &HashMap<Ipv6Addr, (Duid, u32, SystemTime), H>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-    H: std::hash::BuildHasher,
-{
-    let mut map = serializer.serialize_map(Some(orphaned.len()))?;
-    for (ip, (duid, iaid, time)) in orphaned {
-        let elapsed = time
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default();
-        map.serialize_entry(ip, &(duid, iaid, elapsed.as_secs()))?;
+    /// Inserts or updates an NDP cache entry with the current timestamp.
+    pub fn insert_ndp(&self, ip: Ipv6Addr, mac: MacAddr) {
+        self.ndp_cache.insert(ip, (mac, SystemTime::now()));
     }
-    map.end()
-}
 
-pub type OrphanedV6Map<H> = HashMap<Ipv6Addr, (Duid, u32, SystemTime), H>;
+    /// Removes an NDP cache entry.
+    #[must_use]
+    pub fn remove_ndp(&self, ip: &Ipv6Addr) -> Option<(MacAddr, SystemTime)> {
+        self.ndp_cache.remove(ip).map(|(_, v)| v)
+    }
 
-/// Deserializes orphaned `DHCPv6` leases.
-///
-/// # Errors
-///
-/// Returns a deserialization error if the input data is invalid.
-pub fn deserialize_orphaned_v6<'de, D, H>(deserializer: D) -> Result<OrphanedV6Map<H>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    H: std::hash::BuildHasher + Default,
-{
-    let raw = HashMap::<Ipv6Addr, (Duid, u32, u64), H>::deserialize(deserializer)?;
-    Ok(raw
-        .into_iter()
-        .map(|(ip, (duid, iaid, secs))| {
-            (
-                ip,
-                (
-                    duid,
-                    iaid,
-                    SystemTime::UNIX_EPOCH + Duration::from_secs(secs),
-                ),
-            )
-        })
-        .collect())
+    /// Inserts an orphaned IPv6 lease.
+    pub fn insert_orphan(&self, ip: Ipv6Addr, duid: Duid, iaid: u32, expires: SystemTime) {
+        self.orphaned_v6.insert(ip, (duid, iaid, expires));
+    }
+
+    /// Removes an orphaned IPv6 lease by IP.
+    #[must_use]
+    pub fn remove_orphan(&self, ip: &Ipv6Addr) -> Option<(Duid, u32, SystemTime)> {
+        self.orphaned_v6.remove(ip).map(|(_, v)| v)
+    }
+
+    /// Removes all orphaned IPv6 leases associated with a specific DUID.
+    #[must_use]
+    pub fn remove_orphans_by_duid(&self, duid: &Duid) -> Vec<(Ipv6Addr, (Duid, u32, SystemTime))> {
+        let matching: Vec<Ipv6Addr> = self
+            .orphaned_v6
+            .iter()
+            .filter(|entry| &entry.value().0 == duid)
+            .map(|entry| *entry.key())
+            .collect();
+
+        let mut results = Vec::with_capacity(matching.len());
+        for ip in matching {
+            if let Some((_, val)) = self.orphaned_v6.remove(&ip) {
+                results.push((ip, val));
+            }
+        }
+        results
+    }
+
+    /// Prunes stale entries older than `max_age`.
+    pub fn prune_stale(&self, max_age: Duration) {
+        let now = SystemTime::now();
+        self.ndp_cache
+            .retain(|_, (_, time)| now.duration_since(*time).is_ok_and(|d| d < max_age));
+        self.orphaned_v6
+            .retain(|_, (_, _, time)| now.duration_since(*time).is_ok_and(|d| d < max_age));
+    }
 }
