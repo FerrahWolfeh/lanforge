@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from "svelte";
+	import { onMount, onDestroy } from "svelte";
 	import { toast } from "svelte-sonner";
 	import {
 		listDevices,
@@ -7,6 +7,7 @@
 		purge,
 		wol,
 		scan,
+		eventsUrl,
 	} from "$lib/api/client";
 	import type { DeviceEntry } from "$lib/api/types";
 
@@ -35,29 +36,31 @@
 	let promoteHostname = $state("");
 	let promoteV4 = $state("");
 	let promoteV6Suffix = $state("");
+	let eventSource: EventSource | null = null;
 
-	async function loadDevices() {
-		loading = true;
+	async function loadDevices(showSpinner = true) {
+		if (showSpinner) loading = true;
 		try {
 			const res = await listDevices();
 			devices = res.devices;
 			meta = res.meta;
 		} catch (err: any) {
-			toast.error(err?.message || "Failed to load devices");
+			if (showSpinner) {
+				toast.error(err?.message || "Failed to load devices");
+			}
 		} finally {
-			loading = false;
+			if (showSpinner) loading = false;
 		}
 	}
 
 	async function triggerScan() {
 		scanning = true;
-		toast.info("Triggering background network ARP/NDP sweep...");
 		try {
 			await scan();
-			toast.success("Scan initiated successfully");
-			setTimeout(loadDevices, 1500);
+			await loadDevices();
+			toast.success("Network devices refreshed");
 		} catch (err: any) {
-			toast.error(err?.message || "Failed to trigger scan");
+			toast.error(err?.message || "Failed to refresh devices");
 		} finally {
 			scanning = false;
 		}
@@ -106,7 +109,41 @@
 		promoteOpen = true;
 	}
 
-	onMount(loadDevices);
+	onMount(() => {
+		loadDevices();
+
+		try {
+			const url = eventsUrl();
+			eventSource = new EventSource(url);
+
+			eventSource.onmessage = (e) => {
+				try {
+					const data = JSON.parse(e.data);
+					const kind = data?.kind || data?.event || "";
+					if (
+						typeof kind === "string" &&
+						(kind.includes("Device") ||
+							kind.includes("Scan") ||
+							kind.includes("Neighbor") ||
+							kind.includes("Dhcp"))
+					) {
+						loadDevices(false);
+					}
+				} catch {
+					// silent parse error
+				}
+			};
+		} catch {
+			// SSE unsupported
+		}
+	});
+
+	onDestroy(() => {
+		if (eventSource) {
+			eventSource.close();
+			eventSource = null;
+		}
+	});
 
 	const filteredDevices = $derived.by(() => {
 		let list = devices;

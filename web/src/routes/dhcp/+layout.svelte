@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { page } from "$app/stores";
+	import { page } from "$app/state";
 	import NetworkIcon from "@lucide/svelte/icons/network";
 	import ServerIcon from "@lucide/svelte/icons/server";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
@@ -14,7 +14,7 @@
 	];
 
 	function isTabActive(href: string) {
-		const p = $page.url.pathname;
+		const p = page.url.pathname;
 		return p === href || (href !== "/dhcp" && p.startsWith(href));
 	}
 </script>

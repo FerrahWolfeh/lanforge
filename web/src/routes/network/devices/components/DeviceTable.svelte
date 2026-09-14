@@ -5,7 +5,7 @@
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Skeleton } from "$lib/components/ui/skeleton";
-	import { toast } from "svelte-sonner";
+	import { formatTimeAgo as formatLastSeen, copyToClipboard as copyText } from "$lib/utils";
 	import type { DeviceEntry } from "$lib/api/types";
 
 	import WifiIcon from "@lucide/svelte/icons/wifi";
@@ -45,26 +45,6 @@
 	const paginatedDevices = $derived(
 		devices.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize)
 	);
-
-	function formatLastSeen(ts: string | number | undefined): string {
-		if (!ts) return "—";
-		let ms = typeof ts === "string" ? Date.parse(ts) : ts;
-		if (isNaN(ms) || ms === 0) return "Never";
-		if (ms < 10000000000) ms *= 1000;
-		const secsAgo = Math.floor((Date.now() - ms) / 1000);
-		if (secsAgo < 0 || secsAgo < 10) return "Just now";
-		if (secsAgo < 60) return `${secsAgo}s ago`;
-		const minsAgo = Math.floor(secsAgo / 60);
-		if (minsAgo < 60) return `${minsAgo}m ago`;
-		const hoursAgo = Math.floor(minsAgo / 60);
-		if (hoursAgo < 24) return `${hoursAgo}h ago`;
-		return `${Math.floor(hoursAgo / 24)}d ago`;
-	}
-
-	function copyText(text: string, label: string) {
-		navigator.clipboard.writeText(text);
-		toast.success(`Copied ${label}`);
-	}
 </script>
 
 <Card.Root class="overflow-hidden">

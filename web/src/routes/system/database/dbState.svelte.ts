@@ -15,20 +15,7 @@ import GlobeIcon from "@lucide/svelte/icons/globe";
 import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 import LockIcon from "@lucide/svelte/icons/lock";
 
-export function formatBytes(bytes: number): string {
-	if (!bytes || bytes === 0) return "0 B";
-	const k = 1024;
-	const sizes = ["B", "KB", "MB", "GB", "TB"];
-	const i = Math.floor(Math.log(bytes) / Math.log(k));
-	return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
-}
-
-export function formatTimeAgo(secs: number | null | undefined): string {
-	if (secs === null || secs === undefined) return "Never";
-	if (secs < 60) return `${secs}s ago`;
-	if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-	return `${Math.floor(secs / 3600)}h ago`;
-}
+export { formatBytes, formatTimeAgo } from "$lib/utils";
 
 class DbStateManager {
 	systemStatus = $state<StatusResponse | null>(null);

@@ -19,6 +19,7 @@
 		dhcpOptionsGet,
 		dhcpReconcile,
 	} from "$lib/api/client";
+	import { parseCsvList as parseList } from "$lib/utils";
 	import type {
 		DhcpPoolsResponse,
 		Dhcpv4PoolConfig,
@@ -71,13 +72,6 @@
 	let v6Dns = $state("");
 	let v6Lease = $state<number | "">(86400);
 	let v6BootFile = $state("");
-
-	function parseList(str: string): string[] {
-		return str
-			.split(",")
-			.map((s) => s.trim())
-			.filter(Boolean);
-	}
 
 	const isDirty = $derived.by(() => {
 		if (loading) return false;

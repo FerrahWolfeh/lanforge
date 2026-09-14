@@ -51,13 +51,12 @@
 
 	async function handleScan() {
 		scanning = true;
-		toast.info("Triggering ARP/NDP subnet sweep...");
 		try {
 			await scan();
-			toast.success("Subnet scan triggered successfully");
-			setTimeout(loadAll, 1500);
+			await loadAll();
+			toast.success("Neighbor discovery refreshed");
 		} catch (err: any) {
-			toast.error(err?.message || "Failed to trigger scan");
+			toast.error(err?.message || "Failed to refresh discovery data");
 		} finally {
 			scanning = false;
 		}

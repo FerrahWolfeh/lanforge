@@ -18,6 +18,7 @@
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import DatabaseIcon from "@lucide/svelte/icons/database";
 	import KeyRoundIcon from "@lucide/svelte/icons/key-round";
+	import UsersIcon from "@lucide/svelte/icons/users";
 
 	interface Props {
 		onNavigate?: () => void;
@@ -62,6 +63,7 @@
 				{ title: "DNS Resolver", href: "/dns/resolver", icon: GlobeIcon },
 				{ title: "Query Log", href: "/dns/log", icon: ActivityIcon },
 				{ title: "Custom Rewrites", href: "/dns/rewrites", icon: BookmarkIcon },
+				{ title: "DNS Cache", href: "/dns/cache", icon: DatabaseIcon },
 				{ title: "Adblock", href: "/dns/adblock", icon: ShieldIcon },
 			],
 		},
@@ -78,6 +80,7 @@
 				{ title: "System Status", href: "/system", icon: ServerIcon },
 				{ title: "Services", href: "/system/services", icon: LayersIcon },
 				{ title: "Database", href: "/system/database", icon: DatabaseIcon },
+				{ title: "Users", href: "/system/users", icon: UsersIcon },
 				{ title: "Auth Keys", href: "/system/keys", icon: KeyRoundIcon },
 			],
 		},

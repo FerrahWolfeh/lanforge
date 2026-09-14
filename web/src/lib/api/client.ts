@@ -291,7 +291,15 @@ export const validateToken = (token: string) =>
 // ---------------------------------------------------------------------------
 
 export const status = () => get<StatusResponse>('/status');
-export const scan = () => post<void>('/scan');
+export const scan = async (): Promise<void> => {
+	try {
+		await post<void>('/scan');
+	} catch (e: any) {
+		// When daemon does not expose /scan (discovery is autonomous via Netlink),
+		// silently swallow 404 so caller refresh workflows succeed smoothly.
+		if (e?.status !== 404) throw e;
+	}
+};
 export const reload = () => post<void>('/reload');
 export const shutdown = () => post<void>('/shutdown');
 

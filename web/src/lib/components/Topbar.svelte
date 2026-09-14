@@ -3,10 +3,13 @@
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
 	import * as Sheet from "$lib/components/ui/sheet";
 	import * as Tooltip from "$lib/components/ui/tooltip";
+	import { formatUptime } from "$lib/utils";
 	import AppSidebar from "./AppSidebar.svelte";
 	import ModeToggle from "./ModeToggle.svelte";
 	import MenuIcon from "@lucide/svelte/icons/menu";
 	import PanelLeftIcon from "@lucide/svelte/icons/panel-left";
+	import SearchIcon from "@lucide/svelte/icons/search";
+	import { commandState } from "$lib/stores/command.svelte";
 
 	let { uptime = $bindable(0) }: { uptime?: number } = $props();
 	let isMobileOpen = $state(false);
@@ -21,6 +24,7 @@
 		"/dns/resolver": "DNS Resolver",
 		"/dns/log": "DNS Query Log",
 		"/dns/rewrites": "Custom DNS Rewrites",
+		"/dns/cache": "DNS Cache Entries",
 		"/dns/adblock": "Adblock & Domain Filtering",
 		"/dns/adblock/lists": "Adblock Lists",
 		"/dns/adblock/rules": "Adblock Custom Rules",
@@ -37,6 +41,8 @@
 		"/system/database/settings": "Database Storage Settings",
 		"/system/database/maintenance": "Database Maintenance",
 		"/system/database/backup": "Database Backup & Restore",
+		"/system/users": "User Accounts",
+		"/system/keys": "API & Auth Keys",
 	};
 
 	const currentTitle = $derived(
@@ -51,14 +57,6 @@
 			? "System"
 			: "Lanforge")
 	);
-
-	function formatUptime(secs: number): string {
-		if (secs < 60) return `${secs}s`;
-		if (secs < 3600) return `${Math.floor(secs / 60)}m`;
-		const h = Math.floor(secs / 3600);
-		const m = Math.floor((secs % 3600) / 60);
-		return m > 0 ? `${h}h ${m}m` : `${h}h`;
-	}
 </script>
 
 <header
@@ -144,6 +142,30 @@
 				up {formatUptime(uptime)}
 			</span>
 		{/if}
+
+		<!-- Quick Search / Command Palette trigger -->
+		<button
+			type="button"
+			class="hidden md:flex items-center gap-2 h-8 px-2.5 rounded-xl border border-border/70 bg-muted/40 hover:bg-muted/80 text-muted-foreground hover:text-foreground text-xs transition-colors cursor-pointer"
+			onclick={() => commandState.open()}
+			aria-label="Buscar ou executar comando (Ctrl+K)"
+		>
+			<SearchIcon class="size-3.5" />
+			<span>Buscar...</span>
+			<kbd class="pointer-events-none inline-flex h-4.5 select-none items-center gap-0.5 rounded border border-border/80 bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
+				<span>⌘</span>K
+			</kbd>
+		</button>
+
+		<!-- Mobile Search Icon Button -->
+		<button
+			type="button"
+			class="flex md:hidden items-center justify-center size-8 rounded-xl border border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer"
+			onclick={() => commandState.open()}
+			aria-label="Buscar (Ctrl+K)"
+		>
+			<SearchIcon class="size-4" />
+		</button>
 
 		<!-- Theme Toggle -->
 		<ModeToggle />

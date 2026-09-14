@@ -11,6 +11,8 @@
 	import { status } from "$lib/api/client";
 	import AppSidebar from "$lib/components/AppSidebar.svelte";
 	import Topbar from "$lib/components/Topbar.svelte";
+	import CommandPalette from "$lib/components/CommandPalette.svelte";
+	import { commandState } from "$lib/stores/command.svelte";
 
 	let { children } = $props();
 	let uptime = $state(0);
@@ -27,6 +29,7 @@
 		"/dns/resolver": "DNS Resolver",
 		"/dns/log": "Query Log",
 		"/dns/rewrites": "DNS Rewrites",
+		"/dns/cache": "DNS Cache",
 		"/dns/adblock": "Adblock",
 		"/dns/adblock/lists": "Adblock Lists",
 		"/dns/adblock/rules": "Adblock Rules",
@@ -43,6 +46,8 @@
 		"/system/database/settings": "Storage Settings",
 		"/system/database/maintenance": "Maintenance",
 		"/system/database/backup": "Backups",
+		"/system/users": "Users",
+		"/system/keys": "Auth Keys",
 		"/login": "Login",
 		"/setup": "Setup",
 	};
@@ -54,13 +59,34 @@
 	);
 
 	function handleKeydown(event: KeyboardEvent) {
+		const target = event.target as HTMLElement;
+		const isInputActive = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+
+		// Ctrl+K / Cmd+K: Toggle Command Palette
+		if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+			event.preventDefault();
+			commandState.toggle();
+			return;
+		}
+
+		// Ctrl+B / Cmd+B: Toggle Sidebar
 		if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") {
-			const target = event.target as HTMLElement;
-			if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
-				return;
-			}
+			if (isInputActive) return;
 			event.preventDefault();
 			sidebarState.toggle();
+			return;
+		}
+
+		// /: Focus search input on the current page if not already typing
+		if (event.key === "/" && !isInputActive && !event.ctrlKey && !event.metaKey && !event.altKey && !commandState.isOpen) {
+			const searchInput = document.querySelector<HTMLInputElement>(
+				'input[type="search"], input[placeholder*="Buscar"], input[placeholder*="Search"], input[placeholder*="Filtrar"], input[placeholder*="Filter"]'
+			);
+			if (searchInput) {
+				event.preventDefault();
+				searchInput.focus();
+				searchInput.select?.();
+			}
 		}
 	}
 
@@ -127,3 +153,4 @@
 {/if}
 
 <Toaster richColors />
+<CommandPalette />

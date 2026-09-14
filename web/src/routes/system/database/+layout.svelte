@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { page } from "$app/stores";
+	import { page } from "$app/state";
 	import { onMount, onDestroy } from "svelte";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
@@ -28,7 +28,7 @@
 	];
 
 	function isTabActive(href: string) {
-		const p = $page.url.pathname;
+		const p = page.url.pathname;
 		if (href === "/system/database") return p === "/system/database" || p === "/system/database/";
 		return p === href || p.startsWith(href + "/");
 	}

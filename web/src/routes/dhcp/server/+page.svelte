@@ -3,6 +3,7 @@
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { toast } from "svelte-sonner";
 	import { dhcpOptionsGet, dhcpOptionsUpdate, dhcpReconcile } from "$lib/api/client";
+	import { parseCsvList as parseList } from "$lib/utils";
 	import type { DhcpOptionsConfig, TftpOptions } from "$lib/api/types";
 
 	import DhcpServerHeader from "./components/DhcpServerHeader.svelte";
@@ -47,13 +48,6 @@
 	// Custom Raw Options
 	let v4RawOptions = $state<Array<{ code: number; value: string }>>([]);
 	let v6RawOptions = $state<Array<{ code: number; value: string }>>([]);
-
-	function parseList(str: string): string[] {
-		return str
-			.split(",")
-			.map((s) => s.trim())
-			.filter(Boolean);
-	}
 
 	function currentPayload(): DhcpOptionsConfig {
 		const v4RawMap: Record<number, string> = {};

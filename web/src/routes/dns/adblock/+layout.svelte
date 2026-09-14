@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { page } from "$app/stores";
+	import { page } from "$app/state";
 	import ShieldIcon from "@lucide/svelte/icons/shield";
 	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
@@ -50,7 +50,7 @@
 	];
 
 	function isTabActive(href: string) {
-		const p: string = $page.url.pathname;
+		const p: string = page.url.pathname;
 		if (href === "/dns/adblock") return p === "/dns/adblock" || p === "/dns/adblock/";
 		return p === href || p.startsWith(href + "/");
 	}

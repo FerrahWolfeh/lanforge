@@ -10,6 +10,7 @@
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import ZapIcon from "@lucide/svelte/icons/zap";
 	import DatabaseIcon from "@lucide/svelte/icons/database";
+	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
 
 	import { dnsCacheFlush } from "$lib/api/client";
 	import type { DnsStatsResponse } from "$lib/api/types";
@@ -162,6 +163,17 @@
 						<Trash2Icon class="size-3.5 {flushing ? 'animate-spin' : ''}" />
 						Flush Cache
 					</Button>
+				</div>
+
+				<div class="flex justify-end pt-1">
+					<a
+						href="/dns/cache"
+						class="text-xs text-primary hover:underline flex items-center gap-1 font-medium"
+						onclick={() => { open = false; }}
+					>
+						<span>Explore Detailed Cache Records</span>
+						<ArrowRightIcon class="size-3" />
+					</a>
 				</div>
 			</div>
 		</div>

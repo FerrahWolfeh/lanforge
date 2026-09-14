@@ -5,6 +5,8 @@
 	import ZapIcon from "@lucide/svelte/icons/zap";
 	import ShieldIcon from "@lucide/svelte/icons/shield";
 	import ServerIcon from "@lucide/svelte/icons/server";
+	import DatabaseIcon from "@lucide/svelte/icons/database";
+	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
 	import type { DnsStatsResponse, DnsUpstreamEntry } from "$lib/api/types";
 
 	let {
@@ -116,16 +118,24 @@
 				<Skeleton class="h-8 w-28" />
 				<Skeleton class="h-3.5 w-20" />
 			{:else}
-				<div class="flex flex-col gap-0.5">
+				<div class="flex flex-col gap-1">
 					<span
 						class="text-emerald-400 text-3xl font-bold tabular-nums tracking-tight"
 					>
 						{cacheHitPct}%
 					</span>
-					<span class="text-muted-foreground text-xs font-medium">
-						{statsData.cache_hits.toLocaleString()} hits / {cacheMissesCount.toLocaleString()}
-						misses (active session)
-					</span>
+					<div class="flex items-center justify-between gap-1 text-xs">
+						<span class="text-muted-foreground text-xs font-medium truncate">
+							{statsData.cache_hits.toLocaleString()} hits / {cacheMissesCount.toLocaleString()} misses
+						</span>
+						<a
+							href="/dns/cache"
+							class="text-[11px] text-primary hover:underline font-medium flex items-center gap-0.5 shrink-0"
+						>
+							<span>Cache Table</span>
+							<ArrowRightIcon class="size-3" />
+						</a>
+					</div>
 				</div>
 			{/if}
 		</Card.Content>

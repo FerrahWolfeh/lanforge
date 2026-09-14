@@ -8,6 +8,7 @@
 	import { status, scan, reload, controlService } from "$lib/api/client";
 	import { normalizeServices, type StatusResponse } from "$lib/api/types";
 	import { getServiceMeta } from "$lib/services";
+	import { formatBytes, formatUptime } from "$lib/utils";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import ZapIcon from "@lucide/svelte/icons/zap";
@@ -67,9 +68,10 @@
 		scanning = true;
 		try {
 			await scan();
-			toast.success("Network scan triggered");
+			await loadStatus();
+			toast.success("System status refreshed");
 		} catch {
-			toast.error("Failed to trigger scan");
+			toast.error("Failed to refresh status");
 		} finally {
 			scanning = false;
 		}
@@ -88,21 +90,6 @@
 	}
 
 	onMount(loadStatus);
-
-	function formatBytes(bytes: number): string {
-		if (bytes < 1024) return `${bytes} B`;
-		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-		return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-	}
-
-	function formatUptime(secs: number): string {
-		const d = Math.floor(secs / 86400);
-		const h = Math.floor((secs % 86400) / 3600);
-		const m = Math.floor((secs % 3600) / 60);
-		if (d > 0) return `${d}d ${h}h ${m}m`;
-		if (h > 0) return `${h}h ${m}m`;
-		return `${m}m ${secs % 60}s`;
-	}
 
 	const serviceList = $derived(normalizeServices(data));
 
