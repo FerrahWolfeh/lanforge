@@ -78,13 +78,19 @@ export interface UserInfo {
 }
 
 export interface AuthToken {
-	id: string;
+	id: number | string;
 	token?: string; // present only on generate
 	name: string;
 	created_at: number;
 	last_used: number | null;
 	scopes: string[];
 	expires_at: number | null;
+}
+
+export interface GenerateTokenRequest {
+	name: string;
+	scopes?: string[];
+	expires_at?: number | null;
 }
 
 // ---------------------------------------------------------------------------

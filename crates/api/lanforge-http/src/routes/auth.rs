@@ -94,30 +94,106 @@ pub(crate) async fn handle_logout() -> impl IntoResponse {
     )
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum ScopesPayload {
+    List(Vec<String>),
+    Single(String),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GenerateTokenRequest {
+    pub name: String,
+    pub scopes: Option<ScopesPayload>,
+    pub expires_at: Option<i64>,
+}
+
 async fn handle_list_tokens(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_ak_list().await, AuthTokens)
 }
 
-async fn handle_generate_token() -> impl IntoResponse {
-    (
-        StatusCode::FORBIDDEN,
-        Json(serde_json::json!({ "error": "This operation is only available via local socket" })),
+async fn handle_generate_token(
+    State(state): State<AppState>,
+    user: Option<Extension<AuthenticatedUser>>,
+    Json(payload): Json<GenerateTokenRequest>,
+) -> impl IntoResponse {
+    if let Some(Extension(u)) = user
+        && u.role != "admin"
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Admin role required to generate API tokens" })),
+        )
+            .into_response();
+    }
+
+    let parsed_scopes = payload.scopes.and_then(|s| {
+        let mut vec = lanforge_types::auth::ApiScopes::new();
+        match s {
+            ScopesPayload::List(items) => {
+                for item in items {
+                    if let Ok(sc) = item.parse() {
+                        vec.push(sc);
+                    }
+                }
+            }
+            ScopesPayload::Single(str_val) => {
+                for part in str_val.split(',') {
+                    let trimmed = part.trim();
+                    if !trimmed.is_empty()
+                        && let Ok(sc) = trimmed.parse()
+                    {
+                        vec.push(sc);
+                    }
+                }
+            }
+        }
+        if vec.is_empty() { None } else { Some(vec) }
+    });
+
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_ak_generate(payload.name, parsed_scopes, payload.expires_at)
+            .await,
+        AuthToken
     )
 }
 
-async fn handle_delete_token(Path(_id): Path<String>) -> impl IntoResponse {
-    (
-        StatusCode::FORBIDDEN,
-        Json(serde_json::json!({ "error": "This operation is only available via local socket" })),
-    )
+async fn handle_delete_token(
+    State(state): State<AppState>,
+    user: Option<Extension<AuthenticatedUser>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Some(Extension(u)) = user
+        && u.role != "admin"
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Admin role required to delete API tokens" })),
+        )
+            .into_response();
+    }
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_ak_delete(id).await, Success)
 }
 
-async fn handle_renew_token(Path(_id): Path<String>) -> impl IntoResponse {
-    (
-        StatusCode::FORBIDDEN,
-        Json(serde_json::json!({ "error": "This operation is only available via local socket" })),
-    )
+async fn handle_renew_token(
+    State(state): State<AppState>,
+    user: Option<Extension<AuthenticatedUser>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Some(Extension(u)) = user
+        && u.role != "admin"
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": "Admin role required to renew API tokens" })),
+        )
+            .into_response();
+    }
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_ak_renew(id).await, AuthToken)
 }
 
 async fn handle_validate(

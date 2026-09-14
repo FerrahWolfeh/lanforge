@@ -8,6 +8,7 @@
 	import ServerIcon from "@lucide/svelte/icons/server";
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import DatabaseIcon from "@lucide/svelte/icons/database";
+	import KeyRoundIcon from "@lucide/svelte/icons/key-round";
 	import LogOutIcon from "@lucide/svelte/icons/log-out";
 	import ChevronsUpDownIcon from "@lucide/svelte/icons/chevrons-up-down";
 
@@ -116,6 +117,16 @@
 			>
 				<DatabaseIcon class="size-4 mr-2 text-muted-foreground" />
 				<span>Database & Persistence</span>
+			</DropdownMenu.Item>
+			<DropdownMenu.Item
+				class="cursor-pointer text-xs"
+				onclick={() => {
+					onNavigate?.();
+					goto("/system/keys");
+				}}
+			>
+				<KeyRoundIcon class="size-4 mr-2 text-muted-foreground" />
+				<span>Auth & API Keys</span>
 			</DropdownMenu.Item>
 		</DropdownMenu.Group>
 

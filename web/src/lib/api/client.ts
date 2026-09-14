@@ -53,7 +53,8 @@ import type {
 	DbMetrics,
 	SystemConfigExport,
 	SystemConfigImportResponse,
-	DbEngineSwitchRequest
+	DbEngineSwitchRequest,
+	GenerateTokenRequest
 } from './types';
 
 
@@ -259,7 +260,29 @@ export const logout = () => post<void>('/auth/logout');
 export const me = () => get<UserInfo>('/auth/me');
 export const changePassword = (current_password: string, new_password: string) =>
 	post<void>('/auth/change-password', { current_password, new_password });
-export const listTokens = () => get<AuthToken[]>('/auth/tokens');
+export const listTokens = async (): Promise<AuthToken[]> => {
+	const res = await get<any>('/auth/tokens');
+	if (!res) return [];
+	if (Array.isArray(res)) return res;
+	if (Array.isArray(res.tokens)) return res.tokens;
+	if (Array.isArray(res.data?.tokens)) return res.data.tokens;
+	if (Array.isArray(res.data)) return res.data;
+	return [];
+};
+
+export const generateToken = async (req: GenerateTokenRequest): Promise<AuthToken> => {
+	const res = await post<any>('/auth/tokens', req);
+	return (res?.data ?? res) as AuthToken;
+};
+
+export const deleteToken = (idOrName: string | number) =>
+	del<void>(`/auth/tokens/${encodeURIComponent(String(idOrName))}`);
+
+export const renewToken = async (idOrName: string | number): Promise<AuthToken> => {
+	const res = await post<any>(`/auth/tokens/${encodeURIComponent(String(idOrName))}/renew`, {});
+	return (res?.data ?? res) as AuthToken;
+};
+
 export const validateToken = (token: string) =>
 	post<{ valid: boolean }>('/auth/validate', { token });
 

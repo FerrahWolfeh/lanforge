@@ -334,17 +334,22 @@ async fn test_auth_middleware_contract() {
         "validate endpoint should be public"
     );
 
-    // Token generate/delete/renew via HTTP must always return 403 (UDS-only)
-    let uds_only_cases: &[(&str, &str)] =
-        &[("POST /api/v1/auth/tokens (generate)", "/api/v1/auth/tokens")];
-    for (desc, path) in uds_only_cases {
-        let (status, _) = authed_app.post(path, &json!({"name": "test"})).await;
-        assert_eq!(
-            status,
-            StatusCode::FORBIDDEN,
-            "UDS-only op should be 403: {desc}"
-        );
-    }
+    // Token generation via HTTP is permitted for authenticated admin
+    let (status, body) = authed_app.post("/api/v1/auth/tokens", &json!({"name": "test-token"})).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Authenticated admin should be able to generate tokens"
+    );
+    assert!(body["data"]["token"].as_str().unwrap().starts_with("lf_ak_"));
+
+    // Unauthenticated token generation must return 401 Unauthorized
+    let (status, _) = unauthed_app.post("/api/v1/auth/tokens", &json!({"name": "test-token"})).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "Unauthenticated token generation must be rejected"
+    );
 
     // With a valid token, protected endpoints should be accessible
     let (status, _) = authed_app.get("/api/v1/status").await;

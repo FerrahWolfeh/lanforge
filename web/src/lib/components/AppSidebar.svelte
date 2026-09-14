@@ -17,6 +17,7 @@
 	import HardDriveDownloadIcon from "@lucide/svelte/icons/hard-drive-download";
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import DatabaseIcon from "@lucide/svelte/icons/database";
+	import KeyRoundIcon from "@lucide/svelte/icons/key-round";
 
 	interface Props {
 		onNavigate?: () => void;
@@ -77,6 +78,7 @@
 				{ title: "System Status", href: "/system", icon: ServerIcon },
 				{ title: "Services", href: "/system/services", icon: LayersIcon },
 				{ title: "Database", href: "/system/database", icon: DatabaseIcon },
+				{ title: "Auth Keys", href: "/system/keys", icon: KeyRoundIcon },
 			],
 		},
 	];
