@@ -4,7 +4,9 @@ use super::common::{
     Capabilities, HttpDataResponse, HttpWrappedResponse, ServerCapabilities, ServiceBanner,
 };
 use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
-use lanforge_types::network::firewall::{FirewallConfig, FirewallStatus};
+use lanforge_types::network::firewall::{
+    FirewallCommitResponse, FirewallConfig, FirewallStatus, FirewallValidationReport,
+};
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::system::ServiceState;
@@ -523,6 +525,30 @@ impl HttpWrappedResponse for FirewallConfig {
 
 impl HttpWrappedResponse for FirewallStatus {
     type Wrapper = HttpDataResponse<FirewallStatus>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for FirewallValidationReport {
+    type Wrapper = HttpDataResponse<FirewallValidationReport>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for FirewallCommitResponse {
+    type Wrapper = HttpDataResponse<FirewallCommitResponse>;
 
     fn wrap(self) -> Self::Wrapper {
         HttpDataResponse { data: self }

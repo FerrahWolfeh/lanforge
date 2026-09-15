@@ -2,7 +2,11 @@ use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess};
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_types::{
-    network::{firewall::FirewallConfig, pppoe::PppoeConfig, ra::RaServerConfig},
+    network::{
+        firewall::{FirewallCommitRequest, FirewallCommitResponse, FirewallConfig},
+        pppoe::PppoeConfig,
+        ra::RaServerConfig,
+    },
     system::ServiceAction,
 };
 
@@ -170,6 +174,141 @@ impl ClientContext {
 
         Response::Success(SimpleSuccess {
             message: "Firewall reload requested".to_string(),
+        })
+    }
+
+    pub async fn handle_firewall_propose(&self, candidate: FirewallConfig) -> Response {
+        let report = self.ctx.stage_firewall_transaction(candidate);
+        Response::FirewallValidation(Box::new(report))
+    }
+
+    pub async fn handle_firewall_commit(&self, req: FirewallCommitRequest) -> Response {
+        let Some(staged) = self.ctx.get_staged_firewall_transaction() else {
+            return Response::Error {
+                error: "No active staged firewall transaction found or transaction expired".to_string(),
+            };
+        };
+
+        if staged.tx_id != req.tx_id {
+            return Response::Error {
+                error: format!(
+                    "Transaction ID mismatch: expected '{}', got '{}'",
+                    staged.tx_id, req.tx_id
+                ),
+            };
+        }
+
+        let candidate = staged.candidate_config.clone();
+        let previous = staged.previous_config.clone().unwrap_or_default();
+
+        if let Some(rollback_secs) = req.auto_rollback_secs {
+            // Apply candidate to runtime context and reload kernel ruleset
+            self.ctx.update_firewall_config(candidate);
+            let _ = self
+                .ctx
+                .bus()
+                .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+
+            let deadline = std::time::Instant::now()
+                + std::time::Duration::from_secs(u64::from(rollback_secs));
+            let _ = self
+                .ctx
+                .set_firewall_transaction_rollback(&req.tx_id, deadline);
+
+            // Spawn background auto-rollback worker
+            let ctx = self.ctx.clone();
+            let tx_id = req.tx_id.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(u64::from(rollback_secs))).await;
+                // If transaction is still active with this tx_id, rollback!
+                if let Some(current_staged) = ctx.get_staged_firewall_transaction()
+                    && current_staged.tx_id == tx_id
+                {
+                    tracing::warn!(
+                        tx_id = %tx_id,
+                        "Firewall transaction auto-rollback triggered after timeout without confirmation"
+                    );
+                    ctx.update_firewall_config(previous);
+                    let _ = ctx
+                        .bus()
+                        .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+                    let _ = ctx.clear_staged_firewall_transaction(Some(&tx_id));
+                }
+            });
+
+            Response::FirewallCommit(Box::new(FirewallCommitResponse {
+                success: true,
+                message: format!(
+                    "Candidate firewall rules applied with {rollback_secs}s auto-rollback window"
+                ),
+                auto_rollback_active: true,
+                rollback_deadline_secs: Some(rollback_secs),
+            }))
+        } else {
+            // Permanent commit without rollback
+            if let Err(e) = self.db.save_firewall_config(&candidate).await {
+                return Response::Error {
+                    error: format!("Failed to persist firewall configuration: {e}"),
+                };
+            }
+
+            self.ctx.update_firewall_config(candidate);
+            let _ = self
+                .ctx
+                .clear_staged_firewall_transaction(Some(&req.tx_id));
+
+            let _ = self
+                .ctx
+                .bus()
+                .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+
+            Response::FirewallCommit(Box::new(FirewallCommitResponse {
+                success: true,
+                message: "Firewall configuration committed and persisted successfully".to_string(),
+                auto_rollback_active: false,
+                rollback_deadline_secs: None,
+            }))
+        }
+    }
+
+    pub async fn handle_firewall_confirm(&self, tx_id: String) -> Response {
+        let Some(staged) = self.ctx.clear_staged_firewall_transaction(Some(&tx_id)) else {
+            return Response::Error {
+                error: format!("No active transaction found with ID '{tx_id}' to confirm"),
+            };
+        };
+
+        if let Err(e) = self.db.save_firewall_config(&staged.candidate_config).await {
+            return Response::Error {
+                error: format!("Failed to persist confirmed firewall configuration: {e}"),
+            };
+        }
+
+        Response::Success(SimpleSuccess {
+            message: format!("Firewall transaction '{tx_id}' confirmed permanently"),
+        })
+    }
+
+    pub async fn handle_firewall_abort(&self, tx_id: String) -> Response {
+        let Some(staged) = self.ctx.clear_staged_firewall_transaction(Some(&tx_id)) else {
+            return Response::Error {
+                error: format!("No active transaction found with ID '{tx_id}' to abort"),
+            };
+        };
+
+        // If it had a previous config and was active with auto_rollback, revert immediately
+        if staged.auto_rollback_deadline.is_some()
+            && let Some(prev) = staged.previous_config
+        {
+            self.ctx.update_firewall_config(prev);
+            let _ = self
+                .ctx
+                .bus()
+                .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+        }
+
+        Response::Success(SimpleSuccess {
+            message: format!("Firewall transaction '{tx_id}' aborted and discarded"),
         })
     }
 }

@@ -1,7 +1,9 @@
 use lanforge_types::{
     events::TimedEvent,
     network::{
-        firewall::{FirewallConfig, FirewallStatus},
+        firewall::{
+            FirewallCommitResponse, FirewallConfig, FirewallStatus, FirewallValidationReport,
+        },
         pppoe::PppoeConfig,
         ra::RaServerConfig,
     },
@@ -117,4 +119,8 @@ pub enum Response {
     FirewallStatus(Box<FirewallStatus>),
     /// Firewall declarative configuration response.
     FirewallConfig(Box<FirewallConfig>),
+    /// Firewall transaction pre-flight validation report.
+    FirewallValidation(Box<FirewallValidationReport>),
+    /// Firewall transaction commit result.
+    FirewallCommit(Box<FirewallCommitResponse>),
 }

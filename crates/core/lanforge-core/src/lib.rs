@@ -52,6 +52,7 @@ pub mod bus;
 pub mod config;
 pub mod context;
 pub mod error;
+pub mod firewall;
 pub mod macros;
 pub mod service;
 pub mod utils;

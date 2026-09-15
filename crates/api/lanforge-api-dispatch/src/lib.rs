@@ -17,7 +17,10 @@ use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{BlockingMode, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
-use lanforge_types::network::firewall::{FirewallConfig, FirewallStatus};
+use lanforge_types::network::firewall::{
+    FirewallCommitRequest, FirewallCommitResponse, FirewallConfig, FirewallStatus,
+    FirewallValidationReport,
+};
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::RaServerConfig;
 use lanforge_types::system::{PppoeStatusResponse, RaStatusResponse};
@@ -849,6 +852,44 @@ impl LanforgeRpc for ClientContext {
 
     async fn firewall_reload(&self) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_firewall_reload().await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn firewall_propose(
+        &self,
+        candidate: Box<FirewallConfig>,
+    ) -> Result<Box<FirewallValidationReport>, RpcCallError> {
+        match self.handle_firewall_propose(*candidate).await {
+            Response::FirewallValidation(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn firewall_commit(
+        &self,
+        req: Box<FirewallCommitRequest>,
+    ) -> Result<Box<FirewallCommitResponse>, RpcCallError> {
+        match self.handle_firewall_commit(*req).await {
+            Response::FirewallCommit(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn firewall_confirm(&self, tx_id: String) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_firewall_confirm(tx_id).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn firewall_abort(&self, tx_id: String) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_firewall_abort(tx_id).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),

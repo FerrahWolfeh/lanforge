@@ -191,3 +191,38 @@ pub struct FirewallStatus {
     pub flow_offload_active: bool,
     pub default_drop_active: bool,
 }
+
+/// Detailed pre-flight validation report for a proposed firewall transaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FirewallValidationReport {
+    /// True if the candidate configuration has zero blocking errors and can be safely committed.
+    pub valid: bool,
+    /// Transaction ID generated when valid, used to commit or abort the transaction.
+    pub tx_id: Option<String>,
+    /// Human-readable diff summary showing what will change.
+    pub diff_summary: Vec<String>,
+    /// Warnings that do not prevent application (e.g. anti-lockout notes, performance tips).
+    pub warnings: Vec<String>,
+    /// Blocking errors that prevent application (e.g. port collisions, duplicate zones).
+    pub errors: Vec<String>,
+}
+
+/// Request to commit a staged firewall transaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FirewallCommitRequest {
+    /// The transaction ticket ID returned by the pre-flight validation.
+    pub tx_id: String,
+    /// Optional auto-rollback timeout in seconds.
+    /// If specified (e.g. 20s), the candidate rules are applied, but will automatically
+    /// roll back unless a confirmation heartbeat is received before the deadline.
+    pub auto_rollback_secs: Option<u32>,
+}
+
+/// Result of committing a staged firewall transaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FirewallCommitResponse {
+    pub success: bool,
+    pub message: String,
+    pub auto_rollback_active: bool,
+    pub rollback_deadline_secs: Option<u32>,
+}

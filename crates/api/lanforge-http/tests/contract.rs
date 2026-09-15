@@ -960,3 +960,83 @@ async fn test_firewall_contract() {
     assert_eq!(status, StatusCode::OK);
     assert!(body["data"]["message"].as_str().unwrap().contains("reload"));
 }
+
+#[tokio::test]
+async fn test_firewall_transactional_handshake_contract() {
+    use lanforge_types::network::firewall::{L4Protocol, PortForwardRule};
+    use std::net::Ipv4Addr;
+
+    let app = TestApp::with_auth().await;
+
+    // Fetch baseline config
+    let (status, body) = app.get("/api/v1/firewall/config").await;
+    assert_eq!(status, StatusCode::OK);
+    let mut candidate: FirewallConfig = serde_json::from_value(body["data"].clone()).unwrap();
+
+    // 1. Propose invalid candidate (collision on port 8443)
+    let mut invalid_candidate = candidate.clone();
+    invalid_candidate.port_forwards.push(PortForwardRule {
+        comment: Some("Rule 1".into()),
+        src_zone: "external".into(),
+        internal_ip: Ipv4Addr::new(192, 168, 1, 50).into(),
+        external_port: 8443,
+        internal_port: 8443,
+        protocol: L4Protocol::Tcp,
+        enable_hairpin: true,
+    });
+    invalid_candidate.port_forwards.push(PortForwardRule {
+        comment: Some("Rule 2 colliding".into()),
+        src_zone: "external".into(),
+        internal_ip: Ipv4Addr::new(192, 168, 1, 60).into(),
+        external_port: 8443,
+        internal_port: 8443,
+        protocol: L4Protocol::Tcp,
+        enable_hairpin: true,
+    });
+
+    let (status, body) = app.post("/api/v1/firewall/propose", &invalid_candidate).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["valid"], false);
+    assert!(body["data"]["tx_id"].is_null());
+    assert!(!body["data"]["errors"].as_array().unwrap().is_empty());
+
+    // 2. Propose valid candidate
+    candidate.flow_offload = true;
+    candidate.port_forwards.push(PortForwardRule {
+        comment: Some("Plex Server".into()),
+        src_zone: "external".into(),
+        internal_ip: Ipv4Addr::new(192, 168, 1, 100).into(),
+        external_port: 32400,
+        internal_port: 32400,
+        protocol: L4Protocol::Tcp,
+        enable_hairpin: true,
+    });
+
+    let (status, body) = app.post("/api/v1/firewall/propose", &candidate).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["valid"], true);
+    let tx_id = body["data"]["tx_id"].as_str().expect("tx_id must be present").to_string();
+    assert!(!body["data"]["diff_summary"].as_array().unwrap().is_empty());
+
+    // 3. Commit with auto-rollback window
+    let commit_req = json!({
+        "tx_id": tx_id,
+        "auto_rollback_secs": 30
+    });
+    let (status, body) = app.post("/api/v1/firewall/commit", &commit_req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["success"], true);
+    assert_eq!(body["data"]["auto_rollback_active"], true);
+
+    // 4. Confirm transaction
+    let confirm_req = json!({ "tx_id": tx_id });
+    let (status, body) = app.post("/api/v1/firewall/confirm", &confirm_req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["data"]["message"].as_str().unwrap().contains("confirmed"));
+
+    // 5. Verify config has the new port forward
+    let (status, body) = app.get("/api/v1/firewall/config").await;
+    assert_eq!(status, StatusCode::OK);
+    let updated_config: FirewallConfig = serde_json::from_value(body["data"].clone()).unwrap();
+    assert!(updated_config.port_forwards.iter().any(|pf| pf.external_port == 32400));
+}
