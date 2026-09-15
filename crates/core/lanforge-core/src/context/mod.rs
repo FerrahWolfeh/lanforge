@@ -62,8 +62,10 @@ use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
+use lanforge_types::events::FirewallEvent;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::network::firewall::{DynamicPortRequest, FirewallConfig, L4Protocol};
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
 use lanforge_types::system::{ServiceBanner, ServiceState, SystemStatus};
@@ -203,6 +205,8 @@ pub struct DynamicConfig {
     pub dns_adblock_rules: Vec<AdblockRuleEntry>,
     /// Configured `PPPoE` client runtime configuration.
     pub pppoe: Option<PppoeConfig>,
+    /// Configured firewall runtime configuration.
+    pub firewall: Option<FirewallConfig>,
 }
 
 /// Internal state shared behind an `Arc`.
@@ -242,6 +246,8 @@ struct LanforgeContextInner {
     last_db_flush: RwLock<Option<SystemTime>>,
     /// Internal counters for event rates.
     event_counters: EventCounters,
+    /// Dynamic port requests from internal services (HTTP, DNS, DHCP, etc.).
+    firewall_ports: RwLock<Vec<DynamicPortRequest>>,
 
     /// Global system status for reporting.
     status: RwLock<Option<SystemStatus>>,
@@ -306,6 +312,7 @@ impl LanforgeContext {
             dhcpv6_stats: Arc::new(Dhcpv6Stats::new()),
             last_db_flush: RwLock::new(None),
             event_counters: EventCounters::default(),
+            firewall_ports: RwLock::new(Vec::new()),
 
             status: RwLock::new(None),
             active_clients: Arc::new(AtomicUsize::new(0)),
@@ -476,6 +483,57 @@ impl LanforgeContext {
         }
     }
 
+    /// Creates a dedicated `ServiceHandle` subscribing only to firewall events.
+    #[must_use]
+    pub fn service_handle_firewall(&self) -> ServiceHandle {
+        ServiceHandle {
+            rx: self.inner.bus.subscribe_firewall(),
+            ctx: self.clone(),
+        }
+    }
+
+    /// Registers a dynamic port requirement for an internal service (e.g. HTTP WebUI, DNS, DHCP).
+    ///
+    /// Stores the port in context and broadcasts a `FirewallEvent::PortOpenRequested` on the bus.
+    pub fn register_service_port(&self, request: DynamicPortRequest) {
+        {
+            let mut ports = self.inner.firewall_ports.write();
+            if !ports.iter().any(|p| {
+                p.service == request.service && p.port == request.port && p.protocol == request.protocol
+            }) {
+                ports.push(request.clone());
+            }
+        }
+        let _ = self
+            .inner
+            .bus
+            .publish(LanforgeEvent::Firewall(FirewallEvent::PortOpenRequested(
+                Box::new(request),
+            )));
+    }
+
+    /// Releases a previously registered dynamic port requirement.
+    pub fn release_service_port(&self, service: &str, port: u16, protocol: L4Protocol) {
+        {
+            let mut ports = self.inner.firewall_ports.write();
+            ports.retain(|p| !(p.service == service && p.port == port && p.protocol == protocol));
+        }
+        let _ = self
+            .inner
+            .bus
+            .publish(LanforgeEvent::Firewall(FirewallEvent::PortReleaseRequested {
+                service: service.to_string(),
+                port,
+                protocol,
+            }));
+    }
+
+    /// Returns all registered dynamic service ports.
+    #[must_use]
+    pub fn registered_service_ports(&self) -> Vec<DynamicPortRequest> {
+        self.inner.firewall_ports.read().clone()
+    }
+
     /// Returns a copy of the current dynamic subsystem configurations.
     #[must_use]
     pub fn config(&self) -> DynamicConfig {
@@ -585,6 +643,12 @@ impl LanforgeContext {
     #[must_use]
     pub fn get_pppoe_config(&self) -> Option<PppoeConfig> {
         self.inner.config.read().pppoe.clone()
+    }
+
+    /// Returns the current dynamic firewall configuration, if configured.
+    #[must_use]
+    pub fn get_firewall_config(&self) -> Option<FirewallConfig> {
+        self.inner.config.read().firewall.clone()
     }
 
     #[must_use]

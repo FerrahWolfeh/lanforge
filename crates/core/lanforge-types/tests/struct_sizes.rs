@@ -6,6 +6,7 @@ use lanforge_types::device::transient::*;
 use lanforge_types::dhcp::*;
 use lanforge_types::events::device::*;
 use lanforge_types::events::dns::*;
+use lanforge_types::events::firewall::*;
 use lanforge_types::events::network::*;
 use lanforge_types::events::pppoe::*;
 use lanforge_types::events::storage::*;
@@ -128,6 +129,8 @@ fn test_print_all_struct_sizes() {
     print_size::<DnsEvent>("DnsEvent");
     print_size::<PppoeEvent>("PppoeEvent");
     print_size::<PppoeSessionUp>("PppoeSessionUp");
+    print_size::<FirewallEvent>("FirewallEvent");
+    print_size::<FirewallAppliedSummary>("FirewallAppliedSummary");
     print_size::<LanforgeEvent>("LanforgeEvent");
     print_size::<TimedEvent>("TimedEvent");
     print_size::<EventVec>("EventVec");
@@ -141,6 +144,17 @@ fn test_print_all_struct_sizes() {
     print_size::<DhcpV4PoolUpdate>("DhcpV4PoolUpdate");
     print_size::<DhcpV6PoolUpdate>("DhcpV6PoolUpdate");
     print_size::<DeviceUpdate>("DeviceUpdate");
+
+    println!("\n=== FIREWALL TYPES ===");
+    print_size::<FirewallPolicy>("FirewallPolicy");
+    print_size::<L4Protocol>("L4Protocol");
+    print_size::<HostPortRule>("HostPortRule");
+    print_size::<DynamicPortRequest>("DynamicPortRequest");
+    print_size::<FirewallZone>("FirewallZone");
+    print_size::<ZoneForwarding>("ZoneForwarding");
+    print_size::<PortForwardRule>("PortForwardRule");
+    print_size::<FirewallConfig>("FirewallConfig");
+    print_size::<FirewallStatus>("FirewallStatus");
 
     println!("\n=== SYSTEM & AUTH ===");
     print_size::<SystemStatus>("SystemStatus");

@@ -4,6 +4,7 @@ use std::time::SystemTime;
 
 pub mod device;
 pub mod dns;
+pub mod firewall;
 pub mod network;
 pub mod pppoe;
 pub mod storage;
@@ -13,6 +14,7 @@ pub use self::device::{
     AdminChange, DeviceEvent, DhcpV4MessageType, DhcpV6MessageType, NetworkChange,
 };
 pub use self::dns::DnsEvent;
+pub use self::firewall::{FirewallAppliedSummary, FirewallEvent};
 pub use self::network::{NetworkEvent, PrefixChangeDetails};
 pub use self::pppoe::{PppoeEvent, PppoeSessionUp};
 pub use self::storage::StorageEvent;
@@ -80,7 +82,7 @@ impl TimedEvent {
                 DnsEvent::QueryResolved(_) => true,
                 _ => false,
             },
-            LanforgeEvent::Pppoe(_) => true,
+            LanforgeEvent::Pppoe(_) | LanforgeEvent::Firewall(_) => true,
         }
     }
 }
@@ -93,4 +95,5 @@ pub enum LanforgeEvent {
     Storage(StorageEvent),
     Dns(DnsEvent),
     Pppoe(PppoeEvent),
+    Firewall(FirewallEvent),
 }

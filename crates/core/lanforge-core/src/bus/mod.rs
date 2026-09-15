@@ -11,7 +11,8 @@ use tokio::sync::broadcast::{self, Receiver};
 
 pub use lanforge_types::events::{
     AdminChange, DeviceEvent, DhcpV4MessageType, DhcpV6MessageType, DnsEvent, EventVec,
-    NetworkChange, NetworkEvent, PppoeEvent, PrefixChangeDetails, StorageEvent, SystemEvent,
+    FirewallEvent, NetworkChange, NetworkEvent, PppoeEvent, PrefixChangeDetails, StorageEvent,
+    SystemEvent,
 };
 
 pub struct EventBus {
@@ -22,6 +23,7 @@ pub struct EventBus {
     dns: broadcast::Sender<TimedEvent>,
     storage: broadcast::Sender<TimedEvent>,
     pppoe: broadcast::Sender<TimedEvent>,
+    firewall: broadcast::Sender<TimedEvent>,
 }
 
 impl EventBus {
@@ -34,6 +36,7 @@ impl EventBus {
         let (dns, _) = broadcast::channel(512);
         let (storage, _) = broadcast::channel(128);
         let (pppoe, _) = broadcast::channel(128);
+        let (firewall, _) = broadcast::channel(128);
         Self {
             global,
             system,
@@ -42,6 +45,7 @@ impl EventBus {
             dns,
             storage,
             pppoe,
+            firewall,
         }
     }
 
@@ -87,6 +91,12 @@ impl EventBus {
         self.pppoe.subscribe()
     }
 
+    /// Subscribes exclusively to firewall ruleset and dynamic port events.
+    #[must_use]
+    pub fn subscribe_firewall(&self) -> Receiver<TimedEvent> {
+        self.firewall.subscribe()
+    }
+
     #[must_use]
     pub fn publish(&self, event: LanforgeEvent) -> usize {
         #[cfg(feature = "hotpath")]
@@ -109,6 +119,7 @@ impl EventBus {
                 let _ = self.dns.send(event.clone());
                 let _ = self.storage.send(event.clone());
                 let _ = self.pppoe.send(event.clone());
+                let _ = self.firewall.send(event.clone());
             }
             LanforgeEvent::System(SystemEvent::ConfigRaChanged) => {
                 let _ = self.system.send(event.clone());
@@ -140,6 +151,9 @@ impl EventBus {
             LanforgeEvent::Pppoe(_) => {
                 let _ = self.pppoe.send(event.clone());
                 let _ = self.dns.send(event.clone());
+            }
+            LanforgeEvent::Firewall(_) => {
+                let _ = self.firewall.send(event.clone());
             }
         }
 

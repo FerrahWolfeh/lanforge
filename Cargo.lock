@@ -2786,6 +2786,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lanforge-nft"
+version = "0.1.0"
+dependencies = [
+ "lanforge-core",
+ "lanforge-macros",
+ "lanforge-types",
+ "nftables",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "lanforge-pppoe"
 version = "0.3.0"
 dependencies = [

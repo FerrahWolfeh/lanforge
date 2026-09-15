@@ -1,5 +1,6 @@
 pub mod dhcp;
 pub mod dns;
+pub mod firewall;
 mod hostname;
 mod ip;
 mod listen;
@@ -7,6 +8,11 @@ mod neighbor;
 pub mod pppoe;
 pub mod ra;
 pub mod subnet;
+
+pub use firewall::{
+    DynamicPortRequest, FirewallConfig, FirewallPolicy, FirewallStatus, FirewallZone, HostPortRule,
+    L4Protocol, PortForwardRule, ZoneForwarding,
+};
 
 pub use dns::{
     DnsClass, DnsHeader, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordEntry,
