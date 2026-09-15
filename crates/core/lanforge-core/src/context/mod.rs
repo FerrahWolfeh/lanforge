@@ -492,7 +492,7 @@ impl LanforgeContext {
         }
     }
 
-    /// Registers a dynamic port requirement for an internal service (e.g. HTTP WebUI, DNS, DHCP).
+    /// Registers a dynamic port requirement for an internal service (e.g. HTTP `WebUI`, DNS, DHCP).
     ///
     /// Stores the port in context and broadcasts a `FirewallEvent::PortOpenRequested` on the bus.
     pub fn register_service_port(&self, request: DynamicPortRequest) {

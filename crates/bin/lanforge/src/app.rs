@@ -29,6 +29,8 @@ use lanforge_http::HttpService;
 use lanforge_db::PppoeConfigStore;
 #[cfg(feature = "pppoe")]
 use lanforge_pppoe::PppoeService;
+#[cfg(feature = "nft")]
+use lanforge_nft::NftService;
 #[cfg(feature = "ra")]
 use lanforge_ra::RaService;
 #[cfg(feature = "tftp")]
@@ -251,6 +253,9 @@ impl Daemon {
                 ctx.get_pppoe_config().unwrap_or_else(|| cfg.pppoe_toml.clone()),
                 ctx,
             ),
+
+            #[cfg(feature = "nft")]
+            async [] => NftService::new(),
         });
     }
 

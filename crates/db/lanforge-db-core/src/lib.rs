@@ -18,6 +18,7 @@ use lanforge_types::network::dns::adblock::{
     AdblockDbConfig, AdblockRuleAction, AdblockUrlKind, RewriteAnswer, RewriteRule,
 };
 use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
+use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet, QueryLogEntry};
@@ -562,6 +563,31 @@ pub trait PppoeConfigStore: Send + Sync {
     }
 }
 
+/// Handles Firewall configuration persistence.
+pub trait FirewallConfigStore: Send + Sync {
+    /// Loads dynamic Firewall configuration.
+    fn load_firewall_config(&self) -> BoxFuture<'_, Result<Option<FirewallConfig>, DbError>>;
+
+    /// Saves dynamic Firewall configuration.
+    fn save_firewall_config<'a>(&'a self, cfg: &'a FirewallConfig) -> BoxFuture<'a, Result<(), DbError>>;
+
+    /// Seeds Firewall configuration if not present in database. Returns `Ok(true)` if seeded.
+    fn seed_firewall_if_empty<'a>(
+        &'a self,
+        seed: &'a FirewallConfig,
+    ) -> BoxFuture<'a, Result<bool, DbError>> {
+        Box::pin(async move {
+            let existing = self.load_firewall_config().await?;
+            if existing.is_none() {
+                self.save_firewall_config(seed).await?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })
+    }
+}
+
 /// Handles storage and administration of user accounts.
 pub trait UserStore: Send + Sync {
     /// Creates a new user in the database.
@@ -759,6 +785,7 @@ pub trait DatabaseStore:
     + DhcpConfigStore
     + RaConfigStore
     + PppoeConfigStore
+    + FirewallConfigStore
     + UserStore
     + Send
     + Sync
@@ -774,6 +801,7 @@ impl<T> DatabaseStore for T where
         + DhcpConfigStore
         + RaConfigStore
         + PppoeConfigStore
+        + FirewallConfigStore
         + UserStore
         + Send
         + Sync

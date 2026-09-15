@@ -6,6 +6,7 @@ use lanforge_api::api::{
 };
 use lanforge_core::context::CompiledCaps;
 use lanforge_types::device::{IPv6State, Origin};
+use lanforge_types::network::firewall::{FirewallPolicy, FirewallStatus};
 use lanforge_types::system::ServiceState;
 use std::fs::metadata;
 
@@ -137,6 +138,34 @@ impl ClientContext {
         Response::RaStatus(status)
     }
 
+    pub async fn handle_firewall_status(&self) -> Response {
+        let cfg = self.ctx.get_firewall_config().unwrap_or_default();
+        let dynamic_ports = self.ctx.registered_service_ports();
+        let internal_zone = cfg.zones.iter().find(|z| z.name == "internal");
+        let lan_ifaces = internal_zone.map_or_else(Vec::new, |z| z.interfaces.clone());
+        let external_zone = cfg.zones.iter().find(|z| z.name == "external");
+        let active_wan = external_zone.and_then(|z| z.interfaces.first().cloned());
+        #[allow(clippy::cast_possible_truncation)]
+        let open_ports_count = (cfg.zones.iter().map(|z| z.open_ports.len()).sum::<usize>()
+            + dynamic_ports.len()) as u32;
+        #[allow(clippy::cast_possible_truncation)]
+        let rules_count = open_ports_count
+            + (cfg.port_forwards.len() + cfg.forwardings.len()) as u32;
+
+        let status = FirewallStatus {
+            table: cfg.table_name,
+            active_wan,
+            lan_ifaces,
+            last_applied_secs_ago: None,
+            open_ports_count,
+            rules_count,
+            enabled: cfg.enabled,
+            flow_offload_active: cfg.flow_offload,
+            default_drop_active: cfg.default_input_policy == FirewallPolicy::Drop,
+        };
+
+        Response::FirewallStatus(Box::new(status))
+    }
 
     #[must_use]
     pub fn gather_db_status(&self) -> DbStatus {

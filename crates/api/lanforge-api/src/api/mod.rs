@@ -1,6 +1,10 @@
 use lanforge_types::{
     events::TimedEvent,
-    network::{pppoe::PppoeConfig, ra::RaServerConfig},
+    network::{
+        firewall::{FirewallConfig, FirewallStatus},
+        pppoe::PppoeConfig,
+        ra::RaServerConfig,
+    },
     system::{PppoeStatusResponse, RaStatusResponse},
 };
 use serde::{Deserialize, Serialize};
@@ -109,4 +113,8 @@ pub enum Response {
     Setup(Box<SetupResponse>),
     /// DHCP lease sanity check and reconciliation response.
     DhcpReconcile(DhcpReconcileResponse),
+    /// Firewall operational status and metrics response.
+    FirewallStatus(Box<FirewallStatus>),
+    /// Firewall declarative configuration response.
+    FirewallConfig(Box<FirewallConfig>),
 }

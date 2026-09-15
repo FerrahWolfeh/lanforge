@@ -41,7 +41,7 @@ pub struct HostPortRule {
     pub protocol: L4Protocol,
 }
 
-/// Dynamic inbound port requested at runtime by internal services (HTTP WebUI, DNS, DHCP, etc.).
+/// Dynamic inbound port requested at runtime by internal services (HTTP `WebUI`, DNS, DHCP, etc.).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DynamicPortRequest {
     pub service: String,
@@ -85,6 +85,7 @@ pub struct PortForwardRule {
 
 /// Complete declarative firewall configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 #[serde(default)]
 pub struct FirewallConfig {
     pub table_name: String,

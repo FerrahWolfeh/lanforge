@@ -7,8 +7,8 @@ use lanforge_core::context::PersistenceSnapshot;
 use lanforge_core::context::state::State;
 use lanforge_db_core::{
     AdblockStore, ApiTokenEntry, ApiTokenStore, BoxFuture, DbError, DeviceStore, DhcpConfigStore,
-    DnsStore, DnsUpstreamEntry, DnsUpstreamStore, PppoeConfigStore, RaConfigStore, UserEntry,
-    UserStore,
+    DnsStore, DnsUpstreamEntry, DnsUpstreamStore, FirewallConfigStore, PppoeConfigStore,
+    RaConfigStore, UserEntry, UserStore,
 };
 use lanforge_db_redb::RedbDatabase;
 use lanforge_types::auth::{ApiScopes, UserRole};
@@ -20,6 +20,7 @@ use lanforge_types::network::dns::adblock::{
     AdblockDbConfig, AdblockRuleAction, AdblockUrlKind, RewriteAnswer, RewriteRule,
 };
 use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
+use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
@@ -560,6 +561,17 @@ impl PppoeConfigStore for LanforgeDb {
 
     fn save_pppoe_config<'a>(&'a self, cfg: &'a PppoeConfig) -> BoxFuture<'a, Result<(), DbError>> {
         self.inner.save_pppoe_config(cfg)
+    }
+}
+
+// Forward FirewallConfigStore
+impl FirewallConfigStore for LanforgeDb {
+    fn load_firewall_config(&self) -> BoxFuture<'_, Result<Option<FirewallConfig>, DbError>> {
+        self.inner.load_firewall_config()
+    }
+
+    fn save_firewall_config<'a>(&'a self, cfg: &'a FirewallConfig) -> BoxFuture<'a, Result<(), DbError>> {
+        self.inner.save_firewall_config(cfg)
     }
 }
 

@@ -89,6 +89,10 @@ pub struct Config {
     pub pppoe_enabled: bool,
     #[cfg(feature = "pppoe")]
     pub pppoe_toml: lanforge_pppoe::config::PppoeConfig,
+    #[cfg(feature = "nft")]
+    pub firewall_enabled: bool,
+    #[cfg(feature = "nft")]
+    pub firewall_toml: lanforge_nft::FirewallConfig,
 
     pub config_path: String,
 }
@@ -191,6 +195,8 @@ impl Config {
         try_load_section!("tftp.toml", toml_cfg.tftp, TftpConfig);
         #[cfg(feature = "pppoe")]
         try_load_section!("pppoe.toml", toml_cfg.pppoe, lanforge_pppoe::config::PppoeConfig);
+        #[cfg(feature = "nft")]
+        try_load_section!("firewall.toml", toml_cfg.firewall, lanforge_nft::FirewallConfig);
     }
 
     fn resolve_search_domains(toml_cfg: &toml::TomlConfig) -> Vec<String> {
@@ -292,6 +298,10 @@ impl Config {
             pppoe_enabled: toml_cfg.pppoe.enabled,
             #[cfg(feature = "pppoe")]
             pppoe_toml: toml_cfg.pppoe,
+            #[cfg(feature = "nft")]
+            firewall_enabled: toml_cfg.firewall.enabled,
+            #[cfg(feature = "nft")]
+            firewall_toml: toml_cfg.firewall,
             config_path: cli.config.clone(),
         }
     }
@@ -686,6 +696,10 @@ impl Default for Config {
             pppoe_enabled: false,
             #[cfg(feature = "pppoe")]
             pppoe_toml: lanforge_pppoe::config::PppoeConfig::default(),
+            #[cfg(feature = "nft")]
+            firewall_enabled: true,
+            #[cfg(feature = "nft")]
+            firewall_toml: lanforge_nft::FirewallConfig::default(),
             config_path: "/etc/lanforge/lanforge.toml".to_string(),
         }
     }

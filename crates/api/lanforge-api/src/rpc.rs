@@ -19,6 +19,7 @@ use lanforge_types::{
             adblock::{AdblockUrlKind, BlockingMode, RewriteRule},
             upstream::UpstreamProtocol,
         },
+        firewall::{FirewallConfig, FirewallStatus},
         pppoe::PppoeConfig,
         ra::RaServerConfig,
     },
@@ -323,4 +324,15 @@ pub trait LanforgeRpc {
         &self,
         payload: Box<SetupPayload>,
     ) -> impl Future<Output = Result<Box<SetupResponse>, RpcCallError>> + Send;
+    fn firewall_status(
+        &self,
+    ) -> impl Future<Output = Result<Box<FirewallStatus>, RpcCallError>> + Send;
+    fn firewall_config(
+        &self,
+    ) -> impl Future<Output = Result<Box<FirewallConfig>, RpcCallError>> + Send;
+    fn update_firewall_config(
+        &self,
+        cfg: Box<FirewallConfig>,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn firewall_reload(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
 }

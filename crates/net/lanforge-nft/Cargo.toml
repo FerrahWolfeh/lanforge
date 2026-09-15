@@ -13,7 +13,7 @@ lanforge-types = { workspace = true }
 
 # Workspace & Async
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
 tracing = { workspace = true }
 nftables = "0.6.3"
 

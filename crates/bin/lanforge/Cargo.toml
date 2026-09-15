@@ -19,6 +19,7 @@ default = [
     "ra",
     "tftp",
     "pppoe",
+    "nft",
     "discovery",
     "http",
     "https",
@@ -37,6 +38,7 @@ dns = ["dep:lanforge-dns"]
 ra = ["dep:lanforge-ra"]
 tftp = ["dep:lanforge-tftp"]
 pppoe = ["dep:lanforge-pppoe"]
+nft = ["dep:lanforge-nft"]
 discovery = []
 http = ["dep:lanforge-http", "lanforge-http/server"]
 uds = ["dep:lanforge-uds"]
@@ -165,6 +167,7 @@ lanforge-uds = { workspace = true, optional = true }
 lanforge-http = { workspace = true, optional = true }
 lanforge-tftp = { workspace = true, optional = true }
 lanforge-pppoe = { workspace = true, optional = true }
+lanforge-nft = { workspace = true, optional = true }
 
 
 # Async & runtime

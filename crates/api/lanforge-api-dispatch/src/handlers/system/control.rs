@@ -2,7 +2,7 @@ use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess};
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_types::{
-    network::{pppoe::PppoeConfig, ra::RaServerConfig},
+    network::{firewall::FirewallConfig, pppoe::PppoeConfig, ra::RaServerConfig},
     system::ServiceAction,
 };
 
@@ -127,6 +127,49 @@ impl ClientContext {
 
         Response::Success(SimpleSuccess {
             message: "Immediate Router Advertisement burst triggered".to_string(),
+        })
+    }
+
+    pub async fn handle_firewall_config(&self) -> Response {
+        match self.db.load_firewall_config().await {
+            Ok(Some(cfg)) => Response::FirewallConfig(Box::new(cfg)),
+            Ok(None) => {
+                let cfg = self.ctx.get_firewall_config().unwrap_or_default();
+                Response::FirewallConfig(Box::new(cfg))
+            }
+            Err(e) => Response::Error {
+                error: format!("Database error loading firewall config: {e}"),
+            },
+        }
+    }
+
+    pub async fn handle_update_firewall_config(&self, cfg: FirewallConfig) -> Response {
+        if let Err(e) = self.db.save_firewall_config(&cfg).await {
+            return Response::Error {
+                error: format!("Failed to save firewall configuration: {e}"),
+            };
+        }
+
+        self.ctx.update_firewall_config(cfg);
+
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+
+        Response::Success(SimpleSuccess {
+            message: "Firewall configuration updated successfully".to_string(),
+        })
+    }
+
+    pub async fn handle_firewall_reload(&self) -> Response {
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+
+        Response::Success(SimpleSuccess {
+            message: "Firewall reload requested".to_string(),
         })
     }
 }

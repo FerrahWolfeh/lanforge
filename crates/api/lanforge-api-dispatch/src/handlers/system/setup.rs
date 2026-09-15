@@ -8,6 +8,7 @@ use lanforge_types::events::{LanforgeEvent, SystemEvent};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::network::firewall::{FirewallConfig, ZoneForwarding};
 use lanforge_types::network::pppoe::PppoeConfig;
 use pnet::datalink::interfaces;
 use pnet::ipnetwork::IpNetwork;
@@ -293,7 +294,43 @@ impl ClientContext {
             }
         }
 
-        // 7. Write complete declarative TOML file
+        // 7. Seed initial Firewall configuration
+        let wan_interface = if let Some(ref wan) = payload.wan {
+            match wan {
+                SetupWanConfig::Pppoe { interface, vlan_id, .. } => {
+                    if let Some(vid) = vlan_id {
+                        Some(format!("{interface}.{vid}"))
+                    } else {
+                        Some(interface.clone())
+                    }
+                }
+                SetupWanConfig::SystemGateway { .. } => None,
+            }
+        } else {
+            None
+        };
+
+        let mut initial_firewall = FirewallConfig::default();
+        if let Some(internal_zone) = initial_firewall.zones.iter_mut().find(|z| z.name == "internal") {
+            internal_zone.interfaces = vec![payload.lan_iface.clone()];
+        }
+        if let Some(wan_if) = wan_interface
+            && let Some(external_zone) = initial_firewall.zones.iter_mut().find(|z| z.name == "external")
+        {
+            external_zone.interfaces = vec![wan_if];
+        }
+        if !initial_firewall.forwardings.iter().any(|f| f.from == "internal" && f.to == "external") {
+            initial_firewall.forwardings.push(ZoneForwarding {
+                from: "internal".into(),
+                to: "external".into(),
+            });
+        }
+        if let Err(e) = self.db.save_firewall_config(&initial_firewall).await {
+            error!("Setup: failed to persist initial Firewall configuration: {e}");
+        }
+        self.ctx.update_firewall_config(initial_firewall);
+
+        // 8. Write complete declarative TOML file
         let toml_content = generate_setup_toml(&payload, router_ip, subnet_mask, &target_ula);
         let toml_paths = ["/etc/lanforge/lanforge.toml", "lanforge.toml"];
         for p in toml_paths {
@@ -473,6 +510,14 @@ fn generate_setup_toml(
             SetupWanConfig::SystemGateway { .. } => {}
         }
     }
+
+    s.push_str("# Firewall & NAT Orchestrator\n");
+    s.push_str("[firewall]\n");
+    s.push_str("enabled = true\n");
+    s.push_str("table_name = \"lanforge\"\n");
+    s.push_str("flow_offload = true\n");
+    s.push_str("bypass_dns = true\n");
+    s.push_str("bypass_vowifi = true\n\n");
 
     s
 }

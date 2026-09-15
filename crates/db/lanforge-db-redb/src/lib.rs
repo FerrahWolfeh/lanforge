@@ -3,6 +3,7 @@
 pub mod device;
 pub mod dhcp;
 pub mod dns;
+pub mod firewall;
 pub mod log;
 pub mod tables;
 pub mod user;
@@ -376,6 +377,52 @@ mod tests {
         let loaded_pppoe = db.load_pppoe_config().await.unwrap().unwrap();
         assert_eq!(loaded_pppoe.username, "user@isp");
         assert_eq!(loaded_pppoe.wan_iface, "eth0.10");
+    }
+
+    #[tokio::test]
+    async fn test_redb_firewall_store() {
+        use lanforge_db_core::FirewallConfigStore;
+        use lanforge_types::network::firewall::{FirewallConfig, FirewallZone, HostPortRule, L4Protocol};
+
+        let db = RedbDatabase::open_temp().unwrap();
+
+        // 1. Initial should be None
+        assert!(db.load_firewall_config().await.unwrap().is_none());
+
+        // 2. Seed default config
+        let seed = FirewallConfig::default();
+        let seeded = db.seed_firewall_if_empty(&seed).await.unwrap();
+        assert!(seeded);
+
+        // 3. Second seed should be no-op (returns false)
+        let seeded_again = db.seed_firewall_if_empty(&seed).await.unwrap();
+        assert!(!seeded_again);
+
+        // 4. Load config and verify content
+        let mut loaded = db.load_firewall_config().await.unwrap().unwrap();
+        assert_eq!(loaded.table_name, "lanforge");
+        assert!(loaded.enabled);
+
+        // 5. Mutate, save, and reload
+        loaded.zones.push(FirewallZone {
+            name: "dmz".into(),
+            interfaces: vec!["eth2".into()],
+            open_ports: vec![HostPortRule {
+                port: 8443,
+                protocol: L4Protocol::Tcp,
+                comment: Some("DMZ Gateway".into()),
+            }],
+            allowed_subnets: Vec::new(),
+            input_policy: lanforge_types::network::firewall::FirewallPolicy::Drop,
+            forward_policy: lanforge_types::network::firewall::FirewallPolicy::Drop,
+            masquerade: false,
+            mtu_fix: false,
+        });
+        db.save_firewall_config(&loaded).await.unwrap();
+
+        let reloaded = db.load_firewall_config().await.unwrap().unwrap();
+        assert_eq!(reloaded.zones.len(), loaded.zones.len());
+        assert!(reloaded.zones.iter().any(|z| z.name == "dmz"));
     }
 
     #[tokio::test]

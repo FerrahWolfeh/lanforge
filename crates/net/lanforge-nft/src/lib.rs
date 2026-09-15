@@ -8,7 +8,9 @@
 #![allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
 
 pub mod ruleset;
+pub mod service;
 
 pub use lanforge_types::events::firewall::*;
 pub use lanforge_types::network::firewall::*;
 pub use ruleset::RulesetBuilder;
+pub use service::NftService;

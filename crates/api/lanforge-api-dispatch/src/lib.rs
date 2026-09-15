@@ -17,6 +17,7 @@ use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{BlockingMode, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::network::firewall::{FirewallConfig, FirewallStatus};
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::RaServerConfig;
 use lanforge_types::system::{PppoeStatusResponse, RaStatusResponse};
@@ -817,6 +818,38 @@ impl LanforgeRpc for ClientContext {
     async fn system_setup(&self, payload: Box<SetupPayload>) -> Result<Box<SetupResponse>, RpcCallError> {
         match self.handle_setup(*payload).await {
             Response::Setup(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn firewall_status(&self) -> Result<Box<FirewallStatus>, RpcCallError> {
+        match self.handle_firewall_status().await {
+            Response::FirewallStatus(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn firewall_config(&self) -> Result<Box<FirewallConfig>, RpcCallError> {
+        match self.handle_firewall_config().await {
+            Response::FirewallConfig(cfg) => Ok(cfg),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn update_firewall_config(&self, cfg: Box<FirewallConfig>) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_update_firewall_config(*cfg).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn firewall_reload(&self) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_firewall_reload().await {
+            Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }

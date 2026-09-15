@@ -17,6 +17,7 @@ use lanforge_core::{
 };
 use lanforge_db::{config::DatabaseConfig, engine::LanforgeDb, log_engine::LogDb};
 use lanforge_http::{auth::AuthManager, config::HttpConfig, routes, server::AppState};
+use lanforge_types::network::firewall::FirewallConfig;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Instant};
@@ -923,4 +924,39 @@ async fn test_db_and_cache_operations() {
         "db/reset without X-Confirm should return 400"
     );
     assert!(body["error"].is_string(), "error field should be present");
+}
+
+#[tokio::test]
+async fn test_firewall_contract() {
+    let app = TestApp::with_auth().await;
+
+    // 1. GET /api/v1/firewall/status
+    let (status, body) = app.get("/api/v1/firewall/status").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["table"], "lanforge");
+    assert_eq!(body["data"]["enabled"], true);
+
+    // 2. GET /api/v1/firewall/config
+    let (status, body) = app.get("/api/v1/firewall/config").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["table_name"], "lanforge");
+    assert!(body["data"]["zones"].is_array());
+
+    // 3. POST /api/v1/firewall/config
+    let mut config: FirewallConfig =
+        serde_json::from_value(body["data"].clone()).unwrap();
+    config.flow_offload = false;
+    let (status, body) = app.post("/api/v1/firewall/config", &config).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["data"]["message"].as_str().unwrap().contains("updated"));
+
+    // Verify config was updated
+    let (status, body) = app.get("/api/v1/firewall/config").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["flow_offload"], false);
+
+    // 4. POST /api/v1/firewall/reload
+    let (status, body) = app.post("/api/v1/firewall/reload", &json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["data"]["message"].as_str().unwrap().contains("reload"));
 }

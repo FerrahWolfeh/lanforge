@@ -6,8 +6,8 @@ use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_db::{
-    AdblockStore, DhcpConfigStore, DnsStore, DnsUpstreamStore, LanforgeDb, LogDb,
-    PppoeConfigStore, RaConfigStore, UserStore,
+    AdblockStore, DhcpConfigStore, DnsStore, DnsUpstreamStore, FirewallConfigStore, LanforgeDb,
+    LogDb, PppoeConfigStore, RaConfigStore, UserStore,
 };
 use lanforge_discovery::refresh_interface;
 use lanforge_types::device::Origin;
@@ -202,6 +202,11 @@ impl Bootstrapper {
         #[cfg(feature = "pppoe")]
         {
             ctx.update_pppoe_config(cfg.pppoe_toml.clone());
+        }
+
+        #[cfg(feature = "nft")]
+        {
+            ctx.update_firewall_config(cfg.firewall_toml.clone());
         }
 
         let _ = bus.publish(LanforgeEvent::System(SystemEvent::StateReady));
@@ -563,6 +568,18 @@ impl Bootstrapper {
                 if let Some(loaded) = db.load_pppoe_config().await? {
                     cfg.pppoe_enabled = loaded.enabled;
                     cfg.pppoe_toml = loaded;
+                }
+            }
+
+            // 8. Check/seed/load Firewall Config
+            #[cfg(feature = "nft")]
+            {
+                if db.seed_firewall_if_empty(&cfg.firewall_toml).await? {
+                    info!("Seeded Firewall configuration from TOML into database");
+                }
+                if let Some(loaded) = db.load_firewall_config().await? {
+                    cfg.firewall_enabled = loaded.enabled;
+                    cfg.firewall_toml = loaded;
                 }
             }
         }

@@ -4,6 +4,7 @@ pub mod devices;
 pub mod dhcp;
 pub mod dns;
 pub mod events;
+pub mod firewall;
 pub mod hosts;
 pub mod pppoe;
 pub mod ra;
@@ -31,6 +32,7 @@ pub fn router() -> Router<AppState> {
         .nest("/dns", dns::router())
         .nest("/db", db::router())
         .nest("/events", events::router())
+        .nest("/firewall", firewall::router())
         .nest("/hosts", hosts::router())
         .nest("/pppoe", pppoe::router())
         .nest("/ra", ra::router());
