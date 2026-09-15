@@ -1040,3 +1040,96 @@ export interface SystemConfigImportResponse {
 	total_success: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Firewall
+// ---------------------------------------------------------------------------
+
+export type FirewallPolicy = 'Drop' | 'Accept' | 'Reject';
+export type L4Protocol = 'Tcp' | 'Udp' | 'Both';
+
+export interface HostPortRule {
+	comment: string | null;
+	port: number;
+	protocol: L4Protocol;
+}
+
+export interface DynamicPortRequest {
+	service: string;
+	zone: string;
+	comment: string | null;
+	port: number;
+	protocol: L4Protocol;
+}
+
+export interface FirewallZone {
+	name: string;
+	interfaces: string[];
+	open_ports: HostPortRule[];
+	allowed_subnets: string[];
+	input_policy: FirewallPolicy;
+	forward_policy: FirewallPolicy;
+	masquerade: boolean;
+	mtu_fix: boolean;
+}
+
+export interface ZoneForwarding {
+	from: string;
+	to: string;
+}
+
+export interface PortForwardRule {
+	comment: string | null;
+	src_zone: string;
+	internal_ip: string;
+	external_port: number;
+	internal_port: number;
+	protocol: L4Protocol;
+	enable_hairpin: boolean;
+}
+
+export interface FirewallConfig {
+	table_name: string;
+	zones: FirewallZone[];
+	forwardings: ZoneForwarding[];
+	port_forwards: PortForwardRule[];
+	custom_rules_file: string | null;
+	enabled: boolean;
+	flow_offload: boolean;
+	bypass_dns: boolean;
+	bypass_vowifi: boolean;
+	default_input_policy: FirewallPolicy;
+	default_forward_policy: FirewallPolicy;
+}
+
+export interface FirewallStatus {
+	table: string;
+	active_wan: string | null;
+	lan_ifaces: string[];
+	last_applied_secs_ago: number | null;
+	open_ports_count: number;
+	rules_count: number;
+	enabled: boolean;
+	flow_offload_active: boolean;
+	default_drop_active: boolean;
+}
+
+export interface FirewallValidationReport {
+	valid: boolean;
+	tx_id: string | null;
+	diff_summary: string[];
+	warnings: string[];
+	errors: string[];
+}
+
+export interface FirewallCommitRequest {
+	tx_id: string;
+	auto_rollback_secs: number | null;
+}
+
+export interface FirewallCommitResponse {
+	success: boolean;
+	message: string;
+	auto_rollback_active: boolean;
+	rollback_deadline_secs: number | null;
+}
+

@@ -65,6 +65,7 @@
 				{ title: "Custom Rewrites", href: "/dns/rewrites", icon: BookmarkIcon },
 				{ title: "DNS Cache", href: "/dns/cache", icon: DatabaseIcon },
 				{ title: "Adblock", href: "/dns/adblock", icon: ShieldIcon },
+				{ title: "Firewall", href: "/firewall", icon: ShieldIcon },
 			],
 		},
 		{

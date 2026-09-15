@@ -54,7 +54,12 @@ import type {
 	SystemConfigExport,
 	SystemConfigImportResponse,
 	DbEngineSwitchRequest,
-	GenerateTokenRequest
+	GenerateTokenRequest,
+	FirewallConfig,
+	FirewallStatus,
+	FirewallValidationReport,
+	FirewallCommitRequest,
+	FirewallCommitResponse
 } from './types';
 
 
@@ -708,6 +713,22 @@ export const raStatus = () => get<RaStatusResponse>('/ra/status');
 export const raConfig = () => get<RaServerConfig>('/ra/config');
 export const raUpdateConfig = (cfg: RaServerConfig) => post<void>('/ra/config', cfg);
 export const raTrigger = () => post<void>('/ra/trigger');
+
+// ---------------------------------------------------------------------------
+// Firewall (nftables)
+// ---------------------------------------------------------------------------
+
+export const firewallStatus = () => get<FirewallStatus>('/firewall/status');
+export const firewallConfig = () => get<FirewallConfig>('/firewall/config');
+export const firewallPropose = (config: FirewallConfig) =>
+	post<FirewallValidationReport>('/firewall/propose', config);
+export const firewallCommit = (req: FirewallCommitRequest) =>
+	post<FirewallCommitResponse>('/firewall/commit', req);
+export const firewallConfirm = (tx_id: string) =>
+	post<void>('/firewall/confirm', { tx_id });
+export const firewallAbort = (tx_id: string) =>
+	post<void>('/firewall/abort', { tx_id });
+
 
 // ---------------------------------------------------------------------------
 // Setup & Onboarding

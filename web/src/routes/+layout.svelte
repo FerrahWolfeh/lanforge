@@ -48,6 +48,7 @@
 		"/system/database/backup": "Backups",
 		"/system/users": "Users",
 		"/system/keys": "Auth Keys",
+		"/firewall": "Firewall",
 		"/login": "Login",
 		"/setup": "Setup",
 	};
