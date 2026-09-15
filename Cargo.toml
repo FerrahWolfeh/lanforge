@@ -10,7 +10,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-license = "MPL-2.0"
+license = "GPL-3.0-or-later"
 edition = "2024"
 authors = ["Ferrah Aiko <ferrahwolfeh@proton.me>"]
 
