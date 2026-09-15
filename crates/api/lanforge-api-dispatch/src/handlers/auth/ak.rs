@@ -29,13 +29,13 @@ impl ClientContext {
             .store_api_token(&token, &name, &scopes, expires_at, now)
             .await
         {
-            Ok(id) => Response::AuthToken(AuthTokenResponse {
+            Ok(id) => Response::AuthToken(Box::new(AuthTokenResponse {
                 id,
                 token,
                 name,
                 scopes,
                 expires_at,
-            }),
+            })),
             Err(e) => {
                 error!("Failed to store API token: {e}");
                 Response::Error {

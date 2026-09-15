@@ -43,9 +43,9 @@ pub enum Response {
     /// Response for a Whois query.
     Whois(Box<WhoisResponse>),
     /// Response for DNS statistics.
-    DnsStats(DnsStatsResponse),
+    DnsStats(Box<DnsStatsResponse>),
     /// Response for DNS analytics.
-    DnsAnalytics(DnsAnalyticsResponse),
+    DnsAnalytics(Box<DnsAnalyticsResponse>),
     /// Response for DNS upstreams status.
     DnsUpstreams(DnsUpstreamsResponse),
     /// Response for a DNS diagnostic query.
@@ -71,11 +71,11 @@ pub enum Response {
     /// List of custom adblock rules.
     DnsAdblockRules(DnsAdblockRulesResponse),
     /// Response for a generated API token.
-    AuthToken(AuthTokenResponse),
+    AuthToken(Box<AuthTokenResponse>),
     /// List of all API tokens.
     AuthTokens(AuthTokensResponse),
     /// In-depth DNS cache stats.
-    DnsCacheStatsExt(DnsCacheStatsExtResponse),
+    DnsCacheStatsExt(Box<DnsCacheStatsExtResponse>),
     /// Decoupled service banners.
     ServiceBanners(ServiceBannersResponse),
     /// Full system configuration export.
@@ -96,17 +96,17 @@ pub enum Response {
     RaConfig(Box<RaServerConfig>),
     /// User account details response.
 
-    User(UserResponse),
+    User(Box<UserResponse>),
     /// List of user accounts response.
     UserList(UserListResponse),
     /// Configured DHCP options response.
     DhcpOptions(Box<DhcpOptionsResponse>),
     /// Configured DHCP pools configuration response.
-    DhcpPoolsConfig(DhcpPoolsConfigResponse),
+    DhcpPoolsConfig(Box<DhcpPoolsConfigResponse>),
     /// Setup status response.
-    SetupStatus(SetupStatusResponse),
+    SetupStatus(Box<SetupStatusResponse>),
     /// Setup completion response.
-    Setup(SetupResponse),
+    Setup(Box<SetupResponse>),
     /// DHCP lease sanity check and reconciliation response.
     DhcpReconcile(DhcpReconcileResponse),
 }

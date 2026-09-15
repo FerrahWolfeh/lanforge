@@ -224,6 +224,21 @@ pub enum QueryResult {
     CachedBlock = 7,
 }
 
+impl std::fmt::Display for QueryResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local => write!(f, "Local"),
+            Self::Forwarded => write!(f, "Forwarded"),
+            Self::Blocked => write!(f, "Blocked"),
+            Self::NxDomain => write!(f, "NxDomain"),
+            Self::Error => write!(f, "Error"),
+            Self::Cached => write!(f, "Cached"),
+            Self::Rewritten => write!(f, "Rewritten"),
+            Self::CachedBlock => write!(f, "CachedBlock"),
+        }
+    }
+}
+
 /// Transport protocols for incoming and outgoing DNS queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

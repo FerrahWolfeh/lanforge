@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::net::IpAddr;
 
 use axum::{
@@ -36,11 +37,11 @@ pub async fn handle_dns_query(
             return (StatusCode::BAD_REQUEST, "Missing dns parameter").into_response();
         };
         match URL_SAFE_NO_PAD.decode(dns_base64) {
-            Ok(d) => d,
+            Ok(d) => Cow::Owned(d),
             Err(_) => return (StatusCode::BAD_REQUEST, "Invalid base64").into_response(),
         }
     } else {
-        body.to_vec()
+        Cow::Borrowed(body.as_ref())
     };
 
     if query_data.is_empty() {

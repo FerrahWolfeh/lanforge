@@ -49,12 +49,12 @@ impl ClientContext {
         }
         drop(state);
 
-        Response::DhcpPoolsConfig(DhcpPoolsConfigResponse {
+        Response::DhcpPoolsConfig(Box::new(DhcpPoolsConfigResponse {
             v4_pools,
             v6_pools,
             active_ula_prefix,
             active_gua_prefix,
-        })
+        }))
     }
 
     pub async fn handle_update_dhcp_pools_config(

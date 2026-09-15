@@ -90,7 +90,7 @@ impl ClientContext {
                 .then_with(|| a.name.cmp(&b.name))
         });
 
-        Response::SetupStatus(SetupStatusResponse {
+        Response::SetupStatus(Box::new(SetupStatusResponse {
             first_run,
             is_provisioned,
             detected_lan_iface,
@@ -98,7 +98,7 @@ impl ClientContext {
             detected_subnet_mask,
             detected_ula_prefix,
             interfaces: iface_infos,
-        })
+        }))
     }
 
     /// Atomically applies the initial configuration payload submitted by the setup wizard.
@@ -319,12 +319,12 @@ impl ClientContext {
             let _ = bus.publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
         });
 
-        Response::Setup(SetupResponse {
+        Response::Setup(Box::new(SetupResponse {
             success: true,
             token: String::new(), // Will be populated with JWT by the HTTP layer
             username,
             message: "Lanforge initial setup completed successfully".to_string(),
-        })
+        }))
     }
 }
 

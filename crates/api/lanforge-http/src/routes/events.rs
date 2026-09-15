@@ -30,7 +30,13 @@ fn handle_events_stream(
     let mut rx = ctx.bus().subscribe();
 
     async_stream::try_stream! {
-        while let Ok(event) = rx.recv().await {
+        loop {
+            let event = match rx.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+
             // Filter out DNS events (which have their own dedicated log stream)
             if let LanforgeEvent::Dns(_) = &event.event {
                 continue;

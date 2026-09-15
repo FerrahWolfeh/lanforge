@@ -50,19 +50,25 @@ async fn handle_list_devices(
 
     match res {
         Response::Devices(devices_resp) => {
-            let data = if params.grouped.unwrap_or(false) {
-                serde_json::to_value(group_devices(&devices_resp.devices)).unwrap_or_default()
+            if params.grouped.unwrap_or(false) {
+                (
+                    StatusCode::OK,
+                    Json(HttpPaginatedResponse {
+                        data: group_devices(&devices_resp.devices),
+                        meta: devices_resp.meta,
+                    }),
+                )
+                    .into_response()
             } else {
-                serde_json::to_value(devices_resp.devices).unwrap_or_default()
-            };
-            (
-                StatusCode::OK,
-                Json(HttpPaginatedResponse {
-                    data,
-                    meta: devices_resp.meta,
-                }),
-            )
-                .into_response()
+                (
+                    StatusCode::OK,
+                    Json(HttpPaginatedResponse {
+                        data: devices_resp.devices,
+                        meta: devices_resp.meta,
+                    }),
+                )
+                    .into_response()
+            }
         }
         Response::Error { error } => response_error_to_http(error),
         _ => invalid_response_to_http(),

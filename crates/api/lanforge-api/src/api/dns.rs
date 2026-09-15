@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 
 use super::common::{
     CacheMeta, HttpDataResponse, HttpPaginatedResponse, HttpWrappedResponse, LogMeta,
@@ -8,8 +9,9 @@ pub use lanforge_types::network::dns::{
     AdblockUrlEntry, DnsAdblockStatusResponse, DnsCacheEntry, DnsCacheResponse,
     DnsCacheStatsExtResponse, DnsStatsResponse,
 };
+use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::{
-    DnsRecordEntry, DnsRecordType, DnsReverseResolver, UpstreamHealthSnapshot,
+    DnsRecordEntry, DnsRecordType, DnsReverseResolver, QueryResult, UpstreamHealthSnapshot,
     dns::{adblock::RewriteRule, upstream::UpstreamProtocol},
 };
 use serde::{Deserialize, Serialize};
@@ -103,15 +105,15 @@ pub struct DnsQueryResponse {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DnsQueryLogEntry {
     pub timestamp: u64,
-    pub src_ip: String,
-    pub src_mac: Option<String>,
+    pub src_ip: IpAddr,
+    pub domain: Arc<str>,
     pub src_hostname: Option<String>,
-    pub domain: String,
-    pub qtype: DnsRecordType,
-    pub result: String,
-    pub upstream_us: u32,
-    pub cached: bool,
     pub answer: Option<String>,
+    pub src_mac: Option<MacAddr>,
+    pub result: QueryResult,
+    pub cached: bool,
+    pub qtype: DnsRecordType,
+    pub upstream_us: u32,
 }
 
 /// A response containing recent DNS query logs.

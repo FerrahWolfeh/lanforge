@@ -91,14 +91,14 @@ pub trait LanforgeRpc {
         target: Option<LeaseTarget>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn dhcp_pools(&self) -> impl Future<Output = Result<DhcpPoolsResponse, RpcCallError>> + Send;
-    fn dhcp_options(&self) -> impl Future<Output = Result<DhcpOptionsResponse, RpcCallError>> + Send;
+    fn dhcp_options(&self) -> impl Future<Output = Result<Box<DhcpOptionsResponse>, RpcCallError>> + Send;
     fn update_dhcp_options(
         &self,
-        options: DhcpOptionsConfig,
+        options: Box<DhcpOptionsConfig>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn dhcp_pools_config(
         &self,
-    ) -> impl Future<Output = Result<DhcpPoolsConfigResponse, RpcCallError>> + Send;
+    ) -> impl Future<Output = Result<Box<DhcpPoolsConfigResponse>, RpcCallError>> + Send;
     fn update_dhcp_pools_config(
         &self,
         v4_pools: Vec<Dhcpv4Pool>,
@@ -122,12 +122,12 @@ pub trait LanforgeRpc {
         &self,
         target: String,
     ) -> impl Future<Output = Result<Box<WhoisResponse>, RpcCallError>> + Send;
-    fn dns_stats(&self) -> impl Future<Output = Result<DnsStatsResponse, RpcCallError>> + Send;
+    fn dns_stats(&self) -> impl Future<Output = Result<Box<DnsStatsResponse>, RpcCallError>> + Send;
     fn dns_analytics(
         &self,
         limit: Option<usize>,
         client: Option<String>,
-    ) -> impl Future<Output = Result<DnsAnalyticsResponse, RpcCallError>> + Send;
+    ) -> impl Future<Output = Result<Box<DnsAnalyticsResponse>, RpcCallError>> + Send;
     fn dns_upstreams(
         &self,
     ) -> impl Future<Output = Result<DnsUpstreamsResponse, RpcCallError>> + Send;
@@ -158,7 +158,7 @@ pub trait LanforgeRpc {
     ) -> impl Future<Output = Result<DnsCacheResponse, RpcCallError>> + Send;
     fn dns_cache_stats_ext(
         &self,
-    ) -> impl Future<Output = Result<DnsCacheStatsExtResponse, RpcCallError>> + Send;
+    ) -> impl Future<Output = Result<Box<DnsCacheStatsExtResponse>, RpcCallError>> + Send;
     fn dns_adblock_set(
         &self,
         enabled: bool,
@@ -245,7 +245,7 @@ pub trait LanforgeRpc {
         name: String,
         scopes: Option<lanforge_types::auth::ApiScopes>,
         expires_at: Option<i64>,
-    ) -> impl Future<Output = Result<AuthTokenResponse, RpcCallError>> + Send;
+    ) -> impl Future<Output = Result<Box<AuthTokenResponse>, RpcCallError>> + Send;
     fn ak_delete(
         &self,
         id_or_name: String,
@@ -253,14 +253,14 @@ pub trait LanforgeRpc {
     fn ak_renew(
         &self,
         id_or_name: String,
-    ) -> impl Future<Output = Result<AuthTokenResponse, RpcCallError>> + Send;
+    ) -> impl Future<Output = Result<Box<AuthTokenResponse>, RpcCallError>> + Send;
     fn ak_list(&self) -> impl Future<Output = Result<AuthTokensResponse, RpcCallError>> + Send;
     fn system_config_export(
         &self,
     ) -> impl Future<Output = Result<Box<SystemConfigExport>, RpcCallError>> + Send;
     fn system_config_import(
         &self,
-        config: SystemConfigExport,
+        config: Box<SystemConfigExport>,
     ) -> impl Future<Output = Result<SystemConfigImportResponse, RpcCallError>> + Send;
     fn dns_reverse_resolver_add(
         &self,
@@ -282,21 +282,21 @@ pub trait LanforgeRpc {
     ) -> impl Future<Output = Result<Box<PppoeStatusResponse>, RpcCallError>> + Send;
     fn pppoe_reconnect(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn pppoe_disconnect(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
-    fn pppoe_config(&self) -> impl Future<Output = Result<PppoeConfig, RpcCallError>> + Send;
+    fn pppoe_config(&self) -> impl Future<Output = Result<Box<PppoeConfig>, RpcCallError>> + Send;
     fn update_pppoe_config(
         &self,
-        cfg: PppoeConfig,
+        cfg: Box<PppoeConfig>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn ra_status(
         &self,
     ) -> impl Future<Output = Result<Box<RaStatusResponse>, RpcCallError>> + Send;
     fn ra_config(
         &self,
-    ) -> impl Future<Output = Result<RaServerConfig, RpcCallError>> + Send;
+    ) -> impl Future<Output = Result<Box<RaServerConfig>, RpcCallError>> + Send;
 
     fn update_ra_config(
         &self,
-        cfg: RaServerConfig,
+        cfg: Box<RaServerConfig>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn ra_trigger(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn user_create(
@@ -305,7 +305,7 @@ pub trait LanforgeRpc {
         username: String,
         password: String,
         role: Option<String>,
-    ) -> impl Future<Output = Result<UserResponse, RpcCallError>> + Send;
+    ) -> impl Future<Output = Result<Box<UserResponse>, RpcCallError>> + Send;
     fn user_list(&self) -> impl Future<Output = Result<UserListResponse, RpcCallError>> + Send;
     fn user_delete(
         &self,
@@ -318,9 +318,9 @@ pub trait LanforgeRpc {
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn system_setup_status(
         &self,
-    ) -> impl Future<Output = Result<SetupStatusResponse, RpcCallError>> + Send;
+    ) -> impl Future<Output = Result<Box<SetupStatusResponse>, RpcCallError>> + Send;
     fn system_setup(
         &self,
-        payload: SetupPayload,
-    ) -> impl Future<Output = Result<SetupResponse, RpcCallError>> + Send;
+        payload: Box<SetupPayload>,
+    ) -> impl Future<Output = Result<Box<SetupResponse>, RpcCallError>> + Send;
 }

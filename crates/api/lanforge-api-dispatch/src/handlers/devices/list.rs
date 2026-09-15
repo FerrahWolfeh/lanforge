@@ -22,12 +22,15 @@ impl ClientContext {
         let status = self.ctx.get_status().unwrap_or_default();
         let ula_prefix = status.ula_prefix.as_ref().map(|s| s.to_addr());
 
-        let (api_devices, online) = self.ctx.with_state(|state| {
-            let mut list = Vec::new();
+        let filter_lower = filter.as_deref().map(str::to_lowercase);
+        let method_str = method.as_deref();
+
+        let (paginated, total, online) = self.ctx.with_state(|state| {
+            let mut matching = Vec::new();
             let mut online_count = 0;
 
             for dev in state.devices.values() {
-                if !Self::device_matches_filter(dev, filter.as_ref(), method.as_ref()) {
+                if !Self::device_matches_filter(dev, filter_lower.as_deref(), method_str) {
                     continue;
                 }
 
@@ -35,15 +38,19 @@ impl ClientContext {
                     online_count += 1;
                 }
 
-                list.push(self.map_device(dev, gua_prefix, ula_prefix));
+                matching.push(dev);
             }
-            (list, online_count)
-        });
 
-        let total = api_devices.len();
-        let start = offset.unwrap_or(0).min(total);
-        let end = (start + limit.unwrap_or(total)).min(total);
-        let paginated = api_devices[start..end].to_vec();
+            let total = matching.len();
+            let start = offset.unwrap_or(0).min(total);
+            let end = (start + limit.unwrap_or(total)).min(total);
+            let paginated = matching[start..end]
+                .iter()
+                .map(|dev| self.map_device(dev, gua_prefix, ula_prefix))
+                .collect();
+
+            (paginated, total, online_count)
+        });
 
         Response::Devices(DevicesResponse {
             devices: paginated,
@@ -53,23 +60,24 @@ impl ClientContext {
 
     fn device_matches_filter(
         dev: &Device,
-        filter: Option<&String>,
-        method: Option<&String>,
+        filter: Option<&str>,
+        method: Option<&str>,
     ) -> bool {
         if let Some(m) = method
-            && dev.origin.as_str().to_lowercase() != m.to_lowercase()
+            && !dev.origin.as_str().eq_ignore_ascii_case(m)
         {
             return false;
         }
         if let Some(f) = filter {
-            let f = f.to_lowercase();
-            if dev.mac.to_string().to_lowercase().contains(&f)
-                || dev.hostname.name.to_lowercase().contains(&f)
-                || dev
-                    .v4
-                    .ip()
-                    .map(|ip| ip.to_string())
-                    .is_some_and(|s| s.contains(&f))
+            let mac_str = dev.mac.to_string();
+            if mac_str.contains(f) {
+                return true;
+            }
+            if dev.hostname.name.to_lowercase().contains(f) {
+                return true;
+            }
+            if let Some(ip) = dev.v4.ip()
+                && ip.to_string().contains(f)
             {
                 return true;
             }
@@ -101,16 +109,16 @@ impl ClientContext {
             display_v4: dev.display_v4(),
             display_v6: dev.display_v6(gua_prefix, ula_prefix),
             v4: match &dev.v4 {
-                IPv4State::Static(ip) => Some(LeaseInfo {
+                IPv4State::Static(ip) => Some(Box::new(LeaseInfo {
                     ip: IpAddr::V4(*ip),
                     expires: 0,
                     reserved: true,
-                }),
-                IPv4State::Dynamic(v) => Some(LeaseInfo {
+                })),
+                IPv4State::Dynamic(v) => Some(Box::new(LeaseInfo {
                     ip: IpAddr::V4(v.ip),
                     expires: duration_since_epoch_u64(v.expires),
                     reserved: dev.is_static(),
-                }),
+                })),
                 IPv4State::None => None,
             },
             seen_v4: dev.seen_v4.iter().map(|(ip, _)| *ip).collect(),
@@ -127,11 +135,11 @@ impl ClientContext {
                         _ => 0,
                     });
 
-                LeaseInfo {
+                Box::new(LeaseInfo {
                     ip: IpAddr::V6(ip),
                     expires,
                     reserved: dev.is_static(),
-                }
+                })
             }),
             ipv6_addrs: {
                 dev.v6

@@ -15,7 +15,7 @@ impl ClientContext {
         if let Some(handle) = self.ctx.dns_handle()
             && let Ok(DnsResponse::Stats(res)) = handle.send_request(DnsRequest::Stats).await
         {
-            return Response::DnsStats(DnsStatsResponse {
+            return Response::DnsStats(Box::new(DnsStatsResponse {
                 total_requests: res.total_requests,
                 cache_hits: res.cache_hits,
                 cache_misses: res.cache_misses,
@@ -28,10 +28,10 @@ impl ClientContext {
                 cache_entries: res.cache_entries,
                 cache_capacity: res.cache_capacity,
                 cache_evictions: res.cache_evictions,
-            });
+            }));
         }
 
-        Response::DnsStats(DnsStatsResponse {
+        Response::DnsStats(Box::new(DnsStatsResponse {
             total_requests: 0,
             cache_hits: 0,
             cache_misses: 0,
@@ -44,7 +44,7 @@ impl ClientContext {
             cache_entries: 0,
             cache_capacity: 0,
             cache_evictions: 0,
-        })
+        }))
     }
 
     pub async fn handle_dns_upstreams(&self) -> Response {
@@ -238,7 +238,7 @@ impl ClientContext {
             })
         };
 
-        Response::DnsAnalytics(DnsAnalyticsResponse {
+        Response::DnsAnalytics(Box::new(DnsAnalyticsResponse {
             top_domains: top_domains
                 .into_iter()
                 .map(|(domain, count)| TopDomainEntry { domain, count })
@@ -318,6 +318,6 @@ impl ClientContext {
                     ..Default::default()
                 })
                 .collect(),
-        })
+        }))
     }
 }

@@ -42,7 +42,7 @@ impl ClientContext {
             .create_user(&username, &password_hash, parsed_role, now)
             .await
         {
-            Ok(entry) => Response::User(UserResponse {
+            Ok(entry) => Response::User(Box::new(UserResponse {
                 user: UserInfo {
                     id: entry.id,
                     username: entry.username,
@@ -51,7 +51,7 @@ impl ClientContext {
                     updated_at: entry.updated_at,
                     last_login: entry.last_login,
                 },
-            }),
+            })),
             Err(e) => {
                 error!("Failed to create user: {e}");
                 Response::Error {

@@ -204,9 +204,9 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn dhcp_options(&self) -> Result<DhcpOptionsResponse, RpcCallError> {
+    async fn dhcp_options(&self) -> Result<Box<DhcpOptionsResponse>, RpcCallError> {
         match self.handle_get_dhcp_options().await {
-            Response::DhcpOptions(r) => Ok(*r),
+            Response::DhcpOptions(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }
@@ -214,16 +214,16 @@ impl LanforgeRpc for ClientContext {
 
     async fn update_dhcp_options(
         &self,
-        options: DhcpOptionsConfig,
+        options: Box<DhcpOptionsConfig>,
     ) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_update_dhcp_options(options).await {
+        match self.handle_update_dhcp_options(*options).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn dhcp_pools_config(&self) -> Result<DhcpPoolsConfigResponse, RpcCallError> {
+    async fn dhcp_pools_config(&self) -> Result<Box<DhcpPoolsConfigResponse>, RpcCallError> {
         match self.handle_get_dhcp_pools_config().await {
             Response::DhcpPoolsConfig(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -299,7 +299,7 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn dns_stats(&self) -> Result<DnsStatsResponse, RpcCallError> {
+    async fn dns_stats(&self) -> Result<Box<DnsStatsResponse>, RpcCallError> {
         match self.handle_dns_stats().await {
             Response::DnsStats(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -311,7 +311,7 @@ impl LanforgeRpc for ClientContext {
         &self,
         limit: Option<usize>,
         client: Option<String>,
-    ) -> Result<DnsAnalyticsResponse, RpcCallError> {
+    ) -> Result<Box<DnsAnalyticsResponse>, RpcCallError> {
         match self.handle_dns_analytics(limit, client).await {
             Response::DnsAnalytics(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -387,7 +387,7 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn dns_cache_stats_ext(&self) -> Result<DnsCacheStatsExtResponse, RpcCallError> {
+    async fn dns_cache_stats_ext(&self) -> Result<Box<DnsCacheStatsExtResponse>, RpcCallError> {
         match self.handle_dns_cache_stats_ext().await {
             Response::DnsCacheStatsExt(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -599,7 +599,7 @@ impl LanforgeRpc for ClientContext {
         name: String,
         scopes: Option<lanforge_types::auth::ApiScopes>,
         expires_at: Option<i64>,
-    ) -> Result<AuthTokenResponse, RpcCallError> {
+    ) -> Result<Box<AuthTokenResponse>, RpcCallError> {
         match self.handle_ak_generate(name, scopes, expires_at).await {
             Response::AuthToken(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -615,7 +615,7 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn ak_renew(&self, id_or_name: String) -> Result<AuthTokenResponse, RpcCallError> {
+    async fn ak_renew(&self, id_or_name: String) -> Result<Box<AuthTokenResponse>, RpcCallError> {
         match self.handle_ak_renew(id_or_name).await {
             Response::AuthToken(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -641,9 +641,9 @@ impl LanforgeRpc for ClientContext {
 
     async fn system_config_import(
         &self,
-        config: SystemConfigExport,
+        config: Box<SystemConfigExport>,
     ) -> Result<SystemConfigImportResponse, RpcCallError> {
-        match self.handle_system_config_import(config).await {
+        match self.handle_system_config_import(*config).await {
             Response::SystemConfigImport(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
@@ -716,16 +716,16 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn pppoe_config(&self) -> Result<PppoeConfig, RpcCallError> {
+    async fn pppoe_config(&self) -> Result<Box<PppoeConfig>, RpcCallError> {
         match self.handle_pppoe_config().await {
-            Response::PppoeConfig(cfg) => Ok(*cfg),
+            Response::PppoeConfig(cfg) => Ok(cfg),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn update_pppoe_config(&self, cfg: PppoeConfig) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_update_pppoe_config(cfg).await {
+    async fn update_pppoe_config(&self, cfg: Box<PppoeConfig>) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_update_pppoe_config(*cfg).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
@@ -740,16 +740,16 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn ra_config(&self) -> Result<RaServerConfig, RpcCallError> {
+    async fn ra_config(&self) -> Result<Box<RaServerConfig>, RpcCallError> {
         match self.handle_ra_config().await {
-            Response::RaConfig(cfg) => Ok(*cfg),
+            Response::RaConfig(cfg) => Ok(cfg),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }
     }
 
-    async fn update_ra_config(&self, cfg: RaServerConfig) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_update_ra_config(cfg).await {
+    async fn update_ra_config(&self, cfg: Box<RaServerConfig>) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_update_ra_config(*cfg).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
@@ -770,7 +770,7 @@ impl LanforgeRpc for ClientContext {
         username: String,
         password: String,
         role: Option<String>,
-    ) -> Result<lanforge_api::api::UserResponse, RpcCallError> {
+    ) -> Result<Box<lanforge_api::api::UserResponse>, RpcCallError> {
         match self.handle_user_create(username, password, role).await {
             Response::User(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -806,7 +806,7 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn system_setup_status(&self) -> Result<SetupStatusResponse, RpcCallError> {
+    async fn system_setup_status(&self) -> Result<Box<SetupStatusResponse>, RpcCallError> {
         match self.handle_setup_status().await {
             Response::SetupStatus(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -814,8 +814,8 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn system_setup(&self, payload: SetupPayload) -> Result<SetupResponse, RpcCallError> {
-        match self.handle_setup(payload).await {
+    async fn system_setup(&self, payload: Box<SetupPayload>) -> Result<Box<SetupResponse>, RpcCallError> {
+        match self.handle_setup(*payload).await {
             Response::Setup(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),

@@ -232,6 +232,7 @@ where
     let mut reader = BufReader::new(reader);
     let writer = Arc::new(Mutex::new(writer));
     let buf = Arc::new(Mutex::new(Vec::with_capacity(8192)));
+    let mut req_buf = Vec::with_capacity(1024);
 
     loop {
         // Read framing: u32 BE length
@@ -249,8 +250,8 @@ where
             )));
         }
 
-        // Read payload
-        let mut req_buf = vec![0u8; len];
+        // Read payload into reused buffer
+        req_buf.resize(len, 0);
         reader.read_exact(&mut req_buf).await?;
 
         // Deserialize request
@@ -310,19 +311,7 @@ where
 
                 let mut writer_lock = writer.lock().await;
                 let mut buf_lock = buf.lock().await;
-
-                buf_lock.clear();
-                let buffer = std::mem::take(&mut *buf_lock);
-                let buffer = postcard::to_extend(&resp, buffer)
-                    .map_err(|e| UdsError::EncodingError(e.to_string()))?;
-                *buf_lock = buffer;
-                #[allow(clippy::cast_possible_truncation)]
-                let resp_len = buf_lock.len() as u32;
-
-                // Write response framing and payload
-                writer_lock.write_all(&resp_len.to_be_bytes()).await?;
-                writer_lock.write_all(&buf_lock).await?;
-                writer_lock.flush().await?;
+                write_rpc_response(&mut *writer_lock, &resp, &mut buf_lock).await?;
                 drop(buf_lock);
                 drop(writer_lock);
             }
@@ -420,7 +409,7 @@ where
     W: AsyncWrite + Unpin,
     R: AsyncRead + Unpin,
 {
-    let mut bus_rx = ctx.ctx.bus().subscribe();
+    let mut bus_rx = ctx.ctx.bus().subscribe_dns();
     let mut eof_buf = [0u8; 1];
 
     loop {
@@ -465,13 +454,14 @@ where
     W: AsyncWrite + Unpin,
 {
     buf.clear();
+    buf.extend_from_slice(&[0, 0, 0, 0]);
     let buffer = std::mem::take(buf);
-    let buffer =
+    let mut buffer =
         postcard::to_extend(resp, buffer).map_err(|e| UdsError::EncodingError(e.to_string()))?;
-    *buf = buffer;
     #[allow(clippy::cast_possible_truncation)]
-    let len = buf.len() as u32;
-    writer.write_all(&len.to_be_bytes()).await?;
+    let len = (buffer.len() - 4) as u32;
+    buffer[0..4].copy_from_slice(&len.to_be_bytes());
+    *buf = buffer;
     writer.write_all(buf).await?;
     writer.flush().await?;
     Ok(())

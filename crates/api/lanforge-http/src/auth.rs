@@ -1,5 +1,6 @@
 use std::future::{Future, ready};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
@@ -49,6 +50,7 @@ pub enum AuthMethod {
 pub struct AuthManager {
     encoding_key: EncodingKey,
     decoding_key: DecodingKey,
+    has_users: Arc<AtomicBool>,
 }
 
 impl AuthManager {
@@ -63,7 +65,17 @@ impl AuthManager {
         Self {
             encoding_key: EncodingKey::from_secret(secret),
             decoding_key: DecodingKey::from_secret(secret),
+            has_users: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    #[must_use]
+    pub fn has_users_cached(&self) -> bool {
+        self.has_users.load(Ordering::Relaxed)
+    }
+
+    pub fn set_has_users(&self, val: bool) {
+        self.has_users.store(val, Ordering::Relaxed);
     }
 
     pub fn generate_token(&self, username: &str, role: &str) -> HttpResult<String> {
@@ -149,6 +161,73 @@ where
     }
 }
 
+#[inline]
+#[must_use]
+pub fn looks_like_jwt(token: &str) -> bool {
+    let mut dots = 0;
+    for &b in token.as_bytes() {
+        if b == b'.' {
+            dots += 1;
+            if dots > 2 {
+                return false;
+            }
+        }
+    }
+    dots == 2
+}
+
+pub async fn authenticate_token(
+    token: &str,
+    auth_manager: &AuthManager,
+    db: &dyn DatabaseStore,
+) -> HttpResult<AuthenticatedUser> {
+    // 1. Fast-path JWT validation (sub-microsecond in-memory HMAC, zero disk I/O)
+    if looks_like_jwt(token)
+        && let Ok(claims) = auth_manager.validate_token(token)
+    {
+        return Ok(AuthenticatedUser {
+            name: claims.sub,
+            role: claims.role,
+            method: AuthMethod::Jwt,
+            scopes: ApiScopes::from_slice(&[ApiScope::Admin]),
+        });
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .cast_signed();
+
+    // 2. Validate against database API tokens
+    match db.validate_api_token(token, now).await {
+        Ok(Some((name, scopes))) => Ok(AuthenticatedUser {
+            name,
+            role: "admin".to_string(),
+            method: AuthMethod::ApiToken,
+            scopes,
+        }),
+        Ok(None) => {
+            // If not previously attempted as JWT, try as fallback
+            if !looks_like_jwt(token)
+                && let Ok(claims) = auth_manager.validate_token(token)
+            {
+                return Ok(AuthenticatedUser {
+                    name: claims.sub,
+                    role: claims.role,
+                    method: AuthMethod::Jwt,
+                    scopes: ApiScopes::from_slice(&[ApiScope::Admin]),
+                });
+            }
+            Err(HttpError::Auth("Invalid or expired token".into()))
+        }
+        Err(e) => {
+            error!("Database error during token validation: {e}");
+            Err(HttpError::Internal("Auth database error".into()))
+        }
+    }
+}
+
 impl<S> FromRequestParts<S> for AuthenticatedUser
 where
     S: Send + Sync,
@@ -164,39 +243,7 @@ where
             HttpError::Auth("Missing Authorization header or session cookie".into())
         })?;
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            .cast_signed();
-
-        // 1. Try validating as API Token from DB
-        match db.validate_api_token(token, now).await {
-            Ok(Some((name, scopes))) => {
-                return Ok(Self {
-                    name,
-                    role: "admin".to_string(),
-                    method: AuthMethod::ApiToken,
-                    scopes,
-                });
-            }
-            Ok(None) => {}
-            Err(e) => {
-                error!("Database error during token validation: {e}");
-                return Err(HttpError::Internal("Auth database error".into()));
-            }
-        }
-
-        // 2. Try validating as JWT
-        match auth_manager.validate_token(token) {
-            Ok(claims) => Ok(Self {
-                name: claims.sub,
-                role: claims.role,
-                method: AuthMethod::Jwt,
-                scopes: ApiScopes::from_slice(&[ApiScope::Admin]),
-            }),
-            Err(_) => Err(HttpError::Auth("Invalid or expired token".into())),
-        }
+        authenticate_token(token, &auth_manager, db.as_ref()).await
     }
 }
 
@@ -236,11 +283,6 @@ pub async fn middleware(
     mut req: Request<Body>,
     next: Next,
 ) -> HttpResult<AxumResponse> {
-    // If no password hash is set AND no DB users exist, authentication is globally disabled.
-    if cfg.auth_password_hash.is_none() && db.count_users().await.unwrap_or(0) == 0 {
-        return Ok(next.run(req).await);
-    }
-
     if req.method() == Method::OPTIONS {
         return Ok(next.run(req).await);
     }
@@ -249,36 +291,21 @@ pub async fn middleware(
         return Ok(next.run(req).await);
     }
 
+    // If no password hash is set AND no DB users exist, authentication is globally disabled.
+    if cfg.auth_password_hash.is_none()
+        && !auth_manager.has_users_cached()
+    {
+        let count = db.count_users().await.unwrap_or(0);
+        if count == 0 {
+            return Ok(next.run(req).await);
+        }
+        auth_manager.set_has_users(true);
+    }
+
     let token = extract_token_str(req.headers())
         .ok_or_else(|| HttpError::Auth("Missing Authorization header or session cookie".into()))?;
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .cast_signed();
-
-    let user = match db.validate_api_token(token, now).await {
-        Ok(Some((name, scopes))) => AuthenticatedUser {
-            name,
-            role: "admin".to_string(),
-            method: AuthMethod::ApiToken,
-            scopes,
-        },
-        Ok(None) => match auth_manager.validate_token(token) {
-            Ok(claims) => AuthenticatedUser {
-                name: claims.sub,
-                role: claims.role,
-                method: AuthMethod::Jwt,
-                scopes: ApiScopes::from_slice(&[ApiScope::Admin]),
-            },
-            Err(_) => return Err(HttpError::Auth("Invalid or expired token".into())),
-        },
-        Err(e) => {
-            error!("Database error during token validation: {e}");
-            return Err(HttpError::Internal("Auth database error".into()));
-        }
-    };
+    let user = authenticate_token(token, &auth_manager, db.as_ref()).await?;
 
     req.extensions_mut().insert(user);
 

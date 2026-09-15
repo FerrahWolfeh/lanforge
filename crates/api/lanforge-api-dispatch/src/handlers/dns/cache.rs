@@ -58,7 +58,7 @@ impl ClientContext {
             && let Ok(DnsResponse::CacheStatsExt(res)) =
                 handle.send_request(DnsRequest::CacheStatsExt).await
         {
-            return Response::DnsCacheStatsExt(DnsCacheStatsExtResponse {
+            return Response::DnsCacheStatsExt(Box::new(DnsCacheStatsExtResponse {
                 total_entries: res.total_entries,
                 entries_by_type: res.entries_by_type,
                 memory_usage_bytes: res.memory_usage_bytes,
@@ -66,7 +66,7 @@ impl ClientContext {
                 evictions: res.evictions,
                 min_ttl: res.min_ttl,
                 capacity: res.capacity,
-            });
+            }));
         }
 
         Response::Error {

@@ -110,12 +110,18 @@ fn handle_dns_logs_follow(
     state: AppState,
     params: DnsLogQuery,
 ) -> impl Stream<Item = Result<Event, Infallible>> {
-    let mut rx = state.ctx.bus().subscribe();
+    let mut rx = state.ctx.bus().subscribe_dns();
     let filter = params.client;
     let ctx_inner = state.ctx;
 
     async_stream::try_stream! {
-        while let Ok(event) = rx.recv().await {
+        loop {
+            let event = match rx.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+
             if let LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)) = &event.event {
                 let mac = entry.src_mac.or_else(|| ctx_inner.get_mac_by_ip(entry.src_ip));
                 let src_hostname = mac.and_then(|m| {
@@ -150,7 +156,7 @@ fn handle_dns_logs_follow(
                     "src_hostname": src_hostname,
                     "domain": entry.domain.as_ref(),
                     "qtype": entry.qtype,
-                    "result": format!("{:?}", entry.result),
+                    "result": entry.result.to_string(),
                     "upstream_us": entry.upstream_us,
                     "cached": entry.cached,
                     "answer": entry.answer,
@@ -164,7 +170,7 @@ fn handle_dns_logs_follow(
                                 "src_hostname": src_hostname,
                                 "domain": entry.domain.as_ref(),
                                 "qtype": entry.qtype,
-                                "result": format!("{:?}", entry.result),
+                                "result": entry.result.to_string(),
                                 "upstream_us": entry.upstream_us,
                                 "cached": entry.cached,
                                 "answer": entry.answer,

@@ -13,6 +13,8 @@ use axum::{
     routing::get,
 };
 #[cfg(feature = "webui")]
+use axum::handler::Handler;
+#[cfg(feature = "webui")]
 use axum::http::StatusCode;
 use axum_server::{Handle, tls_rustls::RustlsConfig};
 use lanforge_core::{
@@ -174,7 +176,7 @@ impl AsyncService for HttpService {
             #[cfg(feature = "webui")]
             {
                 info!("HTTP: Serving WebUI from embedded assets");
-                app = app.fallback(handle_embedded_webui);
+                app = app.fallback(handle_embedded_webui.layer(CompressionLayer::new()));
             }
         }
 
@@ -225,7 +227,7 @@ impl AsyncService for HttpService {
         let ctx_shutdown = ctx.clone();
         let shutdown_tx_clone = shutdown_tx.clone();
         tokio::spawn(async move {
-            let mut rx = ctx_shutdown.bus().subscribe();
+            let mut rx = ctx_shutdown.bus().subscribe_system();
             while let Ok(event) = rx.recv().await {
                 if !ctx_shutdown.is_running()
                     || matches!(event.event, LanforgeEvent::System(SystemEvent::Shutdown))
@@ -399,10 +401,45 @@ async fn handle_metrics(State(state): State<AppState>) -> HttpResult<impl IntoRe
 
 
 #[cfg(feature = "webui")]
-async fn handle_embedded_webui(uri: axum::http::Uri) -> impl IntoResponse {
-    match WebUiAssets::get_file_or_fallback(uri.path()) {
+async fn handle_embedded_webui(
+    headers: axum::http::HeaderMap,
+    uri: axum::http::Uri,
+) -> impl IntoResponse {
+    let path = uri.path();
+    match WebUiAssets::get_file_or_fallback(path) {
         Some((mime, content)) => {
-            ([(axum::http::header::CONTENT_TYPE, mime.as_ref())], content.data).into_response()
+            let hash = content.metadata.sha256_hash();
+            let mut etag = String::with_capacity(66);
+            etag.push('"');
+            for byte in hash {
+                use std::fmt::Write;
+                let _ = write!(etag, "{byte:02x}");
+            }
+            etag.push('"');
+
+            if let Some(if_none_match) = headers
+                .get(axum::http::header::IF_NONE_MATCH)
+                .and_then(|v| v.to_str().ok())
+                && if_none_match == etag
+            {
+                return StatusCode::NOT_MODIFIED.into_response();
+            }
+
+            let cache_control = if path.starts_with("/_app/immutable/") || path.starts_with("/assets/") {
+                "public, max-age=31536000, immutable"
+            } else {
+                "public, max-age=0, must-revalidate"
+            };
+
+            (
+                [
+                    (axum::http::header::CONTENT_TYPE, mime.as_ref()),
+                    (axum::http::header::ETAG, etag.as_str()),
+                    (axum::http::header::CACHE_CONTROL, cache_control),
+                ],
+                content.data,
+            )
+                .into_response()
         }
         None => (StatusCode::NOT_FOUND, "WebUI index.html not found").into_response(),
     }

@@ -79,12 +79,12 @@ impl ClientContext {
                         });
                         DnsQueryLogEntry {
                             timestamp: q.timestamp,
-                            src_ip: q.src_ip.to_string(),
-                            src_mac: mac.map(|m| m.to_string()),
+                            src_ip: q.src_ip,
+                            src_mac: mac,
                             src_hostname,
-                            domain: q.domain.to_string(),
+                            domain: q.domain,
                             qtype: q.qtype,
-                            result: format!("{:?}", q.result),
+                            result: q.result,
                             upstream_us: q.upstream_us,
                             cached: q.cached,
                             answer: q.answer,

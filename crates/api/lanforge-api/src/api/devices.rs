@@ -72,43 +72,43 @@ pub struct HostConfigEntry {
 pub struct DeviceEntry {
     /// Device MAC address.
     pub mac: MacAddr,
-    /// Hostname, either broadcast by the device or manually set.
-    pub hostname: String,
     /// Source of identification (e.g., "Dynamic", "Toml", "Cli").
     pub origin: Origin,
     /// Current online/offline status.
     pub online: bool,
     /// Detailed reachability status (Online, Stale, Offline).
     pub status: DeviceStatus,
-    /// Last seen timestamp.
-    pub last_seen: u64,
-    /// Hex-encoded DUID for `DHCPv6`, if available.
-    pub duid: Option<Duid>,
-    /// Human-readable primary `IPv4` display.
-    pub display_v4: String,
-    /// Human-readable primary `IPv6` display.
-    pub display_v6: String,
-    /// Active `DHCPv4` lease information.
-    pub v4: Option<LeaseInfo>,
-    /// List of all `IPv4` addresses seen for this device.
-    pub seen_v4: Vec<Ipv4Addr>,
-    /// Active `DHCPv6` lease information.
-    pub v6: Option<LeaseInfo>,
-    /// List of IPv6 addresses (SLAAC, GUA, etc.) tracked for this device.
-    pub ipv6_addrs: Vec<Ipv6Entry>,
     /// Method by which the device was discovered.
     pub learning_method: LearningMethod,
     /// Discovered category (e.g., "printer", "media").
     pub class: DeviceClass,
-    /// Ingress network interface where the device was observed (e.g., "lan0.100").
-    #[serde(default)]
-    pub iface: Option<String>,
-    /// Inferred 802.1Q VLAN ID if observed on a VLAN subinterface (e.g., 100 for "lan0.100").
-    #[serde(default)]
-    pub vlan_id: Option<u16>,
     /// Whether DNS query logging is suppressed for this device.
     #[serde(default)]
     pub ignore_dns_log: bool,
+    /// Inferred 802.1Q VLAN ID if observed on a VLAN subinterface (e.g., 100 for "lan0.100").
+    #[serde(default)]
+    pub vlan_id: Option<u16>,
+    /// Last seen timestamp.
+    pub last_seen: u64,
+    /// Hostname, either broadcast by the device or manually set.
+    pub hostname: String,
+    /// Human-readable primary `IPv4` display.
+    pub display_v4: String,
+    /// Human-readable primary `IPv6` display.
+    pub display_v6: String,
+    /// Ingress network interface where the device was observed (e.g., "lan0.100").
+    #[serde(default)]
+    pub iface: Option<String>,
+    /// Hex-encoded DUID for `DHCPv6`, if available.
+    pub duid: Option<Duid>,
+    /// Active `DHCPv4` lease information.
+    pub v4: Option<Box<LeaseInfo>>,
+    /// Active `DHCPv6` lease information.
+    pub v6: Option<Box<LeaseInfo>>,
+    /// List of all `IPv4` addresses seen for this device.
+    pub seen_v4: Vec<Ipv4Addr>,
+    /// List of IPv6 addresses (SLAAC, GUA, etc.) tracked for this device.
+    pub ipv6_addrs: Vec<Ipv6Entry>,
     /// Specific domains or wildcards to suppress from DNS query logs for this device.
     #[serde(default)]
     pub ignored_log_domains: Vec<String>,

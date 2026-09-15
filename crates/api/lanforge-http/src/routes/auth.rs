@@ -15,7 +15,7 @@ use lanforge_types::auth::UserRole;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use crate::auth::{AuthenticatedUser, extract_token_str};
+use crate::auth::{AuthenticatedUser, extract_token_str, looks_like_jwt};
 use crate::error::{HttpError, Result as HttpResult};
 use crate::routes::create_client_ctx;
 use crate::server::AppState;
@@ -200,14 +200,18 @@ async fn handle_validate(
     State(state): State<AppState>,
     Json(payload): Json<ValidateRequest>,
 ) -> impl IntoResponse {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .cast_signed();
-    let valid = match state.db.validate_api_token(&payload.token, now).await {
-        Ok(Some(_)) => true,
-        _ => state.auth.validate_token(&payload.token).is_ok(),
+    let valid = if looks_like_jwt(&payload.token) && state.auth.validate_token(&payload.token).is_ok() {
+        true
+    } else {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .cast_signed();
+        match state.db.validate_api_token(&payload.token, now).await {
+            Ok(Some(_)) => true,
+            _ => state.auth.validate_token(&payload.token).is_ok(),
+        }
     };
     Json(serde_json::json!({ "data": { "valid": valid } }))
 }
@@ -217,8 +221,17 @@ pub async fn handle_login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,
 ) -> HttpResult<impl IntoResponse> {
-    let auth_required =
-        state.cfg.auth_password_hash.is_some() || state.db.count_users().await.unwrap_or(0) > 0;
+    let auth_required = state.cfg.auth_password_hash.is_some()
+        || state.auth.has_users_cached()
+        || {
+            let count = state.db.count_users().await.unwrap_or(0);
+            if count > 0 {
+                state.auth.set_has_users(true);
+                true
+            } else {
+                false
+            }
+        };
     let username = payload
         .username
         .unwrap_or_else(|| "admin".to_string())
@@ -348,17 +361,31 @@ pub async fn handle_login(
 }
 
 async fn handle_status(State(state): State<AppState>, req: Request) -> impl IntoResponse {
-    let auth_required =
-        state.cfg.auth_password_hash.is_some() || state.db.count_users().await.unwrap_or(0) > 0;
+    let auth_required = state.cfg.auth_password_hash.is_some()
+        || state.auth.has_users_cached()
+        || {
+            let count = state.db.count_users().await.unwrap_or(0);
+            if count > 0 {
+                state.auth.set_has_users(true);
+                true
+            } else {
+                false
+            }
+        };
+
     let authenticated = if let Some(token) = extract_token_str(req.headers()) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            .cast_signed();
-        match state.db.validate_api_token(token, now).await {
-            Ok(Some(_)) => true,
-            _ => state.auth.validate_token(token).is_ok(),
+        if looks_like_jwt(token) && state.auth.validate_token(token).is_ok() {
+            true
+        } else {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .cast_signed();
+            match state.db.validate_api_token(token, now).await {
+                Ok(Some(_)) => true,
+                _ => state.auth.validate_token(token).is_ok(),
+            }
         }
     } else {
         false
