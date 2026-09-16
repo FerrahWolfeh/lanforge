@@ -14,7 +14,7 @@ use lanforge_types::events::pppoe::PppoeEvent;
 use lanforge_types::events::system::SystemEvent;
 use lanforge_types::events::LanforgeEvent;
 use lanforge_types::network::firewall::{DynamicPortRequest, FirewallConfig};
-use tracing::{error, info, warn};
+use tracing::{error, info, trace, warn};
 
 use crate::ruleset::RulesetBuilder;
 
@@ -94,6 +94,9 @@ impl NftService {
             .with_dynamic_ports(dynamic_ports)
             .build();
 
+        let json_payload = serde_json::to_string_pretty(&ruleset).unwrap_or_default();
+        trace!(payload = %json_payload, "Applying nftables ruleset payload to kernel");
+
         let table = cfg.table_name.clone();
         let active_wan = self.active_wan.clone();
         let flow_offload = cfg.flow_offload;
@@ -126,7 +129,11 @@ impl NftService {
             }
             Ok(Err(e)) => {
                 let err_msg = format!("Failed to apply nftables ruleset: {e}");
-                warn!(error = %err_msg, "Firewall ruleset application failed (soft error)");
+                warn!(
+                    error = %err_msg,
+                    payload = %json_payload,
+                    "Firewall ruleset application failed (soft error)"
+                );
                 let _ = ctx.bus().publish(LanforgeEvent::Firewall(
                     FirewallEvent::ApplyFailed { error: err_msg },
                 ));

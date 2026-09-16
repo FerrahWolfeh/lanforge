@@ -107,7 +107,8 @@ impl<'a> RulesetBuilder<'a> {
         // 2. Flowtable (if flow offload is enabled and WAN or LAN interfaces exist)
         let mut flow_devices: Vec<String> = Vec::new();
         if let Some(wan) = self.active_wan
-            && (wan.starts_with("ppp") || wan.is_empty())
+            && !wan.is_empty()
+            && !flow_devices.contains(&wan.to_string())
         {
             flow_devices.push(wan.to_string());
         }
@@ -534,7 +535,7 @@ impl<'a> RulesetBuilder<'a> {
                     }),
                     Statement::Flow(Flow {
                         op: SetOp::Add,
-                        flowtable: flowtable_name.into(),
+                        flowtable: format!("@{flowtable_name}").into(),
                     }),
                 ],
             ));
