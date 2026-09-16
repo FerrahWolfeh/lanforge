@@ -727,7 +727,7 @@ impl Device {
         gua_prefix: Option<Ipv6Addr>,
         ula_prefix: Option<Ipv6Addr>,
     ) -> SmallVec<[IpAddr; 8]> {
-        use crate::network::{Ipv6AddrOrSuffix, classify_ip};
+        use crate::network::{IpClassification, Ipv6AddrOrSuffix, classify_ip, classify_ipv6};
         let mut addrs: SmallVec<[IpAddr; 8]> = SmallVec::new();
         let mut push_unique = |ip: IpAddr| {
             if !addrs.contains(&ip) {
@@ -735,11 +735,15 @@ impl Device {
             }
         };
 
-        if let Some(ip) = self.v4.ip() {
+        if let Some(ip) = self.v4.ip()
+            && !ip.is_loopback()
+        {
             push_unique(IpAddr::V4(ip));
         }
         for (ip, _) in &self.seen_v4 {
-            push_unique(IpAddr::V4(*ip));
+            if !ip.is_loopback() {
+                push_unique(IpAddr::V4(*ip));
+            }
         }
 
         for state in &self.v6 {
@@ -757,7 +761,10 @@ impl Device {
                     if v6.segments()[..4] == cur_gua.segments()[..4] {
                         push_unique(IpAddr::V6(v6));
                     }
-                } else {
+                } else if !matches!(
+                    classify_ipv6(&v6),
+                    IpClassification::LinkLocal | IpClassification::Loopback
+                ) {
                     push_unique(IpAddr::V6(v6));
                 }
             }

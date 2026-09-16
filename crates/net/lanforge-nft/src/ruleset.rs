@@ -1,5 +1,6 @@
 use lanforge_types::network::firewall::{
-    DynamicPortRequest, FirewallConfig, FirewallPolicy, HostPortRule, L4Protocol, PortForwardRule,
+    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, HostPortRule, L4Protocol,
+    PortForwardRule,
 };
 use nftables::batch::Batch;
 use nftables::expr::{
@@ -80,6 +81,12 @@ impl<'a> RulesetBuilder<'a> {
                 {
                     ifaces.push(lan.to_string());
                 }
+                // Auto-bind podman* container wildcard to trusted zone if missing
+                if (zone.name == "trusted" || zone.name == "containers")
+                    && !ifaces.contains(&"podman*".to_string())
+                {
+                    ifaces.push("podman*".to_string());
+                }
             }
         }
         ifaces
@@ -126,7 +133,7 @@ impl<'a> RulesetBuilder<'a> {
             handle: None,
         })));
 
-        if !self.cfg.enabled {
+        if !self.cfg.enabled || self.cfg.mode == FirewallMode::Disabled {
             return batch.to_nftables();
         }
 
@@ -142,6 +149,10 @@ impl<'a> RulesetBuilder<'a> {
             if !flow_devices.contains(&iface) {
                 flow_devices.push(iface);
             }
+        }
+
+        if self.cfg.mode == FirewallMode::Minimal {
+            return self.build_minimal(&table, &flow_devices);
         }
 
         let flowtable_name = "f";
@@ -228,6 +239,23 @@ impl<'a> RulesetBuilder<'a> {
             ],
         ));
 
+        // Rule: ct status dnat accept (Netavark/container reflections & local port forwards)
+        batch.add(add_rule(
+            "input",
+            vec![
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::CT(CT {
+                        key: "status".into(),
+                        family: None,
+                        dir: None,
+                    })),
+                    right: Expression::String("dnat".into()),
+                    op: Operator::IN,
+                }),
+                Statement::Accept(None),
+            ],
+        ));
+
         // Rule: ct state invalid drop
         batch.add(add_rule(
             "input",
@@ -286,13 +314,10 @@ impl<'a> RulesetBuilder<'a> {
             "input",
             vec![
                 Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                        PayloadField {
-                            protocol: "ip6".into(),
-                            field: "nexthdr".into(),
-                        },
-                    ))),
-                    right: Expression::String("icmpv6".into()),
+                    left: Expression::Named(NamedExpression::Meta(Meta {
+                        key: MetaKey::L4proto,
+                    })),
+                    right: Expression::String("ipv6-icmp".into()),
                     op: Operator::EQ,
                 }),
                 Statement::Match(Match {
@@ -317,7 +342,7 @@ impl<'a> RulesetBuilder<'a> {
             ],
         ));
 
-        // Rule: RFC 4890 Essential ICMPv6 types (ND, Packet Too Big, etc.)
+        // Rule: RFC 4890 Essential ICMPv6 types (ND, Packet Too Big, MLD, etc.)
         for icmpv6_type in [
             "destination-unreachable",
             "packet-too-big",
@@ -327,18 +352,19 @@ impl<'a> RulesetBuilder<'a> {
             "nd-router-advert",
             "nd-neighbor-solicit",
             "nd-neighbor-advert",
+            "mld-listener-query",
+            "mld-listener-report",
+            "mld2-listener-report",
+            "mld-listener-done",
         ] {
             batch.add(add_rule(
                 "input",
                 vec![
                     Statement::Match(Match {
-                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                            PayloadField {
-                                protocol: "ip6".into(),
-                                field: "nexthdr".into(),
-                            },
-                        ))),
-                        right: Expression::String("icmpv6".into()),
+                        left: Expression::Named(NamedExpression::Meta(Meta {
+                            key: MetaKey::L4proto,
+                        })),
+                        right: Expression::String("ipv6-icmp".into()),
                         op: Operator::EQ,
                     }),
                     Statement::Match(Match {
@@ -399,6 +425,24 @@ impl<'a> RulesetBuilder<'a> {
                 ));
             }
         }
+
+        // Rule: DHCPv6 Client (UDP 546) on WAN for ISP Prefix Delegation (IA_PD)
+        batch.add(add_rule(
+            "input",
+            vec![
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                        PayloadField {
+                            protocol: "udp".into(),
+                            field: "dport".into(),
+                        },
+                    ))),
+                    right: Expression::Number(546),
+                    op: Operator::EQ,
+                }),
+                Statement::Accept(None),
+            ],
+        ));
 
         // Host port rules: static from zone configuration
         for zone in &self.cfg.zones {
@@ -588,84 +632,146 @@ impl<'a> RulesetBuilder<'a> {
             }
         }
 
-        // TCP MSS clamping
-        for target_chain in ["forward", "output"] {
-            if target_chain == "output" {
-                batch.add(NfListObject::Chain(Chain {
-                    family: NfFamily::INet,
-                    table: table.clone().into(),
-                    name: "output".into(),
-                    newname: None,
-                    handle: None,
-                    _type: Some(NfChainType::Filter),
-                    hook: Some(NfHook::Output),
-                    prio: Some(-10),
-                    dev: None,
-                    policy: Some(NfChainPolicy::Accept),
-                }));
-            }
+        // Forward: Essential ICMPv4 (Destination Unreachable, Time Exceeded, Echo Request/Reply)
+        for icmp_type in ["destination-unreachable", "time-exceeded", "echo-request", "echo-reply"] {
+            batch.add(add_rule(
+                "forward",
+                vec![
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                            PayloadField {
+                                protocol: "ip".into(),
+                                field: "protocol".into(),
+                            },
+                        ))),
+                        right: Expression::String("icmp".into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                            PayloadField {
+                                protocol: "icmp".into(),
+                                field: "type".into(),
+                            },
+                        ))),
+                        right: Expression::String(icmp_type.into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Accept(None),
+                ],
+            ));
+        }
 
+        // Forward: Essential ICMPv6 (RFC 4890 - PMTUD Packet Too Big, Destination Unreachable, Time Exceeded, Param Problem, Echo)
+        for icmpv6_type in [
+            "destination-unreachable",
+            "packet-too-big",
+            "time-exceeded",
+            "parameter-problem",
+            "echo-request",
+            "echo-reply",
+        ] {
+            batch.add(add_rule(
+                "forward",
+                vec![
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Meta(Meta {
+                            key: MetaKey::L4proto,
+                        })),
+                        right: Expression::String("ipv6-icmp".into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                            PayloadField {
+                                protocol: "icmpv6".into(),
+                                field: "type".into(),
+                            },
+                        ))),
+                        right: Expression::String(icmpv6_type.into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Accept(None),
+                ],
+            ));
+        }
+
+        // TCP MSS clamping: clamp on all forwarded traffic in both directions when WAN/mtu_fix is active
+        let has_mtu_fix = self.cfg.zones.iter().any(|z| z.mtu_fix)
+            || self.active_wan.is_some();
+
+        if has_mtu_fix {
             // IPv4 MSS 1452
-            batch.add(add_rule(target_chain, vec![
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                        PayloadField {
-                            protocol: "ip".into(),
-                            field: "protocol".into(),
-                        },
-                    ))),
-                    right: Expression::String("tcp".into()),
-                    op: Operator::EQ,
-                }),
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                        PayloadField {
-                            protocol: "tcp".into(),
-                            field: "flags".into(),
-                        },
-                    ))),
-                    right: Expression::String("syn".into()),
-                    op: Operator::IN,
-                }),
-                Statement::Mangle(Mangle {
-                    key: Expression::Named(NamedExpression::TcpOption(TcpOption {
-                        name: "maxseg".into(),
-                        field: Some("size".into()),
-                    })),
-                    value: Expression::Number(1452),
-                }),
-            ]));
+            batch.add(add_rule(
+                "forward",
+                vec![
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                            PayloadField {
+                                protocol: "ip".into(),
+                                field: "protocol".into(),
+                            },
+                        ))),
+                        right: Expression::String("tcp".into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                            PayloadField {
+                                protocol: "tcp".into(),
+                                field: "flags".into(),
+                            },
+                        ))),
+                        right: Expression::String("syn".into()),
+                        op: Operator::IN,
+                    }),
+                    Statement::Mangle(Mangle {
+                        key: Expression::Named(NamedExpression::TcpOption(TcpOption {
+                            name: "maxseg".into(),
+                            field: Some("size".into()),
+                        })),
+                        value: Expression::Number(1452),
+                    }),
+                ],
+            ));
 
             // IPv6 MSS 1432
-            batch.add(add_rule(target_chain, vec![
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                        PayloadField {
-                            protocol: "ip6".into(),
-                            field: "nexthdr".into(),
-                        },
-                    ))),
-                    right: Expression::String("tcp".into()),
-                    op: Operator::EQ,
-                }),
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                        PayloadField {
-                            protocol: "tcp".into(),
-                            field: "flags".into(),
-                        },
-                    ))),
-                    right: Expression::String("syn".into()),
-                    op: Operator::IN,
-                }),
-                Statement::Mangle(Mangle {
-                    key: Expression::Named(NamedExpression::TcpOption(TcpOption {
-                        name: "maxseg".into(),
-                        field: Some("size".into()),
-                    })),
-                    value: Expression::Number(1432),
-                }),
-            ]));
+            batch.add(add_rule(
+                "forward",
+                vec![
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Meta(Meta {
+                            key: MetaKey::Nfproto,
+                        })),
+                        right: Expression::String("ipv6".into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Meta(Meta {
+                            key: MetaKey::L4proto,
+                        })),
+                        right: Expression::String("tcp".into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                            PayloadField {
+                                protocol: "tcp".into(),
+                                field: "flags".into(),
+                            },
+                        ))),
+                        right: Expression::String("syn".into()),
+                        op: Operator::IN,
+                    }),
+                    Statement::Mangle(Mangle {
+                        key: Expression::Named(NamedExpression::TcpOption(TcpOption {
+                            name: "maxseg".into(),
+                            field: Some("size".into()),
+                        })),
+                        value: Expression::Number(1432),
+                    }),
+                ],
+            ));
         }
 
         // Inter-zone forwarding matrix
@@ -704,34 +810,120 @@ impl<'a> RulesetBuilder<'a> {
                 let ifaces = self.resolve_zone_interfaces(&zone.name);
                 for src in &ifaces {
                     for dst in &ifaces {
-                        if src != dst {
-                            batch.add(add_rule(
-                                "forward",
-                                vec![
-                                    Statement::Match(Match {
-                                        left: Expression::Named(NamedExpression::Meta(Meta {
-                                            key: MetaKey::Iifname,
-                                        })),
-                                        right: Expression::String(src.clone().into()),
-                                        op: Operator::EQ,
-                                    }),
-                                    Statement::Match(Match {
-                                        left: Expression::Named(NamedExpression::Meta(Meta {
-                                            key: MetaKey::Oifname,
-                                        })),
-                                        right: Expression::String(dst.clone().into()),
-                                        op: Operator::EQ,
-                                    }),
-                                    Statement::Accept(None),
-                                ],
-                            ));
-                        }
+                        batch.add(add_rule(
+                            "forward",
+                            vec![
+                                Statement::Match(Match {
+                                    left: Expression::Named(NamedExpression::Meta(Meta {
+                                        key: MetaKey::Iifname,
+                                    })),
+                                    right: Expression::String(src.clone().into()),
+                                    op: Operator::EQ,
+                                }),
+                                Statement::Match(Match {
+                                    left: Expression::Named(NamedExpression::Meta(Meta {
+                                        key: MetaKey::Oifname,
+                                    })),
+                                    right: Expression::String(dst.clone().into()),
+                                    op: Operator::EQ,
+                                }),
+                                Statement::Accept(None),
+                            ],
+                        ));
                     }
                 }
             }
         }
 
-        // 5. NAT Chains: PREROUTING & POSTROUTING
+        // 5. Chain OUTPUT (Local host egress protection & MSS clamping)
+        batch.add(NfListObject::Chain(Chain {
+            family: NfFamily::INet,
+            table: table.clone().into(),
+            name: "output".into(),
+            newname: None,
+            handle: None,
+            _type: Some(NfChainType::Filter),
+            hook: Some(NfHook::Output),
+            prio: Some(0),
+            dev: None,
+            policy: Some(NfChainPolicy::Accept),
+        }));
+
+        if has_mtu_fix {
+            // IPv4 MSS 1452 in output
+            batch.add(add_rule(
+                "output",
+                vec![
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                            PayloadField {
+                                protocol: "ip".into(),
+                                field: "protocol".into(),
+                            },
+                        ))),
+                        right: Expression::String("tcp".into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                            PayloadField {
+                                protocol: "tcp".into(),
+                                field: "flags".into(),
+                            },
+                        ))),
+                        right: Expression::String("syn".into()),
+                        op: Operator::IN,
+                    }),
+                    Statement::Mangle(Mangle {
+                        key: Expression::Named(NamedExpression::TcpOption(TcpOption {
+                            name: "maxseg".into(),
+                            field: Some("size".into()),
+                        })),
+                        value: Expression::Number(1452),
+                    }),
+                ],
+            ));
+
+            // IPv6 MSS 1432 in output
+            batch.add(add_rule(
+                "output",
+                vec![
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Meta(Meta {
+                            key: MetaKey::Nfproto,
+                        })),
+                        right: Expression::String("ipv6".into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Meta(Meta {
+                            key: MetaKey::L4proto,
+                        })),
+                        right: Expression::String("tcp".into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                            PayloadField {
+                                protocol: "tcp".into(),
+                                field: "flags".into(),
+                            },
+                        ))),
+                        right: Expression::String("syn".into()),
+                        op: Operator::IN,
+                    }),
+                    Statement::Mangle(Mangle {
+                        key: Expression::Named(NamedExpression::TcpOption(TcpOption {
+                            name: "maxseg".into(),
+                            field: Some("size".into()),
+                        })),
+                        value: Expression::Number(1432),
+                    }),
+                ],
+            ));
+        }
+
+        // 6. NAT Chains: PREROUTING & POSTROUTING
         let has_port_forwards = !self.cfg.port_forwards.is_empty();
         let external_ifaces = self.resolve_zone_interfaces("external");
         let internal_ifaces = self.resolve_internal_interfaces();
@@ -975,5 +1167,282 @@ impl<'a> RulesetBuilder<'a> {
             index: None,
             comment: rule.comment.as_ref().map(|c| c.clone().into()),
         }));
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn build_minimal(&self, table: &str, flow_devices: &[String]) -> Nftables<'static> {
+        let mut batch = Batch::new();
+
+        batch.add(NfListObject::Table(Table {
+            family: NfFamily::INet,
+            name: table.to_string().into(),
+            handle: None,
+        }));
+        batch.add_cmd(NfCmd::Flush(FlushObject::Table(Table {
+            family: NfFamily::INet,
+            name: table.to_string().into(),
+            handle: None,
+        })));
+
+        let flowtable_name = "f";
+        let has_flowtable = self.cfg.flow_offload && !flow_devices.is_empty();
+        if has_flowtable {
+            let dev: Vec<Cow<'static, str>> =
+                flow_devices.iter().cloned().map(Into::into).collect();
+
+            batch.add(NfListObject::FlowTable(FlowTable {
+                family: NfFamily::INet,
+                table: table.to_string().into(),
+                name: flowtable_name.into(),
+                handle: None,
+                hook: Some(NfHook::Ingress),
+                prio: Some(0),
+                dev: Some(dev.into()),
+            }));
+        }
+
+        let add_rule = |target_chain: &str, stmts: Vec<Statement<'static>>| -> NfListObject<'static> {
+            NfListObject::Rule(Rule {
+                family: NfFamily::INet,
+                table: table.to_string().into(),
+                chain: target_chain.to_string().into(),
+                expr: stmts.into(),
+                handle: None,
+                index: None,
+                comment: None,
+            })
+        };
+
+        // Chain FORWARD (priority filter - 10, policy accept)
+        batch.add(NfListObject::Chain(Chain {
+            family: NfFamily::INet,
+            table: table.to_string().into(),
+            name: "forward".into(),
+            newname: None,
+            handle: None,
+            _type: Some(NfChainType::Filter),
+            hook: Some(NfHook::Forward),
+            prio: Some(-10),
+            dev: None,
+            policy: Some(NfChainPolicy::Accept),
+        }));
+
+        if has_flowtable {
+            for proto in ["tcp", "udp"] {
+                batch.add(add_rule(
+                    "forward",
+                    vec![
+                        Statement::Match(Match {
+                            left: Expression::Named(NamedExpression::Meta(Meta {
+                                key: MetaKey::L4proto,
+                            })),
+                            right: Expression::String(proto.into()),
+                            op: Operator::EQ,
+                        }),
+                        Statement::Flow(Flow {
+                            op: SetOp::Add,
+                            flowtable: format!("@{flowtable_name}").into(),
+                        }),
+                    ],
+                ));
+            }
+        }
+
+        // TCP MSS clamping in forward (both directions)
+        batch.add(add_rule(
+            "forward",
+            vec![
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                        PayloadField {
+                            protocol: "ip".into(),
+                            field: "protocol".into(),
+                        },
+                    ))),
+                    right: Expression::String("tcp".into()),
+                    op: Operator::EQ,
+                }),
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                        PayloadField {
+                            protocol: "tcp".into(),
+                            field: "flags".into(),
+                        },
+                    ))),
+                    right: Expression::String("syn".into()),
+                    op: Operator::IN,
+                }),
+                Statement::Mangle(Mangle {
+                    key: Expression::Named(NamedExpression::TcpOption(TcpOption {
+                        name: "maxseg".into(),
+                        field: Some("size".into()),
+                    })),
+                    value: Expression::Number(1452),
+                }),
+            ],
+        ));
+
+        batch.add(add_rule(
+            "forward",
+            vec![
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Meta(Meta {
+                        key: MetaKey::Nfproto,
+                    })),
+                    right: Expression::String("ipv6".into()),
+                    op: Operator::EQ,
+                }),
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Meta(Meta {
+                        key: MetaKey::L4proto,
+                    })),
+                    right: Expression::String("tcp".into()),
+                    op: Operator::EQ,
+                }),
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                        PayloadField {
+                            protocol: "tcp".into(),
+                            field: "flags".into(),
+                        },
+                    ))),
+                    right: Expression::String("syn".into()),
+                    op: Operator::IN,
+                }),
+                Statement::Mangle(Mangle {
+                    key: Expression::Named(NamedExpression::TcpOption(TcpOption {
+                        name: "maxseg".into(),
+                        field: Some("size".into()),
+                    })),
+                    value: Expression::Number(1432),
+                }),
+            ],
+        ));
+
+        // Chain OUTPUT (priority filter - 10, policy accept)
+        batch.add(NfListObject::Chain(Chain {
+            family: NfFamily::INet,
+            table: table.to_string().into(),
+            name: "output".into(),
+            newname: None,
+            handle: None,
+            _type: Some(NfChainType::Filter),
+            hook: Some(NfHook::Output),
+            prio: Some(-10),
+            dev: None,
+            policy: Some(NfChainPolicy::Accept),
+        }));
+
+        batch.add(add_rule(
+            "output",
+            vec![
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                        PayloadField {
+                            protocol: "ip".into(),
+                            field: "protocol".into(),
+                        },
+                    ))),
+                    right: Expression::String("tcp".into()),
+                    op: Operator::EQ,
+                }),
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                        PayloadField {
+                            protocol: "tcp".into(),
+                            field: "flags".into(),
+                        },
+                    ))),
+                    right: Expression::String("syn".into()),
+                    op: Operator::IN,
+                }),
+                Statement::Mangle(Mangle {
+                    key: Expression::Named(NamedExpression::TcpOption(TcpOption {
+                        name: "maxseg".into(),
+                        field: Some("size".into()),
+                    })),
+                    value: Expression::Number(1452),
+                }),
+            ],
+        ));
+
+        batch.add(add_rule(
+            "output",
+            vec![
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Meta(Meta {
+                        key: MetaKey::Nfproto,
+                    })),
+                    right: Expression::String("ipv6".into()),
+                    op: Operator::EQ,
+                }),
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Meta(Meta {
+                        key: MetaKey::L4proto,
+                    })),
+                    right: Expression::String("tcp".into()),
+                    op: Operator::EQ,
+                }),
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                        PayloadField {
+                            protocol: "tcp".into(),
+                            field: "flags".into(),
+                        },
+                    ))),
+                    right: Expression::String("syn".into()),
+                    op: Operator::IN,
+                }),
+                Statement::Mangle(Mangle {
+                    key: Expression::Named(NamedExpression::TcpOption(TcpOption {
+                        name: "maxseg".into(),
+                        field: Some("size".into()),
+                    })),
+                    value: Expression::Number(1432),
+                }),
+            ],
+        ));
+
+        // Chain POSTROUTING (NAT masquerade for WAN)
+        let external_ifaces = self.resolve_zone_interfaces("external");
+        if !external_ifaces.is_empty() {
+            batch.add(NfListObject::Chain(Chain {
+                family: NfFamily::INet,
+                table: table.to_string().into(),
+                name: "postrouting".into(),
+                newname: None,
+                handle: None,
+                _type: Some(NfChainType::NAT),
+                hook: Some(NfHook::Postrouting),
+                prio: Some(100),
+                dev: None,
+                policy: Some(NfChainPolicy::Accept),
+            }));
+
+            for ext in &external_ifaces {
+                batch.add(add_rule(
+                    "postrouting",
+                    vec![
+                        Statement::Match(Match {
+                            left: Expression::Named(NamedExpression::Meta(Meta {
+                                key: MetaKey::Nfproto,
+                            })),
+                            right: Expression::String("ipv4".into()),
+                            op: Operator::EQ,
+                        }),
+                        Statement::Match(Match {
+                            left: Expression::Named(NamedExpression::Meta(Meta {
+                                key: MetaKey::Oifname,
+                            })),
+                            right: Expression::String(ext.clone().into()),
+                            op: Operator::EQ,
+                        }),
+                        Statement::Masquerade(None),
+                    ],
+                ));
+            }
+        }
+
+        batch.to_nftables()
     }
 }

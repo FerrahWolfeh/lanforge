@@ -83,12 +83,27 @@ pub struct PortForwardRule {
     pub enable_hairpin: bool,
 }
 
+/// Operational mode of the Lanforge firewall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FirewallMode {
+    /// Full stateful firewall with host protection, zone isolation, and NAT (replaces firewalld/ufw).
+    #[default]
+    Full,
+    /// Minimal `PPPoE` routing helper (MSS clamping, flowtable offload, and masquerade only; policy accept, priority filter - 10).
+    /// Coexists cleanly with firewalld or ufw.
+    Minimal,
+    /// Completely disabled (table is flushed and deleted).
+    Disabled,
+}
+
 /// Complete declarative firewall configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
 #[serde(default)]
 pub struct FirewallConfig {
     pub table_name: String,
+    pub mode: FirewallMode,
     pub zones: Vec<FirewallZone>,
     pub forwardings: Vec<ZoneForwarding>,
     pub port_forwards: Vec<PortForwardRule>,
@@ -105,6 +120,7 @@ impl Default for FirewallConfig {
     fn default() -> Self {
         Self {
             table_name: "lanforge".into(),
+            mode: FirewallMode::Full,
             enabled: true,
             flow_offload: true,
             bypass_dns: true,
@@ -146,7 +162,7 @@ impl Default for FirewallConfig {
                 },
                 FirewallZone {
                     name: "trusted".into(),
-                    interfaces: vec!["tailscale0".into(), "podman0".into(), "podman1".into()],
+                    interfaces: vec!["tailscale0".into(), "podman*".into()],
                     open_ports: Vec::new(),
                     allowed_subnets: Vec::new(),
                     input_policy: FirewallPolicy::Accept,

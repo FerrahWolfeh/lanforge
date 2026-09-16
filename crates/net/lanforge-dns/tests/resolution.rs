@@ -159,3 +159,59 @@ async fn nxdomain_for_unknown_host() {
     let result = dns_ctx.local.resolve_ip("ghost", DnsRecordType::A);
     assert!(result.is_none());
 }
+
+#[tokio::test]
+async fn resolve_local_aaaa_ignores_link_local_and_loopback() {
+    let ctx = init_test_context();
+    let mut cfg = mock_config();
+    cfg.ula_prefix = Some(Ipv6Addr::from_str("fd00::").unwrap());
+    cfg.gua_prefix = Some(Ipv6Addr::from_str("2001:db8::").unwrap());
+
+    let mac = MacAddr([0, 0, 0, 0, 0, 2]);
+    register_test_device(&ctx, "pixie", mac, Ipv4Addr::new(192, 168, 3, 1));
+
+    // Add GUA, ULA, and Link-Local addresses
+    let gua_addr = Ipv6Addr::from_str("2001:db8::beef").unwrap();
+    let ula_addr = Ipv6Addr::from_str("fd00::beef").unwrap();
+    let link_local = Ipv6Addr::from_str("fe80::8647:9ff:fe85:d212").unwrap();
+    let loopback = Ipv6Addr::from_str("::1").unwrap();
+
+    let _ = ctx.apply(DeviceUpdate::SlaacObserved {
+        mac,
+        addr: gua_addr,
+        is_active: true,
+    });
+    let _ = ctx.apply(DeviceUpdate::SlaacObserved {
+        mac,
+        addr: ula_addr,
+        is_active: true,
+    });
+    let _ = ctx.apply(DeviceUpdate::SlaacObserved {
+        mac,
+        addr: link_local,
+        is_active: true,
+    });
+    let _ = ctx.apply(DeviceUpdate::SlaacObserved {
+        mac,
+        addr: loopback,
+        is_active: true,
+    });
+
+    let dns_ctx = mock_dns_context(ctx, cfg).await;
+
+    let results = dns_ctx
+        .local
+        .resolve_ip("pixie", DnsRecordType::AAAA)
+        .expect("should resolve AAAA");
+
+    assert!(results.contains(&IpAddr::V6(gua_addr)), "should contain GUA");
+    assert!(results.contains(&IpAddr::V6(ula_addr)), "should contain ULA");
+    assert!(
+        !results.contains(&IpAddr::V6(link_local)),
+        "MUST NOT contain link-local fe80 address in DNS AAAA"
+    );
+    assert!(
+        !results.contains(&IpAddr::V6(loopback)),
+        "MUST NOT contain loopback ::1 in DNS AAAA"
+    );
+}

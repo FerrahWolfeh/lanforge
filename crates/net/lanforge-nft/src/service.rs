@@ -5,6 +5,7 @@
 
 use std::future::Future;
 use std::io::ErrorKind;
+use std::process::{Command, Stdio};
 
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
@@ -13,8 +14,8 @@ use lanforge_types::events::firewall::{FirewallAppliedSummary, FirewallEvent};
 use lanforge_types::events::pppoe::PppoeEvent;
 use lanforge_types::events::system::SystemEvent;
 use lanforge_types::events::LanforgeEvent;
-use lanforge_types::network::firewall::{DynamicPortRequest, FirewallConfig};
-use tracing::{error, info, trace, warn};
+use lanforge_types::network::firewall::{DynamicPortRequest, FirewallConfig, FirewallMode};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::ruleset::RulesetBuilder;
 
@@ -51,14 +52,24 @@ impl NftService {
             }
         };
 
+        let table_clone = table.clone();
+        let table_exists = tokio::task::spawn_blocking(move || {
+            Command::new("nft")
+                .args(["list", "table", "inet", &table_clone])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        })
+        .await
+        .unwrap_or(false);
+
+        if !table_exists {
+            debug!(table, "Firewall table does not exist in kernel, skipping cleanup");
+            return;
+        }
+
         let mut batch = nftables::batch::Batch::new();
-        batch.add_cmd(nftables::schema::NfCmd::Flush(
-            nftables::schema::FlushObject::Table(nftables::schema::Table {
-                family: nftables::types::NfFamily::INet,
-                name: table.clone().into(),
-                handle: None,
-            }),
-        ));
         batch.delete(nftables::schema::NfListObject::Table(nftables::schema::Table {
             family: nftables::types::NfFamily::INet,
             name: table.clone().into(),
@@ -91,7 +102,7 @@ impl NftService {
         cfg: &FirewallConfig,
         dynamic_ports: &[DynamicPortRequest],
     ) {
-        if !cfg.enabled {
+        if !cfg.enabled || cfg.mode == FirewallMode::Disabled {
             info!("Firewall is disabled in configuration, flushing and removing nftables table");
             Self::cleanup_table(&cfg.table_name).await;
             return;
@@ -250,11 +261,7 @@ impl AsyncService for NftService {
                                 self.apply_ruleset_internal(&ctx, &cfg, &dynamic_ports).await;
                             }
                             LanforgeEvent::System(SystemEvent::Shutdown) => {
-                                info!("Firewall service received shutdown signal, cleaning up table and terminating");
-                                let table = ctx
-                                    .get_firewall_config()
-                                    .map_or_else(|| "lanforge".into(), |c| c.table_name);
-                                Self::cleanup_table(&table).await;
+                                info!("Firewall service received shutdown signal, terminating event loop");
                                 break;
                             }
                             _ => {}

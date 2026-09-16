@@ -199,6 +199,12 @@ fn compute_diff(candidate: &FirewallConfig, current: &FirewallConfig, diff: &mut
             current.enabled, candidate.enabled
         ));
     }
+    if candidate.mode != current.mode {
+        diff.push(format!(
+            "~ Firewall mode: {:?} -> {:?}",
+            current.mode, candidate.mode
+        ));
+    }
     if candidate.flow_offload != current.flow_offload {
         diff.push(format!(
             "~ Flowtable offload: {} -> {}",

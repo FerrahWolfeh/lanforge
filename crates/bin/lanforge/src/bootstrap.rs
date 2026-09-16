@@ -635,6 +635,18 @@ impl Bootstrapper {
                             modified = true;
                         }
                     }
+                    // Auto-heal / ensure trusted zone includes container wildcard "podman*"
+                    if let Some(trusted_zone) = loaded.zones.iter_mut().find(|z| z.name == "trusted") {
+                        if !trusted_zone.interfaces.iter().any(|i| i == "podman*" || i.starts_with("podman")) {
+                            info!("Firewall bootstrap: adding 'podman*' wildcard to trusted firewall zone");
+                            trusted_zone.interfaces.push("podman*".into());
+                            modified = true;
+                        } else if !trusted_zone.interfaces.contains(&"podman*".to_string()) {
+                            info!("Firewall bootstrap: ensuring 'podman*' wildcard in trusted firewall zone");
+                            trusted_zone.interfaces.push("podman*".into());
+                            modified = true;
+                        }
+                    }
                     if modified {
                         let _ = db.save_firewall_config(&loaded).await;
                     }

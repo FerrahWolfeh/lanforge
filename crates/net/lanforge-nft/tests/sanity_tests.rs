@@ -1,7 +1,7 @@
 use lanforge_nft::ruleset::RulesetBuilder;
 use lanforge_types::network::firewall::{
-    DynamicPortRequest, FirewallConfig, FirewallPolicy, FirewallZone, L4Protocol, PortForwardRule,
-    ZoneForwarding,
+    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallZone, L4Protocol,
+    PortForwardRule, ZoneForwarding,
 };
 use std::net::IpAddr;
 
@@ -352,4 +352,66 @@ fn test_sanity_flowtable_toggle() {
     )
     .unwrap();
     assert!(!json_off.contains("\"flowtable\""));
+}
+
+#[test]
+fn test_sanity_firewall_mode_minimal() {
+    let cfg = FirewallConfig {
+        mode: FirewallMode::Minimal,
+        flow_offload: true,
+        ..FirewallConfig::default()
+    };
+    let ruleset = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+    let json = serde_json::to_string(&ruleset).unwrap();
+
+    // Minimal mode must have:
+    // 1. Table lanforge + flush
+    assert!(json.contains("\"lanforge\""));
+    // 2. Forward chain with policy accept and priority -10
+    assert!(json.contains("\"forward\""));
+    assert!(json.contains("-10"));
+    // 3. Output chain with policy accept and priority -10
+    assert!(json.contains("\"output\""));
+    // 4. MSS clamping 1452 and 1432
+    assert!(json.contains("1452"));
+    assert!(json.contains("1432"));
+    // 5. Must NOT have input chain with drop
+    assert!(!json.contains("\"input\""));
+    // 6. Masquerade on ppp0
+    assert!(json.contains("\"masquerade\""));
+    assert!(json.contains("ppp0"));
+}
+
+#[test]
+fn test_sanity_output_chain_and_dnat_in_full_mode() {
+    let cfg = FirewallConfig::default();
+    let ruleset = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+    let json = serde_json::to_string(&ruleset).unwrap();
+
+    // Full mode must have:
+    // 1. Output chain with MSS clamping
+    assert!(json.contains("\"output\""));
+    // 2. Input chain with ct status dnat accept
+    assert!(json.contains("\"dnat\""));
+    // 3. ICMPv6 using meta l4proto ipv6-icmp
+    assert!(json.contains("\"ipv6-icmp\""));
+    // 4. MLD types
+    assert!(json.contains("mld-listener-query"));
+    assert!(json.contains("mld2-listener-report"));
+}
+
+#[test]
+fn test_sanity_podman_wildcard_in_trusted_zone() {
+    let cfg = FirewallConfig::default();
+    let ruleset = RulesetBuilder::new(&cfg).build();
+    let json = serde_json::to_string(&ruleset).unwrap();
+
+    // Trusted zone must resolve podman* wildcard
+    assert!(json.contains("podman*"));
 }
