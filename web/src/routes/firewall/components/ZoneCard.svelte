@@ -7,24 +7,50 @@
   import { Switch } from "$lib/components/ui/switch";
   import { Input } from "$lib/components/ui/input";
   import { Separator } from "$lib/components/ui/separator";
+  import InfoPopover from "$lib/components/InfoPopover.svelte";
   import { cn } from "$lib/utils";
   import TrashIcon from "@lucide/svelte/icons/trash-2";
   import PlusIcon from "@lucide/svelte/icons/plus";
   import XIcon from "@lucide/svelte/icons/x";
-  import type { FirewallZone, FirewallPolicy } from "$lib/api/types";
+  import GlobeIcon from "@lucide/svelte/icons/globe";
+  import type { FirewallZone, FirewallPolicy, NetworkInterfaceInfo } from "$lib/api/types";
 
   interface Props {
     zone: FirewallZone;
     highlighted: boolean;
+    availableInterfaces?: NetworkInterfaceInfo[];
+    activeWan?: string | null;
     onUpdate: (updated: FirewallZone) => void;
     onDelete: () => void;
   }
 
-  let { zone, highlighted, onUpdate, onDelete }: Props = $props();
+  let {
+    zone,
+    highlighted,
+    availableInterfaces = [],
+    activeWan = null,
+    onUpdate,
+    onDelete,
+  }: Props = $props();
 
   // ── Inline "add interface" state ──────────────────────────────────────────
   let addingInterface = $state(false);
+  let customInterfaceMode = $state(false);
+  let selectedIfaceToAdd = $state("");
   let newInterfaceValue = $state("");
+
+  // Filter available interfaces not yet in this zone
+  const unassignedInterfaces = $derived(
+    availableInterfaces.filter((i) => !zone.interfaces.includes(i.name))
+  );
+
+  // Check if this is an external zone missing its active WAN
+  const isExternalZone = $derived(
+    zone.name.toLowerCase() === "external" || zone.name.toLowerCase() === "wan"
+  );
+  const activeWanMissing = $derived(
+    isExternalZone && activeWan && !zone.interfaces.includes(activeWan)
+  );
 
   // ── Zone-name → accent dot colour ────────────────────────────────────────
   const DOT_COLOURS: Record<string, string> = {
@@ -38,12 +64,31 @@
   const dotColour = $derived(DOT_COLOURS[zone.name.toLowerCase()] ?? "bg-muted-foreground");
 
   // ── Helpers that produce updated zone objects and call onUpdate ───────────
-  function addInterface() {
+  function addSelectedInterface() {
+    const chosen = selectedIfaceToAdd.trim();
+    if (!chosen) return;
+    if (!zone.interfaces.includes(chosen)) {
+      onUpdate({ ...zone, interfaces: [...zone.interfaces, chosen] });
+    }
+    selectedIfaceToAdd = "";
+    addingInterface = false;
+    customInterfaceMode = false;
+  }
+
+  function addCustomInterface() {
     const trimmed = newInterfaceValue.trim();
     if (!trimmed) return;
-    onUpdate({ ...zone, interfaces: [...zone.interfaces, trimmed] });
+    if (!zone.interfaces.includes(trimmed)) {
+      onUpdate({ ...zone, interfaces: [...zone.interfaces, trimmed] });
+    }
     newInterfaceValue = "";
     addingInterface = false;
+    customInterfaceMode = false;
+  }
+
+  function bindActiveWan() {
+    if (!activeWan || zone.interfaces.includes(activeWan)) return;
+    onUpdate({ ...zone, interfaces: [...zone.interfaces, activeWan] });
   }
 
   function removeInterface(iface: string) {
@@ -66,14 +111,6 @@
 
   function setMtuFix(checked: boolean) {
     onUpdate({ ...zone, mtu_fix: checked });
-  }
-
-  function handleNewInterfaceKeydown(e: KeyboardEvent) {
-    if (e.key === "Enter") addInterface();
-    if (e.key === "Escape") {
-      addingInterface = false;
-      newInterfaceValue = "";
-    }
   }
 </script>
 
@@ -116,10 +153,27 @@
 
     <!-- Interfaces -->
     <div class="flex flex-col gap-1.5">
-      <span class="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-        Interfaces
-      </span>
+      <div class="flex items-center justify-between">
+        <span class="text-muted-foreground text-xs font-medium uppercase tracking-wide">
+          Interfaces
+        </span>
+        {#if activeWanMissing}
+          <button
+            type="button"
+            class="flex items-center gap-1 text-[11px] text-destructive hover:underline cursor-pointer"
+            onclick={bindActiveWan}
+          >
+            <GlobeIcon class="size-3" />
+            Attach WAN ({activeWan})
+          </button>
+        {/if}
+      </div>
+
       <div class="flex flex-wrap items-center gap-1.5">
+        {#if zone.interfaces.length === 0 && !addingInterface}
+          <span class="text-xs text-muted-foreground italic">No interfaces attached</span>
+        {/if}
+
         {#each zone.interfaces as iface (iface)}
           <Badge variant="secondary" class="flex items-center gap-1 pr-1">
             {iface}
@@ -134,27 +188,98 @@
           </Badge>
         {/each}
 
-        {#if addingInterface}
-          <Input
-            class="h-6 w-28 px-2 py-0 text-xs"
-            placeholder="eth0"
-            bind:value={newInterfaceValue}
-            onkeydown={handleNewInterfaceKeydown}
-            onblur={addInterface}
-            autofocus
-          />
-        {:else}
+        {#if !addingInterface}
           <Button
             variant="outline"
             size="icon"
             class="size-6"
             aria-label="Add interface"
-            onclick={() => (addingInterface = true)}
+            onclick={() => {
+              addingInterface = true;
+              selectedIfaceToAdd = unassignedInterfaces[0]?.name ?? "";
+            }}
           >
             <PlusIcon data-icon="inline-start" />
           </Button>
         {/if}
       </div>
+
+      {#if addingInterface}
+        <div class="flex flex-col gap-2 p-2.5 rounded-lg border border-border/70 bg-muted/30 w-full mt-1">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] font-semibold text-foreground">Attach Interface</span>
+            <button
+              type="button"
+              class="text-muted-foreground hover:text-foreground text-xs cursor-pointer"
+              onclick={() => { addingInterface = false; customInterfaceMode = false; }}
+              aria-label="Cancel"
+            >
+              <XIcon class="size-3.5" />
+            </button>
+          </div>
+
+          {#if !customInterfaceMode && unassignedInterfaces.length > 0}
+            <div class="flex items-center gap-1.5">
+              <select
+                class="flex h-8 w-full rounded-md border border-input bg-background px-2.5 py-1 text-xs"
+                bind:value={selectedIfaceToAdd}
+              >
+                <option value="" disabled>Select interface…</option>
+                {#each unassignedInterfaces as iface}
+                  <option value={iface.name}>
+                    {iface.name} ({iface.bus_type} - {iface.carrier_up ? '🟢 Connected' : '⚪ Disconnected'} {iface.ips[0] ? `[${iface.ips[0]}]` : ''})
+                  </option>
+                {/each}
+              </select>
+              <Button
+                size="sm"
+                class="h-8 text-xs px-2.5 shrink-0"
+                disabled={!selectedIfaceToAdd}
+                onclick={addSelectedInterface}
+              >
+                Add
+              </Button>
+            </div>
+            <button
+              type="button"
+              class="text-[11px] text-primary hover:underline text-left cursor-pointer"
+              onclick={() => { customInterfaceMode = true; }}
+            >
+              Or type custom / virtual interface name…
+            </button>
+          {:else}
+            <div class="flex items-center gap-1.5">
+              <Input
+                class="h-8 px-2.5 py-1 text-xs"
+                placeholder="e.g. wg0, podman*, eth1"
+                bind:value={newInterfaceValue}
+                onkeydown={(e) => {
+                  if (e.key === "Enter") addCustomInterface();
+                  if (e.key === "Escape") { addingInterface = false; customInterfaceMode = false; }
+                }}
+                autofocus
+              />
+              <Button
+                size="sm"
+                class="h-8 text-xs px-2.5 shrink-0"
+                disabled={!newInterfaceValue.trim()}
+                onclick={addCustomInterface}
+              >
+                Add
+              </Button>
+            </div>
+            {#if unassignedInterfaces.length > 0}
+              <button
+                type="button"
+                class="text-[11px] text-primary hover:underline text-left cursor-pointer"
+                onclick={() => { customInterfaceMode = false; }}
+              >
+                ← Back to detected interface list
+              </button>
+            {/if}
+          {/if}
+        </div>
+      {/if}
     </div>
 
     <Separator />
@@ -200,7 +325,13 @@
     <!-- Masquerade -->
     <div class="flex items-start justify-between gap-3">
       <div class="flex flex-col gap-0.5">
-        <span class="text-sm font-medium leading-none">Masquerade</span>
+        <div class="flex items-center gap-1.5">
+          <span class="text-sm font-medium leading-none">Masquerade</span>
+          <InfoPopover
+            title="Outbound NAT (Masquerade)"
+            description="Rewrites source IP to this router's external public IP when traffic leaves this zone. Essential for WAN uplink interfaces."
+          />
+        </div>
         <span class="text-muted-foreground text-xs">
           Enable outbound NAT (SNAT)
         </span>
@@ -215,7 +346,13 @@
     <!-- MSS Clamping -->
     <div class="flex items-start justify-between gap-3">
       <div class="flex flex-col gap-0.5">
-        <span class="text-sm font-medium leading-none">MSS Clamping</span>
+        <div class="flex items-center gap-1.5">
+          <span class="text-sm font-medium leading-none">MSS Clamping</span>
+          <InfoPopover
+            title="TCP MSS Clamping"
+            description="Limits TCP Maximum Segment Size to avoid MTU fragmentation on PPPoE (1452 bytes) and tunnel connections."
+          />
+        </div>
         <span class="text-muted-foreground text-xs">
           Fix TCP MSS for PPPoE / WAN links
         </span>

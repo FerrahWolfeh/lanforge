@@ -3,6 +3,7 @@
 	import { Badge } from "$lib/components/ui/badge";
 	import { Switch } from "$lib/components/ui/switch";
 	import { Separator } from "$lib/components/ui/separator";
+	import HelpPopover from "$lib/components/HelpPopover.svelte";
 	import ZapIcon from "@lucide/svelte/icons/zap";
 	import GaugeIcon from "@lucide/svelte/icons/gauge";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
@@ -28,15 +29,28 @@
 				<div class="flex flex-col gap-1">
 					<div class="flex items-center gap-2">
 						<h3 class="text-base font-semibold text-foreground">Kernel Flowtable Offload</h3>
+						<HelpPopover
+							title="Flowtable Dataplane Acceleration"
+							description="Kernel fast-path for established network connection flows."
+						>
+							<div class="flex flex-col gap-2 text-xs text-muted-foreground leading-relaxed">
+								<p>
+									<strong class="text-foreground">How it works:</strong> Once a TCP/UDP connection handshake is completed, subsequent packets are processed directly at the driver/NIC layer, skipping redundant iptables/nftables rules.
+								</p>
+								<p>
+									<strong class="text-foreground">SBC Performance:</strong> Significantly lowers CPU utilization on Raspberry Pi and homelab SBCs during heavy gigabit traffic.
+								</p>
+								<p>
+									<strong class="text-amber-600 dark:text-amber-400 font-semibold">When to disable:</strong> If you use CAKE SQM or bufferbloat traffic shapers, disable flow offload so all packets can be metered by your queues.
+								</p>
+							</div>
+						</HelpPopover>
 						<Badge variant={flowOffload ? "default" : "secondary"} class="text-[10px]">
-							{flowOffload ? "Hardware / Kernel Fast-Path" : "Disabled"}
+							{flowOffload ? "Fast-Path Active" : "Disabled"}
 						</Badge>
 					</div>
 					<p class="text-xs text-muted-foreground leading-relaxed max-w-2xl">
-						Bypasses the standard Linux routing stack for established bidirectional TCP and UDP flows. Forward packets are processed directly at wire speed in the kernel dataplane, dramatically lowering CPU load on single-board computers and gateways.
-					</p>
-					<p class="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
-						Tip: If you are utilizing SQM CAKE QoS active queue management, you may disable flow offload so all packets traverse intermediate queues.
+						Bypasses standard routing lookups for established flows, processing packets at wire speed directly in the kernel dataplane.
 					</p>
 				</div>
 			</div>

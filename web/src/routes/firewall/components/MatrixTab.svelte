@@ -3,6 +3,7 @@
 	import XIcon from '@lucide/svelte/icons/x';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { Separator } from '$lib/components/ui/separator';
+	import HelpPopover from '$lib/components/HelpPopover.svelte';
 	import { cn } from '$lib/utils';
 	import type { FirewallZone, ZoneForwarding } from '$lib/api/types';
 
@@ -33,6 +34,35 @@
 </script>
 
 <div class="flex flex-col gap-4">
+	<!-- Header row with HelpPopover -->
+	<div class="flex items-center justify-between">
+		<div>
+			<div class="flex items-center gap-2">
+				<h3 class="text-sm font-semibold tracking-tight text-foreground">Traffic Forwarding Matrix</h3>
+				<HelpPopover
+					title="Inter-Zone Routing Guide"
+					description="How routed traffic is allowed or blocked between network zones."
+				>
+					<div class="flex flex-col gap-2 text-xs text-muted-foreground leading-relaxed">
+						<p>
+							<strong class="text-foreground">Source → Destination:</strong> Each cell determines if packets entering from the row zone are permitted to route into the column zone.
+						</p>
+						<p>
+							<strong class="text-emerald-600 dark:text-emerald-400 font-semibold">Allowed:</strong> Routed traffic traverses freely. For example, <code>internal → external</code> allows LAN clients to reach the Internet.
+						</p>
+						<p>
+							<strong class="text-foreground font-semibold">Blocked:</strong> Routed packets are dropped by default. For example, <code>external → internal</code> blocks incoming connections from the Internet.
+						</p>
+						<p>
+							<strong class="text-foreground">Tip:</strong> Click any cell in the table to toggle forwarding permissions between the two zones.
+						</p>
+					</div>
+				</HelpPopover>
+			</div>
+			<p class="text-xs text-muted-foreground">Click any cell to toggle allowed forwarding between zones.</p>
+		</div>
+	</div>
+
 	<!-- Matrix table -->
 	<div class="overflow-x-auto rounded-xl border border-border">
 		<table class="min-w-full border-collapse text-sm">

@@ -136,16 +136,34 @@ impl ClientContext {
     }
 
     pub async fn handle_firewall_config(&self) -> Response {
-        match self.db.load_firewall_config().await {
-            Ok(Some(cfg)) => Response::FirewallConfig(Box::new(cfg)),
-            Ok(None) => {
-                let cfg = self.ctx.get_firewall_config().unwrap_or_default();
-                Response::FirewallConfig(Box::new(cfg))
+        let mut cfg = match self.db.load_firewall_config().await {
+            Ok(Some(cfg)) => cfg,
+            Ok(None) => self.ctx.get_firewall_config().unwrap_or_default(),
+            Err(e) => {
+                return Response::Error {
+                    error: format!("Database error loading firewall config: {e}"),
+                };
             }
-            Err(e) => Response::Error {
-                error: format!("Database error loading firewall config: {e}"),
-            },
+        };
+
+        // If external zone exists but has no interfaces assigned, auto-populate with active or configured WAN
+        if let Some(ext) = cfg.zones.iter_mut().find(|z| z.name == "external" || z.name == "wan")
+            && ext.interfaces.is_empty()
+        {
+            let wan = self
+                .ctx
+                .read()
+                .interfaces
+                .pppoe_status
+                .as_ref()
+                .and_then(|p| p.interface.clone().or_else(|| p.wan_iface.clone()))
+                .or_else(|| self.ctx.get_pppoe_config().map(|p| p.wan_iface));
+            if let Some(w) = wan {
+                ext.interfaces.push(w);
+            }
         }
+
+        Response::FirewallConfig(Box::new(cfg))
     }
 
     pub async fn handle_update_firewall_config(&self, cfg: FirewallConfig) -> Response {

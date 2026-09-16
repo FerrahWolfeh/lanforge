@@ -10,6 +10,7 @@
 	import TrashIcon from "@lucide/svelte/icons/trash-2";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import InfoIcon from "@lucide/svelte/icons/info";
+	import HelpPopover from "$lib/components/HelpPopover.svelte";
 	import type { FirewallZone, HostPortRule, PortForwardRule, L4Protocol } from "$lib/api/types";
 
 	interface Props {
@@ -74,9 +75,14 @@
 		if (
 			!pinholeIp.trim() ||
 			typeof pinholeExtPort !== "number" ||
-			typeof pinholeIntPort !== "number"
-		)
+			pinholeExtPort < 1 ||
+			pinholeExtPort > 65535 ||
+			typeof pinholeIntPort !== "number" ||
+			pinholeIntPort < 1 ||
+			pinholeIntPort > 65535
+		) {
 			return;
+		}
 
 		const newRule: PortForwardRule = {
 			comment: pinholeComment.trim() || null,
@@ -102,6 +108,32 @@
 </script>
 
 <div class="flex flex-col gap-4">
+	<!-- Actions row with HelpPopover -->
+	<div class="flex items-center justify-between">
+		<div>
+			<div class="flex items-center gap-2">
+				<h3 class="text-sm font-semibold tracking-tight text-foreground">Host Rules & Access Control</h3>
+				<HelpPopover
+					title="Router Host Rules Guide"
+					description="How inbound connections to services running on the Lanforge router itself are controlled."
+				>
+					<div class="flex flex-col gap-2 text-xs text-muted-foreground leading-relaxed">
+						<p>
+							<strong class="text-foreground">Host Rules vs Port Forwarding:</strong> Host Rules open ports for services running on the router hardware itself (e.g. SSH on port 22, WebUI on port 8080, DNS on port 53). Port Forwarding redirects traffic through the router to another machine on your LAN.
+						</p>
+						<p>
+							<strong class="text-foreground">Zone Policies:</strong> If a zone's Input Policy is <em>Accept</em> (like LAN), all router ports are accessible. If Input Policy is <em>Drop</em> (like WAN/External), only the ports explicitly listed here will be accepted.
+						</p>
+						<p>
+							<strong class="text-foreground">IPv6 Pinholes:</strong> Open routed inbound ports directly to globally-routable IPv6 addresses on your LAN without NAT.
+						</p>
+					</div>
+				</HelpPopover>
+			</div>
+			<p class="text-xs text-muted-foreground">Manage local router listening ports and routed IPv6 pinholes.</p>
+		</div>
+	</div>
+
 	<Tabs.Root bind:value={innerTab} class="w-full">
 		<Tabs.List class="w-full sm:w-auto p-1 mb-2">
 			<Tabs.Trigger value="router-ports">Router Ports (Host)</Tabs.Trigger>
@@ -109,7 +141,7 @@
 		</Tabs.List>
 
 		<!-- Tab 1: Router Host Ports -->
-		<Tabs.Content value="router-ports" class="flex flex-col gap-6">
+		<Tabs.Content value="router-ports" class="flex flex-col gap-4">
 			<div class="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 rounded-xl p-3 border border-border">
 				<InfoIcon class="size-4 shrink-0 text-primary" />
 				<span>

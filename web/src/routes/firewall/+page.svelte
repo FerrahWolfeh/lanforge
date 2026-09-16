@@ -28,13 +28,17 @@
 		firewallCommit,
 		firewallConfirm,
 		firewallAbort,
+		getSetupStatus,
 	} from "$lib/api/client";
 	import type {
 		FirewallConfig,
 		FirewallStatus,
 		FirewallValidationReport,
 		FirewallMode,
+		NetworkInterfaceInfo,
 	} from "$lib/api/types";
+	import HelpPopover from "$lib/components/HelpPopover.svelte";
+	import InfoPopover from "$lib/components/InfoPopover.svelte";
 
 	import FirewallStatsCards from "./components/FirewallStatsCards.svelte";
 	import FirewallModeSelector from "./components/FirewallModeSelector.svelte";
@@ -52,6 +56,7 @@
 	let fwStatus = $state<FirewallStatus | null>(null);
 	let serverConfig = $state<FirewallConfig | null>(null);
 	let draft = $state<FirewallConfig | null>(null);
+	let availableInterfaces = $state<NetworkInterfaceInfo[]>([]);
 
 	let loading = $state(true);
 	let proposing = $state(false);
@@ -100,11 +105,15 @@
 	async function loadAll(silent = false) {
 		if (!silent) loading = true;
 		try {
-			const [s, c] = await Promise.all([
+			const [s, c, setupRes] = await Promise.all([
 				firewallStatus().catch(() => null),
 				firewallConfig().catch(() => null),
+				getSetupStatus().catch(() => null),
 			]);
 			fwStatus = s;
+			if (setupRes?.interfaces) {
+				availableInterfaces = setupRes.interfaces;
+			}
 			if (c) {
 				serverConfig = c;
 				// Only reset draft if user hasn't made local changes
@@ -269,6 +278,22 @@
 			<div class="flex flex-col gap-1">
 				<div class="flex flex-wrap items-center gap-2.5">
 					<h1 class="text-2xl font-bold tracking-tight">Firewall & Security</h1>
+					<HelpPopover
+						title="Firewall Architecture & Safety"
+						description="How network zones, kernel packet filtering, and safety rollbacks work in Lanforge."
+					>
+						<div class="flex flex-col gap-2 text-xs text-muted-foreground leading-relaxed">
+							<p>
+								<strong class="text-foreground">Network Zones:</strong> Group physical and virtual interfaces into security domains (e.g. LAN, WAN, containers, VPNs).
+							</p>
+							<p>
+								<strong class="text-foreground">Traffic Matrix:</strong> Control routed forwarding between zones with one-click toggles.
+							</p>
+							<p>
+								<strong class="text-foreground">Safe 3-Way Apply:</strong> Changes are verified first with <em>Review & Apply</em>. Committing starts an automatic 20-second rollback timer: if network access drops, previous rules are restored to prevent lockouts.
+							</p>
+						</div>
+					</HelpPopover>
 					{#if draft?.mode === "full"}
 						<Badge
 							variant="outline"
@@ -291,7 +316,7 @@
 					{/if}
 				</div>
 				<p class="text-sm text-muted-foreground">
-					Standalone router zones, traffic matrix, DNAT, and nftables packet filtering.
+					Configure zone policies, inter-zone routing, port forwarding, and kernel acceleration.
 				</p>
 			</div>
 		</div>
@@ -353,11 +378,24 @@
 	{#if draft !== null}
 		<Card.Root class="p-5">
 			<div class="flex items-center justify-between mb-3">
-				<div>
+				<div class="flex items-center gap-2">
 					<h3 class="text-sm font-semibold text-foreground">Operation Mode</h3>
-					<p class="text-xs text-muted-foreground">
-						Select the role Lanforge plays in host packet filtering and routing offload.
-					</p>
+					<HelpPopover
+						title="Choosing an Operation Mode"
+						description="Select how Lanforge integrates with Linux kernel packet filtering."
+					>
+						<div class="flex flex-col gap-2 text-xs text-muted-foreground leading-relaxed">
+							<p>
+								<strong class="text-foreground">Full Router:</strong> Lanforge manages all zones, NAT masquerading, input policies, and port forwarding. Recommended for dedicated gateway routers.
+							</p>
+							<p>
+								<strong class="text-foreground">Minimal Helper:</strong> Lanforge only handles PPPoE acceleration and MSS clamping, leaving general packet filtering to firewalld or ufw.
+							</p>
+							<p>
+								<strong class="text-foreground">Disabled:</strong> The Lanforge nftables table is removed entirely.
+							</p>
+						</div>
+					</HelpPopover>
 				</div>
 			</div>
 			<FirewallModeSelector
@@ -390,6 +428,8 @@
 					<ZonesTab
 						zones={draft.zones}
 						{highlightedZone}
+						{availableInterfaces}
+						activeWan={fwStatus?.active_wan ?? null}
 						onUpdate={(zones) => { if (draft) draft = { ...draft, zones }; }}
 					/>
 				</Tabs.Content>
@@ -431,13 +471,23 @@
 		{:else if draft.mode === "minimal"}
 			<!-- Minimal Helper Mode: Notice + Tuning Card -->
 			<div class="flex flex-col gap-4">
-				<Alert.Root class="border-primary/30 bg-primary/5 text-foreground">
-					<InfoIcon class="size-4 text-primary" />
-					<Alert.Title class="text-sm font-semibold">Minimal Coexistence Mode Active</Alert.Title>
-					<Alert.Description class="text-xs text-muted-foreground mt-1 leading-relaxed">
-						Lanforge is running as a non-interfering helper table with <code class="font-mono text-foreground font-semibold">policy accept</code> at priority <code class="font-mono text-foreground font-semibold">-10</code>. General packet filtering, zones, and host firewall rules are delegated to your system firewall (<code class="font-mono text-foreground">firewalld</code> or <code class="font-mono text-foreground">ufw</code>). PPPoE hardware Flowtable acceleration, TCP MSS clamping, and NAT masquerading remain active.
-					</Alert.Description>
-				</Alert.Root>
+				<div class="rounded-xl border border-primary/30 bg-primary/5 p-4 flex items-start justify-between gap-3 text-foreground">
+					<div class="flex items-start gap-2.5">
+						<InfoIcon class="size-4 text-primary mt-0.5 shrink-0" />
+						<div class="flex flex-col gap-1">
+							<div class="flex items-center gap-2">
+								<h4 class="text-sm font-semibold">Minimal Coexistence Mode Active</h4>
+								<InfoPopover
+									title="Minimal Helper Details"
+									description="Lanforge runs as an auxiliary helper table (priority -10, policy accept) alongside system firewalls like ufw or firewalld."
+								/>
+							</div>
+							<p class="text-xs text-muted-foreground leading-relaxed">
+								General packet filtering and zone policies are left to your host system firewall. Lanforge keeps PPPoE Flowtable hardware fast-path and TCP MSS clamping active without interference.
+							</p>
+						</div>
+					</div>
+				</div>
 
 				<FirewallTuningCard
 					flowOffload={draft.flow_offload}

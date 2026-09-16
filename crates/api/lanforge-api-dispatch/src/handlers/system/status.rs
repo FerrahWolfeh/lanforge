@@ -143,8 +143,18 @@ impl ClientContext {
         let dynamic_ports = self.ctx.registered_service_ports();
         let internal_zone = cfg.zones.iter().find(|z| z.name == "internal");
         let lan_ifaces = internal_zone.map_or_else(Vec::new, |z| z.interfaces.clone());
-        let external_zone = cfg.zones.iter().find(|z| z.name == "external");
-        let active_wan = external_zone.and_then(|z| z.interfaces.first().cloned());
+        let external_zone = cfg.zones.iter().find(|z| z.name == "external" || z.name == "wan");
+        let active_wan = external_zone
+            .and_then(|z| z.interfaces.first().cloned())
+            .or_else(|| {
+                self.ctx
+                    .read()
+                    .interfaces
+                    .pppoe_status
+                    .as_ref()
+                    .and_then(|p| p.interface.clone().or_else(|| p.wan_iface.clone()))
+            })
+            .or_else(|| self.ctx.get_pppoe_config().map(|p| p.wan_iface));
         #[allow(clippy::cast_possible_truncation)]
         let open_ports_count = (cfg.zones.iter().map(|z| z.open_ports.len()).sum::<usize>()
             + dynamic_ports.len()) as u32;

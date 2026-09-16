@@ -13,6 +13,7 @@
 	import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
 	import ShuffleIcon from "@lucide/svelte/icons/shuffle";
 	import { cn } from "$lib/utils";
+	import { untrack } from "svelte";
 	import type { PortForwardRule, L4Protocol, DeviceEntry } from "$lib/api/types";
 
 	let {
@@ -37,6 +38,9 @@
 	let internalIp = $state("");
 	let internalPort = $state<number | "">(80);
 	let enableHairpin = $state(false);
+	let devicePickerSearch = $state("");
+	let prevOpen = $state(false);
+	let prevRule = $state<PortForwardRule | null>(null);
 
 	// ── Validation errors ─────────────────────────────────────────────────────
 	let errors = $state<Record<string, string>>({});
@@ -65,37 +69,56 @@
 		errors = {};
 	}
 
-	// ── Initialise / reset form when dialog opens ─────────────────────────────
+	// ── Initialise / reset form only when dialog transitions open or rule changes ──
 	$effect(() => {
-		if (open) {
-			errors = {};
-			if (rule) {
-				comment = rule.comment ?? "";
-				protocol = rule.protocol;
-				srcZone = rule.src_zone;
-				externalPort = rule.external_port;
-				internalIp = rule.internal_ip;
-				internalPort = rule.internal_port;
-				enableHairpin = rule.enable_hairpin;
-			} else {
-				comment = "";
-				protocol = "Tcp";
-				srcZone = zones[0] ?? "";
-				externalPort = 80;
-				internalIp = "";
-				internalPort = 80;
-				enableHairpin = false;
-			}
+		const isOpening = open && !prevOpen;
+		const ruleChanged = rule !== prevRule;
+
+		if (isOpening || (open && ruleChanged)) {
+			untrack(() => {
+				errors = {};
+				devicePickerSearch = "";
+				if (rule) {
+					comment = rule.comment ?? "";
+					protocol = rule.protocol;
+					srcZone = rule.src_zone;
+					externalPort = rule.external_port;
+					internalIp = cleanIp(rule.internal_ip);
+					internalPort = rule.internal_port;
+					enableHairpin = rule.enable_hairpin;
+				} else {
+					comment = "";
+					protocol = "Tcp";
+					srcZone = zones[0] ?? "";
+					externalPort = 80;
+					internalIp = "";
+					internalPort = 80;
+					enableHairpin = false;
+				}
+			});
 		}
+		prevOpen = open;
+		prevRule = rule;
 	});
+
+	// ── IP cleaner: strip any trailing '?', ' ?', or non-numeric tokens ──────
+	function cleanIp(raw: string | undefined | null): string {
+		if (!raw) return "";
+		const trimmed = raw.trim();
+		const match = trimmed.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/);
+		if (match) return match[0];
+		return trimmed.replace(/\s*\?.*$/, "").replace(/[?]/g, "").trim();
+	}
 
 	// ── DeviceCombobox callback ───────────────────────────────────────────────
 	function handleDeviceSelect(dev: DeviceEntry) {
-		const ip = dev.v4?.ip ?? dev.display_v4 ?? "";
-		if (ip) {
+		const raw = dev.v4?.ip || dev.display_v4 || "";
+		const ip = cleanIp(raw);
+		if (ip && ip !== "—") {
 			internalIp = ip;
 			errors = { ...errors, internalIp: "" };
 		}
+		devicePickerSearch = "";
 	}
 
 	// ── Port validator ────────────────────────────────────────────────────────
@@ -106,10 +129,11 @@
 	// ── Submit ────────────────────────────────────────────────────────────────
 	function handleSave() {
 		const next: Record<string, string> = {};
+		const sanitizedIp = cleanIp(internalIp);
 
 		if (!validPort(externalPort)) next.externalPort = "Port must be 1–65535";
 		if (!validPort(internalPort)) next.internalPort = "Port must be 1–65535";
-		if (!internalIp.trim()) next.internalIp = "Internal IP is required";
+		if (!sanitizedIp) next.internalIp = "Internal IP is required";
 		if (!srcZone) next.srcZone = "Please select a source zone";
 
 		errors = next;
@@ -118,7 +142,7 @@
 		onSave({
 			comment: comment.trim() || null,
 			src_zone: srcZone,
-			internal_ip: internalIp.trim(),
+			internal_ip: sanitizedIp,
 			external_port: externalPort as number,
 			internal_port: internalPort as number,
 			protocol,
@@ -281,7 +305,10 @@
 						bind:value={internalIp}
 						placeholder="192.168.1.100"
 						class={cn("font-mono text-xs", errors.internalIp && "border-destructive")}
-						oninput={() => { errors = { ...errors, internalIp: "" }; }}
+						oninput={() => {
+							internalIp = internalIp.replace(/[?]/g, "");
+							errors = { ...errors, internalIp: "" };
+						}}
 					/>
 				</Field.Content>
 				{#if errors.internalIp}
@@ -291,8 +318,8 @@
 				<div class="flex flex-col gap-1 pt-1">
 					<Label class="text-[11px] text-muted-foreground">Select from active network device</Label>
 					<DeviceCombobox
-						value={internalIp}
-						placeholder="Search LAN devices…"
+						bind:value={devicePickerSearch}
+						placeholder="Search LAN devices to auto-fill IP…"
 						onselect={handleDeviceSelect}
 					/>
 				</div>

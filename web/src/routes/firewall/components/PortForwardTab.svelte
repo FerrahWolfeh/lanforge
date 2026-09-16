@@ -8,6 +8,7 @@
 	import PencilIcon from "@lucide/svelte/icons/pencil";
 	import TrashIcon from "@lucide/svelte/icons/trash-2";
 	import ArrowLeftRightIcon from "@lucide/svelte/icons/arrow-left-right";
+	import HelpPopover from "$lib/components/HelpPopover.svelte";
 	import PortForwardDialog from "./PortForwardDialog.svelte";
 	import type { PortForwardRule, FirewallZone } from "$lib/api/types";
 
@@ -64,7 +65,25 @@
 	<!-- Actions row -->
 	<div class="flex items-center justify-between">
 		<div>
-			<h3 class="text-sm font-semibold tracking-tight text-foreground">Port Forwarding (DNAT)</h3>
+			<div class="flex items-center gap-2">
+				<h3 class="text-sm font-semibold tracking-tight text-foreground">Port Forwarding (DNAT)</h3>
+				<HelpPopover
+					title="Port Forwarding & Hairpin NAT"
+					description="How inbound connections from the Internet are routed to local LAN services."
+				>
+					<div class="flex flex-col gap-2 text-xs text-muted-foreground leading-relaxed">
+						<p>
+							<strong class="text-foreground">Destination NAT (DNAT):</strong> When an external client connects to your router's public WAN IP on a specific port, the firewall rewrites the destination to a local private IP and port (e.g. 192.168.1.100:8080).
+						</p>
+						<p>
+							<strong class="text-foreground">Hairpin NAT (NAT Loopback):</strong> Allows internal LAN devices to access the forwarded service using your public WAN IP or DDNS hostname, without split DNS.
+						</p>
+						<p>
+							<strong class="text-foreground">Device Picker:</strong> You can choose a discovered LAN device to automatically fill its current IP address.
+						</p>
+					</div>
+				</HelpPopover>
+			</div>
 			<p class="text-xs text-muted-foreground">Inbound port forwarding to local network hosts.</p>
 		</div>
 		<Button size="sm" onclick={openAdd}>
