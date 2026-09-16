@@ -520,25 +520,24 @@ impl<'a> RulesetBuilder<'a> {
 
         // Flowtable offload in forward chain
         if has_flowtable {
-            batch.add(add_rule(
-                "forward",
-                vec![
-                    Statement::Match(Match {
-                        left: Expression::Named(NamedExpression::Meta(Meta {
-                            key: MetaKey::L4proto,
-                        })),
-                        right: Expression::List(vec![
-                            Expression::String("tcp".into()),
-                            Expression::String("udp".into()),
-                        ]),
-                        op: Operator::IN,
-                    }),
-                    Statement::Flow(Flow {
-                        op: SetOp::Add,
-                        flowtable: format!("@{flowtable_name}").into(),
-                    }),
-                ],
-            ));
+            for proto in ["tcp", "udp"] {
+                batch.add(add_rule(
+                    "forward",
+                    vec![
+                        Statement::Match(Match {
+                            left: Expression::Named(NamedExpression::Meta(Meta {
+                                key: MetaKey::L4proto,
+                            })),
+                            right: Expression::String(proto.into()),
+                            op: Operator::EQ,
+                        }),
+                        Statement::Flow(Flow {
+                            op: SetOp::Add,
+                            flowtable: format!("@{flowtable_name}").into(),
+                        }),
+                    ],
+                ));
+            }
         }
 
         // VoWiFi Forward bypass
