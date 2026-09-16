@@ -415,3 +415,63 @@ fn test_sanity_podman_wildcard_in_trusted_zone() {
     // Trusted zone must resolve podman* wildcard
     assert!(json.contains("podman*"));
 }
+
+#[test]
+fn test_sanity_dnat_restricted_to_internal_and_explicit_port_forwards() {
+    use lanforge_types::network::firewall::{L4Protocol, PortForwardRule};
+    use std::net::IpAddr;
+
+    let mut cfg = FirewallConfig::default();
+    cfg.port_forwards.push(PortForwardRule {
+        comment: Some("qBittorrent IPv6 pinhole".into()),
+        src_zone: "external".into(),
+        protocol: L4Protocol::Tcp,
+        external_port: 6881,
+        internal_ip: "2804:cafe::1".parse::<IpAddr>().unwrap(),
+        internal_port: 6881,
+        enable_hairpin: false,
+    });
+    cfg.port_forwards.push(PortForwardRule {
+        comment: Some("Web port forward".into()),
+        src_zone: "external".into(),
+        protocol: L4Protocol::Tcp,
+        external_port: 8080,
+        internal_ip: "192.168.0.128".parse::<IpAddr>().unwrap(),
+        internal_port: 80,
+        enable_hairpin: true,
+    });
+
+    let ruleset = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+    let json = serde_json::to_string(&ruleset).unwrap();
+
+    // 1. Internal interfaces must have DNAT rules in forward/input
+    assert!(json.contains("lan0"));
+    assert!(json.contains("podman*"));
+
+    // 2. Explicit port forward rules for ppp0 must exist matching target IP and internal port
+    assert!(json.contains("192.168.0.128"));
+    assert!(json.contains("2804:cafe::1"));
+    assert!(json.contains("6881"));
+
+    // 3. Without a rule for 443, no rule in forward allows ppp0 to 443
+    let cfg_clean = FirewallConfig::default();
+    let ruleset_clean = RulesetBuilder::new(&cfg_clean)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+
+    // Must NOT contain any rule matching ppp0 with dnat
+    for obj in ruleset_clean.objects.as_ref() {
+        let obj_str = serde_json::to_string(obj).unwrap();
+        if obj_str.contains("\"rule\"") && obj_str.contains("ppp0") {
+            assert!(
+                !obj_str.contains("\"dnat\""),
+                "ppp0 must NEVER have an unconditional ct status dnat rule! Found: {obj_str}"
+            );
+        }
+    }
+}
+

@@ -172,6 +172,8 @@ impl<'a> RulesetBuilder<'a> {
             }));
         }
 
+        let internal_ifaces = self.resolve_internal_interfaces();
+
         // Helper closures to build rules
         let add_rule = |target_chain: &str, stmts: Vec<Statement<'static>>| -> NfListObject<'static> {
             NfListObject::Rule(Rule {
@@ -239,22 +241,31 @@ impl<'a> RulesetBuilder<'a> {
             ],
         ));
 
-        // Rule: ct status dnat accept (Netavark/container reflections & local port forwards)
-        batch.add(add_rule(
-            "input",
-            vec![
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::CT(CT {
-                        key: "status".into(),
-                        family: None,
-                        dir: None,
-                    })),
-                    right: Expression::String("dnat".into()),
-                    op: Operator::IN,
-                }),
-                Statement::Accept(None),
-            ],
-        ));
+        // Rule: ct status dnat accept ONLY from internal/trusted interfaces (local reflections & container access)
+        for iface in &internal_ifaces {
+            batch.add(add_rule(
+                "input",
+                vec![
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Meta(Meta {
+                            key: MetaKey::Iifname,
+                        })),
+                        right: Expression::String(iface.clone().into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::CT(CT {
+                            key: "status".into(),
+                            family: None,
+                            dir: None,
+                        })),
+                        right: Expression::String("dnat".into()),
+                        op: Operator::IN,
+                    }),
+                    Statement::Accept(None),
+                ],
+            ));
+        }
 
         // Rule: ct state invalid drop
         batch.add(add_rule(
@@ -571,22 +582,104 @@ impl<'a> RulesetBuilder<'a> {
             ],
         ));
 
-        // Rule: ct status dnat accept (Podman / Netavark & Port Forward reflection)
-        batch.add(add_rule(
-            "forward",
-            vec![
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::CT(CT {
-                        key: "status".into(),
-                        family: None,
-                        dir: None,
-                    })),
-                    right: Expression::String("dnat".into()),
-                    op: Operator::IN,
-                }),
-                Statement::Accept(None),
-            ],
-        ));
+        // Rule: Accept DNAT originating from internal/trusted interfaces (LAN <-> Podman / Tailscale)
+        for iface in &internal_ifaces {
+            batch.add(add_rule(
+                "forward",
+                vec![
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Meta(Meta {
+                            key: MetaKey::Iifname,
+                        })),
+                        right: Expression::String(iface.clone().into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::CT(CT {
+                            key: "status".into(),
+                            family: None,
+                            dir: None,
+                        })),
+                        right: Expression::String("dnat".into()),
+                        op: Operator::IN,
+                    }),
+                    Statement::Accept(None),
+                ],
+            ));
+        }
+
+        // Rule: Accept DNAT / Pinholes from external/other zones ONLY when matching explicit Port Forward rules
+        for pf in &self.cfg.port_forwards {
+            let src_ifaces = self.resolve_zone_interfaces(&pf.src_zone);
+            let protos = match pf.protocol {
+                L4Protocol::Tcp => vec!["tcp"],
+                L4Protocol::Udp => vec!["udp"],
+                L4Protocol::Both => vec!["tcp", "udp"],
+            };
+
+            for src in &src_ifaces {
+                for proto in &protos {
+                    let mut stmts = vec![Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Meta(Meta {
+                            key: MetaKey::Iifname,
+                        })),
+                        right: Expression::String(src.clone().into()),
+                        op: Operator::EQ,
+                    })];
+
+                    match pf.internal_ip {
+                        IpAddr::V4(v4) => {
+                            stmts.push(Statement::Match(Match {
+                                left: Expression::Named(NamedExpression::CT(CT {
+                                    key: "status".into(),
+                                    family: None,
+                                    dir: None,
+                                })),
+                                right: Expression::String("dnat".into()),
+                                op: Operator::IN,
+                            }));
+                            stmts.push(Statement::Match(Match {
+                                left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                                    PayloadField {
+                                        protocol: "ip".into(),
+                                        field: "daddr".into(),
+                                    },
+                                ))),
+                                right: Expression::String(v4.to_string().into()),
+                                op: Operator::EQ,
+                            }));
+                        }
+                        IpAddr::V6(v6) => {
+                            stmts.push(Statement::Match(Match {
+                                left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                                    PayloadField {
+                                        protocol: "ip6".into(),
+                                        field: "daddr".into(),
+                                    },
+                                ))),
+                                right: Expression::String(v6.to_string().into()),
+                                op: Operator::EQ,
+                            }));
+                        }
+                    }
+
+                    stmts.push(Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                            PayloadField {
+                                protocol: (*proto).into(),
+                                field: "dport".into(),
+                            },
+                        ))),
+                        right: Expression::Number(u32::from(pf.internal_port)),
+                        op: Operator::EQ,
+                    }));
+
+                    stmts.push(Statement::Accept(None));
+
+                    batch.add(add_rule("forward", stmts));
+                }
+            }
+        }
 
         // Flowtable offload in forward chain
         if has_flowtable {
@@ -926,7 +1019,6 @@ impl<'a> RulesetBuilder<'a> {
         // 6. NAT Chains: PREROUTING & POSTROUTING
         let has_port_forwards = !self.cfg.port_forwards.is_empty();
         let external_ifaces = self.resolve_zone_interfaces("external");
-        let internal_ifaces = self.resolve_internal_interfaces();
 
         if has_port_forwards {
             batch.add(NfListObject::Chain(Chain {

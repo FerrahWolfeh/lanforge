@@ -38,13 +38,14 @@
 		showDialog = true;
 	}
 
-	function handleDialogSave(rule: PortForwardRule) {
+	function handleDialogSave(result: PortForwardRule | PortForwardRule[]) {
+		const newRules = Array.isArray(result) ? result : [result];
 		if (editingIndex !== null) {
 			const next = [...rules];
-			next[editingIndex] = rule;
+			next.splice(editingIndex, 1, ...newRules);
 			onUpdate(next);
 		} else {
-			onUpdate([...rules, rule]);
+			onUpdate([...rules, ...newRules]);
 		}
 		showDialog = false;
 		editingRule = null;
@@ -66,25 +67,28 @@
 	<div class="flex items-center justify-between">
 		<div>
 			<div class="flex items-center gap-2">
-				<h3 class="text-sm font-semibold tracking-tight text-foreground">Port Forwarding (DNAT)</h3>
+				<h3 class="text-sm font-semibold tracking-tight text-foreground">Port Forwarding & IPv6 Pinholes</h3>
 				<HelpPopover
-					title="Port Forwarding & Hairpin NAT"
+					title="Port Forwarding & Pinholes Guide"
 					description="How inbound connections from the Internet are routed to local LAN services."
 				>
 					<div class="flex flex-col gap-2 text-xs text-muted-foreground leading-relaxed">
 						<p>
-							<strong class="text-foreground">Destination NAT (DNAT):</strong> When an external client connects to your router's public WAN IP on a specific port, the firewall rewrites the destination to a local private IP and port (e.g. 192.168.1.100:8080).
+							<strong class="text-foreground">IPv4 DNAT (Port Forward):</strong> Translates an external WAN IP port to a private LAN IPv4 address (e.g. 192.168.0.128:8080).
 						</p>
 						<p>
-							<strong class="text-foreground">Hairpin NAT (NAT Loopback):</strong> Allows internal LAN devices to access the forwarded service using your public WAN IP or DDNS hostname, without split DNS.
+							<strong class="text-foreground">IPv6 Pinholes:</strong> Direct routed hole punching for globally-routable IPv6 addresses without NAT rewriting (e.g. qBittorrent on 6881).
 						</p>
 						<p>
-							<strong class="text-foreground">Device Picker:</strong> You can choose a discovered LAN device to automatically fill its current IP address.
+							<strong class="text-foreground">Dual-Stack & Device Pinning:</strong> When selecting a recognized device from the network table, Lanforge can open both IPv4 and IPv6 ports simultaneously using its tracked static leases or pinned suffixes.
+						</p>
+						<p>
+							<strong class="text-foreground">Hairpin NAT:</strong> Allows internal LAN devices to access forwarded IPv4 services using your public WAN IP or DDNS hostname.
 						</p>
 					</div>
 				</HelpPopover>
 			</div>
-			<p class="text-xs text-muted-foreground">Inbound port forwarding to local network hosts.</p>
+			<p class="text-xs text-muted-foreground">Manage inbound IPv4 port forwarding and IPv6 pinholes for internal LAN devices.</p>
 		</div>
 		<Button size="sm" onclick={openAdd}>
 			<PlusIcon data-icon="inline-start" />
@@ -100,7 +104,7 @@
 			<Empty.Header>
 				<Empty.Title>No port forwarding rules</Empty.Title>
 				<Empty.Description>
-					Create DNAT rules to allow external access to services running on your local network.
+					Create port forwarding rules or IPv6 pinholes to allow external access to services running on your local network.
 				</Empty.Description>
 			</Empty.Header>
 			<Empty.Content>
@@ -116,6 +120,7 @@
 				<Table.Header>
 					<Table.Row class="bg-muted/40 text-xs">
 						<Table.Head>Comment</Table.Head>
+						<Table.Head>Type</Table.Head>
 						<Table.Head>Protocol</Table.Head>
 						<Table.Head>Source Zone</Table.Head>
 						<Table.Head>External Port</Table.Head>
@@ -126,9 +131,21 @@
 				</Table.Header>
 				<Table.Body>
 					{#each rules as rule, index (index)}
+						{@const isV6 = rule.internal_ip.includes(":")}
 						<Table.Row class="text-xs">
 							<Table.Cell class="font-medium text-foreground">
 								{rule.comment || "—"}
+							</Table.Cell>
+							<Table.Cell>
+								{#if isV6}
+									<Badge variant="outline" class="border-purple-500/30 text-purple-400 bg-purple-500/10 font-mono text-[10px]">
+										IPv6 Pinhole
+									</Badge>
+								{:else}
+									<Badge variant="outline" class="border-blue-500/30 text-blue-400 bg-blue-500/10 font-mono text-[10px]">
+										IPv4 DNAT
+									</Badge>
+								{/if}
 							</Table.Cell>
 							<Table.Cell>
 								<Badge variant="outline" class="font-mono text-[11px]">
@@ -143,15 +160,23 @@
 							</Table.Cell>
 							<Table.Cell>
 								<span class="font-mono text-muted-foreground">
-									{rule.internal_ip}:<strong class="text-foreground">{rule.internal_port}</strong>
+									{#if isV6}
+										[{rule.internal_ip}]:<strong class="text-foreground">{rule.internal_port}</strong>
+									{:else}
+										{rule.internal_ip}:<strong class="text-foreground">{rule.internal_port}</strong>
+									{/if}
 								</span>
 							</Table.Cell>
 							<Table.Cell class="text-center">
-								<Switch
-									checked={rule.enable_hairpin}
-									onCheckedChange={(v) => handleHairpinToggle(index, v)}
-									aria-label="Hairpin NAT"
-								/>
+								{#if isV6}
+									<span class="text-[11px] text-muted-foreground font-mono" title="Not applicable to routed IPv6 pinholes">—</span>
+								{:else}
+									<Switch
+										checked={rule.enable_hairpin}
+										onCheckedChange={(v) => handleHairpinToggle(index, v)}
+										aria-label="Hairpin NAT"
+									/>
+								{/if}
 							</Table.Cell>
 							<Table.Cell class="text-right">
 								<div class="flex items-center justify-end gap-1">

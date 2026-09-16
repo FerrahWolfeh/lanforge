@@ -454,9 +454,7 @@
 				<Tabs.Content value="hostrules">
 					<HostRulesTab
 						zones={draft.zones}
-						portForwards={draft.port_forwards}
 						onZonesUpdate={(zones) => { if (draft) draft = { ...draft, zones }; }}
-						onPortForwardsUpdate={(port_forwards) => { if (draft) draft = { ...draft, port_forwards }; }}
 					/>
 				</Tabs.Content>
 
