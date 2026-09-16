@@ -574,10 +574,31 @@ impl Bootstrapper {
             // 8. Check/seed/load Firewall Config
             #[cfg(feature = "nft")]
             {
+                #[cfg(feature = "pppoe")]
+                {
+                    if !cfg.pppoe_toml.nftables.flow_offload {
+                        cfg.firewall_toml.flow_offload = false;
+                    }
+                    if !cfg.pppoe_toml.nftables.bypass_dns {
+                        cfg.firewall_toml.bypass_dns = false;
+                    }
+                    if !cfg.pppoe_toml.nftables.bypass_vowifi {
+                        cfg.firewall_toml.bypass_vowifi = false;
+                    }
+                }
+
                 if db.seed_firewall_if_empty(&cfg.firewall_toml).await? {
                     info!("Seeded Firewall configuration from TOML into database");
                 }
-                if let Some(loaded) = db.load_firewall_config().await? {
+                if let Some(mut loaded) = db.load_firewall_config().await? {
+                    #[cfg(feature = "pppoe")]
+                    {
+                        if !cfg.pppoe_toml.nftables.flow_offload && loaded.flow_offload {
+                            info!("Firewall bootstrap: disabling flow_offload to match existing PPPoE/SQM configuration");
+                            loaded.flow_offload = false;
+                            let _ = db.save_firewall_config(&loaded).await;
+                        }
+                    }
                     cfg.firewall_enabled = loaded.enabled;
                     cfg.firewall_toml = loaded;
                 }
