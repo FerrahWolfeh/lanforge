@@ -311,6 +311,11 @@ impl ClientContext {
         };
 
         let mut initial_firewall = FirewallConfig::default();
+        if let Some(SetupWanConfig::Pppoe { nftables: Some(nft), .. }) = payload.wan.as_ref() {
+            initial_firewall.flow_offload = nft.flow_offload;
+            initial_firewall.bypass_dns = nft.bypass_dns;
+            initial_firewall.bypass_vowifi = nft.bypass_vowifi;
+        }
         if let Some(internal_zone) = initial_firewall.zones.iter_mut().find(|z| z.name == "internal") {
             internal_zone.interfaces = vec![payload.lan_iface.clone()];
         }
