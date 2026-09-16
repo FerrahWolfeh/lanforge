@@ -350,7 +350,6 @@ impl AsyncService for PppoeService {
             info!("PPPoE service is disabled in configuration.");
             ctx.set_service_state("pppoe", ServiceState::Inactive);
             ctx.set_pppoe_ready(true);
-            std::future::pending::<()>().await;
             return Ok(());
         }
 
@@ -366,7 +365,6 @@ impl AsyncService for PppoeService {
                 }));
             ctx.set_service_state("pppoe", ServiceState::Error);
             ctx.set_pppoe_ready(true);
-            std::future::pending::<()>().await;
             return Ok(());
         }
 

@@ -228,7 +228,6 @@ impl AsyncService for DiscoveryService {
         if !self.cfg.enabled {
             info!("Discovery service is disabled in configuration.");
             ctx.set_service_state("monitor", ServiceState::Inactive);
-            std::future::pending::<()>().await;
             return Ok(());
         }
 

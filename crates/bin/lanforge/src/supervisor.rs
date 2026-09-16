@@ -74,7 +74,7 @@ where
         debug!("▸ Starting async service: {}", description);
 
         let ctrl = ServiceControl::new(meta.id, ctx.clone());
-        let mut bus_rx = ctx.bus().subscribe();
+        let mut bus_rx = ctx.bus().subscribe_system();
 
         // 1. Dependency Resolution Phase
         let mut deps_satisfied = true;
@@ -262,7 +262,7 @@ async fn wait_if_inactive(ctx: &LanforgeContext, id: &str) -> Option<bool> {
         return Some(false);
     }
 
-    let mut bus_rx = ctx.bus().subscribe();
+    let mut bus_rx = ctx.bus().subscribe_system();
     loop {
         match bus_rx.recv().await {
             Ok(te) => match te.event {
@@ -277,6 +277,7 @@ async fn wait_if_inactive(ctx: &LanforgeContext, id: &str) -> Option<bool> {
                 }
                 _ => {}
             },
+            Err(RecvError::Lagged(_)) => {}
             Err(_) => return None, // Bus closed
         }
     }
@@ -319,6 +320,13 @@ fn evaluate_service_exit(
                 ctx.set_service_state(id, ServiceState::Inactive);
                 ctx.clear_service_start(id);
                 return None;
+            }
+
+            // Clean intentional dormant transition (e.g. disabled in config or stopped by admin)
+            if ctx.get_service_state(id) == ServiceState::Inactive {
+                debug!("▪ {} entered inactive state cleanly", description);
+                *consecutive_failures = 0;
+                return Some(false);
             }
 
             let uptime = start.elapsed();

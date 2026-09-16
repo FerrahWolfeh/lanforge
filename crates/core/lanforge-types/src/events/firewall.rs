@@ -27,4 +27,6 @@ pub enum FirewallEvent {
     },
     /// Dispatched when firewall rules are flushed
     RulesetFlushed,
+    /// Dispatched when firewall configuration has changed and kernel ruleset should be recompiled and applied
+    RulesetChanged,
 }

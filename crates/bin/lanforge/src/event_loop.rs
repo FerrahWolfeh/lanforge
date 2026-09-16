@@ -73,12 +73,14 @@ where
         system_ready_sent: false,
     };
 
-    // Pre-seed any services that already signaled ready in context before subscription
+    // Pre-seed any services that already settled in context before subscription (Online or Inactive/dormant)
     for s in &loop_ctx.expected_services {
-        if ctx.get_service_state(s) == ServiceState::Online && loop_ctx.ready_services.insert(s.clone()) {
+        let st = ctx.get_service_state(s);
+        if (st == ServiceState::Online || st == ServiceState::Inactive) && loop_ctx.ready_services.insert(s.clone()) {
             debug!(
-                "Service '{}' pre-seeded online ({}/{})",
+                "Service '{}' pre-seeded settled ({:?}) ({}/{})",
                 s,
+                st,
                 loop_ctx.ready_services.len(),
                 loop_ctx.expected_services.len()
             );

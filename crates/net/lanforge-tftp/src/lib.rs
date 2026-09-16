@@ -75,7 +75,6 @@ impl AsyncService for TftpService {
         if !self.cfg.enabled {
             info!("TFTP service is disabled in configuration.");
             ctx.set_service_state("tftp", ServiceState::Inactive);
-            std::future::pending::<()>().await;
             return Ok(());
         }
 

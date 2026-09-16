@@ -1,6 +1,6 @@
 use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess};
-use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
+use lanforge_core::bus::{FirewallEvent, LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_types::{
     network::{
         firewall::{FirewallCommitRequest, FirewallCommitResponse, FirewallConfig},
@@ -36,6 +36,7 @@ impl ClientContext {
     }
 
     pub async fn handle_shutdown(&self) -> Response {
+        self.ctx.terminate();
         let _ = self
             .ctx
             .bus()
@@ -159,7 +160,7 @@ impl ClientContext {
         let _ = self
             .ctx
             .bus()
-            .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+            .publish(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));
 
         Response::Success(SimpleSuccess {
             message: "Firewall configuration updated successfully".to_string(),
@@ -170,7 +171,7 @@ impl ClientContext {
         let _ = self
             .ctx
             .bus()
-            .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+            .publish(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));
 
         Response::Success(SimpleSuccess {
             message: "Firewall reload requested".to_string(),
@@ -207,7 +208,7 @@ impl ClientContext {
             let _ = self
                 .ctx
                 .bus()
-                .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+                .publish(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));
 
             let deadline = std::time::Instant::now()
                 + std::time::Duration::from_secs(u64::from(rollback_secs));
@@ -231,7 +232,7 @@ impl ClientContext {
                     ctx.update_firewall_config(previous);
                     let _ = ctx
                         .bus()
-                        .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+                        .publish(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));
                     let _ = ctx.clear_staged_firewall_transaction(Some(&tx_id));
                 }
             });
@@ -260,7 +261,7 @@ impl ClientContext {
             let _ = self
                 .ctx
                 .bus()
-                .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+                .publish(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));
 
             Response::FirewallCommit(Box::new(FirewallCommitResponse {
                 success: true,
@@ -304,7 +305,7 @@ impl ClientContext {
             let _ = self
                 .ctx
                 .bus()
-                .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
+                .publish(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));
         }
 
         Response::Success(SimpleSuccess {

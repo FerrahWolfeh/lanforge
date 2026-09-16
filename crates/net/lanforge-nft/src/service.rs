@@ -236,6 +236,12 @@ impl AsyncService for NftService {
                                 let dynamic_ports = ctx.registered_service_ports();
                                 self.apply_ruleset_internal(&ctx, &cfg, &dynamic_ports).await;
                             }
+                            LanforgeEvent::Firewall(FirewallEvent::RulesetChanged) => {
+                                info!("Firewall configuration changed, reapplying ruleset in-place");
+                                let cfg = ctx.get_firewall_config().unwrap_or_default();
+                                let dynamic_ports = ctx.registered_service_ports();
+                                self.apply_ruleset_internal(&ctx, &cfg, &dynamic_ports).await;
+                            }
                             LanforgeEvent::Firewall(FirewallEvent::PortReleaseRequested { service, port, protocol }) => {
                                 info!(
                                     %service,

@@ -114,7 +114,6 @@ impl AsyncService for MdnsProber {
         if !self.cfg.enabled {
             info!("mDNS prober is disabled in configuration.");
             ctx.set_service_state("mdns", ServiceState::Inactive);
-            std::future::pending::<()>().await;
             return Ok(());
         }
 
