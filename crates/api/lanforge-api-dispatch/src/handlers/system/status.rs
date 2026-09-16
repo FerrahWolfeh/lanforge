@@ -153,6 +153,7 @@ impl ClientContext {
             + (cfg.port_forwards.len() + cfg.forwardings.len()) as u32;
 
         let status = FirewallStatus {
+            mode: cfg.mode,
             table: cfg.table_name,
             active_wan,
             lan_ifaces,

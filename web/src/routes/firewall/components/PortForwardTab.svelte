@@ -65,11 +65,11 @@
 	<div class="flex items-center justify-between">
 		<div>
 			<h3 class="text-sm font-semibold tracking-tight text-foreground">Port Forwarding (DNAT)</h3>
-			<p class="text-xs text-muted-foreground">Redirecionamento de portas de entrada para hosts da rede local.</p>
+			<p class="text-xs text-muted-foreground">Inbound port forwarding to local network hosts.</p>
 		</div>
 		<Button size="sm" onclick={openAdd}>
 			<PlusIcon data-icon="inline-start" />
-			Adicionar Regra
+			Add Rule
 		</Button>
 	</div>
 
@@ -79,15 +79,15 @@
 				<ArrowLeftRightIcon class="size-10 text-muted-foreground" />
 			</Empty.Media>
 			<Empty.Header>
-				<Empty.Title>Nenhuma regra de redirecionamento</Empty.Title>
+				<Empty.Title>No port forwarding rules</Empty.Title>
 				<Empty.Description>
-					Crie regras DNAT para permitir acesso externo a serviços rodando na sua rede local.
+					Create DNAT rules to allow external access to services running on your local network.
 				</Empty.Description>
 			</Empty.Header>
 			<Empty.Content>
 				<Button size="sm" onclick={openAdd}>
 					<PlusIcon data-icon="inline-start" />
-					Adicionar Regra
+					Add Rule
 				</Button>
 			</Empty.Content>
 		</Empty.Root>
@@ -96,13 +96,13 @@
 			<Table.Root>
 				<Table.Header>
 					<Table.Row class="bg-muted/40 text-xs">
-						<Table.Head>Comentário</Table.Head>
-						<Table.Head>Protocolo</Table.Head>
-						<Table.Head>Zona Origem</Table.Head>
-						<Table.Head>Porta Externa</Table.Head>
-						<Table.Head>Destino Interno</Table.Head>
+						<Table.Head>Comment</Table.Head>
+						<Table.Head>Protocol</Table.Head>
+						<Table.Head>Source Zone</Table.Head>
+						<Table.Head>External Port</Table.Head>
+						<Table.Head>Internal Target</Table.Head>
 						<Table.Head class="text-center">Hairpin NAT</Table.Head>
-						<Table.Head class="w-24 text-right">Ações</Table.Head>
+						<Table.Head class="w-24 text-right">Actions</Table.Head>
 					</Table.Row>
 				</Table.Header>
 				<Table.Body>
@@ -131,6 +131,7 @@
 								<Switch
 									checked={rule.enable_hairpin}
 									onCheckedChange={(v) => handleHairpinToggle(index, v)}
+									aria-label="Hairpin NAT"
 								/>
 							</Table.Cell>
 							<Table.Cell class="text-right">
@@ -140,18 +141,20 @@
 										size="icon"
 										class="size-8"
 										onclick={() => openEdit(rule, index)}
+										aria-label="Edit"
 									>
 										<PencilIcon class="size-3.5 text-muted-foreground" />
-										<span class="sr-only">Editar</span>
+										<span class="sr-only">Edit</span>
 									</Button>
 									<Button
 										variant="ghost"
 										size="icon"
 										class="size-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
 										onclick={() => handleDelete(index)}
+										aria-label="Delete"
 									>
 										<TrashIcon class="size-3.5" />
-										<span class="sr-only">Excluir</span>
+										<span class="sr-only">Delete</span>
 									</Button>
 								</div>
 							</Table.Cell>
@@ -162,7 +165,7 @@
 		</div>
 	{/if}
 
-	<!-- Add / Edit Dialog -->
+	<!-- Dialog for Add / Edit -->
 	<PortForwardDialog
 		bind:open={showDialog}
 		zones={zoneNames}

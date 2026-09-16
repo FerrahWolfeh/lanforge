@@ -82,14 +82,6 @@
 	let formPadiRetries = $state(5);
 	let formPadiTimeout = $state(3);
 
-	// nftables form fields
-	let formNftEnabled = $state(true);
-	let formNftFlowOffload = $state(true);
-	let formNftMssClamping = $state(true);
-	let formNftBypassDns = $state(true);
-	let formNftBypassVowifi = $state(true);
-	let formNftMasquerade = $state(true);
-
 	// Dirty tracking
 	let isDirty = $derived.by(() => {
 		if (!config) return false;
@@ -114,13 +106,6 @@
 		if (Number(formPadiRetries) !== config.discovery_padi_retries) return true;
 		if (Number(formPadiTimeout) !== config.discovery_padi_timeout_secs) return true;
 
-		if (formNftEnabled !== (config.nftables?.enabled ?? true)) return true;
-		if (formNftFlowOffload !== (config.nftables?.flow_offload ?? true)) return true;
-		if (formNftMssClamping !== (config.nftables?.mss_clamping ?? true)) return true;
-		if (formNftBypassDns !== (config.nftables?.bypass_dns ?? true)) return true;
-		if (formNftBypassVowifi !== (config.nftables?.bypass_vowifi ?? true)) return true;
-		if (formNftMasquerade !== (config.nftables?.masquerade ?? true)) return true;
-
 		return false;
 	});
 
@@ -141,13 +126,6 @@
 		formSendPadt = c.send_padt_on_shutdown;
 		formPadiRetries = c.discovery_padi_retries;
 		formPadiTimeout = c.discovery_padi_timeout_secs;
-
-		formNftEnabled = c.nftables?.enabled ?? true;
-		formNftFlowOffload = c.nftables?.flow_offload ?? true;
-		formNftMssClamping = c.nftables?.mss_clamping ?? true;
-		formNftBypassDns = c.nftables?.bypass_dns ?? true;
-		formNftBypassVowifi = c.nftables?.bypass_vowifi ?? true;
-		formNftMasquerade = c.nftables?.masquerade ?? true;
 	}
 
 	async function loadAll(silent = false) {
@@ -206,15 +184,15 @@
 				send_padt_on_shutdown: formSendPadt,
 				discovery_padi_retries: Number(formPadiRetries) || 5,
 				discovery_padi_timeout_secs: Number(formPadiTimeout) || 3,
-				nftables: {
-					enabled: formNftEnabled,
-					table_name: config?.nftables?.table_name ?? "lanforge_pppoe",
-					flow_offload: formNftFlowOffload,
-					mss_clamping: formNftMssClamping,
-					bypass_dns: formNftBypassDns,
-					bypass_vowifi: formNftBypassVowifi,
-					masquerade: formNftMasquerade,
-					custom_rules_file: config?.nftables?.custom_rules_file ?? null,
+				nftables: config?.nftables ?? {
+					enabled: true,
+					table_name: "lanforge_pppoe",
+					flow_offload: true,
+					mss_clamping: true,
+					bypass_dns: true,
+					bypass_vowifi: true,
+					masquerade: true,
+					custom_rules_file: null,
 				},
 			};
 
@@ -388,7 +366,7 @@
 	<Tabs.Root bind:value={activeTab} class="w-full">
 		<Tabs.List class="flex w-full overflow-x-auto justify-start sm:inline-flex sm:w-auto p-1 mb-4 no-scrollbar">
 			<Tabs.Trigger value="connection">Uplink & Credentials</Tabs.Trigger>
-			<Tabs.Trigger value="acceleration">eBPF & nftables</Tabs.Trigger>
+			<Tabs.Trigger value="acceleration">Dataplane & Acceleration</Tabs.Trigger>
 			<Tabs.Trigger value="timers">Parameters & Timers</Tabs.Trigger>
 		</Tabs.List>
 
@@ -408,12 +386,6 @@
 		<Tabs.Content value="acceleration">
 			<PppoeAccelerationTab
 				bind:formDataplane
-				bind:formNftEnabled
-				bind:formNftFlowOffload
-				bind:formNftMssClamping
-				bind:formNftBypassDns
-				bind:formNftBypassVowifi
-				bind:formNftMasquerade
 				onSelectEbpf={() => handleDataplaneSelect("ebpf")}
 			/>
 		</Tabs.Content>

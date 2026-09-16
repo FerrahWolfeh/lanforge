@@ -34,7 +34,7 @@
 
 <div class="flex flex-col gap-4">
 	<!-- Matrix table -->
-	<div class="overflow-x-auto rounded-lg border border-border">
+	<div class="overflow-x-auto rounded-xl border border-border">
 		<table class="min-w-full border-collapse text-sm">
 			<!-- Header row -->
 			<thead>
@@ -42,9 +42,9 @@
 					<!-- Top-left empty corner cell -->
 					<th
 						class="border-b border-r border-border bg-muted/40 px-4 py-3 text-left"
-						aria-label="Zona de origem / destino"
+						aria-label="Source / Destination Zone"
 					>
-						<span class="font-mono text-xs text-muted-foreground">origem → destino</span>
+						<span class="font-mono text-xs text-muted-foreground">src → dst</span>
 					</th>
 					{#each zones as zone (zone.name)}
 						<th
@@ -92,7 +92,7 @@
 								)}
 							>
 								{#if isDiagonal}
-									<span class="select-none text-muted-foreground" aria-label="Mesma zona">—</span>
+									<span class="select-none text-muted-foreground font-mono" aria-label="Same zone">—</span>
 								{:else}
 									<Tooltip.Provider>
 										<Tooltip.Root>
@@ -111,16 +111,16 @@
 																: 'border-border bg-muted text-muted-foreground hover:bg-muted/80'
 														)}
 														aria-label={allowed
-															? `Bloquear encaminhamento de ${fromZone.name} para ${toZone.name}`
-															: `Permitir encaminhamento de ${fromZone.name} para ${toZone.name}`}
+															? `Block forwarding from ${fromZone.name} to ${toZone.name}`
+															: `Allow forwarding from ${fromZone.name} to ${toZone.name}`}
 														aria-pressed={allowed}
 													>
 														{#if allowed}
 															<CheckIcon data-icon="inline-start" />
-															<span>Permitido</span>
+															<span>Allowed</span>
 														{:else}
 															<XIcon data-icon="inline-start" />
-															<span>Bloqueado</span>
+															<span>Blocked</span>
 														{/if}
 													</button>
 												{/snippet}
@@ -128,11 +128,11 @@
 											<Tooltip.Portal>
 												<Tooltip.Content side="top">
 													{#if allowed}
-														Clique para <strong>bloquear</strong> tráfego de
+														Click to <strong>block</strong> traffic from
 														<code class="font-mono">{fromZone.name}</code> →
 														<code class="font-mono">{toZone.name}</code>
 													{:else}
-														Clique para <strong>permitir</strong> tráfego de
+														Click to <strong>allow</strong> traffic from
 														<code class="font-mono">{fromZone.name}</code> →
 														<code class="font-mono">{toZone.name}</code>
 													{/if}
@@ -152,28 +152,28 @@
 	<!-- Legend -->
 	<Separator />
 	<div class="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
-		<span class="font-medium">Legenda:</span>
+		<span class="font-medium text-foreground">Legend:</span>
 		<span class="flex items-center gap-1.5">
 			<span
 				class="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/20 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-400"
 			>
 				<CheckIcon data-icon="inline-start" />
-				Permitido
+				Allowed
 			</span>
-			<span>— encaminhamento ativo entre as zonas</span>
+			<span>— traffic forwarded between zones</span>
 		</span>
 		<span class="flex items-center gap-1.5">
 			<span
 				class="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
 			>
 				<XIcon data-icon="inline-start" />
-				Bloqueado
+				Blocked
 			</span>
-			<span>— tráfego bloqueado entre as zonas</span>
+			<span>— traffic dropped between zones</span>
 		</span>
 		<span class="flex items-center gap-1.5">
 			<span class="rounded border border-border bg-muted/50 px-2 py-0.5 font-mono">—</span>
-			<span>— mesma zona (diagonal)</span>
+			<span>— intra-zone loop (same zone)</span>
 		</span>
 	</div>
 </div>

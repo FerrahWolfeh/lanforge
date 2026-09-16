@@ -34,8 +34,8 @@
   const TEMPLATES: ZoneTemplate[] = [
     {
       id: "lan",
-      label: "LAN / Interna",
-      description: "Rede local confiável, tráfego livre",
+      label: "LAN / Internal",
+      description: "Trusted local network, unrestricted traffic",
       Icon: ShieldIcon,
       input_policy: "Accept",
       forward_policy: "Accept",
@@ -44,8 +44,8 @@
     },
     {
       id: "guest",
-      label: "Guest / Convidado",
-      description: "Sem acesso à rede interna",
+      label: "Guest",
+      description: "Isolated from internal LAN network",
       Icon: UsersIcon,
       input_policy: "Drop",
       forward_policy: "Drop",
@@ -55,7 +55,7 @@
     {
       id: "iot",
       label: "IoT",
-      description: "Isolada, sem saída pra internal",
+      description: "Isolated smart devices, no access to LAN",
       Icon: WifiIcon,
       input_policy: "Drop",
       forward_policy: "Drop",
@@ -65,7 +65,7 @@
     {
       id: "dmz",
       label: "DMZ",
-      description: "Aceita entrada, sem acesso interno",
+      description: "Accepts inbound traffic, isolated from LAN",
       Icon: ServerIcon,
       input_policy: "Accept",
       forward_policy: "Drop",
@@ -87,11 +87,11 @@
   function validate(): boolean {
     const trimmed = formName.trim();
     if (!trimmed) {
-      nameError = "O nome da zona é obrigatório.";
+      nameError = "Zone name is required.";
       return false;
     }
     if (/\s/.test(trimmed)) {
-      nameError = "O nome não pode conter espaços.";
+      nameError = "Zone name cannot contain spaces.";
       return false;
     }
     nameError = null;
@@ -130,7 +130,6 @@
   }
 
   function handleNameInput() {
-    // Clear error as user types
     if (nameError) nameError = null;
   }
 
@@ -142,9 +141,9 @@
 <Dialog.Root bind:open onOpenChange={(o) => { if (!o) handleClose(); }}>
   <Dialog.Content class="sm:max-w-lg">
     <Dialog.Header>
-      <Dialog.Title>Nova zona de firewall</Dialog.Title>
+      <Dialog.Title>New Firewall Zone</Dialog.Title>
       <Dialog.Description>
-        Escolha um template e dê um nome único à zona.
+        Choose a preset template and enter a unique zone name.
       </Dialog.Description>
     </Dialog.Header>
 
@@ -153,12 +152,12 @@
       <!-- Zone name input -->
       <div class="flex flex-col gap-1.5">
         <label for="zone-name" class="text-sm font-medium">
-          Nome da zona
+          Zone Name
           <span class="text-destructive ml-0.5">*</span>
         </label>
         <Input
           id="zone-name"
-          placeholder="ex: dmz, iot, guest"
+          placeholder="e.g. dmz, iot, guest"
           bind:value={formName}
           oninput={handleNameInput}
           onkeydown={handleKeydown}
@@ -180,7 +179,7 @@
               type="button"
               onclick={() => (selectedTemplateId = tpl.id)}
               class={cn(
-                "rounded-lg border p-3 text-left transition-all duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "rounded-lg border p-3 text-left transition-all duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer",
                 isSelected
                   ? "ring-2 ring-primary border-primary bg-primary/5"
                   : "border-border hover:border-muted-foreground/40 hover:bg-muted/40"
@@ -225,8 +224,8 @@
     </div>
 
     <Dialog.Footer class="flex gap-2 pt-2">
-      <Button variant="outline" onclick={handleClose}>Cancelar</Button>
-      <Button onclick={handleAdd} disabled={!formName.trim()}>Adicionar</Button>
+      <Button variant="outline" onclick={handleClose}>Cancel</Button>
+      <Button onclick={handleAdd} disabled={!formName.trim()}>Add Zone</Button>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

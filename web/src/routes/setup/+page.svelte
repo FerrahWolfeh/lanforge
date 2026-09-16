@@ -25,12 +25,14 @@
 	import EyeOffIcon from "@lucide/svelte/icons/eye-off";
 	import ServerIcon from "@lucide/svelte/icons/server";
 	import SparklesIcon from "@lucide/svelte/icons/sparkles";
-	import SlidersIcon from "@lucide/svelte/icons/sliders";
-	import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
-	import ChevronUpIcon from "@lucide/svelte/icons/chevron-up";
+	import ShieldIcon from "@lucide/svelte/icons/shield";
+	import ShieldOffIcon from "@lucide/svelte/icons/shield-off";
+	import ZapIcon from "@lucide/svelte/icons/zap";
+	import LayersIcon from "@lucide/svelte/icons/layers";
 	import RadioIcon from "@lucide/svelte/icons/radio";
+	import type { FirewallMode } from "$lib/api/types";
 
-	let step = $state<1 | 2 | 3 | 4>(1);
+	let step = $state<1 | 2 | 3 | 4 | 5>(1);
 	let loading = $state(true);
 	let submitting = $state(false);
 	let errorMsg = $state("");
@@ -50,13 +52,11 @@
 	let pppoe_password = $state("");
 	let pppoe_vlan = $state("");
 	let pppoe_mtu = $state(1492);
-	let show_advanced_pppoe = $state(false);
-	let pppoe_flow_offload = $state(false);
-	let pppoe_mss_clamping = $state(true);
-	let pppoe_masquerade = $state(true);
-	let pppoe_bypass_dns = $state(true);
-	let pppoe_bypass_vowifi = $state(true);
 	let system_gateway = $state("192.168.1.1");
+
+	// Step 4: Firewall & Security
+	let firewall_mode = $state<FirewallMode>("full");
+	let firewall_flow_offload = $state(true);
 
 	// Step 3: LAN Network & Presence
 	let lan_iface = $state("");
@@ -201,6 +201,11 @@
 		step = 4;
 	}
 
+	function handleNextStep4() {
+		errorMsg = "";
+		step = 5;
+	}
+
 	function getUpstreamDnsList(): string[] {
 		switch (dns_preset) {
 			case "quad9":
@@ -231,11 +236,11 @@
 				vlan_id: pppoe_vlan ? Number.parseInt(pppoe_vlan, 10) : null,
 				mtu: pppoe_mtu || 1492,
 				nftables: {
-					flow_offload: pppoe_flow_offload,
-					mss_clamping: pppoe_mss_clamping,
-					masquerade: pppoe_masquerade,
-					bypass_dns: pppoe_bypass_dns,
-					bypass_vowifi: pppoe_bypass_vowifi
+					flow_offload: firewall_flow_offload,
+					mss_clamping: true,
+					masquerade: true,
+					bypass_dns: true,
+					bypass_vowifi: true
 				}
 			};
 		} else {
@@ -268,7 +273,8 @@
 			adblock_enabled,
 			upstream_dns: getUpstreamDnsList(),
 			ra: raConfig,
-			wan: wanConfig
+			wan: wanConfig,
+			firewall_mode
 		};
 
 		try {
@@ -328,33 +334,40 @@
 			</Card.Root>
 		{:else}
 			<!-- Step Progress Indicator -->
-			<div class="mb-8 flex items-center justify-between px-4">
+			<div class="mb-8 flex items-center justify-between px-2 sm:px-4">
 				<div class="flex flex-col items-center gap-1">
 					<div class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all {step >= 1 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}">
 						{#if step > 1}<CheckIcon class="h-4 w-4" />{:else}1{/if}
 					</div>
-					<span class="text-xs font-medium {step >= 1 ? 'text-foreground' : 'text-muted-foreground'}">Security</span>
+					<span class="text-[11px] sm:text-xs font-medium {step >= 1 ? 'text-foreground' : 'text-muted-foreground'}">Admin</span>
 				</div>
-				<div class="h-0.5 flex-1 mx-2 transition-all {step >= 2 ? 'bg-primary' : 'bg-muted'}"></div>
+				<div class="h-0.5 flex-1 mx-1.5 sm:mx-2 transition-all {step >= 2 ? 'bg-primary' : 'bg-muted'}"></div>
 				<div class="flex flex-col items-center gap-1">
 					<div class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all {step >= 2 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}">
 						{#if step > 2}<CheckIcon class="h-4 w-4" />{:else}2{/if}
 					</div>
-					<span class="text-xs font-medium {step >= 2 ? 'text-foreground' : 'text-muted-foreground'}">Uplink</span>
+					<span class="text-[11px] sm:text-xs font-medium {step >= 2 ? 'text-foreground' : 'text-muted-foreground'}">Uplink</span>
 				</div>
-				<div class="h-0.5 flex-1 mx-2 transition-all {step >= 3 ? 'bg-primary' : 'bg-muted'}"></div>
+				<div class="h-0.5 flex-1 mx-1.5 sm:mx-2 transition-all {step >= 3 ? 'bg-primary' : 'bg-muted'}"></div>
 				<div class="flex flex-col items-center gap-1">
 					<div class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all {step >= 3 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}">
 						{#if step > 3}<CheckIcon class="h-4 w-4" />{:else}3{/if}
 					</div>
-					<span class="text-xs font-medium {step >= 3 ? 'text-foreground' : 'text-muted-foreground'}">LAN & Services</span>
+					<span class="text-[11px] sm:text-xs font-medium {step >= 3 ? 'text-foreground' : 'text-muted-foreground'}">LAN</span>
 				</div>
-				<div class="h-0.5 flex-1 mx-2 transition-all {step >= 4 ? 'bg-primary' : 'bg-muted'}"></div>
+				<div class="h-0.5 flex-1 mx-1.5 sm:mx-2 transition-all {step >= 4 ? 'bg-primary' : 'bg-muted'}"></div>
 				<div class="flex flex-col items-center gap-1">
 					<div class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all {step >= 4 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}">
-						4
+						{#if step > 4}<CheckIcon class="h-4 w-4" />{:else}4{/if}
 					</div>
-					<span class="text-xs font-medium {step >= 4 ? 'text-foreground' : 'text-muted-foreground'}">Launch</span>
+					<span class="text-[11px] sm:text-xs font-medium {step >= 4 ? 'text-foreground' : 'text-muted-foreground'}">Firewall</span>
+				</div>
+				<div class="h-0.5 flex-1 mx-1.5 sm:mx-2 transition-all {step >= 5 ? 'bg-primary' : 'bg-muted'}"></div>
+				<div class="flex flex-col items-center gap-1">
+					<div class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all {step >= 5 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}">
+						5
+					</div>
+					<span class="text-[11px] sm:text-xs font-medium {step >= 5 ? 'text-foreground' : 'text-muted-foreground'}">Launch</span>
 				</div>
 			</div>
 
@@ -521,61 +534,6 @@
 										<Label for="pppoe_mtu">WAN MTU / MRU</Label>
 										<Input id="pppoe_mtu" type="number" bind:value={pppoe_mtu} placeholder="1492" />
 									</div>
-								</div>
-
-								<!-- Advanced PPPoE & Firewall Tuning Accordion -->
-								<div class="rounded-lg border bg-muted/20 p-3 mt-2">
-									<button
-										type="button"
-										class="flex w-full items-center justify-between text-xs font-semibold text-foreground hover:text-primary transition-colors"
-										onclick={() => (show_advanced_pppoe = !show_advanced_pppoe)}
-									>
-										<span class="inline-flex items-center gap-1.5">
-											<SlidersIcon class="h-3.5 w-3.5" />
-											Advanced PPPoE & nftables Firewall Options
-										</span>
-										{#if show_advanced_pppoe}<ChevronUpIcon class="h-3.5 w-3.5" />{:else}<ChevronDownIcon class="h-3.5 w-3.5" />{/if}
-									</button>
-
-									{#if show_advanced_pppoe}
-										<div class="mt-3 space-y-2.5 pt-2 border-t text-xs">
-											<div class="flex items-center justify-between">
-												<div>
-													<p class="font-medium text-foreground">MSS Clamping</p>
-													<p class="text-muted-foreground">Clamps TCP MSS to MTU - 40 to avoid packet fragmentation.</p>
-												</div>
-												<Switch bind:checked={pppoe_mss_clamping} />
-											</div>
-											<div class="flex items-center justify-between">
-												<div>
-													<p class="font-medium text-foreground">Flow Offloading</p>
-													<p class="text-muted-foreground">Hardware/kernel bypass (disable if using SQM CAKE QoS).</p>
-												</div>
-												<Switch bind:checked={pppoe_flow_offload} />
-											</div>
-											<div class="flex items-center justify-between">
-												<div>
-													<p class="font-medium text-foreground">NAT Masquerade</p>
-													<p class="text-muted-foreground">Enable kernel NAT masquerading on the PPPoE WAN interface.</p>
-												</div>
-												<Switch bind:checked={pppoe_masquerade} />
-											</div>
-											<div class="flex items-center justify-between">
-												<div>
-													<p class="font-medium text-foreground">Bypass Local DNS</p>
-													<p class="text-muted-foreground">Ensure router-local DNS queries bypass flow offloading.</p>
-												</div>
-												<Switch bind:checked={pppoe_bypass_dns} />
-											</div>
-											<div class="flex items-center justify-between">
-												<div>
-													<p class="font-medium text-foreground">Bypass VoWiFi (IPsec ESP)</p>
-													<p class="text-muted-foreground">Ensure Wi-Fi calling tunnels bypass offload table.</p>
-												</div>
-												<Switch bind:checked={pppoe_bypass_vowifi} />
-											</div>
-										</div>
-									{/if}
 								</div>
 							</div>
 						{/if}
@@ -818,12 +776,109 @@
 							Back
 						</Button>
 						<Button onclick={handleNextStep3} class="gap-2">
-							Review & Launch
+							Next: Firewall & Security
 							<ArrowRightIcon class="h-4 w-4" />
 						</Button>
 					</Card.Footer>
 
 				{:else if step === 4}
+					<Card.Header>
+						<div class="flex items-center gap-3">
+							<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+								<ShieldIcon class="h-5 w-5" />
+							</div>
+							<div>
+								<Card.Title>Firewall & Network Security</Card.Title>
+								<Card.Description>Choose how Lanforge manages packet filtering, NAT, and network offload.</Card.Description>
+							</div>
+						</div>
+					</Card.Header>
+					<Card.Content class="space-y-4">
+						<div class="grid grid-cols-1 gap-3">
+							<!-- Full Mode Card -->
+							<button
+								type="button"
+								class="flex flex-col text-left rounded-xl border p-4 transition-all {firewall_mode === 'full' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border bg-card hover:bg-muted/40'}"
+								onclick={() => (firewall_mode = 'full')}
+							>
+								<div class="flex items-center justify-between w-full mb-1.5">
+									<div class="flex items-center gap-2">
+										<ShieldCheckIcon class="h-4 w-4 text-primary" />
+										<span class="font-semibold text-sm text-foreground">Full Router (Standalone)</span>
+									</div>
+									<Badge variant={firewall_mode === 'full' ? 'default' : 'secondary'} class="text-xs">Recommended</Badge>
+								</div>
+								<p class="text-xs text-muted-foreground leading-relaxed">
+									Lanforge acts as the primary firewall router. Replaces system firewalls (firewalld/ufw) with dedicated nftables zones (WAN, LAN, DMZ), host access rules, NAT masquerading, and port forwarding.
+								</p>
+							</button>
+
+							<!-- Minimal Mode Card -->
+							<button
+								type="button"
+								class="flex flex-col text-left rounded-xl border p-4 transition-all {firewall_mode === 'minimal' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border bg-card hover:bg-muted/40'}"
+								onclick={() => (firewall_mode = 'minimal')}
+							>
+								<div class="flex items-center justify-between w-full mb-1.5">
+									<div class="flex items-center gap-2">
+										<LayersIcon class="h-4 w-4 text-primary" />
+										<span class="font-semibold text-sm text-foreground">Minimal Helper (Coexistence)</span>
+									</div>
+									<Badge variant={firewall_mode === 'minimal' ? 'default' : 'outline'} class="text-xs">firewalld / ufw</Badge>
+								</div>
+								<p class="text-xs text-muted-foreground leading-relaxed">
+									Creates a non-interfering helper table with default accept. Manages PPPoE Flowtable hardware acceleration, TCP MSS clamping, and masquerade, while delegating general filtering to your existing system firewall.
+								</p>
+							</button>
+
+							<!-- Disabled Mode Card -->
+							<button
+								type="button"
+								class="flex flex-col text-left rounded-xl border p-4 transition-all {firewall_mode === 'disabled' ? 'border-destructive bg-destructive/5 ring-1 ring-destructive' : 'border-border bg-card hover:bg-muted/40'}"
+								onclick={() => (firewall_mode = 'disabled')}
+							>
+								<div class="flex items-center justify-between w-full mb-1.5">
+									<div class="flex items-center gap-2">
+										<ShieldOffIcon class="h-4 w-4 text-muted-foreground" />
+										<span class="font-semibold text-sm text-foreground">Disabled</span>
+									</div>
+									<Badge variant="outline" class="text-xs">Unmanaged</Badge>
+								</div>
+								<p class="text-xs text-muted-foreground leading-relaxed">
+									Lanforge will not create or manage any nftables rules. Packet filtering and routing offload must be configured manually on the host operating system.
+								</p>
+							</button>
+						</div>
+
+						{#if firewall_mode !== 'disabled'}
+							<Separator class="my-2" />
+
+							<div class="flex items-center justify-between rounded-lg border p-3">
+								<div class="space-y-0.5 pr-4">
+									<div class="flex items-center gap-2">
+										<ZapIcon class="h-4 w-4 text-primary" />
+										<h5 class="text-sm font-medium text-foreground">Flowtable Fast-Path Offload</h5>
+									</div>
+									<p class="text-xs text-muted-foreground">
+										Accelerate established TCP and UDP forward flows directly in the kernel dataplane to reduce CPU overhead and achieve line-rate throughput.
+									</p>
+								</div>
+								<Switch bind:checked={firewall_flow_offload} />
+							</div>
+						{/if}
+					</Card.Content>
+					<Card.Footer class="flex justify-between">
+						<Button variant="outline" onclick={() => (step = 3)} class="gap-2">
+							<ArrowLeftIcon class="h-4 w-4" />
+							Back
+						</Button>
+						<Button onclick={handleNextStep4} class="gap-2">
+							Next: Review & Launch
+							<ArrowRightIcon class="h-4 w-4" />
+						</Button>
+					</Card.Footer>
+
+				{:else if step === 5}
 					<Card.Header>
 						<div class="flex items-center gap-3">
 							<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400">
@@ -886,13 +941,25 @@
 								<span class="font-medium text-foreground">{adblock_enabled ? 'Enabled' : 'Disabled'}</span>
 							</div>
 							<div class="flex justify-between text-sm">
+								<span class="text-muted-foreground">Firewall Mode:</span>
+								<span class="font-medium text-foreground">
+									{firewall_mode === 'full' ? 'Full Router (Standalone)' : firewall_mode === 'minimal' ? 'Minimal Helper (Coexistence)' : 'Disabled'}
+								</span>
+							</div>
+							{#if firewall_mode !== 'disabled'}
+								<div class="flex justify-between text-sm">
+									<span class="text-muted-foreground">Flowtable Offload:</span>
+									<span class="font-medium text-foreground">{firewall_flow_offload ? 'Enabled' : 'Disabled'}</span>
+								</div>
+							{/if}
+							<div class="flex justify-between text-sm">
 								<span class="text-muted-foreground">Storage Engine:</span>
 								<span class="font-medium text-emerald-400">redb (embedded pure-Rust)</span>
 							</div>
 						</div>
 					</Card.Content>
 					<Card.Footer class="flex justify-between">
-						<Button variant="outline" onclick={() => (step = 3)} class="gap-2" disabled={submitting}>
+						<Button variant="outline" onclick={() => (step = 4)} class="gap-2" disabled={submitting}>
 							<ArrowLeftIcon class="h-4 w-4" />
 							Back
 						</Button>

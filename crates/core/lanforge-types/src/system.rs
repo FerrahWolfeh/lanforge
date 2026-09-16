@@ -1,6 +1,6 @@
 use crate::identifiers::MacAddr;
 use crate::network::{
-    Ipv6Prefix,
+    FirewallMode, Ipv6Prefix,
     dns::upstream::UpstreamTarget,
     ra::{DnsslConfig, RAPrefix, RdnssConfig, RouterPriority},
 };
@@ -389,6 +389,8 @@ pub struct SetupPayload {
     #[serde(default)]
     pub ra: Option<SetupRaConfig>,
     pub wan: Option<SetupWanConfig>,
+    #[serde(default)]
+    pub firewall_mode: Option<FirewallMode>,
 }
 
 /// Response returned after successfully applying the initial setup.

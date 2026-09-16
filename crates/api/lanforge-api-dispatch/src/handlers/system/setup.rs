@@ -311,6 +311,9 @@ impl ClientContext {
         };
 
         let mut initial_firewall = FirewallConfig::default();
+        if let Some(mode) = payload.firewall_mode {
+            initial_firewall.mode = mode;
+        }
         if let Some(SetupWanConfig::Pppoe { nftables: Some(nft), .. }) = payload.wan.as_ref() {
             initial_firewall.flow_offload = nft.flow_offload;
             initial_firewall.bypass_dns = nft.bypass_dns;

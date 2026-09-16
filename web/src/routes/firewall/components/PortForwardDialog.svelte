@@ -107,10 +107,10 @@
 	function handleSave() {
 		const next: Record<string, string> = {};
 
-		if (!validPort(externalPort)) next.externalPort = "Porta deve ser 1–65535";
-		if (!validPort(internalPort)) next.internalPort = "Porta deve ser 1–65535";
-		if (!internalIp.trim()) next.internalIp = "IP interno obrigatório";
-		if (!srcZone) next.srcZone = "Selecione uma zona de origem";
+		if (!validPort(externalPort)) next.externalPort = "Port must be 1–65535";
+		if (!validPort(internalPort)) next.internalPort = "Port must be 1–65535";
+		if (!internalIp.trim()) next.internalIp = "Internal IP is required";
+		if (!srcZone) next.srcZone = "Please select a source zone";
 
 		errors = next;
 		if (Object.values(next).some(Boolean)) return;
@@ -140,10 +140,10 @@
 				<div class="flex flex-col gap-0.5">
 					<Dialog.Title class="flex items-center gap-2 text-base font-semibold">
 						<ShuffleIcon data-icon="inline-start" class="text-primary" />
-						{rule ? "Editar Regra de Port Forward" : "Nova Regra de Port Forward"}
+						{rule ? "Edit Port Forward Rule" : "New Port Forward Rule"}
 					</Dialog.Title>
 					<Dialog.Description class="text-xs text-muted-foreground">
-						Redireciona tráfego externo para um dispositivo interno.
+						Forward external traffic to an internal LAN host or container.
 					</Dialog.Description>
 				</div>
 
@@ -159,7 +159,7 @@
 					</DropdownMenu.Trigger>
 					<DropdownMenu.Content align="end" class="w-48">
 						<DropdownMenu.Label class="text-[11px] uppercase tracking-wide text-muted-foreground">
-							Aplicar preset
+							Apply Preset
 						</DropdownMenu.Label>
 						<DropdownMenu.Separator />
 						{#each PRESETS as preset (preset.label)}
@@ -180,11 +180,11 @@
 		<div class="flex flex-col gap-4 py-2">
 			<!-- Comment -->
 			<Field.Field>
-				<Field.Label class="text-xs">Comentário <span class="text-muted-foreground">(opcional)</span></Field.Label>
+				<Field.Label class="text-xs">Comment <span class="text-muted-foreground">(optional)</span></Field.Label>
 				<Field.Content>
 					<Input
 						bind:value={comment}
-						placeholder="ex: Plex server da sala"
+						placeholder="e.g. Living room Plex server"
 						class="text-xs"
 					/>
 				</Field.Content>
@@ -192,7 +192,7 @@
 
 			<!-- Protocol -->
 			<Field.Field>
-				<Field.Label class="text-xs">Protocolo</Field.Label>
+				<Field.Label class="text-xs">Protocol</Field.Label>
 				<Field.Content>
 					<ToggleGroup.Root
 						type="single"
@@ -202,14 +202,14 @@
 					>
 						<ToggleGroup.Item value="Tcp" class="flex-1 text-xs">TCP</ToggleGroup.Item>
 						<ToggleGroup.Item value="Udp" class="flex-1 text-xs">UDP</ToggleGroup.Item>
-						<ToggleGroup.Item value="Both" class="flex-1 text-xs">Ambos</ToggleGroup.Item>
+						<ToggleGroup.Item value="Both" class="flex-1 text-xs">Both</ToggleGroup.Item>
 					</ToggleGroup.Root>
 				</Field.Content>
 			</Field.Field>
 
 			<!-- Source Zone -->
 			<Field.Field data-invalid={!!errors.srcZone || undefined}>
-				<Field.Label class="text-xs">Zona de Origem</Field.Label>
+				<Field.Label class="text-xs">Source Zone</Field.Label>
 				<Field.Content>
 					<Select.Root
 						type="single"
@@ -220,7 +220,7 @@
 						}}
 					>
 						<Select.Trigger class={cn("h-9 text-xs", errors.srcZone && "border-destructive")}>
-							{srcZone || "Selecionar zona…"}
+							{srcZone || "Select zone…"}
 						</Select.Trigger>
 						<Select.Content>
 							{#each zones as z (z)}
@@ -237,7 +237,7 @@
 			<!-- External Port / Internal Port side-by-side -->
 			<div class="grid grid-cols-2 gap-3">
 				<Field.Field data-invalid={!!errors.externalPort || undefined}>
-					<Field.Label class="text-xs">Porta Externa</Field.Label>
+					<Field.Label class="text-xs">External Port</Field.Label>
 					<Field.Content>
 						<Input
 							type="number"
@@ -255,7 +255,7 @@
 				</Field.Field>
 
 				<Field.Field data-invalid={!!errors.internalPort || undefined}>
-					<Field.Label class="text-xs">Porta Interna</Field.Label>
+					<Field.Label class="text-xs">Internal Port</Field.Label>
 					<Field.Content>
 						<Input
 							type="number"
@@ -275,7 +275,7 @@
 
 			<!-- Internal IP + DeviceCombobox -->
 			<Field.Field data-invalid={!!errors.internalIp || undefined}>
-				<Field.Label class="text-xs">IP Interno</Field.Label>
+				<Field.Label class="text-xs">Internal IP</Field.Label>
 				<Field.Content>
 					<Input
 						bind:value={internalIp}
@@ -289,10 +289,10 @@
 				{/if}
 				<!-- Device picker below the input -->
 				<div class="flex flex-col gap-1 pt-1">
-					<Label class="text-[11px] text-muted-foreground">Selecionar dispositivo</Label>
+					<Label class="text-[11px] text-muted-foreground">Select from active network device</Label>
 					<DeviceCombobox
 						value={internalIp}
-						placeholder="Buscar dispositivo LAN…"
+						placeholder="Search LAN devices…"
 						onselect={handleDeviceSelect}
 					/>
 				</div>
@@ -305,19 +305,19 @@
 				<Field.Label class="text-xs flex-1">
 					Hairpin NAT
 					<Field.Description class="text-[11px] font-normal text-muted-foreground">
-						Permite que dispositivos internos se conectem via IP externo.
+						Allows internal LAN devices to access this service using the external router WAN IP.
 					</Field.Description>
 				</Field.Label>
 				<Field.Content>
-					<Switch bind:checked={enableHairpin} />
+					<Switch bind:checked={enableHairpin} aria-label="Hairpin NAT" />
 				</Field.Content>
 			</Field.Field>
 		</div>
 
 		<Dialog.Footer class="gap-2">
-			<Button variant="outline" onclick={onClose}>Cancelar</Button>
+			<Button variant="outline" onclick={onClose}>Cancel</Button>
 			<Button onclick={handleSave}>
-				{rule ? "Salvar Alterações" : "Adicionar Regra"}
+				{rule ? "Save Changes" : "Add Rule"}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

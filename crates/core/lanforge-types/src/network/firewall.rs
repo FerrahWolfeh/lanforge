@@ -197,6 +197,7 @@ impl Default for FirewallConfig {
 /// Operational status and statistics snapshot for RPC and telemetry.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FirewallStatus {
+    pub mode: FirewallMode,
     pub table: String,
     pub active_wan: Option<String>,
     pub lan_ifaces: Vec<String>,

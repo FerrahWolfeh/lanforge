@@ -28,10 +28,10 @@
 
   // ── Zone-name → accent dot colour ────────────────────────────────────────
   const DOT_COLOURS: Record<string, string> = {
-    internal: "bg-green-500",
-    external: "bg-red-500",
-    trusted: "bg-blue-500",
-    guest: "bg-orange-500",
+    internal: "bg-emerald-500",
+    external: "bg-destructive",
+    trusted: "bg-primary",
+    guest: "bg-amber-500",
     iot: "bg-purple-500",
   };
 
@@ -100,13 +100,13 @@
               size="icon"
               class="text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 shrink-0"
               onclick={onDelete}
-              aria-label="Excluir zona"
+              aria-label="Delete zone"
             >
               <TrashIcon data-icon="inline-start" />
             </Button>
           {/snippet}
         </Tooltip.Trigger>
-        <Tooltip.Content>Excluir zona</Tooltip.Content>
+        <Tooltip.Content>Delete zone</Tooltip.Content>
       </Tooltip.Root>
     </Tooltip.Provider>
   </Card.Header>
@@ -125,9 +125,9 @@
             {iface}
             <button
               type="button"
-              class="rounded-full p-0.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-1"
+              class="rounded-full p-0.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-1 cursor-pointer"
               onclick={() => removeInterface(iface)}
-              aria-label="Remover {iface}"
+              aria-label="Remove {iface}"
             >
               <XIcon class="size-3" />
             </button>
@@ -148,7 +148,7 @@
             variant="outline"
             size="icon"
             class="size-6"
-            aria-label="Adicionar interface"
+            aria-label="Add interface"
             onclick={() => (addingInterface = true)}
           >
             <PlusIcon data-icon="inline-start" />
@@ -162,7 +162,7 @@
     <!-- Input Policy -->
     <div class="flex flex-col gap-1.5">
       <span class="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-        Política de entrada
+        Input Policy
       </span>
       <ToggleGroup.Root
         type="single"
@@ -180,7 +180,7 @@
     <!-- Forward Policy -->
     <div class="flex flex-col gap-1.5">
       <span class="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-        Política de encaminhamento
+        Forward Policy
       </span>
       <ToggleGroup.Root
         type="single"
@@ -202,7 +202,7 @@
       <div class="flex flex-col gap-0.5">
         <span class="text-sm font-medium leading-none">Masquerade</span>
         <span class="text-muted-foreground text-xs">
-          Habilitar NAT de saída (SNAT)
+          Enable outbound NAT (SNAT)
         </span>
       </div>
       <Switch
@@ -217,7 +217,7 @@
       <div class="flex flex-col gap-0.5">
         <span class="text-sm font-medium leading-none">MSS Clamping</span>
         <span class="text-muted-foreground text-xs">
-          Corrigir MTU para conexões PPPoE/VPN
+          Fix TCP MSS for PPPoE / WAN links
         </span>
       </div>
       <Switch

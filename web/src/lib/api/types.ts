@@ -816,6 +816,7 @@ export interface SetupPayload {
 	upstream_dns?: string[];
 	ra?: SetupRaConfig | null;
 	wan?: SetupWanConfig | null;
+	firewall_mode?: FirewallMode;
 }
 
 export interface SetupResponse {
@@ -1087,7 +1088,10 @@ export interface PortForwardRule {
 	enable_hairpin: boolean;
 }
 
+export type FirewallMode = "full" | "minimal" | "disabled";
+
 export interface FirewallConfig {
+	mode: FirewallMode;
 	table_name: string;
 	zones: FirewallZone[];
 	forwardings: ZoneForwarding[];
@@ -1102,6 +1106,7 @@ export interface FirewallConfig {
 }
 
 export interface FirewallStatus {
+	mode: FirewallMode;
 	table: string;
 	active_wan: string | null;
 	lan_ifaces: string[];

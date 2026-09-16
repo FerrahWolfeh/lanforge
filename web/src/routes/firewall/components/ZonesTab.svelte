@@ -37,12 +37,12 @@
 	<!-- Actions row -->
 	<div class="flex items-center justify-between">
 		<div>
-			<h3 class="text-sm font-semibold tracking-tight text-foreground">Zonas de Rede</h3>
-			<p class="text-xs text-muted-foreground">Configure interfaces físicas, políticas e regras por zona.</p>
+			<h3 class="text-sm font-semibold tracking-tight text-foreground">Network Zones</h3>
+			<p class="text-xs text-muted-foreground">Configure physical interfaces, traffic policies, and rules per zone.</p>
 		</div>
 		<Button size="sm" onclick={() => (newDialogOpen = true)}>
 			<PlusIcon data-icon="inline-start" />
-			Nova Zona
+			New Zone
 		</Button>
 	</div>
 
@@ -53,15 +53,15 @@
 				<ShieldIcon class="size-10 text-muted-foreground" />
 			</Empty.Media>
 			<Empty.Header>
-				<Empty.Title>Nenhuma zona configurada</Empty.Title>
+				<Empty.Title>No zones configured</Empty.Title>
 				<Empty.Description>
-					Adicione zonas para segmentar o tráfego de rede e definir políticas de acesso.
+					Add network zones to segment traffic and define filtering policies.
 				</Empty.Description>
 			</Empty.Header>
 			<Empty.Content>
 				<Button size="sm" onclick={() => (newDialogOpen = true)}>
 					<PlusIcon data-icon="inline-start" />
-					Nova Zona
+					New Zone
 				</Button>
 			</Empty.Content>
 		</Empty.Root>

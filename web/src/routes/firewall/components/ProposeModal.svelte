@@ -52,20 +52,20 @@
 					<Skeleton class="h-5 w-56" />
 				{:else if report.valid}
 					<CheckCircleIcon data-icon="inline-start" class="text-primary" />
-					Revisar Alterações do Firewall
+					Review Firewall Changes
 				{:else}
 					<XCircleIcon data-icon="inline-start" class="text-destructive" />
-					Revisar Alterações do Firewall
+					Review Firewall Changes
 				{/if}
 			</Dialog.Title>
 			<Dialog.Description class="text-xs text-muted-foreground">
-				Revise as alterações pendentes antes de aplicar ao firewall.
+				Review pending changes and dry-run validation before committing rules.
 			</Dialog.Description>
 		</Dialog.Header>
 
 		<Separator />
 
-		<div class="flex flex-col gap-4 px-6 py-4 overflow-y-auto">
+		<div class="flex flex-col gap-4 px-6 py-4 overflow-y-auto max-h-[60vh]">
 			{#if report === null}
 				<div class="flex flex-col gap-2">
 					<Skeleton class="h-4 w-3/4" />
@@ -78,7 +78,7 @@
 				{#if report.errors.length > 0}
 					<Alert.Root variant="destructive">
 						<XCircleIcon data-icon="inline-start" />
-						<Alert.Title>A configuração contém erros</Alert.Title>
+						<Alert.Title>Configuration contains validation errors</Alert.Title>
 						<Alert.Description>
 							<ul class="mt-1.5 flex flex-col gap-1 list-disc list-inside text-xs font-mono">
 								{#each report.errors as err (err)}
@@ -92,7 +92,7 @@
 				{#if report.warnings.length > 0}
 					<Alert.Root class="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400">
 						<AlertTriangleIcon data-icon="inline-start" />
-						<Alert.Title>Avisos</Alert.Title>
+						<Alert.Title>Warnings</Alert.Title>
 						<Alert.Description>
 							<ul class="mt-1.5 flex flex-col gap-1 list-disc list-inside text-xs font-mono">
 								{#each report.warnings as w (w)}
@@ -106,7 +106,7 @@
 				{#if report.warnings.length > 0}
 					<Alert.Root class="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400">
 						<AlertTriangleIcon data-icon="inline-start" />
-						<Alert.Title>Avisos</Alert.Title>
+						<Alert.Title>Warnings</Alert.Title>
 						<Alert.Description>
 							<ul class="mt-1.5 flex flex-col gap-1 list-disc list-inside text-xs font-mono">
 								{#each report.warnings as w (w)}
@@ -119,20 +119,20 @@
 
 				{#if rollbackSecsLeft !== null}
 					<div class="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-xs font-medium text-amber-700 dark:text-amber-400">
-						<AlertTriangleIcon class="size-4 shrink-0" />
+						<AlertTriangleIcon class="size-4 shrink-0 text-amber-500" />
 						<span>
-							Rollback automático em
-							<strong class="font-mono">{rollbackSecsLeft}s</strong>
-							— confirme para manter as regras
+							Auto-rollback active in
+							<strong class="font-mono text-foreground font-bold">{rollbackSecsLeft}s</strong>
+							— confirm connection to persist new rules permanently.
 						</span>
 					</div>
 				{/if}
 
 				{#if report.diff_summary.length > 0}
 					<div class="flex flex-col gap-1.5">
-						<p class="text-xs font-medium text-foreground">Resumo das alterações</p>
+						<p class="text-xs font-medium text-foreground">Diff Summary</p>
 						<ScrollArea class="max-h-80 rounded-lg border border-border">
-							<div class="bg-muted p-3 font-mono text-xs">
+							<div class="bg-muted/50 p-3 font-mono text-xs">
 								{#each report.diff_summary as line, i (i)}
 									{@const kind = diffLineKind(line)}
 									<div
@@ -151,7 +151,7 @@
 						</ScrollArea>
 					</div>
 				{:else}
-					<p class="text-xs text-muted-foreground italic">Nenhuma alteração detectada no diff.</p>
+					<p class="text-xs text-muted-foreground italic">No rule diff detected.</p>
 				{/if}
 			{/if}
 		</div>
@@ -160,7 +160,7 @@
 
 		<Dialog.Footer class="px-6 py-4 flex flex-row gap-2 justify-end">
 			{#if report !== null && !report.valid}
-				<Button variant="outline" onclick={onClose} disabled={committing}>Fechar</Button>
+				<Button variant="outline" onclick={onClose} disabled={committing}>Close</Button>
 			{:else if report !== null && report.valid}
 				<Button
 					variant="outline"
@@ -168,18 +168,18 @@
 					onclick={onAbort}
 					disabled={committing}
 				>
-					Abortar
+					Abort
 				</Button>
 				<Button onclick={onConfirm} disabled={committing}>
 					{#if committing}
 						<Spinner data-icon="inline-start" />
-						Aplicando…
+						Applying…
 					{:else}
-						Confirmar e Aplicar
+						Commit & Apply
 					{/if}
 				</Button>
 			{:else}
-				<Button variant="outline" onclick={onClose} disabled>Fechar</Button>
+				<Button variant="outline" onclick={onClose} disabled>Close</Button>
 			{/if}
 		</Dialog.Footer>
 	</Dialog.Content>

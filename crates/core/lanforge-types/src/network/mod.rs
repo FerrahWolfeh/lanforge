@@ -10,7 +10,7 @@ pub mod ra;
 pub mod subnet;
 
 pub use firewall::{
-    DynamicPortRequest, FirewallConfig, FirewallPolicy, FirewallStatus, FirewallZone, HostPortRule,
+    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallStatus, FirewallZone, HostPortRule,
     L4Protocol, PortForwardRule, ZoneForwarding,
 };
 

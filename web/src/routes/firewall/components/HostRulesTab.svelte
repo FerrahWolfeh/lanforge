@@ -104,16 +104,16 @@
 <div class="flex flex-col gap-4">
 	<Tabs.Root bind:value={innerTab} class="w-full">
 		<Tabs.List class="w-full sm:w-auto p-1 mb-2">
-			<Tabs.Trigger value="router-ports">Portas do Roteador (Host)</Tabs.Trigger>
+			<Tabs.Trigger value="router-ports">Router Ports (Host)</Tabs.Trigger>
 			<Tabs.Trigger value="ipv6-pinholes">IPv6 Pinholes</Tabs.Trigger>
 		</Tabs.List>
 
-		<!-- Tab 1: Portas do Roteador -->
+		<!-- Tab 1: Router Host Ports -->
 		<Tabs.Content value="router-ports" class="flex flex-col gap-6">
-			<div class="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 rounded-lg p-3 border border-border">
+			<div class="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 rounded-xl p-3 border border-border">
 				<InfoIcon class="size-4 shrink-0 text-primary" />
 				<span>
-					Portas abertas para acesso direto aos serviços do sistema nesta máquina (SSH, WebUI, DNS). Regras geradas por daemons aparecem marcadas como dinâmicas.
+					Open ports for direct inbound access to router host services (SSH, WebUI, DNS). Rules managed dynamically by daemons are badged accordingly.
 				</span>
 			</div>
 
@@ -127,7 +127,7 @@
 										{zone.name}
 									</Card.Title>
 									<Badge variant="outline" class="text-[10px]">
-										{zone.open_ports.length} {zone.open_ports.length === 1 ? "porta" : "portas"}
+										{zone.open_ports.length} {zone.open_ports.length === 1 ? "port" : "ports"}
 									</Badge>
 								</div>
 								{#if addingZone !== zone.name}
@@ -142,7 +142,7 @@
 										}}
 									>
 										<PlusIcon data-icon="inline-start" />
-										Porta
+										Add Port
 									</Button>
 								{/if}
 							</div>
@@ -151,7 +151,7 @@
 						<Card.Content class="flex flex-col gap-3">
 							<!-- Static ports list -->
 							{#if zone.open_ports.length === 0 && addingZone !== zone.name}
-								<p class="text-xs text-muted-foreground italic">Nenhuma porta estática configurada.</p>
+								<p class="text-xs text-muted-foreground italic">No static host ports configured.</p>
 							{:else}
 								<div class="flex flex-col gap-1.5">
 									{#each zone.open_ports as portRule, pIndex (pIndex)}
@@ -170,11 +170,12 @@
 											<Button
 												variant="ghost"
 												size="icon"
-												class="size-6 text-muted-foreground hover:text-destructive"
+												class="size-6 text-muted-foreground hover:text-destructive cursor-pointer"
 												onclick={() => handleRemovePort(zone.name, pIndex)}
+												aria-label="Remove port"
 											>
 												<TrashIcon class="size-3" />
-												<span class="sr-only">Remover</span>
+												<span class="sr-only">Remove</span>
 											</Button>
 										</div>
 									{/each}
@@ -186,7 +187,7 @@
 								<div class="flex flex-col gap-2 rounded-lg border border-primary/30 bg-primary/5 p-2.5">
 									<div class="grid grid-cols-2 gap-2">
 										<div>
-											<label class="text-[10px] text-muted-foreground block mb-0.5" for="new-port-{zone.name}">Porta</label>
+											<label class="text-[10px] text-muted-foreground block mb-0.5" for="new-port-{zone.name}">Port</label>
 											<Input
 												id="new-port-{zone.name}"
 												type="number"
@@ -198,7 +199,7 @@
 											/>
 										</div>
 										<div>
-											<span class="text-[10px] text-muted-foreground block mb-0.5">Protocolo</span>
+											<span class="text-[10px] text-muted-foreground block mb-0.5">Protocol</span>
 											<ToggleGroup.Root
 												type="single"
 												bind:value={newProto}
@@ -208,13 +209,13 @@
 											>
 												<ToggleGroup.Item value="Tcp" class="flex-1 text-[10px] px-1">TCP</ToggleGroup.Item>
 												<ToggleGroup.Item value="Udp" class="flex-1 text-[10px] px-1">UDP</ToggleGroup.Item>
-												<ToggleGroup.Item value="Both" class="flex-1 text-[10px] px-1">Ambos</ToggleGroup.Item>
+												<ToggleGroup.Item value="Both" class="flex-1 text-[10px] px-1">Both</ToggleGroup.Item>
 											</ToggleGroup.Root>
 										</div>
 									</div>
 									<Input
 										bind:value={newComment}
-										placeholder="Comentário (opcional)"
+										placeholder="Comment (optional)"
 										class="h-7 text-xs"
 									/>
 									<div class="flex items-center justify-end gap-1.5 pt-1">
@@ -224,14 +225,14 @@
 											class="h-6 text-xs px-2"
 											onclick={() => (addingZone = null)}
 										>
-											Cancelar
+											Cancel
 										</Button>
 										<Button
 											size="sm"
 											class="h-6 text-xs px-2"
 											onclick={() => handleAddPort(zone.name)}
 										>
-											Salvar
+											Save
 										</Button>
 									</div>
 								</div>
@@ -240,7 +241,7 @@
 							<!-- Dynamic service badges -->
 							{#if zone.name === "internal" || zone.name === "trusted"}
 								<div class="pt-2 border-t border-border flex flex-wrap items-center gap-1.5">
-									<span class="text-[10px] text-muted-foreground w-full">Portas dinâmicas do daemon:</span>
+									<span class="text-[10px] text-muted-foreground w-full">Daemon dynamic ports:</span>
 									<Badge variant="secondary" class="text-[10px] gap-1 font-mono">
 										<ShieldCheckIcon class="size-2.5 text-emerald-500" />
 										DNS · 53 (udp/tcp)
@@ -263,13 +264,13 @@
 				<div>
 					<h3 class="text-sm font-semibold tracking-tight text-foreground">IPv6 Pinholes</h3>
 					<p class="text-xs text-muted-foreground">
-						Permissões de tráfego de entrada para endereços IPv6 globais específicos sem NAT.
+						Inbound traffic pinholes for specific global IPv6 addresses (routed directly without NAT).
 					</p>
 				</div>
 				{#if !addingPinhole}
 					<Button size="sm" onclick={() => (addingPinhole = true)}>
 						<PlusIcon data-icon="inline-start" />
-						Adicionar Pinhole
+						Add Pinhole
 					</Button>
 				{/if}
 			</div>
@@ -277,10 +278,10 @@
 			<!-- Inline Add Pinhole Form -->
 			{#if addingPinhole}
 				<div class="rounded-xl border border-primary/30 bg-card p-4 flex flex-col gap-3 shadow-xs">
-					<h4 class="text-xs font-semibold text-foreground">Novo Pinhole IPv6</h4>
+					<h4 class="text-xs font-semibold text-foreground">New IPv6 Pinhole</h4>
 					<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
 						<div class="col-span-1 sm:col-span-2">
-							<label class="text-[11px] text-muted-foreground block mb-1" for="pinhole-ip">Endereço IPv6 Global (GUA)</label>
+							<label class="text-[11px] text-muted-foreground block mb-1" for="pinhole-ip">Global IPv6 Address (GUA)</label>
 							<Input
 								id="pinhole-ip"
 								bind:value={pinholeIp}
@@ -289,7 +290,7 @@
 							/>
 						</div>
 						<div>
-							<label class="text-[11px] text-muted-foreground block mb-1" for="pinhole-ext-port">Porta Externa</label>
+							<label class="text-[11px] text-muted-foreground block mb-1" for="pinhole-ext-port">External Port</label>
 							<Input
 								id="pinhole-ext-port"
 								type="number"
@@ -300,7 +301,7 @@
 							/>
 						</div>
 						<div>
-							<label class="text-[11px] text-muted-foreground block mb-1" for="pinhole-int-port">Porta Interna</label>
+							<label class="text-[11px] text-muted-foreground block mb-1" for="pinhole-int-port">Internal Port</label>
 							<Input
 								id="pinhole-int-port"
 								type="number"
@@ -314,7 +315,7 @@
 					<div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
 						<Input
 							bind:value={pinholeComment}
-							placeholder="Comentário (ex: Servidor Web IPv6)"
+							placeholder="Comment (e.g. IPv6 Web Server)"
 							class="text-xs"
 						/>
 						<ToggleGroup.Root
@@ -325,15 +326,15 @@
 						>
 							<ToggleGroup.Item value="Tcp" class="flex-1 text-xs">TCP</ToggleGroup.Item>
 							<ToggleGroup.Item value="Udp" class="flex-1 text-xs">UDP</ToggleGroup.Item>
-							<ToggleGroup.Item value="Both" class="flex-1 text-xs">Ambos</ToggleGroup.Item>
+							<ToggleGroup.Item value="Both" class="flex-1 text-xs">Both</ToggleGroup.Item>
 						</ToggleGroup.Root>
 					</div>
 					<div class="flex items-center justify-end gap-2 pt-1">
 						<Button variant="outline" size="sm" onclick={() => (addingPinhole = false)}>
-							Cancelar
+							Cancel
 						</Button>
 						<Button size="sm" onclick={handleAddPinhole}>
-							Adicionar Pinhole
+							Add Pinhole
 						</Button>
 					</div>
 				</div>
@@ -342,19 +343,19 @@
 			<!-- IPv6 pinholes table -->
 			{#if ipv6Pinholes.length === 0}
 				<div class="rounded-xl border border-dashed p-8 text-center text-xs text-muted-foreground">
-					Nenhum pinhole IPv6 configurado. Pinholes abrem passagem direta na filtragem IPv6 sem reescrita de endereço (NAT).
+					No IPv6 pinholes configured. Pinholes allow inbound traffic to specific global IPv6 addresses without NAT rewriting.
 				</div>
 			{:else}
 				<div class="rounded-xl border border-border overflow-hidden bg-card">
 					<Table.Root>
 						<Table.Header>
 							<Table.Row class="bg-muted/40 text-xs">
-								<Table.Head>Comentário</Table.Head>
-								<Table.Head>Protocolo</Table.Head>
-								<Table.Head>Porta Externa</Table.Head>
-								<Table.Head>Destino IPv6</Table.Head>
-								<Table.Head>Porta Interna</Table.Head>
-								<Table.Head class="w-16 text-right">Ação</Table.Head>
+								<Table.Head>Comment</Table.Head>
+								<Table.Head>Protocol</Table.Head>
+								<Table.Head>External Port</Table.Head>
+								<Table.Head>IPv6 Destination</Table.Head>
+								<Table.Head>Internal Port</Table.Head>
+								<Table.Head class="w-16 text-right">Action</Table.Head>
 							</Table.Row>
 						</Table.Header>
 						<Table.Body>
@@ -381,11 +382,12 @@
 										<Button
 											variant="ghost"
 											size="icon"
-											class="size-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+											class="size-8 text-destructive hover:bg-destructive/10 hover:text-destructive cursor-pointer"
 											onclick={() => handleRemovePinhole(originalIndex)}
+											aria-label="Remove pinhole"
 										>
 											<TrashIcon class="size-3.5" />
-											<span class="sr-only">Remover</span>
+											<span class="sr-only">Remove</span>
 										</Button>
 									</Table.Cell>
 								</Table.Row>

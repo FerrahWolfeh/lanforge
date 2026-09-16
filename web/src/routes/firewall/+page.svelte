@@ -1,5 +1,7 @@
 <script lang="ts">
 	import * as Tabs from "$lib/components/ui/tabs";
+	import * as Card from "$lib/components/ui/card";
+	import * as Alert from "$lib/components/ui/alert";
 	import { Button } from "$lib/components/ui/button";
 	import { Switch } from "$lib/components/ui/switch";
 	import { Badge } from "$lib/components/ui/badge";
@@ -11,9 +13,13 @@
 	import { cubicOut } from "svelte/easing";
 
 	import ShieldIcon from "@lucide/svelte/icons/shield";
+	import ShieldOffIcon from "@lucide/svelte/icons/shield-off";
+	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
 	import ZapIcon from "@lucide/svelte/icons/zap";
+	import LayersIcon from "@lucide/svelte/icons/layers";
+	import InfoIcon from "@lucide/svelte/icons/info";
 
 	import {
 		firewallStatus,
@@ -27,9 +33,12 @@
 		FirewallConfig,
 		FirewallStatus,
 		FirewallValidationReport,
+		FirewallMode,
 	} from "$lib/api/types";
 
-	import FirewallStatusBar from "./components/FirewallStatusBar.svelte";
+	import FirewallStatsCards from "./components/FirewallStatsCards.svelte";
+	import FirewallModeSelector from "./components/FirewallModeSelector.svelte";
+	import FirewallTuningCard from "./components/FirewallTuningCard.svelte";
 	import ZonesTab from "./components/ZonesTab.svelte";
 	import MatrixTab from "./components/MatrixTab.svelte";
 	import PortForwardTab from "./components/PortForwardTab.svelte";
@@ -75,17 +84,12 @@
 	const changeCount = $derived.by(() => {
 		if (!isDirty || !draft || !serverConfig) return 0;
 		let count = 0;
+		if (draft.mode !== serverConfig.mode) count++;
 		if (draft.enabled !== serverConfig.enabled) count++;
 		if (draft.flow_offload !== serverConfig.flow_offload) count++;
-		const draftZones = JSON.stringify(draft.zones);
-		const serverZones = JSON.stringify(serverConfig.zones);
-		if (draftZones !== serverZones) count++;
-		const draftFwd = JSON.stringify(draft.forwardings);
-		const serverFwd = JSON.stringify(serverConfig.forwardings);
-		if (draftFwd !== serverFwd) count++;
-		const draftPf = JSON.stringify(draft.port_forwards);
-		const serverPf = JSON.stringify(serverConfig.port_forwards);
-		if (draftPf !== serverPf) count++;
+		if (JSON.stringify(draft.zones) !== JSON.stringify(serverConfig.zones)) count++;
+		if (JSON.stringify(draft.forwardings) !== JSON.stringify(serverConfig.forwardings)) count++;
+		if (JSON.stringify(draft.port_forwards) !== JSON.stringify(serverConfig.port_forwards)) count++;
 		return Math.max(count, 1);
 	});
 
@@ -109,7 +113,7 @@
 				}
 			}
 		} catch {
-			if (!silent) toast.error("Falha ao carregar configuração do firewall");
+			if (!silent) toast.error("Failed to load firewall configuration");
 		} finally {
 			if (!silent) loading = false;
 		}
@@ -118,6 +122,15 @@
 	// ---------------------------------------------------------------------------
 	// Draft mutations
 	// ---------------------------------------------------------------------------
+
+	function handleModeChange(newMode: FirewallMode) {
+		if (!draft) return;
+		draft = {
+			...draft,
+			mode: newMode,
+			enabled: newMode !== "disabled",
+		};
+	}
 
 	function handleGlobalToggle(key: "enabled" | "flow_offload", value: boolean) {
 		if (!draft) return;
@@ -141,7 +154,7 @@
 			}
 		} catch (e: unknown) {
 			showProposeModal = false;
-			toast.error(e instanceof Error ? e.message : "Erro ao validar configuração");
+			toast.error(e instanceof Error ? e.message : "Failed to validate firewall configuration");
 		} finally {
 			proposing = false;
 		}
@@ -156,17 +169,17 @@
 				showProposeModal = false;
 				if (resp.auto_rollback_active && resp.rollback_deadline_secs) {
 					startRollbackCountdown(resp.rollback_deadline_secs);
-					toast.info("Regras aplicadas — confirmando conexão para evitar rollback…");
+					toast.info("Rules applied — confirming connection to avoid rollback…");
 				} else {
-					toast.success("Firewall atualizado com sucesso");
+					toast.success("Firewall updated successfully");
 					activeTxId = null;
 					await loadAll(true);
 				}
 			} else {
-				toast.error(resp.message || "Falha ao aplicar regras");
+				toast.error(resp.message || "Failed to commit firewall rules");
 			}
 		} catch (e: unknown) {
-			toast.error(e instanceof Error ? e.message : "Erro ao aplicar regras");
+			toast.error(e instanceof Error ? e.message : "Failed to commit firewall rules");
 		} finally {
 			committing = false;
 		}
@@ -178,10 +191,10 @@
 			await firewallConfirm(activeTxId);
 			stopRollbackCountdown();
 			activeTxId = null;
-			toast.success("Configuração confirmada e aplicada definitivamente");
+			toast.success("Configuration confirmed and permanently persisted");
 			await loadAll(true);
 		} catch {
-			toast.error("Falha ao confirmar transação");
+			toast.error("Failed to confirm transaction");
 		}
 	}
 
@@ -196,13 +209,13 @@
 		activeTxId = null;
 		showProposeModal = false;
 		validationReport = null;
-		toast.info("Transação abortada — configuração anterior mantida");
+		toast.info("Transaction aborted — previous firewall configuration preserved");
 	}
 
 	function handleDiscard() {
 		if (!serverConfig) return;
 		draft = structuredClone(serverConfig);
-		toast.info("Alterações descartadas");
+		toast.info("Pending changes discarded");
 	}
 
 	// ---------------------------------------------------------------------------
@@ -217,7 +230,7 @@
 			if (rollbackSecsLeft <= 0) {
 				stopRollbackCountdown();
 				activeTxId = null;
-				toast.error("Rollback automático executado — regras anteriores restauradas");
+				toast.error("Automatic rollback executed — previous rules restored");
 				loadAll(true);
 			}
 		}, 1000);
@@ -246,7 +259,7 @@
 	});
 </script>
 
-<div class="flex flex-col gap-6 w-full">
+<div class="flex flex-col gap-6 w-full pb-16">
 	<!-- Page Header -->
 	<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
 		<div class="flex items-center gap-3.5">
@@ -255,8 +268,8 @@
 			</div>
 			<div class="flex flex-col gap-1">
 				<div class="flex flex-wrap items-center gap-2.5">
-					<h1 class="text-2xl font-bold tracking-tight">Firewall</h1>
-					{#if draft?.enabled}
+					<h1 class="text-2xl font-bold tracking-tight">Firewall & Security</h1>
+					{#if draft?.mode === "full"}
 						<Badge
 							variant="outline"
 							class="border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium text-xs"
@@ -265,43 +278,26 @@
 								<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
 								<span class="relative inline-flex rounded-full size-2 bg-emerald-500"></span>
 							</span>
-							Ativo
+							Full Router
+						</Badge>
+					{:else if draft?.mode === "minimal"}
+						<Badge variant="outline" class="border-primary/25 bg-primary/10 text-primary font-medium text-xs">
+							Minimal Helper
 						</Badge>
 					{:else if draft !== null}
 						<Badge variant="secondary" class="text-muted-foreground text-xs font-medium">
-							Desativado
+							Disabled
 						</Badge>
 					{/if}
 				</div>
 				<p class="text-sm text-muted-foreground">
-					Zonas, políticas de tráfego, DNAT e filtragem baseada em nftables.
+					Standalone router zones, traffic matrix, DNAT, and nftables packet filtering.
 				</p>
 			</div>
 		</div>
 
-		<!-- Global toggles + refresh -->
-		<div class="flex flex-wrap items-center gap-3">
-			{#if draft !== null}
-				<div class="flex items-center gap-2 text-sm">
-					<Switch
-						checked={draft.flow_offload}
-						onCheckedChange={(v) => handleGlobalToggle("flow_offload", v)}
-					/>
-					<span class="text-muted-foreground flex items-center gap-1">
-						<ZapIcon class="size-3.5" />
-						Flow Offload
-					</span>
-				</div>
-				<Separator orientation="vertical" class="h-5" />
-				<div class="flex items-center gap-2 text-sm">
-					<Switch
-						checked={draft.enabled}
-						onCheckedChange={(v) => handleGlobalToggle("enabled", v)}
-					/>
-					<span class="text-muted-foreground">Firewall</span>
-				</div>
-			{/if}
-			<Separator orientation="vertical" class="h-5" />
+		<!-- Action buttons -->
+		<div class="flex flex-wrap items-center gap-2.5">
 			<Button
 				variant="outline"
 				size="sm"
@@ -310,13 +306,41 @@
 				class="transition-transform duration-150 active:scale-95 transform-gpu"
 			>
 				<RefreshCwIcon class={loading ? "animate-spin" : ""} data-icon="inline-start" />
-				Atualizar
+				Refresh
 			</Button>
+
+			{#if isDirty}
+				<Button
+					variant="outline"
+					size="sm"
+					onclick={handleDiscard}
+					disabled={proposing}
+					class="transition-transform duration-150 active:scale-95 transform-gpu"
+				>
+					<RotateCcwIcon data-icon="inline-start" />
+					Discard
+				</Button>
+				<Button
+					variant="default"
+					size="sm"
+					onclick={handlePropose}
+					disabled={proposing}
+					class="shadow-xs transition-transform duration-150 active:scale-95 transform-gpu"
+				>
+					{#if proposing}
+						<Spinner data-icon="inline-start" />
+						Validating…
+					{:else}
+						<ShieldIcon data-icon="inline-start" />
+						Review & Apply
+					{/if}
+				</Button>
+			{/if}
 		</div>
 	</div>
 
-	<!-- Live Status Bar -->
-	<FirewallStatusBar
+	<!-- Live Status Cards Grid -->
+	<FirewallStatsCards
 		status={fwStatus}
 		{loading}
 		{activeTxId}
@@ -325,55 +349,116 @@
 		onConfirmNow={handleConfirm}
 	/>
 
-	<!-- Main Tabs -->
+	<!-- Operation Mode Selector Card -->
+	{#if draft !== null}
+		<Card.Root class="p-5">
+			<div class="flex items-center justify-between mb-3">
+				<div>
+					<h3 class="text-sm font-semibold text-foreground">Operation Mode</h3>
+					<p class="text-xs text-muted-foreground">
+						Select the role Lanforge plays in host packet filtering and routing offload.
+					</p>
+				</div>
+			</div>
+			<FirewallModeSelector
+				mode={draft.mode}
+				onSelect={handleModeChange}
+				disabled={committing || proposing}
+			/>
+		</Card.Root>
+	{/if}
+
+	<!-- Main Content / Mode-Specific Views -->
 	{#if loading && draft === null}
 		<div class="flex flex-col gap-4">
 			<div class="h-10 w-72 bg-muted rounded-xl animate-pulse"></div>
 			<div class="h-64 w-full bg-muted rounded-2xl animate-pulse"></div>
 		</div>
 	{:else if draft !== null}
-		<Tabs.Root bind:value={activeTab} class="w-full">
-			<Tabs.List class="flex w-full overflow-x-auto justify-start sm:inline-flex sm:w-auto p-1 mb-4 no-scrollbar">
-				<Tabs.Trigger value="zones">Zonas</Tabs.Trigger>
-				<Tabs.Trigger value="matrix">Matriz de Tráfego</Tabs.Trigger>
-				<Tabs.Trigger value="portforward">Port Forwarding</Tabs.Trigger>
-				<Tabs.Trigger value="hostrules">Regras do Host</Tabs.Trigger>
-			</Tabs.List>
+		{#if draft.mode === "full"}
+			<!-- Full Standalone Router: 5 Tabs -->
+			<Tabs.Root bind:value={activeTab} class="w-full">
+				<Tabs.List class="flex w-full overflow-x-auto justify-start sm:inline-flex sm:w-auto p-1 mb-4 no-scrollbar">
+					<Tabs.Trigger value="zones">Zones</Tabs.Trigger>
+					<Tabs.Trigger value="matrix">Traffic Matrix</Tabs.Trigger>
+					<Tabs.Trigger value="portforward">Port Forwarding</Tabs.Trigger>
+					<Tabs.Trigger value="hostrules">Host Rules</Tabs.Trigger>
+					<Tabs.Trigger value="tuning">Acceleration & Tuning</Tabs.Trigger>
+				</Tabs.List>
 
-			<Tabs.Content value="zones">
-				<ZonesTab
-					zones={draft.zones}
-					{highlightedZone}
-					onUpdate={(zones) => { if (draft) draft = { ...draft, zones }; }}
-				/>
-			</Tabs.Content>
+				<Tabs.Content value="zones">
+					<ZonesTab
+						zones={draft.zones}
+						{highlightedZone}
+						onUpdate={(zones) => { if (draft) draft = { ...draft, zones }; }}
+					/>
+				</Tabs.Content>
 
-			<Tabs.Content value="matrix">
-				<MatrixTab
-					zones={draft.zones}
-					forwardings={draft.forwardings}
-					{highlightedZone}
-					onUpdate={(forwardings) => { if (draft) draft = { ...draft, forwardings }; }}
-				/>
-			</Tabs.Content>
+				<Tabs.Content value="matrix">
+					<MatrixTab
+						zones={draft.zones}
+						forwardings={draft.forwardings}
+						{highlightedZone}
+						onUpdate={(forwardings) => { if (draft) draft = { ...draft, forwardings }; }}
+					/>
+				</Tabs.Content>
 
-			<Tabs.Content value="portforward">
-				<PortForwardTab
-					rules={draft.port_forwards}
-					zones={draft.zones}
-					onUpdate={(port_forwards) => { if (draft) draft = { ...draft, port_forwards }; }}
-				/>
-			</Tabs.Content>
+				<Tabs.Content value="portforward">
+					<PortForwardTab
+						rules={draft.port_forwards}
+						zones={draft.zones}
+						onUpdate={(port_forwards) => { if (draft) draft = { ...draft, port_forwards }; }}
+					/>
+				</Tabs.Content>
 
-			<Tabs.Content value="hostrules">
-				<HostRulesTab
-					zones={draft.zones}
-					portForwards={draft.port_forwards}
-					onZonesUpdate={(zones) => { if (draft) draft = { ...draft, zones }; }}
-					onPortForwardsUpdate={(port_forwards) => { if (draft) draft = { ...draft, port_forwards }; }}
+				<Tabs.Content value="hostrules">
+					<HostRulesTab
+						zones={draft.zones}
+						portForwards={draft.port_forwards}
+						onZonesUpdate={(zones) => { if (draft) draft = { ...draft, zones }; }}
+						onPortForwardsUpdate={(port_forwards) => { if (draft) draft = { ...draft, port_forwards }; }}
+					/>
+				</Tabs.Content>
+
+				<Tabs.Content value="tuning">
+					<FirewallTuningCard
+						flowOffload={draft.flow_offload}
+						onToggleFlowOffload={(v) => handleGlobalToggle("flow_offload", v)}
+					/>
+				</Tabs.Content>
+			</Tabs.Root>
+
+		{:else if draft.mode === "minimal"}
+			<!-- Minimal Helper Mode: Notice + Tuning Card -->
+			<div class="flex flex-col gap-4">
+				<Alert.Root class="border-primary/30 bg-primary/5 text-foreground">
+					<InfoIcon class="size-4 text-primary" />
+					<Alert.Title class="text-sm font-semibold">Minimal Coexistence Mode Active</Alert.Title>
+					<Alert.Description class="text-xs text-muted-foreground mt-1 leading-relaxed">
+						Lanforge is running as a non-interfering helper table with <code class="font-mono text-foreground font-semibold">policy accept</code> at priority <code class="font-mono text-foreground font-semibold">-10</code>. General packet filtering, zones, and host firewall rules are delegated to your system firewall (<code class="font-mono text-foreground">firewalld</code> or <code class="font-mono text-foreground">ufw</code>). PPPoE hardware Flowtable acceleration, TCP MSS clamping, and NAT masquerading remain active.
+					</Alert.Description>
+				</Alert.Root>
+
+				<FirewallTuningCard
+					flowOffload={draft.flow_offload}
+					onToggleFlowOffload={(v) => handleGlobalToggle("flow_offload", v)}
 				/>
-			</Tabs.Content>
-		</Tabs.Root>
+			</div>
+
+		{:else}
+			<!-- Disabled Mode -->
+			<Card.Root class="p-8 text-center flex flex-col items-center justify-center gap-3">
+				<div class="flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+					<ShieldOffIcon class="size-6" />
+				</div>
+				<div class="flex flex-col gap-1 max-w-md">
+					<h3 class="text-base font-semibold text-foreground">Firewall Management Disabled</h3>
+					<p class="text-xs text-muted-foreground leading-relaxed">
+						Lanforge will not create or maintain any nftables tables or rules in the kernel dataplane. Select <strong>Full Router</strong> or <strong>Minimal Helper</strong> above and click "Review & Apply" to enable firewall orchestration.
+					</p>
+				</div>
+			</Card.Root>
+		{/if}
 	{/if}
 
 	<!-- Propose / Review Modal -->
@@ -394,7 +479,7 @@
 	{#if isDirty && !showProposeModal}
 		<div
 			transition:fly={{ y: 24, duration: 220, easing: cubicOut }}
-			class="sticky bottom-4 z-30 flex items-center justify-between p-3.5 sm:p-4 rounded-xl border bg-card/90 backdrop-blur-md shadow-2xl border-primary/40 transform-gpu will-change-[transform,opacity] gap-4"
+			class="fixed bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center justify-between p-3.5 sm:p-4 rounded-xl border bg-card/90 backdrop-blur-md shadow-2xl border-primary/40 transform-gpu will-change-[transform,opacity] gap-4 w-[92vw] max-w-3xl"
 		>
 			<div class="flex items-center gap-2.5">
 				<span class="relative flex size-2.5">
@@ -403,10 +488,10 @@
 				</span>
 				<div class="flex flex-col sm:flex-row sm:items-center sm:gap-2">
 					<span class="text-xs font-semibold text-foreground">
-						{changeCount} {changeCount === 1 ? "alteração pendente" : "alterações pendentes"}
+						{changeCount} pending {changeCount === 1 ? "change" : "changes"}
 					</span>
 					<span class="text-[11px] text-muted-foreground hidden sm:inline">
-						Revise e aplique para atualizar as regras no daemon
+						Review and apply to commit new rules to the daemon
 					</span>
 				</div>
 			</div>
@@ -420,7 +505,7 @@
 					class="h-8 text-xs transition-transform duration-150 active:scale-95 transform-gpu"
 				>
 					<RotateCcwIcon data-icon="inline-start" />
-					Descartar
+					Discard
 				</Button>
 
 				<Button
@@ -428,14 +513,14 @@
 					size="sm"
 					onclick={handlePropose}
 					disabled={proposing}
-					class="h-8 text-xs shadow-sm transition-all duration-150 hover:shadow-primary/20 hover:shadow-md active:scale-95 transform-gpu"
+					class="h-8 text-xs shadow-xs transition-all duration-150 hover:shadow-primary/20 hover:shadow-md active:scale-95 transform-gpu"
 				>
 					{#if proposing}
 						<Spinner data-icon="inline-start" />
-						Validando…
+						Validating…
 					{:else}
 						<ShieldIcon data-icon="inline-start" />
-						Revisar & Aplicar
+						Review & Apply
 					{/if}
 				</Button>
 			</div>
