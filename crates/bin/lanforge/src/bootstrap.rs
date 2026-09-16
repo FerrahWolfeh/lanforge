@@ -120,6 +120,9 @@ impl Bootstrapper {
         let cfg = Arc::new(cfg);
 
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
+        if !cfg.system.iface.is_empty() {
+            ctx.set_target_interface_name(cfg.system.iface.clone());
+        }
         if db.is_in_memory() && !cfg.database.is_in_memory() {
             ctx.set_recovery_mode(true);
         }
@@ -587,17 +590,53 @@ impl Bootstrapper {
                     }
                 }
 
+                // Ensure primary LAN interface is included in internal zone
+                if !cfg.system.iface.is_empty() {
+                    for zone in &mut cfg.firewall_toml.zones {
+                        if (zone.name == "internal" || zone.name == "lan")
+                            && !zone.interfaces.contains(&cfg.system.iface)
+                        {
+                            zone.interfaces.push(cfg.system.iface.clone());
+                        }
+                    }
+                }
+
                 if db.seed_firewall_if_empty(&cfg.firewall_toml).await? {
                     info!("Seeded Firewall configuration from TOML into database");
                 }
                 if let Some(mut loaded) = db.load_firewall_config().await? {
+                    let mut modified = false;
                     #[cfg(feature = "pppoe")]
                     {
                         if !cfg.pppoe_toml.nftables.flow_offload && loaded.flow_offload {
                             info!("Firewall bootstrap: disabling flow_offload to match existing PPPoE/SQM configuration");
                             loaded.flow_offload = false;
-                            let _ = db.save_firewall_config(&loaded).await;
+                            modified = true;
                         }
+                    }
+                    // Auto-heal / assign primary LAN interface to internal zone if unassigned in any zone
+                    if !cfg.system.iface.is_empty() {
+                        let is_assigned = loaded
+                            .zones
+                            .iter()
+                            .any(|z| z.interfaces.contains(&cfg.system.iface));
+                        if !is_assigned
+                            && let Some(internal_zone) = loaded
+                                .zones
+                                .iter_mut()
+                                .find(|z| z.name == "internal" || z.name == "lan")
+                        {
+                            info!(
+                                iface = %cfg.system.iface,
+                                zone = %internal_zone.name,
+                                "Firewall bootstrap: auto-assigning primary LAN interface to internal firewall zone"
+                            );
+                            internal_zone.interfaces.push(cfg.system.iface.clone());
+                            modified = true;
+                        }
+                    }
+                    if modified {
+                        let _ = db.save_firewall_config(&loaded).await;
                     }
                     cfg.firewall_enabled = loaded.enabled;
                     cfg.firewall_toml = loaded;

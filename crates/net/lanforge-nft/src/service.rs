@@ -52,6 +52,13 @@ impl NftService {
         };
 
         let mut batch = nftables::batch::Batch::new();
+        batch.add_cmd(nftables::schema::NfCmd::Flush(
+            nftables::schema::FlushObject::Table(nftables::schema::Table {
+                family: nftables::types::NfFamily::INet,
+                name: table.clone().into(),
+                handle: None,
+            }),
+        ));
         batch.delete(nftables::schema::NfListObject::Table(nftables::schema::Table {
             family: nftables::types::NfFamily::INet,
             name: table.clone().into(),
@@ -85,12 +92,15 @@ impl NftService {
         dynamic_ports: &[DynamicPortRequest],
     ) {
         if !cfg.enabled {
-            info!("Firewall is disabled in configuration, skipping nftables application");
+            info!("Firewall is disabled in configuration, flushing and removing nftables table");
+            Self::cleanup_table(&cfg.table_name).await;
             return;
         }
 
+        let primary_lan = ctx.target_interface_name();
         let ruleset = RulesetBuilder::new(cfg)
             .with_active_wan(self.active_wan.as_deref())
+            .with_primary_lan(primary_lan.as_deref())
             .with_dynamic_ports(dynamic_ports)
             .build();
 
@@ -240,7 +250,11 @@ impl AsyncService for NftService {
                                 self.apply_ruleset_internal(&ctx, &cfg, &dynamic_ports).await;
                             }
                             LanforgeEvent::System(SystemEvent::Shutdown) => {
-                                info!("Firewall service received shutdown signal, terminating");
+                                info!("Firewall service received shutdown signal, cleaning up table and terminating");
+                                let table = ctx
+                                    .get_firewall_config()
+                                    .map_or_else(|| "lanforge".into(), |c| c.table_name);
+                                Self::cleanup_table(&table).await;
                                 break;
                             }
                             _ => {}
@@ -249,6 +263,20 @@ impl AsyncService for NftService {
                 }
             }
 
+            Ok(())
+        }
+    }
+
+    fn cleanup(
+        &mut self,
+        ctx: &LanforgeContext,
+    ) -> impl Future<Output = Result<(), CoreError>> + Send {
+        let table = ctx
+            .get_firewall_config()
+            .map_or_else(|| "lanforge".into(), |c| c.table_name);
+        async move {
+            info!(table = %table, "Firewall service shutting down, removing nftables table from kernel");
+            Self::cleanup_table(&table).await;
             Ok(())
         }
     }

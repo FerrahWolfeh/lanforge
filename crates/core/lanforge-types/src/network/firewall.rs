@@ -146,7 +146,7 @@ impl Default for FirewallConfig {
                 },
                 FirewallZone {
                     name: "trusted".into(),
-                    interfaces: vec!["tailscale0".into(), "podman0".into()],
+                    interfaces: vec!["tailscale0".into(), "podman0".into(), "podman1".into()],
                     open_ports: Vec::new(),
                     allowed_subnets: Vec::new(),
                     input_policy: FirewallPolicy::Accept,

@@ -11,9 +11,10 @@ fn test_sanity_host_protection_baseline() {
     let ruleset = RulesetBuilder::new(&cfg).build();
     let json = serde_json::to_string_pretty(&ruleset).unwrap();
 
-    // 1. Must define table inet lanforge
+    // 1. Must define table inet lanforge and flush command
     assert!(json.contains("\"lanforge\""), "Table lanforge missing");
     assert!(json.contains("\"inet\""), "Family inet missing");
+    assert!(json.contains("\"flush\""), "Flush command missing");
 
     // 2. Must have input chain with base hook
     assert!(json.contains("\"input\""), "Input chain missing");
@@ -21,6 +22,21 @@ fn test_sanity_host_protection_baseline() {
 
     // 3. Must allow loopback
     assert!(json.contains("\"lo\""), "Loopback interface allow missing");
+}
+
+#[test]
+fn test_sanity_primary_lan_auto_bind() {
+    let cfg = FirewallConfig::default(); // default internal zone has empty interfaces
+    let ruleset = RulesetBuilder::new(&cfg)
+        .with_primary_lan(Some("lan0"))
+        .with_active_wan(Some("ppp0"))
+        .build();
+    let json = serde_json::to_string_pretty(&ruleset).unwrap();
+
+    // 1. Must accept input on lan0
+    assert!(json.contains("\"lan0\""), "lan0 should be auto-bound to internal zone");
+    // 2. Must forward from lan0 to ppp0
+    assert!(json.contains("\"ppp0\""), "ppp0 should be auto-bound to external zone");
 }
 
 #[test]

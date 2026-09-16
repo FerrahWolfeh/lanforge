@@ -5,7 +5,7 @@ use nftables::batch::Batch;
 use nftables::expr::{
     CT, Expression, Meta, MetaKey, NamedExpression, Payload, PayloadField, TcpOption,
 };
-use nftables::schema::{Chain, FlowTable, NfListObject, Nftables, Rule, Table};
+use nftables::schema::{Chain, FlowTable, FlushObject, NfCmd, NfListObject, Nftables, Rule, Table};
 use nftables::stmt::{Flow, Limit, Mangle, Match, NATFamily, Operator, SetOp, Statement, NAT};
 use nftables::types::{NfChainPolicy, NfChainType, NfFamily, NfHook};
 use std::borrow::Cow;
@@ -15,6 +15,7 @@ use std::net::IpAddr;
 pub struct RulesetBuilder<'a> {
     cfg: &'a FirewallConfig,
     active_wan: Option<&'a str>,
+    primary_lan: Option<&'a str>,
     dynamic_ports: &'a [DynamicPortRequest],
 }
 
@@ -24,6 +25,7 @@ impl<'a> RulesetBuilder<'a> {
         Self {
             cfg,
             active_wan: None,
+            primary_lan: None,
             dynamic_ports: &[],
         }
     }
@@ -31,6 +33,12 @@ impl<'a> RulesetBuilder<'a> {
     #[must_use]
     pub const fn with_active_wan(mut self, wan: Option<&'a str>) -> Self {
         self.active_wan = wan;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_primary_lan(mut self, lan: Option<&'a str>) -> Self {
+        self.primary_lan = lan;
         self
     }
 
@@ -65,6 +73,13 @@ impl<'a> RulesetBuilder<'a> {
                 {
                     ifaces.push(wan.to_string());
                 }
+                // Auto-bind primary LAN interface to internal zone
+                if (zone.name == "internal" || zone.name == "lan")
+                    && let Some(lan) = self.primary_lan
+                    && !ifaces.contains(&lan.to_string())
+                {
+                    ifaces.push(lan.to_string());
+                }
             }
         }
         ifaces
@@ -76,12 +91,18 @@ impl<'a> RulesetBuilder<'a> {
         let mut ifaces = Vec::new();
         for zone in &self.cfg.zones {
             if zone.name != "external" && zone.name != "wan" {
-                for iface in &zone.interfaces {
-                    if !iface.is_empty() && !ifaces.contains(iface) {
-                        ifaces.push(iface.clone());
+                for iface in self.resolve_zone_interfaces(&zone.name) {
+                    if !iface.is_empty() && !ifaces.contains(&iface) {
+                        ifaces.push(iface);
                     }
                 }
             }
+        }
+        if let Some(lan) = self.primary_lan
+            && !lan.is_empty()
+            && !ifaces.contains(&lan.to_string())
+        {
+            ifaces.push(lan.to_string());
         }
         ifaces
     }
@@ -93,12 +114,17 @@ impl<'a> RulesetBuilder<'a> {
         let table = self.table_name().to_string();
         let mut batch = Batch::new();
 
-        // 1. Table
+        // 1. Table: Add if not exists, then flush all previous chains/rules in table
         batch.add(NfListObject::Table(Table {
             family: NfFamily::INet,
             name: table.clone().into(),
             handle: None,
         }));
+        batch.add_cmd(NfCmd::Flush(FlushObject::Table(Table {
+            family: NfFamily::INet,
+            name: table.clone().into(),
+            handle: None,
+        })));
 
         if !self.cfg.enabled {
             return batch.to_nftables();

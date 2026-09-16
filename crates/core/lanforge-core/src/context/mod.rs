@@ -227,6 +227,8 @@ struct LanforgeContextInner {
     discovery: Arc<state::cache::DiscoveryStore>,
     /// The network interface index to monitor for RA/DHCP.
     target_ifindex: Option<u32>,
+    /// The primary LAN interface name (e.g. "lan0").
+    target_ifname: RwLock<Option<String>>,
     /// System running flag — set to false on shutdown.
     running: AtomicBool,
     /// Database readiness flag.
@@ -306,6 +308,7 @@ impl LanforgeContext {
             writer_mutex: Mutex::new(()),
             discovery: Arc::new(state::cache::DiscoveryStore::default()),
             target_ifindex,
+            target_ifname: RwLock::new(None),
             running: AtomicBool::new(true),
             db_ready: AtomicBool::new(false),
             recovery_mode: AtomicBool::new(false),
@@ -376,6 +379,17 @@ impl LanforgeContext {
     #[must_use]
     pub fn target_ifindex(&self) -> Option<u32> {
         self.inner.target_ifindex
+    }
+
+    /// Returns the primary LAN interface name (e.g. "lan0") for this context.
+    #[must_use]
+    pub fn target_interface_name(&self) -> Option<String> {
+        self.inner.target_ifname.read().clone()
+    }
+
+    /// Sets the primary LAN interface name for this context.
+    pub fn set_target_interface_name(&self, name: String) {
+        *self.inner.target_ifname.write() = Some(name);
     }
 
     /// Returns the shared event bus for this instance.
