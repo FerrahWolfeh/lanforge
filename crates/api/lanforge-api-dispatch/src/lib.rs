@@ -23,7 +23,8 @@ use lanforge_types::network::firewall::{
 };
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::RaServerConfig;
-use lanforge_types::system::{PppoeStatusResponse, RaStatusResponse};
+use lanforge_types::network::TrafficConfig;
+use lanforge_types::system::{PppoeStatusResponse, RaStatusResponse, TrafficStatusResponse};
 use lanforge_types::update::LeaseTarget;
 
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -890,6 +891,30 @@ impl LanforgeRpc for ClientContext {
 
     async fn firewall_abort(&self, tx_id: String) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_firewall_abort(tx_id).await {
+            Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn traffic_status(&self) -> Result<Box<TrafficStatusResponse>, RpcCallError> {
+        match self.handle_traffic_status().await {
+            Response::TrafficStatus(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn traffic_config(&self) -> Result<Box<TrafficConfig>, RpcCallError> {
+        match self.handle_traffic_config().await {
+            Response::TrafficConfig(cfg) => Ok(cfg),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn update_traffic_config(&self, cfg: Box<TrafficConfig>) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_update_traffic_config(*cfg).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),

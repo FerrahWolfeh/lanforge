@@ -6,8 +6,9 @@ use lanforge_types::{
         },
         pppoe::PppoeConfig,
         ra::RaServerConfig,
+        TrafficConfig,
     },
-    system::{PppoeStatusResponse, RaStatusResponse},
+    system::{PppoeStatusResponse, RaStatusResponse, TrafficStatusResponse},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -123,4 +124,8 @@ pub enum Response {
     FirewallValidation(Box<FirewallValidationReport>),
     /// Firewall transaction commit result.
     FirewallCommit(Box<FirewallCommitResponse>),
+    /// Traffic and SQM operational status and metrics response.
+    TrafficStatus(Box<TrafficStatusResponse>),
+    /// Traffic and SQM declarative configuration response.
+    TrafficConfig(Box<TrafficConfig>),
 }

@@ -255,6 +255,23 @@ pub struct PppoeStatusResponse {
     pub auth: Option<crate::network::pppoe::AuthMethod>,
 }
 
+/// Status response payload for Network Traffic & SQM.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct TrafficStatusResponse {
+    pub service_state: ServiceState,
+    pub tuning_applied: bool,
+    pub tuned_interfaces: Vec<String>,
+    pub effective_cpu_mask: String,
+    pub sqm_active: bool,
+    pub wan_interface: Option<String>,
+    pub ingress_device: Option<String>,
+    pub download_mbps: u32,
+    pub upload_mbps: u32,
+    pub overhead: crate::network::traffic::SqmOverhead,
+    pub diffserv: crate::network::traffic::SqmDiffserv,
+    pub flow_offload_suppressed: bool,
+}
+
 
 /// Discovered network interface information for setup and topology display.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -59,7 +59,9 @@ import type {
 	FirewallStatus,
 	FirewallValidationReport,
 	FirewallCommitRequest,
-	FirewallCommitResponse
+	FirewallCommitResponse,
+	TrafficConfig,
+	TrafficStatusResponse
 } from './types';
 
 
@@ -728,6 +730,11 @@ export const firewallConfirm = (tx_id: string) =>
 	post<void>('/firewall/confirm', { tx_id });
 export const firewallAbort = (tx_id: string) =>
 	post<void>('/firewall/abort', { tx_id });
+
+export const trafficStatus = () => get<TrafficStatusResponse>('/traffic/status');
+export const trafficConfig = () => get<TrafficConfig>('/traffic/config');
+export const trafficUpdateConfig = (config: TrafficConfig) =>
+	post<void>('/traffic/config', config);
 
 
 // ---------------------------------------------------------------------------

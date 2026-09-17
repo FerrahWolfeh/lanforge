@@ -66,7 +66,11 @@ impl<'a> RulesetBuilder<'a> {
         let mut ifaces = Vec::new();
         for zone in &self.cfg.zones {
             if zone.name == zone_name {
-                ifaces.extend(zone.interfaces.clone());
+                for iface in &zone.interfaces {
+                    if !iface.starts_with("ifb") && !ifaces.contains(iface) {
+                        ifaces.push(iface.clone());
+                    }
+                }
                 // Auto-bind active WAN interface to external zone
                 if (zone.name == "external" || zone.name == "wan")
                     && let Some(wan) = self.active_wan
@@ -146,7 +150,7 @@ impl<'a> RulesetBuilder<'a> {
             flow_devices.push(wan.to_string());
         }
         for iface in self.resolve_internal_interfaces() {
-            if !flow_devices.contains(&iface) {
+            if !iface.starts_with("ifb") && !flow_devices.contains(&iface) {
                 flow_devices.push(iface);
             }
         }

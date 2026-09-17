@@ -29,6 +29,7 @@
 		firewallConfirm,
 		firewallAbort,
 		getSetupStatus,
+		trafficStatus,
 	} from "$lib/api/client";
 	import type {
 		FirewallConfig,
@@ -57,6 +58,7 @@
 	let serverConfig = $state<FirewallConfig | null>(null);
 	let draft = $state<FirewallConfig | null>(null);
 	let availableInterfaces = $state<NetworkInterfaceInfo[]>([]);
+	let sqmActive = $state(false);
 
 	let loading = $state(true);
 	let proposing = $state(false);
@@ -105,12 +107,14 @@
 	async function loadAll(silent = false) {
 		if (!silent) loading = true;
 		try {
-			const [s, c, setupRes] = await Promise.all([
+			const [s, c, setupRes, tStatus] = await Promise.all([
 				firewallStatus().catch(() => null),
 				firewallConfig().catch(() => null),
 				getSetupStatus().catch(() => null),
+				trafficStatus().catch(() => null),
 			]);
 			fwStatus = s;
+			sqmActive = tStatus?.sqm_active ?? false;
 			if (setupRes?.interfaces) {
 				availableInterfaces = setupRes.interfaces;
 			}
@@ -461,6 +465,7 @@
 				<Tabs.Content value="tuning">
 					<FirewallTuningCard
 						flowOffload={draft.flow_offload}
+						{sqmActive}
 						onToggleFlowOffload={(v) => handleGlobalToggle("flow_offload", v)}
 					/>
 				</Tabs.Content>
@@ -489,6 +494,7 @@
 
 				<FirewallTuningCard
 					flowOffload={draft.flow_offload}
+					{sqmActive}
 					onToggleFlowOffload={(v) => handleGlobalToggle("flow_offload", v)}
 				/>
 			</div>

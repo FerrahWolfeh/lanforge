@@ -30,6 +30,7 @@ default = [
     "doh-server",
     "webui",
     "ring",
+    "traffic",
 ]
 
 # Service Features
@@ -39,6 +40,7 @@ ra = ["dep:lanforge-ra"]
 tftp = ["dep:lanforge-tftp"]
 pppoe = ["dep:lanforge-pppoe"]
 nft = ["dep:lanforge-nft"]
+traffic = ["dep:lanforge-traffic"]
 discovery = []
 http = ["dep:lanforge-http", "lanforge-http/server"]
 uds = ["dep:lanforge-uds"]
@@ -117,6 +119,7 @@ full = [
     "dns-doh",
     "adblock",
     "webui",
+    "traffic",
 ]
 
 profile-minimal = ["dns", "dhcp", "ra", "uds"]
@@ -131,6 +134,7 @@ profile-soho = [
     "http",
     "adblock",
     "webui",
+    "traffic",
 ]
 profile-enterprise = [
     "dns",
@@ -144,6 +148,7 @@ profile-enterprise = [
     "adblock",
     "dns-full",
     "webui",
+    "traffic",
 ]
 
 
@@ -168,6 +173,7 @@ lanforge-http = { workspace = true, optional = true }
 lanforge-tftp = { workspace = true, optional = true }
 lanforge-pppoe = { workspace = true, optional = true }
 lanforge-nft = { workspace = true, optional = true }
+lanforge-traffic = { workspace = true, optional = true }
 
 
 # Async & runtime

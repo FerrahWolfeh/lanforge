@@ -2431,6 +2431,7 @@ dependencies = [
  "lanforge-pppoe",
  "lanforge-ra",
  "lanforge-tftp",
+ "lanforge-traffic",
  "lanforge-types",
  "lanforge-uds",
  "lanforge-wol",
@@ -2855,6 +2856,18 @@ dependencies = [
  "smol_str",
  "socket2",
  "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "lanforge-traffic"
+version = "0.1.0"
+dependencies = [
+ "lanforge-core",
+ "lanforge-macros",
+ "lanforge-types",
  "thiserror 2.0.20",
  "tokio",
  "tracing",

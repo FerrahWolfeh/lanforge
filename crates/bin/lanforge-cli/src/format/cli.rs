@@ -16,6 +16,7 @@ impl CliFormat for LanforgeEvent {
             Self::Storage(e) => format_storage_event(now, e, ascii),
             Self::System(e) => format_system_event(now, e, verbose, ascii),
             Self::Pppoe(e) => format_pppoe_event(now, e, ascii),
+            Self::Firewall(_) | Self::Traffic(_) => {}
         }
     }
 }

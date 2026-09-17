@@ -48,6 +48,8 @@ pub struct TomlConfig {
     pub pppoe: PppoeConfig,
     #[cfg(feature = "nft")]
     pub firewall: lanforge_nft::FirewallConfig,
+    #[cfg(feature = "traffic")]
+    pub traffic: lanforge_traffic::TrafficConfig,
 }
 
 #[cfg(feature = "dhcp")]
@@ -169,6 +171,8 @@ pub fn load_toml(path: &str) -> TomlConfig {
         pppoe: load_section(&value, "pppoe"),
         #[cfg(feature = "nft")]
         firewall: load_section(&value, "firewall"),
+        #[cfg(feature = "traffic")]
+        traffic: load_section(&value, "traffic"),
     };
 
     info!("[config] Partial config recovery complete");

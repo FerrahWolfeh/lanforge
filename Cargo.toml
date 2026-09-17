@@ -36,6 +36,7 @@ lanforge-tftp = { path = "crates/net/lanforge-tftp" }
 lanforge-pppoe = { path = "crates/net/lanforge-pppoe" }
 lanforge-nft = { path = "crates/net/lanforge-nft" }
 lanforge-wol = { path = "crates/net/lanforge-wol" }
+lanforge-traffic = { path = "crates/net/lanforge-traffic" }
 lanforge-api-dispatch = { path = "crates/api/lanforge-api-dispatch" }
 
 # Third party

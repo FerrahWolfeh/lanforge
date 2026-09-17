@@ -9,13 +9,15 @@
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import NetworkIcon from "@lucide/svelte/icons/network";
 	import CheckIcon from "@lucide/svelte/icons/check";
+	import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
 
 	interface Props {
 		flowOffload: boolean;
+		sqmActive?: boolean;
 		onToggleFlowOffload: (val: boolean) => void;
 	}
 
-	let { flowOffload, onToggleFlowOffload }: Props = $props();
+	let { flowOffload, sqmActive = false, onToggleFlowOffload }: Props = $props();
 </script>
 
 <div class="flex flex-col gap-4">
@@ -45,13 +47,21 @@
 								</p>
 							</div>
 						</HelpPopover>
-						<Badge variant={flowOffload ? "default" : "secondary"} class="text-[10px]">
-							{flowOffload ? "Fast-Path Active" : "Disabled"}
+						<Badge variant={sqmActive ? "outline" : flowOffload ? "default" : "secondary"} class="text-[10px] {sqmActive ? 'border-amber-500/40 text-amber-600 dark:text-amber-400 font-medium' : ''}">
+							{sqmActive ? "Suspenso pelo SQM" : flowOffload ? "Fast-Path Active" : "Disabled"}
 						</Badge>
 					</div>
 					<p class="text-xs text-muted-foreground leading-relaxed max-w-2xl">
 						Bypasses standard routing lookups for established flows, processing packets at wire speed directly in the kernel dataplane.
 					</p>
+					{#if sqmActive}
+						<div class="mt-2 flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-400">
+							<AlertTriangleIcon class="size-4 shrink-0" />
+							<span>
+								<strong>Suspenso pelo SQM (CAKE):</strong> O flow offload contorna o Traffic Control (TC), o que impediria o controle de latência e bufferbloat.
+							</span>
+						</div>
+					{/if}
 				</div>
 			</div>
 

@@ -39,9 +39,9 @@
   let selectedIfaceToAdd = $state("");
   let newInterfaceValue = $state("");
 
-  // Filter available interfaces not yet in this zone
+  // Filter available interfaces not yet in this zone (excluding intermediate virtual IFB devices)
   const unassignedInterfaces = $derived(
-    availableInterfaces.filter((i) => !zone.interfaces.includes(i.name))
+    availableInterfaces.filter((i) => !i.name.startsWith("ifb") && !zone.interfaces.includes(i.name))
   );
 
   // Check if this is an external zone missing its active WAN

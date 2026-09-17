@@ -558,3 +558,27 @@ impl HttpWrappedResponse for FirewallCommitResponse {
         wrapper.data
     }
 }
+
+impl HttpWrappedResponse for lanforge_types::network::TrafficConfig {
+    type Wrapper = HttpDataResponse<lanforge_types::network::TrafficConfig>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for lanforge_types::system::TrafficStatusResponse {
+    type Wrapper = HttpDataResponse<lanforge_types::system::TrafficStatusResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}

@@ -8,6 +8,11 @@ mod neighbor;
 pub mod pppoe;
 pub mod ra;
 pub mod subnet;
+pub mod traffic;
+
+pub use traffic::{
+    NicTuningConfig, SqmConfig, SqmDiffserv, SqmOverhead, TrafficConfig,
+};
 
 pub use firewall::{
     DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallStatus, FirewallZone, HostPortRule,

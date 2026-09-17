@@ -6,6 +6,7 @@ use lanforge_types::{
         firewall::{FirewallCommitRequest, FirewallCommitResponse, FirewallConfig},
         pppoe::PppoeConfig,
         ra::RaServerConfig,
+        TrafficConfig,
     },
     system::ServiceAction,
 };
@@ -132,6 +133,36 @@ impl ClientContext {
 
         Response::Success(SimpleSuccess {
             message: "Immediate Router Advertisement burst triggered".to_string(),
+        })
+    }
+
+    pub async fn handle_traffic_config(&self) -> Response {
+        let cfg = match self.db.load_traffic_config().await {
+            Ok(Some(cfg)) => cfg,
+            _ => self.ctx.get_traffic_config().unwrap_or_default(),
+        };
+        Response::TrafficConfig(Box::new(cfg))
+    }
+
+    pub async fn handle_update_traffic_config(&self, cfg: TrafficConfig) -> Response {
+        if let Err(e) = self.db.save_traffic_config(&cfg).await {
+            return Response::Error {
+                error: format!("Failed to save traffic configuration: {e}"),
+            };
+        }
+
+        self.ctx.update_traffic_config(cfg);
+
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::ServiceControl {
+                id: "traffic".to_string(),
+                action: ServiceAction::Restart,
+            }));
+
+        Response::Success(SimpleSuccess {
+            message: "Traffic and SQM configuration updated successfully".to_string(),
         })
     }
 

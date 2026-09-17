@@ -11,6 +11,7 @@ use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
+use lanforge_types::network::TrafficConfig;
 use lanforge_types::update::DeviceUpdate;
 
 
@@ -125,6 +126,11 @@ impl LanforgeContext {
     /// Updates the dynamic firewall configuration in context.
     pub fn update_firewall_config(&self, config: FirewallConfig) {
         self.inner.config.write().firewall = Some(config);
+    }
+
+    /// Updates the dynamic traffic and SQM configuration in context.
+    pub fn update_traffic_config(&self, config: TrafficConfig) {
+        self.inner.config.write().traffic = Some(config);
     }
 
     /// Updates the configured DNS upstreams and publishes the change event.

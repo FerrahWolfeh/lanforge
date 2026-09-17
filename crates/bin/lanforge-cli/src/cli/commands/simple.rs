@@ -548,5 +548,19 @@ fn render_watch_event(e: &TimedEvent, device_map: &HashMap<String, String>, verb
                 pppoe_evt
             );
         }
+        LanforgeEvent::Firewall(fw_evt) => {
+            println!(
+                " [{time_str}] {} {:?}",
+                "FIREWALL EVENT".bold().yellow(),
+                fw_evt
+            );
+        }
+        LanforgeEvent::Traffic(traffic_evt) => {
+            println!(
+                " [{time_str}] {} {:?}",
+                "TRAFFIC EVENT".bold().blue(),
+                traffic_evt
+            );
+        }
     }
 }

@@ -1138,3 +1138,55 @@ export interface FirewallCommitResponse {
 	rollback_deadline_secs: number | null;
 }
 
+// ---------------------------------------------------------------------------
+// Traffic & SQM
+// ---------------------------------------------------------------------------
+
+export type SqmOverhead = "auto" | "pppoe" | "ethernet" | "docsis" | "none";
+export type SqmDiffserv = "diffserv4" | "diffserv3" | "besteffort";
+
+export interface NicTuningConfig {
+	enabled: boolean;
+	interfaces: string[];
+	cpu_mask: string;
+	rps_flow_entries: number;
+	rps_flow_cnt: number;
+	rx_ring: string;
+	tx_ring: string;
+	disable_eee: boolean;
+	udp_gro_forwarding: boolean;
+}
+
+export interface SqmConfig {
+	enabled: boolean;
+	interface: string;
+	download_mbps: number;
+	upload_mbps: number;
+	overhead: SqmOverhead;
+	diffserv: SqmDiffserv;
+	per_host_isolation: boolean;
+	rtt_ms: number | null;
+	ingress_device: string;
+	raw_cake_args: string | null;
+}
+
+export interface TrafficConfig {
+	tuning: NicTuningConfig;
+	sqm: SqmConfig;
+}
+
+export interface TrafficStatusResponse {
+	service_state: ServiceState;
+	tuning_applied: boolean;
+	tuned_interfaces: string[];
+	effective_cpu_mask: string;
+	sqm_active: boolean;
+	wan_interface: string | null;
+	ingress_device: string | null;
+	download_mbps: number;
+	upload_mbps: number;
+	overhead: SqmOverhead;
+	diffserv: SqmDiffserv;
+	flow_offload_suppressed: boolean;
+}
+

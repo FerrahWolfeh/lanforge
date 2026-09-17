@@ -65,7 +65,7 @@ impl ClientContext {
 
         let mut iface_infos = Vec::new();
         for iface in all_interfaces {
-            if iface.is_loopback() {
+            if iface.is_loopback() || iface.name.starts_with("ifb") || iface.name.starts_with("teql") {
                 continue;
             }
             let is_phys = is_physical_interface(&iface.name);

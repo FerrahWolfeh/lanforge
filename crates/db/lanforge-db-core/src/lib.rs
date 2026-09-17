@@ -21,7 +21,7 @@ use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
-use lanforge_types::network::{DnsReverseResolver, IpSubnet, QueryLogEntry};
+use lanforge_types::network::{DnsReverseResolver, IpSubnet, QueryLogEntry, TrafficConfig};
 
 /// Database error enum encapsulating all database failures.
 #[derive(Debug, thiserror::Error)]
@@ -588,6 +588,31 @@ pub trait FirewallConfigStore: Send + Sync {
     }
 }
 
+/// Handles Network Traffic & SQM configuration persistence.
+pub trait TrafficConfigStore: Send + Sync {
+    /// Loads dynamic Traffic configuration.
+    fn load_traffic_config(&self) -> BoxFuture<'_, Result<Option<TrafficConfig>, DbError>>;
+
+    /// Saves dynamic Traffic configuration.
+    fn save_traffic_config<'a>(&'a self, cfg: &'a TrafficConfig) -> BoxFuture<'a, Result<(), DbError>>;
+
+    /// Seeds Traffic configuration if not present in database. Returns `Ok(true)` if seeded.
+    fn seed_traffic_if_empty<'a>(
+        &'a self,
+        seed: &'a TrafficConfig,
+    ) -> BoxFuture<'a, Result<bool, DbError>> {
+        Box::pin(async move {
+            let existing = self.load_traffic_config().await?;
+            if existing.is_none() {
+                self.save_traffic_config(seed).await?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })
+    }
+}
+
 /// Handles storage and administration of user accounts.
 pub trait UserStore: Send + Sync {
     /// Creates a new user in the database.
@@ -786,6 +811,7 @@ pub trait DatabaseStore:
     + RaConfigStore
     + PppoeConfigStore
     + FirewallConfigStore
+    + TrafficConfigStore
     + UserStore
     + Send
     + Sync
@@ -802,6 +828,7 @@ impl<T> DatabaseStore for T where
         + RaConfigStore
         + PppoeConfigStore
         + FirewallConfigStore
+        + TrafficConfigStore
         + UserStore
         + Send
         + Sync

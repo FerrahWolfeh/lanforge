@@ -31,6 +31,8 @@ use lanforge_db::PppoeConfigStore;
 use lanforge_pppoe::PppoeService;
 #[cfg(feature = "nft")]
 use lanforge_nft::NftService;
+#[cfg(feature = "traffic")]
+use lanforge_traffic::TrafficService;
 #[cfg(feature = "ra")]
 use lanforge_ra::RaService;
 #[cfg(feature = "tftp")]
@@ -256,6 +258,11 @@ impl Daemon {
 
             #[cfg(feature = "nft")]
             async [] => NftService::new(),
+
+            #[cfg(feature = "traffic")]
+            async [ctx, cfg] => TrafficService::new(
+                ctx.get_traffic_config().unwrap_or_else(|| cfg.traffic_toml.clone()),
+            ),
         });
     }
 

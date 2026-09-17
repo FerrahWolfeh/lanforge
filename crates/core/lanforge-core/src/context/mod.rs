@@ -71,6 +71,7 @@ use lanforge_types::network::firewall::{
 };
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
+use lanforge_types::network::TrafficConfig;
 use lanforge_types::system::{ServiceBanner, ServiceState, SystemStatus};
 
 use arc_swap::ArcSwap;
@@ -210,6 +211,8 @@ pub struct DynamicConfig {
     pub pppoe: Option<PppoeConfig>,
     /// Configured firewall runtime configuration.
     pub firewall: Option<FirewallConfig>,
+    /// Configured traffic management and SQM configuration.
+    pub traffic: Option<TrafficConfig>,
 }
 
 /// Internal state shared behind an `Arc`.
@@ -669,6 +672,12 @@ impl LanforgeContext {
     #[must_use]
     pub fn get_firewall_config(&self) -> Option<FirewallConfig> {
         self.inner.config.read().firewall.clone()
+    }
+
+    /// Returns the current dynamic traffic and SQM configuration, if configured.
+    #[must_use]
+    pub fn get_traffic_config(&self) -> Option<TrafficConfig> {
+        self.inner.config.read().traffic.clone()
     }
 
     /// Evaluates a candidate firewall configuration, runs pre-flight sanity checks,

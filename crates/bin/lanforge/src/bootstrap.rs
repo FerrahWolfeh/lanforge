@@ -212,6 +212,11 @@ impl Bootstrapper {
             ctx.update_firewall_config(cfg.firewall_toml.clone());
         }
 
+        #[cfg(feature = "traffic")]
+        {
+            ctx.update_traffic_config(cfg.traffic_toml.clone());
+        }
+
         let _ = bus.publish(LanforgeEvent::System(SystemEvent::StateReady));
 
         // --- PHASE 2: Netlink Setup ---
@@ -610,6 +615,14 @@ impl Bootstrapper {
                     {
                         if !cfg.pppoe_toml.nftables.flow_offload && loaded.flow_offload {
                             info!("Firewall bootstrap: disabling flow_offload to match existing PPPoE/SQM configuration");
+                            loaded.flow_offload = false;
+                            modified = true;
+                        }
+                    }
+                    #[cfg(feature = "traffic")]
+                    {
+                        if cfg.traffic_toml.sqm.enabled && loaded.flow_offload {
+                            info!("Firewall bootstrap: disabling flow_offload because SQM (CAKE) traffic shaping is active");
                             loaded.flow_offload = false;
                             modified = true;
                         }

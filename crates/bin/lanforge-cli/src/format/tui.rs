@@ -22,6 +22,7 @@ impl TuiFormat for LanforgeEvent {
             Self::System(sys_event) => format_system_event(sys_event, spans),
             Self::Storage(store_event) => format_storage_event(store_event, spans),
             Self::Pppoe(pppoe_event) => format_pppoe_event(pppoe_event, spans),
+            Self::Firewall(_) | Self::Traffic(_) => {}
         }
     }
 }

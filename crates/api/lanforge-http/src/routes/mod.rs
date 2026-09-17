@@ -9,6 +9,7 @@ pub mod hosts;
 pub mod pppoe;
 pub mod ra;
 pub mod system;
+pub mod traffic;
 pub mod users;
 
 use axum::{
@@ -35,7 +36,8 @@ pub fn router() -> Router<AppState> {
         .nest("/firewall", firewall::router())
         .nest("/hosts", hosts::router())
         .nest("/pppoe", pppoe::router())
-        .nest("/ra", ra::router());
+        .nest("/ra", ra::router())
+        .nest("/traffic", traffic::router());
 
 
     Router::new()

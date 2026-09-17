@@ -138,6 +138,29 @@ impl ClientContext {
         Response::RaStatus(status)
     }
 
+    pub async fn handle_traffic_status(&self) -> Response {
+        let traffic_status = self.ctx.read().interfaces.traffic_status.clone();
+        let status = traffic_status.unwrap_or_else(|| {
+            let cfg = self.ctx.get_traffic_config().unwrap_or_default();
+            let service_state = self.ctx.get_service_state("traffic");
+            Box::new(lanforge_types::system::TrafficStatusResponse {
+                service_state,
+                tuning_applied: false,
+                tuned_interfaces: cfg.tuning.interfaces.clone(),
+                effective_cpu_mask: cfg.tuning.cpu_mask.clone(),
+                sqm_active: false,
+                wan_interface: None,
+                ingress_device: None,
+                download_mbps: cfg.sqm.download_mbps,
+                upload_mbps: cfg.sqm.upload_mbps,
+                overhead: cfg.sqm.overhead,
+                diffserv: cfg.sqm.diffserv,
+                flow_offload_suppressed: cfg.sqm.enabled,
+            })
+        });
+        Response::TrafficStatus(status)
+    }
+
     pub async fn handle_firewall_status(&self) -> Response {
         let cfg = self.ctx.get_firewall_config().unwrap_or_default();
         let dynamic_ports = self.ctx.registered_service_ports();

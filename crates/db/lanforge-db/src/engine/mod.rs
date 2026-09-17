@@ -8,7 +8,7 @@ use lanforge_core::context::state::State;
 use lanforge_db_core::{
     AdblockStore, ApiTokenEntry, ApiTokenStore, BoxFuture, DbError, DeviceStore, DhcpConfigStore,
     DnsStore, DnsUpstreamEntry, DnsUpstreamStore, FirewallConfigStore, PppoeConfigStore,
-    RaConfigStore, UserEntry, UserStore,
+    RaConfigStore, TrafficConfigStore, UserEntry, UserStore,
 };
 use lanforge_db_redb::RedbDatabase;
 use lanforge_types::auth::{ApiScopes, UserRole};
@@ -23,7 +23,7 @@ use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
-use lanforge_types::network::{DnsReverseResolver, IpSubnet};
+use lanforge_types::network::{DnsReverseResolver, IpSubnet, TrafficConfig};
 
 pub mod types {
     pub use lanforge_db_core::{
@@ -572,6 +572,17 @@ impl FirewallConfigStore for LanforgeDb {
 
     fn save_firewall_config<'a>(&'a self, cfg: &'a FirewallConfig) -> BoxFuture<'a, Result<(), DbError>> {
         self.inner.save_firewall_config(cfg)
+    }
+}
+
+// Forward TrafficConfigStore
+impl TrafficConfigStore for LanforgeDb {
+    fn load_traffic_config(&self) -> BoxFuture<'_, Result<Option<TrafficConfig>, DbError>> {
+        self.inner.load_traffic_config()
+    }
+
+    fn save_traffic_config<'a>(&'a self, cfg: &'a TrafficConfig) -> BoxFuture<'a, Result<(), DbError>> {
+        self.inner.save_traffic_config(cfg)
     }
 }
 

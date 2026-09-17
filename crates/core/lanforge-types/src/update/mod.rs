@@ -239,5 +239,8 @@ pub enum DeviceUpdate {
     RaStatusUpdated {
         status: Option<Box<crate::system::RaStatusResponse>>,
     },
+    TrafficStatusUpdated {
+        status: Option<Box<crate::system::TrafficStatusResponse>>,
+    },
 }
 

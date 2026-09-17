@@ -61,6 +61,8 @@ pub struct NetworkState {
     pub pppoe_status: Option<Box<lanforge_types::system::PppoeStatusResponse>>,
     /// Active `RA` (Router Advertisement) state.
     pub ra_status: Option<Box<lanforge_types::system::RaStatusResponse>>,
+    /// Active Traffic & SQM state.
+    pub traffic_status: Option<Box<lanforge_types::system::TrafficStatusResponse>>,
 }
 
 impl NetworkState {
@@ -70,6 +72,7 @@ impl NetworkState {
         self.v6_pools.clear();
         self.pppoe_status = None;
         self.ra_status = None;
+        self.traffic_status = None;
     }
 }
 

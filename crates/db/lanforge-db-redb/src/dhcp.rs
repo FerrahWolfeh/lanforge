@@ -3,11 +3,12 @@
 use crate::RedbDatabase;
 use crate::tables::TABLE_CONFIG;
 use lanforge_db_core::{
-    BoxFuture, DbError, DhcpConfigStore, PppoeConfigStore, RaConfigStore,
+    BoxFuture, DbError, DhcpConfigStore, PppoeConfigStore, RaConfigStore, TrafficConfigStore,
 };
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
+use lanforge_types::network::TrafficConfig;
 use redb::ReadableDatabase;
 use std::net::Ipv6Addr;
 
@@ -347,6 +348,48 @@ impl PppoeConfigStore for RedbDatabase {
 
                 table
                     .insert("pppoe_config", bytes.as_slice())
+                    .map_err(|e| DbError::Backend(e.to_string()))?;
+            }
+            write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+            Ok(())
+        })
+    }
+}
+
+impl TrafficConfigStore for RedbDatabase {
+    fn load_traffic_config(&self) -> BoxFuture<'_, Result<Option<TrafficConfig>, DbError>> {
+        Box::pin(async move {
+            let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+            let table = match read_txn.open_table(TABLE_CONFIG) {
+                Ok(t) => t,
+                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+                Err(e) => return Err(DbError::Backend(e.to_string())),
+            };
+
+            match table.get("traffic_config").map_err(|e| DbError::Backend(e.to_string()))? {
+                Some(val) => {
+                    let cfg: TrafficConfig = serde_json::from_slice(val.value())
+                        .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
+                    Ok(Some(cfg))
+                }
+                None => Ok(None),
+            }
+        })
+    }
+
+    fn save_traffic_config<'a>(&'a self, cfg: &'a TrafficConfig) -> BoxFuture<'a, Result<(), DbError>> {
+        Box::pin(async move {
+            let bytes = serde_json::to_vec(cfg)
+                .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+
+            let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+            {
+                let mut table = write_txn
+                    .open_table(TABLE_CONFIG)
+                    .map_err(|e| DbError::Backend(e.to_string()))?;
+
+                table
+                    .insert("traffic_config", bytes.as_slice())
                     .map_err(|e| DbError::Backend(e.to_string()))?;
             }
             write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;

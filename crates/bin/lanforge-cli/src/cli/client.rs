@@ -1107,4 +1107,19 @@ impl LanforgeClient {
     pub async fn system_setup(&self, payload: SetupPayload) -> Result<SetupResponse> {
         dispatch!(self, post => "/system/setup", payload, system_setup(payload))
     }
+
+    pub async fn traffic_status(&self) -> Result<Box<lanforge_types::system::TrafficStatusResponse>> {
+        dispatch!(self, get_box => "/traffic/status", traffic_status())
+    }
+
+    pub async fn traffic_config(&self) -> Result<lanforge_types::network::TrafficConfig> {
+        dispatch!(self, get => "/traffic/config", traffic_config())
+    }
+
+    pub async fn update_traffic_config(
+        &self,
+        cfg: lanforge_types::network::TrafficConfig,
+    ) -> Result<SimpleSuccess> {
+        dispatch!(self, post => "/traffic/config", cfg, update_traffic_config(cfg))
+    }
 }

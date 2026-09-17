@@ -199,3 +199,41 @@ mss_clamping = true
 bypass_dns = true
 bypass_vowifi = true
 masquerade = true
+
+# [traffic] - NIC Optimization & CAKE SQM Bufferbloat Control
+[traffic.tuning]
+# Enables hardware-level NIC optimizations (RPS, RFS, XPS, ring buffers, EEE)
+enabled = true
+# Interfaces to optimize. If empty ([]), defaults to LAN interface and PPPoE WAN interface
+interfaces = []
+# RPS/XPS CPU affinity mask ("auto" detects online CPU cores/threads, or explicit hex e.g. "ff")
+cpu_mask = "auto"
+# Global socket flow table entries for RFS
+rps_flow_entries = 32768
+# Per-queue flow count for RFS
+rps_flow_cnt = 4096
+# Ring buffer sizes ("auto" queries the hardware driver maximum, or explicit e.g. "1024")
+rx_ring = "auto"
+tx_ring = "auto"
+# Disable Energy Efficient Ethernet to prevent link renegotiation or 100Mbps drops
+disable_eee = true
+# Enable UDP GRO forwarding offload (accelerates WireGuard/Tailscale/QUIC throughput)
+udp_gro_forwarding = true
+
+[traffic.sqm]
+# Enables Smart Queue Management (CAKE) to eliminate bufferbloat
+enabled = false
+# Target WAN interface ("auto" detects active PPPoE session or physical WAN)
+interface = "auto"
+# Upload and download bandwidth limits in Mbps (set to ~90-95% of real ISP link speed)
+download_mbps = 500
+upload_mbps = 250
+# Framing overhead compensation ("auto", "pppoe", "ethernet", "docsis", "none")
+overhead = "auto"
+# DSCP prioritization profile ("diffserv4", "diffserv3", "besteffort")
+diffserv = "diffserv4"
+# Enables per-internal-host fair queueing via Conntrack ('nat' keyword in CAKE)
+per_host_isolation = true
+# Optional custom RTT parameter (e.g. 20 for local fiber, or omitted for CAKE default 100ms)
+# rtt_ms = 20
+

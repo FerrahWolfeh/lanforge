@@ -12,7 +12,7 @@ use tokio::sync::broadcast::{self, Receiver};
 pub use lanforge_types::events::{
     AdminChange, DeviceEvent, DhcpV4MessageType, DhcpV6MessageType, DnsEvent, EventVec,
     FirewallEvent, NetworkChange, NetworkEvent, PppoeEvent, PrefixChangeDetails, StorageEvent,
-    SystemEvent,
+    SystemEvent, TrafficEvent,
 };
 
 pub struct EventBus {
@@ -24,6 +24,7 @@ pub struct EventBus {
     storage: broadcast::Sender<TimedEvent>,
     pppoe: broadcast::Sender<TimedEvent>,
     firewall: broadcast::Sender<TimedEvent>,
+    traffic: broadcast::Sender<TimedEvent>,
 }
 
 impl EventBus {
@@ -37,6 +38,7 @@ impl EventBus {
         let (storage, _) = broadcast::channel(128);
         let (pppoe, _) = broadcast::channel(128);
         let (firewall, _) = broadcast::channel(128);
+        let (traffic, _) = broadcast::channel(128);
         Self {
             global,
             system,
@@ -46,6 +48,7 @@ impl EventBus {
             storage,
             pppoe,
             firewall,
+            traffic,
         }
     }
 
@@ -97,6 +100,12 @@ impl EventBus {
         self.firewall.subscribe()
     }
 
+    /// Subscribes exclusively to traffic, NIC tuning, and SQM events.
+    #[must_use]
+    pub fn subscribe_traffic(&self) -> Receiver<TimedEvent> {
+        self.traffic.subscribe()
+    }
+
     #[must_use]
     pub fn publish(&self, event: LanforgeEvent) -> usize {
         #[cfg(feature = "hotpath")]
@@ -120,6 +129,7 @@ impl EventBus {
                 let _ = self.storage.send(event.clone());
                 let _ = self.pppoe.send(event.clone());
                 let _ = self.firewall.send(event.clone());
+                let _ = self.traffic.send(event.clone());
             }
             LanforgeEvent::System(SystemEvent::ConfigRaChanged) => {
                 let _ = self.system.send(event.clone());
@@ -154,6 +164,9 @@ impl EventBus {
             }
             LanforgeEvent::Firewall(_) => {
                 let _ = self.firewall.send(event.clone());
+            }
+            LanforgeEvent::Traffic(_) => {
+                let _ = self.traffic.send(event.clone());
             }
         }
 

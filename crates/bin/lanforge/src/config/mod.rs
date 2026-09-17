@@ -93,6 +93,10 @@ pub struct Config {
     pub firewall_enabled: bool,
     #[cfg(feature = "nft")]
     pub firewall_toml: lanforge_nft::FirewallConfig,
+    #[cfg(feature = "traffic")]
+    pub traffic_enabled: bool,
+    #[cfg(feature = "traffic")]
+    pub traffic_toml: lanforge_traffic::TrafficConfig,
 
     pub config_path: String,
 }
@@ -302,6 +306,10 @@ impl Config {
             firewall_enabled: toml_cfg.firewall.enabled,
             #[cfg(feature = "nft")]
             firewall_toml: toml_cfg.firewall,
+            #[cfg(feature = "traffic")]
+            traffic_enabled: toml_cfg.traffic.tuning.enabled || toml_cfg.traffic.sqm.enabled,
+            #[cfg(feature = "traffic")]
+            traffic_toml: toml_cfg.traffic,
             config_path: cli.config.clone(),
         }
     }
@@ -700,6 +708,10 @@ impl Default for Config {
             firewall_enabled: true,
             #[cfg(feature = "nft")]
             firewall_toml: lanforge_nft::FirewallConfig::default(),
+            #[cfg(feature = "traffic")]
+            traffic_enabled: true,
+            #[cfg(feature = "traffic")]
+            traffic_toml: lanforge_traffic::TrafficConfig::default(),
             config_path: "/etc/lanforge/lanforge.toml".to_string(),
         }
     }

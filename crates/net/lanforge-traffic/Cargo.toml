@@ -1,0 +1,20 @@
+[package]
+name = "lanforge-traffic"
+version = "0.1.0"
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Lanforge
+lanforge-core = { workspace = true }
+lanforge-macros = { workspace = true }
+lanforge-types = { workspace = true }
+
+# Workspace & Async
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "rt", "process", "fs"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

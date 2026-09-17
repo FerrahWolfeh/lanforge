@@ -9,6 +9,7 @@ import FolderIcon from '@lucide/svelte/icons/folder';
 import KeyIcon from '@lucide/svelte/icons/key';
 import CpuIcon from '@lucide/svelte/icons/cpu';
 import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
+import SlidersIcon from '@lucide/svelte/icons/sliders';
 
 export interface ServiceMeta {
 	id: string;
@@ -152,6 +153,16 @@ const SERVICE_REGISTRY: Record<string, Omit<ServiceMeta, 'id'>> = {
 		configLabel: 'System Status',
 		icon: CpuIcon,
 		canControl: false
+	},
+	traffic: {
+		name: 'Traffic & SQM Manager',
+		tag: 'Bufferbloat / CAKE',
+		proto: 'Linux TC / Sysfs',
+		description: 'Smart Queue Management (CAKE), ingress IFB shaping, and NIC hardware RPS/ethtool tuning',
+		configHref: '/network/traffic',
+		configLabel: 'Traffic & SQM Settings',
+		icon: SlidersIcon,
+		canControl: true
 	}
 };
 

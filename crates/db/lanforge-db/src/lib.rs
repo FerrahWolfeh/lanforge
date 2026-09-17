@@ -59,7 +59,7 @@ pub use error::LanforgeDbError;
 pub use lanforge_db_core::{
     AdblockStore, ApiTokenEntry, ApiTokenStore, BoxFuture, DbError, DeviceStore, DhcpConfigStore,
     DnsStore, DnsUpstreamEntry, DnsUpstreamStore, FirewallConfigStore, PppoeConfigStore,
-    RaConfigStore, UserEntry, UserStore, sanitize_db_url,
+    RaConfigStore, TrafficConfigStore, UserEntry, UserStore, sanitize_db_url,
 };
 pub use log_engine::LogDb;
 pub use worker::DbWorker;

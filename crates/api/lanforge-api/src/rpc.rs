@@ -25,8 +25,9 @@ use lanforge_types::{
         },
         pppoe::PppoeConfig,
         ra::RaServerConfig,
+        TrafficConfig,
     },
-    system::{PppoeStatusResponse, RaStatusResponse, ServiceAction},
+    system::{PppoeStatusResponse, RaStatusResponse, ServiceAction, TrafficStatusResponse},
     update::LeaseTarget,
 };
 
@@ -353,5 +354,15 @@ pub trait LanforgeRpc {
     fn firewall_abort(
         &self,
         tx_id: String,
+    ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn traffic_status(
+        &self,
+    ) -> impl Future<Output = Result<Box<TrafficStatusResponse>, RpcCallError>> + Send;
+    fn traffic_config(
+        &self,
+    ) -> impl Future<Output = Result<Box<TrafficConfig>, RpcCallError>> + Send;
+    fn update_traffic_config(
+        &self,
+        cfg: Box<TrafficConfig>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
 }

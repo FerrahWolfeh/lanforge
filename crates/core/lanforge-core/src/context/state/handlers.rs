@@ -775,6 +775,14 @@ impl State {
         EventVec::new()
     }
 
+    pub(crate) fn handle_traffic_status_updated(
+        &mut self,
+        status: Option<Box<lanforge_types::system::TrafficStatusResponse>>,
+    ) -> EventVec {
+        self.interfaces.traffic_status = status;
+        EventVec::new()
+    }
+
 
     pub(crate) fn handle_device_interface_seen(
         &mut self,

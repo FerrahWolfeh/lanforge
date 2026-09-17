@@ -10,6 +10,7 @@
 	import RadioIcon from "@lucide/svelte/icons/radio";
 	import WifiIcon from "@lucide/svelte/icons/wifi";
 	import PlugZapIcon from "@lucide/svelte/icons/plug-zap";
+	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import ShieldIcon from "@lucide/svelte/icons/shield";
@@ -55,6 +56,7 @@
 				{ title: "Discovery & Monitor", href: "/network/discovery", icon: RadioIcon },
 				{ title: "IPv6 RA", href: "/network/ra", icon: WifiIcon },
 				{ title: "PPPoE WAN", href: "/network/pppoe", icon: PlugZapIcon },
+				{ title: "Traffic & SQM", href: "/network/traffic", icon: SlidersHorizontalIcon },
 			],
 		},
 		{

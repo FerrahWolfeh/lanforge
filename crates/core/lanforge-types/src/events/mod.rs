@@ -9,6 +9,7 @@ pub mod network;
 pub mod pppoe;
 pub mod storage;
 pub mod system;
+pub mod traffic;
 
 pub use self::device::{
     AdminChange, DeviceEvent, DhcpV4MessageType, DhcpV6MessageType, NetworkChange,
@@ -19,6 +20,7 @@ pub use self::network::{NetworkEvent, PrefixChangeDetails};
 pub use self::pppoe::{PppoeEvent, PppoeSessionUp};
 pub use self::storage::StorageEvent;
 pub use self::system::SystemEvent;
+pub use self::traffic::TrafficEvent;
 
 /// Reusable event collection that avoids heap allocation for the common case (up to 4 events).
 pub type EventVec = SmallVec<[LanforgeEvent; 4]>;
@@ -82,7 +84,7 @@ impl TimedEvent {
                 DnsEvent::QueryResolved(_) => true,
                 _ => false,
             },
-            LanforgeEvent::Pppoe(_) | LanforgeEvent::Firewall(_) => true,
+            LanforgeEvent::Pppoe(_) | LanforgeEvent::Firewall(_) | LanforgeEvent::Traffic(_) => true,
         }
     }
 }
@@ -96,4 +98,5 @@ pub enum LanforgeEvent {
     Dns(DnsEvent),
     Pppoe(PppoeEvent),
     Firewall(FirewallEvent),
+    Traffic(TrafficEvent),
 }
