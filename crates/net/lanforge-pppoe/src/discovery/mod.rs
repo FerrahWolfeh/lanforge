@@ -11,7 +11,7 @@ use std::ffi::CString;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::time::Duration;
 use tokio::io::unix::AsyncFd;
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 pub struct DiscoveryResult {
     pub ac_mac: MacAddr,
@@ -334,16 +334,44 @@ pub fn send_padt(
     sll.sll_halen = 6;
     sll.sll_addr[..6].copy_from_slice(&ac_mac.0);
 
-    unsafe {
-        libc::sendto(
+    let bind_res = unsafe {
+        libc::bind(
             raw_fd.as_raw_fd(),
-            bytes.as_ptr().cast::<libc::c_void>(),
-            bytes.len(),
-            0,
             std::ptr::addr_of!(sll).cast::<libc::sockaddr>(),
             libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_ll>()).unwrap(),
-        );
+        )
+    };
+    if bind_res < 0 {
+        warn!(error = %std::io::Error::last_os_error(), "Failed to bind raw socket for PADT");
     }
-    debug!(session_id, "Sent PPPoE PADT frame to server");
+
+    // Transmit PADT frame in burst (3 frames spaced by 10ms) to guarantee BRAS receives termination
+    for i in 0..3 {
+        let sent = unsafe {
+            libc::sendto(
+                raw_fd.as_raw_fd(),
+                bytes.as_ptr().cast::<libc::c_void>(),
+                bytes.len(),
+                0,
+                std::ptr::addr_of!(sll).cast::<libc::sockaddr>(),
+                libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_ll>()).unwrap(),
+            )
+        };
+        if sent < 0 {
+            warn!(
+                attempt = i + 1,
+                error = %std::io::Error::last_os_error(),
+                "Failed to transmit PPPoE PADT frame"
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    info!(
+        session_id,
+        wan_iface = ifname,
+        ac_mac = %ac_mac,
+        "Transmitted PPPoE PADT termination frames to BRAS"
+    );
     Ok(())
 }

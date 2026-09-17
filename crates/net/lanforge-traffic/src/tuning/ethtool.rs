@@ -1,16 +1,41 @@
+use std::path::Path;
+use std::sync::OnceLock;
 use tokio::process::Command;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
-/// Parsed maximum ring parameters from `ethtool -g`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RingMaximums {
-    pub rx: Option<u32>,
-    pub tx: Option<u32>,
+/// Resolves the absolute path to the `ethtool` binary, searching common sbin/bin locations.
+fn resolve_ethtool_binary() -> &'static str {
+    static ETHTOOL_PATH: OnceLock<&'static str> = OnceLock::new();
+    ETHTOOL_PATH.get_or_init(|| {
+        for candidate in [
+            "/usr/sbin/ethtool",
+            "/sbin/ethtool",
+            "/usr/bin/ethtool",
+            "/bin/ethtool",
+        ] {
+            if Path::new(candidate).exists() {
+                return candidate;
+            }
+        }
+        "ethtool"
+    })
 }
 
-/// Queries pre-set maximum ring buffer sizes from `ethtool -g <iface>`.
-pub async fn query_max_ring_buffers(iface: &str) -> Option<RingMaximums> {
-    let output = Command::new("ethtool")
+/// Parsed ring parameters from `ethtool -g`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct RingParameters {
+    pub max_rx: Option<u32>,
+    pub max_tx: Option<u32>,
+    pub current_rx: Option<u32>,
+    pub current_tx: Option<u32>,
+}
+
+pub type RingMaximums = RingParameters;
+
+/// Queries pre-set and current ring buffer sizes from `ethtool -g <iface>`.
+pub async fn query_ring_parameters(iface: &str) -> Option<RingParameters> {
+    let ethtool_bin = resolve_ethtool_binary();
+    let output = Command::new(ethtool_bin)
         .args(["-g", iface])
         .output()
         .await
@@ -24,53 +49,100 @@ pub async fn query_max_ring_buffers(iface: &str) -> Option<RingMaximums> {
     parse_ethtool_g_output(&stdout)
 }
 
-/// Parses the output of `ethtool -g`.
+pub async fn query_max_ring_buffers(iface: &str) -> Option<RingParameters> {
+    query_ring_parameters(iface).await
+}
+
+/// Parses the output of `ethtool -g` for both pre-set maximums and current hardware settings.
 #[must_use]
-pub fn parse_ethtool_g_output(stdout: &str) -> Option<RingMaximums> {
+pub fn parse_ethtool_g_output(stdout: &str) -> Option<RingParameters> {
     let mut in_max_section = false;
-    let mut rx_max = None;
-    let mut tx_max = None;
+    let mut in_current_section = false;
+    let mut max_rx = None;
+    let mut max_tx = None;
+    let mut current_rx = None;
+    let mut current_tx = None;
 
     for line in stdout.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("Pre-set maximums:") {
             in_max_section = true;
+            in_current_section = false;
             continue;
         }
-        if in_max_section && trimmed.starts_with("Current hardware settings:") {
-            break;
+        if trimmed.starts_with("Current hardware settings:") {
+            in_max_section = false;
+            in_current_section = true;
+            continue;
         }
         if in_max_section {
-            if let Some(val_str) = trimmed.strip_prefix("RX:") {
-                let val_str = val_str.trim();
-                if let Ok(num) = val_str.parse::<u32>() {
-                    rx_max = Some(num);
-                }
-            } else if let Some(val_str) = trimmed.strip_prefix("TX:") {
-                let val_str = val_str.trim();
-                if let Ok(num) = val_str.parse::<u32>() {
-                    tx_max = Some(num);
-                }
+            if let Some(val_str) = trimmed.strip_prefix("RX:")
+                && let Ok(num) = val_str.trim().parse::<u32>()
+            {
+                max_rx = Some(num);
+            } else if let Some(val_str) = trimmed.strip_prefix("TX:")
+                && let Ok(num) = val_str.trim().parse::<u32>()
+            {
+                max_tx = Some(num);
+            }
+        } else if in_current_section {
+            if let Some(val_str) = trimmed.strip_prefix("RX:")
+                && let Ok(num) = val_str.trim().parse::<u32>()
+            {
+                current_rx = Some(num);
+            } else if let Some(val_str) = trimmed.strip_prefix("TX:")
+                && let Ok(num) = val_str.trim().parse::<u32>()
+            {
+                current_tx = Some(num);
             }
         }
     }
 
-    if rx_max.is_some() || tx_max.is_some() {
-        Some(RingMaximums { rx: rx_max, tx: tx_max })
+    if max_rx.is_some() || max_tx.is_some() || current_rx.is_some() || current_tx.is_some() {
+        Some(RingParameters {
+            max_rx,
+            max_tx,
+            current_rx,
+            current_tx,
+        })
     } else {
         None
     }
 }
 
 /// Applies ring buffer optimization (querying hardware limit if set to "auto").
+///
+/// If the interface already has the target ring sizes configured, skips reconfiguration
+/// to avoid tearing down the link / causing carrier flaps on active connections (e.g. `PPPoE`).
 pub async fn apply_ring_buffers(iface: &str, rx_ring: &str, tx_ring: &str) {
-    let hardware_max = query_max_ring_buffers(iface).await;
+    let hardware_params = query_ring_parameters(iface).await;
 
-    let target_rx = resolve_ring_size(rx_ring, hardware_max.and_then(|m| m.rx));
-    let target_tx = resolve_ring_size(tx_ring, hardware_max.and_then(|m| m.tx));
+    let target_rx = resolve_ring_size(rx_ring, hardware_params.and_then(|m| m.max_rx));
+    let target_tx = resolve_ring_size(tx_ring, hardware_params.and_then(|m| m.max_tx));
 
     let rx_val = target_rx.unwrap_or(1024);
     let tx_val = target_tx.unwrap_or(1024);
+
+    // If current hardware settings already match target values, avoid resetting the NIC!
+    if let Some(params) = hardware_params
+        && params.current_rx == Some(rx_val)
+        && params.current_tx == Some(tx_val)
+    {
+        debug!(
+            iface = %iface,
+            rx = rx_val,
+            tx = tx_val,
+            "NIC ring buffers already configured to target values (skipping driver reinit)"
+        );
+        return;
+    }
+
+    info!(
+        iface = %iface,
+        rx = rx_val,
+        tx = tx_val,
+        "Configuring NIC ring buffers (driver may briefly renegotiate link)"
+    );
 
     // Attempt target values
     if run_ethtool_ring(iface, rx_val, tx_val).await {
@@ -90,14 +162,20 @@ pub async fn apply_ring_buffers(iface: &str, rx_ring: &str, tx_ring: &str) {
 }
 
 async fn run_ethtool_ring(iface: &str, rx: u32, tx: u32) -> bool {
-    let res = Command::new("ethtool")
+    let ethtool_bin = resolve_ethtool_binary();
+    let res = Command::new(ethtool_bin)
         .args(["-G", iface, "rx", &rx.to_string(), "tx", &tx.to_string()])
         .output()
         .await;
 
     match res {
         Ok(out) => out.status.success(),
-        Err(_) => false,
+        Err(e) => {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                warn!("ethtool binary not found. Please install ethtool ('sudo dnf install -y ethtool' on Fedora)");
+            }
+            false
+        }
     }
 }
 
@@ -110,9 +188,50 @@ fn resolve_ring_size(cfg: &str, hw_max: Option<u32>) -> Option<u32> {
     }
 }
 
+/// Parses the output of `ethtool --show-eee` to determine if EEE is enabled.
+#[must_use]
+pub fn parse_ethtool_eee_status(stdout: &str) -> Option<bool> {
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("EEE status:") {
+            if trimmed.contains("enabled") {
+                return Some(true);
+            }
+            if trimmed.contains("disabled") {
+                return Some(false);
+            }
+        }
+    }
+    None
+}
+
+/// Queries whether EEE is currently enabled on the interface.
+pub async fn is_eee_enabled(iface: &str) -> Option<bool> {
+    let ethtool_bin = resolve_ethtool_binary();
+    let output = Command::new(ethtool_bin)
+        .args(["--show-eee", iface])
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_ethtool_eee_status(&stdout)
+}
+
 /// Disables Energy Efficient Ethernet (EEE) to avoid link renegotiation or 100Mbps drops.
+/// Checks current state first to avoid triggering unnecessary PHY resets when already disabled.
 pub async fn disable_eee(iface: &str) {
-    let res = Command::new("ethtool")
+    if is_eee_enabled(iface).await == Some(false) {
+        debug!(iface = %iface, "EEE is already disabled by driver/hardware");
+        return;
+    }
+
+    let ethtool_bin = resolve_ethtool_binary();
+    let res = Command::new(ethtool_bin)
         .args(["--set-eee", iface, "eee", "off"])
         .output()
         .await;
@@ -129,14 +248,19 @@ pub async fn disable_eee(iface: &str) {
             }
         }
         Err(e) => {
-            debug!(iface = %iface, error = %e, "Could not run ethtool to toggle EEE");
+            if e.kind() == std::io::ErrorKind::NotFound {
+                warn!("ethtool binary not found. Please install ethtool ('sudo dnf install -y ethtool' on Fedora)");
+            } else {
+                debug!(iface = %iface, error = %e, "Could not run ethtool to toggle EEE");
+            }
         }
     }
 }
 
 /// Enables UDP GRO forwarding (accelerates WireGuard/Tailscale/QUIC throughput).
 pub async fn apply_udp_gro_forwarding(iface: &str) {
-    let res = Command::new("ethtool")
+    let ethtool_bin = resolve_ethtool_binary();
+    let res = Command::new(ethtool_bin)
         .args(["-K", iface, "rx-udp-gro-forwarding", "on", "rx-gro-list", "off"])
         .output()
         .await;
@@ -180,8 +304,10 @@ RX Jumbo:		n/a
 TX:			256
 "#;
         let parsed = parse_ethtool_g_output(sample).unwrap();
-        assert_eq!(parsed.rx, Some(256));
-        assert_eq!(parsed.tx, Some(256));
+        assert_eq!(parsed.max_rx, Some(256));
+        assert_eq!(parsed.max_tx, Some(256));
+        assert_eq!(parsed.current_rx, Some(256));
+        assert_eq!(parsed.current_tx, Some(256));
     }
 
     #[test]
@@ -196,7 +322,31 @@ RX:			512
 TX:			512
 "#;
         let parsed = parse_ethtool_g_output(sample).unwrap();
-        assert_eq!(parsed.rx, Some(1024));
-        assert_eq!(parsed.tx, Some(1024));
+        assert_eq!(parsed.max_rx, Some(1024));
+        assert_eq!(parsed.max_tx, Some(1024));
+        assert_eq!(parsed.current_rx, Some(512));
+        assert_eq!(parsed.current_tx, Some(512));
+    }
+
+    #[test]
+    fn test_parse_ethtool_eee_status() {
+        let enabled_sample = r#"
+ETHTOOL_GEEE:
+	Supported EEE link modes:  1000baseT/Full
+	Advertised EEE link modes:  1000baseT/Full
+	Link partner advertised EEE link modes:  1000baseT/Full
+	EEE status: enabled - active
+	Tx LPI: 17 (us)
+"#;
+        assert_eq!(parse_ethtool_eee_status(enabled_sample), Some(true));
+
+        let disabled_sample = r#"
+ETHTOOL_GEEE:
+	Supported EEE link modes:  1000baseT/Full
+	Advertised EEE link modes:  Not reported
+	Link partner advertised EEE link modes:  Not reported
+	EEE status: disabled
+"#;
+        assert_eq!(parse_ethtool_eee_status(disabled_sample), Some(false));
     }
 }

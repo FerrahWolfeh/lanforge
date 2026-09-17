@@ -137,6 +137,10 @@ impl AsyncService for TrafficService {
 
     #[allow(clippy::too_many_lines)]
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+        if let Some(dynamic_cfg) = ctx.get_traffic_config() {
+            self.cfg = dynamic_cfg;
+        }
+
         let is_tuning_enabled = self.cfg.tuning.enabled;
         let is_sqm_enabled = self.cfg.sqm.enabled;
 
@@ -194,9 +198,76 @@ impl AsyncService for TrafficService {
         // 3. Event Loop for reactive dynamic adjustments
         let mut sys_rx = ctx.bus().subscribe_system();
         let mut pppoe_rx = ctx.bus().subscribe_pppoe();
+        let mut traffic_rx = ctx.bus().subscribe_traffic();
 
         loop {
             tokio::select! {
+                // Listen to in-place traffic configuration updates
+                traffic_event = traffic_rx.recv() => {
+                    match traffic_event {
+                        Ok(te) => {
+                            if matches!(te.event, LanforgeEvent::Traffic(TrafficEvent::RulesetChanged)) {
+                                let new_cfg = ctx.get_traffic_config().unwrap_or_default();
+                                let tuning_changed = self.cfg.tuning != new_cfg.tuning;
+                                let sqm_changed = self.cfg.sqm != new_cfg.sqm;
+
+                                info!(
+                                    tuning_changed,
+                                    sqm_changed,
+                                    "Traffic: Configuration changed, applying updates in-place"
+                                );
+
+                                if tuning_changed {
+                                    if new_cfg.tuning.enabled {
+                                        let default_ifaces = {
+                                            let mut ifaces = Vec::new();
+                                            if let Some(lan) = ctx.target_interface_name() {
+                                                ifaces.push(lan);
+                                            }
+                                            if let Some(pppoe_cfg) = ctx.get_pppoe_config()
+                                                && !pppoe_cfg.wan_iface.is_empty()
+                                                && !ifaces.contains(&pppoe_cfg.wan_iface)
+                                            {
+                                                ifaces.push(pppoe_cfg.wan_iface);
+                                            }
+                                            ifaces
+                                        };
+                                        let tuned = apply_tuning(&new_cfg.tuning, &default_ifaces).await;
+                                        self.effective_cpu_mask = crate::tuning::cpu::resolve_effective_cpu_mask(&new_cfg.tuning.cpu_mask);
+                                        self.tuned_interfaces = tuned;
+                                    } else {
+                                        self.tuned_interfaces.clear();
+                                    }
+                                }
+
+                                if sqm_changed {
+                                    self.cfg.sqm = new_cfg.sqm.clone();
+                                    if new_cfg.sqm.enabled {
+                                        if let Some((wan_iface, is_pppoe)) = self.resolve_wan_interface(ctx) {
+                                            info!(wan = %wan_iface, "Traffic: Reapplying SQM parameters in-place");
+                                            self.apply_sqm_internal(ctx, &wan_iface, is_pppoe).await;
+                                        }
+                                    } else if self.active_wan.is_some() {
+                                        info!("Traffic: SQM disabled, clearing queues");
+                                        self.clear_sqm_internal(ctx).await;
+                                    }
+                                }
+
+                                self.cfg = new_cfg;
+                                let next_state = if !self.tuned_interfaces.is_empty() || self.active_wan.is_some() {
+                                    ServiceState::Online
+                                } else {
+                                    ServiceState::Inactive
+                                };
+                                ctx.set_service_state("traffic", next_state);
+                                self.publish_status(ctx, next_state);
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    }
+                }
+
                 // Listen to PPPoE session events
                 timed_event = pppoe_rx.recv() => {
                     match timed_event {

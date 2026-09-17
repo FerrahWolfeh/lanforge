@@ -1,12 +1,28 @@
+use std::path::Path;
+use std::sync::OnceLock;
 use super::cake::build_cake_args;
 use super::ifb::{resolve_ifb_name, setup_ifb, teardown_ifb};
 use lanforge_types::network::SqmConfig;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
+/// Resolves the absolute path to the `tc` binary, searching common sbin/bin locations.
+fn resolve_tc_binary() -> &'static str {
+    static TC_PATH: OnceLock<&'static str> = OnceLock::new();
+    TC_PATH.get_or_init(|| {
+        for candidate in ["/usr/sbin/tc", "/sbin/tc", "/usr/bin/tc", "/bin/tc"] {
+            if Path::new(candidate).exists() {
+                return candidate;
+            }
+        }
+        "tc"
+    })
+}
+
 /// Helper to execute a `tc` command and check the result.
 async fn run_tc(args: &[&str]) -> bool {
-    let res = Command::new("tc")
+    let tc_bin = resolve_tc_binary();
+    let res = Command::new(tc_bin)
         .args(args)
         .output()
         .await;
@@ -22,7 +38,14 @@ async fn run_tc(args: &[&str]) -> bool {
             }
         }
         Err(e) => {
-            warn!(args = ?args, error = %e, "Could not execute tc binary");
+            if e.kind() == std::io::ErrorKind::NotFound {
+                warn!(
+                    args = ?args,
+                    "Traffic Control binary 'tc' not found. If running Fedora/RHEL, please install it via: 'sudo dnf install -y iproute-tc'. On Debian/Ubuntu: 'sudo apt install -y iproute2'."
+                );
+            } else {
+                warn!(args = ?args, error = %e, "Could not execute tc binary");
+            }
             false
         }
     }

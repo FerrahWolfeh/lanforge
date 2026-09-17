@@ -40,6 +40,7 @@
 	} from "$lib/api/types";
 	import HelpPopover from "$lib/components/HelpPopover.svelte";
 	import InfoPopover from "$lib/components/InfoPopover.svelte";
+	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
 
 	import FirewallStatsCards from "./components/FirewallStatsCards.svelte";
 	import FirewallModeSelector from "./components/FirewallModeSelector.svelte";
@@ -530,54 +531,17 @@
 	/>
 
 	<!-- Floating pending changes bar -->
-	{#if isDirty && !showProposeModal}
-		<div
-			transition:fly={{ y: 24, duration: 220, easing: cubicOut }}
-			class="fixed bottom-4 left-1/2 -translate-x-1/2 z-30 flex items-center justify-between p-3.5 sm:p-4 rounded-xl border bg-card/90 backdrop-blur-md shadow-2xl border-primary/40 transform-gpu will-change-[transform,opacity] gap-4 w-[92vw] max-w-3xl"
-		>
-			<div class="flex items-center gap-2.5">
-				<span class="relative flex size-2.5">
-					<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-					<span class="relative inline-flex rounded-full size-2.5 bg-amber-500"></span>
-				</span>
-				<div class="flex flex-col sm:flex-row sm:items-center sm:gap-2">
-					<span class="text-xs font-semibold text-foreground">
-						{changeCount} pending {changeCount === 1 ? "change" : "changes"}
-					</span>
-					<span class="text-[11px] text-muted-foreground hidden sm:inline">
-						Review and apply to commit new rules to the daemon
-					</span>
-				</div>
-			</div>
-
-			<div class="flex items-center gap-2 shrink-0">
-				<Button
-					variant="outline"
-					size="sm"
-					onclick={handleDiscard}
-					disabled={proposing}
-					class="h-8 text-xs transition-transform duration-150 active:scale-95 transform-gpu"
-				>
-					<RotateCcwIcon data-icon="inline-start" />
-					Discard
-				</Button>
-
-				<Button
-					variant="default"
-					size="sm"
-					onclick={handlePropose}
-					disabled={proposing}
-					class="h-8 text-xs shadow-xs transition-all duration-150 hover:shadow-primary/20 hover:shadow-md active:scale-95 transform-gpu"
-				>
-					{#if proposing}
-						<Spinner data-icon="inline-start" />
-						Validating…
-					{:else}
-						<ShieldIcon data-icon="inline-start" />
-						Review & Apply
-					{/if}
-				</Button>
-			</div>
-		</div>
-	{/if}
+	<FloatingSaveBar
+		show={isDirty && !showProposeModal}
+		count={changeCount}
+		title={`${changeCount} pending ${changeCount === 1 ? "change" : "changes"}`}
+		description="Review and apply to commit new rules to the daemon"
+		saveLabel="Review & Apply"
+		savingLabel="Validating…"
+		saveIcon={ShieldIcon}
+		saving={proposing}
+		disabled={proposing}
+		onDiscard={handleDiscard}
+		onSave={handlePropose}
+	/>
 </div>

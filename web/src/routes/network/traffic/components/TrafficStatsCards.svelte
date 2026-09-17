@@ -7,8 +7,6 @@
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import GaugeIcon from "@lucide/svelte/icons/gauge";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
-	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
-	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import InfoPopover from "$lib/components/InfoPopover.svelte";
 
 	import type { TrafficStatusResponse } from "$lib/api/types";
@@ -22,23 +20,22 @@
 	const stateStr = $derived((status?.service_state ?? "inactive").toLowerCase());
 	const isOnline = $derived(stateStr === "online" || stateStr === "active");
 	const isStarting = $derived(stateStr === "starting");
-	const isInactive = $derived(stateStr === "inactive" || stateStr === "offline");
 </script>
 
-<div class="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 	<!-- 1. Runtime Subsystem State -->
 	<Card.Root class="relative overflow-hidden">
 		<Card.Header class="pb-2 p-3 sm:p-4">
 			<Card.Description class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
 				<span class="flex items-center gap-1.5">
-					Estado em Runtime
+					Service Runtime
 					<InfoPopover
-						title="Ciclo de Vida do Subsistema"
-						description="Indica a condição operacional do serviço no supervisor do daemon."
+						title="Service Lifecycle"
+						description="Daemon supervisor state for the traffic and queue management subsystem."
 					>
 						<p class="text-xs text-muted-foreground leading-relaxed">
-							<strong>Em Execução:</strong> O daemon está aplicando configurações de fila ou tuning no kernel.<br />
-							<strong>Dormente:</strong> O serviço está carregado, mas em repouso (módulos desativados ou aguardando uplink WAN).
+							<strong>Running:</strong> Actively maintaining kernel queues and driver tuning.<br />
+							<strong>Dormant:</strong> Standing by with zero CPU overhead until interfaces or shaping are enabled.
 						</p>
 					</InfoPopover>
 				</span>
@@ -59,25 +56,27 @@
 			<Card.Title class="flex items-center gap-2 pt-0.5">
 				{#if isOnline}
 					<CheckCircleIcon class="size-5 text-emerald-500 shrink-0" />
-					<span class="text-base font-bold text-emerald-400">Em Execução</span>
+					<span class="text-base font-bold text-emerald-400">Running</span>
 				{:else if isStarting}
 					<RefreshCwIcon class="size-5 text-amber-500 shrink-0 animate-spin" />
-					<span class="text-base text-amber-400 font-bold">Iniciando...</span>
+					<span class="text-base text-amber-400 font-bold">Starting...</span>
 				{:else}
 					<MoonIcon class="size-5 text-muted-foreground shrink-0" />
-					<span class="text-base text-muted-foreground font-normal">Dormente (Standby)</span>
+					<span class="text-base text-muted-foreground font-normal">Dormant (Standby)</span>
 				{/if}
 			</Card.Title>
 		</Card.Header>
 		<Card.Content class="flex flex-col gap-2 p-3 sm:p-4 pt-0 text-xs">
 			<div class="grid grid-cols-2 gap-x-3 gap-y-1.5 border-t pt-2">
 				<div class="flex flex-col gap-0.5">
-					<span class="text-[11px] text-muted-foreground">Supervisor</span>
-					<span class="font-medium text-foreground">Supervisionado</span>
+					<span class="text-[11px] text-muted-foreground">Reload</span>
+					<span class="font-mono text-emerald-500">In-place (~10ms)</span>
 				</div>
 				<div class="flex flex-col gap-0.5">
-					<span class="text-[11px] text-muted-foreground">Isolamento</span>
-					<span class="font-mono text-emerald-500">~10ms Restart</span>
+					<span class="text-[11px] text-muted-foreground">Target Uplink</span>
+					<span class="font-mono font-medium text-foreground truncate">
+						{status?.wan_interface ?? "Auto"}
+					</span>
 				</div>
 			</div>
 		</Card.Content>
@@ -87,7 +86,17 @@
 	<Card.Root class="relative overflow-hidden">
 		<Card.Header class="pb-2 p-3 sm:p-4">
 			<Card.Description class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
-				<span>CAKE Shaper</span>
+				<span class="flex items-center gap-1.5">
+					CAKE Shaper
+					<InfoPopover
+						title="Smart Queue Management"
+						description="Active Queue Management (CAKE) bounds buffer latency to prevent lag spikes under load."
+					>
+						<p class="text-xs text-muted-foreground leading-relaxed">
+							Shapes traffic to ISP limits on ingress and egress, isolates client flows fairly, and keeps ping low during large file transfers.
+						</p>
+					</InfoPopover>
+				</span>
 				<Badge
 					variant="outline"
 					class={[
@@ -97,33 +106,33 @@
 							: "border-border text-muted-foreground",
 					].join(" ")}
 				>
-					{status?.sqm_active ? "Ativo" : "Inativo"}
+					{status?.sqm_active ? "Active" : "Disabled"}
 				</Badge>
 			</Card.Description>
 			<Card.Title class="flex items-center gap-2 pt-0.5">
 				{#if status?.sqm_active}
 					<GaugeIcon class="size-5 text-emerald-500 shrink-0" />
 					<span class="text-base font-bold text-foreground">
-						{status.download_mbps}M / {status.upload_mbps}M
+						{status.download_mbps}M Down / {status.upload_mbps}M Up
 					</span>
 				{:else}
 					<XCircleIcon class="size-5 text-muted-foreground shrink-0" />
-					<span class="text-base text-muted-foreground font-normal">Sem Shaper</span>
+					<span class="text-base text-muted-foreground font-normal">Shaper Disabled</span>
 				{/if}
 			</Card.Title>
 		</Card.Header>
 		<Card.Content class="flex flex-col gap-2 p-3 sm:p-4 pt-0 text-xs">
 			<div class="grid grid-cols-2 gap-x-3 gap-y-1.5 border-t pt-2">
 				<div class="flex flex-col gap-0.5">
-					<span class="text-[11px] text-muted-foreground">Interface WAN</span>
-					<span class="font-mono font-medium text-foreground truncate">
-						{status?.wan_interface ?? "Nenhuma"}
+					<span class="text-[11px] text-muted-foreground">Profile & Framing</span>
+					<span class="font-mono text-[11px] text-foreground truncate">
+						{status?.diffserv ?? "diffserv4"} · {status?.overhead ?? "auto"}
 					</span>
 				</div>
 				<div class="flex flex-col gap-0.5">
-					<span class="text-[11px] text-muted-foreground">Ingresso Mirror</span>
+					<span class="text-[11px] text-muted-foreground">Ingress Device</span>
 					<span class="font-mono text-[11px] text-muted-foreground truncate">
-						{status?.ingress_device ?? "Nenhum"}
+						{status?.ingress_device ?? "None"}
 					</span>
 				</div>
 			</div>
@@ -134,7 +143,17 @@
 	<Card.Root class="relative overflow-hidden">
 		<Card.Header class="pb-2 p-3 sm:p-4">
 			<Card.Description class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
-				<span>Tuning de Hardware</span>
+				<span class="flex items-center gap-1.5">
+					NIC Tuning
+					<InfoPopover
+						title="Hardware & Driver Tuning"
+						description="Kernel-level tuning for network interface controllers."
+					>
+						<p class="text-xs text-muted-foreground leading-relaxed">
+							Spreads packet interrupts across CPU threads via RPS/RFS, sets driver ring buffers to maximum capacity, and disables 802.3az EEE power-saving drops.
+						</p>
+					</InfoPopover>
+				</span>
 				<Badge
 					variant="outline"
 					class={[
@@ -144,78 +163,33 @@
 							: "border-border text-muted-foreground",
 					].join(" ")}
 				>
-					{status?.tuning_applied ? "Otimizado" : "Padrão"}
+					{status?.tuning_applied ? "Tuned" : "Default"}
 				</Badge>
 			</Card.Description>
 			<Card.Title class="flex items-center gap-2 pt-0.5">
 				{#if status?.tuning_applied}
 					<CpuIcon class="size-5 text-primary shrink-0" />
 					<span class="text-base font-bold text-foreground">
-						{status.tuned_interfaces.length} NIC{status.tuned_interfaces.length === 1 ? '' : 's'} Otimizada{status.tuned_interfaces.length === 1 ? '' : 's'}
+						{status.tuned_interfaces.length} NIC{status.tuned_interfaces.length === 1 ? '' : 's'} Tuned
 					</span>
 				{:else}
 					<CpuIcon class="size-5 text-muted-foreground shrink-0" />
-					<span class="text-base text-muted-foreground font-normal">Padrão do Kernel</span>
+					<span class="text-base text-muted-foreground font-normal">Kernel Default</span>
 				{/if}
 			</Card.Title>
 		</Card.Header>
 		<Card.Content class="flex flex-col gap-2 p-3 sm:p-4 pt-0 text-xs">
 			<div class="grid grid-cols-2 gap-x-3 gap-y-1.5 border-t pt-2">
 				<div class="flex flex-col gap-0.5">
-					<span class="text-[11px] text-muted-foreground">Máscara RPS</span>
+					<span class="text-[11px] text-muted-foreground">RPS CPU Mask</span>
 					<span class="font-mono font-medium text-foreground">
-						{status?.effective_cpu_mask ? `0x${status.effective_cpu_mask}` : "N/A"}
+						{status?.effective_cpu_mask ? `0x${status.effective_cpu_mask}` : "auto"}
 					</span>
 				</div>
 				<div class="flex flex-col gap-0.5">
-					<span class="text-[11px] text-muted-foreground">Interfaces</span>
+					<span class="text-[11px] text-muted-foreground">Tuned Ports</span>
 					<span class="font-mono text-[11px] text-muted-foreground truncate" title={status?.tuned_interfaces?.join(", ") ?? ""}>
-						{status?.tuned_interfaces?.join(", ") || "Nenhuma"}
-					</span>
-				</div>
-			</div>
-		</Card.Content>
-	</Card.Root>
-
-	<!-- 4. Firewall Coexistence -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header class="pb-2 p-3 sm:p-4">
-			<Card.Description class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
-				<span>Coexistência Firewall</span>
-				<Badge
-					variant="outline"
-					class={[
-						"text-[10px] uppercase font-mono px-1.5 py-0",
-						status?.flow_offload_suppressed
-							? "border-amber-500/30 bg-amber-500/10 text-amber-500"
-							: "border-border text-muted-foreground",
-					].join(" ")}
-				>
-					{status?.flow_offload_suppressed ? "Offload Suspenso" : "Padrão"}
-				</Badge>
-			</Card.Description>
-			<Card.Title class="flex items-center gap-2 pt-0.5">
-				{#if status?.flow_offload_suppressed}
-					<ShieldAlertIcon class="size-5 text-amber-500 shrink-0" />
-					<span class="text-base font-bold text-foreground">Precedência TC</span>
-				{:else}
-					<ShieldCheckIcon class="size-5 text-emerald-500 shrink-0" />
-					<span class="text-base text-foreground font-medium">Harmonizado</span>
-				{/if}
-			</Card.Title>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-2 p-3 sm:p-4 pt-0 text-xs">
-			<div class="grid grid-cols-2 gap-x-3 gap-y-1.5 border-t pt-2">
-				<div class="flex flex-col gap-0.5">
-					<span class="text-[11px] text-muted-foreground">Flowtable</span>
-					<span class="font-medium text-foreground">
-						{status?.flow_offload_suppressed ? "Bypass Evitado" : "Normal"}
-					</span>
-				</div>
-				<div class="flex flex-col gap-0.5">
-					<span class="text-[11px] text-muted-foreground">Bufferbloat</span>
-					<span class="font-medium text-emerald-500">
-						{status?.sqm_active ? "Garantido" : "Inativo"}
+						{status?.tuned_interfaces?.join(", ") || "None"}
 					</span>
 				</div>
 			</div>

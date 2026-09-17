@@ -145,7 +145,6 @@
 }
 
 .page-content-compositor {
-	will-change: transform, opacity;
-	transform: translateZ(0);
+	will-change: opacity;
 	backface-visibility: hidden;
 }

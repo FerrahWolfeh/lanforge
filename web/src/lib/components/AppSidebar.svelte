@@ -53,21 +53,21 @@
 			items: [
 				{ title: "Devices", href: "/network/devices", icon: MonitorIcon },
 				{ title: "Static Hosts", href: "/network/hosts", icon: BookmarkIcon },
-				{ title: "Discovery & Monitor", href: "/network/discovery", icon: RadioIcon },
-				{ title: "IPv6 RA", href: "/network/ra", icon: WifiIcon },
-				{ title: "PPPoE WAN", href: "/network/pppoe", icon: PlugZapIcon },
+				{ title: "Firewall", href: "/firewall", icon: ShieldIcon },
 				{ title: "Traffic & SQM", href: "/network/traffic", icon: SlidersHorizontalIcon },
+				{ title: "PPPoE WAN", href: "/network/pppoe", icon: PlugZapIcon },
+				{ title: "IPv6 RA", href: "/network/ra", icon: WifiIcon },
+				{ title: "Discovery & Monitor", href: "/network/discovery", icon: RadioIcon },
 			],
 		},
 		{
-			header: "DNS & SECURITY",
+			header: "DNS",
 			items: [
 				{ title: "DNS Resolver", href: "/dns/resolver", icon: GlobeIcon },
 				{ title: "Query Log", href: "/dns/log", icon: ActivityIcon },
 				{ title: "Custom Rewrites", href: "/dns/rewrites", icon: BookmarkIcon },
 				{ title: "DNS Cache", href: "/dns/cache", icon: DatabaseIcon },
 				{ title: "Adblock", href: "/dns/adblock", icon: ShieldIcon },
-				{ title: "Firewall", href: "/firewall", icon: ShieldIcon },
 			],
 		},
 		{

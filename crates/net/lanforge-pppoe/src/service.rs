@@ -259,6 +259,12 @@ impl PppoeService {
         }
         .await;
 
+        if let Some((wan_mac, ac_mac, session_id)) = self.active_session.take()
+            && self.cfg.send_padt_on_shutdown
+        {
+            let _ = send_padt(&self.cfg.wan_iface, wan_mac, ac_mac, session_id);
+        }
+
         deconfigure_interface(
             &self.cfg.wan_iface,
             self.cfg.dataplane == PppoeDataplane::Ebpf,
@@ -266,16 +272,24 @@ impl PppoeService {
         )
         .await;
 
-        if let Some((wan_mac, ac_mac, session_id)) = self.active_session.take()
-            && self.cfg.send_padt_on_shutdown
-        {
-            let _ = send_padt(&self.cfg.wan_iface, wan_mac, ac_mac, session_id);
-        }
-
         let reason = match &flow_res {
             Ok(()) => "Graceful shutdown".to_string(),
             Err(e) => e.to_string(),
         };
+
+        if flow_res.is_err() {
+            warn!(
+                wan_iface = %self.cfg.wan_iface,
+                error = %reason,
+                "PPPoE session disconnected due to error or carrier loss"
+            );
+        } else {
+            info!(
+                wan_iface = %self.cfg.wan_iface,
+                reason = %reason,
+                "PPPoE session disconnected cleanly"
+            );
+        }
 
         self.ctx.set_pppoe_ready(false);
         let _ = self

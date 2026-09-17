@@ -83,7 +83,7 @@ pub async fn run_keepalive(
                 let Ok(event) = res else { continue; };
                 match event.event {
                     LanforgeEvent::System(SystemEvent::Shutdown) => {
-                        debug!("Shutdown received during keepalive loop");
+                        info!("PPPoE keepalive received daemon shutdown, disconnecting session");
                         return Ok(());
                     }
                     LanforgeEvent::System(SystemEvent::ServiceControl { ref id, ref action })
@@ -93,7 +93,10 @@ pub async fn run_keepalive(
                                 ServiceAction::Stop | ServiceAction::Restart
                             ) =>
                     {
-                        debug!("ServiceControl {:?} received during keepalive loop", action);
+                        info!(
+                            action = ?action,
+                            "PPPoE keepalive received service control action (configuration update or manual command), disconnecting session"
+                        );
                         return Ok(());
                     }
                     _ => {}

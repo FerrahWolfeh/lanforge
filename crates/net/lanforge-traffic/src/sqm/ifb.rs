@@ -1,5 +1,38 @@
+use std::path::Path;
+use std::sync::OnceLock;
 use tokio::process::Command;
 use tracing::{debug, warn};
+
+/// Resolves the absolute path to the `ip` binary.
+fn resolve_ip_binary() -> &'static str {
+    static IP_PATH: OnceLock<&'static str> = OnceLock::new();
+    IP_PATH.get_or_init(|| {
+        for candidate in ["/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"] {
+            if Path::new(candidate).exists() {
+                return candidate;
+            }
+        }
+        "ip"
+    })
+}
+
+/// Resolves the absolute path to the `modprobe` binary.
+fn resolve_modprobe_binary() -> &'static str {
+    static MODPROBE_PATH: OnceLock<&'static str> = OnceLock::new();
+    MODPROBE_PATH.get_or_init(|| {
+        for candidate in [
+            "/usr/sbin/modprobe",
+            "/sbin/modprobe",
+            "/usr/bin/modprobe",
+            "/bin/modprobe",
+        ] {
+            if Path::new(candidate).exists() {
+                return candidate;
+            }
+        }
+        "modprobe"
+    })
+}
 
 /// Derives a clean, standard Linux IFB device name (max 15 characters).
 #[must_use]
@@ -18,14 +51,17 @@ pub fn resolve_ifb_name(iface: &str, configured: &str) -> String {
 
 /// Prepares and activates an IFB interface for ingress queue redirection.
 pub async fn setup_ifb(ifb_name: &str) -> bool {
+    let modprobe_bin = resolve_modprobe_binary();
+    let ip_bin = resolve_ip_binary();
+
     // 1. Ensure kernel module is loaded
-    let _ = Command::new("modprobe")
+    let _ = Command::new(modprobe_bin)
         .args(["ifb", "numifbs=0"])
         .output()
         .await;
 
     // 2. Create the virtual IFB link (idempotent; ignores EEXIST)
-    let add_res = Command::new("ip")
+    let add_res = Command::new(ip_bin)
         .args(["link", "add", "name", ifb_name, "type", "ifb"])
         .output()
         .await;
@@ -35,12 +71,16 @@ pub async fn setup_ifb(ifb_name: &str) -> bool {
     {
         let stderr = String::from_utf8_lossy(&out.stderr);
         if !stderr.contains("File exists") {
-            debug!(ifb = %ifb_name, stderr = %stderr.trim(), "ip link add ifb returned notice");
+            warn!(
+                ifb = %ifb_name,
+                stderr = %stderr.trim(),
+                "Failed to create virtual IFB link (ensure 'ifb' kernel module is loaded: 'sudo modprobe ifb')"
+            );
         }
     }
 
     // 3. Bring IFB interface UP
-    let up_res = Command::new("ip")
+    let up_res = Command::new(ip_bin)
         .args(["link", "set", "dev", ifb_name, "up"])
         .output()
         .await;
@@ -68,12 +108,14 @@ pub async fn setup_ifb(ifb_name: &str) -> bool {
 
 /// Tears down and deletes an IFB interface.
 pub async fn teardown_ifb(ifb_name: &str) {
-    let _ = Command::new("ip")
+    let ip_bin = resolve_ip_binary();
+
+    let _ = Command::new(ip_bin)
         .args(["link", "set", "dev", ifb_name, "down"])
         .output()
         .await;
 
-    let _ = Command::new("ip")
+    let _ = Command::new(ip_bin)
         .args(["link", "del", "dev", ifb_name])
         .output()
         .await;

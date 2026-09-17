@@ -35,6 +35,7 @@
 	import PppoeAccelerationTab from "./components/PppoeAccelerationTab.svelte";
 	import PppoeTimersTab from "./components/PppoeTimersTab.svelte";
 	import PppoeEbpfModal from "./components/PppoeEbpfModal.svelte";
+	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
 
 	// Page state
 	let status = $state<PppoeStatusResponse | null>(null);
@@ -410,50 +411,14 @@
 	/>
 
 	<!-- Floating GPU-Accelerated Save/Discard Action Island -->
-	{#if isDirty}
-		<div
-			transition:fly={{ y: 24, duration: 220, easing: cubicOut }}
-			class="sticky bottom-4 z-30 flex items-center justify-between p-3.5 sm:p-4 rounded-xl border bg-card/90 backdrop-blur-md shadow-2xl border-primary/40 transform-gpu will-change-[transform,opacity] gap-4"
-		>
-			<div class="flex items-center gap-2.5">
-				<span class="relative flex size-2.5">
-					<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-					<span class="relative inline-flex rounded-full size-2.5 bg-amber-500"></span>
-				</span>
-				<div class="flex flex-col sm:flex-row sm:items-center sm:gap-2">
-					<span class="text-xs font-semibold text-foreground">Unsaved PPPoE Changes</span>
-					<span class="text-[11px] text-muted-foreground hidden sm:inline">
-						Configuration differs from active runtime parameters
-					</span>
-				</div>
-			</div>
-
-			<div class="flex items-center gap-2 shrink-0">
-				<Button
-					variant="outline"
-					size="sm"
-					onclick={handleDiscard}
-					disabled={saving || loading}
-					class="h-8 text-xs transition-transform duration-150 active:scale-95 transform-gpu"
-				>
-					<RotateCcwIcon data-icon="inline-start" class="size-3.5" />
-					Discard
-				</Button>
-
-				<Button
-					variant="default"
-					size="sm"
-					onclick={handleSave}
-					disabled={!isDirty || saving || loading}
-					class="h-8 text-xs shadow-sm transition-all duration-150 hover:shadow-primary/20 hover:shadow-md active:scale-95 transform-gpu"
-				>
-					<SaveIcon
-						class={saving ? "animate-spin size-3.5" : "size-3.5"}
-						data-icon="inline-start"
-					/>
-					{saving ? "Saving..." : "Save Configuration"}
-				</Button>
-			</div>
-		</div>
-	{/if}
+	<FloatingSaveBar
+		show={isDirty}
+		title="Unsaved PPPoE Changes"
+		description="Configuration differs from active runtime parameters"
+		saveLabel="Save Configuration"
+		{saving}
+		disabled={loading}
+		onDiscard={handleDiscard}
+		onSave={handleSave}
+	/>
 </div>

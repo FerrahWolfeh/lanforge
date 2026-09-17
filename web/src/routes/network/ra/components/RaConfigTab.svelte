@@ -17,6 +17,7 @@
 	import SaveIcon from "@lucide/svelte/icons/save";
 	import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
 	import InfoPopover from "$lib/components/InfoPopover.svelte";
+	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
 
 	import type {
 		RouterPriority,
@@ -660,47 +661,14 @@
 	</div>
 
 	<!-- Floating Save/Discard Action Island -->
-	{#if isDirty}
-		<div
-			transition:fly={{ y: 24, duration: 220, easing: cubicOut }}
-			class="sticky bottom-4 z-30 flex items-center justify-between p-3.5 sm:p-4 rounded-xl border bg-card/95 backdrop-blur-md shadow-2xl border-primary/40 gap-4"
-		>
-			<div class="flex items-center gap-2.5">
-				<span class="relative flex size-2.5">
-					<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-					<span class="relative inline-flex rounded-full size-2.5 bg-amber-500"></span>
-				</span>
-				<div class="flex flex-col sm:flex-row sm:items-center sm:gap-2">
-					<span class="text-xs font-semibold text-foreground">Unsaved RA Changes</span>
-					<span class="text-[11px] text-muted-foreground hidden sm:inline">
-						Configuration differs from active runtime parameters
-					</span>
-				</div>
-			</div>
-
-			<div class="flex items-center gap-2 shrink-0">
-				<Button
-					variant="outline"
-					size="sm"
-					onclick={onDiscard}
-					disabled={saving}
-					class="h-8 text-xs gap-1"
-				>
-					<RotateCcwIcon class="size-3.5" />
-					Discard
-				</Button>
-
-				<Button
-					variant="default"
-					size="sm"
-					onclick={onSave}
-					disabled={saving}
-					class="h-8 text-xs gap-1 shadow-sm"
-				>
-					<SaveIcon class={saving ? "animate-spin size-3.5" : "size-3.5"} />
-					{saving ? "Applying..." : "Save Configuration"}
-				</Button>
-			</div>
-		</div>
-	{/if}
+	<FloatingSaveBar
+		show={isDirty}
+		title="Unsaved RA Changes"
+		description="Configuration differs from active runtime parameters"
+		saveLabel="Save Configuration"
+		savingLabel="Applying..."
+		{saving}
+		onDiscard={onDiscard}
+		onSave={onSave}
+	/>
 </div>

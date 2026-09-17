@@ -1,6 +1,6 @@
 use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess};
-use lanforge_core::bus::{FirewallEvent, LanforgeEvent, NetworkEvent, SystemEvent};
+use lanforge_core::bus::{FirewallEvent, LanforgeEvent, NetworkEvent, SystemEvent, TrafficEvent};
 use lanforge_types::{
     network::{
         firewall::{FirewallCommitRequest, FirewallCommitResponse, FirewallConfig},
@@ -86,6 +86,13 @@ impl ClientContext {
     }
 
     pub async fn handle_update_pppoe_config(&self, cfg: PppoeConfig) -> Response {
+        tracing::info!(
+            wan_iface = %cfg.wan_iface,
+            username = %cfg.username,
+            enabled = cfg.enabled,
+            "PPPoE configuration updated via API; triggering PPPoE service restart to apply new configuration"
+        );
+
         if let Err(e) = self.db.save_pppoe_config(&cfg).await {
             return Response::Error {
                 error: format!("Failed to save PPPoE configuration: {e}"),
@@ -156,10 +163,7 @@ impl ClientContext {
         let _ = self
             .ctx
             .bus()
-            .publish(LanforgeEvent::System(SystemEvent::ServiceControl {
-                id: "traffic".to_string(),
-                action: ServiceAction::Restart,
-            }));
+            .publish(LanforgeEvent::Traffic(TrafficEvent::RulesetChanged));
 
         Response::Success(SimpleSuccess {
             message: "Traffic and SQM configuration updated successfully".to_string(),

@@ -19,4 +19,6 @@ pub enum TrafficEvent {
     SqmCleared {
         interface: String,
     },
+    /// Traffic management or SQM configuration updated in-place.
+    RulesetChanged,
 }

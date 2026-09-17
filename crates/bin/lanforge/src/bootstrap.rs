@@ -7,7 +7,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_db::{
     AdblockStore, DhcpConfigStore, DnsStore, DnsUpstreamStore, FirewallConfigStore, LanforgeDb,
-    LogDb, PppoeConfigStore, RaConfigStore, UserStore,
+    LogDb, PppoeConfigStore, RaConfigStore, TrafficConfigStore, UserStore,
 };
 use lanforge_discovery::refresh_interface;
 use lanforge_types::device::Origin;
@@ -579,7 +579,18 @@ impl Bootstrapper {
                 }
             }
 
-            // 8. Check/seed/load Firewall Config
+            // 8. Check/seed/load Traffic & SQM Config
+            #[cfg(feature = "traffic")]
+            {
+                if db.seed_traffic_if_empty(&cfg.traffic_toml).await? {
+                    info!("Seeded Traffic configuration from TOML into database");
+                }
+                if let Some(loaded) = db.load_traffic_config().await? {
+                    cfg.traffic_toml = loaded;
+                }
+            }
+
+            // 9. Check/seed/load Firewall Config
             #[cfg(feature = "nft")]
             {
                 #[cfg(feature = "pppoe")]

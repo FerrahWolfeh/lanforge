@@ -2,26 +2,28 @@
 	import * as Tabs from "$lib/components/ui/tabs";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
+	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
 	import {
 		trafficStatus,
 		trafficConfig,
 		trafficUpdateConfig,
 		getSetupStatus,
+		pppoeConfig,
 	} from "$lib/api/client";
 	import type {
 		TrafficConfig,
 		TrafficStatusResponse,
 		NetworkInterfaceInfo,
+		SetupStatusResponse,
+		PppoeConfig,
+		SqmOverhead,
+		SqmDiffserv,
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
-	import { fly } from "svelte/transition";
-	import { cubicOut } from "svelte/easing";
 
 	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-	import SaveIcon from "@lucide/svelte/icons/save";
-	import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
 	import GaugeIcon from "@lucide/svelte/icons/gauge";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 
@@ -32,58 +34,157 @@
 	// Page state
 	let status = $state<TrafficStatusResponse | null>(null);
 	let serverConfig = $state<TrafficConfig | null>(null);
-	let draft = $state<TrafficConfig | null>(null);
 	let availableInterfaces = $state<NetworkInterfaceInfo[]>([]);
+	let setupStatus = $state<SetupStatusResponse | null>(null);
+	let pppoeCfg = $state<PppoeConfig | null>(null);
 
 	let loading = $state(true);
 	let saving = $state(false);
 	let activeTab = $state("sqm");
 	let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
+	// Editable reactive form fields (SQM)
+	let sqmEnabled = $state(false);
+	let sqmInterface = $state("auto");
+	let sqmDownloadMbps = $state(0);
+	let sqmUploadMbps = $state(0);
+	let sqmOverhead = $state<SqmOverhead>("auto");
+	let sqmDiffserv = $state<SqmDiffserv>("diffserv4");
+	let sqmPerHostIsolation = $state(true);
+	let sqmRttMs = $state<number | null>(null);
+	let sqmIngressDevice = $state("ifb4lanforge");
+
+	// Editable reactive form fields (Tuning)
+	let tuningEnabled = $state(false);
+	let tuningInterfaces = $state<string[]>([]);
+	let tuningCpuMask = $state("auto");
+	let tuningRxRing = $state("auto");
+	let tuningTxRing = $state("auto");
+	let tuningDisableEee = $state(true);
+	let tuningUdpGroForwarding = $state(true);
+	let tuningRpsFlowEntries = $state(32768);
+	let tuningRpsFlowCnt = $state(4096);
+
+	function syncFormFromConfig(c: TrafficConfig) {
+		sqmEnabled = c.sqm.enabled;
+		sqmInterface = c.sqm.interface || "auto";
+		sqmDownloadMbps = c.sqm.download_mbps;
+		sqmUploadMbps = c.sqm.upload_mbps;
+		sqmOverhead = c.sqm.overhead || "auto";
+		sqmDiffserv = c.sqm.diffserv || "diffserv4";
+		sqmPerHostIsolation = c.sqm.per_host_isolation ?? true;
+		sqmRttMs = c.sqm.rtt_ms ?? null;
+		sqmIngressDevice = c.sqm.ingress_device || "ifb4lanforge";
+
+		tuningEnabled = c.tuning.enabled;
+		tuningInterfaces = [...(c.tuning.interfaces || [])];
+		tuningCpuMask = c.tuning.cpu_mask || "auto";
+		tuningRxRing = c.tuning.rx_ring || "auto";
+		tuningTxRing = c.tuning.tx_ring || "auto";
+		tuningDisableEee = c.tuning.disable_eee ?? true;
+		tuningUdpGroForwarding = c.tuning.udp_gro_forwarding ?? true;
+		tuningRpsFlowEntries = c.tuning.rps_flow_entries || 32768;
+		tuningRpsFlowCnt = c.tuning.rps_flow_cnt || 4096;
+	}
+
+	// Physical LAN port
+	const detectedLan = $derived(
+		setupStatus?.detected_lan_iface ||
+		status?.tuned_interfaces?.find((i) => i.startsWith("lan") || i === "eth0") ||
+		"lan0"
+	);
+
+	// Physical WAN port (for hardware NIC tuning: RPS, ethtool, EEE)
+	const physicalWan = $derived.by(() => {
+		if (pppoeCfg?.wan_iface) return pppoeCfg.wan_iface;
+		const tunedWan = status?.tuned_interfaces?.find((i) => i !== detectedLan && !i.startsWith("ppp"));
+		if (tunedWan) return tunedWan;
+		const found = availableInterfaces.find((i) => i.is_physical && i.name !== detectedLan && !i.name.startsWith("ppp"));
+		return found?.name || "wan0";
+	});
+
+	// Shaping WAN port (for SQM CAKE: prefers active PPPoE session e.g. ppp0, otherwise physical WAN)
+	const shapingWan = $derived(
+		status?.wan_interface || (pppoeCfg?.enabled ? "ppp0" : physicalWan)
+	);
+
 	// Dirty tracking
 	const isDirty = $derived.by(() => {
-		if (!draft || !serverConfig) return false;
-		return JSON.stringify(draft) !== JSON.stringify(serverConfig);
+		if (!serverConfig) return false;
+		if (sqmEnabled !== serverConfig.sqm.enabled) return true;
+		if (Number(sqmDownloadMbps) !== serverConfig.sqm.download_mbps) return true;
+		if (Number(sqmUploadMbps) !== serverConfig.sqm.upload_mbps) return true;
+		if (sqmInterface !== serverConfig.sqm.interface) return true;
+		if (sqmOverhead !== serverConfig.sqm.overhead) return true;
+		if (sqmDiffserv !== serverConfig.sqm.diffserv) return true;
+		if (sqmPerHostIsolation !== serverConfig.sqm.per_host_isolation) return true;
+		if (sqmRttMs !== (serverConfig.sqm.rtt_ms ?? null)) return true;
+		if (sqmIngressDevice !== serverConfig.sqm.ingress_device) return true;
+
+		if (tuningEnabled !== serverConfig.tuning.enabled) return true;
+		if (tuningCpuMask !== serverConfig.tuning.cpu_mask) return true;
+		if (tuningRxRing !== serverConfig.tuning.rx_ring) return true;
+		if (tuningTxRing !== serverConfig.tuning.tx_ring) return true;
+		if (tuningDisableEee !== serverConfig.tuning.disable_eee) return true;
+		if (tuningUdpGroForwarding !== serverConfig.tuning.udp_gro_forwarding) return true;
+		if (Number(tuningRpsFlowEntries) !== serverConfig.tuning.rps_flow_entries) return true;
+		if (Number(tuningRpsFlowCnt) !== serverConfig.tuning.rps_flow_cnt) return true;
+		if (JSON.stringify(tuningInterfaces) !== JSON.stringify(serverConfig.tuning.interfaces)) return true;
+
+		return false;
 	});
 
 	const changeCount = $derived.by(() => {
-		if (!isDirty || !draft || !serverConfig) return 0;
+		if (!isDirty || !serverConfig) return 0;
 		let count = 0;
-		if (draft.sqm.enabled !== serverConfig.sqm.enabled) count++;
-		if (draft.sqm.download_mbps !== serverConfig.sqm.download_mbps) count++;
-		if (draft.sqm.upload_mbps !== serverConfig.sqm.upload_mbps) count++;
-		if (draft.sqm.interface !== serverConfig.sqm.interface) count++;
-		if (draft.sqm.overhead !== serverConfig.sqm.overhead) count++;
-		if (draft.sqm.diffserv !== serverConfig.sqm.diffserv) count++;
-		if (draft.sqm.per_host_isolation !== serverConfig.sqm.per_host_isolation) count++;
-		if (draft.tuning.enabled !== serverConfig.tuning.enabled) count++;
-		if (draft.tuning.cpu_mask !== serverConfig.tuning.cpu_mask) count++;
-		if (draft.tuning.disable_eee !== serverConfig.tuning.disable_eee) count++;
-		if (draft.tuning.udp_gro_forwarding !== serverConfig.tuning.udp_gro_forwarding) count++;
-		if (JSON.stringify(draft.tuning.interfaces) !== JSON.stringify(serverConfig.tuning.interfaces)) count++;
+		if (sqmEnabled !== serverConfig.sqm.enabled) count++;
+		if (Number(sqmDownloadMbps) !== serverConfig.sqm.download_mbps) count++;
+		if (Number(sqmUploadMbps) !== serverConfig.sqm.upload_mbps) count++;
+		if (sqmInterface !== serverConfig.sqm.interface) count++;
+		if (sqmOverhead !== serverConfig.sqm.overhead) count++;
+		if (sqmDiffserv !== serverConfig.sqm.diffserv) count++;
+		if (sqmPerHostIsolation !== serverConfig.sqm.per_host_isolation) count++;
+		if (sqmRttMs !== (serverConfig.sqm.rtt_ms ?? null)) count++;
+		if (sqmIngressDevice !== serverConfig.sqm.ingress_device) count++;
+
+		if (tuningEnabled !== serverConfig.tuning.enabled) count++;
+		if (tuningCpuMask !== serverConfig.tuning.cpu_mask) count++;
+		if (tuningRxRing !== serverConfig.tuning.rx_ring) count++;
+		if (tuningTxRing !== serverConfig.tuning.tx_ring) count++;
+		if (tuningDisableEee !== serverConfig.tuning.disable_eee) count++;
+		if (tuningUdpGroForwarding !== serverConfig.tuning.udp_gro_forwarding) count++;
+		if (Number(tuningRpsFlowEntries) !== serverConfig.tuning.rps_flow_entries) count++;
+		if (Number(tuningRpsFlowCnt) !== serverConfig.tuning.rps_flow_cnt) count++;
+		if (JSON.stringify(tuningInterfaces) !== JSON.stringify(serverConfig.tuning.interfaces)) count++;
 		return Math.max(count, 1);
 	});
 
 	async function loadAll(silent = false) {
 		if (!silent) loading = true;
 		try {
-			const [s, c, setupRes] = await Promise.all([
+			const [s, c, setupRes, pppoeRes] = await Promise.all([
 				trafficStatus().catch(() => null),
 				trafficConfig().catch(() => null),
 				getSetupStatus().catch(() => null),
+				pppoeConfig().catch(() => null),
 			]);
 			status = s;
+			setupStatus = setupRes;
+			pppoeCfg = pppoeRes;
+
 			if (setupRes?.interfaces) {
 				availableInterfaces = setupRes.interfaces;
 			}
 			if (c) {
-				serverConfig = c;
-				if (!isDirty) {
-					draft = structuredClone(c);
+				if (!serverConfig || !isDirty) {
+					serverConfig = c;
+					syncFormFromConfig(c);
+				} else {
+					serverConfig = c;
 				}
 			}
 		} catch {
-			if (!silent) toast.error("Falha ao carregar configurações de tráfego");
+			if (!silent) toast.error("Failed to load traffic and SQM configuration");
 		} finally {
 			if (!silent) loading = false;
 		}
@@ -91,23 +192,48 @@
 
 	function handleDiscard() {
 		if (!serverConfig) return;
-		draft = structuredClone(serverConfig);
-		toast.info("Alterações descartadas");
+		syncFormFromConfig(serverConfig);
+		toast.info("Changes discarded");
 	}
 
 	async function handleSave() {
-		if (!draft) return;
+		if (!isDirty) return;
 		saving = true;
 		try {
-			await trafficUpdateConfig(draft);
-			serverConfig = structuredClone(draft);
-			toast.success("Configuração de tráfego salva e aplicada com sucesso");
-			// Refresh status after in-place reload
+			const payload: TrafficConfig = {
+				sqm: {
+					enabled: sqmEnabled,
+					interface: sqmInterface.trim() || "auto",
+					download_mbps: Number(sqmDownloadMbps) || 0,
+					upload_mbps: Number(sqmUploadMbps) || 0,
+					overhead: sqmOverhead,
+					diffserv: sqmDiffserv,
+					per_host_isolation: sqmPerHostIsolation,
+					rtt_ms: sqmRttMs ? Number(sqmRttMs) : null,
+					ingress_device: sqmIngressDevice.trim() || "ifb4lanforge",
+					raw_cake_args: serverConfig?.sqm.raw_cake_args ?? null,
+				},
+				tuning: {
+					enabled: tuningEnabled,
+					interfaces: [...tuningInterfaces],
+					cpu_mask: tuningCpuMask.trim() || "auto",
+					rps_flow_entries: Number(tuningRpsFlowEntries) || 32768,
+					rps_flow_cnt: Number(tuningRpsFlowCnt) || 4096,
+					rx_ring: tuningRxRing.trim() || "auto",
+					tx_ring: tuningTxRing.trim() || "auto",
+					disable_eee: tuningDisableEee,
+					udp_gro_forwarding: tuningUdpGroForwarding,
+				},
+			};
+
+			await trafficUpdateConfig(payload);
+			serverConfig = structuredClone(payload);
+			toast.success("Traffic configuration saved and applied");
 			setTimeout(() => {
 				loadAll(true);
 			}, 600);
 		} catch (err) {
-			toast.error(`Falha ao salvar: ${err instanceof Error ? err.message : String(err)}`);
+			toast.error(`Failed to save: ${err instanceof Error ? err.message : String(err)}`);
 		} finally {
 			saving = false;
 		}
@@ -133,17 +259,44 @@
 	<title>Traffic & SQM — Lanforge</title>
 </svelte:head>
 
-<div class="flex flex-col gap-6 max-w-6xl pb-24">
+<div class="flex flex-col gap-6 w-full pb-24">
 	<!-- Page Header -->
-	<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-		<div>
-			<div class="flex items-center gap-2">
-				<SlidersHorizontalIcon class="size-6 text-primary" />
-				<h1 class="text-2xl font-bold tracking-tight text-foreground">Traffic & SQM</h1>
+	<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+		<div class="flex items-center gap-3.5">
+			<div class="flex size-11 items-center justify-center rounded-2xl bg-primary/10 text-primary shrink-0">
+				<SlidersHorizontalIcon class="size-6" />
 			</div>
-			<p class="text-xs sm:text-sm text-muted-foreground mt-1">
-				Smart Queue Management (CAKE), controle de bufferbloat e otimização de baixo nível para NICs.
-			</p>
+			<div class="flex flex-col gap-1">
+				<div class="flex flex-wrap items-center gap-2.5">
+					<h1 class="text-2xl font-bold tracking-tight">Traffic & SQM</h1>
+					{#if status?.sqm_active}
+						<Badge
+							variant="outline"
+							class="border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium text-xs"
+						>
+							<span class="relative flex size-2 mr-1.5">
+								<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+								<span class="relative inline-flex rounded-full size-2 bg-emerald-500"></span>
+							</span>
+							CAKE Active ({status.download_mbps}M / {status.upload_mbps}M)
+						</Badge>
+					{:else if status?.tuning_applied}
+						<Badge
+							variant="outline"
+							class="border-primary/25 bg-primary/10 text-primary font-medium text-xs"
+						>
+							NICs Tuned
+						</Badge>
+					{:else}
+						<Badge variant="secondary" class="text-muted-foreground text-xs font-medium">
+							Dormant
+						</Badge>
+					{/if}
+				</div>
+				<p class="text-xs sm:text-sm text-muted-foreground">
+					Hardware network interface optimization and CAKE bufferbloat management.
+				</p>
+			</div>
 		</div>
 
 		<div class="flex items-center gap-2">
@@ -152,104 +305,80 @@
 				size="sm"
 				onclick={() => loadAll(false)}
 				disabled={loading}
-				class="gap-1.5"
+				class="h-9 gap-1.5 text-xs transition-transform duration-150 active:scale-95 transform-gpu"
 			>
 				<RefreshCwIcon class={`size-3.5 ${loading ? "animate-spin" : ""}`} />
-				<span>Atualizar</span>
+				<span>Refresh</span>
 			</Button>
 		</div>
 	</div>
 
-	<!-- Top Telemetry Status Cards -->
+	<!-- Top Telemetry Status Cards (3-column layout) -->
 	<TrafficStatsCards {status} />
 
-	{#if loading && !draft}
+	{#if loading && !serverConfig}
 		<div class="flex items-center justify-center p-12 text-muted-foreground text-sm">
 			<RefreshCwIcon class="size-5 animate-spin mr-2" />
-			Carregando configurações...
+			Loading configuration...
 		</div>
-	{:else if draft}
+	{:else if serverConfig}
 		<!-- Main Tabs -->
 		<Tabs.Root bind:value={activeTab} class="flex flex-col gap-4">
-			<Tabs.List class="grid grid-cols-2 max-w-md">
+			<Tabs.List class="grid grid-cols-2 max-w-xs h-9">
 				<Tabs.Trigger value="sqm" class="gap-2 text-xs">
 					<GaugeIcon class="size-4" />
 					<span>Bufferbloat (CAKE)</span>
 				</Tabs.Trigger>
 				<Tabs.Trigger value="tuning" class="gap-2 text-xs">
 					<CpuIcon class="size-4" />
-					<span>Otimização de NICs</span>
+					<span>NIC Tuning</span>
 				</Tabs.Trigger>
 			</Tabs.List>
 
 			<!-- SQM Tab -->
 			<Tabs.Content value="sqm">
 				<TrafficSqmTab
-					sqm={draft.sqm}
+					bind:enabled={sqmEnabled}
+					bind:downloadMbps={sqmDownloadMbps}
+					bind:uploadMbps={sqmUploadMbps}
+					bind:interface={sqmInterface}
+					bind:overhead={sqmOverhead}
+					bind:diffserv={sqmDiffserv}
+					bind:perHostIsolation={sqmPerHostIsolation}
+					bind:rttMs={sqmRttMs}
+					bind:ingressDevice={sqmIngressDevice}
 					{availableInterfaces}
-					detectedWan={status?.wan_interface}
-					onUpdate={(updated) => {
-						if (draft) draft = { ...draft, sqm: updated };
-					}}
+					detectedWan={shapingWan}
 				/>
 			</Tabs.Content>
 
 			<!-- NIC Tuning Tab -->
 			<Tabs.Content value="tuning">
 				<TrafficTuningTab
-					tuning={draft.tuning}
+					bind:enabled={tuningEnabled}
+					bind:interfaces={tuningInterfaces}
+					bind:cpuMask={tuningCpuMask}
+					bind:rxRing={tuningRxRing}
+					bind:txRing={tuningTxRing}
+					bind:disableEee={tuningDisableEee}
+					bind:udpGroForwarding={tuningUdpGroForwarding}
+					bind:rpsFlowEntries={tuningRpsFlowEntries}
+					bind:rpsFlowCnt={tuningRpsFlowCnt}
 					{availableInterfaces}
 					effectiveCpuMask={status?.effective_cpu_mask}
-					onUpdate={(updated) => {
-						if (draft) draft = { ...draft, tuning: updated };
-					}}
+					{detectedLan}
+					detectedWan={physicalWan}
 				/>
 			</Tabs.Content>
 		</Tabs.Root>
 	{/if}
+
+	<!-- Floating Save / Discard Bar -->
+	<FloatingSaveBar
+		show={isDirty}
+		count={changeCount}
+		{saving}
+		onDiscard={handleDiscard}
+		onSave={handleSave}
+	/>
 </div>
-
-<!-- Floating Action / Save Bar -->
-{#if isDirty}
-	<div
-		transition:fly={{ y: 50, duration: 250, easing: cubicOut }}
-		class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-card border border-border shadow-2xl shadow-black/40 backdrop-blur-md"
-	>
-		<div class="flex items-center gap-2">
-			<span class="size-2 rounded-full bg-amber-500 animate-pulse"></span>
-			<span class="text-xs font-medium text-foreground">
-				{changeCount} alteraç{changeCount === 1 ? "ão" : "ões"} pendente{changeCount === 1 ? "" : "s"}
-			</span>
-		</div>
-
-		<div class="h-4 w-px bg-border"></div>
-
-		<div class="flex items-center gap-1.5">
-			<Button
-				variant="ghost"
-				size="sm"
-				onclick={handleDiscard}
-				disabled={saving}
-				class="h-8 px-3 text-xs gap-1.5"
-			>
-				<RotateCcwIcon class="size-3.5" />
-				<span>Descartar</span>
-			</Button>
-
-			<Button
-				size="sm"
-				onclick={handleSave}
-				disabled={saving}
-				class="h-8 px-3 text-xs gap-1.5"
-			>
-				{#if saving}
-					<RefreshCwIcon class="size-3.5 animate-spin" />
-					<span>Aplicando...</span>
-				{:else}
-					<SaveIcon class="size-3.5" />
-					<span>Salvar e Aplicar</span>
-				{/if}
-			</Button>
-		</div>
-	</div>
-{/if}

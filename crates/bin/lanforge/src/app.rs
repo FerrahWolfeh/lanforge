@@ -30,7 +30,11 @@ use lanforge_db::PppoeConfigStore;
 #[cfg(feature = "pppoe")]
 use lanforge_pppoe::PppoeService;
 #[cfg(feature = "nft")]
+use lanforge_db::FirewallConfigStore;
+#[cfg(feature = "nft")]
 use lanforge_nft::NftService;
+#[cfg(feature = "traffic")]
+use lanforge_db::TrafficConfigStore;
 #[cfg(feature = "traffic")]
 use lanforge_traffic::TrafficService;
 #[cfg(feature = "ra")]
@@ -103,6 +107,17 @@ impl Daemon {
                         new_cfg.pppoe_enabled = pppoe_db.enabled;
                         new_cfg.pppoe_toml = pppoe_db.clone();
                         self.ctx.update_pppoe_config(pppoe_db);
+                    }
+                    #[cfg(feature = "traffic")]
+                    if let Ok(Some(traffic_db)) = self.bootstrap.db.load_traffic_config().await {
+                        new_cfg.traffic_toml = traffic_db.clone();
+                        self.ctx.update_traffic_config(traffic_db);
+                    }
+                    #[cfg(feature = "nft")]
+                    if let Ok(Some(firewall_db)) = self.bootstrap.db.load_firewall_config().await {
+                        new_cfg.firewall_enabled = firewall_db.enabled;
+                        new_cfg.firewall_toml = firewall_db.clone();
+                        self.ctx.update_firewall_config(firewall_db);
                     }
                     let new_cfg = Arc::new(new_cfg);
                     self.bootstrap.cfg = new_cfg.clone();
