@@ -1254,10 +1254,23 @@ export interface ConntrackStats {
 	invalid: number;
 }
 
+export interface InterfaceThroughputPoint {
+	interface: string;
+	rx_rate_bps: number;
+	tx_rate_bps: number;
+}
+
+export interface TrafficHistorySample {
+	timestamp: number;
+	interfaces: InterfaceThroughputPoint[];
+}
+
 export interface TrafficTelemetryResponse {
 	timestamp: number;
 	interfaces: InterfaceTrafficStats[];
 	sqm: SqmTelemetryStats | null;
 	conntrack: ConntrackStats | null;
+	history?: TrafficHistorySample[];
 }
+
 

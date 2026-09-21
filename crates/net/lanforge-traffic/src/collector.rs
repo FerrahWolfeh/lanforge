@@ -1,11 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lanforge_types::network::traffic::{
-    CakeQdiscStats, CakeTinStats, ConntrackStats, InterfaceTrafficStats, SqmTelemetryStats,
-    TrafficTelemetryResponse,
+    CakeQdiscStats, CakeTinStats, ConntrackStats, InterfaceTrafficStats, InterfaceThroughputPoint,
+    SqmTelemetryStats, TrafficHistorySample, TrafficTelemetryResponse,
 };
 use serde::Deserialize;
 use tokio::process::Command;
@@ -17,7 +17,11 @@ static COLLECTOR: OnceLock<Mutex<TrafficCollector>> = OnceLock::new();
 /// Cached period for `tc` execution (2.5 seconds to avoid high fork rate on SBCs).
 const SQM_CACHE_TTL: Duration = Duration::from_millis(2500);
 
+/// Maximum number of historical samples preserved in memory (240 samples @ 2.5s = 10 minutes).
+const MAX_HISTORY_SAMPLES: usize = 240;
+
 /// Raw JSON structures for deserializing `tc -j -s qdisc show`.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct RawTcQdisc {
     #[serde(default)]
@@ -43,6 +47,16 @@ struct RawTcQdisc {
     #[serde(default)]
     capacity_estimate: u64,
     #[serde(default)]
+    min_network_size: u32,
+    #[serde(default)]
+    max_network_size: u32,
+    #[serde(default)]
+    min_adj_size: u32,
+    #[serde(default)]
+    max_adj_size: u32,
+    #[serde(default)]
+    avg_hdr_offset: u32,
+    #[serde(default)]
     options: Option<RawTcOptions>,
     #[serde(default)]
     tins: Vec<RawTcTin>,
@@ -56,6 +70,7 @@ struct RawTcOptions {
     diffserv: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct RawTcTin {
     #[serde(default)]
@@ -67,11 +82,21 @@ struct RawTcTin {
     #[serde(default)]
     backlog_bytes: u64,
     #[serde(default)]
+    target_us: u32,
+    #[serde(default)]
+    interval_us: u32,
+    #[serde(default)]
     peak_delay_us: u32,
     #[serde(default)]
     avg_delay_us: u32,
     #[serde(default)]
     base_delay_us: u32,
+    #[serde(default)]
+    way_indirect_hits: u64,
+    #[serde(default)]
+    way_misses: u64,
+    #[serde(default)]
+    way_collisions: u64,
     #[serde(default)]
     drops: u64,
     #[serde(default)]
@@ -89,6 +114,7 @@ struct RawTcTin {
 pub struct TrafficCollector {
     prev_iface_snapshots: HashMap<String, (Instant, u64, u64)>,
     cached_sqm: Option<(Instant, SqmTelemetryStats)>,
+    history: VecDeque<TrafficHistorySample>,
 }
 
 impl TrafficCollector {
@@ -97,6 +123,7 @@ impl TrafficCollector {
         Self {
             prev_iface_snapshots: HashMap::new(),
             cached_sqm: None,
+            history: VecDeque::with_capacity(MAX_HISTORY_SAMPLES),
         }
     }
 
@@ -115,11 +142,32 @@ impl TrafficCollector {
         let conntrack = read_conntrack_stats();
         let sqm = self.collect_sqm(wan_iface, ifb_iface).await;
 
+        // Record historical slice if interfaces are populated
+        if !interfaces.is_empty() {
+            let point = TrafficHistorySample {
+                timestamp: now,
+                interfaces: interfaces
+                    .iter()
+                    .map(|i| InterfaceThroughputPoint {
+                        interface: i.interface.clone(),
+                        rx_rate_bps: i.rx_rate_bps,
+                        tx_rate_bps: i.tx_rate_bps,
+                    })
+                    .collect(),
+            };
+
+            if self.history.len() >= MAX_HISTORY_SAMPLES {
+                self.history.pop_front();
+            }
+            self.history.push_back(point);
+        }
+
         TrafficTelemetryResponse {
             timestamp: now,
             interfaces,
             sqm,
             conntrack,
+            history: self.history.iter().cloned().collect(),
         }
     }
 

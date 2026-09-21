@@ -200,8 +200,18 @@ impl AsyncService for TrafficService {
         let mut pppoe_rx = ctx.bus().subscribe_pppoe();
         let mut traffic_rx = ctx.bus().subscribe_traffic();
 
+        let mut telemetry_tick = tokio::time::interval(std::time::Duration::from_millis(2500));
+        telemetry_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         loop {
             tokio::select! {
+                // Periodic telemetry background collector (populates ring buffer for instant WebUI graphs)
+                _ = telemetry_tick.tick() => {
+                    let wan = self.active_wan.as_deref();
+                    let ifb = self.active_ifb.as_deref();
+                    let _ = crate::collect_traffic_telemetry(wan, ifb).await;
+                }
+
                 // Listen to in-place traffic configuration updates
                 traffic_event = traffic_rx.recv() => {
                     match traffic_event {

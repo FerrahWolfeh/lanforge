@@ -85,21 +85,49 @@
 		if (!data) return;
 
 		untrack(() => {
-			const now = new Date();
-			const currentIfaces: InterfaceSample[] = (data.interfaces ?? []).map((i) => ({
-				interface: i.interface,
-				rx_rate_bps: i.rx_rate_bps,
-				tx_rate_bps: i.tx_rate_bps,
-			}));
+			if (data.history && data.history.length > 0) {
+				const mapped: TelemetrySample[] = data.history.map((s) => {
+					const ms = s.timestamp < 10_000_000_000 ? s.timestamp * 1000 : s.timestamp;
+					return {
+						date: new Date(ms),
+						timestamp: ms,
+						interfaces: s.interfaces,
+					};
+				});
 
-			rawSamples = [
-				...rawSamples.slice(-29),
-				{
-					date: now,
-					timestamp: now.getTime(),
-					interfaces: currentIfaces,
-				},
-			];
+				if (mapped.length < 30) {
+					const t0 = mapped[0].timestamp;
+					const padCount = 30 - mapped.length;
+					const padded: TelemetrySample[] = [];
+					for (let i = 0; i < padCount; i++) {
+						const pastMs = t0 - (padCount - i) * 2500;
+						padded.push({
+							date: new Date(pastMs),
+							timestamp: pastMs,
+							interfaces: [],
+						});
+					}
+					rawSamples = [...padded, ...mapped];
+				} else {
+					rawSamples = mapped;
+				}
+			} else {
+				const now = new Date();
+				const currentIfaces: InterfaceSample[] = (data.interfaces ?? []).map((i) => ({
+					interface: i.interface,
+					rx_rate_bps: i.rx_rate_bps,
+					tx_rate_bps: i.tx_rate_bps,
+				}));
+
+				rawSamples = [
+					...rawSamples.slice(-239),
+					{
+						date: now,
+						timestamp: now.getTime(),
+						interfaces: currentIfaces,
+					},
+				];
+			}
 		});
 	});
 

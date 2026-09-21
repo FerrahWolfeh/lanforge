@@ -210,6 +210,21 @@ pub struct ConntrackStats {
     pub invalid: u64,
 }
 
+/// Per-interface instantaneous throughput rate within a historical snapshot.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct InterfaceThroughputPoint {
+    pub interface: String,
+    pub rx_rate_bps: u64,
+    pub tx_rate_bps: u64,
+}
+
+/// Historical network telemetry sample representing a single timestamp slice.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TrafficHistorySample {
+    pub timestamp: u64,
+    pub interfaces: Vec<InterfaceThroughputPoint>,
+}
+
 /// Complete real-time traffic, SQM, and conntrack telemetry payload.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct TrafficTelemetryResponse {
@@ -217,5 +232,7 @@ pub struct TrafficTelemetryResponse {
     pub interfaces: Vec<InterfaceTrafficStats>,
     pub sqm: Option<SqmTelemetryStats>,
     pub conntrack: Option<ConntrackStats>,
+    #[serde(default)]
+    pub history: Vec<TrafficHistorySample>,
 }
 
