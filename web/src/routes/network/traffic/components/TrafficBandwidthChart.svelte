@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from "svelte";
 	import * as Card from "$lib/components/ui/card";
 	import { Badge } from "$lib/components/ui/badge";
 	import * as Chart from "$lib/components/ui/chart/index.js";
@@ -18,6 +19,18 @@
 
 	let selectedIface = $state<string>("all");
 
+	interface InterfaceSample {
+		interface: string;
+		rx_rate_bps: number;
+		tx_rate_bps: number;
+	}
+
+	interface TelemetrySample {
+		date: Date;
+		timestamp: number;
+		interfaces: InterfaceSample[];
+	}
+
 	interface BandwidthPoint {
 		date: Date;
 		timestamp: number;
@@ -25,64 +38,81 @@
 		txBps: number;
 	}
 
-	let history = $state<BandwidthPoint[]>([]);
+	let rawSamples = $state<TelemetrySample[]>([]);
 
 	const availableInterfaces = $derived(
 		telemetry?.interfaces?.map((i) => i.interface) ?? []
 	);
 
 	$effect(() => {
-		if (!telemetry) return;
+		const data = telemetry;
+		if (!data) return;
 
-		const ifaces = telemetry.interfaces ?? [];
-		let rx = 0;
-		let tx = 0;
+		untrack(() => {
+			const now = new Date();
+			const currentIfaces: InterfaceSample[] = (data.interfaces ?? []).map((i) => ({
+				interface: i.interface,
+				rx_rate_bps: i.rx_rate_bps,
+				tx_rate_bps: i.tx_rate_bps,
+			}));
 
-		if (selectedIface === "all") {
-			for (const i of ifaces) {
-				rx += i.rx_rate_bps;
-				tx += i.tx_rate_bps;
-			}
-		} else {
-			const found = ifaces.find((i) => i.interface === selectedIface);
-			if (found) {
-				rx = found.rx_rate_bps;
-				tx = found.tx_rate_bps;
-			}
-		}
-
-		const now = new Date();
-
-		if (history.length === 0) {
-			const initial: BandwidthPoint[] = [];
-			for (let i = 24; i >= 1; i--) {
-				const past = new Date(now.getTime() - i * 2500);
-				const jitter = 0.85 + Math.random() * 0.3;
+			if (rawSamples.length === 0) {
+				const initial: TelemetrySample[] = [];
+				for (let i = 24; i >= 1; i--) {
+					const past = new Date(now.getTime() - i * 2500);
+					const jitter = 0.85 + Math.random() * 0.3;
+					initial.push({
+						date: past,
+						timestamp: past.getTime(),
+						interfaces: currentIfaces.map((i) => ({
+							interface: i.interface,
+							rx_rate_bps: Math.round(i.rx_rate_bps * jitter),
+							tx_rate_bps: Math.round(i.tx_rate_bps * jitter),
+						})),
+					});
+				}
 				initial.push({
-					date: past,
-					timestamp: past.getTime(),
-					rxBps: Math.round(rx * jitter),
-					txBps: Math.round(tx * jitter),
-				});
-			}
-			initial.push({
-				date: now,
-				timestamp: now.getTime(),
-				rxBps: rx,
-				txBps: tx,
-			});
-			history = initial;
-		} else {
-			history = [
-				...history.slice(-39),
-				{
 					date: now,
 					timestamp: now.getTime(),
-					rxBps: rx,
-					txBps: tx,
-				},
-			];
-		}
+					interfaces: currentIfaces,
+				});
+				rawSamples = initial;
+			} else {
+				rawSamples = [
+					...rawSamples.slice(-39),
+					{
+						date: now,
+						timestamp: now.getTime(),
+						interfaces: currentIfaces,
+					},
+				];
+			}
+		});
+	});
+
+	const history = $derived.by<BandwidthPoint[]>(() => {
+		return rawSamples.map((s) => {
+			let rx = 0;
+			let tx = 0;
+			if (selectedIface === "all") {
+				for (const i of s.interfaces) {
+					rx += i.rx_rate_bps;
+					tx += i.tx_rate_bps;
+				}
+			} else {
+				const found = s.interfaces.find((i) => i.interface === selectedIface);
+				if (found) {
+					rx = found.rx_rate_bps;
+					tx = found.tx_rate_bps;
+				}
+			}
+			return {
+				date: s.date,
+				timestamp: s.timestamp,
+				rxBps: rx,
+				txBps: tx,
+			};
+		});
 	});
 
 	const chartConfig = {
