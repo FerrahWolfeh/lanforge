@@ -20,6 +20,8 @@
 		"/network/hosts": "Static Host Reservations",
 		"/network/discovery": "Network Discovery & Monitor",
 		"/network/traffic": "Traffic & SQM",
+		"/network/traffic/sqm": "Bufferbloat (CAKE)",
+		"/network/traffic/tuning": "Hardware NIC Tuning",
 		"/firewall": "Firewall & Security",
 		"/network/ra": "IPv6 Router Advertisements",
 		"/network/pppoe": "PPPoE WAN Client",

@@ -279,10 +279,10 @@
 		{
 			label: "Network Traffic",
 			value: telemetryData
-				? `${formatBps(totalRxBps)} ↓ / ${formatBps(totalTxBps)} ↑`
+				? formatBps(totalTrafficBps)
 				: null,
 			subtext: telemetryData
-				? `${telemetryData.interfaces.length} active interfaces`
+				? `${formatBps(totalRxBps)} ↓ • ${formatBps(totalTxBps)} ↑`
 				: "Aggregate throughput",
 			icon: ActivityIcon,
 			color: "text-indigo-400",
@@ -466,12 +466,14 @@
 					{:else}
 						<div class="flex flex-col gap-0.5">
 							<span
-								class="text-foreground text-2xl sm:text-3xl font-bold tabular-nums tracking-tight"
+								class="text-foreground text-2xl sm:text-3xl font-bold tabular-nums tracking-tight truncate"
+								title={card.value}
 							>
 								{card.value}
 							</span>
 							<span
-								class="text-muted-foreground text-xs font-medium"
+								class="text-muted-foreground text-xs font-medium truncate"
+								title={card.subtext}
 							>
 								{card.subtext}
 							</span>

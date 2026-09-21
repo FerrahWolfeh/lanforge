@@ -27,6 +27,8 @@
 		"/network/hosts": "Static Hosts",
 		"/network/discovery": "Discovery & Monitor",
 		"/network/traffic": "Traffic & SQM",
+		"/network/traffic/sqm": "Bufferbloat (CAKE)",
+		"/network/traffic/tuning": "Hardware NIC Tuning",
 		"/network/ra": "IPv6 RA",
 		"/network/pppoe": "PPPoE",
 		"/dns/resolver": "DNS Resolver",

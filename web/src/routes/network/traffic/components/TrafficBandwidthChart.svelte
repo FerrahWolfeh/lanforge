@@ -38,7 +38,19 @@
 		txBps: number;
 	}
 
-	let rawSamples = $state<TelemetrySample[]>([]);
+	function createInitialSamples(): TelemetrySample[] {
+		const now = Date.now();
+		return Array.from({ length: 30 }, (_, i) => {
+			const past = new Date(now - (29 - i) * 2500);
+			return {
+				date: past,
+				timestamp: past.getTime(),
+				interfaces: [],
+			};
+		});
+	}
+
+	let rawSamples = $state<TelemetrySample[]>(createInitialSamples());
 
 	const availableInterfaces = $derived(
 		telemetry?.interfaces?.map((i) => i.interface) ?? []
@@ -56,37 +68,14 @@
 				tx_rate_bps: i.tx_rate_bps,
 			}));
 
-			if (rawSamples.length === 0) {
-				const initial: TelemetrySample[] = [];
-				for (let i = 24; i >= 1; i--) {
-					const past = new Date(now.getTime() - i * 2500);
-					const jitter = 0.85 + Math.random() * 0.3;
-					initial.push({
-						date: past,
-						timestamp: past.getTime(),
-						interfaces: currentIfaces.map((i) => ({
-							interface: i.interface,
-							rx_rate_bps: Math.round(i.rx_rate_bps * jitter),
-							tx_rate_bps: Math.round(i.tx_rate_bps * jitter),
-						})),
-					});
-				}
-				initial.push({
+			rawSamples = [
+				...rawSamples.slice(-29),
+				{
 					date: now,
 					timestamp: now.getTime(),
 					interfaces: currentIfaces,
-				});
-				rawSamples = initial;
-			} else {
-				rawSamples = [
-					...rawSamples.slice(-39),
-					{
-						date: now,
-						timestamp: now.getTime(),
-						interfaces: currentIfaces,
-					},
-				];
-			}
+				},
+			];
 		});
 	});
 
@@ -257,10 +246,13 @@
 					seriesLayout="overlap"
 					axis="x"
 					grid={true}
+					yDomain={[0, Math.max(stats.peakRate, 100_000)]}
 					props={{
 						xAxis: {
-							format: (d: Date) =>
-								`${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`,
+							format: (d: Date | number) => {
+								const dt = d instanceof Date ? d : new Date(Number(d));
+								return `${dt.getHours().toString().padStart(2, "0")}:${dt.getMinutes().toString().padStart(2, "0")}:${dt.getSeconds().toString().padStart(2, "0")}`;
+							},
 							tickSpacing: 80,
 						},
 						yAxis: {
@@ -277,10 +269,10 @@
 					{#snippet tooltip()}
 						<Chart.Tooltip
 							labelFormatter={(v) => {
-								if (v instanceof Date) {
-									return v.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-								}
-								return String(v);
+								const dt = v instanceof Date ? v : new Date(Number(v));
+								return isNaN(dt.getTime())
+									? String(v)
+									: dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 							}}
 						/>
 					{/snippet}
