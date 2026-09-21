@@ -3,7 +3,7 @@
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
-	import { formatBytes } from "$lib/utils";
+	import { formatBytes, formatBps } from "$lib/utils";
 	import {
 		status,
 		dnsStats,
@@ -12,6 +12,7 @@
 		hostList,
 		scan,
 		dnsAnalytics,
+		trafficTelemetry,
 	} from "$lib/api/client";
 	import {
 		normalizeServices,
@@ -22,11 +23,12 @@
 		type DeviceEntry,
 		type HostConfigEntry,
 		type ServiceBanner,
+		type TrafficTelemetryResponse,
 	} from "$lib/api/types";
 	import Sparkline from "$lib/components/ui/sparkline.svelte";
 	import DashboardActivityHero from "./components/DashboardActivityHero.svelte";
 	import { toast } from "svelte-sonner";
-	import { onMount } from "svelte";
+	import { onMount, onDestroy } from "svelte";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import NetworkIcon from "@lucide/svelte/icons/network";
@@ -37,6 +39,7 @@
 	import WifiIcon from "@lucide/svelte/icons/wifi";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import ServerIcon from "@lucide/svelte/icons/server";
+	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
 
 	let statusData = $state<StatusResponse | null>(null);
@@ -48,19 +51,21 @@
 	} | null>(null);
 	let hostsData = $state<HostConfigEntry[] | null>(null);
 	let analyticsData = $state<DnsAnalyticsResponse | null>(null);
+	let telemetryData = $state<TrafficTelemetryResponse | null>(null);
 	let loadingData = $state(true);
 	let scanning = $state(false);
 
 	async function loadAll() {
 		loadingData = true;
 		try {
-			const [s, dns, ls, dev, hst, aRes] = await Promise.allSettled([
+			const [s, dns, ls, dev, hst, aRes, telem] = await Promise.allSettled([
 				status(),
 				dnsStats(),
 				leases(),
 				listDevices(),
 				hostList(),
 				dnsAnalytics(10),
+				trafficTelemetry(),
 			]);
 			if (s.status === "fulfilled") statusData = s.value;
 			if (dns.status === "fulfilled") dnsData = dns.value;
@@ -83,6 +88,9 @@
 			if (aRes.status === "fulfilled") {
 				analyticsData = aRes.value;
 			}
+			if (telem.status === "fulfilled") {
+				telemetryData = telem.value;
+			}
 		} finally {
 			loadingData = false;
 		}
@@ -101,7 +109,23 @@
 		}
 	}
 
-	onMount(loadAll);
+	let pollInterval: ReturnType<typeof setInterval> | null = null;
+
+	onMount(() => {
+		loadAll();
+		pollInterval = setInterval(() => {
+			if (typeof document !== "undefined" && document.hidden) return;
+			trafficTelemetry()
+				.then((t) => {
+					telemetryData = t;
+				})
+				.catch(() => {});
+		}, 2500);
+	});
+
+	onDestroy(() => {
+		if (pollInterval) clearInterval(pollInterval);
+	});
 
 	const rssBytes = $derived(
 		statusData?.resources?.memory_rss_bytes ??
@@ -168,6 +192,43 @@
 		return [c, c, c, c, c, c, c, c];
 	});
 
+	const totalRxBps = $derived(
+		telemetryData?.interfaces?.reduce((acc, i) => acc + i.rx_rate_bps, 0) ?? 0
+	);
+	const totalTxBps = $derived(
+		telemetryData?.interfaces?.reduce((acc, i) => acc + i.tx_rate_bps, 0) ?? 0
+	);
+	const totalTrafficBps = $derived(totalRxBps + totalTxBps);
+	const conntrack = $derived(telemetryData?.conntrack);
+
+	const trafficSparkline = $derived.by(() => {
+		const mbps = totalTrafficBps > 0 ? Math.round(totalTrafficBps / 1_000_000) : 12;
+		return [
+			Math.max(1, mbps * 0.6),
+			Math.max(1, mbps * 0.8),
+			Math.max(1, mbps * 0.7),
+			Math.max(1, mbps * 1.1),
+			Math.max(1, mbps * 0.9),
+			Math.max(1, mbps * 1.0),
+			Math.max(1, mbps * 1.2),
+			Math.max(1, mbps),
+		];
+	});
+
+	const conntrackSparkline = $derived.by(() => {
+		const c = conntrack?.active_connections ?? 42;
+		return [
+			Math.max(1, c - 10),
+			Math.max(1, c - 5),
+			Math.max(1, c - 8),
+			c,
+			Math.max(1, c - 4),
+			c,
+			c,
+			c,
+		];
+	});
+
 	const statCards = $derived([
 		{
 			label: "Active Devices",
@@ -214,6 +275,34 @@
 			bgColor: "bg-sky-500/10 border-sky-500/20",
 			sparklineData: dnsSparkline,
 			sparklineColor: "#0ea5e9",
+		},
+		{
+			label: "Network Traffic",
+			value: telemetryData
+				? `${formatBps(totalRxBps)} ↓ / ${formatBps(totalTxBps)} ↑`
+				: null,
+			subtext: telemetryData
+				? `${telemetryData.interfaces.length} active interfaces`
+				: "Aggregate throughput",
+			icon: ActivityIcon,
+			color: "text-indigo-400",
+			bgColor: "bg-indigo-500/10 border-indigo-500/20",
+			sparklineData: trafficSparkline,
+			sparklineColor: "#6366f1",
+		},
+		{
+			label: "Firewall Conntrack",
+			value: conntrack
+				? `${conntrack.active_connections.toLocaleString()} / ${conntrack.max_connections.toLocaleString()}`
+				: null,
+			subtext: conntrack
+				? `${conntrack.utilization_percent.toFixed(1)}% session capacity`
+				: "Active stateful sessions",
+			icon: ShieldCheckIcon,
+			color: "text-violet-400",
+			bgColor: "bg-violet-500/10 border-violet-500/20",
+			sparklineData: conntrackSparkline,
+			sparklineColor: "#8b5cf6",
 		},
 	]);
 
@@ -345,8 +434,8 @@
 		</div>
 	</div>
 
-	<!-- Top Stat Cards (4 Core Router Metrics) -->
-	<div class="grid grid-cols-1 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-4">
+	<!-- Top Stat Cards (Core Router Metrics) -->
+	<div class="grid grid-cols-1 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
 		{#each statCards as card (card.label)}
 			<Card.Root
 				class="relative overflow-hidden transition-all hover:border-zinc-700"
@@ -402,6 +491,7 @@
 		{analyticsData}
 		{statusData}
 		{dnsData}
+		{telemetryData}
 	/>
 
 	<!-- Main Grid: Subsystem Overview (2 Cols) + Network & System Vitals (1 Col) -->

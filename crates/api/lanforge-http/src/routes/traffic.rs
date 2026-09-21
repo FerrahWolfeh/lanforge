@@ -12,6 +12,7 @@ use crate::server::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/status", get(handle_status))
+        .route("/telemetry", get(handle_telemetry))
         .route(
             "/config",
             get(handle_get_config).post(handle_update_config),
@@ -21,6 +22,11 @@ pub fn router() -> Router<AppState> {
 async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_traffic_status().await, TrafficStatus)
+}
+
+async fn handle_telemetry(State(state): State<AppState>) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_traffic_telemetry().await, TrafficTelemetry)
 }
 
 async fn handle_get_config(State(state): State<AppState>) -> impl IntoResponse {

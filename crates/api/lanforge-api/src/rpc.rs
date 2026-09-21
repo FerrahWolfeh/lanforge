@@ -25,6 +25,7 @@ use lanforge_types::{
         },
         pppoe::PppoeConfig,
         ra::RaServerConfig,
+        traffic::TrafficTelemetryResponse,
         TrafficConfig,
     },
     system::{PppoeStatusResponse, RaStatusResponse, ServiceAction, TrafficStatusResponse},
@@ -365,4 +366,7 @@ pub trait LanforgeRpc {
         &self,
         cfg: Box<TrafficConfig>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn traffic_telemetry(
+        &self,
+    ) -> impl Future<Output = Result<Box<TrafficTelemetryResponse>, RpcCallError>> + Send;
 }

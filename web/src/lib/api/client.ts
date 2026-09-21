@@ -61,7 +61,8 @@ import type {
 	FirewallCommitRequest,
 	FirewallCommitResponse,
 	TrafficConfig,
-	TrafficStatusResponse
+	TrafficStatusResponse,
+	TrafficTelemetryResponse
 } from './types';
 
 
@@ -753,6 +754,7 @@ export const firewallAbort = (tx_id: string) =>
 	post<void>('/firewall/abort', { tx_id });
 
 export const trafficStatus = () => get<TrafficStatusResponse>('/traffic/status');
+export const trafficTelemetry = () => get<TrafficTelemetryResponse>('/traffic/telemetry');
 export const trafficConfig = () => get<TrafficConfig>('/traffic/config');
 export const trafficUpdateConfig = (config: TrafficConfig) =>
 	post<void>('/traffic/config', config);

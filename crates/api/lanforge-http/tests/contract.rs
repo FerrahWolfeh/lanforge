@@ -224,6 +224,9 @@ async fn test_smoke_read_endpoints() {
         ("dns/stats", "/api/v1/dns/stats"),
         ("devices", "/api/v1/devices"),
         ("db/stats", "/api/v1/db/stats"),
+        ("traffic/status", "/api/v1/traffic/status"),
+        ("traffic/config", "/api/v1/traffic/config"),
+        ("traffic/telemetry", "/api/v1/traffic/telemetry"),
     ];
 
     for (desc, path) in cases {
@@ -1072,5 +1075,17 @@ async fn test_users_contract() {
     // 4. Delete user
     let (status, _) = app.delete("/api/v1/users/operator1").await;
     assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_traffic_telemetry_contract() {
+    let app = TestApp::no_auth().await;
+
+    let (status, body) = app.get("/api/v1/traffic/telemetry").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let data = &body["data"];
+    assert!(data["timestamp"].as_u64().is_some(), "timestamp must be present");
+    assert!(data["interfaces"].as_array().is_some(), "interfaces must be a list");
 }
 

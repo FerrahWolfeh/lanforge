@@ -1190,3 +1190,74 @@ export interface TrafficStatusResponse {
 	flow_offload_suppressed: boolean;
 }
 
+export interface InterfaceTrafficStats {
+	interface: string;
+	rx_bytes: number;
+	tx_bytes: number;
+	rx_packets: number;
+	tx_packets: number;
+	rx_errors: number;
+	tx_errors: number;
+	rx_dropped: number;
+	tx_dropped: number;
+	rx_rate_bps: number;
+	tx_rate_bps: number;
+}
+
+export interface CakeTinStats {
+	tin_index: number;
+	name: string;
+	threshold_rate: number;
+	sent_bytes: number;
+	sent_packets: number;
+	backlog_bytes: number;
+	peak_delay_us: number;
+	avg_delay_us: number;
+	base_delay_us: number;
+	drops: number;
+	ecn_mark: number;
+	ack_drops: number;
+	sparse_flows: number;
+	bulk_flows: number;
+	unresponsive_flows: number;
+}
+
+export interface CakeQdiscStats {
+	dev: string;
+	kind: string;
+	bandwidth: number;
+	bytes: number;
+	packets: number;
+	drops: number;
+	overlimits: number;
+	backlog: number;
+	qlen: number;
+	memory_used: number;
+	memory_limit: number;
+	capacity_estimate: number;
+	tins: CakeTinStats[];
+}
+
+export interface SqmTelemetryStats {
+	active: boolean;
+	egress: CakeQdiscStats | null;
+	ingress: CakeQdiscStats | null;
+}
+
+export interface ConntrackStats {
+	active_connections: number;
+	max_connections: number;
+	utilization_percent: number;
+	search: number;
+	new: number;
+	drop: number;
+	invalid: number;
+}
+
+export interface TrafficTelemetryResponse {
+	timestamp: number;
+	interfaces: InterfaceTrafficStats[];
+	sqm: SqmTelemetryStats | null;
+	conntrack: ConntrackStats | null;
+}
+

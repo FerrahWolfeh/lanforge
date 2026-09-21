@@ -582,3 +582,15 @@ impl HttpWrappedResponse for lanforge_types::system::TrafficStatusResponse {
         wrapper.data
     }
 }
+
+impl HttpWrappedResponse for lanforge_types::network::traffic::TrafficTelemetryResponse {
+    type Wrapper = HttpDataResponse<lanforge_types::network::traffic::TrafficTelemetryResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}

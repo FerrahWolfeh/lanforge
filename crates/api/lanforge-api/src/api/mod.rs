@@ -6,6 +6,7 @@ use lanforge_types::{
         },
         pppoe::PppoeConfig,
         ra::RaServerConfig,
+        traffic::TrafficTelemetryResponse,
         TrafficConfig,
     },
     system::{PppoeStatusResponse, RaStatusResponse, TrafficStatusResponse},
@@ -128,4 +129,6 @@ pub enum Response {
     TrafficStatus(Box<TrafficStatusResponse>),
     /// Traffic and SQM declarative configuration response.
     TrafficConfig(Box<TrafficConfig>),
+    /// Traffic telemetry response containing instantaneous rates, conntrack, and SQM stats.
+    TrafficTelemetry(Box<TrafficTelemetryResponse>),
 }

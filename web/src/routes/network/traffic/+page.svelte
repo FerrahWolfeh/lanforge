@@ -5,6 +5,7 @@
 	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
 	import {
 		trafficStatus,
+		trafficTelemetry,
 		trafficConfig,
 		trafficUpdateConfig,
 		getSetupStatus,
@@ -13,6 +14,7 @@
 	import type {
 		TrafficConfig,
 		TrafficStatusResponse,
+		TrafficTelemetryResponse,
 		NetworkInterfaceInfo,
 		SetupStatusResponse,
 		PppoeConfig,
@@ -28,11 +30,13 @@
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 
 	import TrafficStatsCards from "./components/TrafficStatsCards.svelte";
+	import TrafficBandwidthChart from "./components/TrafficBandwidthChart.svelte";
 	import TrafficSqmTab from "./components/TrafficSqmTab.svelte";
 	import TrafficTuningTab from "./components/TrafficTuningTab.svelte";
 
 	// Page state
 	let status = $state<TrafficStatusResponse | null>(null);
+	let telemetry = $state<TrafficTelemetryResponse | null>(null);
 	let serverConfig = $state<TrafficConfig | null>(null);
 	let availableInterfaces = $state<NetworkInterfaceInfo[]>([]);
 	let setupStatus = $state<SetupStatusResponse | null>(null);
@@ -162,15 +166,17 @@
 	async function loadAll(silent = false) {
 		if (!silent) loading = true;
 		try {
-			const [s, c, setupRes, pppoeRes] = await Promise.all([
+			const [s, c, setupRes, pppoeRes, telemRes] = await Promise.all([
 				trafficStatus().catch(() => null),
 				trafficConfig().catch(() => null),
 				getSetupStatus().catch(() => null),
 				pppoeConfig().catch(() => null),
+				trafficTelemetry().catch(() => null),
 			]);
 			status = s;
 			setupStatus = setupRes;
 			pppoeCfg = pppoeRes;
+			telemetry = telemRes;
 
 			if (setupRes?.interfaces) {
 				availableInterfaces = setupRes.interfaces;
@@ -242,12 +248,11 @@
 	onMount(() => {
 		loadAll(false);
 		refreshInterval = setInterval(() => {
-			trafficStatus()
-				.then((s) => {
-					status = s;
-				})
-				.catch(() => {});
-		}, 5000);
+			Promise.allSettled([trafficStatus(), trafficTelemetry()]).then(([sRes, tRes]) => {
+				if (sRes.status === "fulfilled") status = sRes.value;
+				if (tRes.status === "fulfilled") telemetry = tRes.value;
+			});
+		}, 3000);
 	});
 
 	onDestroy(() => {
@@ -313,8 +318,11 @@
 		</div>
 	</div>
 
-	<!-- Top Telemetry Status Cards (3-column layout) -->
-	<TrafficStatsCards {status} />
+	<!-- Top Telemetry Status Cards -->
+	<TrafficStatsCards {status} {telemetry} />
+
+	<!-- Real-Time Bandwidth & Throughput Chart -->
+	<TrafficBandwidthChart {telemetry} />
 
 	{#if loading && !serverConfig}
 		<div class="flex items-center justify-center p-12 text-muted-foreground text-sm">
@@ -349,6 +357,7 @@
 					bind:ingressDevice={sqmIngressDevice}
 					{availableInterfaces}
 					detectedWan={shapingWan}
+					{telemetry}
 				/>
 			</Tabs.Content>
 

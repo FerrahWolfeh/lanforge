@@ -88,3 +88,14 @@ export function parseCsvList(str: string | null | undefined): string[] {
 		.map((s) => s.trim())
 		.filter(Boolean);
 }
+
+/**
+ * Formats a bitrate in bits per second into human-readable rate (bps, kbps, Mbps, Gbps).
+ */
+export function formatBps(bps: number | null | undefined): string {
+	if (!bps || bps <= 0 || isNaN(bps)) return "0 bps";
+	if (bps >= 1_000_000_000) return `${(bps / 1_000_000_000).toFixed(2)} Gbps`;
+	if (bps >= 1_000_000) return `${(bps / 1_000_000).toFixed(1)} Mbps`;
+	if (bps >= 1_000) return `${(bps / 1_000).toFixed(0)} kbps`;
+	return `${bps} bps`;
+}

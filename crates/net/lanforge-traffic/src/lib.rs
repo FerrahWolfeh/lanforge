@@ -6,10 +6,12 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
 
+pub mod collector;
 pub mod service;
 pub mod sqm;
 pub mod tuning;
 
+pub use collector::collect_traffic_telemetry;
 pub use lanforge_types::events::traffic::*;
 pub use lanforge_types::network::traffic::*;
 pub use service::TrafficService;

@@ -14,8 +14,12 @@
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
 	import ChevronUpIcon from "@lucide/svelte/icons/chevron-up";
+	import ArrowDownIcon from "@lucide/svelte/icons/arrow-down";
+	import ArrowUpIcon from "@lucide/svelte/icons/arrow-up";
+	import ActivityIcon from "@lucide/svelte/icons/activity";
+	import { formatBytes } from "$lib/utils";
 
-	import type { SqmOverhead, SqmDiffserv, NetworkInterfaceInfo } from "$lib/api/types";
+	import type { SqmOverhead, SqmDiffserv, NetworkInterfaceInfo, TrafficTelemetryResponse } from "$lib/api/types";
 
 	let {
 		enabled = $bindable(false),
@@ -29,6 +33,7 @@
 		ingressDevice = $bindable("ifb4lanforge"),
 		availableInterfaces = [],
 		detectedWan = null,
+		telemetry = null,
 	}: {
 		enabled?: boolean;
 		downloadMbps?: number;
@@ -41,6 +46,7 @@
 		ingressDevice?: string;
 		availableInterfaces?: NetworkInterfaceInfo[];
 		detectedWan?: string | null;
+		telemetry?: TrafficTelemetryResponse | null;
 	} = $props();
 
 	let advancedOpen = $state(false);
@@ -72,6 +78,249 @@
 </script>
 
 <div class="flex flex-col gap-6">
+	<!-- Real-time CAKE Telemetry Card (When active in kernel) -->
+	{#if telemetry?.sqm?.active}
+		<Card.Root class="border-emerald-500/30 bg-card/60 overflow-hidden">
+			<Card.Header class="pb-3 border-b border-border/50 bg-emerald-500/5">
+				<div class="flex items-center justify-between">
+					<div class="flex items-center gap-2">
+						<GaugeIcon class="size-4 text-emerald-500" />
+						<Card.Title class="text-sm font-semibold text-foreground">
+							Live CAKE Queue & Latency Telemetry
+						</Card.Title>
+					</div>
+					<Badge variant="outline" class="border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-[10px] font-mono">
+						<span class="relative flex size-1.5 mr-1.5">
+							<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+							<span class="relative inline-flex rounded-full size-1.5 bg-emerald-500"></span>
+						</span>
+						Kernel AQM Active
+					</Badge>
+				</div>
+				<Card.Description class="text-xs">
+					Real-time buffer latency, ECN marks, packet pacing, and DiffServ flow isolation measured directly from the Linux kernel.
+				</Card.Description>
+			</Card.Header>
+			<Card.Content class="p-4 flex flex-col gap-4">
+				<!-- Ingress & Egress 2-Column Overview -->
+				<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+					<!-- Ingress (Download) -->
+					{#if telemetry.sqm.ingress}
+						{@const ing = telemetry.sqm.ingress}
+						{@const peakDelay = Math.max(...ing.tins.map((t) => t.peak_delay_us), 0)}
+						{@const avgDelay = Math.round(ing.tins.reduce((a, t) => a + t.avg_delay_us, 0) / Math.max(1, ing.tins.length))}
+						{@const totalEcn = ing.tins.reduce((a, t) => a + t.ecn_mark, 0)}
+						{@const sparseFlows = ing.tins.reduce((a, t) => a + t.sparse_flows, 0)}
+						{@const bulkFlows = ing.tins.reduce((a, t) => a + t.bulk_flows, 0)}
+						<div class="flex flex-col gap-2.5 rounded-xl border p-3.5 bg-muted/20">
+							<div class="flex items-center justify-between">
+								<span class="text-xs font-semibold text-foreground flex items-center gap-1.5">
+									<ArrowDownIcon class="size-3.5 text-sky-400" />
+									Ingress Shaper ({ing.dev})
+								</span>
+								<span class="font-mono text-xs font-bold text-sky-400">
+									{ing.bandwidth > 0 ? `${(ing.bandwidth / 1_000_000).toFixed(1)} Mbps` : "Unlimited"}
+								</span>
+							</div>
+							<div class="grid grid-cols-2 gap-2 text-xs border-t pt-2 font-mono">
+								<div class="flex flex-col gap-0.5">
+									<span class="text-[11px] text-muted-foreground font-sans">Buffer Latency</span>
+									<span class="text-foreground font-semibold">
+										{peakDelay} µs <span class="text-muted-foreground font-normal text-[10px]">(avg {avgDelay} µs)</span>
+									</span>
+								</div>
+								<div class="flex flex-col gap-0.5">
+									<span class="text-[11px] text-muted-foreground font-sans">Drops / ECN Marks</span>
+									<span class="text-foreground font-semibold">
+										<span class={ing.drops > 0 ? "text-amber-400" : "text-emerald-500"}>{ing.drops.toLocaleString()} drops</span>
+										<span class="text-muted-foreground font-normal text-[10px]"> / {totalEcn} ECN</span>
+									</span>
+								</div>
+								<div class="flex flex-col gap-0.5">
+									<span class="text-[11px] text-muted-foreground font-sans">Active Flows</span>
+									<span class="text-foreground">
+										<span class="text-emerald-400">{sparseFlows} sparse</span> / <span class="text-sky-400">{bulkFlows} bulk</span>
+									</span>
+								</div>
+								<div class="flex flex-col gap-0.5">
+									<span class="text-[11px] text-muted-foreground font-sans">Packets / Volume</span>
+									<span class="text-muted-foreground">
+										{ing.packets.toLocaleString()} pkts ({formatBytes(ing.bytes)})
+									</span>
+								</div>
+							</div>
+						</div>
+					{/if}
+
+					<!-- Egress (Upload) -->
+					{#if telemetry.sqm.egress}
+						{@const eg = telemetry.sqm.egress}
+						{@const peakDelay = Math.max(...eg.tins.map((t) => t.peak_delay_us), 0)}
+						{@const avgDelay = Math.round(eg.tins.reduce((a, t) => a + t.avg_delay_us, 0) / Math.max(1, eg.tins.length))}
+						{@const totalEcn = eg.tins.reduce((a, t) => a + t.ecn_mark, 0)}
+						{@const sparseFlows = eg.tins.reduce((a, t) => a + t.sparse_flows, 0)}
+						{@const bulkFlows = eg.tins.reduce((a, t) => a + t.bulk_flows, 0)}
+						<div class="flex flex-col gap-2.5 rounded-xl border p-3.5 bg-muted/20">
+							<div class="flex items-center justify-between">
+								<span class="text-xs font-semibold text-foreground flex items-center gap-1.5">
+									<ArrowUpIcon class="size-3.5 text-emerald-400" />
+									Egress Shaper ({eg.dev})
+								</span>
+								<span class="font-mono text-xs font-bold text-emerald-400">
+									{eg.bandwidth > 0 ? `${(eg.bandwidth / 1_000_000).toFixed(1)} Mbps` : "Unlimited"}
+								</span>
+							</div>
+							<div class="grid grid-cols-2 gap-2 text-xs border-t pt-2 font-mono">
+								<div class="flex flex-col gap-0.5">
+									<span class="text-[11px] text-muted-foreground font-sans">Buffer Latency</span>
+									<span class="text-foreground font-semibold">
+										{peakDelay} µs <span class="text-muted-foreground font-normal text-[10px]">(avg {avgDelay} µs)</span>
+									</span>
+								</div>
+								<div class="flex flex-col gap-0.5">
+									<span class="text-[11px] text-muted-foreground font-sans">Drops / ECN Marks</span>
+									<span class="text-foreground font-semibold">
+										<span class={eg.drops > 0 ? "text-amber-400" : "text-emerald-500"}>{eg.drops.toLocaleString()} drops</span>
+										<span class="text-muted-foreground font-normal text-[10px]"> / {totalEcn} ECN</span>
+									</span>
+								</div>
+								<div class="flex flex-col gap-0.5">
+									<span class="text-[11px] text-muted-foreground font-sans">Active Flows</span>
+									<span class="text-foreground">
+										<span class="text-emerald-400">{sparseFlows} sparse</span> / <span class="text-sky-400">{bulkFlows} bulk</span>
+									</span>
+								</div>
+								<div class="flex flex-col gap-0.5">
+									<span class="text-[11px] text-muted-foreground font-sans">Packets / Volume</span>
+									<span class="text-muted-foreground">
+										{eg.packets.toLocaleString()} pkts ({formatBytes(eg.bytes)})
+									</span>
+								</div>
+							</div>
+						</div>
+					{/if}
+				</div>
+
+				<!-- DiffServ Tins Latency Visual Bars -->
+				{#if telemetry.sqm.egress || telemetry.sqm.ingress}
+					{@const displayQdisc = telemetry.sqm.egress ?? telemetry.sqm.ingress}
+					<div class="flex flex-col gap-2 pt-1">
+						<div class="flex items-center justify-between">
+							<span class="text-xs font-semibold text-foreground">DiffServ Tins Bufferbloat Latency Gauge</span>
+							<span class="text-[11px] text-muted-foreground font-mono">Target Delay: 5,000 µs (5 ms)</span>
+						</div>
+						<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+							{#each displayQdisc?.tins ?? [] as tin (tin.tin_index)}
+								{@const pct = Math.min(100, Math.round((tin.peak_delay_us / 5000) * 100))}
+								<div class="flex flex-col gap-2 rounded-xl border p-3 bg-muted/20">
+									<div class="flex items-center justify-between">
+										<span class="text-xs font-semibold text-foreground">{tin.name}</span>
+										<Badge variant="outline" class="text-[10px] font-mono py-0">
+											Tin {tin.tin_index}
+										</Badge>
+									</div>
+									<div class="flex items-baseline justify-between text-xs font-mono">
+										<span class="text-[11px] text-muted-foreground font-sans">Peak Delay:</span>
+										<span class={[
+											"font-bold",
+											tin.peak_delay_us < 1000 ? "text-emerald-400" : tin.peak_delay_us < 3000 ? "text-sky-400" : tin.peak_delay_us <= 5000 ? "text-amber-400" : "text-rose-400"
+										].join(" ")}>
+											{tin.peak_delay_us} µs
+										</span>
+									</div>
+									<!-- Visual Latency Bar -->
+									<div class="h-2 w-full rounded-full bg-muted/60 overflow-hidden">
+										<div
+											class={[
+												"h-full rounded-full transition-all duration-300",
+												tin.peak_delay_us < 1000 ? "bg-emerald-500" : tin.peak_delay_us < 3000 ? "bg-sky-500" : tin.peak_delay_us <= 5000 ? "bg-amber-500" : "bg-rose-500"
+											].join(" ")}
+											style={`width: ${Math.max(4, pct)}%`}
+										></div>
+									</div>
+									<div class="flex items-center justify-between text-[11px] text-muted-foreground pt-0.5 border-t border-border/40 font-mono">
+										<span>Flows:</span>
+										<span>
+											<span class="text-emerald-400">{tin.sparse_flows} sparse</span> / <span class="text-sky-400">{tin.bulk_flows} bulk</span>
+										</span>
+									</div>
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/if}
+
+				<!-- DiffServ Tins Detailed Priority Queues Table -->
+				{#if (telemetry.sqm.ingress?.tins.length ?? 0) > 0 || (telemetry.sqm.egress?.tins.length ?? 0) > 0}
+					<div class="flex flex-col gap-1.5 pt-1">
+						<span class="text-xs font-semibold text-foreground">DiffServ Priority Tins Breakdown</span>
+						<div class="overflow-x-auto rounded-lg border border-border/50">
+							<table class="w-full text-xs text-left">
+								<thead class="bg-muted/40 text-muted-foreground font-medium border-b border-border/50">
+									<tr>
+										<th class="py-2 px-3">Tin Queue</th>
+										<th class="py-2 px-3 text-center">Direction</th>
+										<th class="py-2 px-3 text-right">Packets Sent</th>
+										<th class="py-2 px-3 text-right">Volume</th>
+										<th class="py-2 px-3 text-right">Buffer Delay</th>
+										<th class="py-2 px-3 text-right">Drops / ECN</th>
+										<th class="py-2 px-3 text-right">Flows (Sparse/Bulk)</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-border/40 font-mono text-[11px]">
+									{#if telemetry.sqm.ingress}
+										{#each telemetry.sqm.ingress.tins as tin (tin.tin_index)}
+											<tr class="hover:bg-muted/20">
+												<td class="py-2 px-3 font-semibold text-foreground font-sans">{tin.name}</td>
+												<td class="py-2 px-3 text-center">
+													<Badge variant="outline" class="text-[10px] px-1 py-0 border-sky-500/30 text-sky-400 font-sans">Ingress</Badge>
+												</td>
+												<td class="py-2 px-3 text-right">{tin.sent_packets.toLocaleString()}</td>
+												<td class="py-2 px-3 text-right">{formatBytes(tin.sent_bytes)}</td>
+												<td class="py-2 px-3 text-right">{tin.peak_delay_us} µs <span class="text-muted-foreground">({tin.avg_delay_us} µs)</span></td>
+												<td class="py-2 px-3 text-right">
+													<span class={tin.drops > 0 ? "text-amber-400" : "text-muted-foreground"}>{tin.drops} drops</span>
+													{#if tin.ecn_mark > 0}
+														<span class="text-emerald-400 ml-1">· {tin.ecn_mark} ecn</span>
+													{/if}
+												</td>
+												<td class="py-2 px-3 text-right">
+													<span class="text-emerald-400">{tin.sparse_flows}s</span> / <span class="text-sky-400">{tin.bulk_flows}b</span>
+												</td>
+											</tr>
+										{/each}
+									{/if}
+									{#if telemetry.sqm.egress}
+										{#each telemetry.sqm.egress.tins as tin (tin.tin_index)}
+											<tr class="hover:bg-muted/20">
+												<td class="py-2 px-3 font-semibold text-foreground font-sans">{tin.name}</td>
+												<td class="py-2 px-3 text-center">
+													<Badge variant="outline" class="text-[10px] px-1 py-0 border-emerald-500/30 text-emerald-400 font-sans">Egress</Badge>
+												</td>
+												<td class="py-2 px-3 text-right">{tin.sent_packets.toLocaleString()}</td>
+												<td class="py-2 px-3 text-right">{formatBytes(tin.sent_bytes)}</td>
+												<td class="py-2 px-3 text-right">{tin.peak_delay_us} µs <span class="text-muted-foreground">({tin.avg_delay_us} µs)</span></td>
+												<td class="py-2 px-3 text-right">
+													<span class={tin.drops > 0 ? "text-amber-400" : "text-muted-foreground"}>{tin.drops} drops</span>
+													{#if tin.ecn_mark > 0}
+														<span class="text-emerald-400 ml-1">· {tin.ecn_mark} ecn</span>
+													{/if}
+												</td>
+												<td class="py-2 px-3 text-right">
+													<span class="text-emerald-400">{tin.sparse_flows}s</span> / <span class="text-sky-400">{tin.bulk_flows}b</span>
+												</td>
+											</tr>
+										{/each}
+									{/if}
+								</tbody>
+							</table>
+						</div>
+					</div>
+				{/if}
+			</Card.Content>
+		</Card.Root>
+	{/if}
+
 	<!-- Master Enable Switch Card -->
 	<Card.Root>
 		<Card.Header class="pb-3 border-b border-border/50">

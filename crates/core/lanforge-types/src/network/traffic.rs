@@ -131,3 +131,91 @@ const fn default_rps_flow_entries() -> u32 {
 const fn default_rps_flow_cnt() -> u32 {
     4096
 }
+
+/// Detailed throughput and packet counters for a single network interface.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct InterfaceTrafficStats {
+    pub interface: String,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    pub rx_packets: u64,
+    pub tx_packets: u64,
+    pub rx_errors: u64,
+    pub tx_errors: u64,
+    pub rx_dropped: u64,
+    pub tx_dropped: u64,
+    pub rx_rate_bps: u64,
+    pub tx_rate_bps: u64,
+}
+
+/// Statistics for a single `DiffServ` priority queue / tin in CAKE.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CakeTinStats {
+    pub tin_index: u8,
+    pub name: String,
+    pub threshold_rate: u64,
+    pub sent_bytes: u64,
+    pub sent_packets: u64,
+    pub backlog_bytes: u64,
+    pub peak_delay_us: u32,
+    pub avg_delay_us: u32,
+    pub base_delay_us: u32,
+    pub drops: u64,
+    pub ecn_mark: u64,
+    pub ack_drops: u64,
+    pub sparse_flows: u32,
+    pub bulk_flows: u32,
+    pub unresponsive_flows: u32,
+}
+
+/// Real-time statistics of a CAKE queuing discipline.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CakeQdiscStats {
+    pub dev: String,
+    pub kind: String,
+    pub bandwidth: u64,
+    pub bytes: u64,
+    pub packets: u64,
+    pub drops: u64,
+    pub overlimits: u64,
+    pub backlog: u64,
+    pub qlen: u32,
+    pub memory_used: u64,
+    pub memory_limit: u64,
+    pub capacity_estimate: u64,
+    pub tins: Vec<CakeTinStats>,
+}
+
+/// Aggregated SQM telemetry (egress on WAN + ingress on IFB).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SqmTelemetryStats {
+    pub active: bool,
+    pub egress: Option<CakeQdiscStats>,
+    pub ingress: Option<CakeQdiscStats>,
+}
+
+/// Kernel Netfilter conntrack table statistics.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+pub struct ConntrackStats {
+    pub active_connections: u32,
+    pub max_connections: u32,
+    pub utilization_percent: f32,
+    #[serde(default)]
+    pub search: u64,
+    #[serde(default)]
+    pub new: u64,
+    #[serde(default)]
+    pub drop: u64,
+    #[serde(default)]
+    pub invalid: u64,
+}
+
+/// Complete real-time traffic, SQM, and conntrack telemetry payload.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+pub struct TrafficTelemetryResponse {
+    pub timestamp: u64,
+    pub interfaces: Vec<InterfaceTrafficStats>,
+    pub sqm: Option<SqmTelemetryStats>,
+    pub conntrack: Option<ConntrackStats>,
+}
+

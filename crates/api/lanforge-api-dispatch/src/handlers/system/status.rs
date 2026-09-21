@@ -161,6 +161,27 @@ impl ClientContext {
         Response::TrafficStatus(status)
     }
 
+    pub async fn handle_traffic_telemetry(&self) -> Response {
+        let (wan_iface, ingress_device) = {
+            let read_guard = self.ctx.read();
+            read_guard
+                .interfaces
+                .traffic_status
+                .as_ref()
+                .map_or((None, None), |s| {
+                    (s.wan_interface.clone(), s.ingress_device.clone())
+                })
+        };
+
+        let telemetry = lanforge_traffic::collect_traffic_telemetry(
+            wan_iface.as_deref(),
+            ingress_device.as_deref(),
+        )
+        .await;
+
+        Response::TrafficTelemetry(Box::new(telemetry))
+    }
+
     pub async fn handle_firewall_status(&self) -> Response {
         let cfg = self.ctx.get_firewall_config().unwrap_or_default();
         let dynamic_ports = self.ctx.registered_service_ports();

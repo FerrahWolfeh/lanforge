@@ -23,6 +23,7 @@ use lanforge_types::network::firewall::{
 };
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::RaServerConfig;
+use lanforge_types::network::traffic::TrafficTelemetryResponse;
 use lanforge_types::network::TrafficConfig;
 use lanforge_types::system::{PppoeStatusResponse, RaStatusResponse, TrafficStatusResponse};
 use lanforge_types::update::LeaseTarget;
@@ -916,6 +917,14 @@ impl LanforgeRpc for ClientContext {
     async fn update_traffic_config(&self, cfg: Box<TrafficConfig>) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_update_traffic_config(*cfg).await {
             Response::Success(s) => Ok(s),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn traffic_telemetry(&self) -> Result<Box<TrafficTelemetryResponse>, RpcCallError> {
+        match self.handle_traffic_telemetry().await {
+            Response::TrafficTelemetry(t) => Ok(t),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }
