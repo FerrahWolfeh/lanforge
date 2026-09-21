@@ -134,6 +134,25 @@ pub fn extract_token_str(headers: &axum::http::HeaderMap) -> Option<&str> {
     None
 }
 
+/// Extract authentication token from headers (Authorization, Cookie) or query string (`token`, `access_token`).
+#[must_use]
+pub fn extract_token(headers: &axum::http::HeaderMap, query: Option<&str>) -> Option<String> {
+    if let Some(tok) = extract_token_str(headers) {
+        return Some(tok.to_string());
+    }
+    if let Some(q) = query {
+        for pair in q.split('&') {
+            if let Some((k, v)) = pair.split_once('=')
+                && (k == "token" || k == "access_token")
+                && !v.is_empty()
+            {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
 impl Default for AuthManager {
     fn default() -> Self {
         Self::new()
@@ -149,11 +168,11 @@ where
 
     fn from_request_parts(parts: &mut Parts, state: &S) -> impl Future<Output = HttpResult<Self>> {
         let auth_manager = AuthManager::from_ref(state);
-        let result = extract_token_str(&parts.headers)
-            .ok_or_else(|| HttpError::Auth("Missing Authorization header or session cookie".into()))
+        let result = extract_token(&parts.headers, parts.uri.query())
+            .ok_or_else(|| HttpError::Auth("Missing Authorization header, session cookie, or token parameter".into()))
             .and_then(|token| {
                 auth_manager
-                    .validate_token(token)
+                    .validate_token(&token)
                     .map_err(|_| HttpError::Auth("Invalid or expired token".into()))
             });
 
@@ -239,11 +258,11 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &S) -> HttpResult<Self> {
         let auth_manager = AuthManager::from_ref(state);
         let db = Arc::<dyn DatabaseStore>::from_ref(state);
-        let token = extract_token_str(&parts.headers).ok_or_else(|| {
-            HttpError::Auth("Missing Authorization header or session cookie".into())
+        let token = extract_token(&parts.headers, parts.uri.query()).ok_or_else(|| {
+            HttpError::Auth("Missing Authorization header, session cookie, or token parameter".into())
         })?;
 
-        authenticate_token(token, &auth_manager, db.as_ref()).await
+        authenticate_token(&token, &auth_manager, db.as_ref()).await
     }
 }
 
@@ -302,10 +321,10 @@ pub async fn middleware(
         auth_manager.set_has_users(true);
     }
 
-    let token = extract_token_str(req.headers())
-        .ok_or_else(|| HttpError::Auth("Missing Authorization header or session cookie".into()))?;
+    let token = extract_token(req.headers(), req.uri().query())
+        .ok_or_else(|| HttpError::Auth("Missing Authorization header, session cookie, or token parameter".into()))?;
 
-    let user = authenticate_token(token, &auth_manager, db.as_ref()).await?;
+    let user = authenticate_token(&token, &auth_manager, db.as_ref()).await?;
 
     req.extensions_mut().insert(user);
 

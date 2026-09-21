@@ -6,10 +6,13 @@
 	import { Switch } from "$lib/components/ui/switch";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import PencilIcon from "@lucide/svelte/icons/pencil";
+	import AlertCircleIcon from "@lucide/svelte/icons/alert-circle";
 	import DeviceCombobox from "$lib/components/DeviceCombobox.svelte";
 	import { toast } from "svelte-sonner";
 	import { hostAdd } from "$lib/api/client";
 	import type { HostConfigEntry, DeviceEntry } from "$lib/api/types";
+	import { z } from "zod";
+	import { validateForm, macSchema, type FieldErrors } from "$lib/utils/validation";
 
 	let {
 		open = $bindable(false),
@@ -25,6 +28,13 @@
 		onSaved?: () => Promise<void>;
 	} = $props();
 
+	const hostFormSchema = z.object({
+		mac: macSchema,
+		hostname: z.string().trim().max(63, "Hostname cannot exceed 63 characters").optional().or(z.literal("")),
+		v4: z.string().trim().ipv4("Invalid IPv4 address format (e.g. 192.168.1.10)").optional().or(z.literal("")),
+		v6Suffix: z.string().trim().optional().or(z.literal("")),
+	});
+
 	let formMac = $state("");
 	let formHostname = $state("");
 	let formV4 = $state("");
@@ -32,9 +42,11 @@
 	let formIgnoreDnsLog = $state(false);
 	let formIgnoredLogDomains = $state("");
 	let submitting = $state(false);
+	let fieldErrors = $state<FieldErrors<{ mac: string; hostname: string; v4: string; v6Suffix: string }>>({});
 
 	$effect(() => {
 		if (open) {
+			fieldErrors = {};
 			if (isEditing && host) {
 				formMac = host.mac;
 				formHostname = host.hostname || "";
@@ -55,11 +67,15 @@
 
 	function handleDeviceSelect(dev: DeviceEntry) {
 		formMac = dev.mac;
+		if (fieldErrors.mac) fieldErrors.mac = undefined;
 		if (dev.hostname && dev.hostname !== "—" && !dev.hostname.startsWith("<")) {
 			formHostname = dev.hostname;
 		}
 		const rawV4 = dev.v4?.ip || (dev.display_v4 && dev.display_v4 !== "—" ? dev.display_v4.replace(/\s*\?$/, "") : "");
-		if (rawV4.trim()) formV4 = rawV4.trim();
+		if (rawV4.trim()) {
+			formV4 = rawV4.trim();
+			if (fieldErrors.v4) fieldErrors.v4 = undefined;
+		}
 		const rawV6 = dev.v6?.ip || (dev.display_v6 && dev.display_v6 !== "—" ? dev.display_v6 : "");
 		if (rawV6.trim()) formV6Suffix = rawV6.trim();
 		if (dev.ignore_dns_log !== undefined) {
@@ -72,8 +88,18 @@
 
 	async function handleSubmit(e: Event) {
 		e.preventDefault();
-		if (!formMac.trim()) {
-			toast.error("MAC Address is required");
+		fieldErrors = {};
+
+		const validation = validateForm(hostFormSchema, {
+			mac: formMac,
+			hostname: formHostname,
+			v4: formV4,
+			v6Suffix: formV6Suffix,
+		});
+
+		if (!validation.success) {
+			fieldErrors = validation.errors;
+			toast.error("Please correct the invalid fields highlighted below");
 			return;
 		}
 
@@ -134,6 +160,12 @@
 						placeholder="Search device or enter MAC (e.g. AA:BB:CC:DD:EE:FF)..."
 						onselect={handleDeviceSelect}
 					/>
+					{#if fieldErrors.mac}
+						<p class="text-[11px] text-destructive font-medium mt-1 flex items-center gap-1">
+							<AlertCircleIcon class="size-3.5 shrink-0" />
+							{fieldErrors.mac}
+						</p>
+					{/if}
 				</Field.Field>
 
 				<!-- Hostname -->
@@ -144,7 +176,15 @@
 						placeholder="e.g. raspberry-pi-4"
 						class="text-xs"
 						bind:value={formHostname}
+						aria-invalid={Boolean(fieldErrors.hostname)}
+						oninput={() => { if (fieldErrors.hostname) fieldErrors.hostname = undefined; }}
 					/>
+					{#if fieldErrors.hostname}
+						<p class="text-[11px] text-destructive font-medium mt-1 flex items-center gap-1">
+							<AlertCircleIcon class="size-3.5 shrink-0" />
+							{fieldErrors.hostname}
+						</p>
+					{/if}
 					<Field.FieldDescription class="text-[11px]">
 						Overrides reverse DNS and DHCP Option 12 host name for this device.
 					</Field.FieldDescription>
@@ -158,7 +198,15 @@
 						placeholder="e.g. 192.168.1.10"
 						class="font-mono text-xs"
 						bind:value={formV4}
+						aria-invalid={Boolean(fieldErrors.v4)}
+						oninput={() => { if (fieldErrors.v4) fieldErrors.v4 = undefined; }}
 					/>
+					{#if fieldErrors.v4}
+						<p class="text-[11px] text-destructive font-medium mt-1 flex items-center gap-1">
+							<AlertCircleIcon class="size-3.5 shrink-0" />
+							{fieldErrors.v4}
+						</p>
+					{/if}
 					<Field.FieldDescription class="text-[11px]">
 						Reserved IPv4 address granted exclusively to this MAC via DHCP.
 					</Field.FieldDescription>

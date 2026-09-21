@@ -32,7 +32,7 @@
 	<!-- Total Tokens -->
 	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
 		<Card.Header class="pb-2">
-			<Card.Description class="text-xs font-medium">Total de Chaves</Card.Description>
+			<Card.Description class="text-xs font-medium">Total Keys</Card.Description>
 			<Card.Title class="text-2xl font-bold text-foreground">
 				{#if isLoading}
 					<Skeleton class="h-8 w-12 rounded-lg" />
@@ -43,14 +43,14 @@
 		</Card.Header>
 		<Card.Content class="pt-0 text-[11px] text-muted-foreground flex items-center gap-1.5">
 			<KeyIcon class="size-3.5 text-primary" />
-			<span>Tokens registrados na base</span>
+			<span>Registered database tokens</span>
 		</Card.Content>
 	</Card.Root>
 
 	<!-- Active Tokens -->
 	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
 		<Card.Header class="pb-2">
-			<Card.Description class="text-xs font-medium">Tokens Ativos</Card.Description>
+			<Card.Description class="text-xs font-medium">Active Tokens</Card.Description>
 			<Card.Title class="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
 				{#if isLoading}
 					<Skeleton class="h-8 w-12 rounded-lg" />
@@ -61,14 +61,14 @@
 		</Card.Header>
 		<Card.Content class="pt-0 text-[11px] text-muted-foreground flex items-center gap-1.5">
 			<CheckCircle2Icon class="size-3.5 text-emerald-500" />
-			<span>Dentro do prazo de validade</span>
+			<span>Within validity period</span>
 		</Card.Content>
 	</Card.Root>
 
 	<!-- Expired Tokens -->
 	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
 		<Card.Header class="pb-2">
-			<Card.Description class="text-xs font-medium">Tokens Expirados</Card.Description>
+			<Card.Description class="text-xs font-medium">Expired Tokens</Card.Description>
 			<Card.Title class="text-2xl font-bold {expiredCount > 0 ? 'text-amber-500' : 'text-muted-foreground'}">
 				{#if isLoading}
 					<Skeleton class="h-8 w-12 rounded-lg" />
@@ -79,14 +79,14 @@
 		</Card.Header>
 		<Card.Content class="pt-0 text-[11px] text-muted-foreground flex items-center gap-1.5">
 			<ClockIcon class="size-3.5 text-amber-500" />
-			<span>Necessitam renovação</span>
+			<span>Require renewal</span>
 		</Card.Content>
 	</Card.Root>
 
 	<!-- Admin Scope -->
 	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
 		<Card.Header class="pb-2">
-			<Card.Description class="text-xs font-medium">Acesso Administrador</Card.Description>
+			<Card.Description class="text-xs font-medium">Admin Scope</Card.Description>
 			<Card.Title class="text-2xl font-bold text-foreground">
 				{#if isLoading}
 					<Skeleton class="h-8 w-12 rounded-lg" />
@@ -97,7 +97,7 @@
 		</Card.Header>
 		<Card.Content class="pt-0 text-[11px] text-muted-foreground flex items-center gap-1.5">
 			<ShieldCheckIcon class="size-3.5 text-primary" />
-			<span>Escopo total de permissões</span>
+			<span>Full permission scope</span>
 		</Card.Content>
 	</Card.Root>
 </div>

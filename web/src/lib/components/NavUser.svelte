@@ -50,27 +50,27 @@
 	async function handleChangePassword(e: SubmitEvent) {
 		e.preventDefault();
 		if (!currentPassword) {
-			toast.error("Informe a senha atual");
+			toast.error("Please enter your current password");
 			return;
 		}
 		if (newPassword.length < 4) {
-			toast.error("A nova senha deve ter pelo menos 4 caracteres");
+			toast.error("New password must be at least 4 characters");
 			return;
 		}
 		if (newPassword !== confirmPassword) {
-			toast.error("As novas senhas não coincidem");
+			toast.error("New passwords do not match");
 			return;
 		}
 		changingPassword = true;
 		try {
 			await changePassword(currentPassword, newPassword);
-			toast.success("Senha alterada com sucesso!");
+			toast.success("Password changed successfully!");
 			currentPassword = "";
 			newPassword = "";
 			confirmPassword = "";
 			isPasswdOpen = false;
 		} catch (err: any) {
-			toast.error(err?.message || "Falha ao alterar senha");
+			toast.error(err?.message || "Failed to change password");
 		} finally {
 			changingPassword = false;
 		}

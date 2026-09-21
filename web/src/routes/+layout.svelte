@@ -13,6 +13,8 @@
 	import Topbar from "$lib/components/Topbar.svelte";
 	import CommandPalette from "$lib/components/CommandPalette.svelte";
 	import { commandState } from "$lib/stores/command.svelte";
+	import { QueryClientProvider } from "@tanstack/svelte-query";
+	import { queryClient } from "$lib/api/query";
 
 	let { children } = $props();
 	let uptime = $state(0);
@@ -24,6 +26,7 @@
 		"/network/devices": "Devices",
 		"/network/hosts": "Static Hosts",
 		"/network/discovery": "Discovery & Monitor",
+		"/network/traffic": "Traffic & SQM",
 		"/network/ra": "IPv6 RA",
 		"/network/pppoe": "PPPoE",
 		"/dns/resolver": "DNS Resolver",
@@ -81,7 +84,7 @@
 		// /: Focus search input on the current page if not already typing
 		if (event.key === "/" && !isInputActive && !event.ctrlKey && !event.metaKey && !event.altKey && !commandState.isOpen) {
 			const searchInput = document.querySelector<HTMLInputElement>(
-				'input[type="search"], input[placeholder*="Buscar"], input[placeholder*="Search"], input[placeholder*="Filtrar"], input[placeholder*="Filter"]'
+				'input[type="search"], input[placeholder*="Search"], input[placeholder*="Filter"]'
 			);
 			if (searchInput) {
 				event.preventDefault();
@@ -120,38 +123,40 @@
 	<title>{currentTabTitle}</title>
 </svelte:head>
 
-<ModeWatcher defaultMode="system" />
+<QueryClientProvider client={queryClient}>
+	<ModeWatcher defaultMode="system" />
 
-{#if isAuthPage}
-	<main class="min-h-screen w-full bg-background text-foreground">
-		{@render children()}
-	</main>
-{:else}
-	<!-- Main Application Shell (Sidebar Inset Layout) -->
-	<div id="app-shell" class="flex h-screen w-full overflow-hidden bg-sidebar text-sidebar-foreground">
-		<!-- Desktop Sidebar (Permanently mounted and static) -->
-		<div class="hidden lg:flex lg:shrink-0">
-			<AppSidebar />
+	{#if isAuthPage}
+		<main class="min-h-screen w-full bg-background text-foreground">
+			{@render children()}
+		</main>
+	{:else}
+		<!-- Main Application Shell (Sidebar Inset Layout) -->
+		<div id="app-shell" class="flex h-screen w-full overflow-hidden bg-sidebar text-sidebar-foreground">
+			<!-- Desktop Sidebar (Permanently mounted and static) -->
+			<div class="hidden lg:flex lg:shrink-0">
+				<AppSidebar />
+			</div>
+
+			<!-- Main Inset Content Area (Floating Elevated Panel Card) -->
+			<div
+				class="flex flex-1 flex-col overflow-hidden min-h-0 lg:my-2.5 lg:mr-2.5 lg:rounded-2xl lg:border lg:border-sidebar-border/80 bg-background text-foreground lg:shadow-xs transition-all duration-300"
+			>
+				<Topbar {uptime} />
+				<main class="flex-1 overflow-y-auto p-3 sm:p-6 flex flex-col min-h-0">
+					{#key page.url.pathname}
+						<div
+							in:fly={{ y: 8, duration: 200, easing: cubicOut }}
+							class="page-content-compositor w-full flex-1 flex flex-col min-h-0"
+						>
+							{@render children()}
+						</div>
+					{/key}
+				</main>
+			</div>
 		</div>
+	{/if}
 
-		<!-- Main Inset Content Area (Floating Elevated Panel Card) -->
-		<div
-			class="flex flex-1 flex-col overflow-hidden min-h-0 lg:my-2.5 lg:mr-2.5 lg:rounded-2xl lg:border lg:border-sidebar-border/80 bg-background text-foreground lg:shadow-xs transition-all duration-300"
-		>
-			<Topbar {uptime} />
-			<main class="flex-1 overflow-y-auto p-3 sm:p-6 flex flex-col min-h-0">
-				{#key page.url.pathname}
-					<div
-						in:fly={{ y: 8, duration: 200, easing: cubicOut }}
-						class="page-content-compositor w-full flex-1 flex flex-col min-h-0"
-					>
-						{@render children()}
-					</div>
-				{/key}
-			</main>
-		</div>
-	</div>
-{/if}
-
-<Toaster richColors />
-<CommandPalette />
+	<Toaster richColors />
+	<CommandPalette />
+</QueryClientProvider>

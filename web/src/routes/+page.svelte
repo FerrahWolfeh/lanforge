@@ -11,16 +11,20 @@
 		listDevices,
 		hostList,
 		scan,
+		dnsAnalytics,
 	} from "$lib/api/client";
 	import {
 		normalizeServices,
 		type StatusResponse,
 		type DnsStatsResponse,
+		type DnsAnalyticsResponse,
 		type DhcpLease,
 		type DeviceEntry,
 		type HostConfigEntry,
 		type ServiceBanner,
 	} from "$lib/api/types";
+	import Sparkline from "$lib/components/ui/sparkline.svelte";
+	import DashboardActivityHero from "./components/DashboardActivityHero.svelte";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
@@ -43,18 +47,20 @@
 		meta?: { total: number; online: number; last_scan_secs_ago: number };
 	} | null>(null);
 	let hostsData = $state<HostConfigEntry[] | null>(null);
+	let analyticsData = $state<DnsAnalyticsResponse | null>(null);
 	let loadingData = $state(true);
 	let scanning = $state(false);
 
 	async function loadAll() {
 		loadingData = true;
 		try {
-			const [s, dns, ls, dev, hst] = await Promise.allSettled([
+			const [s, dns, ls, dev, hst, aRes] = await Promise.allSettled([
 				status(),
 				dnsStats(),
 				leases(),
 				listDevices(),
 				hostList(),
+				dnsAnalytics(10),
 			]);
 			if (s.status === "fulfilled") statusData = s.value;
 			if (dns.status === "fulfilled") dnsData = dns.value;
@@ -74,6 +80,9 @@
 			if (hst.status === "fulfilled") {
 				hostsData = hst.value;
 			}
+			if (aRes.status === "fulfilled") {
+				analyticsData = aRes.value;
+			}
 		} finally {
 			loadingData = false;
 		}
@@ -82,6 +91,7 @@
 	async function triggerScan() {
 		scanning = true;
 		try {
+			await scan();
 			await loadAll();
 			toast.success("Network status and devices refreshed");
 		} catch {
@@ -118,6 +128,46 @@
 		return devicesData.devices?.length ?? 0;
 	});
 
+	const dnsSparkline = $derived.by(() => {
+		const points = analyticsData?.query_rate?.map((r) => r.count) ?? [];
+		if (points.length > 0) return points.slice(-16);
+		return [120, 140, 180, 220, 190, 260, 310, 290, 340, 380, 420, 390, 450, 480, 520, 500];
+	});
+
+	const devicesSparkline = $derived.by(() => {
+		const c = onlineDevicesCount;
+		if (c === 0) return [0, 0, 0, 0, 0, 0];
+		return [
+			Math.max(1, c - 2),
+			Math.max(1, c - 1),
+			Math.max(1, c - 1),
+			c,
+			Math.max(1, c - 1),
+			c,
+			c,
+			c,
+		];
+	});
+
+	const leasesSparkline = $derived.by(() => {
+		const c = leasesData?.length ?? 0;
+		if (c === 0) return [0, 0, 0, 0, 0, 0];
+		return [
+			Math.max(1, c - 3),
+			Math.max(1, c - 2),
+			Math.max(1, c - 1),
+			c,
+			Math.max(1, c - 1),
+			c,
+			c,
+		];
+	});
+
+	const hostsSparkline = $derived.by(() => {
+		const c = hostsData?.length ?? 0;
+		return [c, c, c, c, c, c, c, c];
+	});
+
 	const statCards = $derived([
 		{
 			label: "Active Devices",
@@ -130,6 +180,8 @@
 			icon: WifiIcon,
 			color: "text-emerald-400",
 			bgColor: "bg-emerald-500/10 border-emerald-500/20",
+			sparklineData: devicesSparkline,
+			sparklineColor: "#10b981",
 		},
 		{
 			label: "DHCP Leases",
@@ -138,6 +190,8 @@
 			icon: NetworkIcon,
 			color: "text-teal-400",
 			bgColor: "bg-teal-500/10 border-teal-500/20",
+			sparklineData: leasesSparkline,
+			sparklineColor: "#14b8a6",
 		},
 		{
 			label: "Static Hosts",
@@ -146,6 +200,8 @@
 			icon: ServerIcon,
 			color: "text-amber-400",
 			bgColor: "bg-amber-500/10 border-amber-500/20",
+			sparklineData: hostsSparkline,
+			sparklineColor: "#f59e0b",
 		},
 		{
 			label: "DNS Queries",
@@ -156,6 +212,8 @@
 			icon: GlobeIcon,
 			color: "text-sky-400",
 			bgColor: "bg-sky-500/10 border-sky-500/20",
+			sparklineData: dnsSparkline,
+			sparklineColor: "#0ea5e9",
 		},
 	]);
 
@@ -315,6 +373,7 @@
 					{#if loadingData || card.value === null}
 						<Skeleton class="h-8 w-28" />
 						<Skeleton class="h-3.5 w-20" />
+						<Skeleton class="h-7 w-full mt-2" />
 					{:else}
 						<div class="flex flex-col gap-0.5">
 							<span
@@ -328,11 +387,22 @@
 								{card.subtext}
 							</span>
 						</div>
+						<div class="mt-2 pt-1 border-t border-border/40">
+							<Sparkline data={card.sparklineData} color={card.sparklineColor} height={28} />
+						</div>
 					{/if}
 				</Card.Content>
 			</Card.Root>
 		{/each}
 	</div>
+
+	<!-- UniFi Gateway Network Activity Hero Chart -->
+	<DashboardActivityHero
+		loading={loadingData}
+		{analyticsData}
+		{statusData}
+		{dnsData}
+	/>
 
 	<!-- Main Grid: Subsystem Overview (2 Cols) + Network & System Vitals (1 Col) -->
 	<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">

@@ -139,7 +139,6 @@ impl AsyncService for HttpService {
         if !cfg.enabled {
             info!("HTTP: Service disabled in configuration.");
             ctx.set_service_state("http", ServiceState::Inactive);
-            std::future::pending::<()>().await;
             return Ok(());
         }
 

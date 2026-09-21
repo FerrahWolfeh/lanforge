@@ -18,7 +18,7 @@
 	async function handleValidateToken() {
 		const trimmed = testTokenInput.trim();
 		if (!trimmed) {
-			toast.error("Informe um token para validação.");
+			toast.error("Please enter a token to validate.");
 			return;
 		}
 		isValidating = true;
@@ -27,13 +27,13 @@
 			const res = await validateToken(trimmed);
 			validationResult = { valid: res.valid, checked: true };
 			if (res.valid) {
-				toast.success("Token ativo e válido no sistema!");
+				toast.success("Token is active and valid!");
 			} else {
-				toast.error("Token inválido, inexistente ou expirado.");
+				toast.error("Invalid, nonexistent, or expired token.");
 			}
 		} catch (err: unknown) {
 			validationResult = { valid: false, checked: true };
-			const msg = err instanceof Error ? err.message : "Falha na checagem.";
+			const msg = err instanceof Error ? err.message : "Validation failed.";
 			toast.error(msg);
 		} finally {
 			isValidating = false;
@@ -47,23 +47,23 @@
 		<Card.Header class="pb-3">
 			<Card.Title class="text-sm font-bold flex items-center gap-2 text-foreground">
 				<TerminalIcon class="size-4 text-primary" />
-				Como Utilizar na Prática
+				Practical Usage Guide
 			</Card.Title>
 			<Card.Description class="text-xs">
-				Exemplos de autenticação para automações com cURL ou na CLI do Lanforge.
+				Authentication examples for scripts and automation using cURL or the Lanforge CLI.
 			</Card.Description>
 		</Card.Header>
 		<Card.Content class="flex flex-col gap-3">
 			<div class="flex flex-col gap-1">
-				<span class="text-[11px] font-semibold text-muted-foreground">Exemplo cURL HTTP:</span>
+				<span class="text-[11px] font-semibold text-muted-foreground">cURL HTTP Example:</span>
 				<div class="p-2.5 rounded-xl bg-muted/40 border border-border/60 font-mono text-[11px] text-foreground break-all select-all">
 					curl -H "Authorization: Bearer lf_ak_..." \
-					<br />&nbsp;&nbsp;http://&lt;ip-lanforge&gt;:3000/api/v1/status
+					<br />&nbsp;&nbsp;http://&lt;lanforge-ip&gt;:3000/api/v1/status
 				</div>
 			</div>
 
 			<div class="flex flex-col gap-1">
-				<span class="text-[11px] font-semibold text-muted-foreground">Exemplo CLI Lanforge:</span>
+				<span class="text-[11px] font-semibold text-muted-foreground">Lanforge CLI Example:</span>
 				<div class="p-2.5 rounded-xl bg-muted/40 border border-border/60 font-mono text-[11px] text-foreground break-all select-all">
 					lanforge --token lf_ak_... status
 				</div>
@@ -76,16 +76,16 @@
 		<Card.Header class="pb-3">
 			<Card.Title class="text-sm font-bold flex items-center gap-2 text-foreground">
 				<ShieldCheckIcon class="size-4 text-primary" />
-				Validador de Token
+				Token Validator
 			</Card.Title>
 			<Card.Description class="text-xs">
-				Teste se um token específico é reconhecido e está atualmente ativo no daemon.
+				Verify whether a specific token is recognized and currently active in the daemon.
 			</Card.Description>
 		</Card.Header>
 		<Card.Content class="flex flex-col gap-3">
 			<div class="flex flex-col gap-1.5">
 				<Input
-					placeholder="Cole o token (lf_ak_... ou JWT) para testar..."
+					placeholder="Paste token (lf_ak_... or JWT) to test..."
 					bind:value={testTokenInput}
 					class="text-xs font-mono rounded-xl h-9 bg-background"
 				/>
@@ -101,10 +101,10 @@
 				>
 					{#if isValidating}
 						<Loader2Icon data-icon="inline-start" class="animate-spin" />
-						Validando...
+						Validating...
 					{:else}
 						<ShieldCheckIcon data-icon="inline-start" />
-						Checar Token
+						Check Token
 					{/if}
 				</Button>
 
@@ -112,12 +112,12 @@
 					{#if validationResult.valid}
 						<Badge variant="outline" class="text-xs text-emerald-600 dark:text-emerald-400 border-emerald-500/30 bg-emerald-500/10">
 							<CheckCircle2Icon class="size-3.5 mr-1" />
-							Token Válido
+							Valid Token
 						</Badge>
 					{:else}
 						<Badge variant="destructive" class="text-xs">
 							<XCircleIcon class="size-3.5 mr-1" />
-							Token Inválido ou Expirado
+							Invalid or Expired Token
 						</Badge>
 					{/if}
 				{/if}

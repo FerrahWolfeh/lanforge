@@ -48,7 +48,7 @@
 							</div>
 						</HelpPopover>
 						<Badge variant={sqmActive ? "outline" : flowOffload ? "default" : "secondary"} class="text-[10px] {sqmActive ? 'border-amber-500/40 text-amber-600 dark:text-amber-400 font-medium' : ''}">
-							{sqmActive ? "Suspenso pelo SQM" : flowOffload ? "Fast-Path Active" : "Disabled"}
+							{sqmActive ? "Suspended by SQM" : flowOffload ? "Fast-Path Active" : "Disabled"}
 						</Badge>
 					</div>
 					<p class="text-xs text-muted-foreground leading-relaxed max-w-2xl">
@@ -58,7 +58,7 @@
 						<div class="mt-2 flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-400">
 							<AlertTriangleIcon class="size-4 shrink-0" />
 							<span>
-								<strong>Suspenso pelo SQM (CAKE):</strong> O flow offload contorna o Traffic Control (TC), o que impediria o controle de latência e bufferbloat.
+								<strong>Suspended by SQM (CAKE):</strong> Flow offload bypasses Traffic Control (TC), which would prevent latency and bufferbloat management.
 							</span>
 						</div>
 					{/if}

@@ -264,7 +264,11 @@ const del = <T>(path: string, body?: unknown, extraHeaders?: Record<string, stri
 export const authStatus = () => get<AuthStatusResponse>('/auth/status');
 export const login = (req: LoginRequest) => post<LoginResponse>('/auth/login', req);
 export const logout = () => post<void>('/auth/logout');
-export const me = () => get<UserInfo>('/auth/me');
+export const me = async (): Promise<UserInfo> => {
+	const res = await get<any>('/auth/me');
+	if (res?.data) return res.data as UserInfo;
+	return res as UserInfo;
+};
 export const changePassword = (current_password: string, new_password: string) =>
 	post<void>('/auth/change-password', { current_password, new_password });
 export const listTokens = async (): Promise<AuthToken[]> => {
@@ -532,7 +536,13 @@ export const dnsAdblockStatus = () => get<DnsAdblockStatusResponse>('/dns/adbloc
 export const dnsAdblockSet = (enabled: boolean, duration_secs?: number) =>
 	put<void>('/dns/adblock', { enabled, duration_secs: duration_secs ?? null });
 export const dnsAdblockReload = () => post<void>('/dns/adblock/reload');
-export const dnsAdblockAllowlist = () => get<AllowlistEntry[]>('/dns/adblock/allowlist');
+export const dnsAdblockAllowlist = async (): Promise<AllowlistEntry[]> => {
+	const res = await get<any>('/dns/adblock/allowlist');
+	if (Array.isArray(res)) return res;
+	if (Array.isArray(res?.allowlist)) return res.allowlist;
+	if (Array.isArray(res?.data?.allowlist)) return res.data.allowlist;
+	return [];
+};
 export const dnsBlock = (domain: string) => post<void>('/dns/adblock/block', { domain });
 export const dnsAllow = (domain: string) => post<void>('/dns/adblock/allow', { domain });
 export const dnsUnallow = (target: string) =>
@@ -690,9 +700,20 @@ export const switchDbEngine = (req: DbEngineSwitchRequest) =>
 // Users
 // ---------------------------------------------------------------------------
 
-export const userList = () => get<UserInfo[]>('/users');
-export const userCreate = (username: string, password: string, role?: string) =>
-	post<UserInfo>('/users', { username, password, role });
+export const userList = async (): Promise<UserInfo[]> => {
+	const res = await get<any>('/users');
+	if (Array.isArray(res)) return res;
+	if (Array.isArray(res?.users)) return res.users;
+	if (Array.isArray(res?.data?.users)) return res.data.users;
+	return [];
+};
+
+export const userCreate = async (username: string, password: string, role?: string): Promise<UserInfo> => {
+	const res = await post<any>('/users', { username, password, role });
+	if (res?.data?.user) return res.data.user;
+	if (res?.user) return res.user;
+	return res as UserInfo;
+};
 export const userDelete = (username: string) => del<void>(`/users/${encodeURIComponent(username)}`);
 export const userPasswd = (username: string, new_password: string) =>
 	put<void>(`/users/${encodeURIComponent(username)}/password`, { new_password });
@@ -771,6 +792,8 @@ export function eventsUrl(params?: { filter?: string; initial?: number }): strin
 	const url = new URL('/api/v1/events', window.location.origin);
 	if (params?.filter) url.searchParams.set('filter', params.filter);
 	if (params?.initial) url.searchParams.set('initial', String(params.initial));
+	const token = getToken();
+	if (token) url.searchParams.set('token', token);
 	return url.toString();
 }
 
@@ -782,5 +805,7 @@ export function dnsLogSseUrl(params?: { client?: string; limit?: number }): stri
 	url.searchParams.set('follow', 'true');
 	if (params?.client) url.searchParams.set('client', params.client);
 	if (params?.limit) url.searchParams.set('limit', String(params.limit));
+	const token = getToken();
+	if (token) url.searchParams.set('token', token);
 	return url.toString();
 }

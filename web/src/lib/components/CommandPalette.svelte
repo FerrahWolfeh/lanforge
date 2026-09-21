@@ -28,6 +28,7 @@
 	import PanelLeftIcon from "@lucide/svelte/icons/panel-left";
 	import LogOutIcon from "@lucide/svelte/icons/log-out";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
+	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
 	import { commandState } from "$lib/stores/command.svelte";
 
 	interface CommandItem {
@@ -35,7 +36,7 @@
 		title: string;
 		subtitle?: string;
 		keywords?: string[];
-		category: "Páginas & Navegação" | "Ações Rápidas";
+		category: "Pages & Navigation" | "Quick Actions";
 		icon: Component<Record<string, unknown>>;
 		action: () => void;
 	}
@@ -48,28 +49,28 @@
 		// Quick Actions
 		{
 			id: "action-theme",
-			title: "Alternar Tema Claro / Escuro",
-			subtitle: "Modo visual da interface",
-			keywords: ["tema", "escuro", "claro", "dark", "light", "mode", "cores"],
-			category: "Ações Rápidas",
+			title: "Toggle Light / Dark Theme",
+			subtitle: "Switch visual interface mode",
+			keywords: ["theme", "dark", "light", "mode", "colors"],
+			category: "Quick Actions",
 			icon: SunMoonIcon,
 			action: () => toggleMode()
 		},
 		{
 			id: "action-sidebar",
-			title: "Alternar Barra Lateral",
-			subtitle: "Expandir ou recolher menu",
-			keywords: ["sidebar", "menu", "lateral", "recolher", "expandir"],
-			category: "Ações Rápidas",
+			title: "Toggle Sidebar",
+			subtitle: "Expand or collapse navigation menu",
+			keywords: ["sidebar", "menu", "collapse", "expand"],
+			category: "Quick Actions",
 			icon: PanelLeftIcon,
 			action: () => sidebarState.toggle()
 		},
 		{
 			id: "action-logout",
-			title: "Encerrar Sessão (Log Out)",
-			subtitle: "Desconectar do painel",
-			keywords: ["sair", "logout", "desconectar", "fechar"],
-			category: "Ações Rápidas",
+			title: "Sign Out (Log Out)",
+			subtitle: "Disconnect from session",
+			keywords: ["sign out", "logout", "disconnect", "exit"],
+			category: "Quick Actions",
 			icon: LogOutIcon,
 			action: async () => {
 				try {
@@ -84,181 +85,199 @@
 		// Navigation Pages
 		{
 			id: "page-dashboard",
-			title: "Dashboard Geral",
+			title: "Dashboard Overview",
 			subtitle: "/",
-			keywords: ["inicio", "home", "painel", "resumo", "metricas"],
-			category: "Páginas & Navegação",
+			keywords: ["dashboard", "home", "overview", "metrics", "summary"],
+			category: "Pages & Navigation",
 			icon: LayoutDashboardIcon,
 			action: () => goto("/")
 		},
 		{
 			id: "page-devices",
-			title: "Dispositivos de Rede",
+			title: "Network Devices",
 			subtitle: "/network/devices",
-			keywords: ["aparelhos", "devices", "computadores", "mac", "ip", "clientes"],
-			category: "Páginas & Navegação",
+			keywords: ["devices", "computers", "clients", "mac", "ip"],
+			category: "Pages & Navigation",
 			icon: MonitorIcon,
 			action: () => goto("/network/devices")
 		},
 		{
 			id: "page-hosts",
-			title: "Reservas Estáticas de Host",
+			title: "Static Host Reservations",
 			subtitle: "/network/hosts",
-			keywords: ["hosts", "estatico", "fixo", "reservas", "mac", "dhcp"],
-			category: "Páginas & Navegação",
+			keywords: ["hosts", "static", "reservations", "mac", "dhcp", "ip"],
+			category: "Pages & Navigation",
 			icon: BookmarkIcon,
 			action: () => goto("/network/hosts")
 		},
 		{
 			id: "page-discovery",
-			title: "Descoberta de Rede & Monitor",
+			title: "Network Discovery & Monitor",
 			subtitle: "/network/discovery",
-			keywords: ["scan", "discovery", "monitor", "vizinhos", "arp", "sondagem"],
-			category: "Páginas & Navegação",
+			keywords: ["scan", "discovery", "monitor", "neighbors", "arp", "probe"],
+			category: "Pages & Navigation",
 			icon: RadioIcon,
 			action: () => goto("/network/discovery")
 		},
 		{
 			id: "page-ra",
-			title: "Anúncios de Roteador IPv6 (RA)",
+			title: "IPv6 Router Advertisements (RA)",
 			subtitle: "/network/ra",
-			keywords: ["ipv6", "router", "advertisements", "slaac", "prefixos"],
-			category: "Páginas & Navegação",
+			keywords: ["ipv6", "router", "advertisements", "slaac", "prefixes"],
+			category: "Pages & Navigation",
 			icon: WifiIcon,
 			action: () => goto("/network/ra")
 		},
 		{
 			id: "page-pppoe",
-			title: "Cliente WAN PPPoE",
+			title: "PPPoE WAN Client",
 			subtitle: "/network/pppoe",
-			keywords: ["pppoe", "wan", "internet", "provedor", "fibra", "banda larga"],
-			category: "Páginas & Navegação",
+			keywords: ["pppoe", "wan", "internet", "isp", "fiber", "broadband"],
+			category: "Pages & Navigation",
 			icon: PlugZapIcon,
 			action: () => goto("/network/pppoe")
 		},
 		{
+			id: "page-firewall",
+			title: "Firewall & Security",
+			subtitle: "/firewall",
+			keywords: ["firewall", "nftables", "port forward", "dmz", "pinhole", "rules", "zones"],
+			category: "Pages & Navigation",
+			icon: ShieldIcon,
+			action: () => goto("/firewall")
+		},
+		{
+			id: "page-traffic",
+			title: "Traffic & SQM Shaping",
+			subtitle: "/network/traffic",
+			keywords: ["traffic", "sqm", "cake", "qos", "bandwidth", "tuning", "bufferbloat", "speed"],
+			category: "Pages & Navigation",
+			icon: SlidersHorizontalIcon,
+			action: () => goto("/network/traffic")
+		},
+		{
 			id: "page-resolver",
-			title: "Resolvedor DNS & Upstreams",
+			title: "DNS Resolver & Upstreams",
 			subtitle: "/dns/resolver",
-			keywords: ["dns", "resolver", "cloudflare", "google", "quad9", "recursivo"],
-			category: "Páginas & Navegação",
+			keywords: ["dns", "resolver", "cloudflare", "google", "quad9", "recursive", "upstream"],
+			category: "Pages & Navigation",
 			icon: GlobeIcon,
 			action: () => goto("/dns/resolver")
 		},
 		{
 			id: "page-query-log",
-			title: "Log de Consultas DNS",
+			title: "DNS Query Log",
 			subtitle: "/dns/log",
-			keywords: ["consultas", "query", "log", "historico", "requisicoes"],
-			category: "Páginas & Navegação",
+			keywords: ["queries", "query", "log", "history", "requests"],
+			category: "Pages & Navigation",
 			icon: ActivityIcon,
 			action: () => goto("/dns/log")
 		},
 		{
 			id: "page-rewrites",
-			title: "Reescritas Customizadas DNS",
+			title: "Custom DNS Rewrites",
 			subtitle: "/dns/rewrites",
-			keywords: ["rewrites", "dominios", "redirecionamentos", "locais"],
-			category: "Páginas & Navegação",
+			keywords: ["rewrites", "domains", "records", "local"],
+			category: "Pages & Navigation",
 			icon: BookmarkIcon,
 			action: () => goto("/dns/rewrites")
 		},
 		{
 			id: "page-dns-cache",
-			title: "Cache de Consultas DNS",
+			title: "DNS Query Cache",
 			subtitle: "/dns/cache",
-			keywords: ["cache", "dns", "ttl", "memoria", "limpeza", "entradas"],
-			category: "Páginas & Navegação",
+			keywords: ["cache", "dns", "ttl", "memory", "flush", "entries"],
+			category: "Pages & Navigation",
 			icon: DatabaseIcon,
 			action: () => goto("/dns/cache")
 		},
 		{
 			id: "page-adblock",
-			title: "Bloqueador de Anúncios (Adblock)",
+			title: "Adblock Filter Lists",
 			subtitle: "/dns/adblock",
-			keywords: ["adblock", "anuncios", "rastreadores", "listas", "regras", "bloqueio"],
-			category: "Páginas & Navegação",
+			keywords: ["adblock", "ads", "trackers", "lists", "rules", "blocking"],
+			category: "Pages & Navigation",
 			icon: ShieldIcon,
 			action: () => goto("/dns/adblock")
 		},
 		{
 			id: "page-dhcp-leases",
-			title: "Leases Ativos DHCP",
+			title: "Active DHCP Leases",
 			subtitle: "/dhcp/leases",
-			keywords: ["dhcp", "leases", "concessoes", "ips", "enderecos"],
-			category: "Páginas & Navegação",
+			keywords: ["dhcp", "leases", "ips", "addresses", "clients"],
+			category: "Pages & Navigation",
 			icon: ServerIcon,
 			action: () => goto("/dhcp/leases")
 		},
 		{
 			id: "page-dhcp-pools",
-			title: "Pools & Escopos DHCP",
+			title: "DHCP Pools & Scopes",
 			subtitle: "/dhcp/pools",
-			keywords: ["pools", "faixas", "subredes", "mascara", "gateway"],
-			category: "Páginas & Navegação",
+			keywords: ["pools", "ranges", "subnets", "netmask", "gateway"],
+			category: "Pages & Navigation",
 			icon: ServerIcon,
 			action: () => goto("/dhcp/pools")
 		},
 		{
 			id: "page-dhcp-server",
-			title: "Opções Gerais do Servidor DHCP",
+			title: "DHCP Server Options",
 			subtitle: "/dhcp/server",
-			keywords: ["dhcp", "configuracao", "parametros", "options"],
-			category: "Páginas & Navegação",
+			keywords: ["dhcp", "configuration", "parameters", "options"],
+			category: "Pages & Navigation",
 			icon: ServerIcon,
 			action: () => goto("/dhcp/server")
 		},
 		{
 			id: "page-tftp",
-			title: "Servidor TFTP & Netboot PXE",
+			title: "TFTP Server & PXE Netboot",
 			subtitle: "/tftp",
 			keywords: ["tftp", "pxe", "netboot", "boot", "uefi", "bios", "ipxe"],
-			category: "Páginas & Navegação",
+			category: "Pages & Navigation",
 			icon: HardDriveDownloadIcon,
 			action: () => goto("/tftp")
 		},
 		{
 			id: "page-system",
-			title: "Status & Telemetria do Sistema",
+			title: "System Status & Telemetry",
 			subtitle: "/system",
-			keywords: ["status", "cpu", "memoria", "uptime", "sistema", "hardware"],
-			category: "Páginas & Navegação",
+			keywords: ["status", "cpu", "memory", "uptime", "system", "hardware"],
+			category: "Pages & Navigation",
 			icon: ServerIcon,
 			action: () => goto("/system")
 		},
 		{
 			id: "page-services",
-			title: "Serviços do Daemon Lanforge",
+			title: "Lanforge Daemon Services",
 			subtitle: "/system/services",
-			keywords: ["servicos", "daemon", "lifecycle", "reiniciar", "parar"],
-			category: "Páginas & Navegação",
+			keywords: ["services", "daemon", "lifecycle", "restart", "stop"],
+			category: "Pages & Navigation",
 			icon: LayersIcon,
 			action: () => goto("/system/services")
 		},
 		{
 			id: "page-database",
-			title: "Banco de Dados & Backups",
+			title: "Database & Backups",
 			subtitle: "/system/database",
-			keywords: ["banco", "redb", "backup", "restaurar", "limpeza", "tabelas"],
-			category: "Páginas & Navegação",
+			keywords: ["database", "redb", "backup", "restore", "prune", "tables"],
+			category: "Pages & Navigation",
 			icon: DatabaseIcon,
 			action: () => goto("/system/database")
 		},
 		{
 			id: "page-users",
-			title: "Usuários & Acessos Locais",
+			title: "Local Users & Access",
 			subtitle: "/system/users",
-			keywords: ["usuarios", "contas", "login", "senhas", "permissoes", "admin"],
-			category: "Páginas & Navegação",
+			keywords: ["users", "accounts", "login", "passwords", "permissions", "admin"],
+			category: "Pages & Navigation",
 			icon: UsersIcon,
 			action: () => goto("/system/users")
 		},
 		{
 			id: "page-keys",
-			title: "Chaves de API & Autenticação",
+			title: "API Keys & Authentication",
 			subtitle: "/system/keys",
-			keywords: ["api", "keys", "tokens", "bearer", "tokens", "scripts", "segredos"],
-			category: "Páginas & Navegação",
+			keywords: ["api", "keys", "tokens", "bearer", "scripts", "secrets"],
+			category: "Pages & Navigation",
 			icon: KeyRoundIcon,
 			action: () => goto("/system/keys")
 		}
@@ -326,8 +345,8 @@
 		class="p-0 overflow-hidden sm:max-w-xl rounded-2xl shadow-2xl border border-border/80 bg-card gap-0 top-[20%] sm:top-[25%]"
 	>
 		<Dialog.Header class="sr-only">
-			<Dialog.Title>Paleta de Comandos</Dialog.Title>
-			<Dialog.Description>Navegue rapidamente por páginas e execute ações do sistema</Dialog.Description>
+			<Dialog.Title>Command Palette</Dialog.Title>
+			<Dialog.Description>Quickly navigate pages and execute system actions</Dialog.Description>
 		</Dialog.Header>
 
 		<!-- Input Box -->
@@ -336,7 +355,7 @@
 			<input
 				bind:this={inputEl}
 				bind:value={search}
-				placeholder="Digite um comando ou busque uma página..."
+				placeholder="Type a command or search for a page..."
 				class="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
 			/>
 			<Badge variant="outline" class="font-mono text-[10px] text-muted-foreground px-1.5 py-0">
@@ -348,7 +367,7 @@
 		<div class="max-h-80 overflow-y-auto p-2 space-y-1">
 			{#if filteredItems.length === 0}
 				<div class="py-10 text-center text-xs text-muted-foreground">
-					Nenhum resultado encontrado para "<span class="font-semibold text-foreground">{search}</span>".
+					No results found for "<span class="font-semibold text-foreground">{search}</span>".
 				</div>
 			{:else}
 				{#each filteredItems as item, idx (item.id)}
@@ -392,7 +411,7 @@
 									? 'bg-primary-foreground/20 text-primary-foreground'
 									: 'bg-muted/60 text-muted-foreground'}"
 							>
-								{item.category === 'Ações Rápidas' ? 'Ação' : 'Página'}
+								{item.category === 'Quick Actions' ? 'Action' : 'Page'}
 							</span>
 							{#if isSelected}
 								<ArrowRightIcon class="size-3.5 opacity-80" />
@@ -409,11 +428,11 @@
 				<span class="flex items-center gap-1">
 					<kbd class="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-[10px]">↑</kbd>
 					<kbd class="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-[10px]">↓</kbd>
-					navegar
+					navigate
 				</span>
 				<span class="flex items-center gap-1">
 					<kbd class="rounded border border-border/80 bg-background px-1 py-0.5 font-mono text-[10px]">↵</kbd>
-					executar
+					execute
 				</span>
 			</div>
 			<span>

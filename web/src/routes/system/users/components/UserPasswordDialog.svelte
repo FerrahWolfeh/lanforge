@@ -33,26 +33,26 @@
 	async function handleSubmit() {
 		if (!user) return;
 		if (!newPassword) {
-			toast.error("Informe a nova senha.");
+			toast.error("Please enter a new password.");
 			return;
 		}
 		if (newPassword.length < 4) {
-			toast.error("A senha deve ter pelo menos 4 caracteres.");
+			toast.error("Password must be at least 4 characters.");
 			return;
 		}
 		if (newPassword !== confirmPassword) {
-			toast.error("As senhas informadas não coincidem.");
+			toast.error("Passwords do not match.");
 			return;
 		}
 
 		isSubmitting = true;
 		try {
 			await userPasswd(user.username, newPassword);
-			toast.success(`Senha de '${user.username}' atualizada com sucesso!`);
+			toast.success(`Password for '${user.username}' updated successfully!`);
 			open = false;
 			onUpdated();
 		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : "Falha ao alterar senha.";
+			const msg = err instanceof Error ? err.message : "Failed to change password.";
 			toast.error(msg);
 		} finally {
 			isSubmitting = false;
@@ -65,10 +65,10 @@
 		<Dialog.Header>
 			<Dialog.Title class="text-base font-bold flex items-center gap-2">
 				<KeyIcon class="size-5 text-primary" />
-				Alterar Senha do Usuário
+				Change User Password
 			</Dialog.Title>
 			<Dialog.Description class="text-xs">
-				Defina uma nova senha para a conta <strong>{user?.username}</strong>.
+				Set a new password for account <strong>{user?.username}</strong>.
 			</Dialog.Description>
 		</Dialog.Header>
 
@@ -80,29 +80,29 @@
 			class="flex flex-col gap-4 py-2"
 		>
 			<Field.FieldGroup class="flex flex-col gap-3">
-				<!-- Nova Senha -->
+				<!-- New Password -->
 				<Field.Field>
 					<Field.FieldLabel for="edit-new-password" class="text-xs font-semibold">
-						Nova Senha *
+						New Password *
 					</Field.FieldLabel>
 					<Input
 						id="edit-new-password"
 						type="password"
-						placeholder="Nova senha de acesso"
+						placeholder="New password"
 						bind:value={newPassword}
 						class="text-xs rounded-xl h-9 bg-background"
 					/>
 				</Field.Field>
 
-				<!-- Confirmar Senha -->
+				<!-- Confirm Password -->
 				<Field.Field>
 					<Field.FieldLabel for="edit-confirm-password" class="text-xs font-semibold">
-						Confirmar Nova Senha *
+						Confirm New Password *
 					</Field.FieldLabel>
 					<Input
 						id="edit-confirm-password"
 						type="password"
-						placeholder="Repita a nova senha"
+						placeholder="Repeat new password"
 						bind:value={confirmPassword}
 						class="text-xs rounded-xl h-9 bg-background"
 					/>
@@ -116,7 +116,7 @@
 					class="rounded-xl cursor-pointer text-xs"
 					onclick={() => (open = false)}
 				>
-					Cancelar
+					Cancel
 				</Button>
 
 				<Button
@@ -126,10 +126,10 @@
 				>
 					{#if isSubmitting}
 						<Loader2Icon data-icon="inline-start" class="animate-spin" />
-						Atualizando...
+						Updating...
 					{:else}
 						<KeyIcon data-icon="inline-start" />
-						Salvar Nova Senha
+						Save New Password
 					{/if}
 				</Button>
 			</Dialog.Footer>

@@ -11,7 +11,6 @@
 	} from "$lib/api/client";
 	import type { DeviceEntry } from "$lib/api/types";
 
-	import DeviceStatsHeader from "./components/DeviceStatsHeader.svelte";
 	import DeviceTable from "./components/DeviceTable.svelte";
 	import DeviceWhoisModal from "./components/DeviceWhoisModal.svelte";
 	import DevicePromoteModal from "./components/DevicePromoteModal.svelte";
@@ -20,9 +19,6 @@
 	let meta = $state<{ total: number; online: number } | null>(null);
 	let loading = $state(true);
 	let scanning = $state(false);
-
-	let searchQuery = $state("");
-	let statusFilter = $state<"all" | "online" | "offline">("all");
 
 	// Details Modal State
 	let selectedDevice = $state<DeviceEntry | null>(null);
@@ -119,14 +115,20 @@
 			eventSource.onmessage = (e) => {
 				try {
 					const data = JSON.parse(e.data);
-					const kind = data?.kind || data?.event || "";
-					if (
-						typeof kind === "string" &&
-						(kind.includes("Device") ||
-							kind.includes("Scan") ||
-							kind.includes("Neighbor") ||
-							kind.includes("Dhcp"))
-					) {
+					const kindStr = typeof data?.kind === "string" ? data.kind : "";
+					const eventObj = data?.event;
+					const isDeviceUpdate =
+						kindStr.includes("Device") ||
+						kindStr.includes("Scan") ||
+						kindStr.includes("Neighbor") ||
+						kindStr.includes("Dhcp") ||
+						Boolean(
+							eventObj?.Device ||
+								eventObj?.Network ||
+								eventObj?.System?.ConfigDhcpV4Changed ||
+								eventObj?.System?.ConfigDhcpV6Changed
+						);
+					if (isDeviceUpdate) {
 						loadDevices(false);
 					}
 				} catch {
@@ -145,31 +147,6 @@
 		}
 	});
 
-	const filteredDevices = $derived.by(() => {
-		let list = devices;
-		if (statusFilter === "online") {
-			list = list.filter((d) => d.online);
-		} else if (statusFilter === "offline") {
-			list = list.filter((d) => !d.online);
-		}
-
-		if (searchQuery.trim()) {
-			const q = searchQuery.toLowerCase().trim();
-			list = list.filter((d) => {
-				const macMatch = d.mac?.toLowerCase().includes(q);
-				const hostMatch = d.hostname?.toLowerCase().includes(q);
-				const v4Match = (d.display_v4 || d.v4?.ip || "")
-					.toLowerCase()
-					.includes(q);
-				const v6Match = (d.display_v6 || d.v6?.ip || "")
-					.toLowerCase()
-					.includes(q);
-				return macMatch || hostMatch || v4Match || v6Match;
-			});
-		}
-
-		return list;
-	});
 </script>
 
 <svelte:head>
@@ -177,20 +154,20 @@
 </svelte:head>
 
 <div class="flex flex-col gap-5">
-	<DeviceStatsHeader
-		{loading}
-		{scanning}
+	<!-- Page Description -->
+	<p class="text-muted-foreground text-xs sm:text-sm">
+		Discovered LAN endpoints tracked via ARP, NDP, and DHCP.
+	</p>
+
+	<!-- Device Table with integrated DataTableCard -->
+	<DeviceTable
+		{devices}
 		totalCount={meta?.total ?? devices.length}
 		onlineCount={meta?.online ?? devices.filter((d) => d.online).length}
-		bind:searchQuery
-		bind:statusFilter
+		{loading}
+		{scanning}
 		onRefresh={loadDevices}
 		onScan={triggerScan}
-	/>
-
-	<DeviceTable
-		devices={filteredDevices}
-		{loading}
 		onInspect={openDetails}
 		onWol={handleWol}
 		onPromote={openPromoteModal}

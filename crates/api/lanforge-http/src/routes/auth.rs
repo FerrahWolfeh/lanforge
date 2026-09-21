@@ -15,7 +15,7 @@ use lanforge_types::auth::UserRole;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use crate::auth::{AuthenticatedUser, extract_token_str, looks_like_jwt};
+use crate::auth::{AuthenticatedUser, extract_token, looks_like_jwt};
 use crate::error::{HttpError, Result as HttpResult};
 use crate::routes::create_client_ctx;
 use crate::server::AppState;
@@ -238,61 +238,6 @@ pub async fn handle_login(
         .trim()
         .to_lowercase();
 
-    // 1. If explicit API token or password matching API token format is provided
-    let candidate_token = payload.token.or_else(|| {
-        payload.password.as_ref().and_then(|p| {
-            if p.starts_with("ak_") || p.starts_with("lf_ak_") {
-                Some(p.clone())
-            } else {
-                None
-            }
-        })
-    });
-
-    if let Some(token_str) = candidate_token {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            .cast_signed();
-        match state.db.validate_api_token(&token_str, now).await {
-            Ok(Some((name, _scopes))) => {
-                let session_token = state.auth.generate_token(&name, "admin")?;
-                return Ok((
-                    StatusCode::OK,
-                    Json(LoginResponse {
-                        data: LoginResponseData {
-                            token: session_token,
-                            username: name,
-                            method: "api_token".to_string(),
-                            auth_required,
-                        },
-                    }),
-                )
-                    .into_response());
-            }
-            Ok(None) => {
-                return Err(HttpError::Auth("Invalid API token".to_string()));
-            }
-            Err(e) => {
-                error!("Database error during login token validation: {e}");
-                return Err(HttpError::Internal("Auth DB error".into()));
-            }
-        }
-    }
-
-    // 2. Database User Password Authentication
-    let password = payload.password.unwrap_or_default();
-    if password.is_empty() {
-        return Err(HttpError::Auth("Password is required".to_string()));
-    }
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .cast_signed();
-
     let ttl_secs = if payload.remember_me.unwrap_or(false) {
         2_592_000 // 30 days
     } else {
@@ -320,6 +265,54 @@ pub async fn handle_login(
         )
             .into_response()
     };
+
+    // 1. If explicit API token or password matching API token format is provided
+    let candidate_token = payload.token.or_else(|| {
+        payload.password.as_ref().and_then(|p| {
+            if p.starts_with("ak_") || p.starts_with("lf_ak_") {
+                Some(p.clone())
+            } else {
+                None
+            }
+        })
+    });
+
+    if let Some(token_str) = candidate_token {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .cast_signed();
+        match state.db.validate_api_token(&token_str, now).await {
+            Ok(Some((name, _scopes))) => {
+                let session_token = state.auth.generate_token_with_ttl(&name, "admin", ttl_secs)?;
+                return Ok(build_login_response(
+                    session_token,
+                    name,
+                    "api_token",
+                ));
+            }
+            Ok(None) => {
+                return Err(HttpError::Auth("Invalid API token".to_string()));
+            }
+            Err(e) => {
+                error!("Database error during login token validation: {e}");
+                return Err(HttpError::Internal("Auth DB error".into()));
+            }
+        }
+    }
+
+    // 2. Database User Password Authentication
+    let password = payload.password.unwrap_or_default();
+    if password.is_empty() {
+        return Err(HttpError::Auth("Password is required".to_string()));
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .cast_signed();
 
     if let Ok(Some(db_user)) = state.db.get_user_by_username(&username).await {
         if verify_password(&db_user.password_hash, &password) {
@@ -373,8 +366,8 @@ async fn handle_status(State(state): State<AppState>, req: Request) -> impl Into
             }
         };
 
-    let authenticated = if let Some(token) = extract_token_str(req.headers()) {
-        if looks_like_jwt(token) && state.auth.validate_token(token).is_ok() {
+    let authenticated = if let Some(token) = extract_token(req.headers(), req.uri().query()) {
+        if looks_like_jwt(&token) && state.auth.validate_token(&token).is_ok() {
             true
         } else {
             let now = SystemTime::now()
@@ -382,9 +375,9 @@ async fn handle_status(State(state): State<AppState>, req: Request) -> impl Into
                 .unwrap_or_default()
                 .as_secs()
                 .cast_signed();
-            match state.db.validate_api_token(token, now).await {
+            match state.db.validate_api_token(&token, now).await {
                 Ok(Some(_)) => true,
-                _ => state.auth.validate_token(token).is_ok(),
+                _ => state.auth.validate_token(&token).is_ok(),
             }
         }
     } else {

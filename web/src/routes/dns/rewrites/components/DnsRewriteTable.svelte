@@ -1,17 +1,11 @@
 <script lang="ts">
-	import * as Card from "$lib/components/ui/card";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
-	import { Input } from "$lib/components/ui/input";
 	import { Button } from "$lib/components/ui/button";
 	import { Badge } from "$lib/components/ui/badge";
-	import { Skeleton } from "$lib/components/ui/skeleton";
 	import * as Select from "$lib/components/ui/select";
-	import SearchIcon from "@lucide/svelte/icons/search";
 	import CopyIcon from "@lucide/svelte/icons/copy";
 	import CheckIcon from "@lucide/svelte/icons/check";
-	import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
-	import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 	import ArrowRightLeftIcon from "@lucide/svelte/icons/arrow-right-left";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import PencilIcon from "@lucide/svelte/icons/pencil";
@@ -22,6 +16,7 @@
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import { toast } from "svelte-sonner";
 	import { dnsQuery, dnsRewriteRemove } from "$lib/api/client";
+	import DataTableCard from "$lib/components/DataTableCard.svelte";
 	import {
 		type RewriteRule,
 		type DnsRecordType,
@@ -149,126 +144,52 @@
 		filteredRules.slice(offset, offset + limit),
 	);
 
-	const currentPage = $derived(Math.floor(offset / limit) + 1);
-	const totalPages = $derived(Math.max(1, Math.ceil(total / limit)));
-	const startItem = $derived(total === 0 ? 0 : offset + 1);
-	const endItem = $derived(Math.min(offset + limit, total));
 </script>
 
-<Card.Root
-	class="flex flex-col h-[calc(100vh-250px)] min-h-[480px] max-h-[750px] overflow-hidden border shadow-sm"
+<DataTableCard
+	title="Configured DNS Rewrite Rules"
+	icon={ArrowRightLeftIcon}
+	total={total}
+	itemName="configured rules"
+	searchPlaceholder="Search domain or answer target..."
+	bind:searchQuery
+	{onSearchChange}
+	{loading}
+	columns={4}
+	pageIndex={Math.floor(offset / limit)}
+	pageSize={limit}
+	onPageChange={(newIdx) => onPageChange(newIdx * limit)}
+	emptyMessage="No DNS rewrite rules have been configured yet."
+	emptyFilteredMessage="No rewrite rules match the active filter criteria."
 >
-	<Card.Header class="pb-3 shrink-0 border-b bg-card">
-		<div
-			class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+	{#snippet filters()}
+		<Select.Root
+			type="single"
+			value={selectedType}
+			onValueChange={(val) => onTypeChange(val ?? "")}
 		>
-			<div>
-				<Card.Title
-					class="text-base font-semibold flex items-center gap-2"
-				>
-					<ArrowRightLeftIcon class="h-4 w-4 text-primary" />
-					Configured DNS Rewrite Rules
-				</Card.Title>
-				<Card.Description class="text-xs">
-					Showing {startItem}–{endItem} of {total.toLocaleString()} configured
-					rules
-				</Card.Description>
-			</div>
+			<Select.Trigger class="h-9 w-[130px] text-xs">
+				{selectedType
+					? `Type: ${selectedType}`
+					: "All Record Types"}
+			</Select.Trigger>
+			<Select.Content>
+				<Select.Item value="" class="text-xs">All Record Types</Select.Item>
+				{#each RECORD_TYPES as rtype (rtype)}
+					<Select.Item value={rtype} class="text-xs">{rtype}</Select.Item>
+				{/each}
+			</Select.Content>
+		</Select.Root>
+	{/snippet}
 
-			<!-- Search & Type Filter Controls Toolbar -->
-			<div class="flex flex-wrap items-center gap-2">
-				<div class="relative w-full sm:w-64">
-					<SearchIcon
-						class="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground"
-					/>
-					<Input
-						type="text"
-						placeholder="Search domain or answer target..."
-						class="pl-9 h-9 text-xs"
-						value={searchQuery}
-						oninput={(e: Event) =>
-							onSearchChange(
-								(e.target as HTMLInputElement).value,
-							)}
-					/>
-				</div>
+	{#snippet header()}
+		<Table.Head class="w-[260px]">Domain / Pattern</Table.Head>
+		<Table.Head class="w-[90px]">Type</Table.Head>
+		<Table.Head>Target / Answer</Table.Head>
+		<Table.Head class="w-[60px] text-right">Actions</Table.Head>
+	{/snippet}
 
-				<Select.Root
-					type="single"
-					value={selectedType}
-					onValueChange={(val) => onTypeChange(val ?? "")}
-				>
-					<Select.Trigger class="h-9 w-[130px] text-xs">
-						{selectedType
-							? `Type: ${selectedType}`
-							: "All Record Types"}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" class="text-xs"
-							>All Record Types</Select.Item
-						>
-						{#each RECORD_TYPES as rtype (rtype)}
-							<Select.Item value={rtype} class="text-xs"
-								>{rtype}</Select.Item
-							>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-			</div>
-		</div>
-	</Card.Header>
-
-	<!-- Table Body with Fixed Scroll Container -->
-	<Card.Content class="p-0 flex-1 min-h-0 overflow-auto relative">
-		<Table.Root class="min-w-[600px]">
-			<Table.Header
-				class="sticky top-0 z-10 bg-card/95 backdrop-blur-md border-b shadow-xs"
-			>
-				<Table.Row class="hover:bg-transparent">
-					<Table.Head class="w-[260px]">Domain / Pattern</Table.Head>
-					<Table.Head class="w-[90px]">Type</Table.Head>
-					<Table.Head>Target / Answer</Table.Head>
-					<Table.Head class="w-[60px] text-right">Actions</Table.Head>
-				</Table.Row>
-			</Table.Header>
-			<Table.Body>
-				{#if loading}
-					{#each Array(6) as _}
-						<Table.Row>
-							<Table.Cell
-								><Skeleton class="h-4 w-48" /></Table.Cell
-							>
-							<Table.Cell
-								><Skeleton
-									class="h-5 w-10 rounded-full"
-								/></Table.Cell
-							>
-							<Table.Cell
-								><Skeleton class="h-4 w-64" /></Table.Cell
-							>
-							<Table.Cell
-								><Skeleton
-									class="h-4 w-6 ml-auto"
-								/></Table.Cell
-							>
-						</Table.Row>
-					{/each}
-				{:else if paginatedRules.length === 0}
-					<Table.Row>
-						<Table.Cell
-							colspan={4}
-							class="h-48 text-center text-muted-foreground text-sm"
-						>
-							{#if searchQuery || selectedType}
-								No rewrite rules match the active filter
-								criteria.
-							{:else}
-								No DNS rewrite rules have been configured yet.
-							{/if}
-						</Table.Cell>
-					</Table.Row>
-				{:else}
-					{#each paginatedRules as rule, i (`${rule.id}-${rule.domain}-${rule.rtype}-${i}`)}
+	{#each paginatedRules as rule, i (`${rule.id}-${rule.domain}-${rule.rtype}-${i}`)}
 						{@const domainClean = cleanDomain(rule.domain)}
 						{@const ans = formatRewriteAnswer(rule.answer)}
 						{@const style =
@@ -492,39 +413,4 @@
 							</Table.Cell>
 						</Table.Row>
 					{/each}
-				{/if}
-			</Table.Body>
-		</Table.Root>
-	</Card.Content>
-
-	<!-- Fixed Pinned Pagination Footer -->
-	<div
-		class="flex items-center justify-between px-4 py-2.5 border-t bg-card shrink-0 z-10"
-	>
-		<p class="text-xs text-muted-foreground">
-			Page {currentPage} of {totalPages}
-		</p>
-		<div class="flex items-center gap-1">
-			<Button
-				variant="outline"
-				size="sm"
-				disabled={offset === 0 || loading}
-				onclick={() => onPageChange(Math.max(0, offset - limit))}
-				class="h-8 gap-1 px-2.5 text-xs"
-			>
-				<ChevronLeftIcon class="h-3.5 w-3.5" />
-				Previous
-			</Button>
-			<Button
-				variant="outline"
-				size="sm"
-				disabled={offset + limit >= total || loading}
-				onclick={() => onPageChange(offset + limit)}
-				class="h-8 gap-1 px-2.5 text-xs"
-			>
-				Next
-				<ChevronRightIcon class="h-3.5 w-3.5" />
-			</Button>
-		</div>
-	</div>
-</Card.Root>
+</DataTableCard>

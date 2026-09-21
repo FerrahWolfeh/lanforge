@@ -16,9 +16,13 @@
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import NetworkIcon from "@lucide/svelte/icons/network";
 	import LaptopIcon from "@lucide/svelte/icons/laptop";
+	import AlertCircleIcon from "@lucide/svelte/icons/alert-circle";
+	import { toast } from "svelte-sonner";
 	import { cn } from "$lib/utils";
 	import { untrack } from "svelte";
 	import type { PortForwardRule, L4Protocol, DeviceEntry } from "$lib/api/types";
+	import { z } from "zod";
+	import { validateForm, ipv4Schema, ipv6Schema, portNumberSchema } from "$lib/utils/validation";
 
 	let {
 		open = $bindable(false),
@@ -151,38 +155,65 @@
 		devicePickerSearch = "";
 	}
 
-	// ── Port validator ────────────────────────────────────────────────────────
-	function validPort(v: number | ""): boolean {
-		return typeof v === "number" && v >= 1 && v <= 65535;
-	}
+	// ── Schemas ───────────────────────────────────────────────────────────────
+	const portForwardBaseSchema = z.object({
+		srcZone: z.string().trim().min(1, "Please select a source zone"),
+		externalPort: portNumberSchema,
+		internalPort: portNumberSchema,
+		comment: z.string().trim().max(128, "Comment cannot exceed 128 characters").optional(),
+	});
+
+	const v4PortForwardSchema = portForwardBaseSchema.extend({
+		internalIp: ipv4Schema,
+	});
+
+	const v6PortForwardSchema = portForwardBaseSchema.extend({
+		internalIpv6: ipv6Schema,
+	});
+
+	const dualPortForwardSchema = portForwardBaseSchema.extend({
+		internalIp: ipv4Schema,
+		internalIpv6: ipv6Schema,
+	});
 
 	// ── Submit ────────────────────────────────────────────────────────────────
 	function handleSave() {
-		const next: Record<string, string> = {};
 		const cleanV4 = cleanIp(internalIp);
 		const cleanV6 = cleanIp(internalIpv6);
 
-		if (!validPort(externalPort)) next.externalPort = "Port must be 1–65535";
-		if (!validPort(internalPort)) next.internalPort = "Port must be 1–65535";
-		if (!srcZone) next.srcZone = "Please select a source zone";
+		const rawData = {
+			srcZone,
+			externalPort: externalPort === "" ? NaN : externalPort,
+			internalPort: internalPort === "" ? NaN : internalPort,
+			comment: comment.trim() || undefined,
+			internalIp: cleanV4,
+			internalIpv6: cleanV6,
+		};
 
-		if (ipMode === "v4" || ipMode === "dual") {
-			if (!cleanV4) next.internalIp = "IPv4 address is required";
-		}
-		if (ipMode === "v6" || ipMode === "dual") {
-			if (!cleanV6) next.internalIpv6 = "IPv6 address is required";
+		let validation;
+		if (ipMode === "dual") {
+			validation = validateForm(dualPortForwardSchema, rawData);
+		} else if (ipMode === "v6") {
+			validation = validateForm(v6PortForwardSchema, rawData);
+		} else {
+			validation = validateForm(v4PortForwardSchema, rawData);
 		}
 
-		errors = next;
-		if (Object.values(next).some(Boolean)) return;
+		if (!validation.success) {
+			errors = validation.errors as Record<string, string>;
+			toast.error("Please correct the invalid fields highlighted below");
+			return;
+		}
+
+		errors = {};
 
 		if (ipMode === "dual") {
 			const v4Rule: PortForwardRule = {
 				comment: comment.trim() || null,
 				src_zone: srcZone,
 				internal_ip: cleanV4,
-				external_port: externalPort as number,
-				internal_port: internalPort as number,
+				external_port: Number(externalPort),
+				internal_port: Number(internalPort),
 				protocol,
 				enable_hairpin: enableHairpin,
 			};
@@ -190,8 +221,8 @@
 				comment: comment.trim() ? `${comment.trim()} [IPv6]` : null,
 				src_zone: srcZone,
 				internal_ip: cleanV6,
-				external_port: externalPort as number,
-				internal_port: internalPort as number,
+				external_port: Number(externalPort),
+				internal_port: Number(internalPort),
 				protocol,
 				enable_hairpin: false,
 			};
@@ -201,8 +232,8 @@
 				comment: comment.trim() || null,
 				src_zone: srcZone,
 				internal_ip: cleanV4,
-				external_port: externalPort as number,
-				internal_port: internalPort as number,
+				external_port: Number(externalPort),
+				internal_port: Number(internalPort),
 				protocol,
 				enable_hairpin: enableHairpin,
 			});
@@ -211,8 +242,8 @@
 				comment: comment.trim() || null,
 				src_zone: srcZone,
 				internal_ip: cleanV6,
-				external_port: externalPort as number,
-				internal_port: internalPort as number,
+				external_port: Number(externalPort),
+				internal_port: Number(internalPort),
 				protocol,
 				enable_hairpin: false,
 			});
@@ -345,14 +376,18 @@
 							bind:value={internalIp}
 							placeholder="192.168.0.128"
 							class={cn("font-mono text-xs", errors.internalIp && "border-destructive")}
+							aria-invalid={Boolean(errors.internalIp)}
 							oninput={() => {
 								internalIp = internalIp.replace(/[?]/g, "");
-								errors = { ...errors, internalIp: "" };
+								if (errors.internalIp) errors = { ...errors, internalIp: "" };
 							}}
 						/>
 					</Field.Content>
 					{#if errors.internalIp}
-						<Field.Error>{errors.internalIp}</Field.Error>
+						<Field.Error class="flex items-center gap-1 text-[11px]">
+							<AlertCircleIcon class="size-3.5 shrink-0" />
+							<span>{errors.internalIp}</span>
+						</Field.Error>
 					{/if}
 				</Field.Field>
 			{/if}
@@ -368,14 +403,18 @@
 							bind:value={internalIpv6}
 							placeholder="2804:xxxx:xxxx:xxxx::1057:cafe"
 							class={cn("font-mono text-xs", errors.internalIpv6 && "border-destructive")}
+							aria-invalid={Boolean(errors.internalIpv6)}
 							oninput={() => {
 								internalIpv6 = internalIpv6.replace(/[?]/g, "");
-								errors = { ...errors, internalIpv6: "" };
+								if (errors.internalIpv6) errors = { ...errors, internalIpv6: "" };
 							}}
 						/>
 					</Field.Content>
 					{#if errors.internalIpv6}
-						<Field.Error>{errors.internalIpv6}</Field.Error>
+						<Field.Error class="flex items-center gap-1 text-[11px]">
+							<AlertCircleIcon class="size-3.5 shrink-0" />
+							<span>{errors.internalIpv6}</span>
+						</Field.Error>
 					{/if}
 
 					<!-- Quick switch between GUA and ULA if available -->
@@ -391,7 +430,7 @@
 										"h-5 px-1.5 text-[10px] font-mono",
 										internalIpv6 === addr.addr && "bg-primary/15 text-primary font-semibold"
 									)}
-									onclick={() => { internalIpv6 = addr.addr; errors = { ...errors, internalIpv6: "" }; }}
+									onclick={() => { internalIpv6 = addr.addr; if (errors.internalIpv6) errors = { ...errors, internalIpv6: "" }; }}
 								>
 									{addr.kind}: {addr.addr.slice(0, 12)}…
 								</Button>
@@ -413,11 +452,15 @@
 							bind:value={externalPort}
 							placeholder="80"
 							class={cn("font-mono text-xs", errors.externalPort && "border-destructive")}
-							oninput={() => { errors = { ...errors, externalPort: "" }; }}
+							aria-invalid={Boolean(errors.externalPort)}
+							oninput={() => { if (errors.externalPort) errors = { ...errors, externalPort: "" }; }}
 						/>
 					</Field.Content>
 					{#if errors.externalPort}
-						<Field.Error>{errors.externalPort}</Field.Error>
+						<Field.Error class="flex items-center gap-1 text-[11px]">
+							<AlertCircleIcon class="size-3.5 shrink-0" />
+							<span>{errors.externalPort}</span>
+						</Field.Error>
 					{/if}
 				</Field.Field>
 
@@ -431,11 +474,15 @@
 							bind:value={internalPort}
 							placeholder="80"
 							class={cn("font-mono text-xs", errors.internalPort && "border-destructive")}
-							oninput={() => { errors = { ...errors, internalPort: "" }; }}
+							aria-invalid={Boolean(errors.internalPort)}
+							oninput={() => { if (errors.internalPort) errors = { ...errors, internalPort: "" }; }}
 						/>
 					</Field.Content>
 					{#if errors.internalPort}
-						<Field.Error>{errors.internalPort}</Field.Error>
+						<Field.Error class="flex items-center gap-1 text-[11px]">
+							<AlertCircleIcon class="size-3.5 shrink-0" />
+							<span>{errors.internalPort}</span>
+						</Field.Error>
 					{/if}
 				</Field.Field>
 			</div>
@@ -468,10 +515,10 @@
 							value={srcZone}
 							onValueChange={(v) => {
 								srcZone = v ?? "";
-								errors = { ...errors, srcZone: "" };
+								if (errors.srcZone) errors = { ...errors, srcZone: "" };
 							}}
 						>
-							<Select.Trigger class={cn("h-9 text-xs", errors.srcZone && "border-destructive")}>
+							<Select.Trigger class={cn("h-9 text-xs", errors.srcZone && "border-destructive")} aria-invalid={Boolean(errors.srcZone)}>
 								{srcZone || "Select zone…"}
 							</Select.Trigger>
 							<Select.Content>
@@ -482,21 +529,32 @@
 						</Select.Root>
 					</Field.Content>
 					{#if errors.srcZone}
-						<Field.Error>{errors.srcZone}</Field.Error>
+						<Field.Error class="flex items-center gap-1 text-[11px]">
+							<AlertCircleIcon class="size-3.5 shrink-0" />
+							<span>{errors.srcZone}</span>
+						</Field.Error>
 					{/if}
 				</Field.Field>
 			</div>
 
 			<!-- Comment -->
-			<Field.Field>
+			<Field.Field data-invalid={!!errors.comment || undefined}>
 				<Field.Label class="text-xs">Comment <span class="text-muted-foreground">(optional)</span></Field.Label>
 				<Field.Content>
 					<Input
 						bind:value={comment}
 						placeholder="e.g. qBittorrent, Plex Server"
-						class="text-xs"
+						class={cn("text-xs", errors.comment && "border-destructive")}
+						aria-invalid={Boolean(errors.comment)}
+						oninput={() => { if (errors.comment) errors = { ...errors, comment: "" }; }}
 					/>
 				</Field.Content>
+				{#if errors.comment}
+					<Field.Error class="flex items-center gap-1 text-[11px]">
+						<AlertCircleIcon class="size-3.5 shrink-0" />
+						<span>{errors.comment}</span>
+					</Field.Error>
+				{/if}
 			</Field.Field>
 
 			<Separator />

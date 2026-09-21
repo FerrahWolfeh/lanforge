@@ -29,7 +29,7 @@
 		try {
 			tokens = await listTokens();
 		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : "Erro ao listar tokens.";
+			const msg = err instanceof Error ? err.message : "Failed to list tokens.";
 			toast.error(msg);
 		} finally {
 			isLoading = false;
@@ -53,10 +53,10 @@
 		<div class="flex flex-col gap-1">
 			<h1 class="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2.5">
 				<KeyRoundIcon class="size-6 text-primary" />
-				Chaves de Autenticação & API
+				Authentication & API Keys
 			</h1>
 			<p class="text-xs text-muted-foreground">
-				Gerencie tokens de acesso de longa duração (Bearer API Tokens) para integrações, scripts de automação e clientes remotos.
+				Manage long-lived Bearer API tokens for integrations, automation scripts, and remote clients.
 			</p>
 		</div>
 
@@ -68,7 +68,7 @@
 					class="rounded-xl cursor-pointer text-xs"
 				>
 					<UsersIcon data-icon="inline-start" />
-					Usuários
+					Users
 				</Button>
 			</a>
 
@@ -83,7 +83,7 @@
 					data-icon="inline-start"
 					class={isRefreshing ? "animate-spin" : ""}
 				/>
-				Atualizar
+				Refresh
 			</Button>
 
 			<Button
@@ -92,7 +92,7 @@
 				onclick={() => (isCreateOpen = true)}
 			>
 				<PlusIcon data-icon="inline-start" />
-				Nova Chave de API
+				New API Key
 			</Button>
 		</div>
 	</div>
@@ -113,7 +113,7 @@
 	<TokenValidatorCard />
 </div>
 
-<!-- Modal de Criação de Novo Token -->
+<!-- Create New Token Dialog -->
 <TokenCreateDialog
 	bind:open={isCreateOpen}
 	onCreated={(token) => {
@@ -122,7 +122,7 @@
 	}}
 />
 
-<!-- Modal de Exibição Única do Segredo Gerado -->
+<!-- Token Secret Display Dialog -->
 <TokenSecretModal
 	bind:open={isSecretModalOpen}
 	token={newlyCreatedToken}

@@ -7,9 +7,10 @@
 	import {
 		serviceBanners,
 		transientHostList,
+		listDevices,
 		scan,
 	} from "$lib/api/client";
-	import type { ServiceBanner, TransientHostEntry } from "$lib/api/types";
+	import type { DeviceEntry, ServiceBanner, TransientHostEntry } from "$lib/api/types";
 
 	import DiscoveryServiceCard from "./components/DiscoveryServiceCard.svelte";
 	import TransientHostsTable from "./components/TransientHostsTable.svelte";
@@ -21,6 +22,7 @@
 	let scanning = $state(false);
 	let banners = $state<ServiceBanner[]>([]);
 	let transientHosts = $state<TransientHostEntry[]>([]);
+	let knownDevices = $state<DeviceEntry[]>([]);
 
 	// Promote Modal
 	let promoteOpen = $state(false);
@@ -32,15 +34,19 @@
 	async function loadAll() {
 		loading = true;
 		try {
-			const [bannersRes, transientRes] = await Promise.allSettled([
+			const [bannersRes, transientRes, devicesRes] = await Promise.allSettled([
 				serviceBanners(),
 				transientHostList(),
+				listDevices(),
 			]);
 			if (bannersRes.status === "fulfilled") {
 				banners = bannersRes.value;
 			}
 			if (transientRes.status === "fulfilled") {
 				transientHosts = transientRes.value;
+			}
+			if (devicesRes.status === "fulfilled") {
+				knownDevices = devicesRes.value?.devices ?? [];
 			}
 		} catch {
 			toast.error("Failed to load discovery data");
@@ -63,8 +69,19 @@
 	}
 
 	function handlePromoteTransient(host: TransientHostEntry) {
-		promoteMac = "";
-		promoteHostname = host.hostname || "";
+		// Look up if any known device already has this IP
+		const matchedDev = knownDevices.find(
+			(d) =>
+				d.v4?.ip === host.ip ||
+				d.seen_v4?.includes(host.ip) ||
+				d.display_v4 === host.ip ||
+				d.display_v6 === host.ip ||
+				d.v6?.ip === host.ip ||
+				d.ipv6_addrs?.some((v) => v.addr === host.ip)
+		);
+
+		promoteMac = matchedDev?.mac || "";
+		promoteHostname = host.hostname || matchedDev?.hostname || "";
 		if (host.ip.includes(":")) {
 			promoteV4 = "";
 			promoteV6Suffix = host.ip;

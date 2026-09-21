@@ -70,6 +70,9 @@ Inter-service communication is powered by a multi-topic broadcast bus:
 - `pnpm --prefix web build` - Build the production static SPA bundle for embedding.
 - `pnpm --prefix web check` - Run `svelte-check` and TypeScript type diagnostics.
 
+#### WebUI Language Rule
+- **Strict English Only**: All user-facing text in `web/` (labels, placeholders, tooltips, modals/dialogs, toast notifications, table headers, descriptions, and code comments) must be written exclusively in English. **Never write Portuguese or any non-English text in the WebUI.**
+
 ---
 
 # Coding Idioms & Performance Guidelines (SBC & Embedded Targets)

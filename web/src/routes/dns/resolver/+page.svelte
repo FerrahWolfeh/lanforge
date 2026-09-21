@@ -28,6 +28,7 @@
 	// Page Components
 	import DnsResolverTopCards from "./components/DnsResolverTopCards.svelte";
 	import DnsResolverActivityChart from "./components/DnsResolverActivityChart.svelte";
+	import DnsQueryTypesCard from "./components/DnsQueryTypesCard.svelte";
 	import DnsTopClientsCard from "./components/DnsTopClientsCard.svelte";
 	import DnsTopDomainsCard from "./components/DnsTopDomainsCard.svelte";
 	import DnsUpstreamsCard from "./components/DnsUpstreamsCard.svelte";
@@ -255,8 +256,15 @@
 		<!-- 1. Top Summary Metric Cards -->
 		<DnsResolverTopCards {loading} {statsData} {upstreams} />
 
-		<!-- 2. Time-Series Activity Chart -->
-		<DnsResolverActivityChart {loading} {analyticsData} {statsData} />
+		<!-- 2. Time-Series Activity Chart & Query Types Breakdown (Pi-hole Style) -->
+		<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+			<div class="lg:col-span-2">
+				<DnsResolverActivityChart {loading} {analyticsData} {statsData} />
+			</div>
+			<div class="lg:col-span-1">
+				<DnsQueryTypesCard {loading} {analyticsData} />
+			</div>
+		</div>
 
 		<!-- 3. Row 1: Top Clients - Top Domains -->
 		<div class="grid grid-cols-1 gap-6 lg:grid-cols-2">

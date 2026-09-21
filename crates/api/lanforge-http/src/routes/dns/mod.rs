@@ -10,7 +10,7 @@ use axum::{
     extract::{Query, State},
     response::{
         IntoResponse,
-        sse::{Event, Sse},
+        sse::{Event, KeepAlive, Sse},
     },
     routing::get,
 };
@@ -90,7 +90,13 @@ async fn handle_dns_logs(
 ) -> impl IntoResponse {
     if params.follow {
         let stream = handle_dns_logs_follow(state, params);
-        Sse::new(stream).into_response()
+        Sse::new(stream)
+            .keep_alive(
+                KeepAlive::default()
+                    .interval(std::time::Duration::from_secs(15))
+                    .text("keepalive"),
+            )
+            .into_response()
     } else {
         let ctx = create_client_ctx(&state);
         crate::http_response!(

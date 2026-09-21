@@ -26,10 +26,12 @@
 	async function loadUsers(showSpinner = true) {
 		if (showSpinner) isRefreshing = true;
 		try {
-			users = await userList();
+			const res = await userList();
+			users = Array.isArray(res) ? res : [];
 		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : "Erro ao carregar usuários.";
+			const msg = err instanceof Error ? err.message : "Failed to load users.";
 			toast.error(msg);
+			users = [];
 		} finally {
 			isLoading = false;
 			if (showSpinner) isRefreshing = false;
@@ -47,7 +49,7 @@
 </script>
 
 <svelte:head>
-	<title>Usuários & Acessos — Lanforge</title>
+	<title>Users & Access — Lanforge</title>
 </svelte:head>
 
 <div class="flex flex-col gap-6 max-w-6xl mx-auto w-full pb-12">
@@ -56,10 +58,10 @@
 		<div class="flex flex-col gap-1">
 			<h1 class="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2.5">
 				<UsersIcon class="size-6 text-primary" />
-				Usuários & Acessos
+				Users & Access
 			</h1>
 			<p class="text-xs text-muted-foreground">
-				Gerencie contas de usuários locais para autenticação web e controle de permissões no Lanforge.
+				Manage local user accounts for web authentication and permission controls in Lanforge.
 			</p>
 		</div>
 
@@ -71,7 +73,7 @@
 					class="rounded-xl cursor-pointer text-xs"
 				>
 					<KeyRoundIcon data-icon="inline-start" />
-					Chaves de API
+					API Keys
 				</Button>
 			</a>
 
@@ -86,7 +88,7 @@
 					data-icon="inline-start"
 					class={isRefreshing ? "animate-spin" : ""}
 				/>
-				Atualizar
+				Refresh
 			</Button>
 
 			<Button
@@ -95,7 +97,7 @@
 				onclick={() => (isCreateOpen = true)}
 			>
 				<UserPlusIcon data-icon="inline-start" />
-				Novo Usuário
+				New User
 			</Button>
 		</div>
 	</div>
@@ -114,13 +116,13 @@
 	/>
 </div>
 
-<!-- Modal de Criação de Usuário -->
+<!-- User Creation Dialog -->
 <UserCreateDialog
 	bind:open={isCreateOpen}
 	onCreated={() => loadUsers(false)}
 />
 
-<!-- Modal de Alteração de Senha -->
+<!-- Password Change Dialog -->
 <UserPasswordDialog
 	bind:open={isPasswordOpen}
 	user={selectedUserForPassword}

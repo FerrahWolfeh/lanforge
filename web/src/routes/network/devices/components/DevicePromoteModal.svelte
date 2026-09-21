@@ -82,9 +82,10 @@
 					<Field.FieldLabel for="pmac">Target MAC Address</Field.FieldLabel>
 					<Input
 						id="pmac"
-						class="font-mono text-xs bg-muted/30"
+						class="font-mono text-xs {mac ? 'bg-muted/30' : ''}"
+						placeholder="e.g. aa:bb:cc:dd:ee:ff"
 						bind:value={formMac}
-						readonly
+						readonly={Boolean(mac)}
 					/>
 				</Field.Field>
 

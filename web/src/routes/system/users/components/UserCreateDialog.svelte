@@ -35,34 +35,34 @@
 	async function handleSubmit() {
 		const trimmedUser = username.trim();
 		if (!trimmedUser) {
-			toast.error("Informe o nome de usuário.");
+			toast.error("Please enter a username.");
 			return;
 		}
 		if (trimmedUser.length < 2) {
-			toast.error("O nome de usuário deve ter pelo menos 2 caracteres.");
+			toast.error("Username must be at least 2 characters.");
 			return;
 		}
 		if (!password) {
-			toast.error("Informe uma senha.");
+			toast.error("Please enter a password.");
 			return;
 		}
 		if (password.length < 4) {
-			toast.error("A senha deve ter pelo menos 4 caracteres.");
+			toast.error("Password must be at least 4 characters.");
 			return;
 		}
 		if (password !== confirmPassword) {
-			toast.error("As senhas informadas não coincidem.");
+			toast.error("Passwords do not match.");
 			return;
 		}
 
 		isSubmitting = true;
 		try {
 			await userCreate(trimmedUser, password, role);
-			toast.success(`Usuário '${trimmedUser}' criado com sucesso!`);
+			toast.success(`User '${trimmedUser}' created successfully!`);
 			open = false;
 			onCreated();
 		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : "Falha ao criar usuário.";
+			const msg = err instanceof Error ? err.message : "Failed to create user.";
 			toast.error(msg);
 		} finally {
 			isSubmitting = false;
@@ -75,10 +75,10 @@
 		<Dialog.Header>
 			<Dialog.Title class="text-base font-bold flex items-center gap-2">
 				<UserPlusIcon class="size-5 text-primary" />
-				Novo Usuário
+				New User
 			</Dialog.Title>
 			<Dialog.Description class="text-xs">
-				Crie uma conta local para acesso administrativo ou operacional ao painel do Lanforge.
+				Create a local user account for administrative or operational access to Lanforge.
 			</Dialog.Description>
 		</Dialog.Header>
 
@@ -90,58 +90,58 @@
 			class="flex flex-col gap-4 py-2"
 		>
 			<Field.FieldGroup class="flex flex-col gap-3">
-				<!-- Usuário -->
+				<!-- Username -->
 				<Field.Field>
 					<Field.FieldLabel for="new-username" class="text-xs font-semibold">
-						Nome de Usuário *
+						Username *
 					</Field.FieldLabel>
 					<Input
 						id="new-username"
-						placeholder="Ex: operador1, analista"
+						placeholder="e.g. operator1, sysadmin"
 						bind:value={username}
 						class="text-xs rounded-xl h-9 bg-background"
 					/>
 				</Field.Field>
 
-				<!-- Nível de Acesso -->
+				<!-- Role -->
 				<Field.Field>
 					<Field.FieldLabel for="new-user-role" class="text-xs font-semibold">
-						Nível de Acesso (Perfil)
+						Role & Permissions
 					</Field.FieldLabel>
 					<select
 						id="new-user-role"
 						bind:value={role}
 						class="w-full h-9 text-xs rounded-xl bg-background border border-input px-3 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
 					>
-						<option value="operator">Operador (Acesso a dispositivos, rede e DNS)</option>
-						<option value="admin">Administrador (Acesso irrestrito a configurações e banco)</option>
-						<option value="viewer">Visualizador (Somente visualização de métricas e status)</option>
+						<option value="operator">Operator (Device, network, and DNS management)</option>
+						<option value="admin">Administrator (Unrestricted access to config & database)</option>
+						<option value="viewer">Viewer (Read-only access to metrics & status)</option>
 					</select>
 				</Field.Field>
 
-				<!-- Senha -->
+				<!-- Password -->
 				<Field.Field>
 					<Field.FieldLabel for="new-password" class="text-xs font-semibold">
-						Senha *
+						Password *
 					</Field.FieldLabel>
 					<Input
 						id="new-password"
 						type="password"
-						placeholder="Senha segura"
+						placeholder="Secure password"
 						bind:value={password}
 						class="text-xs rounded-xl h-9 bg-background"
 					/>
 				</Field.Field>
 
-				<!-- Confirmar Senha -->
+				<!-- Confirm Password -->
 				<Field.Field>
 					<Field.FieldLabel for="new-confirm-password" class="text-xs font-semibold">
-						Confirmar Senha *
+						Confirm Password *
 					</Field.FieldLabel>
 					<Input
 						id="new-confirm-password"
 						type="password"
-						placeholder="Repita a senha"
+						placeholder="Repeat password"
 						bind:value={confirmPassword}
 						class="text-xs rounded-xl h-9 bg-background"
 					/>
@@ -155,7 +155,7 @@
 					class="rounded-xl cursor-pointer text-xs"
 					onclick={() => (open = false)}
 				>
-					Cancelar
+					Cancel
 				</Button>
 
 				<Button
@@ -165,10 +165,10 @@
 				>
 					{#if isSubmitting}
 						<Loader2Icon data-icon="inline-start" class="animate-spin" />
-						Criando...
+						Creating...
 					{:else}
 						<UserPlusIcon data-icon="inline-start" />
-						Criar Usuário
+						Create User
 					{/if}
 				</Button>
 			</Dialog.Footer>

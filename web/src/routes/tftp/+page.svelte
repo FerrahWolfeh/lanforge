@@ -122,8 +122,8 @@
 				) ?? null;
 			}
 		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : "Erro ao carregar dados do TFTP.";
-			toast.error(`Falha ao carregar configurações do TFTP: ${msg}`);
+			const msg = err instanceof Error ? err.message : "Failed to load TFTP data.";
+			toast.error(`Failed to load TFTP configuration: ${msg}`);
 		} finally {
 			loading = false;
 		}
@@ -145,7 +145,7 @@
 			dhcpV4BootFile = origDhcp.v4_boot_file || "";
 			dhcpV6BootFile = origDhcp.v6_boot_file || "";
 		}
-		toast.info("Formulário redefinido para a configuração salva");
+		toast.info("Form reset to saved configuration");
 	}
 
 	async function saveAll() {
@@ -174,7 +174,7 @@
 			pristineTftpJson = JSON.stringify(tftp);
 			pristineDhcpPxeJson = JSON.stringify(dhcp);
 
-			toast.success("Configurações do servidor TFTP e PXE salvas com sucesso");
+			toast.success("TFTP and PXE server settings saved successfully");
 
 			// Refresh banners to sync state
 			setTimeout(async () => {
@@ -188,8 +188,8 @@
 				}
 			}, 750);
 		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : "Erro desconhecido";
-			toast.error(`Falha ao salvar configurações do TFTP: ${msg}`);
+			const msg = err instanceof Error ? err.message : "Unknown error";
+			toast.error(`Failed to save TFTP configuration: ${msg}`);
 		} finally {
 			saving = false;
 		}
@@ -199,7 +199,7 @@
 		serviceActionLoading = action;
 		try {
 			await controlService("tftp", action);
-			toast.success(`Serviço TFTP recebeu comando ${action.toLowerCase()}`);
+			toast.success(`TFTP service received ${action.toLowerCase()} command`);
 			setTimeout(async () => {
 				const banners = await serviceBanners();
 				tftpBanner = banners.find(
@@ -209,8 +209,8 @@
 			}, 750);
 		} catch (err: unknown) {
 			serviceActionLoading = null;
-			const msg = err instanceof Error ? err.message : "Erro desconhecido";
-			toast.error(`Falha ao executar ${action.toLowerCase()} no serviço TFTP: ${msg}`);
+			const msg = err instanceof Error ? err.message : "Unknown error";
+			toast.error(`Failed to execute ${action.toLowerCase()} on TFTP service: ${msg}`);
 		}
 	}
 
@@ -218,9 +218,9 @@
 		const ip = systemStatus?.network?.lan_ipv4;
 		if (ip) {
 			dhcpV4TftpServer = ip;
-			toast.success(`Opção 66 configurada com o IP do Lanforge: ${ip}`);
+			toast.success(`Option 66 set to Lanforge IP: ${ip}`);
 		} else {
-			toast.error("Endereço IPv4 LAN do Lanforge indisponível no status");
+			toast.error("Lanforge LAN IPv4 address unavailable in system status");
 		}
 	}
 
@@ -250,32 +250,32 @@
 				</Badge>
 				<HelpPopover
 					title="TFTP Netboot Setup"
-					description="Servidor TFTP (Trivial File Transfer Protocol) para boot de rede PXE/UEFI e instalação automatizada de sistemas operacionais."
+					description="TFTP (Trivial File Transfer Protocol) server for PXE/UEFI network boot and automated operating system provisioning."
 				>
 					{#snippet children()}
 						<div class="flex flex-col gap-2.5 text-xs text-muted-foreground">
 							<div class="flex flex-col gap-0.5 border-l-2 border-primary/50 pl-2">
-								<span class="font-semibold text-foreground">1. Diretório Raiz</span>
-								<span>Copie kernels ou bootloaders (ex: <code class="text-foreground">ipxe.efi</code>) para <code class="text-foreground">{rootDir}</code>.</span>
+								<span class="font-semibold text-foreground">1. Root Directory</span>
+								<span>Copy kernels or bootloaders (e.g. <code class="text-foreground">ipxe.efi</code>) to <code class="text-foreground">{rootDir}</code>.</span>
 							</div>
 							<div class="flex flex-col gap-0.5 border-l-2 border-primary/50 pl-2">
-								<span class="font-semibold text-foreground">2. Daemon Ativo</span>
-								<span>Habilite o servidor TFTP. Certifique-se de que a porta UDP 69 esteja acessível.</span>
+								<span class="font-semibold text-foreground">2. Active Daemon</span>
+								<span>Enable the TFTP server. Ensure UDP port 69 is accessible.</span>
 							</div>
 							<div class="flex flex-col gap-0.5 border-l-2 border-primary/50 pl-2">
-								<span class="font-semibold text-foreground">3. Opções DHCP 66 & 67</span>
-								<span>A Opção 66 aponta para o IP do Lanforge e a Opção 67 especifica o executável NBP.</span>
+								<span class="font-semibold text-foreground">3. DHCP Options 66 & 67</span>
+								<span>Option 66 points to the Lanforge IP and Option 67 specifies the NBP executable.</span>
 							</div>
 							<div class="flex flex-col gap-0.5 border-l-2 border-primary/50 pl-2">
-								<span class="font-semibold text-foreground">4. Boot dos Clientes PXE</span>
-								<span>Os clientes BIOS/UEFI configurados para inicialização via rede carregarão o bootloader automaticamente.</span>
+								<span class="font-semibold text-foreground">4. PXE Client Boot</span>
+								<span>BIOS/UEFI clients configured for network boot will load the bootloader automatically.</span>
 							</div>
 						</div>
 					{/snippet}
 				</HelpPopover>
 			</div>
 			<p class="text-muted-foreground text-sm mt-0.5">
-				Servidor de arquivos TFTP para boot de rede PXE e provisionamento de sistemas operacionais
+				TFTP file server for PXE network boot and operating system provisioning
 			</p>
 		</div>
 
@@ -292,7 +292,7 @@
 					data-icon="inline-start"
 					class={loading ? "animate-spin" : ""}
 				/>
-				Atualizar
+				Refresh
 			</Button>
 
 			{#if isDirty}
@@ -304,7 +304,7 @@
 					disabled={saving}
 				>
 					<RotateCcwIcon data-icon="inline-start" />
-					Descartar
+					Discard
 				</Button>
 				<Button
 					size="sm"
@@ -316,7 +316,7 @@
 						data-icon="inline-start"
 						class={saving ? "animate-spin" : ""}
 					/>
-					Salvar Alterações
+					Save Changes
 				</Button>
 			{/if}
 		</div>

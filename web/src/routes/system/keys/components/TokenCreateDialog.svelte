@@ -37,32 +37,32 @@
 		{
 			id: "admin",
 			label: "Admin",
-			desc: "Acesso administrativo irrestrito a todos os serviços, APIs e banco de dados"
+			desc: "Full unrestricted administrative access to all services, APIs, and database"
 		},
 		{
 			id: "monitoring",
 			label: "Monitoring",
-			desc: "Apenas leitura de telemetria, status dos serviços e métricas agregadas"
+			desc: "Read-only access to telemetry, service statuses, and aggregated metrics"
 		},
 		{
 			id: "device_write",
 			label: "Device Write",
-			desc: "Registro, alteração de propriedades e disparo de pacotes Wake-on-LAN"
+			desc: "Register and modify device properties, and send Wake-on-LAN packets"
 		},
 		{
 			id: "dns_query",
 			label: "DNS Query",
-			desc: "Execução de consultas de teste no resolvedor e inspeção de logs DNS"
+			desc: "Execute test queries on the resolver and inspect DNS logs"
 		},
 		{
 			id: "upstream_write",
 			label: "Upstream Write",
-			desc: "Configuração e manutenção da lista de provedores DNS upstream"
+			desc: "Configure and manage upstream DNS server providers"
 		},
 		{
 			id: "config_write",
 			label: "Config Write",
-			desc: "Importação e aplicação de configurações de pools, leases e roteamento"
+			desc: "Import and apply pool, lease, and routing configurations"
 		}
 	];
 
@@ -111,7 +111,7 @@
 
 	async function handleCreateToken() {
 		if (!formName.trim()) {
-			toast.error("Informe um nome ou identificador para a chave.");
+			toast.error("Please enter a name or identifier for the key.");
 			return;
 		}
 
@@ -137,11 +137,11 @@
 			};
 
 			const created = await generateToken(payload);
-			toast.success(`Chave '${created.name}' gerada com sucesso!`);
+			toast.success(`API key '${created.name}' generated successfully!`);
 			open = false;
 			onCreated(created);
 		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : "Erro ao gerar chave de API.";
+			const msg = err instanceof Error ? err.message : "Failed to generate API key.";
 			toast.error(msg);
 		} finally {
 			isSubmitting = false;
@@ -154,10 +154,10 @@
 		<Dialog.Header>
 			<Dialog.Title class="text-base font-bold flex items-center gap-2">
 				<KeyRoundIcon class="size-5 text-primary" />
-				Nova Chave de API
+				New API Key
 			</Dialog.Title>
 			<Dialog.Description class="text-xs">
-				Gere uma chave de autenticação para seu aplicativo ou serviço. O segredo será exibido somente uma vez.
+				Generate an authentication key for your application or service. The secret will be displayed only once.
 			</Dialog.Description>
 		</Dialog.Header>
 
@@ -169,44 +169,44 @@
 			class="flex flex-col gap-4 py-2"
 		>
 			<Field.FieldGroup class="flex flex-col gap-3">
-				<!-- Nome -->
+				<!-- Name -->
 				<Field.Field>
 					<Field.FieldLabel for="token-name" class="text-xs font-semibold">
-						Nome / Identificador *
+						Name / Identifier *
 					</Field.FieldLabel>
 					<Input
 						id="token-name"
-						placeholder="Ex: Home Assistant, Prometheus, Backup Script"
+						placeholder="e.g. Home Assistant, Prometheus, Backup Script"
 						bind:value={formName}
 						class="text-xs rounded-xl h-9 bg-background"
 					/>
 					<Field.FieldDescription class="text-[11px] text-muted-foreground">
-						Um rótulo descritivo para reconhecer onde esta chave está configurada.
+						A descriptive label to recognize where this key is configured.
 					</Field.FieldDescription>
 				</Field.Field>
 
-				<!-- Validade -->
+				<!-- Expiry -->
 				<Field.Field>
 					<Field.FieldLabel for="token-expiry" class="text-xs font-semibold">
-						Tempo de Validade
+						Expiration Period
 					</Field.FieldLabel>
 					<select
 						id="token-expiry"
 						bind:value={formExpiryPreset}
 						class="w-full h-9 text-xs rounded-xl bg-background border border-input px-3 text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
 					>
-						<option value="7d">7 dias</option>
-						<option value="30d">30 dias (Recomendado)</option>
-						<option value="90d">90 dias</option>
-						<option value="1y">1 ano</option>
-						<option value="never">Nunca expira (Uso permanente)</option>
+						<option value="7d">7 days</option>
+						<option value="30d">30 days (Recommended)</option>
+						<option value="90d">90 days</option>
+						<option value="1y">1 year</option>
+						<option value="never">Never expires (Permanent)</option>
 					</select>
 				</Field.Field>
 
-				<!-- Escopos -->
+				<!-- Scopes -->
 				<Field.FieldSet class="flex flex-col gap-2 pt-1">
 					<Field.FieldLegend class="text-xs font-semibold">
-						Permissões & Escopos
+						Permissions & Scopes
 					</Field.FieldLegend>
 					<div class="flex flex-col gap-2 rounded-xl border border-border/60 p-3 bg-muted/20">
 						{#each availableScopes as sc}
@@ -215,7 +215,7 @@
 									<span class="text-xs font-semibold text-foreground flex items-center gap-1.5">
 										{sc.label}
 										{#if sc.id === 'admin'}
-											<Badge variant="default" class="text-[9px] px-1 py-0">Recomendado</Badge>
+											<Badge variant="default" class="text-[9px] px-1 py-0">Recommended</Badge>
 										{/if}
 									</span>
 									<span class="text-[11px] text-muted-foreground leading-tight">
@@ -253,7 +253,7 @@
 					class="rounded-xl cursor-pointer text-xs"
 					onclick={() => (open = false)}
 				>
-					Cancelar
+					Cancel
 				</Button>
 
 				<Button
@@ -263,10 +263,10 @@
 				>
 					{#if isSubmitting}
 						<Loader2Icon data-icon="inline-start" class="animate-spin" />
-						Gerando Chave...
+						Generating Key...
 					{:else}
 						<SparklesIcon data-icon="inline-start" />
-						Gerar Chave de API
+						Generate API Key
 					{/if}
 				</Button>
 			</Dialog.Footer>

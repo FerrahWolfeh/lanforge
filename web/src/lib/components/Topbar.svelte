@@ -19,6 +19,8 @@
 		"/network/devices": "Network Devices",
 		"/network/hosts": "Static Host Reservations",
 		"/network/discovery": "Network Discovery & Monitor",
+		"/network/traffic": "Traffic & SQM",
+		"/firewall": "Firewall & Security",
 		"/network/ra": "IPv6 Router Advertisements",
 		"/network/pppoe": "PPPoE WAN Client",
 		"/dns/resolver": "DNS Resolver",

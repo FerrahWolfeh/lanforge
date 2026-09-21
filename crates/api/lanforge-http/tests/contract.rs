@@ -1040,3 +1040,37 @@ async fn test_firewall_transactional_handshake_contract() {
     let updated_config: FirewallConfig = serde_json::from_value(body["data"].clone()).unwrap();
     assert!(updated_config.port_forwards.iter().any(|pf| pf.external_port == 32400));
 }
+
+#[tokio::test]
+async fn test_users_contract() {
+    let app = TestApp::with_auth().await;
+
+    // 1. List users
+    let (status, body) = app.get("/api/v1/users").await;
+    assert_eq!(status, StatusCode::OK);
+    // body is {"data": {"users": [...]}}
+    let users = body["data"]["users"].as_array().expect("users array in data");
+    assert!(!users.is_empty(), "default admin user should exist");
+    assert_eq!(users[0]["username"], "admin");
+
+    // 2. Create user
+    let new_user = json!({
+        "username": "operator1",
+        "password": "secretpassword",
+        "role": "operator"
+    });
+    let (status, body) = app.post("/api/v1/users", &new_user).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["user"]["username"], "operator1");
+
+    // 3. List users again
+    let (status, body) = app.get("/api/v1/users").await;
+    assert_eq!(status, StatusCode::OK);
+    let users = body["data"]["users"].as_array().unwrap();
+    assert_eq!(users.len(), 2);
+
+    // 4. Delete user
+    let (status, _) = app.delete("/api/v1/users/operator1").await;
+    assert_eq!(status, StatusCode::OK);
+}
+

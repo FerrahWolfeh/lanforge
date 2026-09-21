@@ -1,7 +1,5 @@
 <script lang="ts">
-	import * as Card from "$lib/components/ui/card";
 	import { Button } from "$lib/components/ui/button";
-	import { Input } from "$lib/components/ui/input";
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
 	import {
@@ -12,7 +10,6 @@
 	} from "$lib/api/client";
 	import type { LeaseEntry, LeaseTarget } from "$lib/api/types";
 
-	import SearchIcon from "@lucide/svelte/icons/search";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
 	import LeaseStatsCards from "./components/LeaseStatsCards.svelte";
@@ -23,10 +20,6 @@
 	let allLeases = $state<LeaseEntry[]>([]);
 	let loading = $state(true);
 	let isRefreshing = $state(false);
-
-	// Filters
-	let searchQuery = $state("");
-	let selectedKind = $state<"all" | "v4" | "v6" | "v6_prefix">("all");
 
 	// Modals
 	let promoteOpen = $state(false);
@@ -93,13 +86,23 @@
 			eventSource.onmessage = (e) => {
 				try {
 					const data = JSON.parse(e.data);
-					const kind = data?.kind || data?.event || "";
-					if (
-						typeof kind === "string" &&
-						(kind.includes("DhcpLeaseGranted") ||
-							kind.includes("DhcpLeaseReleased") ||
-							kind.includes("Device"))
-					) {
+					const kindStr = typeof data?.kind === "string" ? data.kind : "";
+					const eventObj = data?.event;
+					const isLeaseOrDevice =
+						kindStr.includes("Dhcp") ||
+						kindStr.includes("Lease") ||
+						kindStr.includes("Device") ||
+						Boolean(
+							eventObj?.Network?.DhcpLeaseGranted ||
+								eventObj?.Network?.DhcpLeaseReleased ||
+								eventObj?.Device?.LeaseRelease ||
+								eventObj?.Device?.LeaseRenew ||
+								eventObj?.Device?.DhcpV4Transaction ||
+								eventObj?.Device?.DhcpV6Transaction ||
+								eventObj?.Device?.NetworkUpdate ||
+								eventObj?.Device?.Discovered
+						);
+					if (isLeaseOrDevice) {
 						loadLeasesData(false);
 					}
 				} catch {
@@ -129,20 +132,6 @@
 	);
 
 	// Filtered leases
-	const filteredLeases = $derived(
-		allLeases.filter((lease) => {
-			if (selectedKind !== "all" && lease.kind !== selectedKind) {
-				return false;
-			}
-			if (!searchQuery.trim()) return true;
-			const q = searchQuery.toLowerCase().trim();
-			return (
-				lease.hostname.toLowerCase().includes(q) ||
-				lease.mac.toLowerCase().includes(q) ||
-				lease.address.toLowerCase().includes(q)
-			);
-		}),
-	);
 </script>
 
 <svelte:head>
@@ -178,73 +167,9 @@
 		{expiringSoonCount}
 	/>
 
-	<!-- Filter & Search Toolbar -->
-	<Card.Root>
-		<Card.Content class="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
-			<!-- Search -->
-			<div class="relative flex-1 max-w-sm">
-				<SearchIcon class="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
-				<Input
-					type="search"
-					placeholder="Search hostname, IP, MAC..."
-					class="pl-8 text-xs h-8"
-					bind:value={searchQuery}
-				/>
-			</div>
-
-			<!-- Protocol Selector Pills -->
-			<div class="flex items-center rounded-lg border border-border/80 bg-muted/40 p-1 text-xs">
-				<button
-					class={[
-						"rounded px-2.5 py-1 font-medium transition-colors",
-						selectedKind === "all"
-							? "bg-background text-foreground shadow-sm"
-							: "text-muted-foreground hover:text-foreground",
-					].join(" ")}
-					onclick={() => (selectedKind = "all")}
-				>
-					All ({totalCount})
-				</button>
-				<button
-					class={[
-						"rounded px-2.5 py-1 font-medium transition-colors",
-						selectedKind === "v4"
-							? "bg-background text-emerald-400 shadow-sm"
-							: "text-muted-foreground hover:text-foreground",
-					].join(" ")}
-					onclick={() => (selectedKind = "v4")}
-				>
-					IPv4 ({v4Count})
-				</button>
-				<button
-					class={[
-						"rounded px-2.5 py-1 font-medium transition-colors",
-						selectedKind === "v6"
-							? "bg-background text-sky-400 shadow-sm"
-							: "text-muted-foreground hover:text-foreground",
-					].join(" ")}
-					onclick={() => (selectedKind = "v6")}
-				>
-					IPv6
-				</button>
-				<button
-					class={[
-						"rounded px-2.5 py-1 font-medium transition-colors",
-						selectedKind === "v6_prefix"
-							? "bg-background text-purple-400 shadow-sm"
-							: "text-muted-foreground hover:text-foreground",
-					].join(" ")}
-					onclick={() => (selectedKind = "v6_prefix")}
-				>
-					Prefixes
-				</button>
-			</div>
-		</Card.Content>
-	</Card.Root>
-
-	<!-- Main Leases Table / Mobile Cards -->
+	<!-- Main Leases Table -->
 	<LeaseTable
-		leases={filteredLeases}
+		leases={allLeases}
 		{loading}
 		onRenew={handleRenew}
 		onRelease={openRelease}

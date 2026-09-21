@@ -15,17 +15,18 @@
 		isLoading: boolean;
 	} = $props();
 
-	const totalCount = $derived(users.length);
-	const adminCount = $derived(users.filter((u) => u.role === "admin").length);
-	const operatorCount = $derived(users.filter((u) => u.role === "operator").length);
-	const viewerCount = $derived(users.filter((u) => u.role === "viewer").length);
+	const safeUsers = $derived(Array.isArray(users) ? users : []);
+	const totalCount = $derived(safeUsers.length);
+	const adminCount = $derived(safeUsers.filter((u) => u.role === "admin").length);
+	const operatorCount = $derived(safeUsers.filter((u) => u.role === "operator").length);
+	const viewerCount = $derived(safeUsers.filter((u) => u.role === "viewer").length);
 </script>
 
 <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
 	<!-- Total Users -->
 	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
 		<Card.Header class="pb-2">
-			<Card.Description class="text-xs font-medium">Total de Usuários</Card.Description>
+			<Card.Description class="text-xs font-medium">Total Users</Card.Description>
 			<Card.Title class="text-2xl font-bold text-foreground">
 				{#if isLoading}
 					<Skeleton class="h-8 w-12 rounded-lg" />
@@ -36,14 +37,14 @@
 		</Card.Header>
 		<Card.Content class="pt-0 text-[11px] text-muted-foreground flex items-center gap-1.5">
 			<UsersIcon class="size-3.5 text-primary" />
-			<span>Contas locais ativas</span>
+			<span>Active local accounts</span>
 		</Card.Content>
 	</Card.Root>
 
 	<!-- Admin Users -->
 	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
 		<Card.Header class="pb-2">
-			<Card.Description class="text-xs font-medium">Administradores</Card.Description>
+			<Card.Description class="text-xs font-medium">Administrators</Card.Description>
 			<Card.Title class="text-2xl font-bold text-foreground">
 				{#if isLoading}
 					<Skeleton class="h-8 w-12 rounded-lg" />
@@ -54,14 +55,14 @@
 		</Card.Header>
 		<Card.Content class="pt-0 text-[11px] text-muted-foreground flex items-center gap-1.5">
 			<ShieldCheckIcon class="size-3.5 text-primary" />
-			<span>Controle total do sistema</span>
+			<span>Full system control</span>
 		</Card.Content>
 	</Card.Root>
 
 	<!-- Operator Users -->
 	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
 		<Card.Header class="pb-2">
-			<Card.Description class="text-xs font-medium">Operadores</Card.Description>
+			<Card.Description class="text-xs font-medium">Operators</Card.Description>
 			<Card.Title class="text-2xl font-bold text-foreground">
 				{#if isLoading}
 					<Skeleton class="h-8 w-12 rounded-lg" />
@@ -72,14 +73,14 @@
 		</Card.Header>
 		<Card.Content class="pt-0 text-[11px] text-muted-foreground flex items-center gap-1.5">
 			<WrenchIcon class="size-3.5 text-sky-500" />
-			<span>Operações diárias de rede</span>
+			<span>Daily network operations</span>
 		</Card.Content>
 	</Card.Root>
 
 	<!-- Viewer Users -->
 	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
 		<Card.Header class="pb-2">
-			<Card.Description class="text-xs font-medium">Visualizadores</Card.Description>
+			<Card.Description class="text-xs font-medium">Viewers</Card.Description>
 			<Card.Title class="text-2xl font-bold text-foreground">
 				{#if isLoading}
 					<Skeleton class="h-8 w-12 rounded-lg" />
@@ -90,7 +91,7 @@
 		</Card.Header>
 		<Card.Content class="pt-0 text-[11px] text-muted-foreground flex items-center gap-1.5">
 			<EyeIcon class="size-3.5 text-muted-foreground" />
-			<span>Acesso somente leitura</span>
+			<span>Read-only access</span>
 		</Card.Content>
 	</Card.Root>
 </div>

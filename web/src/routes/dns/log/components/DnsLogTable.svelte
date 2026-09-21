@@ -1,17 +1,11 @@
 <script lang="ts">
-	import * as Card from "$lib/components/ui/card";
 	import * as Table from "$lib/components/ui/table";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
-	import { Input } from "$lib/components/ui/input";
 	import { Button } from "$lib/components/ui/button";
 	import { Badge } from "$lib/components/ui/badge";
-	import { Skeleton } from "$lib/components/ui/skeleton";
 	import * as Select from "$lib/components/ui/select";
-	import SearchIcon from "@lucide/svelte/icons/search";
 	import CopyIcon from "@lucide/svelte/icons/copy";
 	import CheckIcon from "@lucide/svelte/icons/check";
-	import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
-	import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
 	import ListFilterIcon from "@lucide/svelte/icons/list-filter";
 	import MoreHorizontalIcon from "@lucide/svelte/icons/more-horizontal";
 	import EyeIcon from "@lucide/svelte/icons/eye";
@@ -23,7 +17,7 @@
 	import { dnsBlock, dnsAllow } from "$lib/api/client";
 	import type { DnsQueryLogEntry, DnsRecordType } from "$lib/api/types";
 	import DnsLogDetailDialog from "./DnsLogDetailDialog.svelte";
-	import DataTablePagination from "$lib/components/DataTablePagination.svelte";
+	import DataTableCard from "$lib/components/DataTableCard.svelte";
 
 	let {
 		loading = false,
@@ -209,164 +203,76 @@
 		};
 	}
 
-	const currentPage = $derived(Math.floor(offset / limit) + 1);
-	const totalPages = $derived(Math.max(1, Math.ceil(total / limit)));
-	const startItem = $derived(total === 0 ? 0 : offset + 1);
-	const endItem = $derived(Math.min(offset + limit, total));
 </script>
 
-<Card.Root
-	class="flex flex-col h-[calc(100vh-250px)] min-h-[480px] max-h-[750px] overflow-hidden border shadow-sm"
+<DataTableCard
+	title="DNS Query Log Entries"
+	icon={ListFilterIcon}
+	total={total}
+	itemName="logged queries"
+	searchPlaceholder="Search domain, client IP, or answer..."
+	bind:searchQuery
+	{onSearchChange}
+	{loading}
+	columns={7}
+	pageIndex={Math.floor(offset / limit)}
+	pageSize={limit}
+	onPageChange={(newIdx) => onPageChange(newIdx * limit)}
+	emptyMessage="No DNS queries have been logged yet."
+	emptyFilteredMessage="No DNS log entries match the active filter criteria."
 >
-	<Card.Header class="pb-3 shrink-0 border-b bg-card">
-		<div
-			class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+	{#snippet filters()}
+		<!-- Outcome Filter -->
+		<Select.Root
+			type="single"
+			value={selectedResult}
+			onValueChange={(val) => onResultChange(val ?? "")}
 		>
-			<div>
-				<Card.Title
-					class="text-base font-semibold flex items-center gap-2"
-				>
-					<ListFilterIcon class="h-4 w-4 text-primary" />
-					DNS Query Log Entries
-				</Card.Title>
-				<Card.Description class="text-xs">
-					Showing {startItem}–{endItem} of {total.toLocaleString()} logged
-					queries
-				</Card.Description>
-			</div>
+			<Select.Trigger class="h-9 w-[130px] text-xs">
+				{selectedResult
+					? `Outcome: ${selectedResult}`
+					: "All Outcomes"}
+			</Select.Trigger>
+			<Select.Content>
+				{#each RESULT_FILTERS as filter (filter.value)}
+					<Select.Item value={filter.value} class="text-xs">
+						{filter.label}
+					</Select.Item>
+				{/each}
+			</Select.Content>
+		</Select.Root>
 
-			<!-- Search & Filter Controls Toolbar -->
-			<div class="flex flex-wrap items-center gap-2">
-				<div class="relative w-full sm:w-60">
-					<SearchIcon
-						class="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground"
-					/>
-					<Input
-						type="text"
-						placeholder="Search domain, client IP, or answer..."
-						class="pl-9 h-9 text-xs"
-						value={searchQuery}
-						oninput={(e: Event) =>
-							onSearchChange(
-								(e.target as HTMLInputElement).value,
-							)}
-					/>
-				</div>
+		<!-- Record Type Filter -->
+		<Select.Root
+			type="single"
+			value={selectedType}
+			onValueChange={(val) => onTypeChange(val ?? "")}
+		>
+			<Select.Trigger class="h-9 w-[130px] text-xs">
+				{selectedType
+					? `Type: ${selectedType}`
+					: "All Record Types"}
+			</Select.Trigger>
+			<Select.Content>
+				<Select.Item value="" class="text-xs">All Record Types</Select.Item>
+				{#each RECORD_TYPES as rtype (rtype)}
+					<Select.Item value={rtype} class="text-xs">{rtype}</Select.Item>
+				{/each}
+			</Select.Content>
+		</Select.Root>
+	{/snippet}
 
-				<!-- Outcome Filter -->
-				<Select.Root
-					type="single"
-					value={selectedResult}
-					onValueChange={(val) => onResultChange(val ?? "")}
-				>
-					<Select.Trigger class="h-9 w-[130px] text-xs">
-						{selectedResult
-							? `Outcome: ${selectedResult}`
-							: "All Outcomes"}
-					</Select.Trigger>
-					<Select.Content>
-						{#each RESULT_FILTERS as filter (filter.value)}
-							<Select.Item value={filter.value} class="text-xs"
-								>{filter.label}</Select.Item
-							>
-						{/each}
-					</Select.Content>
-				</Select.Root>
+	{#snippet header()}
+		<Table.Head class="w-[100px]">Time</Table.Head>
+		<Table.Head class="w-[180px]">Client</Table.Head>
+		<Table.Head class="w-[260px]">Domain Name</Table.Head>
+		<Table.Head class="w-[80px]">Type</Table.Head>
+		<Table.Head class="w-[110px]">Status</Table.Head>
+		<Table.Head class="w-[100px] text-right">Latency</Table.Head>
+		<Table.Head class="w-[60px] text-right">Actions</Table.Head>
+	{/snippet}
 
-				<!-- Record Type Filter -->
-				<Select.Root
-					type="single"
-					value={selectedType}
-					onValueChange={(val) => onTypeChange(val ?? "")}
-				>
-					<Select.Trigger class="h-9 w-[130px] text-xs">
-						{selectedType
-							? `Type: ${selectedType}`
-							: "All Record Types"}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" class="text-xs"
-							>All Record Types</Select.Item
-						>
-						{#each RECORD_TYPES as rtype (rtype)}
-							<Select.Item value={rtype} class="text-xs"
-								>{rtype}</Select.Item
-							>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-			</div>
-		</div>
-	</Card.Header>
-
-	<!-- Table Body with Fixed Scroll Container -->
-	<Card.Content class="p-0 flex-1 min-h-0 overflow-auto relative">
-		<Table.Root class="min-w-[750px]">
-			<Table.Header
-				class="sticky top-0 z-10 bg-card/95 backdrop-blur-md border-b shadow-xs"
-			>
-				<Table.Row class="hover:bg-transparent">
-					<Table.Head class="w-[100px]">Time</Table.Head>
-					<Table.Head class="w-[180px]">Client</Table.Head>
-					<Table.Head class="w-[260px]">Domain Name</Table.Head>
-					<Table.Head class="w-[80px]">Type</Table.Head>
-					<Table.Head class="w-[110px]">Status</Table.Head>
-					<Table.Head class="w-[100px] text-right">Latency</Table.Head
-					>
-					<Table.Head class="w-[60px] text-right">Actions</Table.Head>
-				</Table.Row>
-			</Table.Header>
-			<Table.Body>
-				{#if loading && entries.length === 0}
-					{#each Array(6) as _}
-						<Table.Row>
-							<Table.Cell
-								><Skeleton class="h-4 w-16" /></Table.Cell
-							>
-							<Table.Cell
-								><Skeleton class="h-4 w-32" /></Table.Cell
-							>
-							<Table.Cell
-								><Skeleton class="h-4 w-48" /></Table.Cell
-							>
-							<Table.Cell
-								><Skeleton
-									class="h-5 w-10 rounded-full"
-								/></Table.Cell
-							>
-							<Table.Cell
-								><Skeleton
-									class="h-5 w-16 rounded-full"
-								/></Table.Cell
-							>
-							<Table.Cell class="text-right"
-								><Skeleton
-									class="h-4 w-14 ml-auto"
-								/></Table.Cell
-							>
-							<Table.Cell
-								><Skeleton
-									class="h-4 w-6 ml-auto"
-								/></Table.Cell
-							>
-						</Table.Row>
-					{/each}
-				{:else if entries.length === 0}
-					<Table.Row>
-						<Table.Cell
-							colspan={7}
-							class="h-48 text-center text-muted-foreground text-sm"
-						>
-							{#if searchQuery || selectedType || selectedResult}
-								No DNS log entries match the active filter
-								criteria.
-							{:else}
-								No DNS queries have been logged yet.
-							{/if}
-						</Table.Cell>
-					</Table.Row>
-				{:else}
-					{#each entries as entry, i (`${entry.timestamp}-${entry.src_ip}-${entry.domain}-${entry.qtype}-${i}`)}
+	{#each entries as entry, i (`${entry.timestamp}-${entry.src_ip}-${entry.domain}-${entry.qtype}-${i}`)}
 						{@const domainClean = cleanDomain(entry.domain)}
 						{@const answerClean = cleanAnswer(entry.answer)}
 						{@const style =
@@ -579,21 +485,7 @@
 							</Table.Cell>
 						</Table.Row>
 					{/each}
-				{/if}
-			</Table.Body>
-		</Table.Root>
-	</Card.Content>
-
-	<!-- Fixed Pinned Pagination Footer -->
-	<DataTablePagination
-		pageIndex={Math.floor(offset / limit)}
-		pageSize={limit}
-		totalItems={total}
-		itemName="queries"
-		disabled={loading}
-		onPageChange={(newIdx) => onPageChange(newIdx * limit)}
-	/>
-</Card.Root>
+</DataTableCard>
 
 <!-- Inspection Dialog -->
 <DnsLogDetailDialog
