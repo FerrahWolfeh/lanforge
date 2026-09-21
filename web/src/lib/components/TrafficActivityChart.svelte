@@ -4,44 +4,149 @@
 	import { Skeleton } from "$lib/components/ui/skeleton";
 	import { Badge } from "$lib/components/ui/badge";
 	import * as Chart from "$lib/components/ui/chart/index.js";
+	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { AreaChart } from "layerchart";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import ZapIcon from "@lucide/svelte/icons/zap";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import GaugeIcon from "@lucide/svelte/icons/gauge";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
+	import NetworkIcon from "@lucide/svelte/icons/network";
+	import BoxesIcon from "@lucide/svelte/icons/boxes";
+	import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
 	import ArrowDownIcon from "@lucide/svelte/icons/arrow-down";
 	import ArrowUpIcon from "@lucide/svelte/icons/arrow-up";
-	import { formatBytes, formatBps } from "$lib/utils";
+	import { formatBps } from "$lib/utils";
 	import type {
 		DnsAnalyticsResponse,
 		StatusResponse,
 		DnsStatsResponse,
 		TrafficTelemetryResponse,
+		TrafficStatusResponse,
 	} from "$lib/api/types";
 
 	interface Props {
 		loading?: boolean;
-		analyticsData?: DnsAnalyticsResponse | null;
-		statusData?: StatusResponse | null;
-		dnsData?: DnsStatsResponse | null;
+		title?: string;
+		description?: string;
+		showDnsToggle?: boolean;
+		showConntrack?: boolean;
 		telemetryData?: TrafficTelemetryResponse | null;
+		statusData?: StatusResponse | null;
+		trafficStatus?: TrafficStatusResponse | null;
+		dnsData?: DnsStatsResponse | null;
+		analyticsData?: DnsAnalyticsResponse | null;
 	}
 
 	let {
-		loading = true,
-		analyticsData = null,
-		statusData = null,
-		dnsData = null,
+		loading = false,
+		title = "Real-Time Bandwidth & Throughput",
+		description,
+		showDnsToggle = false,
+		showConntrack = true,
 		telemetryData = null,
+		statusData = null,
+		trafficStatus = null,
+		dnsData = null,
+		analyticsData = null,
 	}: Props = $props();
 
 	// View mode toggle
 	let activeMode = $state<"bandwidth" | "dns">("bandwidth");
-	let selectedIface = $state<string>("all");
+	let selectedIface = $state<string>("auto_wan");
 
 	// ---------------------------------------------------------------------------
-	// 1. Live Bandwidth History & Computation
+	// 1. Interface Classification & Filtering
+	// ---------------------------------------------------------------------------
+	const availableInterfaces = $derived(
+		telemetryData?.interfaces?.map((i) => i.interface) ?? []
+	);
+
+	const detectedWan = $derived.by(() => {
+		if (telemetryData?.wan_interface) return telemetryData.wan_interface;
+		if (trafficStatus?.wan_interface) return trafficStatus.wan_interface;
+		const ifaces = availableInterfaces;
+		return (
+			ifaces.find((i) => i === "ppp0" || i.startsWith("wan")) ??
+			null
+		);
+	});
+
+	const detectedIngress = $derived.by(() => {
+		if (telemetryData?.ingress_device) return telemetryData.ingress_device;
+		if (trafficStatus?.ingress_device) return trafficStatus.ingress_device;
+		const ifaces = availableInterfaces;
+		return ifaces.find((i) => i.startsWith("ifb")) ?? null;
+	});
+
+	const detectedLan = $derived.by(() => {
+		if (statusData?.network?.lan_iface) return statusData.network.lan_iface;
+		const ifaces = availableInterfaces;
+		return (
+			ifaces.find(
+				(i) =>
+					(i.startsWith("br-") || i.startsWith("lan") || i === "eth0" || i === "eth1") &&
+					i !== detectedWan &&
+					i !== detectedIngress,
+			) ?? null
+		);
+	});
+
+	function isWan(iface: string) {
+		return iface === detectedWan;
+	}
+
+	function isIngress(iface: string) {
+		return iface === detectedIngress || iface.startsWith("ifb");
+	}
+
+	function isVpn(iface: string) {
+		return (
+			iface.startsWith("tailscale") ||
+			iface.startsWith("wg") ||
+			iface.startsWith("tun")
+		);
+	}
+
+	function isContainer(iface: string) {
+		return (
+			iface.startsWith("veth") ||
+			iface.startsWith("podman") ||
+			iface.startsWith("docker")
+		);
+	}
+
+	const vpnInterfaces = $derived(availableInterfaces.filter((i) => isVpn(i)));
+	const containerInterfaces = $derived(availableInterfaces.filter((i) => isContainer(i)));
+	const otherInterfaces = $derived(
+		availableInterfaces.filter(
+			(i) =>
+				!isWan(i) &&
+				!isIngress(i) &&
+				!isVpn(i) &&
+				!isContainer(i) &&
+				i !== detectedLan,
+		),
+	);
+
+	const effectiveSelectedIface = $derived.by(() => {
+		if (selectedIface === "auto_wan") {
+			return (
+				detectedWan ??
+				availableInterfaces.find((i) => !isIngress(i) && !isContainer(i)) ??
+				"all"
+			);
+		}
+		return selectedIface;
+	});
+
+	const isContainerOrOtherSelected = $derived(
+		containerInterfaces.includes(effectiveSelectedIface) ||
+			otherInterfaces.includes(effectiveSelectedIface),
+	);
+
+	// ---------------------------------------------------------------------------
+	// 2. Live Bandwidth History & Computation
 	// ---------------------------------------------------------------------------
 	interface InterfaceSample {
 		interface: string;
@@ -75,10 +180,6 @@
 	}
 
 	let rawSamples = $state<TelemetrySample[]>(createInitialSamples());
-
-	const availableInterfaces = $derived(
-		telemetryData?.interfaces?.map((i) => i.interface) ?? []
-	);
 
 	$effect(() => {
 		const data = telemetryData;
@@ -132,16 +233,19 @@
 	});
 
 	const trafficHistory = $derived.by<BandwidthPoint[]>(() => {
+		const target = effectiveSelectedIface;
 		return rawSamples.map((s) => {
 			let rx = 0;
 			let tx = 0;
-			if (selectedIface === "all") {
+			if (target === "all") {
 				for (const i of s.interfaces) {
+					// Crucial: Exclude IFB mirror devices from aggregate to prevent multiplication
+					if (isIngress(i.interface)) continue;
 					rx += i.rx_rate_bps;
 					tx += i.tx_rate_bps;
 				}
 			} else {
-				const found = s.interfaces.find((i) => i.interface === selectedIface);
+				const found = s.interfaces.find((i) => i.interface === target);
 				if (found) {
 					rx = found.rx_rate_bps;
 					tx = found.tx_rate_bps;
@@ -196,16 +300,16 @@
 	const conntrack = $derived(telemetryData?.conntrack);
 
 	// ---------------------------------------------------------------------------
-	// 2. DNS Activity History & Computation
+	// 3. DNS Activity History & Computation (Dashboard Mode)
 	// ---------------------------------------------------------------------------
 	const dnsChartConfig = {
 		total: {
 			label: "Total Queries",
-			color: "#38bdf8", // Sky 400
+			color: "#38bdf8",
 		},
 		cached: {
 			label: "Cache Accelerated",
-			color: "#34d399", // Emerald 400
+			color: "#34d399",
 		},
 	} satisfies Chart.ChartConfig;
 
@@ -285,10 +389,10 @@
 </script>
 
 <Card.Root class="relative overflow-hidden border-border/70 shadow-xs">
-	<!-- UniFi Glow Header -->
+	<!-- Glow Header -->
 	<Card.Header class="pb-3 border-b border-border/50 bg-gradient-to-r from-sky-500/5 via-transparent to-emerald-500/5">
 		<div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-			<!-- Title & Mode Toggles -->
+			<!-- Title & Mode Switcher -->
 			<div class="flex flex-col sm:flex-row sm:items-center gap-3">
 				<div class="flex items-start gap-3">
 					<div class="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-sky-500/30 bg-sky-500/10">
@@ -301,7 +405,7 @@
 					<div>
 						<div class="flex items-center gap-2">
 							<Card.Title class="text-base font-semibold">
-								{activeMode === "bandwidth" ? "Real-Time Bandwidth & Throughput" : "Gateway DNS Activity"}
+								{activeMode === "bandwidth" ? title : "Gateway DNS Activity"}
 							</Card.Title>
 							<div class="flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
 								<span class="size-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
@@ -309,42 +413,48 @@
 							</div>
 						</div>
 						<p class="text-muted-foreground text-xs mt-0.5">
-							{activeMode === "bandwidth"
-								? "Instantaneous kernel Rx/Tx throughput sampled continuously across interfaces"
-								: "24-hour aggregate request throughput and real-time DNS cache acceleration"}
+							{#if description}
+								{description}
+							{:else if activeMode === "bandwidth"}
+								Instantaneous kernel throughput sampled every 2.5s across gateway interfaces
+							{:else}
+								24-hour aggregate request throughput and real-time DNS cache acceleration
+							{/if}
 						</p>
 					</div>
 				</div>
 
-				<!-- UniFi View Selector Switcher -->
-				<div class="inline-flex rounded-lg border border-border/60 bg-muted/40 p-0.5 sm:ml-2">
-					<button
-						type="button"
-						class={[
-							"inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-							activeMode === "bandwidth"
-								? "bg-background text-foreground shadow-xs font-semibold"
-								: "text-muted-foreground hover:text-foreground",
-						].join(" ")}
-						onclick={() => (activeMode = "bandwidth")}
-					>
-						<ActivityIcon class="size-3.5 text-sky-400" />
-						<span>Live Bandwidth</span>
-					</button>
-					<button
-						type="button"
-						class={[
-							"inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-							activeMode === "dns"
-								? "bg-background text-foreground shadow-xs font-semibold"
-								: "text-muted-foreground hover:text-foreground",
-						].join(" ")}
-						onclick={() => (activeMode = "dns")}
-					>
-						<GlobeIcon class="size-3.5 text-emerald-400" />
-						<span>DNS Activity</span>
-					</button>
-				</div>
+				<!-- Optional View Selector Switcher (Dashboard Mode) -->
+				{#if showDnsToggle}
+					<div class="inline-flex rounded-lg border border-border/60 bg-muted/40 p-0.5 sm:ml-2">
+						<button
+							type="button"
+							class={[
+								"inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+								activeMode === "bandwidth"
+									? "bg-background text-foreground shadow-xs font-semibold"
+									: "text-muted-foreground hover:text-foreground",
+							].join(" ")}
+							onclick={() => (activeMode = "bandwidth")}
+						>
+							<ActivityIcon class="size-3.5 text-sky-400" />
+							<span>Live Bandwidth</span>
+						</button>
+						<button
+							type="button"
+							class={[
+								"inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+								activeMode === "dns"
+									? "bg-background text-foreground shadow-xs font-semibold"
+									: "text-muted-foreground hover:text-foreground",
+							].join(" ")}
+							onclick={() => (activeMode = "dns")}
+						>
+							<GlobeIcon class="size-3.5 text-emerald-400" />
+							<span>DNS Activity</span>
+						</button>
+					</div>
+				{/if}
 			</div>
 
 			<!-- Right-Side Live Telemetry Metrics -->
@@ -374,7 +484,7 @@
 							{formatBps(bandwidthStats.peakRate)}
 						</span>
 					</div>
-					{#if conntrack}
+					{#if showConntrack && conntrack}
 						<div class="hidden md:flex flex-col gap-0.5 text-right">
 							<span class="text-[10px] uppercase font-sans text-muted-foreground font-semibold tracking-wider">Conntrack</span>
 							<span class="text-violet-400 font-bold tabular-nums">
@@ -407,36 +517,142 @@
 			{/if}
 		</div>
 
-		<!-- Optional Interface Filter (Bandwidth Mode) -->
+		<!-- Categorized Interface Filter Bar (Bandwidth Mode) -->
 		{#if activeMode === "bandwidth" && availableInterfaces.length > 0}
 			<div class="flex items-center gap-1.5 pt-2 text-xs border-t border-border/40 overflow-x-auto">
-				<span class="text-[11px] text-muted-foreground font-sans mr-1 shrink-0">Filter:</span>
+				<span class="text-[11px] text-muted-foreground font-sans mr-1 shrink-0 flex items-center gap-1">
+					<NetworkIcon class="size-3" />
+					Interface:
+				</span>
+
+				<!-- 1. WAN (Internet Gateway) - Primary Default -->
+				{#if detectedWan}
+					<button
+						type="button"
+						class={[
+							"px-2 py-0.5 rounded text-[11px] font-mono transition-colors shrink-0 flex items-center gap-1",
+							effectiveSelectedIface === detectedWan
+								? "bg-primary text-primary-foreground font-semibold shadow-xs"
+								: "bg-muted/50 text-muted-foreground hover:text-foreground",
+						].join(" ")}
+						onclick={() => (selectedIface = detectedWan)}
+						title="Active Gateway WAN interface"
+					>
+						<GlobeIcon class="size-3 text-sky-400" />
+						<span>WAN ({detectedWan})</span>
+					</button>
+				{/if}
+
+				<!-- 2. LAN (Local Network) -->
+				{#if detectedLan && detectedLan !== detectedWan}
+					<button
+						type="button"
+						class={[
+							"px-2 py-0.5 rounded text-[11px] font-mono transition-colors shrink-0 flex items-center gap-1",
+							effectiveSelectedIface === detectedLan
+								? "bg-primary text-primary-foreground font-semibold shadow-xs"
+								: "bg-muted/50 text-muted-foreground hover:text-foreground",
+						].join(" ")}
+						onclick={() => (selectedIface = detectedLan)}
+						title="Local Network interface"
+					>
+						<NetworkIcon class="size-3 text-emerald-400" />
+						<span>LAN ({detectedLan})</span>
+					</button>
+				{/if}
+
+				<!-- 3. VPN / Overlays (Tailscale, WireGuard, Tun) -->
+				{#each vpnInterfaces as vpn (vpn)}
+					<button
+						type="button"
+						class={[
+							"px-2 py-0.5 rounded text-[11px] font-mono transition-colors shrink-0 flex items-center gap-1",
+							effectiveSelectedIface === vpn
+								? "bg-primary text-primary-foreground font-semibold shadow-xs"
+								: "bg-muted/50 text-muted-foreground hover:text-foreground",
+						].join(" ")}
+						onclick={() => (selectedIface = vpn)}
+						title="Virtual Private Network overlay"
+					>
+						<ShieldCheckIcon class="size-3 text-violet-400" />
+						<span>{vpn} (VPN)</span>
+					</button>
+				{/each}
+
+				<!-- 4. SQM Ingress Device (IFB) -->
+				{#if detectedIngress}
+					<button
+						type="button"
+						class={[
+							"px-2 py-0.5 rounded text-[11px] font-mono transition-colors shrink-0 flex items-center gap-1",
+							effectiveSelectedIface === detectedIngress
+								? "bg-primary text-primary-foreground font-semibold shadow-xs"
+								: "bg-muted/50 text-muted-foreground hover:text-foreground",
+						].join(" ")}
+						onclick={() => (selectedIface = detectedIngress)}
+						title="Kernel IFB queue redirect mirror for SQM ingress traffic shaping"
+					>
+						<GaugeIcon class="size-3 text-sky-400" />
+						<span>SQM Ingress ({detectedIngress})</span>
+					</button>
+				{/if}
+
+				<!-- 5. Containers & Other Interfaces Dropdown -->
+				{#if containerInterfaces.length > 0 || otherInterfaces.length > 0}
+					<DropdownMenu.Root>
+						<DropdownMenu.Trigger
+							class={[
+								"px-2 py-0.5 rounded text-[11px] font-mono transition-colors shrink-0 flex items-center gap-1 cursor-pointer border border-border/40",
+								isContainerOrOtherSelected
+									? "bg-primary text-primary-foreground font-semibold shadow-xs"
+									: "bg-muted/50 text-muted-foreground hover:text-foreground",
+							].join(" ")}
+							title="Container virtual devices (Podman/Docker) and secondary interfaces"
+						>
+							<BoxesIcon class="size-3 text-amber-400" />
+							<span>{isContainerOrOtherSelected ? effectiveSelectedIface : `Containers & Others (${containerInterfaces.length + otherInterfaces.length})`}</span>
+							<ChevronDownIcon class="size-3 opacity-60" />
+						</DropdownMenu.Trigger>
+						<DropdownMenu.Content align="start" class="w-56 max-h-64 overflow-y-auto text-xs">
+							{#if containerInterfaces.length > 0}
+								<DropdownMenu.Label class="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Containers (Podman / Docker)</DropdownMenu.Label>
+								{#each containerInterfaces as cIface (cIface)}
+									<DropdownMenu.Item onclick={() => (selectedIface = cIface)} class="font-mono text-xs gap-2">
+										<BoxesIcon class="size-3.5 text-amber-400" />
+										<span>{cIface}</span>
+									</DropdownMenu.Item>
+								{/each}
+							{/if}
+							{#if otherInterfaces.length > 0}
+								{#if containerInterfaces.length > 0}
+									<DropdownMenu.Separator />
+								{/if}
+								<DropdownMenu.Label class="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Other Interfaces</DropdownMenu.Label>
+								{#each otherInterfaces as oIface (oIface)}
+									<DropdownMenu.Item onclick={() => (selectedIface = oIface)} class="font-mono text-xs gap-2">
+										<NetworkIcon class="size-3.5 text-muted-foreground" />
+										<span>{oIface}</span>
+									</DropdownMenu.Item>
+								{/each}
+							{/if}
+						</DropdownMenu.Content>
+					</DropdownMenu.Root>
+				{/if}
+
+				<!-- 6. All Interfaces (Excludes IFB mirrors from aggregation) -->
 				<button
 					type="button"
 					class={[
 						"px-2 py-0.5 rounded text-[11px] font-mono transition-colors shrink-0",
-						selectedIface === "all"
-							? "bg-primary text-primary-foreground font-semibold"
+						effectiveSelectedIface === "all"
+							? "bg-primary text-primary-foreground font-semibold shadow-xs"
 							: "bg-muted/50 text-muted-foreground hover:text-foreground",
 					].join(" ")}
 					onclick={() => (selectedIface = "all")}
+					title="Aggregated throughput across physical interfaces (excludes SQM IFB mirrors)"
 				>
 					All Interfaces
 				</button>
-				{#each availableInterfaces as iface (iface)}
-					<button
-						type="button"
-						class={[
-							"px-2 py-0.5 rounded text-[11px] font-mono transition-colors shrink-0",
-							selectedIface === iface
-								? "bg-primary text-primary-foreground font-semibold"
-								: "bg-muted/50 text-muted-foreground hover:text-foreground",
-						].join(" ")}
-						onclick={() => (selectedIface = iface)}
-					>
-						{iface}
-					</button>
-				{/each}
 			</div>
 		{/if}
 	</Card.Header>
@@ -444,7 +660,7 @@
 	<!-- Chart Canvas -->
 	<Card.Content class="p-4 sm:p-6">
 		{#if activeMode === "bandwidth"}
-			{#if trafficHistory.length === 0}
+			{#if loading && trafficHistory.length === 0}
 				<Skeleton class="h-[210px] w-full" />
 			{:else}
 				<Chart.Container config={trafficChartConfig} class="aspect-auto h-[210px] w-full">
@@ -533,20 +749,22 @@
 		{/if}
 	</Card.Content>
 
-	<!-- UniFi Gateway Status Strip -->
-	<Card.Footer class="border-t border-border/50 bg-muted/10 px-6 py-2.5">
+	<!-- Status Strip Footer -->
+	<Card.Footer class="border-t border-border/50 bg-muted/10 px-4 sm:px-6 py-2.5">
 		<div class="flex flex-wrap items-center justify-between gap-3 w-full text-xs text-muted-foreground font-mono">
 			<div class="flex items-center gap-2">
 				<ZapIcon class="size-3.5 text-amber-400" />
-				<span>Uplink: <span class="text-foreground font-semibold font-sans">{statusData?.network?.lan_iface || "eth0"}</span> (1 Gbps Full-Duplex)</span>
+				<span>Gateway Uplink: <span class="text-foreground font-semibold font-sans">{detectedWan || statusData?.network?.lan_iface || "Auto"}</span></span>
 			</div>
-			<div class="flex items-center gap-2">
-				<ShieldCheckIcon class="size-3.5 text-emerald-400" />
-				<span>Stateful Conntrack: <span class="text-emerald-400 font-semibold">{conntrack ? `${conntrack.active_connections} active` : "Protected"}</span></span>
-			</div>
+			{#if showConntrack}
+				<div class="flex items-center gap-2">
+					<ShieldCheckIcon class="size-3.5 text-emerald-400" />
+					<span>Conntrack: <span class="text-emerald-400 font-semibold">{conntrack ? `${conntrack.active_connections.toLocaleString()} active` : "Protected"}</span></span>
+				</div>
+			{/if}
 			<div class="flex items-center gap-2">
 				<GaugeIcon class="size-3.5 text-sky-400" />
-				<span>Bufferbloat (CAKE): <span class="text-sky-400 font-semibold">{telemetryData?.sqm?.active ? "Active AQM" : "Standard"}</span></span>
+				<span>Bufferbloat (CAKE): <span class="text-sky-400 font-semibold">{telemetryData?.sqm?.active ? (detectedIngress ? `Active on ${detectedWan || 'WAN'} & ${detectedIngress}` : "Active AQM") : "Standard"}</span></span>
 			</div>
 		</div>
 	</Card.Footer>

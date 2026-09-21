@@ -1271,6 +1271,8 @@ export interface TrafficTelemetryResponse {
 	sqm: SqmTelemetryStats | null;
 	conntrack: ConntrackStats | null;
 	history?: TrafficHistorySample[];
+	wan_interface?: string | null;
+	ingress_device?: string | null;
 }
 
 

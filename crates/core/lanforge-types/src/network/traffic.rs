@@ -234,5 +234,9 @@ pub struct TrafficTelemetryResponse {
     pub conntrack: Option<ConntrackStats>,
     #[serde(default)]
     pub history: Vec<TrafficHistorySample>,
+    #[serde(default)]
+    pub wan_interface: Option<String>,
+    #[serde(default)]
+    pub ingress_device: Option<String>,
 }
 

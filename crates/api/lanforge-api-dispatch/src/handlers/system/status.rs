@@ -164,14 +164,23 @@ impl ClientContext {
     pub async fn handle_traffic_telemetry(&self) -> Response {
         let (wan_iface, ingress_device) = {
             let read_guard = self.ctx.read();
-            read_guard
+            let (w, i) = read_guard
                 .interfaces
                 .traffic_status
                 .as_ref()
                 .map_or((None, None), |s| {
                     (s.wan_interface.clone(), s.ingress_device.clone())
-                })
+                });
+            let fallback_wan = w.or_else(|| {
+                read_guard
+                    .interfaces
+                    .pppoe_status
+                    .as_ref()
+                    .and_then(|p| p.interface.clone())
+            });
+            (fallback_wan, i)
         };
+        let wan_iface = wan_iface.or_else(|| self.ctx.get_pppoe_config().map(|p| p.wan_iface));
 
         let telemetry = lanforge_traffic::collect_traffic_telemetry(
             wan_iface.as_deref(),

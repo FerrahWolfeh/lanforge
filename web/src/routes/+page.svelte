@@ -26,7 +26,7 @@
 		type TrafficTelemetryResponse,
 	} from "$lib/api/types";
 	import Sparkline from "$lib/components/ui/sparkline.svelte";
-	import DashboardActivityHero from "./components/DashboardActivityHero.svelte";
+	import TrafficActivityChart from "$lib/components/TrafficActivityChart.svelte";
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
@@ -192,12 +192,27 @@
 		return [c, c, c, c, c, c, c, c];
 	});
 
-	const totalRxBps = $derived(
-		telemetryData?.interfaces?.reduce((acc, i) => acc + i.rx_rate_bps, 0) ?? 0
-	);
-	const totalTxBps = $derived(
-		telemetryData?.interfaces?.reduce((acc, i) => acc + i.tx_rate_bps, 0) ?? 0
-	);
+	const gatewayTraffic = $derived.by(() => {
+		const wan = telemetryData?.wan_interface;
+		if (wan) {
+			const found = telemetryData?.interfaces?.find((i) => i.interface === wan);
+			if (found) {
+				return { rx: found.rx_rate_bps, tx: found.tx_rate_bps };
+			}
+		}
+		// Fallback: sum across physical interfaces (excluding ifb* and veth*)
+		let rx = 0;
+		let tx = 0;
+		for (const i of telemetryData?.interfaces ?? []) {
+			if (i.interface.startsWith("ifb") || i.interface.startsWith("veth")) continue;
+			rx += i.rx_rate_bps;
+			tx += i.tx_rate_bps;
+		}
+		return { rx, tx };
+	});
+
+	const totalRxBps = $derived(gatewayTraffic.rx);
+	const totalTxBps = $derived(gatewayTraffic.tx);
 	const totalTrafficBps = $derived(totalRxBps + totalTxBps);
 	const conntrack = $derived(telemetryData?.conntrack);
 
@@ -487,9 +502,11 @@
 		{/each}
 	</div>
 
-	<!-- UniFi Gateway Network Activity Hero Chart -->
-	<DashboardActivityHero
+	<!-- Gateway Network Activity Hero Chart -->
+	<TrafficActivityChart
 		loading={loadingData}
+		showDnsToggle={true}
+		title="Real-Time Bandwidth & Throughput"
 		{analyticsData}
 		{statusData}
 		{dnsData}

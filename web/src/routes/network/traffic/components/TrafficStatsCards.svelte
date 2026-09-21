@@ -28,24 +28,61 @@
 	const isOnline = $derived(stateStr === "online" || stateStr === "active");
 	const isStarting = $derived(stateStr === "starting");
 
-	// Instantaneous aggregate rates across all physical & virtual interfaces
-	const totalRxBps = $derived(
-		telemetry?.interfaces?.reduce((acc, i) => acc + i.rx_rate_bps, 0) ?? 0
-	);
-	const totalTxBps = $derived(
-		telemetry?.interfaces?.reduce((acc, i) => acc + i.tx_rate_bps, 0) ?? 0
-	);
-	const totalRxBytes = $derived(
-		telemetry?.interfaces?.reduce((acc, i) => acc + i.rx_bytes, 0) ?? 0
-	);
-	const totalTxBytes = $derived(
-		telemetry?.interfaces?.reduce((acc, i) => acc + i.tx_bytes, 0) ?? 0
-	);
+	// Instantaneous rates for gateway uplink and physical interfaces (excluding IFB mirrors and container veths)
+	const wanIface = $derived(telemetry?.wan_interface ?? status?.wan_interface);
+	const totalRxBps = $derived.by(() => {
+		if (wanIface) {
+			const found = telemetry?.interfaces?.find((i) => i.interface === wanIface);
+			if (found) return found.rx_rate_bps;
+		}
+		return (
+			telemetry?.interfaces
+				?.filter((i) => !i.interface.startsWith("ifb") && !i.interface.startsWith("veth"))
+				?.reduce((acc, i) => acc + i.rx_rate_bps, 0) ?? 0
+		);
+	});
+	const totalTxBps = $derived.by(() => {
+		if (wanIface) {
+			const found = telemetry?.interfaces?.find((i) => i.interface === wanIface);
+			if (found) return found.tx_rate_bps;
+		}
+		return (
+			telemetry?.interfaces
+				?.filter((i) => !i.interface.startsWith("ifb") && !i.interface.startsWith("veth"))
+				?.reduce((acc, i) => acc + i.tx_rate_bps, 0) ?? 0
+		);
+	});
+	const totalRxBytes = $derived.by(() => {
+		if (wanIface) {
+			const found = telemetry?.interfaces?.find((i) => i.interface === wanIface);
+			if (found) return found.rx_bytes;
+		}
+		return (
+			telemetry?.interfaces
+				?.filter((i) => !i.interface.startsWith("ifb") && !i.interface.startsWith("veth"))
+				?.reduce((acc, i) => acc + i.rx_bytes, 0) ?? 0
+		);
+	});
+	const totalTxBytes = $derived.by(() => {
+		if (wanIface) {
+			const found = telemetry?.interfaces?.find((i) => i.interface === wanIface);
+			if (found) return found.tx_bytes;
+		}
+		return (
+			telemetry?.interfaces
+				?.filter((i) => !i.interface.startsWith("ifb") && !i.interface.startsWith("veth"))
+				?.reduce((acc, i) => acc + i.tx_bytes, 0) ?? 0
+		);
+	});
 	const totalDrops = $derived(
-		telemetry?.interfaces?.reduce((acc, i) => acc + i.rx_dropped + i.tx_dropped, 0) ?? 0
+		telemetry?.interfaces
+			?.filter((i) => !i.interface.startsWith("ifb"))
+			?.reduce((acc, i) => acc + i.rx_dropped + i.tx_dropped, 0) ?? 0
 	);
 	const totalErrors = $derived(
-		telemetry?.interfaces?.reduce((acc, i) => acc + i.rx_errors + i.tx_errors, 0) ?? 0
+		telemetry?.interfaces
+			?.filter((i) => !i.interface.startsWith("ifb"))
+			?.reduce((acc, i) => acc + i.rx_errors + i.tx_errors, 0) ?? 0
 	);
 
 	const conntrack = $derived(telemetry?.conntrack);
@@ -373,11 +410,15 @@
 									<td class="py-2.5 px-4 font-semibold text-foreground flex items-center gap-2">
 										<span class="size-2 rounded-full bg-emerald-500 inline-block shrink-0"></span>
 										<span>{iface.interface}</span>
-										{#if iface.interface.startsWith("ppp")}
-											<Badge variant="outline" class="text-[10px] px-1 py-0 border-sky-500/30 text-sky-400 font-sans">PPPoE</Badge>
+										{#if iface.interface === wanIface || iface.interface.startsWith("ppp")}
+											<Badge variant="outline" class="text-[10px] px-1 py-0 border-sky-500/30 text-sky-400 font-sans">WAN</Badge>
 										{:else if iface.interface.startsWith("ifb")}
-											<Badge variant="outline" class="text-[10px] px-1 py-0 border-amber-500/30 text-amber-400 font-sans">IFB Shaper</Badge>
-										{:else if iface.interface.startsWith("lan")}
+											<Badge variant="outline" class="text-[10px] px-1 py-0 border-amber-500/30 text-amber-400 font-sans">SQM Ingress</Badge>
+										{:else if iface.interface.startsWith("tailscale")}
+											<Badge variant="outline" class="text-[10px] px-1 py-0 border-violet-500/30 text-violet-400 font-sans">Tailscale VPN</Badge>
+										{:else if iface.interface.startsWith("veth") || iface.interface.startsWith("podman") || iface.interface.startsWith("docker")}
+											<Badge variant="outline" class="text-[10px] px-1 py-0 border-zinc-500/30 text-zinc-400 font-sans">Container</Badge>
+										{:else if iface.interface.startsWith("lan") || iface.interface.startsWith("br-")}
 											<Badge variant="outline" class="text-[10px] px-1 py-0 border-emerald-500/30 text-emerald-400 font-sans">LAN</Badge>
 										{/if}
 									</td>

@@ -162,12 +162,42 @@ impl TrafficCollector {
             self.history.push_back(point);
         }
 
+        let resolved_wan = wan_iface
+            .map(String::from)
+            .or_else(|| {
+                interfaces.iter().find_map(|i| {
+                    if i.interface == "ppp0" || i.interface == "wan0" || i.interface == "wan" {
+                        Some(i.interface.clone())
+                    } else {
+                        None
+                    }
+                })
+            });
+
+        let resolved_ifb = ifb_iface
+            .map(String::from)
+            .or_else(|| {
+                sqm.as_ref()
+                    .and_then(|s| s.ingress.as_ref().map(|i| i.dev.clone()))
+                    .or_else(|| {
+                        interfaces.iter().find_map(|i| {
+                            if i.interface.starts_with("ifb") {
+                                Some(i.interface.clone())
+                            } else {
+                                None
+                            }
+                        })
+                    })
+            });
+
         TrafficTelemetryResponse {
             timestamp: now,
             interfaces,
             sqm,
             conntrack,
             history: self.history.iter().cloned().collect(),
+            wan_interface: resolved_wan,
+            ingress_device: resolved_ifb,
         }
     }
 

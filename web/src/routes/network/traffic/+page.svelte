@@ -4,7 +4,7 @@
 	import { onMount, onDestroy } from "svelte";
 
 	import TrafficStatsCards from "./components/TrafficStatsCards.svelte";
-	import TrafficBandwidthChart from "./components/TrafficBandwidthChart.svelte";
+	import TrafficActivityChart from "$lib/components/TrafficActivityChart.svelte";
 
 	let status = $state<TrafficStatusResponse | null>(null);
 	let telemetry = $state<TrafficTelemetryResponse | null>(null);
@@ -42,7 +42,13 @@
 
 <div class="flex flex-col gap-6 w-full">
 	<!-- Real-Time Bandwidth & Throughput Chart -->
-	<TrafficBandwidthChart {telemetry} />
+	<TrafficActivityChart
+		telemetryData={telemetry}
+		trafficStatus={status}
+		title="Live Traffic & Throughput Stream"
+		description="Continuous instantaneous throughput sampled every 2.5 seconds directly from the kernel"
+		{loading}
+	/>
 
 	<!-- Core Telemetry Status Cards & Interfaces Table -->
 	<TrafficStatsCards {status} {telemetry} />
