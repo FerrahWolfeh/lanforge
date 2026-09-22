@@ -1,7 +1,7 @@
 use crate::ClientContext;
 use lanforge_api::api::{DnsQueryLogEntry, DnsQueryLogResponse, DnsQueryResponse, Response};
 use lanforge_types::network::dns::{DnsRecordEntry, DnsRecordType};
-use std::time::Instant;
+use std::{collections::HashMap, net::IpAddr, time::Instant};
 
 impl ClientContext {
     pub async fn handle_dns_query(
@@ -55,44 +55,42 @@ impl ClientContext {
     ) -> Response {
         let limit = n.unwrap_or(100);
         match self.log_db.get_dns_query_history(limit, offset, client).await {
-            Ok((queries, total)) => Response::DnsQueryLog(DnsQueryLogResponse {
-                entries: queries
-                    .into_iter()
-                    .map(|q| {
-                        let mac = q.src_mac.or_else(|| self.ctx.get_mac_by_ip(q.src_ip));
-                        let src_hostname = mac.and_then(|m| {
-                            if let Some(d) = self.ctx.get_device(&m) {
-                                let name = d.display_hostname();
-                                if name != "?" && !name.is_empty() {
-                                    return Some(name.to_string());
+            Ok((queries, total)) => {
+                let entries = self.ctx.with_state(|state| {
+                    let mut ip_cache: HashMap<IpAddr, (Option<lanforge_types::identifiers::MacAddr>, Option<String>)> =
+                        HashMap::new();
+                    queries
+                        .into_iter()
+                        .map(|q| {
+                            let (mac, src_hostname) = match q.src_mac {
+                                Some(mac) => {
+                                    let hostname = super::resolve_mac_hostname(state, mac);
+                                    (Some(mac), hostname)
                                 }
-                                if !d.dns_fallback.is_empty() {
-                                    return Some(d.dns_fallback.clone());
+                                None => {
+                                    ip_cache
+                                        .entry(q.src_ip)
+                                        .or_insert_with(|| super::resolve_ip_identity(state, q.src_ip))
+                                        .clone()
                                 }
+                            };
+                            DnsQueryLogEntry {
+                                timestamp: q.timestamp,
+                                src_ip: q.src_ip,
+                                src_mac: mac,
+                                src_hostname,
+                                domain: q.domain,
+                                qtype: q.qtype,
+                                result: q.result,
+                                upstream_us: q.upstream_us,
+                                cached: q.cached,
+                                answer: q.answer,
                             }
-                            self.ctx.with_state(|s| {
-                                s.static_entries
-                                    .get(&m)
-                                    .filter(|e| !e.hostname.is_empty())
-                                    .map(|e| e.hostname.clone())
-                            })
-                        });
-                        DnsQueryLogEntry {
-                            timestamp: q.timestamp,
-                            src_ip: q.src_ip,
-                            src_mac: mac,
-                            src_hostname,
-                            domain: q.domain,
-                            qtype: q.qtype,
-                            result: q.result,
-                            upstream_us: q.upstream_us,
-                            cached: q.cached,
-                            answer: q.answer,
-                        }
-                    })
-                    .collect(),
-                total,
-            }),
+                        })
+                        .collect()
+                });
+                Response::DnsQueryLog(DnsQueryLogResponse { entries, total })
+            }
             Err(e) => Response::Error {
                 error: e.to_string(),
             },

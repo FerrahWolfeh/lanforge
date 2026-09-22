@@ -7,7 +7,11 @@ use lanforge_types::network::dns::{
     DnsRecordType, DnsRequest, DnsResponse, UpstreamStatus,
     upstream::UpstreamProtocol,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    net::IpAddr,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 impl ClientContext {
     /// Snapshot of DNS resolver statistics.
@@ -216,27 +220,22 @@ impl ClientContext {
             .await
             .unwrap_or_default();
 
-        let resolve_hostname = |ip_str: &str| {
-            let parsed_ip = ip_str.parse().unwrap_or_else(|_| "0.0.0.0".parse().unwrap());
-            let mac = self.ctx.get_mac_by_ip(parsed_ip);
-            mac.and_then(|m| {
-                if let Some(d) = self.ctx.get_device(&m) {
-                    let name = d.display_hostname();
-                    if name != "?" && !name.is_empty() {
-                        return Some(name.to_string());
-                    }
-                    if !d.dns_fallback.is_empty() {
-                        return Some(d.dns_fallback.clone());
-                    }
+        let client_hostnames: HashMap<IpAddr, Option<String>> = self.ctx.with_state(|state| {
+            let mut map = HashMap::new();
+            for ip_str in top_clients
+                .iter()
+                .map(|(ip, _, _)| ip)
+                .chain(top_blocked_clients.iter().map(|(ip, _)| ip))
+            {
+                if let Ok(parsed_ip) = ip_str.parse::<IpAddr>()
+                    && let std::collections::hash_map::Entry::Vacant(e) = map.entry(parsed_ip)
+                {
+                    let hostname = super::resolve_ip_identity(state, parsed_ip).1;
+                    e.insert(hostname);
                 }
-                self.ctx.with_state(|s| {
-                    s.static_entries
-                        .get(&m)
-                        .filter(|e| !e.hostname.is_empty())
-                        .map(|e| e.hostname.clone())
-                })
-            })
-        };
+            }
+            map
+        });
 
         Response::DnsAnalytics(Box::new(DnsAnalyticsResponse {
             top_domains: top_domains
@@ -267,7 +266,10 @@ impl ClientContext {
             top_clients: top_clients
                 .into_iter()
                 .map(|(ip, count, blocked_count)| {
-                    let hostname = resolve_hostname(&ip);
+                    let hostname = ip
+                        .parse::<IpAddr>()
+                        .ok()
+                        .and_then(|addr| client_hostnames.get(&addr).cloned().flatten());
                     TopClientEntry {
                         ip,
                         hostname,
@@ -298,7 +300,10 @@ impl ClientContext {
             top_blocked_clients: top_blocked_clients
                 .into_iter()
                 .map(|(ip, count)| {
-                    let hostname = resolve_hostname(&ip);
+                    let hostname = ip
+                        .parse::<IpAddr>()
+                        .ok()
+                        .and_then(|addr| client_hostnames.get(&addr).cloned().flatten());
                     TopClientEntry {
                         ip,
                         hostname,

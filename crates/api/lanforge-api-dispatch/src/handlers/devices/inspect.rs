@@ -17,7 +17,7 @@ impl ClientContext {
                             state
                                 .devices
                                 .values()
-                                .find(|d| d.hostname.name.to_lowercase() == target.to_lowercase())
+                                .find(|d| d.hostname.name.eq_ignore_ascii_case(&target))
                                 .cloned()
                         })
                     },
@@ -63,7 +63,7 @@ impl ClientContext {
                 state
                     .devices
                     .values()
-                    .find(|d| d.hostname.name.to_lowercase() == target.to_lowercase())
+                    .find(|d| d.hostname.name.eq_ignore_ascii_case(&target))
                     .map(|d| d.mac)
             });
             match found_mac {

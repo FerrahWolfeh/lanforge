@@ -32,22 +32,22 @@ impl ClientContext {
         let v4_pools = self.ctx.get_dhcp_v4_pools();
         let v6_pools = self.ctx.get_dhcp_v6_pools();
 
-        let state = self.ctx.read();
-        let mut active_ula_prefix = None;
-        let mut active_gua_prefix = None;
-
-        for pool in state.interfaces.v6_pools.values() {
-            if let Some(IpAddr::V6(addr)) = pool.prefix {
-                let len = pool.prefix_len.unwrap_or(64);
-                let formatted = format!("{addr}/{len}");
-                if (addr.segments()[0] & 0xfe00) == 0xfc00 {
-                    active_ula_prefix = Some(formatted);
-                } else if (addr.segments()[0] & 0xe000) == 0x2000 {
-                    active_gua_prefix = Some(formatted);
+        let (active_ula_prefix, active_gua_prefix) = self.ctx.with_state(|state| {
+            let mut ula = None;
+            let mut gua = None;
+            for pool in state.interfaces.v6_pools.values() {
+                if let Some(IpAddr::V6(addr)) = pool.prefix {
+                    let len = pool.prefix_len.unwrap_or(64);
+                    let formatted = format!("{addr}/{len}");
+                    if (addr.segments()[0] & 0xfe00) == 0xfc00 {
+                        ula = Some(formatted);
+                    } else if (addr.segments()[0] & 0xe000) == 0x2000 {
+                        gua = Some(formatted);
+                    }
                 }
             }
-        }
-        drop(state);
+            (ula, gua)
+        });
 
         Response::DhcpPoolsConfig(Box::new(DhcpPoolsConfigResponse {
             v4_pools,
@@ -88,69 +88,74 @@ impl ClientContext {
             .unwrap_or(Ipv4Addr::new(255, 255, 255, 0));
         let server_router = options.v4.router;
 
-        let mut invalidated = Vec::new();
-        let mut valid_count = 0;
-        let mut static_count = 0;
+        let (valid_count, static_count, to_invalidate) = self.ctx.with_state(|state| {
+            let mut valid_count = 0;
+            let mut static_count = 0;
+            let mut to_invalidate = Vec::new();
 
-        let devices = self.ctx.with_state(|state| {
-            state.devices.values().cloned().collect::<Vec<_>>()
-        });
-
-        for dev in devices {
-            match &dev.v4 {
-                IPv4State::Static(_) => {
-                    // Static reservations are NEVER invalidated or touched
-                    static_count += 1;
-                }
-                IPv4State::Dynamic(lease) => {
-                    let in_pool = pools
-                        .iter()
-                        .find(|p| lease.ip >= p.range_start && lease.ip <= p.range_end);
-                    let is_valid = if let Some(p) = in_pool {
-                        let mask = p.subnet_mask.unwrap_or(server_mask);
-                        let router = p.router.or(server_router);
-                        if let Some(r) = router {
-                            (u32::from(lease.ip) & u32::from(mask))
-                                == (u32::from(r) & u32::from(mask))
+            for dev in state.devices.values() {
+                match &dev.v4 {
+                    IPv4State::Static(_) => {
+                        // Static reservations are NEVER invalidated or touched
+                        static_count += 1;
+                    }
+                    IPv4State::Dynamic(lease) => {
+                        let in_pool = pools
+                            .iter()
+                            .find(|p| lease.ip >= p.range_start && lease.ip <= p.range_end);
+                        let is_valid = if let Some(p) = in_pool {
+                            let mask = p.subnet_mask.unwrap_or(server_mask);
+                            let router = p.router.or(server_router);
+                            if let Some(r) = router {
+                                (u32::from(lease.ip) & u32::from(mask))
+                                    == (u32::from(r) & u32::from(mask))
+                            } else {
+                                true
+                            }
                         } else {
-                            true
-                        }
-                    } else {
-                        false
-                    };
-
-                    if is_valid {
-                        valid_count += 1;
-                    } else {
-                        let reason = if in_pool.is_none() {
-                            format!("IP {} is outside configured dynamic pools", lease.ip)
-                        } else {
-                            format!(
-                                "IP {} does not match subnet mask {server_mask} or gateway {server_router:?}",
-                                lease.ip
-                            )
+                            false
                         };
 
-                        // Invalidate stale lease in State and DB
-                        let _ = self.ctx.apply(DeviceUpdate::LeaseReleased {
-                            mac: dev.mac,
-                            target: LeaseTarget::V4,
-                        });
+                        if is_valid {
+                            valid_count += 1;
+                        } else {
+                            let reason = if in_pool.is_none() {
+                                format!("IP {} is outside configured dynamic pools", lease.ip)
+                            } else {
+                                format!(
+                                    "IP {} does not match subnet mask {server_mask} or gateway {server_router:?}",
+                                    lease.ip
+                                )
+                            };
 
-                        invalidated.push(InvalidatedLeaseInfo {
-                            mac: dev.mac,
-                            ip: lease.ip,
-                            hostname: if dev.hostname.name.is_empty() {
+                            let hostname = if dev.hostname.name.is_empty() {
                                 None
                             } else {
                                 Some(dev.hostname.name.clone())
-                            },
-                            reason,
-                        });
+                            };
+
+                            to_invalidate.push((dev.mac, lease.ip, hostname, reason));
+                        }
                     }
+                    IPv4State::None => {}
                 }
-                IPv4State::None => {}
             }
+            (valid_count, static_count, to_invalidate)
+        });
+
+        let mut invalidated = Vec::with_capacity(to_invalidate.len());
+        for (mac, ip, hostname, reason) in to_invalidate {
+            let _ = self.ctx.apply(DeviceUpdate::LeaseReleased {
+                mac,
+                target: LeaseTarget::V4,
+            });
+
+            invalidated.push(InvalidatedLeaseInfo {
+                mac,
+                ip,
+                hostname,
+                reason,
+            });
         }
 
         // Notify DHCP service to reload and ensure transports/pools are fully synced

@@ -29,9 +29,10 @@ impl ClientContext {
         };
 
         let (total_devices, counts) = self.ctx.with_state(|state| {
+            let now = std::time::SystemTime::now();
             let mut counts = (0, 0, 0, 0, 0, 0, 0); // online, static, dynamic, v4_dyn, v6_dyn, slaac, managed_cli
             for dev in state.devices.values() {
-                if dev.last_seen.elapsed().unwrap_or_default().as_secs() < 300 {
+                if now.duration_since(dev.last_seen).unwrap_or_default().as_secs() < 300 {
                     counts.0 += 1;
                 }
                 if dev.is_static() {
@@ -80,7 +81,7 @@ impl ClientContext {
     }
 
     pub async fn handle_pppoe_status(&self) -> Response {
-        let pppoe_status = self.ctx.read().interfaces.pppoe_status.clone();
+        let pppoe_status = self.ctx.with_state(|s| s.interfaces.pppoe_status.clone());
         let mut status = pppoe_status.unwrap_or_else(|| Box::new(lanforge_types::system::PppoeStatusResponse {
             enabled: self
                 .ctx
@@ -105,7 +106,7 @@ impl ClientContext {
 
 
     pub async fn handle_ra_status(&self) -> Response {
-        let ra_status = self.ctx.read().interfaces.ra_status.clone();
+        let ra_status = self.ctx.with_state(|s| s.interfaces.ra_status.clone());
         let status = ra_status.unwrap_or_else(|| {
             let target_ifindex = self.ctx.target_ifindex().unwrap_or(0);
             let if_ips = self.ctx.get_interface_state(target_ifindex);
@@ -139,7 +140,7 @@ impl ClientContext {
     }
 
     pub async fn handle_traffic_status(&self) -> Response {
-        let traffic_status = self.ctx.read().interfaces.traffic_status.clone();
+        let traffic_status = self.ctx.with_state(|s| s.interfaces.traffic_status.clone());
         let status = traffic_status.unwrap_or_else(|| {
             let cfg = self.ctx.get_traffic_config().unwrap_or_default();
             let service_state = self.ctx.get_service_state("traffic");
@@ -162,24 +163,22 @@ impl ClientContext {
     }
 
     pub async fn handle_traffic_telemetry(&self) -> Response {
-        let (wan_iface, ingress_device) = {
-            let read_guard = self.ctx.read();
-            let (w, i) = read_guard
+        let (wan_iface, ingress_device) = self.ctx.with_state(|s| {
+            let (w, i) = s
                 .interfaces
                 .traffic_status
                 .as_ref()
-                .map_or((None, None), |s| {
-                    (s.wan_interface.clone(), s.ingress_device.clone())
+                .map_or((None, None), |status| {
+                    (status.wan_interface.clone(), status.ingress_device.clone())
                 });
             let fallback_wan = w.or_else(|| {
-                read_guard
-                    .interfaces
+                s.interfaces
                     .pppoe_status
                     .as_ref()
                     .and_then(|p| p.interface.clone())
             });
             (fallback_wan, i)
-        };
+        });
         let wan_iface = wan_iface.or_else(|| self.ctx.get_pppoe_config().map(|p| p.wan_iface));
 
         let telemetry = lanforge_traffic::collect_traffic_telemetry(
@@ -197,16 +196,15 @@ impl ClientContext {
         let internal_zone = cfg.zones.iter().find(|z| z.name == "internal");
         let lan_ifaces = internal_zone.map_or_else(Vec::new, |z| z.interfaces.clone());
         let external_zone = cfg.zones.iter().find(|z| z.name == "external" || z.name == "wan");
+        let pppoe_wan = self.ctx.with_state(|s| {
+            s.interfaces
+                .pppoe_status
+                .as_ref()
+                .and_then(|p| p.interface.clone().or_else(|| p.wan_iface.clone()))
+        });
         let active_wan = external_zone
             .and_then(|z| z.interfaces.first().cloned())
-            .or_else(|| {
-                self.ctx
-                    .read()
-                    .interfaces
-                    .pppoe_status
-                    .as_ref()
-                    .and_then(|p| p.interface.clone().or_else(|| p.wan_iface.clone()))
-            })
+            .or(pppoe_wan)
             .or_else(|| self.ctx.get_pppoe_config().map(|p| p.wan_iface));
         #[allow(clippy::cast_possible_truncation)]
         let open_ports_count = (cfg.zones.iter().map(|z| z.open_ports.len()).sum::<usize>()
@@ -270,16 +268,17 @@ impl ClientContext {
             ..Default::default()
         };
         if let Some(ifindex) = self.ctx.target_ifindex() {
-            let state = self.ctx.read();
-            if let Some(if_ips) = state.interfaces.interface_ips.get(&ifindex) {
-                if let Some((ip, prefix)) = if_ips.v4 {
-                    net.lan_ipv4 = Some(ip);
-                    net.lan_ipv4_cidr = Some(prefix);
+            self.ctx.with_state(|state| {
+                if let Some(if_ips) = state.interfaces.interface_ips.get(&ifindex) {
+                    if let Some((ip, prefix)) = if_ips.v4 {
+                        net.lan_ipv4 = Some(ip);
+                        net.lan_ipv4_cidr = Some(prefix);
+                    }
+                    net.gua = if_ips.gua;
+                    net.ula = if_ips.ula;
+                    net.lan_ipv6 = if_ips.link_local;
                 }
-                net.gua = if_ips.gua;
-                net.ula = if_ips.ula;
-                net.lan_ipv6 = if_ips.link_local;
-            }
+            });
         }
         if net.gua.is_none() {
             net.gua = self.current_gua;

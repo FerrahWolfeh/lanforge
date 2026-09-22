@@ -69,17 +69,31 @@ impl ClientContext {
             return false;
         }
         if let Some(f) = filter {
-            let mac_str = dev.mac.to_string();
-            if mac_str.contains(f) {
+            if dev.mac.contains_str(f) {
                 return true;
             }
-            if dev.hostname.name.to_lowercase().contains(f) {
-                return true;
-            }
-            if let Some(ip) = dev.v4.ip()
-                && ip.to_string().contains(f)
+            if !f.is_empty()
+                && dev
+                    .hostname
+                    .name
+                    .as_bytes()
+                    .windows(f.len())
+                    .any(|w| w.eq_ignore_ascii_case(f.as_bytes()))
             {
                 return true;
+            }
+            if let Some(ip) = dev.v4.ip() {
+                use std::io::Write;
+                let mut buf = [0u8; 16];
+                let mut slice = &mut buf[..];
+                if write!(slice, "{ip}").is_ok() {
+                    let written = 16 - slice.len();
+                    if let Ok(ip_str) = std::str::from_utf8(&buf[..written])
+                        && ip_str.contains(f)
+                    {
+                        return true;
+                    }
+                }
             }
             return false;
         }
