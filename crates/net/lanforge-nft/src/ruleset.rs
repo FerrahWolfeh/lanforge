@@ -1,6 +1,5 @@
 use lanforge_types::network::firewall::{
-    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, HostPortRule, L4Protocol,
-    PortForwardRule,
+    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, L4Protocol, PortForwardRule,
 };
 use nftables::batch::Batch;
 use nftables::expr::{
@@ -11,6 +10,14 @@ use nftables::stmt::{Flow, Limit, Mangle, Match, NATFamily, Operator, SetOp, Sta
 use nftables::types::{NfChainPolicy, NfChainType, NfFamily, NfHook};
 use std::borrow::Cow;
 use std::net::IpAddr;
+
+const fn protocol_l4_names(proto: L4Protocol) -> &'static [&'static str] {
+    match proto {
+        L4Protocol::Tcp => &["tcp"],
+        L4Protocol::Udp => &["udp"],
+        L4Protocol::Both => &["tcp", "udp"],
+    }
+}
 
 /// Builder that compiles a high-level `FirewallConfig` into an atomic `nftables` batch.
 pub struct RulesetBuilder<'a> {
@@ -74,20 +81,20 @@ impl<'a> RulesetBuilder<'a> {
                 // Auto-bind active WAN interface to external zone
                 if (zone.name == "external" || zone.name == "wan")
                     && let Some(wan) = self.active_wan
-                    && !ifaces.contains(&wan.to_string())
+                    && !ifaces.iter().any(|i| i == wan)
                 {
                     ifaces.push(wan.to_string());
                 }
                 // Auto-bind primary LAN interface to internal zone
                 if (zone.name == "internal" || zone.name == "lan")
                     && let Some(lan) = self.primary_lan
-                    && !ifaces.contains(&lan.to_string())
+                    && !ifaces.iter().any(|i| i == lan)
                 {
                     ifaces.push(lan.to_string());
                 }
                 // Auto-bind podman* container wildcard to trusted zone if missing
                 if (zone.name == "trusted" || zone.name == "containers")
-                    && !ifaces.contains(&"podman*".to_string())
+                    && !ifaces.iter().any(|i| i == "podman*")
                 {
                     ifaces.push("podman*".to_string());
                 }
@@ -111,7 +118,7 @@ impl<'a> RulesetBuilder<'a> {
         }
         if let Some(lan) = self.primary_lan
             && !lan.is_empty()
-            && !ifaces.contains(&lan.to_string())
+            && !ifaces.iter().any(|i| i == lan)
         {
             ifaces.push(lan.to_string());
         }
@@ -122,18 +129,22 @@ impl<'a> RulesetBuilder<'a> {
     #[must_use]
     #[allow(clippy::too_many_lines)]
     pub fn build(&self) -> Nftables<'static> {
-        let table = self.table_name().to_string();
+        let table: Cow<'static, str> = if self.table_name() == "lanforge" {
+            Cow::Borrowed("lanforge")
+        } else {
+            Cow::Owned(self.table_name().to_string())
+        };
         let mut batch = Batch::new();
 
         // 1. Table: Add if not exists, then flush all previous chains/rules in table
         batch.add(NfListObject::Table(Table {
             family: NfFamily::INet,
-            name: table.clone().into(),
+            name: table.clone(),
             handle: None,
         }));
         batch.add_cmd(NfCmd::Flush(FlushObject::Table(Table {
             family: NfFamily::INet,
-            name: table.clone().into(),
+            name: table.clone(),
             handle: None,
         })));
 
@@ -145,12 +156,12 @@ impl<'a> RulesetBuilder<'a> {
         let mut flow_devices: Vec<String> = Vec::new();
         if let Some(wan) = self.active_wan
             && !wan.is_empty()
-            && !flow_devices.contains(&wan.to_string())
+            && !flow_devices.iter().any(|d| d == wan)
         {
             flow_devices.push(wan.to_string());
         }
         for iface in self.resolve_internal_interfaces() {
-            if !iface.starts_with("ifb") && !flow_devices.contains(&iface) {
+            if !iface.starts_with("ifb") && !flow_devices.iter().any(|d| d == &iface) {
                 flow_devices.push(iface);
             }
         }
@@ -167,7 +178,7 @@ impl<'a> RulesetBuilder<'a> {
 
             batch.add(NfListObject::FlowTable(FlowTable {
                 family: NfFamily::INet,
-                table: table.clone().into(),
+                table: table.clone(),
                 name: flowtable_name.into(),
                 handle: None,
                 hook: Some(NfHook::Ingress),
@@ -179,11 +190,11 @@ impl<'a> RulesetBuilder<'a> {
         let internal_ifaces = self.resolve_internal_interfaces();
 
         // Helper closures to build rules
-        let add_rule = |target_chain: &str, stmts: Vec<Statement<'static>>| -> NfListObject<'static> {
+        let add_rule = |target_chain: &'static str, stmts: Vec<Statement<'static>>| -> NfListObject<'static> {
             NfListObject::Rule(Rule {
                 family: NfFamily::INet,
-                table: table.clone().into(),
-                chain: target_chain.to_string().into(),
+                table: table.clone(),
+                chain: Cow::Borrowed(target_chain),
                 expr: stmts.into(),
                 handle: None,
                 index: None,
@@ -199,7 +210,7 @@ impl<'a> RulesetBuilder<'a> {
 
         batch.add(NfListObject::Chain(Chain {
             family: NfFamily::INet,
-            table: table.clone().into(),
+            table: table.clone(),
             name: "input".into(),
             newname: None,
             handle: None,
@@ -464,18 +475,29 @@ impl<'a> RulesetBuilder<'a> {
             let ifaces = self.resolve_zone_interfaces(&zone.name);
             for iface in &ifaces {
                 for rule in &zone.open_ports {
-                    Self::add_port_rule(&mut batch, &table, "input", iface, rule);
+                    Self::add_port_rule(
+                        &mut batch,
+                        &table,
+                        "input",
+                        iface,
+                        rule.port,
+                        rule.protocol,
+                        rule.comment.as_deref(),
+                    );
                 }
 
                 // Dynamic ports registered for this zone
                 for dyn_port in self.dynamic_ports {
                     if dyn_port.zone == zone.name {
-                        let rule = HostPortRule {
-                            comment: dyn_port.comment.clone(),
-                            port: dyn_port.port,
-                            protocol: dyn_port.protocol,
-                        };
-                        Self::add_port_rule(&mut batch, &table, "input", iface, &rule);
+                        Self::add_port_rule(
+                            &mut batch,
+                            &table,
+                            "input",
+                            iface,
+                            dyn_port.port,
+                            dyn_port.protocol,
+                            dyn_port.comment.as_deref(),
+                        );
                     }
                 }
 
@@ -538,7 +560,7 @@ impl<'a> RulesetBuilder<'a> {
 
         batch.add(NfListObject::Chain(Chain {
             family: NfFamily::INet,
-            table: table.clone().into(),
+            table: table.clone(),
             name: "forward".into(),
             newname: None,
             handle: None,
@@ -615,14 +637,10 @@ impl<'a> RulesetBuilder<'a> {
         // Rule: Accept DNAT / Pinholes from external/other zones ONLY when matching explicit Port Forward rules
         for pf in &self.cfg.port_forwards {
             let src_ifaces = self.resolve_zone_interfaces(&pf.src_zone);
-            let protos = match pf.protocol {
-                L4Protocol::Tcp => vec!["tcp"],
-                L4Protocol::Udp => vec!["udp"],
-                L4Protocol::Both => vec!["tcp", "udp"],
-            };
+            let protos = protocol_l4_names(pf.protocol);
 
             for src in &src_ifaces {
-                for proto in &protos {
+                for &proto in protos {
                     let mut stmts = vec![Statement::Match(Match {
                         left: Expression::Named(NamedExpression::Meta(Meta {
                             key: MetaKey::Iifname,
@@ -935,7 +953,7 @@ impl<'a> RulesetBuilder<'a> {
         // 5. Chain OUTPUT (Local host egress protection & MSS clamping)
         batch.add(NfListObject::Chain(Chain {
             family: NfFamily::INet,
-            table: table.clone().into(),
+            table: table.clone(),
             name: "output".into(),
             newname: None,
             handle: None,
@@ -1027,7 +1045,7 @@ impl<'a> RulesetBuilder<'a> {
         if has_port_forwards {
             batch.add(NfListObject::Chain(Chain {
                 family: NfFamily::INet,
-                table: table.clone().into(),
+                table: table.clone(),
                 name: "prerouting".into(),
                 newname: None,
                 handle: None,
@@ -1040,14 +1058,10 @@ impl<'a> RulesetBuilder<'a> {
 
             for pf in &self.cfg.port_forwards {
                 let src_ifaces = self.resolve_zone_interfaces(&pf.src_zone);
-                let protos = match pf.protocol {
-                    L4Protocol::Tcp => vec!["tcp"],
-                    L4Protocol::Udp => vec!["udp"],
-                    L4Protocol::Both => vec!["tcp", "udp"],
-                };
+                let protos = protocol_l4_names(pf.protocol);
 
                 for iface in &src_ifaces {
-                    for proto in &protos {
+                    for &proto in protos {
                         Self::add_dnat_rule(&mut batch, &table, iface, proto, pf);
                     }
                 }
@@ -1055,7 +1069,7 @@ impl<'a> RulesetBuilder<'a> {
                 // Hairpin NAT: internal clients requesting external port
                 if pf.enable_hairpin {
                     for int_iface in &internal_ifaces {
-                        for proto in &protos {
+                        for &proto in protos {
                             Self::add_dnat_rule(&mut batch, &table, int_iface, proto, pf);
                         }
                     }
@@ -1071,7 +1085,7 @@ impl<'a> RulesetBuilder<'a> {
         if has_masquerade || has_hairpin {
             batch.add(NfListObject::Chain(Chain {
                 family: NfFamily::INet,
-                table: table.clone().into(),
+                table: table.clone(),
                 name: "postrouting".into(),
                 newname: None,
                 handle: None,
@@ -1173,24 +1187,23 @@ impl<'a> RulesetBuilder<'a> {
         batch.to_nftables()
     }
 
+    #[allow(clippy::ptr_arg)]
     fn add_port_rule(
         batch: &mut Batch<'static>,
-        table: &str,
-        chain: &str,
+        table: &Cow<'static, str>,
+        chain: &'static str,
         iface: &str,
-        rule: &HostPortRule,
+        port: u16,
+        protocol: L4Protocol,
+        comment: Option<&str>,
     ) {
-        let protos = match rule.protocol {
-            L4Protocol::Tcp => vec!["tcp"],
-            L4Protocol::Udp => vec!["udp"],
-            L4Protocol::Both => vec!["tcp", "udp"],
-        };
+        let protos = protocol_l4_names(protocol);
 
-        for proto in protos {
+        for &proto in protos {
             batch.add(NfListObject::Rule(Rule {
                 family: NfFamily::INet,
-                table: table.to_string().into(),
-                chain: chain.to_string().into(),
+                table: table.clone(),
+                chain: Cow::Borrowed(chain),
                 expr: vec![
                     Statement::Match(Match {
                         left: Expression::Named(NamedExpression::Meta(Meta {
@@ -1206,7 +1219,7 @@ impl<'a> RulesetBuilder<'a> {
                                 field: "dport".into(),
                             },
                         ))),
-                        right: Expression::Number(u32::from(rule.port)),
+                        right: Expression::Number(u32::from(port)),
                         op: Operator::EQ,
                     }),
                     Statement::Accept(None),
@@ -1214,22 +1227,23 @@ impl<'a> RulesetBuilder<'a> {
                 .into(),
                 handle: None,
                 index: None,
-                comment: rule.comment.as_ref().map(|c| c.clone().into()),
+                comment: comment.map(|c| c.to_string().into()),
             }));
         }
     }
 
+    #[allow(clippy::ptr_arg)]
     fn add_dnat_rule(
         batch: &mut Batch<'static>,
-        table: &str,
+        table: &Cow<'static, str>,
         iface: &str,
         proto: &'static str,
         rule: &PortForwardRule,
     ) {
         batch.add(NfListObject::Rule(Rule {
             family: NfFamily::INet,
-            table: table.to_string().into(),
-            chain: "prerouting".into(),
+            table: table.clone(),
+            chain: Cow::Borrowed("prerouting"),
             expr: vec![
                 Statement::Match(Match {
                     left: Expression::Named(NamedExpression::Meta(Meta {
@@ -1265,18 +1279,18 @@ impl<'a> RulesetBuilder<'a> {
         }));
     }
 
-    #[allow(clippy::too_many_lines)]
-    fn build_minimal(&self, table: &str, flow_devices: &[String]) -> Nftables<'static> {
+    #[allow(clippy::too_many_lines, clippy::ptr_arg)]
+    fn build_minimal(&self, table: &Cow<'static, str>, flow_devices: &[String]) -> Nftables<'static> {
         let mut batch = Batch::new();
 
         batch.add(NfListObject::Table(Table {
             family: NfFamily::INet,
-            name: table.to_string().into(),
+            name: table.clone(),
             handle: None,
         }));
         batch.add_cmd(NfCmd::Flush(FlushObject::Table(Table {
             family: NfFamily::INet,
-            name: table.to_string().into(),
+            name: table.clone(),
             handle: None,
         })));
 
@@ -1288,7 +1302,7 @@ impl<'a> RulesetBuilder<'a> {
 
             batch.add(NfListObject::FlowTable(FlowTable {
                 family: NfFamily::INet,
-                table: table.to_string().into(),
+                table: table.clone(),
                 name: flowtable_name.into(),
                 handle: None,
                 hook: Some(NfHook::Ingress),
@@ -1297,11 +1311,11 @@ impl<'a> RulesetBuilder<'a> {
             }));
         }
 
-        let add_rule = |target_chain: &str, stmts: Vec<Statement<'static>>| -> NfListObject<'static> {
+        let add_rule = |target_chain: &'static str, stmts: Vec<Statement<'static>>| -> NfListObject<'static> {
             NfListObject::Rule(Rule {
                 family: NfFamily::INet,
-                table: table.to_string().into(),
-                chain: target_chain.to_string().into(),
+                table: table.clone(),
+                chain: Cow::Borrowed(target_chain),
                 expr: stmts.into(),
                 handle: None,
                 index: None,
@@ -1312,7 +1326,7 @@ impl<'a> RulesetBuilder<'a> {
         // Chain FORWARD (priority filter - 10, policy accept)
         batch.add(NfListObject::Chain(Chain {
             family: NfFamily::INet,
-            table: table.to_string().into(),
+            table: table.clone(),
             name: "forward".into(),
             newname: None,
             handle: None,
@@ -1418,7 +1432,7 @@ impl<'a> RulesetBuilder<'a> {
         // Chain OUTPUT (priority filter - 10, policy accept)
         batch.add(NfListObject::Chain(Chain {
             family: NfFamily::INet,
-            table: table.to_string().into(),
+            table: table.clone(),
             name: "output".into(),
             newname: None,
             handle: None,
@@ -1504,7 +1518,7 @@ impl<'a> RulesetBuilder<'a> {
         if !external_ifaces.is_empty() {
             batch.add(NfListObject::Chain(Chain {
                 family: NfFamily::INet,
-                table: table.to_string().into(),
+                table: table.clone(),
                 name: "postrouting".into(),
                 newname: None,
                 handle: None,

@@ -5,7 +5,6 @@
 
 use std::future::Future;
 use std::io::ErrorKind;
-use std::process::{Command, Stdio};
 
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
@@ -15,7 +14,7 @@ use lanforge_types::events::pppoe::PppoeEvent;
 use lanforge_types::events::system::SystemEvent;
 use lanforge_types::events::LanforgeEvent;
 use lanforge_types::network::firewall::{DynamicPortRequest, FirewallConfig, FirewallMode};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{error, info, trace, warn};
 
 use crate::ruleset::RulesetBuilder;
 
@@ -43,44 +42,28 @@ impl NftService {
 
     /// Flushes and removes the configured table cleanly.
     pub async fn cleanup_table(table_name: &str) {
-        let table: String = {
+        let table = {
             let t = table_name.trim();
             if t.is_empty() {
-                "lanforge".into()
+                "lanforge"
             } else {
-                t.into()
+                t
             }
         };
-
-        let table_clone = table.clone();
-        let table_exists = tokio::task::spawn_blocking(move || {
-            Command::new("nft")
-                .args(["list", "table", "inet", &table_clone])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .is_ok_and(|s| s.success())
-        })
-        .await
-        .unwrap_or(false);
-
-        if !table_exists {
-            debug!(table, "Firewall table does not exist in kernel, skipping cleanup");
-            return;
-        }
 
         let mut batch = nftables::batch::Batch::new();
         batch.delete(nftables::schema::NfListObject::Table(nftables::schema::Table {
             family: nftables::types::NfFamily::INet,
-            name: table.clone().into(),
+            name: table.to_string().into(),
             handle: None,
         }));
         let ruleset = batch.to_nftables();
 
+        let table_owned = table.to_string();
         let result = tokio::task::spawn_blocking(move || nftables::helper::apply_ruleset(&ruleset)).await;
         match result {
             Ok(Ok(())) => {
-                info!(table, "Flushed and removed firewall table");
+                info!(table = table_owned, "Flushed and removed firewall table");
             }
             Ok(Err(nftables::helper::NftablesError::NftFailed { .. })) => {
                 // Table may not exist or was already removed; ignore silently.
@@ -88,12 +71,18 @@ impl NftService {
             Ok(Err(nftables::helper::NftablesError::NftExecution { inner, .. }))
                 if inner.kind() == ErrorKind::NotFound => {}
             Ok(Err(e)) => {
-                warn!(table, error = %e, "Failed to delete firewall table");
+                warn!(table = table_owned, error = %e, "Failed to delete firewall table");
             }
             Err(e) => {
-                warn!(table, error = %e, "Firewall cleanup task panicked");
+                warn!(table = table_owned, error = %e, "Firewall cleanup task panicked");
             }
         }
+    }
+
+    async fn reapply(&self, ctx: &LanforgeContext) {
+        let cfg = ctx.get_firewall_config().unwrap_or_default();
+        let dynamic_ports = ctx.registered_service_ports();
+        self.apply_ruleset_internal(ctx, &cfg, &dynamic_ports).await;
     }
 
     async fn apply_ruleset_internal(
@@ -115,8 +104,14 @@ impl NftService {
             .with_dynamic_ports(dynamic_ports)
             .build();
 
-        let json_payload = serde_json::to_string_pretty(&ruleset).unwrap_or_default();
-        trace!(payload = %json_payload, "Applying nftables ruleset payload to kernel");
+        let json_payload = if tracing::enabled!(tracing::Level::TRACE) {
+            serde_json::to_string_pretty(&ruleset).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        if !json_payload.is_empty() {
+            trace!(payload = %json_payload, "Applying nftables ruleset payload to kernel");
+        }
 
         let table = cfg.table_name.clone();
         let active_wan = self.active_wan.clone();
@@ -125,7 +120,17 @@ impl NftService {
         let rules_count = (cfg.port_forwards.len() + dynamic_ports.len()) as u32;
 
         let result = tokio::task::spawn_blocking(move || {
-            nftables::helper::apply_ruleset(&ruleset)
+            let res = nftables::helper::apply_ruleset(&ruleset);
+            if let Err(e) = res {
+                let payload = if json_payload.is_empty() {
+                    serde_json::to_string_pretty(&ruleset).unwrap_or_default()
+                } else {
+                    json_payload
+                };
+                Err((e, payload))
+            } else {
+                Ok(())
+            }
         })
         .await;
 
@@ -148,11 +153,11 @@ impl NftService {
                     FirewallEvent::RulesetApplied(Box::new(summary)),
                 ));
             }
-            Ok(Err(e)) => {
+            Ok(Err((e, payload))) => {
                 let err_msg = format!("Failed to apply nftables ruleset: {e}");
                 warn!(
                     error = %err_msg,
-                    payload = %json_payload,
+                    payload = %payload,
                     "Firewall ruleset application failed (soft error)"
                 );
                 let _ = ctx.bus().publish(LanforgeEvent::Firewall(
@@ -182,11 +187,9 @@ impl AsyncService for NftService {
     }
 
     fn init(&mut self, ctx: &LanforgeContext) -> impl Future<Output = Result<(), CoreError>> + Send {
-        let cfg = ctx.get_firewall_config().unwrap_or_default();
-        let dynamic_ports = ctx.registered_service_ports();
         let ctx_clone = ctx.clone();
         async move {
-            self.apply_ruleset_internal(&ctx_clone, &cfg, &dynamic_ports).await;
+            self.reapply(&ctx_clone).await;
             Ok(())
         }
     }
@@ -206,16 +209,12 @@ impl AsyncService for NftService {
                             LanforgeEvent::Pppoe(PppoeEvent::SessionUp(session)) => {
                                 info!(wan = %session.interface, "Active WAN interface up, updating firewall ruleset");
                                 self.active_wan = Some(session.interface.clone());
-                                let cfg = ctx.get_firewall_config().unwrap_or_default();
-                                let dynamic_ports = ctx.registered_service_ports();
-                                self.apply_ruleset_internal(&ctx, &cfg, &dynamic_ports).await;
+                                self.reapply(&ctx).await;
                             }
                             LanforgeEvent::Pppoe(PppoeEvent::SessionDown { reason }) => {
                                 info!(%reason, "Active WAN interface down, updating firewall ruleset");
                                 self.active_wan = None;
-                                let cfg = ctx.get_firewall_config().unwrap_or_default();
-                                let dynamic_ports = ctx.registered_service_ports();
-                                self.apply_ruleset_internal(&ctx, &cfg, &dynamic_ports).await;
+                                self.reapply(&ctx).await;
                             }
                             _ => {}
                         }
@@ -232,15 +231,11 @@ impl AsyncService for NftService {
                                     proto = ?req.protocol,
                                     "Dynamic port open requested, updating firewall ruleset"
                                 );
-                                let cfg = ctx.get_firewall_config().unwrap_or_default();
-                                let dynamic_ports = ctx.registered_service_ports();
-                                self.apply_ruleset_internal(&ctx, &cfg, &dynamic_ports).await;
+                                self.reapply(&ctx).await;
                             }
                             LanforgeEvent::Firewall(FirewallEvent::RulesetChanged) => {
                                 info!("Firewall configuration changed, reapplying ruleset in-place");
-                                let cfg = ctx.get_firewall_config().unwrap_or_default();
-                                let dynamic_ports = ctx.registered_service_ports();
-                                self.apply_ruleset_internal(&ctx, &cfg, &dynamic_ports).await;
+                                self.reapply(&ctx).await;
                             }
                             LanforgeEvent::Firewall(FirewallEvent::PortReleaseRequested { service, port, protocol }) => {
                                 info!(
@@ -249,9 +244,7 @@ impl AsyncService for NftService {
                                     proto = ?protocol,
                                     "Dynamic port release requested, updating firewall ruleset"
                                 );
-                                let cfg = ctx.get_firewall_config().unwrap_or_default();
-                                let dynamic_ports = ctx.registered_service_ports();
-                                self.apply_ruleset_internal(&ctx, &cfg, &dynamic_ports).await;
+                                self.reapply(&ctx).await;
                             }
                             _ => {}
                         }
@@ -262,9 +255,7 @@ impl AsyncService for NftService {
                         match event.event {
                             LanforgeEvent::System(SystemEvent::ReloadConfig) => {
                                 info!("Firewall service reloading configuration");
-                                let cfg = ctx.get_firewall_config().unwrap_or_default();
-                                let dynamic_ports = ctx.registered_service_ports();
-                                self.apply_ruleset_internal(&ctx, &cfg, &dynamic_ports).await;
+                                self.reapply(&ctx).await;
                             }
                             LanforgeEvent::System(SystemEvent::Shutdown) => {
                                 info!("Firewall service received shutdown signal, terminating event loop");
