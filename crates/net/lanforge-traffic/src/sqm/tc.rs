@@ -7,7 +7,7 @@ use tokio::process::Command;
 use tracing::{debug, info, warn};
 
 /// Resolves the absolute path to the `tc` binary, searching common sbin/bin locations.
-fn resolve_tc_binary() -> &'static str {
+pub fn resolve_tc_binary() -> &'static str {
     static TC_PATH: OnceLock<&'static str> = OnceLock::new();
     TC_PATH.get_or_init(|| {
         for candidate in ["/usr/sbin/tc", "/sbin/tc", "/usr/bin/tc", "/bin/tc"] {
@@ -67,9 +67,11 @@ pub async fn apply_sqm(wan_iface: &str, cfg: &SqmConfig, is_pppoe: bool) -> Opti
 
     // 1. Egress Shaping on WAN interface
     let egress_cake_args = build_cake_args(cfg, cfg.upload_mbps, false, is_pppoe);
-    let mut egress_cmd = vec!["qdisc", "replace", "dev", wan_iface, "root", "cake"];
-    let egress_cake_refs: Vec<&str> = egress_cake_args.iter().map(String::as_str).collect();
-    egress_cmd.extend_from_slice(&egress_cake_refs);
+    let mut egress_cmd = Vec::with_capacity(6 + egress_cake_args.len());
+    egress_cmd.extend_from_slice(&["qdisc", "replace", "dev", wan_iface, "root", "cake"]);
+    for arg in &egress_cake_args {
+        egress_cmd.push(arg.as_str());
+    }
 
     if run_tc(&egress_cmd).await {
         debug!(wan = %wan_iface, "Attached CAKE to WAN egress");
@@ -95,9 +97,11 @@ pub async fn apply_sqm(wan_iface: &str, cfg: &SqmConfig, is_pppoe: bool) -> Opti
             if run_tc(&filter_args).await {
                 // Attach CAKE to IFB root
                 let ingress_cake_args = build_cake_args(cfg, cfg.download_mbps, true, is_pppoe);
-                let mut ingress_cmd = vec!["qdisc", "replace", "dev", &ifb_name, "root", "cake"];
-                let ingress_cake_refs: Vec<&str> = ingress_cake_args.iter().map(String::as_str).collect();
-                ingress_cmd.extend_from_slice(&ingress_cake_refs);
+                let mut ingress_cmd = Vec::with_capacity(6 + ingress_cake_args.len());
+                ingress_cmd.extend_from_slice(&["qdisc", "replace", "dev", &ifb_name, "root", "cake"]);
+                for arg in &ingress_cake_args {
+                    ingress_cmd.push(arg.as_str());
+                }
 
                 if run_tc(&ingress_cmd).await {
                     info!(

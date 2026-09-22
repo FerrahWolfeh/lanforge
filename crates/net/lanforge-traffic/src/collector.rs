@@ -1,5 +1,4 @@
 use std::collections::{HashMap, VecDeque};
-use std::path::Path;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -113,8 +112,9 @@ struct RawTcTin {
 
 pub struct TrafficCollector {
     prev_iface_snapshots: HashMap<String, (Instant, u64, u64)>,
-    cached_sqm: Option<(Instant, SqmTelemetryStats)>,
+    cached_sqm: Option<(Instant, Option<SqmTelemetryStats>)>,
     history: VecDeque<TrafficHistorySample>,
+    proc_net_dev_buf: String,
 }
 
 impl TrafficCollector {
@@ -124,6 +124,45 @@ impl TrafficCollector {
             prev_iface_snapshots: HashMap::new(),
             cached_sqm: None,
             history: VecDeque::with_capacity(MAX_HISTORY_SAMPLES),
+            proc_net_dev_buf: String::with_capacity(1024),
+        }
+    }
+
+    /// Periodic telemetry tick: samples interface counters into the ring buffer
+    /// without building the entire response or cloning history.
+    pub async fn record_tick(
+        &mut self,
+        wan_iface: Option<&str>,
+        ifb_iface: Option<&str>,
+    ) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let interfaces = self.collect_interfaces();
+
+        if wan_iface.is_some() || ifb_iface.is_some() {
+            let _ = self.collect_sqm(wan_iface, ifb_iface).await;
+        }
+
+        if !interfaces.is_empty() {
+            let point = TrafficHistorySample {
+                timestamp: now,
+                interfaces: interfaces
+                    .into_iter()
+                    .map(|i| InterfaceThroughputPoint {
+                        interface: i.interface,
+                        rx_rate_bps: i.rx_rate_bps,
+                        tx_rate_bps: i.tx_rate_bps,
+                    })
+                    .collect(),
+            };
+
+            if self.history.len() >= MAX_HISTORY_SAMPLES {
+                self.history.pop_front();
+            }
+            self.history.push_back(point);
         }
     }
 
@@ -203,15 +242,14 @@ impl TrafficCollector {
 
     /// Reads `/proc/net/dev` and calculates throughput rates based on elapsed time.
     fn collect_interfaces(&mut self) -> Vec<InterfaceTrafficStats> {
-        let content = match std::fs::read_to_string("/proc/net/dev") {
-            Ok(c) => c,
-            Err(e) => {
-                debug!("Failed to read /proc/net/dev: {e}");
-                return Vec::new();
+        self.proc_net_dev_buf.clear();
+        if let Ok(mut file) = std::fs::File::open("/proc/net/dev") {
+            use std::io::Read;
+            if file.read_to_string(&mut self.proc_net_dev_buf).is_ok() {
+                return parse_proc_net_dev(&self.proc_net_dev_buf, &mut self.prev_iface_snapshots);
             }
-        };
-
-        parse_proc_net_dev(&content, &mut self.prev_iface_snapshots)
+        }
+        Vec::new()
     }
 
     /// Reads SQM CAKE statistics with caching to prevent excessive process forks.
@@ -220,16 +258,21 @@ impl TrafficCollector {
         wan_iface: Option<&str>,
         ifb_iface: Option<&str>,
     ) -> Option<SqmTelemetryStats> {
+        if wan_iface.is_none() && ifb_iface.is_none() {
+            return None;
+        }
+
         let now = Instant::now();
 
-        if let Some((cached_at, ref stats)) = self.cached_sqm
+        if let Some((cached_at, ref cached_res)) = self.cached_sqm
             && now.duration_since(cached_at) < SQM_CACHE_TTL
         {
-            return Some(stats.clone());
+            return cached_res.clone();
         }
 
         let qdiscs = fetch_tc_qdiscs().await;
         if qdiscs.is_empty() {
+            self.cached_sqm = Some((now, None));
             return None;
         }
 
@@ -259,7 +302,7 @@ impl TrafficCollector {
             ingress,
         };
 
-        self.cached_sqm = Some((now, stats.clone()));
+        self.cached_sqm = Some((now, Some(stats.clone())));
         Some(stats)
     }
 }
@@ -268,6 +311,15 @@ impl Default for TrafficCollector {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Global entry point to record a background telemetry tick.
+pub async fn record_traffic_telemetry_tick(
+    wan_iface: Option<&str>,
+    ifb_iface: Option<&str>,
+) {
+    let collector = COLLECTOR.get_or_init(|| Mutex::new(TrafficCollector::new()));
+    collector.lock().await.record_tick(wan_iface, ifb_iface).await;
 }
 
 /// Global entry point to query telemetry.
@@ -297,9 +349,10 @@ pub fn parse_proc_net_dev<S: ::std::hash::BuildHasher>(
         }
 
         let mut parts = trimmed.splitn(2, ':');
-        let Some(iface) = parts.next().map(|i| i.trim().to_string()) else {
+        let Some(iface_raw) = parts.next() else {
             continue;
         };
+        let iface = iface_raw.trim();
 
         // Skip loopback interface from telemetry
         if iface == "lo" {
@@ -337,7 +390,7 @@ pub fn parse_proc_net_dev<S: ::std::hash::BuildHasher>(
         let mut rx_rate_bps = 0;
         let mut tx_rate_bps = 0;
 
-        if let Some((prev_time, prev_rx, prev_tx)) = prev_snapshots.get(&iface) {
+        if let Some((prev_time, prev_rx, prev_tx)) = prev_snapshots.get(iface) {
             let elapsed_secs = now.duration_since(*prev_time).as_secs_f64();
             if elapsed_secs > 0.05 {
                 let delta_rx = rx_bytes.saturating_sub(*prev_rx);
@@ -348,10 +401,14 @@ pub fn parse_proc_net_dev<S: ::std::hash::BuildHasher>(
             }
         }
 
-        prev_snapshots.insert(iface.clone(), (now, rx_bytes, tx_bytes));
+        if let Some(entry) = prev_snapshots.get_mut(iface) {
+            *entry = (now, rx_bytes, tx_bytes);
+        } else {
+            prev_snapshots.insert(iface.to_string(), (now, rx_bytes, tx_bytes));
+        }
 
         results.push(InterfaceTrafficStats {
-            interface: iface,
+            interface: iface.to_string(),
             rx_bytes,
             tx_bytes,
             rx_packets,
@@ -369,15 +426,21 @@ pub fn parse_proc_net_dev<S: ::std::hash::BuildHasher>(
     results
 }
 
+fn read_sysctl_u32(path: &str) -> Option<u32> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buf = [0u8; 32];
+    let n = file.read(&mut buf).ok()?;
+    let s = std::str::from_utf8(&buf[..n]).ok()?.trim();
+    s.parse::<u32>().ok()
+}
+
 /// Reads conntrack statistics from procfs.
 #[must_use]
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 pub fn read_conntrack_stats() -> Option<ConntrackStats> {
-    let count_str = std::fs::read_to_string("/proc/sys/net/netfilter/nf_conntrack_count").ok()?;
-    let max_str = std::fs::read_to_string("/proc/sys/net/netfilter/nf_conntrack_max").ok()?;
-
-    let active_connections = count_str.trim().parse::<u32>().ok()?;
-    let max_connections = max_str.trim().parse::<u32>().ok().unwrap_or(65536);
+    let active_connections = read_sysctl_u32("/proc/sys/net/netfilter/nf_conntrack_count")?;
+    let max_connections = read_sysctl_u32("/proc/sys/net/netfilter/nf_conntrack_max").unwrap_or(65536);
 
     let utilization_percent = if max_connections > 0 {
         ((f64::from(active_connections) / f64::from(max_connections)) * 100.0) as f32
@@ -422,7 +485,7 @@ pub fn read_conntrack_stats() -> Option<ConntrackStats> {
 
 /// Runs `tc -j -s qdisc show` and parses all CAKE qdiscs.
 async fn fetch_tc_qdiscs() -> Vec<CakeQdiscStats> {
-    let tc_path = resolve_tc_path();
+    let tc_path = crate::sqm::tc::resolve_tc_binary();
     let output = match Command::new(tc_path)
         .args(["-j", "-s", "qdisc", "show"])
         .output()
@@ -446,18 +509,6 @@ async fn fetch_tc_qdiscs() -> Vec<CakeQdiscStats> {
     };
 
     parse_tc_qdisc_json(json_str)
-}
-
-fn resolve_tc_path() -> &'static str {
-    static TC_PATH: OnceLock<&'static str> = OnceLock::new();
-    TC_PATH.get_or_init(|| {
-        for candidate in ["/usr/sbin/tc", "/sbin/tc", "/usr/bin/tc", "/bin/tc"] {
-            if Path::new(candidate).exists() {
-                return candidate;
-            }
-        }
-        "tc"
-    })
 }
 
 /// Parses the JSON output of `tc -j -s qdisc show`.
@@ -496,18 +547,21 @@ pub fn parse_tc_qdisc_json(json_str: &str) -> Vec<CakeQdiscStats> {
             .enumerate()
             .map(|(idx, tin)| {
                 let name = match (diffserv_mode, idx) {
-                    ("diffserv4" | "diffserv3", 0) => "Bulk".to_string(),
-                    ("diffserv4" | "diffserv3", 1) | ("besteffort", 0) => {
-                        "Best Effort".to_string()
-                    }
-                    ("diffserv4", 2) => "Video".to_string(),
-                    ("diffserv4" | "diffserv3", 3) | ("diffserv3", 2) => "Voice".to_string(),
-                    (_, i) => format!("Tin {i}"),
+                    ("diffserv4" | "diffserv3", 0) => "Bulk",
+                    ("diffserv4" | "diffserv3", 1) | ("besteffort", 0) => "Best Effort",
+                    ("diffserv4", 2) => "Video",
+                    ("diffserv4" | "diffserv3", 3) | ("diffserv3", 2) => "Voice",
+                    _ => "",
+                };
+                let name_str = if name.is_empty() {
+                    format!("Tin {idx}")
+                } else {
+                    name.to_string()
                 };
 
                 CakeTinStats {
                     tin_index: u8::try_from(idx).unwrap_or(255),
-                    name,
+                    name: name_str,
                     threshold_rate: tin.threshold_rate,
                     sent_bytes: tin.sent_bytes,
                     sent_packets: tin.sent_packets,
@@ -599,5 +653,15 @@ mod tests {
         assert_eq!(ifaces[1].interface, "ppp0");
         assert_eq!(ifaces[1].rx_bytes, 5000000);
         assert_eq!(ifaces[1].tx_bytes, 1000000);
+    }
+
+    #[tokio::test]
+    async fn test_collector_record_tick_and_history() {
+        let mut collector = TrafficCollector::new();
+        assert!(collector.history.is_empty());
+        collector.record_tick(None, None).await;
+        let resp = collector.collect(None, None).await;
+        assert!(resp.wan_interface.is_none());
+        assert!(resp.ingress_device.is_none());
     }
 }

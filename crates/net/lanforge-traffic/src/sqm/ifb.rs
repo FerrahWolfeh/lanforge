@@ -43,8 +43,8 @@ pub fn resolve_ifb_name(iface: &str, configured: &str) -> String {
     }
 
     let mut candidate = format!("ifb4{iface}");
-    if candidate.len() > 15 {
-        candidate.truncate(15);
+    if let Some((idx, _)) = candidate.char_indices().nth(15) {
+        candidate.truncate(idx);
     }
     candidate
 }

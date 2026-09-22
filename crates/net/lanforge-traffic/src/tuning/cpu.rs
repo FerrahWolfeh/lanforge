@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::path::Path;
 use tracing::debug;
 
@@ -68,13 +69,19 @@ pub fn format_cpu_mask(cpus: &[usize]) -> String {
         words[word_idx] |= 1u32 << bit_idx;
     }
 
+    if num_words == 1 {
+        return format!("{:x}", words[0]);
+    }
+
     // Linux prints most significant 32-bit chunk first, comma-separated.
-    words
-        .into_iter()
-        .rev()
-        .map(|w| format!("{w:x}"))
-        .collect::<Vec<_>>()
-        .join(",")
+    let mut out = String::with_capacity(num_words * 9);
+    for (i, &w) in words.iter().rev().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let _ = write!(&mut out, "{w:x}");
+    }
+    out
 }
 
 /// Resolves the effective CPU mask string (either auto-detected or user configured).

@@ -66,6 +66,21 @@ impl TrafficService {
         });
     }
 
+    /// Resolves default LAN and WAN interfaces from context.
+    fn resolve_default_interfaces(ctx: &LanforgeContext) -> Vec<String> {
+        let mut ifaces = Vec::with_capacity(2);
+        if let Some(lan) = ctx.target_interface_name() {
+            ifaces.push(lan);
+        }
+        if let Some(pppoe_cfg) = ctx.get_pppoe_config()
+            && !pppoe_cfg.wan_iface.is_empty()
+            && !ifaces.contains(&pppoe_cfg.wan_iface)
+        {
+            ifaces.push(pppoe_cfg.wan_iface);
+        }
+        ifaces
+    }
+
     /// Resolves target WAN interface for SQM based on auto-detection or config.
     fn resolve_wan_interface(&self, ctx: &LanforgeContext) -> Option<(String, bool)> {
         let configured = self.cfg.sqm.interface.trim();
@@ -155,20 +170,7 @@ impl AsyncService for TrafficService {
 
         // 1. Initial NIC Hardware & Sysfs Tuning
         if is_tuning_enabled {
-            let default_ifaces = {
-                let mut ifaces = Vec::new();
-                if let Some(lan) = ctx.target_interface_name() {
-                    ifaces.push(lan);
-                }
-                if let Some(pppoe_cfg) = ctx.get_pppoe_config()
-                    && !pppoe_cfg.wan_iface.is_empty()
-                    && !ifaces.contains(&pppoe_cfg.wan_iface)
-                {
-                    ifaces.push(pppoe_cfg.wan_iface);
-                }
-                ifaces
-            };
-
+            let default_ifaces = Self::resolve_default_interfaces(ctx);
             let tuned = apply_tuning(&self.cfg.tuning, &default_ifaces).await;
             self.effective_cpu_mask = crate::tuning::cpu::resolve_effective_cpu_mask(&self.cfg.tuning.cpu_mask);
             self.tuned_interfaces.clone_from(&tuned);
@@ -209,7 +211,7 @@ impl AsyncService for TrafficService {
                 _ = telemetry_tick.tick() => {
                     let wan = self.active_wan.as_deref();
                     let ifb = self.active_ifb.as_deref();
-                    let _ = crate::collect_traffic_telemetry(wan, ifb).await;
+                    crate::record_traffic_telemetry_tick(wan, ifb).await;
                 }
 
                 // Listen to in-place traffic configuration updates
@@ -229,24 +231,12 @@ impl AsyncService for TrafficService {
 
                                 if tuning_changed {
                                     if new_cfg.tuning.enabled {
-                                        let default_ifaces = {
-                                            let mut ifaces = Vec::new();
-                                            if let Some(lan) = ctx.target_interface_name() {
-                                                ifaces.push(lan);
-                                            }
-                                            if let Some(pppoe_cfg) = ctx.get_pppoe_config()
-                                                && !pppoe_cfg.wan_iface.is_empty()
-                                                && !ifaces.contains(&pppoe_cfg.wan_iface)
-                                            {
-                                                ifaces.push(pppoe_cfg.wan_iface);
-                                            }
-                                            ifaces
-                                        };
-                                        let tuned = apply_tuning(&new_cfg.tuning, &default_ifaces).await;
-                                        self.effective_cpu_mask = crate::tuning::cpu::resolve_effective_cpu_mask(&new_cfg.tuning.cpu_mask);
-                                        self.tuned_interfaces = tuned;
+                                         let default_ifaces = Self::resolve_default_interfaces(ctx);
+                                         let tuned = apply_tuning(&new_cfg.tuning, &default_ifaces).await;
+                                         self.effective_cpu_mask = crate::tuning::cpu::resolve_effective_cpu_mask(&new_cfg.tuning.cpu_mask);
+                                         self.tuned_interfaces = tuned;
                                     } else {
-                                        self.tuned_interfaces.clear();
+                                         self.tuned_interfaces.clear();
                                     }
                                 }
 
@@ -322,11 +312,32 @@ impl AsyncService for TrafficService {
                                 debug!("Traffic: Shutdown signal received");
                                 break;
                             }
-                            LanforgeEvent::System(SystemEvent::InterfaceReady) if is_tuning_enabled => {
-                                let default_ifaces = ctx.target_interface_name().map(|lan| vec![lan]).unwrap_or_default();
-                                let tuned = apply_tuning(&self.cfg.tuning, &default_ifaces).await;
-                                self.tuned_interfaces.clone_from(&tuned);
-                                self.publish_status(ctx, ServiceState::Online);
+                            LanforgeEvent::System(SystemEvent::InterfaceReady) => {
+                                let mut changed = false;
+                                if self.cfg.tuning.enabled {
+                                    let default_ifaces = Self::resolve_default_interfaces(ctx);
+                                    let tuned = apply_tuning(&self.cfg.tuning, &default_ifaces).await;
+                                    if tuned != self.tuned_interfaces {
+                                        self.tuned_interfaces = tuned;
+                                        changed = true;
+                                    }
+                                }
+                                if self.cfg.sqm.enabled
+                                    && self.active_wan.is_none()
+                                    && let Some((wan_iface, is_pppoe)) = self.resolve_wan_interface(ctx)
+                                {
+                                    self.apply_sqm_internal(ctx, &wan_iface, is_pppoe).await;
+                                    changed = true;
+                                }
+                                if changed {
+                                    let next_state = if !self.tuned_interfaces.is_empty() || self.active_wan.is_some() {
+                                        ServiceState::Online
+                                    } else {
+                                        ServiceState::Inactive
+                                    };
+                                    ctx.set_service_state("traffic", next_state);
+                                    self.publish_status(ctx, next_state);
+                                }
                             }
                             _ => {}
                         },
