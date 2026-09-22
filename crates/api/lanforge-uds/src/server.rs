@@ -1,7 +1,6 @@
 use lanforge_api::api::EventKind;
 use lanforge_api::rpc::{LanforgeRpcDispatcher, RpcRequest, RpcResponse};
 use lanforge_api_dispatch::ClientContext;
-use tokio::sync::Mutex;
 
 use crate::config::ApiConfig;
 use crate::error::UdsError;
@@ -142,12 +141,12 @@ impl AsyncService for ControlService {
         if !cfg.enabled {
             info!("Control API: Service disabled in configuration.");
             ctx.set_service_state("control", ServiceState::Inactive);
-            std::future::pending::<()>().await;
             return Ok(());
         }
         let listener = Self::setup_unix_listener(&cfg.socket_path)?;
 
-        let mut bus_rx = ctx.bus().subscribe();
+        let mut net_rx = ctx.bus().subscribe_network();
+        let mut sys_rx = ctx.bus().subscribe_system();
         let mut current_gua: Option<Ipv6Addr> = None;
         let startup_time = Instant::now();
 
@@ -158,19 +157,28 @@ impl AsyncService for ControlService {
                 break;
             }
             tokio::select! {
-                msg = bus_rx.recv() => {
+                msg = net_rx.recv() => {
                     match msg {
                         Ok(timed_event) => {
-                            lanforge_core::match_event!(timed_event, {
-                                LanforgeEvent::Network(NetworkEvent::PrefixChanged(details)) => {
-                                    current_gua = details.gua;
-                                }
-                                LanforgeEvent::System(SystemEvent::Shutdown) => break,
-                                _ => {}
-                            });
+                            if let LanforgeEvent::Network(NetworkEvent::PrefixChanged(details)) = timed_event.event {
+                                current_gua = details.gua;
+                            }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            warn!(service = "ControlAPI", lost = n, "Event bus lagged");
+                            warn!(service = "ControlAPI", lost = n, "Network event bus lagged");
+                        }
+                        Err(_) => break,
+                    }
+                }
+                msg = sys_rx.recv() => {
+                    match msg {
+                        Ok(timed_event) => {
+                            if let LanforgeEvent::System(SystemEvent::Shutdown) = timed_event.event {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            warn!(service = "ControlAPI", lost = n, "System event bus lagged");
                         }
                         Err(_) => break,
                     }
@@ -228,10 +236,9 @@ async fn handle_client_inner<S>(stream: S, ctx: ClientContext) -> Result<(), Uds
 where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    let (reader, writer) = split(stream);
+    let (reader, mut writer) = split(stream);
     let mut reader = BufReader::new(reader);
-    let writer = Arc::new(Mutex::new(writer));
-    let buf = Arc::new(Mutex::new(Vec::with_capacity(8192)));
+    let mut buf = Vec::with_capacity(8192);
     let mut req_buf = Vec::with_capacity(1024);
 
     loop {
@@ -262,11 +269,11 @@ where
         match req {
             RpcRequest::Log { follow, n, filter } => {
                 handle_log_stream(
-                    writer.clone(),
+                    &mut writer,
                     reader,
                     ctx.clone(),
                     n,
-                    buf.clone(),
+                    &mut buf,
                     follow,
                     filter,
                 )
@@ -287,20 +294,14 @@ where
                         offset,
                     })
                     .await;
-                {
-                    let mut writer_lock = writer.lock().await;
-                    let mut buf_lock = buf.lock().await;
-                    write_rpc_response(&mut *writer_lock, &resp, &mut buf_lock).await?;
-                    drop(buf_lock);
-                    drop(writer_lock);
-                }
+                write_rpc_response(&mut writer, &resp, &mut buf).await?;
                 if follow {
                     handle_dns_query_log_stream(
-                        writer.clone(),
+                        &mut writer,
                         reader,
                         ctx.clone(),
                         client,
-                        buf.clone(),
+                        &mut buf,
                     )
                     .await?;
                 }
@@ -308,12 +309,7 @@ where
             }
             _ => {
                 let resp = ctx.dispatch(req).await;
-
-                let mut writer_lock = writer.lock().await;
-                let mut buf_lock = buf.lock().await;
-                write_rpc_response(&mut *writer_lock, &resp, &mut buf_lock).await?;
-                drop(buf_lock);
-                drop(writer_lock);
+                write_rpc_response(&mut writer, &resp, &mut buf).await?;
             }
         }
     }
@@ -327,11 +323,11 @@ where
 ///
 /// Returns a `UdsError` if the database query fails or the client disconnects unexpectedly.
 pub async fn handle_log_stream<W, R>(
-    writer: Arc<Mutex<W>>,
+    writer: &mut W,
     mut reader: R,
     ctx: ClientContext,
     n: Option<usize>,
-    buf: Arc<Mutex<Vec<u8>>>,
+    buf: &mut Vec<u8>,
     follow: bool,
     filter: Option<Vec<EventKind>>,
 ) -> Result<(), UdsError>
@@ -342,21 +338,14 @@ where
     let n_lines = n.unwrap_or(100);
     let history = ctx.log_db.get_history(n_lines).await?;
 
-    {
-        let mut writer_lock = writer.lock().await;
-        let mut buf_lock = buf.lock().await;
-        write_rpc_response(&mut *writer_lock, &RpcResponse::Log(()), &mut buf_lock).await?;
-        for event in history {
-            if let Some(ref filters) = filter
-                && !filters.iter().any(|f| f.matches(&event.event))
-            {
-                continue;
-            }
-            write_rpc_response(&mut *writer_lock, &RpcResponse::Event(event), &mut buf_lock)
-                .await?;
+    write_rpc_response(writer, &RpcResponse::Log(()), buf).await?;
+    for event in history {
+        if let Some(ref filters) = filter
+            && !filters.iter().any(|f| f.matches(&event.event))
+        {
+            continue;
         }
-        drop(writer_lock);
-        drop(buf_lock);
+        write_rpc_response(writer, &RpcResponse::Event(event), buf).await?;
     }
 
     if !follow {
@@ -375,11 +364,7 @@ where
                             && !filters.iter().any(|f| f.matches(&event.event)) {
                                 continue;
                             }
-                        let mut writer_lock = writer.lock().await;
-                        let mut buf_lock = buf.lock().await;
-                        write_rpc_response(&mut *writer_lock, &RpcResponse::Event(event), &mut buf_lock).await?;
-                        drop(buf_lock);
-                        drop(writer_lock);
+                        write_rpc_response(writer, &RpcResponse::Event(event), buf).await?;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => break,
@@ -399,16 +384,18 @@ where
 
 /// Handles the 'DnsQueryLog' command by streaming live DNS query events.
 async fn handle_dns_query_log_stream<W, R>(
-    writer: Arc<Mutex<W>>,
+    writer: &mut W,
     mut reader: R,
     ctx: ClientContext,
     client_filter: Option<String>,
-    buf: Arc<Mutex<Vec<u8>>>,
+    buf: &mut Vec<u8>,
 ) -> Result<(), UdsError>
 where
     W: AsyncWrite + Unpin,
     R: AsyncRead + Unpin,
 {
+    let client_ip_filter: Option<std::net::IpAddr> =
+        client_filter.as_deref().and_then(|s| s.parse().ok());
     let mut bus_rx = ctx.ctx.bus().subscribe_dns();
     let mut eof_buf = [0u8; 1];
 
@@ -418,15 +405,11 @@ where
                 match res {
                     Ok(event) => {
                         if let lanforge_types::events::LanforgeEvent::Dns(lanforge_types::events::DnsEvent::QueryResolved(ref q)) = event.event {
-                            if let Some(ref client_ip) = client_filter
-                                && q.src_ip.to_string() != *client_ip {
+                            if let Some(target_ip) = client_ip_filter
+                                && q.src_ip != target_ip {
                                     continue;
                                 }
-                            let mut writer_lock = writer.lock().await;
-                            let mut buf_lock = buf.lock().await;
-                            write_rpc_response(&mut *writer_lock, &RpcResponse::Event(event), &mut buf_lock).await?;
-                            drop(buf_lock);
-                            drop(writer_lock);
+                            write_rpc_response(writer, &RpcResponse::Event(event), buf).await?;
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
