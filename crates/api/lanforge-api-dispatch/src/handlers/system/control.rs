@@ -163,7 +163,7 @@ impl ClientContext {
         let _ = self
             .ctx
             .bus()
-            .publish(LanforgeEvent::Traffic(TrafficEvent::RulesetChanged));
+            .publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::RulesetChanged)));
 
         Response::Success(SimpleSuccess {
             message: "Traffic and SQM configuration updated successfully".to_string(),

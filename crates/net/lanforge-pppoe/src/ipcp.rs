@@ -2,6 +2,7 @@ use crate::error::PppoeError;
 use crate::lcp::{LCP_ECHO_REP, LCP_ECHO_REQ, PPP_LCP};
 use crate::session::PppoeSession;
 use lanforge_types::identifiers::MacAddr;
+use smallvec::SmallVec;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 use tokio::time::{Instant, timeout};
@@ -15,6 +16,27 @@ pub const IPCP_OPT_DNS1: u8 = 129;
 pub const IPCP_OPT_DNS2: u8 = 131;
 
 pub const IPV6CP_OPT_IFID: u8 = 1;
+
+#[derive(Clone, Copy)]
+pub struct PacketBuf<const N: usize> {
+    pub buf: [u8; N],
+    pub len: usize,
+}
+
+impl<const N: usize> std::ops::Deref for PacketBuf<N> {
+    type Target = [u8];
+    #[inline]
+    fn deref(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
+}
+
+impl<const N: usize> AsRef<[u8]> for PacketBuf<N> {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
+}
 
 #[must_use]
 pub fn mac_to_eui64_link_local(mac: MacAddr) -> Ipv6Addr {
@@ -41,66 +63,67 @@ pub struct IpcpNegotiated {
     pub peer_v6_ll: Option<Ipv6Addr>,
 }
 
-fn build_ipcp_req(id: u8, ip: Ipv4Addr, dns1: Ipv4Addr, dns2: Ipv4Addr, req_dns: bool) -> Vec<u8> {
-    let mut pkt = Vec::with_capacity(32);
-    pkt.extend_from_slice(&PPP_IPCP.to_be_bytes());
-    pkt.push(0x01); // Configure-Request
-    pkt.push(id);
-
-    let mut opts = Vec::with_capacity(24);
+fn build_ipcp_req(id: u8, ip: Ipv4Addr, dns1: Ipv4Addr, dns2: Ipv4Addr, req_dns: bool) -> PacketBuf<32> {
+    let mut buf = [0u8; 32];
+    buf[0..2].copy_from_slice(&PPP_IPCP.to_be_bytes());
+    buf[2] = 0x01; // Configure-Request
+    buf[3] = id;
+    let opt_len: u16 = if req_dns { 18 } else { 6 };
+    let len: u16 = 4 + opt_len;
+    buf[4..6].copy_from_slice(&len.to_be_bytes());
     // Opt 3: IP Address
-    opts.push(IPCP_OPT_IP);
-    opts.push(6);
-    opts.extend_from_slice(&ip.octets());
-
-    if req_dns {
+    buf[6] = IPCP_OPT_IP;
+    buf[7] = 6;
+    buf[8..12].copy_from_slice(&ip.octets());
+    let total_len = if req_dns {
         // Opt 129: Primary DNS
-        opts.push(IPCP_OPT_DNS1);
-        opts.push(6);
-        opts.extend_from_slice(&dns1.octets());
+        buf[12] = IPCP_OPT_DNS1;
+        buf[13] = 6;
+        buf[14..18].copy_from_slice(&dns1.octets());
 
         // Opt 131: Secondary DNS
-        opts.push(IPCP_OPT_DNS2);
-        opts.push(6);
-        opts.extend_from_slice(&dns2.octets());
+        buf[18] = IPCP_OPT_DNS2;
+        buf[19] = 6;
+        buf[20..24].copy_from_slice(&dns2.octets());
+        24
+    } else {
+        12
+    };
+
+    PacketBuf { buf, len: total_len }
+}
+
+fn build_control_ack(proto: u16, id: u8, data: &[u8], len: usize) -> SmallVec<[u8; 128]> {
+    let mut ack_pkt = SmallVec::with_capacity(len + 2);
+    ack_pkt.extend_from_slice(&proto.to_be_bytes());
+    ack_pkt.push(0x02); // Configure-Ack
+    ack_pkt.push(id);
+    if data.len() >= 2 + len {
+        ack_pkt.extend_from_slice(&data[4..2 + len]);
     }
-
-    #[allow(clippy::cast_possible_truncation)]
-    let len = (4 + opts.len()) as u16;
-    pkt.extend_from_slice(&len.to_be_bytes());
-    pkt.extend_from_slice(&opts);
-    pkt
-}
-
-fn build_ipcp_ack(id: u8, data: &[u8], len: usize) -> Vec<u8> {
-    let mut ack_pkt = Vec::with_capacity(len + 2);
-    ack_pkt.extend_from_slice(&PPP_IPCP.to_be_bytes());
-    ack_pkt.push(0x02); // Configure-Ack
-    ack_pkt.push(id);
-    // Copy original length and options (from index 4 to 2 + len)
-    ack_pkt.extend_from_slice(&data[4..2 + len]);
     ack_pkt
 }
 
-fn build_ipv6cp_req(id: u8, ifid: [u8; 8]) -> Vec<u8> {
-    let mut pkt = Vec::with_capacity(16);
-    pkt.extend_from_slice(&PPP_IPV6CP.to_be_bytes());
-    pkt.push(0x01); // Configure-Request
-    pkt.push(id);
-    pkt.extend_from_slice(&14u16.to_be_bytes()); // 4 (header) + 10 (option)
-    pkt.push(IPV6CP_OPT_IFID);
-    pkt.push(10);
-    pkt.extend_from_slice(&ifid);
-    pkt
+#[inline]
+fn build_ipcp_ack(id: u8, data: &[u8], len: usize) -> SmallVec<[u8; 128]> {
+    build_control_ack(PPP_IPCP, id, data, len)
 }
 
-fn build_ipv6cp_ack(id: u8, data: &[u8], len: usize) -> Vec<u8> {
-    let mut ack_pkt = Vec::with_capacity(len + 2);
-    ack_pkt.extend_from_slice(&PPP_IPV6CP.to_be_bytes());
-    ack_pkt.push(0x02); // Configure-Ack
-    ack_pkt.push(id);
-    ack_pkt.extend_from_slice(&data[4..2 + len]);
-    ack_pkt
+fn build_ipv6cp_req(id: u8, ifid: [u8; 8]) -> PacketBuf<16> {
+    let mut buf = [0u8; 16];
+    buf[0..2].copy_from_slice(&PPP_IPV6CP.to_be_bytes());
+    buf[2] = 0x01; // Configure-Request
+    buf[3] = id;
+    buf[4..6].copy_from_slice(&14u16.to_be_bytes()); // 4 (header) + 10 (option)
+    buf[6] = IPV6CP_OPT_IFID;
+    buf[7] = 10;
+    buf[8..16].copy_from_slice(&ifid);
+    PacketBuf { buf, len: 16 }
+}
+
+#[inline]
+fn build_ipv6cp_ack(id: u8, data: &[u8], len: usize) -> SmallVec<[u8; 128]> {
+    build_control_ack(PPP_IPV6CP, id, data, len)
 }
 
 pub const fn parse_ipcp_nak(
@@ -549,5 +572,41 @@ mod tests {
         assert_eq!(addr.octets()[1], 0x80);
         assert_eq!(addr.octets()[8], 0x02);
         assert_eq!(addr.octets()[15], 0x77);
+    }
+
+    #[test]
+    fn test_build_ipcp_req_with_dns() {
+        let ip = Ipv4Addr::new(192, 168, 1, 10);
+        let dns1 = Ipv4Addr::new(1, 1, 1, 1);
+        let dns2 = Ipv4Addr::new(8, 8, 8, 8);
+        let pkt = build_ipcp_req(5, ip, dns1, dns2, true);
+        assert_eq!(pkt.len(), 24);
+        assert_eq!(u16::from_be_bytes([pkt[0], pkt[1]]), PPP_IPCP);
+        assert_eq!(pkt[2], 0x01); // Conf-Req
+        assert_eq!(pkt[3], 5); // ID
+        assert_eq!(u16::from_be_bytes([pkt[4], pkt[5]]), 22); // Length
+        assert_eq!(pkt[6], IPCP_OPT_IP);
+        assert_eq!(pkt[7], 6);
+        assert_eq!(&pkt[8..12], &ip.octets());
+        assert_eq!(pkt[12], IPCP_OPT_DNS1);
+        assert_eq!(pkt[13], 6);
+        assert_eq!(&pkt[14..18], &dns1.octets());
+        assert_eq!(pkt[18], IPCP_OPT_DNS2);
+        assert_eq!(pkt[19], 6);
+        assert_eq!(&pkt[20..24], &dns2.octets());
+    }
+
+    #[test]
+    fn test_build_ipv6cp_req() {
+        let ifid = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+        let pkt = build_ipv6cp_req(3, ifid);
+        assert_eq!(pkt.len(), 16);
+        assert_eq!(u16::from_be_bytes([pkt[0], pkt[1]]), PPP_IPV6CP);
+        assert_eq!(pkt[2], 0x01);
+        assert_eq!(pkt[3], 3);
+        assert_eq!(u16::from_be_bytes([pkt[4], pkt[5]]), 14);
+        assert_eq!(pkt[6], IPV6CP_OPT_IFID);
+        assert_eq!(pkt[7], 10);
+        assert_eq!(&pkt[8..16], &ifid);
     }
 }

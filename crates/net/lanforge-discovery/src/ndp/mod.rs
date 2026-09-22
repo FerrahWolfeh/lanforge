@@ -38,7 +38,7 @@ pub mod utils;
 use crate::ndp::config::MonitorConfig;
 use crate::ndp::utils::{extract_neigh_info, get_ipv4_neighbors, get_ipv6_neighbors};
 use crate::ping::IcmpPinger;
-use lanforge_core::bus::{DeviceEvent, LanforgeEvent, NetworkChange, NetworkEvent, SystemEvent};
+use lanforge_core::bus::{DeviceEvent, LanforgeEvent, NetworkChange, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceDependency};
@@ -73,6 +73,29 @@ fn ifindex_to_name(ifindex: u32) -> Option<String> {
             .ok()
             .and_then(|cs| cs.to_str().ok())
             .map(String::from)
+    }
+}
+
+#[derive(Default)]
+struct IfNameCache {
+    cache: std::collections::HashMap<u32, String>,
+}
+
+impl IfNameCache {
+    fn new() -> Self {
+        Self {
+            cache: std::collections::HashMap::new(),
+        }
+    }
+
+    fn get(&mut self, ifindex: u32) -> Option<&str> {
+        match self.cache.entry(ifindex) {
+            std::collections::hash_map::Entry::Occupied(e) => Some(e.into_mut().as_str()),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                let name = ifindex_to_name(ifindex)?;
+                Some(e.insert(name).as_str())
+            }
+        }
     }
 }
 
@@ -206,12 +229,16 @@ impl AsyncService for DiscoveryService {
             }
         }
 
+        let mut ifname_cache = IfNameCache::new();
         for event in bootstrap_events {
             let ifindex = event.ifindex();
             if let Some(mac) = event.mac()
-                && let Some(ifname) = ifindex_to_name(ifindex)
+                && let Some(ifname) = ifname_cache.get(ifindex)
             {
-                let _ = ctx.apply(DeviceUpdate::DeviceInterfaceSeen { mac, iface: ifname });
+                let _ = ctx.apply(DeviceUpdate::DeviceInterfaceSeen {
+                    mac,
+                    iface: ifname.to_string(),
+                });
             }
             if let Some(update) =
                 event.to_device_update(current_gua.as_ref(), current_ula.as_ref())
@@ -261,8 +288,7 @@ impl AsyncService for DiscoveryService {
                     }
                     sweep_timer.tick().await;
 
-                    let ips = {
-                        let state = ctx_sweep.read();
+                    let ips = ctx_sweep.with_state(|state| {
                         let mut all_ips = Vec::new();
                         for dev in state.devices.values() {
                             if dev.origin != lanforge_types::device::Origin::System {
@@ -279,9 +305,8 @@ impl AsyncService for DiscoveryService {
                                 }
                             }
                         }
-                        drop(state);
                         all_ips
-                    };
+                    });
 
                     for ip in ips {
                         seq_counter = seq_counter.wrapping_add(1);
@@ -315,7 +340,7 @@ impl AsyncService for DiscoveryService {
             let pinger_jit = pinger_ref.clone();
             let ctx_jit = ctx.clone();
             tokio::spawn(async move {
-                let mut bus_rx = ctx_jit.bus().subscribe();
+                let mut bus_rx = ctx_jit.bus().subscribe_device();
                 let mut seq_counter = 0u16;
                 loop {
                     if !ctx_jit.is_running() {
@@ -335,8 +360,7 @@ impl AsyncService for DiscoveryService {
                                 let target_ip = *ip;
                                 tokio::spawn(async move {
                                     debug!(
-                                        "DiscoveryService: JIT verification ping triggered for offline transition of {}",
-                                        target_ip
+                                        "DiscoveryService: JIT verification ping triggered for offline transition of {target_ip}"
                                     );
                                     if matches!(
                                         pinger_c.ping(target_ip, seq_counter).await,
@@ -373,7 +397,8 @@ impl AsyncService for DiscoveryService {
             });
         }
 
-        let mut bus_rx = ctx.bus().subscribe();
+        let mut handle = ctx.service_handle_network();
+        let mut ifname_cache = IfNameCache::new();
 
         // Initialize prefixes from current context state
         let primary_ifindex = self.target_ifindexes.first().copied().unwrap_or(0);
@@ -424,8 +449,16 @@ impl AsyncService for DiscoveryService {
                     if let Some(event) = extract_neigh_info(&msg)
                         && self.target_ifindexes.contains(&event.ifindex()) {
                             if let NeighborEvent::Added { mac, ip, is_active, ifindex } = event {
-                                if let Some(ifname) = ifindex_to_name(ifindex) {
-                                    let _ = ctx.apply(DeviceUpdate::DeviceInterfaceSeen { mac, iface: ifname });
+                                if let Some(ifname) = ifname_cache.get(ifindex) {
+                                    let needs_update = ctx.with_state(|state| {
+                                        state.devices.get(&mac).is_none_or(|dev| dev.iface.as_deref() != Some(ifname))
+                                    });
+                                    if needs_update {
+                                        let _ = ctx.apply(DeviceUpdate::DeviceInterfaceSeen {
+                                            mac,
+                                            iface: ifname.to_string(),
+                                        });
+                                    }
                                 }
                                 // Optimization: Batch Added events during scans/bursts
                                 pending_batch.push((mac, ip, is_active));
@@ -453,17 +486,10 @@ impl AsyncService for DiscoveryService {
                     }
                 }
 
-                res = bus_rx.recv() => {
-                    let Ok(timed_event) = res else {
-                        if let Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) = res {
-                            warn!(service = "DiscoveryService", lost = n, "Event bus lagged");
-                            continue;
-                        }
-                        break; // Channel closed
-                    };
-                    if matches!(timed_event.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
+                res = handle.next_event() => {
+                    let Some(timed_event) = res else {
                         break;
-                    }
+                    };
                     lanforge_core::match_event!(timed_event, {
                         LanforgeEvent::Network(NetworkEvent::PrefixChanged(details)) => {
                             current_gua = details.gua;

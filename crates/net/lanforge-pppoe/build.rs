@@ -63,6 +63,10 @@ fn try_compile_bpf(bpf_c: &Path, bpf_o: &Path) -> Result<(), String> {
 }
 
 fn main() {
+    if env::var("CARGO_FEATURE_EBPF").is_err() {
+        return;
+    }
+
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let bpf_c = manifest_dir.join("bpf/pppoe_fastpath.bpf.c");
     let bundled_bpf_o = manifest_dir.join("bpf/pppoe_fastpath.bpf.o");

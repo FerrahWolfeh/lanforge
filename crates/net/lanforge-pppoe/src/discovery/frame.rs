@@ -1,4 +1,5 @@
 use lanforge_types::identifiers::MacAddr;
+use smallvec::SmallVec;
 
 pub const ETH_P_PPP_DISC: u16 = 0x8863;
 
@@ -25,14 +26,14 @@ pub struct PppoeDiscoveryFrame<'a> {
     pub src_mac: MacAddr,
     pub code: u8,
     pub session_id: u16,
-    pub tags: Vec<Tag<'a>>,
+    pub tags: SmallVec<[Tag<'a>; 8]>,
 }
 
 impl<'a> PppoeDiscoveryFrame<'a> {
     #[must_use]
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode(&self) -> SmallVec<[u8; 256]> {
         let total_tags_len: usize = self.tags.iter().map(|t| 4 + t.value.len()).sum();
-        let mut packet = Vec::with_capacity(20 + total_tags_len);
+        let mut packet = SmallVec::with_capacity(20 + total_tags_len);
 
         packet.extend_from_slice(&self.dst_mac.0);
         packet.extend_from_slice(&self.src_mac.0);
@@ -83,7 +84,7 @@ impl<'a> PppoeDiscoveryFrame<'a> {
             return None;
         }
 
-        let mut tags = Vec::new();
+        let mut tags = SmallVec::new();
         let mut offset = 20;
         let end = 20 + payload_len;
 
@@ -115,6 +116,7 @@ impl<'a> PppoeDiscoveryFrame<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use smallvec::smallvec;
 
     #[test]
     fn test_discovery_frame_encode_parse() {
@@ -123,7 +125,7 @@ mod tests {
             src_mac: MacAddr([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]),
             code: CODE_PADI,
             session_id: 0,
-            tags: vec![
+            tags: smallvec![
                 Tag {
                     tag_type: TAG_SERVICE_NAME,
                     value: &[],

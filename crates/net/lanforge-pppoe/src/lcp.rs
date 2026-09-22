@@ -2,8 +2,9 @@ use crate::config::AuthMethod;
 use crate::error::PppoeError;
 use crate::session::PppoeSession;
 use rand::random;
+use smallvec::{SmallVec, smallvec};
 use std::time::Duration;
-use tokio::time::{timeout, Instant};
+use tokio::time::{Instant, timeout};
 use tracing::debug;
 
 pub const PPP_LCP: u16 = 0xc021;
@@ -24,24 +25,24 @@ pub const LCP_OPT_MRU: u8 = 1;
 pub const LCP_OPT_AUTH: u8 = 3;
 pub const LCP_OPT_MAGIC: u8 = 5;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LcpOption<'a> {
     pub opt_type: u8,
     pub data: &'a [u8],
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LcpPacket<'a> {
     pub code: u8,
     pub id: u8,
-    pub options: Vec<LcpOption<'a>>,
+    pub options: SmallVec<[LcpOption<'a>; 8]>,
 }
 
 impl<'a> LcpPacket<'a> {
     #[must_use]
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode(&self) -> SmallVec<[u8; 128]> {
         let opts_len: usize = self.options.iter().map(|o| 2 + o.data.len()).sum();
-        let mut pkt = Vec::with_capacity(6 + opts_len);
+        let mut pkt = SmallVec::with_capacity(6 + opts_len);
         pkt.extend_from_slice(&PPP_LCP.to_be_bytes());
         pkt.push(self.code);
         pkt.push(self.id);
@@ -84,7 +85,7 @@ impl<'a> LcpPacket<'a> {
             return None;
         }
 
-        let mut options = Vec::new();
+        let mut options = SmallVec::new();
         let mut offset = 6;
         let end = 2 + len;
 
@@ -208,7 +209,7 @@ pub async fn negotiate_lcp(
                 let ack = LcpPacket {
                     code: LCP_TERM_ACK,
                     id: packet.id,
-                    options: vec![],
+                    options: smallvec![],
                 };
                 session.send_ppp_frame(&ack.encode()).await?;
                 return Err(PppoeError::LcpFailed("Peer terminated LCP".into()));
@@ -224,7 +225,7 @@ fn build_conf_req<'a>(id: u8, mru_bytes: &'a [u8; 2], magic_bytes: &'a [u8; 4]) 
     LcpPacket {
         code: LCP_CONF_REQ,
         id,
-        options: vec![
+        options: smallvec![
             LcpOption {
                 opt_type: LCP_OPT_MRU,
                 data: mru_bytes,
@@ -252,9 +253,9 @@ async fn handle_conf_req(
     peer_magic: &mut u32,
     negotiated_auth: &mut AuthMethod,
 ) -> Result<bool, PppoeError> {
-    let mut nak_options = Vec::new();
-    let mut rej_options = Vec::new();
-    let mut ack_options = Vec::new();
+    let mut nak_options: SmallVec<[LcpOption<'_>; 8]> = SmallVec::new();
+    let mut rej_options: SmallVec<[LcpOption<'_>; 8]> = SmallVec::new();
+    let mut ack_options: SmallVec<[LcpOption<'_>; 8]> = SmallVec::new();
 
     for opt in &packet.options {
         match opt.opt_type {
@@ -336,5 +337,43 @@ async fn handle_conf_req(
         };
         session.send_ppp_frame(&resp.encode()).await?;
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lcp_packet_encode_parse() {
+        let mru = 1492u16.to_be_bytes();
+        let magic = 0x1234_5678u32.to_be_bytes();
+        let pkt = build_conf_req(1, &mru, &magic);
+        let encoded = pkt.encode();
+
+        let parsed = LcpPacket::parse(&encoded).expect("parse encoded LCP packet");
+        assert_eq!(parsed.code, LCP_CONF_REQ);
+        assert_eq!(parsed.id, 1);
+        assert_eq!(parsed.options.len(), 2);
+        assert_eq!(parsed.options[0].opt_type, LCP_OPT_MRU);
+        assert_eq!(parsed.options[0].data, &mru);
+        assert_eq!(parsed.options[1].opt_type, LCP_OPT_MAGIC);
+        assert_eq!(parsed.options[1].data, &magic);
+    }
+
+    #[test]
+    fn test_lcp_handle_conf_nak() {
+        let new_mru = 1400u16.to_be_bytes();
+        let pkt = LcpPacket {
+            code: LCP_CONF_NAK,
+            id: 2,
+            options: smallvec![LcpOption {
+                opt_type: LCP_OPT_MRU,
+                data: &new_mru,
+            }],
+        };
+        let mut negotiated = 1492;
+        handle_conf_nak(&pkt, &mut negotiated);
+        assert_eq!(negotiated, 1400);
     }
 }

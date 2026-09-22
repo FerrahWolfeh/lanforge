@@ -131,6 +131,7 @@ fn test_print_all_struct_sizes() {
     print_size::<PppoeSessionUp>("PppoeSessionUp");
     print_size::<FirewallEvent>("FirewallEvent");
     print_size::<FirewallAppliedSummary>("FirewallAppliedSummary");
+    print_size::<TrafficEvent>("TrafficEvent");
     print_size::<LanforgeEvent>("LanforgeEvent");
     print_size::<TimedEvent>("TimedEvent");
     print_size::<EventVec>("EventVec");
@@ -155,6 +156,22 @@ fn test_print_all_struct_sizes() {
     print_size::<PortForwardRule>("PortForwardRule");
     print_size::<FirewallConfig>("FirewallConfig");
     print_size::<FirewallStatus>("FirewallStatus");
+
+    println!("\n=== TRAFFIC & SQM TYPES ===");
+    print_size::<lanforge_types::network::TrafficConfig>("TrafficConfig");
+    print_size::<lanforge_types::network::traffic::NicTuningConfig>("NicTuningConfig");
+    print_size::<lanforge_types::network::traffic::SqmConfig>("SqmConfig");
+    print_size::<lanforge_types::network::traffic::SqmOverhead>("SqmOverhead");
+    print_size::<lanforge_types::network::traffic::SqmDiffserv>("SqmDiffserv");
+    print_size::<lanforge_types::network::traffic::InterfaceTrafficStats>("InterfaceTrafficStats");
+    print_size::<lanforge_types::network::traffic::CakeTinStats>("CakeTinStats");
+    print_size::<lanforge_types::network::traffic::CakeQdiscStats>("CakeQdiscStats");
+    print_size::<lanforge_types::network::traffic::SqmTelemetryStats>("SqmTelemetryStats");
+    print_size::<lanforge_types::network::traffic::ConntrackStats>("ConntrackStats");
+    print_size::<lanforge_types::network::traffic::InterfaceThroughputPoint>("InterfaceThroughputPoint");
+    print_size::<lanforge_types::network::traffic::TrafficHistorySample>("TrafficHistorySample");
+    print_size::<lanforge_types::network::traffic::TrafficTelemetryResponse>("TrafficTelemetryResponse");
+    print_size::<lanforge_types::system::TrafficStatusResponse>("TrafficStatusResponse");
 
     println!("\n=== SYSTEM & AUTH ===");
     print_size::<SystemStatus>("SystemStatus");

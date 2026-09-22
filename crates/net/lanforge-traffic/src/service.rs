@@ -110,12 +110,12 @@ impl TrafficService {
         self.active_wan = Some(iface.to_string());
         self.active_ifb.clone_from(&ifb);
 
-        let _ = ctx.bus().publish(LanforgeEvent::Traffic(TrafficEvent::SqmApplied {
+        let _ = ctx.bus().publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::SqmApplied {
             interface: iface.to_string(),
             ingress_device: ifb,
             download_mbps: self.cfg.sqm.download_mbps,
             upload_mbps: self.cfg.sqm.upload_mbps,
-        }));
+        })));
     }
 
     /// Clears any active SQM configuration.
@@ -123,9 +123,9 @@ impl TrafficService {
         if let Some(ref wan) = self.active_wan.take() {
             clear_sqm(wan, &self.cfg.sqm.ingress_device).await;
             self.active_ifb = None;
-            let _ = ctx.bus().publish(LanforgeEvent::Traffic(TrafficEvent::SqmCleared {
+            let _ = ctx.bus().publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::SqmCleared {
                 interface: wan.clone(),
-            }));
+            })));
         }
     }
 }
@@ -172,10 +172,10 @@ impl AsyncService for TrafficService {
             let tuned = apply_tuning(&self.cfg.tuning, &default_ifaces).await;
             self.effective_cpu_mask = crate::tuning::cpu::resolve_effective_cpu_mask(&self.cfg.tuning.cpu_mask);
             self.tuned_interfaces.clone_from(&tuned);
-            let _ = ctx.bus().publish(LanforgeEvent::Traffic(TrafficEvent::TuningApplied {
+            let _ = ctx.bus().publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::TuningApplied {
                 interfaces: tuned,
                 cpu_mask: self.effective_cpu_mask.clone(),
-            }));
+            })));
         }
 
         // 2. Initial SQM Setup (if WAN is already resolved)
@@ -216,7 +216,7 @@ impl AsyncService for TrafficService {
                 traffic_event = traffic_rx.recv() => {
                     match traffic_event {
                         Ok(te) => {
-                            if matches!(te.event, LanforgeEvent::Traffic(TrafficEvent::RulesetChanged)) {
+                            if matches!(te.event, LanforgeEvent::Traffic(ref e) if matches!(**e, TrafficEvent::RulesetChanged)) {
                                 let new_cfg = ctx.get_traffic_config().unwrap_or_default();
                                 let tuning_changed = self.cfg.tuning != new_cfg.tuning;
                                 let sqm_changed = self.cfg.sqm != new_cfg.sqm;

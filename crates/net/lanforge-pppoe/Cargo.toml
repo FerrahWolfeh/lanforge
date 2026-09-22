@@ -33,9 +33,11 @@ hotpath = { workspace = true, optional = true }
 # Third party protocol / low level
 nix = { version = "0.31.3", features = ["socket", "ioctl", "net", "fs"] }
 md-5 = "0.11.0"
-aya = "0.13.1"
+smallvec = { workspace = true }
+aya = { version = "0.13.1", optional = true }
 
 [features]
+ebpf = ["dep:aya"]
 hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
 hotpath-alloc = [
     "hotpath",

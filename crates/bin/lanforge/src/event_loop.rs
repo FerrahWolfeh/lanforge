@@ -312,19 +312,19 @@ fn handle_wol_event<S: BuildHasher>(
     ip_hint: Option<Ipv4Addr>,
 ) {
     info!("WOL: Triggering for {mac} (hint: {ip_hint:?})");
-    let mut directed_broadcast = None;
-
-    {
-        let ctx_read = l_ctx.ctx.read();
-        if let Some(if_ips) = ctx_read.interfaces.interface_ips.get(&l_ctx.target_ifindex)
-            && let Some((ip, prefix)) = if_ips.v4
-        {
-            let ip_u32 = u32::from_be_bytes(ip.octets());
-            let mask = !((1u32.checked_shl(32 - u32::from(prefix))).map_or(0, |v| v - 1));
-            let broadcast = ip_u32 | !mask;
-            directed_broadcast = Some(Ipv4Addr::from(broadcast.to_be_bytes()));
-        }
-    }
+    let directed_broadcast = l_ctx.ctx.with_state(|state| {
+        state
+            .interfaces
+            .interface_ips
+            .get(&l_ctx.target_ifindex)
+            .and_then(|if_ips| if_ips.v4)
+            .map(|(ip, prefix)| {
+                let ip_u32 = u32::from(ip);
+                let mask = !((1u32.checked_shl(32 - u32::from(prefix))).map_or(0, |v| v - 1));
+                let broadcast = ip_u32 | !mask;
+                Ipv4Addr::from(broadcast)
+            })
+    });
 
     if let Err(e) = send_wol_magic_packet(mac, &l_ctx.cfg.system.iface, directed_broadcast, ip_hint)
     {

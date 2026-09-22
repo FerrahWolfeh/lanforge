@@ -82,6 +82,8 @@ use tracing::{debug, info, warn};
 
 // ICMP6_FILTER = 1 (linux/icmpv6.h — not exposed by libc crate)
 const ICMP6_FILTER: libc::c_int = 1;
+const ALL_NODES_MULTICAST: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1);
+const ALL_ROUTERS_MULTICAST: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 2);
 
 // ---------------------------------------------------------------------------
 // Runtime State — Handles RFC-compliant timing
@@ -186,6 +188,10 @@ impl RaState {
 
     pub(crate) fn record_unicast(&mut self, dst: Ipv6Addr) {
         let now = Instant::now();
+        if self.unicast_rl.len() >= 32 {
+            self.unicast_rl
+                .retain(|_, last_sent| now.duration_since(*last_sent) < Duration::from_secs(10));
+        }
         self.unicast_rl.insert(dst, now);
         self.last_ra_sent = Some(now);
         self.sent_unicast_ras = self.sent_unicast_ras.saturating_add(1);
@@ -201,18 +207,11 @@ impl RaState {
     }
 
 
-    pub(crate) fn build_status(
-        &self,
-        cfg: &RaConfig,
-        ctx: &LanforgeContext,
-        next_ra_at: Option<Instant>,
-    ) -> RaStatusResponse {
-        let target_ifindex = ctx.target_ifindex().unwrap_or(0);
-        let if_ips = ctx.get_interface_state(target_ifindex);
-        let now = Instant::now();
-
-        let deprecated_list: Vec<(Ipv6Addr, u32)> = self
-            .deprecated_prefixes
+    pub(crate) fn deprecated_list(&self, now: Instant) -> Vec<(Ipv6Addr, u32)> {
+        if self.deprecated_prefixes.is_empty() {
+            return Vec::new();
+        }
+        self.deprecated_prefixes
             .iter()
             .map(|&(ip, _, valid_end)| {
                 let remaining = if valid_end > now {
@@ -222,7 +221,19 @@ impl RaState {
                 };
                 (ip, remaining)
             })
-            .collect();
+            .collect()
+    }
+
+    pub(crate) fn build_status(
+        &self,
+        cfg: &RaConfig,
+        ctx: &LanforgeContext,
+        next_ra_at: Option<Instant>,
+    ) -> RaStatusResponse {
+        let target_ifindex = ctx.target_ifindex().unwrap_or(0);
+        let if_ips = ctx.get_interface_state(target_ifindex);
+        let now = Instant::now();
+        let deprecated_list = self.deprecated_list(now);
 
         RaStatusResponse {
             enabled: true,
@@ -485,7 +496,7 @@ impl AsyncService for RaService {
     }
 
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let ra_status = ctx.read().interfaces.ra_status.clone();
+        let ra_status = ctx.with_state(|state| state.interfaces.ra_status.clone());
         let if_state = ctx.get_interface_state(ctx.target_ifindex().unwrap_or(0));
         let prefixes = ctx.get_ra_prefixes();
         let mut list = vec![
@@ -744,20 +755,9 @@ fn send_ra_internal(
         .deprecated_prefixes
         .retain(|(_, deprecation_end, _)| *deprecation_end > now);
 
-    let deprecated_list: Vec<(Ipv6Addr, u32)> = state
-        .deprecated_prefixes
-        .iter()
-        .map(|&(ip, _, valid_end)| {
-            let remaining = if valid_end > now {
-                u32::try_from((valid_end - now).as_secs()).unwrap_or(u32::MAX)
-            } else {
-                0
-            };
-            (ip, remaining)
-        })
-        .collect();
+    let deprecated_list = state.deprecated_list(now);
 
-    let dst_ip: Ipv6Addr = unicast_dst.unwrap_or_else(|| "ff02::1".parse().unwrap());
+    let dst_ip: Ipv6Addr = unicast_dst.unwrap_or(ALL_NODES_MULTICAST);
     let dst_sa = SockAddr::from(SocketAddrV6::new(dst_ip, 0, 0, iface_index));
 
     let gua_info = gua
@@ -799,8 +799,7 @@ fn create_ra_socket(iface: &str, iface_index: u32) -> Result<Socket, NetworkErro
 
     // Joins ff02::2 (all-routers) to receive Router Solicitations.
     // The kernel doesn't pass multicast traffic if the socket isn't subscribed.
-    let ff02_2: Ipv6Addr = "ff02::2".parse().unwrap();
-    sock.join_multicast_v6(&ff02_2, iface_index)
+    sock.join_multicast_v6(&ALL_ROUTERS_MULTICAST, iface_index)
         .map_err(|e| NetworkError::Socket(format!("join_multicast_v6(ff02::2): {e}")))?;
 
     // ICMP6_FILTER: tells the kernel to reject all ICMPv6 types except RS (133).

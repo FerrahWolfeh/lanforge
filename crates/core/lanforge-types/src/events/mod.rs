@@ -98,5 +98,5 @@ pub enum LanforgeEvent {
     Dns(DnsEvent),
     Pppoe(PppoeEvent),
     Firewall(FirewallEvent),
-    Traffic(TrafficEvent),
+    Traffic(Box<TrafficEvent>),
 }

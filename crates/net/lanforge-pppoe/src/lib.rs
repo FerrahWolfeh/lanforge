@@ -9,6 +9,7 @@
 pub mod auth;
 pub mod config;
 pub mod discovery;
+#[cfg(feature = "ebpf")]
 pub mod ebpf;
 pub mod error;
 pub mod ipcp;

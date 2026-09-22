@@ -202,6 +202,9 @@ impl IcmpPinger {
 
     /// Sends a targeted ICMP Echo Request and waits for an Echo Reply with a 1-second timeout.
     pub async fn ping(&self, ip: IpAddr, seq: u16) -> Result<bool, std::io::Error> {
+        const PAYLOAD: &[u8] = b"LanforgeProberPingPayload";
+        const PACKET_LEN: usize = 8 + PAYLOAD.len();
+
         let ident = 12345u16;
         let (tx, rx) = oneshot::channel();
 
@@ -211,15 +214,14 @@ impl IcmpPinger {
             reg.insert((ip, ident, seq), tx);
         }
 
-        let payload = b"LanforgeProberPingPayload";
         let sent = match ip {
             IpAddr::V4(ip4) => self.socket_v4.as_ref().is_some_and(|s_v4| {
-                let mut packet = vec![0u8; 8 + payload.len()];
+                let mut packet = [0u8; PACKET_LEN];
                 packet[0] = 8; // Echo Request
                 packet[1] = 0;
                 packet[4..6].copy_from_slice(&ident.to_be_bytes());
                 packet[6..8].copy_from_slice(&seq.to_be_bytes());
-                packet[8..].copy_from_slice(payload);
+                packet[8..].copy_from_slice(PAYLOAD);
                 let cs = checksum(&packet);
                 packet[2..4].copy_from_slice(&cs.to_be_bytes());
 
@@ -229,12 +231,12 @@ impl IcmpPinger {
                     .is_ok()
             }),
             IpAddr::V6(ip6) => self.socket_v6.as_ref().is_some_and(|s_v6| {
-                let mut packet = vec![0u8; 8 + payload.len()];
+                let mut packet = [0u8; PACKET_LEN];
                 packet[0] = 128; // Echo Request
                 packet[1] = 0;
                 packet[4..6].copy_from_slice(&ident.to_be_bytes());
                 packet[6..8].copy_from_slice(&seq.to_be_bytes());
-                packet[8..].copy_from_slice(payload);
+                packet[8..].copy_from_slice(PAYLOAD);
 
                 let dest = SocketAddr::new(IpAddr::V6(ip6), 0);
                 s_v6.get_ref()
@@ -263,13 +265,12 @@ impl IcmpPinger {
 
 fn checksum(data: &[u8]) -> u16 {
     let mut sum = 0u32;
-    let mut i = 0;
-    while i + 1 < data.len() {
-        sum += u32::from(u16::from_be_bytes([data[i], data[i + 1]]));
-        i += 2;
+    let chunks = data.as_chunks::<2>();
+    for chunk in chunks.0 {
+        sum += u32::from(u16::from_be_bytes(*chunk));
     }
-    if i < data.len() {
-        sum += u32::from(u16::from_be_bytes([data[i], 0]));
+    if let [tail] = chunks.1 {
+        sum += u32::from(u16::from_be_bytes([*tail, 0]));
     }
     while sum >> 16 != 0 {
         sum = (sum & 0xffff) + (sum >> 16);

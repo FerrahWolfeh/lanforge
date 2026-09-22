@@ -3,7 +3,6 @@ use lanforge_types::identifiers::MacAddr;
 use nix::errno::Errno;
 use nix::sys::socket::{AddressFamily, SockFlag, SockType, socket};
 use nix::unistd::{read, write};
-use std::ffi::CString;
 use std::os::fd::{AsRawFd, OwnedFd};
 use tokio::io::unix::AsyncFd;
 
@@ -39,12 +38,13 @@ impl PppoeSession {
         )?;
 
         let mut dev_bytes = [0u8; 16];
-        let c_ifname = CString::new(ifname).map_err(|_| {
-            PppoeError::NegotiationFailed("Invalid interface name for CString".into())
-        })?;
-        let bytes = c_ifname.as_bytes();
-        let len = bytes.len().min(15);
-        dev_bytes[..len].copy_from_slice(&bytes[..len]);
+        let bytes = ifname.as_bytes();
+        if bytes.len() >= 16 || bytes.contains(&0) {
+            return Err(PppoeError::NegotiationFailed(
+                "Invalid interface name".into(),
+            ));
+        }
+        dev_bytes[..bytes.len()].copy_from_slice(bytes);
 
         let addr = SockAddrPppox {
             sa_family: u16::try_from(libc::AF_PPPOX).unwrap(),

@@ -216,7 +216,7 @@ async fn run_mdns_worker(
         debug!("mDNS v6 listener exited");
     });
 
-    let mut bus_rx = bus.subscribe();
+    let mut bus_rx = bus.subscribe_system();
     let mut probe_timer = tokio::time::interval(Duration::from_secs(cfg.probe_interval));
 
     if cfg.enabled {
@@ -250,10 +250,7 @@ async fn run_mdns_worker(
                 }
             }
             Some((data_vec, addr)) = resp_rx.recv() => {
-                let ctx_clone = ctx.clone();
-                tokio::spawn(async move {
-                    handle_mdns_packet(&ctx_clone, &data_vec, addr);
-                });
+                handle_mdns_packet(&ctx, &data_vec, addr);
             }
             _ = probe_timer.tick() => {
                 if cfg.enabled {
@@ -416,22 +413,40 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
         return;
     }
 
-    // Passive Classification Mapping
+    // Passive Classification Mapping with zero allocations
     let classify = |name: &str| -> Option<DeviceClass> {
-        let n = name.to_lowercase();
-        if n.contains("printer") || n.contains("_ipp") || n.contains("_pdl-datastream") {
+        fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+            haystack
+                .as_bytes()
+                .windows(needle.len())
+                .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+        }
+
+        if contains_ignore_ascii_case(name, "printer")
+            || contains_ignore_ascii_case(name, "_ipp")
+            || contains_ignore_ascii_case(name, "_pdl-datastream")
+        {
             Some(DeviceClass::Printer)
-        } else if n.contains("_airplay")
-            || n.contains("_googlecast")
-            || n.contains("_spotify")
-            || n.contains("_raop")
+        } else if contains_ignore_ascii_case(name, "_airplay")
+            || contains_ignore_ascii_case(name, "_googlecast")
+            || contains_ignore_ascii_case(name, "_spotify")
+            || contains_ignore_ascii_case(name, "_raop")
         {
             Some(DeviceClass::Media)
-        } else if n.contains("_hap") || n.contains("_miio") || n.contains("_homekit") {
+        } else if contains_ignore_ascii_case(name, "_hap")
+            || contains_ignore_ascii_case(name, "_miio")
+            || contains_ignore_ascii_case(name, "_homekit")
+        {
             Some(DeviceClass::IoT)
-        } else if n.contains("_ssh") || n.contains("_smb") || n.contains("_afp") {
+        } else if contains_ignore_ascii_case(name, "_ssh")
+            || contains_ignore_ascii_case(name, "_smb")
+            || contains_ignore_ascii_case(name, "_afp")
+        {
             Some(DeviceClass::Computer)
-        } else if n.contains("_ubnt") || n.contains("_unifi") || n.contains("_mikrotik") {
+        } else if contains_ignore_ascii_case(name, "_ubnt")
+            || contains_ignore_ascii_case(name, "_unifi")
+            || contains_ignore_ascii_case(name, "_mikrotik")
+        {
             Some(DeviceClass::Network)
         } else {
             None
@@ -441,9 +456,9 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
     // We look for PTR, SRV, or A/AAAA records that might reveal a hostname.
     // The most reliable is the "Answer" section names or SRV target.
     for record in msg.answers.iter().chain(msg.additionals.iter()) {
-        let hostname = match &record.rdata {
-            DnsRData::PTR(name) => Some(name.to_string()),
-            DnsRData::SRV { target, .. } => Some(target.to_string()),
+        let hostname: Option<&str> = match &record.rdata {
+            DnsRData::PTR(name) => Some(name.as_ref()),
+            DnsRData::SRV { target, .. } => Some(target.as_ref()),
             _ => None,
         };
 
@@ -451,7 +466,7 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
             let clean_host: &str = h.trim_end_matches('.').trim_end_matches(".local");
             if clean_host.is_empty() || clean_host.contains('.') {
                 // It might still be useful for classification even if not a valid hostname
-                if let Some(class) = classify(&h)
+                if let Some(class) = classify(h)
                     && let Some(mac) = ctx.get_mac_by_ip(from.ip())
                 {
                     let _ = ctx.apply(DeviceUpdate::ClassHint { mac, class });
@@ -464,7 +479,7 @@ fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
 
             if let Some(mac) = mac {
                 // If it has a classification hit, apply it
-                if let Some(class) = classify(&h) {
+                if let Some(class) = classify(h) {
                     let _ = ctx.apply(DeviceUpdate::ClassHint { mac, class });
                 }
 

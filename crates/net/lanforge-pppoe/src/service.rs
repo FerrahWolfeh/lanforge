@@ -1,6 +1,7 @@
 use crate::auth::authenticate;
 use crate::config::{PppoeConfig, PppoeCredentials};
 use crate::discovery::{PppoeDiscovery, send_padt};
+#[cfg(feature = "ebpf")]
 use crate::ebpf::EbpfSession;
 use crate::error::PppoeError;
 use crate::ipcp::negotiate_ipcp;
@@ -24,6 +25,11 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, warn};
+
+#[cfg(feature = "ebpf")]
+type EbpfSessionHandle = Option<crate::ebpf::EbpfSession>;
+#[cfg(not(feature = "ebpf"))]
+type EbpfSessionHandle = Option<()>;
 
 #[lanforge_macros::lanforge_service(
     id = "pppoe",
@@ -138,8 +144,14 @@ impl PppoeService {
             );
 
             // 6. Handoff to data plane & Configure network interface
-            let (interface_name, control_fd, _ebpf_session, _kernel_session) =
-                if self.cfg.dataplane == PppoeDataplane::Ebpf {
+            let (interface_name, control_fd, _ebpf_session, _kernel_session): (
+                String,
+                std::os::fd::OwnedFd,
+                EbpfSessionHandle,
+                Option<crate::kernel::KernelSession>,
+            ) = if self.cfg.dataplane == PppoeDataplane::Ebpf {
+                #[cfg(feature = "ebpf")]
+                {
                     info!(
                         wan_iface = %self.cfg.wan_iface,
                         "Attaching eBPF Generic XDP + TC fast-path data plane"
@@ -170,27 +182,34 @@ impl PppoeService {
                         Some(ebpf_sess),
                         None,
                     )
-                } else {
-                    info!("Performing kernel ppp_generic handoff...");
-                    let kernel_session = handoff_to_kernel(session.session_fd(), lcp_res.mru)?;
-                    configure_interface(
-                        &kernel_session.interface_name,
-                        ipcp_res.local_ip,
-                        ipcp_res.peer_ip,
-                        None,
-                        ipcp_res.local_v6_ll,
-                        ipcp_res.peer_v6_ll,
-                        lcp_res.mru,
-                    )
-                    .await?;
-                    let chan_fd = kernel_session.ppp_chan_fd.try_clone()?;
-                    (
-                        kernel_session.interface_name.clone(),
-                        chan_fd,
-                        None,
-                        Some(kernel_session),
-                    )
-                };
+                }
+                #[cfg(not(feature = "ebpf"))]
+                {
+                    return Err(PppoeError::NegotiationFailed(
+                        "eBPF dataplane support is not compiled into this binary (compile with --features ebpf)".into(),
+                    ));
+                }
+            } else {
+                info!("Performing kernel ppp_generic handoff...");
+                let kernel_session = handoff_to_kernel(session.session_fd(), lcp_res.mru)?;
+                configure_interface(
+                    &kernel_session.interface_name,
+                    ipcp_res.local_ip,
+                    ipcp_res.peer_ip,
+                    None,
+                    ipcp_res.local_v6_ll,
+                    ipcp_res.peer_v6_ll,
+                    lcp_res.mru,
+                )
+                .await?;
+                let chan_fd = kernel_session.ppp_chan_fd.try_clone()?;
+                (
+                    kernel_session.interface_name.clone(),
+                    chan_fd,
+                    None,
+                    Some(kernel_session),
+                )
+            };
 
             // Update core State with connected PPPoE status
             let pppoe_status = PppoeStatusResponse {
@@ -376,6 +395,22 @@ impl AsyncService for PppoeService {
                 .bus()
                 .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionDown {
                     reason: "/dev/ppp device unavailable".into(),
+                }));
+            ctx.set_service_state("pppoe", ServiceState::Error);
+            ctx.set_pppoe_ready(true);
+            return Ok(());
+        }
+
+        #[cfg(not(feature = "ebpf"))]
+        if self.cfg.dataplane == PppoeDataplane::Ebpf {
+            warn!(
+                service = "PPPoE",
+                "eBPF dataplane requested but not compiled into this binary (compile with --features ebpf). Disabling PPPoE service."
+            );
+            let _ = ctx
+                .bus()
+                .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionDown {
+                    reason: "eBPF dataplane not compiled in".into(),
                 }));
             ctx.set_service_state("pppoe", ServiceState::Error);
             ctx.set_pppoe_ready(true);

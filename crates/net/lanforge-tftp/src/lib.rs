@@ -13,6 +13,7 @@ use thiserror::Error;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::net::UdpSocket;
+use smallvec::SmallVec;
 use tokio::time::{Duration, timeout};
 use tracing::{debug, error, info};
 
@@ -103,9 +104,10 @@ impl AsyncService for TftpService {
         let shutdown_tx_clone = shutdown_tx.clone();
         let mut bus_rx = ctx.bus().subscribe_system();
 
+        let cfg_shared = Arc::new(self.cfg.clone());
         let mut reader_handles = Vec::new();
         for socket in sockets {
-            let cfg_clone = self.cfg.clone();
+            let cfg = Arc::clone(&cfg_shared);
             let mut shutdown_rx = shutdown_tx.subscribe();
             reader_handles.push(tokio::spawn(async move {
                 let mut buf = [0u8; 1024];
@@ -114,17 +116,17 @@ impl AsyncService for TftpService {
                         res = socket.recv_from(&mut buf) => {
                             match res {
                                 Ok((size, src)) => {
-                                    let data = buf[..size].to_vec();
+                                    let data = SmallVec::<[u8; 512]>::from_slice(&buf[..size]);
                                     let socket_clone = Arc::clone(&socket);
-                                    let cfg = cfg_clone.clone();
+                                    let cfg_clone = Arc::clone(&cfg);
                                     tokio::spawn(async move {
-                                        if let Err(e) = handle_packet(socket_clone, src, data, cfg).await {
-                                            debug!("TFTP error handling request from {}: {}", src, e);
+                                        if let Err(e) = handle_packet(socket_clone, src, &data, &cfg_clone).await {
+                                            debug!("TFTP error handling request from {src}: {e}");
                                         }
                                     });
                                 }
                                 Err(e) => {
-                                    error!("TFTP socket recv error: {}", e);
+                                    error!("TFTP socket recv error: {e}");
                                 }
                             }
                         }
@@ -170,8 +172,8 @@ impl AsyncService for TftpService {
 async fn handle_packet(
     socket: Arc<UdpSocket>,
     src: SocketAddr,
-    data: Vec<u8>,
-    cfg: TftpConfig,
+    data: &[u8],
+    cfg: &TftpConfig,
 ) -> Result<(), TftpError> {
     if data.len() < 4 {
         return Ok(());
@@ -194,16 +196,18 @@ async fn handle_rrq(
     socket: Arc<UdpSocket>,
     src: SocketAddr,
     data: &[u8],
-    cfg: TftpConfig,
+    cfg: &TftpConfig,
 ) -> Result<(), TftpError> {
     let mut parts = data.split(|&b| b == 0);
     let filename_bytes = parts
         .next()
         .ok_or_else(|| TftpError::Protocol("Missing filename".into()))?;
-    let filename = String::from_utf8_lossy(filename_bytes).to_string();
+    let Ok(filename) = std::str::from_utf8(filename_bytes) else {
+        return send_error(&socket, src, 0, "Invalid UTF-8 filename").await;
+    };
 
     // Security: prevent path traversal
-    let rel_path = std::path::Path::new(&filename);
+    let rel_path = std::path::Path::new(filename);
     if rel_path.components().any(|c| {
         matches!(
             c,
@@ -224,11 +228,13 @@ async fn handle_rrq(
         return send_error(&socket, src, 1, "File not found").await;
     }
 
-    info!("TFTP: Sending {} to {}", filename, src);
+    info!("TFTP: Sending {filename} to {src}");
 
     let mut file = File::open(path).await?;
     let mut block_num: u16 = 1;
-    let mut buffer = vec![0u8; cfg.block_size as usize];
+    let block_size = cfg.block_size as usize;
+    let mut packet = vec![0u8; 4 + block_size];
+    packet[0..2].copy_from_slice(&3u16.to_be_bytes()); // Opcode 3 (DATA)
 
     // TFTP uses a new port for the transfer (TID)
     let session_socket = match src {
@@ -237,17 +243,13 @@ async fn handle_rrq(
     };
 
     loop {
-        let n = file.read(&mut buffer).await?;
-
-        // Send DATA packet
-        let mut packet = Vec::with_capacity(4 + n);
-        packet.extend_from_slice(&3u16.to_be_bytes()); // Opcode 3
-        packet.extend_from_slice(&block_num.to_be_bytes());
-        packet.extend_from_slice(&buffer[..n]);
+        packet[2..4].copy_from_slice(&block_num.to_be_bytes());
+        let n = file.read(&mut packet[4..4 + block_size]).await?;
+        let packet_slice = &packet[..4 + n];
 
         let mut retries = 0;
         loop {
-            session_socket.send_to(&packet, src).await?;
+            session_socket.send_to(packet_slice, src).await?;
 
             // Wait for ACK
             let mut ack_buf = [0u8; 4];
@@ -267,11 +269,11 @@ async fn handle_rrq(
                 if retries > cfg.max_retries {
                     return Err(TftpError::Protocol("Transfer timed out".into()));
                 }
-                debug!("TFTP: Retrying block {} to {}", block_num, src);
+                debug!("TFTP: Retrying block {block_num} to {src}");
             }
         }
 
-        if n < cfg.block_size as usize {
+        if n < block_size {
             break; // End of file
         }
         block_num = block_num.wrapping_add(1);
@@ -356,12 +358,15 @@ async fn send_error(
     code: u16,
     msg: &str,
 ) -> Result<(), TftpError> {
-    let mut packet = Vec::with_capacity(4 + msg.len() + 1);
-    packet.extend_from_slice(&5u16.to_be_bytes()); // Opcode 5
-    packet.extend_from_slice(&code.to_be_bytes());
-    packet.extend_from_slice(msg.as_bytes());
-    packet.push(0);
-    socket.send_to(&packet, src).await?;
+    let mut packet = [0u8; 128];
+    packet[0..2].copy_from_slice(&5u16.to_be_bytes()); // Opcode 5
+    packet[2..4].copy_from_slice(&code.to_be_bytes());
+    let msg_bytes = msg.as_bytes();
+    let msg_len = msg_bytes.len().min(128 - 5);
+    packet[4..4 + msg_len].copy_from_slice(&msg_bytes[..msg_len]);
+    packet[4 + msg_len] = 0;
+    let total_len = 5 + msg_len;
+    socket.send_to(&packet[..total_len], src).await?;
     Ok(())
 }
 

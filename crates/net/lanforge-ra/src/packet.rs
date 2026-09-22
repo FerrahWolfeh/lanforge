@@ -15,7 +15,7 @@
 //! [ Option 31: DNSSL (search domains) ]
 //! ```
 
-use lanforge_types::network::ra::{PrefixLifetime, PrefixSource, RAPrefix};
+use lanforge_types::network::ra::{PrefixSource, RAPrefix};
 
 use std::net::Ipv6Addr;
 
@@ -89,37 +89,46 @@ pub fn build_ra_packet(
 
     // ── Option 3: Prefix Information (RFC 4861 §4.6.2) ────────────────────
     for pc in &cfg.prefixes {
-        let (addr, pc_eff) = match pc.source {
-            PrefixSource::Static | PrefixSource::Ula => (pc.resolved_address(), pc.clone()),
+        let (addr, valid_lt, pref_lt) = match pc.source {
+            PrefixSource::Static | PrefixSource::Ula => (
+                pc.resolved_address(),
+                pc.valid_lifetime.as_u32(),
+                pc.preferred_lifetime.as_u32(),
+            ),
             PrefixSource::AutoGua => {
                 if let Some((addr, preferred, valid)) = gua_prefix {
-                    let mut pc_mod = pc.clone();
-                    pc_mod.preferred_lifetime = PrefixLifetime::Secs(preferred);
-                    pc_mod.valid_lifetime = PrefixLifetime::Secs(valid);
-                    (Some(*addr), pc_mod)
+                    (Some(*addr), valid, preferred)
                 } else {
-                    (None, pc.clone())
+                    (None, 0, 0)
                 }
             }
         };
         if let Some(addr) = addr {
-            push_prefix_option(&mut p, &addr, &pc_eff);
+            push_prefix_option_raw(
+                &mut p,
+                &addr,
+                pc.prefix_len,
+                pc.on_link,
+                pc.autonomous,
+                pc.router_addr,
+                valid_lt,
+                pref_lt,
+            );
         }
     }
 
     // ── Deprecated Prefixes (RFC 4861 §6.2.4 / §6.2.6) ───────────────────
     for &(addr, remaining_valid) in deprecated_prefixes {
-        let pc = RAPrefix {
-            source: PrefixSource::Static,
-            address: Some(addr.to_string()),
-            prefix_len: 64,
-            on_link: true,
-            autonomous: true,
-            router_addr: true,
-            valid_lifetime: PrefixLifetime::Secs(remaining_valid),
-            preferred_lifetime: PrefixLifetime::Secs(0),
-        };
-        push_prefix_option(&mut p, &addr, &pc);
+        push_prefix_option_raw(
+            &mut p,
+            &addr,
+            64,
+            true,
+            true,
+            true,
+            remaining_valid,
+            0,
+        );
     }
 
     // ── Option 25: RDNSS (RFC 8106 §3.1) ─────────────────────────────────
@@ -143,16 +152,20 @@ pub fn build_ra_packet(
         if dnssl.domains.is_empty() {
             continue;
         }
-        let encoded = encode_dns_wire(&dnssl.domains);
-        // Total option size: 8 bytes of header + data, rounded up (multiple of 8)
-        let total = 8 + encoded.len();
-        let padded = (total + 7) & !7;
-        p.push(31u8);
-        p.push(u8::try_from(padded / 8).unwrap_or(u8::MAX));
+        let start_opt = p.len();
+        p.push(31u8); // type
+        p.push(0u8);  // length placeholder
         p.extend([0u8; 2]); // reserved
         p.extend(get_dns_lifetime(dnssl.lifetime, cfg.max_interval).to_be_bytes());
-        p.extend_from_slice(&encoded);
-        p.resize(p.len() + (padded - total), 0u8); // zero padding
+
+        let start_data = p.len();
+        encode_dns_wire_into(&dnssl.domains, &mut p);
+        let data_len = p.len() - start_data;
+        let total = 8 + data_len;
+        let padded = (total + 7) & !7;
+        let pad_bytes = padded - total;
+        p.resize(p.len() + pad_bytes, 0u8); // zero padding
+        p[start_opt + 1] = u8::try_from(padded / 8).unwrap_or(u8::MAX);
     }
 
     p
@@ -164,15 +177,52 @@ fn get_dns_lifetime(configured_lifetime: Option<u32>, max_interval: std::time::D
         .unwrap_or_else(|| u32::try_from(max_interval.as_secs() * 2).unwrap_or(u32::MAX))
 }
 
-/// Zeros out the host bits of an IPv6 address based on the prefix length.
+/// Zeros out the host bits of an IPv6 address based on the prefix length using bitwise mask.
 #[must_use]
 pub fn mask_ipv6_address(addr: &Ipv6Addr, prefix_len: u8) -> Ipv6Addr {
-    let mut octets = addr.octets();
-    let host_bytes = usize::from((128 - prefix_len) / 8);
-    for i in octets.iter_mut().skip(16 - host_bytes) {
-        *i = 0;
+    if prefix_len >= 128 {
+        return *addr;
     }
-    Ipv6Addr::from(octets)
+    if prefix_len == 0 {
+        return Ipv6Addr::UNSPECIFIED;
+    }
+    let mask = !0u128 << (128 - prefix_len);
+    let ip_val = u128::from(*addr);
+    Ipv6Addr::from(ip_val & mask)
+}
+
+/// Pushes a Prefix Information Option (type 3) onto the RA packet using scalar attributes.
+#[allow(clippy::too_many_arguments)]
+pub fn push_prefix_option_raw(
+    p: &mut Vec<u8>,
+    addr: &Ipv6Addr,
+    prefix_len: u8,
+    on_link: bool,
+    autonomous: bool,
+    router_addr: bool,
+    valid_lifetime: u32,
+    preferred_lifetime: u32,
+) {
+    p.push(3u8); // type
+    p.push(4u8); // length = 4 × 8 = 32 bytes
+    p.push(prefix_len);
+
+    // Flags:
+    //   bit 7 (L): on-link
+    //   bit 6 (A): autonomous (SLAAC)
+    //   bit 5 (R): router address (RFC 3775)
+    let flags: u8 = if on_link { 0x80 } else { 0 }
+        | if autonomous { 0x40 } else { 0 }
+        | if router_addr { 0x20 } else { 0 };
+    p.push(flags);
+
+    p.extend(valid_lifetime.to_be_bytes());
+    p.extend(preferred_lifetime.to_be_bytes());
+    p.extend([0u8; 4]); // reserved
+
+    // Zero out host bits based on prefix_len.
+    let octets = mask_ipv6_address(addr, prefix_len).octets();
+    p.extend_from_slice(&octets);
 }
 
 /// Pushes a Prefix Information Option (type 3) onto the RA packet.
@@ -180,26 +230,28 @@ pub fn mask_ipv6_address(addr: &Ipv6Addr, prefix_len: u8) -> Ipv6Addr {
 /// Follows RFC 4861 §4.6.2: sets L/A/R flags, prefix length, lifetimes,
 /// and rounds the prefix to 64 bits for SLAAC compatibility.
 pub fn push_prefix_option(p: &mut Vec<u8>, addr: &Ipv6Addr, cfg: &RAPrefix) {
-    p.push(3u8); // type
-    p.push(4u8); // length = 4 × 8 = 32 bytes
-    p.push(cfg.prefix_len);
+    push_prefix_option_raw(
+        p,
+        addr,
+        cfg.prefix_len,
+        cfg.on_link,
+        cfg.autonomous,
+        cfg.router_addr,
+        cfg.valid_lifetime.as_u32(),
+        cfg.preferred_lifetime.as_u32(),
+    );
+}
 
-    // Flags:
-    //   bit 7 (L): on-link
-    //   bit 6 (A): autonomous (SLAAC)
-    //   bit 5 (R): router address (RFC 3775)
-    let flags: u8 = if cfg.on_link { 0x80 } else { 0 }
-        | if cfg.autonomous { 0x40 } else { 0 }
-        | if cfg.router_addr { 0x20 } else { 0 };
-    p.push(flags);
-
-    p.extend(cfg.valid_lifetime.as_u32().to_be_bytes());
-    p.extend(cfg.preferred_lifetime.as_u32().to_be_bytes());
-    p.extend([0u8; 4]); // reserved
-
-    // Zero out host bits based on prefix_len.
-    let octets = mask_ipv6_address(addr, cfg.prefix_len).octets();
-    p.extend_from_slice(&octets);
+/// Encodes domain names in DNS wire format (RFC 1035 §3.1) directly into an existing buffer.
+pub fn encode_dns_wire_into(domains: &[String], out: &mut Vec<u8>) {
+    for domain in domains {
+        for label in domain.trim_end_matches('.').split('.') {
+            let b = label.as_bytes();
+            out.push(u8::try_from(b.len()).unwrap_or(u8::MAX));
+            out.extend_from_slice(b);
+        }
+        out.push(0u8); // domain terminator
+    }
 }
 
 /// Encodes domain names in DNS wire format (RFC 1035 §3.1).
@@ -213,14 +265,7 @@ pub fn push_prefix_option(p: &mut Vec<u8>, addr: &Ipv6Addr, cfg: &RAPrefix) {
 #[must_use]
 pub fn encode_dns_wire(domains: &[String]) -> Vec<u8> {
     let mut out = Vec::new();
-    for domain in domains {
-        for label in domain.trim_end_matches('.').split('.') {
-            let b = label.as_bytes();
-            out.push(u8::try_from(b.len()).unwrap_or(u8::MAX));
-            out.extend_from_slice(b);
-        }
-        out.push(0u8); // domain terminator
-    }
+    encode_dns_wire_into(domains, &mut out);
     out
 }
 
@@ -237,11 +282,11 @@ pub fn encode_dns_wire(domains: &[String]) -> Vec<u8> {
 pub fn icmpv6_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, payload: &[u8]) -> u16 {
     let mut acc = 0u32;
 
-    for chunk in src.octets().chunks(2) {
-        acc += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+    for seg in src.segments() {
+        acc += u32::from(seg);
     }
-    for chunk in dst.octets().chunks(2) {
-        acc += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+    for seg in dst.segments() {
+        acc += u32::from(seg);
     }
 
     let len = u32::try_from(payload.len()).unwrap_or(u32::MAX);
@@ -251,7 +296,7 @@ pub fn icmpv6_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, payload: &[u8]) -> u16 {
 
     let iter = payload.as_chunks::<2>();
     for chunk in iter.0 {
-        acc += u32::from(u16::from_be_bytes([chunk[0], chunk[1]]));
+        acc += u32::from(u16::from_be_bytes(*chunk));
     }
     if let [tail] = iter.1 {
         acc += u32::from(*tail) << 8; // right-aligned zero padding

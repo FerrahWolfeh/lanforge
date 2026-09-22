@@ -310,20 +310,29 @@ pub fn parse_proc_net_dev<S: ::std::hash::BuildHasher>(
             continue;
         };
 
-        let fields: Vec<&str> = data.split_whitespace().collect();
-        if fields.len() < 16 {
+        let mut fields = data.split_whitespace();
+        let Some(rx_bytes_str) = fields.next() else { continue; };
+        let Some(rx_packets_str) = fields.next() else { continue; };
+        let Some(rx_errors_str) = fields.next() else { continue; };
+        let Some(rx_dropped_str) = fields.next() else { continue; };
+        // Skip 4 fields (fifo, frame, compressed, multicast)
+        if fields.nth(3).is_none() {
             continue;
         }
+        let Some(tx_bytes_str) = fields.next() else { continue; };
+        let Some(tx_packets_str) = fields.next() else { continue; };
+        let Some(tx_errors_str) = fields.next() else { continue; };
+        let Some(tx_dropped_str) = fields.next() else { continue; };
 
-        let rx_bytes = fields[0].parse::<u64>().unwrap_or(0);
-        let rx_packets = fields[1].parse::<u64>().unwrap_or(0);
-        let rx_errors = fields[2].parse::<u64>().unwrap_or(0);
-        let rx_dropped = fields[3].parse::<u64>().unwrap_or(0);
+        let rx_bytes = rx_bytes_str.parse::<u64>().unwrap_or(0);
+        let rx_packets = rx_packets_str.parse::<u64>().unwrap_or(0);
+        let rx_errors = rx_errors_str.parse::<u64>().unwrap_or(0);
+        let rx_dropped = rx_dropped_str.parse::<u64>().unwrap_or(0);
 
-        let tx_bytes = fields[8].parse::<u64>().unwrap_or(0);
-        let tx_packets = fields[9].parse::<u64>().unwrap_or(0);
-        let tx_errors = fields[10].parse::<u64>().unwrap_or(0);
-        let tx_dropped = fields[11].parse::<u64>().unwrap_or(0);
+        let tx_bytes = tx_bytes_str.parse::<u64>().unwrap_or(0);
+        let tx_packets = tx_packets_str.parse::<u64>().unwrap_or(0);
+        let tx_errors = tx_errors_str.parse::<u64>().unwrap_or(0);
+        let tx_dropped = tx_dropped_str.parse::<u64>().unwrap_or(0);
 
         let mut rx_rate_bps = 0;
         let mut tx_rate_bps = 0;
@@ -389,14 +398,19 @@ pub fn read_conntrack_stats() -> Option<ConntrackStats> {
     // Optionally parse /proc/net/stat/nf_conntrack if readable
     if let Ok(stat_content) = std::fs::read_to_string("/proc/net/stat/nf_conntrack") {
         for line in stat_content.lines().skip(1) {
-            let parts: Vec<&str> = line.split_whitespace().collect();
+            let mut parts = [""; 12];
+            let mut count = 0;
+            for (slot, part) in parts.iter_mut().zip(line.split_whitespace()) {
+                *slot = part;
+                count += 1;
+            }
             // entries: cpu, found, invalid, ignore, insert, insert_failed, drop, early_drop, error, search, new...
-            if parts.len() >= 10 {
+            if count >= 10 {
                 let parse_hex = |s: &str| u64::from_str_radix(s, 16).unwrap_or(0);
                 stats.invalid = stats.invalid.saturating_add(parse_hex(parts[1]));
                 stats.drop = stats.drop.saturating_add(parse_hex(parts[5]));
                 stats.search = stats.search.saturating_add(parse_hex(parts[8]));
-                if parts.len() >= 11 {
+                if count >= 11 {
                     stats.new = stats.new.saturating_add(parse_hex(parts[9]));
                 }
             }

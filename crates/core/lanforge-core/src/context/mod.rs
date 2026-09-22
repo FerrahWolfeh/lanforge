@@ -515,6 +515,15 @@ impl LanforgeContext {
         }
     }
 
+    /// Creates a dedicated `ServiceHandle` subscribing only to traffic events.
+    #[must_use]
+    pub fn service_handle_traffic(&self) -> ServiceHandle {
+        ServiceHandle {
+            rx: self.inner.bus.subscribe_traffic(),
+            ctx: self.clone(),
+        }
+    }
+
     /// Registers a dynamic port requirement for an internal service (e.g. HTTP `WebUI`, DNS, DHCP).
     ///
     /// Stores the port in context and broadcasts a `FirewallEvent::PortOpenRequested` on the bus.

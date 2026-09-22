@@ -7,7 +7,7 @@ use frame::{
 };
 use lanforge_types::identifiers::MacAddr;
 use nix::sys::socket::{AddressFamily, SockFlag, SockProtocol, SockType, socket};
-use std::ffi::CString;
+use smallvec::{SmallVec, smallvec};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::time::Duration;
 use tokio::io::unix::AsyncFd;
@@ -127,14 +127,14 @@ async fn exchange_padi(
     padi_timeout_secs: u64,
     service_name: Option<&str>,
     ac_name_filter: Option<&str>,
-) -> Result<(MacAddr, Option<String>, Option<Vec<u8>>), PppoeError> {
+) -> Result<(MacAddr, Option<String>, Option<SmallVec<[u8; 64]>>), PppoeError> {
     let service_name_bytes = service_name.map_or_else(|| &[] as &[u8], str::as_bytes);
     let padi_frame = PppoeDiscoveryFrame {
         dst_mac: MacAddr([0xff; 6]),
         src_mac: local_mac,
         code: CODE_PADI,
         session_id: 0,
-        tags: vec![
+        tags: smallvec![
             Tag {
                 tag_type: TAG_SERVICE_NAME,
                 value: service_name_bytes,
@@ -181,7 +181,7 @@ async fn exchange_padi(
                             let mut frame_ac_cookie = None;
                             for tag in &frame.tags {
                                 if tag.tag_type == TAG_AC_COOKIE {
-                                    frame_ac_cookie = Some(tag.value.to_vec());
+                                    frame_ac_cookie = Some(SmallVec::from_slice(tag.value));
                                 } else if tag.tag_type == TAG_AC_NAME {
                                     frame_ac_name = std::str::from_utf8(tag.value)
                                         .ok()
@@ -229,7 +229,7 @@ async fn exchange_padr(
     service_name: Option<&str>,
 ) -> Result<u16, PppoeError> {
     let service_name_bytes = service_name.map_or_else(|| &[] as &[u8], str::as_bytes);
-    let mut padr_tags = vec![
+    let mut padr_tags = smallvec![
         Tag {
             tag_type: TAG_SERVICE_NAME,
             value: service_name_bytes,
@@ -309,7 +309,7 @@ pub fn send_padt(
         src_mac: wan_mac,
         code: CODE_PADT,
         session_id,
-        tags: vec![],
+        tags: smallvec![],
     };
 
     let raw_fd = socket(
@@ -319,9 +319,13 @@ pub fn send_padt(
         Some(SockProtocol::EthAll),
     )?;
 
-    let c_ifname = CString::new(ifname)
-        .map_err(|_| PppoeError::NegotiationFailed("Invalid interface name for CString".into()))?;
-    let ifindex = unsafe { libc::if_nametoindex(c_ifname.as_ptr()) };
+    let mut ifname_buf = [0u8; libc::IF_NAMESIZE];
+    let if_bytes = ifname.as_bytes();
+    if if_bytes.len() >= libc::IF_NAMESIZE || if_bytes.contains(&0) {
+        return Err(PppoeError::NegotiationFailed("Invalid interface name".into()));
+    }
+    ifname_buf[..if_bytes.len()].copy_from_slice(if_bytes);
+    let ifindex = unsafe { libc::if_nametoindex(ifname_buf.as_ptr().cast()) };
     if ifindex == 0 {
         return Err(PppoeError::NegotiationFailed("Interface not found".into()));
     }
