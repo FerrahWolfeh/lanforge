@@ -110,5 +110,41 @@ async fn test_tftp_path_traversal_prevention() {
     let error_code = u16::from_be_bytes([buf[2], buf[3]]);
     assert_eq!(error_code, 2, "Expected Access Violation (2) error code");
 
+    // --- Part C: Verify Option Negotiation (RFC 2347/2348: tsize and blksize) ---
+    let mut opt_packet = Vec::new();
+    opt_packet.extend_from_slice(&1u16.to_be_bytes()); // RRQ
+    opt_packet.extend_from_slice(b"valid.txt\0octet\0blksize\01024\0tsize\00\0");
+    client.send_to(&opt_packet, tftp_addr).await.unwrap();
+
+    let (n3, server_session_addr3) =
+        tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
+            .await
+            .expect("Timeout waiting for TFTP OACK")
+            .unwrap();
+
+    let opcode = u16::from_be_bytes([buf[0], buf[1]]);
+    assert_eq!(opcode, 6, "Expected OACK opcode (6)");
+    let oack_str = String::from_utf8_lossy(&buf[2..n3]);
+    assert!(oack_str.contains("blksize"));
+    assert!(oack_str.contains("tsize"));
+
+    // Send ACK for block 0 to acknowledge OACK
+    let mut ack0 = Vec::new();
+    ack0.extend_from_slice(&4u16.to_be_bytes());
+    ack0.extend_from_slice(&0u16.to_be_bytes());
+    client.send_to(&ack0, server_session_addr3).await.unwrap();
+
+    // Now server should send DATA block 1
+    let (n4, _) = tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
+        .await
+        .expect("Timeout waiting for DATA block 1 after OACK")
+        .unwrap();
+
+    let opcode = u16::from_be_bytes([buf[0], buf[1]]);
+    assert_eq!(opcode, 3, "Expected DATA opcode (3) after OACK");
+    let block = u16::from_be_bytes([buf[2], buf[3]]);
+    assert_eq!(block, 1, "Expected block number 1");
+    assert_eq!(&buf[4..n4], b"Hello Inside TFTP!");
+
     ctx.terminate();
 }

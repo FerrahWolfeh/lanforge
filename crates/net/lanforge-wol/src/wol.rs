@@ -67,7 +67,9 @@ pub fn send_wol_magic_packet(
     // Bind to the specific interface if possible (Linux specific)
     #[cfg(target_os = "linux")]
     {
-        if let Err(e) = socket.bind_device(Some(interface.as_bytes())) {
+        if !interface.is_empty()
+            && let Err(e) = socket.bind_device(Some(interface.as_bytes()))
+        {
             tracing::warn!("Failed to bind to device {interface}: {e}");
         }
     }

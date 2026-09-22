@@ -34,7 +34,7 @@ impl<'a> DnsPipelineRequest<'a> {
         src_ip: IpAddr,
         protocol: TransportProtocol,
     ) -> Self {
-        let domain = Arc::from(question.to_domain_lowercase());
+        let domain = question.to_domain_lowercase_arc();
         Self {
             data,
             header,

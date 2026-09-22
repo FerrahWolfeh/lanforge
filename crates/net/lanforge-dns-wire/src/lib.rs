@@ -258,18 +258,42 @@ impl<'a> WireQuestion<'a> {
     /// Returns the domain name in standard dot-separated representation, converted to lowercase in a single pass.
     #[must_use]
     pub fn to_domain_lowercase(&self) -> String {
-        let mut domain = String::with_capacity(64);
+        let mut domain = String::with_capacity(self.qname_end.saturating_sub(12));
         for label in self.labels() {
             if !domain.is_empty() {
                 domain.push('.');
             }
-            if let Ok(s) = std::str::from_utf8(label) {
-                for b in s.bytes() {
-                    domain.push(b.to_ascii_lowercase() as char);
-                }
+            for &b in label {
+                domain.push(b.to_ascii_lowercase() as char);
             }
         }
         domain
+    }
+
+    /// Returns the domain name in standard dot-separated lowercase representation wrapped in `Arc<str>`,
+    /// constructed directly on stack without intermediate heap `String` allocation.
+    #[must_use]
+    pub fn to_domain_lowercase_arc(&self) -> Arc<str> {
+        let mut buf = [0u8; 256];
+        let mut pos = 0;
+        let mut first = true;
+        for label in self.labels() {
+            if !first && pos < buf.len() {
+                buf[pos] = b'.';
+                pos += 1;
+            }
+            first = false;
+            let take = label.len().min(buf.len().saturating_sub(pos));
+            for i in 0..take {
+                buf[pos + i] = label[i].to_ascii_lowercase();
+            }
+            pos += take;
+        }
+        if let Ok(s) = std::str::from_utf8(&buf[..pos]) {
+            Arc::from(s)
+        } else {
+            Arc::from(self.to_domain_lowercase())
+        }
     }
 }
 
@@ -440,6 +464,17 @@ pub struct PtrResponseArgs<'a> {
 }
 
 impl WireResponseWriter {
+    /// Appends dot-separated domain labels to a buffer in DNS wire format without terminating with 0.
+    #[inline]
+    pub fn write_domain_labels(resp: &mut Vec<u8>, domain: &str) {
+        for label in domain.split('.') {
+            if !label.is_empty() {
+                resp.push(u8::try_from(label.len()).unwrap_or(u8::MAX));
+                resp.extend_from_slice(label.as_bytes());
+            }
+        }
+    }
+
     /// Writes a minimal error response (REFUSED, FORMERR, etc) into the provided buffer.
     pub fn write_error_response(
         query_data: &[u8],
@@ -595,40 +630,16 @@ impl WireResponseWriter {
         ];
         resp.extend_from_slice(&ans_hdr);
 
-        // RDLEN and RDATA
-        // Pre-calculate RDATA length to avoid extra Vec allocation
-        let mut rdlen = 0u16;
-        for label in args.host.split('.') {
-            if label.is_empty() {
-                continue;
-            }
-            rdlen += 1 + u16::try_from(label.len()).unwrap_or(u16::MAX);
-        }
-        for label in args.domain.split('.') {
-            if label.is_empty() {
-                continue;
-            }
-            rdlen += 1 + u16::try_from(label.len()).unwrap_or(u16::MAX);
-        }
-        rdlen += 1; // Null terminator
-
-        resp.extend_from_slice(&rdlen.to_be_bytes());
-
-        for label in args.host.split('.') {
-            if label.is_empty() {
-                continue;
-            }
-            resp.push(u8::try_from(label.len()).unwrap_or(u8::MAX));
-            resp.extend_from_slice(label.as_bytes());
-        }
-        for label in args.domain.split('.') {
-            if label.is_empty() {
-                continue;
-            }
-            resp.push(u8::try_from(label.len()).unwrap_or(u8::MAX));
-            resp.extend_from_slice(label.as_bytes());
-        }
+        // RDLEN and RDATA in a single pass
+        let rdlen_pos = resp.len();
+        resp.extend_from_slice(&[0, 0]); // Placeholder for RDLEN
+        Self::write_domain_labels(resp, args.host);
+        Self::write_domain_labels(resp, args.domain);
         resp.push(0); // Null terminator
+        let rdlen = u16::try_from(resp.len() - rdlen_pos - 2).unwrap_or(u16::MAX);
+        let rdlen_bytes = rdlen.to_be_bytes();
+        resp[rdlen_pos] = rdlen_bytes[0];
+        resp[rdlen_pos + 1] = rdlen_bytes[1];
 
         // 4. EDNS
         if let Some(opt) = args.edns {
@@ -679,25 +690,15 @@ impl WireResponseWriter {
         ];
         resp.extend_from_slice(&ans_hdr);
 
-        // RDLEN and RDATA
-        let mut rdlen = 0u16;
-        for label in target.split('.') {
-            if label.is_empty() {
-                continue;
-            }
-            rdlen += 1 + u16::try_from(label.len()).unwrap_or(u16::MAX);
-        }
-        rdlen += 1; // Null terminator
-        resp.extend_from_slice(&rdlen.to_be_bytes());
-
-        for label in target.split('.') {
-            if label.is_empty() {
-                continue;
-            }
-            resp.push(u8::try_from(label.len()).unwrap_or(u8::MAX));
-            resp.extend_from_slice(label.as_bytes());
-        }
-        resp.push(0);
+        // RDLEN and RDATA in a single pass
+        let rdlen_pos = resp.len();
+        resp.extend_from_slice(&[0, 0]); // Placeholder for RDLEN
+        Self::write_domain_labels(resp, target);
+        resp.push(0); // Null terminator
+        let rdlen = u16::try_from(resp.len() - rdlen_pos - 2).unwrap_or(u16::MAX);
+        let rdlen_bytes = rdlen.to_be_bytes();
+        resp[rdlen_pos] = rdlen_bytes[0];
+        resp[rdlen_pos + 1] = rdlen_bytes[1];
 
         // 4. EDNS
         if let Some(opt) = edns {
@@ -752,18 +753,9 @@ impl WireResponseWriter {
         ];
         resp.extend_from_slice(&ans_hdr);
 
-        // RDLEN and RDATA
-        let mut target_len = 0u16;
-        for label in target.split('.') {
-            if label.is_empty() {
-                continue;
-            }
-            target_len += 1 + u16::try_from(label.len()).unwrap_or(u16::MAX);
-        }
-        target_len += 1; // Null terminator
-
-        let rdlen = 6 + target_len;
-        resp.extend_from_slice(&rdlen.to_be_bytes());
+        // RDLEN and RDATA in a single pass
+        let rdlen_pos = resp.len();
+        resp.extend_from_slice(&[0, 0]); // Placeholder for RDLEN
 
         // RDATA: Priority (2 bytes), Weight (2 bytes), Port (2 bytes), Target (variable)
         let port_bytes = port.to_be_bytes();
@@ -774,14 +766,13 @@ impl WireResponseWriter {
         ];
         resp.extend_from_slice(&srv_fixed);
 
-        for label in target.split('.') {
-            if label.is_empty() {
-                continue;
-            }
-            resp.push(u8::try_from(label.len()).unwrap_or(u8::MAX));
-            resp.extend_from_slice(label.as_bytes());
-        }
+        Self::write_domain_labels(resp, target);
         resp.push(0); // Null terminator
+
+        let rdlen = u16::try_from(resp.len() - rdlen_pos - 2).unwrap_or(u16::MAX);
+        let rdlen_bytes = rdlen.to_be_bytes();
+        resp[rdlen_pos] = rdlen_bytes[0];
+        resp[rdlen_pos + 1] = rdlen_bytes[1];
 
         // 4. EDNS
         if let Some(opt) = edns {
@@ -1127,13 +1118,7 @@ impl WireEncoder {
     }
 
     pub fn encode_name(&mut self, name: &str) {
-        for label in name.split('.') {
-            if label.is_empty() {
-                continue;
-            }
-            self.buf.push(u8::try_from(label.len()).unwrap_or(u8::MAX));
-            self.buf.extend_from_slice(label.as_bytes());
-        }
+        WireResponseWriter::write_domain_labels(&mut self.buf, name);
         self.buf.push(0);
     }
 
@@ -1381,6 +1366,7 @@ mod tests {
             b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x04Host\x03LAN\x00\x00\x01\x00\x01";
         let question = WireQuestion::parse(query_data).expect("Should parse question");
         assert_eq!(question.to_domain_lowercase(), "host.lan");
+        assert_eq!(&*question.to_domain_lowercase_arc(), "host.lan");
     }
 
     #[test]

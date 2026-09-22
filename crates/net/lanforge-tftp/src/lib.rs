@@ -192,6 +192,7 @@ async fn handle_packet(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn handle_rrq(
     socket: Arc<UdpSocket>,
     src: SocketAddr,
@@ -224,23 +225,68 @@ async fn handle_rrq(
         return send_error(&socket, src, 2, "Access violation").await;
     }
 
-    if !path.is_file() {
-        return send_error(&socket, src, 1, "File not found").await;
+    let meta = match tokio::fs::metadata(&path).await {
+        Ok(m) if m.is_file() => m,
+        _ => return send_error(&socket, src, 1, "File not found").await,
+    };
+    let file_len = meta.len();
+
+    // Option negotiation (RFC 2347, RFC 2348)
+    let _mode = parts.next();
+    let mut requested_blksize = None;
+    let mut requested_tsize = false;
+
+    while let Some(opt_name_bytes) = parts.next() {
+        let Some(opt_val_bytes) = parts.next() else { break; };
+        if let (Ok(name), Ok(val)) = (
+            std::str::from_utf8(opt_name_bytes),
+            std::str::from_utf8(opt_val_bytes),
+        ) {
+            if name.eq_ignore_ascii_case("blksize") {
+                if let Ok(bs) = val.parse::<u16>() {
+                    let max_bs = cfg.block_size.clamp(512, 1468);
+                    requested_blksize = Some(bs.clamp(512, max_bs));
+                }
+            } else if name.eq_ignore_ascii_case("tsize") {
+                requested_tsize = true;
+            }
+        }
     }
 
-    info!("TFTP: Sending {filename} to {src}");
+    info!("TFTP: Sending {filename} ({file_len} bytes) to {src}");
+
+    // TFTP uses a new port for the transfer (TID).
+    // Normalize IPv4-mapped IPv6 address to prevent v6-only routing failure.
+    let (session_socket, target_addr) = match src {
+        SocketAddr::V6(v6) => {
+            if let Some(v4) = v6.ip().to_ipv4_mapped() {
+                let v4_addr = SocketAddr::new(std::net::IpAddr::V4(v4), v6.port());
+                (UdpSocket::bind("0.0.0.0:0").await?, v4_addr)
+            } else {
+                (UdpSocket::bind("[::]:0").await?, src)
+            }
+        }
+        SocketAddr::V4(_) => (UdpSocket::bind("0.0.0.0:0").await?, src),
+    };
+
+    let block_size = requested_blksize.unwrap_or(cfg.block_size) as usize;
+
+    if requested_blksize.is_some() || requested_tsize {
+        handle_oack_handshake(
+            &session_socket,
+            target_addr,
+            requested_blksize,
+            requested_tsize,
+            file_len,
+            cfg,
+        )
+        .await?;
+    }
 
     let mut file = File::open(path).await?;
     let mut block_num: u16 = 1;
-    let block_size = cfg.block_size as usize;
     let mut packet = vec![0u8; 4 + block_size];
     packet[0..2].copy_from_slice(&3u16.to_be_bytes()); // Opcode 3 (DATA)
-
-    // TFTP uses a new port for the transfer (TID)
-    let session_socket = match src {
-        SocketAddr::V6(_) => UdpSocket::bind("[::]:0").await?,
-        SocketAddr::V4(_) => UdpSocket::bind("0.0.0.0:0").await?,
-    };
 
     loop {
         packet[2..4].copy_from_slice(&block_num.to_be_bytes());
@@ -249,7 +295,7 @@ async fn handle_rrq(
 
         let mut retries = 0;
         loop {
-            session_socket.send_to(packet_slice, src).await?;
+            session_socket.send_to(packet_slice, target_addr).await?;
 
             // Wait for ACK
             let mut ack_buf = [0u8; 4];
@@ -269,7 +315,7 @@ async fn handle_rrq(
                 if retries > cfg.max_retries {
                     return Err(TftpError::Protocol("Transfer timed out".into()));
                 }
-                debug!("TFTP: Retrying block {block_num} to {src}");
+                debug!("TFTP: Retrying block {block_num} to {target_addr}");
             }
         }
 
@@ -280,6 +326,51 @@ async fn handle_rrq(
     }
 
     Ok(())
+}
+
+async fn handle_oack_handshake(
+    session_socket: &UdpSocket,
+    target_addr: SocketAddr,
+    requested_blksize: Option<u16>,
+    requested_tsize: bool,
+    file_len: u64,
+    cfg: &TftpConfig,
+) -> Result<(), TftpError> {
+    use std::io::Write;
+    let mut oack = Vec::with_capacity(64);
+    oack.extend_from_slice(&6u16.to_be_bytes()); // Opcode 6 (OACK)
+    if let Some(bs) = requested_blksize {
+        oack.extend_from_slice(b"blksize\0");
+        let _ = write!(&mut oack, "{bs}\0");
+    }
+    if requested_tsize {
+        oack.extend_from_slice(b"tsize\0");
+        let _ = write!(&mut oack, "{file_len}\0");
+    }
+
+    let mut oack_retries = 0;
+    loop {
+        session_socket.send_to(&oack, target_addr).await?;
+        let mut ack_buf = [0u8; 4];
+        if let Ok(Ok((4, _))) = timeout(
+            Duration::from_secs(cfg.timeout),
+            session_socket.recv_from(&mut ack_buf),
+        )
+        .await
+        {
+            let ack_opcode = u16::from_be_bytes([ack_buf[0], ack_buf[1]]);
+            let ack_block = u16::from_be_bytes([ack_buf[2], ack_buf[3]]);
+            if ack_opcode == 4 && ack_block == 0 {
+                return Ok(()); // Client acknowledged OACK with block 0!
+            }
+        } else {
+            oack_retries += 1;
+            if oack_retries > cfg.max_retries {
+                return Err(TftpError::Protocol("OACK transfer timed out".into()));
+            }
+            debug!("TFTP: Retrying OACK to {target_addr}");
+        }
+    }
 }
 
 fn bind_udp_dual_stack(addr: SocketAddr) -> Result<tokio::net::UdpSocket, CoreError> {
