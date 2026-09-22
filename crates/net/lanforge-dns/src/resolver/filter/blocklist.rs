@@ -97,7 +97,7 @@ impl DiskBlocklist {
         Ok(Self {
             bloom,
             lru: Arc::new(Mutex::new(LruCache::new(
-                NonZeroUsize::new(lru_cap).unwrap(),
+                NonZeroUsize::new(lru_cap.max(1)).unwrap(),
             ))),
             fst,
         })
@@ -114,16 +114,15 @@ impl DiskBlocklist {
             }
         }
 
-        // 2. Check Bloom filter
+        // 2. Fast rejection via Bloom filter (zero allocations, zero lock contention, zero false negatives)
         if !self.bloom.check(domain) {
-            self.lru.lock().put(Box::from(domain), false);
             return false;
         }
 
         // 3. FST Lookup
         let result = self.fst.contains(domain);
 
-        // 4. Update LRU
+        // 4. Update LRU for confirmed hits and Bloom false positives
         self.lru.lock().put(Box::from(domain), result);
 
         result

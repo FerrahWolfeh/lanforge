@@ -4,7 +4,7 @@ use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_types::device::TransientOrigin;
 use lanforge_types::network::dns::TransportProtocol;
 use lanforge_types::network::dns::{DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType};
-use lanforge_types::network::{Hostname, HostnameOrigin, IpSubnet};
+use lanforge_types::network::{Hostname, HostnameOrigin};
 use lanforge_types::update::{DeviceUpdate, TransientHostUpdate};
 
 use crate::error::DnsError;
@@ -16,13 +16,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 /// Represents a DNS query request passing through the pipeline.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct DnsPipelineRequest<'a> {
     pub data: &'a [u8],
     pub header: &'a WireHeader<'a>,
     pub question: &'a WireQuestion<'a>,
     pub src_ip: IpAddr,
     pub protocol: TransportProtocol,
+    pub domain: Arc<str>,
 }
 
 impl<'a> DnsPipelineRequest<'a> {
@@ -33,12 +34,14 @@ impl<'a> DnsPipelineRequest<'a> {
         src_ip: IpAddr,
         protocol: TransportProtocol,
     ) -> Self {
+        let domain = Arc::from(question.to_domain_lowercase());
         Self {
             data,
             header,
             question,
             src_ip: src_ip.to_canonical(),
             protocol,
+            domain,
         }
     }
 }
@@ -82,7 +85,7 @@ impl Pipeline {
         handle_reverse_dns_trigger(ctx, req.src_ip);
 
         for m in &self.middlewares {
-            if m.run(ctx, req, resp).await? {
+            if m.run(ctx, req.clone(), resp).await? {
                 return Ok(());
             }
         }
@@ -91,23 +94,25 @@ impl Pipeline {
 }
 
 fn classify_transient_origin(ip: IpAddr) -> TransientOrigin {
-    let tailscale_v4 = "100.64.0.0/10".parse::<IpSubnet>().unwrap();
-    if tailscale_v4.contains(ip) {
-        return TransientOrigin::Tailscale;
-    }
-    if let IpAddr::V6(v6) = ip {
-        let octets = v6.octets();
-        if octets[0] == 0xfd
-            && octets[1] == 0x7a
-            && octets[2] == 0x11
-            && octets[3] == 0x5c
-            && octets[4] == 0xa1
-            && octets[5] == 0xe0
-        {
-            return TransientOrigin::Tailscale;
+    match ip {
+        IpAddr::V4(v4) => {
+            // 100.64.0.0/10 (Tailscale CGNAT space: 100.64.0.0 - 100.127.255.255)
+            if (u32::from(v4) & 0xFFC0_0000) == 0x6440_0000 {
+                TransientOrigin::Tailscale
+            } else {
+                TransientOrigin::LocalPtr
+            }
+        }
+        IpAddr::V6(v6) => {
+            let octets = v6.octets();
+            // fd7a:115c:a1e0::/48 (Tailscale IPv6 ULA)
+            if octets[0..6] == [0xfd, 0x7a, 0x11, 0x5c, 0xa1, 0xe0] {
+                TransientOrigin::Tailscale
+            } else {
+                TransientOrigin::LocalPtr
+            }
         }
     }
-    TransientOrigin::LocalPtr
 }
 
 fn handle_reverse_dns_trigger(ctx: &DnsContext, client_ip: IpAddr) {

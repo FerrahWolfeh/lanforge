@@ -36,11 +36,7 @@ fn cache_hit_and_ttl_scrubbing() {
     let original_ttl: u32 = 60;
     resp_data[ttl_offset..ttl_offset + 4].copy_from_slice(&original_ttl.to_be_bytes());
 
-    let key = CacheKey {
-        qname: question.qname_raw().to_vec(),
-        qtype: question.qtype(),
-        qclass: question.qclass(),
-    };
+    let key = CacheKey::from_question(&question);
 
     // 3. Insert into cache
     cache.insert(
@@ -132,11 +128,7 @@ async fn query_logging_ring_buffer() {
 #[test]
 fn cache_expiration() {
     let cache = DnsCache::new(10, 30, None);
-    let key = CacheKey {
-        qname: b"\x04test\x00".to_vec(),
-        qtype: 1,
-        qclass: 1,
-    };
+    let key = CacheKey::new(b"\x04test\x00", 1, 1);
 
     // Insert with very short TTL
     cache.insert(key.clone(), vec![0; 64], vec![], 1, false);
@@ -166,11 +158,7 @@ fn cache_eviction_tracking() {
 
     // Insert 3 unique entries. Since capacity is 2, inserting the 3rd one should trigger an eviction.
     for i in 1..=3 {
-        let key = CacheKey {
-            qname: format!("\x05test{i}\x00").into_bytes(),
-            qtype: 1,
-            qclass: 1,
-        };
+        let key = CacheKey::new(format!("\x05test{i}\x00").into_bytes(), 1, 1);
         cache.insert(key, vec![0; 64], vec![], 30, false);
     }
 

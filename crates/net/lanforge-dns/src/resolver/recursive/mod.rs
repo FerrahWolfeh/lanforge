@@ -15,11 +15,12 @@ use crate::error::DnsError;
 use crate::resolver::recursive::cache::CacheKey;
 use crate::utils::health::{UpstreamHealth, UpstreamStatus};
 use lanforge_dns_wire::{WireHeader, WireQuestion, WireResponseScanner};
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
@@ -142,7 +143,7 @@ impl UpstreamManager {
                         if len >= 2 {
                             let id = u16::from_be_bytes([buf[0], buf[1]]);
                             let tx = {
-                                let mut map = p.lock().unwrap();
+                                let mut map = p.lock();
                                 map.remove(&id)
                             };
                             if let Some(tx) = tx {
@@ -175,7 +176,7 @@ impl UpstreamManager {
                 }
             }
         });
-        *mgr.rx_handle.lock().unwrap() = Some(rx_task);
+        *mgr.rx_handle.lock() = Some(rx_task);
 
         let weak_mgr = Arc::downgrade(&mgr);
         let probe_task = tokio::spawn(async move {
@@ -203,7 +204,7 @@ impl UpstreamManager {
                 }
             }
         });
-        *mgr.probe_handle.lock().unwrap() = Some(probe_task);
+        *mgr.probe_handle.lock() = Some(probe_task);
 
         Ok(mgr)
     }
@@ -271,11 +272,7 @@ impl UpstreamManager {
         let scanner = WireResponseScanner::new(&final_bytes);
         let (offsets, min_ttl) = scanner.scan_ttls();
 
-        let key = CacheKey {
-            qname: question.qname_raw().to_vec(),
-            qtype: question.qtype(),
-            qclass: question.qclass(),
-        };
+        let key = CacheKey::from_question(&question);
 
         // Only cache NOERROR (0) and NXDOMAIN (3)
         if let Some(resp_header) = WireHeader::parse(&final_bytes) {
@@ -291,14 +288,27 @@ impl UpstreamManager {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn forward_udp(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>, DnsError> {
         let internal_id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let mut data_to_send = data.to_vec();
+        let mut data_to_send = smallvec::SmallVec::<[u8; 512]>::from_slice(data);
         WireHeader::patch_id(&mut data_to_send, internal_id);
 
         let (tx, rx) = oneshot::channel();
-        {
-            let mut map = self.pending.lock().unwrap();
-            map.insert(internal_id, tx);
+        self.pending.lock().insert(internal_id, tx);
+
+        // RAII guard to ensure internal_id is always removed from pending map
+        // on timeout, cancellation, or socket send failure.
+        struct PendingGuard<'a> {
+            pending: &'a Mutex<HashMap<u16, Sender<Vec<u8>>>>,
+            id: u16,
         }
+        impl<'a> Drop for PendingGuard<'a> {
+            fn drop(&mut self) {
+                self.pending.lock().remove(&self.id);
+            }
+        }
+        let _guard = PendingGuard {
+            pending: &self.pending,
+            id: internal_id,
+        };
 
         self.socket.send_to(&data_to_send, upstream).await?;
 
@@ -319,10 +329,7 @@ impl UpstreamManager {
                 }
             }
             Ok(Err(_)) => Err(DnsError::ChannelClosed),
-            Err(_) => {
-                self.pending.lock().unwrap().remove(&internal_id);
-                Err(DnsError::UpstreamTimeout)
-            }
+            Err(_) => Err(DnsError::UpstreamTimeout),
         }
     }
 
@@ -514,14 +521,10 @@ impl UpstreamManager {
 
 impl Drop for UpstreamManager {
     fn drop(&mut self) {
-        if let Ok(mut rx) = self.rx_handle.lock()
-            && let Some(h) = rx.take()
-        {
+        if let Some(h) = self.rx_handle.lock().take() {
             h.abort();
         }
-        if let Ok(mut probe) = self.probe_handle.lock()
-            && let Some(h) = probe.take()
-        {
+        if let Some(h) = self.probe_handle.lock().take() {
             h.abort();
         }
     }

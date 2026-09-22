@@ -30,10 +30,10 @@ type InFlightTx = Sender<Result<(Vec<u8>, bool, bool), String>>;
 pub struct ConditionalRoute {
     pub domain: String,
     pub labels: Vec<Vec<u8>>,
-    pub tiers: Vec<Vec<Arc<UpstreamManager>>>,
+    pub tiers: Arc<[Vec<Arc<UpstreamManager>>]>,
 }
 
-fn group_by_tier(upstreams: Vec<Arc<UpstreamManager>>) -> Vec<Vec<Arc<UpstreamManager>>> {
+fn group_by_tier(upstreams: Vec<Arc<UpstreamManager>>) -> Arc<[Vec<Arc<UpstreamManager>>]> {
     let max_tier = upstreams
         .iter()
         .map(|m| m.target.protocol.tier() as usize)
@@ -44,7 +44,7 @@ fn group_by_tier(upstreams: Vec<Arc<UpstreamManager>>) -> Vec<Vec<Arc<UpstreamMa
     for mgr in upstreams {
         tiers[mgr.target.protocol.tier() as usize].push(mgr);
     }
-    tiers
+    Arc::from(tiers)
 }
 
 fn normalize_domain(d: &str) -> String {
@@ -64,10 +64,10 @@ fn domain_to_labels(d: &str) -> Vec<Vec<u8>> {
 pub struct UpstreamStrategy {
     pub mode: UpstreamMode,
     /// Upstreams grouped by protocol tier. Index 0 = tier 0 (TLS/QUIC), etc.
-    tiers: parking_lot::RwLock<Vec<Vec<Arc<UpstreamManager>>>>,
+    tiers: parking_lot::RwLock<Arc<[Vec<Arc<UpstreamManager>>]>>,
     /// Conditional split-DNS domain routes sorted descending by label length.
-    conditional_routes: parking_lot::RwLock<Vec<Arc<ConditionalRoute>>>,
-    fallback_upstreams: parking_lot::RwLock<Vec<Arc<UpstreamManager>>>,
+    conditional_routes: parking_lot::RwLock<Arc<[Arc<ConditionalRoute>]>>,
+    fallback_upstreams: parking_lot::RwLock<Arc<[Arc<UpstreamManager>]>>,
     pub rr_index: AtomicUsize,
     in_flight: DashMap<CacheKey, InFlightTx>,
 }
@@ -77,9 +77,9 @@ impl UpstreamStrategy {
     pub fn new(mode: UpstreamMode, upstreams: Vec<Arc<UpstreamManager>>) -> Self {
         let strategy = Self {
             mode,
-            tiers: parking_lot::RwLock::new(Vec::new()),
-            conditional_routes: parking_lot::RwLock::new(Vec::new()),
-            fallback_upstreams: parking_lot::RwLock::new(Vec::new()),
+            tiers: parking_lot::RwLock::new(Arc::from(Vec::<Vec<Arc<UpstreamManager>>>::new())),
+            conditional_routes: parking_lot::RwLock::new(Arc::from(Vec::<Arc<ConditionalRoute>>::new())),
+            fallback_upstreams: parking_lot::RwLock::new(Arc::from(Vec::<Arc<UpstreamManager>>::new())),
             rr_index: AtomicUsize::new(0),
             in_flight: DashMap::new(),
         };
@@ -115,22 +115,27 @@ impl UpstreamStrategy {
 
         // Sort descending by number of labels (longest suffix match wins)
         routes.sort_by_key(|a| std::cmp::Reverse(a.labels.len()));
-        *self.conditional_routes.write() = routes;
+        *self.conditional_routes.write() = Arc::from(routes);
     }
 
     pub fn replace_fallback_upstreams(&self, fallbacks: Vec<Arc<UpstreamManager>>) {
-        *self.fallback_upstreams.write() = fallbacks;
+        *self.fallback_upstreams.write() = Arc::from(fallbacks);
     }
 
     /// Flat iterator of all upstreams (both global and domain-specific).
     pub fn all_upstreams(&self) -> impl Iterator<Item = Arc<UpstreamManager>> {
-        let tiers = self.tiers.read().clone();
-        let global_iter = tiers.into_iter().flatten();
-        let conditionals = self.conditional_routes.read().clone();
-        let cond_iter = conditionals
-            .into_iter()
-            .flat_map(|r| r.tiers.clone().into_iter().flatten());
-        global_iter.chain(cond_iter)
+        let mut list = Vec::new();
+        let tiers = Arc::clone(&*self.tiers.read());
+        for tier in tiers.iter() {
+            list.extend(tier.iter().cloned());
+        }
+        let conditionals = Arc::clone(&*self.conditional_routes.read());
+        for route in conditionals.iter() {
+            for tier in route.tiers.iter() {
+                list.extend(tier.iter().cloned());
+            }
+        }
+        list.into_iter()
     }
 
     /// Returns true if no upstreams are configured anywhere.
@@ -227,17 +232,18 @@ impl UpstreamStrategy {
 
     pub async fn resolve(&self, data: &[u8]) -> Result<(Vec<u8>, bool, bool), DnsError> {
         let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
-        let mut qname = question.qname_raw().to_vec();
-        qname.make_ascii_lowercase();
-        let key = CacheKey {
-            qname,
-            qtype: question.qtype(),
-            qclass: question.qclass(),
+        let key = CacheKey::from_question(&question);
+
+        let (mut rx, is_leader) = match self.in_flight.entry(key.clone()) {
+            dashmap::Entry::Occupied(occ) => (Some(occ.get().subscribe()), false),
+            dashmap::Entry::Vacant(vac) => {
+                let (tx, _) = tokio::sync::broadcast::channel(1);
+                vac.insert(tx);
+                (None, true)
+            }
         };
 
-        let rx = { self.in_flight.get(&key).map(|tx| tx.subscribe()) };
-
-        if let Some(mut rx) = rx {
+        if let Some(ref mut rx) = rx {
             match rx.recv().await {
                 Ok(Ok(res)) => return Ok(res),
                 Ok(Err(e)) => return Err(DnsError::Generic(e)),
@@ -247,17 +253,33 @@ impl UpstreamStrategy {
             }
         }
 
-        let (tx, _) = tokio::sync::broadcast::channel(1);
-        self.in_flight.insert(key.clone(), tx.clone());
+        struct InFlightGuard<'a> {
+            in_flight: &'a DashMap<CacheKey, InFlightTx>,
+            key: Option<CacheKey>,
+        }
+        impl<'a> Drop for InFlightGuard<'a> {
+            fn drop(&mut self) {
+                if let Some(k) = self.key.take() {
+                    self.in_flight.remove(&k);
+                }
+            }
+        }
+
+        let mut guard = InFlightGuard {
+            in_flight: &self.in_flight,
+            key: if is_leader { Some(key.clone()) } else { None },
+        };
 
         let res = self.resolve_internal(data, &question).await;
 
-        self.in_flight.remove(&key);
-        let _ = tx.send(
-            res.as_ref()
-                .map(|(v, c, b)| (v.clone(), *c, *b))
-                .map_err(|e| e.to_string()),
-        );
+        guard.key = None;
+        if let Some((_, tx)) = self.in_flight.remove(&key) {
+            let _ = tx.send(
+                res.as_ref()
+                    .map(|(v, c, b)| (v.clone(), *c, *b))
+                    .map_err(|e| e.to_string()),
+            );
+        }
 
         res
     }
@@ -270,7 +292,7 @@ impl UpstreamStrategy {
         // 1. Check for matching conditional domain route (Split DNS)
         if let Some(route) = self.find_conditional_route(question) {
             let mut last_err = DnsError::Refused;
-            for tier in &route.tiers {
+            for tier in route.tiers.iter() {
                 if tier.is_empty() {
                     continue;
                 }
@@ -285,13 +307,13 @@ impl UpstreamStrategy {
         // 2. Fall back to global upstreams
         let mut last_err = DnsError::Refused;
         if !self.has_global_upstreams() {
-            let fallbacks = self.fallback_upstreams.read().clone();
+            let fallbacks = Arc::clone(&*self.fallback_upstreams.read());
             if !fallbacks.is_empty() {
                 return self.resolve_sequential(&fallbacks, data).await;
             }
         }
-        let tiers = self.tiers.read().clone();
-        for tier in &tiers {
+        let tiers = Arc::clone(&*self.tiers.read());
+        for tier in tiers.iter() {
             if tier.is_empty() {
                 continue;
             }

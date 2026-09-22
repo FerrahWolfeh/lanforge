@@ -219,20 +219,83 @@ pub fn fast_lowercase(s: &str) -> Cow<'_, str> {
 pub fn ip_to_arpa(ip: IpAddr) -> String {
     match ip {
         IpAddr::V4(ipv4) => {
-            let octets = ipv4.octets();
-            format!(
-                "{}.{}.{}.{}.in-addr.arpa.",
-                octets[3], octets[2], octets[1], octets[0]
-            )
+            let [a, b, c, d] = ipv4.octets();
+            let mut s = String::with_capacity(30);
+            use std::fmt::Write;
+            let _ = write!(&mut s, "{d}.{c}.{b}.{a}.in-addr.arpa.");
+            s
         }
         IpAddr::V6(ipv6) => {
+            const HEX: &[u8; 16] = b"0123456789abcdef";
             let mut s = String::with_capacity(74);
             for &octet in ipv6.octets().iter().rev() {
-                use std::fmt::Write;
-                write!(&mut s, "{:x}.{:x}.", octet & 0xf, octet >> 4).unwrap();
+                s.push(HEX[(octet & 0x0f) as usize] as char);
+                s.push('.');
+                s.push(HEX[(octet >> 4) as usize] as char);
+                s.push('.');
             }
             s.push_str("ip6.arpa.");
             s
+        }
+    }
+}
+
+/// Extracts a concise string representation of the first answer in a raw DNS response
+/// without performing a full message decode.
+#[must_use]
+pub fn extract_first_answer_summary(resp: &[u8], question_len: usize) -> Option<String> {
+    if resp.len() < 12 {
+        return None;
+    }
+    let ancount = u16::from_be_bytes([resp[6], resp[7]]);
+    if ancount == 0 {
+        let rcode = resp[3] & 0x0F;
+        if rcode != 0 {
+            return Some(format!("{:?}", lanforge_types::network::dns::DnsResponseCode::from(rcode)));
+        }
+        return None;
+    }
+
+    let pos = lanforge_dns_wire::skip_name(resp, question_len)?;
+    if pos + 10 > resp.len() {
+        return None;
+    }
+    let rtype = u16::from_be_bytes([resp[pos], resp[pos + 1]]);
+    let rdlen = u16::from_be_bytes([resp[pos + 8], resp[pos + 9]]) as usize;
+    let rdata_start = pos + 10;
+    if rdata_start + rdlen > resp.len() {
+        return None;
+    }
+
+    match rtype {
+        1 if rdlen == 4 => Some(
+            Ipv4Addr::new(
+                resp[rdata_start],
+                resp[rdata_start + 1],
+                resp[rdata_start + 2],
+                resp[rdata_start + 3],
+            )
+            .to_string(),
+        ),
+        28 if rdlen == 16 => {
+            let mut b = [0u8; 16];
+            b.copy_from_slice(&resp[rdata_start..rdata_start + 16]);
+            Some(Ipv6Addr::from(b).to_string())
+        }
+        5 => {
+            let mut dec = lanforge_dns_wire::WireDecoder::new(resp);
+            dec.pos = rdata_start;
+            dec.decode_name().map(|n| n.to_string())
+        }
+        12 => {
+            let mut dec = lanforge_dns_wire::WireDecoder::new(resp);
+            dec.pos = rdata_start;
+            dec.decode_name().map(|n| n.to_string())
+        }
+        _ => {
+            let mut dec = lanforge_dns_wire::WireDecoder::new(resp);
+            dec.pos = pos;
+            dec.decode_record().map(|r| format!("{}", r.rdata))
         }
     }
 }

@@ -207,6 +207,13 @@ impl<'a> WireQuestion<'a> {
         u16::from_be_bytes([self.data[self.qname_end + 2], self.data[self.qname_end + 3]])
     }
 
+    /// Returns the total wire length of the header and question combined (the offset where answers start).
+    #[inline]
+    #[must_use]
+    pub const fn wire_len(&self) -> usize {
+        self.data.len()
+    }
+
     /// Returns the raw QNAME slice (including label lengths and the null terminator).
     #[inline]
     #[must_use]
@@ -913,7 +920,7 @@ impl<'a> WireDecoder<'a> {
         })
     }
 
-    fn decode_record(&mut self) -> Option<DnsRecord> {
+    pub fn decode_record(&mut self) -> Option<DnsRecord> {
         let name = self.decode_name()?;
         if self.pos + 10 > self.data.len() {
             return None;

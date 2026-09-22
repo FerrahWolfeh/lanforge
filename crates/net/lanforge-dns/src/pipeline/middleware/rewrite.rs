@@ -1,13 +1,11 @@
-use lanforge_dns_wire::WireDecoder;
 use lanforge_types::network::dns::{DnsRecordType, QueryResult};
 
 use crate::error::DnsError;
 use crate::pipeline::Middleware;
-use crate::resolver::labels_to_domain;
 use crate::server::{DnsContext, DnsLogEvent};
+use crate::utils::extract_first_answer_summary;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 
 #[derive(Default)]
 pub struct RewriteMiddleware;
@@ -26,31 +24,27 @@ impl Middleware for RewriteMiddleware {
         resp: &'a mut Vec<u8>,
     ) -> Pin<Box<dyn Future<Output = Result<bool, DnsError>> + Send + 'a>> {
         Box::pin(async move {
-            let domain = labels_to_domain(req.question.labels());
             if ctx.rewrites.try_resolve_rewrite_wire(
                 req.data,
                 req.header,
                 req.question,
                 ctx,
-                &domain,
+                &req.domain,
                 resp,
             ) {
                 ctx.stats.inc_auth();
 
                 let src_mac = ctx.local.ctx.get_mac_by_ip(req.src_ip);
-
-                let mut answer = None;
-                let mut decoder = WireDecoder::new(resp);
-                if let Some(msg) = decoder.decode_message()
-                    && let Some(first) = msg.answers.first()
-                {
-                    answer = Some(format!("{}", first.rdata));
-                }
+                let answer = if ctx.query_log.is_some() {
+                    extract_first_answer_summary(resp, req.question.wire_len())
+                } else {
+                    None
+                };
 
                 ctx.record_log(DnsLogEvent {
                     src_ip: req.src_ip,
                     src_mac,
-                    domain: Arc::from(domain),
+                    domain: req.domain.clone(),
                     qtype: DnsRecordType::from(req.question.qtype()),
                     result: QueryResult::Rewritten,
                     upstream_us: 0,

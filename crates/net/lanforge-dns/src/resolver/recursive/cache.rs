@@ -11,11 +11,40 @@ use lanforge_types::network::dns::DnsRecordType;
 
 use crate::telemetry::DnsStats;
 
+use smallvec::SmallVec;
+
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub struct CacheKey {
-    pub qname: Vec<u8>,
+    pub qname: SmallVec<[u8; 64]>,
     pub qtype: u16,
     pub qclass: u16,
+}
+
+impl CacheKey {
+    #[inline]
+    #[must_use]
+    pub fn from_question(question: &WireQuestion<'_>) -> Self {
+        let raw = question.qname_raw();
+        let mut qname = SmallVec::<[u8; 64]>::from_slice(raw);
+        qname.make_ascii_lowercase();
+        Self {
+            qname,
+            qtype: question.qtype(),
+            qclass: question.qclass(),
+        }
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn new(qname: impl AsRef<[u8]>, qtype: u16, qclass: u16) -> Self {
+        let mut qname_vec = SmallVec::<[u8; 64]>::from_slice(qname.as_ref());
+        qname_vec.make_ascii_lowercase();
+        Self {
+            qname: qname_vec,
+            qtype,
+            qclass,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -52,14 +81,7 @@ impl DnsCache {
         query_data: &[u8],
         question: &WireQuestion<'_>,
     ) -> Option<(Vec<u8>, bool)> {
-        let mut qname = question.qname_raw().to_vec();
-        qname.make_ascii_lowercase();
-
-        let key = CacheKey {
-            qname,
-            qtype: question.qtype(),
-            qclass: question.qclass(),
-        };
+        let key = CacheKey::from_question(question);
 
         let entry = self.cache.get(&key)?;
         let now = Instant::now();

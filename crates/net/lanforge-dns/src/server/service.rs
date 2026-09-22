@@ -236,7 +236,6 @@ impl AsyncService for DnsService {
         if !self.cfg.enabled {
             info!("DNS Service disabled in config");
             ctx.set_service_state("dns", ServiceState::Inactive);
-            std::future::pending::<()>().await;
             return Ok(());
         }
 
@@ -288,6 +287,8 @@ impl AsyncService for DnsService {
         let cache_worker = crate::server::worker::spawn_cache_handler(Arc::clone(&dns_ctx));
 
         let mut bus_rx = ctx.bus().subscribe_dns();
+        let mut sys_rx = ctx.bus().subscribe_system();
+        let mut pppoe_rx = ctx.bus().subscribe_pppoe();
 
         let mpsc_worker = {
             let dns_ctx = Arc::clone(&dns_ctx);
@@ -304,10 +305,50 @@ impl AsyncService for DnsService {
                 break;
             }
             tokio::select! {
+                Ok(event) = sys_rx.recv() => {
+                    if let lanforge_core::bus::LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown) = event.event {
+                        info!("DNS service received shutdown signal, terminating event loop");
+                        break;
+                    }
+                }
+                Ok(event) = pppoe_rx.recv() => {
+                    match event.event {
+                        lanforge_core::bus::LanforgeEvent::Pppoe(lanforge_core::bus::PppoeEvent::SessionUp(ref session)) => {
+                            // Auto-adopt ISP DNS upstreams if user has not configured custom static upstreams
+                            if ctx.get_dns_upstreams().is_empty() && !session.dns.is_empty() {
+                                info!(count = session.dns.len(), "DNS: Auto-adopting ISP DNS upstreams from PPPoE WAN session");
+                                let mut upstreams = Vec::new();
+                                for ip in &session.dns {
+                                    let target = UpstreamTarget {
+                                        addr: SocketAddr::new(*ip, 53),
+                                        protocol: UpstreamProtocol::Udp,
+                                        hostname: None,
+                                        domain: None,
+                                    };
+                                    match UpstreamManager::new(&target, Arc::clone(&dns_ctx.cache)).await {
+                                        Ok(mgr) => upstreams.push(mgr),
+                                        Err(e) => error!(addr = %target.addr, error = %e, "DNS: Failed to initialize ISP upstream"),
+                                    }
+                                }
+                                dns_ctx.recursive.replace_upstreams(upstreams);
+                                if !dns_ctx.recursive.is_empty() {
+                                    dns_ctx.cache.invalidate_all();
+                                    info!("DNS: ISP upstreams activated and cache cleared");
+                                }
+                            }
+                        }
+                        lanforge_core::bus::LanforgeEvent::Pppoe(lanforge_core::bus::PppoeEvent::SessionDown { reason })
+                            if ctx.get_dns_upstreams().is_empty() =>
+                        {
+                            info!(reason = %reason, "DNS: PPPoE session down, clearing ISP upstreams");
+                            dns_ctx.recursive.replace_upstreams(Vec::new());
+                        }
+                        _ => {}
+                    }
+                }
                 msg = bus_rx.recv() => {
                     match msg {
                         Ok(timed_event) => match timed_event.event {
-                            lanforge_core::bus::LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown) => break,
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigUpstreamsChanged) => {
                                 info!("DNS: Reloading upstreams");
                                 let mut upstreams = Vec::new();
@@ -323,36 +364,6 @@ impl AsyncService for DnsService {
                                 if !dns_ctx.recursive.is_empty() {
                                     dns_ctx.cache.invalidate_all();
                                     info!("DNS: Cache invalidated after upstream reload");
-                                }
-                            }
-                            lanforge_core::bus::LanforgeEvent::Pppoe(lanforge_core::bus::PppoeEvent::SessionUp(ref session)) => {
-                                // Auto-adopt ISP DNS upstreams if user has not configured custom static upstreams
-                                if ctx.get_dns_upstreams().is_empty() && !session.dns.is_empty() {
-                                    info!(count = session.dns.len(), "DNS: Auto-adopting ISP DNS upstreams from PPPoE WAN session");
-                                    let mut upstreams = Vec::new();
-                                    for ip in &session.dns {
-                                        let target = UpstreamTarget {
-                                            addr: SocketAddr::new(*ip, 53),
-                                            protocol: UpstreamProtocol::Udp,
-                                            hostname: None,
-                                            domain: None,
-                                        };
-                                        match UpstreamManager::new(&target, Arc::clone(&dns_ctx.cache)).await {
-                                            Ok(mgr) => upstreams.push(mgr),
-                                            Err(e) => error!(addr = %target.addr, error = %e, "DNS: Failed to initialize ISP upstream"),
-                                        }
-                                    }
-                                    dns_ctx.recursive.replace_upstreams(upstreams);
-                                    if !dns_ctx.recursive.is_empty() {
-                                        dns_ctx.cache.invalidate_all();
-                                        info!("DNS: ISP upstreams activated and cache cleared");
-                                    }
-                                }
-                            }
-                            lanforge_core::bus::LanforgeEvent::Pppoe(lanforge_core::bus::PppoeEvent::SessionDown { reason }) => {
-                                if ctx.get_dns_upstreams().is_empty() {
-                                    info!(reason = %reason, "DNS: PPPoE session down, clearing ISP upstreams");
-                                    dns_ctx.recursive.replace_upstreams(Vec::new());
                                 }
                             }
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::CacheFlush) => {
@@ -406,9 +417,6 @@ impl AsyncService for DnsService {
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                         Err(_) => break,
                     }
-                }
-                () = tokio::time::sleep(std::time::Duration::from_millis(500)) => {
-                    if !self.ctx.is_running() { break; }
                 }
             }
         }
@@ -646,14 +654,7 @@ async fn resolve_diagnostic_internal(
     {
         format!("{:?}", last.result)
     } else {
-        // Fallback logic matching pipeline order
-        let mut qname = question.qname_raw().to_vec();
-        qname.make_ascii_lowercase();
-        let key = CacheKey {
-            qname,
-            qtype: u16::from(qtype),
-            qclass: 1, // IN
-        };
+        let key = CacheKey::from_question(&question);
 
         if let Some(entry) = dns_ctx.cache.cache.get(&key) {
             if entry.is_block {

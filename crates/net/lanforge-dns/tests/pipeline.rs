@@ -246,11 +246,7 @@ async fn pipeline_transient_ip_reverse_dns_cached() {
     let scanner = WireResponseScanner::new(&resp_bytes);
     let (offsets, min_ttl) = scanner.scan_ttls();
 
-    let key = CacheKey {
-        qname: question.qname_raw().to_vec(),
-        qtype: question.qtype(),
-        qclass: question.qclass(),
-    };
+    let key = CacheKey::from_question(&question);
     dns_ctx
         .cache
         .insert(key, resp_bytes, offsets, min_ttl, false);

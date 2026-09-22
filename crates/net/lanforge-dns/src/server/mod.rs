@@ -61,23 +61,30 @@ pub struct DnsLogEvent {
 /// Checks if a domain matches an exact or wildcard pattern (e.g. `*.sonarr.tv`) without heap allocation.
 #[must_use]
 pub fn matches_domain_pattern(domain: &str, pattern: &str) -> bool {
-    let d = domain.trim_end_matches('.').to_ascii_lowercase();
-    let p = pattern.trim_end_matches('.').to_ascii_lowercase();
+    let d = domain.trim_end_matches('.');
+    let p = pattern.trim_end_matches('.');
     if let Some(suffix) = p.strip_prefix("*.") {
-        if d == suffix {
+        if d.eq_ignore_ascii_case(suffix) {
             return true;
         }
-        if d.ends_with(suffix) && d.as_bytes().get(d.len().saturating_sub(suffix.len() + 1)) == Some(&b'.') {
+        if d.len() > suffix.len()
+            && d.as_bytes().get(d.len().saturating_sub(suffix.len() + 1)) == Some(&b'.')
+            && d[d.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+        {
             return true;
         }
         false
     } else {
-        d == p
+        d.eq_ignore_ascii_case(p)
     }
 }
 
 impl DnsContext {
     pub fn record_log(&self, event: DnsLogEvent) {
+        if self.query_log.is_none() {
+            return;
+        }
+
         // Noise filtering
         if event.domain.is_empty() || event.domain.as_ref() == "." || event.domain.as_ref() == ":0"
         {
