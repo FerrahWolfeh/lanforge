@@ -41,7 +41,6 @@ use lanforge_types::device::{Device, IPv4State};
 use lanforge_types::identifiers::MacAddr;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
-use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::traits::DhcpPool;
@@ -129,7 +128,7 @@ impl DhcpServer {
     /// The result (`HandleResult`) contains the response packet or signals
     /// a release/ignore action.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub fn handle_packet(&mut self, data: &[u8], device: Option<Arc<Device>>) -> HandleResult {
+    pub fn handle_packet(&mut self, data: &[u8], device: Option<&Device>) -> HandleResult {
         self.last_assigned_ip = None;
         let msg = match Message::decode(&mut Decoder::new(data)) {
             Ok(m) => m,
@@ -647,10 +646,12 @@ impl DhcpServer {
 }
 
 fn get_interface_mtu(iface: &str) -> Option<u16> {
+    use std::io::Read;
     let path = format!("/sys/class/net/{iface}/mtu");
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| s.trim().parse::<u16>().ok())
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buf = [0u8; 16];
+    let n = file.read(&mut buf).ok()?;
+    std::str::from_utf8(&buf[..n]).ok()?.trim().parse::<u16>().ok()
 }
 
 #[cfg(test)]
@@ -1312,7 +1313,7 @@ mod tests {
         // Request lease
         let req = build_raw_msg(MessageType::Request, mac, Some(static_ip), None, None);
         let device = ctx.get_device(&mac);
-        let res_static = srv.handle_packet(&req, device);
+        let res_static = srv.handle_packet(&req, device.as_deref());
         if let HandleResult::Reply { packet, .. } = res_static {
             let reply = decode_reply(&packet);
             let lease_time = reply.opts().get(v4::OptionCode::AddressLeaseTime);

@@ -2626,6 +2626,7 @@ dependencies = [
  "lanforge-core",
  "lanforge-macros",
  "lanforge-types",
+ "libc",
  "parking_lot",
  "pnet",
  "rand 0.10.2",

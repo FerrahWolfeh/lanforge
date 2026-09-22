@@ -30,6 +30,7 @@ use std::net::Ipv4Addr;
 pub struct RawSender {
     tx: Box<dyn datalink::DataLinkSender>,
     src_mac: PnetMac,
+    buf: Vec<u8>,
 }
 
 impl RawSender {
@@ -62,7 +63,11 @@ impl RawSender {
             }
         };
 
-        Ok(Self { tx, src_mac })
+        Ok(Self {
+            tx,
+            src_mac,
+            buf: Vec::with_capacity(1514),
+        })
     }
 
     /// Wraps the `DHCPv4` (BOOTP) payload in UDP, IPv4, and Ethernet headers,
@@ -87,10 +92,11 @@ impl RawSender {
         let ipv4_len = 20 + udp_len;
         let eth_len = 14 + ipv4_len;
 
-        let mut buf = vec![0u8; eth_len];
+        self.buf.clear();
+        self.buf.resize(eth_len, 0);
 
         // 1. Assemble Ethernet Header
-        let mut eth = MutableEthernetPacket::new(&mut buf).unwrap();
+        let mut eth = MutableEthernetPacket::new(&mut self.buf).unwrap();
         eth.set_destination(dst_mac);
         eth.set_source(self.src_mac);
         eth.set_ethertype(EtherTypes::Ipv4);
@@ -120,7 +126,7 @@ impl RawSender {
         udp.set_checksum(udp_checksum);
 
         // 4. Inject Packet (Layer 2)
-        match self.tx.send_to(&buf, None) {
+        match self.tx.send_to(&self.buf, None) {
             Some(Ok(())) => Ok(()),
             Some(Err(e)) => Err(NetworkError::RawSocket(format!(
                 "AF_PACKET injection failed: {e}"

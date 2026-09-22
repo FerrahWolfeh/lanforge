@@ -5,7 +5,7 @@
 //! the persistent device table in `LanforgeContext` to produce a complete
 //! identity for logging, display, and state updates.
 
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use lanforge_types::{device::Device, identifiers::MacAddr};
 
@@ -54,7 +54,7 @@ impl DeviceIdentity {
         mac: MacAddr,
         packet_hostname: Option<String>,
         packet_vendor: Option<String>,
-        device: Option<Arc<Device>>,
+        device: Option<&Device>,
     ) -> Self {
         let mut identity = Self::new(mac, packet_hostname, packet_vendor);
 

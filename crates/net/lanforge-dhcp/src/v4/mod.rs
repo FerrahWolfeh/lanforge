@@ -395,7 +395,7 @@ impl Dhcpv4Service {
 
                 let handle_res = {
                     let device = self.ctx.get_device(&mac);
-                    server.handle_packet(data, device)
+                    server.handle_packet(data, device.as_deref())
                 };
 
                 match handle_res {
@@ -540,26 +540,31 @@ impl Dhcpv4Service {
         transport: &Dhcpv4Transport,
         cfg: &Dhcpv4Config,
     ) {
-        let dynamic_leases: Vec<(MacAddr, Ipv4Addr, String)> = self.ctx.with_state(|state| {
+        let dynamic_leases: Vec<(MacAddr, Ipv4Addr)> = self.ctx.with_state(|state| {
             state
                 .devices
                 .values()
                 .filter_map(|dev| match &dev.v4 {
-                    IPv4State::Dynamic(lease) => {
-                        Some((dev.mac, lease.ip, dev.hostname.name.clone()))
-                    }
+                    IPv4State::Dynamic(lease) => Some((dev.mac, lease.ip)),
                     // Static reservations (fixed IPs inside or outside pool ranges) MUST NOT be touched
                     IPv4State::Static(_) | IPv4State::None => None,
                 })
                 .collect()
         });
 
-        let mut valid_dynamic_ips = Vec::new();
+        let mut valid_dynamic_ips = Vec::with_capacity(dynamic_leases.len());
 
-        for (mac, ip, hostname) in dynamic_leases {
+        for (mac, ip) in dynamic_leases {
             if server.pool.is_valid_dynamic_ip(ip, cfg.subnet_mask, Some(cfg.router)) {
                 valid_dynamic_ips.push(ip);
             } else {
+                let hostname = self.ctx.with_state(|state| {
+                    state
+                        .devices
+                        .get(&mac)
+                        .map(|d| d.hostname.name.clone())
+                        .unwrap_or_default()
+                });
                 let name = if hostname.is_empty() { "unknown" } else { &hostname };
                 let reason = if server.pool.is_in_range(ip) {
                     format!(

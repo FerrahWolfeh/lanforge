@@ -249,9 +249,25 @@ impl Ipv6Pool {
             prefixes.push((gua, 64));
         }
 
-        let mut results = Vec::new();
+        let used_counts: Vec<u32> = ctx.with_state(|state| {
+            let mut counts = vec![0u32; prefixes.len()];
+            for dev in state.devices.values() {
+                for v6_state in &dev.v6 {
+                    if let IPv6State::Dynamic(lease) = v6_state {
+                        for (idx, (prefix, _)) in prefixes.iter().enumerate() {
+                            if Self::prefix_matches(*prefix, lease.ip) {
+                                counts[idx] = counts[idx].saturating_add(1);
+                            }
+                        }
+                    }
+                }
+            }
+            counts
+        });
 
-        for (prefix, prefix_len) in prefixes {
+        let mut results = Vec::with_capacity(prefixes.len());
+
+        for ((prefix, prefix_len), used_count) in prefixes.into_iter().zip(used_counts) {
             let mut total_size = 0u32;
             for pool in &self.pools {
                 match pool {
@@ -289,20 +305,6 @@ impl Ipv6Pool {
                     }
                 }
             }
-
-            let used_count = ctx.with_state(|state| {
-                let mut count = 0u32;
-                for dev in state.devices.values() {
-                    for v6_state in &dev.v6 {
-                        if let IPv6State::Dynamic(lease) = v6_state
-                            && Self::prefix_matches(prefix, lease.ip)
-                        {
-                            count = count.saturating_add(1);
-                        }
-                    }
-                }
-                count
-            });
 
             let available = total_size.saturating_sub(used_count);
             let utilization_percent = if total_size > 0 {
@@ -350,38 +352,6 @@ impl Ipv6Pool {
 
     /// Collects static suffix addresses across all active prefixes.
     /// Returns addresses for every prefix where the device has a static reservation.
-    fn collect_static_ips(
-        &self,
-        ctx: &LanforgeContext,
-        duid: &Duid,
-        mac: Option<MacAddr>,
-        prefixes: &[Ipv6Addr],
-    ) -> Vec<Ipv6Addr> {
-        let mut dev_opt = ctx.with_state(|t| t.get_by_duid(duid));
-        if dev_opt.is_none()
-            && let Some(m) = mac
-        {
-            dev_opt = ctx.get_device(&m);
-        }
-
-        let Some(dev) = dev_opt else {
-            return Vec::new();
-        };
-
-        let mut ips = Vec::new();
-        for prefix in prefixes {
-            for state in &dev.v6 {
-                if let IPv6State::Static(suffix, _) = state {
-                    let ip = self.construct_addr(*prefix, suffix);
-                    if Self::is_on_prefix(&ip, prefix) && !ips.contains(&ip) {
-                        ips.push(ip);
-                    }
-                }
-            }
-        }
-        ips
-    }
-
     /// Allocates IPv6 addresses for the given DUID+IAID.
     /// Returns a list of addresses (e.g. one ULA and one GUA).
     pub fn allocate(
@@ -394,17 +364,52 @@ impl Ipv6Pool {
     ) -> Vec<Ipv6Addr> {
         let prefixes = self.get_active_prefixes();
 
-        // 1. Static reservations take absolute priority (OpenWrt-style).
-        //    If the device has a configured suffix, apply it to ALL active prefixes.
-        let static_ips = self.collect_static_ips(ctx, duid, mac, &prefixes);
+        // 1. Static reservations & 2. Sticky dynamic lease check under a single state lock.
+        let (static_ips, sticky_ips) = ctx.with_state(|state| {
+            let dev = state
+                .get_by_duid(duid)
+                .or_else(|| mac.and_then(|m| state.devices.get(&m).cloned()));
+
+            let Some(dev) = dev else {
+                return (Vec::new(), Vec::new());
+            };
+
+            // 1. Static reservations take absolute priority (OpenWrt-style).
+            let mut statics = Vec::new();
+            for prefix in &prefixes {
+                for v6_state in &dev.v6 {
+                    if let IPv6State::Static(suffix, _) = v6_state {
+                        let ip = self.construct_addr(*prefix, suffix);
+                        if Self::is_on_prefix(&ip, prefix) && !statics.contains(&ip) {
+                            statics.push(ip);
+                        }
+                    }
+                }
+            }
+
+            if !statics.is_empty() {
+                return (statics, Vec::new());
+            }
+
+            // 2. Sticky IP check: return previously assigned dynamic leases for this IAID.
+            let mut sticky = Vec::new();
+            for v6_state in &dev.v6 {
+                if let IPv6State::Dynamic(lease) = v6_state
+                    && lease.iaid == iaid
+                {
+                    sticky.push(lease.ip);
+                }
+            }
+
+            (Vec::new(), sticky)
+        });
+
         if !static_ips.is_empty() {
             return static_ips;
         }
 
-        // 2. Sticky IP check: return previously assigned dynamic leases.
-        let sticky = Self::get_sticky_ips(ctx, duid, iaid, mac);
-        if !sticky.is_empty() {
-            return sticky;
+        if !sticky_ips.is_empty() {
+            return sticky_ips;
         }
 
         // 3. Fresh dynamic allocation from pools.
@@ -417,34 +422,6 @@ impl Ipv6Pool {
         }
 
         assigned
-    }
-
-    /// Checks if a device already has an active lease for a specific IAID.
-    fn get_sticky_ips(
-        ctx: &LanforgeContext,
-        duid: &Duid,
-        iaid: u32,
-        mac: Option<MacAddr>,
-    ) -> Vec<Ipv6Addr> {
-        let mut dev_opt = ctx.with_state(|t| t.get_by_duid(duid));
-        if dev_opt.is_none()
-            && let Some(m) = mac
-        {
-            dev_opt = ctx.get_device(&m);
-        }
-
-        if let Some(dev) = dev_opt {
-            let mut sticky = Vec::new();
-            for state in &dev.v6 {
-                if let IPv6State::Dynamic(lease) = state
-                    && lease.iaid == iaid
-                {
-                    sticky.push(lease.ip);
-                }
-            }
-            return sticky;
-        }
-        Vec::new()
     }
 
     /// Gathers all prefixes that this service should provide addresses for.
@@ -629,12 +606,7 @@ impl Ipv6Pool {
     }
 
     fn combine_pref_suf(prefix: &Ipv6Addr, suffix: [u8; 8]) -> u128 {
-        let p = prefix.segments();
-        let mut octets = [0u8; 16];
-        octets[0..2].copy_from_slice(&p[0].to_be_bytes());
-        octets[2..4].copy_from_slice(&p[1].to_be_bytes());
-        octets[4..6].copy_from_slice(&p[2].to_be_bytes());
-        octets[6..8].copy_from_slice(&p[3].to_be_bytes());
+        let mut octets = prefix.octets();
         octets[8..16].copy_from_slice(&suffix);
         u128::from_be_bytes(octets)
     }
@@ -710,23 +682,26 @@ impl Ipv6Pool {
         target_mac: Option<MacAddr>,
         target_duid: &Duid,
     ) -> bool {
-        if let Some(mac) = ctx.get_mac_by_ip(IpAddr::V6(*ip))
-            && Some(mac) != target_mac
-        {
-            if let Some(device) = ctx.get_device(&mac)
-                && device.duid.as_ref() == Some(target_duid)
-            {
-                // Owned by the same client (matching DUID), so it is available
-            } else {
-                return false;
-            }
-        }
-
-        if self.reserved_static.contains(ip) {
+        if self.reserved_static.contains(ip) || self.blacklisted.contains_key(ip) {
             return false;
         }
 
-        !self.blacklisted.contains_key(ip)
+        ctx.with_state(|state| {
+            if let Some(mac) = state.get_mac_by_ip(IpAddr::V6(*ip))
+                && Some(mac) != target_mac
+            {
+                if let Some(device) = state.devices.get(&mac)
+                    && device.duid.as_ref() == Some(target_duid)
+                {
+                    // Owned by the same client (matching DUID), so it is available
+                    true
+                } else {
+                    false
+                }
+            } else {
+                true
+            }
+        })
     }
 
     /// Allocates an IPv6 prefix for the given DUID+IAID (Prefix Delegation).

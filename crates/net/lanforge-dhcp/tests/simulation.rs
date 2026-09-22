@@ -186,7 +186,7 @@ fn test_dhcp_static_reservation_simulation() {
 
     // Send Discover from reserved MAC
     let discover_bytes = build_packet(static_mac, MessageType::Discover, None, None, None);
-    let res = server.handle_packet(&discover_bytes, device);
+    let res = server.handle_packet(&discover_bytes, device.as_deref());
 
     match res {
         HandleResult::Reply { packet, msg_type, .. } => {

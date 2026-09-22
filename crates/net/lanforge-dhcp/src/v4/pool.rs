@@ -52,10 +52,14 @@ use roaring::RoaringBitmap;
 pub struct IpPool {
     /// Configured pools (ranges).
     pools: Vec<Dhcpv4Pool>,
+    /// Precomputed bitmap of all IPs in configured ranges.
+    all_pool_ips: RoaringBitmap,
     /// IPs rejected via DECLINE with quarantine timestamp.
     declined: HashMap<Ipv4Addr, Instant>,
     /// Bitmap of free IPs — efficient O(1) insert/remove, O(log n) select.
     available: RoaringBitmap,
+    /// Precomputed total number of IPs in the pool.
+    total_size: u32,
 }
 
 impl IpPool {
@@ -75,10 +79,15 @@ impl IpPool {
             }
         }
 
+        let all_pool_ips = available.clone();
+        let total_size = u32::try_from(all_pool_ips.len()).unwrap_or(0);
+
         Self {
             pools,
+            all_pool_ips,
             declined: HashMap::new(),
             available,
+            total_size,
         }
     }
 
@@ -86,19 +95,23 @@ impl IpPool {
     pub fn cleanup_quarantine(&mut self, now: Instant) {
         // Cleanup Quarantine (DECLINEs) - Recover IPs after 2 hours
         let quarantine_timeout = Duration::from_hours(2);
-        let recovered_ips: Vec<Ipv4Addr> = self
-            .declined
-            .iter()
-            .filter(|(_, time)| now.duration_since(**time) >= quarantine_timeout)
-            .map(|(&ip, _)| ip)
-            .collect();
-
-        for ip in recovered_ips {
-            tracing::info!("DHCPv4: Recovering IP {ip} from DECLINE quarantine");
-            self.declined.remove(&ip);
-            if self.is_in_range(ip) {
-                self.add_to_available(ip);
+        let mut recovered_any = false;
+        let all_pool_ips = &self.all_pool_ips;
+        let available = &mut self.available;
+        self.declined.retain(|&ip, time| {
+            if now.duration_since(*time) >= quarantine_timeout {
+                tracing::info!("DHCPv4: Recovering IP {ip} from DECLINE quarantine");
+                if all_pool_ips.contains(u32::from(ip)) {
+                    available.insert(u32::from(ip));
+                    recovered_any = true;
+                }
+                false
+            } else {
+                true
             }
+        });
+        if recovered_any {
+            tracing::debug!("DHCPv4: Completed quarantine cleanup");
         }
     }
 
@@ -118,14 +131,8 @@ impl IpPool {
         (total, used, available, utilization_percent)
     }
 
-    fn total_pool_size(&self) -> u32 {
-        let mut bitmap = RoaringBitmap::new();
-        for p in &self.pools {
-            if p.range_start <= p.range_end {
-                bitmap.insert_range(u32::from(p.range_start)..=u32::from(p.range_end));
-            }
-        }
-        u32::try_from(bitmap.len()).unwrap_or(0)
+    const fn total_pool_size(&self) -> u32 {
+        self.total_size
     }
 
     /// Allocates an IP for a MAC address.
@@ -182,12 +189,7 @@ impl IpPool {
         }
 
         // 3.5. Garbage Collection: If pool is empty, scan for naturally expired leases
-        let mut recovered = RoaringBitmap::new();
-        for pool in &self.pools {
-            if pool.range_start <= pool.range_end {
-                recovered.insert_range(u32::from(pool.range_start)..=u32::from(pool.range_end));
-            }
-        }
+        let mut recovered = self.all_pool_ips.clone();
 
         let mut active_ips = RoaringBitmap::new();
         ctx.with_state(|state| {
@@ -278,9 +280,7 @@ impl IpPool {
     /// Check if an IP is within any of the configured dynamic ranges.
     #[must_use]
     pub fn is_in_range(&self, ip: Ipv4Addr) -> bool {
-        self.pools
-            .iter()
-            .any(|p| ip >= p.range_start && ip <= p.range_end)
+        self.all_pool_ips.contains(u32::from(ip))
     }
 
     /// Returns the pool configuration matching the given IP address, if any.

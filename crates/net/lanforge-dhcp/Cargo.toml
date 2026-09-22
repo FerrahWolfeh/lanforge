@@ -28,6 +28,7 @@ socket2 = { workspace = true }
 rand = { workspace = true }
 pnet = { workspace = true }
 hex = { workspace = true }
+libc = { workspace = true }
 
 # Third party
 dhcproto = "0.15.0"
