@@ -118,6 +118,7 @@ fn handle_dns_logs_follow(
 ) -> impl Stream<Item = Result<Event, Infallible>> {
     let mut rx = state.ctx.bus().subscribe_dns();
     let filter = params.client;
+    let filter_ip: Option<std::net::IpAddr> = filter.as_deref().and_then(|f| f.parse().ok());
     let ctx_inner = state.ctx;
 
     async_stream::try_stream! {
@@ -129,40 +130,46 @@ fn handle_dns_logs_follow(
             };
 
             if let LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)) = &event.event {
-                let mac = entry.src_mac.or_else(|| ctx_inner.get_mac_by_ip(entry.src_ip));
-                let src_hostname = mac.and_then(|m| {
-                    if let Some(d) = ctx_inner.get_device(&m) {
-                        let name = d.display_hostname();
-                        if name != "?" && !name.is_empty() {
-                            return Some(name.to_string());
+                let (mac, src_hostname) = ctx_inner.with_state(|s| {
+                    let mac = entry.src_mac.or_else(|| s.get_mac_by_ip(entry.src_ip));
+                    let hostname = mac.and_then(|m| {
+                        if let Some(d) = s.devices.get(&m) {
+                            let name = d.display_hostname();
+                            if name != "?" && !name.is_empty() {
+                                return Some(name.to_string());
+                            }
+                            if !d.dns_fallback.is_empty() {
+                                return Some(d.dns_fallback.clone());
+                            }
                         }
-                        if !d.dns_fallback.is_empty() {
-                            return Some(d.dns_fallback.clone());
-                        }
-                    }
-                    ctx_inner.with_state(|s| {
                         s.static_entries
                             .get(&m)
                             .filter(|e| !e.hostname.is_empty())
                             .map(|e| e.hostname.clone())
-                    })
+                    });
+                    (mac, hostname)
                 });
 
-                if let Some(f) = &filter
-                    && &entry.src_ip.to_string() != f
-                    && src_hostname.as_deref() != Some(f.as_str())
-                {
-                    continue;
+                if let Some(f) = &filter {
+                    let ip_matches = filter_ip.is_some_and(|target_ip| entry.src_ip == target_ip);
+                    let host_matches = src_hostname.as_deref() == Some(f.as_str());
+                    if !ip_matches && !host_matches {
+                        continue;
+                    }
                 }
+
+                let src_ip_str = entry.src_ip.to_string();
+                let src_mac_str = mac.map(|m| m.to_string());
+                let result_str = entry.result.to_string();
 
                 let payload = serde_json::json!({
                     "timestamp": entry.timestamp,
-                    "src_ip": entry.src_ip.to_string(),
-                    "src_mac": mac.map(|m| m.to_string()),
-                    "src_hostname": src_hostname,
+                    "src_ip": &src_ip_str,
+                    "src_mac": &src_mac_str,
+                    "src_hostname": &src_hostname,
                     "domain": entry.domain.as_ref(),
                     "qtype": entry.qtype,
-                    "result": entry.result.to_string(),
+                    "result": &result_str,
                     "upstream_us": entry.upstream_us,
                     "cached": entry.cached,
                     "answer": entry.answer,
@@ -171,12 +178,12 @@ fn handle_dns_logs_follow(
                         "Dns": {
                             "QueryResolved": {
                                 "timestamp": entry.timestamp,
-                                "src_ip": entry.src_ip.to_string(),
-                                "src_mac": mac.map(|m| m.to_string()),
-                                "src_hostname": src_hostname,
+                                "src_ip": &src_ip_str,
+                                "src_mac": &src_mac_str,
+                                "src_hostname": &src_hostname,
                                 "domain": entry.domain.as_ref(),
                                 "qtype": entry.qtype,
-                                "result": entry.result.to_string(),
+                                "result": &result_str,
                                 "upstream_us": entry.upstream_us,
                                 "cached": entry.cached,
                                 "answer": entry.answer,

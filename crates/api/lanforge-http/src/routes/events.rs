@@ -62,12 +62,11 @@ fn handle_events_stream(
             }
 
             if let Some(ref f) = filter {
-                let f_lower = f.to_lowercase();
                 let matches_filter = match &event.event {
                     LanforgeEvent::Device(dev_ev) => {
-                        f_lower == "device"
-                            || f_lower == "devices"
-                            || (f_lower == "dhcp"
+                        f.eq_ignore_ascii_case("device")
+                            || f.eq_ignore_ascii_case("devices")
+                            || (f.eq_ignore_ascii_case("dhcp")
                                 && matches!(
                                     dev_ev,
                                     DeviceEvent::LeaseRelease { .. }
@@ -78,11 +77,13 @@ fn handle_events_stream(
                                 ))
                     }
                     LanforgeEvent::Network(_) => {
-                        f_lower == "network" || f_lower == "dhcp" || f_lower == "ra"
+                        f.eq_ignore_ascii_case("network")
+                            || f.eq_ignore_ascii_case("dhcp")
+                            || f.eq_ignore_ascii_case("ra")
                     }
                     LanforgeEvent::System(sys_ev) => {
-                        f_lower == "system"
-                            || (f_lower == "dhcp"
+                        f.eq_ignore_ascii_case("system")
+                            || (f.eq_ignore_ascii_case("dhcp")
                                 && matches!(
                                     sys_ev,
                                     SystemEvent::ConfigDhcpV4Changed
@@ -90,11 +91,13 @@ fn handle_events_stream(
                                         | SystemEvent::ConfigDhcpOptionsChanged
                                 ))
                     }
-                    LanforgeEvent::Storage(_) => f_lower == "storage" || f_lower == "db",
-                    LanforgeEvent::Pppoe(_) => f_lower == "pppoe",
-                    LanforgeEvent::Firewall(_) => f_lower == "firewall",
-                    LanforgeEvent::Traffic(_) => f_lower == "traffic",
-                    LanforgeEvent::Dns(_) => f_lower == "dns",
+                    LanforgeEvent::Storage(_) => {
+                        f.eq_ignore_ascii_case("storage") || f.eq_ignore_ascii_case("db")
+                    }
+                    LanforgeEvent::Pppoe(_) => f.eq_ignore_ascii_case("pppoe"),
+                    LanforgeEvent::Firewall(_) => f.eq_ignore_ascii_case("firewall"),
+                    LanforgeEvent::Traffic(_) => f.eq_ignore_ascii_case("traffic"),
+                    LanforgeEvent::Dns(_) => f.eq_ignore_ascii_case("dns"),
                 };
                 if !matches_filter {
                     continue;

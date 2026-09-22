@@ -408,13 +408,15 @@ async fn handle_embedded_webui(
     match WebUiAssets::get_file_or_fallback(path) {
         Some((mime, content)) => {
             let hash = content.metadata.sha256_hash();
-            let mut etag = String::with_capacity(66);
-            etag.push('"');
-            for byte in hash {
-                use std::fmt::Write;
-                let _ = write!(etag, "{byte:02x}");
+            const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
+            let mut etag_bytes = [0u8; 66];
+            etag_bytes[0] = b'"';
+            for (i, &b) in hash.iter().enumerate() {
+                etag_bytes[1 + i * 2] = HEX_DIGITS[(b >> 4) as usize];
+                etag_bytes[2 + i * 2] = HEX_DIGITS[(b & 0x0f) as usize];
             }
-            etag.push('"');
+            etag_bytes[65] = b'"';
+            let etag = std::str::from_utf8(&etag_bytes).unwrap_or("");
 
             if let Some(if_none_match) = headers
                 .get(axum::http::header::IF_NONE_MATCH)
@@ -433,7 +435,7 @@ async fn handle_embedded_webui(
             (
                 [
                     (axum::http::header::CONTENT_TYPE, mime.as_ref()),
-                    (axum::http::header::ETAG, etag.as_str()),
+                    (axum::http::header::ETAG, etag),
                     (axum::http::header::CACHE_CONTROL, cache_control),
                 ],
                 content.data,

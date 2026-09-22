@@ -1,35 +1,50 @@
 use std::fmt::Write;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use lanforge_core::context::{EventCounters, LanforgeContext};
 use lanforge_dns::server::DnsContext;
 use lanforge_dns::telemetry::DnsStats;
-use lanforge_types::device::{Device, Origin};
+use lanforge_types::device::Origin;
 use lanforge_types::system::SystemStatus;
+
+#[derive(Default)]
+struct DeviceMetricsSummary {
+    total: usize,
+    online: usize,
+    static_count: usize,
+    dynamic_count: usize,
+    v4_leases: usize,
+    v6_leases: usize,
+}
 
 /// Generates a Prometheus-formatted metrics string.
 #[must_use]
 pub fn generate_metrics(ctx: &LanforgeContext, uptime_secs: u64) -> String {
     let mut out = String::with_capacity(4096);
-    let (devices, v4_leases, v6_leases) = {
-        let state = ctx.read();
-
-        let devices: Vec<_> = state.devices().collect();
-        let v4_leases = state.devices().filter(|d| d.v4.is_dynamic()).count();
-        let v6_leases: usize = state
-            .devices()
-            .map(|d| d.v6.iter().filter(|s| s.is_dynamic()).count())
-            .sum();
-
-        drop(state);
-        (devices, v4_leases, v6_leases)
-    };
+    let summary = ctx.with_state(|state| {
+        let mut summary = DeviceMetricsSummary::default();
+        for dev in state.devices.values() {
+            summary.total += 1;
+            if dev.is_online() {
+                summary.online += 1;
+            }
+            match dev.origin {
+                Origin::Static => summary.static_count += 1,
+                Origin::Dynamic => summary.dynamic_count += 1,
+                Origin::System => {}
+            }
+            if dev.v4.is_dynamic() {
+                summary.v4_leases += 1;
+            }
+            summary.v6_leases += dev.v6.iter().filter(|s| s.is_dynamic()).count();
+        }
+        summary
+    });
     let counters = ctx.counters();
     let status = ctx.get_status().unwrap_or_default();
 
-    append_device_metrics(&mut out, &devices);
-    append_dhcp_metrics(&mut out, ctx, &status, v4_leases, v6_leases);
+    append_device_metrics(&mut out, &summary);
+    append_dhcp_metrics(&mut out, ctx, &status, summary.v4_leases, summary.v6_leases);
     append_dns_metrics(&mut out, ctx);
     append_core_metrics(&mut out, counters);
     append_system_metrics(&mut out, &status, uptime_secs);
@@ -37,34 +52,26 @@ pub fn generate_metrics(ctx: &LanforgeContext, uptime_secs: u64) -> String {
     out
 }
 
-fn append_device_metrics(out: &mut String, devices: &[Arc<Device>]) {
+fn append_device_metrics(out: &mut String, summary: &DeviceMetricsSummary) {
     out.push_str("# HELP lanforge_devices_total Total number of known devices in state table\n");
     out.push_str("# TYPE lanforge_devices_total gauge\n");
-    let _ = writeln!(out, "lanforge_devices_total {}", devices.len());
+    let _ = writeln!(out, "lanforge_devices_total {}", summary.total);
 
-    let online_ct = devices.iter().filter(|d| d.is_online()).count();
     out.push_str("# HELP lanforge_devices_online Number of devices seen recently (online)\n");
     out.push_str("# TYPE lanforge_devices_online gauge\n");
-    let _ = writeln!(out, "lanforge_devices_online {online_ct}");
-
-    let static_ct = devices
-        .iter()
-        .filter(|d| matches!(d.origin, Origin::Static))
-        .count();
-    let dyn_ct = devices
-        .iter()
-        .filter(|d| d.origin == Origin::Dynamic)
-        .count();
+    let _ = writeln!(out, "lanforge_devices_online {}", summary.online);
 
     out.push_str("# HELP lanforge_devices_by_origin Number of devices by discovery origin\n");
     out.push_str("# TYPE lanforge_devices_by_origin gauge\n");
     let _ = writeln!(
         out,
-        "lanforge_devices_by_origin{{origin=\"static\"}} {static_ct}"
+        "lanforge_devices_by_origin{{origin=\"static\"}} {}",
+        summary.static_count
     );
     let _ = writeln!(
         out,
-        "lanforge_devices_by_origin{{origin=\"dynamic\"}} {dyn_ct}"
+        "lanforge_devices_by_origin{{origin=\"dynamic\"}} {}",
+        summary.dynamic_count
     );
 }
 
