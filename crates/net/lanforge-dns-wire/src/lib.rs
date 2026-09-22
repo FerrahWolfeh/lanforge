@@ -247,6 +247,23 @@ impl<'a> WireQuestion<'a> {
             qclass: DnsClass::from(self.qclass()),
         }
     }
+
+    /// Returns the domain name in standard dot-separated representation, converted to lowercase in a single pass.
+    #[must_use]
+    pub fn to_domain_lowercase(&self) -> String {
+        let mut domain = String::with_capacity(64);
+        for label in self.labels() {
+            if !domain.is_empty() {
+                domain.push('.');
+            }
+            if let Ok(s) = std::str::from_utf8(label) {
+                for b in s.bytes() {
+                    domain.push(b.to_ascii_lowercase() as char);
+                }
+            }
+        }
+        domain
+    }
 }
 
 #[derive(Clone)]
@@ -303,11 +320,10 @@ impl<'a> WireResponseScanner<'a> {
             pos += 4; // Type and Class
         }
 
-        let mut offsets = Vec::new();
-        let mut min_ttl = u32::MAX;
-
         let record_count =
             header.ancount() as usize + header.nscount() as usize + header.arcount() as usize;
+        let mut offsets = Vec::with_capacity(record_count);
+        let mut min_ttl = u32::MAX;
 
         for _ in 0..record_count {
             if pos >= self.data.len() {
@@ -320,6 +336,14 @@ impl<'a> WireResponseScanner<'a> {
 
             // TYPE(2), CLASS(2), TTL(4), RDLEN(2)
             let rtype = u16::from_be_bytes([self.data[pos], self.data[pos + 1]]);
+            if rtype == 41 {
+                // RFC 6891: OPT pseudo-RR TTL field encodes extended RCODE, version, and flags,
+                // not an actual TTL. Never scrub it or count it toward min_ttl.
+                let rdlen = u16::from_be_bytes([self.data[pos + 8], self.data[pos + 9]]) as usize;
+                pos += 10 + rdlen;
+                continue;
+            }
+
             let ttl_offset = pos + 4;
             let mut ttl = u32::from_be_bytes([
                 self.data[ttl_offset],
@@ -490,16 +514,33 @@ impl WireResponseWriter {
 
         // 3. Answers
         let qtype = if is_v6 { 28u16 } else { 1u16 }; // AAAA=28, A=1
+        let qtype_bytes = qtype.to_be_bytes();
+        let ttl_bytes = ttl.to_be_bytes();
         for ip in ips {
-            // Name Pointer (0xC00C points to the QNAME starting at index 12)
-            resp.extend_from_slice(&[0xC0, 0x0C]);
-            resp.extend_from_slice(&qtype.to_be_bytes());
-            resp.extend_from_slice(&1u16.to_be_bytes()); // Class IN (1)
-            resp.extend_from_slice(&ttl.to_be_bytes());
-            resp.extend_from_slice(&(u16::try_from(rd_len).unwrap_or(u16::MAX)).to_be_bytes());
             match ip {
-                IpAddr::V4(addr) => resp.extend_from_slice(&addr.octets()),
-                IpAddr::V6(addr) => resp.extend_from_slice(&addr.octets()),
+                IpAddr::V4(addr) => {
+                    let octets = addr.octets();
+                    let record: [u8; 16] = [
+                        0xC0, 0x0C,
+                        qtype_bytes[0], qtype_bytes[1],
+                        0x00, 0x01,
+                        ttl_bytes[0], ttl_bytes[1], ttl_bytes[2], ttl_bytes[3],
+                        0x00, 0x04,
+                        octets[0], octets[1], octets[2], octets[3],
+                    ];
+                    resp.extend_from_slice(&record);
+                }
+                IpAddr::V6(addr) => {
+                    let octets = addr.octets();
+                    let mut record = [0u8; 28];
+                    record[0..2].copy_from_slice(&[0xC0, 0x0C]);
+                    record[2..4].copy_from_slice(&qtype_bytes);
+                    record[4..6].copy_from_slice(&[0x00, 0x01]);
+                    record[6..10].copy_from_slice(&ttl_bytes);
+                    record[10..12].copy_from_slice(&[0x00, 0x10]);
+                    record[12..28].copy_from_slice(&octets);
+                    resp.extend_from_slice(&record);
+                }
             }
         }
 
@@ -538,10 +579,14 @@ impl WireResponseWriter {
         resp.extend_from_slice(&args.question.data[12..]);
 
         // 3. Answer (PTR)
-        resp.extend_from_slice(&[0xC0, 0x0C]);
-        resp.extend_from_slice(&12u16.to_be_bytes()); // Type PTR (12)
-        resp.extend_from_slice(&1u16.to_be_bytes()); // Class IN (1)
-        resp.extend_from_slice(&args.ttl.to_be_bytes());
+        let ttl_bytes = args.ttl.to_be_bytes();
+        let ans_hdr: [u8; 10] = [
+            0xC0, 0x0C,
+            0x00, 12, // Type PTR (12)
+            0x00, 0x01, // Class IN (1)
+            ttl_bytes[0], ttl_bytes[1], ttl_bytes[2], ttl_bytes[3],
+        ];
+        resp.extend_from_slice(&ans_hdr);
 
         // RDLEN and RDATA
         // Pre-calculate RDATA length to avoid extra Vec allocation
@@ -618,10 +663,14 @@ impl WireResponseWriter {
         resp.extend_from_slice(&question.data[12..]);
 
         // 3. Answer (CNAME)
-        resp.extend_from_slice(&[0xC0, 0x0C]);
-        resp.extend_from_slice(&5u16.to_be_bytes()); // Type CNAME (5)
-        resp.extend_from_slice(&1u16.to_be_bytes()); // Class IN (1)
-        resp.extend_from_slice(&ttl.to_be_bytes());
+        let ttl_bytes = ttl.to_be_bytes();
+        let ans_hdr: [u8; 10] = [
+            0xC0, 0x0C,
+            0x00, 5, // Type CNAME (5)
+            0x00, 0x01, // Class IN (1)
+            ttl_bytes[0], ttl_bytes[1], ttl_bytes[2], ttl_bytes[3],
+        ];
+        resp.extend_from_slice(&ans_hdr);
 
         // RDLEN and RDATA
         let mut rdlen = 0u16;
@@ -687,10 +736,14 @@ impl WireResponseWriter {
         resp.extend_from_slice(&question.data[12..]);
 
         // 3. Answer (SRV)
-        resp.extend_from_slice(&[0xC0, 0x0C]); // Name pointer to question
-        resp.extend_from_slice(&33u16.to_be_bytes()); // Type SRV (33)
-        resp.extend_from_slice(&1u16.to_be_bytes()); // Class IN (1)
-        resp.extend_from_slice(&ttl.to_be_bytes());
+        let ttl_bytes = ttl.to_be_bytes();
+        let ans_hdr: [u8; 10] = [
+            0xC0, 0x0C,
+            0x00, 33, // Type SRV (33)
+            0x00, 0x01, // Class IN (1)
+            ttl_bytes[0], ttl_bytes[1], ttl_bytes[2], ttl_bytes[3],
+        ];
+        resp.extend_from_slice(&ans_hdr);
 
         // RDLEN and RDATA
         let mut target_len = 0u16;
@@ -706,9 +759,13 @@ impl WireResponseWriter {
         resp.extend_from_slice(&rdlen.to_be_bytes());
 
         // RDATA: Priority (2 bytes), Weight (2 bytes), Port (2 bytes), Target (variable)
-        resp.extend_from_slice(&0u16.to_be_bytes()); // Priority = 0
-        resp.extend_from_slice(&0u16.to_be_bytes()); // Weight = 0
-        resp.extend_from_slice(&port.to_be_bytes());
+        let port_bytes = port.to_be_bytes();
+        let srv_fixed: [u8; 6] = [
+            0, 0, // Priority = 0
+            0, 0, // Weight = 0
+            port_bytes[0], port_bytes[1],
+        ];
+        resp.extend_from_slice(&srv_fixed);
 
         for label in target.split('.') {
             if label.is_empty() {
@@ -726,11 +783,15 @@ impl WireResponseWriter {
     }
 
     fn write_opt(resp: &mut Vec<u8>, opt: WireOptScanner) {
-        resp.push(0); // Root Name
-        resp.extend_from_slice(&41u16.to_be_bytes()); // Type 41 (OPT)
-        resp.extend_from_slice(&opt.max_payload.to_be_bytes()); // Class (Max Payload)
-        resp.extend_from_slice(&[0, 0, 0, 0]); // TTL
-        resp.extend_from_slice(&[0, 0]); // RDLEN = 0
+        let max_payload_bytes = opt.max_payload.to_be_bytes();
+        let opt_rr: [u8; 11] = [
+            0, // Root Name
+            0x00, 41, // Type 41 (OPT)
+            max_payload_bytes[0], max_payload_bytes[1], // Class (Max Payload)
+            0, 0, 0, 0, // TTL
+            0, 0, // RDLEN = 0
+        ];
+        resp.extend_from_slice(&opt_rr);
     }
 }
 
@@ -752,7 +813,7 @@ impl<'a> WireDecoder<'a> {
 
     /// Decodes a domain name from the wire format, handling pointers (decompression).
     pub fn decode_name(&mut self) -> Option<Arc<str>> {
-        let mut name = String::new();
+        let mut name = String::with_capacity(48);
         let mut pos = self.pos;
         let mut jumped = false;
         let mut first_label = true;
@@ -1070,7 +1131,7 @@ impl WireEncoder {
     }
 
     pub fn encode_header(&mut self, h: &DnsHeader) {
-        self.buf.extend_from_slice(&h.id.to_be_bytes());
+        let id_bytes = h.id.to_be_bytes();
         let mut b2 = 0u8;
         if h.qr {
             b2 |= 0x80;
@@ -1085,7 +1146,6 @@ impl WireEncoder {
         if h.rd {
             b2 |= 0x01;
         }
-        self.buf.push(b2);
 
         let mut b3 = 0u8;
         if h.ra {
@@ -1101,12 +1161,27 @@ impl WireEncoder {
             b3 |= 0x10;
         }
         b3 |= u8::from(h.rcode) & 0x0F;
-        self.buf.push(b3);
 
-        self.buf.extend_from_slice(&h.qdcount.to_be_bytes());
-        self.buf.extend_from_slice(&h.ancount.to_be_bytes());
-        self.buf.extend_from_slice(&h.nscount.to_be_bytes());
-        self.buf.extend_from_slice(&h.arcount.to_be_bytes());
+        let qd = h.qdcount.to_be_bytes();
+        let an = h.ancount.to_be_bytes();
+        let ns = h.nscount.to_be_bytes();
+        let ar = h.arcount.to_be_bytes();
+
+        let header_bytes: [u8; 12] = [
+            id_bytes[0],
+            id_bytes[1],
+            b2,
+            b3,
+            qd[0],
+            qd[1],
+            an[0],
+            an[1],
+            ns[0],
+            ns[1],
+            ar[0],
+            ar[1],
+        ];
+        self.buf.extend_from_slice(&header_bytes);
     }
 
     pub fn encode_message(&mut self, msg: &DnsMessage) -> Vec<u8> {
@@ -1132,14 +1207,23 @@ impl WireEncoder {
 
     fn encode_record(&mut self, r: &DnsRecord) {
         self.encode_name(&r.name);
-        self.buf
-            .extend_from_slice(&u16::from(r.rtype).to_be_bytes());
-        self.buf
-            .extend_from_slice(&u16::from(r.rclass).to_be_bytes());
-        self.buf.extend_from_slice(&r.ttl.to_be_bytes());
-
-        let rdlen_pos = self.buf.len();
-        self.buf.extend_from_slice(&[0, 0]); // Placeholder
+        let rtype_bytes = u16::from(r.rtype).to_be_bytes();
+        let rclass_bytes = u16::from(r.rclass).to_be_bytes();
+        let ttl_bytes = r.ttl.to_be_bytes();
+        let header_suffix: [u8; 10] = [
+            rtype_bytes[0],
+            rtype_bytes[1],
+            rclass_bytes[0],
+            rclass_bytes[1],
+            ttl_bytes[0],
+            ttl_bytes[1],
+            ttl_bytes[2],
+            ttl_bytes[3],
+            0,
+            0, // rdlen placeholder
+        ];
+        let rdlen_pos = self.buf.len() + 8;
+        self.buf.extend_from_slice(&header_suffix);
 
         let rdata_start = self.buf.len();
         self.encode_rdata(&r.rdata);
@@ -1281,5 +1365,47 @@ mod tests {
         let mut encoder = WireEncoder::new();
         let encoded = encoder.encode_message(&msg);
         assert_eq!(encoded, query_data);
+    }
+
+    #[test]
+    fn test_to_domain_lowercase() {
+        // Query for "Host.LAN"
+        let query_data =
+            b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x04Host\x03LAN\x00\x00\x01\x00\x01";
+        let question = WireQuestion::parse(query_data).expect("Should parse question");
+        assert_eq!(question.to_domain_lowercase(), "host.lan");
+    }
+
+    #[test]
+    fn test_write_ip_response_v4_v6_and_ttl_scan() {
+        let query_data =
+            b"\x56\x78\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03app\x03lan\x00\x00\x01\x00\x01";
+        let question = WireQuestion::parse(query_data).expect("Should parse question");
+        let ips = [
+            IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 50)),
+            IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 51)),
+        ];
+        let mut resp = Vec::new();
+        WireResponseWriter::write_ip_response(
+            query_data,
+            &question,
+            &ips,
+            300,
+            Some(WireOptScanner { max_payload: 1232 }),
+            true,
+            &mut resp,
+        );
+
+        let scanner = WireResponseScanner::new(&resp);
+        let (offsets, min_ttl) = scanner.scan_ttls();
+        assert_eq!(offsets.len(), 2);
+        assert_eq!(min_ttl, 300);
+
+        let mut decoder = WireDecoder::new(&resp);
+        let msg = decoder.decode_message().expect("Should decode response message");
+        assert_eq!(msg.header.id, 0x5678);
+        assert_eq!(msg.answers.len(), 2);
+        assert_eq!(msg.answers[0].ttl, 300);
+        assert_eq!(msg.answers[1].ttl, 300);
     }
 }
