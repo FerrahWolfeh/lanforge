@@ -6,7 +6,8 @@ use crate::tables::{
 };
 use lanforge_core::bus::TimedEvent;
 use lanforge_db_core::{BoxFuture, DbError, DnsQueryRateBucket, LogStore};
-use lanforge_types::network::dns::{DnsLifetimeStats, TransportProtocol};
+use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType, TransportProtocol};
 use lanforge_types::network::{QueryLogEntry, QueryResult};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
 use std::net::IpAddr;
@@ -19,6 +20,75 @@ pub struct BlockedQueryEntry {
     pub src_ip: String,
     pub src_mac: Option<String>,
     pub domain: String,
+}
+
+#[derive(serde::Deserialize)]
+struct QueryFilterRow<'a> {
+    src_ip: IpAddr,
+    #[serde(borrow)]
+    domain: std::borrow::Cow<'a, str>,
+    #[serde(default)]
+    src_mac: Option<MacAddr>,
+}
+
+impl QueryFilterRow<'_> {
+    fn matches(&self, filter_lower: &str) -> bool {
+        let ip_str = self.src_ip.to_string();
+        if ip_str.contains(filter_lower) {
+            return true;
+        }
+        if let Some(mac) = self.src_mac {
+            let mac_str = mac.to_string().to_lowercase();
+            if mac_str.contains(filter_lower) {
+                return true;
+            }
+        }
+        self.domain.to_lowercase().contains(filter_lower)
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct DomainResultRow<'a> {
+    #[serde(borrow)]
+    domain: std::borrow::Cow<'a, str>,
+    result: QueryResult,
+}
+
+#[derive(serde::Deserialize)]
+struct ClientDomainResultRow<'a> {
+    #[serde(borrow)]
+    domain: std::borrow::Cow<'a, str>,
+    result: QueryResult,
+    src_ip: IpAddr,
+    #[serde(default)]
+    src_mac: Option<MacAddr>,
+}
+
+#[derive(serde::Deserialize)]
+struct QTypeResultRow {
+    qtype: DnsRecordType,
+}
+
+#[derive(serde::Deserialize)]
+struct QueryRateDetailedRow {
+    result: QueryResult,
+    qtype: DnsRecordType,
+}
+
+#[derive(serde::Deserialize)]
+struct BlockedRateResultRow {
+    result: QueryResult,
+}
+
+#[derive(serde::Deserialize)]
+struct ClientResultRow {
+    src_ip: IpAddr,
+    result: QueryResult,
+}
+
+#[derive(serde::Deserialize)]
+struct ProtocolResultRow {
+    protocol: TransportProtocol,
 }
 
 impl RedbDatabase {
@@ -79,7 +149,7 @@ impl RedbDatabase {
 impl LogStore for RedbDatabase {
     fn record_log<'a>(&'a self, timed_event: &'a TimedEvent) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
-            let mut buf = String::new();
+            let mut buf = Vec::with_capacity(256);
             self.record_logs_batch(std::slice::from_ref(timed_event), &mut buf)
                 .await
         })
@@ -88,7 +158,7 @@ impl LogStore for RedbDatabase {
     fn record_logs_batch<'a>(
         &'a self,
         events: &'a [TimedEvent],
-        _json_buf: &'a mut String,
+        bytes_buf: &'a mut Vec<u8>,
     ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             if events.is_empty() {
@@ -112,10 +182,11 @@ impl LogStore for RedbDatabase {
                         .unwrap_or_default()
                         .as_secs();
                     let seq = self.log_seq.fetch_add(1, Ordering::Relaxed);
-                    let bytes = serde_json::to_vec(event)
+                    bytes_buf.clear();
+                    serde_json::to_writer(&mut *bytes_buf, event)
                         .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
                     table
-                        .insert((ts, seq), bytes.as_slice())
+                        .insert((ts, seq), bytes_buf.as_slice())
                         .map_err(|e| DbError::Backend(e.to_string()))?;
                 }
             }
@@ -152,7 +223,8 @@ impl LogStore for RedbDatabase {
                 src_mac,
                 domain: domain.to_string(),
             };
-            let bytes = serde_json::to_vec(&entry)
+            let mut bytes_buf = Vec::with_capacity(256);
+            serde_json::to_writer(&mut bytes_buf, &entry)
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
             let write_txn = self
@@ -166,7 +238,7 @@ impl LogStore for RedbDatabase {
                     .map_err(|e| DbError::Backend(e.to_string()))?;
                 let seq = self.log_seq.fetch_add(1, Ordering::Relaxed);
                 table
-                    .insert((ts, seq), bytes.as_slice())
+                    .insert((ts, seq), bytes_buf.as_slice())
                     .map_err(|e| DbError::Backend(e.to_string()))?;
             }
             write_txn
@@ -202,13 +274,15 @@ impl LogStore for RedbDatabase {
                     .open_table(TABLE_DNS_QUERIES)
                     .map_err(|e| DbError::Backend(e.to_string()))?;
 
+                let mut bytes_buf = Vec::with_capacity(512);
                 for entry in entries {
                     let ts = entry.timestamp;
                     let seq = self.log_seq.fetch_add(1, Ordering::Relaxed);
-                    let bytes = serde_json::to_vec(entry)
+                    bytes_buf.clear();
+                    serde_json::to_writer(&mut bytes_buf, entry)
                         .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
                     table
-                        .insert((ts, seq), bytes.as_slice())
+                        .insert((ts, seq), bytes_buf.as_slice())
                         .map_err(|e| DbError::Backend(e.to_string()))?;
                 }
 
@@ -350,32 +424,42 @@ impl LogStore for RedbDatabase {
             {
                 // 1. Prune TABLE_LOG_EVENTS
                 if let Ok(mut table) = write_txn.open_table(TABLE_LOG_EVENTS) {
-                    let mut to_delete = Vec::new();
-                    for item in table
-                        .range(..(cutoff, 0))
-                        .map_err(|e| DbError::Backend(e.to_string()))?
-                    {
-                        let (k, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                        to_delete.push(k.value());
-                    }
-                    for k in to_delete {
-                        let _ = table.remove(k);
+                    loop {
+                        let mut chunk = Vec::with_capacity(512);
+                        for item in table
+                            .range(..(cutoff, 0))
+                            .map_err(|e| DbError::Backend(e.to_string()))?
+                            .take(512)
+                        {
+                            let (k, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+                            chunk.push(k.value());
+                        }
+                        if chunk.is_empty() {
+                            break;
+                        }
+                        for k in chunk {
+                            let _ = table.remove(k);
+                        }
                     }
 
                     // Capacity cap (10,000)
-                    let len = table.len().map_err(|e| DbError::Backend(e.to_string()))? as usize;
-                    if len > 10_000 {
-                        let excess = len - 10_000;
-                        let mut excess_keys = Vec::with_capacity(excess);
+                    let mut len = table.len().map_err(|e| DbError::Backend(e.to_string()))? as usize;
+                    while len > 10_000 {
+                        let to_take = (len - 10_000).min(512);
+                        let mut chunk = Vec::with_capacity(to_take);
                         for item in table
                             .iter()
                             .map_err(|e| DbError::Backend(e.to_string()))?
-                            .take(excess)
+                            .take(to_take)
                         {
                             let (k, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                            excess_keys.push(k.value());
+                            chunk.push(k.value());
                         }
-                        for k in excess_keys {
+                        if chunk.is_empty() {
+                            break;
+                        }
+                        len -= chunk.len();
+                        for k in chunk {
                             let _ = table.remove(k);
                         }
                     }
@@ -383,32 +467,42 @@ impl LogStore for RedbDatabase {
 
                 // 2. Prune TABLE_DNS_QUERIES
                 if let Ok(mut table) = write_txn.open_table(TABLE_DNS_QUERIES) {
-                    let mut to_delete = Vec::new();
-                    for item in table
-                        .range(..(cutoff, 0))
-                        .map_err(|e| DbError::Backend(e.to_string()))?
-                    {
-                        let (k, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                        to_delete.push(k.value());
-                    }
-                    for k in to_delete {
-                        let _ = table.remove(k);
+                    loop {
+                        let mut chunk = Vec::with_capacity(512);
+                        for item in table
+                            .range(..(cutoff, 0))
+                            .map_err(|e| DbError::Backend(e.to_string()))?
+                            .take(512)
+                        {
+                            let (k, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+                            chunk.push(k.value());
+                        }
+                        if chunk.is_empty() {
+                            break;
+                        }
+                        for k in chunk {
+                            let _ = table.remove(k);
+                        }
                     }
 
                     // Capacity cap (100,000)
-                    let len = table.len().map_err(|e| DbError::Backend(e.to_string()))? as usize;
-                    if len > 100_000 {
-                        let excess = len - 100_000;
-                        let mut excess_keys = Vec::with_capacity(excess);
+                    let mut len = table.len().map_err(|e| DbError::Backend(e.to_string()))? as usize;
+                    while len > 100_000 {
+                        let to_take = (len - 100_000).min(512);
+                        let mut chunk = Vec::with_capacity(to_take);
                         for item in table
                             .iter()
                             .map_err(|e| DbError::Backend(e.to_string()))?
-                            .take(excess)
+                            .take(to_take)
                         {
                             let (k, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                            excess_keys.push(k.value());
+                            chunk.push(k.value());
                         }
-                        for k in excess_keys {
+                        if chunk.is_empty() {
+                            break;
+                        }
+                        len -= chunk.len();
+                        for k in chunk {
                             let _ = table.remove(k);
                         }
                     }
@@ -416,32 +510,42 @@ impl LogStore for RedbDatabase {
 
                 // 3. Prune TABLE_DNS_BLOCKED
                 if let Ok(mut table) = write_txn.open_table(TABLE_DNS_BLOCKED) {
-                    let mut to_delete = Vec::new();
-                    for item in table
-                        .range(..(cutoff, 0))
-                        .map_err(|e| DbError::Backend(e.to_string()))?
-                    {
-                        let (k, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                        to_delete.push(k.value());
-                    }
-                    for k in to_delete {
-                        let _ = table.remove(k);
+                    loop {
+                        let mut chunk = Vec::with_capacity(512);
+                        for item in table
+                            .range(..(cutoff, 0))
+                            .map_err(|e| DbError::Backend(e.to_string()))?
+                            .take(512)
+                        {
+                            let (k, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+                            chunk.push(k.value());
+                        }
+                        if chunk.is_empty() {
+                            break;
+                        }
+                        for k in chunk {
+                            let _ = table.remove(k);
+                        }
                     }
 
                     // Capacity cap (50,000)
-                    let len = table.len().map_err(|e| DbError::Backend(e.to_string()))? as usize;
-                    if len > 50_000 {
-                        let excess = len - 50_000;
-                        let mut excess_keys = Vec::with_capacity(excess);
+                    let mut len = table.len().map_err(|e| DbError::Backend(e.to_string()))? as usize;
+                    while len > 50_000 {
+                        let to_take = (len - 50_000).min(512);
+                        let mut chunk = Vec::with_capacity(to_take);
                         for item in table
                             .iter()
                             .map_err(|e| DbError::Backend(e.to_string()))?
-                            .take(excess)
+                            .take(to_take)
                         {
                             let (k, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                            excess_keys.push(k.value());
+                            chunk.push(k.value());
                         }
-                        for k in excess_keys {
+                        if chunk.is_empty() {
+                            break;
+                        }
+                        len -= chunk.len();
+                        for k in chunk {
                             let _ = table.remove(k);
                         }
                     }
@@ -450,16 +554,22 @@ impl LogStore for RedbDatabase {
                 // 4. Prune TABLE_DNS_TELEMETRY (keep up to 30 days of 15-minute buckets)
                 if let Ok(mut table) = write_txn.open_table(TABLE_DNS_TELEMETRY) {
                     let telemetry_cutoff = cutoff.saturating_sub(23 * 86400); // 30 days total retention
-                    let mut to_delete = Vec::new();
-                    for item in table
-                        .range(..telemetry_cutoff)
-                        .map_err(|e| DbError::Backend(e.to_string()))?
-                    {
-                        let (k, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                        to_delete.push(k.value());
-                    }
-                    for k in to_delete {
-                        let _ = table.remove(k);
+                    loop {
+                        let mut chunk = Vec::with_capacity(512);
+                        for item in table
+                            .range(..telemetry_cutoff)
+                            .map_err(|e| DbError::Backend(e.to_string()))?
+                            .take(512)
+                        {
+                            let (k, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+                            chunk.push(k.value());
+                        }
+                        if chunk.is_empty() {
+                            break;
+                        }
+                        for k in chunk {
+                            let _ = table.remove(k);
+                        }
                     }
                 }
             }
@@ -523,33 +633,28 @@ impl LogStore for RedbDatabase {
 
             if let Some(cf) = client_filter {
                 let cf_lower = cf.to_lowercase();
-                let mut matched_entries = Vec::new();
+                let mut matched_total = 0;
+                let mut entries = Vec::with_capacity(limit);
+
                 for item in table
                     .iter()
                     .map_err(|e| DbError::Backend(e.to_string()))?
                     .rev()
                 {
                     let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                    let entry: QueryLogEntry = serde_json::from_slice(val.value())
+                    let bytes = val.value();
+                    let filter_row: QueryFilterRow = serde_json::from_slice(bytes)
                         .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                    let matches = entry.src_ip.to_string().contains(&cf_lower)
-                        || entry
-                            .src_mac
-                            .as_ref()
-                            .map(|m| m.to_string().to_lowercase())
-                            .is_some_and(|m| m.contains(&cf_lower))
-                        || entry.domain.to_lowercase().contains(&cf_lower);
-                    if matches {
-                        matched_entries.push(entry);
+                    if filter_row.matches(&cf_lower) {
+                        if matched_total >= offset && entries.len() < limit {
+                            let entry: QueryLogEntry = serde_json::from_slice(bytes)
+                                .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
+                            entries.push(entry);
+                        }
+                        matched_total += 1;
                     }
                 }
-                let total = matched_entries.len();
-                let entries = matched_entries
-                    .into_iter()
-                    .skip(offset)
-                    .take(limit)
-                    .collect();
-                Ok((entries, total))
+                Ok((entries, matched_total))
             } else {
                 let total = table.len().map_err(|e| DbError::Backend(e.to_string()))? as usize;
                 if offset >= total {
@@ -595,12 +700,16 @@ impl LogStore for RedbDatabase {
                 std::collections::HashMap::new();
             for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
                 let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: QueryLogEntry = serde_json::from_slice(val.value())
+                let entry: DomainResultRow = serde_json::from_slice(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 if matches!(entry.result, QueryResult::Blocked | QueryResult::CachedBlock) {
                     continue;
                 }
-                *counts.entry(entry.domain.to_string()).or_insert(0) += 1;
+                if let Some(count) = counts.get_mut(entry.domain.as_ref()) {
+                    *count += 1;
+                } else {
+                    counts.insert(entry.domain.to_string(), 1);
+                }
             }
 
             let mut vec: Vec<(String, u64)> = counts.into_iter().collect();
@@ -627,19 +736,26 @@ impl LogStore for RedbDatabase {
                 Err(e) => return Err(DbError::Backend(e.to_string())),
             };
 
+            let client_ip: Option<IpAddr> = client.parse().ok();
+            let client_mac: Option<MacAddr> = client.parse().ok();
+
             let mut counts: std::collections::HashMap<String, u64> =
                 std::collections::HashMap::new();
             for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
                 let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: QueryLogEntry = serde_json::from_slice(val.value())
+                let entry: ClientDomainResultRow = serde_json::from_slice(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 if matches!(entry.result, QueryResult::Blocked | QueryResult::CachedBlock) {
                     continue;
                 }
-                if entry.src_ip.to_string() == client
-                    || entry.src_mac.as_ref().map(|m| m.to_string()).as_deref() == Some(client)
-                {
-                    *counts.entry(entry.domain.to_string()).or_insert(0) += 1;
+                let matches = (client_ip.is_some() && client_ip == Some(entry.src_ip))
+                    || (client_mac.is_some() && client_mac == entry.src_mac);
+                if matches {
+                    if let Some(count) = counts.get_mut(entry.domain.as_ref()) {
+                        *count += 1;
+                    } else {
+                        counts.insert(entry.domain.to_string(), 1);
+                    }
                 }
             }
 
@@ -666,7 +782,7 @@ impl LogStore for RedbDatabase {
             let mut counts: std::collections::HashMap<u16, u64> = std::collections::HashMap::new();
             for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
                 let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: QueryLogEntry = serde_json::from_slice(val.value())
+                let entry: QTypeResultRow = serde_json::from_slice(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 *counts.entry(u16::from(entry.qtype)).or_insert(0) += 1;
             }
@@ -699,10 +815,9 @@ impl LogStore for RedbDatabase {
                 .range((since_secs, 0)..)
                 .map_err(|e| DbError::Backend(e.to_string()))?
             {
-                let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: QueryLogEntry = serde_json::from_slice(val.value())
-                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                let bucket = (entry.timestamp / 30) * 30;
+                let (k, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+                let (timestamp, _) = k.value();
+                let bucket = (timestamp / 30) * 30;
                 *buckets.entry(bucket).or_insert(0) += 1;
             }
 
@@ -788,10 +903,11 @@ impl LogStore for RedbDatabase {
                 .range((since_secs, 0)..)
                 .map_err(|e| DbError::Backend(e.to_string()))?
             {
-                let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: QueryLogEntry = serde_json::from_slice(val.value())
+                let (k, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+                let (ts, _) = k.value();
+                let entry: QueryRateDetailedRow = serde_json::from_slice(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                let bucket_ts = (entry.timestamp / bsize) * bsize;
+                let bucket_ts = (ts / bsize) * bsize;
                 let bucket = buckets.entry(bucket_ts).or_insert_with(|| DnsQueryRateBucket {
                     timestamp: bucket_ts,
                     ..Default::default()
@@ -821,14 +937,28 @@ impl LogStore for RedbDatabase {
                     }
                 };
 
-                let qtype_str = entry.qtype.to_string();
-                *bucket.record_types.entry(qtype_str.clone()).or_insert(0) += 1;
-                *bucket
-                    .outcome_types
-                    .entry(outcome_key.to_string())
-                    .or_default()
-                    .entry(qtype_str)
-                    .or_insert(0) += 1;
+                if let Some(s) = entry.qtype.as_static_str() {
+                    if let Some(cnt) = bucket.record_types.get_mut(s) {
+                        *cnt += 1;
+                    } else {
+                        bucket.record_types.insert(s.to_string(), 1);
+                    }
+                    let out_map = bucket.outcome_types.entry(outcome_key.to_string()).or_default();
+                    if let Some(cnt) = out_map.get_mut(s) {
+                        *cnt += 1;
+                    } else {
+                        out_map.insert(s.to_string(), 1);
+                    }
+                } else {
+                    let qtype_str = entry.qtype.to_string();
+                    *bucket.record_types.entry(qtype_str.clone()).or_insert(0) += 1;
+                    *bucket
+                        .outcome_types
+                        .entry(outcome_key.to_string())
+                        .or_default()
+                        .entry(qtype_str)
+                        .or_insert(0) += 1;
+                }
             }
 
             let mut vec: Vec<DnsQueryRateBucket> = buckets.into_values().collect();
@@ -853,26 +983,27 @@ impl LogStore for RedbDatabase {
                 Err(e) => return Err(DbError::Backend(e.to_string())),
             };
 
-            let mut counts: std::collections::HashMap<String, (u64, u64)> =
+            let mut counts: std::collections::HashMap<IpAddr, (u64, u64)> =
                 std::collections::HashMap::new();
             for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
                 let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: QueryLogEntry = serde_json::from_slice(val.value())
+                let entry: ClientResultRow = serde_json::from_slice(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                let c = counts.entry(entry.src_ip.to_string()).or_insert((0, 0));
+                let c = counts.entry(entry.src_ip).or_insert((0, 0));
                 c.0 += 1;
                 if matches!(entry.result, QueryResult::Blocked | QueryResult::CachedBlock) {
                     c.1 += 1;
                 }
             }
 
-            let mut vec: Vec<(String, u64, u64)> = counts
-                .into_iter()
-                .map(|(ip, (total, blocked))| (ip, total, blocked))
-                .collect();
-            vec.sort_by_key(|b| std::cmp::Reverse(b.1));
+            let mut vec: Vec<(IpAddr, (u64, u64))> = counts.into_iter().collect();
+            vec.sort_by_key(|b| std::cmp::Reverse((b.1).0));
             vec.truncate(limit);
-            Ok(vec)
+            let result = vec
+                .into_iter()
+                .map(|(ip, (total, blocked))| (ip.to_string(), total, blocked))
+                .collect();
+            Ok(result)
         })
     }
 
@@ -889,23 +1020,31 @@ impl LogStore for RedbDatabase {
                 Err(e) => return Err(DbError::Backend(e.to_string())),
             };
 
-            let mut counts: std::collections::HashMap<String, u64> =
-                std::collections::HashMap::new();
+            let mut udp = 0u64;
+            let mut tcp = 0u64;
+            let mut dot = 0u64;
+            let mut doq = 0u64;
+            let mut doh = 0u64;
             for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
                 let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: QueryLogEntry = serde_json::from_slice(val.value())
+                let entry: ProtocolResultRow = serde_json::from_slice(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                let proto_str = match entry.protocol {
-                    TransportProtocol::Udp => "udp",
-                    TransportProtocol::Tcp => "tcp",
-                    TransportProtocol::Tls => "dot",
-                    TransportProtocol::Quic => "doq",
-                    TransportProtocol::Https => "doh",
-                };
-                *counts.entry(proto_str.to_string()).or_insert(0) += 1;
+                match entry.protocol {
+                    TransportProtocol::Udp => udp += 1,
+                    TransportProtocol::Tcp => tcp += 1,
+                    TransportProtocol::Tls => dot += 1,
+                    TransportProtocol::Quic => doq += 1,
+                    TransportProtocol::Https => doh += 1,
+                }
             }
 
-            let vec: Vec<(String, u64)> = counts.into_iter().collect();
+            let vec = vec![
+                ("udp".to_string(), udp),
+                ("tcp".to_string(), tcp),
+                ("dot".to_string(), dot),
+                ("doq".to_string(), doq),
+                ("doh".to_string(), doh),
+            ];
             Ok(vec)
         })
     }
@@ -930,10 +1069,14 @@ impl LogStore for RedbDatabase {
                 std::collections::HashMap::new();
             for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
                 let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: QueryLogEntry = serde_json::from_slice(val.value())
+                let entry: DomainResultRow = serde_json::from_slice(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 if matches!(entry.result, QueryResult::Blocked | QueryResult::CachedBlock) {
-                    *counts.entry(entry.domain.to_string()).or_insert(0) += 1;
+                    if let Some(count) = counts.get_mut(entry.domain.as_ref()) {
+                        *count += 1;
+                    } else {
+                        counts.insert(entry.domain.to_string(), 1);
+                    }
                 }
             }
 
@@ -960,21 +1103,25 @@ impl LogStore for RedbDatabase {
                 Err(e) => return Err(DbError::Backend(e.to_string())),
             };
 
-            let mut counts: std::collections::HashMap<String, u64> =
+            let mut counts: std::collections::HashMap<IpAddr, u64> =
                 std::collections::HashMap::new();
             for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
                 let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: QueryLogEntry = serde_json::from_slice(val.value())
+                let entry: ClientResultRow = serde_json::from_slice(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 if matches!(entry.result, QueryResult::Blocked | QueryResult::CachedBlock) {
-                    *counts.entry(entry.src_ip.to_string()).or_insert(0) += 1;
+                    *counts.entry(entry.src_ip).or_insert(0) += 1;
                 }
             }
 
-            let mut vec: Vec<(String, u64)> = counts.into_iter().collect();
+            let mut vec: Vec<(IpAddr, u64)> = counts.into_iter().collect();
             vec.sort_by_key(|b| std::cmp::Reverse(b.1));
             vec.truncate(limit);
-            Ok(vec)
+            let result = vec
+                .into_iter()
+                .map(|(ip, count)| (ip.to_string(), count))
+                .collect();
+            Ok(result)
         })
     }
 
@@ -1000,11 +1147,12 @@ impl LogStore for RedbDatabase {
                 .range((since_secs, 0)..)
                 .map_err(|e| DbError::Backend(e.to_string()))?
             {
-                let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: QueryLogEntry = serde_json::from_slice(val.value())
+                let (k, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+                let entry: BlockedRateResultRow = serde_json::from_slice(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 if matches!(entry.result, QueryResult::Blocked | QueryResult::CachedBlock) {
-                    let bucket = (entry.timestamp / 30) * 30;
+                    let (timestamp, _) = k.value();
+                    let bucket = (timestamp / 30) * 30;
                     *buckets.entry(bucket).or_insert(0) += 1;
                 }
             }

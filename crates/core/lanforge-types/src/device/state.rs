@@ -48,10 +48,11 @@ pub struct V6PrefixLease {
     pub expires: SystemTime,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum IPv4State {
     Static(Ipv4Addr),
     Dynamic(Box<V4Lease>),
+    #[default]
     None,
 }
 

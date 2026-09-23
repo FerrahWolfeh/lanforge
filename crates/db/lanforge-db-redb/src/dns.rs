@@ -45,46 +45,40 @@ impl DnsStore for RedbDatabase {
         answer: &'a RewriteAnswer,
     ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
-            let existing_id = {
-                let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
-                let table = match read_txn.open_table(TABLE_DNS_REWRITES) {
-                    Ok(t) => Some(t),
-                    Err(redb::TableError::TableDoesNotExist(_)) => None,
-                    Err(e) => return Err(DbError::Backend(e.to_string())),
-                };
-
-                let mut found = None;
-                if let Some(t) = table {
-                    for item in t.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-                        let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                        let r: RewriteRule = serde_json::from_slice(val.value())
-                            .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                        if r.domain.eq_ignore_ascii_case(domain) && r.rtype == rtype {
-                            found = Some(id.value());
-                            break;
-                        }
-                    }
-                }
-                found
-            };
-
-            let id = match existing_id {
-                Some(id) => id,
-                None => self.next_id("dns_rewrites")?,
-            };
-
-            let rule = RewriteRule {
-                id: Some(id),
-                domain: domain.to_string(),
-                rtype,
-                answer: answer.clone(),
-            };
-
-            let bytes = serde_json::to_vec(&rule)
-                .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
             {
+                let table = write_txn
+                    .open_table(TABLE_DNS_REWRITES)
+                    .map_err(|e| DbError::Backend(e.to_string()))?;
+
+                let mut existing_id = None;
+                for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
+                    let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+                    let r: RewriteRule = serde_json::from_slice(val.value())
+                        .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
+                    if r.domain.eq_ignore_ascii_case(domain) && r.rtype == rtype {
+                        existing_id = Some(id.value());
+                        break;
+                    }
+                }
+
+                drop(table);
+
+                let id = match existing_id {
+                    Some(id) => id,
+                    None => Self::next_id_in_txn(&write_txn, "dns_rewrites")?,
+                };
+
+                let rule = RewriteRule {
+                    id: Some(id),
+                    domain: domain.to_string(),
+                    rtype,
+                    answer: answer.clone(),
+                };
+
+                let bytes = serde_json::to_vec(&rule)
+                    .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+
                 let mut table = write_txn
                     .open_table(TABLE_DNS_REWRITES)
                     .map_err(|e| DbError::Backend(e.to_string()))?;
@@ -145,9 +139,9 @@ impl DnsStore for RedbDatabase {
 
     fn add_dns_allowlist<'a>(&'a self, domain: &'a str) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
-            let id = self.next_id("dns_allowlist")?;
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
             {
+                let id = Self::next_id_in_txn(&write_txn, "dns_allowlist")?;
                 let mut table = write_txn
                     .open_table(TABLE_DNS_ALLOWLIST)
                     .map_err(|e| DbError::Backend(e.to_string()))?;
@@ -394,12 +388,12 @@ impl AdblockStore for RedbDatabase {
         kind: AdblockUrlKind,
     ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
-            let id = self.next_id("adblock_urls")?;
-            let bytes = serde_json::to_vec(&(url.to_string(), kind, true))
-                .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
             {
+                let id = Self::next_id_in_txn(&write_txn, "adblock_urls")?;
+                let bytes = serde_json::to_vec(&(url, kind, true))
+                    .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+
                 let mut table = write_txn
                     .open_table(TABLE_ADBLOCK_URLS)
                     .map_err(|e| DbError::Backend(e.to_string()))?;
@@ -486,12 +480,12 @@ impl AdblockStore for RedbDatabase {
         kind: AdblockUrlKind,
     ) -> BoxFuture<'a, Result<i64, DbError>> {
         Box::pin(async move {
-            let id = self.next_id("adblock_urls")?;
-            let bytes = serde_json::to_vec(&(url.to_string(), kind, true))
-                .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-            {
+            let id = {
+                let id = Self::next_id_in_txn(&write_txn, "adblock_urls")?;
+                let bytes = serde_json::to_vec(&(url, kind, true))
+                    .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+
                 let mut table = write_txn
                     .open_table(TABLE_ADBLOCK_URLS)
                     .map_err(|e| DbError::Backend(e.to_string()))?;
@@ -499,7 +493,8 @@ impl AdblockStore for RedbDatabase {
                 table
                     .insert(id, bytes.as_slice())
                     .map_err(|e| DbError::Backend(e.to_string()))?;
-            }
+                id
+            };
             write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
             Ok(id)
         })
@@ -590,12 +585,12 @@ impl AdblockStore for RedbDatabase {
         action: AdblockRuleAction,
     ) -> BoxFuture<'a, Result<i64, DbError>> {
         Box::pin(async move {
-            let id = self.next_id("adblock_rules")?;
-            let bytes = serde_json::to_vec(&(domain.to_string(), action, true))
-                .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-            {
+            let id = {
+                let id = Self::next_id_in_txn(&write_txn, "adblock_rules")?;
+                let bytes = serde_json::to_vec(&(domain, action, true))
+                    .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+
                 let mut table = write_txn
                     .open_table(TABLE_ADBLOCK_RULES)
                     .map_err(|e| DbError::Backend(e.to_string()))?;
@@ -603,7 +598,8 @@ impl AdblockStore for RedbDatabase {
                 table
                     .insert(id, bytes.as_slice())
                     .map_err(|e| DbError::Backend(e.to_string()))?;
-            }
+                id
+            };
             write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
             Ok(id)
         })
@@ -638,7 +634,7 @@ impl AdblockStore for RedbDatabase {
 
                 let updated = {
                     if let Some(val) = table.get(id).map_err(|e| DbError::Backend(e.to_string()))? {
-                        let (domain, action, _): (String, String, bool) =
+                        let (domain, action, _): (String, AdblockRuleAction, bool) =
                             serde_json::from_slice(val.value())
                                 .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                         Some((domain, action, enabled))
@@ -702,19 +698,19 @@ impl DnsUpstreamStore for RedbDatabase {
         domain: Option<&'a str>,
     ) -> BoxFuture<'a, Result<i64, DbError>> {
         Box::pin(async move {
-            let id = self.next_id("dns_upstreams")?;
-            let entry = DnsUpstreamEntry {
-                id,
-                addr,
-                protocol,
-                domain: domain.map(ToString::to_string),
-            };
-
-            let bytes = serde_json::to_vec(&entry)
-                .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-            {
+            let id = {
+                let id = Self::next_id_in_txn(&write_txn, "dns_upstreams")?;
+                let entry = DnsUpstreamEntry {
+                    id,
+                    addr,
+                    protocol,
+                    domain: domain.map(ToString::to_string),
+                };
+
+                let bytes = serde_json::to_vec(&entry)
+                    .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+
                 let mut table = write_txn
                     .open_table(TABLE_DNS_UPSTREAMS)
                     .map_err(|e| DbError::Backend(e.to_string()))?;
@@ -722,7 +718,8 @@ impl DnsUpstreamStore for RedbDatabase {
                 table
                     .insert(id, bytes.as_slice())
                     .map_err(|e| DbError::Backend(e.to_string()))?;
-            }
+                id
+            };
             write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
             Ok(id)
         })

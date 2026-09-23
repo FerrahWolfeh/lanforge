@@ -83,9 +83,9 @@ impl LogDb {
     pub async fn record_logs_batch(
         &self,
         events: &[TimedEvent],
-        json_buf: &mut String,
+        bytes_buf: &mut Vec<u8>,
     ) -> Result<(), DbError> {
-        self.inner.record_logs_batch(events, json_buf).await
+        self.inner.record_logs_batch(events, bytes_buf).await
     }
 
     pub async fn record_dns_block(
@@ -213,9 +213,9 @@ impl LogStore for LogDb {
     fn record_logs_batch<'a>(
         &'a self,
         events: &'a [TimedEvent],
-        json_buf: &'a mut String,
+        bytes_buf: &'a mut Vec<u8>,
     ) -> BoxFuture<'a, Result<(), DbError>> {
-        self.inner.record_logs_batch(events, json_buf)
+        self.inner.record_logs_batch(events, bytes_buf)
     }
 
     fn record_dns_block<'a>(

@@ -90,33 +90,40 @@ impl RedbDatabase {
         self.path.is_none()
     }
 
+    /// Generates the next sequential ID for a given sequence name within an active write transaction.
+    pub(crate) fn next_id_in_txn(
+        write_txn: &redb::WriteTransaction,
+        sequence: &str,
+    ) -> Result<i64, DbError> {
+        let mut table = write_txn
+            .open_table(TABLE_META)
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+
+        let current = match table.get(sequence).map_err(|e| DbError::Backend(e.to_string()))? {
+            Some(val) => {
+                let bytes = val.value();
+                if bytes.len() == 8 {
+                    let mut arr = [0u8; 8];
+                    arr.copy_from_slice(bytes);
+                    i64::from_be_bytes(arr)
+                } else {
+                    0
+                }
+            }
+            None => 0,
+        };
+
+        let next = current + 1;
+        table
+            .insert(sequence, next.to_be_bytes().as_slice())
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        Ok(next)
+    }
+
     /// Generates the next sequential ID for a given sequence name atomically.
     pub fn next_id(&self, sequence: &str) -> Result<i64, DbError> {
         let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        let next = {
-            let mut table = write_txn
-                .open_table(TABLE_META)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            let current = match table.get(sequence).map_err(|e| DbError::Backend(e.to_string()))? {
-                Some(val) => {
-                    let mut bytes = [0u8; 8];
-                    if val.value().len() == 8 {
-                        bytes.copy_from_slice(val.value());
-                        i64::from_be_bytes(bytes)
-                    } else {
-                        0
-                    }
-                }
-                None => 0,
-            };
-
-            let next = current + 1;
-            table
-                .insert(sequence, next.to_be_bytes().as_slice())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-            next
-        };
+        let next = Self::next_id_in_txn(&write_txn, sequence)?;
         write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(next)
     }

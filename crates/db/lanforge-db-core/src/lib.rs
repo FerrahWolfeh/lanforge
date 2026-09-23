@@ -175,6 +175,27 @@ pub trait DeviceStore: Send + Sync {
         &self,
         mac: MacAddr,
     ) -> BoxFuture<'_, Result<Vec<LeaseHistoryEntry>, DbError>>;
+
+    /// Synchronizes a batch of device updates (full, base-only, and deletions) atomically.
+    fn batch_sync_devices<'a>(
+        &'a self,
+        full_upserts: &'a [std::sync::Arc<Device>],
+        base_upserts: &'a [std::sync::Arc<Device>],
+        deletes: &'a [MacAddr],
+    ) -> BoxFuture<'a, Result<(), DbError>> {
+        Box::pin(async move {
+            if !deletes.is_empty() {
+                self.delete_devices(deletes).await?;
+            }
+            for d in full_upserts {
+                self.upsert_device(d).await?;
+            }
+            for d in base_upserts {
+                self.upsert_base_device_only(d).await?;
+            }
+            Ok(())
+        })
+    }
 }
 
 /// Handles local DNS rewrites, allowlists, and reverse resolvers.
@@ -689,7 +710,7 @@ pub trait LogStore: Send + Sync {
     fn record_logs_batch<'a>(
         &'a self,
         events: &'a [TimedEvent],
-        json_buf: &'a mut String,
+        bytes_buf: &'a mut Vec<u8>,
     ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Records a blocked DNS query.

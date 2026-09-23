@@ -9,6 +9,32 @@ use redb::{ReadableDatabase, ReadableTable};
 use std::net::IpAddr;
 use std::time::SystemTime;
 
+#[derive(serde::Deserialize)]
+struct HostnameOnlyName<'a> {
+    #[serde(borrow)]
+    name: std::borrow::Cow<'a, str>,
+}
+
+#[derive(serde::Deserialize)]
+struct DeviceHostnameOnly<'a> {
+    #[serde(borrow)]
+    hostname: HostnameOnlyName<'a>,
+}
+
+#[derive(serde::Deserialize)]
+struct ZombieCheckDevice {
+    #[serde(default)]
+    hostname: lanforge_types::device::Hostname,
+    #[serde(default)]
+    v4: lanforge_types::device::IPv4State,
+    #[serde(default)]
+    v6: Vec<serde::de::IgnoredAny>,
+    #[serde(default)]
+    v6_prefixes: Vec<serde::de::IgnoredAny>,
+    #[serde(default)]
+    seen_v4: Vec<serde::de::IgnoredAny>,
+}
+
 impl DeviceStore for RedbDatabase {
     fn is_in_memory(&self) -> bool {
         self.path.is_none()
@@ -132,11 +158,16 @@ impl DeviceStore for RedbDatabase {
             };
 
             for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-                let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let device: Device = serde_json::from_slice(val.value())
+                let (k, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+                let dev: DeviceHostnameOnly = serde_json::from_slice(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                if device.hostname.name.as_str().eq_ignore_ascii_case(hostname) {
-                    return Ok(Some(device.mac));
+                if dev.hostname.name.as_ref().eq_ignore_ascii_case(hostname) {
+                    let k_bytes = k.value();
+                    if k_bytes.len() == 6 {
+                        let mut mac_arr = [0u8; 6];
+                        mac_arr.copy_from_slice(k_bytes);
+                        return Ok(Some(MacAddr(mac_arr)));
+                    }
                 }
             }
             Ok(None)
@@ -178,8 +209,8 @@ impl DeviceStore for RedbDatabase {
                 };
 
                 for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-                    let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                    let device: Device = serde_json::from_slice(val.value())
+                    let (k, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+                    let device: ZombieCheckDevice = serde_json::from_slice(val.value())
                         .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                     if device.hostname.name.is_empty()
                         && matches!(device.v4, lanforge_types::device::IPv4State::None)
@@ -187,7 +218,12 @@ impl DeviceStore for RedbDatabase {
                         && device.v6_prefixes.is_empty()
                         && device.seen_v4.is_empty()
                     {
-                        zombies.push(device.mac);
+                        let k_bytes = k.value();
+                        if k_bytes.len() == 6 {
+                            let mut mac_arr = [0u8; 6];
+                            mac_arr.copy_from_slice(k_bytes);
+                            zombies.push(MacAddr(mac_arr));
+                        }
                     }
                 }
             }
@@ -230,13 +266,13 @@ impl DeviceStore for RedbDatabase {
             let bytes = serde_json::to_vec(&entry)
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
-            let id = self.next_id("lease_history")?;
-            let mut key = Vec::with_capacity(14);
-            key.extend_from_slice(&mac.0);
-            key.extend_from_slice(&id.to_be_bytes());
-
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
             {
+                let id = Self::next_id_in_txn(&write_txn, "lease_history")?;
+                let mut key = [0u8; 14];
+                key[..6].copy_from_slice(&mac.0);
+                key[6..].copy_from_slice(&id.to_be_bytes());
+
                 let mut table = write_txn
                     .open_table(TABLE_LEASE_HISTORY)
                     .map_err(|e| DbError::Backend(e.to_string()))?;
@@ -262,22 +298,88 @@ impl DeviceStore for RedbDatabase {
                 Err(e) => return Err(DbError::Backend(e.to_string())),
             };
 
+            let mut start_key = [0u8; 14];
+            start_key[..6].copy_from_slice(&mac.0);
+            let mut end_key = [0xffu8; 14];
+            end_key[..6].copy_from_slice(&mac.0);
+
             let mut history = Vec::new();
-            for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-                let (k, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let k_bytes = k.value();
-                if k_bytes.starts_with(&mac.0) {
-                    let entry: LeaseHistoryEntry = serde_json::from_slice(val.value())
-                        .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                    history.push(entry);
-                }
-            }
-            history.sort_by_key(|h| h.timestamp);
-            history.reverse();
-            if history.len() > 100 {
-                history.truncate(100);
+            for item in table
+                .range(start_key.as_slice()..=end_key.as_slice())
+                .map_err(|e| DbError::Backend(e.to_string()))?
+                .rev()
+                .take(100)
+            {
+                let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+                let entry: LeaseHistoryEntry = serde_json::from_slice(val.value())
+                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
+                history.push(entry);
             }
             Ok(history)
+        })
+    }
+
+    fn batch_sync_devices<'a>(
+        &'a self,
+        full_upserts: &'a [std::sync::Arc<Device>],
+        base_upserts: &'a [std::sync::Arc<Device>],
+        deletes: &'a [MacAddr],
+    ) -> BoxFuture<'a, Result<(), DbError>> {
+        Box::pin(async move {
+            if full_upserts.is_empty() && base_upserts.is_empty() && deletes.is_empty() {
+                return Ok(());
+            }
+
+            let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+            {
+                let mut table = write_txn
+                    .open_table(TABLE_DEVICES)
+                    .map_err(|e| DbError::Backend(e.to_string()))?;
+
+                for mac in deletes {
+                    let _ = table.remove(mac.0.as_slice());
+                }
+
+                let mut buf = Vec::with_capacity(512);
+                for dev in full_upserts {
+                    buf.clear();
+                    serde_json::to_writer(&mut buf, dev)
+                        .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+                    table
+                        .insert(dev.mac.0.as_slice(), buf.as_slice())
+                        .map_err(|e| DbError::Backend(e.to_string()))?;
+                }
+
+                for dev in base_upserts {
+                    let mut buf_written = false;
+                    if let Some(val) = table
+                        .get(dev.mac.0.as_slice())
+                        .map_err(|e| DbError::Backend(e.to_string()))?
+                    {
+                        let mut existing: Device = serde_json::from_slice(val.value())
+                            .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
+                        existing.hostname.clone_from(&dev.hostname);
+                        existing.origin = dev.origin;
+                        existing.managed_at = dev.managed_at;
+                        existing.class.clone_from(&dev.class);
+                        existing.duid.clone_from(&dev.duid);
+                        buf.clear();
+                        serde_json::to_writer(&mut buf, &existing)
+                            .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+                        buf_written = true;
+                    }
+                    if !buf_written {
+                        buf.clear();
+                        serde_json::to_writer(&mut buf, dev.as_ref())
+                            .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+                    }
+                    table
+                        .insert(dev.mac.0.as_slice(), buf.as_slice())
+                        .map_err(|e| DbError::Backend(e.to_string()))?;
+                }
+            }
+            write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+            Ok(())
         })
     }
 }

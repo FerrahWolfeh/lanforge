@@ -56,7 +56,7 @@ pub struct DbWorker {
     purged_macs: HashSet<MacAddr>,
     log_buffer: Vec<TimedEvent>,
     dns_log_buffer: Vec<QueryLogEntry>,
-    json_buf: String,
+    bytes_buf: Vec<u8>,
 }
 
 impl DbWorker {
@@ -78,7 +78,7 @@ impl DbWorker {
             purged_macs: HashSet::new(),
             log_buffer: Vec::with_capacity(128),
             dns_log_buffer: Vec::with_capacity(128),
-            json_buf: String::with_capacity(4096),
+            bytes_buf: Vec::with_capacity(4096),
         }
     }
 
@@ -96,7 +96,7 @@ impl DbWorker {
         // 1. Flush Logs
         if !self.log_buffer.is_empty() {
             if let Err(e) = log_db
-                .record_logs_batch(&self.log_buffer, &mut self.json_buf)
+                .record_logs_batch(&self.log_buffer, &mut self.bytes_buf)
                 .await
             {
                 error!("Failed to flush log batch: {e}");
@@ -159,32 +159,7 @@ impl DbWorker {
             let purges: Vec<MacAddr> = self.purged_macs.iter().copied().collect();
             let count = lease_devices.len() + base_devices.len() + purges.len();
 
-            let mut result = Ok(());
-            // 1. Perform purges
-            if !purges.is_empty() {
-                result = db.delete_devices(&purges).await;
-            }
-
-            // 2. Perform lease updates (heavy)
-            if result.is_ok() {
-                for device in lease_devices {
-                    if let Err(e) = db.upsert_device(&device).await {
-                        result = Err(e);
-                        break;
-                    }
-                }
-            }
-
-            // 3. Perform base updates (light)
-            if result.is_ok() {
-                for device in base_devices {
-                    if let Err(e) = db.upsert_base_device_only(&device).await {
-                        result = Err(e);
-                        break;
-                    }
-                }
-            }
-
+            let result = db.batch_sync_devices(&lease_devices, &base_devices, &purges).await;
             result.map(|()| count)
         };
 
@@ -195,6 +170,7 @@ impl DbWorker {
             }
             Ok(count) => {
                 written_devices_count = count;
+                let was_full_flush = self.dirty;
                 self.dirty = false;
                 self.dirty_macs.clear();
                 self.dirty_lease_macs.clear();
@@ -207,14 +183,12 @@ impl DbWorker {
                         .publish(LanforgeEvent::Storage(StorageEvent::DbWrite {
                             devices: count,
                         }));
-                    if self.dirty {
+                    if was_full_flush {
                         debug!("Main DB flushed (all devices)");
                     } else {
                         debug!("Main DB flushed ({count} devices)");
                     }
                 }
-                self.dirty = false;
-                self.dirty_macs.clear();
             }
         }
 
@@ -307,7 +281,7 @@ impl AsyncService for DbWorker {
                     if timed_event.is_loggable() {
                         self.log_buffer.push(timed_event.clone());
                         if self.log_buffer.len() >= 100 {
-                            if let Err(e) = log_db.record_logs_batch(&self.log_buffer, &mut self.json_buf).await {
+                            if let Err(e) = log_db.record_logs_batch(&self.log_buffer, &mut self.bytes_buf).await {
                                 error!("Immediate log flush error: {e}");
                             } else {
                                 self.log_buffer.clear();

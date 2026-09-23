@@ -117,20 +117,25 @@ impl LanforgeDb {
         Ok(state)
     }
 
-    /// Flushes all devices in the current State to disk.
+    /// Flushes all devices in the current State to disk in a single transaction.
     pub async fn save_table(&self, table: &State) -> Result<(), DbError> {
-        for device in table.devices() {
-            self.inner.upsert_device(&device).await?;
-        }
-        Ok(())
+        let devices: Vec<std::sync::Arc<Device>> = table.devices().collect();
+        self.inner.batch_sync_devices(&devices, &[], &[]).await
     }
 
-    /// Flushes a persistence snapshot to disk.
+    /// Flushes a persistence snapshot to disk in a single transaction.
     pub async fn save_snapshot(&self, snapshot: &PersistenceSnapshot) -> Result<(), DbError> {
-        for device in snapshot.devices.values() {
-            self.inner.upsert_device(device).await?;
-        }
-        Ok(())
+        let devices: Vec<std::sync::Arc<Device>> = snapshot.devices.values().cloned().collect();
+        self.inner.batch_sync_devices(&devices, &[], &[]).await
+    }
+
+    pub async fn batch_sync_devices(
+        &self,
+        full_upserts: &[std::sync::Arc<Device>],
+        base_upserts: &[std::sync::Arc<Device>],
+        deletes: &[MacAddr],
+    ) -> Result<(), DbError> {
+        self.inner.batch_sync_devices(full_upserts, base_upserts, deletes).await
     }
 
     pub async fn upsert_device(&self, device: &Device) -> Result<(), DbError> {
@@ -233,6 +238,15 @@ impl DeviceStore for LanforgeDb {
         mac: MacAddr,
     ) -> BoxFuture<'_, Result<Vec<LeaseHistoryEntry>, DbError>> {
         self.inner.get_lease_history(mac)
+    }
+
+    fn batch_sync_devices<'a>(
+        &'a self,
+        full_upserts: &'a [std::sync::Arc<Device>],
+        base_upserts: &'a [std::sync::Arc<Device>],
+        deletes: &'a [MacAddr],
+    ) -> BoxFuture<'a, Result<(), DbError>> {
+        self.inner.batch_sync_devices(full_upserts, base_upserts, deletes)
     }
 }
 

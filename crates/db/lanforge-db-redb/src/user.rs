@@ -15,23 +15,9 @@ impl UserStore for RedbDatabase {
         now: i64,
     ) -> BoxFuture<'a, Result<UserEntry, DbError>> {
         Box::pin(async move {
-            let id = self.next_id("users")?;
-            let entry = UserEntry {
-                id,
-                username: username.to_string(),
-                password_hash: password_hash.to_string(),
-                role,
-                created_at: now,
-                updated_at: now,
-                last_login: None,
-            };
-
-            let bytes = serde_json::to_vec(&entry)
-                .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-            {
-                let mut table = write_txn
+            let entry = {
+                let table = write_txn
                     .open_table(TABLE_USERS)
                     .map_err(|e| DbError::Backend(e.to_string()))?;
 
@@ -39,10 +25,31 @@ impl UserStore for RedbDatabase {
                     return Err(DbError::Validation(format!("User '{username}' already exists")));
                 }
 
+                drop(table);
+                let id = Self::next_id_in_txn(&write_txn, "users")?;
+                let entry = UserEntry {
+                    id,
+                    username: username.to_string(),
+                    password_hash: password_hash.to_string(),
+                    role,
+                    created_at: now,
+                    updated_at: now,
+                    last_login: None,
+                };
+
+                let bytes = serde_json::to_vec(&entry)
+                    .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+
+                let mut table = write_txn
+                    .open_table(TABLE_USERS)
+                    .map_err(|e| DbError::Backend(e.to_string()))?;
+
                 table
                     .insert(username, bytes.as_slice())
                     .map_err(|e| DbError::Backend(e.to_string()))?;
-            }
+
+                entry
+            };
             write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
 
             Ok(entry)
@@ -268,22 +275,22 @@ impl ApiTokenStore for RedbDatabase {
         now: i64,
     ) -> BoxFuture<'a, Result<i64, DbError>> {
         Box::pin(async move {
-            let id = self.next_id("api_tokens")?;
-            let entry = ApiTokenEntry {
-                id,
-                token: token.to_string(),
-                name: name.to_string(),
-                created_at: now,
-                last_used: None,
-                scopes: scopes.clone(),
-                expires_at,
-            };
-
-            let bytes = serde_json::to_vec(&entry)
-                .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-            {
+            let id = {
+                let id = Self::next_id_in_txn(&write_txn, "api_tokens")?;
+                let entry = ApiTokenEntry {
+                    id,
+                    token: token.to_string(),
+                    name: name.to_string(),
+                    created_at: now,
+                    last_used: None,
+                    scopes: scopes.clone(),
+                    expires_at,
+                };
+
+                let bytes = serde_json::to_vec(&entry)
+                    .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+
                 let mut table = write_txn
                     .open_table(TABLE_API_TOKENS)
                     .map_err(|e| DbError::Backend(e.to_string()))?;
@@ -291,7 +298,8 @@ impl ApiTokenStore for RedbDatabase {
                 table
                     .insert(token, bytes.as_slice())
                     .map_err(|e| DbError::Backend(e.to_string()))?;
-            }
+                id
+            };
             write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
 
             Ok(id)
@@ -304,6 +312,33 @@ impl ApiTokenStore for RedbDatabase {
         now: i64,
     ) -> BoxFuture<'a, Result<Option<(String, ApiScopes)>, DbError>> {
         Box::pin(async move {
+            // Fast read check first: avoid write lock when token invalid, expired, or recently updated
+            let token_info = {
+                let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+                let table = match read_txn.open_table(TABLE_API_TOKENS) {
+                    Ok(t) => t,
+                    Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+                    Err(e) => return Err(DbError::Backend(e.to_string())),
+                };
+
+                match table.get(token).map_err(|e| DbError::Backend(e.to_string()))? {
+                    Some(guard) => {
+                        let entry: ApiTokenEntry = serde_json::from_slice(guard.value())
+                            .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
+                        if entry.expires_at.is_some_and(|exp| exp < now) {
+                            return Ok(None);
+                        }
+                        entry
+                    }
+                    None => return Ok(None),
+                }
+            };
+
+            // Throttle disk writes: if last_used was updated less than 60s ago, return without writing
+            if token_info.last_used.is_some_and(|last| now >= last && now - last < 60) {
+                return Ok(Some((token_info.name, token_info.scopes)));
+            }
+
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
             let res = {
                 let mut table = match write_txn.open_table(TABLE_API_TOKENS) {
@@ -364,7 +399,7 @@ impl ApiTokenStore for RedbDatabase {
     ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-            {
+            let removed = {
                 let mut table = match write_txn.open_table(TABLE_API_TOKENS) {
                     Ok(t) => t,
                     Err(redb::TableError::TableDoesNotExist(_)) => return Ok(()),
@@ -389,9 +424,14 @@ impl ApiTokenStore for RedbDatabase {
                     table
                         .remove(token.as_str())
                         .map_err(|e| DbError::Backend(e.to_string()))?;
+                    true
+                } else {
+                    false
                 }
+            };
+            if removed {
+                write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
             }
-            write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
             Ok(())
         })
     }
