@@ -400,6 +400,9 @@ async fn handle_metrics(State(state): State<AppState>) -> HttpResult<impl IntoRe
 
 
 #[cfg(feature = "webui")]
+const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
+
+#[cfg(feature = "webui")]
 async fn handle_embedded_webui(
     headers: axum::http::HeaderMap,
     uri: axum::http::Uri,
@@ -408,7 +411,6 @@ async fn handle_embedded_webui(
     match WebUiAssets::get_file_or_fallback(path) {
         Some((mime, content)) => {
             let hash = content.metadata.sha256_hash();
-            const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
             let mut etag_bytes = [0u8; 66];
             etag_bytes[0] = b'"';
             for (i, &b) in hash.iter().enumerate() {

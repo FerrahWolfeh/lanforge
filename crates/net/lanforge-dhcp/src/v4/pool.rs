@@ -31,10 +31,10 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::traits::DhcpPool;
-use lanforge_types::device::IPv4State;
+use lanforge_types::device::{Device, IPv4State};
 use lanforge_types::identifiers::MacAddr;
 
 use lanforge_core::context::LanforgeContext;
@@ -115,6 +115,42 @@ impl IpPool {
         }
     }
 
+    /// Reconciles the available bitmap against current active leases and reservations in context.
+    /// Reclaims expired dynamic leases and ensures all truly free IPs in configured ranges
+    /// are present in `self.available`.
+    pub fn reconcile_active(&mut self, ctx: &LanforgeContext) {
+        let now = SystemTime::now();
+        let mut active_ips = RoaringBitmap::new();
+
+        ctx.with_state(|state| {
+            for dev in state.devices.values() {
+                match &dev.v4 {
+                    IPv4State::Static(ip) => {
+                        active_ips.insert(u32::from(*ip));
+                    }
+                    IPv4State::Dynamic(lease) => {
+                        if lease.expires > now {
+                            active_ips.insert(u32::from(lease.ip));
+                        }
+                    }
+                    IPv4State::None => {}
+                }
+            }
+            for ip in state.static_registry.v4.keys() {
+                active_ips.insert(u32::from(*ip));
+            }
+        });
+
+        let mut available = self.all_pool_ips.clone();
+        available -= active_ips;
+
+        for ip in self.declined.keys() {
+            available.remove(u32::from(*ip));
+        }
+
+        self.available = available;
+    }
+
     /// Returns the live pool utilization statistics.
     /// Returns: (total, used, available, `utilization_percent`)
     #[must_use]
@@ -142,8 +178,23 @@ impl IpPool {
         mac: MacAddr,
         requested: Option<Ipv4Addr>,
     ) -> Option<Ipv4Addr> {
+        self.allocate_with_device(ctx, mac, requested, None)
+    }
+
+    /// Allocates an IP for a MAC address, utilizing an optional pre-resolved `Device` reference
+    /// to avoid redundant global state lookups.
+    pub fn allocate_with_device(
+        &mut self,
+        ctx: &LanforgeContext,
+        mac: MacAddr,
+        requested: Option<Ipv4Addr>,
+        device: Option<&Device>,
+    ) -> Option<Ipv4Addr> {
+        let mut dev_owned = None;
+        let dev_ref = crate::identity::resolve_device(ctx, mac, device, &mut dev_owned);
+
         // 1. Sticky / Static: already has allocation in global table
-        if let Some(dev) = ctx.get_device(&mac) {
+        if let Some(dev) = dev_ref {
             match &dev.v4 {
                 IPv4State::Static(ip) => {
                     self.remove_from_available(*ip);
@@ -189,24 +240,7 @@ impl IpPool {
         }
 
         // 3.5. Garbage Collection: If pool is empty, scan for naturally expired leases
-        let mut recovered = self.all_pool_ips.clone();
-
-        let mut active_ips = RoaringBitmap::new();
-        ctx.with_state(|state| {
-            for dev in state.devices.values() {
-                if let Some(ip) = dev.v4.ip() {
-                    active_ips.insert(u32::from(ip));
-                }
-            }
-        });
-
-        recovered -= active_ips;
-
-        for ip in self.declined.keys() {
-            recovered.remove(u32::from(*ip));
-        }
-
-        self.available = recovered;
+        self.reconcile_active(ctx);
 
         // Second pass after GC
         while !self.available.is_empty() {
@@ -585,5 +619,68 @@ mod tests {
         // In pool range but gateway is in a completely different subnet
         let mismatched_gw = Ipv4Addr::new(192, 168, 1, 1);
         assert!(!p.is_valid_dynamic_ip(Ipv4Addr::new(10, 0, 1, 150), mask_22, Some(mismatched_gw)));
+    }
+
+    #[test]
+    fn test_reconcile_active_reclaims_expired_leases() {
+        let (mut p, ctx) = pool(); // Range 192.168.0.100..=192.168.0.105 (6 IPs)
+        let mac1 = mac(1);
+        let ip1 = Ipv4Addr::new(192, 168, 0, 100);
+
+        // Simulate expired dynamic lease in context (expired 10 seconds ago)
+        let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
+            mac: mac1,
+            ip: ip1,
+            expires: SystemTime::now() - Duration::from_secs(10),
+        });
+
+        // Initially remove from available as if it was allocated
+        p.remove_from_available(ip1);
+        assert!(!p.available.contains(u32::from(ip1)));
+
+        // Reconcile should detect the lease is expired and reclaim it back to available
+        p.reconcile_active(&ctx);
+        assert!(p.available.contains(u32::from(ip1)));
+    }
+
+    #[test]
+    fn test_reconcile_active_preserves_unexpired_and_static_leases() {
+        let (mut p, ctx) = pool(); // Range 192.168.0.100..=192.168.0.105
+        let mac1 = mac(1);
+        let dynamic_ip = Ipv4Addr::new(192, 168, 0, 101);
+        let static_ip = Ipv4Addr::new(192, 168, 0, 102);
+
+        // Active dynamic lease (expires in 1 hour)
+        let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
+            mac: mac1,
+            ip: dynamic_ip,
+            expires: SystemTime::now() + Duration::from_hours(1),
+        });
+
+        // Static reservation
+        let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
+            mac: mac(2),
+            update: Box::new(CliHostUpdate {
+                hostname: FieldUpdate::Set("static-host".to_string()),
+                duid: FieldUpdate::NoChange,
+                v4_static: FieldUpdate::Set(static_ip),
+                v6_suffix: FieldUpdate::NoChange,
+                origin: Origin::Static,
+                boot_file: FieldUpdate::NoChange,
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
+            }),
+        });
+
+        p.reconcile_active(&ctx);
+        assert!(
+            !p.available.contains(u32::from(dynamic_ip)),
+            "Active dynamic lease must not be available"
+        );
+        assert!(
+            !p.available.contains(u32::from(static_ip)),
+            "Static reservation must not be available"
+        );
+        assert!(p.available.contains(u32::from(Ipv4Addr::new(192, 168, 0, 100))));
     }
 }

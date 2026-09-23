@@ -33,6 +33,7 @@
 //! | Inform | Provide config options (no IP) | Ack |
 
 const MAX_LEASE_TIME: u32 = 30 * 24 * 60 * 60; // 30 dias em segundos
+const PROTECTED_OPTIONS: &[u8] = &[53, 54, 51, 1];
 
 use dhcproto::v4::{self, DhcpOption, HType, Message, MessageType, Opcode, UnknownOption};
 use dhcproto::{Decodable, Decoder, Encodable, Encoder, Name};
@@ -47,7 +48,7 @@ use crate::traits::DhcpPool;
 
 use super::config::Dhcpv4Config;
 use super::pool::IpPool;
-use crate::identity::DeviceIdentity;
+use crate::identity::{resolve_device, DeviceIdentity};
 use crate::options::iter_custom_options;
 
 /// Outcome of processing a DHCP message from a client.
@@ -106,6 +107,12 @@ pub struct DhcpServer {
     pub last_assigned_ip: Option<Ipv4Addr>,
     /// Global context for device lookups and state updates.
     pub ctx: LanforgeContext,
+    /// Cached physical interface MTU to avoid blocking sysfs reads per packet.
+    pub cached_mtu: u16,
+    /// Precompiled custom options to avoid runtime parsing on the packet hot-path.
+    pub precompiled_custom_options: Vec<(u8, Vec<u8>)>,
+    /// Precomputed ASCII bytes of the server identifier IP.
+    pub server_id_bytes: Vec<u8>,
 }
 
 impl DhcpServer {
@@ -113,11 +120,18 @@ impl DhcpServer {
     #[must_use]
     pub fn new(cfg: Dhcpv4Config, ctx: LanforgeContext) -> Self {
         let pool = IpPool::new(cfg.get_effective_pools());
+        let cached_mtu = get_interface_mtu(&cfg.iface).unwrap_or(1500);
+        let precompiled_custom_options =
+            iter_custom_options(&cfg.options, PROTECTED_OPTIONS).collect();
+        let server_id_bytes = cfg.server_id.to_string().into_bytes();
         Self {
             cfg,
             pool,
             last_assigned_ip: None,
             ctx,
+            cached_mtu,
+            precompiled_custom_options,
+            server_id_bytes,
         }
     }
 
@@ -170,11 +184,11 @@ impl DhcpServer {
         );
 
         match msg_type {
-            MessageType::Discover => self.handle_discover(&msg, &identity, broadcast),
-            MessageType::Request => self.handle_request(&msg, &identity, broadcast),
-            MessageType::Release => self.handle_release(&msg, &identity),
-            MessageType::Decline => self.handle_decline(&msg, &identity),
-            MessageType::Inform => self.handle_inform(&msg, &identity),
+            MessageType::Discover => self.handle_discover(&msg, &identity, broadcast, device),
+            MessageType::Request => self.handle_request(&msg, &identity, broadcast, device),
+            MessageType::Release => self.handle_release(&msg, &identity, device),
+            MessageType::Decline => self.handle_decline(&msg, &identity, device),
+            MessageType::Inform => self.handle_inform(&msg, &identity, device),
             other => {
                 debug!("Ignoring message type: {other:?}");
                 HandleResult::Ignore
@@ -189,11 +203,12 @@ impl DhcpServer {
         msg: &Message,
         identity: &DeviceIdentity,
         broadcast: bool,
+        device: Option<&Device>,
     ) -> HandleResult {
         let mac = identity.mac;
         let requested = Self::get_requested_ip(msg);
 
-        let Some(offered_ip) = self.pool.allocate(&self.ctx, mac, requested) else {
+        let Some(offered_ip) = self.pool.allocate_with_device(&self.ctx, mac, requested, device) else {
             warn!("DHCPv4: Pool exhausted, no IP available for {identity}");
             return HandleResult::Ignore;
         };
@@ -201,7 +216,7 @@ impl DhcpServer {
         self.last_assigned_ip = Some(offered_ip);
 
         info!("DHCPv4: {identity} is looking for an address -> Offering {offered_ip}");
-        let packet = self.build_reply(msg, MessageType::Offer, offered_ip);
+        let packet = self.build_reply(msg, MessageType::Offer, offered_ip, device);
         HandleResult::Reply {
             packet,
             broadcast,
@@ -219,6 +234,7 @@ impl DhcpServer {
         msg: &Message,
         identity: &DeviceIdentity,
         broadcast: bool,
+        device: Option<&Device>,
     ) -> HandleResult {
         let mac = identity.mac;
         // RFC 2131 §3.1 — REQUEST can happen in multiple contexts
@@ -254,11 +270,11 @@ impl DhcpServer {
         // 2. OR `wanted` falls within active dynamic pools and aligns with the subnet mask & gateway.
         // Otherwise, the address is invalid for this subnet/pool; reply with DHCPNAK to force the
         // client back to INIT state so it broadcasts DHCPDISCOVER and receives a valid lease.
+        let mut dev_owned = None;
+        let dev_ref = resolve_device(&self.ctx, mac, device, &mut dev_owned);
+
         let is_static_for_client = self.ctx.get_static_registry().v4.get(&wanted) == Some(&mac)
-            || self
-                .ctx
-                .get_device(&mac)
-                .as_deref()
+            || dev_ref
                 .is_some_and(|d| matches!(d.v4, IPv4State::Static(ip) if ip == wanted));
 
         if !is_static_for_client && !self.pool.is_valid_dynamic_ip(wanted, self.cfg.subnet_mask, Some(self.cfg.router)) {
@@ -267,7 +283,7 @@ impl DhcpServer {
         }
 
         // Try to allocate
-        let Some(assigned_ip) = self.pool.allocate(&self.ctx, mac, Some(wanted)) else {
+        let Some(assigned_ip) = self.pool.allocate_with_device(&self.ctx, mac, Some(wanted), device) else {
             warn!("DHCPv4: {identity} requested {wanted} but it is not available");
             return self.send_nak(msg, "Requested IP not available");
         };
@@ -281,7 +297,7 @@ impl DhcpServer {
         self.last_assigned_ip = Some(assigned_ip);
 
         info!("DHCPv4: Assigning {assigned_ip} to {identity}");
-        let packet = self.build_reply(msg, MessageType::Ack, assigned_ip);
+        let packet = self.build_reply(msg, MessageType::Ack, assigned_ip, device);
         HandleResult::Reply {
             packet,
             broadcast,
@@ -294,11 +310,19 @@ impl DhcpServer {
 
     // ── RELEASE ──────────────────────────────────────────────────────────
 
-    fn handle_release(&mut self, msg: &Message, identity: &DeviceIdentity) -> HandleResult {
+    fn handle_release(
+        &mut self,
+        msg: &Message,
+        identity: &DeviceIdentity,
+        device: Option<&Device>,
+    ) -> HandleResult {
         let ip = msg.ciaddr();
 
         // Validate client lease ownership to prevent spoofed/rogue release DoS
-        let owned_ip = self.ctx.get_device(&identity.mac).and_then(|d| d.v4.ip());
+        let mut dev_owned = None;
+        let dev_ref = resolve_device(&self.ctx, identity.mac, device, &mut dev_owned);
+
+        let owned_ip = dev_ref.and_then(|d| d.v4.ip());
         if owned_ip != Some(ip) {
             warn!(
                 "DHCPv4: RELEASE from {} for {} ignored: client does not own this lease.",
@@ -314,10 +338,18 @@ impl DhcpServer {
 
     // ── DECLINE ──────────────────────────────────────────────────────────
 
-    fn handle_decline(&mut self, msg: &Message, identity: &DeviceIdentity) -> HandleResult {
+    fn handle_decline(
+        &mut self,
+        msg: &Message,
+        identity: &DeviceIdentity,
+        device: Option<&Device>,
+    ) -> HandleResult {
         if let Some(declined_ip) = Self::get_requested_ip(msg) {
             // Validate client lease ownership to prevent rogue decline starvation DoS
-            let owned_ip = self.ctx.get_device(&identity.mac).and_then(|d| d.v4.ip());
+            let mut dev_owned = None;
+            let dev_ref = resolve_device(&self.ctx, identity.mac, device, &mut dev_owned);
+
+            let owned_ip = dev_ref.and_then(|d| d.v4.ip());
             if owned_ip != Some(declined_ip) {
                 warn!(
                     "DHCPv4: DECLINE from {} for {} ignored: client does not own this lease.",
@@ -337,11 +369,16 @@ impl DhcpServer {
 
     // ── INFORM ───────────────────────────────────────────────────────────
 
-    fn handle_inform(&self, msg: &Message, identity: &DeviceIdentity) -> HandleResult {
+    fn handle_inform(
+        &self,
+        msg: &Message,
+        identity: &DeviceIdentity,
+        device: Option<&Device>,
+    ) -> HandleResult {
         let ip = msg.ciaddr();
         info!("DHCPv4: {identity} ({ip}) requested configuration options");
 
-        let packet = self.build_reply(msg, MessageType::Ack, Ipv4Addr::UNSPECIFIED);
+        let packet = self.build_reply(msg, MessageType::Ack, Ipv4Addr::UNSPECIFIED, device);
 
         HandleResult::Reply {
             packet,
@@ -401,7 +438,13 @@ impl DhcpServer {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn build_reply(&self, request: &Message, msg_type: MessageType, yiaddr: Ipv4Addr) -> Vec<u8> {
+    fn build_reply(
+        &self,
+        request: &Message,
+        msg_type: MessageType,
+        yiaddr: Ipv4Addr,
+        device: Option<&Device>,
+    ) -> Vec<u8> {
         let mut reply = Message::default();
 
         reply
@@ -424,8 +467,9 @@ impl DhcpServer {
         if msg_type != MessageType::Nak {
             let chaddr = request.chaddr();
             let mac = MacAddr::from_slice(&chaddr[..6]).unwrap_or(MacAddr::ZERO);
-            let dev = self.ctx.get_device(&mac);
-            let is_static = dev.as_ref().is_some_and(|d| d.is_static());
+            let mut dev_owned = None;
+            let dev_ref = resolve_device(&self.ctx, mac, device, &mut dev_owned);
+            let is_static = dev_ref.is_some_and(lanforge_types::device::Device::is_static);
 
             let pool_opt = self.pool.pool_for_ip(yiaddr);
             let pool_router = pool_opt.and_then(|p| p.router).unwrap_or(self.cfg.router);
@@ -496,8 +540,7 @@ impl DhcpServer {
                 request.opts().get(v4::OptionCode::ParameterRequestList)
                 && req_list.contains(&v4::OptionCode::InterfaceMtu)
             {
-                let mtu = get_interface_mtu(&self.cfg.iface).unwrap_or(1500);
-                opts.insert(DhcpOption::InterfaceMtu(mtu));
+                opts.insert(DhcpOption::InterfaceMtu(self.cached_mtu));
             }
 
             // NTP Servers (Option 42)
@@ -513,7 +556,7 @@ impl DhcpServer {
             }
 
             // Hybrid PXE / HTTP Boot Support
-            self.add_boot_options(request, opts, pool_opt);
+            self.add_boot_options(request, opts, pool_opt, device);
 
             // Custom Options
             self.add_custom_options(opts);
@@ -532,6 +575,7 @@ impl DhcpServer {
         request: &Message,
         opts: &mut v4::DhcpOptions,
         pool_opt: Option<&lanforge_types::network::dhcp::Dhcpv4Pool>,
+        device: Option<&Device>,
     ) {
         let vendor_class = Self::get_vendor_class(request);
         let arch = Self::get_arch(request);
@@ -544,9 +588,10 @@ impl DhcpServer {
 
         let chaddr = request.chaddr();
         let mac = MacAddr::from_slice(&chaddr[..6]).unwrap_or(MacAddr::ZERO);
-        let dev = self.ctx.get_device(&mac);
-        let boot_file = dev
-            .as_ref()
+        let mut dev_owned = None;
+        let dev_ref = resolve_device(&self.ctx, mac, device, &mut dev_owned);
+
+        let boot_file = dev_ref
             .and_then(|d| d.boot_file.clone())
             .or_else(|| pool_opt.and_then(|p| p.boot_file.clone()))
             .or_else(|| self.cfg.boot_file.clone());
@@ -566,18 +611,26 @@ impl DhcpServer {
                 if let Some(tftp) = tftp {
                     opts.insert(DhcpOption::TFTPServerName(tftp.as_bytes().to_vec()));
                 } else {
-                    opts.insert(DhcpOption::TFTPServerName(
-                        self.cfg.server_id.to_string().into_bytes(),
-                    ));
+                    opts.insert(DhcpOption::TFTPServerName(self.server_id_bytes.clone()));
                 }
             }
         }
     }
 
+    pub fn recompile_options(&mut self) {
+        self.precompiled_custom_options =
+            iter_custom_options(&self.cfg.options, PROTECTED_OPTIONS).collect();
+    }
+
     fn add_custom_options(&self, opts: &mut v4::DhcpOptions) {
-        const PROTECTED: &[u8] = &[53, 54, 51, 1];
-        for (code, data) in iter_custom_options(&self.cfg.options, PROTECTED) {
-            opts.insert(DhcpOption::Unknown(UnknownOption::new(code.into(), data)));
+        if !self.precompiled_custom_options.is_empty() {
+            for (code, data) in &self.precompiled_custom_options {
+                opts.insert(DhcpOption::Unknown(UnknownOption::new((*code).into(), data.clone())));
+            }
+        } else if !self.cfg.options.is_empty() {
+            for (code, data) in iter_custom_options(&self.cfg.options, PROTECTED_OPTIONS) {
+                opts.insert(DhcpOption::Unknown(UnknownOption::new(code.into(), data)));
+            }
         }
     }
 
@@ -1059,7 +1112,7 @@ mod tests {
         let mut reply_opts = v4::DhcpOptions::new();
 
         // 1. Global config only
-        srv.add_boot_options(&request, &mut reply_opts, None);
+        srv.add_boot_options(&request, &mut reply_opts, None, None);
         assert_eq!(
             reply_opts.get(66.into()),
             Some(&DhcpOption::TFTPServerName(b"1.2.3.4".to_vec()))
@@ -1085,7 +1138,7 @@ mod tests {
         });
 
         let mut reply_opts = v4::DhcpOptions::new();
-        srv.add_boot_options(&request, &mut reply_opts, None);
+        srv.add_boot_options(&request, &mut reply_opts, None, None);
         assert_eq!(
             reply_opts.get(v4::OptionCode::BootfileName),
             Some(&DhcpOption::BootfileName(b"custom.efi".to_vec()))
@@ -1096,7 +1149,7 @@ mod tests {
             .opts_mut()
             .insert(DhcpOption::ClientSystemArchitecture(Architecture::from(16))); // UEFI HTTP
         let mut reply_opts = v4::DhcpOptions::new();
-        srv.add_boot_options(&request, &mut reply_opts, None);
+        srv.add_boot_options(&request, &mut reply_opts, None, None);
         assert!(
             reply_opts.get(v4::OptionCode::ClassIdentifier).is_some(),
             "Missing Class Identifier (Option 60)"

@@ -35,7 +35,10 @@ pub mod server;
 
 use dhcproto::v4::{DhcpOption, Message, MessageType, Opcode, OptionCode};
 use dhcproto::{Decodable, Decoder};
-use lanforge_core::bus::{AdminChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent, SystemEvent};
+use lanforge_core::bus::{
+    AdminChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent, NetworkChange, NetworkEvent,
+    SystemEvent,
+};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceDependency};
 use lanforge_macros::lanforge_service;
@@ -46,7 +49,7 @@ use lanforge_types::network::dhcp::Dhcpv4Pool;
 use lanforge_types::system::{RunResult, ServiceState};
 use lanforge_types::update::{DeviceUpdate, DhcpV4PoolUpdate, LeaseTarget};
 use server::{DhcpServer, HandleResult};
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime};
 use tracing::{debug, info, warn};
@@ -268,6 +271,7 @@ impl Dhcpv4Service {
         // Static leases (fixed IPs) are untouched; stale dynamic leases outside active pools/subnet
         // are invalidated and clients are prompted to re-authenticate via RFC 3203 FORCERENEW.
         self.reconcile_dynamic_leases(&mut server, &transport, &current_cfg);
+        server.pool.reconcile_active(&self.ctx);
 
         let (total, used, available, util_pct) = server.pool.stats();
         let range_start = current_cfg
@@ -326,6 +330,7 @@ impl Dhcpv4Service {
                 _ = cleanup_timer.tick() => {
                     server.pool.cleanup_quarantine(Instant::now());
                     self.reconcile_dynamic_leases(&mut server, &transport, &current_cfg);
+                    server.pool.reconcile_active(&self.ctx);
                     let (total, used, available, util_pct) = server.pool.stats();
                     let range_start = current_cfg.range_start.or_else(|| current_cfg.pools.first().map(|p| p.range_start)).unwrap_or(Ipv4Addr::UNSPECIFIED);
                     let range_end = current_cfg.range_end.or_else(|| current_cfg.pools.first().map(|p| p.range_end)).unwrap_or(Ipv4Addr::UNSPECIFIED);
@@ -478,6 +483,38 @@ impl Dhcpv4Service {
         transport: &Dhcpv4Transport,
     ) {
         lanforge_core::match_event!(event, {
+            LanforgeEvent::Network(NetworkEvent::LeaseReleaseRequested { mac, target }) => {
+                if target.is_none() || target == &Some(LeaseTarget::V4) {
+                    info!("DHCPv4: Forcing release of {mac} via API/CLI");
+                    let ip = self.ctx.get_device(mac).and_then(|d| d.v4.ip());
+                    if let Some(i) = ip {
+                        server.pool.release(&i);
+                    }
+                    let _ = self.ctx.apply(DeviceUpdate::LeaseReleased {
+                        mac: *mac,
+                        target: LeaseTarget::V4,
+                    });
+                }
+            }
+            LanforgeEvent::Network(NetworkEvent::LeaseRenewRequested { mac, target }) => {
+                if target.is_none() || target == &Some(LeaseTarget::V4) {
+                    let ip = self.ctx.get_device(mac).and_then(|d| d.v4.ip());
+                    if let Some(ip) = ip {
+                        let packet = server.build_forcerenew(*mac, ip);
+                        if let Err(e) = transport.send_reply(
+                            &packet,
+                            self.cfg.server_id,
+                            false,
+                            ip,
+                            Ipv4Addr::UNSPECIFIED,
+                            *mac,
+                            self.cfg.port,
+                        ) {
+                            warn!("DHCPv4: Failed to send FORCERENEW to {ip} ({mac}): {e}");
+                        }
+                    }
+                }
+            }
             LanforgeEvent::Device(DeviceEvent::LeaseRelease {
                 mac,
                 target: LeaseTarget::V4,
@@ -506,6 +543,17 @@ impl Dhcpv4Service {
                     ) {
                         warn!("DHCPv4: Failed to send FORCERENEW to {ip} ({mac}): {e}");
                     }
+                }
+            }
+            LanforgeEvent::Device(DeviceEvent::NetworkUpdate { change, .. }) => {
+                match change.as_ref() {
+                    NetworkChange::LeaseExpired { target: LeaseTarget::V4 } => {
+                        server.pool.reconcile_active(&self.ctx);
+                    }
+                    NetworkChange::IpDeleted { ip: IpAddr::V4(ip) } => {
+                        server.pool.release(ip);
+                    }
+                    _ => {}
                 }
             }
             LanforgeEvent::Device(DeviceEvent::AdminUpdate { mac, change, .. }) => {

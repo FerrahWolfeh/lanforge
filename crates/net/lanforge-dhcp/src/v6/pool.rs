@@ -625,31 +625,52 @@ impl Ipv6Pool {
         }
         let size = end.saturating_sub(start) + 1;
 
-        // 1. Deterministic Candidate (Stability)
-        let det_offset = Self::generate_deterministic_u128(&prefix, target_duid.as_bytes(), size);
-        let det_ip = Ipv6Addr::from((start + (det_offset % size)).to_be_bytes());
-        if self.is_available(ctx, &det_ip, target_mac, target_duid) {
-            return Some(det_ip);
-        }
+        ctx.with_state(|state| {
+            let is_available_fn = |ip: &Ipv6Addr| -> bool {
+                if self.reserved_static.contains(ip) || self.blacklisted.contains_key(ip) {
+                    return false;
+                }
+                if let Some(mac) = state.get_mac_by_ip(IpAddr::V6(*ip))
+                    && Some(mac) != target_mac
+                {
+                    if let Some(device) = state.devices.get(&mac)
+                        && device.duid.as_ref() == Some(target_duid)
+                    {
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    true
+                }
+            };
 
-        // 2. Limited Probabilistic Retries (Safety)
-        for _ in 0..10 {
-            let offset = random::<u128>() % size;
-            let ip = Ipv6Addr::from((start + offset).to_be_bytes());
-            if self.is_available(ctx, &ip, target_mac, target_duid) {
-                return Some(ip);
+            // 1. Deterministic Candidate (Stability)
+            let det_offset = Self::generate_deterministic_u128(&prefix, target_duid.as_bytes(), size);
+            let det_ip = Ipv6Addr::from((start + (det_offset % size)).to_be_bytes());
+            if is_available_fn(&det_ip) {
+                return Some(det_ip);
             }
-        }
 
-        // 3. Fallback Linear Scan (Exhaustive guarantee)
-        let max_scan = size.min(1000); // Cap scan to avoid locking up on huge subnets
-        for offset in 0..max_scan {
-            let ip = Ipv6Addr::from((start + offset).to_be_bytes());
-            if self.is_available(ctx, &ip, target_mac, target_duid) {
-                return Some(ip);
+            // 2. Limited Probabilistic Retries (Safety)
+            for _ in 0..10 {
+                let offset = random::<u128>() % size;
+                let ip = Ipv6Addr::from((start + offset).to_be_bytes());
+                if is_available_fn(&ip) {
+                    return Some(ip);
+                }
             }
-        }
-        None
+
+            // 3. Fallback Linear Scan (Exhaustive guarantee under single state read)
+            let max_scan = size.min(1000);
+            for offset in 0..max_scan {
+                let ip = Ipv6Addr::from((start + offset).to_be_bytes());
+                if is_available_fn(&ip) {
+                    return Some(ip);
+                }
+            }
+            None
+        })
     }
 
     fn generate_deterministic_u128(prefix: &Ipv6Addr, identifier: &[u8], range_size: u128) -> u128 {

@@ -38,6 +38,8 @@
 //! | Decline | Mark address as conflicted | Reply |
 //! | Information-Request | Provide DNS/search options | Reply |
 
+const PROTECTED_OPTIONS: &[u16] = &[1, 2, 3, 5, 25];
+
 use dhcproto::v6::{
     DhcpOption, DhcpOptions, IAAddr, IANA, IAPD, IAPrefix, Message, MessageType, OptionCode,
     Status, StatusCode, UnknownOption,
@@ -45,6 +47,7 @@ use dhcproto::v6::{
 use dhcproto::{Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::utils::mac_from_eui64_link_local;
+use lanforge_types::device::Device;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use std::net::Ipv6Addr;
 use std::str::FromStr;
@@ -108,23 +111,33 @@ pub struct Dhcpv6Server {
     pub prefix_lifetimes: Option<(u32, u32)>,
     /// Global context for device lookups and state updates.
     pub ctx: LanforgeContext,
+    /// Precompiled custom options to avoid runtime string decoding on the packet hot-path.
+    pub precompiled_custom_options: Vec<(u16, Vec<u8>)>,
 }
 
 impl Dhcpv6Server {
     #[must_use]
-    pub const fn new(
+    pub fn new(
         cfg: Dhcpv6Config,
         pool: Ipv6Pool,
         server_duid: Duid,
         ctx: LanforgeContext,
     ) -> Self {
+        let precompiled_custom_options =
+            iter_custom_options(&cfg.options, PROTECTED_OPTIONS).collect();
         Self {
             cfg,
             pool,
             server_duid,
             prefix_lifetimes: None,
             ctx,
+            precompiled_custom_options,
         }
+    }
+
+    pub fn recompile_options(&mut self) {
+        self.precompiled_custom_options =
+            iter_custom_options(&self.cfg.options, PROTECTED_OPTIONS).collect();
     }
 
     const fn get_lifetimes(&self) -> (u32, u32) {
@@ -152,7 +165,8 @@ impl Dhcpv6Server {
             .or_else(|| self.ctx.get_mac_by_duid(client_duid));
         let is_static = mac
             .and_then(|m| self.ctx.get_device(&m))
-            .is_some_and(|d| d.is_static());
+            .as_deref()
+            .is_some_and(Device::is_static);
         if is_static {
             (u32::MAX, u32::MAX)
         } else {
@@ -199,13 +213,13 @@ impl Dhcpv6Server {
     ) -> HandleResult<'a> {
         let client_id_opt = msg.opts().get(OptionCode::ClientId);
         let client_duid = if let Some(DhcpOption::ClientId(duid_bytes)) = client_id_opt {
-            Duid::new(duid_bytes.clone())
+            Duid::from_slice(duid_bytes)
         } else {
             if msg.msg_type() != MessageType::InformationRequest {
                 debug!("No ClientId option, ignoring");
                 return HandleResult::Ignore;
             }
-            Duid::new(vec![])
+            Duid::from_slice(&[])
         };
 
         // Try to extract MAC address in increasing order of cost
@@ -1078,11 +1092,18 @@ impl Dhcpv6Server {
     }
 
     fn add_custom_options(&self, reply: &mut Message) {
-        const PROTECTED: &[u16] = &[1, 2, 3, 5, 25];
-        for (code, data) in iter_custom_options(&self.cfg.options, PROTECTED) {
-            reply
-                .opts_mut()
-                .insert(DhcpOption::Unknown(UnknownOption::new(code.into(), data)));
+        if !self.precompiled_custom_options.is_empty() {
+            for (code, data) in &self.precompiled_custom_options {
+                reply
+                    .opts_mut()
+                    .insert(DhcpOption::Unknown(UnknownOption::new((*code).into(), data.clone())));
+            }
+        } else if !self.cfg.options.is_empty() {
+            for (code, data) in iter_custom_options(&self.cfg.options, PROTECTED_OPTIONS) {
+                reply
+                    .opts_mut()
+                    .insert(DhcpOption::Unknown(UnknownOption::new(code.into(), data)));
+            }
         }
     }
 

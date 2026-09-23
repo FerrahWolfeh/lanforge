@@ -45,6 +45,14 @@ impl Duid {
         }
     }
 
+    /// Creates a new DUID directly from a slice of bytes without intermediate Vec allocation.
+    #[must_use]
+    pub fn from_slice(slice: &[u8]) -> Self {
+        Self {
+            bytes: Arc::from(slice),
+        }
+    }
+
     /// Returns the raw bytes of the DUID.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
@@ -170,6 +178,12 @@ impl FromStr for Duid {
             return Err("DUID cannot be empty".to_string());
         }
         Ok(Self::new(bytes))
+    }
+}
+
+impl From<&[u8]> for Duid {
+    fn from(slice: &[u8]) -> Self {
+        Self::from_slice(slice)
     }
 }
 

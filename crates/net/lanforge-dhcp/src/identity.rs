@@ -6,8 +6,27 @@
 //! identity for logging, display, and state updates.
 
 use std::fmt;
+use std::sync::Arc;
 
+use lanforge_core::context::LanforgeContext;
 use lanforge_types::{device::Device, identifiers::MacAddr};
+
+/// Resolves a reference to `Device`, borrowing the caller's pre-fetched reference
+/// or looking it up in `ctx` if not provided.
+pub fn resolve_device<'a>(
+    ctx: &LanforgeContext,
+    mac: MacAddr,
+    device: Option<&'a Device>,
+    storage: &'a mut Option<Arc<Device>>,
+) -> Option<&'a Device> {
+    device.map_or_else(
+        || {
+            *storage = ctx.get_device(&mac);
+            storage.as_deref()
+        },
+        Some,
+    )
+}
 
 /// Resolved identity of a DHCP client device.
 ///
