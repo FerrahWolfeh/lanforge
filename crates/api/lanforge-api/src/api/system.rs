@@ -287,9 +287,9 @@ pub struct SystemConfigExport {
     pub ra_prefixes: Option<Vec<RAPrefix>>,
     pub ra_rdnss: Option<Vec<RdnssConfig>>,
     pub ra_dnssl: Option<Vec<DnsslConfig>>,
-    pub pppoe_config: Option<PppoeConfig>,
+    pub pppoe_config: Option<Box<PppoeConfig>>,
     #[serde(default)]
-    pub dhcp_options: Option<DhcpOptionsConfig>,
+    pub dhcp_options: Option<Box<DhcpOptionsConfig>>,
     #[serde(default)]
     pub dns_reverse_resolvers: Option<Vec<DnsReverseResolver>>,
     #[serde(default)]

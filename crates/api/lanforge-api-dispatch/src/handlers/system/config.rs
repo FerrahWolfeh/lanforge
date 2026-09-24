@@ -99,8 +99,8 @@ impl ClientContext {
         let ra_prefixes = self.db.load_ra_prefixes().await.ok();
         let ra_rdnss = self.db.load_ra_rdnss().await.ok();
         let ra_dnssl = self.db.load_ra_dnssl().await.ok();
-        let pppoe_config = self.db.load_pppoe_config().await.ok().flatten();
-        let dhcp_options = self.db.load_dhcp_options().await.ok().flatten();
+        let pppoe_config = self.db.load_pppoe_config().await.ok().flatten().map(Box::new);
+        let dhcp_options = self.db.load_dhcp_options().await.ok().flatten().map(Box::new);
         let dns_reverse_resolvers = self.db.load_dns_reverse_resolvers().await.ok();
 
         Response::SystemConfig(Box::new(SystemConfigExport {
@@ -634,7 +634,7 @@ impl ClientContext {
                 total_success = false;
                 opts_err = Some(e.to_string());
             } else {
-                self.ctx.update_dhcp_options(opts);
+                self.ctx.update_dhcp_options(*opts);
             }
             results.push(ImportResult {
                 section: ImportSection::DhcpOptions,

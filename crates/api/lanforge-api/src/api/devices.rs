@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use super::common::{HttpDataResponse, HttpPaginatedResponse, HttpWrappedResponse};
@@ -18,6 +19,17 @@ pub struct DevicesResponse {
     pub devices: Vec<DeviceEntry>,
     /// Statistical metadata about the scan results.
     pub meta: DevicesMeta,
+}
+
+/// Query parameters for listing devices with pagination and filtering.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct DeviceListQuery {
+    pub filter: Option<String>,
+    pub vendor: Option<String>,
+    pub method: Option<String>,
+    pub format: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 /// A response containing a list of manually configured hosts.
@@ -251,27 +263,74 @@ pub struct GroupedDevice {
 
 #[must_use]
 pub fn group_devices(devices: &[DeviceEntry]) -> Vec<GroupedDevice> {
-    let mut groups: Vec<Vec<DeviceEntry>> = devices.iter().cloned().map(|d| vec![d]).collect();
+    if devices.is_empty() {
+        return Vec::new();
+    }
 
-    // Iteratively merge groups
-    let mut merged = true;
-    while merged {
-        merged = false;
-        'outer: for i in 0..groups.len() {
-            for j in (i + 1)..groups.len() {
-                if should_merge(&groups[i], &groups[j]) {
-                    let mut other = groups.remove(j);
-                    groups[i].append(&mut other);
-                    merged = true;
-                    break 'outer;
-                }
+    let n = devices.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+
+    fn find(parent: &mut [usize], mut i: usize) -> usize {
+        let mut root = i;
+        while root != parent[root] {
+            root = parent[root];
+        }
+        while i != root {
+            let next = parent[i];
+            parent[i] = root;
+            i = next;
+        }
+        root
+    }
+
+    fn union(parent: &mut [usize], i: usize, j: usize) {
+        let root_i = find(parent, i);
+        let root_j = find(parent, j);
+        if root_i != root_j {
+            parent[root_i] = root_j;
+        }
+    }
+
+    let mut duid_map: HashMap<&Duid, usize> = HashMap::with_capacity(n);
+    let mut name_map: HashMap<String, usize> = HashMap::with_capacity(n);
+
+    for (i, dev) in devices.iter().enumerate() {
+        if let Some(ref duid) = dev.duid {
+            if let Some(&prev_idx) = duid_map.get(duid) {
+                union(&mut parent, i, prev_idx);
+            } else {
+                duid_map.insert(duid, i);
+            }
+        }
+
+        if is_valid_hostname(&dev.hostname) {
+            let lower = dev.hostname.to_ascii_lowercase();
+            if let Some(&prev_idx) = name_map.get(&lower) {
+                union(&mut parent, i, prev_idx);
+            } else {
+                name_map.insert(lower, i);
             }
         }
     }
 
+    // Bucket devices by their root while preserving deterministic first-seen order
+    let mut root_to_group: Vec<Option<Vec<DeviceEntry>>> = (0..n).map(|_| None).collect();
+    let mut group_roots: Vec<usize> = Vec::with_capacity(n);
+
+    for (i, dev) in devices.iter().enumerate() {
+        let root = find(&mut parent, i);
+        if let Some(ref mut group) = root_to_group[root] {
+            group.push(dev.clone());
+        } else {
+            group_roots.push(root);
+            root_to_group[root] = Some(vec![dev.clone()]);
+        }
+    }
+
     // Construct GroupedDevice list
-    let mut correlated = Vec::new();
-    for mut interfaces in groups {
+    let mut correlated = Vec::with_capacity(group_roots.len());
+    for root in group_roots {
+        let mut interfaces = root_to_group[root].take().unwrap_or_default();
         // Sort interfaces inside the group
         sort_interfaces(&mut interfaces);
 
@@ -304,34 +363,6 @@ pub fn group_devices(devices: &[DeviceEntry]) -> Vec<GroupedDevice> {
 
 fn is_valid_hostname(hostname: &str) -> bool {
     !hostname.is_empty() && hostname != "<unknown>" && !hostname.starts_with("host-")
-}
-
-fn should_merge(a: &[DeviceEntry], b: &[DeviceEntry]) -> bool {
-    // Check DUID match
-    for dev_a in a {
-        if let Some(ref duid_a) = dev_a.duid {
-            for dev_b in b {
-                if let Some(ref duid_b) = dev_b.duid
-                    && duid_a == duid_b
-                {
-                    return true;
-                }
-            }
-        }
-    }
-    // Check Hostname match
-    for dev_a in a {
-        if is_valid_hostname(&dev_a.hostname) {
-            for dev_b in b {
-                if is_valid_hostname(&dev_b.hostname)
-                    && dev_a.hostname.eq_ignore_ascii_case(&dev_b.hostname)
-                {
-                    return true;
-                }
-            }
-        }
-    }
-    false
 }
 
 pub fn sort_interfaces(interfaces: &mut [DeviceEntry]) {

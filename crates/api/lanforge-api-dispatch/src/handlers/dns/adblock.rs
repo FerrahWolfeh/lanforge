@@ -96,7 +96,7 @@ impl ClientContext {
                 .send_request(lanforge_types::network::dns::DnsRequest::AdblockStatus)
                 .await
         {
-            return Response::DnsAdblockStatus(DnsAdblockStatusResponse {
+            return Response::DnsAdblockStatus(Box::new(DnsAdblockStatusResponse {
                 enabled: res.enabled,
                 disabled_until: res.disabled_until,
                 remaining_secs: res.remaining_secs,
@@ -105,7 +105,7 @@ impl ClientContext {
                 blocking_mode: res.blocking_mode,
                 blocking_ip_v4: res.blocking_ip_v4,
                 blocking_ip_v6: res.blocking_ip_v6,
-            });
+            }));
         }
 
         Response::Error {

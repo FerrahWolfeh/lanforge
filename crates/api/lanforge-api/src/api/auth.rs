@@ -54,6 +54,14 @@ impl HttpWrappedResponse for AuthTokensResponse {
     }
 }
 
+/// Payload for creating a new user account.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct CreateUserPayload {
+    pub username: String,
+    pub password: String,
+    pub role: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UserResponse {
     pub user: lanforge_types::auth::UserInfo,

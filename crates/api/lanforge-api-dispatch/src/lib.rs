@@ -88,15 +88,17 @@ impl LanforgeRpc for ClientContext {
 
     async fn list_devices(
         &self,
-        filter: Option<String>,
-        vendor: Option<String>,
-        method: Option<String>,
-        format: Option<String>,
-        limit: Option<usize>,
-        offset: Option<usize>,
+        query: Box<lanforge_api::api::DeviceListQuery>,
     ) -> Result<DevicesResponse, RpcCallError> {
         match self
-            .handle_devices(filter, vendor, method, format, limit, offset)
+            .handle_devices(
+                query.filter,
+                query.vendor,
+                query.method,
+                query.format,
+                query.limit,
+                query.offset,
+            )
             .await
         {
             Response::Devices(d) => Ok(d),
@@ -130,8 +132,8 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn host_add(&self, entry: HostConfigEntry) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_host_add(entry).await {
+    async fn host_add(&self, entry: Box<HostConfigEntry>) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_host_add(*entry).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
@@ -363,7 +365,7 @@ impl LanforgeRpc for ClientContext {
         &self,
         name: String,
         record_type: Option<DnsRecordType>,
-    ) -> Result<DnsQueryResponse, RpcCallError> {
+    ) -> Result<Box<DnsQueryResponse>, RpcCallError> {
         match self.handle_dns_query(name, record_type).await {
             Response::DnsQuery(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -453,7 +455,7 @@ impl LanforgeRpc for ClientContext {
 
     async fn dns_adblock_status(
         &self,
-    ) -> Result<lanforge_api::api::DnsAdblockStatusResponse, RpcCallError> {
+    ) -> Result<Box<lanforge_api::api::DnsAdblockStatusResponse>, RpcCallError> {
         match self.handle_dns_adblock_status().await {
             Response::DnsAdblockStatus(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -485,8 +487,8 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn dns_rewrite_add(&self, rule: RewriteRule) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_dns_rewrite_add(rule).await {
+    async fn dns_rewrite_add(&self, rule: Box<RewriteRule>) -> Result<SimpleSuccess, RpcCallError> {
+        match self.handle_dns_rewrite_add(*rule).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
@@ -773,11 +775,12 @@ impl LanforgeRpc for ClientContext {
 
     async fn user_create(
         &self,
-        username: String,
-        password: String,
-        role: Option<String>,
+        payload: Box<lanforge_api::api::CreateUserPayload>,
     ) -> Result<Box<lanforge_api::api::UserResponse>, RpcCallError> {
-        match self.handle_user_create(username, password, role).await {
+        match self
+            .handle_user_create(payload.username, payload.password, payload.role)
+            .await
+        {
             Response::User(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),

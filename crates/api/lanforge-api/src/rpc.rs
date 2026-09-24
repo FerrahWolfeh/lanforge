@@ -1,13 +1,13 @@
 use crate::api::{
-    AuthTokenResponse, AuthTokensResponse, DevicesResponse, DhcpOptionsResponse,
-    DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockStatusResponse,
-    DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse,
-    DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse,
-    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry,
-    HostsResponse, LeasesResponse, RpcCallError, ServiceBannersResponse, SetupPayload,
-    SetupResponse, SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
-    SystemConfigImportResponse, TransientHostsResponse, UserListResponse, UserResponse,
-    WhoisResponse,
+    AuthTokenResponse, AuthTokensResponse, CreateUserPayload, DeviceListQuery, DevicesResponse,
+    DhcpOptionsResponse, DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse,
+    DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse,
+    DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
+    DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
+    EventKind, HostConfigEntry, HostsResponse, LeasesResponse, RpcCallError, ServiceBannersResponse,
+    SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess, StatusResponse,
+    SystemConfigExport, SystemConfigImportResponse, TransientHostsResponse, UserListResponse,
+    UserResponse, WhoisResponse,
 };
 use lanforge_macros::lanforge_rpc;
 use lanforge_types::{
@@ -51,12 +51,7 @@ pub trait LanforgeRpc {
     ) -> impl Future<Output = Result<ServiceBannersResponse, RpcCallError>> + Send;
     fn list_devices(
         &self,
-        filter: Option<String>,
-        vendor: Option<String>,
-        method: Option<String>,
-        format: Option<String>,
-        limit: Option<usize>,
-        offset: Option<usize>,
+        query: Box<DeviceListQuery>,
     ) -> impl Future<Output = Result<DevicesResponse, RpcCallError>> + Send;
     fn reload(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn log(
@@ -69,7 +64,7 @@ pub trait LanforgeRpc {
     fn shutdown(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn host_add(
         &self,
-        entry: HostConfigEntry,
+        entry: Box<HostConfigEntry>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn host_import(
         &self,
@@ -153,7 +148,7 @@ pub trait LanforgeRpc {
         &self,
         name: String,
         record_type: Option<DnsRecordType>,
-    ) -> impl Future<Output = Result<DnsQueryResponse, RpcCallError>> + Send;
+    ) -> impl Future<Output = Result<Box<DnsQueryResponse>, RpcCallError>> + Send;
     fn dns_cache_flush(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn dns_cache_dump(
         &self,
@@ -188,7 +183,7 @@ pub trait LanforgeRpc {
     ) -> impl Future<Output = Result<DnsQueryLogResponse, RpcCallError>> + Send;
     fn dns_adblock_status(
         &self,
-    ) -> impl Future<Output = Result<DnsAdblockStatusResponse, RpcCallError>> + Send;
+    ) -> impl Future<Output = Result<Box<DnsAdblockStatusResponse>, RpcCallError>> + Send;
     fn dns_block(
         &self,
         domain: String,
@@ -203,7 +198,7 @@ pub trait LanforgeRpc {
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn dns_rewrite_add(
         &self,
-        rule: RewriteRule,
+        rule: Box<RewriteRule>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn dns_rewrite_remove(
         &self,
@@ -306,11 +301,8 @@ pub trait LanforgeRpc {
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn ra_trigger(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn user_create(
-
         &self,
-        username: String,
-        password: String,
-        role: Option<String>,
+        payload: Box<CreateUserPayload>,
     ) -> impl Future<Output = Result<Box<UserResponse>, RpcCallError>> + Send;
     fn user_list(&self) -> impl Future<Output = Result<UserListResponse, RpcCallError>> + Send;
     fn user_delete(

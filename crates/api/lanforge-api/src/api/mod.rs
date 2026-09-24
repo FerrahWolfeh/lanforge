@@ -57,11 +57,11 @@ pub enum Response {
     /// Response for DNS upstreams status.
     DnsUpstreams(DnsUpstreamsResponse),
     /// Response for a DNS diagnostic query.
-    DnsQuery(DnsQueryResponse),
+    DnsQuery(Box<DnsQueryResponse>),
     /// Response for DNS query logs.
     DnsQueryLog(DnsQueryLogResponse),
     /// Response for DNS adblock status.
-    DnsAdblockStatus(DnsAdblockStatusResponse),
+    DnsAdblockStatus(Box<DnsAdblockStatusResponse>),
     /// Response for DHCP pool utilization.
     DhcpPools(DhcpPoolsResponse),
     /// Response for DNS cache dump.

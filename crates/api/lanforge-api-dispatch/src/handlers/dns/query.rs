@@ -13,12 +13,12 @@ impl ClientContext {
 
         let start = Instant::now();
         match self.resolve_diagnostic(&name, qtype).await {
-            Ok((records, auth, result)) => Response::DnsQuery(DnsQueryResponse {
+            Ok((records, auth, result)) => Response::DnsQuery(Box::new(DnsQueryResponse {
                 records,
                 latency_ms: u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
                 authoritative: auth,
                 result,
-            }),
+            })),
             Err(e) => Response::Error {
                 error: format!("DNS resolution failed: {e}"),
             },
