@@ -34,6 +34,7 @@ pub struct ConfigExportQuery {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/status", get(handle_status))
+        .route("/capabilities", get(handle_capabilities))
         .route("/setup-status", get(handle_setup_status))
         .route("/setup", post(handle_setup))
         .route("/service_banners", get(handle_service_banners))
@@ -51,6 +52,16 @@ pub fn router() -> Router<AppState> {
 async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_status().await, Status)
+}
+
+async fn handle_capabilities(State(state): State<AppState>) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    (
+        axum::http::StatusCode::OK,
+        axum::Json(lanforge_api::api::HttpDataResponse {
+            data: ctx.server_capabilities(),
+        }),
+    )
 }
 
 async fn handle_service_banners(State(state): State<AppState>) -> impl IntoResponse {

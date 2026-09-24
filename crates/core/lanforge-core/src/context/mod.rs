@@ -72,7 +72,8 @@ use lanforge_types::network::firewall::{
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
 use lanforge_types::network::TrafficConfig;
-use lanforge_types::system::{ServiceBanner, ServiceState, SystemStatus};
+use lanforge_types::system::{Cap, ServerCapabilities, ServiceBanner, ServiceState, SystemStatus};
+use smallvec::SmallVec;
 
 use arc_swap::ArcSwap;
 use parking_lot::{Mutex, RwLock};
@@ -277,6 +278,8 @@ struct LanforgeContextInner {
     db_metrics: DbWorkerMetrics,
     /// Path to the active TOML configuration file on disk.
     config_path: RwLock<Option<std::path::PathBuf>>,
+    /// Compiled daemon capabilities.
+    compiled_caps: RwLock<SmallVec<[Cap; 32]>>,
 }
 
 #[allow(clippy::missing_panics_doc)] // Temporary
@@ -335,6 +338,7 @@ impl LanforgeContext {
             start_time: Instant::now(),
             db_metrics: DbWorkerMetrics::default(),
             config_path: RwLock::new(None),
+            compiled_caps: RwLock::new(CompiledCaps::detect_default_compiled()),
         });
         Self { inner }
     }
@@ -619,6 +623,77 @@ impl LanforgeContext {
     #[must_use]
     pub fn get_status(&self) -> Option<SystemStatus> {
         self.inner.status.read().clone()
+    }
+
+    /// Sets the compiled capabilities for this daemon binary.
+    pub fn set_compiled_caps(&self, caps: SmallVec<[Cap; 32]>) {
+        *self.inner.compiled_caps.write() = caps;
+    }
+
+    /// Returns the compiled capabilities for this daemon binary.
+    #[must_use]
+    pub fn compiled_caps(&self) -> SmallVec<[Cap; 32]> {
+        self.inner.compiled_caps.read().clone()
+    }
+
+    /// Evaluates compiled vs enabled server capabilities based on runtime configuration.
+    #[must_use]
+    pub fn server_capabilities(&self) -> ServerCapabilities {
+        let compiled = self.compiled_caps();
+        let mut enabled = SmallVec::new();
+        let status = self.get_status();
+
+        for &cap in &compiled {
+            let is_enabled = match cap {
+                Cap::Dns => status.as_ref().is_none_or(|s| s.dns_enabled),
+                Cap::UpstreamUdpTcp | Cap::UpstreamDoT | Cap::UpstreamDoQ | Cap::UpstreamDoH => {
+                    status.as_ref().is_none_or(|s| s.dns_enabled)
+                }
+                Cap::DohDownstream => {
+                    status.as_ref().is_none_or(|s| s.dns_enabled && s.http_enabled)
+                }
+                Cap::DhcpV4 => status.as_ref().is_none_or(|s| s.dhcp_v4_enabled),
+                Cap::DhcpV6 => status.as_ref().is_none_or(|s| s.dhcp_v6_enabled),
+                Cap::Ra => {
+                    let from_status = status.as_ref().is_none_or(|s| s.ra_enabled);
+                    let from_config = self.with_config(|c| c.ra_config.as_ref().is_none_or(|r| r.enabled));
+                    from_status && from_config
+                }
+                Cap::NdpDiscovery
+                | Cap::MdnsProbe
+                | Cap::Uds
+                | Cap::Zstd
+                | Cap::Storage
+                | Cap::Ebpf => true,
+                Cap::Http => status.as_ref().is_none_or(|s| s.http_enabled),
+                Cap::Webui => status.as_ref().is_none_or(|s| s.http_enabled),
+                Cap::Pppoe => {
+                    let from_status = status.as_ref().is_none_or(|s| s.pppoe_enabled);
+                    let from_config = self.with_config(|c| c.pppoe.as_ref().is_none_or(|p| p.enabled));
+                    from_status && from_config
+                }
+                Cap::Tftp => status.as_ref().and_then(|s| s.boot_dir.as_ref()).is_some(),
+                Cap::Firewall => {
+                    let from_status = status.as_ref().is_none_or(|s| s.firewall_enabled);
+                    let from_config = self.with_config(|c| c.firewall.as_ref().is_none_or(|f| f.enabled));
+                    from_status && from_config
+                }
+                Cap::Traffic => {
+                    let from_status = status.as_ref().is_none_or(|s| s.traffic_enabled);
+                    let from_config = self.with_config(|c| {
+                        c.traffic.as_ref().is_none_or(|t| t.tuning.enabled || t.sqm.enabled)
+                    });
+                    from_status && from_config
+                }
+                Cap::Adblock => self.with_config(|c| c.dns_adblock.enabled),
+            };
+
+            if is_enabled {
+                enabled.push(cap);
+            }
+        }
+
+        ServerCapabilities { compiled, enabled }
     }
 
     #[must_use]

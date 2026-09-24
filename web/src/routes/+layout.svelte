@@ -8,6 +8,7 @@
 	import { Toaster } from "$lib/components/ui/sonner";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
+	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 	import { status } from "$lib/api/client";
 	import AppSidebar from "$lib/components/AppSidebar.svelte";
 	import Topbar from "$lib/components/Topbar.svelte";
@@ -103,7 +104,10 @@
 		async function pollStatus() {
 			try {
 				const s = await status();
-				if (active) uptime = s.uptime_secs;
+				if (active) {
+					uptime = s.uptime_secs;
+					capabilitiesState.updateFromStatus(s);
+				}
 			} catch {
 				// daemon unreachable — leave uptime as-is
 			}

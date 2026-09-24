@@ -21,6 +21,7 @@
 	import { onMount, onDestroy } from "svelte";
 	import { fly } from "svelte/transition";
 	import { cubicOut } from "svelte/easing";
+	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 
 	import PlugZapIcon from "@lucide/svelte/icons/plug-zap";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -367,7 +368,9 @@
 	<Tabs.Root bind:value={activeTab} class="w-full">
 		<Tabs.List class="flex w-full overflow-x-auto justify-start sm:inline-flex sm:w-auto p-1 mb-4 no-scrollbar">
 			<Tabs.Trigger value="connection">Uplink & Credentials</Tabs.Trigger>
-			<Tabs.Trigger value="acceleration">Dataplane & Acceleration</Tabs.Trigger>
+			{#if capabilitiesState.isCompiled("ebpf")}
+				<Tabs.Trigger value="acceleration">Dataplane & Acceleration</Tabs.Trigger>
+			{/if}
 			<Tabs.Trigger value="timers">Parameters & Timers</Tabs.Trigger>
 		</Tabs.List>
 
@@ -384,12 +387,14 @@
 			/>
 		</Tabs.Content>
 
-		<Tabs.Content value="acceleration">
-			<PppoeAccelerationTab
-				bind:formDataplane
-				onSelectEbpf={() => handleDataplaneSelect("ebpf")}
-			/>
-		</Tabs.Content>
+		{#if capabilitiesState.isCompiled("ebpf")}
+			<Tabs.Content value="acceleration">
+				<PppoeAccelerationTab
+					bind:formDataplane
+					onSelectEbpf={() => handleDataplaneSelect("ebpf")}
+				/>
+			</Tabs.Content>
+		{/if}
 
 		<Tabs.Content value="timers">
 			<PppoeTimersTab

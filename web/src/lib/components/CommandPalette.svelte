@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { goto } from "$app/navigation";
+	import { dev } from "$app/environment";
 	import * as Dialog from "$lib/components/ui/dialog";
 	import { Badge } from "$lib/components/ui/badge";
 	import { toggleMode } from "mode-watcher";
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
 	import { auth } from "$lib/stores/auth.svelte";
+	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 	import { logout } from "$lib/api/client";
 	import type { Component } from "svelte";
 
@@ -29,6 +31,7 @@
 	import LogOutIcon from "@lucide/svelte/icons/log-out";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
 	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
+	import BugIcon from "@lucide/svelte/icons/bug";
 	import { commandState } from "$lib/stores/command.svelte";
 
 	interface CommandItem {
@@ -39,6 +42,7 @@
 		category: "Pages & Navigation" | "Quick Actions";
 		icon: Component<Record<string, unknown>>;
 		action: () => void;
+		cap?: string | string[];
 	}
 
 	let search = $state("");
@@ -47,6 +51,19 @@
 
 	const items: CommandItem[] = [
 		// Quick Actions
+		...(dev
+			? [
+					{
+						id: "action-dev-cdbg",
+						title: "Toggle Capabilities Debug Mode",
+						subtitle: "Vite Dev: Switch between live daemon capabilities and all pages",
+						keywords: ["caps", "capabilities", "debug", "cdbg", "dev", "override", "vite"],
+						category: "Quick Actions" as const,
+						icon: BugIcon,
+						action: () => capabilitiesState.toggleDebugMode(),
+					},
+			  ]
+			: []),
 		{
 			id: "action-theme",
 			title: "Toggle Light / Dark Theme",
@@ -117,7 +134,8 @@
 			keywords: ["scan", "discovery", "monitor", "neighbors", "arp", "probe"],
 			category: "Pages & Navigation",
 			icon: RadioIcon,
-			action: () => goto("/network/discovery")
+			action: () => goto("/network/discovery"),
+			cap: ["ndp_discovery", "mdns_probe"]
 		},
 		{
 			id: "page-ra",
@@ -126,7 +144,8 @@
 			keywords: ["ipv6", "router", "advertisements", "slaac", "prefixes"],
 			category: "Pages & Navigation",
 			icon: WifiIcon,
-			action: () => goto("/network/ra")
+			action: () => goto("/network/ra"),
+			cap: "ra"
 		},
 		{
 			id: "page-pppoe",
@@ -135,7 +154,8 @@
 			keywords: ["pppoe", "wan", "internet", "isp", "fiber", "broadband"],
 			category: "Pages & Navigation",
 			icon: PlugZapIcon,
-			action: () => goto("/network/pppoe")
+			action: () => goto("/network/pppoe"),
+			cap: "pppoe"
 		},
 		{
 			id: "page-firewall",
@@ -144,7 +164,8 @@
 			keywords: ["firewall", "nftables", "port forward", "dmz", "pinhole", "rules", "zones"],
 			category: "Pages & Navigation",
 			icon: ShieldIcon,
-			action: () => goto("/firewall")
+			action: () => goto("/firewall"),
+			cap: "firewall"
 		},
 		{
 			id: "page-traffic",
@@ -153,7 +174,8 @@
 			keywords: ["traffic", "sqm", "cake", "qos", "bandwidth", "tuning", "bufferbloat", "speed"],
 			category: "Pages & Navigation",
 			icon: SlidersHorizontalIcon,
-			action: () => goto("/network/traffic")
+			action: () => goto("/network/traffic"),
+			cap: "traffic"
 		},
 		{
 			id: "page-resolver",
@@ -162,7 +184,8 @@
 			keywords: ["dns", "resolver", "cloudflare", "google", "quad9", "recursive", "upstream"],
 			category: "Pages & Navigation",
 			icon: GlobeIcon,
-			action: () => goto("/dns/resolver")
+			action: () => goto("/dns/resolver"),
+			cap: "dns"
 		},
 		{
 			id: "page-query-log",
@@ -171,7 +194,8 @@
 			keywords: ["queries", "query", "log", "history", "requests"],
 			category: "Pages & Navigation",
 			icon: ActivityIcon,
-			action: () => goto("/dns/log")
+			action: () => goto("/dns/log"),
+			cap: "dns"
 		},
 		{
 			id: "page-rewrites",
@@ -180,7 +204,8 @@
 			keywords: ["rewrites", "domains", "records", "local"],
 			category: "Pages & Navigation",
 			icon: BookmarkIcon,
-			action: () => goto("/dns/rewrites")
+			action: () => goto("/dns/rewrites"),
+			cap: "dns"
 		},
 		{
 			id: "page-dns-cache",
@@ -189,7 +214,8 @@
 			keywords: ["cache", "dns", "ttl", "memory", "flush", "entries"],
 			category: "Pages & Navigation",
 			icon: DatabaseIcon,
-			action: () => goto("/dns/cache")
+			action: () => goto("/dns/cache"),
+			cap: "dns"
 		},
 		{
 			id: "page-adblock",
@@ -198,7 +224,8 @@
 			keywords: ["adblock", "ads", "trackers", "lists", "rules", "blocking"],
 			category: "Pages & Navigation",
 			icon: ShieldIcon,
-			action: () => goto("/dns/adblock")
+			action: () => goto("/dns/adblock"),
+			cap: "adblock"
 		},
 		{
 			id: "page-dhcp-leases",
@@ -207,7 +234,8 @@
 			keywords: ["dhcp", "leases", "ips", "addresses", "clients"],
 			category: "Pages & Navigation",
 			icon: ServerIcon,
-			action: () => goto("/dhcp/leases")
+			action: () => goto("/dhcp/leases"),
+			cap: ["dhcp_v4", "dhcp_v6"]
 		},
 		{
 			id: "page-dhcp-pools",
@@ -216,7 +244,8 @@
 			keywords: ["pools", "ranges", "subnets", "netmask", "gateway"],
 			category: "Pages & Navigation",
 			icon: ServerIcon,
-			action: () => goto("/dhcp/pools")
+			action: () => goto("/dhcp/pools"),
+			cap: ["dhcp_v4", "dhcp_v6"]
 		},
 		{
 			id: "page-dhcp-server",
@@ -225,7 +254,8 @@
 			keywords: ["dhcp", "configuration", "parameters", "options"],
 			category: "Pages & Navigation",
 			icon: ServerIcon,
-			action: () => goto("/dhcp/server")
+			action: () => goto("/dhcp/server"),
+			cap: ["dhcp_v4", "dhcp_v6"]
 		},
 		{
 			id: "page-tftp",
@@ -234,7 +264,8 @@
 			keywords: ["tftp", "pxe", "netboot", "boot", "uefi", "bios", "ipxe"],
 			category: "Pages & Navigation",
 			icon: HardDriveDownloadIcon,
-			action: () => goto("/tftp")
+			action: () => goto("/tftp"),
+			cap: "tftp"
 		},
 		{
 			id: "page-system",
@@ -283,10 +314,20 @@
 		}
 	];
 
+	const availableItems = $derived(
+		items.filter((item) => {
+			if (!item.cap) return true;
+			if (Array.isArray(item.cap)) {
+				return item.cap.some((c) => capabilitiesState.isEnabled(c));
+			}
+			return capabilitiesState.isEnabled(item.cap);
+		})
+	);
+
 	const filteredItems = $derived.by(() => {
 		const q = search.trim().toLowerCase();
-		if (!q) return items;
-		return items.filter((item) => {
+		if (!q) return availableItems;
+		return availableItems.filter((item) => {
 			if (item.title.toLowerCase().includes(q)) return true;
 			if (item.subtitle?.toLowerCase().includes(q)) return true;
 			if (item.keywords?.some((k) => k.toLowerCase().includes(q))) return true;
@@ -373,6 +414,11 @@
 				{#each filteredItems as item, idx (item.id)}
 					{@const isSelected = idx === selectedIndex}
 					{@const Icon = item.icon}
+					{@const isDbgOnly = capabilitiesState.debugMode && item.cap && (
+						Array.isArray(item.cap)
+							? !capabilitiesState.isAnyActualEnabled(item.cap)
+							: !capabilitiesState.isActualEnabled(item.cap)
+					)}
 					<button
 						type="button"
 						class="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl text-left transition-colors cursor-pointer {isSelected
@@ -406,6 +452,14 @@
 						</div>
 
 						<div class="flex items-center gap-1.5 shrink-0">
+							{#if isDbgOnly}
+								<span
+									class="text-[9px] font-mono font-medium px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-500 border border-amber-500/30"
+									title="Disabled on daemon (visible in dev mode)"
+								>
+									DBG
+								</span>
+							{/if}
 							<span
 								class="text-[10px] uppercase tracking-wider font-mono px-1.5 py-0.5 rounded {isSelected
 									? 'bg-primary-foreground/20 text-primary-foreground'

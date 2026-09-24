@@ -281,6 +281,10 @@ fn is_public_auth_path(path: &str) -> bool {
             | "/api/v1/system/setup-status"
             | "/api/system/setup"
             | "/api/v1/system/setup"
+            | "/api/capabilities"
+            | "/api/v1/capabilities"
+            | "/api/system/capabilities"
+            | "/api/v1/system/capabilities"
             | "/auth/login"
             | "/v1/auth/login"
             | "/auth/logout"
@@ -292,6 +296,10 @@ fn is_public_auth_path(path: &str) -> bool {
             | "/v1/system/setup-status"
             | "/system/setup"
             | "/v1/system/setup"
+            | "/capabilities"
+            | "/v1/capabilities"
+            | "/system/capabilities"
+            | "/v1/system/capabilities"
     )
 }
 

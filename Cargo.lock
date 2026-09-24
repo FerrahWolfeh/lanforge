@@ -2371,6 +2371,7 @@ dependencies = [
  "sd-notify",
  "serde",
  "serde_json",
+ "smallvec",
  "tempfile",
  "tikv-jemallocator",
  "tokio",

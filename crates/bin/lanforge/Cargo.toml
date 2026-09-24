@@ -45,6 +45,7 @@ discovery = []
 http = ["dep:lanforge-http", "lanforge-http/server"]
 uds = ["dep:lanforge-uds"]
 webui = ["http", "lanforge-http/webui"]
+ebpf = ["pppoe", "lanforge-pppoe?/ebpf"]
 
 # Profiling & Diagnostics
 hotpath = [
@@ -155,6 +156,7 @@ profile-enterprise = [
 [dependencies]
 # === L0 (Foundational) ===
 lanforge-types = { workspace = true }
+smallvec = { workspace = true }
 
 # === L1 (Core APIs & Logic) ===
 lanforge-core = { workspace = true }

@@ -3,8 +3,9 @@ export const prerender = false;
 
 import type { LayoutLoad } from './$types';
 import { isRedirect, redirect } from '@sveltejs/kit';
-import { authStatus, getSetupStatus } from '$lib/api/client';
+import { authStatus, getSetupStatus, status as getSystemStatus } from '$lib/api/client';
 import { auth } from '$lib/stores/auth.svelte';
+import { capabilitiesState } from '$lib/stores/capabilities.svelte';
 
 export const load: LayoutLoad = async ({ url }) => {
 	try {
@@ -46,6 +47,14 @@ export const load: LayoutLoad = async ({ url }) => {
 			// Authentication not required on this server
 			if (url.pathname === '/login') {
 				throw redirect(302, '/');
+			}
+		}
+
+		// 3. Early capabilities inspection
+		if (url.pathname !== '/setup' && url.pathname !== '/login') {
+			const sysStatus = await getSystemStatus().catch(() => null);
+			if (sysStatus) {
+				capabilitiesState.updateFromStatus(sysStatus);
 			}
 		}
 	} catch (e) {

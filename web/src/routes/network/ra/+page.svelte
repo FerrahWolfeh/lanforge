@@ -21,6 +21,7 @@
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
+	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 
 	import RadioIcon from "@lucide/svelte/icons/radio";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -295,6 +296,25 @@
 			</Button>
 		</div>
 	</div>
+
+	{#if capabilitiesState.isLoaded && !capabilitiesState.isActualEnabled("ra")}
+		<div class="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-900 dark:text-amber-200 flex items-start gap-3">
+			<RadioIcon class="size-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+			<div class="flex flex-col gap-1 text-xs">
+				<div class="flex items-center gap-2">
+					<span class="font-semibold text-sm">Router Advertisement (RA) Module is Disabled</span>
+					{#if capabilitiesState.debugMode}
+						<span class="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-mono font-medium text-amber-600 dark:text-amber-300 border border-amber-500/30">
+							DEV OVERRIDE
+						</span>
+					{/if}
+				</div>
+				<p class="leading-relaxed opacity-90">
+					IPv6 Router Advertisements are currently disabled in the daemon configuration or not compiled into this binary build. To advertise IPv6 prefixes and enable autonomous SLAAC addressing, activate the RA module in your <code class="rounded bg-muted/60 px-1 py-0.5 font-mono">/etc/lanforge/lanforge.toml</code> configuration file.
+				</p>
+			</div>
+		</div>
+	{/if}
 
 	{#if loading && !status}
 		<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">

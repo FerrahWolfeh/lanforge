@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from "$app/state";
+	import { dev } from "$app/environment";
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
 	import * as Sheet from "$lib/components/ui/sheet";
 	import * as Tooltip from "$lib/components/ui/tooltip";
@@ -9,7 +10,9 @@
 	import MenuIcon from "@lucide/svelte/icons/menu";
 	import PanelLeftIcon from "@lucide/svelte/icons/panel-left";
 	import SearchIcon from "@lucide/svelte/icons/search";
+	import BugIcon from "@lucide/svelte/icons/bug";
 	import { commandState } from "$lib/stores/command.svelte";
+	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 
 	let { uptime = $bindable(0) }: { uptime?: number } = $props();
 	let isMobileOpen = $state(false);
@@ -147,15 +150,46 @@
 			</span>
 		{/if}
 
+		<!-- Capabilities Debug Mode Controls -->
+		{#if dev}
+			<!-- Vite Dev Mode Dedicated Toggle Button -->
+			<Tooltip.Provider>
+				<Tooltip.Root>
+					<Tooltip.Trigger
+						class={[
+							"flex items-center gap-1.5 h-8 px-2.5 rounded-xl border text-xs font-mono font-medium transition-colors cursor-pointer select-none",
+							capabilitiesState.debugMode
+								? "bg-amber-500/15 border-amber-500/40 text-amber-500 hover:bg-amber-500/25 shadow-xs"
+								: "bg-muted/40 border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/80",
+						].join(" ")}
+						onclick={() => capabilitiesState.toggleDebugMode()}
+						aria-label="Toggle capabilities debug override (Vite Dev only)"
+					>
+						<BugIcon class="size-3.5 shrink-0 {capabilitiesState.debugMode ? 'text-amber-500' : 'text-muted-foreground'}" />
+						<span class="hidden sm:inline">Caps:</span>
+						<span class="font-semibold">{capabilitiesState.debugMode ? "All" : "Live"}</span>
+					</Tooltip.Trigger>
+					<Tooltip.Content side="bottom" sideOffset={6} class="text-xs font-normal max-w-xs">
+						<p class="font-medium text-foreground mb-1">Vite Dev: Capabilities Override</p>
+						{#if capabilitiesState.debugMode}
+							Currently forcing <strong>all</strong> pages and modules visible, ignoring live daemon capabilities. Click to filter by connected daemon.
+						{:else}
+							Currently filtering pages according to the <strong>live connected daemon</strong>. Click to force all pages visible for local development.
+						{/if}
+					</Tooltip.Content>
+				</Tooltip.Root>
+			</Tooltip.Provider>
+		{/if}
+
 		<!-- Quick Search / Command Palette trigger -->
 		<button
 			type="button"
 			class="hidden md:flex items-center gap-2 h-8 px-2.5 rounded-xl border border-border/70 bg-muted/40 hover:bg-muted/80 text-muted-foreground hover:text-foreground text-xs transition-colors cursor-pointer"
 			onclick={() => commandState.open()}
-			aria-label="Buscar ou executar comando (Ctrl+K)"
+			aria-label="Search or execute command (Ctrl+K)"
 		>
 			<SearchIcon class="size-3.5" />
-			<span>Buscar...</span>
+			<span>Search...</span>
 			<kbd class="pointer-events-none inline-flex h-4.5 select-none items-center gap-0.5 rounded border border-border/80 bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
 				<span>⌘</span>K
 			</kbd>
@@ -166,7 +200,7 @@
 			type="button"
 			class="flex md:hidden items-center justify-center size-8 rounded-xl border border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer"
 			onclick={() => commandState.open()}
-			aria-label="Buscar (Ctrl+K)"
+			aria-label="Search (Ctrl+K)"
 		>
 			<SearchIcon class="size-4" />
 		</button>

@@ -209,6 +209,54 @@ impl Bootstrapper {
 
         ctx.set_status(cfg.to_system_status());
 
+        let mut compiled = smallvec::SmallVec::new();
+        #[cfg(feature = "dns")]
+        compiled.push(lanforge_types::system::Cap::Dns);
+        #[cfg(feature = "dns")]
+        compiled.push(lanforge_types::system::Cap::UpstreamUdpTcp);
+        #[cfg(feature = "dns-dot")]
+        compiled.push(lanforge_types::system::Cap::UpstreamDoT);
+        #[cfg(feature = "dns-doq")]
+        compiled.push(lanforge_types::system::Cap::UpstreamDoQ);
+        #[cfg(feature = "dns-doh")]
+        compiled.push(lanforge_types::system::Cap::UpstreamDoH);
+        #[cfg(feature = "doh-server")]
+        compiled.push(lanforge_types::system::Cap::DohDownstream);
+        #[cfg(feature = "dhcp")]
+        {
+            compiled.push(lanforge_types::system::Cap::DhcpV4);
+            compiled.push(lanforge_types::system::Cap::DhcpV6);
+        }
+        #[cfg(feature = "ra")]
+        compiled.push(lanforge_types::system::Cap::Ra);
+        #[cfg(feature = "discovery")]
+        {
+            compiled.push(lanforge_types::system::Cap::NdpDiscovery);
+            compiled.push(lanforge_types::system::Cap::MdnsProbe);
+        }
+        #[cfg(feature = "uds")]
+        compiled.push(lanforge_types::system::Cap::Uds);
+        #[cfg(feature = "http")]
+        compiled.push(lanforge_types::system::Cap::Http);
+        compiled.push(lanforge_types::system::Cap::Zstd);
+        compiled.push(lanforge_types::system::Cap::Storage);
+        #[cfg(feature = "pppoe")]
+        compiled.push(lanforge_types::system::Cap::Pppoe);
+        #[cfg(feature = "ebpf")]
+        compiled.push(lanforge_types::system::Cap::Ebpf);
+        #[cfg(feature = "tftp")]
+        compiled.push(lanforge_types::system::Cap::Tftp);
+        #[cfg(feature = "nft")]
+        compiled.push(lanforge_types::system::Cap::Firewall);
+        #[cfg(feature = "traffic")]
+        compiled.push(lanforge_types::system::Cap::Traffic);
+        #[cfg(feature = "adblock")]
+        compiled.push(lanforge_types::system::Cap::Adblock);
+        #[cfg(feature = "webui")]
+        compiled.push(lanforge_types::system::Cap::Webui);
+
+        ctx.set_compiled_caps(compiled);
+
         // Load DNS settings from database into context
         #[cfg(feature = "dns")]
         Self::load_dns_state_into_context(&db, &ctx).await;

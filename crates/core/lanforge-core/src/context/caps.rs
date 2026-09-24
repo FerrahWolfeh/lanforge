@@ -4,13 +4,10 @@ use smallvec::SmallVec;
 pub struct CompiledCaps;
 
 impl CompiledCaps {
-    /// Detects and returns the compiled and runtime enabled server capabilities.
+    /// Returns the baseline list of compiled capabilities known to the system.
     #[must_use]
-    pub fn detect() -> ServerCapabilities {
+    pub fn detect_default_compiled() -> SmallVec<[Cap; 32]> {
         let mut compiled = SmallVec::new();
-        let mut enabled = SmallVec::new();
-
-        // Core compiled features
         compiled.push(Cap::Dns);
         compiled.push(Cap::UpstreamUdpTcp);
         compiled.push(Cap::UpstreamDoT);
@@ -27,16 +24,19 @@ impl CompiledCaps {
         compiled.push(Cap::Zstd);
         compiled.push(Cap::Storage);
         compiled.push(Cap::Pppoe);
+        compiled.push(Cap::Tftp);
+        compiled.push(Cap::Firewall);
+        compiled.push(Cap::Traffic);
+        compiled.push(Cap::Adblock);
+        compiled.push(Cap::Webui);
+        compiled
+    }
 
-        // Enabled features (simulated/detected runtime configuration)
-        enabled.push(Cap::Dns);
-        enabled.push(Cap::UpstreamDoT);
-        enabled.push(Cap::DhcpV4);
-        enabled.push(Cap::Ra);
-        enabled.push(Cap::Uds);
-        enabled.push(Cap::Http);
-        enabled.push(Cap::Storage);
-
+    /// Detects and returns a fallback `ServerCapabilities` snapshot.
+    #[must_use]
+    pub fn detect() -> ServerCapabilities {
+        let compiled = Self::detect_default_compiled();
+        let enabled = compiled.clone();
         ServerCapabilities { compiled, enabled }
     }
 }

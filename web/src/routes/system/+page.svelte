@@ -31,8 +31,17 @@
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import RadioIcon from "@lucide/svelte/icons/radio";
 	import FolderIcon from "@lucide/svelte/icons/folder";
+	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
+	import type { ServerCapabilities } from "$lib/api/types";
 
 	let data = $state<StatusResponse | null>(null);
+	const serverCaps = $derived<ServerCapabilities | null>(
+		data?.server_caps ??
+		(data?.capabilities && "compiled" in data.capabilities
+			? (data.capabilities as ServerCapabilities)
+			: null) ??
+		capabilitiesState.serverCaps
+	);
 	let loading = $state(true);
 	let reloading = $state(false);
 	let scanning = $state(false);
@@ -543,45 +552,67 @@
 {#if data}
 	<Card.Root>
 		<Card.Header>
-			<Card.Title class="text-sm font-medium"
-				>Server Capabilities</Card.Title
-			>
-			<Card.Description
-				>Compiled feature flags vs. runtime enabled capabilities</Card.Description
-			>
+			<div class="flex items-center justify-between">
+				<div>
+					<Card.Title class="text-sm font-medium">Server Capabilities</Card.Title>
+					<Card.Description>Compiled feature flags vs. runtime enabled capabilities</Card.Description>
+				</div>
+				{#if capabilitiesState.debugMode}
+					<Badge variant="outline" class="border-amber-500/40 text-amber-500 font-mono text-xs">
+						Dev Override Active
+					</Badge>
+				{/if}
+			</div>
 		</Card.Header>
 		<Card.Content class="flex flex-col gap-4">
-			<div>
-				<p
-					class="text-muted-foreground mb-2 text-xs font-medium uppercase tracking-wide"
-				>
-					Enabled
-				</p>
-				<div class="flex flex-wrap gap-1.5">
-					{#each data.capabilities.enabled as cap (cap)}
-						<Badge variant="default" class="font-mono text-xs"
-							>{cap}</Badge
-						>
-					{/each}
+			{#if capabilitiesState.debugMode}
+				<div class="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-200 flex items-center justify-between gap-3">
+					<p>
+						<strong class="font-semibold">Vite Dev Capabilities Override:</strong> All navigation menus and sub-features are forced visible. Click the button or use Topbar to restore live filtering.
+					</p>
+					<Button
+						variant="outline"
+						size="sm"
+						class="h-7 text-xs border-amber-500/40 text-amber-600 dark:text-amber-300 hover:bg-amber-500/20 shrink-0"
+						onclick={() => capabilitiesState.setDebugMode(false)}
+					>
+						Restore Live Filtering
+					</Button>
 				</div>
-			</div>
-			<Separator />
-			<div>
-				<p
-					class="text-muted-foreground mb-2 text-xs font-medium uppercase tracking-wide"
-				>
-					Compiled (not enabled)
-				</p>
-				<div class="flex flex-wrap gap-1.5">
-					{#each data.capabilities.compiled.filter((c) => !data!.capabilities.enabled.includes(c)) as cap (cap)}
-						<Badge
-							variant="outline"
-							class="text-muted-foreground font-mono text-xs"
-							>{cap}</Badge
-						>
-					{/each}
+			{/if}
+			{#if serverCaps}
+				<div>
+					<p
+						class="text-muted-foreground mb-2 text-xs font-medium uppercase tracking-wide"
+					>
+						Enabled
+					</p>
+					<div class="flex flex-wrap gap-1.5">
+						{#each serverCaps.enabled as cap (cap)}
+							<Badge variant="default" class="font-mono text-xs"
+								>{cap}</Badge
+							>
+						{/each}
+					</div>
 				</div>
-			</div>
+				<Separator />
+				<div>
+					<p
+						class="text-muted-foreground mb-2 text-xs font-medium uppercase tracking-wide"
+					>
+						Compiled (not enabled)
+					</p>
+					<div class="flex flex-wrap gap-1.5">
+						{#each serverCaps.compiled.filter((c) => !serverCaps.enabled.includes(c)) as cap (cap)}
+							<Badge
+								variant="outline"
+								class="text-muted-foreground font-mono text-xs"
+								>{cap}</Badge
+							>
+						{/each}
+					</div>
+				</div>
+			{/if}
 		</Card.Content>
 	</Card.Root>
 {/if}

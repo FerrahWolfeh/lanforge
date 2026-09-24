@@ -4,7 +4,6 @@ use lanforge_api::api::{
     Response, ServiceBannersResponse, ServiceDoh, ServiceDoq, ServiceDot, ServiceStatusInfo,
     ServicesStatus, StatusResponse,
 };
-use lanforge_core::context::CompiledCaps;
 use lanforge_types::device::{IPv6State, Origin};
 use lanforge_types::network::firewall::{FirewallPolicy, FirewallStatus};
 use lanforge_types::system::ServiceState;
@@ -24,7 +23,7 @@ impl ClientContext {
             resources: Self::gather_resource_status(),
             devices: DevicesStats::default(),
             capabilities: Self::gather_capabilities(),
-            server_caps: CompiledCaps::detect(),
+            server_caps: self.ctx.server_capabilities(),
             service_banners: self.ctx.service_banners(),
         };
 
@@ -295,6 +294,11 @@ impl ClientContext {
             encodings: vec![Encoding::Json, Encoding::Postcard],
             compression: vec![Compression::None],
         }
+    }
+
+    #[must_use]
+    pub fn server_capabilities(&self) -> lanforge_types::system::ServerCapabilities {
+        self.ctx.server_capabilities()
     }
 
     pub fn populate_service_and_device_stats(

@@ -39,6 +39,10 @@ pub struct SystemStatus {
     pub boot_dir: Option<String>,
     pub http_enabled: bool,
     pub pppoe_enabled: bool,
+    #[serde(default)]
+    pub firewall_enabled: bool,
+    #[serde(default)]
+    pub traffic_enabled: bool,
 }
 
 /// The operational storage mode of the persistence layer.
@@ -94,6 +98,14 @@ pub enum Cap {
     #[serde(alias = "redb")]
     Storage,
     Pppoe,
+    Tftp,
+    #[serde(alias = "nft")]
+    Firewall,
+    #[serde(alias = "sqm")]
+    Traffic,
+    Adblock,
+    Ebpf,
+    Webui,
 }
 
 /// Server capabilities representing compiled feature flags and runtime enabled features.
@@ -101,6 +113,18 @@ pub enum Cap {
 pub struct ServerCapabilities {
     pub compiled: SmallVec<[Cap; 32]>,
     pub enabled: SmallVec<[Cap; 32]>,
+}
+
+impl ServerCapabilities {
+    #[must_use]
+    pub fn is_compiled(&self, cap: Cap) -> bool {
+        self.compiled.contains(&cap)
+    }
+
+    #[must_use]
+    pub fn is_enabled(&self, cap: Cap) -> bool {
+        self.enabled.contains(&cap)
+    }
 }
 
 /// Represents the operating state of a decoupled service.

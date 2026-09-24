@@ -126,6 +126,11 @@ export interface ServiceBanner {
 	stats: Record<string, string>;
 }
 
+export interface CapabilitiesInfo {
+	encodings: string[];
+	compression: string[];
+}
+
 export interface ServerCapabilities {
 	compiled: string[];
 	enabled: string[];
@@ -137,7 +142,8 @@ export interface StatusResponse {
 	network: NetworkStatus;
 	db: DbStatus;
 	resources: ResourceUsage;
-	capabilities: ServerCapabilities;
+	capabilities?: CapabilitiesInfo | ServerCapabilities;
+	server_caps: ServerCapabilities;
 	services: Record<string, unknown>;
 	service_banners?: ServiceBanner[];
 }

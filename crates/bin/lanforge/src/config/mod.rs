@@ -664,6 +664,26 @@ impl Config {
                     false
                 }
             },
+            firewall_enabled: {
+                #[cfg(feature = "nft")]
+                {
+                    self.firewall_enabled
+                }
+                #[cfg(not(feature = "nft"))]
+                {
+                    false
+                }
+            },
+            traffic_enabled: {
+                #[cfg(feature = "traffic")]
+                {
+                    self.traffic_enabled
+                }
+                #[cfg(not(feature = "traffic"))]
+                {
+                    false
+                }
+            },
         }
     }
 }
