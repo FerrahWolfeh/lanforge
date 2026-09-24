@@ -34,10 +34,8 @@
 	async function loadLeasesData(showSpinner = true) {
 		if (showSpinner) loading = true;
 		else isRefreshing = true;
-
 		try {
-			const res = await leases();
-			allLeases = Array.isArray(res) ? res : [];
+			allLeases = await leases();
 		} catch (err: any) {
 			toast.error(err?.message ?? "Failed to load DHCP leases");
 		} finally {

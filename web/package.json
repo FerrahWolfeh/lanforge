@@ -37,7 +37,6 @@
 		"vite": "^8.0.16"
 	},
 	"dependencies": {
-		"@tanstack/svelte-query": "^6.2.3",
 		"zod": "^4.6.5"
 	}
 }

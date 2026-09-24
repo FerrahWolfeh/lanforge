@@ -44,15 +44,7 @@
 	async function loadRewrites() {
 		loading = true;
 		try {
-			const res: any = await dnsRewriteList();
-			const list: RewriteRule[] = Array.isArray(res)
-				? res
-				: Array.isArray(res?.rewrites)
-					? res.rewrites
-					: Array.isArray(res?.data)
-						? res.data
-						: [];
-			rules = list;
+			rules = await dnsRewriteList();
 		} catch {
 			toast.error("Failed to load DNS rewrite rules");
 		} finally {

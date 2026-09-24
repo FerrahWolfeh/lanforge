@@ -26,8 +26,7 @@
 	async function loadUsers(showSpinner = true) {
 		if (showSpinner) isRefreshing = true;
 		try {
-			const res = await userList();
-			users = Array.isArray(res) ? res : [];
+			users = await userList();
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : "Failed to load users.";
 			toast.error(msg);

@@ -50,23 +50,14 @@
 
 	async function loadEntries() {
 		try {
-			const res: any = await dnsCacheDump({
+			const res = await dnsCacheDump({
 				limit,
 				offset,
 				q: searchQuery.trim() || undefined,
 				kind: selectedType || undefined,
 			});
-			if (res) {
-				const list: DnsCacheEntry[] = Array.isArray(res)
-					? res
-					: Array.isArray(res.entries)
-						? res.entries
-						: Array.isArray(res.data)
-							? res.data
-							: [];
-				entries = list;
-				total = res.total ?? res.meta?.total ?? list.length;
-			}
+			entries = res.entries;
+			total = res.total;
 		} catch {
 			toast.error("Failed to load DNS cache entries");
 		}

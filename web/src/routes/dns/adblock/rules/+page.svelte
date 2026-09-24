@@ -47,9 +47,7 @@
 				dnsAdblockRules(),
 			]);
 			if (allowRes.status === "fulfilled" && allowRes.value) {
-				allowlist = Array.isArray(allowRes.value)
-					? allowRes.value
-					: (allowRes.value as any).allowlist ?? [];
+				allowlist = allowRes.value;
 			}
 			if (rulesRes.status === "fulfilled" && rulesRes.value) {
 				customRules = rulesRes.value;

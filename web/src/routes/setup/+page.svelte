@@ -1,36 +1,24 @@
 <script lang="ts">
 	import * as Card from "$lib/components/ui/card";
-	import { Label } from "$lib/components/ui/label";
 	import { Button } from "$lib/components/ui/button";
-	import { Input } from "$lib/components/ui/input";
-	import { Badge } from "$lib/components/ui/badge";
-	import { Switch } from "$lib/components/ui/switch";
-	import { Separator } from "$lib/components/ui/separator";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { getSetupStatus, submitSetup, ApiError } from "$lib/api/client";
-	import type { SetupStatusResponse, SetupPayload, SetupWanConfig, SetupRaConfig } from "$lib/api/types";
+	import type { SetupStatusResponse, SetupPayload, SetupWanConfig, SetupRaConfig, FirewallMode } from "$lib/api/types";
 	import { goto } from "$app/navigation";
 	import { onMount } from "svelte";
 	import { toast } from "svelte-sonner";
+	import { markSetupCompleted } from "../+layout";
 
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
-	import GlobeIcon from "@lucide/svelte/icons/globe";
-	import NetworkIcon from "@lucide/svelte/icons/network";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
-	import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
 	import CheckIcon from "@lucide/svelte/icons/check";
-	import LockIcon from "@lucide/svelte/icons/lock";
-	import UserIcon from "@lucide/svelte/icons/user";
-	import EyeIcon from "@lucide/svelte/icons/eye";
-	import EyeOffIcon from "@lucide/svelte/icons/eye-off";
-	import ServerIcon from "@lucide/svelte/icons/server";
 	import SparklesIcon from "@lucide/svelte/icons/sparkles";
-	import ShieldIcon from "@lucide/svelte/icons/shield";
-	import ShieldOffIcon from "@lucide/svelte/icons/shield-off";
-	import ZapIcon from "@lucide/svelte/icons/zap";
-	import LayersIcon from "@lucide/svelte/icons/layers";
-	import RadioIcon from "@lucide/svelte/icons/radio";
-	import type { FirewallMode } from "$lib/api/types";
+
+	import AdminStep from "./components/AdminStep.svelte";
+	import UplinkStep from "./components/UplinkStep.svelte";
+	import LanStep from "./components/LanStep.svelte";
+	import FirewallStep from "./components/FirewallStep.svelte";
+	import ReviewStep from "./components/ReviewStep.svelte";
 
 	let step = $state<1 | 2 | 3 | 4 | 5>(1);
 	let loading = $state(true);
@@ -43,7 +31,6 @@
 	let admin_username = $state("admin");
 	let admin_password = $state("");
 	let confirm_password = $state("");
-	let showPassword = $state(false);
 
 	// Step 2: Uplink Connection Mode
 	let wan_mode = $state<"system_gateway" | "pppoe">("system_gateway");
@@ -53,10 +40,6 @@
 	let pppoe_vlan = $state("");
 	let pppoe_mtu = $state(1492);
 	let system_gateway = $state("192.168.1.1");
-
-	// Step 4: Firewall & Security
-	let firewall_mode = $state<FirewallMode>("full");
-	let firewall_flow_offload = $state(true);
 
 	// Step 3: LAN Network & Presence
 	let lan_iface = $state("");
@@ -78,6 +61,10 @@
 	// DNS Upstream
 	let dns_preset = $state<"quad9" | "cloudflare" | "google" | "custom">("quad9");
 	let custom_dns_servers = $state("9.9.9.9, 149.112.112.112");
+
+	// Step 4: Firewall & Security
+	let firewall_mode = $state<FirewallMode>("full");
+	let firewall_flow_offload = $state(true);
 
 	function cidrToSubnetMask(prefixLen: number): string {
 		if (prefixLen <= 0) return "0.0.0.0";
@@ -283,13 +270,14 @@
 				auth.setToken(res.token);
 			}
 			await auth.fetchUser();
-			toast.success("Lanforge initialized and operational!");
+			markSetupCompleted();
+			toast.success("Router configuration successfully deployed! Welcome to Lanforge.");
 			goto("/");
-		} catch (err) {
-			if (err instanceof ApiError) {
-				errorMsg = err.message;
+		} catch (e) {
+			if (e instanceof ApiError) {
+				errorMsg = e.message;
 			} else {
-				errorMsg = "Failed to submit configuration. Check daemon connection.";
+				errorMsg = "An unexpected error occurred while applying initial setup.";
 			}
 		} finally {
 			submitting = false;
@@ -380,597 +368,78 @@
 				{/if}
 
 				{#if step === 1}
-					<Card.Header>
-						<div class="flex items-center gap-3">
-							<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-								<ShieldCheckIcon class="h-5 w-5" />
-							</div>
-							<div>
-								<Card.Title>Administrator Security</Card.Title>
-								<Card.Description>Create your primary administrator account to secure the network console.</Card.Description>
-							</div>
-						</div>
-					</Card.Header>
-					<Card.Content class="space-y-4">
-						<div class="space-y-1.5">
-							<Label for="username">Admin Username</Label>
-							<div class="relative">
-								<UserIcon class="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-								<Input id="username" class="pl-9" bind:value={admin_username} placeholder="admin" />
-							</div>
-						</div>
-
-						<div class="space-y-1.5">
-							<Label for="password">Password (Minimum 8 characters)</Label>
-							<div class="relative">
-								<LockIcon class="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-								<Input
-									id="password"
-									type={showPassword ? "text" : "password"}
-									class="pl-9 pr-9"
-									bind:value={admin_password}
-									placeholder="••••••••••••"
-								/>
-								<button
-									type="button"
-									class="absolute right-3 top-3 text-muted-foreground hover:text-foreground"
-									onclick={() => (showPassword = !showPassword)}
-								>
-									{#if showPassword}<EyeOffIcon class="h-4 w-4" />{:else}<EyeIcon class="h-4 w-4" />{/if}
-								</button>
-							</div>
-						</div>
-
-						<div class="space-y-1.5">
-							<Label for="confirm_password">Confirm Password</Label>
-							<div class="relative">
-								<LockIcon class="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-								<Input
-									id="confirm_password"
-									type={showPassword ? "text" : "password"}
-									class="pl-9"
-									bind:value={confirm_password}
-									placeholder="••••••••••••"
-								/>
-							</div>
-						</div>
-					</Card.Content>
-					<Card.Footer class="flex justify-end">
-						<Button onclick={handleNextStep1} class="gap-2">
-							Next: Internet Uplink
-							<ArrowRightIcon class="h-4 w-4" />
-						</Button>
-					</Card.Footer>
-
+					<AdminStep
+						bind:username={admin_username}
+						bind:password={admin_password}
+						bind:confirmPassword={confirm_password}
+						onnext={handleNextStep1}
+					/>
 				{:else if step === 2}
-					<Card.Header>
-						<div class="flex items-center gap-3">
-							<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-								<GlobeIcon class="h-5 w-5" />
-							</div>
-							<div>
-								<Card.Title>Internet / Uplink Connection</Card.Title>
-								<Card.Description>Select how this device connects to your ISP or upstream router.</Card.Description>
-							</div>
-						</div>
-					</Card.Header>
-					<Card.Content class="space-y-4">
-						<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-							<!-- System-Managed Mode -->
-							<button
-								type="button"
-								class="flex flex-col items-start rounded-xl border p-4 text-left transition-all {wan_mode === 'system_gateway' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border hover:border-muted-foreground/40'}"
-								onclick={() => (wan_mode = "system_gateway")}
-							>
-								<div class="flex w-full items-center justify-between mb-2">
-									<ServerIcon class="h-5 w-5 text-primary" />
-									{#if wan_mode === "system_gateway"}<Badge variant="default">Selected</Badge>{/if}
-								</div>
-								<h4 class="font-semibold text-foreground">System-Managed Uplink</h4>
-								<p class="mt-1 text-xs text-muted-foreground">
-									Single-NIC or OS-managed network (systemd-networkd / existing modem).
-								</p>
-							</button>
-
-							<!-- Integrated PPPoE Mode -->
-							<button
-								type="button"
-								class="flex flex-col items-start rounded-xl border p-4 text-left transition-all {wan_mode === 'pppoe' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border hover:border-muted-foreground/40'}"
-								onclick={() => (wan_mode = "pppoe")}
-							>
-								<div class="flex w-full items-center justify-between mb-2">
-									<GlobeIcon class="h-5 w-5 text-primary" />
-									{#if wan_mode === "pppoe"}<Badge variant="default">Selected</Badge>{/if}
-								</div>
-								<h4 class="font-semibold text-foreground">Integrated PPPoE</h4>
-								<p class="mt-1 text-xs text-muted-foreground">
-									Direct Fiber / DSL dial-in managed on a dedicated WAN port by Lanforge.
-								</p>
-							</button>
-						</div>
-
-						<Separator class="my-4" />
-
-						{#if wan_mode === "system_gateway"}
-							<div class="space-y-1.5">
-								<Label for="gateway_ip">Upstream Default Gateway IP</Label>
-								<Input id="gateway_ip" bind:value={system_gateway} placeholder="192.168.1.1" />
-								<p class="text-xs text-muted-foreground mt-1">
-									LAN clients will route internet traffic through this IP while Lanforge orchestrates DHCP and local DNS.
-								</p>
-							</div>
-						{:else}
-							<div class="space-y-3">
-								<div class="space-y-1.5">
-									<Label for="wan_iface">WAN Interface</Label>
-									<select id="wan_iface" class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background" bind:value={wan_iface}>
-										{#if setupStatus}
-											{#each setupStatus.interfaces as iface}
-												<option value={iface.name}>
-													{iface.name} ({iface.bus_type} - {iface.carrier_up ? '🟢 Cable Connected' : '⚪ Disconnected'})
-												</option>
-											{/each}
-										{/if}
-									</select>
-								</div>
-
-								<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-									<div class="space-y-1.5">
-										<Label for="pppoe_user">PPPoE Username</Label>
-										<Input id="pppoe_user" bind:value={pppoe_username} placeholder="client@isp.com" />
-									</div>
-									<div class="space-y-1.5">
-										<Label for="pppoe_pass">PPPoE Password</Label>
-										<Input id="pppoe_pass" type="password" bind:value={pppoe_password} placeholder="••••••••" />
-									</div>
-								</div>
-
-								<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-									<div class="space-y-1.5">
-										<Label for="pppoe_vlan">VLAN Tag (Optional)</Label>
-										<Input id="pppoe_vlan" bind:value={pppoe_vlan} placeholder="e.g. 35 (leave empty if none)" />
-									</div>
-									<div class="space-y-1.5">
-										<Label for="pppoe_mtu">WAN MTU / MRU</Label>
-										<Input id="pppoe_mtu" type="number" bind:value={pppoe_mtu} placeholder="1492" />
-									</div>
-								</div>
-							</div>
-						{/if}
-					</Card.Content>
-					<Card.Footer class="flex justify-between">
-						<Button variant="outline" onclick={() => (step = 1)} class="gap-2">
-							<ArrowLeftIcon class="h-4 w-4" />
-							Back
-						</Button>
-						<Button onclick={handleNextStep2} class="gap-2">
-							Next: LAN & Services
-							<ArrowRightIcon class="h-4 w-4" />
-						</Button>
-					</Card.Footer>
-
+					<UplinkStep
+						bind:wanMode={wan_mode}
+						bind:systemGateway={system_gateway}
+						bind:wanIface={wan_iface}
+						bind:pppoeUsername={pppoe_username}
+						bind:pppoePassword={pppoe_password}
+						bind:pppoeVlan={pppoe_vlan}
+						bind:pppoeMtu={pppoe_mtu}
+						interfaces={setupStatus?.interfaces ?? []}
+						onback={() => (step = 1)}
+						onnext={handleNextStep2}
+					/>
 				{:else if step === 3}
-					<Card.Header>
-						<div class="flex items-center gap-3">
-							<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-								<NetworkIcon class="h-5 w-5" />
-							</div>
-							<div>
-								<Card.Title>LAN Subnet, DHCP, RA & DNS</Card.Title>
-								<Card.Description>Configure local address pools, IPv6 SLAAC, and DNS resolver.</Card.Description>
-							</div>
-						</div>
-					</Card.Header>
-					<Card.Content class="space-y-4">
-						<div class="space-y-1.5">
-							<Label for="lan_iface">LAN Interface (Local Network)</Label>
-							<select
-								id="lan_iface"
-								class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
-								value={lan_iface}
-								onchange={(e) => onLanIfaceChange((e.target as HTMLSelectElement).value)}
-							>
-								{#if setupStatus}
-									{#each setupStatus.interfaces as iface}
-										<option value={iface.name}>
-											{iface.name} ({iface.bus_type} - {iface.carrier_up ? '🟢 Cable Connected' : '⚪ Disconnected'} {iface.ips[0] ? `[${iface.ips[0]}]` : ''})
-										</option>
-									{/each}
-								{/if}
-							</select>
-						</div>
-
-						<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-							<div class="space-y-1.5">
-								<Label for="lan_ip">Lanforge Router IP</Label>
-								<Input id="lan_ip" bind:value={lan_ip} placeholder="192.168.1.1" onchange={() => (dhcp_router = lan_ip)} />
-							</div>
-							<div class="space-y-1.5">
-								<Label for="subnet_mask">Subnet Mask</Label>
-								<Input id="subnet_mask" bind:value={subnet_mask} placeholder="255.255.255.0" />
-							</div>
-						</div>
-
-						<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-							<div class="space-y-1.5">
-								<Label for="pool_start">DHCPv4 Pool Start</Label>
-								<Input id="pool_start" bind:value={dhcp_pool_start} placeholder="192.168.1.100" />
-							</div>
-							<div class="space-y-1.5">
-								<Label for="pool_end">DHCPv4 Pool End</Label>
-								<Input id="pool_end" bind:value={dhcp_pool_end} placeholder="192.168.1.240" />
-							</div>
-						</div>
-
-						<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-							<div class="space-y-1.5">
-								<Label for="dhcp_router">DHCP Default Gateway (Router)</Label>
-								<Input id="dhcp_router" bind:value={dhcp_router} placeholder="192.168.1.1" />
-							</div>
-							<div class="space-y-1.5">
-								<Label for="domain_name">Local Domain</Label>
-								<Input id="domain_name" bind:value={domain_name} placeholder="lan" />
-							</div>
-						</div>
-
-						<Separator class="my-2" />
-
-						<!-- IPv6 Router Advertisement (RA) Card -->
-						<div class="rounded-lg border bg-muted/20 p-3.5 space-y-3">
-							<div class="flex items-center justify-between">
-								<div class="flex items-center gap-2">
-									<RadioIcon class="h-4 w-4 text-cyan-400" />
-									<div>
-										<h5 class="text-sm font-semibold text-foreground">IPv6 Router Advertisement (SLAAC)</h5>
-										<p class="text-xs text-muted-foreground">Dual-prefix auto-configuration (ULA local + Auto-GUA public ISP).</p>
-									</div>
-								</div>
-								<Switch bind:checked={ra_enabled} />
-							</div>
-
-							{#if ra_enabled}
-								<div class="grid grid-cols-1 gap-2 sm:grid-cols-2 pt-2 border-t text-xs">
-									<div class="flex items-center justify-between rounded border bg-background/50 p-2">
-										<div>
-											<p class="font-medium text-foreground">Auto-GUA Delegated Prefix</p>
-											<p class="text-muted-foreground">SLAAC for ISP public IPv6 addresses.</p>
-										</div>
-										<Switch bind:checked={ra_auto_gua} />
-									</div>
-
-									<div class="flex items-center justify-between rounded border bg-background/50 p-2">
-										<div>
-											<p class="font-medium text-foreground">Custom ULA Local Prefix</p>
-											<p class="text-muted-foreground">Stable fd00:: link for local LAN.</p>
-										</div>
-										<Switch bind:checked={ra_ula_enabled} />
-									</div>
-								</div>
-
-								{#if ra_ula_enabled}
-									<div class="space-y-1 pt-1">
-										<Label for="ra_prefix" class="text-xs">ULA Subnet Prefix (RFC 4193)</Label>
-										<Input id="ra_prefix" class="h-8 text-xs font-mono" bind:value={ra_ula_prefix} placeholder="fdxx:xxxx:xxxx:xxxx::/64" />
-										<p class="text-[11px] text-muted-foreground">
-											Unique Local Address prefix. IPv6 SLAAC autoconfiguration strictly requires a <code class="font-mono text-foreground font-medium">/64</code> prefix length (e.g. <code class="font-mono text-foreground">fd12:3456:789a:1::/64</code>).
-										</p>
-									</div>
-								{/if}
-							{/if}
-						</div>
-
-						<!-- Upstream DNS Resolvers -->
-						<div class="rounded-lg border bg-muted/20 p-3.5 space-y-2.5">
-							<div class="flex items-center justify-between">
-								<div>
-									<h5 class="text-sm font-semibold text-foreground">Upstream DNS Resolvers</h5>
-									<p class="text-xs text-muted-foreground">Secure upstream DNS forwarding servers for external domain queries.</p>
-								</div>
-								<Badge variant="outline">{dns_preset.toUpperCase()}</Badge>
-							</div>
-
-							<div class="grid grid-cols-2 gap-2 sm:grid-cols-4 pt-1">
-								<button
-									type="button"
-									class="rounded-md border py-1.5 text-xs font-medium transition-colors {dns_preset === 'quad9' ? 'border-primary bg-primary/10 text-primary' : 'bg-background hover:bg-muted'}"
-									onclick={() => (dns_preset = "quad9")}
-								>
-									Quad9 (Default)
-								</button>
-								<button
-									type="button"
-									class="rounded-md border py-1.5 text-xs font-medium transition-colors {dns_preset === 'cloudflare' ? 'border-primary bg-primary/10 text-primary' : 'bg-background hover:bg-muted'}"
-									onclick={() => (dns_preset = "cloudflare")}
-								>
-									Cloudflare
-								</button>
-								<button
-									type="button"
-									class="rounded-md border py-1.5 text-xs font-medium transition-colors {dns_preset === 'google' ? 'border-primary bg-primary/10 text-primary' : 'bg-background hover:bg-muted'}"
-									onclick={() => (dns_preset = "google")}
-								>
-									Google
-								</button>
-								<button
-									type="button"
-									class="rounded-md border py-1.5 text-xs font-medium transition-colors {dns_preset === 'custom' ? 'border-primary bg-primary/10 text-primary' : 'bg-background hover:bg-muted'}"
-									onclick={() => (dns_preset = "custom")}
-								>
-									Custom
-								</button>
-							</div>
-
-							{#if dns_preset === "quad9"}
-								<div class="rounded border bg-background/50 p-2.5 space-y-1.5 text-xs">
-									<div class="flex items-center justify-between text-muted-foreground">
-										<span class="font-medium text-foreground">Quad9 Dual-Stack Anycast (4 Resolvers)</span>
-										<Badge variant="secondary" class="text-[10px] px-1.5 py-0">Malware Filter + DNSSEC</Badge>
-									</div>
-									<div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] font-mono">
-										<div class="flex items-center gap-1.5">
-											<span class="px-1 py-0.5 rounded bg-blue-500/10 text-blue-400 font-sans text-[10px] font-semibold">IPv4</span>
-											<span>9.9.9.9, 149.112.112.112</span>
-										</div>
-										<div class="flex items-center gap-1.5">
-											<span class="px-1 py-0.5 rounded bg-purple-500/10 text-purple-400 font-sans text-[10px] font-semibold">IPv6</span>
-											<span>2620:fe::fe, 2620:fe::9</span>
-										</div>
-									</div>
-								</div>
-							{:else if dns_preset === "cloudflare"}
-								<div class="rounded border bg-background/50 p-2.5 space-y-1.5 text-xs">
-									<div class="flex items-center justify-between text-muted-foreground">
-										<span class="font-medium text-foreground">Cloudflare 1.1.1.1 (4 Resolvers)</span>
-										<Badge variant="secondary" class="text-[10px] px-1.5 py-0">Ultra-Fast + Privacy</Badge>
-									</div>
-									<div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] font-mono">
-										<div class="flex items-center gap-1.5">
-											<span class="px-1 py-0.5 rounded bg-blue-500/10 text-blue-400 font-sans text-[10px] font-semibold">IPv4</span>
-											<span>1.1.1.1, 1.0.0.1</span>
-										</div>
-										<div class="flex items-center gap-1.5">
-											<span class="px-1 py-0.5 rounded bg-purple-500/10 text-purple-400 font-sans text-[10px] font-semibold">IPv6</span>
-											<span>2606:4700:4700::1111, 2606:4700:4700::1001</span>
-										</div>
-									</div>
-								</div>
-							{:else if dns_preset === "google"}
-								<div class="rounded border bg-background/50 p-2.5 space-y-1.5 text-xs">
-									<div class="flex items-center justify-between text-muted-foreground">
-										<span class="font-medium text-foreground">Google Public DNS (4 Resolvers)</span>
-										<Badge variant="secondary" class="text-[10px] px-1.5 py-0">Worldwide Anycast</Badge>
-									</div>
-									<div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] font-mono">
-										<div class="flex items-center gap-1.5">
-											<span class="px-1 py-0.5 rounded bg-blue-500/10 text-blue-400 font-sans text-[10px] font-semibold">IPv4</span>
-											<span>8.8.8.8, 8.8.4.4</span>
-										</div>
-										<div class="flex items-center gap-1.5">
-											<span class="px-1 py-0.5 rounded bg-purple-500/10 text-purple-400 font-sans text-[10px] font-semibold">IPv6</span>
-											<span>2001:4860:4860::8888, 2001:4860:4860::8844</span>
-										</div>
-									</div>
-								</div>
-							{:else if dns_preset === "custom"}
-								<div class="space-y-1 pt-1">
-									<Label for="custom_dns" class="text-xs">Custom DNS Server IPs (Comma separated)</Label>
-									<Input id="custom_dns" class="h-8 text-xs font-mono" bind:value={custom_dns_servers} placeholder="1.1.1.1, 8.8.8.8, 2620:fe::fe" />
-									<p class="text-[11px] text-muted-foreground">
-										Specify IPv4 and/or IPv6 upstream resolver addresses.
-									</p>
-								</div>
-							{/if}
-						</div>
-
-						<div class="flex items-center justify-between rounded-lg border p-3">
-							<div>
-								<h5 class="text-sm font-medium text-foreground">Built-in DNS Adblocker</h5>
-								<p class="text-xs text-muted-foreground">Block ads, trackers, and telemetry network-wide via Lanforge DNS.</p>
-							</div>
-							<Switch bind:checked={adblock_enabled} />
-						</div>
-					</Card.Content>
-					<Card.Footer class="flex justify-between">
-						<Button variant="outline" onclick={() => (step = 2)} class="gap-2">
-							<ArrowLeftIcon class="h-4 w-4" />
-							Back
-						</Button>
-						<Button onclick={handleNextStep3} class="gap-2">
-							Next: Firewall & Security
-							<ArrowRightIcon class="h-4 w-4" />
-						</Button>
-					</Card.Footer>
-
+					<LanStep
+						bind:lanIface={lan_iface}
+						bind:lanIp={lan_ip}
+						bind:subnetMask={subnet_mask}
+						bind:dhcpPoolStart={dhcp_pool_start}
+						bind:dhcpPoolEnd={dhcp_pool_end}
+						bind:dhcpRouter={dhcp_router}
+						bind:domainName={domain_name}
+						bind:raEnabled={ra_enabled}
+						bind:raAutoGua={ra_auto_gua}
+						bind:raUlaEnabled={ra_ula_enabled}
+						bind:raUlaPrefix={ra_ula_prefix}
+						bind:dnsPreset={dns_preset}
+						bind:customDnsServers={custom_dns_servers}
+						bind:adblockEnabled={adblock_enabled}
+						interfaces={setupStatus?.interfaces ?? []}
+						{onLanIfaceChange}
+						onback={() => (step = 2)}
+						onnext={handleNextStep3}
+					/>
 				{:else if step === 4}
-					<Card.Header>
-						<div class="flex items-center gap-3">
-							<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-								<ShieldIcon class="h-5 w-5" />
-							</div>
-							<div>
-								<Card.Title>Firewall & Network Security</Card.Title>
-								<Card.Description>Choose how Lanforge manages packet filtering, NAT, and network offload.</Card.Description>
-							</div>
-						</div>
-					</Card.Header>
-					<Card.Content class="space-y-4">
-						<div class="grid grid-cols-1 gap-3">
-							<!-- Full Mode Card -->
-							<button
-								type="button"
-								class="flex flex-col text-left rounded-xl border p-4 transition-all {firewall_mode === 'full' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border bg-card hover:bg-muted/40'}"
-								onclick={() => (firewall_mode = 'full')}
-							>
-								<div class="flex items-center justify-between w-full mb-1.5">
-									<div class="flex items-center gap-2">
-										<ShieldCheckIcon class="h-4 w-4 text-primary" />
-										<span class="font-semibold text-sm text-foreground">Full Router (Standalone)</span>
-									</div>
-									<Badge variant={firewall_mode === 'full' ? 'default' : 'secondary'} class="text-xs">Recommended</Badge>
-								</div>
-								<p class="text-xs text-muted-foreground leading-relaxed">
-									Lanforge acts as the primary firewall router. Replaces system firewalls (firewalld/ufw) with dedicated nftables zones (WAN, LAN, DMZ), host access rules, NAT masquerading, and port forwarding.
-								</p>
-							</button>
-
-							<!-- Minimal Mode Card -->
-							<button
-								type="button"
-								class="flex flex-col text-left rounded-xl border p-4 transition-all {firewall_mode === 'minimal' ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'border-border bg-card hover:bg-muted/40'}"
-								onclick={() => (firewall_mode = 'minimal')}
-							>
-								<div class="flex items-center justify-between w-full mb-1.5">
-									<div class="flex items-center gap-2">
-										<LayersIcon class="h-4 w-4 text-primary" />
-										<span class="font-semibold text-sm text-foreground">Minimal Helper (Coexistence)</span>
-									</div>
-									<Badge variant={firewall_mode === 'minimal' ? 'default' : 'outline'} class="text-xs">firewalld / ufw</Badge>
-								</div>
-								<p class="text-xs text-muted-foreground leading-relaxed">
-									Creates a non-interfering helper table with default accept. Manages PPPoE Flowtable hardware acceleration, TCP MSS clamping, and masquerade, while delegating general filtering to your existing system firewall.
-								</p>
-							</button>
-
-							<!-- Disabled Mode Card -->
-							<button
-								type="button"
-								class="flex flex-col text-left rounded-xl border p-4 transition-all {firewall_mode === 'disabled' ? 'border-destructive bg-destructive/5 ring-1 ring-destructive' : 'border-border bg-card hover:bg-muted/40'}"
-								onclick={() => (firewall_mode = 'disabled')}
-							>
-								<div class="flex items-center justify-between w-full mb-1.5">
-									<div class="flex items-center gap-2">
-										<ShieldOffIcon class="h-4 w-4 text-muted-foreground" />
-										<span class="font-semibold text-sm text-foreground">Disabled</span>
-									</div>
-									<Badge variant="outline" class="text-xs">Unmanaged</Badge>
-								</div>
-								<p class="text-xs text-muted-foreground leading-relaxed">
-									Lanforge will not create or manage any nftables rules. Packet filtering and routing offload must be configured manually on the host operating system.
-								</p>
-							</button>
-						</div>
-
-						{#if firewall_mode !== 'disabled'}
-							<Separator class="my-2" />
-
-							<div class="flex items-center justify-between rounded-lg border p-3">
-								<div class="space-y-0.5 pr-4">
-									<div class="flex items-center gap-2">
-										<ZapIcon class="h-4 w-4 text-primary" />
-										<h5 class="text-sm font-medium text-foreground">Flowtable Fast-Path Offload</h5>
-									</div>
-									<p class="text-xs text-muted-foreground">
-										Accelerate established TCP and UDP forward flows directly in the kernel dataplane to reduce CPU overhead and achieve line-rate throughput.
-									</p>
-								</div>
-								<Switch bind:checked={firewall_flow_offload} />
-							</div>
-						{/if}
-					</Card.Content>
-					<Card.Footer class="flex justify-between">
-						<Button variant="outline" onclick={() => (step = 3)} class="gap-2">
-							<ArrowLeftIcon class="h-4 w-4" />
-							Back
-						</Button>
-						<Button onclick={handleNextStep4} class="gap-2">
-							Next: Review & Launch
-							<ArrowRightIcon class="h-4 w-4" />
-						</Button>
-					</Card.Footer>
-
+					<FirewallStep
+						bind:firewallMode={firewall_mode}
+						bind:firewallFlowOffload={firewall_flow_offload}
+						onback={() => (step = 3)}
+						onnext={handleNextStep4}
+					/>
 				{:else if step === 5}
-					<Card.Header>
-						<div class="flex items-center gap-3">
-							<div class="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400">
-								<SparklesIcon class="h-5 w-5" />
-							</div>
-							<div>
-								<Card.Title>Review & Launch</Card.Title>
-								<Card.Description>Review your configuration summary before activating services.</Card.Description>
-							</div>
-						</div>
-					</Card.Header>
-					<Card.Content class="space-y-4">
-						<div class="rounded-xl border bg-muted/30 p-4 space-y-2.5">
-							<div class="flex justify-between text-sm">
-								<span class="text-muted-foreground">Administrator:</span>
-								<span class="font-medium text-foreground">{admin_username}</span>
-							</div>
-							<div class="flex justify-between text-sm">
-								<span class="text-muted-foreground">Uplink Mode:</span>
-								<span class="font-medium text-foreground">
-									{wan_mode === 'pppoe' ? `Integrated PPPoE (${wan_iface}${pppoe_vlan ? ` VLAN ${pppoe_vlan}` : ''})` : `System-Managed Gateway (${system_gateway})`}
-								</span>
-							</div>
-							<div class="flex justify-between text-sm">
-								<span class="text-muted-foreground">LAN Interface:</span>
-								<span class="font-medium text-foreground">{lan_iface} ({lan_ip})</span>
-							</div>
-							<div class="flex justify-between text-sm">
-								<span class="text-muted-foreground">Subnet Mask:</span>
-								<span class="font-medium text-foreground">{subnet_mask}</span>
-							</div>
-							<div class="flex justify-between text-sm">
-								<span class="text-muted-foreground">DHCPv4 Scope:</span>
-								<span class="font-medium text-foreground">{dhcp_pool_start} – {dhcp_pool_end}</span>
-							</div>
-							<div class="flex justify-between text-sm">
-								<span class="text-muted-foreground">DHCP Default Gateway:</span>
-								<span class="font-medium text-foreground">{dhcp_router}</span>
-							</div>
-							<div class="flex justify-between text-sm">
-								<span class="text-muted-foreground">IPv6 RA SLAAC:</span>
-								<span class="font-medium text-foreground">
-									{#if ra_enabled}
-										Enabled ({ra_auto_gua ? 'Auto-GUA' : ''}{ra_auto_gua && ra_ula_enabled ? ' + ' : ''}{ra_ula_enabled ? 'ULA' : ''})
-									{:else}
-										Disabled
-									{/if}
-								</span>
-							</div>
-							<div class="flex justify-between text-sm">
-								<span class="text-muted-foreground">Local Domain:</span>
-								<span class="font-medium text-foreground">.{domain_name}</span>
-							</div>
-							<div class="flex justify-between text-sm">
-								<span class="text-muted-foreground">Upstream DNS:</span>
-								<span class="font-medium text-foreground">{getUpstreamDnsList().join(", ")}</span>
-							</div>
-							<div class="flex justify-between text-sm">
-								<span class="text-muted-foreground">DNS Adblocker:</span>
-								<span class="font-medium text-foreground">{adblock_enabled ? 'Enabled' : 'Disabled'}</span>
-							</div>
-							<div class="flex justify-between text-sm">
-								<span class="text-muted-foreground">Firewall Mode:</span>
-								<span class="font-medium text-foreground">
-									{firewall_mode === 'full' ? 'Full Router (Standalone)' : firewall_mode === 'minimal' ? 'Minimal Helper (Coexistence)' : 'Disabled'}
-								</span>
-							</div>
-							{#if firewall_mode !== 'disabled'}
-								<div class="flex justify-between text-sm">
-									<span class="text-muted-foreground">Flowtable Offload:</span>
-									<span class="font-medium text-foreground">{firewall_flow_offload ? 'Enabled' : 'Disabled'}</span>
-								</div>
-							{/if}
-							<div class="flex justify-between text-sm">
-								<span class="text-muted-foreground">Storage Engine:</span>
-								<span class="font-medium text-emerald-400">redb (embedded pure-Rust)</span>
-							</div>
-						</div>
-					</Card.Content>
-					<Card.Footer class="flex justify-between">
-						<Button variant="outline" onclick={() => (step = 4)} class="gap-2" disabled={submitting}>
-							<ArrowLeftIcon class="h-4 w-4" />
-							Back
-						</Button>
-						<Button onclick={handleLaunch} class="gap-2 bg-emerald-600 hover:bg-emerald-500 text-white" disabled={submitting}>
-							{#if submitting}
-								Activating Lanforge...
-							{:else}
-								Launch Lanforge 🚀
-							{/if}
-						</Button>
-					</Card.Footer>
+					<ReviewStep
+						adminUsername={admin_username}
+						wanMode={wan_mode}
+						wanIface={wan_iface}
+						pppoeVlan={pppoe_vlan}
+						systemGateway={system_gateway}
+						lanIface={lan_iface}
+						lanIp={lan_ip}
+						subnetMask={subnet_mask}
+						dhcpPoolStart={dhcp_pool_start}
+						dhcpPoolEnd={dhcp_pool_end}
+						dhcpRouter={dhcp_router}
+						raEnabled={ra_enabled}
+						raAutoGua={ra_auto_gua}
+						raUlaEnabled={ra_ula_enabled}
+						domainName={domain_name}
+						upstreamDnsList={getUpstreamDnsList()}
+						adblockEnabled={adblock_enabled}
+						firewallMode={firewall_mode}
+						firewallFlowOffload={firewall_flow_offload}
+						{submitting}
+						onback={() => (step = 4)}
+						onlaunch={handleLaunch}
+					/>
 				{/if}
 			</Card.Root>
 		{/if}

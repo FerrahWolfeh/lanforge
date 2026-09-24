@@ -85,11 +85,66 @@ function getToken(): string | null {
 	return localStorage.getItem('lf_session');
 }
 
-async function request<T>(
+function handleUnauthorized(path: string) {
+	if (path !== '/auth/login' && path !== '/auth/status') {
+		if (typeof localStorage !== 'undefined') {
+			localStorage.removeItem('lf_session');
+		}
+		if (
+			typeof window !== 'undefined' &&
+			window.location.pathname !== '/login' &&
+			window.location.pathname !== '/setup'
+		) {
+			window.location.href = '/login';
+		}
+	}
+}
+
+function buildPath(
+	path: string,
+	params?: Record<string, string | number | boolean | undefined>
+): string {
+	if (!params) return path;
+	const url = new URL(path, 'http://x');
+	for (const [k, v] of Object.entries(params)) {
+		if (v !== undefined) url.searchParams.set(k, String(v));
+	}
+	return url.pathname + url.search;
+}
+
+function extractList<T>(res: any, key?: string): T[] {
+	if (!res) return [];
+	if (Array.isArray(res)) return res;
+	if (key && Array.isArray(res[key])) return res[key];
+	if (Array.isArray(res.data)) return res.data;
+	if (key && Array.isArray(res.data?.[key])) return res.data[key];
+	return [];
+}
+
+function extractPaginated<T>(res: any, key: string): { entries: T[]; total: number } {
+	if (!res) return { entries: [], total: 0 };
+	const list: T[] = Array.isArray(res)
+		? res
+		: Array.isArray(res.data)
+			? res.data
+			: Array.isArray(res[key])
+				? res[key]
+				: [];
+	const total =
+		typeof res.meta?.total === 'number'
+			? res.meta.total
+			: typeof res.total === 'number'
+				? res.total
+				: list.length;
+	return { entries: list, total };
+}
+
+async function requestCore<T>(
 	method: string,
 	path: string,
 	body?: unknown,
-	extraHeaders?: Record<string, string>
+	extraHeaders?: Record<string, string>,
+	raw: boolean = false
 ): Promise<T> {
 	const token = getToken();
 	const headers: Record<string, string> = {
@@ -117,16 +172,14 @@ async function request<T>(
 	}
 
 	if (!res.ok) {
-		if (res.status === 401 && path !== '/auth/login' && path !== '/auth/status') {
-			if (typeof localStorage !== 'undefined') {
-				localStorage.removeItem('lf_session');
-			}
-			if (typeof window !== 'undefined' && window.location.pathname !== '/login' && window.location.pathname !== '/setup') {
-				window.location.href = '/login';
-			}
-		}
-		const errorMsg = json?.error ?? (typeof json === 'string' ? json : null) ?? text ?? `HTTP ${res.status}`;
+		if (res.status === 401) handleUnauthorized(path);
+		const errorMsg =
+			json?.error ?? (typeof json === 'string' ? json : null) ?? text ?? `HTTP ${res.status}`;
 		throw new ApiError(res.status, errorMsg);
+	}
+
+	if (raw) {
+		return (json !== null ? json : text) as T;
 	}
 
 	if (!json && text) {
@@ -137,75 +190,19 @@ async function request<T>(
 	return (json && 'data' in json ? json.data : json) as T;
 }
 
-async function requestRaw<T>(
+const request = <T>(
 	method: string,
 	path: string,
 	body?: unknown,
 	extraHeaders?: Record<string, string>
-): Promise<T> {
-	const token = getToken();
-	const headers: Record<string, string> = {
-		'Content-Type': 'application/json',
-		...extraHeaders
-	};
-	if (token) headers['Authorization'] = `Bearer ${token}`;
+) => requestCore<T>(method, path, body, extraHeaders, false);
 
-	const res = await fetch(`/api/v1${path}`, {
-		method,
-		headers,
-		body: body !== undefined ? JSON.stringify(body) : undefined
-	});
-
-	if (res.status === 204) return undefined as T;
-
-	const text = await res.text();
-	let json: any = null;
-	if (text) {
-		try {
-			json = JSON.parse(text);
-		} catch {
-			// not valid json
-		}
-	}
-
-	if (!res.ok) {
-		if (res.status === 401 && path !== '/auth/login' && path !== '/auth/status') {
-			if (typeof localStorage !== 'undefined') {
-				localStorage.removeItem('lf_session');
-			}
-			if (typeof window !== 'undefined' && window.location.pathname !== '/login' && window.location.pathname !== '/setup') {
-				window.location.href = '/login';
-			}
-		}
-		const errorMsg = json?.error ?? (typeof json === 'string' ? json : null) ?? text ?? `HTTP ${res.status}`;
-		throw new ApiError(res.status, errorMsg);
-	}
-
-	return (json !== null ? json : text) as T;
-}
-
-const get = <T>(path: string, params?: Record<string, string | number | boolean | undefined>) => {
-	const url = new URL(path, 'http://x');
-	if (params) {
-		for (const [k, v] of Object.entries(params)) {
-			if (v !== undefined) url.searchParams.set(k, String(v));
-		}
-	}
-	return request<T>('GET', url.pathname + url.search);
-};
-
-const getRaw = <T>(
+const requestRaw = <T>(
+	method: string,
 	path: string,
-	params?: Record<string, string | number | boolean | undefined>
-) => {
-	const url = new URL(path, 'http://x');
-	if (params) {
-		for (const [k, v] of Object.entries(params)) {
-			if (v !== undefined) url.searchParams.set(k, String(v));
-		}
-	}
-	return requestRaw<T>('GET', url.pathname + url.search);
-};
+	body?: unknown,
+	extraHeaders?: Record<string, string>
+) => requestCore<T>(method, path, body, extraHeaders, true);
 
 async function requestText(
 	path: string,
@@ -215,31 +212,14 @@ async function requestText(
 	const headers: Record<string, string> = {};
 	if (token) headers['Authorization'] = `Bearer ${token}`;
 
-	const url = new URL(path, 'http://x');
-	if (params) {
-		for (const [k, v] of Object.entries(params)) {
-			if (v !== undefined) url.searchParams.set(k, String(v));
-		}
-	}
-
-	const res = await fetch(`/api/v1${url.pathname + url.search}`, {
+	const fullPath = buildPath(path, params);
+	const res = await fetch(`/api/v1${fullPath}`, {
 		method: 'GET',
 		headers
 	});
 
 	if (!res.ok) {
-		if (res.status === 401 && path !== '/auth/login' && path !== '/auth/status') {
-			if (typeof localStorage !== 'undefined') {
-				localStorage.removeItem('lf_session');
-			}
-			if (
-				typeof window !== 'undefined' &&
-				window.location.pathname !== '/login' &&
-				window.location.pathname !== '/setup'
-			) {
-				window.location.href = '/login';
-			}
-		}
+		if (res.status === 401) handleUnauthorized(path);
 		const text = await res.text();
 		throw new ApiError(res.status, text || `HTTP ${res.status}`);
 	}
@@ -247,10 +227,14 @@ async function requestText(
 	return res.text();
 }
 
-const getText = (
-	path: string,
-	params?: Record<string, string | number | boolean | undefined>
-) => requestText(path, params);
+const get = <T>(path: string, params?: Record<string, string | number | boolean | undefined>) =>
+	request<T>('GET', buildPath(path, params));
+
+const getRaw = <T>(path: string, params?: Record<string, string | number | boolean | undefined>) =>
+	requestRaw<T>('GET', buildPath(path, params));
+
+const getText = (path: string, params?: Record<string, string | number | boolean | undefined>) =>
+	requestText(path, params);
 
 const post = <T>(path: string, body?: unknown) => request<T>('POST', path, body);
 const put = <T>(path: string, body?: unknown) => request<T>('PUT', path, body);
@@ -272,15 +256,8 @@ export const me = async (): Promise<UserInfo> => {
 };
 export const changePassword = (current_password: string, new_password: string) =>
 	post<void>('/auth/change-password', { current_password, new_password });
-export const listTokens = async (): Promise<AuthToken[]> => {
-	const res = await get<any>('/auth/tokens');
-	if (!res) return [];
-	if (Array.isArray(res)) return res;
-	if (Array.isArray(res.tokens)) return res.tokens;
-	if (Array.isArray(res.data?.tokens)) return res.data.tokens;
-	if (Array.isArray(res.data)) return res.data;
-	return [];
-};
+export const listTokens = async (): Promise<AuthToken[]> =>
+	extractList<AuthToken>(await get<any>('/auth/tokens'), 'tokens');
 
 export const generateToken = async (req: GenerateTokenRequest): Promise<AuthToken> => {
 	const res = await post<any>('/auth/tokens', req);
@@ -330,13 +307,7 @@ export const listDevices = async (params?: {
 	if (!raw) {
 		return { devices: [], meta: { total: 0, online: 0, last_scan_secs_ago: 0 } };
 	}
-	const devList: DeviceEntry[] = Array.isArray(raw)
-		? raw
-		: Array.isArray(raw.devices)
-			? raw.devices
-			: Array.isArray(raw.data)
-				? raw.data
-				: [];
+	const devList = extractList<DeviceEntry>(raw, 'devices');
 	const onlineCount = devList.filter((d) => d.online).length;
 	const meta: DevicesMeta = {
 		total: typeof raw.meta?.total === 'number' ? raw.meta.total : devList.length,
@@ -360,43 +331,23 @@ export const whois = async (target: string): Promise<WhoisResponse> => {
 export const purge = (target: string) => del<void>(`/devices/${encodeURIComponent(target)}`);
 export const wol = (target: string) =>
 	post<void>(`/devices/${encodeURIComponent(target)}/wol`);
-export const transientHostList = async (): Promise<TransientHostEntry[]> => {
-	const res = await get<any>('/devices/transient');
-	if (!res) return [];
-	if (Array.isArray(res)) return res;
-	if (Array.isArray(res.hosts)) return res.hosts;
-	if (Array.isArray(res.data?.hosts)) return res.data.hosts;
-	return [];
-};
+export const transientHostList = async (): Promise<TransientHostEntry[]> =>
+	extractList<TransientHostEntry>(await get<any>('/devices/transient'), 'hosts');
 
 // ---------------------------------------------------------------------------
 // Hosts
 // ---------------------------------------------------------------------------
 
-export const hostList = async (): Promise<HostConfigEntry[]> => {
-	const res = await get<any>('/hosts');
-	if (!res) return [];
-	if (Array.isArray(res)) return res;
-	if (Array.isArray(res.hosts)) return res.hosts;
-	if (Array.isArray(res.data?.hosts)) return res.data.hosts;
-	if (Array.isArray(res.data)) return res.data;
-	return [];
-};
+export const hostList = async (): Promise<HostConfigEntry[]> =>
+	extractList<HostConfigEntry>(await get<any>('/hosts'), 'hosts');
 
 export const hostAdd = (entry: HostConfigEntry) => post<void>('/hosts', entry);
 export const hostSet = (mac: string, field: string, value: string) =>
 	patch<void>(`/hosts/${mac}`, { field, value });
 export const hostRemove = (mac: string) => del<void>(`/hosts/${mac}`);
 
-export const hostExport = async (): Promise<HostConfigEntry[]> => {
-	const res = await get<any>('/hosts/export');
-	if (!res) return [];
-	if (Array.isArray(res)) return res;
-	if (Array.isArray(res.hosts)) return res.hosts;
-	if (Array.isArray(res.data?.hosts)) return res.data.hosts;
-	if (Array.isArray(res.data)) return res.data;
-	return [];
-};
+export const hostExport = async (): Promise<HostConfigEntry[]> =>
+	extractList<HostConfigEntry>(await get<any>('/hosts/export'), 'hosts');
 
 export const hostImport = (entries: HostConfigEntry[]) => post<void>('/hosts/import', entries);
 
@@ -416,24 +367,9 @@ export const dnsQueryLog = async (params?: {
 	client?: string;
 	limit?: number;
 	offset?: number;
-}): Promise<{ entries: DnsQueryLogEntry[]; total: number }> => {
-	const res = await getRaw<any>('/dns/logs', params);
-	if (!res) return { entries: [], total: 0 };
-	const list: DnsQueryLogEntry[] = Array.isArray(res)
-		? res
-		: Array.isArray(res.data)
-			? res.data
-			: Array.isArray(res.entries)
-				? res.entries
-				: [];
-	const totalCount =
-		typeof res.meta?.total === 'number'
-			? res.meta.total
-			: typeof res.total === 'number'
-				? res.total
-				: list.length;
-	return { entries: list, total: totalCount };
-};
+}): Promise<{ entries: DnsQueryLogEntry[]; total: number }> =>
+	extractPaginated<DnsQueryLogEntry>(await getRaw<any>('/dns/logs', params), 'entries');
+
 export function formatDnsAddr(addr: string): string {
 	const trimmed = addr.trim();
 	if (!trimmed) return trimmed;
@@ -454,7 +390,8 @@ export function formatDnsAddr(addr: string): string {
 	return trimmed;
 }
 
-export const dnsUpstreams = () => get<DnsUpstreamsResponse | DnsUpstreamEntry[]>('/dns/upstreams');
+export const dnsUpstreams = async (): Promise<DnsUpstreamEntry[]> =>
+	extractList<DnsUpstreamEntry>(await get<any>('/dns/upstreams'), 'upstreams');
 export const dnsUpstreamAdd = (entry: { addr: string; protocol: string; domain?: string }) => {
 	const formattedAddr = formatDnsAddr(entry.addr);
 	const proto = (entry.protocol || 'udp').toLowerCase();
@@ -479,14 +416,8 @@ export const dnsUpstreamRemove = (entry: { addr: string; protocol: string; domai
 };
 export const dnsUpstreamClear = () => del<void>('/dns/upstreams/clear');
 
-export const dnsReverseResolverList = async (): Promise<ReverseResolverEntry[]> => {
-	const res = await get<any>('/dns/reverse-resolvers');
-	if (!res) return [];
-	if (Array.isArray(res)) return res;
-	if (Array.isArray(res.resolvers)) return res.resolvers;
-	if (Array.isArray(res.data)) return res.data;
-	return [];
-};
+export const dnsReverseResolverList = async (): Promise<ReverseResolverEntry[]> =>
+	extractList<ReverseResolverEntry>(await get<any>('/dns/reverse-resolvers'), 'resolvers');
 export const dnsReverseResolverAdd = (subnet: string, resolver_uri: string) => {
 	const s = subnet.trim();
 	const r = resolver_uri.trim();
@@ -508,24 +439,8 @@ export const dnsCacheDump = async (params?: {
 	offset?: number;
 	q?: string;
 	kind?: string;
-}): Promise<{ entries: DnsCacheEntry[]; total: number }> => {
-	const res = await getRaw<any>('/dns/cache', params);
-	if (!res) return { entries: [], total: 0 };
-	const list: DnsCacheEntry[] = Array.isArray(res)
-		? res
-		: Array.isArray(res.data)
-			? res.data
-			: Array.isArray(res.entries)
-				? res.entries
-				: [];
-	const totalCount =
-		typeof res.meta?.total === 'number'
-			? res.meta.total
-			: typeof res.total === 'number'
-				? res.total
-				: list.length;
-	return { entries: list, total: totalCount };
-};
+}): Promise<{ entries: DnsCacheEntry[]; total: number }> =>
+	extractPaginated<DnsCacheEntry>(await getRaw<any>('/dns/cache', params), 'entries');
 export const dnsCacheFlush = () => del<void>('/dns/cache');
 export const dnsCacheStatsExt = () => get<DnsCacheStatsResponse>('/dns/cache/stats');
 
@@ -537,26 +452,14 @@ export const dnsAdblockStatus = () => get<DnsAdblockStatusResponse>('/dns/adbloc
 export const dnsAdblockSet = (enabled: boolean, duration_secs?: number) =>
 	put<void>('/dns/adblock', { enabled, duration_secs: duration_secs ?? null });
 export const dnsAdblockReload = () => post<void>('/dns/adblock/reload');
-export const dnsAdblockAllowlist = async (): Promise<AllowlistEntry[]> => {
-	const res = await get<any>('/dns/adblock/allowlist');
-	if (Array.isArray(res)) return res;
-	if (Array.isArray(res?.allowlist)) return res.allowlist;
-	if (Array.isArray(res?.data?.allowlist)) return res.data.allowlist;
-	return [];
-};
+export const dnsAdblockAllowlist = async (): Promise<AllowlistEntry[]> =>
+	extractList<AllowlistEntry>(await get<any>('/dns/adblock/allowlist'), 'allowlist');
 export const dnsBlock = (domain: string) => post<void>('/dns/adblock/block', { domain });
 export const dnsAllow = (domain: string) => post<void>('/dns/adblock/allow', { domain });
 export const dnsUnallow = (target: string) =>
 	del<void>(`/dns/adblock/allow/${encodeURIComponent(target)}`);
-export const dnsAdblockUrls = async (): Promise<DnsAdblockUrlEntry[]> => {
-	const res = await get<any>('/dns/adblock/sources');
-	if (!res) return [];
-	if (Array.isArray(res)) return res;
-	if (Array.isArray(res.urls)) return res.urls;
-	if (Array.isArray(res.data)) return res.data;
-	if (Array.isArray(res.data?.urls)) return res.data.urls;
-	return [];
-};
+export const dnsAdblockUrls = async (): Promise<DnsAdblockUrlEntry[]> =>
+	extractList<DnsAdblockUrlEntry>(await get<any>('/dns/adblock/sources'), 'urls');
 export const dnsAdblockUrlAdd = (entry: DnsAdblockUrlEntry) =>
 	post<void>('/dns/adblock/sources', entry);
 export const dnsAdblockUrlRemove = (entry: DnsAdblockUrlEntry) =>
@@ -566,14 +469,8 @@ export const dnsAdblockConfigSet = (config: {
 	blocking_ip_v4?: string | null;
 	blocking_ip_v6?: string | null;
 }) => post<void>('/dns/adblock/config', config);
-export const dnsAdblockRules = async (): Promise<AdblockRuleEntry[]> => {
-	const res = await get<any>('/dns/adblock/rules');
-	if (!res) return [];
-	if (Array.isArray(res)) return res;
-	if (Array.isArray(res.rules)) return res.rules;
-	if (Array.isArray(res.data)) return res.data;
-	return [];
-};
+export const dnsAdblockRules = async (): Promise<AdblockRuleEntry[]> =>
+	extractList<AdblockRuleEntry>(await get<any>('/dns/adblock/rules'), 'rules');
 export const dnsAdblockRuleAdd = (domain: string, action: 'block' | 'allow') =>
 	post<void>('/dns/adblock/rules', { domain, action });
 export const dnsAdblockRuleRemove = (id: number) =>
@@ -585,39 +482,21 @@ export const dnsAdblockRuleStatus = (id: number, enabled: boolean) =>
 // DNS — rewrites
 // ---------------------------------------------------------------------------
 
-export const dnsRewriteList = async (): Promise<RewriteRule[]> => {
-	const res = await get<any>('/dns/rewrites');
-	if (!res) return [];
-	if (Array.isArray(res)) return res;
-	if (Array.isArray(res.rewrites)) return res.rewrites;
-	if (Array.isArray(res.data)) return res.data;
-	return [];
-};
+export const dnsRewriteList = async (): Promise<RewriteRule[]> =>
+	extractList<RewriteRule>(await get<any>('/dns/rewrites'), 'rewrites');
 export const dnsRewriteAdd = (rule: Omit<RewriteRule, 'id'>) => post<void>('/dns/rewrites', rule);
 export const dnsRewriteRemove = (id: number) => del<void>(`/dns/rewrites/${id}`);
 export const dnsRewriteClear = () => del<void>('/dns/rewrites');
-export const dnsRewriteExport = async (): Promise<RewriteRule[]> => {
-	const res = await get<any>('/dns/rewrites/export');
-	if (!res) return [];
-	if (Array.isArray(res)) return res;
-	if (Array.isArray(res.rewrites)) return res.rewrites;
-	if (Array.isArray(res.data)) return res.data;
-	return [];
-};
+export const dnsRewriteExport = async (): Promise<RewriteRule[]> =>
+	extractList<RewriteRule>(await get<any>('/dns/rewrites/export'), 'rewrites');
 export const dnsRewriteImport = (rules: RewriteRule[]) => post<void>('/dns/rewrites/import', rules);
 
 // ---------------------------------------------------------------------------
 // DHCP
 // ---------------------------------------------------------------------------
 
-export const leases = async (): Promise<DhcpLease[]> => {
-	const res = await get<any>('/dhcp/leases');
-	if (!res) return [];
-	if (Array.isArray(res)) return res;
-	if (Array.isArray(res.leases)) return res.leases;
-	if (Array.isArray(res.data)) return res.data;
-	return [];
-};
+export const leases = async (): Promise<DhcpLease[]> =>
+	extractList<DhcpLease>(await get<any>('/dhcp/leases'), 'leases');
 
 export const dhcpPools = async (): Promise<DhcpPoolsResponse> => {
 	const res = await get<any>('/dhcp/pools');
@@ -701,13 +580,8 @@ export const switchDbEngine = (req: DbEngineSwitchRequest) =>
 // Users
 // ---------------------------------------------------------------------------
 
-export const userList = async (): Promise<UserInfo[]> => {
-	const res = await get<any>('/users');
-	if (Array.isArray(res)) return res;
-	if (Array.isArray(res?.users)) return res.users;
-	if (Array.isArray(res?.data?.users)) return res.data.users;
-	return [];
-};
+export const userList = async (): Promise<UserInfo[]> =>
+	extractList<UserInfo>(await get<any>('/users'), 'users');
 
 export const userCreate = async (username: string, password: string, role?: string): Promise<UserInfo> => {
 	const res = await post<any>('/users', { username, password, role });

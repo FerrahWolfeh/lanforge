@@ -70,14 +70,7 @@
 			if (s.status === "fulfilled") statusData = s.value;
 			if (dns.status === "fulfilled") dnsData = dns.value;
 			if (ls.status === "fulfilled") {
-				const raw: any = ls.value;
-				leasesData = Array.isArray(raw)
-					? raw
-					: Array.isArray(raw?.leases)
-						? raw.leases
-						: Array.isArray(raw?.data)
-							? raw.data
-							: [];
+				leasesData = ls.value;
 			}
 			if (dev.status === "fulfilled") {
 				devicesData = dev.value;

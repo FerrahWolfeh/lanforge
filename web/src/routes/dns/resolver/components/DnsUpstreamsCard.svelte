@@ -130,16 +130,7 @@
 		}
 	}
 
-	const displayUpstreams = $derived.by(() => {
-		const list: DnsUpstreamEntry[] = Array.isArray(upstreams)
-			? upstreams
-			: upstreams &&
-				  typeof upstreams === "object" &&
-				  Array.isArray((upstreams as any).upstreams)
-				? (upstreams as any).upstreams
-				: [];
-		return list;
-	});
+	const displayUpstreams = $derived(upstreams ?? []);
 </script>
 
 <Card.Root class="flex flex-col overflow-hidden">

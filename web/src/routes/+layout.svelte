@@ -14,8 +14,6 @@
 	import Topbar from "$lib/components/Topbar.svelte";
 	import CommandPalette from "$lib/components/CommandPalette.svelte";
 	import { commandState } from "$lib/stores/command.svelte";
-	import { QueryClientProvider } from "@tanstack/svelte-query";
-	import { queryClient } from "$lib/api/query";
 
 	let { children } = $props();
 	let uptime = $state(0);
@@ -129,8 +127,7 @@
 	<title>{currentTabTitle}</title>
 </svelte:head>
 
-<QueryClientProvider client={queryClient}>
-	<ModeWatcher defaultMode="system" />
+<ModeWatcher defaultMode="system" />
 
 	{#if isAuthPage}
 		<main class="min-h-screen w-full bg-background text-foreground">
@@ -165,4 +162,3 @@
 
 	<Toaster richColors />
 	<CommandPalette />
-</QueryClientProvider>

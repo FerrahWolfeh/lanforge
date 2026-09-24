@@ -7,15 +7,26 @@ import { authStatus, getSetupStatus, status as getSystemStatus } from '$lib/api/
 import { auth } from '$lib/stores/auth.svelte';
 import { capabilitiesState } from '$lib/stores/capabilities.svelte';
 
+let isSetupCompleted = false;
+
+export function markSetupCompleted() {
+	isSetupCompleted = true;
+}
+
 export const load: LayoutLoad = async ({ url }) => {
 	try {
-		// 1. First-run / setup inspection
-		const setup = await getSetupStatus().catch(() => null);
-		if (setup?.first_run) {
-			if (url.pathname !== '/setup') {
-				throw redirect(302, '/setup');
+		// 1. First-run / setup inspection (cached once completed)
+		if (!isSetupCompleted) {
+			const setup = await getSetupStatus().catch(() => null);
+			if (setup?.first_run) {
+				if (url.pathname !== '/setup') {
+					throw redirect(302, '/setup');
+				}
+				return {};
 			}
-			return {};
+			if (setup && !setup.first_run) {
+				isSetupCompleted = true;
+			}
 		}
 
 		// If setup is already finished, disallow visiting the setup wizard
@@ -23,8 +34,16 @@ export const load: LayoutLoad = async ({ url }) => {
 			throw redirect(302, '/');
 		}
 
-		// 2. Authentication check
-		const status = await authStatus();
+		// 2. Authentication check & early capabilities inspection (parallelized)
+		const needsCaps = !capabilitiesState.isLoaded && url.pathname !== '/login';
+		const [status, sysStatus] = await Promise.all([
+			authStatus(),
+			needsCaps ? getSystemStatus().catch(() => null) : Promise.resolve(null)
+		]);
+
+		if (sysStatus) {
+			capabilitiesState.updateFromStatus(sysStatus);
+		}
 
 		if (status.auth_required) {
 			if (!status.authenticated) {
@@ -49,17 +68,13 @@ export const load: LayoutLoad = async ({ url }) => {
 				throw redirect(302, '/');
 			}
 		}
-
-		// 3. Early capabilities inspection
-		if (url.pathname !== '/setup' && url.pathname !== '/login') {
-			const sysStatus = await getSystemStatus().catch(() => null);
-			if (sysStatus) {
-				capabilitiesState.updateFromStatus(sysStatus);
-			}
-		}
 	} catch (e) {
 		// Re-throw SvelteKit redirects so the router performs the navigation
-		if (isRedirect(e) || (e as { status?: number })?.status === 302 || (e as { status?: number })?.status === 307) {
+		if (
+			isRedirect(e) ||
+			(e as { status?: number })?.status === 302 ||
+			(e as { status?: number })?.status === 307
+		) {
 			throw e;
 		}
 		// Network errors / daemon offline — let the layout and pages handle offline state gracefully

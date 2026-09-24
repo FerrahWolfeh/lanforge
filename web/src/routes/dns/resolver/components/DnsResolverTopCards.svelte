@@ -34,13 +34,7 @@
 	});
 
 	const upstreamStats = $derived.by(() => {
-		const list: DnsUpstreamEntry[] = Array.isArray(upstreams)
-			? upstreams
-			: upstreams &&
-				  typeof upstreams === "object" &&
-				  Array.isArray((upstreams as any).upstreams)
-				? (upstreams as any).upstreams
-				: [];
+		const list = upstreams ?? [];
 		const total = list.length;
 		if (total === 0) {
 			return {
