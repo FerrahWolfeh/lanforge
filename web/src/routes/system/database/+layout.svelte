@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from "$app/state";
-	import { onMount, onDestroy } from "svelte";
+	import { onMount } from "svelte";
+	import { createPolling } from "$lib/utils/polling";
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
@@ -18,8 +19,6 @@
 
 	let { children } = $props();
 
-	let refreshInterval: ReturnType<typeof setInterval> | null = null;
-
 	const tabs = [
 		{ label: "Inventory", href: "/system/database", icon: LayersIcon },
 		{ label: "Storage Settings", href: "/system/database/settings", icon: SlidersIcon },
@@ -35,13 +34,12 @@
 
 	onMount(() => {
 		dbState.loadAll();
-		refreshInterval = setInterval(() => {
+		const stopPolling = createPolling(() => {
 			dbState.loadAll(true);
 		}, 10000);
-	});
-
-	onDestroy(() => {
-		if (refreshInterval) clearInterval(refreshInterval);
+		return () => {
+			stopPolling();
+		};
 	});
 </script>
 

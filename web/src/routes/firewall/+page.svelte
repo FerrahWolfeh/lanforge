@@ -41,6 +41,7 @@
 	import HelpPopover from "$lib/components/HelpPopover.svelte";
 	import InfoPopover from "$lib/components/InfoPopover.svelte";
 	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
+	import { createPolling } from "$lib/utils";
 
 	import FirewallStatsCards from "./components/FirewallStatsCards.svelte";
 	import FirewallModeSelector from "./components/FirewallModeSelector.svelte";
@@ -77,9 +78,6 @@
 	let rollbackSecsLeft = $state<number | null>(null);
 	let rollbackInterval: ReturnType<typeof setInterval> | null = null;
 
-	// Polling interval for status
-	let statusInterval: ReturnType<typeof setInterval> | null = null;
-
 	// ---------------------------------------------------------------------------
 	// Derived
 	// ---------------------------------------------------------------------------
@@ -111,7 +109,9 @@
 			const [s, c, setupRes, tStatus] = await Promise.all([
 				firewallStatus().catch(() => null),
 				firewallConfig().catch(() => null),
-				getSetupStatus().catch(() => null),
+				!silent || availableInterfaces.length === 0
+					? getSetupStatus().catch(() => null)
+					: Promise.resolve(null),
 				trafficStatus().catch(() => null),
 			]);
 			fwStatus = s;
@@ -264,11 +264,13 @@
 
 	onMount(() => {
 		loadAll();
-		statusInterval = setInterval(() => loadAll(true), 10_000);
+		const stopPolling = createPolling(() => loadAll(true), 10_000);
+		return () => {
+			stopPolling();
+		};
 	});
 
 	onDestroy(() => {
-		if (statusInterval) clearInterval(statusInterval);
 		if (rollbackInterval) clearInterval(rollbackInterval);
 	});
 </script>

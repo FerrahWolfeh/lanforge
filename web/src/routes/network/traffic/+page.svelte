@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { trafficStatus, trafficTelemetry } from "$lib/api/client";
 	import type { TrafficStatusResponse, TrafficTelemetryResponse } from "$lib/api/types";
-	import { onMount, onDestroy } from "svelte";
+	import { onMount } from "svelte";
+	import { createPolling } from "$lib/utils/polling";
 
 	import TrafficStatsCards from "./components/TrafficStatsCards.svelte";
 	import TrafficActivityChart from "$lib/components/TrafficActivityChart.svelte";
@@ -9,7 +10,6 @@
 	let status = $state<TrafficStatusResponse | null>(null);
 	let telemetry = $state<TrafficTelemetryResponse | null>(null);
 	let loading = $state(true);
-	let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
 	async function loadData() {
 		try {
@@ -26,17 +26,15 @@
 
 	onMount(() => {
 		loadData();
-		refreshInterval = setInterval(() => {
-			if (typeof document !== "undefined" && document.hidden) return;
+		const stopPolling = createPolling(() => {
 			Promise.allSettled([trafficStatus(), trafficTelemetry()]).then(([sRes, tRes]) => {
 				if (sRes.status === "fulfilled") status = sRes.value;
 				if (tRes.status === "fulfilled") telemetry = tRes.value;
 			});
 		}, 2500);
-	});
-
-	onDestroy(() => {
-		if (refreshInterval) clearInterval(refreshInterval);
+		return () => {
+			stopPolling();
+		};
 	});
 </script>
 

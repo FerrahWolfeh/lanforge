@@ -7,6 +7,7 @@
 	import AlertTriangleIcon from "@lucide/svelte/icons/alert-triangle";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
+	import { createPolling, createDebounce } from "$lib/utils/polling";
 	import {
 		dnsCacheDump,
 		dnsCacheFlush,
@@ -37,7 +38,9 @@
 	let flushModalOpen = $state(false);
 	let flushing = $state(false);
 
-	let searchTimeout: ReturnType<typeof setTimeout> | null = null;
+	const debouncedLoadEntries = createDebounce(() => {
+		loadEntries();
+	}, 300);
 
 	async function loadStats() {
 		try {
@@ -78,10 +81,7 @@
 	function handleSearchInput(q: string) {
 		searchQuery = q;
 		offset = 0;
-		if (searchTimeout) clearTimeout(searchTimeout);
-		searchTimeout = setTimeout(() => {
-			loadEntries();
-		}, 300);
+		debouncedLoadEntries();
 	}
 
 	function handleTypeSelect(kind: string) {
@@ -112,11 +112,14 @@
 
 	onMount(() => {
 		refreshAll();
-		const interval = setInterval(() => {
+		const stopPolling = createPolling(() => {
 			loadStats();
 			loadEntries();
 		}, 10_000);
-		return () => clearInterval(interval);
+		return () => {
+			stopPolling();
+			debouncedLoadEntries.cancel();
+		};
 	});
 </script>
 

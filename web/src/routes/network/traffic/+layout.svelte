@@ -9,13 +9,13 @@
 	import { Button } from "$lib/components/ui/button";
 	import { trafficStatus } from "$lib/api/client";
 	import type { TrafficStatusResponse } from "$lib/api/types";
-	import { onMount, onDestroy } from "svelte";
+	import { onMount } from "svelte";
+	import { createPolling } from "$lib/utils/polling";
 
 	let { children } = $props();
 
 	let status = $state<TrafficStatusResponse | null>(null);
 	let loading = $state(false);
-	let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
 	const tabs = [
 		{ label: "Overview", href: "/network/traffic", icon: ActivityIcon },
@@ -42,14 +42,12 @@
 
 	onMount(() => {
 		fetchStatus();
-		refreshInterval = setInterval(() => {
-			if (typeof document !== "undefined" && document.hidden) return;
+		const stopPolling = createPolling(() => {
 			trafficStatus().then((s) => (status = s)).catch(() => {});
 		}, 4000);
-	});
-
-	onDestroy(() => {
-		if (refreshInterval) clearInterval(refreshInterval);
+		return () => {
+			stopPolling();
+		};
 	});
 </script>
 

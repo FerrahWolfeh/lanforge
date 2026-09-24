@@ -3,7 +3,7 @@
  * Uses Svelte 5 runes wrapped in a reactive class pattern.
  */
 
-import { me } from '$lib/api/client';
+import { me, setClientToken } from '$lib/api/client';
 import type { UserInfo } from '$lib/api/types';
 
 const TOKEN_KEY = 'lf_session';
@@ -31,7 +31,7 @@ function createAuthStore() {
 
 		setToken(t: string) {
 			token = t;
-			if (typeof localStorage !== 'undefined') localStorage.setItem(TOKEN_KEY, t);
+			setClientToken(t);
 		},
 
 		async fetchUser() {
@@ -50,7 +50,7 @@ function createAuthStore() {
 		clear() {
 			token = null;
 			user = null;
-			if (typeof localStorage !== 'undefined') localStorage.removeItem(TOKEN_KEY);
+			setClientToken(null);
 		}
 	};
 }

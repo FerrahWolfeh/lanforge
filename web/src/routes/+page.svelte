@@ -3,7 +3,7 @@
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
-	import { formatBytes, formatBps } from "$lib/utils";
+	import { formatBytes, formatBps, createPolling } from "$lib/utils";
 	import {
 		status,
 		dnsStats,
@@ -28,7 +28,7 @@
 	import Sparkline from "$lib/components/ui/sparkline.svelte";
 	import TrafficActivityChart from "$lib/components/TrafficActivityChart.svelte";
 	import { toast } from "svelte-sonner";
-	import { onMount, onDestroy } from "svelte";
+	import { onMount } from "svelte";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import NetworkIcon from "@lucide/svelte/icons/network";
@@ -102,22 +102,15 @@
 		}
 	}
 
-	let pollInterval: ReturnType<typeof setInterval> | null = null;
-
 	onMount(() => {
 		loadAll();
-		pollInterval = setInterval(() => {
-			if (typeof document !== "undefined" && document.hidden) return;
+		return createPolling(() => {
 			trafficTelemetry()
 				.then((t) => {
 					telemetryData = t;
 				})
 				.catch(() => {});
 		}, 2500);
-	});
-
-	onDestroy(() => {
-		if (pollInterval) clearInterval(pollInterval);
 	});
 
 	const rssBytes = $derived(

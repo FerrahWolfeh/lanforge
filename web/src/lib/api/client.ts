@@ -80,16 +80,34 @@ export class ApiError extends Error {
 	}
 }
 
-function getToken(): string | null {
-	if (typeof localStorage === 'undefined') return null;
-	return localStorage.getItem('lf_session');
+let memoryToken: string | null = null;
+let memoryTokenLoaded = false;
+
+export function getToken(): string | null {
+	if (!memoryTokenLoaded) {
+		memoryTokenLoaded = true;
+		if (typeof localStorage !== 'undefined') {
+			memoryToken = localStorage.getItem('lf_session');
+		}
+	}
+	return memoryToken;
+}
+
+export function setClientToken(token: string | null) {
+	memoryToken = token;
+	memoryTokenLoaded = true;
+	if (typeof localStorage !== 'undefined') {
+		if (token) {
+			localStorage.setItem('lf_session', token);
+		} else {
+			localStorage.removeItem('lf_session');
+		}
+	}
 }
 
 function handleUnauthorized(path: string) {
 	if (path !== '/auth/login' && path !== '/auth/status') {
-		if (typeof localStorage !== 'undefined') {
-			localStorage.removeItem('lf_session');
-		}
+		setClientToken(null);
 		if (
 			typeof window !== 'undefined' &&
 			window.location.pathname !== '/login' &&

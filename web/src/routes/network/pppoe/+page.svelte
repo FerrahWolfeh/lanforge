@@ -18,10 +18,11 @@
 		NetworkInterfaceInfo,
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
-	import { onMount, onDestroy } from "svelte";
+	import { onMount } from "svelte";
 	import { fly } from "svelte/transition";
 	import { cubicOut } from "svelte/easing";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
+	import { createPolling } from "$lib/utils/polling";
 
 	import PlugZapIcon from "@lucide/svelte/icons/plug-zap";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -48,7 +49,6 @@
 	let showEbpfWarningDialog = $state(false);
 	let availableInterfaces = $state<NetworkInterfaceInfo[]>([]);
 	let activeTab = $state("connection");
-	let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
 	// Derived list of selectable interfaces ensuring currently selected iface is present
 	let interfaceOptions = $derived.by(() => {
@@ -133,10 +133,11 @@
 	async function loadAll(silent = false) {
 		if (!silent) loading = true;
 		try {
+			const fetchSetup = !silent || availableInterfaces.length === 0;
 			const [s, c, setupRes] = await Promise.all([
 				pppoeStatus().catch(() => null),
 				pppoeConfig().catch(() => null),
-				getSetupStatus().catch(() => null),
+				fetchSetup ? getSetupStatus().catch(() => null) : Promise.resolve(null),
 			]);
 			status = s;
 
@@ -248,13 +249,10 @@
 
 	onMount(() => {
 		loadAll();
-		refreshInterval = setInterval(() => {
-			loadAll(true);
-		}, 4000);
-	});
-
-	onDestroy(() => {
-		if (refreshInterval) clearInterval(refreshInterval);
+		const stopPolling = createPolling(() => loadAll(true), 4000);
+		return () => {
+			stopPolling();
+		};
 	});
 </script>
 

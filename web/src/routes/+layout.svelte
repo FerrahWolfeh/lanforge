@@ -14,6 +14,7 @@
 	import Topbar from "$lib/components/Topbar.svelte";
 	import CommandPalette from "$lib/components/CommandPalette.svelte";
 	import { commandState } from "$lib/stores/command.svelte";
+	import { createPolling } from "$lib/utils";
 
 	let { children } = $props();
 	let uptime = $state(0);
@@ -112,10 +113,10 @@
 		}
 
 		pollStatus();
-		const interval = setInterval(pollStatus, 30_000);
+		const cleanup = createPolling(pollStatus, 30_000);
 		return () => {
 			active = false;
-			clearInterval(interval);
+			cleanup();
 		};
 	});
 </script>

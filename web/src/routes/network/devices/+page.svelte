@@ -10,6 +10,7 @@
 		eventsUrl,
 	} from "$lib/api/client";
 	import type { DeviceEntry } from "$lib/api/types";
+	import { createDebounce } from "$lib/utils";
 
 	import DeviceTable from "./components/DeviceTable.svelte";
 	import DeviceWhoisModal from "./components/DeviceWhoisModal.svelte";
@@ -105,11 +106,15 @@
 		promoteOpen = true;
 	}
 
+	const debouncedLoad = createDebounce(() => {
+		loadDevices(false);
+	}, 300);
+
 	onMount(() => {
 		loadDevices();
 
 		try {
-			const url = eventsUrl();
+			const url = eventsUrl({ filter: "device" });
 			eventSource = new EventSource(url);
 
 			eventSource.onmessage = (e) => {
@@ -129,7 +134,7 @@
 								eventObj?.System?.ConfigDhcpV6Changed
 						);
 					if (isDeviceUpdate) {
-						loadDevices(false);
+						debouncedLoad();
 					}
 				} catch {
 					// silent parse error
@@ -141,6 +146,7 @@
 	});
 
 	onDestroy(() => {
+		debouncedLoad.cancel();
 		if (eventSource) {
 			eventSource.close();
 			eventSource = null;

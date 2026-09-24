@@ -9,7 +9,8 @@
 	import { getServiceMeta } from "$lib/services";
 	import { toast } from "svelte-sonner";
 	import { goto } from "$app/navigation";
-	import { onMount, onDestroy } from "svelte";
+	import { onMount } from "svelte";
+	import { createPolling } from "$lib/utils/polling";
 
 	import ServerIcon from "@lucide/svelte/icons/server";
 	import CircleCheckIcon from "@lucide/svelte/icons/circle-check";
@@ -33,7 +34,6 @@
 	let searchQuery = $state("");
 	let statusFilter = $state<"all" | "online" | "inactive" | "error">("all");
 	let actionLoading = $state<Record<string, string | null>>({});
-	let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
 	async function fetchBanners(showSpinner = true) {
 		if (showSpinner) isRefreshing = true;
@@ -92,13 +92,12 @@
 
 	onMount(() => {
 		fetchBanners(true);
-		refreshInterval = setInterval(() => {
+		const stopPolling = createPolling(() => {
 			fetchBanners(false);
 		}, 6000);
-	});
-
-	onDestroy(() => {
-		if (refreshInterval) clearInterval(refreshInterval);
+		return () => {
+			stopPolling();
+		};
 	});
 
 	function isOnline(state: string): boolean {

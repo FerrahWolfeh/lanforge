@@ -9,6 +9,7 @@
 		eventsUrl,
 	} from "$lib/api/client";
 	import type { LeaseEntry, LeaseTarget } from "$lib/api/types";
+	import { createDebounce } from "$lib/utils";
 
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
@@ -74,6 +75,10 @@
 		releaseOpen = true;
 	}
 
+	const debouncedLoad = createDebounce(() => {
+		loadLeasesData(false);
+	}, 300);
+
 	onMount(() => {
 		loadLeasesData();
 
@@ -101,7 +106,7 @@
 								eventObj?.Device?.Discovered
 						);
 					if (isLeaseOrDevice) {
-						loadLeasesData(false);
+						debouncedLoad();
 					}
 				} catch {
 					// silent parse error
@@ -113,6 +118,7 @@
 	});
 
 	onDestroy(() => {
+		debouncedLoad.cancel();
 		if (eventSource) {
 			eventSource.close();
 			eventSource = null;

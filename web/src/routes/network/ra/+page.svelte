@@ -20,8 +20,9 @@
 		NetworkInterfaceInfo,
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
-	import { onMount, onDestroy } from "svelte";
+	import { onMount } from "svelte";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
+	import { createPolling } from "$lib/utils/polling";
 
 	import RadioIcon from "@lucide/svelte/icons/radio";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
@@ -38,7 +39,6 @@
 	let loading = $state(true);
 	let saving = $state(false);
 	let triggering = $state(false);
-	let refreshInterval: ReturnType<typeof setInterval> | null = null;
 	let availableInterfaces = $state<NetworkInterfaceInfo[]>([]);
 	let activeTab = $state("status");
 
@@ -144,10 +144,11 @@
 	async function loadAll(silent = false) {
 		if (!silent) loading = true;
 		try {
+			const fetchSetup = !silent || availableInterfaces.length === 0;
 			const [s, c, setupRes] = await Promise.all([
 				raStatus().catch(() => null),
 				raConfig().catch(() => null),
-				getSetupStatus().catch(() => null),
+				fetchSetup ? getSetupStatus().catch(() => null) : Promise.resolve(null),
 			]);
 			status = s;
 			if (setupRes?.interfaces) {
@@ -228,13 +229,10 @@
 
 	onMount(() => {
 		loadAll();
-		refreshInterval = setInterval(() => {
-			loadAll(true);
-		}, 5000);
-	});
-
-	onDestroy(() => {
-		if (refreshInterval) clearInterval(refreshInterval);
+		const stopPolling = createPolling(() => loadAll(true), 5000);
+		return () => {
+			stopPolling();
+		};
 	});
 </script>
 

@@ -19,7 +19,8 @@
 		SqmDiffserv,
 	} from "$lib/api/types";
 	import { toast } from "svelte-sonner";
-	import { onMount, onDestroy } from "svelte";
+	import { onMount } from "svelte";
+	import { createPolling } from "$lib/utils/polling";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
 	import TrafficSqmTab from "../components/TrafficSqmTab.svelte";
@@ -33,7 +34,6 @@
 
 	let loading = $state(true);
 	let saving = $state(false);
-	let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
 	// Editable reactive form fields (SQM)
 	let sqmEnabled = $state(false);
@@ -112,15 +112,16 @@
 	async function loadAll(silent = false) {
 		if (!silent) loading = true;
 		try {
+			const fetchSetup = !silent || availableInterfaces.length === 0;
 			const [s, c, setupRes, pppoeRes, telemRes] = await Promise.all([
 				trafficStatus().catch(() => null),
 				trafficConfig().catch(() => null),
-				getSetupStatus().catch(() => null),
+				fetchSetup ? getSetupStatus().catch(() => null) : Promise.resolve(null),
 				pppoeConfig().catch(() => null),
 				trafficTelemetry().catch(() => null),
 			]);
 			status = s;
-			setupStatus = setupRes;
+			if (setupRes) setupStatus = setupRes;
 			pppoeCfg = pppoeRes;
 			telemetry = telemRes;
 
@@ -190,17 +191,15 @@
 
 	onMount(() => {
 		loadAll(false);
-		refreshInterval = setInterval(() => {
-			if (typeof document !== "undefined" && document.hidden) return;
+		const stopPolling = createPolling(() => {
 			Promise.allSettled([trafficStatus(), trafficTelemetry()]).then(([sRes, tRes]) => {
 				if (sRes.status === "fulfilled") status = sRes.value;
 				if (tRes.status === "fulfilled") telemetry = tRes.value;
 			});
 		}, 3000);
-	});
-
-	onDestroy(() => {
-		if (refreshInterval) clearInterval(refreshInterval);
+		return () => {
+			stopPolling();
+		};
 	});
 </script>
 

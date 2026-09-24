@@ -18,7 +18,8 @@
 	import { Switch } from "$lib/components/ui/switch";
 	import * as DropdownMenu from "$lib/components/ui/dropdown-menu";
 	import { toast } from "svelte-sonner";
-	import { onMount, onDestroy } from "svelte";
+	import { onMount } from "svelte";
+	import { createPolling } from "$lib/utils/polling";
 	import {
 		dnsAdblockStatus,
 		dnsAdblockSet,
@@ -31,7 +32,6 @@
 	let status = $state<DnsAdblockStatusResponse | null>(null);
 	let loadingStatus = $state(true);
 	let reloadingLists = $state(false);
-	let pollInterval: ReturnType<typeof setInterval> | null = null;
 
 	const tabs = [
 		{ label: "Overview", href: "/dns/adblock", icon: LayoutDashboardIcon },
@@ -117,11 +117,10 @@
 
 	onMount(() => {
 		fetchStatus();
-		pollInterval = setInterval(fetchStatus, 5000);
-	});
-
-	onDestroy(() => {
-		if (pollInterval) clearInterval(pollInterval);
+		const stopPolling = createPolling(fetchStatus, 5000);
+		return () => {
+			stopPolling();
+		};
 	});
 </script>
 
