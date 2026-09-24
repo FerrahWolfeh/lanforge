@@ -36,6 +36,92 @@ use tracing::{debug, info, warn};
 
 use crate::config::Config;
 
+macro_rules! feat_flag {
+    ($feat:ident, $val:expr) => {
+        feat_flag!($feat, $val, false)
+    };
+    (ra, $val:expr, $default:expr) => {{
+        #[cfg(feature = "ra")]
+        {
+            $val
+        }
+        #[cfg(not(feature = "ra"))]
+        {
+            $default
+        }
+    }};
+    (dhcp, $val:expr, $default:expr) => {{
+        #[cfg(feature = "dhcp")]
+        {
+            $val
+        }
+        #[cfg(not(feature = "dhcp"))]
+        {
+            $default
+        }
+    }};
+    (dns, $val:expr, $default:expr) => {{
+        #[cfg(feature = "dns")]
+        {
+            $val
+        }
+        #[cfg(not(feature = "dns"))]
+        {
+            $default
+        }
+    }};
+    (pppoe, $val:expr, $default:expr) => {{
+        #[cfg(feature = "pppoe")]
+        {
+            $val
+        }
+        #[cfg(not(feature = "pppoe"))]
+        {
+            $default
+        }
+    }};
+    (http, $val:expr, $default:expr) => {{
+        #[cfg(feature = "http")]
+        {
+            $val
+        }
+        #[cfg(not(feature = "http"))]
+        {
+            $default
+        }
+    }};
+    (tftp, $val:expr, $default:expr) => {{
+        #[cfg(feature = "tftp")]
+        {
+            $val
+        }
+        #[cfg(not(feature = "tftp"))]
+        {
+            $default
+        }
+    }};
+    (nft, $val:expr, $default:expr) => {{
+        #[cfg(feature = "nft")]
+        {
+            $val
+        }
+        #[cfg(not(feature = "nft"))]
+        {
+            $default
+        }
+    }};
+    (traffic, $val:expr, $default:expr) => {{
+        #[cfg(feature = "traffic")]
+        {
+            $val
+        }
+        #[cfg(not(feature = "traffic"))]
+        {
+            $default
+        }
+    }};
+}
+
 const RTNLGRP_NEIGH: u32 = 3;
 const RTNLGRP_IPV4_IFADDR: u32 = 5;
 const RTNLGRP_IPV6_IFADDR: u32 = 9;
@@ -66,55 +152,18 @@ impl Bootstrapper {
         // --- PHASE 1: Initialization ---
         let mut cfg = Config::load();
 
-        let ra_print = {
-            #[cfg(feature = "ra")]
-            {
-                cfg.ra_enabled
-            }
-            #[cfg(not(feature = "ra"))]
-            {
-                false
-            }
-        };
-        let dhcpv4_print = {
-            #[cfg(feature = "dhcp")]
-            {
-                cfg.dhcpv4_enabled
-            }
-            #[cfg(not(feature = "dhcp"))]
-            {
-                false
-            }
-        };
-        let dhcpv6_print = {
-            #[cfg(feature = "dhcp")]
-            {
-                cfg.dhcpv6_enabled
-            }
-            #[cfg(not(feature = "dhcp"))]
-            {
-                false
-            }
-        };
-        let dns_print = {
-            #[cfg(feature = "dns")]
-            {
-                cfg.dns_enabled
-            }
-            #[cfg(not(feature = "dns"))]
-            {
-                false
-            }
-        };
-
         info!(
             "Starting Lanforge (RA: {}, DHCPv4: {}, DHCPv6: {}, DNS: {})",
-            ra_print, dhcpv4_print, dhcpv6_print, dns_print
+            feat_flag!(ra, cfg.ra_enabled),
+            feat_flag!(dhcp, cfg.dhcpv4_enabled),
+            feat_flag!(dhcp, cfg.dhcpv6_enabled),
+            feat_flag!(dns, cfg.dns_enabled)
         );
 
         let bus = Arc::new(EventBus::new());
-        let target_ifindex = Self::find_target_interface(&mut cfg)?;
-        let (initial_table, db, log_db) = Self::init_device_table(&mut cfg).await?;
+        let host_ifaces = interfaces();
+        let target_ifindex = Self::find_target_interface(&mut cfg, &host_ifaces)?;
+        let (initial_table, db, log_db) = Self::init_device_table(&mut cfg, &host_ifaces).await?;
         let db = Arc::new(db);
         let log_db = Arc::new(log_db);
         let cfg = Arc::new(cfg);
@@ -162,45 +211,7 @@ impl Bootstrapper {
 
         // Load DNS settings from database into context
         #[cfg(feature = "dns")]
-        {
-            if let Ok(upstreams) = db.load_dns_upstreams().await {
-                let list = upstreams.into_iter().map(|row| row.to_target()).collect();
-                ctx.update_dns_upstreams(list);
-            }
-            if let Ok(rewrites) = db.load_dns_rewrites().await {
-                ctx.update_dns_rewrites(rewrites);
-            }
-            if let Ok(allowlist) = db.load_dns_allowlist().await {
-                ctx.update_dns_allowlist(allowlist.into_iter().map(|(_, d)| d).collect());
-            }
-            if let Ok(adblock) = db.load_adblock_config().await {
-                ctx.update_dns_adblock(adblock);
-            }
-            if let Ok(urls) = db.load_adblock_urls().await {
-                ctx.update_dns_adblock_urls(
-                    urls.into_iter()
-                        .map(|(id, url, kind)| AdblockUrlEntry {
-                            id: Some(id),
-                            url,
-                            kind,
-                        })
-                        .collect(),
-                );
-            }
-            if let Ok(rules) = db.load_adblock_rules().await {
-                ctx.update_dns_adblock_rules(
-                    rules
-                        .into_iter()
-                        .map(|(id, domain, action, enabled)| AdblockRuleEntry {
-                            id: Some(id),
-                            domain,
-                            action,
-                            enabled,
-                        })
-                        .collect(),
-                );
-            }
-        }
+        Self::load_dns_state_into_context(&db, &ctx).await;
 
         #[cfg(feature = "pppoe")]
         {
@@ -245,17 +256,7 @@ impl Bootstrapper {
         ctx.set_if_ready(true);
         let _ = bus.publish(LanforgeEvent::System(SystemEvent::InterfaceReady));
 
-        let pppoe_enabled = {
-            #[cfg(feature = "pppoe")]
-            {
-                cfg.pppoe_enabled
-            }
-            #[cfg(not(feature = "pppoe"))]
-            {
-                false
-            }
-        };
-        if !pppoe_enabled {
+        if !feat_flag!(pppoe, cfg.pppoe_enabled) {
             ctx.set_pppoe_ready(true);
         }
 
@@ -276,6 +277,47 @@ impl Bootstrapper {
             },
             ctx,
         ))
+    }
+
+    #[cfg(feature = "dns")]
+    async fn load_dns_state_into_context(db: &LanforgeDb, ctx: &LanforgeContext) {
+        if let Ok(upstreams) = db.load_dns_upstreams().await {
+            let list = upstreams.into_iter().map(|row| row.to_target()).collect();
+            ctx.update_dns_upstreams(list);
+        }
+        if let Ok(rewrites) = db.load_dns_rewrites().await {
+            ctx.update_dns_rewrites(rewrites);
+        }
+        if let Ok(allowlist) = db.load_dns_allowlist().await {
+            ctx.update_dns_allowlist(allowlist.into_iter().map(|(_, d)| d).collect());
+        }
+        if let Ok(adblock) = db.load_adblock_config().await {
+            ctx.update_dns_adblock(adblock);
+        }
+        if let Ok(urls) = db.load_adblock_urls().await {
+            ctx.update_dns_adblock_urls(
+                urls.into_iter()
+                    .map(|(id, url, kind)| AdblockUrlEntry {
+                        id: Some(id),
+                        url,
+                        kind,
+                    })
+                    .collect(),
+            );
+        }
+        if let Ok(rules) = db.load_adblock_rules().await {
+            ctx.update_dns_adblock_rules(
+                rules
+                    .into_iter()
+                    .map(|(id, domain, action, enabled)| AdblockRuleEntry {
+                        id: Some(id),
+                        domain,
+                        action,
+                        enabled,
+                    })
+                    .collect(),
+            );
+        }
     }
 
     #[cfg(feature = "dns")]
@@ -372,7 +414,10 @@ impl Bootstrapper {
     }
 
     #[allow(clippy::too_many_lines)]
-    async fn init_device_table(cfg: &mut Config) -> Result<(State, LanforgeDb, LogDb)> {
+    async fn init_device_table(
+        cfg: &mut Config,
+        host_ifaces: &[pnet::datalink::NetworkInterface],
+    ) -> Result<(State, LanforgeDb, LogDb)> {
         let db_target = if cfg.database.is_in_memory() {
             "in-memory".to_string()
         } else {
@@ -665,7 +710,7 @@ impl Bootstrapper {
                             info!("Firewall bootstrap: adding 'podman*' wildcard to trusted firewall zone");
                             trusted_zone.interfaces.push("podman*".into());
                             modified = true;
-                        } else if !trusted_zone.interfaces.contains(&"podman*".to_string()) {
+                        } else if !trusted_zone.interfaces.iter().any(|i| i == "podman*") {
                             info!("Firewall bootstrap: ensuring 'podman*' wildcard in trusted firewall zone");
                             trusted_zone.interfaces.push("podman*".into());
                             modified = true;
@@ -688,7 +733,7 @@ impl Bootstrapper {
         // 2c. Check/reconcile DHCPv4 topology sanity against physical interface and host identity
         #[cfg(feature = "dhcp")]
         if is_provisioned {
-            Self::reconcile_dhcp_v4_topology_sanity(&db, cfg, &table).await?;
+            Self::reconcile_dhcp_v4_topology_sanity(&db, cfg, &table, host_ifaces).await?;
         }
 
         match db.load_dns_reverse_resolvers().await {
@@ -722,7 +767,7 @@ impl Bootstrapper {
         info!(
             "Database loaded (schema: {schema}, size: {size_str}, devices: {device_count}, users: {user_count}, runtime: {log_db_desc})"
         );
-        Self::inject_self_device(&mut table, cfg);
+        Self::inject_self_device(&mut table, cfg, host_ifaces);
 
         // Trigger early collision validation and logging
         let _ = table.get_static_registry();
@@ -740,16 +785,7 @@ impl Bootstrapper {
                 .and_then(|i| i.ips.iter().find(|ip| ip.is_ipv4()))
                 .map_or_else(|| "localhost".to_string(), |ip| ip.ip().to_string())
         };
-        let http_port = {
-            #[cfg(feature = "http")]
-            {
-                cfg.http_toml.listen.port()
-            }
-            #[cfg(not(feature = "http"))]
-            {
-                8088
-            }
-        };
+        let http_port = feat_flag!(http, cfg.http_toml.listen.port(), 8088);
 
         let console_url = format!("http://{host_ip}:{http_port}");
         let is_first_run = db.count_users().await.unwrap_or(0) == 0;
@@ -782,11 +818,14 @@ impl Bootstrapper {
     }
 
     /// Injects the host machine as a system device in the state table.
-    fn inject_self_device(table: &mut State, cfg: &Config) {
+    fn inject_self_device(
+        table: &mut State,
+        cfg: &Config,
+        interfaces: &[pnet::datalink::NetworkInterface],
+    ) {
         let hostname = std::fs::read_to_string("/proc/sys/kernel/hostname")
             .map_or_else(|_| "lanforge".to_string(), |s| s.trim().to_string());
 
-        let interfaces = interfaces();
         if let Some(iface) = interfaces.iter().find(|i| i.name == cfg.system.iface)
             && let Some(mac) = iface.mac
         {
@@ -824,8 +863,8 @@ impl Bootstrapper {
         db: &LanforgeDb,
         cfg: &mut Config,
         table: &State,
+        all_ifaces: &[pnet::datalink::NetworkInterface],
     ) -> Result<()> {
-        let all_ifaces = interfaces();
         let target_iface = all_ifaces
             .iter()
             .find(|i| !cfg.system.iface.is_empty() && i.name == cfg.system.iface)
@@ -944,8 +983,10 @@ impl Bootstrapper {
         Ok(())
     }
 
-    fn find_target_interface(cfg: &mut Config) -> Result<u32> {
-        let interfaces = interfaces();
+    fn find_target_interface(
+        cfg: &mut Config,
+        interfaces: &[pnet::datalink::NetworkInterface],
+    ) -> Result<u32> {
         if !cfg.system.iface.is_empty()
             && let Some(iface) = interfaces.iter().find(|iface| iface.name == cfg.system.iface)
         {

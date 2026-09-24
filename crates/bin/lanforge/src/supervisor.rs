@@ -114,8 +114,7 @@ where
                 start,
                 &mut consecutive_failures,
             ) else {
-                let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
-                let _ = service.on_shutdown();
+                teardown_service(&mut service, ctx, meta.shutdown_timeout).await;
                 return;
             };
             if backoff_needed
@@ -123,8 +122,7 @@ where
                     .await
                     .is_none()
             {
-                let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
-                let _ = service.on_shutdown();
+                teardown_service(&mut service, ctx, meta.shutdown_timeout).await;
                 return;
             }
             continue;
@@ -176,27 +174,15 @@ where
         };
 
         // 5. Cooperative Cleanup & Shutdown Hook
+        teardown_service(&mut service, ctx, meta.shutdown_timeout).await;
+
         match outcome {
             ServiceRunOutcome::Shutdown => {
-                let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
-                if let Err(e) = service.on_shutdown() {
-                    error!(
-                        "Error during async service '{}' on_shutdown: {e}",
-                        meta.display_name
-                    );
-                }
                 ctx.set_service_state(id, ServiceState::Inactive);
                 ctx.clear_service_start(id);
                 return;
             }
             ServiceRunOutcome::Control(action) => {
-                let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
-                if let Err(e) = service.on_shutdown() {
-                    error!(
-                        "Error during async service '{}' on_shutdown: {e}",
-                        meta.display_name
-                    );
-                }
                 match action {
                     ServiceAction::Stop => {
                         ctx.set_service_state(id, ServiceState::Inactive);
@@ -213,12 +199,9 @@ where
                 }
             }
             ServiceRunOutcome::BusClosed => {
-                let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
-                let _ = service.on_shutdown();
                 return;
             }
             ServiceRunOutcome::Exited(res) => {
-                let _ = tokio::time::timeout(meta.shutdown_timeout, service.cleanup(ctx)).await;
                 let Some(backoff_needed) = evaluate_service_exit(
                     res,
                     ctx,
@@ -227,12 +210,6 @@ where
                     start,
                     &mut consecutive_failures,
                 ) else {
-                    if let Err(e) = service.on_shutdown() {
-                        error!(
-                            "Error during async service '{}' on_shutdown: {e}",
-                            meta.display_name
-                        );
-                    }
                     return;
                 };
 
@@ -241,16 +218,24 @@ where
                         .await
                         .is_none()
                 {
-                    if let Err(e) = service.on_shutdown() {
-                        error!(
-                            "Error during async service '{}' on_shutdown: {e}",
-                            meta.display_name
-                        );
-                    }
                     return;
                 }
             }
         }
+    }
+}
+
+async fn teardown_service<S: AsyncService>(
+    service: &mut S,
+    ctx: &LanforgeContext,
+    timeout: Duration,
+) {
+    let _ = tokio::time::timeout(timeout, service.cleanup(ctx)).await;
+    if let Err(e) = service.on_shutdown() {
+        error!(
+            "Error during async service '{}' on_shutdown: {e}",
+            service.meta().display_name
+        );
     }
 }
 

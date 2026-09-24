@@ -28,7 +28,25 @@ pub enum LoopResult {
     Shutdown,
 }
 
-#[allow(clippy::too_many_lines)]
+macro_rules! handle_bus_recv {
+    ($event:expr, $topic:literal, $l_ctx:expr) => {
+        match $event {
+            Ok(timed_event) => {
+                if let Some(res) = handle_bus_event(timed_event.event, $l_ctx) {
+                    break res;
+                }
+            }
+            Err(RecvError::Lagged(n)) => {
+                warn!("EventBus ({}): consumer lagged, lost {n} events", $topic);
+            }
+            Err(RecvError::Closed) => {
+                error!("EventBus ({}): channel closed unexpectedly", $topic);
+                break LoopResult::Shutdown;
+            }
+        }
+    };
+}
+
 pub async fn run_event_loop<S>(
     bootstrap: BootstrapResult,
     ctx: LanforgeContext,
@@ -54,8 +72,8 @@ where
     let mut stale_timer = interval(stale_check_interval);
     stale_timer.tick().await;
 
-    let mut expected_sorted: Vec<_> = expected_services.iter().cloned().collect();
-    expected_sorted.sort();
+    let mut expected_sorted: Vec<_> = expected_services.iter().map(String::as_str).collect();
+    expected_sorted.sort_unstable();
     info!(
         "Event loop: expecting readiness from {} services: {:?}",
         expected_sorted.len(),
@@ -87,34 +105,7 @@ where
         }
     }
 
-    if !loop_ctx.system_ready_sent
-        && loop_ctx.ready_services.len() >= loop_ctx.expected_services.len()
-    {
-        let mut services: Vec<_> = loop_ctx.expected_services.iter().cloned().collect();
-        services.sort();
-        info!(
-            "All {} internal services online ({}). System fully operational.",
-            services.len(),
-            services.join(", ")
-        );
-        crate::bootstrap::Bootstrapper::print_startup_banner(
-            loop_ctx.cfg,
-            loop_ctx.target_ifindex,
-            loop_ctx.db,
-        )
-        .await;
-        let _ = loop_ctx
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::System(SystemEvent::SystemReady));
-        let status = format!(
-            "Operational ({} services online on {})",
-            loop_ctx.expected_services.len(),
-            loop_ctx.cfg.system.iface
-        );
-        sd_notify_ready(&status);
-        loop_ctx.system_ready_sent = true;
-    }
+    loop_ctx.try_emit_system_ready();
 
     let mut status_timer = interval(Duration::from_secs(10));
     status_timer.tick().await; // skip first tick
@@ -138,66 +129,21 @@ where
             }
             _ = status_timer.tick() => {
                 if !loop_ctx.system_ready_sent {
-                    let mut missing = Vec::new();
-                    for s in &loop_ctx.expected_services {
-                        if !loop_ctx.ready_services.contains(s) {
-                            missing.push(s);
-                        }
-                    }
+                    let mut missing: Vec<_> = loop_ctx
+                        .expected_services
+                        .iter()
+                        .filter(|s| !loop_ctx.ready_services.contains(*s))
+                        .map(String::as_str)
+                        .collect();
                     if !missing.is_empty() {
-                        missing.sort();
+                        missing.sort_unstable();
                         warn!("⌛ Still waiting for {} services to be ready: {:?}", missing.len(), missing);
                     }
                 }
             }
-            event = sys_rx.recv() => {
-                match event {
-                    Ok(timed_event) => {
-                        if let Some(res) = handle_bus_event(timed_event.event, &mut loop_ctx) {
-                            break res;
-                        }
-                    }
-                    Err(RecvError::Lagged(n)) => {
-                        warn!("EventBus (system): consumer lagged, lost {n} events");
-                    }
-                    Err(RecvError::Closed) => {
-                        error!("EventBus (system): channel closed unexpectedly");
-                        break LoopResult::Shutdown;
-                    }
-                }
-            }
-            event = net_rx.recv() => {
-                match event {
-                    Ok(timed_event) => {
-                        if let Some(res) = handle_bus_event(timed_event.event, &mut loop_ctx) {
-                            break res;
-                        }
-                    }
-                    Err(RecvError::Lagged(n)) => {
-                        warn!("EventBus (network): consumer lagged, lost {n} events");
-                    }
-                    Err(RecvError::Closed) => {
-                        error!("EventBus (network): channel closed unexpectedly");
-                        break LoopResult::Shutdown;
-                    }
-                }
-            }
-            event = sto_rx.recv() => {
-                match event {
-                    Ok(timed_event) => {
-                        if let Some(res) = handle_bus_event(timed_event.event, &mut loop_ctx) {
-                            break res;
-                        }
-                    }
-                    Err(RecvError::Lagged(n)) => {
-                        warn!("EventBus (storage): consumer lagged, lost {n} events");
-                    }
-                    Err(RecvError::Closed) => {
-                        error!("EventBus (storage): channel closed unexpectedly");
-                        break LoopResult::Shutdown;
-                    }
-                }
-            }
+            event = sys_rx.recv() => handle_bus_recv!(event, "system", &mut loop_ctx),
+            event = net_rx.recv() => handle_bus_recv!(event, "network", &mut loop_ctx),
+            event = sto_rx.recv() => handle_bus_recv!(event, "storage", &mut loop_ctx),
         }
     };
 
@@ -213,6 +159,39 @@ struct LoopContext<'a, S> {
     expected_services: HashSet<String, S>,
     ready_services: HashSet<String, S>,
     system_ready_sent: bool,
+}
+
+impl<S: BuildHasher> LoopContext<'_, S> {
+    fn try_emit_system_ready(&mut self) {
+        if self.system_ready_sent || self.ready_services.len() < self.expected_services.len() {
+            return;
+        }
+
+        let mut services: Vec<_> = self.expected_services.iter().map(String::as_str).collect();
+        services.sort_unstable();
+        info!(
+            "All {} internal services online ({}). System fully operational.",
+            services.len(),
+            services.join(", ")
+        );
+        let cfg = self.cfg.clone();
+        let db = self.db.clone();
+        let ifindex = self.target_ifindex;
+        tokio::spawn(async move {
+            crate::bootstrap::Bootstrapper::print_startup_banner(&cfg, ifindex, &db).await;
+        });
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::SystemReady));
+        let status = format!(
+            "Operational ({} services online on {})",
+            self.expected_services.len(),
+            self.cfg.system.iface
+        );
+        sd_notify_ready(&status);
+        self.system_ready_sent = true;
+    }
 }
 
 fn handle_bus_event<S: BuildHasher>(
@@ -231,34 +210,7 @@ fn handle_bus_event<S: BuildHasher>(
                 l_ctx.expected_services.len()
             );
 
-            if !l_ctx.system_ready_sent
-                && l_ctx.ready_services.len() >= l_ctx.expected_services.len()
-            {
-                let mut services: Vec<_> = l_ctx.expected_services.iter().cloned().collect();
-                services.sort();
-                info!(
-                    "All {} internal services online ({}). System fully operational.",
-                    services.len(),
-                    services.join(", ")
-                );
-                let cfg = l_ctx.cfg.clone();
-                let db = l_ctx.db.clone();
-                let ifindex = l_ctx.target_ifindex;
-                tokio::spawn(async move {
-                    crate::bootstrap::Bootstrapper::print_startup_banner(&cfg, ifindex, &db).await;
-                });
-                let _ = l_ctx
-                    .ctx
-                    .bus()
-                    .publish(LanforgeEvent::System(SystemEvent::SystemReady));
-                let status = format!(
-                    "Operational ({} services online on {})",
-                    l_ctx.expected_services.len(),
-                    l_ctx.cfg.system.iface
-                );
-                sd_notify_ready(&status);
-                l_ctx.system_ready_sent = true;
-            }
+            l_ctx.try_emit_system_ready();
         }
         LanforgeEvent::Network(NetworkEvent::PrefixChanged(details))
             if (l_ctx.state.current_gua != details.gua || l_ctx.state.current_ula != details.ula) =>

@@ -102,23 +102,7 @@ impl Daemon {
 
                     // 4. Reload configuration from disk
                     let mut new_cfg = Config::load();
-                    #[cfg(feature = "pppoe")]
-                    if let Ok(Some(pppoe_db)) = self.bootstrap.db.load_pppoe_config().await {
-                        new_cfg.pppoe_enabled = pppoe_db.enabled;
-                        new_cfg.pppoe_toml = pppoe_db.clone();
-                        self.ctx.update_pppoe_config(pppoe_db);
-                    }
-                    #[cfg(feature = "traffic")]
-                    if let Ok(Some(traffic_db)) = self.bootstrap.db.load_traffic_config().await {
-                        new_cfg.traffic_toml = traffic_db.clone();
-                        self.ctx.update_traffic_config(traffic_db);
-                    }
-                    #[cfg(feature = "nft")]
-                    if let Ok(Some(firewall_db)) = self.bootstrap.db.load_firewall_config().await {
-                        new_cfg.firewall_enabled = firewall_db.enabled;
-                        new_cfg.firewall_toml = firewall_db.clone();
-                        self.ctx.update_firewall_config(firewall_db);
-                    }
+                    self.reload_db_configs(&mut new_cfg).await;
                     let new_cfg = Arc::new(new_cfg);
                     self.bootstrap.cfg = new_cfg.clone();
 
@@ -138,6 +122,26 @@ impl Daemon {
         }
 
         self.shutdown().await
+    }
+
+    async fn reload_db_configs(&self, new_cfg: &mut Config) {
+        #[cfg(feature = "pppoe")]
+        if let Ok(Some(pppoe_db)) = self.bootstrap.db.load_pppoe_config().await {
+            new_cfg.pppoe_enabled = pppoe_db.enabled;
+            new_cfg.pppoe_toml = pppoe_db.clone();
+            self.ctx.update_pppoe_config(pppoe_db);
+        }
+        #[cfg(feature = "traffic")]
+        if let Ok(Some(traffic_db)) = self.bootstrap.db.load_traffic_config().await {
+            new_cfg.traffic_toml = traffic_db.clone();
+            self.ctx.update_traffic_config(traffic_db);
+        }
+        #[cfg(feature = "nft")]
+        if let Ok(Some(firewall_db)) = self.bootstrap.db.load_firewall_config().await {
+            new_cfg.firewall_enabled = firewall_db.enabled;
+            new_cfg.firewall_toml = firewall_db.clone();
+            self.ctx.update_firewall_config(firewall_db);
+        }
     }
 
     #[allow(clippy::missing_const_for_fn)]
@@ -193,22 +197,26 @@ impl Daemon {
         let log_db = self.bootstrap.log_db.clone();
         let ctx = self.ctx.clone();
 
-        let monitored_ifindexes = {
-            let mut indexes = Vec::new();
-            if cfg.monitor_toml.ifaces.is_empty() {
-                indexes.push(target_ifindex);
-            } else {
-                let host_ifaces = pnet::datalink::interfaces();
-                for ifname in &cfg.monitor_toml.ifaces {
-                    if let Some(iface) = host_ifaces.iter().find(|i| &i.name == ifname) {
-                        indexes.push(iface.index);
-                    } else {
-                        tracing::warn!("Discovery: Configured monitor interface '{ifname}' not found on host");
+        let monitored_ifindexes = if cfg.monitor_toml.ifaces.is_empty() {
+            vec![target_ifindex]
+        } else {
+            let host_ifaces = pnet::datalink::interfaces();
+            let mut indexes: Vec<u32> = cfg
+                .monitor_toml
+                .ifaces
+                .iter()
+                .filter_map(|ifname| {
+                    let iface = host_ifaces.iter().find(|i| &i.name == ifname);
+                    if iface.is_none() {
+                        tracing::warn!(
+                            "Discovery: Configured monitor interface '{ifname}' not found on host"
+                        );
                     }
-                }
-                if indexes.is_empty() {
-                    indexes.push(target_ifindex);
-                }
+                    iface.map(|i| i.index)
+                })
+                .collect();
+            if indexes.is_empty() {
+                indexes.push(target_ifindex);
             }
             indexes
         };
