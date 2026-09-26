@@ -21,7 +21,6 @@
 		"/": "Dashboard",
 		"/network/devices": "Network Devices",
 		"/network/hosts": "Static Host Reservations",
-		"/network/discovery": "Network Discovery & Monitor",
 		"/network/traffic": "Traffic & SQM",
 		"/network/traffic/sqm": "Bufferbloat (CAKE)",
 		"/network/traffic/tuning": "Hardware NIC Tuning",

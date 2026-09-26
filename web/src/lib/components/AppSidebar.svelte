@@ -8,7 +8,6 @@
 	import LayoutDashboardIcon from "@lucide/svelte/icons/layout-dashboard";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
 	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
-	import RadioIcon from "@lucide/svelte/icons/radio";
 	import WifiIcon from "@lucide/svelte/icons/wifi";
 	import PlugZapIcon from "@lucide/svelte/icons/plug-zap";
 	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
@@ -59,7 +58,6 @@
 				{ title: "Traffic & SQM", href: "/network/traffic", icon: SlidersHorizontalIcon, cap: "traffic" },
 				{ title: "PPPoE WAN", href: "/network/pppoe", icon: PlugZapIcon, cap: "pppoe" },
 				{ title: "IPv6 RA", href: "/network/ra", icon: WifiIcon, cap: "ra" },
-				{ title: "Discovery & Monitor", href: "/network/discovery", icon: RadioIcon, cap: ["ndp_discovery", "mdns_probe"] },
 			],
 		},
 		{

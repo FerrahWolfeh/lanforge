@@ -14,7 +14,6 @@
 	import LayoutDashboardIcon from "@lucide/svelte/icons/layout-dashboard";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
 	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
-	import RadioIcon from "@lucide/svelte/icons/radio";
 	import WifiIcon from "@lucide/svelte/icons/wifi";
 	import PlugZapIcon from "@lucide/svelte/icons/plug-zap";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
@@ -126,16 +125,6 @@
 			category: "Pages & Navigation",
 			icon: BookmarkIcon,
 			action: () => goto("/network/hosts")
-		},
-		{
-			id: "page-discovery",
-			title: "Network Discovery & Monitor",
-			subtitle: "/network/discovery",
-			keywords: ["scan", "discovery", "monitor", "neighbors", "arp", "probe"],
-			category: "Pages & Navigation",
-			icon: RadioIcon,
-			action: () => goto("/network/discovery"),
-			cap: ["ndp_discovery", "mdns_probe"]
 		},
 		{
 			id: "page-ra",

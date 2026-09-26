@@ -6,17 +6,12 @@ import { isRedirect, redirect } from '@sveltejs/kit';
 import { authStatus, getSetupStatus, status as getSystemStatus } from '$lib/api/client';
 import { auth } from '$lib/stores/auth.svelte';
 import { capabilitiesState } from '$lib/stores/capabilities.svelte';
-
-let isSetupCompleted = false;
-
-export function markSetupCompleted() {
-	isSetupCompleted = true;
-}
+import { isSetupCompleted, markSetupCompleted } from '$lib/stores/setup.svelte';
 
 export const load: LayoutLoad = async ({ url }) => {
 	try {
 		// 1. First-run / setup inspection (cached once completed)
-		if (!isSetupCompleted) {
+		if (!isSetupCompleted()) {
 			const setup = await getSetupStatus().catch(() => null);
 			if (setup?.first_run) {
 				if (url.pathname !== '/setup') {
@@ -25,7 +20,7 @@ export const load: LayoutLoad = async ({ url }) => {
 				return {};
 			}
 			if (setup && !setup.first_run) {
-				isSetupCompleted = true;
+				markSetupCompleted();
 			}
 		}
 

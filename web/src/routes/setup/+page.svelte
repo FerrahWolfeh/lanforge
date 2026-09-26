@@ -7,7 +7,7 @@
 	import { goto } from "$app/navigation";
 	import { onMount } from "svelte";
 	import { toast } from "svelte-sonner";
-	import { markSetupCompleted } from "../+layout";
+	import { markSetupCompleted } from "$lib/stores/setup.svelte";
 
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";

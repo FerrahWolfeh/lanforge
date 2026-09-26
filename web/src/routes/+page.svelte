@@ -380,12 +380,12 @@
 			href: "/network/pppoe",
 		},
 		{
-			id: "discovery",
-			name: "Discovery & Monitor",
-			tag: "Passive / mDNS",
-			proto: "Netlink / ARP",
-			desc: "Transient neighbor monitor & active mDNS discovery prober",
-			href: "/network/discovery",
+			id: "monitor",
+			name: "Neighbor Monitor",
+			tag: "Passive / Netlink",
+			proto: "Kernel Netlink",
+			desc: "Real-time L2/L3 neighbor discovery and device tracking",
+			href: "/network/devices",
 		},
 	];
 </script>
