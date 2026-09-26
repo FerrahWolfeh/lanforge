@@ -50,4 +50,20 @@ pub struct CliArgs {
     /// Path to the UDS control socket.
     #[arg(long, env = "LANFORGE_CONTROL_SOCKET")]
     pub control_socket: Option<String>,
+
+    /// Skip first-run onboarding provisioning wizard and boot directly with configured services.
+    #[arg(
+        long = "auto-provision",
+        alias = "skip-provisioning",
+        env = "LANFORGE_AUTO_PROVISION"
+    )]
+    pub auto_provision: bool,
+
+    /// Allow running without root (EUID 0) privileges (for capability-based or unprivileged sandboxes).
+    #[arg(long, env = "LANFORGE_ALLOW_UNPRIVILEGED")]
+    pub allow_unprivileged: bool,
+
+    /// Quick start in ephemeral development/profiling mode (in-memory DB if unconfigured, auto-provision enabled).
+    #[arg(long = "dev", env = "LANFORGE_DEV")]
+    pub dev: bool,
 }

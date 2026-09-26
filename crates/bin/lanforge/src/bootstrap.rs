@@ -152,6 +152,8 @@ impl Bootstrapper {
         // --- PHASE 1: Initialization ---
         let mut cfg = Config::load();
 
+        Self::check_privileges(&cfg)?;
+
         info!(
             "Starting Lanforge (RA: {}, DHCPv4: {}, DHCPv6: {}, DNS: {})",
             feat_flag!(ra, cfg.ra_enabled),
@@ -497,7 +499,15 @@ impl Bootstrapper {
         };
 
         let is_provisioned = db.is_provisioned().unwrap_or(false)
-            || (db.count_users().await.unwrap_or(0) > 0);
+            || (db.count_users().await.unwrap_or(0) > 0)
+            || cfg.system.auto_provision;
+
+        if cfg.system.auto_provision && !db.is_provisioned().unwrap_or(false) {
+            info!("Bootstrap: Auto-provisioning enabled via configuration/CLI");
+            if let Err(e) = db.set_provisioned(true) {
+                warn!("Bootstrap: Failed to persist provisioned state in database: {e}");
+            }
+        }
 
         #[allow(clippy::if_not_else)]
         if !is_provisioned {
@@ -823,6 +833,26 @@ impl Bootstrapper {
         Ok((table, db, log_db))
     }
 
+    /// Checks whether Lanforge is running with sufficient privileges (EUID 0 / root).
+    fn check_privileges(cfg: &Config) -> Result<()> {
+        let is_root = unsafe { libc::geteuid() == 0 };
+        if !is_root {
+            if cfg.system.allow_unprivileged {
+                warn!(
+                    "⚠️  Lanforge is running without root privileges (EUID != 0). \
+                     Kernel network operations (Netlink route sockets, nftables firewall, raw packet sockets for DHCP/RA/PPPoE, and binding ports 53/67) may fail unless capabilities are granted."
+                );
+            } else {
+                anyhow::bail!(
+                    "Lanforge requires root privileges (sudo).\n\
+                     Kernel network orchestration (Netlink route sockets, nftables firewall, raw packet sockets for DHCP/RA/PPPoE, and binding ports 53/67) requires root (EUID 0).\n\
+                     Please run with: sudo lanforge [options] (or pass --allow-unprivileged / --dev if testing in an unprivileged or capability-granted environment)."
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Prints the user-friendly startup banner when all services are fully initialized and ready.
     pub async fn print_startup_banner(cfg: &Config, target_ifindex: u32, db: &LanforgeDb) {
         let host_ip = {
@@ -836,7 +866,9 @@ impl Bootstrapper {
         let http_port = feat_flag!(http, cfg.http_toml.listen.port(), 8088);
 
         let console_url = format!("http://{host_ip}:{http_port}");
-        let is_first_run = db.count_users().await.unwrap_or(0) == 0;
+        let is_first_run = !(db.is_provisioned().unwrap_or(false)
+            || db.count_users().await.unwrap_or(0) > 0
+            || cfg.system.auto_provision);
         let db_desc = if db.is_in_memory() {
             if cfg.database.is_in_memory() {
                 "in-memory (non-persistent)".to_string()

@@ -78,6 +78,12 @@ pub struct SystemCfg {
     /// Global TLS private key path (inherited by DNS/HTTP).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_key: Option<String>,
+    /// Whether to skip first-run onboarding setup and boot directly with configured services.
+    #[serde(default, alias = "skip_provisioning", alias = "provisioned")]
+    pub auto_provision: bool,
+    /// Allow running without root (EUID 0) privileges.
+    #[serde(default)]
+    pub allow_unprivileged: bool,
 }
 
 impl Default for SystemCfg {
@@ -89,6 +95,8 @@ impl Default for SystemCfg {
             search_domains: Vec::new(),
             tls_cert: None,
             tls_key: None,
+            auto_provision: false,
+            allow_unprivileged: false,
         }
     }
 }

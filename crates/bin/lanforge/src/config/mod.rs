@@ -245,10 +245,22 @@ impl Config {
                 if let Some(debounce) = cli.debounce_secs {
                     s.debounce_secs = debounce;
                 }
+                if cli.auto_provision || cli.dev {
+                    s.auto_provision = true;
+                }
+                if cli.allow_unprivileged || cli.dev {
+                    s.allow_unprivileged = true;
+                }
                 s
             },
             database: {
                 let mut db = toml_cfg.database;
+                if cli.dev && cli.config_db_path.is_none() && (db.config_path.is_empty() || db.config_path == "/var/lib/lanforge/config.redb") {
+                    db.config_path = "memory".to_string();
+                }
+                if cli.dev && cli.runtime_db_path.is_none() && (db.runtime_path.is_empty() || db.runtime_path == "/run/lanforge/runtime.redb") {
+                    db.runtime_path = "memory".to_string();
+                }
                 if let Some(ref path) = cli.config_db_path {
                     db.config_path.clone_from(path);
                 }

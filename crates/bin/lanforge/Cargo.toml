@@ -198,6 +198,7 @@ serde = { workspace = true }
 toml = { workspace = true }
 rand = { workspace = true }
 bytesize = { workspace = true }
+libc = { workspace = true }
 
 # Networking / netlink
 netlink-sys = { workspace = true }
