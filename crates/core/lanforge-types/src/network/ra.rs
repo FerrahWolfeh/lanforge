@@ -134,9 +134,20 @@ impl<'de> Deserialize<'de> for PrefixLifetime {
             {
                 PrefixLifetime::from_str(v).map_err(E::custom)
             }
+
+            fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                PrefixLifetime::from_str(&v).map_err(E::custom)
+            }
         }
 
-        deserializer.deserialize_any(LifetimeVisitor)
+        if deserializer.is_human_readable() {
+            deserializer.deserialize_any(LifetimeVisitor)
+        } else {
+            deserializer.deserialize_str(LifetimeVisitor)
+        }
     }
 }
 
@@ -481,6 +492,24 @@ mod tests {
         let pref2 = RAPrefix::ula("fd00:1234::");
         assert_eq!(pref2.address.as_deref(), Some("fd00:1234::"));
         assert_eq!(pref2.prefix_len, 64);
+    }
+
+    #[test]
+    fn test_prefix_lifetime_postcard_roundtrip() {
+        let original_secs = PrefixLifetime::Secs(86400);
+        let bytes = postcard::to_stdvec(&original_secs).expect("postcard serialize Secs");
+        let decoded: PrefixLifetime = postcard::from_bytes(&bytes).expect("postcard deserialize Secs");
+        assert_eq!(decoded, original_secs);
+
+        let original_inf = PrefixLifetime::Infinity;
+        let bytes_inf = postcard::to_stdvec(&original_inf).expect("postcard serialize Infinity");
+        let decoded_inf: PrefixLifetime = postcard::from_bytes(&bytes_inf).expect("postcard deserialize Infinity");
+        assert_eq!(decoded_inf, original_inf);
+
+        let ra_prefix = RAPrefix::ula("fd97:f00d:cafe:3731::/64");
+        let bytes_ra = postcard::to_stdvec(&ra_prefix).expect("postcard serialize RAPrefix");
+        let decoded_ra: RAPrefix = postcard::from_bytes(&bytes_ra).expect("postcard deserialize RAPrefix");
+        assert_eq!(decoded_ra, ra_prefix);
     }
 }
 

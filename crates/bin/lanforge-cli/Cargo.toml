@@ -14,7 +14,7 @@ name = "lanforge"
 path = "src/main.rs"
 
 [features]
-default = ["remote", "tui", "ring"]
+default = ["remote", "ring"]
 ring = ["rustls/ring", "lanforge-http?/ring", "hyper-rustls?/ring"]
 aws-lc = ["rustls/aws-lc-rs", "lanforge-http?/aws-lc", "hyper-rustls?/aws-lc-rs"]
 remote = [
@@ -64,7 +64,7 @@ bytesize = { workspace = true }
 color-eyre = "0.6.5"
 colored = "3.1.1"
 inquire = "0.9.4"
-iocraft = "0.8.0"
+comfy-table = "7.1"
 mac_oui = { version = "0.4.11", features = ["with-db"] }
 duration-str = "0.21.0"
 ratatui = { version = "0.30.1", features = ["crossterm"], optional = true }

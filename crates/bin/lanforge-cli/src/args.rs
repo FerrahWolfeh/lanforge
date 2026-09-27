@@ -1,30 +1,22 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
+use crate::commands::{
+    DbArgs, DhcpArgs, DnsArgs, FirewallArgs, PppoeArgs, RaArgs, ReloadArgs, ServiceArgs,
+    StatusArgs, WatchArgs, WolArgs,
+};
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(
     name = "lanforge",
     version,
-    about = "Lanforge Control CLI",
-    multicall = true
+    about = "Lanforge Router & Network Orchestration CLI",
+    long_about = "Modern, high-performance command-line management client for the Lanforge router daemon."
 )]
-pub enum Cli {
-    /// Standard lanforge command
-    #[command(name = "lanforge")]
-    Lanforge(LanforgeArgs),
-
-    /// Shortcut for TUI dashboard
-    #[cfg(feature = "tui")]
-    #[command(name = "lanforge-tui")]
-    LanforgeTui(LanforgeArgs),
-}
-
-#[derive(Args, Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)]
-pub struct LanforgeArgs {
+pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
 
-    /// Path to the Unix domain socket for daemon control.
+    /// Path to the Unix domain socket for local daemon control.
     #[arg(
         short,
         long,
@@ -34,17 +26,17 @@ pub struct LanforgeArgs {
     )]
     pub socket: String,
 
-    /// Remote URL of the Lanforge daemon (e.g. <https://192.168.1.1:8080>). Switches to JSON/REST mode.
+    /// Remote URL of the Lanforge daemon (e.g. <https://192.168.1.1:8080>).
     #[cfg(feature = "remote")]
     #[arg(long, env = "LANFORGE_REMOTE_URL", global = true)]
     pub remote: Option<String>,
 
-    /// Authentication token for remote connection. Falls back to `$XDG_DATA_DIR/lanforge/login.json`.
+    /// Authentication token for remote connection.
     #[cfg(feature = "remote")]
     #[arg(long, env = "LANFORGE_TOKEN", global = true)]
     pub token: Option<String>,
 
-    /// Output raw API JSON. No formatting, no colors.
+    /// Output raw API JSON.
     #[arg(long, global = true)]
     pub json: bool,
 
@@ -52,107 +44,39 @@ pub struct LanforgeArgs {
     #[arg(long, env = "NO_COLOR", global = true)]
     pub no_color: bool,
 
-    /// Replace Unicode box-drawing, symbols, and emoji with ASCII equivalents.
+    /// Replace Unicode box-drawing with ASCII equivalents.
     #[arg(long, global = true)]
     pub ascii: bool,
 
-    /// Skip all confirmation prompts.
+    /// Skip all interactive confirmation prompts.
     #[arg(short, long, global = true)]
     pub yes: bool,
 }
 
-#[cfg(feature = "tui")]
-use crate::cli::commands::tui::TuiArgs;
-use crate::cli::commands::{
-    auth::AuthArgs, config::ConfigArgs, db::DbArgs, devices::DevicesArgs, dhcp::DhcpArgs,
-    dns::DnsArgs, host::HostArgs, init::InitArgs, lease::LeaseArgs, pppoe::PppoeArgs,
-    service::ServiceArgs, simple::ContextArgs, simple::LoginArgs, simple::PurgeArgs,
-    simple::ReloadArgs, simple::ShutdownArgs, simple::WatchArgs, status::ServicesArgs,
-    status::StatusArgs, user::UserArgs, whois::WhoisArgs, wol::WolArgs,
-};
-
-use crate::cli::{Execute, LanforgeClient};
-use color_eyre::eyre::Result;
-
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    /// First-time router and network setup wizard
-    Init(InitArgs),
-    /// Service health and general status
+    /// Router health, resources, and general overview dashboard
     Status(StatusArgs),
-    /// Detailed deep-dive service metrics and status banners
-    Services(ServicesArgs),
-    /// List known devices
-    Devices(DevicesArgs),
-    /// Detailed aggregated information for a device
-    Whois(WhoisArgs),
-    /// Wake-on-LAN magic packet
-    Wol(WolArgs),
-    /// Reactive live view via stream (no polling)
-    Watch(WatchArgs),
-    /// Authenticate and save remote token
-    Login(LoginArgs),
-    /// Send reload signal to running daemon (reloads static config from TOML)
-    Reload(ReloadArgs),
-    /// Send shutdown signal to running daemon
-    Shutdown(ShutdownArgs),
-    /// Forcefully purge a device from memory and database by its MAC
-    Purge(PurgeArgs),
-    /// Dump internal daemon context
-    Context(ContextArgs),
-    /// Persistence management
-    Db(DbArgs),
-    /// Custom device management
-    Host(HostArgs),
-    /// Lease management (renew/release)
-    Lease(LeaseArgs),
-    /// DHCP server management
-    Dhcp(DhcpArgs),
-    /// Authentication management (tokens)
-    Auth(AuthArgs),
-    /// User account management
-    User(UserArgs),
-    /// DNS resolver statistics and diagnostics
-    Dns(DnsArgs),
-    /// System configuration import/export
-    Config(ConfigArgs),
-    /// Manage daemon background services (start, stop, restart)
+    /// Manage daemon background services (start, stop, restart, list, show)
     Service(ServiceArgs),
-    /// `PPPoE` WAN session status and control
+    /// Stream live daemon events in real-time (devices, DHCP, DNS, firewall, `PPPoE`)
+    #[command(alias = "events")]
+    Watch(WatchArgs),
+    /// Send Wake-on-LAN magic packet to power on a networked device
+    #[command(alias = "wake")]
+    Wol(WolArgs),
+    /// Trigger configuration reload across all running services in-place
+    Reload(ReloadArgs),
+    /// Manage `PPPoE` WAN session (status, reconnect, disconnect)
     Pppoe(PppoeArgs),
-
-    /// Interactive TUI dashboard
-    #[cfg(feature = "tui")]
-    Tui(TuiArgs),
-}
-
-impl Execute for Command {
-    async fn execute(self, client: &LanforgeClient) -> Result<()> {
-        match self {
-            Self::Init(args) => args.execute(client).await,
-            Self::Status(args) => args.execute(client).await,
-            Self::Services(args) => args.execute(client).await,
-            Self::Devices(args) => args.execute(client).await,
-            Self::Whois(args) => args.execute(client).await,
-            Self::Wol(args) => args.execute(client).await,
-            Self::Watch(args) => args.execute(client).await,
-            Self::Login(args) => args.execute(client).await,
-            Self::Reload(args) => args.execute(client).await,
-            Self::Shutdown(args) => args.execute(client).await,
-            Self::Purge(args) => args.execute(client).await,
-            Self::Context(args) => args.execute(client).await,
-            Self::Db(args) => args.execute(client).await,
-            Self::Host(args) => args.execute(client).await,
-            Self::Lease(args) => args.execute(client).await,
-            Self::Dhcp(args) => args.execute(client).await,
-            Self::Auth(args) => args.execute(client).await,
-            Self::User(args) => args.execute(client).await,
-            Self::Dns(args) => args.execute(client).await,
-            Self::Config(args) => args.execute(client).await,
-            Self::Service(args) => args.execute(client).await,
-            Self::Pppoe(args) => args.execute(client).await,
-            #[cfg(feature = "tui")]
-            Self::Tui(args) => args.execute(client).await,
-        }
-    }
+    /// Manage IPv6 Router Advertisement daemon (status, trigger)
+    Ra(RaArgs),
+    /// Manage DNS resolver, cache, and adblock filter rules
+    Dns(DnsArgs),
+    /// Manage DHCP server (reconcile leases, release/renew client leases)
+    Dhcp(DhcpArgs),
+    /// Manage nftables firewall and NAT orchestrator (status, reload)
+    Firewall(FirewallArgs),
+    /// Embedded database maintenance (vacuum, prune, clean)
+    Db(DbArgs),
 }
