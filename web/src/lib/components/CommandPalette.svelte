@@ -275,6 +275,15 @@
 			action: () => goto("/system/services")
 		},
 		{
+			id: "page-events",
+			title: "System Events & Audit Log",
+			subtitle: "/system/events",
+			keywords: ["events", "logs", "audit", "stream", "sse", "activity", "feed", "bus"],
+			category: "Pages & Navigation",
+			icon: ActivityIcon,
+			action: () => goto("/system/events")
+		},
+		{
 			id: "page-database",
 			title: "Database & Backups",
 			subtitle: "/system/database",

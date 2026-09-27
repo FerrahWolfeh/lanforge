@@ -31,6 +31,7 @@
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import RadioIcon from "@lucide/svelte/icons/radio";
 	import FolderIcon from "@lucide/svelte/icons/folder";
+	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 	import type { ServerCapabilities } from "$lib/api/types";
 
@@ -158,6 +159,14 @@
 		</p>
 	</div>
 	<div class="flex gap-2">
+		<Button
+			variant="outline"
+			size="sm"
+			href="/system/events"
+		>
+			<ActivityIcon data-icon="inline-start" class="text-primary" />
+			Events Log
+		</Button>
 		<Button
 			variant="outline"
 			size="sm"

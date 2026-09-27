@@ -82,6 +82,7 @@
 			items: [
 				{ title: "System Status", href: "/system", icon: ServerIcon },
 				{ title: "Services", href: "/system/services", icon: LayersIcon },
+				{ title: "System Events", href: "/system/events", icon: ActivityIcon },
 				{ title: "Database", href: "/system/database", icon: DatabaseIcon },
 				{ title: "Users", href: "/system/users", icon: UsersIcon },
 				{ title: "Auth Keys", href: "/system/keys", icon: KeyRoundIcon },

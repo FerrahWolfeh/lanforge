@@ -2666,6 +2666,7 @@ dependencies = [
  "lanforge-macros",
  "lanforge-types",
  "lanforge-webui",
+ "libc",
  "rand 0.10.3",
  "rustls",
  "serde",

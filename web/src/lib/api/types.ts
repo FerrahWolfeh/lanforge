@@ -185,7 +185,9 @@ export function parseTimedEvent(raw: unknown, eventId?: string): SseEvent {
 
 	if (raw && typeof raw === 'object') {
 		const rawObj = raw as Record<string, unknown>;
-		if (typeof rawObj.timestamp === 'number') {
+		if (typeof rawObj.timestamp_ms === 'number') {
+			ts = rawObj.timestamp_ms;
+		} else if (typeof rawObj.timestamp === 'number') {
 			ts = rawObj.timestamp;
 		} else if (rawObj.timestamp && typeof rawObj.timestamp === 'object') {
 			const tObj = rawObj.timestamp as Record<string, unknown>;
@@ -200,11 +202,12 @@ export function parseTimedEvent(raw: unknown, eventId?: string): SseEvent {
 
 	const rawObj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
 	const eventObj = rawObj?.event ?? raw;
+	let catKey: string | undefined;
 
 	if (typeof eventObj === 'string') {
 		kind = eventObj;
 	} else if (typeof eventObj === 'object' && eventObj !== null) {
-		const catKey = Object.keys(eventObj)[0];
+		catKey = Object.keys(eventObj)[0];
 		if (catKey) {
 			const catVal = (eventObj as Record<string, unknown>)[catKey];
 			if (typeof catVal === 'string') {
@@ -229,88 +232,241 @@ export function parseTimedEvent(raw: unknown, eventId?: string): SseEvent {
 		}
 	}
 
-	return { id, kind: kind as EventKind, data: payload, ts };
+	const topic = typeof rawObj?.topic === 'string'
+		? rawObj.topic
+		: (catKey ? catKey.toLowerCase() : undefined);
+
+	if (typeof rawObj?.kind === 'string') {
+		kind = rawObj.kind;
+	}
+
+	const device_info = (rawObj?.device_info && typeof rawObj.device_info === 'object')
+		? (rawObj.device_info as EventDeviceInfo)
+		: undefined;
+	const interface_info = (rawObj?.interface_info && typeof rawObj.interface_info === 'object')
+		? (rawObj.interface_info as EventInterfaceInfo)
+		: undefined;
+	const service_info = (rawObj?.service_info && typeof rawObj.service_info === 'object')
+		? (rawObj.service_info as EventServiceInfo)
+		: undefined;
+
+	return {
+		id,
+		kind: kind as EventKind,
+		topic,
+		data: payload,
+		ts,
+		device_info,
+		interface_info,
+		service_info,
+		raw
+	};
 }
 
-export function formatEventPayload(data: Record<string, unknown>, kind?: string): string {
-	if (!data || Object.keys(data).length === 0) return '—';
+export function formatEventPayload(
+	data: Record<string, unknown>,
+	kind?: string,
+	deviceInfo?: EventDeviceInfo,
+	interfaceInfo?: EventInterfaceInfo,
+	serviceInfo?: EventServiceInfo
+): string {
+	if (!data && !deviceInfo && !interfaceInfo && !serviceInfo) return '—';
+
+	// Helper to get preferred device display name
+	const devLabel = deviceInfo?.hostname
+		? `${deviceInfo.hostname}${deviceInfo.ip ? ` (${deviceInfo.ip})` : ''}`
+		: (deviceInfo?.ip || deviceInfo?.mac || (data?.hostname as string) || (data?.mac as string) || 'device');
 
 	// 1. Network Activity
-	if (kind === 'NetworkActivity' || 'change' in data) {
-		const mac = (data.mac as string) || '';
-		const host = (data.hostname as string) || mac || 'Device';
-		const change = data.change;
+	if (kind === 'NetworkActivity' || (data && 'change' in data)) {
+		const change = data?.change;
 		if (typeof change === 'object' && change !== null) {
 			const keys = Object.keys(change);
 			if (keys.length > 0) {
 				const activityKind = keys[0];
 				const inner = (change as Record<string, Record<string, unknown>>)[activityKind];
 				if (activityKind === 'NdpActivity' && inner?.ip) {
-					return `${host} updated NDP address (${inner.ip})`;
+					return `${devLabel} active on NDP (${inner.ip})`;
 				}
 				if (activityKind === 'ArpActivity' && inner?.ip) {
-					return `${host} active on ARP (${inner.ip})`;
+					return `${devLabel} active on ARP (${inner.ip})`;
 				}
 				if (activityKind === 'DhcpActivity' && inner?.ip) {
-					return `${host} DHCP activity (${inner.ip})`;
+					return `${devLabel} active on DHCP (${inner.ip})`;
 				}
 				if (activityKind === 'L2Activity') {
-					return `Layer 2 traffic detected from ${host}`;
+					return `Layer 2 traffic detected from ${devLabel}`;
 				}
 			}
 		}
-		return `Activity detected for ${host}`;
+		return `Activity detected from ${devLabel}`;
 	}
 
 	// 2. Neighbor Batch Summary
-	if (kind === 'NeighborBatchSummary' || ('total' in data && 'duration_ms' in data)) {
-		const total = Number(data.total ?? 0);
-		const newCount = Number(data.new ?? 0);
-		const duration = data.duration_ms ? ` in ${data.duration_ms}ms` : '';
+	if (kind === 'NeighborBatchSummary' || (data && 'total' in data && 'duration_ms' in data)) {
+		const total = Number(data?.total ?? 0);
+		const newCount = Number(data?.new ?? 0);
+		const duration = data?.duration_ms ? ` in ${data.duration_ms}ms` : '';
 		if (newCount > 0) {
 			return `Discovered ${newCount} new device${newCount > 1 ? 's' : ''} (${total} total${duration})`;
 		}
 		return `Scanned ${total} neighbor${total === 1 ? '' : 's'} (${total} known${duration})`;
 	}
 
-	// 3. DHCP Lease Granted / Released
-	if (kind === 'DhcpLeaseGranted') {
-		const host = (data.hostname as string) || (data.mac as string) || 'client';
-		const ip = (data.ip as string) || '';
-		return `Lease granted to ${host}${ip ? ` (${ip})` : ''}`;
+	// 3. DHCP Transactions & Leases
+	if (kind === 'DhcpV4Transaction' || kind === 'DhcpV6Transaction') {
+		const proto = kind === 'DhcpV4Transaction' ? 'DHCPv4' : 'DHCPv6';
+		const msg = (data?.msg_type as string) || '';
+		const det = (data?.details as string) || '';
+		return `${proto} ${msg} from ${devLabel}${det ? ` — ${det}` : ''}`;
 	}
-	if (kind === 'DhcpLeaseReleased') {
-		const host = (data.hostname as string) || (data.ip as string) || (data.mac as string) || 'client';
-		return `Lease released for ${host}`;
+	if (kind === 'DhcpLeaseGranted') {
+		const ip = (data?.ip as string) || deviceInfo?.ip || '';
+		return `Lease granted to ${devLabel}${ip && !devLabel.includes(ip) ? ` (${ip})` : ''}`;
+	}
+	if (kind === 'DhcpLeaseReleased' || kind === 'LeaseRelease') {
+		return `Lease released for ${devLabel}`;
+	}
+	if (kind === 'LeaseRenew') {
+		return `Lease renewed for ${devLabel}`;
 	}
 
-	// 4. Device Online / Offline
+	// 4. Device Lifecycle
+	if (kind === 'Discovered') {
+		const iface = deviceInfo?.iface ? ` on ${deviceInfo.iface}` : '';
+		return `New device discovered: ${devLabel}${iface}`;
+	}
+	if (kind === 'Expired') {
+		return `Device lease expired: ${devLabel}`;
+	}
+	if (kind === 'Purged') {
+		return `Device record purged: ${devLabel}`;
+	}
 	if (kind === 'DeviceOnline') {
-		const host = (data.hostname as string) || (data.mac as string) || 'Device';
-		return `${host} came online`;
+		return `${devLabel} came online`;
 	}
 	if (kind === 'DeviceOffline') {
-		const host = (data.hostname as string) || (data.mac as string) || 'Device';
-		return `${host} went offline`;
+		return `${devLabel} went offline`;
+	}
+	if (kind === 'AdminUpdate') {
+		return `Device configuration updated for ${devLabel}`;
 	}
 
-	// 5. Keepalive & Scans
+	// 5. Network / Interfaces / WOL
+	if (kind === 'WolTriggered') {
+		return `Wake-on-LAN magic packet sent to ${devLabel}`;
+	}
+	if (kind === 'RsReceived') {
+		return `Router Solicitation (RS) received from ${devLabel}`;
+	}
+	if (kind === 'InterfaceUpdated') {
+		const name = interfaceInfo?.name || `ifindex #${interfaceInfo?.ifindex ?? data?.ifindex ?? ''}`;
+		const ip = interfaceInfo?.ipv4 ? ` (${interfaceInfo.ipv4})` : '';
+		const gua = interfaceInfo?.gua ? ` [GUA: ${interfaceInfo.gua}]` : '';
+		return `Interface ${name} state updated${ip}${gua}`;
+	}
+
+	// 6. Firewall Events
+	if (kind === 'RulesetApplied') {
+		const count = data?.rules_count !== undefined ? `${data.rules_count} rules` : 'rules';
+		const wan = data?.wan_iface ? ` on ${data.wan_iface}` : '';
+		const offload = data?.flow_offload ? ' (flow offload active)' : '';
+		return `Firewall ruleset applied: ${count}${wan}${offload}`;
+	}
+	if (kind === 'PortOpenRequested' || kind === 'PortReleaseRequested') {
+		const action = kind === 'PortOpenRequested' ? 'opened' : 'released';
+		return `Port ${data?.port || ''}/${data?.protocol || ''} ${action} for ${data?.service || 'service'}`;
+	}
+	if (kind === 'RulesetFlushed') {
+		return 'Firewall ruleset flushed';
+	}
+	if (kind === 'ApplyFailed') {
+		return `Firewall apply failed: ${data?.error || 'kernel error'}`;
+	}
+
+	// 7. PPPoE WAN Events
+	if (kind === 'SessionUp') {
+		return `PPPoE session up on ${data?.interface || 'WAN'}${data?.ipv4 ? ` (${data.ipv4})` : ''}`;
+	}
+	if (kind === 'SessionDown') {
+		return `PPPoE session disconnected: ${data?.reason || 'unknown'}`;
+	}
+	if (kind === 'Reconnecting') {
+		return `PPPoE reconnecting (attempt ${data?.attempt || 1})`;
+	}
+	if (kind === 'AuthFailed') {
+		return `PPPoE authentication failed: ${data?.reason || 'bad credentials'}`;
+	}
+
+	// 8. System Lifecycle & Services
+	if (kind === 'ReloadConfig' || kind === 'ConfigReloaded') {
+		return 'Daemon configuration reloaded';
+	}
+	if (kind === 'Shutdown') {
+		return 'System daemon shutdown initiated';
+	}
+	if (kind === 'SystemReady') {
+		return 'All system services initialized and ready';
+	}
+	if (kind === 'ServiceReady') {
+		return `Service '${data?.name || 'service'}' is ready and operational`;
+	}
+	if (kind === 'ServiceControl') {
+		const svcName = serviceInfo?.id || (data?.id as string) || 'service';
+		const svcState = serviceInfo?.state ? ` [${serviceInfo.state}]` : '';
+		return `Service control command: ${data?.action || 'signal'} -> ${svcName}${svcState}`;
+	}
+	if (kind === 'ConfigDhcpV4Changed') {
+		return 'DHCPv4 service configuration updated in-place';
+	}
+	if (kind === 'ConfigDhcpV6Changed') {
+		return 'DHCPv6 service configuration updated in-place';
+	}
+	if (kind === 'ConfigRaChanged') {
+		return 'IPv6 Router Advertisement configuration updated in-place';
+	}
+	if (kind === 'ConfigTftpChanged') {
+		return 'TFTP service configuration updated in-place';
+	}
+	if (kind === 'ConfigDhcpOptionsChanged') {
+		return 'DHCP custom options updated in-place';
+	}
+
+	// 9. Traffic & SQM Events
+	if (kind === 'TuningApplied') {
+		return `Network tuning applied (CPU mask: ${data?.cpu_mask || 'default'})`;
+	}
+	if (kind === 'SqmApplied') {
+		return `SQM active on ${data?.interface || 'interface'} (${data?.download_mbps || 0}M down / ${data?.upload_mbps || 0}M up)`;
+	}
+	if (kind === 'SqmCleared') {
+		return `SQM queues removed from ${data?.interface || 'interface'}`;
+	}
+
+	// 10. Keepalive & Scans
 	if (kind === 'KeepaliveRestored') {
 		return 'Daemon connection keepalive restored';
 	}
 	if (kind === 'ScanCompleted') {
-		const dur = data.duration_ms ? ` (${data.duration_ms}ms)` : '';
+		const dur = data?.duration_ms ? ` (${data.duration_ms}ms)` : '';
 		return `Network ARP/NDP scan completed${dur}`;
 	}
 
-	// 6. DNS Blocked
+	// 11. DNS Events
 	if (kind === 'DnsBlocked') {
-		const domain = (data.domain as string) || '';
-		const client = (data.client as string) || '';
+		const domain = (data?.domain as string) || '';
+		const client = (data?.client as string) || '';
 		return `Blocked ${domain}${client ? ` for ${client}` : ''}`;
+	}
+	if (kind === 'CacheFlush') {
+		return 'DNS cache flushed';
+	}
+	if (kind === 'AdblockReload') {
+		return 'DNS adblock rules reloaded';
 	}
 
 	// General Fallback formatting
+	if (!data) return '—';
 	const parts: string[] = [];
 	for (const [k, v] of Object.entries(data)) {
 		if (v === null || v === undefined) continue;
@@ -740,15 +896,41 @@ export function formatRewriteAnswer(ans: unknown): string {
 	return String(ans);
 }
 
-// ---------------------------------------------------------------------------
-// Events (SSE)
-// ---------------------------------------------------------------------------
+export interface EventDeviceInfo {
+	mac: string;
+	hostname?: string;
+	ip?: string;
+	class?: string;
+	status?: string;
+	origin?: string;
+	is_static?: boolean;
+	iface?: string;
+}
+
+export interface EventInterfaceInfo {
+	ifindex: number;
+	name?: string;
+	ipv4?: string;
+	gua?: string;
+	ula?: string;
+}
+
+export interface EventServiceInfo {
+	id: string;
+	state: string;
+	uptime_secs: number;
+}
 
 export interface SseEvent {
 	id: string;
 	kind: EventKind;
+	topic?: string;
 	data: Record<string, unknown>;
 	ts: number; // parsed from id (ms)
+	device_info?: EventDeviceInfo;
+	interface_info?: EventInterfaceInfo;
+	service_info?: EventServiceInfo;
+	raw?: unknown;
 }
 
 // ---------------------------------------------------------------------------

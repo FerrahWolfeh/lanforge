@@ -68,21 +68,35 @@ impl TimedEvent {
             },
             LanforgeEvent::System(e) => matches!(
                 e,
-                SystemEvent::ReloadConfig
+                SystemEvent::Shutdown
+                    | SystemEvent::StateReady
+                    | SystemEvent::DbReady
+                    | SystemEvent::InterfaceReady
                     | SystemEvent::ServiceReady { .. }
                     | SystemEvent::SystemReady
+                    | SystemEvent::ReloadConfig
                     | SystemEvent::ConfigUpdate { .. }
                     | SystemEvent::ServiceStatusBanner(..)
+                    | SystemEvent::ServiceControl { .. }
+                    | SystemEvent::ConfigDhcpV4Changed
+                    | SystemEvent::ConfigDhcpV6Changed
+                    | SystemEvent::ConfigRaChanged
+                    | SystemEvent::ConfigTftpChanged
+                    | SystemEvent::ConfigDhcpOptionsChanged
             ),
             LanforgeEvent::Storage(e) => matches!(
                 e,
-                StorageEvent::DbVacuum | StorageEvent::DbLogClean | StorageEvent::DbPrune
+                StorageEvent::DbVacuum
+                    | StorageEvent::DbLogClean
+                    | StorageEvent::DbPrune
+                    | StorageEvent::DbReset
+                    | StorageEvent::DbResetCompleted
             ),
             LanforgeEvent::Dns(e) => match e {
                 #[cfg(feature = "adblock")]
-                DnsEvent::AdblockToggle { .. } | DnsEvent::AdblockReload => true,
-                DnsEvent::QueryResolved(_) => true,
-                _ => false,
+                DnsEvent::QueryBlocked { .. } => false,
+                DnsEvent::QueryResolved(_) => false,
+                _ => true,
             },
             LanforgeEvent::Pppoe(_) | LanforgeEvent::Firewall(_) | LanforgeEvent::Traffic(_) => true,
         }

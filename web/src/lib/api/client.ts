@@ -62,8 +62,10 @@ import type {
 	FirewallCommitResponse,
 	TrafficConfig,
 	TrafficStatusResponse,
-	TrafficTelemetryResponse
+	TrafficTelemetryResponse,
+	SseEvent
 } from './types';
+import { parseTimedEvent } from './types';
 
 
 // ---------------------------------------------------------------------------
@@ -673,6 +675,22 @@ export const controlService = (
 	id: string,
 	action: 'start' | 'stop' | 'restart' | 'Start' | 'Stop' | 'Restart'
 ) => post<void>(`/service/${encodeURIComponent(id)}/control`, { action: action.toLowerCase() });
+
+/**
+ * Fetch historical system events via REST.
+ */
+export const eventsHistory = async (params?: {
+	filter?: string;
+	limit?: number;
+	offset?: number;
+}): Promise<{ entries: SseEvent[]; total: number }> => {
+	const raw = await getRaw<any>('/events/history', params);
+	const paginated = extractPaginated<unknown>(raw, 'events');
+	return {
+		entries: paginated.entries.map((item) => parseTimedEvent(item)),
+		total: paginated.total
+	};
+};
 
 // ---------------------------------------------------------------------------
 // SSE helpers

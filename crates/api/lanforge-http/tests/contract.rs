@@ -1089,3 +1089,55 @@ async fn test_traffic_telemetry_contract() {
     assert!(data["interfaces"].as_array().is_some(), "interfaces must be a list");
 }
 
+#[tokio::test]
+async fn test_events_contract() {
+    let state = make_state(false).await;
+    let ev1 = lanforge_types::events::TimedEvent::new(
+        lanforge_core::bus::LanforgeEvent::System(
+            lanforge_types::events::SystemEvent::ReloadConfig,
+        ),
+    );
+    let ev2 = lanforge_types::events::TimedEvent::new(
+        lanforge_core::bus::LanforgeEvent::Firewall(
+            lanforge_types::events::FirewallEvent::RulesetFlushed,
+        ),
+    );
+    let mut buf = Vec::new();
+    state
+        .log_db
+        .record_logs_batch(&[ev1, ev2], &mut buf)
+        .await
+        .unwrap();
+
+    let router = build_router(state);
+    let app = TestApp {
+        router,
+        token: None,
+    };
+
+    // 1. GET /api/v1/events (REST fallback)
+    let (status, body) = app.get("/api/v1/events").await;
+    assert_eq!(status, StatusCode::OK);
+    let data = body["data"].as_array().expect("data array");
+    assert_eq!(data.len(), 2);
+    assert_eq!(body["meta"]["total"], 2);
+
+    // Verify fields
+    assert!(data[0]["timestamp_ms"].as_u64().is_some());
+    assert!(data[0]["topic"].as_str().is_some());
+    assert!(data[0]["kind"].as_str().is_some());
+
+    // 2. GET /api/v1/events/history with filter
+    let (status, body) = app.get("/api/v1/events/history?filter=system").await;
+    assert_eq!(status, StatusCode::OK);
+    let data = body["data"].as_array().expect("data array");
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["topic"], "system");
+
+    // 3. GET /api/v1/events/history with limit
+    let (status, body) = app.get("/api/v1/events/history?limit=1").await;
+    assert_eq!(status, StatusCode::OK);
+    let data = body["data"].as_array().expect("data array");
+    assert_eq!(data.len(), 1);
+}
+
