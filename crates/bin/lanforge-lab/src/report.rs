@@ -34,6 +34,14 @@ pub struct DhcpStormReport {
     pub max_latency_ms: f64,
 }
 
+/// Statistics for a DHCP Flood benchmark (firehose of Discover/Request packets).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DhcpFloodReport {
+    pub total_sent: usize,
+    pub duration_secs: f64,
+    pub actual_pps: f64,
+}
+
 /// Result of a single DNS query.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DnsQueryResult {

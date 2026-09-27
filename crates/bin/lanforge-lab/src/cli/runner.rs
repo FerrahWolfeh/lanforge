@@ -235,6 +235,21 @@ impl CliRunner {
                     println!("Max Latency:        {} µs ({:.2} ms)", rep.max_latency_us, rep.max_latency_us as f64 / 1000.0);
                 }
             }
+            BenchTypeArg::DhcpFlood => {
+                let dur = Duration::from_secs(args.duration);
+                let target_pps = if args.qps > 0 { args.qps } else { 5000 };
+                println!("{}", format!("Starting DHCP Flood target {} PPS for {}s...", target_pps, args.duration).cyan());
+                let rep = harness.dhcp().flood_benchmark(target_pps, dur).await?;
+
+                if args.json {
+                    println!("{}", serde_json::to_string_pretty(&rep)?);
+                } else {
+                    println!("\n{}", "=== DHCP Flood Report ===".bold().green());
+                    println!("Total Packets Sent: {}", rep.total_sent.to_string().green());
+                    println!("Duration:           {:.2} s", rep.duration_secs);
+                    println!("Throughput:         {:.1} PPS", rep.actual_pps.to_string().bold());
+                }
+            }
         }
 
         Ok(())

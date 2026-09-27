@@ -9,19 +9,19 @@ pub struct Cli {
     pub command: Option<Commands>,
 
     /// Mode override: direct, netns, or interface.
-    #[arg(long, default_value = "auto")]
+    #[arg(long, default_value = "auto", global = true)]
     pub mode: ModeArg,
 
     /// DHCP server address (e.g. 127.0.0.1:1067 or 192.168.100.1:67).
-    #[arg(long, default_value = "127.0.0.1:1067")]
+    #[arg(long, default_value = "127.0.0.1:1067", global = true)]
     pub dhcp_server: SocketAddr,
 
     /// DNS server address (e.g. 127.0.0.1:1053 or 192.168.100.1:53).
-    #[arg(long, default_value = "127.0.0.1:1053")]
+    #[arg(long, default_value = "127.0.0.1:1053", global = true)]
     pub dns_server: SocketAddr,
 
     /// Target network interface name (optional).
-    #[arg(short = 'i', long)]
+    #[arg(short = 'i', long, global = true)]
     pub iface: Option<String>,
 }
 
@@ -132,6 +132,7 @@ pub struct BenchArgs {
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BenchTypeArg {
     DhcpStorm,
+    DhcpFlood,
     DnsFlood,
 }
 

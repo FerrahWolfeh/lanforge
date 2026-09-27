@@ -111,8 +111,8 @@ impl LabHarness {
 
     /// Accessor for the DHCP simulation engine.
     #[must_use]
-    pub const fn dhcp(&self) -> DhcpEngine {
-        DhcpEngine::new(self.dhcp_target)
+    pub fn dhcp(&self) -> DhcpEngine {
+        DhcpEngine::new(self.dhcp_target).with_iface(self.iface.clone())
     }
 
     /// Accessor for the DNS simulation engine.
