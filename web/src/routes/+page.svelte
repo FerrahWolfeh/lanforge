@@ -9,7 +9,6 @@
 		dnsStats,
 		leases,
 		listDevices,
-		hostList,
 		scan,
 		dnsAnalytics,
 		trafficTelemetry,
@@ -21,7 +20,6 @@
 		type DnsAnalyticsResponse,
 		type DhcpLease,
 		type DeviceEntry,
-		type HostConfigEntry,
 		type ServiceBanner,
 		type TrafficTelemetryResponse,
 	} from "$lib/api/types";
@@ -38,7 +36,6 @@
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 	import WifiIcon from "@lucide/svelte/icons/wifi";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
-	import ServerIcon from "@lucide/svelte/icons/server";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
 
@@ -49,7 +46,6 @@
 		devices: DeviceEntry[];
 		meta?: { total: number; online: number; last_scan_secs_ago: number };
 	} | null>(null);
-	let hostsData = $state<HostConfigEntry[] | null>(null);
 	let analyticsData = $state<DnsAnalyticsResponse | null>(null);
 	let telemetryData = $state<TrafficTelemetryResponse | null>(null);
 	let loadingData = $state(true);
@@ -58,12 +54,11 @@
 	async function loadAll() {
 		loadingData = true;
 		try {
-			const [s, dns, ls, dev, hst, aRes, telem] = await Promise.allSettled([
+			const [s, dns, ls, dev, aRes, telem] = await Promise.allSettled([
 				status(),
 				dnsStats(),
 				leases(),
 				listDevices(),
-				hostList(),
 				dnsAnalytics(10),
 				trafficTelemetry(),
 			]);
@@ -74,9 +69,6 @@
 			}
 			if (dev.status === "fulfilled") {
 				devicesData = dev.value;
-			}
-			if (hst.status === "fulfilled") {
-				hostsData = hst.value;
 			}
 			if (aRes.status === "fulfilled") {
 				analyticsData = aRes.value;
@@ -173,11 +165,6 @@
 		];
 	});
 
-	const hostsSparkline = $derived.by(() => {
-		const c = hostsData?.length ?? 0;
-		return [c, c, c, c, c, c, c, c];
-	});
-
 	const gatewayTraffic = $derived.by(() => {
 		const wan = telemetryData?.wan_interface;
 		if (wan) {
@@ -254,16 +241,6 @@
 			bgColor: "bg-teal-500/10 border-teal-500/20",
 			sparklineData: leasesSparkline,
 			sparklineColor: "#14b8a6",
-		},
-		{
-			label: "Static Hosts",
-			value: hostsData ? hostsData.length.toString() : null,
-			subtext: "Configured static rules",
-			icon: ServerIcon,
-			color: "text-amber-400",
-			bgColor: "bg-amber-500/10 border-amber-500/20",
-			sparklineData: hostsSparkline,
-			sparklineColor: "#f59e0b",
 		},
 		{
 			label: "DNS Queries",
@@ -436,7 +413,7 @@
 	</div>
 
 	<!-- Top Stat Cards (Core Router Metrics) -->
-	<div class="grid grid-cols-1 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+	<div class="grid grid-cols-1 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
 		{#each statCards as card (card.label)}
 			<Card.Root
 				class="relative overflow-hidden transition-all hover:border-zinc-700"
