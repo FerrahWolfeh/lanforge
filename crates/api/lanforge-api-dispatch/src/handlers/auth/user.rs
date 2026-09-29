@@ -1,7 +1,8 @@
 use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess, UserListResponse, UserResponse};
-use lanforge_core::utils::auth::hash_password;
+use lanforge_crypto::hash_password;
 use lanforge_types::auth::{UserInfo, UserRole};
+use lanforge_types::storage::{StorageQuery, StorageQueryResult};
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::error;
@@ -13,6 +14,12 @@ impl ClientContext {
         password: String,
         role: Option<String>,
     ) -> Response {
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service handle is not available".to_string(),
+            };
+        };
+
         let username = username.trim().to_lowercase();
         if username.is_empty() {
             return Response::Error {
@@ -37,21 +44,30 @@ impl ClientContext {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        match self
-            .db
-            .create_user(&username, &password_hash, parsed_role, now)
+        match storage
+            .send_query(StorageQuery::CreateUser {
+                username,
+                password_hash,
+                role: parsed_role,
+                now,
+            })
             .await
         {
-            Ok(entry) => Response::User(Box::new(UserResponse {
-                user: UserInfo {
-                    id: entry.id,
-                    username: entry.username,
-                    role: entry.role,
-                    created_at: entry.created_at,
-                    updated_at: entry.updated_at,
-                    last_login: entry.last_login,
-                },
-            })),
+            Ok(StorageQueryResult::User(Some(entry))) => {
+                Response::User(Box::new(UserResponse {
+                    user: UserInfo {
+                        id: entry.id,
+                        username: entry.username,
+                        role: entry.role,
+                        created_at: entry.created_at,
+                        updated_at: entry.updated_at,
+                        last_login: entry.last_login,
+                    },
+                }))
+            }
+            Ok(_) => Response::Error {
+                error: "Unexpected response from storage service".to_string(),
+            },
             Err(e) => {
                 error!("Failed to create user: {e}");
                 Response::Error {
@@ -62,8 +78,14 @@ impl ClientContext {
     }
 
     pub async fn handle_user_list(&self) -> Response {
-        match self.db.list_users().await {
-            Ok(users) => {
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service handle is not available".to_string(),
+            };
+        };
+
+        match storage.send_query(StorageQuery::ListUsers).await {
+            Ok(StorageQueryResult::Users(users)) => {
                 let user_infos = users
                     .into_iter()
                     .map(|u| UserInfo {
@@ -77,6 +99,9 @@ impl ClientContext {
                     .collect();
                 Response::UserList(UserListResponse { users: user_infos })
             }
+            Ok(_) => Response::Error {
+                error: "Unexpected response from storage service".to_string(),
+            },
             Err(e) => Response::Error {
                 error: format!("Database error: {e}"),
             },
@@ -84,15 +109,22 @@ impl ClientContext {
     }
 
     pub async fn handle_user_delete(&self, username: String) -> Response {
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service handle is not available".to_string(),
+            };
+        };
+
         let username = username.trim().to_lowercase();
-        match self.db.count_users().await {
-            Ok(count) => {
+        match storage.send_query(StorageQuery::CountUsers).await {
+            Ok(StorageQueryResult::Count(count)) => {
                 if count <= 1 {
                     return Response::Error {
                         error: "Cannot delete the last remaining user account".to_string(),
                     };
                 }
             }
+            Ok(_) => {}
             Err(e) => {
                 return Response::Error {
                     error: format!("Database error: {e}"),
@@ -100,8 +132,11 @@ impl ClientContext {
             }
         }
 
-        match self.db.delete_user(&username).await {
-            Ok(()) => Response::Success(SimpleSuccess {
+        match storage
+            .send_query(StorageQuery::DeleteUser(username.clone()))
+            .await
+        {
+            Ok(_) => Response::Success(SimpleSuccess {
                 message: format!("User '{username}' deleted successfully"),
             }),
             Err(e) => Response::Error {
@@ -111,6 +146,12 @@ impl ClientContext {
     }
 
     pub async fn handle_user_passwd(&self, username: String, new_password: String) -> Response {
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service handle is not available".to_string(),
+            };
+        };
+
         let username = username.trim().to_lowercase();
         if new_password.len() < 8 {
             return Response::Error {
@@ -124,12 +165,15 @@ impl ClientContext {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        match self
-            .db
-            .update_user_password(&username, &new_hash, now)
+        match storage
+            .send_query(StorageQuery::UpdateUserPassword {
+                username: username.clone(),
+                new_hash,
+                now,
+            })
             .await
         {
-            Ok(()) => Response::Success(SimpleSuccess {
+            Ok(_) => Response::Success(SimpleSuccess {
                 message: format!("Password for user '{username}' updated successfully"),
             }),
             Err(e) => Response::Error {

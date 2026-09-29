@@ -15,7 +15,7 @@ use lanforge_types::network::TrafficConfig;
 use lanforge_types::update::DeviceUpdate;
 
 
-use crate::bus::{DnsEvent, LanforgeEvent, SystemEvent};
+use crate::bus::{DnsEvent, FirewallEvent, LanforgeEvent, SystemEvent, TrafficEvent};
 use crate::context::LanforgeContext;
 
 impl LanforgeContext {
@@ -118,19 +118,28 @@ impl LanforgeContext {
             .publish(LanforgeEvent::System(SystemEvent::ConfigRaChanged));
     }
 
-    /// Updates the dynamic `PPPoE` configuration in context.
+    /// Updates the dynamic `PPPoE` configuration in context and publishes change event.
     pub fn update_pppoe_config(&self, config: PppoeConfig) {
         self.inner.config.write().pppoe = Some(config);
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::System(SystemEvent::ConfigPppoeChanged));
     }
 
-    /// Updates the dynamic firewall configuration in context.
+    /// Updates the dynamic firewall configuration in context and publishes change event.
     pub fn update_firewall_config(&self, config: FirewallConfig) {
         self.inner.config.write().firewall = Some(config);
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));
     }
 
-    /// Updates the dynamic traffic and SQM configuration in context.
+    /// Updates the dynamic traffic and SQM configuration in context and publishes change event.
     pub fn update_traffic_config(&self, config: TrafficConfig) {
         self.inner.config.write().traffic = Some(config);
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::RulesetChanged)));
     }
 
     /// Updates the configured DNS upstreams and publishes the change event.

@@ -34,9 +34,18 @@ impl ClientContext {
         if let Some(dev) = device {
             let mac = dev.mac;
 
-            // Fetch history from DB
-            let history: Vec<LeaseHistoryEntry> =
-                self.db.get_lease_history(mac).await.unwrap_or_default();
+            // Fetch history from DB via storage handle
+            let history: Vec<LeaseHistoryEntry> = if let Some(storage) = self.ctx.storage_handle() {
+                match storage
+                    .send_query(lanforge_types::storage::StorageQuery::GetLeaseHistory(mac))
+                    .await
+                {
+                    Ok(lanforge_types::storage::StorageQueryResult::LeaseHistory(h)) => h,
+                    _ => Vec::new(),
+                }
+            } else {
+                Vec::new()
+            };
 
             // Build DeviceEntry
             let gua_prefix = self.current_gua;

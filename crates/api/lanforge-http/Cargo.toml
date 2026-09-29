@@ -15,6 +15,7 @@ lanforge-dns = { workspace = true, optional = true }
 lanforge-dns-wire = { workspace = true, optional = true }
 lanforge-macros = { workspace = true, optional = true }
 lanforge-types = { workspace = true }
+lanforge-crypto = { workspace = true, optional = true }
 lanforge-dhcp = { workspace = true, optional = true }
 
 # Workspace
@@ -26,7 +27,6 @@ tracing = { workspace = true }
 socket2 = { workspace = true }
 chrono = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
-argon2 = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
@@ -74,7 +74,7 @@ aws-lc = [
 server = [
     "dep:axum",
     "dep:tower-http",
-    "dep:argon2",
+    "dep:lanforge-crypto",
     "dep:jsonwebtoken",
     "dep:axum-server",
     "dep:futures",

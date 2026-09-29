@@ -54,8 +54,21 @@ impl ClientContext {
         offset: Option<usize>,
     ) -> Response {
         let limit = n.unwrap_or(100);
-        match self.log_db.get_dns_query_history(limit, offset, client).await {
-            Ok((queries, total)) => {
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service handle is not available".to_string(),
+            };
+        };
+
+        match storage
+            .send_query(lanforge_types::storage::StorageQuery::GetDnsQueryHistory {
+                limit,
+                offset,
+                client,
+            })
+            .await
+        {
+            Ok(lanforge_types::storage::StorageQueryResult::DnsQueryHistory { queries, total }) => {
                 let entries = self.ctx.with_state(|state| {
                     let mut ip_cache: HashMap<IpAddr, (Option<lanforge_types::identifiers::MacAddr>, Option<String>)> =
                         HashMap::new();
@@ -91,8 +104,11 @@ impl ClientContext {
                 });
                 Response::DnsQueryLog(DnsQueryLogResponse { entries, total })
             }
+            Ok(_) => Response::Error {
+                error: "Unexpected response from storage service".to_string(),
+            },
             Err(e) => Response::Error {
-                error: e.to_string(),
+                error: e,
             },
         }
     }

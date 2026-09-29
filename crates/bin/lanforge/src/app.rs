@@ -262,7 +262,7 @@ impl Daemon {
             async [ctx, cfg] => DoqService::new(Arc::new(cfg.to_dns_config()), ctx),
 
             #[cfg(feature = "uds")]
-            async [ctx, cfg, db, log_db] => ControlService::new(Arc::new(cfg.to_api_config()), ctx, db, log_db),
+            async [ctx, cfg] => ControlService::new(Arc::new(cfg.to_api_config()), ctx),
 
             #[cfg(feature = "http")]
             async [ctx, cfg, db, log_db] => HttpService::new(Arc::new(cfg.to_http_config()), ctx, db, log_db),

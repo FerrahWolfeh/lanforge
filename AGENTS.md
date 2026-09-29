@@ -6,8 +6,9 @@ A high-performance, resource-efficient Rust-based router and LAN orchestration p
 ## Module Crate Architecture
 - `core/lanforge-types` (L0) - Foundational crate. Contains core domain types (`Device`, `MacAddr`, `Duid`), event definitions (`LanforgeEvent`), and state update protocols (`DeviceUpdate`). **Rule:** Must never depend on any other workspace crate.
 - `core/lanforge-core` (L1) - The "brain" of the project. Orchestrates global state transitions, event bus, and context management. Depends on `lanforge-types`.
+- `core/lanforge-crypto` (L1) - Foundational security crate. Encapsulates password hashing (Argon2id), key derivation, and cryptographic utilities.
 - `api/lanforge-api` (L1) - Shared API protocol definitions, DTOs, and RPC trait contracts. Used by both CLI and Daemon.
-- `api/lanforge-api-dispatch` (L2) - Server-side RPC protocol handlers. Depends on `core` and `db`.
+- `api/lanforge-api-dispatch` (L2) - Server-side RPC protocol handlers. Depends on `core`, `api`, and `crypto`. Operates decoupled from database persistence via event-driven CQRS.
 - `api/lanforge-uds`, `api/lanforge-http` (L2) - Communication endpoints exposing the API via Unix Domain Sockets or HTTP/WebSockets.
 - `net/lanforge-dhcp`, `net/lanforge-ra`, `net/lanforge-dns`, `net/lanforge-dns-wire`, `net/lanforge-pppoe`, `net/lanforge-nft`, `net/lanforge-discovery`, `net/lanforge-wol`, `net/lanforge-tftp` (L2) - Specialized network service crates.
 - `db/lanforge-db` (L2) - Embedded data persistence backed by `redb`.

@@ -1,9 +1,6 @@
 use crate::ClientContext;
 use lanforge_api::api::{DnsReverseResolversResponse, Response, SimpleSuccess};
-use lanforge_types::{
-    network::{DnsReverseResolver, IpSubnet, dns::upstream::UpstreamTarget},
-    update::DeviceUpdate,
-};
+use lanforge_types::network::{IpSubnet, dns::upstream::UpstreamTarget};
 
 impl ClientContext {
     pub async fn handle_dns_reverse_resolver_add(
@@ -28,15 +25,21 @@ impl ClientContext {
             }
         };
 
-        if let Err(e) = self.db.add_dns_reverse_resolver(&subnet, &resolver).await {
+        let Some(storage) = self.ctx.storage_handle() else {
             return Response::Error {
-                error: e.to_string(),
+                error: "Storage service not available".into(),
             };
-        }
+        };
 
-        let _ = self.ctx.apply(DeviceUpdate::AddReverseResolver {
-            resolver: Box::new(DnsReverseResolver { subnet, resolver }),
-        });
+        if let Err(e) = storage
+            .send_query(lanforge_types::storage::StorageQuery::AddReverseResolver {
+                subnet,
+                resolver,
+            })
+            .await
+        {
+            return Response::Error { error: e };
+        }
 
         Response::Success(SimpleSuccess {
             message: "Reverse resolver added successfully".to_string(),
@@ -53,15 +56,20 @@ impl ClientContext {
             }
         };
 
-        if let Err(e) = self.db.remove_dns_reverse_resolver(&subnet).await {
+        let Some(storage) = self.ctx.storage_handle() else {
             return Response::Error {
-                error: e.to_string(),
+                error: "Storage service not available".into(),
             };
-        }
+        };
 
-        let _ = self
-            .ctx
-            .apply(DeviceUpdate::RemoveReverseResolver { subnet });
+        if let Err(e) = storage
+            .send_query(lanforge_types::storage::StorageQuery::RemoveReverseResolver(
+                subnet,
+            ))
+            .await
+        {
+            return Response::Error { error: e };
+        }
 
         Response::Success(SimpleSuccess {
             message: "Reverse resolver removed successfully".to_string(),

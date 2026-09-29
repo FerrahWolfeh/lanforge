@@ -70,14 +70,7 @@ impl ClientContext {
         dev.ignore_dns_log = entry.ignore_dns_log;
         dev.ignored_log_domains = entry.ignored_log_domains.clone();
 
-        // 2. Synchronous database write
-        if let Err(e) = self.db.upsert_device(&dev).await {
-            return Response::Error {
-                error: format!("Database write failed: {e}"),
-            };
-        }
-
-        // 3. Apply to memory context
+        // 2. Apply to memory context
         let hostname_update = if sanitized_hostname.is_empty() {
             FieldUpdate::NoChange
         } else {
@@ -189,11 +182,6 @@ impl ClientContext {
             dev.origin = Origin::Static;
             dev.managed_at = Some(SystemTime::now());
 
-            if let Err(e) = self.db.upsert_device(&dev).await {
-                return Response::Error {
-                    error: format!("Database write failed: {e}"),
-                };
-            }
             let _ = self.ctx.apply(DeviceUpdate::IgnoreDnsLogSet {
                 mac,
                 ignore: ign,
@@ -216,11 +204,6 @@ impl ClientContext {
             dev.origin = Origin::Static;
             dev.managed_at = Some(SystemTime::now());
 
-            if let Err(e) = self.db.upsert_device(&dev).await {
-                return Response::Error {
-                    error: format!("Database write failed: {e}"),
-                };
-            }
             let _ = self.ctx.apply(DeviceUpdate::IgnoredLogDomainsSet {
                 mac,
                 domains,
@@ -236,11 +219,6 @@ impl ClientContext {
             dev.origin = Origin::Static;
             dev.managed_at = Some(SystemTime::now());
 
-            if let Err(e) = self.db.upsert_device(&dev).await {
-                return Response::Error {
-                    error: format!("Database write failed: {e}"),
-                };
-            }
             let _ = self.ctx.apply(DeviceUpdate::IgnoredLogDomainsSet {
                 mac,
                 domains: dev.ignored_log_domains.clone(),
@@ -254,11 +232,6 @@ impl ClientContext {
             dev.origin = Origin::Static;
             dev.managed_at = Some(SystemTime::now());
 
-            if let Err(e) = self.db.upsert_device(&dev).await {
-                return Response::Error {
-                    error: format!("Database write failed: {e}"),
-                };
-            }
             let _ = self.ctx.apply(DeviceUpdate::IgnoredLogDomainsSet {
                 mac,
                 domains: dev.ignored_log_domains.clone(),
@@ -275,14 +248,7 @@ impl ClientContext {
         dev.origin = Origin::Static;
         dev.managed_at = Some(SystemTime::now());
 
-        // 2. Synchronous database write
-        if let Err(e) = self.db.upsert_device(&dev).await {
-            return Response::Error {
-                error: format!("Database write failed: {e}"),
-            };
-        }
-
-        // 3. Apply to memory context
+        // 2. Apply to memory context
         let update = DeviceUpdate::CliHostUpdated {
             mac,
             update: Box::new(cli_update),
@@ -300,14 +266,6 @@ impl ClientContext {
     }
 
     pub async fn handle_host_remove(&self, mac: MacAddr) -> Response {
-        // 1. Synchronous database delete
-        if let Err(e) = self.db.remove_device(mac).await {
-            return Response::Error {
-                error: format!("Database delete failed: {e}"),
-            };
-        }
-
-        // 2. Apply to memory context
         let _ = self.ctx.apply(DeviceUpdate::Remove(mac));
 
         Response::Success(SimpleSuccess {

@@ -3,8 +3,7 @@ use lanforge_api::api::{
     AllowlistEntry, DnsUpstreamConfig, ImportResult, ImportSection, Response, SystemConfigExport,
     SystemConfigImportResponse,
 };
-use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry};
+use lanforge_types::network::dns::adblock::AdblockDbConfig;
 
 impl ClientContext {
     pub async fn handle_system_config_export(&self) -> Response {
@@ -23,85 +22,72 @@ impl ClientContext {
         };
 
         // 3. DNS Upstreams
-        let dns_upstreams = match self.db.load_dns_upstreams().await {
-            Ok(rows) => rows
-                .into_iter()
-                .map(|row| DnsUpstreamConfig {
-                    addr: row.addr,
-                    protocol: row.protocol,
-                    domain: row.domain,
-                })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
+        let dns_upstreams = self
+            .ctx
+            .get_dns_upstreams()
+            .into_iter()
+            .map(|row| DnsUpstreamConfig {
+                addr: row.addr,
+                protocol: row.protocol,
+                domain: row.domain,
+            })
+            .collect();
 
         // 4. Adblock Config
-        let dns_adblock_config = self.db.load_adblock_config().await.unwrap_or_default();
+        let dns_adblock_config = self.ctx.get_dns_adblock();
 
         // 5. Adblock URLs
-        let dns_adblock_urls = match self.db.load_adblock_urls().await {
-            Ok(rows) => rows
-                .into_iter()
-                .map(|(id, url, kind)| AdblockUrlEntry {
-                    id: Some(id),
-                    url,
-                    kind,
-                })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
+        let dns_adblock_urls = self.ctx.get_dns_adblock_urls();
 
         // 6. DNS Allowlist
-        let dns_allowlist = match self.db.load_dns_allowlist().await {
-            Ok(rows) => rows
-                .into_iter()
-                .map(|(id, domain)| AllowlistEntry { id, domain })
-                .collect(),
-            Err(_) => Vec::new(),
-        };
+        let dns_allowlist = self
+            .ctx
+            .get_dns_allowlist()
+            .into_iter()
+            .enumerate()
+            .map(|(id, domain)| AllowlistEntry {
+                id: id as i64 + 1,
+                domain,
+            })
+            .collect();
 
         // 6b. DNS Adblock Rules
-        let dns_adblock_rules = match self.db.load_adblock_rules().await {
-            Ok(rows) => Some(
-                rows.into_iter()
-                    .map(|(id, domain, action, enabled)| AdblockRuleEntry {
-                        id: Some(id),
-                        domain,
-                        action,
-                        enabled,
-                    })
-                    .collect(),
-            ),
-            Err(_) => None,
-        };
+        let dns_adblock_rules = Some(self.ctx.get_dns_adblock_rules());
 
         // 7. API Tokens
-        let api_tokens = match self.db.load_api_tokens().await {
-            Ok(tokens) => Some(
-                tokens
-                    .into_iter()
-                    .map(|t| lanforge_api::api::ExportedApiToken {
-                        token: t.token,
-                        name: t.name,
-                        created_at: t.created_at,
-                        last_used: t.last_used,
-                        scopes: t.scopes,
-                        expires_at: t.expires_at,
-                    })
-                    .collect(),
-            ),
-            Err(_) => None,
+        let api_tokens = if let Some(storage) = self.ctx.storage_handle() {
+            match storage
+                .send_query(lanforge_types::storage::StorageQuery::LoadApiTokens)
+                .await
+            {
+                Ok(lanforge_types::storage::StorageQueryResult::ApiTokens(tokens)) => Some(
+                    tokens
+                        .into_iter()
+                        .map(|t| lanforge_api::api::ExportedApiToken {
+                            token: t.token,
+                            name: t.name,
+                            created_at: t.created_at,
+                            last_used: t.last_used,
+                            scopes: t.scopes,
+                            expires_at: t.expires_at,
+                        })
+                        .collect(),
+                ),
+                _ => None,
+            }
+        } else {
+            None
         };
 
         // 8. Dynamic Configs (pools, prefixes, pppoe, options, reverse resolvers)
-        let dhcp_v4_pools = self.db.load_dhcp_v4_pools().await.ok();
-        let dhcp_v6_pools = self.db.load_dhcp_v6_pools().await.ok();
-        let ra_prefixes = self.db.load_ra_prefixes().await.ok();
-        let ra_rdnss = self.db.load_ra_rdnss().await.ok();
-        let ra_dnssl = self.db.load_ra_dnssl().await.ok();
-        let pppoe_config = self.db.load_pppoe_config().await.ok().flatten().map(Box::new);
-        let dhcp_options = self.db.load_dhcp_options().await.ok().flatten().map(Box::new);
-        let dns_reverse_resolvers = self.db.load_dns_reverse_resolvers().await.ok();
+        let dhcp_v4_pools = Some(self.ctx.get_dhcp_v4_pools());
+        let dhcp_v6_pools = Some(self.ctx.get_dhcp_v6_pools());
+        let ra_prefixes = Some(self.ctx.get_ra_prefixes());
+        let ra_rdnss = Some(self.ctx.get_ra_rdnss());
+        let ra_dnssl = Some(self.ctx.get_ra_dnssl());
+        let pppoe_config = self.ctx.get_pppoe_config().map(Box::new);
+        let dhcp_options = Some(Box::new(self.ctx.get_dhcp_options()));
+        let dns_reverse_resolvers = Some(self.ctx.with_state(|s| s.reverse_resolvers.clone()));
 
         Response::SystemConfig(Box::new(SystemConfigExport {
             hosts,
@@ -145,6 +131,12 @@ impl ClientContext {
             overwrite,
         } = config;
 
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service not available".into(),
+            };
+        };
+
         let mut dhcp_v4_dirty = overwrite;
         let mut dhcp_v6_dirty = overwrite;
         let mut ra_dirty = overwrite;
@@ -169,7 +161,10 @@ impl ClientContext {
             }
 
             // Clear DNS rewrites, upstreams, adblock URLs, allowlist
-            if let Err(e) = self.db.clear_dns_rewrites().await {
+            if let Err(e) = storage
+                .send_query(lanforge_types::storage::StorageQuery::ClearDnsRewrites)
+                .await
+            {
                 total_success = false;
                 results.push(ImportResult {
                     section: ImportSection::DnsRewrites,
@@ -180,7 +175,10 @@ impl ClientContext {
             } else {
                 self.ctx.update_dns_rewrites(Vec::new());
             }
-            if let Err(e) = self.db.clear_dns_upstreams().await {
+            if let Err(e) = storage
+                .send_query(lanforge_types::storage::StorageQuery::ClearDnsUpstreams)
+                .await
+            {
                 total_success = false;
                 results.push(ImportResult {
                     section: ImportSection::DnsUpstreams,
@@ -191,7 +189,10 @@ impl ClientContext {
             } else {
                 self.ctx.update_dns_upstreams(Vec::new());
             }
-            if let Err(e) = self.db.clear_adblock_urls().await {
+            if let Err(e) = storage
+                .send_query(lanforge_types::storage::StorageQuery::ClearAdblockUrls)
+                .await
+            {
                 total_success = false;
                 results.push(ImportResult {
                     section: ImportSection::DnsAdblockUrls,
@@ -202,7 +203,10 @@ impl ClientContext {
             } else {
                 self.ctx.update_dns_adblock_urls(Vec::new());
             }
-            if let Err(e) = self.db.clear_dns_allowlist().await {
+            if let Err(e) = storage
+                .send_query(lanforge_types::storage::StorageQuery::ClearDnsAllowlist)
+                .await
+            {
                 total_success = false;
                 results.push(ImportResult {
                     section: ImportSection::DnsAllowlist,
@@ -214,7 +218,10 @@ impl ClientContext {
                 self.ctx.update_dns_allowlist(Vec::new());
             }
 
-            if let Err(e) = self.db.clear_adblock_rules().await {
+            if let Err(e) = storage
+                .send_query(lanforge_types::storage::StorageQuery::ClearAdblockRules)
+                .await
+            {
                 total_success = false;
                 results.push(ImportResult {
                     section: ImportSection::DnsAdblockRules,
@@ -227,19 +234,26 @@ impl ClientContext {
             }
 
             // Clear API Tokens
-            if let Ok(existing_tokens) = self.db.load_api_tokens().await {
+            if let Ok(lanforge_types::storage::StorageQueryResult::ApiTokens(existing_tokens)) = storage
+                .send_query(lanforge_types::storage::StorageQuery::LoadApiTokens)
+                .await
+            {
                 for token in existing_tokens {
-                    let _ = self.db.delete_api_token(&token.token).await;
+                    let _ = storage
+                        .send_query(lanforge_types::storage::StorageQuery::DeleteApiToken(
+                            token.token,
+                        ))
+                        .await;
                 }
             }
 
             // Clear Dynamic Configs by overwriting with empty lists
-            let _ = self.db.save_dhcp_v4_pools(&[]).await;
-            let _ = self.db.save_dhcp_v6_pools(&[]).await;
-            let _ = self.db.save_ra_prefixes(&[]).await;
-            let _ = self.db.save_ra_rdnss(&[]).await;
-            let _ = self.db.save_ra_dnssl(&[]).await;
-            let _ = self.db.clear_dns_reverse_resolvers().await;
+            self.ctx.update_dhcp_v4_pools(Vec::new());
+            self.ctx.update_dhcp_v6_pools(Vec::new());
+            self.ctx.update_ra_config(Vec::new(), Vec::new(), Vec::new());
+            let _ = storage
+                .send_query(lanforge_types::storage::StorageQuery::ClearReverseResolvers)
+                .await;
         }
 
         // 1. Import hosts
@@ -329,18 +343,22 @@ impl ClientContext {
 
         let mut adblock_cfg_success = true;
         let mut adblock_cfg_err = None;
-        if let Err(e) = self
-            .db
-            .set_adblock_config_value("enabled", if enabled { "true" } else { "false" })
+        if let Err(e) = storage
+            .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                key: "enabled".into(),
+                value: if enabled { "true".into() } else { "false".into() },
+            })
             .await
         {
             adblock_cfg_success = false;
             adblock_cfg_err = Some(format!("Failed to set enabled: {e}"));
         }
         if adblock_cfg_success
-            && let Err(e) = self
-                .db
-                .set_adblock_config_value("blocking_mode", &blocking_mode.to_string())
+            && let Err(e) = storage
+                .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                    key: "blocking_mode".into(),
+                    value: blocking_mode.to_string(),
+                })
                 .await
         {
             adblock_cfg_success = false;
@@ -348,9 +366,11 @@ impl ClientContext {
         }
         if adblock_cfg_success
             && let Some(ip) = blocking_ip_v4
-            && let Err(e) = self
-                .db
-                .set_adblock_config_value("blocking_ip_v4", &ip.to_string())
+            && let Err(e) = storage
+                .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                    key: "blocking_ip_v4".into(),
+                    value: ip.to_string(),
+                })
                 .await
         {
             adblock_cfg_success = false;
@@ -358,40 +378,39 @@ impl ClientContext {
         }
         if adblock_cfg_success
             && let Some(ip) = blocking_ip_v6
-            && let Err(e) = self
-                .db
-                .set_adblock_config_value("blocking_ip_v6", &ip.to_string())
+            && let Err(e) = storage
+                .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                    key: "blocking_ip_v6".into(),
+                    value: ip.to_string(),
+                })
                 .await
         {
             adblock_cfg_success = false;
             adblock_cfg_err = Some(format!("Failed to set blocking_ip_v6: {e}"));
         }
         if adblock_cfg_success
-            && let Err(e) = self
-                .db
-                .set_adblock_config_value("refresh_hours", &refresh_hours.to_string())
+            && let Err(e) = storage
+                .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                    key: "refresh_hours".into(),
+                    value: refresh_hours.to_string(),
+                })
                 .await
         {
             adblock_cfg_success = false;
             adblock_cfg_err = Some(format!("Failed to set refresh_hours: {e}"));
         }
         if adblock_cfg_success
-            && let Err(e) = self
-                .db
-                .set_adblock_config_value(
-                    "refresh_at_night",
-                    if refresh_at_night { "true" } else { "false" },
-                )
+            && let Err(e) = storage
+                .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                    key: "refresh_at_night".into(),
+                    value: if refresh_at_night { "true".into() } else { "false".into() },
+                })
                 .await
         {
             adblock_cfg_success = false;
             adblock_cfg_err = Some(format!("Failed to set refresh_at_night: {e}"));
         }
-        if adblock_cfg_success {
-            if let Ok(cfg) = self.db.load_adblock_config().await {
-                self.ctx.update_dns_adblock(cfg);
-            }
-        } else {
+        if !adblock_cfg_success {
             total_success = false;
         }
         results.push(ImportResult {
@@ -454,28 +473,36 @@ impl ClientContext {
             let mut rules_count = 0;
             let mut rules_success = true;
             let mut rules_err = None;
-            let mut imported_rules = Vec::new();
             for r in rules {
-                match self.db.add_adblock_rule(&r.domain, r.action).await {
-                    Ok(id) => {
+                match storage
+                    .send_query(lanforge_types::storage::StorageQuery::AddAdblockRule {
+                        domain: r.domain,
+                        action: r.action,
+                    })
+                    .await
+                {
+                    Ok(lanforge_types::storage::StorageQueryResult::Id(id)) => {
                         if !r.enabled {
-                            let _ = self.db.update_adblock_rule_status(id, false).await;
+                            let _ = storage
+                                .send_query(
+                                    lanforge_types::storage::StorageQuery::UpdateAdblockRuleStatus {
+                                        id,
+                                        enabled: false,
+                                    },
+                                )
+                                .await;
                         }
-                        imported_rules.push(AdblockRuleEntry {
-                            id: Some(id),
-                            domain: r.domain,
-                            action: r.action,
-                            enabled: r.enabled,
-                        });
+                        rules_count += 1;
+                    }
+                    Ok(_) => {
                         rules_count += 1;
                     }
                     Err(e) => {
                         rules_success = false;
-                        rules_err = Some(e.to_string());
+                        rules_err = Some(e);
                     }
                 }
             }
-            self.ctx.update_dns_adblock_rules(imported_rules);
             if !rules_success {
                 total_success = false;
             }
@@ -497,13 +524,18 @@ impl ClientContext {
                 .unwrap_or_default()
                 .as_secs() as i64;
             for t in tokens {
-                if let Err(e) = self
-                    .db
-                    .store_api_token(&t.token, &t.name, &t.scopes, t.expires_at, now)
+                if let Err(e) = storage
+                    .send_query(lanforge_types::storage::StorageQuery::StoreApiToken {
+                        token: t.token,
+                        name: t.name,
+                        scopes: t.scopes,
+                        expires_at: t.expires_at,
+                        now,
+                    })
                     .await
                 {
                     tokens_success = false;
-                    tokens_err = Some(e.to_string());
+                    tokens_err = Some(e);
                 } else {
                     imported_tokens += 1;
                 }
@@ -520,127 +552,75 @@ impl ClientContext {
         }
 
         // 8. Import Dynamic Configs
-        if let Some(pools) = dhcp_v4_pools {
-            let mut pools_success = true;
-            let mut pools_err = None;
-            let count = pools.len();
-            if let Err(e) = self.db.save_dhcp_v4_pools(&pools).await {
-                pools_success = false;
-                total_success = false;
-                pools_err = Some(e.to_string());
-            } else {
-                dhcp_v4_dirty = true;
-            }
+        if let Some(ref pools) = dhcp_v4_pools {
+            self.ctx.update_dhcp_v4_pools(pools.clone());
+            dhcp_v4_dirty = false;
             results.push(ImportResult {
                 section: ImportSection::DhcpV4Pools,
-                success: pools_success,
-                count: if pools_success { count } else { 0 },
-                error: pools_err,
+                success: true,
+                count: pools.len(),
+                error: None,
             });
         }
-        if let Some(pools) = dhcp_v6_pools {
-            let mut pools_success = true;
-            let mut pools_err = None;
-            let count = pools.len();
-            if let Err(e) = self.db.save_dhcp_v6_pools(&pools).await {
-                pools_success = false;
-                total_success = false;
-                pools_err = Some(e.to_string());
-            } else {
-                dhcp_v6_dirty = true;
-            }
+        if let Some(ref pools) = dhcp_v6_pools {
+            self.ctx.update_dhcp_v6_pools(pools.clone());
+            dhcp_v6_dirty = false;
             results.push(ImportResult {
                 section: ImportSection::DhcpV6Pools,
-                success: pools_success,
-                count: if pools_success { count } else { 0 },
-                error: pools_err,
+                success: true,
+                count: pools.len(),
+                error: None,
             });
         }
-        if let Some(prefixes) = ra_prefixes {
-            let mut ra_pref_success = true;
-            let mut ra_pref_err = None;
-            let count = prefixes.len();
-            if let Err(e) = self.db.save_ra_prefixes(&prefixes).await {
-                ra_pref_success = false;
-                total_success = false;
-                ra_pref_err = Some(e.to_string());
-            } else {
-                ra_dirty = true;
+        if ra_prefixes.is_some() || ra_rdnss.is_some() || ra_dnssl.is_some() {
+            let prefixes = ra_prefixes.clone().unwrap_or_else(|| self.ctx.get_ra_prefixes());
+            let rdnss = ra_rdnss.clone().unwrap_or_else(|| self.ctx.get_ra_rdnss());
+            let dnssl = ra_dnssl.clone().unwrap_or_else(|| self.ctx.get_ra_dnssl());
+            self.ctx.update_ra_config(prefixes.clone(), rdnss.clone(), dnssl.clone());
+            ra_dirty = false;
+
+            if let Some(ref p) = ra_prefixes {
+                results.push(ImportResult {
+                    section: ImportSection::RaPrefixes,
+                    success: true,
+                    count: p.len(),
+                    error: None,
+                });
             }
-            results.push(ImportResult {
-                section: ImportSection::RaPrefixes,
-                success: ra_pref_success,
-                count: if ra_pref_success { count } else { 0 },
-                error: ra_pref_err,
-            });
-        }
-        if let Some(rdnss) = ra_rdnss {
-            let mut rdnss_success = true;
-            let mut rdnss_err = None;
-            let count = rdnss.len();
-            if let Err(e) = self.db.save_ra_rdnss(&rdnss).await {
-                rdnss_success = false;
-                total_success = false;
-                rdnss_err = Some(e.to_string());
-            } else {
-                ra_dirty = true;
+            if let Some(ref r) = ra_rdnss {
+                results.push(ImportResult {
+                    section: ImportSection::RaRdnss,
+                    success: true,
+                    count: r.len(),
+                    error: None,
+                });
             }
-            results.push(ImportResult {
-                section: ImportSection::RaRdnss,
-                success: rdnss_success,
-                count: if rdnss_success { count } else { 0 },
-                error: rdnss_err,
-            });
-        }
-        if let Some(dnssl) = ra_dnssl {
-            let mut dnssl_success = true;
-            let mut dnssl_err = None;
-            let count = dnssl.len();
-            if let Err(e) = self.db.save_ra_dnssl(&dnssl).await {
-                dnssl_success = false;
-                total_success = false;
-                dnssl_err = Some(e.to_string());
-            } else {
-                ra_dirty = true;
+            if let Some(ref d) = ra_dnssl {
+                results.push(ImportResult {
+                    section: ImportSection::RaDnssl,
+                    success: true,
+                    count: d.len(),
+                    error: None,
+                });
             }
-            results.push(ImportResult {
-                section: ImportSection::RaDnssl,
-                success: dnssl_success,
-                count: if dnssl_success { count } else { 0 },
-                error: dnssl_err,
-            });
         }
         if let Some(pppoe_cfg) = pppoe_config {
-            let mut pppoe_success = true;
-            let mut pppoe_err = None;
-            if let Err(e) = self.db.save_pppoe_config(&pppoe_cfg).await {
-                pppoe_success = false;
-                total_success = false;
-                pppoe_err = Some(e.to_string());
-            }
+            self.ctx.update_pppoe_config(*pppoe_cfg);
             results.push(ImportResult {
                 section: ImportSection::PppoeConfig,
-                success: pppoe_success,
-                count: if pppoe_success { 1 } else { 0 },
-                error: pppoe_err,
+                success: true,
+                count: 1,
+                error: None,
             });
         }
 
         if let Some(opts) = dhcp_options {
-            let mut opts_success = true;
-            let mut opts_err = None;
-            if let Err(e) = self.db.save_dhcp_options(&opts).await {
-                opts_success = false;
-                total_success = false;
-                opts_err = Some(e.to_string());
-            } else {
-                self.ctx.update_dhcp_options(*opts);
-            }
+            self.ctx.update_dhcp_options(*opts);
             results.push(ImportResult {
                 section: ImportSection::DhcpOptions,
-                success: opts_success,
-                count: if opts_success { 1 } else { 0 },
-                error: opts_err,
+                success: true,
+                count: 1,
+                error: None,
             });
         }
 
@@ -649,19 +629,16 @@ impl ClientContext {
             let mut res_success = true;
             let mut res_err = None;
             for r in resolvers {
-                if let Err(e) = self
-                    .db
-                    .add_dns_reverse_resolver(&r.subnet, &r.resolver)
+                if let Err(e) = storage
+                    .send_query(lanforge_types::storage::StorageQuery::AddReverseResolver {
+                        subnet: r.subnet,
+                        resolver: r.resolver,
+                    })
                     .await
                 {
                     res_success = false;
-                    res_err = Some(e.to_string());
+                    res_err = Some(e);
                 } else {
-                    let _ =
-                        self.ctx
-                            .apply(lanforge_types::update::DeviceUpdate::AddReverseResolver {
-                                resolver: Box::new(r),
-                            });
                     res_count += 1;
                 }
             }
@@ -676,20 +653,14 @@ impl ClientContext {
             });
         }
 
-        if dhcp_v4_dirty && let Ok(pools) = self.db.load_dhcp_v4_pools().await {
-            self.ctx.update_dhcp_v4_pools(pools);
+        if dhcp_v4_dirty {
+            self.ctx.update_dhcp_v4_pools(Vec::new());
         }
-        if dhcp_v6_dirty && let Ok(pools) = self.db.load_dhcp_v6_pools().await {
-            self.ctx.update_dhcp_v6_pools(pools);
+        if dhcp_v6_dirty {
+            self.ctx.update_dhcp_v6_pools(Vec::new());
         }
-        if ra_dirty
-            && let (Ok(prefixes), Ok(rdnss), Ok(dnssl)) = (
-                self.db.load_ra_prefixes().await,
-                self.db.load_ra_rdnss().await,
-                self.db.load_ra_dnssl().await,
-            )
-        {
-            self.ctx.update_ra_config(prefixes, rdnss, dnssl);
+        if ra_dirty {
+            self.ctx.update_ra_config(Vec::new(), Vec::new(), Vec::new());
         }
 
         Response::SystemConfigImport(SystemConfigImportResponse {

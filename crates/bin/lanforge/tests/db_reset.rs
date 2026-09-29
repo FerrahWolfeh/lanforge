@@ -105,8 +105,6 @@ async fn test_full_db_reset_chain() {
         ctx: ctx_api,
         uptime_secs: 0,
         current_gua: None,
-        db,
-        log_db,
         active_clients: Arc::new(AtomicUsize::new(0)),
     };
 

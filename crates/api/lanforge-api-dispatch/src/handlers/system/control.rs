@@ -1,6 +1,6 @@
 use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess};
-use lanforge_core::bus::{FirewallEvent, LanforgeEvent, NetworkEvent, SystemEvent, TrafficEvent};
+use lanforge_core::bus::{FirewallEvent, LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_types::{
     network::{
         firewall::{FirewallCommitRequest, FirewallCommitResponse, FirewallConfig},
@@ -74,13 +74,10 @@ impl ClientContext {
     }
 
     pub async fn handle_pppoe_config(&self) -> Response {
-        match self.db.load_pppoe_config().await {
-            Ok(Some(cfg)) => Response::PppoeConfig(Box::new(cfg)),
-            Ok(None) => Response::Error {
-                error: "PPPoE configuration not found in database".to_string(),
-            },
-            Err(e) => Response::Error {
-                error: format!("Database error: {e}"),
+        match self.ctx.get_pppoe_config() {
+            Some(cfg) => Response::PppoeConfig(Box::new(cfg)),
+            None => Response::Error {
+                error: "PPPoE configuration not found".to_string(),
             },
         }
     }
@@ -92,12 +89,6 @@ impl ClientContext {
             enabled = cfg.enabled,
             "PPPoE configuration updated via API; triggering PPPoE service restart to apply new configuration"
         );
-
-        if let Err(e) = self.db.save_pppoe_config(&cfg).await {
-            return Response::Error {
-                error: format!("Failed to save PPPoE configuration: {e}"),
-            };
-        }
 
         self.ctx.update_pppoe_config(cfg);
 
@@ -120,11 +111,6 @@ impl ClientContext {
     }
 
     pub async fn handle_update_ra_config(&self, cfg: RaServerConfig) -> Response {
-        // Save dynamic RA components to database
-        let _ = self.db.save_ra_prefixes(&cfg.prefixes).await;
-        let _ = self.db.save_ra_rdnss(&cfg.rdnss).await;
-        let _ = self.db.save_ra_dnssl(&cfg.dnssl).await;
-
         self.ctx.update_ra_server_config(cfg);
 
         Response::Success(SimpleSuccess {
@@ -144,26 +130,12 @@ impl ClientContext {
     }
 
     pub async fn handle_traffic_config(&self) -> Response {
-        let cfg = match self.db.load_traffic_config().await {
-            Ok(Some(cfg)) => cfg,
-            _ => self.ctx.get_traffic_config().unwrap_or_default(),
-        };
+        let cfg = self.ctx.get_traffic_config().unwrap_or_default();
         Response::TrafficConfig(Box::new(cfg))
     }
 
     pub async fn handle_update_traffic_config(&self, cfg: TrafficConfig) -> Response {
-        if let Err(e) = self.db.save_traffic_config(&cfg).await {
-            return Response::Error {
-                error: format!("Failed to save traffic configuration: {e}"),
-            };
-        }
-
         self.ctx.update_traffic_config(cfg);
-
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::RulesetChanged)));
 
         Response::Success(SimpleSuccess {
             message: "Traffic and SQM configuration updated successfully".to_string(),
@@ -171,15 +143,7 @@ impl ClientContext {
     }
 
     pub async fn handle_firewall_config(&self) -> Response {
-        let mut cfg = match self.db.load_firewall_config().await {
-            Ok(Some(cfg)) => cfg,
-            Ok(None) => self.ctx.get_firewall_config().unwrap_or_default(),
-            Err(e) => {
-                return Response::Error {
-                    error: format!("Database error loading firewall config: {e}"),
-                };
-            }
-        };
+        let mut cfg = self.ctx.get_firewall_config().unwrap_or_default();
 
         // If external zone exists but has no interfaces assigned, auto-populate with active or configured WAN
         if let Some(ext) = cfg.zones.iter_mut().find(|z| z.name == "external" || z.name == "wan")
@@ -201,18 +165,7 @@ impl ClientContext {
     }
 
     pub async fn handle_update_firewall_config(&self, cfg: FirewallConfig) -> Response {
-        if let Err(e) = self.db.save_firewall_config(&cfg).await {
-            return Response::Error {
-                error: format!("Failed to save firewall configuration: {e}"),
-            };
-        }
-
         self.ctx.update_firewall_config(cfg);
-
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));
 
         Response::Success(SimpleSuccess {
             message: "Firewall configuration updated successfully".to_string(),
@@ -299,21 +252,10 @@ impl ClientContext {
             }))
         } else {
             // Permanent commit without rollback
-            if let Err(e) = self.db.save_firewall_config(&candidate).await {
-                return Response::Error {
-                    error: format!("Failed to persist firewall configuration: {e}"),
-                };
-            }
-
             self.ctx.update_firewall_config(candidate);
             let _ = self
                 .ctx
                 .clear_staged_firewall_transaction(Some(&req.tx_id));
-
-            let _ = self
-                .ctx
-                .bus()
-                .publish(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));
 
             Response::FirewallCommit(Box::new(FirewallCommitResponse {
                 success: true,
@@ -331,11 +273,7 @@ impl ClientContext {
             };
         };
 
-        if let Err(e) = self.db.save_firewall_config(&staged.candidate_config).await {
-            return Response::Error {
-                error: format!("Failed to persist confirmed firewall configuration: {e}"),
-            };
-        }
+        self.ctx.update_firewall_config(staged.candidate_config);
 
         Response::Success(SimpleSuccess {
             message: format!("Firewall transaction '{tx_id}' confirmed permanently"),

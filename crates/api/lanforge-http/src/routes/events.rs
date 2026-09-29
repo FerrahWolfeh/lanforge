@@ -254,6 +254,7 @@ fn enrich_interface_info(ctx: &LanforgeContext, ifindex: u32) -> serde_json::Val
     serde_json::Value::Object(map)
 }
 
+#[allow(clippy::too_many_lines)]
 fn event_to_json_value(ctx: &LanforgeContext, event: &TimedEvent) -> Option<serde_json::Value> {
     let ts_millis = u64::try_from(
         event
@@ -303,6 +304,7 @@ fn event_to_json_value(ctx: &LanforgeContext, event: &TimedEvent) -> Option<serd
             SystemEvent::ConfigRaChanged => "ConfigRaChanged",
             SystemEvent::ConfigTftpChanged => "ConfigTftpChanged",
             SystemEvent::ConfigDhcpOptionsChanged => "ConfigDhcpOptionsChanged",
+            SystemEvent::ConfigPppoeChanged => "ConfigPppoeChanged",
         }),
         LanforgeEvent::Storage(s) => ("storage", match s {
             StorageEvent::DbVacuum => "DbVacuum",

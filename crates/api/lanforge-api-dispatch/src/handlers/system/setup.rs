@@ -2,7 +2,7 @@ use crate::ClientContext;
 use lanforge_api::api::{
     NetworkInterfaceInfo, Response, SetupPayload, SetupResponse, SetupStatusResponse, SetupWanConfig,
 };
-use lanforge_core::utils::auth::hash_password;
+use lanforge_crypto::hash_password;
 use lanforge_types::auth::UserRole;
 use lanforge_types::events::{LanforgeEvent, SystemEvent};
 use lanforge_types::identifiers::MacAddr;
@@ -34,8 +34,19 @@ impl ClientContext {
     /// Inspects the host environment to report first-run readiness and discovered network interfaces.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub async fn handle_setup_status(&self) -> Response {
-        let is_provisioned = self.db.is_provisioned().unwrap_or(false)
-            || (self.db.count_users().await.unwrap_or(0) > 0);
+        let is_provisioned = if let Some(storage) = self.ctx.storage_handle() {
+            let prov = matches!(
+                storage.send_query(lanforge_types::storage::StorageQuery::IsProvisioned).await,
+                Ok(lanforge_types::storage::StorageQueryResult::Boolean(true))
+            );
+            let has_users = match storage.send_query(lanforge_types::storage::StorageQuery::CountUsers).await {
+                Ok(lanforge_types::storage::StorageQueryResult::Count(c)) => c > 0,
+                _ => false,
+            };
+            prov || has_users
+        } else {
+            false
+        };
         let first_run = !is_provisioned;
 
         let status = self.ctx.get_status();
@@ -105,8 +116,23 @@ impl ClientContext {
     /// Atomically applies the initial configuration payload submitted by the setup wizard.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub async fn handle_setup(&self, payload: SetupPayload) -> Response {
-        let is_provisioned = self.db.is_provisioned().unwrap_or(false)
-            || (self.db.count_users().await.unwrap_or(0) > 0);
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service not available".into(),
+            };
+        };
+
+        let is_provisioned = {
+            let prov = matches!(
+                storage.send_query(lanforge_types::storage::StorageQuery::IsProvisioned).await,
+                Ok(lanforge_types::storage::StorageQueryResult::Boolean(true))
+            );
+            let has_users = match storage.send_query(lanforge_types::storage::StorageQuery::CountUsers).await {
+                Ok(lanforge_types::storage::StorageQueryResult::Count(c)) => c > 0,
+                _ => false,
+            };
+            prov || has_users
+        };
         if is_provisioned {
             return Response::Error {
                 error: "Forbidden: Initial onboarding setup has already been completed and locked."
@@ -133,15 +159,22 @@ impl ClientContext {
         let password_hash = hash_password(&payload.admin_password);
 
         // 1. Create or update root admin user in database
-        if let Err(e) = self
-            .db
-            .create_user(&username, &password_hash, UserRole::Admin, now)
+        if let Err(e) = storage
+            .send_query(lanforge_types::storage::StorageQuery::CreateUser {
+                username: username.clone(),
+                password_hash: password_hash.clone(),
+                role: UserRole::Admin,
+                now,
+            })
             .await
         {
             // If user already exists, update password
-            let _ = self
-                .db
-                .update_user_password(&username, &password_hash, now)
+            let _ = storage
+                .send_query(lanforge_types::storage::StorageQuery::UpdateUserPassword {
+                    username: username.clone(),
+                    new_hash: password_hash.clone(),
+                    now,
+                })
                 .await;
             info!("Setup: updated existing admin credentials ({e})");
         }
@@ -172,20 +205,16 @@ impl ClientContext {
                 dns_servers: vec![payload.lan_ip],
                 ..Default::default()
             };
-            if let Err(e) = self.db.save_dhcp_v4_pools(std::slice::from_ref(&pool)).await {
-                error!("Setup: failed to persist DHCPv4 pool: {e}");
-            }
             self.ctx.update_dhcp_v4_pools(vec![pool]);
 
-            let mut opts = self.db.load_dhcp_options().await.ok().flatten().unwrap_or_default();
+            let mut opts = self
+                .ctx
+                .with_config(|cfg| cfg.dhcp_options.clone());
             opts.v4.enabled = true;
             opts.v4.router = Some(router_ip);
             opts.v4.subnet_mask = Some(subnet_mask);
             opts.v4.dns_servers = vec![payload.lan_ip];
             opts.v4.domain_name = Some(payload.domain_name.clone());
-            if let Err(e) = self.db.save_dhcp_options(&opts).await {
-                error!("Setup: failed to persist DHCP options: {e}");
-            }
             self.ctx.update_dhcp_options(opts);
         }
 
@@ -207,22 +236,19 @@ impl ClientContext {
             if ra.auto_gua {
                 prefixes.push(lanforge_types::network::ra::RAPrefix::gua_dynamic());
             }
-            if let Err(e) = self.db.save_ra_prefixes(&prefixes).await {
-                error!("Setup: failed to persist RA prefixes: {e}");
-            }
 
-                let dnssl = vec![lanforge_types::network::ra::DnsslConfig {
-                    domains: vec![payload.domain_name.clone()],
-                    lifetime: Some(600),
-                }];
-                if let Err(e) = self.db.save_ra_dnssl(&dnssl).await {
-                    error!("Setup: failed to persist RA DNSSL: {e}");
-                }
+            let dnssl = vec![lanforge_types::network::ra::DnsslConfig {
+                domains: vec![payload.domain_name.clone()],
+                lifetime: Some(600),
+            }];
+            self.ctx.update_ra_config(prefixes, Vec::new(), dnssl);
         }
 
         // 5. Configure Upstream DNS & Adblock
         if !payload.upstream_dns.is_empty() {
-            let _ = self.db.clear_dns_upstreams().await;
+            let _ = storage
+                .send_query(lanforge_types::storage::StorageQuery::ClearDnsUpstreams)
+                .await;
             for server in &payload.upstream_dns {
                 let s = server.trim();
                 if !s.is_empty() {
@@ -234,14 +260,28 @@ impl ClientContext {
                         None
                     };
                     if let Some(addr) = addr {
-                        let _ = self.db.add_dns_upstream(addr, UpstreamProtocol::Udp, None).await;
+                        let _ = storage
+                            .send_query(lanforge_types::storage::StorageQuery::AddDnsUpstream {
+                                addr,
+                                protocol: UpstreamProtocol::Udp,
+                                domain: None,
+                            })
+                            .await;
                     }
                 }
             }
         }
-        let _ = self
-            .db
-            .set_adblock_config_value("enabled", if payload.adblock_enabled { "true" } else { "false" })
+        let _ = storage
+            .send_query(
+                lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                    key: "enabled".into(),
+                    value: if payload.adblock_enabled {
+                        "true".into()
+                    } else {
+                        "false".into()
+                    },
+                },
+            )
             .await;
 
         // 6. Configure WAN / Uplink
@@ -276,20 +316,14 @@ impl ClientContext {
                         pppoe_cfg.nftables.bypass_vowifi = nft.bypass_vowifi;
                         pppoe_cfg.nftables.lan_ifaces = vec![payload.lan_iface.clone()];
                     }
-                    if let Err(e) = self.db.save_pppoe_config(&pppoe_cfg).await {
-                        error!("Setup: failed to persist PPPoE configuration: {e}");
-                    }
+                    self.ctx.update_pppoe_config(pppoe_cfg);
                 }
                 SetupWanConfig::SystemGateway { gateway_ip } => {
-                    if let Ok(Some(mut opts)) = self.db.load_dhcp_options().await {
-                        opts.v4.router = Some(*gateway_ip);
-                        if let Err(e) = self.db.save_dhcp_options(&opts).await {
-                            error!(
-                                "Setup: failed to update DHCP options with upstream gateway: {e}"
-                            );
-                        }
-                        self.ctx.update_dhcp_options(opts);
-                    }
+                    let mut opts = self
+                        .ctx
+                        .with_config(|cfg| cfg.dhcp_options.clone());
+                    opts.v4.router = Some(*gateway_ip);
+                    self.ctx.update_dhcp_options(opts);
                 }
             }
         }
@@ -333,9 +367,6 @@ impl ClientContext {
                 to: "external".into(),
             });
         }
-        if let Err(e) = self.db.save_firewall_config(&initial_firewall).await {
-            error!("Setup: failed to persist initial Firewall configuration: {e}");
-        }
         self.ctx.update_firewall_config(initial_firewall);
 
         // 8. Write complete declarative TOML file
@@ -353,7 +384,10 @@ impl ClientContext {
         }
 
         // 8. Permanently mark system as provisioned
-        if let Err(e) = self.db.set_provisioned(true) {
+        if let Err(e) = storage
+            .send_query(lanforge_types::storage::StorageQuery::SetProvisioned(true))
+            .await
+        {
             error!("Setup: failed to set provisioned flag: {e}");
         }
 

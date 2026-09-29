@@ -11,7 +11,6 @@ use lanforge_api::api::{
 };
 use lanforge_api::rpc::LanforgeRpc;
 use lanforge_core::context::LanforgeContext;
-use lanforge_db_core::{DatabaseStore, LogStore};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
@@ -44,10 +43,6 @@ pub struct ClientContext {
 
     /// Lanforge Context.
     pub ctx: LanforgeContext,
-    /// Shared lease database.
-    pub db: Arc<dyn DatabaseStore>,
-    /// Shared log database.
-    pub log_db: Arc<dyn LogStore>,
     /// Active client counter.
     pub active_clients: Arc<AtomicUsize>,
 }

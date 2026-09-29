@@ -1,3 +1,5 @@
+//! Password hashing and verification using Argon2id.
+
 use argon2::{
     Argon2,
     password_hash::{PasswordHasher, PasswordVerifier},
@@ -28,4 +30,17 @@ pub fn verify_password(hash: &str, password: &str) -> bool {
     Argon2::default()
         .verify_password(password.as_bytes(), &parsed_hash)
         .is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_password_roundtrip() {
+        let password = "super-secret-test-password";
+        let hash = hash_password(password);
+        assert!(verify_password(&hash, password));
+        assert!(!verify_password(&hash, "wrong-password"));
+    }
 }

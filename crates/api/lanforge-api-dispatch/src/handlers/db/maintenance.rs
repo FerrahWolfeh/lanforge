@@ -1,11 +1,17 @@
 use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess};
-use lanforge_core::bus::{LanforgeEvent, StorageEvent};
+use lanforge_types::storage::{StorageQuery, StorageQueryResult};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl ClientContext {
     pub async fn handle_db_vacuum(&self) -> Response {
-        if let Err(e) = self.db.vacuum().await {
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service handle is not available".to_string(),
+            };
+        };
+
+        if let Err(e) = storage.send_query(StorageQuery::Vacuum).await {
             return Response::Error {
                 error: format!("Database VACUUM failed: {e}"),
             };
@@ -16,7 +22,13 @@ impl ClientContext {
     }
 
     pub async fn handle_db_log_clean(&self) -> Response {
-        if let Err(e) = self.log_db.clear_logs().await {
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service handle is not available".to_string(),
+            };
+        };
+
+        if let Err(e) = storage.send_query(StorageQuery::ClearLogs).await {
             return Response::Error {
                 error: format!("Transient log cleanup failed: {e}"),
             };
@@ -27,8 +39,15 @@ impl ClientContext {
     }
 
     pub async fn handle_db_prune(&self) -> Response {
-        let pruned_zombies = match self.db.prune_zombies().await {
-            Ok(n) => n,
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service handle is not available".to_string(),
+            };
+        };
+
+        let pruned_zombies = match storage.send_query(StorageQuery::PruneZombies).await {
+            Ok(StorageQueryResult::Count(n)) => n,
+            Ok(_) => 0,
             Err(e) => {
                 return Response::Error {
                     error: format!("Failed to prune zombie entries: {e}"),
@@ -42,7 +61,10 @@ impl ClientContext {
             .as_secs() as i64)
             - (24 * 3600);
 
-        if let Err(e) = self.log_db.prune_logs(cutoff).await {
+        if let Err(e) = storage
+            .send_query(StorageQuery::PruneLogs { before: cutoff })
+            .await
+        {
             return Response::Error {
                 error: format!("Failed to prune transient logs: {e}"),
             };
@@ -56,26 +78,17 @@ impl ClientContext {
     }
 
     pub async fn handle_db_reset(&self) -> Response {
-        // 1. Synchronously reset database and log tables
-        if let Err(e) = self.db.reset().await {
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service handle is not available".to_string(),
+            };
+        };
+
+        if let Err(e) = storage.send_query(StorageQuery::ResetDb).await {
             return Response::Error {
                 error: format!("Database reset failed: {e}"),
             };
         }
-        if let Err(e) = self.log_db.clear_logs().await {
-            return Response::Error {
-                error: format!("Transient logs cleanup during reset failed: {e}"),
-            };
-        }
-
-        // 2. Clear in-memory state
-        self.ctx.reset();
-
-        // 3. Publish completion event to let worker know to clear its queues
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::Storage(StorageEvent::DbResetCompleted));
 
         Response::Success(SimpleSuccess {
             message: "Factory reset completed. Database and transient logs have been cleared."

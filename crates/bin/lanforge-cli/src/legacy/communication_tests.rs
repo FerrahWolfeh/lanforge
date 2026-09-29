@@ -120,7 +120,13 @@ async fn start_test_daemon(socket_path: String) -> LanforgeContext {
         tcp_port: None,
     });
 
-    let mut service = ControlService::new(cfg, ctx.clone(), db, log_db);
+    let (mut worker, _ctrl) = lanforge_db::worker::DbWorker::new(ctx.clone(), db.clone(), log_db.clone());
+    let ctx_worker = ctx.clone();
+    tokio::spawn(async move {
+        let _ = worker.serve(&ctx_worker).await;
+    });
+
+    let mut service = ControlService::new(cfg, ctx.clone());
     let ctrl = ServiceControl::new("control", ctx.clone());
     let ctx_service = ctx.clone();
 

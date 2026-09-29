@@ -3,33 +3,21 @@ use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceControl};
-use lanforge_db::config::DatabaseConfig;
-use lanforge_db::engine::LanforgeDb;
-use lanforge_db::log_engine::LogDb;
 use lanforge_uds::config::ApiConfig;
 use lanforge_uds::server::ControlService;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
-async fn init_test_context() -> (LanforgeContext, Arc<LanforgeDb>, Arc<LogDb>) {
+async fn init_test_context() -> LanforgeContext {
     let bus = Arc::new(EventBus::new());
     let table = State::new();
-    let db = Arc::new(
-        LanforgeDb::open(&DatabaseConfig {
-            config_path: "memory".to_string(),
-            ..Default::default()
-        })
-        .await
-        .unwrap(),
-    );
-    let log_db = Arc::new(LogDb::open_in_memory());
-    (LanforgeContext::new(bus, table, None), db, log_db)
+    LanforgeContext::new(bus, table, None)
 }
 
 #[tokio::test]
 async fn dns_uds_simulation_basic() {
-    let (ctx, db, log_db) = init_test_context().await;
+    let ctx = init_test_context().await;
     let socket_path = "/tmp/lanforge_test_control.sock";
 
     // 1. Setup config
@@ -41,7 +29,7 @@ async fn dns_uds_simulation_basic() {
     let cfg = Arc::new(api_cfg);
 
     // 2. Spawn UDS server control service
-    let mut service = ControlService::new(cfg, ctx.clone(), db, log_db);
+    let mut service = ControlService::new(cfg, ctx.clone());
     let ctrl = ServiceControl::new("control", ctx.clone());
     let ctx_service = ctx.clone();
 

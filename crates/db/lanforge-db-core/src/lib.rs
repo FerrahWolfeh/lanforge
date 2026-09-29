@@ -1,6 +1,5 @@
 #![allow(clippy::type_complexity)]
 
-use std::collections::HashMap;
 use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
@@ -8,7 +7,7 @@ use std::pin::Pin;
 /// Alias for a boxed thread-safe future used for dynamic trait objects.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-use lanforge_types::auth::{ApiScopes, UserRole};
+pub use lanforge_types::auth::{ApiScopes, ApiTokenEntry, UserEntry, UserInfo, UserRole};
 use lanforge_types::device::{Device, LeaseAction, LeaseHistoryEntry, LeaseKind};
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
@@ -61,18 +60,6 @@ impl std::fmt::Display for DeviceId {
     }
 }
 
-/// Domain representation of an API token entry stored in the database.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct ApiTokenEntry {
-    pub id: i64,
-    pub token: String,
-    pub name: String,
-    pub created_at: i64,
-    pub last_used: Option<i64>,
-    pub scopes: ApiScopes,
-    pub expires_at: Option<i64>,
-}
-
 /// Domain representation of a DNS upstream resolver entry.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DnsUpstreamEntry {
@@ -97,18 +84,6 @@ impl DnsUpstreamEntry {
             domain: self.domain.clone(),
         }
     }
-}
-
-/// Domain representation of a user stored in the database.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct UserEntry {
-    pub id: i64,
-    pub username: String,
-    pub password_hash: String,
-    pub role: UserRole,
-    pub created_at: i64,
-    pub updated_at: i64,
-    pub last_login: Option<i64>,
 }
 
 /// Handles storage and retrieval of devices and DHCP/SLAAC leases.
@@ -687,19 +662,7 @@ pub trait UserStore: Send + Sync {
     fn count_users(&self) -> BoxFuture<'_, Result<i64, DbError>>;
 }
 
-/// Detailed bucket metrics for DNS query activity.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct DnsQueryRateBucket {
-    pub timestamp: u64,
-    pub total: u64,
-    pub cached: u64,
-    pub forwarded: u64,
-    pub blocked: u64,
-    pub local: u64,
-    pub rewritten: u64,
-    pub record_types: HashMap<String, u32>,
-    pub outcome_types: HashMap<String, HashMap<String, u32>>,
-}
+pub use lanforge_types::storage::DnsQueryRateBucket;
 
 /// Handles transient log operations.
 pub trait LogStore: Send + Sync {

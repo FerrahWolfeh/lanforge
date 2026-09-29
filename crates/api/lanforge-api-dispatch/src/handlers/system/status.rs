@@ -63,11 +63,10 @@ impl ClientContext {
         });
 
         let first_upstream = self
-            .db
-            .load_dns_upstreams()
-            .await
-            .ok()
-            .and_then(|rows| rows.into_iter().next())
+            .ctx
+            .get_dns_upstreams()
+            .into_iter()
+            .next()
             .map(|r| format!("{}://{}", r.protocol, r.addr));
         self.populate_service_and_device_stats(&mut status, total_devices, counts, first_upstream);
 
@@ -92,11 +91,8 @@ impl ClientContext {
         }));
         if status.auth.is_none() {
             status.auth = self
-                .db
-                .load_pppoe_config()
-                .await
-                .ok()
-                .flatten()
+                .ctx
+                .get_pppoe_config()
                 .map(|cfg| cfg.auth);
         }
 
@@ -162,29 +158,41 @@ impl ClientContext {
     }
 
     pub async fn handle_traffic_telemetry(&self) -> Response {
-        let (wan_iface, ingress_device) = self.ctx.with_state(|s| {
-            let (w, i) = s
-                .interfaces
-                .traffic_status
-                .as_ref()
-                .map_or((None, None), |status| {
-                    (status.wan_interface.clone(), status.ingress_device.clone())
+        let telemetry = self.ctx.traffic_telemetry().map_or_else(
+            || {
+                let (wan_iface, ingress_device) = self.ctx.with_state(|s| {
+                    let (w, i) = s
+                        .interfaces
+                        .traffic_status
+                        .as_ref()
+                        .map_or((None, None), |status| {
+                            (status.wan_interface.clone(), status.ingress_device.clone())
+                        });
+                    let fallback_wan = w.or_else(|| {
+                        s.interfaces
+                            .pppoe_status
+                            .as_ref()
+                            .and_then(|p| p.interface.clone())
+                    });
+                    (fallback_wan, i)
                 });
-            let fallback_wan = w.or_else(|| {
-                s.interfaces
-                    .pppoe_status
-                    .as_ref()
-                    .and_then(|p| p.interface.clone())
-            });
-            (fallback_wan, i)
-        });
-        let wan_iface = wan_iface.or_else(|| self.ctx.get_pppoe_config().map(|p| p.wan_iface));
+                let wan_iface = wan_iface.or_else(|| self.ctx.get_pppoe_config().map(|p| p.wan_iface));
 
-        let telemetry = lanforge_traffic::collect_traffic_telemetry(
-            wan_iface.as_deref(),
-            ingress_device.as_deref(),
-        )
-        .await;
+                lanforge_types::network::traffic::TrafficTelemetryResponse {
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    wan_interface: wan_iface,
+                    ingress_device,
+                    interfaces: Vec::new(),
+                    sqm: None,
+                    conntrack: None,
+                    history: Vec::new(),
+                }
+            },
+            |t| (*t).clone(),
+        );
 
         Response::TrafficTelemetry(Box::new(telemetry))
     }

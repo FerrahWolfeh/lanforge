@@ -19,6 +19,7 @@ authors = ["Ferrah Aiko <ferrahwolfeh@proton.me>"]
 lanforge-core = { path = "crates/core/lanforge-core" }
 lanforge-macros = { path = "crates/core/lanforge-macros" }
 lanforge-types = { path = "crates/core/lanforge-types" }
+lanforge-crypto = { path = "crates/core/lanforge-crypto" }
 lanforge-db = { path = "crates/db/lanforge-db" }
 lanforge-db-core = { path = "crates/db/lanforge-db-core" }
 lanforge-db-redb = { path = "crates/db/lanforge-db-redb" }

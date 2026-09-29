@@ -7,12 +7,9 @@ authors.workspace = true
 [dependencies]
 lanforge-types = { workspace = true }
 lanforge-core = { workspace = true }
-lanforge-db-core = { workspace = true }
 lanforge-api = { workspace = true }
-lanforge-dns = { workspace = true }
-lanforge-dns-wire = { workspace = true }
-lanforge-traffic = { workspace = true }
 lanforge-macros = { workspace = true }
+lanforge-crypto = { workspace = true }
 toml = { workspace = true }
 
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
@@ -30,15 +27,11 @@ hotpath = { workspace = true, optional = true }
 adblock = [
     "lanforge-types/adblock",
     "lanforge-core/adblock",
-    "lanforge-db-core/adblock",
-    "lanforge-dns/adblock",
     "lanforge-api/adblock",
 ]
 hotpath = [
     "dep:hotpath",
     "lanforge-core/hotpath",
-    "lanforge-db-core/hotpath",
-    "lanforge-dns/hotpath",
 ]
 [dev-dependencies]
 lanforge-dhcp = { workspace = true }

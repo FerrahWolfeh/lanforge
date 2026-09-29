@@ -20,8 +20,6 @@ smallvec = { workspace = true }
 parking_lot = { workspace = true }
 arc-swap = { workspace = true }
 dashmap = { workspace = true }
-argon2 = { workspace = true }
-password-hash = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "sync", "rt-multi-thread"] }

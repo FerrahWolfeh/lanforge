@@ -1,0 +1,10 @@
+[package]
+name = "lanforge-crypto"
+version = "0.1.0"
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+argon2 = { workspace = true }
+password-hash = { workspace = true }

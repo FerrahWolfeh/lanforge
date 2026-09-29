@@ -17,11 +17,6 @@ impl ClientContext {
     }
 
     pub async fn handle_update_dhcp_options(&self, options: DhcpOptionsConfig) -> Response {
-        if let Err(e) = self.db.save_dhcp_options(&options).await {
-            return Response::Error {
-                error: format!("Failed to save DHCP options to database: {e}"),
-            };
-        }
         self.ctx.update_dhcp_options(options);
         Response::Success(SimpleSuccess {
             message: "DHCP & TFTP options updated successfully".to_string(),
@@ -62,16 +57,6 @@ impl ClientContext {
         v4_pools: Vec<Dhcpv4Pool>,
         v6_pools: Vec<Dhcpv6Pool>,
     ) -> Response {
-        if let Err(e) = self.db.save_dhcp_v4_pools(&v4_pools).await {
-            return Response::Error {
-                error: format!("Failed to save DHCPv4 pools to database: {e}"),
-            };
-        }
-        if let Err(e) = self.db.save_dhcp_v6_pools(&v6_pools).await {
-            return Response::Error {
-                error: format!("Failed to save DHCPv6 pools to database: {e}"),
-            };
-        }
         self.ctx.update_dhcp_v4_pools(v4_pools);
         self.ctx.update_dhcp_v6_pools(v6_pools);
         Response::Success(SimpleSuccess {

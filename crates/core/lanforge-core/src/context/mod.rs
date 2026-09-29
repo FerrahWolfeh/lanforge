@@ -72,10 +72,11 @@ use lanforge_types::network::firewall::{
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
 use lanforge_types::network::TrafficConfig;
+use lanforge_types::network::traffic::TrafficTelemetryResponse;
 use lanforge_types::system::{Cap, ServerCapabilities, ServiceBanner, ServiceState, SystemStatus};
 use smallvec::SmallVec;
 
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use parking_lot::{Mutex, RwLock};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -88,12 +89,14 @@ pub mod caps;
 pub mod dns_handle;
 pub mod read;
 pub mod state;
+pub mod storage_handle;
 #[cfg(test)]
 pub mod tests;
 pub mod write;
 
 pub use self::caps::CompiledCaps;
 pub use self::dns_handle::DnsHandle;
+pub use self::storage_handle::StorageHandle;
 
 use std::sync::atomic::AtomicU64;
 
@@ -268,6 +271,8 @@ struct LanforgeContextInner {
     status_providers: RwLock<BTreeMap<String, Arc<dyn StatusProvider>>>,
     /// Decoupled DNS handle.
     dns_handle: RwLock<Option<DnsHandle>>,
+    /// Decoupled Storage handle.
+    storage_handle: RwLock<Option<StorageHandle>>,
     /// Dynamic service states.
     service_states: RwLock<HashMap<String, ServiceState>>,
     /// Dynamic service start times.
@@ -280,6 +285,8 @@ struct LanforgeContextInner {
     config_path: RwLock<Option<std::path::PathBuf>>,
     /// Compiled daemon capabilities.
     compiled_caps: RwLock<SmallVec<[Cap; 32]>>,
+    /// Latest traffic telemetry snapshot.
+    traffic_telemetry: ArcSwapOption<TrafficTelemetryResponse>,
 }
 
 #[allow(clippy::missing_panics_doc)] // Temporary
@@ -333,12 +340,14 @@ impl LanforgeContext {
             active_clients: Arc::new(AtomicUsize::new(0)),
             status_providers: RwLock::new(BTreeMap::new()),
             dns_handle: RwLock::new(None),
+            storage_handle: RwLock::new(None),
             service_states: RwLock::new(HashMap::new()),
             service_starts: RwLock::new(HashMap::new()),
             start_time: Instant::now(),
             db_metrics: DbWorkerMetrics::default(),
             config_path: RwLock::new(None),
             compiled_caps: RwLock::new(CompiledCaps::detect_default_compiled()),
+            traffic_telemetry: ArcSwapOption::empty(),
         });
         Self { inner }
     }
@@ -764,6 +773,17 @@ impl LanforgeContext {
         self.inner.config.read().traffic.clone()
     }
 
+    /// Stores the latest traffic telemetry snapshot.
+    pub fn set_traffic_telemetry(&self, telemetry: TrafficTelemetryResponse) {
+        self.inner.traffic_telemetry.store(Some(Arc::new(telemetry)));
+    }
+
+    /// Retrieves the latest traffic telemetry snapshot, if available.
+    #[must_use]
+    pub fn traffic_telemetry(&self) -> Option<Arc<TrafficTelemetryResponse>> {
+        self.inner.traffic_telemetry.load_full()
+    }
+
     /// Evaluates a candidate firewall configuration, runs pre-flight sanity checks,
     /// and stages it as an active pending transaction if valid.
     #[must_use]
@@ -905,6 +925,17 @@ impl LanforgeContext {
     #[must_use]
     pub fn dns_handle(&self) -> Option<DnsHandle> {
         self.inner.dns_handle.read().clone()
+    }
+
+    /// Sets the decoupled storage handle.
+    pub fn set_storage_handle(&self, handle: StorageHandle) {
+        *self.inner.storage_handle.write() = Some(handle);
+    }
+
+    /// Returns the decoupled storage handle, if available.
+    #[must_use]
+    pub fn storage_handle(&self) -> Option<StorageHandle> {
+        self.inner.storage_handle.read().clone()
     }
 
     /// Sets the dynamic state of a service.

@@ -3,9 +3,6 @@ use lanforge_api_dispatch::ClientContext;
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_db::config::DatabaseConfig;
-use lanforge_db::engine::LanforgeDb;
-use lanforge_db::log_engine::LogDb;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::Ipv6Prefix;
@@ -19,15 +16,6 @@ use std::time::{Duration, SystemTime};
 async fn init_test_context() -> ClientContext {
     let bus = Arc::new(EventBus::new());
     let table = State::new();
-    let db = Arc::new(
-        LanforgeDb::open(&DatabaseConfig {
-            config_path: "memory".to_string(),
-            ..Default::default()
-        })
-        .await
-        .unwrap(),
-    );
-    let log_db = Arc::new(LogDb::open_in_memory());
     let ctx = LanforgeContext::new(bus, table, None);
 
     ClientContext {
@@ -35,8 +23,6 @@ async fn init_test_context() -> ClientContext {
         uptime_secs: 10,
 
         ctx,
-        db,
-        log_db,
         active_clients: Arc::new(AtomicUsize::new(0)),
     }
 }
@@ -140,8 +126,6 @@ async fn test_api_status_reports_gua_and_ula() {
         uptime_secs: 100,
 
         ctx: ctx_handle.ctx,
-        db: ctx_handle.db,
-        log_db: ctx_handle.log_db,
         active_clients: ctx_handle.active_clients,
     };
 

@@ -7,11 +7,7 @@ use lanforge_types::network::dns::{
     DnsRecordType, DnsRequest, DnsResponse, UpstreamStatus,
     upstream::UpstreamProtocol,
 };
-use std::{
-    collections::HashMap,
-    net::IpAddr,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{collections::HashMap, net::IpAddr};
 
 impl ClientContext {
     /// Snapshot of DNS resolver statistics.
@@ -60,27 +56,24 @@ impl ClientContext {
             return Response::DnsUpstreams(DnsUpstreamsResponse { upstreams: res });
         }
 
-        if let Ok(rows) = self.db.load_dns_upstreams().await
-            && !rows.is_empty()
-        {
-            let mapped: Vec<lanforge_types::network::dns::UpstreamHealthSnapshot> =
-                rows.into_iter()
-                    .map(|r| lanforge_types::network::dns::UpstreamHealthSnapshot {
-                        target: r.addr,
-                        protocol: r.protocol,
-                        rtt_ewma_us: 1200,
-                        last_rtt_us: 1200,
-                        total_queries: 0,
-                        total_successes: 0,
-                        total_failures: 0,
-                        status: UpstreamStatus::Healthy,
-                        last_success_secs_ago: Some(0),
-                        domain: r.domain,
-                    })
-                    .collect();
-            if !mapped.is_empty() {
-                return Response::DnsUpstreams(DnsUpstreamsResponse { upstreams: mapped });
-            }
+        let configured = self.ctx.get_dns_upstreams();
+        if !configured.is_empty() {
+            let mapped: Vec<lanforge_types::network::dns::UpstreamHealthSnapshot> = configured
+                .into_iter()
+                .map(|r| lanforge_types::network::dns::UpstreamHealthSnapshot {
+                    target: r.addr,
+                    protocol: r.protocol,
+                    rtt_ewma_us: 1200,
+                    last_rtt_us: 1200,
+                    total_queries: 0,
+                    total_successes: 0,
+                    total_failures: 0,
+                    status: UpstreamStatus::Healthy,
+                    last_success_secs_ago: Some(0),
+                    domain: r.domain,
+                })
+                .collect();
+            return Response::DnsUpstreams(DnsUpstreamsResponse { upstreams: mapped });
         }
 
         Response::DnsUpstreams(DnsUpstreamsResponse {
@@ -94,19 +87,23 @@ impl ClientContext {
         protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> Response {
-        match self
-            .db
-            .add_dns_upstream(addr, protocol, domain.as_deref())
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service not available".into(),
+            };
+        };
+
+        match storage
+            .send_query(lanforge_types::storage::StorageQuery::AddDnsUpstream {
+                addr,
+                protocol,
+                domain,
+            })
             .await
         {
-            Ok(_) => {
-                if let Err(e) = self.reload_dns_upstreams_to_context().await {
-                    return Response::Error { error: e };
-                }
-                Response::Success(SimpleSuccess {
-                    message: "Upstream added successfully".into(),
-                })
-            }
+            Ok(_) => Response::Success(SimpleSuccess {
+                message: "Upstream added successfully".into(),
+            }),
             Err(e) => Response::Error {
                 error: format!("Failed to add upstream: {e}"),
             },
@@ -119,15 +116,23 @@ impl ClientContext {
         protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> Response {
-        match self.db.remove_dns_upstream(addr, protocol, domain.as_deref()).await {
-            Ok(_) => {
-                if let Err(e) = self.reload_dns_upstreams_to_context().await {
-                    return Response::Error { error: e };
-                }
-                Response::Success(SimpleSuccess {
-                    message: "Upstream removed successfully".into(),
-                })
-            }
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service not available".into(),
+            };
+        };
+
+        match storage
+            .send_query(lanforge_types::storage::StorageQuery::RemoveDnsUpstream {
+                addr,
+                protocol,
+                domain,
+            })
+            .await
+        {
+            Ok(_) => Response::Success(SimpleSuccess {
+                message: "Upstream removed successfully".into(),
+            }),
             Err(e) => Response::Error {
                 error: format!("Failed to remove upstream: {e}"),
             },
@@ -135,33 +140,23 @@ impl ClientContext {
     }
 
     pub async fn handle_dns_upstream_clear(&self) -> Response {
-        match self.db.clear_dns_upstreams().await {
-            Ok(_) => {
-                if let Err(e) = self.reload_dns_upstreams_to_context().await {
-                    return Response::Error { error: e };
-                }
-                Response::Success(SimpleSuccess {
-                    message: "All upstreams cleared successfully".into(),
-                })
-            }
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service not available".into(),
+            };
+        };
+
+        match storage
+            .send_query(lanforge_types::storage::StorageQuery::ClearDnsUpstreams)
+            .await
+        {
+            Ok(_) => Response::Success(SimpleSuccess {
+                message: "All upstreams cleared successfully".into(),
+            }),
             Err(e) => Response::Error {
                 error: format!("Failed to clear upstreams: {e}"),
             },
         }
-    }
-
-    async fn reload_dns_upstreams_to_context(&self) -> Result<(), String> {
-        let rows = self
-            .db
-            .load_dns_upstreams()
-            .await
-            .map_err(|e| e.to_string())?;
-        let upstreams = rows
-            .into_iter()
-            .map(|row| row.to_target())
-            .collect();
-        self.ctx.update_dns_upstreams(upstreams);
-        Ok(())
     }
 
     pub async fn handle_dns_analytics(
@@ -170,62 +165,36 @@ impl ClientContext {
         client: Option<String>,
     ) -> Response {
         let limit = limit.unwrap_or(10);
-        let top_domains = if let Some(ref c) = client {
-            self.log_db
-                .get_dns_top_domains_for_client(c, limit)
-                .await
-                .unwrap_or_default()
-        } else {
-            self.log_db
-                .get_dns_top_domains(limit)
-                .await
-                .unwrap_or_default()
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service not available".into(),
+            };
         };
-        let query_types = self.log_db.get_dns_query_types().await.unwrap_or_default();
-        let now_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let since_secs = now_secs.saturating_sub(86400);
-        let detailed_rates = self
-            .log_db
-            .get_dns_query_rate_detailed(since_secs, 900)
-            .await
-            .unwrap_or_default();
 
-        let top_clients = self
-            .log_db
-            .get_dns_top_clients(limit)
+        let data = match storage
+            .send_query(lanforge_types::storage::StorageQuery::GetDnsAnalytics { limit, client })
             .await
-            .unwrap_or_default();
-        let protocol_stats = self
-            .log_db
-            .get_dns_protocol_stats()
-            .await
-            .unwrap_or_default();
-
-        let top_blocked_domains = self
-            .log_db
-            .get_dns_top_blocked_domains(limit)
-            .await
-            .unwrap_or_default();
-        let top_blocked_clients = self
-            .log_db
-            .get_dns_top_blocked_clients(limit)
-            .await
-            .unwrap_or_default();
-        let blocked_query_rate = self
-            .log_db
-            .get_dns_blocked_query_rate(since_secs)
-            .await
-            .unwrap_or_default();
+        {
+            Ok(lanforge_types::storage::StorageQueryResult::DnsAnalytics(data)) => data,
+            Ok(_) => {
+                return Response::Error {
+                    error: "Unexpected storage query result for DNS analytics".into(),
+                };
+            }
+            Err(e) => {
+                return Response::Error {
+                    error: format!("Failed to retrieve DNS analytics: {e}"),
+                };
+            }
+        };
 
         let client_hostnames: HashMap<IpAddr, Option<String>> = self.ctx.with_state(|state| {
             let mut map = HashMap::new();
-            for ip_str in top_clients
+            for ip_str in data
+                .top_clients
                 .iter()
                 .map(|(ip, _, _)| ip)
-                .chain(top_blocked_clients.iter().map(|(ip, _)| ip))
+                .chain(data.top_blocked_clients.iter().map(|(ip, _)| ip))
             {
                 if let Ok(parsed_ip) = ip_str.parse::<IpAddr>()
                     && let std::collections::hash_map::Entry::Vacant(e) = map.entry(parsed_ip)
@@ -238,18 +207,21 @@ impl ClientContext {
         });
 
         Response::DnsAnalytics(Box::new(DnsAnalyticsResponse {
-            top_domains: top_domains
+            top_domains: data
+                .top_domains
                 .into_iter()
                 .map(|(domain, count)| TopDomainEntry { domain, count })
                 .collect(),
-            query_types: query_types
+            query_types: data
+                .query_types
                 .into_iter()
                 .map(|(qtype, count)| QueryTypeEntry {
                     qtype: DnsRecordType::from(qtype).to_string(),
                     count,
                 })
                 .collect(),
-            query_rate: detailed_rates
+            query_rate: data
+                .detailed_rates
                 .into_iter()
                 .map(|b| QueryRateEntry {
                     timestamp: b.timestamp,
@@ -263,7 +235,8 @@ impl ClientContext {
                     outcome_types: b.outcome_types,
                 })
                 .collect(),
-            top_clients: top_clients
+            top_clients: data
+                .top_clients
                 .into_iter()
                 .map(|(ip, count, blocked_count)| {
                     let hostname = ip
@@ -279,8 +252,8 @@ impl ClientContext {
                 })
                 .collect(),
             protocol_stats: {
-                let total: u64 = protocol_stats.iter().map(|(_, c)| *c).sum();
-                protocol_stats
+                let total: u64 = data.protocol_stats.iter().map(|(_, c)| *c).sum();
+                data.protocol_stats
                     .into_iter()
                     .map(|(protocol, count)| ProtocolStatEntry {
                         protocol,
@@ -293,11 +266,13 @@ impl ClientContext {
                     })
                     .collect()
             },
-            top_blocked_domains: top_blocked_domains
+            top_blocked_domains: data
+                .top_blocked_domains
                 .into_iter()
                 .map(|(domain, count)| TopDomainEntry { domain, count })
                 .collect(),
-            top_blocked_clients: top_blocked_clients
+            top_blocked_clients: data
+                .top_blocked_clients
                 .into_iter()
                 .map(|(ip, count)| {
                     let hostname = ip
@@ -312,7 +287,8 @@ impl ClientContext {
                     }
                 })
                 .collect(),
-            blocked_query_rate: blocked_query_rate
+            blocked_query_rate: data
+                .blocked_query_rate
                 .into_iter()
                 .map(|(timestamp, count)| QueryRateEntry {
                     timestamp,

@@ -95,3 +95,27 @@ pub struct UserInfo {
     pub updated_at: i64,
     pub last_login: Option<i64>,
 }
+
+/// Domain representation of an API token entry stored in the database.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApiTokenEntry {
+    pub id: i64,
+    pub token: String,
+    pub name: String,
+    pub created_at: i64,
+    pub last_used: Option<i64>,
+    pub scopes: ApiScopes,
+    pub expires_at: Option<i64>,
+}
+
+/// Domain representation of a user stored in the database.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserEntry {
+    pub id: i64,
+    pub username: String,
+    pub password_hash: String,
+    pub role: UserRole,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub last_login: Option<i64>,
+}

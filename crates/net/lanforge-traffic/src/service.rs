@@ -197,6 +197,11 @@ impl AsyncService for TrafficService {
         ctx.set_service_state("traffic", initial_state);
         self.publish_status(ctx, initial_state);
 
+        let wan = self.active_wan.as_deref();
+        let ifb = self.active_ifb.as_deref();
+        let initial_snapshot = crate::collect_traffic_telemetry(wan, ifb).await;
+        ctx.set_traffic_telemetry(initial_snapshot);
+
         // 3. Event Loop for reactive dynamic adjustments
         let mut sys_rx = ctx.bus().subscribe_system();
         let mut pppoe_rx = ctx.bus().subscribe_pppoe();
@@ -211,7 +216,8 @@ impl AsyncService for TrafficService {
                 _ = telemetry_tick.tick() => {
                     let wan = self.active_wan.as_deref();
                     let ifb = self.active_ifb.as_deref();
-                    crate::record_traffic_telemetry_tick(wan, ifb).await;
+                    let snapshot = crate::collect_traffic_telemetry(wan, ifb).await;
+                    ctx.set_traffic_telemetry(snapshot);
                 }
 
                 // Listen to in-place traffic configuration updates

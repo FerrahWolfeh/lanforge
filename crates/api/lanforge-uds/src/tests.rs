@@ -5,33 +5,21 @@ use lanforge_api_dispatch::ClientContext;
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State as CoreState;
-use lanforge_db::config::DatabaseConfig;
-use lanforge_db::engine::LanforgeDb;
-use lanforge_db::log_engine::LogDb;
+use lanforge_core::context::storage_handle::StorageHandle;
 use lanforge_types::events::{LanforgeEvent, StorageEvent, SystemEvent, TimedEvent};
+use lanforge_types::storage::{StorageQuery, StorageQueryResult};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 async fn init_test_context() -> ClientContext {
     let bus = Arc::new(EventBus::new());
     let table = CoreState::new();
-    let db = Arc::new(
-        LanforgeDb::open(&DatabaseConfig {
-            config_path: "memory".to_string(),
-            ..Default::default()
-        })
-        .await
-        .unwrap(),
-    );
-    let log_db = Arc::new(LogDb::open_in_memory());
     let ctx = LanforgeContext::new(bus, table, None);
 
     ClientContext {
         current_gua: None,
         uptime_secs: 100,
         ctx: ctx.clone(),
-        db,
-        log_db,
         active_clients: ctx.active_clients(),
     }
 }
@@ -92,11 +80,27 @@ async fn test_uds_log_streaming_filter() {
     let client_ctx = init_test_context().await;
     let (mut client, server) = tokio::io::duplex(8192);
 
+    let (storage_tx, mut storage_rx) = tokio::sync::mpsc::channel(16);
+    client_ctx
+        .ctx
+        .set_storage_handle(StorageHandle::new(storage_tx));
+
     // Populate history logs using TimedEvent::new() to automatically assign timestamps
     let log1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::ReloadConfig)); // matches ConfigReloaded
     let log2 = TimedEvent::new(LanforgeEvent::Storage(StorageEvent::DbVacuum)); // filtered out
-    client_ctx.log_db.record_log(&log1).await.unwrap();
-    client_ctx.log_db.record_log(&log2).await.unwrap();
+    let log1_clone = log1.clone();
+    let log2_clone = log2.clone();
+
+    tokio::spawn(async move {
+        while let Some((query, reply)) = storage_rx.recv().await {
+            if let StorageQuery::GetLogHistory(_) = query {
+                let _ = reply.send(Ok(StorageQueryResult::LogHistory(vec![
+                    log1_clone.clone(),
+                    log2_clone.clone(),
+                ])));
+            }
+        }
+    });
 
     let client_ctx_clone = client_ctx.clone();
     let handler_task = tokio::spawn(async move {

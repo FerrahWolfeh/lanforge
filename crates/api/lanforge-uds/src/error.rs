@@ -1,4 +1,3 @@
-use lanforge_db_core::DbError;
 use thiserror::Error;
 
 /// Errors that can occur during API operations.
@@ -12,9 +11,9 @@ pub enum UdsError {
     #[error("Encoding error: {0}")]
     EncodingError(String),
 
-    /// Error during database operations.
-    #[error("Database error: {0}")]
-    Database(#[from] DbError),
+    /// Error during database or storage operations.
+    #[error("Storage error: {0}")]
+    Storage(String),
 }
 
 /// A specialized Result type for API operations.

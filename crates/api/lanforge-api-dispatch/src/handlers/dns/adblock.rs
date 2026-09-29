@@ -3,8 +3,8 @@ use crate::ClientContext;
 use lanforge_api::api::Response;
 #[cfg(feature = "adblock")]
 use lanforge_api::api::{
-    AdblockRuleEntry, AdblockUrlEntry, DnsAdblockRulesResponse, DnsAdblockStatusResponse,
-    DnsAdblockUrlsResponse, Response, SimpleSuccess,
+    DnsAdblockRulesResponse, DnsAdblockStatusResponse, DnsAdblockUrlsResponse, Response,
+    SimpleSuccess,
 };
 
 #[cfg(feature = "adblock")]
@@ -27,15 +27,15 @@ impl ClientContext {
         if duration_secs.is_none() {
             // Persistent change
             let val = if enabled { "true" } else { "false" };
-            match self.db.set_adblock_config_value("enabled", val).await {
-                Ok(()) => {
-                    if let Ok(cfg) = self.db.load_adblock_config().await {
-                        self.ctx.update_dns_adblock(cfg);
-                    }
-                }
-                Err(e) => {
-                    error!("❌ API: Failed to persist adblock enabled status: {e}");
-                }
+            if let Some(storage) = self.ctx.storage_handle()
+                && let Err(e) = storage
+                    .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                        key: "enabled".into(),
+                        value: val.into(),
+                    })
+                    .await
+            {
+                error!("❌ API: Failed to persist adblock enabled status: {e}");
             }
         }
 
@@ -123,26 +123,23 @@ impl ClientContext {
 
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_url_add(&self, url: String, kind: AdblockUrlKind) -> Response {
-        match self.db.add_adblock_url(&url, kind).await {
-            Ok(()) => {
-                if let Ok(urls) = self.db.load_adblock_urls().await {
-                    let entries = urls
-                        .into_iter()
-                        .map(|(id, url, kind)| AdblockUrlEntry {
-                            id: Some(id),
-                            url,
-                            kind,
-                        })
-                        .collect();
-                    self.ctx.update_dns_adblock_urls(entries);
-                }
-                Response::Success(SimpleSuccess {
-                    message: format!("Adblock {kind} URL added: {url}"),
-                })
-            }
-            Err(e) => Response::Error {
-                error: e.to_string(),
-            },
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service not available".into(),
+            };
+        };
+
+        match storage
+            .send_query(lanforge_types::storage::StorageQuery::AddAdblockUrl {
+                url: url.clone(),
+                kind,
+            })
+            .await
+        {
+            Ok(_) => Response::Success(SimpleSuccess {
+                message: format!("Adblock {kind} URL added: {url}"),
+            }),
+            Err(e) => Response::Error { error: e },
         }
     }
 
@@ -160,26 +157,22 @@ impl ClientContext {
 
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_url_remove(&self, url: String) -> Response {
-        match self.db.remove_adblock_url(&url).await {
-            Ok(()) => {
-                if let Ok(urls) = self.db.load_adblock_urls().await {
-                    let entries = urls
-                        .into_iter()
-                        .map(|(id, url, kind)| AdblockUrlEntry {
-                            id: Some(id),
-                            url,
-                            kind,
-                        })
-                        .collect();
-                    self.ctx.update_dns_adblock_urls(entries);
-                }
-                Response::Success(SimpleSuccess {
-                    message: format!("Adblock URL removed: {url}"),
-                })
-            }
-            Err(e) => Response::Error {
-                error: e.to_string(),
-            },
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service not available".into(),
+            };
+        };
+
+        match storage
+            .send_query(lanforge_types::storage::StorageQuery::RemoveAdblockUrl(
+                url.clone(),
+            ))
+            .await
+        {
+            Ok(_) => Response::Success(SimpleSuccess {
+                message: format!("Adblock URL removed: {url}"),
+            }),
+            Err(e) => Response::Error { error: e },
         }
     }
 
@@ -193,21 +186,8 @@ impl ClientContext {
 
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_url_list(&self) -> Response {
-        match self.db.load_adblock_urls().await {
-            Ok(urls) => Response::DnsAdblockUrls(DnsAdblockUrlsResponse {
-                urls: urls
-                    .into_iter()
-                    .map(|(id, url, kind)| AdblockUrlEntry {
-                        id: Some(id),
-                        url,
-                        kind,
-                    })
-                    .collect(),
-            }),
-            Err(e) => Response::Error {
-                error: e.to_string(),
-            },
-        }
+        let urls = self.ctx.get_dns_adblock_urls();
+        Response::DnsAdblockUrls(DnsAdblockUrlsResponse { urls })
     }
 
     #[cfg(not(feature = "adblock"))]
@@ -225,46 +205,47 @@ impl ClientContext {
         blocking_ip_v4: Option<Ipv4Addr>,
         blocking_ip_v6: Option<Ipv6Addr>,
     ) -> Response {
-        let mut updated = false;
-        if let Some(mode) = blocking_mode {
-            if let Err(e) = self
-                .db
-                .set_adblock_config_value("blocking_mode", &mode.to_string())
-                .await
-            {
-                return Response::Error {
-                    error: format!("Failed to update blocking_mode: {e}"),
-                };
-            }
-            updated = true;
-        }
-        if let Some(ip) = blocking_ip_v4 {
-            if let Err(e) = self
-                .db
-                .set_adblock_config_value("blocking_ip_v4", &ip.to_string())
-                .await
-            {
-                return Response::Error {
-                    error: format!("Failed to update blocking_ip_v4: {e}"),
-                };
-            }
-            updated = true;
-        }
-        if let Some(ip) = blocking_ip_v6 {
-            if let Err(e) = self
-                .db
-                .set_adblock_config_value("blocking_ip_v6", &ip.to_string())
-                .await
-            {
-                return Response::Error {
-                    error: format!("Failed to update blocking_ip_v6: {e}"),
-                };
-            }
-            updated = true;
-        }
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service not available".into(),
+            };
+        };
 
-        if updated && let Ok(cfg) = self.db.load_adblock_config().await {
-            self.ctx.update_dns_adblock(cfg);
+        if let Some(mode) = blocking_mode
+            && let Err(e) = storage
+                .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                    key: "blocking_mode".into(),
+                    value: mode.to_string(),
+                })
+                .await
+        {
+            return Response::Error {
+                error: format!("Failed to update blocking_mode: {e}"),
+            };
+        }
+        if let Some(ip) = blocking_ip_v4
+            && let Err(e) = storage
+                .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                    key: "blocking_ip_v4".into(),
+                    value: ip.to_string(),
+                })
+                .await
+        {
+            return Response::Error {
+                error: format!("Failed to update blocking_ip_v4: {e}"),
+            };
+        }
+        if let Some(ip) = blocking_ip_v6
+            && let Err(e) = storage
+                .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                    key: "blocking_ip_v6".into(),
+                    value: ip.to_string(),
+                })
+                .await
+        {
+            return Response::Error {
+                error: format!("Failed to update blocking_ip_v6: {e}"),
+            };
         }
 
         Response::Success(SimpleSuccess {
@@ -287,23 +268,8 @@ impl ClientContext {
 
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_rules(&self) -> Response {
-        match self.db.load_adblock_rules().await {
-            Ok(rows) => {
-                let rules = rows
-                    .into_iter()
-                    .map(|(id, domain, action, enabled)| AdblockRuleEntry {
-                        id: Some(id),
-                        domain,
-                        action,
-                        enabled,
-                    })
-                    .collect();
-                Response::DnsAdblockRules(DnsAdblockRulesResponse { rules })
-            }
-            Err(e) => Response::Error {
-                error: e.to_string(),
-            },
-        }
+        let rules = self.ctx.get_dns_adblock_rules();
+        Response::DnsAdblockRules(DnsAdblockRulesResponse { rules })
     }
 
     #[cfg(not(feature = "adblock"))]
@@ -320,27 +286,30 @@ impl ClientContext {
             Ok(a) => a,
             Err(e) => return Response::Error { error: e },
         };
-        match self.db.add_adblock_rule(&domain, rule_action).await {
-            Ok(id) => {
-                if let Ok(rows) = self.db.load_adblock_rules().await {
-                    let rules = rows
-                        .into_iter()
-                        .map(|(id, domain, action, enabled)| AdblockRuleEntry {
-                            id: Some(id),
-                            domain,
-                            action,
-                            enabled,
-                        })
-                        .collect();
-                    self.ctx.update_dns_adblock_rules(rules);
-                }
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service not available".into(),
+            };
+        };
+
+        match storage
+            .send_query(lanforge_types::storage::StorageQuery::AddAdblockRule {
+                domain: domain.clone(),
+                action: rule_action,
+            })
+            .await
+        {
+            Ok(lanforge_types::storage::StorageQueryResult::Id(id)) => {
                 Response::Success(SimpleSuccess {
-                    message: format!("Adblock rule added for domain '{domain}' with action '{action}' (id: {id})"),
+                    message: format!(
+                        "Adblock rule added for domain '{domain}' with action '{action}' (id: {id})"
+                    ),
                 })
             }
-            Err(e) => Response::Error {
-                error: e.to_string(),
-            },
+            Ok(_) => Response::Success(SimpleSuccess {
+                message: format!("Adblock rule added for domain '{domain}' with action '{action}'"),
+            }),
+            Err(e) => Response::Error { error: e },
         }
     }
 
@@ -354,27 +323,20 @@ impl ClientContext {
 
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_rule_remove(&self, id: i64) -> Response {
-        match self.db.remove_adblock_rule(id).await {
-            Ok(()) => {
-                if let Ok(rows) = self.db.load_adblock_rules().await {
-                    let rules = rows
-                        .into_iter()
-                        .map(|(id, domain, action, enabled)| AdblockRuleEntry {
-                            id: Some(id),
-                            domain,
-                            action,
-                            enabled,
-                        })
-                        .collect();
-                    self.ctx.update_dns_adblock_rules(rules);
-                }
-                Response::Success(SimpleSuccess {
-                    message: format!("Adblock rule {id} removed"),
-                })
-            }
-            Err(e) => Response::Error {
-                error: e.to_string(),
-            },
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service not available".into(),
+            };
+        };
+
+        match storage
+            .send_query(lanforge_types::storage::StorageQuery::RemoveAdblockRule(id))
+            .await
+        {
+            Ok(_) => Response::Success(SimpleSuccess {
+                message: format!("Adblock rule {id} removed"),
+            }),
+            Err(e) => Response::Error { error: e },
         }
     }
 
@@ -388,27 +350,22 @@ impl ClientContext {
 
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_rule_status(&self, id: i64, enabled: bool) -> Response {
-        match self.db.update_adblock_rule_status(id, enabled).await {
-            Ok(()) => {
-                if let Ok(rows) = self.db.load_adblock_rules().await {
-                    let rules = rows
-                        .into_iter()
-                        .map(|(id, domain, action, enabled)| AdblockRuleEntry {
-                            id: Some(id),
-                            domain,
-                            action,
-                            enabled,
-                        })
-                        .collect();
-                    self.ctx.update_dns_adblock_rules(rules);
-                }
-                Response::Success(SimpleSuccess {
-                    message: format!("Adblock rule {id} status updated to enabled={enabled}"),
-                })
-            }
-            Err(e) => Response::Error {
-                error: e.to_string(),
-            },
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Response::Error {
+                error: "Storage service not available".into(),
+            };
+        };
+
+        match storage
+            .send_query(
+                lanforge_types::storage::StorageQuery::UpdateAdblockRuleStatus { id, enabled },
+            )
+            .await
+        {
+            Ok(_) => Response::Success(SimpleSuccess {
+                message: format!("Adblock rule {id} status updated to enabled={enabled}"),
+            }),
+            Err(e) => Response::Error { error: e },
         }
     }
 

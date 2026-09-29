@@ -2375,13 +2375,10 @@ dependencies = [
  "hotpath",
  "lanforge-api",
  "lanforge-core",
+ "lanforge-crypto",
  "lanforge-db",
- "lanforge-db-core",
  "lanforge-dhcp",
- "lanforge-dns",
- "lanforge-dns-wire",
  "lanforge-macros",
- "lanforge-traffic",
  "lanforge-types",
  "pnet",
  "rand 0.10.3",
@@ -2447,18 +2444,24 @@ name = "lanforge-core"
 version = "0.26.0"
 dependencies = [
  "arc-swap",
- "argon2",
  "dashmap",
  "hotpath",
  "lanforge-macros",
  "lanforge-types",
  "parking_lot",
- "password-hash",
  "serde",
  "smallvec",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "lanforge-crypto"
+version = "0.1.0"
+dependencies = [
+ "argon2",
+ "password-hash",
 ]
 
 [[package]]
@@ -2610,7 +2613,6 @@ dependencies = [
 name = "lanforge-http"
 version = "0.10.0"
 dependencies = [
- "argon2",
  "async-stream",
  "axum",
  "axum-server",
@@ -2626,6 +2628,7 @@ dependencies = [
  "lanforge-api",
  "lanforge-api-dispatch",
  "lanforge-core",
+ "lanforge-crypto",
  "lanforge-db",
  "lanforge-db-core",
  "lanforge-dhcp",
@@ -2799,7 +2802,6 @@ dependencies = [
  "lanforge-api-dispatch",
  "lanforge-core",
  "lanforge-db",
- "lanforge-db-core",
  "lanforge-dns",
  "lanforge-macros",
  "lanforge-types",

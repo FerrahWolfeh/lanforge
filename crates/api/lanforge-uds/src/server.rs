@@ -7,7 +7,6 @@ use crate::error::UdsError;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_db_core::{DatabaseStore, LogStore};
 use std::fs::{self, Permissions};
 use std::io::ErrorKind;
 use std::net::Ipv6Addr;
@@ -35,8 +34,6 @@ use lanforge_types::system::ServiceState;
 pub struct ControlService {
     cfg: Arc<ApiConfig>,
     ctx: LanforgeContext,
-    db: Arc<dyn DatabaseStore>,
-    log_db: Arc<dyn LogStore>,
 }
 
 impl ControlService {
@@ -44,14 +41,10 @@ impl ControlService {
     pub const fn new(
         cfg: Arc<ApiConfig>,
         ctx: LanforgeContext,
-        db: Arc<dyn DatabaseStore>,
-        log_db: Arc<dyn LogStore>,
     ) -> Self {
         Self {
             cfg,
             ctx,
-            db,
-            log_db,
         }
     }
 
@@ -100,8 +93,6 @@ impl ControlService {
             current_gua,
             uptime_secs: startup_time.elapsed().as_secs(),
             ctx: self.ctx.clone(),
-            db: self.db.clone(),
-            log_db: self.log_db.clone(),
             active_clients: self.ctx.active_clients(),
         };
         tokio::spawn(async move {
@@ -336,7 +327,18 @@ where
     R: AsyncRead + Unpin,
 {
     let n_lines = n.unwrap_or(100);
-    let history = ctx.log_db.get_history(n_lines).await?;
+    let history = if let Some(storage) = ctx.ctx.storage_handle() {
+        match storage
+            .send_query(lanforge_types::storage::StorageQuery::GetLogHistory(n_lines))
+            .await
+        {
+            Ok(lanforge_types::storage::StorageQueryResult::LogHistory(h)) => h,
+            Ok(_) => Vec::new(),
+            Err(e) => return Err(UdsError::Storage(e)),
+        }
+    } else {
+        Vec::new()
+    };
 
     write_rpc_response(writer, &RpcResponse::Log(()), buf).await?;
     for event in history {

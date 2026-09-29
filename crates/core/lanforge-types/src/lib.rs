@@ -6,6 +6,7 @@ pub mod dhcp;
 pub mod events;
 pub mod identifiers;
 pub mod network;
+pub mod storage;
 pub mod system;
 pub mod update;
 pub mod utils;

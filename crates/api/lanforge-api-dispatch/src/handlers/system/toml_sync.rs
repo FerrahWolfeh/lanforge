@@ -423,7 +423,7 @@ impl ClientContext {
     /// Exports the consolidated configuration as a formatted TOML string.
     pub async fn export_system_config_toml(&self) -> String {
         let export = self.export_system_config_data().await;
-        let db_url = if self.db.is_in_memory() {
+        let db_url = if self.ctx.is_recovery_mode() {
             "memory".to_string()
         } else {
             std::env::var("DATABASE_URL").unwrap_or_else(|_| {

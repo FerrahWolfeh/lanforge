@@ -123,7 +123,7 @@ async fn test_handle_login() {
 
     // 2. Test when auth is enabled
     let password = "my_secure_password";
-    let hash = lanforge_core::utils::auth::hash_password(password);
+    let hash = lanforge_crypto::hash_password(password);
     let state_with_auth = AppState {
         cfg: Arc::new(HttpConfig {
             auth_password_hash: Some(hash),

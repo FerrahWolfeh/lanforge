@@ -14,6 +14,7 @@ use http_body_util::BodyExt;
 use lanforge_core::{
     bus::EventBus,
     context::{LanforgeContext, state::State as CoreState},
+    service::AsyncService,
 };
 use lanforge_db::{config::DatabaseConfig, engine::LanforgeDb, log_engine::LogDb};
 use lanforge_http::{auth::AuthManager, config::HttpConfig, routes, server::AppState};
@@ -61,10 +62,21 @@ async fn make_state(with_auth: bool) -> AppState {
     let log_db = Arc::new(LogDb::open_in_memory());
     let ctx = LanforgeContext::new(bus, table, None);
 
+    let mut worker = lanforge_db::worker::DbWorker::new(
+        DatabaseConfig::default(),
+        ctx.clone(),
+        db.clone(),
+        log_db.clone(),
+    );
+    let ctx_worker = ctx.clone();
+    tokio::spawn(async move {
+        let _ = worker.serve(&ctx_worker).await;
+    });
+
     AppState {
         cfg: Arc::new(HttpConfig {
             auth_password_hash: if with_auth {
-                Some(lanforge_core::utils::auth::hash_password("testpass"))
+                Some(lanforge_crypto::hash_password("testpass"))
             } else {
                 None
             },

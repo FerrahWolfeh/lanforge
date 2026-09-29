@@ -5,6 +5,7 @@ use lanforge_api_dispatch::ClientContext;
 use lanforge_core::bus::{EventBus, LanforgeEvent, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
+use lanforge_core::service::AsyncService;
 use lanforge_db::config::DatabaseConfig;
 use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
@@ -36,12 +37,17 @@ async fn init_test_context() -> ClientContext {
     let log_db = Arc::new(LogDb::open_in_memory());
     let ctx = LanforgeContext::new(bus, table, None);
 
+    let mut worker =
+        lanforge_db::worker::DbWorker::new(DatabaseConfig::default(), ctx.clone(), db, log_db);
+    let ctx_worker = ctx.clone();
+    tokio::spawn(async move {
+        let _ = worker.serve(&ctx_worker).await;
+    });
+
     ClientContext {
         current_gua: None,
         uptime_secs: 100,
         ctx,
-        db,
-        log_db,
         active_clients: Arc::new(AtomicUsize::new(1)),
     }
 }
@@ -504,10 +510,8 @@ async fn test_static_host_deletion_should_purge_all_leases() {
     let remove_res = client_ctx.handle_host_remove(mac).await;
     assert!(matches!(remove_res, Response::Success(_)));
 
-    // 4. Verify device is purged from memory and database
+    // 4. Verify device is purged from memory context
     assert!(client_ctx.ctx.get_device(&mac).is_none());
-    let db_devices = client_ctx.db.load_all_devices().await.unwrap();
-    assert!(!db_devices.iter().any(|d| d.mac == mac));
 }
 
 #[tokio::test]

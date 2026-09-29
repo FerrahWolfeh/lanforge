@@ -83,6 +83,7 @@ impl TimedEvent {
                     | SystemEvent::ConfigRaChanged
                     | SystemEvent::ConfigTftpChanged
                     | SystemEvent::ConfigDhcpOptionsChanged
+                    | SystemEvent::ConfigPppoeChanged
             ),
             LanforgeEvent::Storage(e) => matches!(
                 e,

@@ -10,7 +10,7 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post},
 };
-use lanforge_core::utils::auth::{hash_password, verify_password};
+use lanforge_crypto::{hash_password, verify_password};
 use lanforge_types::auth::UserRole;
 use serde::{Deserialize, Serialize};
 use tracing::error;
