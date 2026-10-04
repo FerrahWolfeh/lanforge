@@ -694,6 +694,34 @@ pub struct AdblockUrlEntry {
     pub format: AdblockSourceFormat,
 }
 
+impl AdblockUrlEntry {
+    /// Returns the database ID or computes a deterministic positive 64-bit ID from the URL.
+    ///
+    /// When an entry lacks an explicit database ID (e.g. in test suites, transient configurations,
+    /// or before database insertion), a deterministic positive `i64` is derived using 64-bit FNV-1a:
+    /// - `0xcbf2_9ce4_8422_2325`: Standard 64-bit FNV offset basis seed.
+    /// - `0x0100_0000_01b3`: Standard 64-bit FNV prime providing fast bit avalanche.
+    /// - `& 0x7FFF_FFFF_FFFF_FFFF`: Masks the sign bit to guarantee a non-negative `i64`.
+    #[must_use]
+    #[allow(clippy::cast_possible_wrap)]
+    pub fn source_id(&self) -> i64 {
+        self.id.unwrap_or_else(|| {
+            // 64-bit FNV-1a offset basis
+            let mut h = 0xcbf2_9ce4_8422_2325_u64;
+            for &b in self.url.as_bytes() {
+                h ^= u64::from(b);
+                // 64-bit FNV prime
+                h = h.wrapping_mul(0x0100_0000_01b3);
+            }
+            // Clear sign bit to ensure a non-negative i64
+            (h & 0x7FFF_FFFF_FFFF_FFFF) as i64
+        })
+    }
+}
+
+
+
+
 /// Status and metrics for an adblock filter list source.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AdblockSourceStatus {

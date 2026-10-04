@@ -11,12 +11,11 @@ use dashmap::DashMap;
 use http_body_util::{BodyExt, Full};
 use hyper::header::LOCATION;
 use hyper::{Method, Request, Uri};
-use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::rt::TokioExecutor;
 use parking_lot::RwLock;
 use tracing::{debug, error, info, trace};
+
 
 use lanforge_dns_wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use lanforge_types::network::dns::DnsRecordType;
@@ -316,20 +315,10 @@ impl AdBlocker {
 
     pub async fn load_from_urls(&self, name: &str, urls: &[String]) -> Result<HashSet<String>, DnsError> {
         let mut new_list = HashSet::new();
-        let mut http = HttpConnector::new();
-        http.set_connect_timeout(Some(Duration::from_secs(10)));
-        let https = HttpsConnectorBuilder::new()
-            .with_webpki_roots()
-            .https_or_http()
-            .enable_http1()
-            .enable_http2()
-            .wrap_connector(http);
-
-        let client = Client::builder(TokioExecutor::new())
-            .pool_idle_timeout(Duration::from_secs(30))
-            .build(https);
+        let client = source::build_adblock_http_client();
 
         let mut total_domains = 0;
+
         let mut successful_urls = 0;
 
         info!(
@@ -418,7 +407,8 @@ async fn fetch_url_inner(
         let resp = client
             .request(req)
             .await
-            .map_err(|e| DnsError::Generic(format!("HTTP request error: {e}")))?;
+            .map_err(|e| DnsError::Generic(format!("HTTP request error: {}", source::format_error_chain(&e))))?;
+
         let status = resp.status();
 
         if status.is_redirection() {

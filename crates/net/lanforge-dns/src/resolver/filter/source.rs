@@ -10,8 +10,10 @@ use fst::{Map, MapBuilder, Streamer};
 use http_body_util::{BodyExt, Full};
 use hyper::header::{ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED, LOCATION};
 use hyper::{Method, Request, Uri};
+use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::rt::TokioExecutor;
 use memmap2::Mmap;
 
 use lanforge_types::network::dns::adblock::AdblockSourceFormat;
@@ -25,6 +27,42 @@ use crate::resolver::filter::parse::{parse_source, MatchFlags, RuleAction};
 
 const MAX_BODY_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
 
+pub type AdblockHttpClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>;
+
+/// Builds an HTTP/HTTPS client configured for downloading adblock filter sources.
+#[must_use]
+pub fn build_adblock_http_client() -> AdblockHttpClient {
+    #[cfg(feature = "ring")]
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let mut http = HttpConnector::new();
+    http.enforce_http(false);
+    http.set_connect_timeout(Some(Duration::from_secs(10)));
+    let https = HttpsConnectorBuilder::new()
+        .with_webpki_roots()
+        .https_or_http()
+        .enable_http1()
+        .enable_http2()
+        .wrap_connector(http);
+
+    Client::builder(TokioExecutor::new())
+        .pool_idle_timeout(Duration::from_secs(30))
+        .build(https)
+}
+
+/// Formats an error and its entire underlying cause chain for diagnostics.
+pub fn format_error_chain(err: &impl std::error::Error) -> String {
+    let mut msg = err.to_string();
+    let mut cur = err.source();
+    while let Some(cause) = cur {
+        msg.push_str(&format!(": {cause}"));
+        cur = cause.source();
+    }
+    msg
+}
+
 pub enum SourceFetchResult {
     NotModified,
     Fetched {
@@ -33,6 +71,7 @@ pub enum SourceFetchResult {
         last_modified: Option<String>,
     },
 }
+
 
 /// Performs a conditional HTTP GET request using ETag and If-Modified-Since headers.
 pub async fn fetch_source_conditional(
@@ -65,7 +104,8 @@ pub async fn fetch_source_conditional(
         let resp = tokio::time::timeout(Duration::from_secs(120), client.request(req))
             .await
             .map_err(|_| DnsError::Generic("Request timed out (120s limit)".to_string()))?
-            .map_err(|e| DnsError::Generic(format!("HTTP request error: {e}")))?;
+            .map_err(|e| DnsError::Generic(format!("HTTP request error: {}", format_error_chain(&e))))?;
+
 
         let status = resp.status();
 
@@ -532,5 +572,26 @@ mod tests {
 
         assert_eq!(block_map.len(), 3);
         assert_eq!(allow_map.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_adblock_http_client_scheme_support() {
+        let client = build_adblock_http_client();
+        // Request an HTTPS URI on loopback: even if connection is refused, it must NOT fail
+        // with "invalid URL, scheme is not http".
+        let uri: Uri = "https://127.0.0.1:1/hosts".parse().unwrap();
+        let req = Request::builder()
+            .method(Method::GET)
+            .uri(uri)
+            .body(Full::<Bytes>::default())
+            .unwrap();
+
+        let res = client.request(req).await;
+        assert!(res.is_err());
+        let err_chain = format_error_chain(&res.unwrap_err());
+        assert!(
+            !err_chain.contains("scheme is not http"),
+            "Client should not enforce http scheme on https requests: {err_chain}"
+        );
     }
 }

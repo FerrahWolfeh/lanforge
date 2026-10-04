@@ -592,7 +592,7 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                 let sources = urls
                     .into_iter()
                     .map(|u| {
-                        let id = u.id.unwrap_or(0);
+                        let id = u.source_id();
                         if let Some(sm) = manifest.sources.get(&id) {
                             AdblockSourceStatus {
                                 id,
@@ -651,9 +651,10 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                         let urls = dns_ctx.ctx.get_dns_adblock_urls();
                         let url = urls
                             .iter()
-                            .find(|u| u.id == Some(source_id))
+                            .find(|u| u.source_id() == source_id)
                             .map(|u| u.url.clone())
                             .unwrap_or_else(|| format!("source#{source_id}"));
+
                         source_matches.push(AdblockSourceMatch {
                             source_id,
                             url,
