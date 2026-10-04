@@ -77,11 +77,11 @@ impl PppoeService {
         )))
     }
 
-    #[allow(clippy::too_many_lines)]
-    async fn run_session_flow(&mut self) -> Result<(), PppoeError> {
-        let (ifindex, mac) = self.get_interface_details()?;
-
-        // 1. Discovery
+    async fn perform_discovery(
+        &mut self,
+        ifindex: u32,
+        mac: MacAddr,
+    ) -> Result<crate::discovery::DiscoveryResult, PppoeError> {
         info!("PPPoE: Starting discovery on {}", self.cfg.wan_iface);
         let discovery = PppoeDiscovery::new(
             ifindex,
@@ -99,167 +99,199 @@ impl PppoeService {
             session_id = disc_res.session_id,
             "PPPoE discovery complete"
         );
+        Ok(disc_res)
+    }
 
-        // 2. Open Session Socket & Execute Session Flow
-        let flow_res = async {
-            let session =
-                PppoeSession::connect(&self.cfg.wan_iface, disc_res.ac_mac, disc_res.session_id)?;
+    async fn negotiate_session(
+        &self,
+        disc_res: &crate::discovery::DiscoveryResult,
+        mac: MacAddr,
+    ) -> Result<(PppoeSession, crate::lcp::LcpNegotiated, crate::ipcp::IpcpNegotiated), PppoeError> {
+        let session =
+            PppoeSession::connect(&self.cfg.wan_iface, disc_res.ac_mac, disc_res.session_id)?;
 
-            // 3. Negotiate LCP
-            info!("Negotiating LCP...");
-            let lcp_res = negotiate_lcp(&session, self.cfg.mru, self.cfg.auth).await?;
-            info!(
-                mru = lcp_res.mru,
-                auth = ?lcp_res.auth_method,
-                "LCP negotiation succeeded"
-            );
+        info!("Negotiating LCP...");
+        let lcp_res = negotiate_lcp(&session, self.cfg.mru, self.cfg.auth).await?;
+        info!(
+            mru = lcp_res.mru,
+            auth = ?lcp_res.auth_method,
+            "LCP negotiation succeeded"
+        );
 
-            // 4. Authenticate
-            info!("Authenticating via {:?}...", lcp_res.auth_method);
-            let creds = PppoeCredentials {
-                username: self.cfg.username.clone(),
-                password: self.cfg.password.clone(),
-                auth: lcp_res.auth_method,
-            };
-            if let Err(e) = authenticate(&session, &creds).await {
-                let _ = self
-                    .ctx
-                    .bus()
-                    .publish(LanforgeEvent::Pppoe(PppoeEvent::AuthFailed {
-                        reason: e.to_string(),
-                    }));
-                return Err(e);
-            }
-            info!("Authentication successful");
+        info!("Authenticating via {:?}...", lcp_res.auth_method);
+        let creds = PppoeCredentials {
+            username: self.cfg.username.clone(),
+            password: self.cfg.password.clone(),
+            auth: lcp_res.auth_method,
+        };
+        if let Err(e) = authenticate(&session, &creds).await {
+            let _ = self
+                .ctx
+                .bus()
+                .publish(LanforgeEvent::Pppoe(PppoeEvent::AuthFailed {
+                    reason: e.to_string(),
+                }));
+            return Err(e);
+        }
+        info!("Authentication successful");
 
-            // 5. Negotiate IPCP / IPv6CP
-            info!("Negotiating IPCP / IPv6CP...");
-            let ipcp_res = negotiate_ipcp(&session, mac).await?;
-            info!(
-                ipv4 = ?ipcp_res.local_ip,
-                peer = ?ipcp_res.peer_ip,
-                dns_count = ipcp_res.dns.len(),
-                ipv6_link_local = ipcp_res.local_v6_ll.is_some(),
-                "IPCP negotiation succeeded"
-            );
+        info!("Negotiating IPCP / IPv6CP...");
+        let ipcp_res = negotiate_ipcp(&session, mac).await?;
+        info!(
+            ipv4 = ?ipcp_res.local_ip,
+            peer = ?ipcp_res.peer_ip,
+            dns_count = ipcp_res.dns.len(),
+            ipv6_link_local = ipcp_res.local_v6_ll.is_some(),
+            "IPCP negotiation succeeded"
+        );
 
-            // 6. Handoff to data plane & Configure network interface
-            let (interface_name, control_fd, _ebpf_session, _kernel_session): (
-                String,
-                std::os::fd::OwnedFd,
-                EbpfSessionHandle,
-                Option<crate::kernel::KernelSession>,
-            ) = if self.cfg.dataplane == PppoeDataplane::Ebpf {
-                #[cfg(feature = "ebpf")]
-                {
-                    info!(
-                        wan_iface = %self.cfg.wan_iface,
-                        "Attaching eBPF Generic XDP + TC fast-path data plane"
-                    );
-                    let ebpf_sess = EbpfSession::attach(
-                        ifindex,
-                        &self.cfg.wan_iface,
-                        disc_res.session_id,
-                        disc_res.ac_mac.0,
-                        mac.0,
-                        ipcp_res.local_ip,
-                        ipcp_res.peer_ip,
-                        lcp_res.mru,
-                    )?;
-                    configure_interface(
-                        &self.cfg.wan_iface,
-                        ipcp_res.local_ip,
-                        ipcp_res.peer_ip,
-                        Some(disc_res.ac_mac.0),
-                        ipcp_res.local_v6_ll,
-                        ipcp_res.peer_v6_ll,
-                        lcp_res.mru,
-                    )
-                    .await?;
-                    (
-                        self.cfg.wan_iface.clone(),
-                        session.session_fd().try_clone()?,
-                        Some(ebpf_sess),
-                        None,
-                    )
-                }
-                #[cfg(not(feature = "ebpf"))]
-                {
-                    return Err(PppoeError::NegotiationFailed(
-                        "eBPF dataplane support is not compiled into this binary (compile with --features ebpf)".into(),
-                    ));
-                }
-            } else {
-                info!("Performing kernel ppp_generic handoff...");
-                let kernel_session = handoff_to_kernel(session.session_fd(), lcp_res.mru)?;
-                configure_interface(
-                    &kernel_session.interface_name,
+        Ok((session, lcp_res, ipcp_res))
+    }
+
+    async fn setup_dataplane(
+        &self,
+        session: &PppoeSession,
+        _disc_res: &crate::discovery::DiscoveryResult,
+        mac: MacAddr,
+        ifindex: u32,
+        lcp_res: &crate::lcp::LcpNegotiated,
+        ipcp_res: &crate::ipcp::IpcpNegotiated,
+    ) -> Result<
+        (
+            String,
+            std::os::fd::OwnedFd,
+            EbpfSessionHandle,
+            Option<crate::kernel::KernelSession>,
+        ),
+        PppoeError,
+    > {
+        if self.cfg.dataplane == PppoeDataplane::Ebpf {
+            #[cfg(feature = "ebpf")]
+            {
+                info!(
+                    wan_iface = %self.cfg.wan_iface,
+                    "Attaching eBPF Generic XDP + TC fast-path data plane"
+                );
+                let ebpf_sess = EbpfSession::attach(
+                    ifindex,
+                    &self.cfg.wan_iface,
+                    _disc_res.session_id,
+                    _disc_res.ac_mac.0,
+                    mac.0,
                     ipcp_res.local_ip,
                     ipcp_res.peer_ip,
-                    None,
+                    lcp_res.mru,
+                )?;
+                configure_interface(
+                    &self.cfg.wan_iface,
+                    ipcp_res.local_ip,
+                    ipcp_res.peer_ip,
+                    Some(_disc_res.ac_mac.0),
                     ipcp_res.local_v6_ll,
                     ipcp_res.peer_v6_ll,
                     lcp_res.mru,
                 )
                 .await?;
-                let chan_fd = kernel_session.ppp_chan_fd.try_clone()?;
-                (
-                    kernel_session.interface_name.clone(),
-                    chan_fd,
+                Ok((
+                    self.cfg.wan_iface.clone(),
+                    session.session_fd().try_clone()?,
+                    Some(ebpf_sess),
                     None,
-                    Some(kernel_session),
-                )
-            };
+                ))
+            }
+            #[cfg(not(feature = "ebpf"))]
+            {
+                let _ = (ifindex, mac);
+                Err(PppoeError::NegotiationFailed(
+                    "eBPF dataplane support is not compiled into this binary (compile with --features ebpf)".into(),
+                ))
+            }
+        } else {
+            info!("Performing kernel ppp_generic handoff...");
+            let kernel_session = handoff_to_kernel(session.session_fd(), lcp_res.mru)?;
+            configure_interface(
+                &kernel_session.interface_name,
+                ipcp_res.local_ip,
+                ipcp_res.peer_ip,
+                None,
+                ipcp_res.local_v6_ll,
+                ipcp_res.peer_v6_ll,
+                lcp_res.mru,
+            )
+            .await?;
+            let chan_fd = kernel_session.ppp_chan_fd.try_clone()?;
+            Ok((
+                kernel_session.interface_name.clone(),
+                chan_fd,
+                None,
+                Some(kernel_session),
+            ))
+        }
+    }
 
-            // Update core State with connected PPPoE status
-            let pppoe_status = PppoeStatusResponse {
-                enabled: true,
-                dataplane: Some(self.cfg.dataplane),
-                state: PppoeSessionState::Connected,
-                interface: Some(interface_name.clone()),
-                wan_iface: Some(self.cfg.wan_iface.clone()),
-                local_ip: ipcp_res.local_ip,
-                peer_ip: ipcp_res.peer_ip,
-                ac_mac: Some(disc_res.ac_mac),
-                ac_name: disc_res.ac_name.clone(),
-                session_id: Some(disc_res.session_id),
-                mru: Some(lcp_res.mru),
-                dns_servers: ipcp_res.dns.clone(),
-                uptime_secs: Some(0),
-                reconnect_attempts: self.attempt,
-                last_error: None,
-                auth: Some(lcp_res.auth_method),
-            };
+    fn publish_connected_status(
+        &mut self,
+        interface_name: &str,
+        disc_res: &crate::discovery::DiscoveryResult,
+        lcp_res: &crate::lcp::LcpNegotiated,
+        ipcp_res: &crate::ipcp::IpcpNegotiated,
+    ) {
+        let pppoe_status = PppoeStatusResponse {
+            enabled: true,
+            dataplane: Some(self.cfg.dataplane),
+            state: PppoeSessionState::Connected,
+            interface: Some(interface_name.to_string()),
+            wan_iface: Some(self.cfg.wan_iface.clone()),
+            local_ip: ipcp_res.local_ip,
+            peer_ip: ipcp_res.peer_ip,
+            ac_mac: Some(disc_res.ac_mac),
+            ac_name: disc_res.ac_name.clone(),
+            session_id: Some(disc_res.session_id),
+            mru: Some(lcp_res.mru),
+            dns_servers: ipcp_res.dns.clone(),
+            uptime_secs: Some(0),
+            reconnect_attempts: self.attempt,
+            last_error: None,
+            auth: Some(lcp_res.auth_method),
+        };
 
-            let _ = self.ctx.apply(DeviceUpdate::PppoeStatusUpdated {
-                status: Some(Box::new(pppoe_status)),
-            });
+        let _ = self.ctx.apply(DeviceUpdate::PppoeStatusUpdated {
+            status: Some(Box::new(pppoe_status)),
+        });
 
-            // 7. Publish SessionUp event and signal service readiness
-            let _ = self
-                .ctx
-                .bus()
-                .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(
-                    lanforge_types::events::PppoeSessionUp {
-                        interface: interface_name.clone(),
-                        ac_mac: Some(disc_res.ac_mac),
-                        ac_name: disc_res.ac_name.clone(),
-                        session_id: disc_res.session_id,
-                        mru: lcp_res.mru,
-                        ipv4: ipcp_res.local_ip,
-                        ipv4_peer: ipcp_res.peer_ip,
-                        dns: ipcp_res.dns,
-                        ipv6_link_local: ipcp_res.local_v6_ll.is_some(),
-                    },
-                ))));
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(
+                lanforge_types::events::PppoeSessionUp {
+                    interface: interface_name.to_string(),
+                    ac_mac: Some(disc_res.ac_mac),
+                    ac_name: disc_res.ac_name.clone(),
+                    session_id: disc_res.session_id,
+                    mru: lcp_res.mru,
+                    ipv4: ipcp_res.local_ip,
+                    ipv4_peer: ipcp_res.peer_ip,
+                    dns: ipcp_res.dns.clone(),
+                    ipv6_link_local: ipcp_res.local_v6_ll.is_some(),
+                },
+            ))));
 
-            // Signal supervisor that PPPoE WAN interface is UP and ready
-            self.ctx.set_pppoe_ready(true);
+        self.ctx.set_pppoe_ready(true);
+        self.attempt = 0;
+    }
 
-            // Reset attempt counter on clean connection
-            self.attempt = 0;
+    async fn run_session_flow(&mut self) -> Result<(), PppoeError> {
+        let (ifindex, mac) = self.get_interface_details()?;
+        let disc_res = self.perform_discovery(ifindex, mac).await?;
 
-            // 8. Run keepalive / monitoring loop
+        let flow_res = async {
+            let (session, lcp_res, ipcp_res) = self.negotiate_session(&disc_res, mac).await?;
+            let (interface_name, control_fd, _ebpf_session, _kernel_session) = self
+                .setup_dataplane(&session, &disc_res, mac, ifindex, &lcp_res, &ipcp_res)
+                .await?;
+
+            self.publish_connected_status(&interface_name, &disc_res, &lcp_res, &ipcp_res);
+
             info!(
                 interface = %interface_name,
                 dataplane = ?self.cfg.dataplane,

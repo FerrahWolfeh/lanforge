@@ -218,44 +218,286 @@ pub fn parse_peer_v6_ifid(data: &[u8], len: usize) -> Option<Ipv6Addr> {
 ///
 /// Both protocols run concurrently over the PPP session stream, preventing
 /// packets of one protocol from being discarded while waiting for the other.
-#[allow(clippy::too_many_lines)]
+struct IpcpV4State {
+    req_id: u8,
+    assigned_ip: Ipv4Addr,
+    assigned_dns1: Ipv4Addr,
+    assigned_dns2: Ipv4Addr,
+    req_dns: bool,
+    my_ack_received: bool,
+    peer_ack_sent: bool,
+    peer_ip: Ipv4Addr,
+    req_pkt: PacketBuf<32>,
+}
+
+impl IpcpV4State {
+    fn new() -> Self {
+        let req_id = 1u8;
+        let assigned_ip = Ipv4Addr::UNSPECIFIED;
+        let assigned_dns1 = Ipv4Addr::UNSPECIFIED;
+        let assigned_dns2 = Ipv4Addr::UNSPECIFIED;
+        let req_dns = true;
+        let req_pkt = build_ipcp_req(req_id, assigned_ip, assigned_dns1, assigned_dns2, req_dns);
+        Self {
+            req_id,
+            assigned_ip,
+            assigned_dns1,
+            assigned_dns2,
+            req_dns,
+            my_ack_received: false,
+            peer_ack_sent: false,
+            peer_ip: Ipv4Addr::UNSPECIFIED,
+            req_pkt,
+        }
+    }
+
+    const fn is_done(&self) -> bool {
+        self.my_ack_received && self.peer_ack_sent
+    }
+
+    fn rebuild_req(&mut self) {
+        self.req_id = self.req_id.wrapping_add(1);
+        self.req_pkt = build_ipcp_req(
+            self.req_id,
+            self.assigned_ip,
+            self.assigned_dns1,
+            self.assigned_dns2,
+            self.req_dns,
+        );
+    }
+}
+
+struct IpcpV6State {
+    req_id: u8,
+    local_ifid: [u8; 8],
+    local_v6_ll: Ipv6Addr,
+    my_ack_received: bool,
+    peer_ack_sent: bool,
+    peer_v6_ll: Option<Ipv6Addr>,
+    rejected: bool,
+    req_pkt: PacketBuf<16>,
+}
+
+impl IpcpV6State {
+    fn new(local_mac: MacAddr) -> Self {
+        let local_v6_ll = mac_to_eui64_link_local(local_mac);
+        let mut local_ifid = [0u8; 8];
+        local_ifid.copy_from_slice(&local_v6_ll.octets()[8..16]);
+        let req_id = 1u8;
+        let req_pkt = build_ipv6cp_req(req_id, local_ifid);
+        Self {
+            req_id,
+            local_ifid,
+            local_v6_ll,
+            my_ack_received: false,
+            peer_ack_sent: false,
+            peer_v6_ll: None,
+            rejected: false,
+            req_pkt,
+        }
+    }
+
+    const fn is_done(&self) -> bool {
+        (self.my_ack_received && self.peer_ack_sent) || self.rejected
+    }
+
+    fn rebuild_req(&mut self) {
+        self.req_id = self.req_id.wrapping_add(1);
+        self.req_pkt = build_ipv6cp_req(self.req_id, self.local_ifid);
+    }
+}
+
+async fn handle_ipcp_code(
+    session: &PppoeSession,
+    code: u8,
+    id: u8,
+    data: &[u8],
+    len: usize,
+    v4: &mut IpcpV4State,
+) -> Result<(), PppoeError> {
+    match code {
+        0x01 => {
+            if let Some(pip) = parse_peer_ip(data, len) {
+                v4.peer_ip = pip;
+            }
+            let ack_pkt = build_ipcp_ack(id, data, len);
+            session.send_ppp_frame(&ack_pkt).await?;
+            v4.peer_ack_sent = true;
+            info!(peer_ip = %v4.peer_ip, "Acknowledged BRAS IPv4 IPCP Configure-Request");
+        }
+        0x02 if id == v4.req_id => {
+            v4.my_ack_received = true;
+            info!(
+                assigned_ip = %v4.assigned_ip,
+                dns1 = %v4.assigned_dns1,
+                dns2 = %v4.assigned_dns2,
+                "BRAS acknowledged our IPv4 IPCP Configure-Request"
+            );
+        }
+        0x03 if id == v4.req_id => {
+            parse_ipcp_nak(
+                data,
+                len,
+                &mut v4.assigned_ip,
+                &mut v4.assigned_dns1,
+                &mut v4.assigned_dns2,
+            );
+            info!(
+                assigned_ip = %v4.assigned_ip,
+                dns1 = %v4.assigned_dns1,
+                dns2 = %v4.assigned_dns2,
+                "Received IPv4 IPCP Configure-Nak from BRAS, confirming assignment"
+            );
+            v4.rebuild_req();
+            session.send_ppp_frame(&v4.req_pkt).await?;
+        }
+        0x04 if id == v4.req_id => {
+            warn!("BRAS rejected DNS options in IPv4 IPCP, retrying without DNS");
+            v4.req_dns = false;
+            v4.rebuild_req();
+            session.send_ppp_frame(&v4.req_pkt).await?;
+        }
+        _ => {
+            debug!(code, id, "Unhandled IPCP packet code");
+        }
+    }
+    Ok(())
+}
+
+async fn handle_ipv6cp_code(
+    session: &PppoeSession,
+    code: u8,
+    id: u8,
+    data: &[u8],
+    len: usize,
+    v6: &mut IpcpV6State,
+) -> Result<(), PppoeError> {
+    match code {
+        0x01 => {
+            if let Some(peer_ll) = parse_peer_v6_ifid(data, len) {
+                v6.peer_v6_ll = Some(peer_ll);
+                info!(peer_ll = %peer_ll, "Extracted peer IPv6 link-local interface identifier");
+            }
+            let ack_pkt = build_ipv6cp_ack(id, data, len);
+            session.send_ppp_frame(&ack_pkt).await?;
+            v6.peer_ack_sent = true;
+            info!("Acknowledged BRAS IPv6CP Configure-Request");
+        }
+        0x02 if id == v6.req_id => {
+            v6.my_ack_received = true;
+            info!(local_ll = %v6.local_v6_ll, "BRAS acknowledged our IPv6CP Configure-Request");
+        }
+        0x03 if id == v6.req_id => {
+            if let Some(alt_ll) = parse_peer_v6_ifid(data, len) {
+                v6.local_ifid.copy_from_slice(&alt_ll.octets()[8..16]);
+            }
+            v6.rebuild_req();
+            session.send_ppp_frame(&v6.req_pkt).await?;
+        }
+        0x04 => {
+            info!("BRAS rejected IPv6CP negotiation");
+            v6.rejected = true;
+        }
+        _ => {
+            debug!(code, id, "Unhandled IPv6CP packet code");
+        }
+    }
+    Ok(())
+}
+
+async fn handle_lcp_echo(
+    session: &PppoeSession,
+    code: u8,
+    id: u8,
+    data: &[u8],
+    len: usize,
+) -> Result<(), PppoeError> {
+    if code == LCP_ECHO_REQ {
+        let mut rep = [0u8; 128];
+        let payload_len = (len.saturating_sub(4)).min(120);
+        rep[0..2].copy_from_slice(&PPP_LCP.to_be_bytes());
+        rep[2] = LCP_ECHO_REP;
+        rep[3] = id;
+        #[allow(clippy::cast_possible_truncation)]
+        let l = (4 + payload_len) as u16;
+        rep[4..6].copy_from_slice(&l.to_be_bytes());
+        rep[6..6 + payload_len].copy_from_slice(&data[6..6 + payload_len]);
+        let _ = session.send_ppp_frame(&rep[..6 + payload_len]).await;
+    }
+    Ok(())
+}
+
+fn finalize_negotiation(
+    v4: &IpcpV4State,
+    v6: &IpcpV6State,
+) -> Result<IpcpNegotiated, PppoeError> {
+    let mut dns = Vec::new();
+    if v4.assigned_dns1 != Ipv4Addr::UNSPECIFIED {
+        dns.push(IpAddr::V4(v4.assigned_dns1));
+    }
+    if v4.assigned_dns2 != Ipv4Addr::UNSPECIFIED {
+        dns.push(IpAddr::V4(v4.assigned_dns2));
+    }
+
+    let local_ip = if v4.my_ack_received && v4.assigned_ip != Ipv4Addr::UNSPECIFIED {
+        Some(v4.assigned_ip)
+    } else {
+        None
+    };
+
+    let resolved_peer_ip = if local_ip.is_some() {
+        if v4.peer_ip == Ipv4Addr::UNSPECIFIED {
+            local_ip
+        } else {
+            Some(v4.peer_ip)
+        }
+    } else {
+        None
+    };
+
+    let resolved_v6_ll = if v6.my_ack_received {
+        Some(v6.local_v6_ll)
+    } else {
+        None
+    };
+
+    if local_ip.is_none() && resolved_v6_ll.is_none() {
+        return Err(PppoeError::IpcpFailed(
+            "Neither IPv4 nor IPv6 could be negotiated in IPCP phase".into(),
+        ));
+    }
+
+    info!(
+        ipv4 = ?local_ip,
+        peer_v4 = ?resolved_peer_ip,
+        dns_count = dns.len(),
+        ipv6_ll = ?resolved_v6_ll,
+        peer_v6_ll = ?v6.peer_v6_ll,
+        "IPCP / IPv6CP negotiation complete"
+    );
+
+    Ok(IpcpNegotiated {
+        local_ip,
+        peer_ip: resolved_peer_ip,
+        dns,
+        local_v6_ll: resolved_v6_ll,
+        peer_v6_ll: v6.peer_v6_ll,
+    })
+}
+
+/// Unified concurrent IPCP (IPv4) and `IPv6CP` negotiation loop.
+///
+/// Both protocols run concurrently over the PPP session stream, preventing
+/// packets of one protocol from being discarded while waiting for the other.
 pub async fn negotiate_ipcp(
     session: &PppoeSession,
     local_mac: MacAddr,
 ) -> Result<IpcpNegotiated, PppoeError> {
-    let local_v6_ll = mac_to_eui64_link_local(local_mac);
-    let mut local_ifid = [0u8; 8];
-    local_ifid.copy_from_slice(&local_v6_ll.octets()[8..16]);
+    let mut v4 = IpcpV4State::new();
+    let mut v6 = IpcpV6State::new(local_mac);
 
-    // IPv4 State
-    let mut v4_req_id = 1u8;
-    let mut assigned_ip = Ipv4Addr::UNSPECIFIED;
-    let mut assigned_dns1 = Ipv4Addr::UNSPECIFIED;
-    let mut assigned_dns2 = Ipv4Addr::UNSPECIFIED;
-    let mut req_dns = true;
-    let mut v4_my_ack_received = false;
-    let mut v4_peer_ack_sent = false;
-    let mut peer_ip = Ipv4Addr::UNSPECIFIED;
-
-    // IPv6 State
-    let mut v6_req_id = 1u8;
-    let mut v6_my_ack_received = false;
-    let mut v6_peer_ack_sent = false;
-    let mut peer_v6_ll: Option<Ipv6Addr> = None;
-    let mut v6_rejected = false;
-
-    // Initial Configure-Requests
-    let mut v4_req_pkt = build_ipcp_req(
-        v4_req_id,
-        assigned_ip,
-        assigned_dns1,
-        assigned_dns2,
-        req_dns,
-    );
-    session.send_ppp_frame(&v4_req_pkt).await?;
-
-    let mut v6_req_pkt = build_ipv6cp_req(v6_req_id, local_ifid);
-    session.send_ppp_frame(&v6_req_pkt).await?;
+    session.send_ppp_frame(&v4.req_pkt).await?;
+    session.send_ppp_frame(&v6.req_pkt).await?;
 
     let start = Instant::now();
     let total_timeout = Duration::from_secs(12);
@@ -265,37 +507,24 @@ pub async fn negotiate_ipcp(
     let mut buf = [0u8; 1500];
 
     while start.elapsed() < total_timeout {
-        let v4_done = v4_my_ack_received && v4_peer_ack_sent;
-        let v6_done = (v6_my_ack_received && v6_peer_ack_sent) || v6_rejected;
-
-        if v4_done && v6_done {
+        if v4.is_done() && v6.is_done() {
             break;
         }
 
-        // If IPv4 is done and we waited 3 seconds for optional IPv6CP without reply, proceed
-        if v4_done && start.elapsed() > Duration::from_secs(4) {
+        if v4.is_done() && start.elapsed() > Duration::from_secs(4) {
             debug!("IPv4 negotiated successfully, IPv6CP negotiation finished/skipped");
             break;
         }
 
-        // Periodic retransmit of unacknowledged Configure-Requests
         if last_retransmit.elapsed() >= retransmit_interval {
             last_retransmit = Instant::now();
-            if !v4_my_ack_received {
-                v4_req_id = v4_req_id.wrapping_add(1);
-                v4_req_pkt = build_ipcp_req(
-                    v4_req_id,
-                    assigned_ip,
-                    assigned_dns1,
-                    assigned_dns2,
-                    req_dns,
-                );
-                let _ = session.send_ppp_frame(&v4_req_pkt).await;
+            if !v4.my_ack_received {
+                v4.rebuild_req();
+                let _ = session.send_ppp_frame(&v4.req_pkt).await;
             }
-            if !v6_my_ack_received && !v6_rejected {
-                v6_req_id = v6_req_id.wrapping_add(1);
-                v6_req_pkt = build_ipv6cp_req(v6_req_id, local_ifid);
-                let _ = session.send_ppp_frame(&v6_req_pkt).await;
+            if !v6.my_ack_received && !v6.rejected {
+                v6.rebuild_req();
+                let _ = session.send_ppp_frame(&v6.req_pkt).await;
             }
         }
 
@@ -324,123 +553,9 @@ pub async fn negotiate_ipcp(
         }
 
         match proto {
-            PPP_IPCP => {
-                match code {
-                    0x01 => {
-                        // Configure-Request from BRAS
-                        if let Some(pip) = parse_peer_ip(data, len) {
-                            peer_ip = pip;
-                        }
-                        let ack_pkt = build_ipcp_ack(id, data, len);
-                        session.send_ppp_frame(&ack_pkt).await?;
-                        v4_peer_ack_sent = true;
-                        info!(peer_ip = %peer_ip, "Acknowledged BRAS IPv4 IPCP Configure-Request");
-                    }
-                    0x02 if id == v4_req_id => {
-                        // Configure-Ack from BRAS for our IPCP request
-                        v4_my_ack_received = true;
-                        info!(
-                            assigned_ip = %assigned_ip,
-                            dns1 = %assigned_dns1,
-                            dns2 = %assigned_dns2,
-                            "BRAS acknowledged our IPv4 IPCP Configure-Request"
-                        );
-                    }
-                    0x03 if id == v4_req_id => {
-                        // Configure-Nak from BRAS (assigning our IP / DNS)
-                        parse_ipcp_nak(
-                            data,
-                            len,
-                            &mut assigned_ip,
-                            &mut assigned_dns1,
-                            &mut assigned_dns2,
-                        );
-                        info!(
-                            assigned_ip = %assigned_ip,
-                            dns1 = %assigned_dns1,
-                            dns2 = %assigned_dns2,
-                            "Received IPv4 IPCP Configure-Nak from BRAS, confirming assignment"
-                        );
-                        v4_req_id = v4_req_id.wrapping_add(1);
-                        v4_req_pkt = build_ipcp_req(
-                            v4_req_id,
-                            assigned_ip,
-                            assigned_dns1,
-                            assigned_dns2,
-                            req_dns,
-                        );
-                        session.send_ppp_frame(&v4_req_pkt).await?;
-                    }
-                    0x04 if id == v4_req_id => {
-                        // Configure-Reject from BRAS (e.g. DNS options not supported)
-                        warn!("BRAS rejected DNS options in IPv4 IPCP, retrying without DNS");
-                        req_dns = false;
-                        v4_req_id = v4_req_id.wrapping_add(1);
-                        v4_req_pkt = build_ipcp_req(
-                            v4_req_id,
-                            assigned_ip,
-                            assigned_dns1,
-                            assigned_dns2,
-                            req_dns,
-                        );
-                        session.send_ppp_frame(&v4_req_pkt).await?;
-                    }
-                    _ => {
-                        debug!(code, id, "Unhandled IPCP packet code");
-                    }
-                }
-            }
-            PPP_IPV6CP => {
-                match code {
-                    0x01 => {
-                        // Configure-Request from BRAS for IPv6CP
-                        if let Some(peer_ll) = parse_peer_v6_ifid(data, len) {
-                            peer_v6_ll = Some(peer_ll);
-                            info!(peer_ll = %peer_ll, "Extracted peer IPv6 link-local interface identifier");
-                        }
-                        let ack_pkt = build_ipv6cp_ack(id, data, len);
-                        session.send_ppp_frame(&ack_pkt).await?;
-                        v6_peer_ack_sent = true;
-                        info!("Acknowledged BRAS IPv6CP Configure-Request");
-                    }
-                    0x02 if id == v6_req_id => {
-                        // Configure-Ack from BRAS for our IPv6CP request
-                        v6_my_ack_received = true;
-                        info!(local_ll = %local_v6_ll, "BRAS acknowledged our IPv6CP Configure-Request");
-                    }
-                    0x03 if id == v6_req_id => {
-                        // Configure-Nak from BRAS: suggests alternate Interface Identifier
-                        if let Some(alt_ll) = parse_peer_v6_ifid(data, len) {
-                            local_ifid.copy_from_slice(&alt_ll.octets()[8..16]);
-                        }
-                        v6_req_id = v6_req_id.wrapping_add(1);
-                        v6_req_pkt = build_ipv6cp_req(v6_req_id, local_ifid);
-                        session.send_ppp_frame(&v6_req_pkt).await?;
-                    }
-                    0x04 => {
-                        // Configure-Reject: BRAS does not support IPv6CP
-                        info!("BRAS rejected IPv6CP negotiation");
-                        v6_rejected = true;
-                    }
-                    _ => {
-                        debug!(code, id, "Unhandled IPv6CP packet code");
-                    }
-                }
-            }
-            PPP_LCP => {
-                if code == LCP_ECHO_REQ {
-                    let mut rep = [0u8; 128];
-                    let payload_len = (len.saturating_sub(4)).min(120);
-                    rep[0..2].copy_from_slice(&PPP_LCP.to_be_bytes());
-                    rep[2] = LCP_ECHO_REP;
-                    rep[3] = id;
-                    #[allow(clippy::cast_possible_truncation)]
-                    let l = (4 + payload_len) as u16;
-                    rep[4..6].copy_from_slice(&l.to_be_bytes());
-                    rep[6..6 + payload_len].copy_from_slice(&data[6..6 + payload_len]);
-                    let _ = session.send_ppp_frame(&rep[..6 + payload_len]).await;
-                }
-            }
+            PPP_IPCP => handle_ipcp_code(session, code, id, data, len, &mut v4).await?,
+            PPP_IPV6CP => handle_ipv6cp_code(session, code, id, data, len, &mut v6).await?,
+            PPP_LCP => handle_lcp_echo(session, code, id, data, len).await?,
             _ => {
                 debug!(
                     proto = format_args!("{proto:#06x}"),
@@ -450,60 +565,7 @@ pub async fn negotiate_ipcp(
         }
     }
 
-    // Build DNS list
-    let mut dns = Vec::new();
-    if assigned_dns1 != Ipv4Addr::UNSPECIFIED {
-        dns.push(IpAddr::V4(assigned_dns1));
-    }
-    if assigned_dns2 != Ipv4Addr::UNSPECIFIED {
-        dns.push(IpAddr::V4(assigned_dns2));
-    }
-
-    let local_ip = if v4_my_ack_received && assigned_ip != Ipv4Addr::UNSPECIFIED {
-        Some(assigned_ip)
-    } else {
-        None
-    };
-
-    let resolved_peer_ip = if local_ip.is_some() {
-        if peer_ip == Ipv4Addr::UNSPECIFIED {
-            // Fallback for BRAS that do not advertise their own IP: use assigned_ip as point-to-point peer
-            local_ip
-        } else {
-            Some(peer_ip)
-        }
-    } else {
-        None
-    };
-
-    let resolved_v6_ll = if v6_my_ack_received {
-        Some(local_v6_ll)
-    } else {
-        None
-    };
-
-    if local_ip.is_none() && resolved_v6_ll.is_none() {
-        return Err(PppoeError::IpcpFailed(
-            "Neither IPv4 nor IPv6 could be negotiated in IPCP phase".into(),
-        ));
-    }
-
-    info!(
-        ipv4 = ?local_ip,
-        peer_v4 = ?resolved_peer_ip,
-        dns_count = dns.len(),
-        ipv6_ll = ?resolved_v6_ll,
-        peer_v6_ll = ?peer_v6_ll,
-        "IPCP / IPv6CP negotiation complete"
-    );
-
-    Ok(IpcpNegotiated {
-        local_ip,
-        peer_ip: resolved_peer_ip,
-        dns,
-        local_v6_ll: resolved_v6_ll,
-        peer_v6_ll,
-    })
+    finalize_negotiation(&v4, &v6)
 }
 
 #[cfg(test)]
