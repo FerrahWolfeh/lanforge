@@ -143,15 +143,20 @@ impl TrafficService {
             })));
         }
     }
-}
 
-impl AsyncService for TrafficService {
-    fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[ServiceDependency::Interfaces]
+    /// Updates the service state and publishes it to the event bus.
+    fn update_service_state(&self, ctx: &LanforgeContext) {
+        let next_state = if !self.tuned_interfaces.is_empty() || self.active_wan.is_some() {
+            ServiceState::Online
+        } else {
+            ServiceState::Inactive
+        };
+        ctx.set_service_state("traffic", next_state);
+        self.publish_status(ctx, next_state);
     }
 
-    #[allow(clippy::too_many_lines)]
-    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+    /// Initializes tuning, SQM, and telemetry. Returns false if both features are disabled.
+    async fn initialize(&mut self, ctx: &LanforgeContext) -> bool {
         if let Some(dynamic_cfg) = ctx.get_traffic_config() {
             self.cfg = dynamic_cfg;
         }
@@ -163,16 +168,16 @@ impl AsyncService for TrafficService {
             info!("Traffic: Both NIC tuning and SQM are disabled, service entering inactive state");
             self.publish_status(ctx, ServiceState::Inactive);
             ctx.set_service_state("traffic", ServiceState::Inactive);
-            return Ok(());
+            return false;
         }
 
         ctx.set_service_state("traffic", ServiceState::Starting);
 
-        // 1. Initial NIC Hardware & Sysfs Tuning
         if is_tuning_enabled {
             let default_ifaces = Self::resolve_default_interfaces(ctx);
             let tuned = apply_tuning(&self.cfg.tuning, &default_ifaces).await;
-            self.effective_cpu_mask = crate::tuning::cpu::resolve_effective_cpu_mask(&self.cfg.tuning.cpu_mask);
+            self.effective_cpu_mask =
+                crate::tuning::cpu::resolve_effective_cpu_mask(&self.cfg.tuning.cpu_mask);
             self.tuned_interfaces.clone_from(&tuned);
             let _ = ctx.bus().publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::TuningApplied {
                 interfaces: tuned,
@@ -180,7 +185,6 @@ impl AsyncService for TrafficService {
             })));
         }
 
-        // 2. Initial SQM Setup (if WAN is already resolved)
         if is_sqm_enabled {
             if let Some((wan_iface, is_pppoe)) = self.resolve_wan_interface(ctx) {
                 self.apply_sqm_internal(ctx, &wan_iface, is_pppoe).await;
@@ -189,20 +193,102 @@ impl AsyncService for TrafficService {
             }
         }
 
-        let initial_state = if !self.tuned_interfaces.is_empty() || self.active_wan.is_some() {
-            ServiceState::Online
-        } else {
-            ServiceState::Inactive
-        };
-        ctx.set_service_state("traffic", initial_state);
-        self.publish_status(ctx, initial_state);
+        self.update_service_state(ctx);
 
         let wan = self.active_wan.as_deref();
         let ifb = self.active_ifb.as_deref();
         let initial_snapshot = crate::collect_traffic_telemetry(wan, ifb).await;
         ctx.set_traffic_telemetry(initial_snapshot);
+        true
+    }
 
-        // 3. Event Loop for reactive dynamic adjustments
+    async fn handle_traffic_config_change(&mut self, ctx: &LanforgeContext) {
+        let new_cfg = ctx.get_traffic_config().unwrap_or_default();
+        let tuning_changed = self.cfg.tuning != new_cfg.tuning;
+        let sqm_changed = self.cfg.sqm != new_cfg.sqm;
+
+        info!(
+            tuning_changed,
+            sqm_changed, "Traffic: Configuration changed, applying updates in-place"
+        );
+
+        if tuning_changed {
+            if new_cfg.tuning.enabled {
+                let default_ifaces = Self::resolve_default_interfaces(ctx);
+                let tuned = apply_tuning(&new_cfg.tuning, &default_ifaces).await;
+                self.effective_cpu_mask =
+                    crate::tuning::cpu::resolve_effective_cpu_mask(&new_cfg.tuning.cpu_mask);
+                self.tuned_interfaces = tuned;
+            } else {
+                self.tuned_interfaces.clear();
+            }
+        }
+
+        if sqm_changed {
+            self.cfg.sqm = new_cfg.sqm.clone();
+            if new_cfg.sqm.enabled {
+                if let Some((wan_iface, is_pppoe)) = self.resolve_wan_interface(ctx) {
+                    info!(wan = %wan_iface, "Traffic: Reapplying SQM parameters in-place");
+                    self.apply_sqm_internal(ctx, &wan_iface, is_pppoe).await;
+                }
+            } else if self.active_wan.is_some() {
+                info!("Traffic: SQM disabled, clearing queues");
+                self.clear_sqm_internal(ctx).await;
+            }
+        }
+
+        self.cfg = new_cfg;
+        self.update_service_state(ctx);
+    }
+
+    async fn handle_pppoe_event(&mut self, ctx: &LanforgeContext, event: &PppoeEvent) {
+        match event {
+            PppoeEvent::SessionUp(session) => {
+                info!(
+                    interface = %session.interface,
+                    "Traffic: Detected PPPoE SessionUp, updating SQM binding"
+                );
+                self.is_pppoe_active = true;
+                self.active_wan = Some(session.interface.clone());
+                if self.cfg.sqm.enabled {
+                    self.apply_sqm_internal(ctx, &session.interface, true).await;
+                }
+                ctx.set_service_state("traffic", ServiceState::Online);
+                self.publish_status(ctx, ServiceState::Online);
+            }
+            PppoeEvent::SessionDown { reason } => {
+                info!(reason = %reason, "Traffic: PPPoE SessionDown, removing session SQM queues");
+                self.is_pppoe_active = false;
+                self.clear_sqm_internal(ctx).await;
+                self.update_service_state(ctx);
+            }
+            _ => {}
+        }
+    }
+
+    async fn handle_interface_ready(&mut self, ctx: &LanforgeContext) {
+        let mut changed = false;
+        if self.cfg.tuning.enabled {
+            let default_ifaces = Self::resolve_default_interfaces(ctx);
+            let tuned = apply_tuning(&self.cfg.tuning, &default_ifaces).await;
+            if tuned != self.tuned_interfaces {
+                self.tuned_interfaces = tuned;
+                changed = true;
+            }
+        }
+        if self.cfg.sqm.enabled
+            && self.active_wan.is_none()
+            && let Some((wan_iface, is_pppoe)) = self.resolve_wan_interface(ctx)
+        {
+            self.apply_sqm_internal(ctx, &wan_iface, is_pppoe).await;
+            changed = true;
+        }
+        if changed {
+            self.update_service_state(ctx);
+        }
+    }
+
+    async fn run_event_loop(&mut self, ctx: &LanforgeContext) {
         let mut sys_rx = ctx.bus().subscribe_system();
         let mut pppoe_rx = ctx.bus().subscribe_pppoe();
         let mut traffic_rx = ctx.bus().subscribe_traffic();
@@ -212,7 +298,6 @@ impl AsyncService for TrafficService {
 
         loop {
             tokio::select! {
-                // Periodic telemetry background collector (populates ring buffer for instant WebUI graphs)
                 _ = telemetry_tick.tick() => {
                     let wan = self.active_wan.as_deref();
                     let ifb = self.active_ifb.as_deref();
@@ -220,53 +305,11 @@ impl AsyncService for TrafficService {
                     ctx.set_traffic_telemetry(snapshot);
                 }
 
-                // Listen to in-place traffic configuration updates
                 traffic_event = traffic_rx.recv() => {
                     match traffic_event {
                         Ok(te) => {
                             if matches!(te.event, LanforgeEvent::Traffic(ref e) if matches!(**e, TrafficEvent::RulesetChanged)) {
-                                let new_cfg = ctx.get_traffic_config().unwrap_or_default();
-                                let tuning_changed = self.cfg.tuning != new_cfg.tuning;
-                                let sqm_changed = self.cfg.sqm != new_cfg.sqm;
-
-                                info!(
-                                    tuning_changed,
-                                    sqm_changed,
-                                    "Traffic: Configuration changed, applying updates in-place"
-                                );
-
-                                if tuning_changed {
-                                    if new_cfg.tuning.enabled {
-                                         let default_ifaces = Self::resolve_default_interfaces(ctx);
-                                         let tuned = apply_tuning(&new_cfg.tuning, &default_ifaces).await;
-                                         self.effective_cpu_mask = crate::tuning::cpu::resolve_effective_cpu_mask(&new_cfg.tuning.cpu_mask);
-                                         self.tuned_interfaces = tuned;
-                                    } else {
-                                         self.tuned_interfaces.clear();
-                                    }
-                                }
-
-                                if sqm_changed {
-                                    self.cfg.sqm = new_cfg.sqm.clone();
-                                    if new_cfg.sqm.enabled {
-                                        if let Some((wan_iface, is_pppoe)) = self.resolve_wan_interface(ctx) {
-                                            info!(wan = %wan_iface, "Traffic: Reapplying SQM parameters in-place");
-                                            self.apply_sqm_internal(ctx, &wan_iface, is_pppoe).await;
-                                        }
-                                    } else if self.active_wan.is_some() {
-                                        info!("Traffic: SQM disabled, clearing queues");
-                                        self.clear_sqm_internal(ctx).await;
-                                    }
-                                }
-
-                                self.cfg = new_cfg;
-                                let next_state = if !self.tuned_interfaces.is_empty() || self.active_wan.is_some() {
-                                    ServiceState::Online
-                                } else {
-                                    ServiceState::Inactive
-                                };
-                                ctx.set_service_state("traffic", next_state);
-                                self.publish_status(ctx, next_state);
+                                self.handle_traffic_config_change(ctx).await;
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -274,43 +317,18 @@ impl AsyncService for TrafficService {
                     }
                 }
 
-                // Listen to PPPoE session events
                 timed_event = pppoe_rx.recv() => {
                     match timed_event {
-                        Ok(te) => match te.event {
-                            LanforgeEvent::Pppoe(PppoeEvent::SessionUp(session)) => {
-                                info!(
-                                    interface = %session.interface,
-                                    "Traffic: Detected PPPoE SessionUp, updating SQM binding"
-                                );
-                                self.is_pppoe_active = true;
-                                self.active_wan = Some(session.interface.clone());
-                                if self.cfg.sqm.enabled {
-                                    self.apply_sqm_internal(ctx, &session.interface, true).await;
-                                }
-                                ctx.set_service_state("traffic", ServiceState::Online);
-                                self.publish_status(ctx, ServiceState::Online);
+                        Ok(te) => {
+                            if let LanforgeEvent::Pppoe(ref pe) = te.event {
+                                self.handle_pppoe_event(ctx, pe).await;
                             }
-                            LanforgeEvent::Pppoe(PppoeEvent::SessionDown { reason }) => {
-                                info!(reason = %reason, "Traffic: PPPoE SessionDown, removing session SQM queues");
-                                self.is_pppoe_active = false;
-                                self.clear_sqm_internal(ctx).await;
-                                let next_state = if self.tuned_interfaces.is_empty() {
-                                    ServiceState::Inactive
-                                } else {
-                                    ServiceState::Online
-                                };
-                                ctx.set_service_state("traffic", next_state);
-                                self.publish_status(ctx, next_state);
-                            }
-                            _ => {}
-                        },
+                        }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     }
                 }
 
-                // Listen to system events (shutdown, reloads)
                 sys_event = sys_rx.recv() => {
                     match sys_event {
                         Ok(te) => match te.event {
@@ -319,31 +337,7 @@ impl AsyncService for TrafficService {
                                 break;
                             }
                             LanforgeEvent::System(SystemEvent::InterfaceReady) => {
-                                let mut changed = false;
-                                if self.cfg.tuning.enabled {
-                                    let default_ifaces = Self::resolve_default_interfaces(ctx);
-                                    let tuned = apply_tuning(&self.cfg.tuning, &default_ifaces).await;
-                                    if tuned != self.tuned_interfaces {
-                                        self.tuned_interfaces = tuned;
-                                        changed = true;
-                                    }
-                                }
-                                if self.cfg.sqm.enabled
-                                    && self.active_wan.is_none()
-                                    && let Some((wan_iface, is_pppoe)) = self.resolve_wan_interface(ctx)
-                                {
-                                    self.apply_sqm_internal(ctx, &wan_iface, is_pppoe).await;
-                                    changed = true;
-                                }
-                                if changed {
-                                    let next_state = if !self.tuned_interfaces.is_empty() || self.active_wan.is_some() {
-                                        ServiceState::Online
-                                    } else {
-                                        ServiceState::Inactive
-                                    };
-                                    ctx.set_service_state("traffic", next_state);
-                                    self.publish_status(ctx, next_state);
-                                }
+                                self.handle_interface_ready(ctx).await;
                             }
                             _ => {}
                         },
@@ -353,8 +347,21 @@ impl AsyncService for TrafficService {
                 }
             }
         }
+    }
+}
 
-        // 4. Cooperative Teardown
+impl AsyncService for TrafficService {
+    fn dependencies(&self) -> &'static [ServiceDependency] {
+        &[ServiceDependency::Interfaces]
+    }
+
+    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+        if !self.initialize(ctx).await {
+            return Ok(());
+        }
+
+        self.run_event_loop(ctx).await;
+
         if self.cfg.sqm.enabled {
             self.clear_sqm_internal(ctx).await;
         }
