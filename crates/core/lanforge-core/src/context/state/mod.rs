@@ -34,8 +34,40 @@ pub use self::network::NetworkState;
 // ---------------------------------------------------------------------------
 
 impl State {
-    #[allow(clippy::too_many_lines)]
     pub fn apply_update(&mut self, update: DeviceUpdate, discovery: &DiscoveryStore) -> EventVec {
+        match update {
+            DeviceUpdate::V4LeaseGranted { .. }
+            | DeviceUpdate::V6LeaseGranted(_)
+            | DeviceUpdate::V6PrefixAssigned(_)
+            | DeviceUpdate::SlaacObserved { .. }
+            | DeviceUpdate::LeaseReleased { .. }
+            | DeviceUpdate::IpDeleted { .. }
+            | DeviceUpdate::IpOffline { .. } => self.apply_addressing_update(update, discovery),
+
+            DeviceUpdate::NdpSeen { .. }
+            | DeviceUpdate::ArpSeen { .. }
+            | DeviceUpdate::NeighborBatch { .. }
+            | DeviceUpdate::DeviceInterfaceSeen { .. } => {
+                self.apply_discovery_update(update, discovery)
+            }
+
+            DeviceUpdate::DhcpHostnameHint { .. }
+            | DeviceUpdate::MdnsHostnameHint { .. }
+            | DeviceUpdate::DuidAssociated { .. }
+            | DeviceUpdate::CliHostUpdated { .. }
+            | DeviceUpdate::IgnoreDnsLogSet { .. }
+            | DeviceUpdate::IgnoredLogDomainsSet { .. }
+            | DeviceUpdate::ClassHint { .. } => self.apply_host_meta_update(update, discovery),
+
+            _ => self.apply_system_service_update(update, discovery),
+        }
+    }
+
+    fn apply_addressing_update(
+        &mut self,
+        update: DeviceUpdate,
+        discovery: &DiscoveryStore,
+    ) -> EventVec {
         match update {
             DeviceUpdate::V4LeaseGranted { mac, ip, expires } => {
                 self.handle_v4_lease_granted(mac, ip, expires)
@@ -61,12 +93,41 @@ impl State {
                 addr,
                 is_active,
             } => self.handle_slaac_observed(mac, addr, is_active),
+            DeviceUpdate::LeaseReleased { mac, target } => self.handle_lease_released(mac, target),
+            DeviceUpdate::IpDeleted { ip } => self.handle_ip_deleted(ip, discovery),
+            DeviceUpdate::IpOffline { ip } => self.handle_ip_offline(ip),
+            _ => unreachable!(),
+        }
+    }
+
+    fn apply_discovery_update(
+        &mut self,
+        update: DeviceUpdate,
+        discovery: &DiscoveryStore,
+    ) -> EventVec {
+        match update {
             DeviceUpdate::NdpSeen { mac, ip, is_active } => {
                 self.handle_ndp_seen(mac, ip, is_active, discovery)
             }
             DeviceUpdate::ArpSeen { mac, ip, is_active } => {
                 self.handle_arp_seen(mac, ip, is_active)
             }
+            DeviceUpdate::NeighborBatch { entries } => {
+                self.handle_neighbor_batch(entries, discovery)
+            }
+            DeviceUpdate::DeviceInterfaceSeen { mac, iface } => {
+                self.handle_device_interface_seen(mac, iface)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn apply_host_meta_update(
+        &mut self,
+        update: DeviceUpdate,
+        discovery: &DiscoveryStore,
+    ) -> EventVec {
+        match update {
             DeviceUpdate::DhcpHostnameHint { mac, hostname } => {
                 self.handle_hostname_hint_dhcp(mac, &hostname)
             }
@@ -85,23 +146,26 @@ impl State {
             DeviceUpdate::IgnoredLogDomainsSet { mac, domains } => {
                 self.handle_ignored_log_domains_set(mac, domains)
             }
+            DeviceUpdate::ClassHint { mac, class } => self.handle_class_hint(mac, class),
+            _ => unreachable!(),
+        }
+    }
+
+    fn apply_system_service_update(
+        &mut self,
+        update: DeviceUpdate,
+        discovery: &DiscoveryStore,
+    ) -> EventVec {
+        match update {
             DeviceUpdate::HostRemoved { mac }
             | DeviceUpdate::Remove(mac)
             | DeviceUpdate::Purge(mac) => self.handle_host_removed(mac),
-            DeviceUpdate::LeaseReleased { mac, target } => self.handle_lease_released(mac, target),
-            DeviceUpdate::IpDeleted { ip } => self.handle_ip_deleted(ip, discovery),
-            DeviceUpdate::IpOffline { ip } => self.handle_ip_offline(ip),
             DeviceUpdate::InterfaceIpsChanged { ifindex, state } => {
                 self.handle_interface_ips_changed(ifindex, &state)
             }
             DeviceUpdate::PruneZombies => self.handle_prune_zombies(discovery),
             DeviceUpdate::RebuildDnsIndices => self.handle_rebuild_dns_indices(),
-            DeviceUpdate::ClassHint { mac, class } => self.handle_class_hint(mac, class),
-            DeviceUpdate::DeviceInterfaceSeen { mac, iface } => {
-                self.handle_device_interface_seen(mac, iface)
-            }
             DeviceUpdate::Reset => self.handle_reset(discovery),
-            DeviceUpdate::NeighborBatch { entries } => self.handle_neighbor_batch(entries, discovery),
             DeviceUpdate::TransientHostResolved(update) => {
                 self.handle_transient_host_resolved(update.ip, update.hostname, update.origin)
             }
@@ -118,10 +182,12 @@ impl State {
             DeviceUpdate::DhcpV6PoolUpdated(ref update) => self.handle_dhcp_v6_pool_updated(update),
             DeviceUpdate::PppoeStatusUpdated { status } => self.handle_pppoe_status_updated(status),
             DeviceUpdate::RaStatusUpdated { status } => self.handle_ra_status_updated(status),
-            DeviceUpdate::TrafficStatusUpdated { status } => self.handle_traffic_status_updated(status),
+            DeviceUpdate::TrafficStatusUpdated { status } => {
+                self.handle_traffic_status_updated(status)
+            }
+            _ => unreachable!(),
         }
     }
-
 }
 
 // ---------------------------------------------------------------------------

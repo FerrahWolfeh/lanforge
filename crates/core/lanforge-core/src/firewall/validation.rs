@@ -1,5 +1,6 @@
 use lanforge_types::network::firewall::{
-    DynamicPortRequest, FirewallConfig, FirewallPolicy, FirewallValidationReport, L4Protocol,
+    DynamicPortRequest, FirewallConfig, FirewallPolicy, FirewallValidationReport, FirewallZone,
+    L4Protocol, PortForwardRule, ZoneForwarding,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -9,7 +10,6 @@ fn protocols_overlap(a: L4Protocol, b: L4Protocol) -> bool {
 
 /// Runs comprehensive pre-flight sanity and conflict checks on a candidate firewall configuration.
 #[must_use]
-#[allow(clippy::too_many_lines)]
 pub fn validate_firewall_candidate(
     candidate: &FirewallConfig,
     current: &FirewallConfig,
@@ -20,12 +20,42 @@ pub fn validate_firewall_candidate(
     let mut warnings = Vec::new();
     let mut diff_summary = Vec::new();
 
-    // 1. Zone Name Uniqueness & Interface Overlap Check
-    let mut zone_names = HashSet::new();
-    let mut assigned_interfaces: HashMap<String, String> = HashMap::new();
+    let zone_names = validate_zones(&candidate.zones, &mut errors);
+    validate_forwardings(&candidate.forwardings, &zone_names, &mut errors);
+    validate_port_forwards(
+        &candidate.port_forwards,
+        &zone_names,
+        dynamic_ports,
+        &mut errors,
+        &mut warnings,
+    );
+    validate_open_ports(&candidate.zones, &mut errors, &mut warnings);
+    validate_anti_lockout(&candidate.zones, dynamic_ports, &mut errors);
 
-    for zone in &candidate.zones {
-        if !zone_names.insert(&zone.name) {
+    compute_diff(candidate, current, &mut diff_summary);
+
+    let valid = errors.is_empty();
+    let tx_id = if valid {
+        Some(tx_id_generator())
+    } else {
+        None
+    };
+
+    FirewallValidationReport {
+        valid,
+        tx_id,
+        diff_summary,
+        warnings,
+        errors,
+    }
+}
+
+fn validate_zones<'a>(zones: &'a [FirewallZone], errors: &mut Vec<String>) -> HashSet<&'a str> {
+    let mut zone_names = HashSet::new();
+    let mut assigned_interfaces: HashMap<&str, &str> = HashMap::new();
+
+    for zone in zones {
+        if !zone_names.insert(zone.name.as_str()) {
             errors.push(format!(
                 "Duplicate zone name '{}': all zone names must be unique",
                 zone.name
@@ -33,36 +63,50 @@ pub fn validate_firewall_candidate(
         }
 
         for iface in &zone.interfaces {
-            if let Some(existing_zone) = assigned_interfaces.get(iface) {
+            if let Some(existing_zone) = assigned_interfaces.get(iface.as_str()) {
                 errors.push(format!(
                     "Interface overlap: interface '{iface}' is assigned to both zone '{existing_zone}' and zone '{}'",
                     zone.name
                 ));
             } else {
-                assigned_interfaces.insert(iface.clone(), zone.name.clone());
+                assigned_interfaces.insert(iface.as_str(), zone.name.as_str());
             }
         }
     }
 
-    // 2. Inter-Zone Forwarding Integrity
-    for fwd in &candidate.forwardings {
-        if !zone_names.contains(&fwd.from) {
+    zone_names
+}
+
+fn validate_forwardings(
+    forwardings: &[ZoneForwarding],
+    zone_names: &HashSet<&str>,
+    errors: &mut Vec<String>,
+) {
+    for fwd in forwardings {
+        if !zone_names.contains(fwd.from.as_str()) {
             errors.push(format!(
                 "Invalid forwarding source: zone '{}' does not exist in candidate configuration",
                 fwd.from
             ));
         }
-        if !zone_names.contains(&fwd.to) {
+        if !zone_names.contains(fwd.to.as_str()) {
             errors.push(format!(
                 "Invalid forwarding destination: zone '{}' does not exist in candidate configuration",
                 fwd.to
             ));
         }
     }
+}
 
-    // 3. Port Forwarding (DNAT) Collisions & Validation
-    for (idx, rule) in candidate.port_forwards.iter().enumerate() {
-        if !zone_names.contains(&rule.src_zone) {
+fn validate_port_forwards(
+    port_forwards: &[PortForwardRule],
+    zone_names: &HashSet<&str>,
+    dynamic_ports: &[DynamicPortRequest],
+    errors: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) {
+    for (idx, rule) in port_forwards.iter().enumerate() {
+        if !zone_names.contains(rule.src_zone.as_str()) {
             errors.push(format!(
                 "Invalid port forward source zone: zone '{}' does not exist",
                 rule.src_zone
@@ -91,8 +135,7 @@ pub fn validate_firewall_candidate(
             ));
         }
 
-        // Collision check against subsequent port forward rules
-        for other in &candidate.port_forwards[idx + 1..] {
+        for other in &port_forwards[idx + 1..] {
             if rule.external_port == other.external_port
                 && protocols_overlap(rule.protocol, other.protocol)
             {
@@ -104,7 +147,6 @@ pub fn validate_firewall_candidate(
             }
         }
 
-        // Collision check against active host dynamic service ports (e.g. WebUI, DNS)
         for dyn_port in dynamic_ports {
             if rule.external_port == dyn_port.port
                 && protocols_overlap(rule.protocol, dyn_port.protocol)
@@ -119,9 +161,14 @@ pub fn validate_firewall_candidate(
             }
         }
     }
+}
 
-    // 4. Host Open Ports Validity within Zones
-    for zone in &candidate.zones {
+fn validate_open_ports(
+    zones: &[FirewallZone],
+    errors: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) {
+    for zone in zones {
         for (i, p1) in zone.open_ports.iter().enumerate() {
             if p1.port == 0 {
                 errors.push(format!("Zone '{}' has invalid open port 0", zone.name));
@@ -138,11 +185,14 @@ pub fn validate_firewall_candidate(
             }
         }
     }
+}
 
-    // 5. Anti-Lockout Guard
-    // If an administrative zone (e.g. "internal" or "trusted") has input policy Drop or Reject,
-    // ensure either SSH (22) or the WebUI port is open.
-    for zone in &candidate.zones {
+fn validate_anti_lockout(
+    zones: &[FirewallZone],
+    dynamic_ports: &[DynamicPortRequest],
+    errors: &mut Vec<String>,
+) {
+    for zone in zones {
         if (zone.name == "internal" || zone.name == "trusted")
             && (zone.input_policy == FirewallPolicy::Drop
                 || zone.input_policy == FirewallPolicy::Reject)
@@ -171,28 +221,16 @@ pub fn validate_firewall_candidate(
             }
         }
     }
-
-    // 6. Diff Computation
-    compute_diff(candidate, current, &mut diff_summary);
-
-    let valid = errors.is_empty();
-    let tx_id = if valid {
-        Some(tx_id_generator())
-    } else {
-        None
-    };
-
-    FirewallValidationReport {
-        valid,
-        tx_id,
-        diff_summary,
-        warnings,
-        errors,
-    }
 }
 
-#[allow(clippy::too_many_lines)]
 fn compute_diff(candidate: &FirewallConfig, current: &FirewallConfig, diff: &mut Vec<String>) {
+    diff_globals(candidate, current, diff);
+    diff_zones(candidate, current, diff);
+    diff_forwardings(candidate, current, diff);
+    diff_port_forwards(candidate, current, diff);
+}
+
+fn diff_globals(candidate: &FirewallConfig, current: &FirewallConfig, diff: &mut Vec<String>) {
     if candidate.enabled != current.enabled {
         diff.push(format!(
             "~ Firewall master toggle: {} -> {}",
@@ -229,57 +267,15 @@ fn compute_diff(candidate: &FirewallConfig, current: &FirewallConfig, diff: &mut
             current.default_forward_policy, candidate.default_forward_policy
         ));
     }
+}
 
-    // Zones
+fn diff_zones(candidate: &FirewallConfig, current: &FirewallConfig, diff: &mut Vec<String>) {
     let curr_zones: HashMap<&str, _> = current.zones.iter().map(|z| (z.name.as_str(), z)).collect();
     let cand_zones: HashMap<&str, _> = candidate.zones.iter().map(|z| (z.name.as_str(), z)).collect();
 
     for (name, z) in &cand_zones {
         if let Some(curr_z) = curr_zones.get(name) {
-            if z.input_policy != curr_z.input_policy {
-                diff.push(format!(
-                    "~ Zone '{name}' input policy: {:?} -> {:?}",
-                    curr_z.input_policy, z.input_policy
-                ));
-            }
-            if z.forward_policy != curr_z.forward_policy {
-                diff.push(format!(
-                    "~ Zone '{name}' forward policy: {:?} -> {:?}",
-                    curr_z.forward_policy, z.forward_policy
-                ));
-            }
-            if z.interfaces != curr_z.interfaces {
-                diff.push(format!(
-                    "~ Zone '{name}' interfaces: {:?} -> {:?}",
-                    curr_z.interfaces, z.interfaces
-                ));
-            }
-            if z.masquerade != curr_z.masquerade {
-                diff.push(format!(
-                    "~ Zone '{name}' masquerade: {} -> {}",
-                    curr_z.masquerade, z.masquerade
-                ));
-            }
-
-            // Open ports diff
-            for p in &z.open_ports {
-                if !curr_z.open_ports.contains(p) {
-                    diff.push(format!(
-                        "+ Zone '{name}' open port: {}/{}",
-                        p.port,
-                        p.protocol.as_str()
-                    ));
-                }
-            }
-            for p in &curr_z.open_ports {
-                if !z.open_ports.contains(p) {
-                    diff.push(format!(
-                        "- Zone '{name}' open port: {}/{}",
-                        p.port,
-                        p.protocol.as_str()
-                    ));
-                }
-            }
+            diff_single_zone(name, z, curr_z, diff);
         } else {
             diff.push(format!(
                 "+ Added zone '{name}' (input: {:?}, forward: {:?})",
@@ -293,8 +289,55 @@ fn compute_diff(candidate: &FirewallConfig, current: &FirewallConfig, diff: &mut
             diff.push(format!("- Removed zone '{name}'"));
         }
     }
+}
 
-    // Forwardings
+fn diff_single_zone(name: &str, z: &FirewallZone, curr_z: &FirewallZone, diff: &mut Vec<String>) {
+    if z.input_policy != curr_z.input_policy {
+        diff.push(format!(
+            "~ Zone '{name}' input policy: {:?} -> {:?}",
+            curr_z.input_policy, z.input_policy
+        ));
+    }
+    if z.forward_policy != curr_z.forward_policy {
+        diff.push(format!(
+            "~ Zone '{name}' forward policy: {:?} -> {:?}",
+            curr_z.forward_policy, z.forward_policy
+        ));
+    }
+    if z.interfaces != curr_z.interfaces {
+        diff.push(format!(
+            "~ Zone '{name}' interfaces: {:?} -> {:?}",
+            curr_z.interfaces, z.interfaces
+        ));
+    }
+    if z.masquerade != curr_z.masquerade {
+        diff.push(format!(
+            "~ Zone '{name}' masquerade: {} -> {}",
+            curr_z.masquerade, z.masquerade
+        ));
+    }
+
+    for p in &z.open_ports {
+        if !curr_z.open_ports.contains(p) {
+            diff.push(format!(
+                "+ Zone '{name}' open port: {}/{}",
+                p.port,
+                p.protocol.as_str()
+            ));
+        }
+    }
+    for p in &curr_z.open_ports {
+        if !z.open_ports.contains(p) {
+            diff.push(format!(
+                "- Zone '{name}' open port: {}/{}",
+                p.port,
+                p.protocol.as_str()
+            ));
+        }
+    }
+}
+
+fn diff_forwardings(candidate: &FirewallConfig, current: &FirewallConfig, diff: &mut Vec<String>) {
     for f in &candidate.forwardings {
         if !current.forwardings.contains(f) {
             diff.push(format!("+ Inter-zone forwarding: {} -> {}", f.from, f.to));
@@ -305,8 +348,9 @@ fn compute_diff(candidate: &FirewallConfig, current: &FirewallConfig, diff: &mut
             diff.push(format!("- Inter-zone forwarding: {} -> {}", f.from, f.to));
         }
     }
+}
 
-    // Port forwards
+fn diff_port_forwards(candidate: &FirewallConfig, current: &FirewallConfig, diff: &mut Vec<String>) {
     for pf in &candidate.port_forwards {
         if !current.port_forwards.contains(pf) {
             diff.push(format!(

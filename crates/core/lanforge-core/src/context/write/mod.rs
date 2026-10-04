@@ -112,85 +112,19 @@ impl LanforgeContext {
 
     /// Internal helper to perform fast-path debounce checks.
     /// Returns `None` if the update was skipped, or `Some(update)` (possibly filtered) to proceed.
-    #[allow(clippy::too_many_lines)]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     fn debounce_update(&self, update: DeviceUpdate) -> Option<DeviceUpdate> {
+        let state = self.inner.state.load();
         match update {
-            DeviceUpdate::ArpSeen { mac, ip, is_active } => {
-                let should_skip = {
-                    let state = self.inner.state.load();
-                    state.devices.get(&mac).is_some_and(|dev| {
-                        let recently_seen =
-                            dev.last_seen.elapsed().unwrap_or_default() < Device::ACTIVITY_DEBOUNCE;
-                        let has_ip = dev.seen_v4.iter().any(|(a, _)| *a == ip);
-                        recently_seen && has_ip
-                    })
-                };
-                if should_skip {
-                    None
-                } else {
-                    Some(DeviceUpdate::ArpSeen { mac, ip, is_active })
-                }
-            }
-            DeviceUpdate::NdpSeen { mac, ip, is_active } => {
-                let should_skip = {
-                    let state = self.inner.state.load();
-                    state.devices.get(&mac).is_some_and(|dev| {
-                        let recently_seen =
-                            dev.last_seen.elapsed().unwrap_or_default() < Device::ACTIVITY_DEBOUNCE;
-                        let has_ip = dev.v6.iter().any(|s| s.ip() == Some(ip));
-                        recently_seen && has_ip
-                    })
-                };
-                if should_skip {
-                    None
-                } else {
-                    Some(DeviceUpdate::NdpSeen { mac, ip, is_active })
-                }
-            }
-            DeviceUpdate::SlaacObserved {
-                mac,
-                addr,
-                is_active,
-            } => {
-                let should_skip = {
-                    let state = self.inner.state.load();
-                    state.devices.get(&mac).is_some_and(|dev| {
-                        let recently_seen =
-                            dev.last_seen.elapsed().unwrap_or_default() < Device::ACTIVITY_DEBOUNCE;
-                        let has_slaac = dev.v6.iter().any(|s| match s {
-                            IPv6State::Slaac(a, _) => *a == addr,
-                            IPv6State::Dynamic(l) => l.ip == addr,
-                            IPv6State::Static(suf, _) => suf.matches(addr),
-                            _ => false,
-                        });
-                        recently_seen && has_slaac
-                    })
-                };
-                if should_skip {
-                    None
-                } else {
-                    Some(DeviceUpdate::SlaacObserved {
-                        mac,
-                        addr,
-                        is_active,
-                    })
-                }
+            DeviceUpdate::ArpSeen { mac, ip, .. } if should_debounce_arp(&state, mac, ip) => None,
+            DeviceUpdate::NdpSeen { mac, ip, .. } if should_debounce_ndp(&state, mac, ip) => None,
+            DeviceUpdate::SlaacObserved { mac, addr, .. }
+                if should_debounce_slaac(&state, mac, addr) =>
+            {
+                None
             }
             DeviceUpdate::NeighborBatch { mut entries } => {
-                let state = self.inner.state.load();
-                entries.retain(|(mac, ip, _)| {
-                    state.devices.get(mac).is_none_or(|dev| {
-                        let recently_seen =
-                            dev.last_seen.elapsed().unwrap_or_default() < Device::ACTIVITY_DEBOUNCE;
-                        let has_ip = match ip {
-                            IpAddr::V4(v4) => dev.seen_v4.iter().any(|(a, _)| a == v4),
-                            IpAddr::V6(v6) => dev.v6.iter().any(|s| s.ip() == Some(*v6)),
-                        };
-                        !(recently_seen && has_ip)
-                    })
-                });
-
+                debounce_neighbor_entries(&state, &mut entries);
                 if entries.is_empty() {
                     None
                 } else {
@@ -200,4 +134,60 @@ impl LanforgeContext {
             _ => Some(update),
         }
     }
+}
+
+#[inline]
+fn is_recently_seen(dev: &Device) -> bool {
+    dev.last_seen.elapsed().unwrap_or_default() < Device::ACTIVITY_DEBOUNCE
+}
+
+fn should_debounce_arp(
+    state: &crate::context::state::State,
+    mac: lanforge_types::identifiers::MacAddr,
+    ip: std::net::Ipv4Addr,
+) -> bool {
+    state.devices.get(&mac).is_some_and(|dev| {
+        is_recently_seen(dev) && dev.seen_v4.iter().any(|(a, _)| *a == ip)
+    })
+}
+
+fn should_debounce_ndp(
+    state: &crate::context::state::State,
+    mac: lanforge_types::identifiers::MacAddr,
+    ip: std::net::Ipv6Addr,
+) -> bool {
+    state.devices.get(&mac).is_some_and(|dev| {
+        is_recently_seen(dev) && dev.v6.iter().any(|s| s.ip() == Some(ip))
+    })
+}
+
+fn should_debounce_slaac(
+    state: &crate::context::state::State,
+    mac: lanforge_types::identifiers::MacAddr,
+    addr: std::net::Ipv6Addr,
+) -> bool {
+    state.devices.get(&mac).is_some_and(|dev| {
+        is_recently_seen(dev)
+            && dev.v6.iter().any(|s| match s {
+                IPv6State::Slaac(a, _) => *a == addr,
+                IPv6State::Dynamic(l) => l.ip == addr,
+                IPv6State::Static(suf, _) => suf.matches(addr),
+                _ => false,
+            })
+    })
+}
+
+fn debounce_neighbor_entries(
+    state: &crate::context::state::State,
+    entries: &mut Vec<(lanforge_types::identifiers::MacAddr, IpAddr, bool)>,
+) {
+    entries.retain(|(mac, ip, _)| {
+        state.devices.get(mac).is_none_or(|dev| {
+            let has_ip = match *ip {
+                IpAddr::V4(v4) => dev.seen_v4.iter().any(|(a, _)| *a == v4),
+                IpAddr::V6(v6) => dev.v6.iter().any(|s| s.ip() == Some(v6)),
+            };
+            !(is_recently_seen(dev) && has_ip)
+        })
+    });
 }
