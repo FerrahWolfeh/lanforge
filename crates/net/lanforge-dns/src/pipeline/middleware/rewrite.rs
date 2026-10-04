@@ -51,6 +51,7 @@ impl Middleware for RewriteMiddleware {
                     cached: false,
                     answer,
                     protocol: req.protocol,
+                    filter: None,
                 });
 
                 return Ok(true);

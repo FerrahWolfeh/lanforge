@@ -347,10 +347,11 @@ impl Bootstrapper {
         if let Ok(urls) = db.load_adblock_urls().await {
             ctx.update_dns_adblock_urls(
                 urls.into_iter()
-                    .map(|(id, url, kind)| AdblockUrlEntry {
+                    .map(|(id, url, kind, format)| AdblockUrlEntry {
                         id: Some(id),
                         url,
                         kind,
+                        format,
                     })
                     .collect(),
             );
@@ -422,11 +423,21 @@ impl Bootstrapper {
         if is_new_adblock {
             let mut count = 0;
             for url in &cfg.dns_toml.adblock_urls {
-                db.add_adblock_url(url, AdblockUrlKind::Blocklist).await?;
+                db.add_adblock_url(
+                    url,
+                    AdblockUrlKind::Blocklist,
+                    lanforge_types::network::dns::adblock::AdblockSourceFormat::Auto,
+                )
+                .await?;
                 count += 1;
             }
             for url in &cfg.dns_toml.adblock_allowlist_urls {
-                db.add_adblock_url(url, AdblockUrlKind::Allowlist).await?;
+                db.add_adblock_url(
+                    url,
+                    AdblockUrlKind::Allowlist,
+                    lanforge_types::network::dns::adblock::AdblockSourceFormat::Auto,
+                )
+                .await?;
                 count += 1;
             }
             if count > 0 {

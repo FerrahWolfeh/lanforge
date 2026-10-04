@@ -180,6 +180,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
         cached: false,
         answer: None,
         protocol: TransportProtocol::Udp,
+        filter: None,
     });
     assert_eq!(query_log.len(), 1);
 
@@ -200,6 +201,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
         cached: false,
         answer: None,
         protocol: TransportProtocol::Udp,
+        filter: None,
     });
     assert_eq!(query_log.len(), 1, "Expected device1 queries to be suppressed");
 
@@ -214,6 +216,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
         cached: false,
         answer: None,
         protocol: TransportProtocol::Udp,
+        filter: None,
     });
     assert_eq!(query_log.len(), 2, "Expected normal device to be logged");
 
@@ -228,6 +231,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
         cached: false,
         answer: None,
         protocol: TransportProtocol::Udp,
+        filter: None,
     });
     assert_eq!(query_log.len(), 2, "Expected ignored IP to be suppressed");
 
@@ -252,6 +256,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
         cached: false,
         answer: None,
         protocol: TransportProtocol::Udp,
+        filter: None,
     });
     assert_eq!(query_log.len(), 2, "Expected *.sonarr.tv to be suppressed for Sonarr");
 
@@ -266,6 +271,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
         cached: false,
         answer: None,
         protocol: TransportProtocol::Udp,
+        filter: None,
     });
     assert_eq!(query_log.len(), 3, "Expected github.com to be logged for Sonarr");
 
@@ -280,6 +286,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
         cached: false,
         answer: None,
         protocol: TransportProtocol::Udp,
+        filter: None,
     });
     assert_eq!(query_log.len(), 4, "Expected skyhook.sonarr.tv to be logged for device2");
 }

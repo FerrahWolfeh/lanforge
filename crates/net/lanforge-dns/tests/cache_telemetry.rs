@@ -117,6 +117,7 @@ async fn query_logging_ring_buffer() {
             src_mac: None,
             answer: Some("1.1.1.1".to_string()),
             protocol: TransportProtocol::Udp,
+            filter: None,
         });
     }
 

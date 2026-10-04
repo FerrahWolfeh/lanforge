@@ -425,7 +425,7 @@ impl ClientContext {
         let mut url_success = true;
         let mut url_err = None;
         for u in dns_adblock_urls {
-            match self.handle_dns_adblock_url_add(u.url, u.kind).await {
+            match self.handle_dns_adblock_url_add(u.url, u.kind, Some(u.format)).await {
                 Response::Success(_) => url_count += 1,
                 Response::Error { error } => {
                     url_success = false;

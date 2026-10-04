@@ -315,6 +315,57 @@
 					</div>
 				</div>
 
+				<!-- Filter Rule Attribution -->
+				{#if entry.filter}
+					<div class="rounded-lg border p-3 bg-muted/20 space-y-2">
+						<div class="flex items-center justify-between">
+							<span class="text-[11px] text-muted-foreground font-medium uppercase tracking-wider block">
+								Filter Rule Attribution
+							</span>
+							{#if entry.filter.action === 'block'}
+								<Badge variant="outline" class="bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20 font-mono text-[10px]">
+									Blocked by Filter
+								</Badge>
+							{:else}
+								<Badge variant="outline" class="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 font-mono text-[10px]">
+									Allowed Exception (@@)
+								</Badge>
+							{/if}
+						</div>
+
+						<div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1">
+							{#if entry.filter.rule}
+								<div>
+									<span class="text-[10px] text-muted-foreground block">Matched Rule</span>
+									<div class="flex items-center gap-1.5 mt-0.5">
+										<code class="font-mono text-xs bg-muted px-1.5 py-0.5 rounded font-medium text-foreground">
+											{entry.filter.rule}
+										</code>
+										{#if entry.filter.important}
+											<Badge variant="secondary" class="font-mono text-[9px] bg-amber-500/10 text-amber-600 border-amber-500/20">
+												$important
+											</Badge>
+										{/if}
+									</div>
+								</div>
+							{/if}
+
+							<div>
+								<span class="text-[10px] text-muted-foreground block">Rule Origin</span>
+								<div class="font-mono text-xs text-foreground mt-0.5">
+									{#if entry.filter.origin.type === 'user_rule'}
+										Custom User Rule
+									{:else if entry.filter.origin.type === 'user_allowlist'}
+										Manual Allowlist
+									{:else if entry.filter.origin.type === 'list'}
+										Source List #{entry.filter.origin.source_id}
+									{/if}
+								</div>
+							</div>
+						</div>
+					</div>
+				{/if}
+
 				<!-- Quick Action Toolbar -->
 				<div>
 					<span class="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block mb-2">

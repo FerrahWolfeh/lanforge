@@ -498,6 +498,7 @@ mod tests {
             src_mac: None,
             answer: Some("93.184.216.34".to_string()),
             protocol: TransportProtocol::Udp,
+            filter: None,
         };
         let query2 = QueryLogEntry {
             timestamp: 1700000020,
@@ -510,6 +511,7 @@ mod tests {
             src_mac: None,
             answer: None,
             protocol: TransportProtocol::Udp,
+            filter: None,
         };
         db.record_dns_queries_batch(&[query1, query2]).await.unwrap();
 

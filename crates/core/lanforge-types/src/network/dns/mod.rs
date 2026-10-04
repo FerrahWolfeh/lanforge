@@ -13,6 +13,7 @@ use std::{
 };
 
 pub mod adblock;
+pub use adblock::{AdblockSourceFormat, FilterAction, FilterMatch, FilterOrigin};
 pub mod upstream;
 
 /// Supported DNS record types in Lanforge.
@@ -285,6 +286,9 @@ pub struct QueryLogEntry {
     pub answer: Option<String>,
     /// Transport protocol used.
     pub protocol: TransportProtocol,
+    /// Adblock / filter match attribution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<Box<FilterMatch>>,
 }
 
 /// A single DNS record entry.
@@ -670,6 +674,14 @@ pub struct DnsAdblockStatusResponse {
     pub blocking_mode: BlockingMode,
     pub blocking_ip_v4: Option<Ipv4Addr>,
     pub blocking_ip_v6: Option<Ipv6Addr>,
+    #[serde(default)]
+    pub exceptions_size: usize,
+    #[serde(default)]
+    pub last_update: Option<u64>,
+    #[serde(default)]
+    pub sources_ok: usize,
+    #[serde(default)]
+    pub sources_failing: usize,
 }
 
 /// A single adblock source URL entry.
@@ -678,6 +690,56 @@ pub struct AdblockUrlEntry {
     pub id: Option<i64>,
     pub url: String,
     pub kind: AdblockUrlKind,
+    #[serde(default)]
+    pub format: AdblockSourceFormat,
+}
+
+/// Status and metrics for an adblock filter list source.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AdblockSourceStatus {
+    pub id: i64,
+    pub url: String,
+    pub format: AdblockSourceFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format_detected: Option<AdblockSourceFormat>,
+    pub blocks: usize,
+    pub exceptions: usize,
+    pub unsupported: usize,
+    pub last_attempt: u64,
+    pub last_success: Option<u64>,
+    pub consecutive_failures: u32,
+    pub last_error: Option<String>,
+    #[serde(default)]
+    pub sample_unsupported: Vec<String>,
+}
+
+/// Response containing status of all compiled adblock filter sources.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DnsAdblockSourcesResponse {
+    pub sources: Vec<AdblockSourceStatus>,
+}
+
+/// Attribution for a single source list matching a domain.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AdblockSourceMatch {
+    pub source_id: i64,
+    pub url: String,
+    pub action: FilterAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+    #[serde(default)]
+    pub important: bool,
+}
+
+/// Diagnostic check response for a domain against adblock rules and sources.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AdblockCheckResponse {
+    pub domain: String,
+    pub matched: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<FilterMatch>,
+    #[serde(default)]
+    pub source_matches: Vec<AdblockSourceMatch>,
 }
 
 /// In-depth DNS cache statistics.
@@ -719,6 +781,10 @@ pub enum DnsRequest {
         protocol: UpstreamProtocol,
     },
     AdblockStatus,
+    AdblockSources,
+    AdblockCheck {
+        domain: String,
+    },
     AdblockSet {
         enabled: bool,
         duration_secs: Option<u64>,
@@ -728,6 +794,8 @@ pub enum DnsRequest {
     AdblockUrlAdd {
         url: String,
         kind: AdblockUrlKind,
+        #[serde(default)]
+        format: AdblockSourceFormat,
     },
     AdblockUrlRemove {
         url: String,
@@ -751,6 +819,8 @@ pub enum DnsResponse {
     UpstreamAdd(Result<(), String>),
     UpstreamRemove(Result<(), String>),
     AdblockStatus(DnsAdblockStatusResponse),
+    AdblockSources(DnsAdblockSourcesResponse),
+    AdblockCheck(AdblockCheckResponse),
     AdblockSet(Result<(), String>),
     AdblockReload(Result<(), String>),
     AdblockUrlList(Vec<AdblockUrlEntry>),

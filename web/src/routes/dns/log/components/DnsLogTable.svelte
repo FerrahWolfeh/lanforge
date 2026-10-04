@@ -15,7 +15,7 @@
 	import LaptopIcon from "@lucide/svelte/icons/laptop";
 	import { toast } from "svelte-sonner";
 	import { dnsBlock, dnsAllow } from "$lib/api/client";
-	import type { DnsQueryLogEntry, DnsRecordType } from "$lib/api/types";
+	import type { DnsQueryLogEntry, DnsRecordType, FilterMatch } from "$lib/api/types";
 	import DnsLogDetailDialog from "./DnsLogDetailDialog.svelte";
 	import DataTableCard from "$lib/components/DataTableCard.svelte";
 
@@ -160,7 +160,13 @@
 		}
 	}
 
-	function getResultBadge(result: string, cached: boolean) {
+	function getResultBadge(result: string, cached: boolean, filter?: FilterMatch | null) {
+		if (filter?.action === "allow") {
+			return {
+				label: "Allowed (@@)",
+				class: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
+			};
+		}
 		const lower = (result || "").toLowerCase();
 		if (
 			lower === "cachedblock" ||
@@ -281,6 +287,7 @@
 						{@const badgeInfo = getResultBadge(
 							entry.result,
 							entry.cached,
+							entry.filter,
 						)}
 						<Table.Row
 							class="hover:bg-muted/50 transition-colors cursor-pointer group"
@@ -382,6 +389,7 @@
 								<Badge
 									variant="outline"
 									class="px-2 py-0.5 text-[11px] font-mono border font-semibold {badgeInfo.class}"
+									title={entry.filter?.rule ? `Rule: ${entry.filter.rule}` : undefined}
 								>
 									{badgeInfo.label}
 								</Badge>

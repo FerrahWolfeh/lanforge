@@ -1,13 +1,14 @@
 pub mod handlers;
 
 use lanforge_api::api::{
-    AuthTokenResponse, DevicesResponse, DhcpOptionsResponse, DhcpPoolsConfigResponse,
-    DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse,
-    DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse,
-    DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse,
-    DnsUpstreamsResponse, EventKind, HostConfigEntry, HostsResponse, LeasesResponse, Response,
-    RpcCallError, SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess, StatusResponse,
-    SystemConfigExport, SystemConfigImportResponse, TransientHostsResponse, WhoisResponse,
+    AdblockCheckResponse, AuthTokenResponse, DevicesResponse, DhcpOptionsResponse,
+    DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockSourcesResponse,
+    DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse,
+    DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse,
+    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry,
+    HostsResponse, LeasesResponse, Response, RpcCallError, SetupPayload, SetupResponse,
+    SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
+    SystemConfigImportResponse, TransientHostsResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpc;
 use lanforge_core::context::LanforgeContext;
@@ -545,8 +546,9 @@ impl LanforgeRpc for ClientContext {
         &self,
         url: String,
         kind: lanforge_types::network::dns::adblock::AdblockUrlKind,
+        format: Option<lanforge_types::network::dns::adblock::AdblockSourceFormat>,
     ) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_dns_adblock_url_add(url, kind).await {
+        match self.handle_dns_adblock_url_add(url, kind, format).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
@@ -564,6 +566,25 @@ impl LanforgeRpc for ClientContext {
     async fn dns_adblock_url_list(&self) -> Result<DnsAdblockUrlsResponse, RpcCallError> {
         match self.handle_dns_adblock_url_list().await {
             Response::DnsAdblockUrls(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn dns_adblock_sources(&self) -> Result<DnsAdblockSourcesResponse, RpcCallError> {
+        match self.handle_dns_adblock_sources().await {
+            Response::DnsAdblockSources(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn dns_adblock_check(
+        &self,
+        domain: String,
+    ) -> Result<Box<AdblockCheckResponse>, RpcCallError> {
+        match self.handle_dns_adblock_check(domain).await {
+            Response::AdblockCheck(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }

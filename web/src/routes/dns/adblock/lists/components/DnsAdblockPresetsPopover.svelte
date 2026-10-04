@@ -5,46 +5,59 @@
 	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
 	import PlusIcon from "@lucide/svelte/icons/plus";
 	import CheckIcon from "@lucide/svelte/icons/check";
-	import type { DnsAdblockUrlEntry } from "$lib/api/types";
+	import type { AdblockSourceFormat, DnsAdblockUrlEntry } from "$lib/api/types";
 
 	let {
 		sources = [],
 		onAdd = () => {},
 	}: {
 		sources?: DnsAdblockUrlEntry[];
-		onAdd?: (url: string, title: string) => void;
+		onAdd?: (url: string, title: string, format?: AdblockSourceFormat) => void;
 	} = $props();
 
-	const PRESETS = [
+	interface Preset {
+		title: string;
+		description: string;
+		url: string;
+		badge: string;
+		format: AdblockSourceFormat;
+	}
+
+	const PRESETS: Preset[] = [
 		{
 			title: "StevenBlack Unified",
 			description: "Adware and malware blocking hosts list (~150k rules).",
 			url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
-			badge: "Standard",
+			badge: "Hosts",
+			format: "hosts",
 		},
 		{
 			title: "OISD Basic",
 			description: "Ad, tracking, and telemetry blocklist (~250k rules).",
 			url: "https://big.oisd.nl/domainswg",
-			badge: "General",
+			badge: "Domains",
+			format: "domains",
 		},
 		{
 			title: "Hägezi Multi Normal",
 			description: "Tracker, phishing, and telemetry domain list.",
 			url: "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/hosts/multi.txt",
-			badge: "Strict",
+			badge: "Hosts",
+			format: "hosts",
 		},
 		{
 			title: "AdGuard Mobile & Tracking",
 			description: "Mobile app trackers and telemetry domain list.",
 			url: "https://v.firebog.net/hosts/AdguardDNS.txt",
-			badge: "Mobile",
+			badge: "Domains",
+			format: "domains",
 		},
 		{
 			title: "Windows SpyBlocker",
 			description: "Telemetry, diagnostics, and update tracking endpoints in Windows.",
 			url: "https://raw.githubusercontent.com/crazy-max/WindowsSpyBlocker/master/data/hosts/spy.txt",
-			badge: "Telemetry",
+			badge: "Hosts",
+			format: "hosts",
 		},
 	];
 </script>
@@ -97,7 +110,7 @@
 								variant="outline"
 								size="sm"
 								class="h-6 text-[10px] px-2 gap-1"
-								onclick={() => onAdd(p.url, p.title)}
+								onclick={() => onAdd(p.url, p.title, p.format)}
 							>
 								<PlusIcon class="size-2.5" />
 								Add

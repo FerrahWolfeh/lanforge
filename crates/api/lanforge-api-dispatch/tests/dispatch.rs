@@ -174,6 +174,7 @@ async fn test_dispatch_system_config_import_export() {
                 id: None,
                 url: "https://example.com/adblock.hosts".to_string(),
                 kind: AdblockUrlKind::Blocklist,
+                format: lanforge_types::network::dns::adblock::AdblockSourceFormat::Auto,
             }]
         } else {
             vec![]

@@ -5,6 +5,8 @@ use tracing::debug;
 
 use crate::ClientContext;
 use lanforge_api::api::SystemConfigExport;
+#[cfg(test)]
+use lanforge_types::network::dns::adblock::AdblockSourceFormat;
 use lanforge_types::network::dns::adblock::AdblockUrlKind;
 
 /// Atomically writes content to a file using a temporary file in the same directory.
@@ -515,11 +517,13 @@ mod tests {
                     id: Some(1),
                     url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts".to_string(),
                     kind: AdblockUrlKind::Blocklist,
+                    format: AdblockSourceFormat::Auto,
                 },
                 AdblockUrlEntry {
                     id: Some(2),
                     url: "https://example.com/allowlist.txt".to_string(),
                     kind: AdblockUrlKind::Allowlist,
+                    format: AdblockSourceFormat::Auto,
                 },
             ],
             dns_allowlist: vec![lanforge_api::api::AllowlistEntry {

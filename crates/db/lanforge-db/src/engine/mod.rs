@@ -17,7 +17,8 @@ use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{
-    AdblockDbConfig, AdblockRuleAction, AdblockUrlKind, RewriteAnswer, RewriteRule,
+    AdblockDbConfig, AdblockRuleAction, AdblockSourceFormat, AdblockUrlKind, RewriteAnswer,
+    RewriteRule,
 };
 use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::firewall::FirewallConfig;
@@ -336,7 +337,7 @@ impl AdblockStore for LanforgeDb {
 
     fn load_adblock_urls(
         &self,
-    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind)>, DbError>> {
+    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind, AdblockSourceFormat)>, DbError>> {
         self.inner.load_adblock_urls()
     }
 
@@ -344,8 +345,9 @@ impl AdblockStore for LanforgeDb {
         &'a self,
         url: &'a str,
         kind: AdblockUrlKind,
+        format: AdblockSourceFormat,
     ) -> BoxFuture<'a, Result<(), DbError>> {
-        self.inner.add_adblock_url(url, kind)
+        self.inner.add_adblock_url(url, kind, format)
     }
 
     fn remove_adblock_url<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<(), DbError>> {
@@ -358,7 +360,7 @@ impl AdblockStore for LanforgeDb {
 
     fn load_adblock_sources(
         &self,
-    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind, bool)>, DbError>> {
+    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind, bool, AdblockSourceFormat)>, DbError>> {
         self.inner.load_adblock_sources()
     }
 
@@ -366,8 +368,9 @@ impl AdblockStore for LanforgeDb {
         &'a self,
         url: &'a str,
         kind: AdblockUrlKind,
+        format: AdblockSourceFormat,
     ) -> BoxFuture<'a, Result<i64, DbError>> {
-        self.inner.add_adblock_source(url, kind)
+        self.inner.add_adblock_source(url, kind, format)
     }
 
     fn remove_adblock_source(&self, id: i64) -> BoxFuture<'_, Result<(), DbError>> {

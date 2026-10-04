@@ -31,6 +31,7 @@ rand = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }
+parking_lot = { workspace = true, optional = true }
 
 # Server dependencies
 axum = { version = "0.8.8", optional = true }
@@ -90,6 +91,7 @@ server = [
     "dep:rand",
     "dep:async-stream",
     "dep:libc",
+    "dep:parking_lot",
 ]
 client = [
     "dep:hyper",

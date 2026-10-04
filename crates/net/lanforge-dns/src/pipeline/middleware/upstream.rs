@@ -69,6 +69,7 @@ impl Middleware for UpstreamMiddleware {
                         cached,
                         answer,
                         protocol: req.protocol,
+                        filter: req.filter_match.lock().clone(),
                     });
 
                     // Update cache size counter in real-time

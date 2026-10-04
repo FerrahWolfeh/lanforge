@@ -22,6 +22,8 @@ import type {
 	DhcpReconcileResponse,
 	Dhcpv4PoolConfig,
 	Dhcpv6PoolConfig,
+	AdblockCheckResponse,
+	DnsAdblockSourcesResponse,
 	DnsAdblockStatusResponse,
 	DnsAdblockUrlEntry,
 	DnsAnalyticsResponse,
@@ -479,7 +481,10 @@ export const dnsAllow = (domain: string) => post<void>('/dns/adblock/allow', { d
 export const dnsUnallow = (target: string) =>
 	del<void>(`/dns/adblock/allow/${encodeURIComponent(target)}`);
 export const dnsAdblockUrls = async (): Promise<DnsAdblockUrlEntry[]> =>
-	extractList<DnsAdblockUrlEntry>(await get<any>('/dns/adblock/sources'), 'urls');
+	extractList<DnsAdblockUrlEntry>(await get<any>('/dns/adblock/urls'), 'urls');
+export const dnsAdblockSources = () => get<DnsAdblockSourcesResponse>('/dns/adblock/sources');
+export const dnsAdblockCheck = (domain: string) =>
+	get<AdblockCheckResponse>(`/dns/adblock/check?domain=${encodeURIComponent(domain)}`);
 export const dnsAdblockUrlAdd = (entry: DnsAdblockUrlEntry) =>
 	post<void>('/dns/adblock/sources', entry);
 export const dnsAdblockUrlRemove = (entry: DnsAdblockUrlEntry) =>

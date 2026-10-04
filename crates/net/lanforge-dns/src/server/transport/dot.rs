@@ -150,6 +150,7 @@ async fn handle_dot_connection(
         };
 
         let mut resp_buf = Vec::with_capacity(512);
+        let filter_match = parking_lot::Mutex::new(None);
         dns_ctx
             .pipeline
             .run(
@@ -160,6 +161,7 @@ async fn handle_dot_connection(
                     &question,
                     peer.ip(),
                     TransportProtocol::Tls,
+                    &filter_match,
                 ),
                 &mut resp_buf,
             )

@@ -3,7 +3,7 @@ pub mod middleware;
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_types::device::TransientOrigin;
 use lanforge_types::network::dns::TransportProtocol;
-use lanforge_types::network::dns::{DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType};
+use lanforge_types::network::dns::{DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, FilterMatch};
 use lanforge_types::network::{Hostname, HostnameOrigin};
 use lanforge_types::update::{DeviceUpdate, TransientHostUpdate};
 
@@ -24,6 +24,7 @@ pub struct DnsPipelineRequest<'a> {
     pub src_ip: IpAddr,
     pub protocol: TransportProtocol,
     pub domain: Arc<str>,
+    pub filter_match: &'a parking_lot::Mutex<Option<Box<FilterMatch>>>,
 }
 
 impl<'a> DnsPipelineRequest<'a> {
@@ -33,6 +34,7 @@ impl<'a> DnsPipelineRequest<'a> {
         question: &'a WireQuestion<'a>,
         src_ip: IpAddr,
         protocol: TransportProtocol,
+        filter_match: &'a parking_lot::Mutex<Option<Box<FilterMatch>>>,
     ) -> Self {
         let domain = question.to_domain_lowercase_arc();
         Self {
@@ -42,6 +44,7 @@ impl<'a> DnsPipelineRequest<'a> {
             src_ip: src_ip.to_canonical(),
             protocol,
             domain,
+            filter_match,
         }
     }
 }

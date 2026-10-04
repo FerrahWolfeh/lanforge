@@ -36,6 +36,7 @@ async fn test_dns_adblock_update_failure_and_fallback() {
         id: Some(1),
         url: "http://127.0.0.1:1/nonexistent.txt".to_string(),
         kind: AdblockUrlKind::Blocklist,
+        format: lanforge_types::network::dns::adblock::AdblockSourceFormat::Auto,
     }]);
     ctx_instance.update_dns_adblock(AdblockDbConfig {
         enabled: true,

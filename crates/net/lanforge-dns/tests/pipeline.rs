@@ -176,7 +176,8 @@ async fn pipeline_cached_block() {
     assert!(has_resp);
     assert_eq!(dns_ctx.stats.snapshot().blocked_queries, 1);
 
-    // 2. Second query (same) -> Should be CachedBlock
+    // 2. Second query (same) -> Per D9, blocked queries are NOT cached.
+    // The query is evaluated fresh and blocked by the engine without polluting cache.
     let mut resp_buf2 = Vec::new();
     let has_resp2 = process_query_test(
         &data,
@@ -188,10 +189,25 @@ async fn pipeline_cached_block() {
     .unwrap();
     assert!(has_resp2);
 
-    // Check logs for the second query
+    // Check logs for the second query: still Blocked, no cache hit
     let recent = dns_ctx.query_log.as_ref().unwrap().get_recent(2);
-    assert_eq!(recent[0].result, QueryResult::CachedBlock);
-    assert_eq!(dns_ctx.stats.snapshot().cache_hits, 1);
+    assert_eq!(recent[0].result, QueryResult::Blocked);
+    assert_eq!(dns_ctx.stats.snapshot().blocked_queries, 2);
+    assert_eq!(dns_ctx.stats.snapshot().cache_hits, 0);
+
+    // 3. Immediately unblock: query should not be served from a stale block cache
+    filter.set_enabled(false);
+    let mut resp_buf3 = Vec::new();
+    let res3 = process_query_test(
+        &data,
+        &dns_ctx,
+        "127.0.0.1".parse().unwrap(),
+        &mut resp_buf3,
+    )
+    .await;
+    // Without an upstream configured, an unblocked query is not served from cache
+    // (which would have returned Ok(true) with 0.0.0.0), but instead falls through to resolution.
+    assert!(res3.is_err());
 }
 
 #[tokio::test]

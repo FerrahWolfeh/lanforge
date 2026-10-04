@@ -4,6 +4,9 @@ use colored::Colorize;
 use crate::client::LanforgeClient;
 use crate::output::{Printer, format_duration_secs};
 
+use lanforge_types::network::dns::adblock::{AdblockSourceFormat, AdblockUrlKind};
+use lanforge_types::network::dns::{FilterAction, FilterOrigin};
+
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct DnsArgs {
     #[command(subcommand)]
@@ -26,6 +29,29 @@ pub enum DnsSubcommand {
         /// Fully qualified domain name to allow (e.g. tracking.example.com)
         domain: String,
     },
+    /// Check whether a domain is blocked or allowed by adblock rules and sources
+    Check {
+        /// Fully qualified domain name to check (e.g. ads.example.com)
+        domain: String,
+    },
+    /// List all configured adblock filter sources and compilation status
+    Sources,
+    /// Add an adblock source URL
+    SourceAdd {
+        /// URL of the blocklist or allowlist
+        url: String,
+        /// Source format (auto, adblock, hosts, domains, wildcard-domains)
+        #[arg(short, long)]
+        format: Option<AdblockSourceFormat>,
+        /// List kind: 'blocklist' or 'allowlist'
+        #[arg(short, long, default_value = "blocklist")]
+        kind: AdblockUrlKind,
+    },
+    /// Remove an adblock source URL
+    SourceRemove {
+        /// URL to remove
+        url: String,
+    },
     /// Temporarily or indefinitely pause DNS adblocking
     Pause {
         /// Optional duration in seconds to pause (e.g. 300 for 5 minutes). If omitted, pauses indefinitely until resumed.
@@ -37,6 +63,7 @@ pub enum DnsSubcommand {
 }
 
 impl DnsArgs {
+    #[allow(clippy::too_many_lines)]
     pub async fn execute(self, client: &LanforgeClient, printer: &Printer) -> Result<()> {
         match self.subcommand.unwrap_or(DnsSubcommand::Status) {
             DnsSubcommand::Status => show_status(client, printer).await,
@@ -62,6 +89,106 @@ impl DnsArgs {
                     return printer.print_json(&resp);
                 }
                 printer.success(&format!("Domain '{domain}' added to allowlist: {}", resp.message));
+                Ok(())
+            }
+            DnsSubcommand::Check { domain } => {
+                let resp = client.dns_adblock_check(domain.clone()).await?;
+                if printer.json {
+                    return printer.print_json(&resp);
+                }
+                println!();
+                if let Some(ref m) = resp.filter {
+                    let action_str = match m.action {
+                        FilterAction::Block => "BLOCKED".red().bold(),
+                        FilterAction::Allow => "ALLOWED".green().bold(),
+                    };
+                    println!("  Domain:    {}", resp.domain.bold());
+                    println!("  Verdict:   {action_str}");
+                    let origin_str = match m.origin {
+                        FilterOrigin::UserRule => "Custom User Rule".to_string(),
+                        FilterOrigin::UserAllowlist => "User Allowlist".to_string(),
+                        FilterOrigin::List { source_id } => {
+                            format!("Filter List #{source_id}")
+                        }
+                    };
+                    println!("  Origin:    {}", origin_str.cyan());
+                    if let Some(ref rule) = m.rule {
+                        println!("  Matched:   {} (inherited rule)", rule.yellow());
+                    }
+                    if m.important {
+                        println!("  Important: {}", "yes ($important flag)".yellow());
+                    }
+                    if !resp.source_matches.is_empty() {
+                        println!("\n  Sources:");
+                        for sm in &resp.source_matches {
+                            println!("    - [{}] {}", sm.action.as_str().to_uppercase(), sm.url);
+                        }
+                    }
+                } else {
+                    println!("  Domain:    {}", resp.domain.bold());
+                    println!("  Verdict:   {}", "NOT BLOCKED (default pass)".green());
+                }
+                println!();
+                Ok(())
+            }
+            DnsSubcommand::Sources => {
+                let resp = client.dns_adblock_sources().await?;
+                if printer.json {
+                    return printer.print_json(&resp);
+                }
+                if resp.sources.is_empty() {
+                    printer.info("No adblock sources configured.");
+                    return Ok(());
+                }
+                let mut table = printer.new_table();
+                table.set_header(vec![
+                    "ID",
+                    "Format",
+                    "Blocks",
+                    "Exceptions",
+                    "Status",
+                    "URL",
+                ]);
+                for s in &resp.sources {
+                    let fmt_str = match s.format_detected {
+                        Some(d) if d != s.format => format!("{} ({})", s.format.as_str(), d.as_str()),
+                        _ => s.format.as_str().to_string(),
+                    };
+
+                    let status_str = if s.consecutive_failures > 0 {
+                        format!("FAIL ({})", s.consecutive_failures).red().to_string()
+                    } else if s.last_success.is_some() {
+                        "OK".green().to_string()
+                    } else {
+                        "PENDING".yellow().to_string()
+                    };
+
+                    table.add_row(vec![
+                        s.id.to_string(),
+                        fmt_str,
+                        s.blocks.to_string(),
+                        s.exceptions.to_string(),
+                        status_str,
+                        s.url.clone(),
+                    ]);
+                }
+                println!("{table}");
+                Ok(())
+            }
+            DnsSubcommand::SourceAdd { url, format, kind } => {
+                let resp = client.dns_adblock_url_add(url.clone(), kind, format).await?;
+                if printer.json {
+                    return printer.print_json(&resp);
+                }
+                printer.success(&format!("Added adblock source URL: {url}"));
+                Ok(())
+            }
+            DnsSubcommand::SourceRemove { url } => {
+                let resp = client.dns_adblock_url_remove(url.clone()).await?;
+                if printer.json {
+                    return printer.print_json(&resp);
+                }
+                printer.success(&format!("Removed adblock source URL: {url}"));
                 Ok(())
             }
             DnsSubcommand::Pause { duration } => {

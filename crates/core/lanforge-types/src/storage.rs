@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::auth::{ApiScopes, ApiTokenEntry, UserEntry, UserRole};
 use crate::device::LeaseHistoryEntry;
 use crate::identifiers::MacAddr;
-use crate::network::dns::adblock::{AdblockRuleAction, AdblockUrlKind, RewriteAnswer};
+use crate::network::dns::adblock::{
+    AdblockRuleAction, AdblockSourceFormat, AdblockUrlKind, RewriteAnswer,
+};
 use crate::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 use crate::network::dns::DnsRecordType;
 use crate::network::{IpSubnet, QueryLogEntry};
@@ -122,6 +124,8 @@ pub enum StorageQuery {
     AddAdblockUrl {
         url: String,
         kind: AdblockUrlKind,
+        #[serde(default)]
+        format: AdblockSourceFormat,
     },
     RemoveAdblockUrl(String),
     ClearAdblockUrls,

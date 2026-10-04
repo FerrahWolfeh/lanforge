@@ -1,140 +1,98 @@
 use std::collections::HashSet;
-use std::fs::File;
-use std::io::BufWriter;
-use std::num::NonZeroUsize;
 use std::path::Path;
-use std::sync::Arc;
-
-use bloomfilter::Bloom;
-use fst::{Set, SetBuilder, Streamer};
-use lru::LruCache;
-use memmap2::Mmap;
-use parking_lot::Mutex;
 
 use crate::error::DnsError;
+use crate::resolver::filter::engine::{
+    build_fst_map, encode_val, reverse_domain_key, DiskFilterMap, MatchCandidate,
+};
+use crate::resolver::filter::parse::MatchFlags;
 
-/// Memory-efficient blocklist using a Bloom filter, an LRU cache, and a disk-backed FST.
+use std::sync::Arc;
+
+/// High-performance adblock filter engine backed by memory-mapped reversed FST Maps.
+/// Operates with zero heap allocations and zero lock contention during lookups.
 pub struct DiskBlocklist {
-    /// Bloom filter for fast negative lookups (0.5% FP rate).
-    bloom: Bloom<str>,
-    /// LRU cache of recent lookup results (domain -> blocked?).
-    lru: Arc<Mutex<LruCache<Box<str>, bool>>>,
-    /// Memory-mapped FST (Finite State Transducer) set of domains.
-    fst: Set<Mmap>,
+    pub block_map: DiskFilterMap,
+    pub allow_map: Option<DiskFilterMap>,
+    pub source_index: Arc<[i64]>,
 }
 
 impl DiskBlocklist {
-    /// Build from a set of domains, deduplicate, sort, write to disk as FST, and build bloom filter.
-    pub fn build(domains: HashSet<String>, path: &Path, lru_cap: usize) -> Result<Self, DnsError> {
-        let mut sorted_domains: Vec<String> = domains.into_iter().collect();
-        sorted_domains.sort_unstable();
-
-        let tmp_file = tempfile::Builder::new()
-            .prefix("lanforge-dns-")
-            .suffix(".fst.tmp")
-            .tempfile()
-            .map_err(|e| DnsError::Generic(format!("Failed to create tempfile: {e}")))?;
-
-        let mut writer = BufWriter::new(tmp_file);
-        let mut builder = SetBuilder::new(&mut writer)
-            .map_err(|e| DnsError::Generic(format!("FST builder creation failed: {e}")))?;
-
-        for domain in &sorted_domains {
-            builder
-                .insert(domain)
-                .map_err(|e| DnsError::Generic(format!("FST insertion failed: {e}")))?;
-        }
-
-        builder
-            .finish()
-            .map_err(|e| DnsError::Generic(format!("FST finalization failed: {e}")))?;
-
-        std::io::Write::flush(&mut writer)
-            .map_err(|e| DnsError::Generic(format!("FST flush failed: {e}")))?;
-
-        let tmp_file = writer
-            .into_inner()
-            .map_err(|e| DnsError::Generic(format!("FST buffer unwrap failed: {e}")))?;
-
-        match tmp_file.persist(path) {
-            Ok(_) => {}
-            Err(e) => {
-                let tmp_file = e.file;
-                std::fs::copy(tmp_file.path(), path).map_err(|err| {
-                    DnsError::Generic(format!("FST cross-device copy failed: {err}"))
-                })?;
+    /// Build from a set of domains, convert to reversed keys with wildcard flags, and write to disk.
+    pub fn build(domains: HashSet<String>, path: &Path, _lru_cap: usize) -> Result<Self, DnsError> {
+        let mut rules = Vec::with_capacity(domains.len());
+        for domain in domains {
+            if let Some(rev_key) = reverse_domain_key(&domain) {
+                rules.push((rev_key, encode_val(MatchFlags::wildcard(), 0)));
             }
         }
 
-        Self::load(path, lru_cap)
+        build_fst_map(rules, path)?;
+        Self::load(path, _lru_cap)
     }
 
     /// Load from an existing FST file on disk.
-    pub fn load(path: &Path, lru_cap: usize) -> Result<Self, DnsError> {
-        let file = File::open(path)?;
-        let mmap = unsafe { Mmap::map(&file)? };
+    pub fn load(path: &Path, _lru_cap: usize) -> Result<Self, DnsError> {
+        let block_map = DiskFilterMap::open(path)?;
+        let allow_path = path.with_file_name("allow.fst");
+        let allow_map = if allow_path.exists() {
+            DiskFilterMap::open(&allow_path).ok()
+        } else {
+            None
+        };
 
-        let fst = Set::new(mmap).map_err(|e| DnsError::Generic(format!("FST load failed: {e}")))?;
-        let domain_count = fst.len();
-
-        if domain_count > 50_000_000 {
-            return Err(DnsError::Generic(format!(
-                "FST file corrupted or unreasonably large (reported {domain_count} domains)"
-            )));
-        }
-
-        // Build Bloom filter from the FST contents
-        let mut bloom = Bloom::new_for_fp_rate(domain_count.max(100), 0.005)
-            .map_err(|e| DnsError::Generic(format!("Bloom filter creation failed: {e}")))?;
-
-        let mut stream = fst.stream();
-        while let Some(domain_bytes) = stream.next() {
-            if let Ok(domain_str) = std::str::from_utf8(domain_bytes) {
-                bloom.set(domain_str);
-            }
-        }
+        let manifest_path = path.with_file_name("manifest.json");
+        let source_index = if manifest_path.exists() {
+            let manifest = crate::resolver::filter::manifest::AdblockManifest::load_or_default(&manifest_path);
+            Arc::from(manifest.source_index.into_boxed_slice())
+        } else {
+            Arc::from([])
+        };
 
         Ok(Self {
-            bloom,
-            lru: Arc::new(Mutex::new(LruCache::new(
-                NonZeroUsize::new(lru_cap.max(1)).unwrap(),
-            ))),
-            fst,
+            block_map,
+            allow_map,
+            source_index,
         })
     }
 
-    /// Check if a domain is in the blocklist.
+    /// Check if a domain matches the blocklist (including wildcard subdomains).
+    #[inline]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn contains(&self, domain: &str) -> bool {
-        // 1. Check LRU cache
-        {
-            let mut lru = self.lru.lock();
-            if let Some(&blocked) = lru.get(domain) {
-                return blocked;
-            }
-        }
+        self.block_map.match_domain(domain).is_some()
+    }
 
-        // 2. Fast rejection via Bloom filter (zero allocations, zero lock contention, zero false negatives)
-        if !self.bloom.check(domain) {
-            return false;
-        }
+    /// Match against the block map returning candidate flags and source attribution.
+    #[inline]
+    pub fn match_block(&self, domain: &str) -> Option<MatchCandidate> {
+        self.block_map.match_domain(domain)
+    }
 
-        // 3. FST Lookup
-        let result = self.fst.contains(domain);
+    /// Match against the source allow/exception map.
+    #[inline]
+    pub fn match_allow(&self, domain: &str) -> Option<MatchCandidate> {
+        self.allow_map.as_ref().and_then(|m| m.match_domain(domain))
+    }
 
-        // 4. Update LRU for confirmed hits and Bloom false positives
-        self.lru.lock().put(Box::from(domain), result);
-
-        result
+    /// Resolves internal source index to database source ID.
+    #[inline]
+    pub fn resolve_source_id(&self, source_idx: u16) -> i64 {
+        self.source_index
+            .get(source_idx as usize)
+            .copied()
+            .unwrap_or(source_idx as i64)
     }
 
     /// Get the number of domains in the blocklist.
+    #[inline]
     pub fn len(&self) -> usize {
-        self.fst.len()
+        self.block_map.len()
     }
 
     /// Check if the blocklist is empty.
+    #[inline]
     pub fn is_empty(&self) -> bool {
-        self.fst.is_empty()
+        self.block_map.is_empty()
     }
 }

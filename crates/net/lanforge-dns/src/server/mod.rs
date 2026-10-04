@@ -13,7 +13,9 @@ use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::upstream::UpstreamTarget;
-use lanforge_types::network::dns::{DnsRecordType, QueryLogEntry, QueryResult, TransportProtocol};
+use lanforge_types::network::dns::{
+    DnsRecordType, FilterMatch, QueryLogEntry, QueryResult, TransportProtocol,
+};
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -56,6 +58,7 @@ pub struct DnsLogEvent {
     pub cached: bool,
     pub answer: Option<String>,
     pub protocol: TransportProtocol,
+    pub filter: Option<Box<FilterMatch>>,
 }
 
 /// Checks if a domain matches an exact or wildcard pattern (e.g. `*.sonarr.tv`) without heap allocation.
@@ -145,6 +148,7 @@ impl DnsContext {
                 src_mac: event.src_mac,
                 answer: event.answer,
                 protocol: event.protocol,
+                filter: event.filter,
             };
             log.push(entry.clone());
 

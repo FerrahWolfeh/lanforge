@@ -14,7 +14,9 @@ use tracing::error;
 
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::AdblockRuleAction;
-use lanforge_types::network::dns::adblock::{AdblockUrlKind, BlockingMode};
+use lanforge_types::network::dns::adblock::{
+    AdblockSourceFormat, AdblockUrlKind, BlockingMode,
+};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 impl ClientContext {
@@ -105,6 +107,10 @@ impl ClientContext {
                 blocking_mode: res.blocking_mode,
                 blocking_ip_v4: res.blocking_ip_v4,
                 blocking_ip_v6: res.blocking_ip_v6,
+                exceptions_size: res.exceptions_size,
+                last_update: res.last_update,
+                sources_ok: res.sources_ok,
+                sources_failing: res.sources_failing,
             }));
         }
 
@@ -122,7 +128,59 @@ impl ClientContext {
     }
 
     #[cfg(feature = "adblock")]
-    pub async fn handle_dns_adblock_url_add(&self, url: String, kind: AdblockUrlKind) -> Response {
+    pub async fn handle_dns_adblock_sources(&self) -> Response {
+        if let Some(handle) = self.ctx.dns_handle()
+            && let Ok(lanforge_types::network::dns::DnsResponse::AdblockSources(res)) = handle
+                .send_request(lanforge_types::network::dns::DnsRequest::AdblockSources)
+                .await
+        {
+            return Response::DnsAdblockSources(res);
+        }
+        Response::DnsAdblockSources(lanforge_types::network::dns::DnsAdblockSourcesResponse::default())
+    }
+
+    #[cfg(not(feature = "adblock"))]
+    pub async fn handle_dns_adblock_sources(&self) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
+    }
+
+    #[cfg(feature = "adblock")]
+    pub async fn handle_dns_adblock_check(&self, domain: String) -> Response {
+        if let Some(handle) = self.ctx.dns_handle()
+            && let Ok(lanforge_types::network::dns::DnsResponse::AdblockCheck(res)) = handle
+                .send_request(lanforge_types::network::dns::DnsRequest::AdblockCheck {
+                    domain: domain.clone(),
+                })
+                .await
+        {
+            return Response::AdblockCheck(Box::new(res));
+        }
+        Response::AdblockCheck(Box::new(lanforge_types::network::dns::AdblockCheckResponse {
+            domain,
+            matched: false,
+            filter: None,
+            source_matches: Vec::new(),
+        }))
+    }
+
+    #[cfg(not(feature = "adblock"))]
+    pub async fn handle_dns_adblock_check(&self, _domain: String) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
+    }
+
+    #[cfg(feature = "adblock")]
+    pub async fn handle_dns_adblock_url_add(
+        &self,
+        url: String,
+        kind: AdblockUrlKind,
+        format: Option<AdblockSourceFormat>,
+    ) -> Response {
         let Some(storage) = self.ctx.storage_handle() else {
             return Response::Error {
                 error: "Storage service not available".into(),
@@ -133,6 +191,7 @@ impl ClientContext {
             .send_query(lanforge_types::storage::StorageQuery::AddAdblockUrl {
                 url: url.clone(),
                 kind,
+                format: format.unwrap_or_default(),
             })
             .await
         {
@@ -148,6 +207,7 @@ impl ClientContext {
         &self,
         _url: String,
         _kind: AdblockUrlKind,
+        _format: Option<AdblockSourceFormat>,
     ) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."

@@ -87,6 +87,7 @@ pub fn spawn_tcp_worker(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                             }
 
                             let mut resp_buf = Vec::with_capacity(len + 128);
+                            let filter_match = parking_lot::Mutex::new(None);
                             let run_res = task_ctx
                                 .pipeline
                                 .run(
@@ -97,6 +98,7 @@ pub fn spawn_tcp_worker(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                         &question,
                                         src.ip(),
                                         TransportProtocol::Tcp,
+                                        &filter_match,
                                     ),
                                     &mut resp_buf,
                                 )

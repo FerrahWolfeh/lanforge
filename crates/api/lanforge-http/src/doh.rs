@@ -70,12 +70,14 @@ pub async fn handle_dns_query(
     };
 
     let mut resp_buf = Vec::with_capacity(512);
+    let filter_match = parking_lot::Mutex::new(None);
     let req = DnsPipelineRequest::new(
         &query_data,
         &header,
         &question,
         src_ip,
         TransportProtocol::Https,
+        &filter_match,
     );
 
     match dns_ctx.pipeline.run(&dns_ctx, req, &mut resp_buf).await {

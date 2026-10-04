@@ -20,13 +20,19 @@ use tracing::{debug, error, info, trace};
 
 use lanforge_dns_wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use lanforge_types::network::dns::DnsRecordType;
-use lanforge_types::network::dns::adblock::BlockingMode;
+use lanforge_types::network::dns::adblock::{
+    BlockingMode, FilterAction, FilterMatch, FilterOrigin,
+};
 
 use crate::error::DnsError;
 use crate::resolver::builder::ResponseBuilder;
 use crate::server::DnsContext;
 
 pub mod blocklist;
+pub mod engine;
+pub mod manifest;
+pub mod parse;
+pub mod source;
 pub use blocklist::DiskBlocklist;
 
 pub struct AdBlocker {
@@ -114,32 +120,95 @@ impl AdBlocker {
         }
     }
 
-    pub fn should_block(&self, qname: &str) -> bool {
+    /// Evaluates a domain against custom rules, allowlist, and compiled blocklist, returning match attribution.
+    pub fn check_domain(&self, qname: &str) -> Option<FilterMatch> {
         if !self.is_enabled() {
-            return false;
+            return None;
         }
         {
             let allow = self.allowlist.read();
-            if Self::match_allow(&allow, qname) {
-                return false;
+            if let Some(rule) = Self::find_matching_rule(&allow, qname) {
+                let rule_str = if rule != qname { Some(rule.into()) } else { None };
+                return Some(FilterMatch {
+                    action: FilterAction::Allow,
+                    origin: FilterOrigin::UserAllowlist,
+                    rule: rule_str,
+                    important: false,
+                });
             }
         }
         {
             let custom_blocks = self.custom_blocks.read();
-            if Self::match_allow(&custom_blocks, qname) {
-                return true;
+            if let Some(rule) = Self::find_matching_rule(&custom_blocks, qname) {
+                let rule_str = if rule != qname { Some(rule.into()) } else { None };
+                return Some(FilterMatch {
+                    action: FilterAction::Block,
+                    origin: FilterOrigin::UserRule,
+                    rule: rule_str,
+                    important: false,
+                });
             }
         }
-        let block = self.blocklist.read();
-        if let Some(bl) = block.as_ref() {
-            return Self::match_block(bl, qname);
+        let block_guard = self.blocklist.read();
+        if let Some(bl) = block_guard.as_ref() {
+            let allow_cand = bl.match_allow(qname);
+            let block_cand = bl.match_block(qname);
+
+            match (allow_cand, block_cand) {
+                (Some(a), Some(b)) => {
+                    if b.flags.is_important() && !a.flags.is_important() {
+                        let source_id = bl.resolve_source_id(b.source_idx);
+                        return Some(FilterMatch {
+                            action: FilterAction::Block,
+                            origin: FilterOrigin::List { source_id },
+                            rule: None,
+                            important: true,
+                        });
+                    }
+                    let source_id = bl.resolve_source_id(a.source_idx);
+                    Some(FilterMatch {
+                        action: FilterAction::Allow,
+                        origin: FilterOrigin::List { source_id },
+                        rule: None,
+                        important: a.flags.is_important(),
+                    })
+                }
+                (Some(a), None) => {
+                    let source_id = bl.resolve_source_id(a.source_idx);
+                    Some(FilterMatch {
+                        action: FilterAction::Allow,
+                        origin: FilterOrigin::List { source_id },
+                        rule: None,
+                        important: a.flags.is_important(),
+                    })
+                }
+                (None, Some(b)) => {
+                    let source_id = bl.resolve_source_id(b.source_idx);
+                    Some(FilterMatch {
+                        action: FilterAction::Block,
+                        origin: FilterOrigin::List { source_id },
+                        rule: None,
+                        important: b.flags.is_important(),
+                    })
+                }
+                (None, None) => None,
+            }
+        } else {
+            None
         }
-        false
     }
 
-    fn match_allow(set: &HashSet<Box<str>>, qname: &str) -> bool {
-        if set.contains(qname) {
-            return true;
+    #[inline]
+    pub fn should_block(&self, qname: &str) -> bool {
+        match self.check_domain(qname) {
+            Some(m) => m.action == FilterAction::Block,
+            None => false,
+        }
+    }
+
+    fn find_matching_rule<'a>(set: &'a HashSet<Box<str>>, qname: &str) -> Option<&'a str> {
+        if let Some(r) = set.get(qname) {
+            return Some(r);
         }
         let mut current = qname;
         while let Some(pos) = current.find('.') {
@@ -147,28 +216,11 @@ impl AdBlocker {
             if current.is_empty() {
                 break;
             }
-            if set.contains(current) {
-                return true;
+            if let Some(r) = set.get(current) {
+                return Some(r);
             }
         }
-        false
-    }
-
-    fn match_block(bl: &DiskBlocklist, qname: &str) -> bool {
-        if bl.contains(qname) {
-            return true;
-        }
-        let mut current = qname;
-        while let Some(pos) = current.find('.') {
-            current = &current[pos + 1..];
-            if current.is_empty() {
-                break;
-            }
-            if bl.contains(current) {
-                return true;
-            }
-        }
-        false
+        None
     }
 
     pub fn inc_ip_stats(&self, ip: IpAddr) {
@@ -253,14 +305,25 @@ impl AdBlocker {
         self.allowlist.read().len()
     }
 
+    #[must_use]
+    pub fn exceptions_size(&self) -> usize {
+        self.blocklist
+            .read()
+            .as_ref()
+            .and_then(|bl| bl.allow_map.as_ref().map(crate::resolver::filter::engine::DiskFilterMap::len))
+            .unwrap_or(0)
+    }
+
     pub async fn load_from_urls(&self, name: &str, urls: &[String]) -> Result<HashSet<String>, DnsError> {
         let mut new_list = HashSet::new();
+        let mut http = HttpConnector::new();
+        http.set_connect_timeout(Some(Duration::from_secs(10)));
         let https = HttpsConnectorBuilder::new()
             .with_webpki_roots()
             .https_or_http()
             .enable_http1()
             .enable_http2()
-            .build();
+            .wrap_connector(http);
 
         let client = Client::builder(TokioExecutor::new())
             .pool_idle_timeout(Duration::from_secs(30))
@@ -327,8 +390,19 @@ impl AdBlocker {
 
 async fn fetch_url(
     client: &Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>,
+    target_url: String,
+) -> Result<Bytes, DnsError> {
+    tokio::time::timeout(Duration::from_secs(120), fetch_url_inner(client, target_url))
+        .await
+        .map_err(|_| DnsError::Generic("Request timed out (120s limit)".to_string()))?
+}
+
+async fn fetch_url_inner(
+    client: &Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>,
     mut target_url: String,
 ) -> Result<Bytes, DnsError> {
+    const MAX_BODY_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
+
     for _ in 0..5 {
         let uri: Uri = target_url
             .parse()
@@ -370,12 +444,22 @@ async fn fetch_url(
             return Err(DnsError::Generic(format!("HTTP status {status}")));
         }
 
-        let body_bytes = resp
-            .into_body()
-            .collect()
-            .await
-            .map_err(|e| DnsError::Generic(format!("Failed to read body: {e}")))?;
-        return Ok(body_bytes.to_bytes());
+        let mut body = resp.into_body();
+        let mut body_bytes = Vec::new();
+
+        while let Some(frame_res) = body.frame().await {
+            let frame = frame_res.map_err(|e| DnsError::Generic(format!("Body frame error: {e}")))?;
+            if let Ok(data) = frame.into_data() {
+                if body_bytes.len() + data.len() > MAX_BODY_SIZE {
+                    return Err(DnsError::Generic(format!(
+                        "Response body exceeded limit of 64 MiB (read {} bytes)",
+                        body_bytes.len() + data.len()
+                    )));
+                }
+                body_bytes.extend_from_slice(&data);
+            }
+        }
+        return Ok(Bytes::from(body_bytes));
     }
 
     Err(DnsError::Generic("Too many redirects".to_string()))

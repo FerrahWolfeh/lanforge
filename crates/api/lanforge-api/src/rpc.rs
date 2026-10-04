@@ -1,13 +1,14 @@
 use crate::api::{
-    AuthTokenResponse, AuthTokensResponse, CreateUserPayload, DeviceListQuery, DevicesResponse,
-    DhcpOptionsResponse, DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse,
-    DnsAdblockStatusResponse, DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse,
-    DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
-    DnsReverseResolversResponse, DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse,
-    EventKind, HostConfigEntry, HostsResponse, LeasesResponse, RpcCallError, ServiceBannersResponse,
-    SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess, StatusResponse,
-    SystemConfigExport, SystemConfigImportResponse, TransientHostsResponse, UserListResponse,
-    UserResponse, WhoisResponse,
+    AdblockCheckResponse, AuthTokenResponse, AuthTokensResponse, CreateUserPayload, DeviceListQuery,
+    DevicesResponse, DhcpOptionsResponse, DhcpPoolsConfigResponse, DhcpPoolsResponse,
+    DhcpReconcileResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse, DnsAdblockUrlsResponse,
+    DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse,
+    DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse,
+    DnsStatsResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry, HostsResponse,
+    LeasesResponse, RpcCallError, ServiceBannersResponse, SetupPayload, SetupResponse,
+    SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
+    SystemConfigImportResponse, TransientHostsResponse, UserListResponse, UserResponse,
+    WhoisResponse,
 };
 use lanforge_macros::lanforge_rpc;
 use lanforge_types::{
@@ -16,7 +17,7 @@ use lanforge_types::{
         dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool},
         dns::{
             DnsRecordType,
-            adblock::{AdblockUrlKind, BlockingMode, RewriteRule},
+            adblock::{AdblockSourceFormat, AdblockUrlKind, BlockingMode, RewriteRule},
             upstream::UpstreamProtocol,
         },
         firewall::{
@@ -223,6 +224,7 @@ pub trait LanforgeRpc {
         &self,
         url: String,
         kind: AdblockUrlKind,
+        format: Option<AdblockSourceFormat>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn dns_adblock_url_remove(
         &self,
@@ -231,6 +233,13 @@ pub trait LanforgeRpc {
     fn dns_adblock_url_list(
         &self,
     ) -> impl Future<Output = Result<DnsAdblockUrlsResponse, RpcCallError>> + Send;
+    fn dns_adblock_sources(
+        &self,
+    ) -> impl Future<Output = Result<DnsAdblockSourcesResponse, RpcCallError>> + Send;
+    fn dns_adblock_check(
+        &self,
+        domain: String,
+    ) -> impl Future<Output = Result<Box<AdblockCheckResponse>, RpcCallError>> + Send;
     fn context_dump(
         &self,
         only_devices: bool,

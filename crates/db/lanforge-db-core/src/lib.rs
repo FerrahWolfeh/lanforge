@@ -14,7 +14,8 @@ use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType};
 use lanforge_types::network::dns::adblock::{
-    AdblockDbConfig, AdblockRuleAction, AdblockUrlKind, RewriteAnswer, RewriteRule,
+    AdblockDbConfig, AdblockRuleAction, AdblockSourceFormat, AdblockUrlKind, RewriteAnswer,
+    RewriteRule,
 };
 use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::firewall::FirewallConfig;
@@ -246,13 +247,14 @@ pub trait AdblockStore: Send + Sync {
     /// Loads all adblock filter subscription URLs.
     fn load_adblock_urls(
         &self,
-    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind)>, DbError>>;
+    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind, AdblockSourceFormat)>, DbError>>;
 
     /// Adds a new adblock filter source URL.
     fn add_adblock_url<'a>(
         &'a self,
         url: &'a str,
         kind: AdblockUrlKind,
+        format: AdblockSourceFormat,
     ) -> BoxFuture<'a, Result<(), DbError>>;
 
     /// Removes an adblock filter source URL by URL string.
@@ -264,13 +266,14 @@ pub trait AdblockStore: Send + Sync {
     /// Loads all adblock filter subscription URLs.
     fn load_adblock_sources(
         &self,
-    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind, bool)>, DbError>>;
+    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind, bool, AdblockSourceFormat)>, DbError>>;
 
     /// Adds a new adblock filter source URL.
     fn add_adblock_source<'a>(
         &'a self,
         url: &'a str,
         kind: AdblockUrlKind,
+        format: AdblockSourceFormat,
     ) -> BoxFuture<'a, Result<i64, DbError>>;
 
     /// Removes an adblock filter source URL by ID.

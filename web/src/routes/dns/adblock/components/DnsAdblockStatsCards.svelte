@@ -28,6 +28,8 @@
 		if (totalQueries === 0) return 0;
 		return ((blockedQueries / totalQueries) * 100).toFixed(1);
 	});
+	const exceptionsDomains = $derived(status?.exceptions_size ?? 0);
+	const totalAllowedOrExceptions = $derived(allowlistDomains + exceptionsDomains);
 </script>
 
 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -97,10 +99,10 @@
 		</Card.Content>
 	</Card.Root>
 
-	<!-- Allowlist Exceptions -->
+	<!-- Allowlist & @@ Exceptions -->
 	<Card.Root class="relative overflow-hidden">
 		<Card.Header class="flex flex-row items-center justify-between pb-2">
-			<Card.Title class="text-sm font-medium">Allowlist Exceptions</Card.Title>
+			<Card.Title class="text-sm font-medium">Exceptions & Allowlist</Card.Title>
 			<ShieldCheckIcon class="size-4 text-emerald-500" />
 		</Card.Header>
 		<Card.Content>
@@ -109,10 +111,14 @@
 				<Skeleton class="h-3 w-36" />
 			{:else}
 				<div class="text-2xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400">
-					{allowlistDomains.toLocaleString()}
+					{totalAllowedOrExceptions.toLocaleString()}
 				</div>
 				<p class="text-xs text-muted-foreground mt-1">
-					Whitelisted domains taking precedence
+					{#if exceptionsDomains > 0}
+						{allowlistDomains.toLocaleString()} manual, {exceptionsDomains.toLocaleString()} list @@ rules
+					{:else}
+						Whitelisted domains taking precedence
+					{/if}
 				</p>
 			{/if}
 		</Card.Content>

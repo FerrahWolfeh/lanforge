@@ -10,7 +10,8 @@ use lanforge_db_core::{
 };
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{
-    AdblockDbConfig, AdblockRuleAction, AdblockUrlKind, RewriteAnswer, RewriteRule,
+    AdblockDbConfig, AdblockRuleAction, AdblockSourceFormat, AdblockUrlKind, RewriteAnswer,
+    RewriteRule,
 };
 use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
@@ -274,6 +275,22 @@ impl DnsStore for RedbDatabase {
     }
 }
 
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum StoredSourceTuple {
+    V2(String, AdblockUrlKind, bool, AdblockSourceFormat),
+    V1(String, AdblockUrlKind, bool),
+}
+
+impl StoredSourceTuple {
+    fn into_parts(self) -> (String, AdblockUrlKind, bool, AdblockSourceFormat) {
+        match self {
+            Self::V2(url, kind, enabled, format) => (url, kind, enabled, format),
+            Self::V1(url, kind, enabled) => (url, kind, enabled, AdblockSourceFormat::Auto),
+        }
+    }
+}
+
 impl AdblockStore for RedbDatabase {
     fn load_adblock_config(&self) -> BoxFuture<'_, Result<AdblockDbConfig, DbError>> {
         Box::pin(async move {
@@ -361,7 +378,7 @@ impl AdblockStore for RedbDatabase {
 
     fn load_adblock_urls(
         &self,
-    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind)>, DbError>> {
+    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind, AdblockSourceFormat)>, DbError>> {
         Box::pin(async move {
             let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
             let table = match read_txn.open_table(TABLE_ADBLOCK_URLS) {
@@ -373,11 +390,12 @@ impl AdblockStore for RedbDatabase {
             let mut urls = Vec::new();
             for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
                 let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let (url, kind, _): (String, AdblockUrlKind, bool) = serde_json::from_slice(val.value())
-                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                urls.push((id.value(), url, kind));
+                let (url, kind, _, format) = serde_json::from_slice::<StoredSourceTuple>(val.value())
+                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?
+                    .into_parts();
+                urls.push((id.value(), url, kind, format));
             }
-            urls.sort_by_key(|(id, _, _)| *id);
+            urls.sort_by_key(|(id, _, _, _)| *id);
             Ok(urls)
         })
     }
@@ -386,12 +404,13 @@ impl AdblockStore for RedbDatabase {
         &'a self,
         url: &'a str,
         kind: AdblockUrlKind,
+        format: AdblockSourceFormat,
     ) -> BoxFuture<'a, Result<(), DbError>> {
         Box::pin(async move {
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
             {
                 let id = Self::next_id_in_txn(&write_txn, "adblock_urls")?;
-                let bytes = serde_json::to_vec(&(url, kind, true))
+                let bytes = serde_json::to_vec(&(url, kind, true, format))
                     .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
                 let mut table = write_txn
@@ -453,7 +472,7 @@ impl AdblockStore for RedbDatabase {
 
     fn load_adblock_sources(
         &self,
-    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind, bool)>, DbError>> {
+    ) -> BoxFuture<'_, Result<Vec<(i64, String, AdblockUrlKind, bool, AdblockSourceFormat)>, DbError>> {
         Box::pin(async move {
             let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
             let table = match read_txn.open_table(TABLE_ADBLOCK_URLS) {
@@ -465,11 +484,12 @@ impl AdblockStore for RedbDatabase {
             let mut urls = Vec::new();
             for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
                 let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let (url, kind, enabled): (String, AdblockUrlKind, bool) = serde_json::from_slice(val.value())
-                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                urls.push((id.value(), url, kind, enabled));
+                let (url, kind, enabled, format) = serde_json::from_slice::<StoredSourceTuple>(val.value())
+                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?
+                    .into_parts();
+                urls.push((id.value(), url, kind, enabled, format));
             }
-            urls.sort_by_key(|(id, _, _, _)| *id);
+            urls.sort_by_key(|(id, _, _, _, _)| *id);
             Ok(urls)
         })
     }
@@ -478,12 +498,13 @@ impl AdblockStore for RedbDatabase {
         &'a self,
         url: &'a str,
         kind: AdblockUrlKind,
+        format: AdblockSourceFormat,
     ) -> BoxFuture<'a, Result<i64, DbError>> {
         Box::pin(async move {
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
             let id = {
                 let id = Self::next_id_in_txn(&write_txn, "adblock_urls")?;
-                let bytes = serde_json::to_vec(&(url, kind, true))
+                let bytes = serde_json::to_vec(&(url, kind, true, format))
                     .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
                 let mut table = write_txn

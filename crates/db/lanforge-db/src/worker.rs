@@ -481,17 +481,18 @@ impl DbWorker {
                 }
                 Ok(StorageQueryResult::Success)
             }
-            StorageQuery::AddAdblockUrl { url, kind } => {
-                db.add_adblock_url(&url, kind)
+            StorageQuery::AddAdblockUrl { url, kind, format } => {
+                db.add_adblock_url(&url, kind, format)
                     .await
                     .map_err(|e| e.to_string())?;
                 if let Ok(urls) = db.load_adblock_urls().await {
                     ctx.update_dns_adblock_urls(
                         urls.into_iter()
-                            .map(|(id, url, kind)| AdblockUrlEntry {
+                            .map(|(id, url, kind, format)| AdblockUrlEntry {
                                 id: Some(id),
                                 url,
                                 kind,
+                                format,
                             })
                             .collect(),
                     );
@@ -505,10 +506,11 @@ impl DbWorker {
                 if let Ok(urls) = db.load_adblock_urls().await {
                     ctx.update_dns_adblock_urls(
                         urls.into_iter()
-                            .map(|(id, url, kind)| AdblockUrlEntry {
+                            .map(|(id, url, kind, format)| AdblockUrlEntry {
                                 id: Some(id),
                                 url,
                                 kind,
+                                format,
                             })
                             .collect(),
                     );

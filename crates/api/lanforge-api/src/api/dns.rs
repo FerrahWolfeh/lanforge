@@ -6,8 +6,13 @@ use super::common::{
     CacheMeta, HttpDataResponse, HttpPaginatedResponse, HttpWrappedResponse, LogMeta,
 };
 pub use lanforge_types::network::dns::{
-    AdblockUrlEntry, DnsAdblockStatusResponse, DnsCacheEntry, DnsCacheResponse,
+    AdblockCheckResponse, AdblockSourceMatch, AdblockSourceStatus, AdblockUrlEntry,
+    DnsAdblockSourcesResponse, DnsAdblockStatusResponse, DnsCacheEntry, DnsCacheResponse,
     DnsCacheStatsExtResponse, DnsStatsResponse,
+};
+pub use lanforge_types::network::dns::adblock::{
+    AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, FilterAction, FilterMatch,
+    FilterOrigin,
 };
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::{
@@ -114,6 +119,8 @@ pub struct DnsQueryLogEntry {
     pub cached: bool,
     pub qtype: DnsRecordType,
     pub upstream_us: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<Box<FilterMatch>>,
 }
 
 /// A response containing recent DNS query logs.
@@ -147,8 +154,6 @@ pub struct DnsAllowlistResponse {
 pub struct DnsAdblockUrlsResponse {
     pub urls: Vec<AdblockUrlEntry>,
 }
-
-pub use lanforge_types::network::dns::adblock::AdblockRuleEntry;
 
 /// Response containing custom adblock rules.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -336,6 +341,30 @@ impl HttpWrappedResponse for DnsQueryLogResponse {
 
 impl HttpWrappedResponse for DnsReverseResolversResponse {
     type Wrapper = HttpDataResponse<DnsReverseResolversResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for DnsAdblockSourcesResponse {
+    type Wrapper = HttpDataResponse<DnsAdblockSourcesResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for AdblockCheckResponse {
+    type Wrapper = HttpDataResponse<AdblockCheckResponse>;
 
     fn wrap(self) -> Self::Wrapper {
         HttpDataResponse { data: self }

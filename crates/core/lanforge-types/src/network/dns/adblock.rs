@@ -351,6 +351,95 @@ impl Display for AdblockUrlKind {
     }
 }
 
+/// Format of an adblock source list.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AdblockSourceFormat {
+    #[default]
+    Auto,
+    Adblock,
+    Hosts,
+    Domains,
+    WildcardDomains,
+}
+
+impl FromStr for AdblockSourceFormat {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().replace('-', "_").as_str() {
+            "auto" => Ok(Self::Auto),
+            "adblock" => Ok(Self::Adblock),
+            "hosts" => Ok(Self::Hosts),
+            "domains" => Ok(Self::Domains),
+            "wildcard_domains" | "wildcard" => Ok(Self::WildcardDomains),
+            _ => Err(format!("Invalid adblock source format: {s}")),
+        }
+    }
+}
+
+impl AdblockSourceFormat {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Adblock => "adblock",
+            Self::Hosts => "hosts",
+            Self::Domains => "domains",
+            Self::WildcardDomains => "wildcard_domains",
+        }
+    }
+}
+
+impl Display for AdblockSourceFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Action decided by the filter engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FilterAction {
+    Block,
+    Allow,
+}
+
+impl FilterAction {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Block => "block",
+            Self::Allow => "allow",
+        }
+    }
+}
+
+impl Display for FilterAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Origin of a filter rule match.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FilterOrigin {
+    UserRule,
+    UserAllowlist,
+    List { source_id: i64 },
+}
+
+/// Detailed filter match attribution for query logging and diagnostic checks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilterMatch {
+    pub action: FilterAction,
+    pub origin: FilterOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<Box<str>>,
+    #[serde(default)]
+    pub important: bool,
+}
+
 /// Action associated with a custom adblock user rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]

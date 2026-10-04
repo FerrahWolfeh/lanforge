@@ -768,6 +768,7 @@ export interface DnsQueryLogEntry {
 	upstream_us: number;
 	cached: boolean;
 	answer?: string | null;
+	filter?: FilterMatch | null;
 }
 
 export interface DnsUpstreamEntry {
@@ -823,12 +824,70 @@ export type DnsCacheStatsResponse = DnsCacheStatsExtResponse;
 
 export type BlockingMode = 'nxdomain' | 'null_ip' | 'custom_ip' | 'refused';
 
+export type FilterAction = 'block' | 'allow';
+
+export type FilterOrigin =
+	| { type: 'user_rule' }
+	| { type: 'user_allowlist' }
+	| { type: 'list'; source_id: number };
+
+export interface FilterMatch {
+	action: FilterAction;
+	origin: FilterOrigin;
+	rule?: string | null;
+	important?: boolean;
+}
+
+export type AdblockSourceFormat =
+	| 'auto'
+	| 'adblock'
+	| 'hosts'
+	| 'domains'
+	| 'wildcard_domains';
+
+export interface AdblockSourceStatus {
+	source_id: number;
+	url: string;
+	format: AdblockSourceFormat;
+	format_detected?: AdblockSourceFormat | null;
+	last_fetch_attempt?: number | null;
+	last_success?: number | null;
+	consecutive_failures: number;
+	last_error?: string | null;
+	rules_count: number;
+	exceptions_count: number;
+	unsupported_count: number;
+}
+
+export interface DnsAdblockSourcesResponse {
+	sources: AdblockSourceStatus[];
+}
+
+export interface AdblockSourceMatch {
+	source_id: number;
+	url: string;
+	action: FilterAction;
+	rule?: string | null;
+	important: boolean;
+}
+
+export interface AdblockCheckResponse {
+	domain: string;
+	matched: boolean;
+	filter?: FilterMatch | null;
+	source_matches: AdblockSourceMatch[];
+}
+
 export interface DnsAdblockStatusResponse {
 	enabled: boolean;
 	disabled_until?: number | null;
 	remaining_secs?: number | null;
 	blocklist_size: number;
 	allowlist_size: number;
+	exceptions_size?: number;
+	last_update?: number | null;
+	sources_ok?: number;
+	sources_failing?: number;
 	blocking_mode: BlockingMode;
 	blocking_ip_v4?: string | null;
 	blocking_ip_v6?: string | null;
@@ -838,6 +897,7 @@ export interface DnsAdblockUrlEntry {
 	id?: number | null;
 	url: string;
 	kind: 'blocklist' | 'allowlist';
+	format?: AdblockSourceFormat;
 }
 
 export interface AllowlistEntry {

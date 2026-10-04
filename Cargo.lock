@@ -466,16 +466,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bloomfilter"
-version = "3.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f6d7f06817e48ea4e17532fa61bc4e8b9a101437f0623f69d2ea54284f3a817"
-dependencies = [
- "getrandom 0.2.17",
- "siphasher",
-]
-
-[[package]]
 name = "borsh"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2567,7 +2557,6 @@ name = "lanforge-dns"
 version = "2.7.0"
 dependencies = [
  "base64 0.23.1",
- "bloomfilter",
  "bytes",
  "chrono",
  "dashmap",
@@ -2582,7 +2571,6 @@ dependencies = [
  "lanforge-dns-wire",
  "lanforge-macros",
  "lanforge-types",
- "lru",
  "memmap2",
  "once_cell",
  "parking_lot",
@@ -2591,6 +2579,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "serde",
+ "serde_json",
  "smallvec",
  "socket2",
  "tempfile",
@@ -2638,6 +2627,7 @@ dependencies = [
  "lanforge-types",
  "lanforge-webui",
  "libc",
+ "parking_lot",
  "rand 0.10.3",
  "rustls",
  "serde",

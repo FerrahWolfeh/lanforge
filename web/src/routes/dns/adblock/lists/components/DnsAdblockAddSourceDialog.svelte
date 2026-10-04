@@ -7,7 +7,7 @@
 	import LinkIcon from "@lucide/svelte/icons/link";
 	import { toast } from "svelte-sonner";
 	import { dnsAdblockUrlAdd } from "$lib/api/client";
-	import type { DnsAdblockUrlEntry } from "$lib/api/types";
+	import type { AdblockSourceFormat, DnsAdblockUrlEntry } from "$lib/api/types";
 
 	let {
 		open = $bindable(false),
@@ -19,6 +19,7 @@
 
 	let url = $state("");
 	let kind = $state<"blocklist" | "allowlist">("blocklist");
+	let format = $state<AdblockSourceFormat>("auto");
 	let submitting = $state(false);
 
 	async function handleSubmit(e: Event) {
@@ -39,9 +40,11 @@
 			await dnsAdblockUrlAdd({
 				url: trimmedUrl,
 				kind,
+				format,
 			});
 			toast.success(`Added ${kind}: ${trimmedUrl}`);
 			url = "";
+			format = "auto";
 			open = false;
 			onAdded();
 		} catch (err: any) {
@@ -62,7 +65,7 @@
 				<Dialog.Title>Add Filter List URL</Dialog.Title>
 			</div>
 			<Dialog.Description class="text-xs">
-				Enter a remote URL containing host-formatted rules (0.0.0.0 domain.com) or plain domain lists.
+				Enter a remote URL containing adblock rules, host-formatted lists, or plain domains.
 			</Dialog.Description>
 		</Dialog.Header>
 
@@ -104,6 +107,60 @@
 						</Select.Item>
 					</Select.Content>
 				</Select.Root>
+			</div>
+
+			<!-- List Format -->
+			<div class="flex flex-col gap-1.5">
+				<Label for="source-format" class="text-xs font-semibold">List Format</Label>
+				<Select.Root
+					type="single"
+					value={format}
+					onValueChange={(val) => {
+						if (
+							val === "auto" ||
+							val === "adblock" ||
+							val === "hosts" ||
+							val === "domains" ||
+							val === "wildcard_domains"
+						) {
+							format = val;
+						}
+					}}
+				>
+					<Select.Trigger class="w-full text-xs">
+						{#if format === "auto"}
+							Auto-detect (Recommended)
+						{:else if format === "adblock"}
+							Adblock Syntax (||domain^, @@, $important)
+						{:else if format === "hosts"}
+							Standard Hosts (0.0.0.0 domain)
+						{:else if format === "domains"}
+							Plain Domains (one domain per line)
+						{:else if format === "wildcard_domains"}
+							Wildcard Domains (*.domain or .domain)
+						{/if}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="auto" class="text-xs">
+							Auto-detect (Recommended)
+						</Select.Item>
+						<Select.Item value="adblock" class="text-xs">
+							Adblock Syntax (||domain^, @@, $important)
+						</Select.Item>
+						<Select.Item value="hosts" class="text-xs">
+							Standard Hosts (0.0.0.0 domain)
+						</Select.Item>
+						<Select.Item value="domains" class="text-xs">
+							Plain Domains (one domain per line)
+						</Select.Item>
+						<Select.Item value="wildcard_domains" class="text-xs">
+							Wildcard Domains (*.domain or .domain)
+						</Select.Item>
+					</Select.Content>
+				</Select.Root>
+				<p class="text-[11px] text-muted-foreground">
+					Auto-detection inspects headers and content during download.
+				</p>
 			</div>
 
 			<Dialog.Footer class="pt-2">

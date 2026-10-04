@@ -55,6 +55,7 @@ impl Middleware for CacheMiddleware {
                     cached: true,
                     answer,
                     protocol: req.protocol,
+                    filter: req.filter_match.lock().clone(),
                 });
 
                 return Ok(true);

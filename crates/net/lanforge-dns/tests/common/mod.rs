@@ -74,9 +74,9 @@ pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContex
     let mut pipeline = Pipeline::new();
     pipeline.push(RewriteMiddleware::new());
     pipeline.push(LocalResolverMiddleware::new());
-    pipeline.push(CacheMiddleware::new());
     #[cfg(feature = "adblock")]
     pipeline.push(AdblockMiddleware::new());
+    pipeline.push(CacheMiddleware::new());
     pipeline.push(UpstreamMiddleware::new());
 
     DnsContext {
@@ -124,10 +124,18 @@ pub async fn process_query_test(
 ) -> Result<bool, DnsError> {
     let header = WireHeader::parse(data).ok_or(DnsError::WireParseError)?;
     let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
+    let filter_match = parking_lot::Mutex::new(None);
     ctx.pipeline
         .run(
             ctx,
-            DnsPipelineRequest::new(data, &header, &question, src_ip, TransportProtocol::Udp),
+            DnsPipelineRequest::new(
+                data,
+                &header,
+                &question,
+                src_ip,
+                TransportProtocol::Udp,
+                &filter_match,
+            ),
             resp,
         )
         .await?;

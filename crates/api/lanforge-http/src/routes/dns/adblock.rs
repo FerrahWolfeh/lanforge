@@ -6,7 +6,9 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post, put},
 };
-use lanforge_types::network::dns::adblock::{AdblockUrlKind, BlockingMode};
+use lanforge_types::network::dns::adblock::{
+    AdblockSourceFormat, AdblockUrlKind, BlockingMode,
+};
 use serde::Deserialize;
 
 use crate::routes::create_client_ctx;
@@ -22,6 +24,13 @@ pub struct AdblockSetRequest {
 pub struct AdblockUrlRequest {
     pub url: String,
     pub kind: AdblockUrlKind,
+    #[serde(default)]
+    pub format: Option<AdblockSourceFormat>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdblockCheckQuery {
+    pub domain: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,10 +72,12 @@ pub fn router() -> Router<AppState> {
         .route("/adblock/reload", post(handle_adblock_reload))
         .route(
             "/adblock/sources",
-            get(handle_adblock_urls)
+            get(handle_adblock_sources)
                 .post(handle_adblock_url_add)
                 .delete(handle_adblock_url_remove),
         )
+        .route("/adblock/urls", get(handle_adblock_urls))
+        .route("/adblock/check", get(handle_adblock_check))
         .route("/adblock/allowlist", get(handle_allowlist))
         .route("/adblock/allow", post(handle_allow))
         .route("/adblock/allow/{target}", delete(handle_unallow))
@@ -116,6 +127,19 @@ async fn handle_adblock_reload(State(state): State<AppState>) -> impl IntoRespon
     crate::http_response!(ctx.handle_dns_adblock_reload().await, Success => NoContent)
 }
 
+async fn handle_adblock_sources(State(state): State<AppState>) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_dns_adblock_sources().await, DnsAdblockSources)
+}
+
+async fn handle_adblock_check(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<AdblockCheckQuery>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_dns_adblock_check(query.domain).await, AdblockCheck)
+}
+
 async fn handle_adblock_urls(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_dns_adblock_url_list().await, DnsAdblockUrls)
@@ -127,7 +151,7 @@ async fn handle_adblock_url_add(
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(
-        ctx.handle_dns_adblock_url_add(payload.url, payload.kind).await,
+        ctx.handle_dns_adblock_url_add(payload.url, payload.kind, payload.format).await,
         Success => NoContent
     )
 }

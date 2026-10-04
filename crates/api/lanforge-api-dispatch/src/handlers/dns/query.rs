@@ -98,6 +98,7 @@ impl ClientContext {
                                 upstream_us: q.upstream_us,
                                 cached: q.cached,
                                 answer: q.answer,
+                                filter: q.filter,
                             }
                         })
                         .collect()
