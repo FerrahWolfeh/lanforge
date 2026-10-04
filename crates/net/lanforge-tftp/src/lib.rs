@@ -192,49 +192,14 @@ async fn handle_packet(
     }
 }
 
-#[allow(clippy::too_many_lines)]
-async fn handle_rrq(
-    socket: Arc<UdpSocket>,
-    src: SocketAddr,
-    data: &[u8],
-    cfg: &TftpConfig,
-) -> Result<(), TftpError> {
-    let mut parts = data.split(|&b| b == 0);
-    let filename_bytes = parts
-        .next()
-        .ok_or_else(|| TftpError::Protocol("Missing filename".into()))?;
-    let Ok(filename) = std::str::from_utf8(filename_bytes) else {
-        return send_error(&socket, src, 0, "Invalid UTF-8 filename").await;
-    };
+struct RrqOptions {
+    blksize: Option<u16>,
+    tsize: bool,
+}
 
-    // Security: prevent path traversal
-    let rel_path = std::path::Path::new(filename);
-    if rel_path.components().any(|c| {
-        matches!(
-            c,
-            std::path::Component::ParentDir
-                | std::path::Component::RootDir
-                | std::path::Component::Prefix(_)
-        )
-    }) {
-        return send_error(&socket, src, 2, "Access violation").await;
-    }
-
-    let path = cfg.root_dir.join(rel_path);
-    if !path.starts_with(&cfg.root_dir) {
-        return send_error(&socket, src, 2, "Access violation").await;
-    }
-
-    let meta = match tokio::fs::metadata(&path).await {
-        Ok(m) if m.is_file() => m,
-        _ => return send_error(&socket, src, 1, "File not found").await,
-    };
-    let file_len = meta.len();
-
-    // Option negotiation (RFC 2347, RFC 2348)
-    let _mode = parts.next();
-    let mut requested_blksize = None;
-    let mut requested_tsize = false;
+fn parse_rrq_options<'a>(mut parts: impl Iterator<Item = &'a [u8]>, cfg: &TftpConfig) -> RrqOptions {
+    let mut blksize = None;
+    let mut tsize = false;
 
     while let Some(opt_name_bytes) = parts.next() {
         let Some(opt_val_bytes) = parts.next() else { break; };
@@ -245,45 +210,113 @@ async fn handle_rrq(
             if name.eq_ignore_ascii_case("blksize") {
                 if let Ok(bs) = val.parse::<u16>() {
                     let max_bs = cfg.block_size.clamp(512, 1468);
-                    requested_blksize = Some(bs.clamp(512, max_bs));
+                    blksize = Some(bs.clamp(512, max_bs));
                 }
             } else if name.eq_ignore_ascii_case("tsize") {
-                requested_tsize = true;
+                tsize = true;
             }
         }
     }
 
-    info!("TFTP: Sending {filename} ({file_len} bytes) to {src}");
+    RrqOptions { blksize, tsize }
+}
 
-    // TFTP uses a new port for the transfer (TID).
-    // Normalize IPv4-mapped IPv6 address to prevent v6-only routing failure.
-    let (session_socket, target_addr) = match src {
+async fn validate_rrq_path(
+    socket: &UdpSocket,
+    src: SocketAddr,
+    filename_bytes: &[u8],
+    root_dir: &std::path::Path,
+) -> Result<Option<(std::path::PathBuf, u64, String)>, TftpError> {
+    let Ok(filename) = std::str::from_utf8(filename_bytes) else {
+        send_error(socket, src, 0, "Invalid UTF-8 filename").await?;
+        return Ok(None);
+    };
+
+    let rel_path = std::path::Path::new(filename);
+    if rel_path.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        send_error(socket, src, 2, "Access violation").await?;
+        return Ok(None);
+    }
+
+    let path = root_dir.join(rel_path);
+    if !path.starts_with(root_dir) {
+        send_error(socket, src, 2, "Access violation").await?;
+        return Ok(None);
+    }
+
+    let meta = match tokio::fs::metadata(&path).await {
+        Ok(m) if m.is_file() => m,
+        _ => {
+            send_error(socket, src, 1, "File not found").await?;
+            return Ok(None);
+        }
+    };
+
+    Ok(Some((path, meta.len(), filename.to_string())))
+}
+
+async fn bind_session_socket(src: SocketAddr) -> Result<(UdpSocket, SocketAddr), TftpError> {
+    match src {
         SocketAddr::V6(v6) => {
             if let Some(v4) = v6.ip().to_ipv4_mapped() {
                 let v4_addr = SocketAddr::new(std::net::IpAddr::V4(v4), v6.port());
-                (UdpSocket::bind("0.0.0.0:0").await?, v4_addr)
+                Ok((UdpSocket::bind("0.0.0.0:0").await?, v4_addr))
             } else {
-                (UdpSocket::bind("[::]:0").await?, src)
+                Ok((UdpSocket::bind("[::]:0").await?, src))
             }
         }
-        SocketAddr::V4(_) => (UdpSocket::bind("0.0.0.0:0").await?, src),
-    };
-
-    let block_size = requested_blksize.unwrap_or(cfg.block_size) as usize;
-
-    if requested_blksize.is_some() || requested_tsize {
-        handle_oack_handshake(
-            &session_socket,
-            target_addr,
-            requested_blksize,
-            requested_tsize,
-            file_len,
-            cfg,
-        )
-        .await?;
+        SocketAddr::V4(_) => Ok((UdpSocket::bind("0.0.0.0:0").await?, src)),
     }
+}
 
-    let mut file = File::open(path).await?;
+async fn send_block_with_retries(
+    session_socket: &UdpSocket,
+    packet_slice: &[u8],
+    target_addr: SocketAddr,
+    block_num: u16,
+    cfg: &TftpConfig,
+) -> Result<(), TftpError> {
+    let mut retries = 0;
+    loop {
+        session_socket.send_to(packet_slice, target_addr).await?;
+
+        let mut ack_buf = [0u8; 4];
+        if let Ok(Ok((4, _))) = timeout(
+            Duration::from_secs(cfg.timeout),
+            session_socket.recv_from(&mut ack_buf),
+        )
+        .await
+        {
+            let ack_opcode = u16::from_be_bytes([ack_buf[0], ack_buf[1]]);
+            let ack_block = u16::from_be_bytes([ack_buf[2], ack_buf[3]]);
+            if ack_opcode == 4 && ack_block == block_num {
+                return Ok(());
+            }
+        }
+
+        retries += 1;
+        if retries > cfg.max_retries {
+            return Err(TftpError::Protocol("Transfer timed out".into()));
+        }
+        debug!("TFTP: Retrying block {block_num} to {target_addr}");
+    }
+}
+
+async fn transfer_file(
+    file_path: std::path::PathBuf,
+    block_size: usize,
+    session_socket: &UdpSocket,
+    target_addr: SocketAddr,
+    cfg: &TftpConfig,
+) -> Result<(), TftpError> {
+    let mut file = File::open(file_path).await?;
     let mut block_num: u16 = 1;
     let mut packet = vec![0u8; 4 + block_size];
     packet[0..2].copy_from_slice(&3u16.to_be_bytes()); // Opcode 3 (DATA)
@@ -293,39 +326,55 @@ async fn handle_rrq(
         let n = file.read(&mut packet[4..4 + block_size]).await?;
         let packet_slice = &packet[..4 + n];
 
-        let mut retries = 0;
-        loop {
-            session_socket.send_to(packet_slice, target_addr).await?;
-
-            // Wait for ACK
-            let mut ack_buf = [0u8; 4];
-            if let Ok(Ok((4, _))) = timeout(
-                Duration::from_secs(cfg.timeout),
-                session_socket.recv_from(&mut ack_buf),
-            )
-            .await
-            {
-                let ack_opcode = u16::from_be_bytes([ack_buf[0], ack_buf[1]]);
-                let ack_block = u16::from_be_bytes([ack_buf[2], ack_buf[3]]);
-                if ack_opcode == 4 && ack_block == block_num {
-                    break; // Success
-                }
-            } else {
-                retries += 1;
-                if retries > cfg.max_retries {
-                    return Err(TftpError::Protocol("Transfer timed out".into()));
-                }
-                debug!("TFTP: Retrying block {block_num} to {target_addr}");
-            }
-        }
+        send_block_with_retries(session_socket, packet_slice, target_addr, block_num, cfg).await?;
 
         if n < block_size {
-            break; // End of file
+            break;
         }
         block_num = block_num.wrapping_add(1);
     }
 
     Ok(())
+}
+
+async fn handle_rrq(
+    socket: Arc<UdpSocket>,
+    src: SocketAddr,
+    data: &[u8],
+    cfg: &TftpConfig,
+) -> Result<(), TftpError> {
+    let mut parts = data.split(|&b| b == 0);
+    let filename_bytes = parts
+        .next()
+        .ok_or_else(|| TftpError::Protocol("Missing filename".into()))?;
+
+    let Some((path, file_len, filename)) =
+        validate_rrq_path(&socket, src, filename_bytes, &cfg.root_dir).await?
+    else {
+        return Ok(());
+    };
+
+    let _mode = parts.next();
+    let opts = parse_rrq_options(parts, cfg);
+
+    info!("TFTP: Sending {filename} ({file_len} bytes) to {src}");
+
+    let (session_socket, target_addr) = bind_session_socket(src).await?;
+    let block_size = opts.blksize.unwrap_or(cfg.block_size) as usize;
+
+    if opts.blksize.is_some() || opts.tsize {
+        handle_oack_handshake(
+            &session_socket,
+            target_addr,
+            opts.blksize,
+            opts.tsize,
+            file_len,
+            cfg,
+        )
+        .await?;
+    }
+
+    transfer_file(path, block_size, &session_socket, target_addr, cfg).await
 }
 
 async fn handle_oack_handshake(
