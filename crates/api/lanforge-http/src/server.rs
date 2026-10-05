@@ -108,49 +108,8 @@ impl HttpService {
             log_db,
         }
     }
-}
 
-impl AsyncService for HttpService {
-    fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[ServiceDependency::Database]
-    }
-
-    fn stats(&self, _ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
-        vec![
-            (Cow::Borrowed("listen"), self.cfg.listen.to_string()),
-            (
-                Cow::Borrowed("https_enabled"),
-                self.cfg.https_enabled.to_string(),
-            ),
-            (
-                Cow::Borrowed("doh_enabled"),
-                self.cfg.doh_enabled.to_string(),
-            ),
-            (
-                Cow::Borrowed("auth_enabled"),
-                self.cfg.auth_password_hash.is_some().to_string(),
-            ),
-        ]
-    }
-
-    #[allow(clippy::too_many_lines)]
-    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
-        let cfg = self.cfg.clone();
-        if !cfg.enabled {
-            info!("HTTP: Service disabled in configuration.");
-            ctx.set_service_state("http", ServiceState::Inactive);
-            return Ok(());
-        }
-
-        let state = AppState {
-            cfg: cfg.clone(),
-            ctx: self.ctx.clone(),
-            db: self.db.clone(),
-            log_db: self.log_db.clone(),
-            auth: Arc::new(AuthManager::new()),
-            start_time: Instant::now(),
-        };
-
+    fn build_router(state: AppState, cfg: &HttpConfig) -> Router {
         let mut app = Router::new()
             .nest(
                 "/api",
@@ -193,9 +152,11 @@ impl AsyncService for HttpService {
             info!("HTTP: API authentication enabled");
         }
 
-        let app = app.with_state(state);
+        app.with_state(state)
+    }
 
-        let maybe_tls_config = if cfg.https_enabled
+    fn resolve_tls_config(cfg: &HttpConfig) -> Option<rustls::ServerConfig> {
+        if cfg.https_enabled
             && let Some(cert) = &cfg.tls_cert
             && let Some(key) = &cfg.tls_key
         {
@@ -213,7 +174,146 @@ impl AsyncService for HttpService {
                 );
             }
             None
+        }
+    }
+
+    fn spawn_shutdown_listener(ctx: &LanforgeContext, shutdown_tx: tokio::sync::watch::Sender<()>) {
+        let ctx_shutdown = ctx.clone();
+        tokio::spawn(async move {
+            let mut rx = ctx_shutdown.bus().subscribe_system();
+            while let Ok(event) = rx.recv().await {
+                if !ctx_shutdown.is_running()
+                    || matches!(event.event, LanforgeEvent::System(SystemEvent::Shutdown))
+                {
+                    info!("HTTP: shutdown signal received");
+                    let _ = shutdown_tx.send(());
+                    break;
+                }
+            }
+        });
+    }
+
+    async fn serve_https(
+        app: Router,
+        addrs: &[SocketAddr],
+        config: Arc<rustls::ServerConfig>,
+        shutdown_tx: &tokio::sync::watch::Sender<()>,
+    ) -> Result<(), CoreError> {
+        let mut server_tasks = Vec::new();
+
+        for &addr in addrs {
+            let std_listener = bind_tcp_dual_stack(addr)?;
+            info!(addr = %addr, "HTTPS: API listening");
+            let rustls_cfg = RustlsConfig::from_config(Arc::clone(&config));
+            let handle = Handle::new();
+            let shutdown_handle = handle.clone();
+            let mut shutdown_rx = shutdown_tx.subscribe();
+
+            tokio::spawn(async move {
+                let _ = shutdown_rx.changed().await;
+                shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
+            });
+
+            let app_service = app.clone().into_make_service();
+            let server = axum_server::from_tcp_rustls(std_listener, rustls_cfg)
+                .map_err(|e| CoreError::Generic(format!("Failed to create TLS server: {e}")))?;
+            server_tasks.push(tokio::spawn(async move {
+                server
+                    .handle(handle)
+                    .serve(app_service)
+                    .await
+                    .map_err(|e| CoreError::Generic(format!("HTTPS server error: {e}")))
+            }));
+        }
+
+        for res in futures::future::join_all(server_tasks).await {
+            match res {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(e),
+                Err(e) => return Err(CoreError::Generic(format!("HTTPS server task failed: {e}"))),
+            }
+        }
+        Ok(())
+    }
+
+    async fn serve_plaintext(
+        app: Router,
+        addrs: &[SocketAddr],
+        shutdown_tx: &tokio::sync::watch::Sender<()>,
+    ) -> Result<(), CoreError> {
+        let mut server_tasks = Vec::new();
+
+        for &addr in addrs {
+            let std_listener = bind_tcp_dual_stack(addr)?;
+            info!(addr = %addr, "HTTP: API listening");
+            let tcp_listener = TcpListener::from_std(std_listener)
+                .map_err(|e| CoreError::Generic(format!("Failed to bind to {addr}: {e}")))?;
+            let mut shutdown_rx = shutdown_tx.subscribe();
+            let app_clone = app.clone();
+
+            server_tasks.push(tokio::spawn(async move {
+                axum::serve(tcp_listener, app_clone)
+                    .with_graceful_shutdown(async move {
+                        let _ = shutdown_rx.changed().await;
+                    })
+                    .await
+                    .map_err(|e| CoreError::Generic(format!("Axum server error: {e}")))
+            }));
+        }
+
+        for res in futures::future::join_all(server_tasks).await {
+            match res {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(e),
+                Err(e) => return Err(CoreError::Generic(format!("Axum server task failed: {e}"))),
+            }
+        }
+        Ok(())
+    }
+}
+
+impl AsyncService for HttpService {
+    fn dependencies(&self) -> &'static [ServiceDependency] {
+        &[ServiceDependency::Database]
+    }
+
+    fn stats(&self, _ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
+        vec![
+            (Cow::Borrowed("listen"), self.cfg.listen.to_string()),
+            (
+                Cow::Borrowed("https_enabled"),
+                self.cfg.https_enabled.to_string(),
+            ),
+            (
+                Cow::Borrowed("doh_enabled"),
+                self.cfg.doh_enabled.to_string(),
+            ),
+            (
+                Cow::Borrowed("auth_enabled"),
+                self.cfg.auth_password_hash.is_some().to_string(),
+            ),
+        ]
+    }
+
+    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+        let cfg = self.cfg.clone();
+        if !cfg.enabled {
+            info!("HTTP: Service disabled in configuration.");
+            ctx.set_service_state("http", ServiceState::Inactive);
+            return Ok(());
+        }
+
+        let state = AppState {
+            cfg: cfg.clone(),
+            ctx: self.ctx.clone(),
+            db: self.db.clone(),
+            log_db: self.log_db.clone(),
+            auth: Arc::new(AuthManager::new()),
+            start_time: Instant::now(),
         };
+
+        let app = Self::build_router(state, &cfg);
+        let maybe_tls_config = Self::resolve_tls_config(&cfg);
 
         let addrs = cfg.listen.addrs();
         if addrs.is_empty() {
@@ -223,85 +323,12 @@ impl AsyncService for HttpService {
         }
 
         let (shutdown_tx, _) = tokio::sync::watch::channel(());
-        let ctx_shutdown = ctx.clone();
-        let shutdown_tx_clone = shutdown_tx.clone();
-        tokio::spawn(async move {
-            let mut rx = ctx_shutdown.bus().subscribe_system();
-            while let Ok(event) = rx.recv().await {
-                if !ctx_shutdown.is_running()
-                    || matches!(event.event, LanforgeEvent::System(SystemEvent::Shutdown))
-                {
-                    info!("HTTP: shutdown signal received");
-                    let _ = shutdown_tx_clone.send(());
-                    break;
-                }
-            }
-        });
+        Self::spawn_shutdown_listener(ctx, shutdown_tx.clone());
 
         if let Some(tls_config) = maybe_tls_config {
-            let config = Arc::new(tls_config);
-            let mut server_tasks = Vec::new();
-
-            for addr in addrs {
-                let std_listener = bind_tcp_dual_stack(addr)?;
-                info!(addr = %addr, "HTTPS: API listening");
-                let rustls_cfg = RustlsConfig::from_config(Arc::clone(&config));
-                let handle = Handle::new();
-                let shutdown_handle = handle.clone();
-                let mut shutdown_rx = shutdown_tx.subscribe();
-
-                tokio::spawn(async move {
-                    let _ = shutdown_rx.changed().await;
-                    shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
-                });
-
-                let app_service = app.clone().into_make_service();
-                let server = axum_server::from_tcp_rustls(std_listener, rustls_cfg)
-                    .map_err(|e| CoreError::Generic(format!("Failed to create TLS server: {e}")))?;
-                server_tasks.push(tokio::spawn(async move {
-                    server
-                        .handle(handle)
-                        .serve(app_service)
-                        .await
-                        .map_err(|e| CoreError::Generic(format!("HTTPS server error: {e}")))
-                }));
-            }
-
-            for res in futures::future::join_all(server_tasks).await {
-                match res {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => return Err(e),
-                    Err(e) => return Err(CoreError::Generic(format!("HTTPS server task failed: {e}"))),
-                }
-            }
+            Self::serve_https(app, &addrs, Arc::new(tls_config), &shutdown_tx).await?;
         } else if cfg.allow_plaintext_http {
-            let mut server_tasks = Vec::new();
-
-            for addr in addrs {
-                let std_listener = bind_tcp_dual_stack(addr)?;
-                info!(addr = %addr, "HTTP: API listening");
-                let tcp_listener = TcpListener::from_std(std_listener)
-                    .map_err(|e| CoreError::Generic(format!("Failed to bind to {addr}: {e}")))?;
-                let mut shutdown_rx = shutdown_tx.subscribe();
-                let app_clone = app.clone();
-
-                server_tasks.push(tokio::spawn(async move {
-                    axum::serve(tcp_listener, app_clone)
-                        .with_graceful_shutdown(async move {
-                            let _ = shutdown_rx.changed().await;
-                        })
-                        .await
-                        .map_err(|e| CoreError::Generic(format!("Axum server error: {e}")))
-                }));
-            }
-
-            for res in futures::future::join_all(server_tasks).await {
-                match res {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => return Err(e),
-                    Err(e) => return Err(CoreError::Generic(format!("Axum server task failed: {e}"))),
-                }
-            }
+            Self::serve_plaintext(app, &addrs, &shutdown_tx).await?;
         } else {
             let msg = "HTTP: TLS configuration missing and allow_plaintext_http is false. Refusing to start unencrypted server.";
             error!("{msg}");

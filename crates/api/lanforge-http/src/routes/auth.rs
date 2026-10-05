@@ -216,12 +216,8 @@ async fn handle_validate(
     Json(serde_json::json!({ "data": { "valid": valid } }))
 }
 
-#[allow(clippy::too_many_lines)]
-pub async fn handle_login(
-    State(state): State<AppState>,
-    Json(payload): Json<LoginRequest>,
-) -> HttpResult<impl IntoResponse> {
-    let auth_required = state.cfg.auth_password_hash.is_some()
+async fn check_auth_required(state: &AppState) -> bool {
+    state.cfg.auth_password_hash.is_some()
         || state.auth.has_users_cached()
         || {
             let count = state.db.count_users().await.unwrap_or(0);
@@ -231,43 +227,43 @@ pub async fn handle_login(
             } else {
                 false
             }
-        };
-    let username = payload
-        .username
-        .unwrap_or_else(|| "admin".to_string())
-        .trim()
-        .to_lowercase();
-
-    let ttl_secs = if payload.remember_me.unwrap_or(false) {
-        2_592_000 // 30 days
-    } else {
-        86_400 // 24 hours
-    };
-
-    let build_login_response = |token: String, user_name: String, method: &str| {
-        let cookie_header =
-            format!("session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ttl_secs}");
-        let mut headers = HeaderMap::new();
-        if let Ok(v) = HeaderValue::from_str(&cookie_header) {
-            headers.insert(SET_COOKIE, v);
         }
-        (
-            StatusCode::OK,
-            headers,
-            Json(LoginResponse {
-                data: LoginResponseData {
-                    token,
-                    username: user_name,
-                    method: method.to_string(),
-                    auth_required,
-                },
-            }),
-        )
-            .into_response()
-    };
+}
 
-    // 1. If explicit API token or password matching API token format is provided
-    let candidate_token = payload.token.or_else(|| {
+fn build_login_response(
+    token: String,
+    user_name: String,
+    method: &str,
+    ttl_secs: u64,
+    auth_required: bool,
+) -> axum::response::Response {
+    let cookie_header =
+        format!("session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ttl_secs}");
+    let mut headers = HeaderMap::new();
+    if let Ok(v) = HeaderValue::from_str(&cookie_header) {
+        headers.insert(SET_COOKIE, v);
+    }
+    (
+        StatusCode::OK,
+        headers,
+        Json(LoginResponse {
+            data: LoginResponseData {
+                token,
+                username: user_name,
+                method: method.to_string(),
+                auth_required,
+            },
+        }),
+    )
+        .into_response()
+}
+
+async fn authenticate_via_api_token(
+    state: &AppState,
+    payload: &LoginRequest,
+    ttl_secs: u64,
+) -> HttpResult<Option<(String, String, &'static str)>> {
+    let candidate_token = payload.token.clone().or_else(|| {
         payload.password.as_ref().and_then(|p| {
             if p.starts_with("ak_") || p.starts_with("lf_ak_") {
                 Some(p.clone())
@@ -286,24 +282,24 @@ pub async fn handle_login(
         match state.db.validate_api_token(&token_str, now).await {
             Ok(Some((name, _scopes))) => {
                 let session_token = state.auth.generate_token_with_ttl(&name, "admin", ttl_secs)?;
-                return Ok(build_login_response(
-                    session_token,
-                    name,
-                    "api_token",
-                ));
+                return Ok(Some((session_token, name, "api_token")));
             }
-            Ok(None) => {
-                return Err(HttpError::Auth("Invalid API token".to_string()));
-            }
+            Ok(None) => return Err(HttpError::Auth("Invalid API token".to_string())),
             Err(e) => {
                 error!("Database error during login token validation: {e}");
                 return Err(HttpError::Internal("Auth DB error".into()));
             }
         }
     }
+    Ok(None)
+}
 
-    // 2. Database User Password Authentication
-    let password = payload.password.unwrap_or_default();
+async fn authenticate_via_password(
+    state: &AppState,
+    username: &str,
+    password: &str,
+    ttl_secs: u64,
+) -> HttpResult<(String, String, &'static str)> {
     if password.is_empty() {
         return Err(HttpError::Auth("Password is required".to_string()));
     }
@@ -314,8 +310,8 @@ pub async fn handle_login(
         .as_secs()
         .cast_signed();
 
-    if let Ok(Some(db_user)) = state.db.get_user_by_username(&username).await {
-        if verify_password(&db_user.password_hash, &password) {
+    if let Ok(Some(db_user)) = state.db.get_user_by_username(username).await {
+        if verify_password(&db_user.password_hash, password) {
             let _ = state
                 .db
                 .update_user_last_login(&db_user.username, now)
@@ -324,47 +320,72 @@ pub async fn handle_login(
                 state
                     .auth
                     .generate_token_with_ttl(&db_user.username, db_user.role.as_str(), ttl_secs)?;
-            return Ok(build_login_response(
-                session_token,
-                db_user.username,
-                "password",
-            ));
+            return Ok((session_token, db_user.username, "password"));
         }
         return Err(HttpError::Auth("Invalid credentials".to_string()));
     }
 
-    // 3. Bootstrapping / Fallback Admin seeding if no DB users exist
+    // Bootstrapping / Fallback Admin seeding if no DB users exist
     let user_count = state.db.count_users().await.unwrap_or(0);
     if user_count == 0
         && let Some(hash) = &state.cfg.auth_password_hash
-        && verify_password(hash, &password)
+        && verify_password(hash, password)
     {
         let _ = state.db.create_user("admin", hash, UserRole::Admin, now).await;
         let session_token = state
             .auth
             .generate_token_with_ttl("admin", "admin", ttl_secs)?;
-        return Ok(build_login_response(
-            session_token,
-            "admin".to_string(),
-            "password",
-        ));
+        return Ok((session_token, "admin".to_string(), "password"));
     }
 
     Err(HttpError::Auth("Invalid credentials".to_string()))
 }
 
+pub async fn handle_login(
+    State(state): State<AppState>,
+    Json(payload): Json<LoginRequest>,
+) -> HttpResult<impl IntoResponse> {
+    let auth_required = check_auth_required(&state).await;
+    let username = payload
+        .username
+        .as_deref()
+        .unwrap_or("admin")
+        .trim()
+        .to_lowercase();
+
+    let ttl_secs = if payload.remember_me.unwrap_or(false) {
+        2_592_000 // 30 days
+    } else {
+        86_400 // 24 hours
+    };
+
+    if let Some((session_token, name, method)) =
+        authenticate_via_api_token(&state, &payload, ttl_secs).await?
+    {
+        return Ok(build_login_response(
+            session_token,
+            name,
+            method,
+            ttl_secs,
+            auth_required,
+        ));
+    }
+
+    let password = payload.password.as_deref().unwrap_or_default();
+    let (session_token, authed_user, method) =
+        authenticate_via_password(&state, &username, password, ttl_secs).await?;
+
+    Ok(build_login_response(
+        session_token,
+        authed_user,
+        method,
+        ttl_secs,
+        auth_required,
+    ))
+}
+
 async fn handle_status(State(state): State<AppState>, req: Request) -> impl IntoResponse {
-    let auth_required = state.cfg.auth_password_hash.is_some()
-        || state.auth.has_users_cached()
-        || {
-            let count = state.db.count_users().await.unwrap_or(0);
-            if count > 0 {
-                state.auth.set_has_users(true);
-                true
-            } else {
-                false
-            }
-        };
+    let auth_required = check_auth_required(&state).await;
 
     let authenticated = if let Some(token) = extract_token(req.headers(), req.uri().query()) {
         if looks_like_jwt(&token) && state.auth.validate_token(&token).is_ok() {

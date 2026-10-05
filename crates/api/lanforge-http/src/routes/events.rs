@@ -254,18 +254,8 @@ fn enrich_interface_info(ctx: &LanforgeContext, ifindex: u32) -> serde_json::Val
     serde_json::Value::Object(map)
 }
 
-#[allow(clippy::too_many_lines)]
-fn event_to_json_value(ctx: &LanforgeContext, event: &TimedEvent) -> Option<serde_json::Value> {
-    let ts_millis = u64::try_from(
-        event
-            .timestamp
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis(),
-    )
-    .unwrap_or(0);
-
-    let (topic, kind) = match &event.event {
+const fn event_topic_and_kind(event: &LanforgeEvent) -> (&'static str, &'static str) {
+    match event {
         LanforgeEvent::Device(d) => ("device", match d {
             DeviceEvent::Discovered { .. } => "Discovered",
             DeviceEvent::NetworkUpdate { .. } => "NetworkUpdate",
@@ -351,7 +341,47 @@ fn event_to_json_value(ctx: &LanforgeContext, event: &TimedEvent) -> Option<serd
             DnsEvent::ConfigAdblockRulesChanged => "ConfigAdblockRulesChanged",
             DnsEvent::ConfigUpstreamsChanged => "ConfigUpstreamsChanged",
         }),
-    };
+    }
+}
+
+fn enrich_event_details(
+    ctx: &LanforgeContext,
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    event: &LanforgeEvent,
+) {
+    // Enrich with device info if MAC address is present
+    if let Some(mac) = extract_mac(event) {
+        map.insert("device_info".to_string(), enrich_device_info(ctx, mac));
+    }
+
+    // Enrich with interface info if InterfaceUpdated
+    if let LanforgeEvent::Network(NetworkEvent::InterfaceUpdated { ifindex }) = event {
+        map.insert("interface_info".to_string(), enrich_interface_info(ctx, *ifindex));
+    }
+
+    // Enrich with service info if ServiceControl
+    if let LanforgeEvent::System(SystemEvent::ServiceControl { id, .. }) = event {
+        let mut svc_map = serde_json::Map::new();
+        svc_map.insert("id".to_string(), serde_json::Value::String(id.clone()));
+        let state = ctx.get_service_state(id);
+        svc_map.insert("state".to_string(), serde_json::Value::String(format!("{state:?}")));
+        let uptime = ctx.get_service_uptime(id);
+        svc_map.insert("uptime_secs".to_string(), serde_json::Value::Number(uptime.into()));
+        map.insert("service_info".to_string(), serde_json::Value::Object(svc_map));
+    }
+}
+
+fn event_to_json_value(ctx: &LanforgeContext, event: &TimedEvent) -> Option<serde_json::Value> {
+    let ts_millis = u64::try_from(
+        event
+            .timestamp
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(0);
+
+    let (topic, kind) = event_topic_and_kind(&event.event);
 
     let mut val = serde_json::to_value(event).ok()?;
     if let serde_json::Value::Object(ref mut map) = val {
@@ -365,26 +395,7 @@ fn event_to_json_value(ctx: &LanforgeContext, event: &TimedEvent) -> Option<serd
             serde_json::Value::Number(ts_millis.into()),
         );
 
-        // Enrich with device info if MAC address is present
-        if let Some(mac) = extract_mac(&event.event) {
-            map.insert("device_info".to_string(), enrich_device_info(ctx, mac));
-        }
-
-        // Enrich with interface info if InterfaceUpdated
-        if let LanforgeEvent::Network(NetworkEvent::InterfaceUpdated { ifindex }) = &event.event {
-            map.insert("interface_info".to_string(), enrich_interface_info(ctx, *ifindex));
-        }
-
-        // Enrich with service info if ServiceControl
-        if let LanforgeEvent::System(SystemEvent::ServiceControl { id, .. }) = &event.event {
-            let mut svc_map = serde_json::Map::new();
-            svc_map.insert("id".to_string(), serde_json::Value::String(id.clone()));
-            let state = ctx.get_service_state(id);
-            svc_map.insert("state".to_string(), serde_json::Value::String(format!("{state:?}")));
-            let uptime = ctx.get_service_uptime(id);
-            svc_map.insert("uptime_secs".to_string(), serde_json::Value::Number(uptime.into()));
-            map.insert("service_info".to_string(), serde_json::Value::Object(svc_map));
-        }
+        enrich_event_details(ctx, map, &event.event);
     }
     Some(val)
 }
