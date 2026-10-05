@@ -125,182 +125,155 @@ impl<'a> RulesetBuilder<'a> {
         ifaces
     }
 
-    /// Compiles the complete declarative ruleset.
-    #[must_use]
-    #[allow(clippy::too_many_lines)]
-    pub fn build(&self) -> Nftables<'static> {
-        let table: Cow<'static, str> = if self.table_name() == "lanforge" {
-            Cow::Borrowed("lanforge")
-        } else {
-            Cow::Owned(self.table_name().to_string())
-        };
-        let mut batch = Batch::new();
-
-        // 1. Table: Add if not exists, then flush all previous chains/rules in table
-        batch.add(NfListObject::Table(Table {
-            family: NfFamily::INet,
-            name: table.clone(),
-            handle: None,
-        }));
-        batch.add_cmd(NfCmd::Flush(FlushObject::Table(Table {
-            family: NfFamily::INet,
-            name: table.clone(),
-            handle: None,
-        })));
-
-        if !self.cfg.enabled || self.cfg.mode == FirewallMode::Disabled {
-            return batch.to_nftables();
-        }
-
-        // 2. Flowtable (if flow offload is enabled and WAN or LAN interfaces exist)
-        let mut flow_devices: Vec<String> = Vec::new();
-        if let Some(wan) = self.active_wan
-            && !wan.is_empty()
-            && !flow_devices.iter().any(|d| d == wan)
-        {
-            flow_devices.push(wan.to_string());
-        }
-        for iface in self.resolve_internal_interfaces() {
-            if !iface.starts_with("ifb") && !flow_devices.iter().any(|d| d == &iface) {
-                flow_devices.push(iface);
-            }
-        }
-
-        if self.cfg.mode == FirewallMode::Minimal {
-            return self.build_minimal(&table, &flow_devices);
-        }
-
-        let flowtable_name = "f";
-        let has_flowtable = self.cfg.flow_offload && !flow_devices.is_empty();
-        if has_flowtable {
-            let dev: Vec<Cow<'static, str>> =
-                flow_devices.into_iter().map(Into::into).collect();
-
-            batch.add(NfListObject::FlowTable(FlowTable {
-                family: NfFamily::INet,
-                table: table.clone(),
-                name: flowtable_name.into(),
-                handle: None,
-                hook: Some(NfHook::Ingress),
-                prio: Some(0),
-                dev: Some(dev.into()),
-            }));
-        }
-
-        let internal_ifaces = self.resolve_internal_interfaces();
-
-        // Helper closures to build rules
-        let add_rule = |target_chain: &'static str, stmts: Vec<Statement<'static>>| -> NfListObject<'static> {
-            NfListObject::Rule(Rule {
-                family: NfFamily::INet,
-                table: table.clone(),
-                chain: Cow::Borrowed(target_chain),
-                expr: stmts.into(),
-                handle: None,
-                index: None,
-                comment: None,
-            })
-        };
-
-        // 3. Chain INPUT (Host protection)
-        let input_policy = match self.cfg.default_input_policy {
-            FirewallPolicy::Accept => NfChainPolicy::Accept,
-            FirewallPolicy::Drop | FirewallPolicy::Reject => NfChainPolicy::Drop,
-        };
-
-        batch.add(NfListObject::Chain(Chain {
+    #[allow(clippy::ptr_arg)]
+    fn make_rule(
+        table: &Cow<'static, str>,
+        chain: &'static str,
+        stmts: Vec<Statement<'static>>,
+    ) -> NfListObject<'static> {
+        NfListObject::Rule(Rule {
             family: NfFamily::INet,
             table: table.clone(),
-            name: "input".into(),
-            newname: None,
+            chain: Cow::Borrowed(chain),
+            expr: stmts.into(),
             handle: None,
-            _type: Some(NfChainType::Filter),
-            hook: Some(NfHook::Input),
-            prio: Some(0),
-            dev: None,
-            policy: Some(input_policy),
-        }));
+            index: None,
+            comment: None,
+        })
+    }
 
-        // Rule: lo accept
-        batch.add(add_rule(
-            "input",
+    #[must_use]
+    fn has_mtu_fix(&self) -> bool {
+        self.cfg.zones.iter().any(|z| z.mtu_fix) || self.active_wan.is_some()
+    }
+
+    #[allow(clippy::ptr_arg)]
+    fn add_mss_clamping_rules(
+        batch: &mut Batch<'static>,
+        table: &Cow<'static, str>,
+        chain: &'static str,
+    ) {
+        batch.add(Self::make_rule(
+            table,
+            chain,
+            vec![
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                        PayloadField {
+                            protocol: "ip".into(),
+                            field: "protocol".into(),
+                        },
+                    ))),
+                    right: Expression::String("tcp".into()),
+                    op: Operator::EQ,
+                }),
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                        PayloadField {
+                            protocol: "tcp".into(),
+                            field: "flags".into(),
+                        },
+                    ))),
+                    right: Expression::String("syn".into()),
+                    op: Operator::IN,
+                }),
+                Statement::Mangle(Mangle {
+                    key: Expression::Named(NamedExpression::TcpOption(TcpOption {
+                        name: "maxseg".into(),
+                        field: Some("size".into()),
+                    })),
+                    value: Expression::Number(1452),
+                }),
+            ],
+        ));
+
+        batch.add(Self::make_rule(
+            table,
+            chain,
             vec![
                 Statement::Match(Match {
                     left: Expression::Named(NamedExpression::Meta(Meta {
-                        key: MetaKey::Iifname,
+                        key: MetaKey::Nfproto,
                     })),
-                    right: Expression::String("lo".into()),
+                    right: Expression::String("ipv6".into()),
                     op: Operator::EQ,
                 }),
-                Statement::Accept(None),
-            ],
-        ));
-
-        // Rule: ct state established,related accept
-        batch.add(add_rule(
-            "input",
-            vec![
                 Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::CT(CT {
-                        key: "state".into(),
-                        family: None,
-                        dir: None,
+                    left: Expression::Named(NamedExpression::Meta(Meta {
+                        key: MetaKey::L4proto,
                     })),
-                    right: Expression::List(vec![
-                        Expression::String("established".into()),
-                        Expression::String("related".into()),
-                    ]),
+                    right: Expression::String("tcp".into()),
+                    op: Operator::EQ,
+                }),
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                        PayloadField {
+                            protocol: "tcp".into(),
+                            field: "flags".into(),
+                        },
+                    ))),
+                    right: Expression::String("syn".into()),
                     op: Operator::IN,
                 }),
-                Statement::Accept(None),
+                Statement::Mangle(Mangle {
+                    key: Expression::Named(NamedExpression::TcpOption(TcpOption {
+                        name: "maxseg".into(),
+                        field: Some("size".into()),
+                    })),
+                    value: Expression::Number(1432),
+                }),
             ],
         ));
+    }
 
-        // Rule: ct status dnat accept ONLY from internal/trusted interfaces (local reflections & container access)
-        for iface in &internal_ifaces {
-            batch.add(add_rule(
+    #[allow(clippy::ptr_arg)]
+    fn build_input_icmpv6_rfc4890(batch: &mut Batch<'static>, table: &Cow<'static, str>) {
+        for icmpv6_type in [
+            "destination-unreachable",
+            "packet-too-big",
+            "time-exceeded",
+            "parameter-problem",
+            "nd-router-solicit",
+            "nd-router-advert",
+            "nd-neighbor-solicit",
+            "nd-neighbor-advert",
+            "mld-listener-query",
+            "mld-listener-report",
+            "mld2-listener-report",
+            "mld-listener-done",
+        ] {
+            batch.add(Self::make_rule(
+                table,
                 "input",
                 vec![
                     Statement::Match(Match {
                         left: Expression::Named(NamedExpression::Meta(Meta {
-                            key: MetaKey::Iifname,
+                            key: MetaKey::L4proto,
                         })),
-                        right: Expression::String(iface.clone().into()),
+                        right: Expression::String("ipv6-icmp".into()),
                         op: Operator::EQ,
                     }),
                     Statement::Match(Match {
-                        left: Expression::Named(NamedExpression::CT(CT {
-                            key: "status".into(),
-                            family: None,
-                            dir: None,
-                        })),
-                        right: Expression::String("dnat".into()),
-                        op: Operator::IN,
+                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                            PayloadField {
+                                protocol: "icmpv6".into(),
+                                field: "type".into(),
+                            },
+                        ))),
+                        right: Expression::String(icmpv6_type.into()),
+                        op: Operator::EQ,
                     }),
                     Statement::Accept(None),
                 ],
             ));
         }
+    }
 
-        // Rule: ct state invalid drop
-        batch.add(add_rule(
-            "input",
-            vec![
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::CT(CT {
-                        key: "state".into(),
-                        family: None,
-                        dir: None,
-                    })),
-                    right: Expression::String("invalid".into()),
-                    op: Operator::EQ,
-                }),
-                Statement::Drop(None),
-            ],
-        ));
-
+    #[allow(clippy::ptr_arg)]
+    fn build_input_icmp(batch: &mut Batch<'static>, table: &Cow<'static, str>) {
         // Rule: ICMP rate-limited echo-request (10/sec)
-        batch.add(add_rule(
+        batch.add(Self::make_rule(
+            table,
             "input",
             vec![
                 Statement::Match(Match {
@@ -336,7 +309,8 @@ impl<'a> RulesetBuilder<'a> {
         ));
 
         // Rule: ICMPv6 rate-limited echo-request (20/sec)
-        batch.add(add_rule(
+        batch.add(Self::make_rule(
+            table,
             "input",
             vec![
                 Statement::Match(Match {
@@ -369,49 +343,16 @@ impl<'a> RulesetBuilder<'a> {
         ));
 
         // Rule: RFC 4890 Essential ICMPv6 types (ND, Packet Too Big, MLD, etc.)
-        for icmpv6_type in [
-            "destination-unreachable",
-            "packet-too-big",
-            "time-exceeded",
-            "parameter-problem",
-            "nd-router-solicit",
-            "nd-router-advert",
-            "nd-neighbor-solicit",
-            "nd-neighbor-advert",
-            "mld-listener-query",
-            "mld-listener-report",
-            "mld2-listener-report",
-            "mld-listener-done",
-        ] {
-            batch.add(add_rule(
-                "input",
-                vec![
-                    Statement::Match(Match {
-                        left: Expression::Named(NamedExpression::Meta(Meta {
-                            key: MetaKey::L4proto,
-                        })),
-                        right: Expression::String("ipv6-icmp".into()),
-                        op: Operator::EQ,
-                    }),
-                    Statement::Match(Match {
-                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                            PayloadField {
-                                protocol: "icmpv6".into(),
-                                field: "type".into(),
-                            },
-                        ))),
-                        right: Expression::String(icmpv6_type.into()),
-                        op: Operator::EQ,
-                    }),
-                    Statement::Accept(None),
-                ],
-            ));
-        }
+        Self::build_input_icmpv6_rfc4890(batch, table);
+    }
 
+    #[allow(clippy::ptr_arg)]
+    fn build_input_bypasses(&self, batch: &mut Batch<'static>, table: &Cow<'static, str>) {
         // Rule: Bypass DNS (UDP/TCP 53) directly to router host
         if self.cfg.bypass_dns {
             for proto in ["udp", "tcp"] {
-                batch.add(add_rule(
+                batch.add(Self::make_rule(
+                    table,
                     "input",
                     vec![
                         Statement::Match(Match {
@@ -433,7 +374,8 @@ impl<'a> RulesetBuilder<'a> {
         // Rule: Bypass VoWiFi (IKEv2 / IPsec ports 500, 4500)
         if self.cfg.bypass_vowifi {
             for port in [500, 4500] {
-                batch.add(add_rule(
+                batch.add(Self::make_rule(
+                    table,
                     "input",
                     vec![
                         Statement::Match(Match {
@@ -453,7 +395,8 @@ impl<'a> RulesetBuilder<'a> {
         }
 
         // Rule: DHCPv6 Client (UDP 546) on WAN for ISP Prefix Delegation (IA_PD)
-        batch.add(add_rule(
+        batch.add(Self::make_rule(
+            table,
             "input",
             vec![
                 Statement::Match(Match {
@@ -469,15 +412,17 @@ impl<'a> RulesetBuilder<'a> {
                 Statement::Accept(None),
             ],
         ));
+    }
 
-        // Host port rules: static from zone configuration
+    #[allow(clippy::ptr_arg)]
+    fn build_input_host_rules(&self, batch: &mut Batch<'static>, table: &Cow<'static, str>) {
         for zone in &self.cfg.zones {
             let ifaces = self.resolve_zone_interfaces(&zone.name);
             for iface in &ifaces {
                 for rule in &zone.open_ports {
                     Self::add_port_rule(
-                        &mut batch,
-                        &table,
+                        batch,
+                        table,
                         "input",
                         iface,
                         rule.port,
@@ -490,8 +435,8 @@ impl<'a> RulesetBuilder<'a> {
                 for dyn_port in self.dynamic_ports {
                     if dyn_port.zone == zone.name {
                         Self::add_port_rule(
-                            &mut batch,
-                            &table,
+                            batch,
+                            table,
                             "input",
                             iface,
                             dyn_port.port,
@@ -502,58 +447,38 @@ impl<'a> RulesetBuilder<'a> {
                 }
 
                 // Zone-level ingress policy overrides
-                match zone.input_policy {
-                    FirewallPolicy::Accept => {
-                        batch.add(add_rule(
-                            "input",
-                            vec![
-                                Statement::Match(Match {
-                                    left: Expression::Named(NamedExpression::Meta(Meta {
-                                        key: MetaKey::Iifname,
-                                    })),
-                                    right: Expression::String(iface.clone().into()),
-                                    op: Operator::EQ,
-                                }),
-                                Statement::Accept(None),
-                            ],
-                        ));
-                    }
-                    FirewallPolicy::Drop => {
-                        batch.add(add_rule(
-                            "input",
-                            vec![
-                                Statement::Match(Match {
-                                    left: Expression::Named(NamedExpression::Meta(Meta {
-                                        key: MetaKey::Iifname,
-                                    })),
-                                    right: Expression::String(iface.clone().into()),
-                                    op: Operator::EQ,
-                                }),
-                                Statement::Drop(None),
-                            ],
-                        ));
-                    }
-                    FirewallPolicy::Reject => {
-                        batch.add(add_rule(
-                            "input",
-                            vec![
-                                Statement::Match(Match {
-                                    left: Expression::Named(NamedExpression::Meta(Meta {
-                                        key: MetaKey::Iifname,
-                                    })),
-                                    right: Expression::String(iface.clone().into()),
-                                    op: Operator::EQ,
-                                }),
-                                Statement::Reject(None),
-                            ],
-                        ));
-                    }
-                }
+                let policy_stmt = match zone.input_policy {
+                    FirewallPolicy::Accept => Statement::Accept(None),
+                    FirewallPolicy::Drop => Statement::Drop(None),
+                    FirewallPolicy::Reject => Statement::Reject(None),
+                };
+
+                batch.add(Self::make_rule(
+                    table,
+                    "input",
+                    vec![
+                        Statement::Match(Match {
+                            left: Expression::Named(NamedExpression::Meta(Meta {
+                                key: MetaKey::Iifname,
+                            })),
+                            right: Expression::String(iface.clone().into()),
+                            op: Operator::EQ,
+                        }),
+                        policy_stmt,
+                    ],
+                ));
             }
         }
+    }
 
-        // 4. Chain FORWARD (Gateway routing)
-        let forward_policy = match self.cfg.default_forward_policy {
+    #[allow(clippy::ptr_arg)]
+    fn build_input_chain(
+        &self,
+        batch: &mut Batch<'static>,
+        table: &Cow<'static, str>,
+        internal_ifaces: &[String],
+    ) {
+        let input_policy = match self.cfg.default_input_policy {
             FirewallPolicy::Accept => NfChainPolicy::Accept,
             FirewallPolicy::Drop | FirewallPolicy::Reject => NfChainPolicy::Drop,
         };
@@ -561,19 +486,36 @@ impl<'a> RulesetBuilder<'a> {
         batch.add(NfListObject::Chain(Chain {
             family: NfFamily::INet,
             table: table.clone(),
-            name: "forward".into(),
+            name: "input".into(),
             newname: None,
             handle: None,
             _type: Some(NfChainType::Filter),
-            hook: Some(NfHook::Forward),
+            hook: Some(NfHook::Input),
             prio: Some(0),
             dev: None,
-            policy: Some(forward_policy),
+            policy: Some(input_policy),
         }));
 
+        // Rule: lo accept
+        batch.add(Self::make_rule(
+            table,
+            "input",
+            vec![
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Meta(Meta {
+                        key: MetaKey::Iifname,
+                    })),
+                    right: Expression::String("lo".into()),
+                    op: Operator::EQ,
+                }),
+                Statement::Accept(None),
+            ],
+        ));
+
         // Rule: ct state established,related accept
-        batch.add(add_rule(
-            "forward",
+        batch.add(Self::make_rule(
+            table,
+            "input",
             vec![
                 Statement::Match(Match {
                     left: Expression::Named(NamedExpression::CT(CT {
@@ -591,9 +533,37 @@ impl<'a> RulesetBuilder<'a> {
             ],
         ));
 
+        // Rule: ct status dnat accept ONLY from internal/trusted interfaces (local reflections & container access)
+        for iface in internal_ifaces {
+            batch.add(Self::make_rule(
+                table,
+                "input",
+                vec![
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Meta(Meta {
+                            key: MetaKey::Iifname,
+                        })),
+                        right: Expression::String(iface.clone().into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::CT(CT {
+                            key: "status".into(),
+                            family: None,
+                            dir: None,
+                        })),
+                        right: Expression::String("dnat".into()),
+                        op: Operator::IN,
+                    }),
+                    Statement::Accept(None),
+                ],
+            ));
+        }
+
         // Rule: ct state invalid drop
-        batch.add(add_rule(
-            "forward",
+        batch.add(Self::make_rule(
+            table,
+            "input",
             vec![
                 Statement::Match(Match {
                     left: Expression::Named(NamedExpression::CT(CT {
@@ -608,9 +578,22 @@ impl<'a> RulesetBuilder<'a> {
             ],
         ));
 
+        Self::build_input_icmp(batch, table);
+        self.build_input_bypasses(batch, table);
+        self.build_input_host_rules(batch, table);
+    }
+
+    #[allow(clippy::ptr_arg)]
+    fn build_forward_dnat_and_pinholes(
+        &self,
+        batch: &mut Batch<'static>,
+        table: &Cow<'static, str>,
+        internal_ifaces: &[String],
+    ) {
         // Rule: Accept DNAT originating from internal/trusted interfaces (LAN <-> Podman / Tailscale)
-        for iface in &internal_ifaces {
-            batch.add(add_rule(
+        for iface in internal_ifaces {
+            batch.add(Self::make_rule(
+                table,
                 "forward",
                 vec![
                     Statement::Match(Match {
@@ -697,59 +680,18 @@ impl<'a> RulesetBuilder<'a> {
                     }));
 
                     stmts.push(Statement::Accept(None));
-
-                    batch.add(add_rule("forward", stmts));
+                    batch.add(Self::make_rule(table, "forward", stmts));
                 }
             }
         }
+    }
 
-        // Flowtable offload in forward chain
-        if has_flowtable {
-            for proto in ["tcp", "udp"] {
-                batch.add(add_rule(
-                    "forward",
-                    vec![
-                        Statement::Match(Match {
-                            left: Expression::Named(NamedExpression::Meta(Meta {
-                                key: MetaKey::L4proto,
-                            })),
-                            right: Expression::String(proto.into()),
-                            op: Operator::EQ,
-                        }),
-                        Statement::Flow(Flow {
-                            op: SetOp::Add,
-                            flowtable: format!("@{flowtable_name}").into(),
-                        }),
-                    ],
-                ));
-            }
-        }
-
-        // VoWiFi Forward bypass
-        if self.cfg.bypass_vowifi {
-            for port in [500, 4500] {
-                batch.add(add_rule(
-                    "forward",
-                    vec![
-                        Statement::Match(Match {
-                            left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                                PayloadField {
-                                    protocol: "udp".into(),
-                                    field: "dport".into(),
-                                },
-                            ))),
-                            right: Expression::Number(port),
-                            op: Operator::EQ,
-                        }),
-                        Statement::Accept(None),
-                    ],
-                ));
-            }
-        }
-
+    #[allow(clippy::ptr_arg)]
+    fn build_forward_icmp(batch: &mut Batch<'static>, table: &Cow<'static, str>) {
         // Forward: Essential ICMPv4 (Destination Unreachable, Time Exceeded, Echo Request/Reply)
         for icmp_type in ["destination-unreachable", "time-exceeded", "echo-request", "echo-reply"] {
-            batch.add(add_rule(
+            batch.add(Self::make_rule(
+                table,
                 "forward",
                 vec![
                     Statement::Match(Match {
@@ -786,7 +728,8 @@ impl<'a> RulesetBuilder<'a> {
             "echo-request",
             "echo-reply",
         ] {
-            batch.add(add_rule(
+            batch.add(Self::make_rule(
+                table,
                 "forward",
                 vec![
                     Statement::Match(Match {
@@ -810,92 +753,18 @@ impl<'a> RulesetBuilder<'a> {
                 ],
             ));
         }
+    }
 
-        // TCP MSS clamping: clamp on all forwarded traffic in both directions when WAN/mtu_fix is active
-        let has_mtu_fix = self.cfg.zones.iter().any(|z| z.mtu_fix)
-            || self.active_wan.is_some();
-
-        if has_mtu_fix {
-            // IPv4 MSS 1452
-            batch.add(add_rule(
-                "forward",
-                vec![
-                    Statement::Match(Match {
-                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                            PayloadField {
-                                protocol: "ip".into(),
-                                field: "protocol".into(),
-                            },
-                        ))),
-                        right: Expression::String("tcp".into()),
-                        op: Operator::EQ,
-                    }),
-                    Statement::Match(Match {
-                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                            PayloadField {
-                                protocol: "tcp".into(),
-                                field: "flags".into(),
-                            },
-                        ))),
-                        right: Expression::String("syn".into()),
-                        op: Operator::IN,
-                    }),
-                    Statement::Mangle(Mangle {
-                        key: Expression::Named(NamedExpression::TcpOption(TcpOption {
-                            name: "maxseg".into(),
-                            field: Some("size".into()),
-                        })),
-                        value: Expression::Number(1452),
-                    }),
-                ],
-            ));
-
-            // IPv6 MSS 1432
-            batch.add(add_rule(
-                "forward",
-                vec![
-                    Statement::Match(Match {
-                        left: Expression::Named(NamedExpression::Meta(Meta {
-                            key: MetaKey::Nfproto,
-                        })),
-                        right: Expression::String("ipv6".into()),
-                        op: Operator::EQ,
-                    }),
-                    Statement::Match(Match {
-                        left: Expression::Named(NamedExpression::Meta(Meta {
-                            key: MetaKey::L4proto,
-                        })),
-                        right: Expression::String("tcp".into()),
-                        op: Operator::EQ,
-                    }),
-                    Statement::Match(Match {
-                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                            PayloadField {
-                                protocol: "tcp".into(),
-                                field: "flags".into(),
-                            },
-                        ))),
-                        right: Expression::String("syn".into()),
-                        op: Operator::IN,
-                    }),
-                    Statement::Mangle(Mangle {
-                        key: Expression::Named(NamedExpression::TcpOption(TcpOption {
-                            name: "maxseg".into(),
-                            field: Some("size".into()),
-                        })),
-                        value: Expression::Number(1432),
-                    }),
-                ],
-            ));
-        }
-
+    #[allow(clippy::ptr_arg)]
+    fn build_forward_zone_matrix(&self, batch: &mut Batch<'static>, table: &Cow<'static, str>) {
         // Inter-zone forwarding matrix
         for fwd in &self.cfg.forwardings {
             let src_ifaces = self.resolve_zone_interfaces(&fwd.from);
             let dst_ifaces = self.resolve_zone_interfaces(&fwd.to);
             for src in &src_ifaces {
                 for dst in &dst_ifaces {
-                    batch.add(add_rule(
+                    batch.add(Self::make_rule(
+                        table,
                         "forward",
                         vec![
                             Statement::Match(Match {
@@ -925,7 +794,8 @@ impl<'a> RulesetBuilder<'a> {
                 let ifaces = self.resolve_zone_interfaces(&zone.name);
                 for src in &ifaces {
                     for dst in &ifaces {
-                        batch.add(add_rule(
+                        batch.add(Self::make_rule(
+                            table,
                             "forward",
                             vec![
                                 Statement::Match(Match {
@@ -949,8 +819,142 @@ impl<'a> RulesetBuilder<'a> {
                 }
             }
         }
+    }
 
-        // 5. Chain OUTPUT (Local host egress protection & MSS clamping)
+    #[allow(clippy::ptr_arg)]
+    fn build_forward_chain(
+        &self,
+        batch: &mut Batch<'static>,
+        table: &Cow<'static, str>,
+        has_flowtable: bool,
+        flowtable_name: &str,
+        internal_ifaces: &[String],
+        has_mtu_fix: bool,
+    ) {
+        let forward_policy = match self.cfg.default_forward_policy {
+            FirewallPolicy::Accept => NfChainPolicy::Accept,
+            FirewallPolicy::Drop | FirewallPolicy::Reject => NfChainPolicy::Drop,
+        };
+
+        batch.add(NfListObject::Chain(Chain {
+            family: NfFamily::INet,
+            table: table.clone(),
+            name: "forward".into(),
+            newname: None,
+            handle: None,
+            _type: Some(NfChainType::Filter),
+            hook: Some(NfHook::Forward),
+            prio: Some(0),
+            dev: None,
+            policy: Some(forward_policy),
+        }));
+
+        // Rule: ct state established,related accept
+        batch.add(Self::make_rule(
+            table,
+            "forward",
+            vec![
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::CT(CT {
+                        key: "state".into(),
+                        family: None,
+                        dir: None,
+                    })),
+                    right: Expression::List(vec![
+                        Expression::String("established".into()),
+                        Expression::String("related".into()),
+                    ]),
+                    op: Operator::IN,
+                }),
+                Statement::Accept(None),
+            ],
+        ));
+
+        // Rule: ct state invalid drop
+        batch.add(Self::make_rule(
+            table,
+            "forward",
+            vec![
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::CT(CT {
+                        key: "state".into(),
+                        family: None,
+                        dir: None,
+                    })),
+                    right: Expression::String("invalid".into()),
+                    op: Operator::EQ,
+                }),
+                Statement::Drop(None),
+            ],
+        ));
+
+        // DNAT and explicit pinholes
+        self.build_forward_dnat_and_pinholes(batch, table, internal_ifaces);
+
+        // Flowtable offload in forward chain
+        if has_flowtable {
+            for proto in ["tcp", "udp"] {
+                batch.add(Self::make_rule(
+                    table,
+                    "forward",
+                    vec![
+                        Statement::Match(Match {
+                            left: Expression::Named(NamedExpression::Meta(Meta {
+                                key: MetaKey::L4proto,
+                            })),
+                            right: Expression::String(proto.into()),
+                            op: Operator::EQ,
+                        }),
+                        Statement::Flow(Flow {
+                            op: SetOp::Add,
+                            flowtable: format!("@{flowtable_name}").into(),
+                        }),
+                    ],
+                ));
+            }
+        }
+
+        // VoWiFi Forward bypass
+        if self.cfg.bypass_vowifi {
+            for port in [500, 4500] {
+                batch.add(Self::make_rule(
+                    table,
+                    "forward",
+                    vec![
+                        Statement::Match(Match {
+                            left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                                PayloadField {
+                                    protocol: "udp".into(),
+                                    field: "dport".into(),
+                                },
+                            ))),
+                            right: Expression::Number(port),
+                            op: Operator::EQ,
+                        }),
+                        Statement::Accept(None),
+                    ],
+                ));
+            }
+        }
+
+        // ICMP / ICMPv6
+        Self::build_forward_icmp(batch, table);
+
+        // MSS clamping
+        if has_mtu_fix {
+            Self::add_mss_clamping_rules(batch, table, "forward");
+        }
+
+        // Zone forwarding matrix
+        self.build_forward_zone_matrix(batch, table);
+    }
+
+    #[allow(clippy::ptr_arg)]
+    fn build_output_chain(
+        batch: &mut Batch<'static>,
+        table: &Cow<'static, str>,
+        has_mtu_fix: bool,
+    ) {
         batch.add(NfListObject::Chain(Chain {
             family: NfFamily::INet,
             table: table.clone(),
@@ -965,217 +969,130 @@ impl<'a> RulesetBuilder<'a> {
         }));
 
         if has_mtu_fix {
-            // IPv4 MSS 1452 in output
-            batch.add(add_rule(
-                "output",
-                vec![
-                    Statement::Match(Match {
-                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                            PayloadField {
-                                protocol: "ip".into(),
-                                field: "protocol".into(),
-                            },
-                        ))),
-                        right: Expression::String("tcp".into()),
-                        op: Operator::EQ,
-                    }),
-                    Statement::Match(Match {
-                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                            PayloadField {
-                                protocol: "tcp".into(),
-                                field: "flags".into(),
-                            },
-                        ))),
-                        right: Expression::String("syn".into()),
-                        op: Operator::IN,
-                    }),
-                    Statement::Mangle(Mangle {
-                        key: Expression::Named(NamedExpression::TcpOption(TcpOption {
-                            name: "maxseg".into(),
-                            field: Some("size".into()),
-                        })),
-                        value: Expression::Number(1452),
-                    }),
-                ],
-            ));
+            Self::add_mss_clamping_rules(batch, table, "output");
+        }
+    }
 
-            // IPv6 MSS 1432 in output
-            batch.add(add_rule(
-                "output",
+    #[allow(clippy::ptr_arg)]
+    fn build_prerouting_nat(
+        &self,
+        batch: &mut Batch<'static>,
+        table: &Cow<'static, str>,
+        internal_ifaces: &[String],
+    ) {
+        if self.cfg.port_forwards.is_empty() {
+            return;
+        }
+
+        batch.add(NfListObject::Chain(Chain {
+            family: NfFamily::INet,
+            table: table.clone(),
+            name: "prerouting".into(),
+            newname: None,
+            handle: None,
+            _type: Some(NfChainType::NAT),
+            hook: Some(NfHook::Prerouting),
+            prio: Some(-100),
+            dev: None,
+            policy: Some(NfChainPolicy::Accept),
+        }));
+
+        for pf in &self.cfg.port_forwards {
+            let src_ifaces = self.resolve_zone_interfaces(&pf.src_zone);
+            let protos = protocol_l4_names(pf.protocol);
+
+            for iface in &src_ifaces {
+                for &proto in protos {
+                    Self::add_dnat_rule(batch, table, iface, proto, pf);
+                }
+            }
+
+            // Hairpin NAT: internal clients requesting external port
+            if pf.enable_hairpin {
+                for int_iface in internal_ifaces {
+                    for &proto in protos {
+                        Self::add_dnat_rule(batch, table, int_iface, proto, pf);
+                    }
+                }
+            }
+        }
+    }
+
+    #[allow(clippy::ptr_arg)]
+    fn build_postrouting_nat(
+        &self,
+        batch: &mut Batch<'static>,
+        table: &Cow<'static, str>,
+        internal_ifaces: &[String],
+    ) {
+        let external_ifaces = self.resolve_zone_interfaces("external");
+        let has_hairpin = self.cfg.port_forwards.iter().any(|p| p.enable_hairpin);
+        let has_masquerade = !external_ifaces.is_empty()
+            || self.cfg.zones.iter().any(|z| z.masquerade);
+
+        if !has_masquerade && !has_hairpin {
+            return;
+        }
+
+        batch.add(NfListObject::Chain(Chain {
+            family: NfFamily::INet,
+            table: table.clone(),
+            name: "postrouting".into(),
+            newname: None,
+            handle: None,
+            _type: Some(NfChainType::NAT),
+            hook: Some(NfHook::Postrouting),
+            prio: Some(100),
+            dev: None,
+            policy: Some(NfChainPolicy::Accept),
+        }));
+
+        // WAN IPv4 Masquerade
+        for ext in &external_ifaces {
+            batch.add(Self::make_rule(
+                table,
+                "postrouting",
                 vec![
                     Statement::Match(Match {
                         left: Expression::Named(NamedExpression::Meta(Meta {
                             key: MetaKey::Nfproto,
                         })),
-                        right: Expression::String("ipv6".into()),
+                        right: Expression::String("ipv4".into()),
                         op: Operator::EQ,
                     }),
                     Statement::Match(Match {
                         left: Expression::Named(NamedExpression::Meta(Meta {
-                            key: MetaKey::L4proto,
+                            key: MetaKey::Oifname,
                         })),
-                        right: Expression::String("tcp".into()),
+                        right: Expression::String(ext.clone().into()),
                         op: Operator::EQ,
                     }),
-                    Statement::Match(Match {
-                        left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                            PayloadField {
-                                protocol: "tcp".into(),
-                                field: "flags".into(),
-                            },
-                        ))),
-                        right: Expression::String("syn".into()),
-                        op: Operator::IN,
-                    }),
-                    Statement::Mangle(Mangle {
-                        key: Expression::Named(NamedExpression::TcpOption(TcpOption {
-                            name: "maxseg".into(),
-                            field: Some("size".into()),
-                        })),
-                        value: Expression::Number(1432),
-                    }),
+                    Statement::Masquerade(None),
                 ],
             ));
         }
 
-        // 6. NAT Chains: PREROUTING & POSTROUTING
-        let has_port_forwards = !self.cfg.port_forwards.is_empty();
-        let external_ifaces = self.resolve_zone_interfaces("external");
-
-        if has_port_forwards {
-            batch.add(NfListObject::Chain(Chain {
-                family: NfFamily::INet,
-                table: table.clone(),
-                name: "prerouting".into(),
-                newname: None,
-                handle: None,
-                _type: Some(NfChainType::NAT),
-                hook: Some(NfHook::Prerouting),
-                prio: Some(-100),
-                dev: None,
-                policy: Some(NfChainPolicy::Accept),
-            }));
-
-            for pf in &self.cfg.port_forwards {
-                let src_ifaces = self.resolve_zone_interfaces(&pf.src_zone);
-                let protos = protocol_l4_names(pf.protocol);
-
-                for iface in &src_ifaces {
-                    for &proto in protos {
-                        Self::add_dnat_rule(&mut batch, &table, iface, proto, pf);
-                    }
-                }
-
-                // Hairpin NAT: internal clients requesting external port
-                if pf.enable_hairpin {
-                    for int_iface in &internal_ifaces {
-                        for &proto in protos {
-                            Self::add_dnat_rule(&mut batch, &table, int_iface, proto, pf);
-                        }
-                    }
-                }
-            }
-        }
-
-        // Chain POSTROUTING (NAT Masquerade & Hairpin NAT)
-        let has_hairpin = self.cfg.port_forwards.iter().any(|p| p.enable_hairpin);
-        let has_masquerade = !external_ifaces.is_empty()
-            || self.cfg.zones.iter().any(|z| z.masquerade);
-
-        if has_masquerade || has_hairpin {
-            batch.add(NfListObject::Chain(Chain {
-                family: NfFamily::INet,
-                table: table.clone(),
-                name: "postrouting".into(),
-                newname: None,
-                handle: None,
-                _type: Some(NfChainType::NAT),
-                hook: Some(NfHook::Postrouting),
-                prio: Some(100),
-                dev: None,
-                policy: Some(NfChainPolicy::Accept),
-            }));
-
-            // WAN IPv4 Masquerade
-            for ext in &external_ifaces {
-                batch.add(add_rule(
-                    "postrouting",
-                    vec![
-                        Statement::Match(Match {
-                            left: Expression::Named(NamedExpression::Meta(Meta {
-                                key: MetaKey::Nfproto,
-                            })),
-                            right: Expression::String("ipv4".into()),
-                            op: Operator::EQ,
-                        }),
-                        Statement::Match(Match {
-                            left: Expression::Named(NamedExpression::Meta(Meta {
-                                key: MetaKey::Oifname,
-                            })),
-                            right: Expression::String(ext.clone().into()),
-                            op: Operator::EQ,
-                        }),
-                        Statement::Masquerade(None),
-                    ],
-                ));
-            }
-
-            // Zones with explicit masquerade enabled
-            for zone in &self.cfg.zones {
-                if zone.masquerade && zone.name != "external" && zone.name != "wan" {
-                    for iface in &zone.interfaces {
-                        batch.add(add_rule(
-                            "postrouting",
-                            vec![
-                                Statement::Match(Match {
-                                    left: Expression::Named(NamedExpression::Meta(Meta {
-                                        key: MetaKey::Nfproto,
-                                    })),
-                                    right: Expression::String("ipv4".into()),
-                                    op: Operator::EQ,
-                                }),
-                                Statement::Match(Match {
-                                    left: Expression::Named(NamedExpression::Meta(Meta {
-                                        key: MetaKey::Oifname,
-                                    })),
-                                    right: Expression::String(iface.clone().into()),
-                                    op: Operator::EQ,
-                                }),
-                                Statement::Masquerade(None),
-                            ],
-                        ));
-                    }
-                }
-            }
-
-            // Hairpin NAT Masquerade
-            if has_hairpin {
-                for int_iface in &internal_ifaces {
-                    batch.add(add_rule(
+        // Zones with explicit masquerade enabled
+        for zone in &self.cfg.zones {
+            if zone.masquerade && zone.name != "external" && zone.name != "wan" {
+                for iface in &zone.interfaces {
+                    batch.add(Self::make_rule(
+                        table,
                         "postrouting",
                         vec![
                             Statement::Match(Match {
                                 left: Expression::Named(NamedExpression::Meta(Meta {
-                                    key: MetaKey::Iifname,
+                                    key: MetaKey::Nfproto,
                                 })),
-                                right: Expression::String(int_iface.clone().into()),
+                                right: Expression::String("ipv4".into()),
                                 op: Operator::EQ,
                             }),
                             Statement::Match(Match {
                                 left: Expression::Named(NamedExpression::Meta(Meta {
                                     key: MetaKey::Oifname,
                                 })),
-                                right: Expression::String(int_iface.clone().into()),
+                                right: Expression::String(iface.clone().into()),
                                 op: Operator::EQ,
-                            }),
-                            Statement::Match(Match {
-                                left: Expression::Named(NamedExpression::CT(CT {
-                                    key: "status".into(),
-                                    family: None,
-                                    dir: None,
-                                })),
-                                right: Expression::String("dnat".into()),
-                                op: Operator::IN,
                             }),
                             Statement::Masquerade(None),
                         ],
@@ -1183,6 +1100,146 @@ impl<'a> RulesetBuilder<'a> {
                 }
             }
         }
+
+        // Hairpin NAT Masquerade
+        if has_hairpin {
+            Self::build_postrouting_hairpin_nat(batch, table, internal_ifaces);
+        }
+    }
+
+    #[allow(clippy::ptr_arg)]
+    fn build_postrouting_hairpin_nat(
+        batch: &mut Batch<'static>,
+        table: &Cow<'static, str>,
+        internal_ifaces: &[String],
+    ) {
+        for int_iface in internal_ifaces {
+            batch.add(Self::make_rule(
+                table,
+                "postrouting",
+                vec![
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Meta(Meta {
+                            key: MetaKey::Iifname,
+                        })),
+                        right: Expression::String(int_iface.clone().into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Meta(Meta {
+                            key: MetaKey::Oifname,
+                        })),
+                        right: Expression::String(int_iface.clone().into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::CT(CT {
+                            key: "status".into(),
+                            family: None,
+                            dir: None,
+                        })),
+                        right: Expression::String("dnat".into()),
+                        op: Operator::IN,
+                    }),
+                    Statement::Masquerade(None),
+                ],
+            ));
+        }
+    }
+
+    #[allow(clippy::ptr_arg)]
+    fn build_nat_chains(
+        &self,
+        batch: &mut Batch<'static>,
+        table: &Cow<'static, str>,
+        internal_ifaces: &[String],
+    ) {
+        self.build_prerouting_nat(batch, table, internal_ifaces);
+        self.build_postrouting_nat(batch, table, internal_ifaces);
+    }
+
+    /// Compiles the complete declarative ruleset.
+    #[must_use]
+    pub fn build(&self) -> Nftables<'static> {
+        let table: Cow<'static, str> = if self.table_name() == "lanforge" {
+            Cow::Borrowed("lanforge")
+        } else {
+            Cow::Owned(self.table_name().to_string())
+        };
+        let mut batch = Batch::new();
+
+        // 1. Table: Add if not exists, then flush all previous chains/rules in table
+        batch.add(NfListObject::Table(Table {
+            family: NfFamily::INet,
+            name: table.clone(),
+            handle: None,
+        }));
+        batch.add_cmd(NfCmd::Flush(FlushObject::Table(Table {
+            family: NfFamily::INet,
+            name: table.clone(),
+            handle: None,
+        })));
+
+        if !self.cfg.enabled || self.cfg.mode == FirewallMode::Disabled {
+            return batch.to_nftables();
+        }
+
+        // 2. Flowtable (if flow offload is enabled and WAN or LAN interfaces exist)
+        let mut flow_devices: Vec<String> = Vec::new();
+        if let Some(wan) = self.active_wan
+            && !wan.is_empty()
+            && !flow_devices.iter().any(|d| d == wan)
+        {
+            flow_devices.push(wan.to_string());
+        }
+        for iface in self.resolve_internal_interfaces() {
+            if !iface.starts_with("ifb") && !flow_devices.iter().any(|d| d == &iface) {
+                flow_devices.push(iface);
+            }
+        }
+
+        if self.cfg.mode == FirewallMode::Minimal {
+            return self.build_minimal(&table, &flow_devices);
+        }
+
+        let flowtable_name = "f";
+        let has_flowtable = self.cfg.flow_offload && !flow_devices.is_empty();
+        if has_flowtable {
+            let dev: Vec<Cow<'static, str>> =
+                flow_devices.into_iter().map(Into::into).collect();
+
+            batch.add(NfListObject::FlowTable(FlowTable {
+                family: NfFamily::INet,
+                table: table.clone(),
+                name: flowtable_name.into(),
+                handle: None,
+                hook: Some(NfHook::Ingress),
+                prio: Some(0),
+                dev: Some(dev.into()),
+            }));
+        }
+
+        let internal_ifaces = self.resolve_internal_interfaces();
+        let has_mtu_fix = self.has_mtu_fix();
+
+        // 3. Chain INPUT (Host protection)
+        self.build_input_chain(&mut batch, &table, &internal_ifaces);
+
+        // 4. Chain FORWARD (Gateway routing)
+        self.build_forward_chain(
+            &mut batch,
+            &table,
+            has_flowtable,
+            flowtable_name,
+            &internal_ifaces,
+            has_mtu_fix,
+        );
+
+        // 5. Chain OUTPUT (Local host egress protection & MSS clamping)
+        Self::build_output_chain(&mut batch, &table, has_mtu_fix);
+
+        // 6. NAT Chains: PREROUTING & POSTROUTING
+        self.build_nat_chains(&mut batch, &table, &internal_ifaces);
 
         batch.to_nftables()
     }
@@ -1279,7 +1336,115 @@ impl<'a> RulesetBuilder<'a> {
         }));
     }
 
-    #[allow(clippy::too_many_lines, clippy::ptr_arg)]
+    #[allow(clippy::ptr_arg)]
+    fn build_minimal_forward(
+        batch: &mut Batch<'static>,
+        table: &Cow<'static, str>,
+        has_flowtable: bool,
+        flowtable_name: &str,
+    ) {
+        batch.add(NfListObject::Chain(Chain {
+            family: NfFamily::INet,
+            table: table.clone(),
+            name: "forward".into(),
+            newname: None,
+            handle: None,
+            _type: Some(NfChainType::Filter),
+            hook: Some(NfHook::Forward),
+            prio: Some(-10),
+            dev: None,
+            policy: Some(NfChainPolicy::Accept),
+        }));
+
+        if has_flowtable {
+            for proto in ["tcp", "udp"] {
+                batch.add(Self::make_rule(
+                    table,
+                    "forward",
+                    vec![
+                        Statement::Match(Match {
+                            left: Expression::Named(NamedExpression::Meta(Meta {
+                                key: MetaKey::L4proto,
+                            })),
+                            right: Expression::String(proto.into()),
+                            op: Operator::EQ,
+                        }),
+                        Statement::Flow(Flow {
+                            op: SetOp::Add,
+                            flowtable: format!("@{flowtable_name}").into(),
+                        }),
+                    ],
+                ));
+            }
+        }
+
+        Self::add_mss_clamping_rules(batch, table, "forward");
+    }
+
+    #[allow(clippy::ptr_arg)]
+    fn build_minimal_output(batch: &mut Batch<'static>, table: &Cow<'static, str>) {
+        batch.add(NfListObject::Chain(Chain {
+            family: NfFamily::INet,
+            table: table.clone(),
+            name: "output".into(),
+            newname: None,
+            handle: None,
+            _type: Some(NfChainType::Filter),
+            hook: Some(NfHook::Output),
+            prio: Some(-10),
+            dev: None,
+            policy: Some(NfChainPolicy::Accept),
+        }));
+
+        Self::add_mss_clamping_rules(batch, table, "output");
+    }
+
+    #[allow(clippy::ptr_arg)]
+    fn build_minimal_postrouting(&self, batch: &mut Batch<'static>, table: &Cow<'static, str>) {
+        let external_ifaces = self.resolve_zone_interfaces("external");
+        if external_ifaces.is_empty() {
+            return;
+        }
+
+        batch.add(NfListObject::Chain(Chain {
+            family: NfFamily::INet,
+            table: table.clone(),
+            name: "postrouting".into(),
+            newname: None,
+            handle: None,
+            _type: Some(NfChainType::NAT),
+            hook: Some(NfHook::Postrouting),
+            prio: Some(100),
+            dev: None,
+            policy: Some(NfChainPolicy::Accept),
+        }));
+
+        for ext in &external_ifaces {
+            batch.add(Self::make_rule(
+                table,
+                "postrouting",
+                vec![
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Meta(Meta {
+                            key: MetaKey::Nfproto,
+                        })),
+                        right: Expression::String("ipv4".into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Match(Match {
+                        left: Expression::Named(NamedExpression::Meta(Meta {
+                            key: MetaKey::Oifname,
+                        })),
+                        right: Expression::String(ext.clone().into()),
+                        op: Operator::EQ,
+                    }),
+                    Statement::Masquerade(None),
+                ],
+            ));
+        }
+    }
+
+    #[allow(clippy::ptr_arg)]
     fn build_minimal(&self, table: &Cow<'static, str>, flow_devices: &[String]) -> Nftables<'static> {
         let mut batch = Batch::new();
 
@@ -1311,247 +1476,9 @@ impl<'a> RulesetBuilder<'a> {
             }));
         }
 
-        let add_rule = |target_chain: &'static str, stmts: Vec<Statement<'static>>| -> NfListObject<'static> {
-            NfListObject::Rule(Rule {
-                family: NfFamily::INet,
-                table: table.clone(),
-                chain: Cow::Borrowed(target_chain),
-                expr: stmts.into(),
-                handle: None,
-                index: None,
-                comment: None,
-            })
-        };
-
-        // Chain FORWARD (priority filter - 10, policy accept)
-        batch.add(NfListObject::Chain(Chain {
-            family: NfFamily::INet,
-            table: table.clone(),
-            name: "forward".into(),
-            newname: None,
-            handle: None,
-            _type: Some(NfChainType::Filter),
-            hook: Some(NfHook::Forward),
-            prio: Some(-10),
-            dev: None,
-            policy: Some(NfChainPolicy::Accept),
-        }));
-
-        if has_flowtable {
-            for proto in ["tcp", "udp"] {
-                batch.add(add_rule(
-                    "forward",
-                    vec![
-                        Statement::Match(Match {
-                            left: Expression::Named(NamedExpression::Meta(Meta {
-                                key: MetaKey::L4proto,
-                            })),
-                            right: Expression::String(proto.into()),
-                            op: Operator::EQ,
-                        }),
-                        Statement::Flow(Flow {
-                            op: SetOp::Add,
-                            flowtable: format!("@{flowtable_name}").into(),
-                        }),
-                    ],
-                ));
-            }
-        }
-
-        // TCP MSS clamping in forward (both directions)
-        batch.add(add_rule(
-            "forward",
-            vec![
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                        PayloadField {
-                            protocol: "ip".into(),
-                            field: "protocol".into(),
-                        },
-                    ))),
-                    right: Expression::String("tcp".into()),
-                    op: Operator::EQ,
-                }),
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                        PayloadField {
-                            protocol: "tcp".into(),
-                            field: "flags".into(),
-                        },
-                    ))),
-                    right: Expression::String("syn".into()),
-                    op: Operator::IN,
-                }),
-                Statement::Mangle(Mangle {
-                    key: Expression::Named(NamedExpression::TcpOption(TcpOption {
-                        name: "maxseg".into(),
-                        field: Some("size".into()),
-                    })),
-                    value: Expression::Number(1452),
-                }),
-            ],
-        ));
-
-        batch.add(add_rule(
-            "forward",
-            vec![
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::Meta(Meta {
-                        key: MetaKey::Nfproto,
-                    })),
-                    right: Expression::String("ipv6".into()),
-                    op: Operator::EQ,
-                }),
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::Meta(Meta {
-                        key: MetaKey::L4proto,
-                    })),
-                    right: Expression::String("tcp".into()),
-                    op: Operator::EQ,
-                }),
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                        PayloadField {
-                            protocol: "tcp".into(),
-                            field: "flags".into(),
-                        },
-                    ))),
-                    right: Expression::String("syn".into()),
-                    op: Operator::IN,
-                }),
-                Statement::Mangle(Mangle {
-                    key: Expression::Named(NamedExpression::TcpOption(TcpOption {
-                        name: "maxseg".into(),
-                        field: Some("size".into()),
-                    })),
-                    value: Expression::Number(1432),
-                }),
-            ],
-        ));
-
-        // Chain OUTPUT (priority filter - 10, policy accept)
-        batch.add(NfListObject::Chain(Chain {
-            family: NfFamily::INet,
-            table: table.clone(),
-            name: "output".into(),
-            newname: None,
-            handle: None,
-            _type: Some(NfChainType::Filter),
-            hook: Some(NfHook::Output),
-            prio: Some(-10),
-            dev: None,
-            policy: Some(NfChainPolicy::Accept),
-        }));
-
-        batch.add(add_rule(
-            "output",
-            vec![
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                        PayloadField {
-                            protocol: "ip".into(),
-                            field: "protocol".into(),
-                        },
-                    ))),
-                    right: Expression::String("tcp".into()),
-                    op: Operator::EQ,
-                }),
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                        PayloadField {
-                            protocol: "tcp".into(),
-                            field: "flags".into(),
-                        },
-                    ))),
-                    right: Expression::String("syn".into()),
-                    op: Operator::IN,
-                }),
-                Statement::Mangle(Mangle {
-                    key: Expression::Named(NamedExpression::TcpOption(TcpOption {
-                        name: "maxseg".into(),
-                        field: Some("size".into()),
-                    })),
-                    value: Expression::Number(1452),
-                }),
-            ],
-        ));
-
-        batch.add(add_rule(
-            "output",
-            vec![
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::Meta(Meta {
-                        key: MetaKey::Nfproto,
-                    })),
-                    right: Expression::String("ipv6".into()),
-                    op: Operator::EQ,
-                }),
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::Meta(Meta {
-                        key: MetaKey::L4proto,
-                    })),
-                    right: Expression::String("tcp".into()),
-                    op: Operator::EQ,
-                }),
-                Statement::Match(Match {
-                    left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                        PayloadField {
-                            protocol: "tcp".into(),
-                            field: "flags".into(),
-                        },
-                    ))),
-                    right: Expression::String("syn".into()),
-                    op: Operator::IN,
-                }),
-                Statement::Mangle(Mangle {
-                    key: Expression::Named(NamedExpression::TcpOption(TcpOption {
-                        name: "maxseg".into(),
-                        field: Some("size".into()),
-                    })),
-                    value: Expression::Number(1432),
-                }),
-            ],
-        ));
-
-        // Chain POSTROUTING (NAT masquerade for WAN)
-        let external_ifaces = self.resolve_zone_interfaces("external");
-        if !external_ifaces.is_empty() {
-            batch.add(NfListObject::Chain(Chain {
-                family: NfFamily::INet,
-                table: table.clone(),
-                name: "postrouting".into(),
-                newname: None,
-                handle: None,
-                _type: Some(NfChainType::NAT),
-                hook: Some(NfHook::Postrouting),
-                prio: Some(100),
-                dev: None,
-                policy: Some(NfChainPolicy::Accept),
-            }));
-
-            for ext in &external_ifaces {
-                batch.add(add_rule(
-                    "postrouting",
-                    vec![
-                        Statement::Match(Match {
-                            left: Expression::Named(NamedExpression::Meta(Meta {
-                                key: MetaKey::Nfproto,
-                            })),
-                            right: Expression::String("ipv4".into()),
-                            op: Operator::EQ,
-                        }),
-                        Statement::Match(Match {
-                            left: Expression::Named(NamedExpression::Meta(Meta {
-                                key: MetaKey::Oifname,
-                            })),
-                            right: Expression::String(ext.clone().into()),
-                            op: Operator::EQ,
-                        }),
-                        Statement::Masquerade(None),
-                    ],
-                ));
-            }
-        }
+        Self::build_minimal_forward(&mut batch, table, has_flowtable, flowtable_name);
+        Self::build_minimal_output(&mut batch, table);
+        self.build_minimal_postrouting(&mut batch, table);
 
         batch.to_nftables()
     }
