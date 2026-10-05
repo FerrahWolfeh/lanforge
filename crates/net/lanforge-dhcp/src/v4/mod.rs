@@ -213,16 +213,12 @@ impl Dhcpv4Service {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
-    async fn run_server(
-        &self,
-        pools: Vec<Dhcpv4Pool>,
-    ) -> Result<RunResult, CoreError> {
+    fn prepare_config(&self, pools: Vec<Dhcpv4Pool>) -> Option<Dhcpv4Config> {
         let mut current_cfg = self.cfg.clone();
         let options = self.ctx.get_dhcp_options();
         if !options.v4.enabled {
             warn!("DHCPv4: Service disabled via options configuration — server idle");
-            return self.wait_for_config_change_or_shutdown().await;
+            return None;
         }
 
         if let Some(r) = options.v4.router {
@@ -256,23 +252,10 @@ impl Dhcpv4Service {
 
         // Audit network topology against physical interface and auto-heal if needed
         sanity::audit_and_auto_heal_dhcpv4(&mut current_cfg);
+        Some(current_cfg)
+    }
 
-        let mut server = DhcpServer::new(current_cfg.clone(), self.ctx.clone());
-        let transport = Dhcpv4Transport::new(&current_cfg.iface, current_cfg.port)?;
-
-        // Pre-allocate static reservations to avoid collisions with dynamic pool
-        let registry = self.ctx.get_static_registry();
-        server.pool.reserve_statics(registry.v4_ips());
-        // Ensure server_id and router are never leased dynamically to clients
-        server.pool.decline(current_cfg.server_id);
-        server.pool.decline(current_cfg.router);
-
-        // Sanity check: audit and reconcile all dynamic leases loaded from DB/previous config.
-        // Static leases (fixed IPs) are untouched; stale dynamic leases outside active pools/subnet
-        // are invalidated and clients are prompted to re-authenticate via RFC 3203 FORCERENEW.
-        self.reconcile_dynamic_leases(&mut server, &transport, &current_cfg);
-        server.pool.reconcile_active(&self.ctx);
-
+    fn publish_pool_update(&self, server: &DhcpServer, current_cfg: &Dhcpv4Config) {
         let (total, used, available, util_pct) = server.pool.stats();
         let range_start = current_cfg
             .range_start
@@ -293,6 +276,39 @@ impl Dhcpv4Service {
                 utilization_percent: util_pct,
             },
         )));
+    }
+
+    fn reconcile_and_report(
+        &self,
+        server: &mut DhcpServer,
+        transport: &Dhcpv4Transport,
+        current_cfg: &Dhcpv4Config,
+    ) {
+        server.pool.cleanup_quarantine(Instant::now());
+        self.reconcile_dynamic_leases(server, transport, current_cfg);
+        server.pool.reconcile_active(&self.ctx);
+        self.publish_pool_update(server, current_cfg);
+    }
+
+    async fn run_server(
+        &self,
+        pools: Vec<Dhcpv4Pool>,
+    ) -> Result<RunResult, CoreError> {
+        let Some(current_cfg) = self.prepare_config(pools) else {
+            return self.wait_for_config_change_or_shutdown().await;
+        };
+
+        let mut server = DhcpServer::new(current_cfg.clone(), self.ctx.clone());
+        let transport = Dhcpv4Transport::new(&current_cfg.iface, current_cfg.port)?;
+
+        // Pre-allocate static reservations to avoid collisions with dynamic pool
+        let registry = self.ctx.get_static_registry();
+        server.pool.reserve_statics(registry.v4_ips());
+        // Ensure server_id and router are never leased dynamically to clients
+        server.pool.decline(current_cfg.server_id);
+        server.pool.decline(current_cfg.router);
+
+        self.reconcile_and_report(&mut server, &transport, &current_cfg);
 
         let mut buf = [0u8; 1500];
         let mut handle = self.ctx.service_handle();
@@ -328,23 +344,7 @@ impl Dhcpv4Service {
                     self.handle_bus_event(&timed_event, &mut server, &transport);
                 }
                 _ = cleanup_timer.tick() => {
-                    server.pool.cleanup_quarantine(Instant::now());
-                    self.reconcile_dynamic_leases(&mut server, &transport, &current_cfg);
-                    server.pool.reconcile_active(&self.ctx);
-                    let (total, used, available, util_pct) = server.pool.stats();
-                    let range_start = current_cfg.range_start.or_else(|| current_cfg.pools.first().map(|p| p.range_start)).unwrap_or(Ipv4Addr::UNSPECIFIED);
-                    let range_end = current_cfg.range_end.or_else(|| current_cfg.pools.first().map(|p| p.range_end)).unwrap_or(Ipv4Addr::UNSPECIFIED);
-                    let _ = self.ctx.apply(DeviceUpdate::DhcpV4PoolUpdated(Box::new(
-                        DhcpV4PoolUpdate {
-                            range_start,
-                            range_end,
-                            subnet_mask: current_cfg.subnet_mask,
-                            total,
-                            used,
-                            available,
-                            utilization_percent: util_pct,
-                        },
-                    )));
+                    self.reconcile_and_report(&mut server, &transport, &current_cfg);
                 }
             }
         }
@@ -352,7 +352,91 @@ impl Dhcpv4Service {
 }
 
 impl Dhcpv4Service {
-    #[allow(clippy::too_many_lines)]
+    fn record_incoming_transaction(&self, msg: &Message, mac: MacAddr, handle: &ServiceHandle) {
+        if let Some(DhcpOption::MessageType(t)) = msg.opts().get(OptionCode::MessageType) {
+            let msg_type = u8::from(*t);
+            let stats = self.ctx.dhcpv4_stats();
+            match msg_type {
+                1 => stats.discovers.fetch_add(1, Ordering::Relaxed),
+                3 => stats.requests.fetch_add(1, Ordering::Relaxed),
+                4 => stats.declines.fetch_add(1, Ordering::Relaxed),
+                7 => stats.releases.fetch_add(1, Ordering::Relaxed),
+                8 => stats.informs.fetch_add(1, Ordering::Relaxed),
+                _ => 0,
+            };
+            let _ = handle.publish(LanforgeEvent::Device(DeviceEvent::DhcpV4Transaction {
+                mac,
+                msg_type: DhcpV4MessageType::from(msg_type),
+                details: None,
+            }));
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn handle_reply_result(
+        &self,
+        server: &mut DhcpServer,
+        transport: &Dhcpv4Transport,
+        mac: MacAddr,
+        packet: &[u8],
+        broadcast: bool,
+        dest_ip: Ipv4Addr,
+        giaddr: Ipv4Addr,
+        req_hostname: Option<String>,
+        msg_type: MessageType,
+    ) {
+        let stats = self.ctx.dhcpv4_stats();
+        match msg_type {
+            MessageType::Offer => {
+                stats.offers.fetch_add(1, Ordering::Relaxed);
+            }
+            MessageType::Ack => {
+                stats.acks.fetch_add(1, Ordering::Relaxed);
+            }
+            MessageType::Nak => {
+                stats.naks.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+
+        if let Err(e) = transport.send_reply(
+            packet,
+            self.cfg.server_id,
+            broadcast,
+            dest_ip,
+            giaddr,
+            mac,
+            self.cfg.port,
+        ) {
+            warn!("DHCPv4: Failed to send reply: {e}");
+        }
+
+        if let Some(assigned_ip) = server.last_assignment_for() {
+            let expires = SystemTime::now() + Duration::from_secs(u64::from(self.cfg.lease_time));
+
+            let _ = self.ctx.apply(DeviceUpdate::V4LeaseGranted {
+                mac,
+                ip: assigned_ip,
+                expires,
+            });
+
+            if !self.cfg.iface.is_empty() {
+                let _ = self.ctx.apply(DeviceUpdate::DeviceInterfaceSeen {
+                    mac,
+                    iface: self.cfg.iface.clone(),
+                });
+            }
+
+            if let Some(hostname) = req_hostname
+                && !hostname.is_empty()
+            {
+                let _ = self
+                    .ctx
+                    .apply(DeviceUpdate::DhcpHostnameHint { mac, hostname });
+            }
+        }
+    }
+
     fn handle_incoming_packet(
         &self,
         data: &[u8],
@@ -369,34 +453,7 @@ impl Dhcpv4Service {
                     chaddr[0], chaddr[1], chaddr[2], chaddr[3], chaddr[4], chaddr[5],
                 ]);
 
-                // Diagnostic: Publish DHCPv4 Transaction
-                if let Some(DhcpOption::MessageType(t)) = msg.opts().get(OptionCode::MessageType) {
-                    let msg_type = u8::from(*t);
-                    let stats = self.ctx.dhcpv4_stats();
-                    match msg_type {
-                        1 => {
-                            stats.discovers.fetch_add(1, Ordering::Relaxed);
-                        }
-                        3 => {
-                            stats.requests.fetch_add(1, Ordering::Relaxed);
-                        }
-                        4 => {
-                            stats.declines.fetch_add(1, Ordering::Relaxed);
-                        }
-                        7 => {
-                            stats.releases.fetch_add(1, Ordering::Relaxed);
-                        }
-                        8 => {
-                            stats.informs.fetch_add(1, Ordering::Relaxed);
-                        }
-                        _ => {}
-                    }
-                    let _ = handle.publish(LanforgeEvent::Device(DeviceEvent::DhcpV4Transaction {
-                        mac,
-                        msg_type: DhcpV4MessageType::from(msg_type),
-                        details: None,
-                    }));
-                }
+                self.record_incoming_transaction(&msg, mac, handle);
 
                 let handle_res = {
                     let device = self.ctx.get_device(&mac);
@@ -412,57 +469,17 @@ impl Dhcpv4Service {
                         hostname: req_hostname,
                         msg_type,
                     } => {
-                        let stats = self.ctx.dhcpv4_stats();
-                        match msg_type {
-                            MessageType::Offer => {
-                                stats.offers.fetch_add(1, Ordering::Relaxed);
-                            }
-                            MessageType::Ack => {
-                                stats.acks.fetch_add(1, Ordering::Relaxed);
-                            }
-                            MessageType::Nak => {
-                                stats.naks.fetch_add(1, Ordering::Relaxed);
-                            }
-                            _ => {}
-                        }
-
-                        if let Err(e) = transport.send_reply(
+                        self.handle_reply_result(
+                            server,
+                            transport,
+                            mac,
                             &packet,
-                            self.cfg.server_id,
                             broadcast,
                             dest_ip,
                             giaddr,
-                            mac,
-                            self.cfg.port,
-                        ) {
-                            warn!("DHCPv4: Failed to send reply: {e}");
-                        }
-
-                        if let Some(assigned_ip) = server.last_assignment_for() {
-                            let expires = SystemTime::now()
-                                + Duration::from_secs(u64::from(self.cfg.lease_time));
-
-                            let _ = self.ctx.apply(DeviceUpdate::V4LeaseGranted {
-                                mac,
-                                ip: assigned_ip,
-                                expires,
-                            });
-
-                            if !self.cfg.iface.is_empty() {
-                                let _ = self.ctx.apply(DeviceUpdate::DeviceInterfaceSeen {
-                                    mac,
-                                    iface: self.cfg.iface.clone(),
-                                });
-                            }
-
-                            if let Some(hostname) = req_hostname
-                                && !hostname.is_empty()
-                            {
-                                let _ = self
-                                    .ctx
-                                    .apply(DeviceUpdate::DhcpHostnameHint { mac, hostname });
-                            }
-                        }
+                            req_hostname,
+                            msg_type,
+                        );
                     }
                     HandleResult::Release { ip: _ } => {
                         let _ = self.ctx.apply(DeviceUpdate::LeaseReleased {

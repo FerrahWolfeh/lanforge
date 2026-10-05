@@ -212,19 +212,8 @@ impl Dhcpv6Service {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
-    async fn run_server(
-        &self,
-        pools: Vec<Dhcpv6Pool>,
-    ) -> Result<RunResult, CoreError> {
-        let mut current_cfg = self.config.clone();
-        current_cfg.pools = pools;
-
-        let target_ifindex = self.ctx.target_ifindex().ok_or_else(|| {
-            CoreError::Generic("Target interface index is not configured in context".to_string())
-        })?;
-        let server_mac = self
-            .ctx
+    fn resolve_server_mac(&self, target_ifindex: u32, iface: &str) -> Result<MacAddr, CoreError> {
+        self.ctx
             .with_state(|state| {
                 state
                     .interfaces
@@ -233,7 +222,7 @@ impl Dhcpv6Service {
                     .and_then(|i| i.mac)
             })
             .or_else(|| {
-                std::fs::read_to_string(format!("/sys/class/net/{}/address", current_cfg.iface))
+                std::fs::read_to_string(format!("/sys/class/net/{iface}/address"))
                     .ok()
                     .and_then(|s| MacAddr::parse(s.trim()))
             })
@@ -246,7 +235,7 @@ impl Dhcpv6Service {
             .or_else(|| {
                 pnet::datalink::interfaces()
                     .into_iter()
-                    .find(|i| i.index == target_ifindex || i.name == current_cfg.iface)
+                    .find(|i| i.index == target_ifindex || i.name == iface)
                     .and_then(|i| i.mac)
                     .and_then(|m| MacAddr::from_slice(&m.octets()))
             })
@@ -254,19 +243,10 @@ impl Dhcpv6Service {
                 CoreError::Generic(format!(
                     "MAC address for interface index {target_ifindex} is not resolved"
                 ))
-            })?;
+            })
+    }
 
-        let mut server = Dhcpv6Server::new(
-            current_cfg.clone(),
-            Ipv6Pool::new(
-                &current_cfg.pools,
-                current_cfg.ula_prefix,
-                current_cfg.ula_prefix_len,
-            ),
-            Duid::generate_ll_from_mac(server_mac.as_bytes()),
-            self.ctx.clone(),
-        );
-
+    fn initialize_pool_reservations(&self, server: &mut Dhcpv6Server, current_cfg: &Dhcpv6Config) {
         // Pre-allocate static reservations for ULA prefix
         let registry = self.ctx.get_static_registry();
         if let Some(ula) = current_cfg.ula_prefix {
@@ -292,7 +272,7 @@ impl Dhcpv6Service {
         });
         server.pool.reserve_statics(active_dynamic_ips);
 
-        // 2. Re-sync GUA from global state (honoring configured interface)
+        // Re-sync GUA from global state (honoring configured interface)
         if let Some(ifindex) = pnet::datalink::interfaces()
             .iter()
             .find(|i| i.name == current_cfg.iface)
@@ -313,6 +293,32 @@ impl Dhcpv6Service {
                 .collect();
             server.pool.reserve_statics(gua_ips);
         }
+    }
+
+    async fn run_server(
+        &self,
+        pools: Vec<Dhcpv6Pool>,
+    ) -> Result<RunResult, CoreError> {
+        let mut current_cfg = self.config.clone();
+        current_cfg.pools = pools;
+
+        let target_ifindex = self.ctx.target_ifindex().ok_or_else(|| {
+            CoreError::Generic("Target interface index is not configured in context".to_string())
+        })?;
+        let server_mac = self.resolve_server_mac(target_ifindex, &current_cfg.iface)?;
+
+        let mut server = Dhcpv6Server::new(
+            current_cfg.clone(),
+            Ipv6Pool::new(
+                &current_cfg.pools,
+                current_cfg.ula_prefix,
+                current_cfg.ula_prefix_len,
+            ),
+            Duid::generate_ll_from_mac(server_mac.as_bytes()),
+            self.ctx.clone(),
+        );
+
+        self.initialize_pool_reservations(&mut server, &current_cfg);
 
         // Setup transport socket
         let transport = io::Dhcpv6Transport::new(&current_cfg.iface, current_cfg.port)?;

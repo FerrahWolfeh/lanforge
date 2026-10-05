@@ -437,7 +437,110 @@ impl DhcpServer {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    fn populate_reply_options(
+        &self,
+        request: &Message,
+        opts: &mut v4::DhcpOptions,
+        yiaddr: Ipv4Addr,
+        device: Option<&Device>,
+    ) {
+        let chaddr = request.chaddr();
+        let mac = MacAddr::from_slice(&chaddr[..6]).unwrap_or(MacAddr::ZERO);
+        let mut dev_owned = None;
+        let dev_ref = resolve_device(&self.ctx, mac, device, &mut dev_owned);
+        let is_static = dev_ref.is_some_and(lanforge_types::device::Device::is_static);
+
+        let pool_opt = self.pool.pool_for_ip(yiaddr);
+        let pool_router = pool_opt.and_then(|p| p.router).unwrap_or(self.cfg.router);
+        let pool_mask = pool_opt.and_then(|p| p.subnet_mask).unwrap_or(self.cfg.subnet_mask);
+        let pool_dns = pool_opt.map_or(&self.cfg.dns, |p| {
+            if p.dns_servers.is_empty() {
+                &self.cfg.dns
+            } else {
+                &p.dns_servers
+            }
+        });
+        let pool_domain = pool_opt
+            .and_then(|p| p.domain_name.as_ref())
+            .or(self.cfg.domain_name.as_ref());
+        let pool_search = pool_opt.map_or(&self.cfg.search_domains, |p| {
+            if p.search_domains.is_empty() {
+                &self.cfg.search_domains
+            } else {
+                &p.search_domains
+            }
+        });
+        let pool_ntp = pool_opt.map_or(&self.cfg.ntp_servers, |p| {
+            if p.ntp_servers.is_empty() {
+                &self.cfg.ntp_servers
+            } else {
+                &p.ntp_servers
+            }
+        });
+
+        let effective_lease_time = pool_opt
+            .and_then(|p| p.lease_time)
+            .unwrap_or(self.cfg.lease_time);
+        let lease_time = if is_static {
+            u32::MAX
+        } else {
+            effective_lease_time
+        };
+
+        opts.insert(DhcpOption::AddressLeaseTime(lease_time));
+        opts.insert(DhcpOption::SubnetMask(pool_mask));
+        opts.insert(DhcpOption::Router(vec![pool_router]));
+        opts.insert(DhcpOption::DomainNameServer(pool_dns.clone()));
+
+        if let Some(domain) = pool_domain {
+            opts.insert(DhcpOption::DomainName(domain.clone()));
+        }
+
+        if !pool_search.is_empty() {
+            // Option 119: Domain Search List (RFC 3397)
+            let names: Vec<Name> = pool_search
+                .iter()
+                .filter_map(|d| Name::from_str(d).ok())
+                .collect();
+            opts.insert(DhcpOption::DomainSearch(names));
+        }
+
+        let (t1, t2) = if is_static {
+            (u32::MAX, u32::MAX)
+        } else {
+            let safe_lease_time = std::cmp::min(effective_lease_time, MAX_LEASE_TIME);
+            (safe_lease_time / 2, safe_lease_time.saturating_mul(7) / 8)
+        };
+        opts.insert(DhcpOption::Renewal(t1));
+        opts.insert(DhcpOption::Rebinding(t2));
+
+        // Dynamic MTU (Option 26)
+        if let Some(DhcpOption::ParameterRequestList(req_list)) =
+            request.opts().get(v4::OptionCode::ParameterRequestList)
+            && req_list.contains(&v4::OptionCode::InterfaceMtu)
+        {
+            opts.insert(DhcpOption::InterfaceMtu(self.cached_mtu));
+        }
+
+        // NTP Servers (Option 42)
+        if !pool_ntp.is_empty() {
+            let mut ntp_bytes = Vec::with_capacity(pool_ntp.len() * 4);
+            for ip in pool_ntp {
+                ntp_bytes.extend_from_slice(&ip.octets());
+            }
+            opts.insert(DhcpOption::Unknown(UnknownOption::new(
+                42.into(),
+                ntp_bytes,
+            )));
+        }
+
+        // Hybrid PXE / HTTP Boot Support
+        self.add_boot_options(request, opts, pool_opt, device);
+
+        // Custom Options
+        self.add_custom_options(opts);
+    }
+
     fn build_reply(
         &self,
         request: &Message,
@@ -465,101 +568,7 @@ impl DhcpServer {
         opts.insert(DhcpOption::ServerIdentifier(self.cfg.server_id));
 
         if msg_type != MessageType::Nak {
-            let chaddr = request.chaddr();
-            let mac = MacAddr::from_slice(&chaddr[..6]).unwrap_or(MacAddr::ZERO);
-            let mut dev_owned = None;
-            let dev_ref = resolve_device(&self.ctx, mac, device, &mut dev_owned);
-            let is_static = dev_ref.is_some_and(lanforge_types::device::Device::is_static);
-
-            let pool_opt = self.pool.pool_for_ip(yiaddr);
-            let pool_router = pool_opt.and_then(|p| p.router).unwrap_or(self.cfg.router);
-            let pool_mask = pool_opt.and_then(|p| p.subnet_mask).unwrap_or(self.cfg.subnet_mask);
-            let pool_dns = pool_opt.map_or(&self.cfg.dns, |p| {
-                if p.dns_servers.is_empty() {
-                    &self.cfg.dns
-                } else {
-                    &p.dns_servers
-                }
-            });
-            let pool_domain = pool_opt
-                .and_then(|p| p.domain_name.as_ref())
-                .or(self.cfg.domain_name.as_ref());
-            let pool_search = pool_opt.map_or(&self.cfg.search_domains, |p| {
-                if p.search_domains.is_empty() {
-                    &self.cfg.search_domains
-                } else {
-                    &p.search_domains
-                }
-            });
-            let pool_ntp = pool_opt.map_or(&self.cfg.ntp_servers, |p| {
-                if p.ntp_servers.is_empty() {
-                    &self.cfg.ntp_servers
-                } else {
-                    &p.ntp_servers
-                }
-            });
-
-            let effective_lease_time = pool_opt
-                .and_then(|p| p.lease_time)
-                .unwrap_or(self.cfg.lease_time);
-            let lease_time = if is_static {
-                u32::MAX
-            } else {
-                effective_lease_time
-            };
-
-            opts.insert(DhcpOption::AddressLeaseTime(lease_time));
-            opts.insert(DhcpOption::SubnetMask(pool_mask));
-            opts.insert(DhcpOption::Router(vec![pool_router]));
-            opts.insert(DhcpOption::DomainNameServer(pool_dns.clone()));
-
-            if let Some(domain) = pool_domain {
-                opts.insert(DhcpOption::DomainName(domain.clone()));
-            }
-
-            if !pool_search.is_empty() {
-                // Option 119: Domain Search List (RFC 3397)
-                let names: Vec<Name> = pool_search
-                    .iter()
-                    .filter_map(|d| Name::from_str(d).ok())
-                    .collect();
-                opts.insert(DhcpOption::DomainSearch(names));
-            }
-
-            let (t1, t2) = if is_static {
-                (u32::MAX, u32::MAX)
-            } else {
-                let safe_lease_time = std::cmp::min(effective_lease_time, MAX_LEASE_TIME);
-                (safe_lease_time / 2, safe_lease_time.saturating_mul(7) / 8)
-            };
-            opts.insert(DhcpOption::Renewal(t1));
-            opts.insert(DhcpOption::Rebinding(t2));
-
-            // Dynamic MTU (Option 26)
-            if let Some(DhcpOption::ParameterRequestList(req_list)) =
-                request.opts().get(v4::OptionCode::ParameterRequestList)
-                && req_list.contains(&v4::OptionCode::InterfaceMtu)
-            {
-                opts.insert(DhcpOption::InterfaceMtu(self.cached_mtu));
-            }
-
-            // NTP Servers (Option 42)
-            if !pool_ntp.is_empty() {
-                let mut ntp_bytes = Vec::with_capacity(pool_ntp.len() * 4);
-                for ip in pool_ntp {
-                    ntp_bytes.extend_from_slice(&ip.octets());
-                }
-                opts.insert(DhcpOption::Unknown(UnknownOption::new(
-                    42.into(),
-                    ntp_bytes,
-                )));
-            }
-
-            // Hybrid PXE / HTTP Boot Support
-            self.add_boot_options(request, opts, pool_opt, device);
-
-            // Custom Options
-            self.add_custom_options(opts);
+            self.populate_reply_options(request, opts, yiaddr, device);
         }
 
         let mut buf = Vec::with_capacity(576);

@@ -58,109 +58,116 @@ pub enum PoolRange {
 }
 
 impl PoolRange {
+    const fn from_cidr(addr: Ipv6Addr, len: u8) -> Self {
+        let segs = addr.segments();
+        if segs[0] == 0 && segs[1] == 0 && segs[2] == 0 && segs[3] == 0 {
+            // Floating range from CIDR (e.g. ::/64)
+            let start = [0u8; 8];
+            let end = if len <= 64 {
+                [0xff; 8]
+            } else {
+                let total_host_bits = 128 - len;
+                let end_u64 = if total_host_bits >= 64 {
+                    !0u64
+                } else {
+                    (1u64 << total_host_bits) - 1
+                };
+                end_u64.to_be_bytes()
+            };
+
+            return Self::Floating {
+                start_suffix: start,
+                end_suffix: end,
+            };
+        }
+        // Fixed range from CIDR (e.g. fd00::/64)
+        let start_u128 = u128::from_be_bytes(addr.octets());
+        let host_bits = 128 - len;
+        let end_u128 = if host_bits >= 128 {
+            !0u128
+        } else {
+            start_u128 | ((1u128 << host_bits) - 1)
+        };
+
+        Self::Fixed {
+            prefix: [segs[0], segs[1], segs[2], segs[3]],
+            start_u128,
+            end_u128,
+        }
+    }
+
+    fn from_full_addrs(start: Ipv6Addr, end: Ipv6Addr) -> Self {
+        let s_segs = start.segments();
+        let e_segs = end.segments();
+        if s_segs[0..4] == e_segs[0..4] {
+            let start_u128 = u128::from_be_bytes(start.octets());
+            let end_u128 = u128::from_be_bytes(end.octets());
+            if start_u128 <= end_u128 {
+                Self::Fixed {
+                    prefix: [s_segs[0], s_segs[1], s_segs[2], s_segs[3]],
+                    start_u128,
+                    end_u128,
+                }
+            } else {
+                tracing::warn!(
+                    "[DHCPv6] Invalid Fixed range: start {} is greater than end {}. Falling back to empty.",
+                    start,
+                    end
+                );
+                Self::Floating {
+                    start_suffix: [0; 8],
+                    end_suffix: [0; 8],
+                }
+            }
+        } else {
+            let start_suffix = [
+                s_segs[4].to_be_bytes()[0],
+                s_segs[4].to_be_bytes()[1],
+                s_segs[5].to_be_bytes()[0],
+                s_segs[5].to_be_bytes()[1],
+                s_segs[6].to_be_bytes()[0],
+                s_segs[6].to_be_bytes()[1],
+                s_segs[7].to_be_bytes()[0],
+                s_segs[7].to_be_bytes()[1],
+            ];
+            let end_suffix = [
+                e_segs[4].to_be_bytes()[0],
+                e_segs[4].to_be_bytes()[1],
+                e_segs[5].to_be_bytes()[0],
+                e_segs[5].to_be_bytes()[1],
+                e_segs[6].to_be_bytes()[0],
+                e_segs[6].to_be_bytes()[1],
+                e_segs[7].to_be_bytes()[0],
+                e_segs[7].to_be_bytes()[1],
+            ];
+            if start_suffix <= end_suffix {
+                Self::Floating {
+                    start_suffix,
+                    end_suffix,
+                }
+            } else {
+                tracing::warn!(
+                    "[DHCPv6] Invalid Floating range suffixes. Falling back to empty."
+                );
+                Self::Floating {
+                    start_suffix: [0; 8],
+                    end_suffix: [0; 8],
+                }
+            }
+        }
+    }
+
     #[must_use]
-    #[allow(clippy::too_many_lines)]
     pub fn from_config(cfg: &Dhcpv6Pool) -> Self {
         if let Some(ref cidr) = cfg.address
             && let Some((addr, len)) = Self::parse_cidr(cidr)
         {
-            let segs = addr.segments();
-            if segs[0] == 0 && segs[1] == 0 && segs[2] == 0 && segs[3] == 0 {
-                // Floating range from CIDR (e.g. ::/64)
-                let start = [0u8; 8];
-                let end = if len <= 64 {
-                    [0xff; 8]
-                } else {
-                    let total_host_bits = 128 - len;
-                    let end_u64 = if total_host_bits >= 64 {
-                        !0u64
-                    } else {
-                        (1u64 << total_host_bits) - 1
-                    };
-                    end_u64.to_be_bytes()
-                };
-
-                return Self::Floating {
-                    start_suffix: start,
-                    end_suffix: end,
-                };
-            }
-            // Fixed range from CIDR (e.g. fd00::/64)
-            let start_u128 = u128::from_be_bytes(addr.octets());
-            let host_bits = 128 - len;
-            let end_u128 = if host_bits >= 128 {
-                !0u128
-            } else {
-                start_u128 | ((1u128 << host_bits) - 1)
-            };
-
-            return Self::Fixed {
-                prefix: [segs[0], segs[1], segs[2], segs[3]],
-                start_u128,
-                end_u128,
-            };
+            return Self::from_cidr(addr, len);
         }
 
         match (&cfg.range_start, &cfg.range_end) {
             (Some(Ipv6AddrOrSuffix::Full(start)), Some(Ipv6AddrOrSuffix::Full(end))) => {
-                let s_segs = start.segments();
-                let e_segs = end.segments();
-                if s_segs[0..4] == e_segs[0..4] {
-                    let start_u128 = u128::from_be_bytes(start.octets());
-                    let end_u128 = u128::from_be_bytes(end.octets());
-                    if start_u128 <= end_u128 {
-                        Self::Fixed {
-                            prefix: [s_segs[0], s_segs[1], s_segs[2], s_segs[3]],
-                            start_u128,
-                            end_u128,
-                        }
-                    } else {
-                        tracing::warn!(
-                            "[DHCPv6] Invalid Fixed range: start {} is greater than end {}. Falling back to empty.",
-                            start,
-                            end
-                        );
-                        Self::Floating {
-                            start_suffix: [0; 8],
-                            end_suffix: [0; 8],
-                        }
-                    }
-                } else {
-                    let start_suffix = [
-                        s_segs[4].to_be_bytes()[0],
-                        s_segs[4].to_be_bytes()[1],
-                        s_segs[5].to_be_bytes()[0],
-                        s_segs[5].to_be_bytes()[1],
-                        s_segs[6].to_be_bytes()[0],
-                        s_segs[6].to_be_bytes()[1],
-                        s_segs[7].to_be_bytes()[0],
-                        s_segs[7].to_be_bytes()[1],
-                    ];
-                    let end_suffix = [
-                        e_segs[4].to_be_bytes()[0],
-                        e_segs[4].to_be_bytes()[1],
-                        e_segs[5].to_be_bytes()[0],
-                        e_segs[5].to_be_bytes()[1],
-                        e_segs[6].to_be_bytes()[0],
-                        e_segs[6].to_be_bytes()[1],
-                        e_segs[7].to_be_bytes()[0],
-                        e_segs[7].to_be_bytes()[1],
-                    ];
-                    if start_suffix <= end_suffix {
-                        Self::Floating {
-                            start_suffix,
-                            end_suffix,
-                        }
-                    } else {
-                        tracing::warn!(
-                            "[DHCPv6] Invalid Floating range suffixes. Falling back to empty."
-                        );
-                        Self::Floating {
-                            start_suffix: [0; 8],
-                            end_suffix: [0; 8],
-                        }
-                    }
-                }
+                Self::from_full_addrs(*start, *end)
             }
             (Some(Ipv6AddrOrSuffix::Suffix(s)), Some(Ipv6AddrOrSuffix::Suffix(e))) => {
                 if s <= e {
