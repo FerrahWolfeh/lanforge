@@ -26,7 +26,7 @@ use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::update::InterfaceState;
 use netlink_sys::SocketAddr;
 use pnet::datalink::interfaces;
-use pnet::ipnetwork::IpNetwork;
+use pnet::ipnetwork::{IpNetwork, Ipv4Network};
 use rtnetlink::new_connection;
 use rtnetlink::packet_core::NetlinkMessage;
 use rtnetlink::packet_route::RouteNetlinkMessage;
@@ -147,7 +147,6 @@ pub struct Bootstrapper;
 
 impl Bootstrapper {
     /// Executes the full bootstrap sequence.
-    #[allow(clippy::too_many_lines)]
     pub async fn run() -> Result<(BootstrapResult, LanforgeContext)> {
         // --- PHASE 1: Initialization ---
         let mut cfg = Config::load();
@@ -171,46 +170,45 @@ impl Bootstrapper {
         let cfg = Arc::new(cfg);
 
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
-        if !cfg.system.iface.is_empty() {
-            ctx.set_target_interface_name(cfg.system.iface.clone());
-        }
-        if db.is_in_memory() && !cfg.database.is_in_memory() {
-            ctx.set_recovery_mode(true);
-        }
-        ctx.set_config_path(&cfg.config_path);
-        #[cfg(feature = "dhcp")]
-        {
-            ctx.update_dhcp_v4_pools(cfg.dhcpv4_toml.pools.clone());
-            ctx.update_dhcp_v6_pools(cfg.dhcpv6_toml.pools.clone());
-            if let Ok(Some(opts)) = db.load_dhcp_options().await {
-                ctx.update_dhcp_options(opts);
-            }
-        }
-        #[cfg(feature = "ra")]
-        {
-            let ra_cfg = cfg.to_ra_config();
-            let ra_srv = lanforge_types::network::ra::RaServerConfig {
-                enabled: cfg.ra_toml.enabled,
-                iface: Some(ra_cfg.iface),
-                managed: ra_cfg.managed,
-                other_config: ra_cfg.other_config,
-                hop_limit: ra_cfg.hop_limit,
-                priority: ra_cfg.priority,
-                max_interval_secs: ra_cfg.max_interval.as_secs(),
-                min_interval_secs: ra_cfg.min_interval.map(|d| d.as_secs()),
-                lifetime_secs: ra_cfg.lifetime.map(|d| d.as_secs()),
-                reachable_time_ms: ra_cfg.reachable_time,
-                retrans_timer_ms: ra_cfg.retrans_timer,
-                mtu: ra_cfg.mtu,
-                prefixes: cfg.ra_toml.prefixes.clone(),
-                rdnss: cfg.ra_toml.rdnss.clone(),
-                dnssl: cfg.ra_toml.dnssl.clone(),
-            };
-            ctx.update_ra_server_config(ra_srv);
+        Self::populate_context(&ctx, &cfg, &db).await;
+
+        let _ = bus.publish(LanforgeEvent::System(SystemEvent::StateReady));
+
+        // --- PHASE 2: Netlink Setup ---
+        let (handle, messages) = Self::start_netlink_dispatcher()?;
+
+        // --- PHASE 3: Initial Scan ---
+        // Crucial: updates ctx with current GUA/ULA/Link-Local before services start.
+        let if_state = Self::perform_initial_scan(&handle, &messages, target_ifindex, &ctx).await?;
+        Self::log_welcome_banner(&cfg, &if_state);
+
+        ctx.set_if_ready(true);
+        let _ = bus.publish(LanforgeEvent::System(SystemEvent::InterfaceReady));
+
+        if !feat_flag!(pppoe, cfg.pppoe_enabled) {
+            ctx.set_pppoe_ready(true);
         }
 
-        ctx.set_status(cfg.to_system_status());
+        if let Ok(Some(stored_gua)) = db.load_last_gua_prefix().await {
+            info!("Bootstrapper: Restored stored GUA prefix from DB: {stored_gua}");
+            let _ = ctx.signal_gua_change(target_ifindex, stored_gua, 7200, 7200);
+        }
 
+        // --- PHASE 4/5: Handover to Daemon ---
+        Ok((
+            BootstrapResult {
+                cfg,
+                rt_handle: handle,
+                messages,
+                target_ifindex,
+                db,
+                log_db,
+            },
+            ctx,
+        ))
+    }
+
+    fn build_compiled_caps() -> smallvec::SmallVec<[lanforge_types::system::Cap; 32]> {
         let mut compiled = smallvec::SmallVec::new();
         #[cfg(feature = "dns")]
         compiled.push(lanforge_types::system::Cap::Dns);
@@ -256,77 +254,80 @@ impl Bootstrapper {
         compiled.push(lanforge_types::system::Cap::Adblock);
         #[cfg(feature = "webui")]
         compiled.push(lanforge_types::system::Cap::Webui);
+        compiled
+    }
 
-        ctx.set_compiled_caps(compiled);
+    async fn populate_context(ctx: &LanforgeContext, cfg: &Config, db: &LanforgeDb) {
+        if !cfg.system.iface.is_empty() {
+            ctx.set_target_interface_name(cfg.system.iface.clone());
+        }
+        if db.is_in_memory() && !cfg.database.is_in_memory() {
+            ctx.set_recovery_mode(true);
+        }
+        ctx.set_config_path(&cfg.config_path);
+        #[cfg(feature = "dhcp")]
+        {
+            ctx.update_dhcp_v4_pools(cfg.dhcpv4_toml.pools.clone());
+            ctx.update_dhcp_v6_pools(cfg.dhcpv6_toml.pools.clone());
+            if let Ok(Some(opts)) = db.load_dhcp_options().await {
+                ctx.update_dhcp_options(opts);
+            }
+        }
+        #[cfg(feature = "ra")]
+        {
+            let ra_cfg = cfg.to_ra_config();
+            let ra_srv = lanforge_types::network::ra::RaServerConfig {
+                enabled: cfg.ra_toml.enabled,
+                iface: Some(ra_cfg.iface),
+                managed: ra_cfg.managed,
+                other_config: ra_cfg.other_config,
+                hop_limit: ra_cfg.hop_limit,
+                priority: ra_cfg.priority,
+                max_interval_secs: ra_cfg.max_interval.as_secs(),
+                min_interval_secs: ra_cfg.min_interval.map(|d| d.as_secs()),
+                lifetime_secs: ra_cfg.lifetime.map(|d| d.as_secs()),
+                reachable_time_ms: ra_cfg.reachable_time,
+                retrans_timer_ms: ra_cfg.retrans_timer,
+                mtu: ra_cfg.mtu,
+                prefixes: cfg.ra_toml.prefixes.clone(),
+                rdnss: cfg.ra_toml.rdnss.clone(),
+                dnssl: cfg.ra_toml.dnssl.clone(),
+            };
+            ctx.update_ra_server_config(ra_srv);
+        }
 
-        // Load DNS settings from database into context
+        ctx.set_status(cfg.to_system_status());
+        ctx.set_compiled_caps(Self::build_compiled_caps());
+
         #[cfg(feature = "dns")]
-        Self::load_dns_state_into_context(&db, &ctx).await;
+        Self::load_dns_state_into_context(db, ctx).await;
 
         #[cfg(feature = "pppoe")]
-        {
-            ctx.update_pppoe_config(cfg.pppoe_toml.clone());
-        }
+        ctx.update_pppoe_config(cfg.pppoe_toml.clone());
 
         #[cfg(feature = "nft")]
-        {
-            ctx.update_firewall_config(cfg.firewall_toml.clone());
-        }
+        ctx.update_firewall_config(cfg.firewall_toml.clone());
 
         #[cfg(feature = "traffic")]
-        {
-            ctx.update_traffic_config(cfg.traffic_toml.clone());
-        }
+        ctx.update_traffic_config(cfg.traffic_toml.clone());
+    }
 
-        let _ = bus.publish(LanforgeEvent::System(SystemEvent::StateReady));
-
-        // --- PHASE 2: Netlink Setup ---
+    fn start_netlink_dispatcher() -> Result<(rtnetlink::Handle, NetlinkMessages)> {
         let (handle, messages_rx) = Self::init_netlink()?;
         let (tx, _rx) = broadcast::channel(NETLINK_BROADCAST_CAPACITY);
         let messages = tx.clone();
 
-        // Netlink Dispatcher Task
-        let dispatcher_tx = tx.clone();
+        let dispatcher_tx = tx;
         tokio::spawn(async move {
             let mut rx = messages_rx;
             while let Some(msg) = rx.next().await {
                 if dispatcher_tx.send(msg).is_err() {
-                    // All receivers dropped — this is expected during shutdown,
-                    // but we log it once if the dispatcher is still running.
                     debug!("Netlink dispatcher: zero active subscribers");
                 }
             }
         });
 
-        // --- PHASE 3: Initial Scan ---
-        // Crucial: updates ctx with current GUA/ULA/Link-Local before services start.
-        let if_state = Self::perform_initial_scan(&handle, &messages, target_ifindex, &ctx).await?;
-        Self::log_welcome_banner(&cfg, &if_state);
-
-        ctx.set_if_ready(true);
-        let _ = bus.publish(LanforgeEvent::System(SystemEvent::InterfaceReady));
-
-        if !feat_flag!(pppoe, cfg.pppoe_enabled) {
-            ctx.set_pppoe_ready(true);
-        }
-
-        if let Ok(Some(stored_gua)) = db.load_last_gua_prefix().await {
-            info!("Bootstrapper: Restored stored GUA prefix from DB: {stored_gua}");
-            let _ = ctx.signal_gua_change(target_ifindex, stored_gua, 7200, 7200);
-        }
-
-        // --- PHASE 4/5: Handover to Daemon ---
-        Ok((
-            BootstrapResult {
-                cfg,
-                rt_handle: handle,
-                messages,
-                target_ifindex,
-                db,
-                log_db,
-            },
-            ctx,
-        ))
+        Ok((handle, messages))
     }
 
     #[cfg(feature = "dns")]
@@ -474,11 +475,43 @@ impl Bootstrapper {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines)]
     async fn init_device_table(
         cfg: &mut Config,
         host_ifaces: &[pnet::datalink::NetworkInterface],
     ) -> Result<(State, LanforgeDb, LogDb)> {
+        let (db, log_db) = Self::open_databases(cfg).await?;
+        let user_count = db.count_users().await.unwrap_or(0);
+        let is_provisioned = Self::check_provisioning_mode(cfg, &db, user_count);
+
+        if is_provisioned {
+            Self::seed_provisioned_configs(&db, cfg).await?;
+        }
+
+        let mut table = db.load_table().await.unwrap_or_else(|e| {
+            warn!("Falha ao carregar DB ({e}), iniciando do zero");
+            State::new()
+        });
+
+        // 2c. Check/reconcile DHCPv4 topology sanity against physical interface and host identity
+        #[cfg(feature = "dhcp")]
+        if is_provisioned {
+            Self::reconcile_dhcp_v4_topology_sanity(&db, cfg, &table, host_ifaces).await?;
+        }
+
+        if let Ok(resolvers) = db.load_dns_reverse_resolvers().await {
+            table.reverse_resolvers = resolvers;
+        }
+
+        Self::log_db_status(&db, &log_db, &table, cfg, user_count);
+        Self::inject_self_device(&mut table, cfg, host_ifaces);
+
+        // Trigger early collision validation and logging
+        let _ = table.get_static_registry();
+
+        Ok((table, db, log_db))
+    }
+
+    async fn open_databases(cfg: &Config) -> Result<(LanforgeDb, LogDb)> {
         let db_target = if cfg.database.is_in_memory() {
             "in-memory".to_string()
         } else {
@@ -509,8 +542,12 @@ impl Bootstrapper {
             }
         };
 
+        Ok((db, log_db))
+    }
+
+    fn check_provisioning_mode(cfg: &mut Config, db: &LanforgeDb, user_count: i64) -> bool {
         let is_provisioned = db.is_provisioned().unwrap_or(false)
-            || (db.count_users().await.unwrap_or(0) > 0)
+            || (user_count > 0)
             || cfg.system.auto_provision;
 
         if cfg.system.auto_provision && !db.is_provisioned().unwrap_or(false) {
@@ -541,292 +578,289 @@ impl Bootstrapper {
             {
                 cfg.pppoe_enabled = false;
             }
-        } else {
-        // 1. Check/seed/load DHCPv4 Pools
+        }
+
+        is_provisioned
+    }
+
+    async fn seed_provisioned_configs(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
         #[cfg(feature = "dhcp")]
-        {
-            let mut seed_v4 = Vec::new();
-            for mut pool in cfg.dhcpv4_toml.get_effective_pools() {
-                if pool.lease_time.is_none() {
-                    pool.lease_time = Some(cfg.dhcpv4_toml.lease_time);
-                }
-                seed_v4.push(pool);
-            }
-            if seed_v4.is_empty() {
-                use std::net::Ipv4Addr;
+        Self::seed_dhcp_configs(db, cfg).await?;
 
-                seed_v4.push(Dhcpv4Pool {
-                    name: Some("Primary LAN Scope".to_string()),
-                    range_start: Ipv4Addr::new(192, 168, 1, 100),
-                    range_end: Ipv4Addr::new(192, 168, 1, 240),
-                    lease_time: Some(cfg.dhcpv4_toml.lease_time),
-                    router: Some(cfg.dhcpv4_toml.router),
-                    subnet_mask: Some(cfg.dhcpv4_toml.subnet_mask),
-                    dns_servers: cfg.dhcpv4_toml.dns.clone(),
-                    ..Default::default()
-                });
-            }
-            if db.seed_dhcp_v4_if_empty(&seed_v4).await? {
-                info!(
-                    "Seeded {} DHCPv4 pools from configuration into database",
-                    seed_v4.len()
-                );
-            }
-            cfg.dhcpv4_toml.pools = db.load_dhcp_v4_pools().await?;
-            cfg.dhcpv4_toml.range_start = None;
-            cfg.dhcpv4_toml.range_end = None;
-        }
-
-        // 2. Check/seed/load DHCPv6 Pools
-        #[cfg(feature = "dhcp")]
-        {
-            let mut seed_v6 = Vec::new();
-            for pool in &cfg.dhcpv6_toml.pools {
-                let mut p = pool.clone();
-                if p.lease_time.is_none() {
-                    p.lease_time = Some(cfg.dhcpv6_toml.lease_time);
-                }
-                seed_v6.push(p);
-            }
-            if db.seed_dhcp_v6_if_empty(&seed_v6).await? {
-                info!(
-                    "Seeded {} DHCPv6 pools from TOML configuration into database",
-                    seed_v6.len()
-                );
-            }
-            cfg.dhcpv6_toml.pools = db.load_dhcp_v6_pools().await?;
-        }
-
-        // 2b. Check/seed DHCP & TFTP Options
-        #[cfg(feature = "dhcp")]
-        {
-            let seed_opts = DhcpOptionsConfig {
-                v4: Dhcpv4Options {
-                    enabled: cfg.dhcpv4_toml.enabled,
-                    lease_time: cfg.dhcpv4_toml.lease_time,
-                    router: Some(cfg.dhcpv4_toml.router),
-                    subnet_mask: Some(cfg.dhcpv4_toml.subnet_mask),
-                    dns_servers: cfg.dhcpv4_toml.dns.clone(),
-                    domain_name: cfg.dhcpv4_toml.domain_name.clone(),
-                    search_domains: cfg.dhcpv4_toml.search_domains.clone(),
-                    ntp_servers: cfg.dhcpv4_toml.ntp_servers.clone(),
-                    tftp_server: cfg.dhcpv4_toml.tftp_server.clone(),
-                    boot_file: cfg.dhcpv4_toml.boot_file.clone(),
-                    raw_options: cfg.dhcpv4_toml.options.clone(),
-                },
-                v6: Dhcpv6Options {
-                    enabled: cfg.dhcpv6_toml.enabled,
-                    lease_time: cfg.dhcpv6_toml.lease_time,
-                    dns_servers: cfg.dhcpv6_toml.dns_servers.clone(),
-                    search_domains: cfg.dhcpv6_toml.search_domains.clone(),
-                    ntp_servers: cfg.dhcpv6_toml.ntp_servers.clone(),
-                    boot_file: cfg.dhcpv6_toml.boot_file.clone(),
-                    raw_options: cfg.dhcpv6_toml.options.clone(),
-                },
-                #[cfg(feature = "tftp")]
-                tftp: TftpOptions {
-                    enabled: cfg.tftp_toml.enabled,
-                    listen_addr: cfg.tftp_toml.listen.to_string(),
-                    root_dir: cfg.tftp_toml.root_dir.to_string_lossy().to_string(),
-                    block_size: cfg.tftp_toml.block_size,
-                    timeout: cfg.tftp_toml.timeout,
-                    max_retries: cfg.tftp_toml.max_retries,
-                },
-                #[cfg(not(feature = "tftp"))]
-                tftp: TftpOptions::default(),
-            };
-
-            if db.seed_dhcp_options_if_empty(&seed_opts).await? {
-                info!("Seeded DHCP & TFTP scope options from configuration into database");
-            }
-        }
-
-        // 3. Check/seed/load RA Prefixes
         #[cfg(feature = "ra")]
-        {
-            if db.seed_ra_prefixes_if_empty(&cfg.ra_toml.prefixes).await? {
-                info!(
-                    "Seeded {} RA prefixes from TOML configuration into database",
-                    cfg.ra_toml.prefixes.len()
-                );
-            }
-            cfg.ra_toml.prefixes = db.load_ra_prefixes().await?;
-        }
+        Self::seed_ra_configs(db, cfg).await?;
 
-        // 4. Check/seed/load RA RDNSS
-        #[cfg(feature = "ra")]
-        {
-            if db.seed_ra_rdnss_if_empty(&cfg.ra_toml.rdnss).await? {
-                info!(
-                    "Seeded {} RA RDNSS options from TOML configuration into database",
-                    cfg.ra_toml.rdnss.len()
-                );
-            }
-            cfg.ra_toml.rdnss = db.load_ra_rdnss().await?;
-        }
-
-        // 5. Check/seed/load RA DNSSL
-        #[cfg(feature = "ra")]
-        {
-            if db.seed_ra_dnssl_if_empty(&cfg.ra_toml.dnssl).await? {
-                info!(
-                    "Seeded {} RA DNSSL options from TOML configuration into database",
-                    cfg.ra_toml.dnssl.len()
-                );
-            }
-            cfg.ra_toml.dnssl = db.load_ra_dnssl().await?;
-        }
-
-        // 6. Check/seed/load DNS Config
         #[cfg(feature = "dns")]
-        Self::load_dns_config(&db, cfg).await?;
+        Self::load_dns_config(db, cfg).await?;
 
-            // 7. Check/seed/load PPPoE Config
+        #[cfg(feature = "pppoe")]
+        Self::seed_pppoe_config(db, cfg).await?;
+
+        #[cfg(feature = "traffic")]
+        Self::seed_traffic_config(db, cfg).await?;
+
+        #[cfg(feature = "nft")]
+        Self::seed_firewall_config(db, cfg).await?;
+
+        Ok(())
+    }
+
+    #[cfg(feature = "dhcp")]
+    async fn seed_dhcp_configs(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+        let mut seed_v4 = Vec::new();
+        for mut pool in cfg.dhcpv4_toml.get_effective_pools() {
+            if pool.lease_time.is_none() {
+                pool.lease_time = Some(cfg.dhcpv4_toml.lease_time);
+            }
+            seed_v4.push(pool);
+        }
+        if seed_v4.is_empty() {
+            use std::net::Ipv4Addr;
+
+            seed_v4.push(Dhcpv4Pool {
+                name: Some("Primary LAN Scope".to_string()),
+                range_start: Ipv4Addr::new(192, 168, 1, 100),
+                range_end: Ipv4Addr::new(192, 168, 1, 240),
+                lease_time: Some(cfg.dhcpv4_toml.lease_time),
+                router: Some(cfg.dhcpv4_toml.router),
+                subnet_mask: Some(cfg.dhcpv4_toml.subnet_mask),
+                dns_servers: cfg.dhcpv4_toml.dns.clone(),
+                ..Default::default()
+            });
+        }
+        if db.seed_dhcp_v4_if_empty(&seed_v4).await? {
+            info!(
+                "Seeded {} DHCPv4 pools from configuration into database",
+                seed_v4.len()
+            );
+        }
+        cfg.dhcpv4_toml.pools = db.load_dhcp_v4_pools().await?;
+        cfg.dhcpv4_toml.range_start = None;
+        cfg.dhcpv4_toml.range_end = None;
+
+        let mut seed_v6 = Vec::new();
+        for pool in &cfg.dhcpv6_toml.pools {
+            let mut p = pool.clone();
+            if p.lease_time.is_none() {
+                p.lease_time = Some(cfg.dhcpv6_toml.lease_time);
+            }
+            seed_v6.push(p);
+        }
+        if db.seed_dhcp_v6_if_empty(&seed_v6).await? {
+            info!(
+                "Seeded {} DHCPv6 pools from TOML configuration into database",
+                seed_v6.len()
+            );
+        }
+        cfg.dhcpv6_toml.pools = db.load_dhcp_v6_pools().await?;
+
+        let seed_opts = DhcpOptionsConfig {
+            v4: Dhcpv4Options {
+                enabled: cfg.dhcpv4_toml.enabled,
+                lease_time: cfg.dhcpv4_toml.lease_time,
+                router: Some(cfg.dhcpv4_toml.router),
+                subnet_mask: Some(cfg.dhcpv4_toml.subnet_mask),
+                dns_servers: cfg.dhcpv4_toml.dns.clone(),
+                domain_name: cfg.dhcpv4_toml.domain_name.clone(),
+                search_domains: cfg.dhcpv4_toml.search_domains.clone(),
+                ntp_servers: cfg.dhcpv4_toml.ntp_servers.clone(),
+                tftp_server: cfg.dhcpv4_toml.tftp_server.clone(),
+                boot_file: cfg.dhcpv4_toml.boot_file.clone(),
+                raw_options: cfg.dhcpv4_toml.options.clone(),
+            },
+            v6: Dhcpv6Options {
+                enabled: cfg.dhcpv6_toml.enabled,
+                lease_time: cfg.dhcpv6_toml.lease_time,
+                dns_servers: cfg.dhcpv6_toml.dns_servers.clone(),
+                search_domains: cfg.dhcpv6_toml.search_domains.clone(),
+                ntp_servers: cfg.dhcpv6_toml.ntp_servers.clone(),
+                boot_file: cfg.dhcpv6_toml.boot_file.clone(),
+                raw_options: cfg.dhcpv6_toml.options.clone(),
+            },
+            #[cfg(feature = "tftp")]
+            tftp: TftpOptions {
+                enabled: cfg.tftp_toml.enabled,
+                listen_addr: cfg.tftp_toml.listen.to_string(),
+                root_dir: cfg.tftp_toml.root_dir.to_string_lossy().to_string(),
+                block_size: cfg.tftp_toml.block_size,
+                timeout: cfg.tftp_toml.timeout,
+                max_retries: cfg.tftp_toml.max_retries,
+            },
+            #[cfg(not(feature = "tftp"))]
+            tftp: TftpOptions::default(),
+        };
+
+        if db.seed_dhcp_options_if_empty(&seed_opts).await? {
+            info!("Seeded DHCP & TFTP scope options from configuration into database");
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "ra")]
+    async fn seed_ra_configs(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+        if db.seed_ra_prefixes_if_empty(&cfg.ra_toml.prefixes).await? {
+            info!(
+                "Seeded {} RA prefixes from TOML configuration into database",
+                cfg.ra_toml.prefixes.len()
+            );
+        }
+        cfg.ra_toml.prefixes = db.load_ra_prefixes().await?;
+
+        if db.seed_ra_rdnss_if_empty(&cfg.ra_toml.rdnss).await? {
+            info!(
+                "Seeded {} RA RDNSS options from TOML configuration into database",
+                cfg.ra_toml.rdnss.len()
+            );
+        }
+        cfg.ra_toml.rdnss = db.load_ra_rdnss().await?;
+
+        if db.seed_ra_dnssl_if_empty(&cfg.ra_toml.dnssl).await? {
+            info!(
+                "Seeded {} RA DNSSL options from TOML configuration into database",
+                cfg.ra_toml.dnssl.len()
+            );
+        }
+        cfg.ra_toml.dnssl = db.load_ra_dnssl().await?;
+        Ok(())
+    }
+
+    #[cfg(feature = "pppoe")]
+    async fn seed_pppoe_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+        if db.seed_pppoe_if_empty(&cfg.pppoe_toml).await? {
+            info!("Seeded PPPoE configuration from TOML into database");
+        }
+        if let Some(loaded) = db.load_pppoe_config().await? {
+            cfg.pppoe_enabled = loaded.enabled;
+            cfg.pppoe_toml = loaded;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "traffic")]
+    async fn seed_traffic_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+        if db.seed_traffic_if_empty(&cfg.traffic_toml).await? {
+            info!("Seeded Traffic configuration from TOML into database");
+        }
+        if let Some(loaded) = db.load_traffic_config().await? {
+            cfg.traffic_toml = loaded;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "nft")]
+    async fn seed_firewall_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+        #[cfg(feature = "pppoe")]
+        {
+            if !cfg.pppoe_toml.nftables.flow_offload {
+                cfg.firewall_toml.flow_offload = false;
+            }
+            if !cfg.pppoe_toml.nftables.bypass_dns {
+                cfg.firewall_toml.bypass_dns = false;
+            }
+            if !cfg.pppoe_toml.nftables.bypass_vowifi {
+                cfg.firewall_toml.bypass_vowifi = false;
+            }
+        }
+
+        // Ensure primary LAN interface is included in internal zone
+        if !cfg.system.iface.is_empty() {
+            for zone in &mut cfg.firewall_toml.zones {
+                if (zone.name == "internal" || zone.name == "lan")
+                    && !zone.interfaces.contains(&cfg.system.iface)
+                {
+                    zone.interfaces.push(cfg.system.iface.clone());
+                }
+            }
+        }
+
+        if db.seed_firewall_if_empty(&cfg.firewall_toml).await? {
+            info!("Seeded Firewall configuration from TOML into database");
+        }
+        if let Some(mut loaded) = db.load_firewall_config().await? {
+            let mut modified = false;
             #[cfg(feature = "pppoe")]
             {
-                if db.seed_pppoe_if_empty(&cfg.pppoe_toml).await? {
-                    info!("Seeded PPPoE configuration from TOML into database");
-                }
-                if let Some(loaded) = db.load_pppoe_config().await? {
-                    cfg.pppoe_enabled = loaded.enabled;
-                    cfg.pppoe_toml = loaded;
+                if !cfg.pppoe_toml.nftables.flow_offload && loaded.flow_offload {
+                    info!("Firewall bootstrap: disabling flow_offload to match existing PPPoE/SQM configuration");
+                    loaded.flow_offload = false;
+                    modified = true;
                 }
             }
-
-            // 8. Check/seed/load Traffic & SQM Config
             #[cfg(feature = "traffic")]
             {
-                if db.seed_traffic_if_empty(&cfg.traffic_toml).await? {
-                    info!("Seeded Traffic configuration from TOML into database");
-                }
-                if let Some(loaded) = db.load_traffic_config().await? {
-                    cfg.traffic_toml = loaded;
+                if cfg.traffic_toml.sqm.enabled && loaded.flow_offload {
+                    info!("Firewall bootstrap: disabling flow_offload because SQM (CAKE) traffic shaping is active");
+                    loaded.flow_offload = false;
+                    modified = true;
                 }
             }
-
-            // 9. Check/seed/load Firewall Config
-            #[cfg(feature = "nft")]
-            {
-                #[cfg(feature = "pppoe")]
+            // Auto-heal / assign primary LAN interface to internal zone if unassigned in any zone
+            if !cfg.system.iface.is_empty() {
+                let is_assigned = loaded
+                    .zones
+                    .iter()
+                    .any(|z| z.interfaces.contains(&cfg.system.iface));
+                if !is_assigned
+                    && let Some(internal_zone) = loaded
+                        .zones
+                        .iter_mut()
+                        .find(|z| z.name == "internal" || z.name == "lan")
                 {
-                    if !cfg.pppoe_toml.nftables.flow_offload {
-                        cfg.firewall_toml.flow_offload = false;
-                    }
-                    if !cfg.pppoe_toml.nftables.bypass_dns {
-                        cfg.firewall_toml.bypass_dns = false;
-                    }
-                    if !cfg.pppoe_toml.nftables.bypass_vowifi {
-                        cfg.firewall_toml.bypass_vowifi = false;
-                    }
-                }
-
-                // Ensure primary LAN interface is included in internal zone
-                if !cfg.system.iface.is_empty() {
-                    for zone in &mut cfg.firewall_toml.zones {
-                        if (zone.name == "internal" || zone.name == "lan")
-                            && !zone.interfaces.contains(&cfg.system.iface)
-                        {
-                            zone.interfaces.push(cfg.system.iface.clone());
-                        }
-                    }
-                }
-
-                if db.seed_firewall_if_empty(&cfg.firewall_toml).await? {
-                    info!("Seeded Firewall configuration from TOML into database");
-                }
-                if let Some(mut loaded) = db.load_firewall_config().await? {
-                    let mut modified = false;
-                    #[cfg(feature = "pppoe")]
-                    {
-                        if !cfg.pppoe_toml.nftables.flow_offload && loaded.flow_offload {
-                            info!("Firewall bootstrap: disabling flow_offload to match existing PPPoE/SQM configuration");
-                            loaded.flow_offload = false;
-                            modified = true;
-                        }
-                    }
-                    #[cfg(feature = "traffic")]
-                    {
-                        if cfg.traffic_toml.sqm.enabled && loaded.flow_offload {
-                            info!("Firewall bootstrap: disabling flow_offload because SQM (CAKE) traffic shaping is active");
-                            loaded.flow_offload = false;
-                            modified = true;
-                        }
-                    }
-                    // Auto-heal / assign primary LAN interface to internal zone if unassigned in any zone
-                    if !cfg.system.iface.is_empty() {
-                        let is_assigned = loaded
-                            .zones
-                            .iter()
-                            .any(|z| z.interfaces.contains(&cfg.system.iface));
-                        if !is_assigned
-                            && let Some(internal_zone) = loaded
-                                .zones
-                                .iter_mut()
-                                .find(|z| z.name == "internal" || z.name == "lan")
-                        {
-                            info!(
-                                iface = %cfg.system.iface,
-                                zone = %internal_zone.name,
-                                "Firewall bootstrap: auto-assigning primary LAN interface to internal firewall zone"
-                            );
-                            internal_zone.interfaces.push(cfg.system.iface.clone());
-                            modified = true;
-                        }
-                    }
-                    // Auto-heal / ensure trusted zone includes container wildcard "podman*"
-                    if let Some(trusted_zone) = loaded.zones.iter_mut().find(|z| z.name == "trusted") {
-                        if !trusted_zone.interfaces.iter().any(|i| i == "podman*" || i.starts_with("podman")) {
-                            info!("Firewall bootstrap: adding 'podman*' wildcard to trusted firewall zone");
-                            trusted_zone.interfaces.push("podman*".into());
-                            modified = true;
-                        } else if !trusted_zone.interfaces.iter().any(|i| i == "podman*") {
-                            info!("Firewall bootstrap: ensuring 'podman*' wildcard in trusted firewall zone");
-                            trusted_zone.interfaces.push("podman*".into());
-                            modified = true;
-                        }
-                    }
-                    if modified {
-                        let _ = db.save_firewall_config(&loaded).await;
-                    }
-                    cfg.firewall_enabled = loaded.enabled;
-                    cfg.firewall_toml = loaded;
+                    info!(
+                        iface = %cfg.system.iface,
+                        zone = %internal_zone.name,
+                        "Firewall bootstrap: auto-assigning primary LAN interface to internal firewall zone"
+                    );
+                    internal_zone.interfaces.push(cfg.system.iface.clone());
+                    modified = true;
                 }
             }
-        }
-
-        let mut table = db.load_table().await.unwrap_or_else(|e| {
-            warn!("Falha ao carregar DB ({e}), iniciando do zero");
-            State::new()
-        });
-
-        // 2c. Check/reconcile DHCPv4 topology sanity against physical interface and host identity
-        #[cfg(feature = "dhcp")]
-        if is_provisioned {
-            Self::reconcile_dhcp_v4_topology_sanity(&db, cfg, &table, host_ifaces).await?;
-        }
-
-        match db.load_dns_reverse_resolvers().await {
-            Ok(resolvers) => {
-                table.reverse_resolvers = resolvers;
+            // Auto-heal / ensure trusted zone includes container wildcard "podman*"
+            if let Some(trusted_zone) = loaded.zones.iter_mut().find(|z| z.name == "trusted") {
+                if !trusted_zone.interfaces.iter().any(|i| i == "podman*" || i.starts_with("podman")) {
+                    info!("Firewall bootstrap: adding 'podman*' wildcard to trusted firewall zone");
+                    trusted_zone.interfaces.push("podman*".into());
+                    modified = true;
+                } else if !trusted_zone.interfaces.iter().any(|i| i == "podman*") {
+                    info!("Firewall bootstrap: ensuring 'podman*' wildcard in trusted firewall zone");
+                    trusted_zone.interfaces.push("podman*".into());
+                    modified = true;
+                }
             }
-            Err(e) => {
-                warn!("Failed to load reverse resolvers from database: {e}");
+            if modified {
+                let _ = db.save_firewall_config(&loaded).await;
             }
+            cfg.firewall_enabled = loaded.enabled;
+            cfg.firewall_toml = loaded;
         }
+        Ok(())
+    }
 
+    fn log_db_status(
+        db: &LanforgeDb,
+        log_db: &LogDb,
+        table: &State,
+        cfg: &Config,
+        user_count: i64,
+    ) {
         let schema = db.schema_version().unwrap_or(1);
-        let size_str = if let Some(path) = db.path() {
-            std::fs::metadata(path).map_or_else(
-                |_| "unknown".to_string(),
-                |m| ByteSize::b(m.len()).to_string(),
-            )
-        } else if cfg.database.is_in_memory() {
-            "in-memory".to_string()
-        } else {
-            "in-memory (recovery mode)".to_string()
-        };
+        let size_str = db.path().map_or_else(
+            || {
+                if cfg.database.is_in_memory() {
+                    "in-memory".to_string()
+                } else {
+                    "in-memory (recovery mode)".to_string()
+                }
+            },
+            |path| {
+                std::fs::metadata(path).map_or_else(
+                    |_| "unknown".to_string(),
+                    |m| ByteSize::b(m.len()).to_string(),
+                )
+            },
+        );
         let device_count = table.devices().count();
-        let user_count = db.count_users().await.unwrap_or(0);
         let log_db_desc = if log_db.is_in_memory() {
             "in-memory".to_string()
         } else {
@@ -836,12 +870,6 @@ impl Bootstrapper {
         info!(
             "Database loaded (schema: {schema}, size: {size_str}, devices: {device_count}, users: {user_count}, runtime: {log_db_desc})"
         );
-        Self::inject_self_device(&mut table, cfg, host_ifaces);
-
-        // Trigger early collision validation and logging
-        let _ = table.get_static_registry();
-
-        Ok((table, db, log_db))
     }
 
     /// Checks whether Lanforge is running with sufficient privileges (EUID 0 / root).
@@ -949,7 +977,6 @@ impl Bootstrapper {
     }
 
     #[cfg(feature = "dhcp")]
-    #[allow(clippy::too_many_lines)]
     async fn reconcile_dhcp_v4_topology_sanity(
         db: &LanforgeDb,
         cfg: &mut Config,
@@ -992,86 +1019,108 @@ impl Bootstrapper {
                     .and_then(|d| d.v4.ip())
             });
 
-        // 1. Audit & Auto-Heal DHCP Options in DB
-        if let Ok(Some(mut opts)) = db.load_dhcp_options().await {
-            let mut opts_modified = false;
+        Self::audit_and_heal_dhcp_options(db, cfg, &v4, iface_ip, iface_mask, prev_host_ip).await;
+        Self::audit_and_heal_dhcp_pools(db, cfg, &v4).await;
 
-            match opts.v4.router {
-                None => {
-                    info!("DHCPv4 Startup Sanity: Gateway unconfigured / auto — advertising interface IP {iface_ip}.");
+        Ok(())
+    }
+
+    #[cfg(feature = "dhcp")]
+    async fn audit_and_heal_dhcp_options(
+        db: &LanforgeDb,
+        cfg: &Config,
+        v4: &Ipv4Network,
+        iface_ip: std::net::Ipv4Addr,
+        iface_mask: std::net::Ipv4Addr,
+        prev_host_ip: Option<std::net::Ipv4Addr>,
+    ) {
+        let Ok(Some(mut opts)) = db.load_dhcp_options().await else {
+            return;
+        };
+        let mut opts_modified = false;
+
+        match opts.v4.router {
+            None => {
+                info!("DHCPv4 Startup Sanity: Gateway unconfigured / auto — advertising interface IP {iface_ip}.");
+                opts.v4.router = Some(iface_ip);
+                opts_modified = true;
+            }
+            Some(r) => {
+                let was_self = prev_host_ip.is_some_and(|prev| prev == r);
+
+                if was_self && r != iface_ip {
+                    info!(
+                        "DHCPv4 Startup Sanity: Host interface IP changed from {r} to {iface_ip}. Auto-migrating gateway to {iface_ip}."
+                    );
+                    opts.v4.router = Some(iface_ip);
+                    opts_modified = true;
+                } else if !v4.contains(r) {
+                    warn!(
+                        "DHCPv4 Startup Sanity: Database gateway '{r}' is outside interface '{}' subnet ({}/{}). Auto-healing database to {iface_ip}.",
+                        cfg.system.iface, v4.network(), v4.prefix()
+                    );
                     opts.v4.router = Some(iface_ip);
                     opts_modified = true;
                 }
-                Some(r) => {
-                    let was_self = prev_host_ip.is_some_and(|prev| prev == r);
-
-                    if was_self && r != iface_ip {
-                        info!(
-                            "DHCPv4 Startup Sanity: Host interface IP changed from {r} to {iface_ip}. Auto-migrating gateway to {iface_ip}."
-                        );
-                        opts.v4.router = Some(iface_ip);
-                        opts_modified = true;
-                    } else if !v4.contains(r) {
-                        warn!(
-                            "DHCPv4 Startup Sanity: Database gateway '{r}' is outside interface '{}' subnet ({}/{}). Auto-healing database to {iface_ip}.",
-                            cfg.system.iface, v4.network(), v4.prefix()
-                        );
-                        opts.v4.router = Some(iface_ip);
-                        opts_modified = true;
-                    }
-                }
-            }
-
-            if opts.v4.subnet_mask != Some(iface_mask) {
-                warn!(
-                    "DHCPv4 Startup Sanity: Database subnet mask {:?} does not match interface '{}' mask {iface_mask}. Auto-healing database.",
-                    opts.v4.subnet_mask, cfg.system.iface
-                );
-                opts.v4.subnet_mask = Some(iface_mask);
-                opts_modified = true;
-            }
-
-            if opts_modified {
-                if let Err(e) = db.save_dhcp_options(&opts).await {
-                    warn!("DHCPv4 Startup Sanity: Failed to persist auto-healed DHCP options to DB: {e}");
-                } else {
-                    info!("DHCPv4 Startup Sanity: Auto-healed DHCP options saved to database.");
-                }
             }
         }
 
-        // 2. Audit & Auto-Heal DHCP Pools in DB
-        if !cfg.dhcpv4_toml.pools.is_empty() {
-            let any_in_subnet = cfg.dhcpv4_toml.pools.iter().any(|p| {
-                v4.contains(p.range_start) && v4.contains(p.range_end)
-            });
-
-            if !any_in_subnet {
-                warn!(
-                    "DHCPv4 Startup Sanity: Stored DHCPv4 pools are outside interface '{}' subnet ({}). Auto-healing dynamic pools in database.",
-                    cfg.system.iface, v4
-                );
-                let derived = derive_dhcp_defaults_from_v4(&v4);
-                let healed_pool = Dhcpv4Pool {
-                    name: Some("Auto-Healed LAN Scope".to_string()),
-                    range_start: derived.range_start,
-                    range_end: derived.range_end,
-                    lease_time: Some(cfg.dhcpv4_toml.lease_time),
-                    router: Some(derived.router),
-                    subnet_mask: Some(derived.subnet_mask),
-                    dns_servers: vec![derived.router],
-                    ..Default::default()
-                };
-                cfg.dhcpv4_toml.pools = vec![healed_pool];
-                if let Err(e) = db.save_dhcp_v4_pools(&cfg.dhcpv4_toml.pools).await {
-                    warn!("DHCPv4 Startup Sanity: Failed to persist auto-healed pools to DB: {e}");
-                } else {
-                    info!("DHCPv4 Startup Sanity: Auto-healed dynamic pools saved to database.");
-                }
-            }
+        if opts.v4.subnet_mask != Some(iface_mask) {
+            warn!(
+                "DHCPv4 Startup Sanity: Database subnet mask {:?} does not match interface '{}' mask {iface_mask}. Auto-healing database.",
+                opts.v4.subnet_mask, cfg.system.iface
+            );
+            opts.v4.subnet_mask = Some(iface_mask);
+            opts_modified = true;
         }
 
-        Ok(())
+        if opts_modified {
+            if let Err(e) = db.save_dhcp_options(&opts).await {
+                warn!("DHCPv4 Startup Sanity: Failed to persist auto-healed DHCP options to DB: {e}");
+            } else {
+                info!("DHCPv4 Startup Sanity: Auto-healed DHCP options saved to database.");
+            }
+        }
+    }
+
+    #[cfg(feature = "dhcp")]
+    async fn audit_and_heal_dhcp_pools(
+        db: &LanforgeDb,
+        cfg: &mut Config,
+        v4: &Ipv4Network,
+    ) {
+        if cfg.dhcpv4_toml.pools.is_empty() {
+            return;
+        }
+        let any_in_subnet = cfg
+            .dhcpv4_toml
+            .pools
+            .iter()
+            .any(|p| v4.contains(p.range_start) && v4.contains(p.range_end));
+
+        if !any_in_subnet {
+            warn!(
+                "DHCPv4 Startup Sanity: Stored DHCPv4 pools are outside interface '{}' subnet ({}). Auto-healing dynamic pools in database.",
+                cfg.system.iface, v4
+            );
+            let derived = derive_dhcp_defaults_from_v4(v4);
+            let healed_pool = Dhcpv4Pool {
+                name: Some("Auto-Healed LAN Scope".to_string()),
+                range_start: derived.range_start,
+                range_end: derived.range_end,
+                lease_time: Some(cfg.dhcpv4_toml.lease_time),
+                router: Some(derived.router),
+                subnet_mask: Some(derived.subnet_mask),
+                dns_servers: vec![derived.router],
+                ..Default::default()
+            };
+            cfg.dhcpv4_toml.pools = vec![healed_pool];
+            if let Err(e) = db.save_dhcp_v4_pools(&cfg.dhcpv4_toml.pools).await {
+                warn!("DHCPv4 Startup Sanity: Failed to persist auto-healed pools to DB: {e}");
+            } else {
+                info!("DHCPv4 Startup Sanity: Auto-healed dynamic pools saved to database.");
+            }
+        }
     }
 
     fn find_target_interface(

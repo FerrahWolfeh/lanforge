@@ -530,172 +530,133 @@ impl Config {
         cfg
     }
 
+    fn resolve_ula_prefix(&self) -> Option<lanforge_types::network::Ipv6Prefix> {
+        if self.system.target_prefix.starts_with("fe80") {
+            None
+        } else {
+            self.system
+                .target_prefix
+                .parse::<std::net::Ipv6Addr>()
+                .ok()
+                .map(lanforge_types::network::Ipv6Prefix::from_addr)
+        }
+    }
+
+    #[cfg(feature = "dhcp")]
+    fn calculate_dhcpv4_range_size(&self) -> u32 {
+        self.dhcpv4_toml
+            .pools
+            .iter()
+            .map(|p| {
+                let start = u32::from(p.range_start);
+                let end = u32::from(p.range_end);
+                end.saturating_sub(start).saturating_add(1)
+            })
+            .sum()
+    }
+
+    #[cfg(not(feature = "dhcp"))]
+    const fn calculate_dhcpv4_range_size(&self) -> u32 {
+        0
+    }
+
+    #[cfg(feature = "dhcp")]
+    fn calculate_dhcpv6_pool_size(&self) -> Option<u64> {
+        self.dhcpv6_toml
+            .pools
+            .iter()
+            .map(|p| match (&p.range_start, &p.range_end) {
+                (Some(Ipv6AddrOrSuffix::Full(s)), Some(Ipv6AddrOrSuffix::Full(e))) => {
+                    let start = u128::from_be_bytes(s.octets());
+                    let end = u128::from_be_bytes(e.octets());
+                    u64::try_from(end.saturating_sub(start).saturating_add(1)).ok()
+                }
+                _ => None,
+            })
+            .sum()
+    }
+
+    #[cfg(not(feature = "dhcp"))]
+    const fn calculate_dhcpv6_pool_size(&self) -> Option<u64> {
+        None
+    }
+
+    #[cfg(feature = "dns")]
+    fn resolve_dns_upstream(&self) -> Option<lanforge_types::network::dns::upstream::UpstreamTarget> {
+        self.dns_toml.upstreams.first().map(|u| u.target.clone())
+    }
+
+    #[cfg(not(feature = "dns"))]
+    const fn resolve_dns_upstream(&self) -> Option<lanforge_types::network::dns::upstream::UpstreamTarget> {
+        None
+    }
+
+    #[cfg(feature = "dns")]
+    fn resolve_dns_port(&self) -> u16 {
+        self.dns_toml.listen.port()
+    }
+
+    #[cfg(not(feature = "dns"))]
+    const fn resolve_dns_port(&self) -> u16 {
+        53
+    }
+
+    #[cfg(feature = "tftp")]
+    #[allow(clippy::unnecessary_wraps)]
+    fn resolve_boot_dir(&self) -> Option<String> {
+        Some(self.tftp_toml.root_dir.to_string_lossy().to_string())
+    }
+
+    #[cfg(not(feature = "tftp"))]
+    const fn resolve_boot_dir(&self) -> Option<String> {
+        None
+    }
+
     /// Builds a `SystemStatus` snapshot from the current configuration.
-    #[allow(clippy::too_many_lines)]
     #[must_use]
     pub fn to_system_status(&self) -> SystemStatus {
         SystemStatus {
             db_path: sanitize_db_url(&self.database.config_path),
             log_db_path: sanitize_db_url(&self.database.runtime_path),
             lan_iface: self.system.iface.clone(),
-            ula_prefix: if self.system.target_prefix.starts_with("fe80") {
-                None
-            } else {
-                self.system
-                    .target_prefix
-                    .parse::<std::net::Ipv6Addr>()
-                    .ok()
-                    .map(lanforge_types::network::Ipv6Prefix::from_addr)
-            },
-            ra_enabled: {
-                #[cfg(feature = "ra")]
-                {
-                    self.ra_enabled
-                }
-                #[cfg(not(feature = "ra"))]
-                {
-                    false
-                }
-            },
-            dhcp_v4_enabled: {
-                #[cfg(feature = "dhcp")]
-                {
-                    self.dhcpv4_enabled
-                }
-                #[cfg(not(feature = "dhcp"))]
-                {
-                    false
-                }
-            },
-            dhcp_v4_range_size: {
-                #[cfg(feature = "dhcp")]
-                {
-                    self.dhcpv4_toml
-                        .pools
-                        .iter()
-                        .map(|p| {
-                            let start = u32::from(p.range_start);
-                            let end = u32::from(p.range_end);
-                            end.saturating_sub(start).saturating_add(1)
-                        })
-                        .sum()
-                }
-                #[cfg(not(feature = "dhcp"))]
-                {
-                    0
-                }
-            },
-            dhcp_v6_enabled: {
-                #[cfg(feature = "dhcp")]
-                {
-                    self.dhcpv6_enabled
-                }
-                #[cfg(not(feature = "dhcp"))]
-                {
-                    false
-                }
-            },
-            dhcp_v6_pool_size: {
-                #[cfg(feature = "dhcp")]
-                {
-                    self.dhcpv6_toml
-                        .pools
-                        .iter()
-                        .map(|p| match (&p.range_start, &p.range_end) {
-                            (Some(Ipv6AddrOrSuffix::Full(s)), Some(Ipv6AddrOrSuffix::Full(e))) => {
-                                let start = u128::from_be_bytes(s.octets());
-                                let end = u128::from_be_bytes(e.octets());
-                                u64::try_from(end.saturating_sub(start).saturating_add(1)).ok()
-                            }
-                            _ => None,
-                        })
-                        .sum()
-                }
-                #[cfg(not(feature = "dhcp"))]
-                {
-                    0
-                }
-            },
-            dns_enabled: {
-                #[cfg(feature = "dns")]
-                {
-                    self.dns_enabled
-                }
-                #[cfg(not(feature = "dns"))]
-                {
-                    false
-                }
-            },
-            dns_upstream: {
-                #[cfg(feature = "dns")]
-                {
-                    self.dns_toml.upstreams.first().map(|u| u.target.clone())
-                }
-                #[cfg(not(feature = "dns"))]
-                {
-                    None
-                }
-            },
-            dns_port: {
-                #[cfg(feature = "dns")]
-                {
-                    self.dns_toml.listen.port()
-                }
-                #[cfg(not(feature = "dns"))]
-                {
-                    53
-                }
-            },
-            boot_dir: {
-                #[cfg(feature = "tftp")]
-                {
-                    Some(self.tftp_toml.root_dir.to_string_lossy().to_string())
-                }
-                #[cfg(not(feature = "tftp"))]
-                {
-                    None
-                }
-            },
-            http_enabled: {
-                #[cfg(feature = "http")]
-                {
-                    self.http_toml.enabled
-                }
-                #[cfg(not(feature = "http"))]
-                {
-                    false
-                }
-            },
-            pppoe_enabled: {
-                #[cfg(feature = "pppoe")]
-                {
-                    self.pppoe_toml.enabled
-                }
-                #[cfg(not(feature = "pppoe"))]
-                {
-                    false
-                }
-            },
-            firewall_enabled: {
-                #[cfg(feature = "nft")]
-                {
-                    self.firewall_enabled
-                }
-                #[cfg(not(feature = "nft"))]
-                {
-                    false
-                }
-            },
-            traffic_enabled: {
-                #[cfg(feature = "traffic")]
-                {
-                    self.traffic_enabled
-                }
-                #[cfg(not(feature = "traffic"))]
-                {
-                    false
-                }
-            },
+            ula_prefix: self.resolve_ula_prefix(),
+            #[cfg(feature = "ra")]
+            ra_enabled: self.ra_enabled,
+            #[cfg(not(feature = "ra"))]
+            ra_enabled: false,
+            #[cfg(feature = "dhcp")]
+            dhcp_v4_enabled: self.dhcpv4_enabled,
+            #[cfg(not(feature = "dhcp"))]
+            dhcp_v4_enabled: false,
+            dhcp_v4_range_size: self.calculate_dhcpv4_range_size(),
+            #[cfg(feature = "dhcp")]
+            dhcp_v6_enabled: self.dhcpv6_enabled,
+            #[cfg(not(feature = "dhcp"))]
+            dhcp_v6_enabled: false,
+            dhcp_v6_pool_size: self.calculate_dhcpv6_pool_size(),
+            #[cfg(feature = "dns")]
+            dns_enabled: self.dns_enabled,
+            #[cfg(not(feature = "dns"))]
+            dns_enabled: false,
+            dns_upstream: self.resolve_dns_upstream(),
+            dns_port: self.resolve_dns_port(),
+            boot_dir: self.resolve_boot_dir(),
+            #[cfg(feature = "http")]
+            http_enabled: self.http_toml.enabled,
+            #[cfg(not(feature = "http"))]
+            http_enabled: false,
+            #[cfg(feature = "pppoe")]
+            pppoe_enabled: self.pppoe_toml.enabled,
+            #[cfg(not(feature = "pppoe"))]
+            pppoe_enabled: false,
+            #[cfg(feature = "nft")]
+            firewall_enabled: self.firewall_enabled,
+            #[cfg(not(feature = "nft"))]
+            firewall_enabled: false,
+            #[cfg(feature = "traffic")]
+            traffic_enabled: self.traffic_enabled,
+            #[cfg(not(feature = "traffic"))]
+            traffic_enabled: false,
         }
     }
 }

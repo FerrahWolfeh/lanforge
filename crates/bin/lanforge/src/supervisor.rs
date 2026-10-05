@@ -41,7 +41,6 @@ enum ServiceRunOutcome {
 }
 
 /// Executa uma task supervisionada que implementa `AsyncService`.
-#[allow(clippy::too_many_lines)]
 pub async fn supervise_async<S, F>(ctx: &LanforgeContext, factory: F)
 where
     S: AsyncService,
@@ -77,31 +76,19 @@ where
         let mut bus_rx = ctx.bus().subscribe_system();
 
         // 1. Dependency Resolution Phase
-        let mut deps_satisfied = true;
-        for dep in service.dependencies() {
-            if let Err(e) = ctx.wait_for_dependency(*dep).await {
-                if matches!(e, CoreError::Shutdown) || !ctx.is_running() {
-                    ctx.set_service_state(id, ServiceState::Inactive);
-                    ctx.clear_service_start(id);
+        match resolve_dependencies(&service, ctx, &description, id).await {
+            Ok(true) => {}
+            Ok(false) => {
+                ctx.set_service_state(id, ServiceState::Error);
+                if handle_backoff(ctx, &meta, &mut consecutive_failures, &mut bus_rx)
+                    .await
+                    .is_none()
+                {
                     return;
                 }
-                warn!(
-                    "Supervisor: {} failed waiting for dependency {:?}: {e}",
-                    description, dep
-                );
-                deps_satisfied = false;
-                break;
+                continue;
             }
-        }
-        if !deps_satisfied {
-            ctx.set_service_state(id, ServiceState::Error);
-            if handle_backoff(ctx, &meta, &mut consecutive_failures, &mut bus_rx)
-                .await
-                .is_none()
-            {
-                return;
-            }
-            continue;
+            Err(()) => return,
         }
 
         // 2. Resource Initialization Phase
@@ -132,95 +119,159 @@ where
         ctrl.signal_ready();
 
         // 4. Serve Phase
-        let outcome = {
-            let serve_fut = service.serve(ctx);
-            tokio::pin!(serve_fut);
-
-            tokio::select! {
-                biased;
-                shutdown_or_control = next_control_event(&mut bus_rx, id) => {
-                    match shutdown_or_control {
-                        Some(SystemEvent::Shutdown) => {
-                            info!(
-                                "Supervisor: {} shutdown initiated, awaiting cooperative termination (timeout: {:.1}s)",
-                                description,
-                                meta.shutdown_timeout.as_secs_f64()
-                            );
-                            match tokio::time::timeout(meta.shutdown_timeout, &mut serve_fut).await {
-                                Ok(res) => {
-                                    debug!("Supervisor: {} completed graceful shutdown: {:?}", description, res);
-                                }
-                                Err(_) => {
-                                    warn!(
-                                        "Supervisor: {} exceeded shutdown timeout of {:.1}s — forcing abort",
-                                        description,
-                                        meta.shutdown_timeout.as_secs_f64()
-                                    );
-                                }
-                            }
-                            ServiceRunOutcome::Shutdown
-                        }
-                        Some(SystemEvent::ServiceControl { action, .. }) => {
-                            info!("▪ {} control action requested: {:?}", description, action);
-                            ServiceRunOutcome::Control(action)
-                        }
-                        None | Some(_) => ServiceRunOutcome::BusClosed,
-                    }
-                }
-                res = &mut serve_fut => {
-                    ServiceRunOutcome::Exited(res)
-                }
-            }
-        };
+        let outcome = execute_serve_phase(
+            &mut service,
+            ctx,
+            id,
+            &description,
+            &meta,
+            &mut bus_rx,
+        )
+        .await;
 
         // 5. Cooperative Cleanup & Shutdown Hook
         teardown_service(&mut service, ctx, meta.shutdown_timeout).await;
 
-        match outcome {
-            ServiceRunOutcome::Shutdown => {
+        if handle_service_run_outcome(
+            outcome,
+            ctx,
+            id,
+            &description,
+            &meta,
+            start,
+            &mut consecutive_failures,
+            &mut bus_rx,
+        )
+        .await
+        .is_none()
+        {
+            return;
+        }
+    }
+}
+
+async fn resolve_dependencies<S: AsyncService>(
+    service: &S,
+    ctx: &LanforgeContext,
+    description: &str,
+    id: &'static str,
+) -> Result<bool, ()> {
+    for dep in service.dependencies() {
+        if let Err(e) = ctx.wait_for_dependency(*dep).await {
+            if matches!(e, CoreError::Shutdown) || !ctx.is_running() {
                 ctx.set_service_state(id, ServiceState::Inactive);
                 ctx.clear_service_start(id);
-                return;
+                return Err(());
             }
-            ServiceRunOutcome::Control(action) => {
-                match action {
-                    ServiceAction::Stop => {
-                        ctx.set_service_state(id, ServiceState::Inactive);
-                        ctx.clear_service_start(id);
-                        consecutive_failures = 0;
-                    }
-                    ServiceAction::Restart => {
-                        ctx.set_service_state(id, ServiceState::Starting);
-                        consecutive_failures = 0;
-                    }
-                    ServiceAction::Start => {
-                        // Already started/starting, ignore
-                    }
-                }
-            }
-            ServiceRunOutcome::BusClosed => {
-                return;
-            }
-            ServiceRunOutcome::Exited(res) => {
-                let Some(backoff_needed) = evaluate_service_exit(
-                    res,
-                    ctx,
-                    id,
-                    &description,
-                    start,
-                    &mut consecutive_failures,
-                ) else {
-                    return;
-                };
+            warn!(
+                "Supervisor: {} failed waiting for dependency {:?}: {e}",
+                description, dep
+            );
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
 
-                if backoff_needed
-                    && handle_backoff(ctx, &meta, &mut consecutive_failures, &mut bus_rx)
-                        .await
-                        .is_none()
-                {
-                    return;
+async fn execute_serve_phase<S: AsyncService>(
+    service: &mut S,
+    ctx: &LanforgeContext,
+    id: &'static str,
+    description: &str,
+    meta: &ServiceMeta,
+    bus_rx: &mut Receiver<TimedEvent>,
+) -> ServiceRunOutcome {
+    let serve_fut = service.serve(ctx);
+    tokio::pin!(serve_fut);
+
+    tokio::select! {
+        biased;
+        shutdown_or_control = next_control_event(bus_rx, id) => {
+            match shutdown_or_control {
+                Some(SystemEvent::Shutdown) => {
+                    info!(
+                        "Supervisor: {} shutdown initiated, awaiting cooperative termination (timeout: {:.1}s)",
+                        description,
+                        meta.shutdown_timeout.as_secs_f64()
+                    );
+                    match tokio::time::timeout(meta.shutdown_timeout, &mut serve_fut).await {
+                        Ok(res) => {
+                            debug!("Supervisor: {} completed graceful shutdown: {:?}", description, res);
+                        }
+                        Err(_) => {
+                            warn!(
+                                "Supervisor: {} exceeded shutdown timeout of {:.1}s — forcing abort",
+                                description,
+                                meta.shutdown_timeout.as_secs_f64()
+                            );
+                        }
+                    }
+                    ServiceRunOutcome::Shutdown
                 }
+                Some(SystemEvent::ServiceControl { action, .. }) => {
+                    info!("▪ {} control action requested: {:?}", description, action);
+                    ServiceRunOutcome::Control(action)
+                }
+                None | Some(_) => ServiceRunOutcome::BusClosed,
             }
+        }
+        res = &mut serve_fut => {
+            ServiceRunOutcome::Exited(res)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_service_run_outcome(
+    outcome: ServiceRunOutcome,
+    ctx: &LanforgeContext,
+    id: &'static str,
+    description: &str,
+    meta: &ServiceMeta,
+    start: Instant,
+    consecutive_failures: &mut u32,
+    bus_rx: &mut Receiver<TimedEvent>,
+) -> Option<bool> {
+    match outcome {
+        ServiceRunOutcome::Shutdown => {
+            ctx.set_service_state(id, ServiceState::Inactive);
+            ctx.clear_service_start(id);
+            None
+        }
+        ServiceRunOutcome::Control(action) => {
+            match action {
+                ServiceAction::Stop => {
+                    ctx.set_service_state(id, ServiceState::Inactive);
+                    ctx.clear_service_start(id);
+                    *consecutive_failures = 0;
+                }
+                ServiceAction::Restart => {
+                    ctx.set_service_state(id, ServiceState::Starting);
+                    *consecutive_failures = 0;
+                }
+                ServiceAction::Start => {}
+            }
+            Some(false)
+        }
+        ServiceRunOutcome::BusClosed => None,
+        ServiceRunOutcome::Exited(res) => {
+            let backoff_needed = evaluate_service_exit(
+                res,
+                ctx,
+                id,
+                description,
+                start,
+                consecutive_failures,
+            )?;
+
+            if backoff_needed
+                && handle_backoff(ctx, meta, consecutive_failures, bus_rx)
+                    .await
+                    .is_none()
+            {
+                return None;
+            }
+            Some(true)
         }
     }
 }
