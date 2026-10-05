@@ -164,6 +164,52 @@ impl DiscoveryService {
                 duration_ms: u64::try_from(duration.as_millis()).unwrap_or_default(),
             }));
     }
+
+    fn process_neighbor_event(
+        &self,
+        event: &NeighborEvent,
+        ifname_cache: &mut IfNameCache,
+        ctx: &LanforgeContext,
+        pending_batch: &mut Vec<(MacAddr, IpAddr, bool)>,
+        current_gua: Option<&Ipv6Addr>,
+        current_ula: Option<&Ipv6Addr>,
+    ) {
+        if let NeighborEvent::Added {
+            mac,
+            ip,
+            is_active,
+            ifindex,
+        } = *event
+        {
+            if let Some(ifname) = ifname_cache.get(ifindex) {
+                let needs_update = ctx.with_state(|state| {
+                    state
+                        .devices
+                        .get(&mac)
+                        .is_none_or(|dev| dev.iface.as_deref() != Some(ifname))
+                });
+                if needs_update {
+                    let _ = ctx.apply(DeviceUpdate::DeviceInterfaceSeen {
+                        mac,
+                        iface: ifname.to_string(),
+                    });
+                }
+            }
+            pending_batch.push((mac, ip, is_active));
+            if pending_batch.len() >= 50 {
+                let batch = std::mem::replace(pending_batch, Vec::with_capacity(50));
+                self.flush_neighbor_batch(batch);
+            }
+        } else {
+            if !pending_batch.is_empty() {
+                let batch = std::mem::take(pending_batch);
+                self.flush_neighbor_batch(batch);
+            }
+            if let Some(update) = event.to_device_update(current_gua, current_ula) {
+                let _ = ctx.apply(update);
+            }
+        }
+    }
 }
 
 impl AsyncService for DiscoveryService {
@@ -250,7 +296,6 @@ impl AsyncService for DiscoveryService {
         Ok(())
     }
 
-    #[allow(clippy::too_many_lines)]
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         if !self.cfg.enabled {
             info!("Discovery service is disabled in configuration.");
@@ -258,149 +303,13 @@ impl AsyncService for DiscoveryService {
             return Ok(());
         }
 
-        // Spin up the integrated ICMP active pinger helper if enabled
-        let pinger = if self.cfg.ping_enabled {
-            match IcmpPinger::new(ctx.clone()) {
-                Ok(p) => {
-                    info!("Discovery: Active ICMP ping probe initialized");
-                    Some(Arc::new(p))
-                }
-                Err(e) => {
-                    warn!("Discovery: Failed to initialize ICMP ping probe: {e}");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        if let Some(pinger_ref) = &pinger {
-            // A. Spawn periodic ICMP active ping sweep task
-            let pinger_sweep = pinger_ref.clone();
-            let ctx_sweep = ctx.clone();
-            let ping_interval = self.cfg.ping_interval_secs;
-            tokio::spawn(async move {
-                let mut sweep_timer = interval(Duration::from_secs(ping_interval));
-                let mut seq_counter = 0u16;
-                loop {
-                    if !ctx_sweep.is_running() {
-                        break;
-                    }
-                    sweep_timer.tick().await;
-
-                    let ips = ctx_sweep.with_state(|state| {
-                        let mut all_ips = Vec::new();
-                        for dev in state.devices.values() {
-                            if dev.origin != lanforge_types::device::Origin::System {
-                                if let Some(v4) = dev.v4.ip() {
-                                    all_ips.push(IpAddr::V4(v4));
-                                }
-                                for (v4_seen, _) in &dev.seen_v4 {
-                                    all_ips.push(IpAddr::V4(*v4_seen));
-                                }
-                                for v6_state in &dev.v6 {
-                                    if let Some(v6_ip) = v6_state.ip() {
-                                        all_ips.push(IpAddr::V6(v6_ip));
-                                    }
-                                }
-                            }
-                        }
-                        all_ips
-                    });
-
-                    for ip in ips {
-                        seq_counter = seq_counter.wrapping_add(1);
-                        let pinger_c = pinger_sweep.clone();
-                        let ctx_c = ctx_sweep.clone();
-                        tokio::spawn(async move {
-                            if matches!(pinger_c.ping(ip, seq_counter).await, Ok(true))
-                                && let Some(mac) = ctx_c.get_mac_by_ip(ip)
-                            {
-                                let update = match ip {
-                                    IpAddr::V4(v4) => DeviceUpdate::ArpSeen {
-                                        mac,
-                                        ip: v4,
-                                        is_active: true,
-                                    },
-                                    IpAddr::V6(v6) => DeviceUpdate::NdpSeen {
-                                        mac,
-                                        ip: v6,
-                                        is_active: true,
-                                    },
-                                };
-                                let _ = ctx_c.apply(update);
-                            }
-                        });
-                        sleep(Duration::from_millis(10)).await;
-                    }
-                }
-            });
-
-            // B. Spawn EventBus subscriber for JIT offline verification pings
-            let pinger_jit = pinger_ref.clone();
-            let ctx_jit = ctx.clone();
-            tokio::spawn(async move {
-                let mut bus_rx = ctx_jit.bus().subscribe_device();
-                let mut seq_counter = 0u16;
-                loop {
-                    if !ctx_jit.is_running() {
-                        break;
-                    }
-                    match bus_rx.recv().await {
-                        Ok(timed_event) => {
-                            if let LanforgeEvent::Device(DeviceEvent::NetworkActivity {
-                                change,
-                                ..
-                            }) = &timed_event.event
-                                && let NetworkChange::IpOffline { ip } = &**change
-                            {
-                                seq_counter = seq_counter.wrapping_add(1);
-                                let pinger_c = pinger_jit.clone();
-                                let ctx_c = ctx_jit.clone();
-                                let target_ip = *ip;
-                                tokio::spawn(async move {
-                                    debug!(
-                                        "DiscoveryService: JIT verification ping triggered for offline transition of {target_ip}"
-                                    );
-                                    if matches!(
-                                        pinger_c.ping(target_ip, seq_counter).await,
-                                        Ok(true)
-                                    ) && let Some(mac) = ctx_c.get_mac_by_ip(target_ip)
-                                    {
-                                        let update = match target_ip {
-                                            IpAddr::V4(v4) => DeviceUpdate::ArpSeen {
-                                                mac,
-                                                ip: v4,
-                                                is_active: true,
-                                            },
-                                            IpAddr::V6(v6) => DeviceUpdate::NdpSeen {
-                                                mac,
-                                                ip: v6,
-                                                is_active: true,
-                                            },
-                                        };
-                                        let _ = ctx_c.apply(update);
-                                    }
-                                });
-                            }
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            warn!(
-                                service = "DiscoveryServicePinger",
-                                lost = n,
-                                "Event bus lagged"
-                            );
-                        }
-                        Err(_) => break,
-                    }
-                }
-            });
+        if self.cfg.ping_enabled {
+            spawn_active_pinger(ctx, self.cfg.ping_interval_secs);
         }
 
         let mut handle = ctx.service_handle_network();
         let mut ifname_cache = IfNameCache::new();
 
-        // Initialize prefixes from current context state
         let primary_ifindex = self.target_ifindexes.first().copied().unwrap_or(0);
         let if_state = ctx.get_interface_state(primary_ifindex);
         let mut current_gua: Option<Ipv6Addr> = if_state.gua;
@@ -422,7 +331,6 @@ impl AsyncService for DiscoveryService {
                         }
                         break;
                     };
-                    // A. Handle Interface Address Events
                     if let NetlinkPayload::InnerMessage(
                         RouteNetlinkMessage::NewAddress(addr) | RouteNetlinkMessage::DelAddress(addr),
                     ) = &msg.payload
@@ -445,38 +353,18 @@ impl AsyncService for DiscoveryService {
                         }
                     }
 
-                    // B. Handle Neighbor Events
                     if let Some(event) = extract_neigh_info(&msg)
-                        && self.target_ifindexes.contains(&event.ifindex()) {
-                            if let NeighborEvent::Added { mac, ip, is_active, ifindex } = event {
-                                if let Some(ifname) = ifname_cache.get(ifindex) {
-                                    let needs_update = ctx.with_state(|state| {
-                                        state.devices.get(&mac).is_none_or(|dev| dev.iface.as_deref() != Some(ifname))
-                                    });
-                                    if needs_update {
-                                        let _ = ctx.apply(DeviceUpdate::DeviceInterfaceSeen {
-                                            mac,
-                                            iface: ifname.to_string(),
-                                        });
-                                    }
-                                }
-                                // Optimization: Batch Added events during scans/bursts
-                                pending_batch.push((mac, ip, is_active));
-                                if pending_batch.len() >= 50 {
-                                    let batch = std::mem::replace(&mut pending_batch, Vec::with_capacity(50));
-                                    self.flush_neighbor_batch(batch);
-                                }
-                            } else {
-                                // Flush pending batch before processing delete/fail to maintain order
-                                if !pending_batch.is_empty() {
-                                    let batch = std::mem::take(&mut pending_batch);
-                                    self.flush_neighbor_batch(batch);
-                                }
-                                if let Some(update) = event.to_device_update(current_gua.as_ref(), current_ula.as_ref()) {
-                                    let _ = ctx.apply(update);
-                                }
-                            }
-                        }
+                        && self.target_ifindexes.contains(&event.ifindex())
+                    {
+                        self.process_neighbor_event(
+                            &event,
+                            &mut ifname_cache,
+                            ctx,
+                            &mut pending_batch,
+                            current_gua.as_ref(),
+                            current_ula.as_ref(),
+                        );
+                    }
                 }
 
                 _ = flush_timer.tick() => {
@@ -503,4 +391,138 @@ impl AsyncService for DiscoveryService {
         info!("DiscoveryService: Service stopped");
         Ok(())
     }
+}
+
+fn spawn_active_pinger(ctx: &LanforgeContext, ping_interval_secs: u64) {
+    let pinger = match IcmpPinger::new(ctx.clone()) {
+        Ok(p) => {
+            info!("Discovery: Active ICMP ping probe initialized");
+            Arc::new(p)
+        }
+        Err(e) => {
+            warn!("Discovery: Failed to initialize ICMP ping probe: {e}");
+            return;
+        }
+    };
+
+    spawn_sweep_task(pinger.clone(), ctx.clone(), ping_interval_secs);
+    spawn_jit_offline_task(pinger, ctx.clone());
+}
+
+fn spawn_sweep_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext, ping_interval: u64) {
+    tokio::spawn(async move {
+        let mut sweep_timer = interval(Duration::from_secs(ping_interval));
+        let mut seq_counter = 0u16;
+        loop {
+            if !ctx.is_running() {
+                break;
+            }
+            sweep_timer.tick().await;
+
+            let ips = ctx.with_state(|state| {
+                let mut all_ips = Vec::new();
+                for dev in state.devices.values() {
+                    if dev.origin != lanforge_types::device::Origin::System {
+                        if let Some(v4) = dev.v4.ip() {
+                            all_ips.push(IpAddr::V4(v4));
+                        }
+                        for (v4_seen, _) in &dev.seen_v4 {
+                            all_ips.push(IpAddr::V4(*v4_seen));
+                        }
+                        for v6_state in &dev.v6 {
+                            if let Some(v6_ip) = v6_state.ip() {
+                                all_ips.push(IpAddr::V6(v6_ip));
+                            }
+                        }
+                    }
+                }
+                all_ips
+            });
+
+            for ip in ips {
+                seq_counter = seq_counter.wrapping_add(1);
+                let pinger_c = pinger.clone();
+                let ctx_c = ctx.clone();
+                tokio::spawn(async move {
+                    if matches!(pinger_c.ping(ip, seq_counter).await, Ok(true))
+                        && let Some(mac) = ctx_c.get_mac_by_ip(ip)
+                    {
+                        let update = match ip {
+                            IpAddr::V4(v4) => DeviceUpdate::ArpSeen {
+                                mac,
+                                ip: v4,
+                                is_active: true,
+                            },
+                            IpAddr::V6(v6) => DeviceUpdate::NdpSeen {
+                                mac,
+                                ip: v6,
+                                is_active: true,
+                            },
+                        };
+                        let _ = ctx_c.apply(update);
+                    }
+                });
+                sleep(Duration::from_millis(10)).await;
+            }
+        }
+    });
+}
+
+fn spawn_jit_offline_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext) {
+    tokio::spawn(async move {
+        let mut bus_rx = ctx.bus().subscribe_device();
+        let mut seq_counter = 0u16;
+        loop {
+            if !ctx.is_running() {
+                break;
+            }
+            match bus_rx.recv().await {
+                Ok(timed_event) => {
+                    if let LanforgeEvent::Device(DeviceEvent::NetworkActivity {
+                        change,
+                        ..
+                    }) = &timed_event.event
+                        && let NetworkChange::IpOffline { ip } = &**change
+                    {
+                        seq_counter = seq_counter.wrapping_add(1);
+                        let pinger_c = pinger.clone();
+                        let ctx_c = ctx.clone();
+                        let target_ip = *ip;
+                        tokio::spawn(async move {
+                            debug!(
+                                "DiscoveryService: JIT verification ping triggered for offline transition of {target_ip}"
+                            );
+                            if matches!(
+                                pinger_c.ping(target_ip, seq_counter).await,
+                                Ok(true)
+                            ) && let Some(mac) = ctx_c.get_mac_by_ip(target_ip)
+                            {
+                                let update = match target_ip {
+                                    IpAddr::V4(v4) => DeviceUpdate::ArpSeen {
+                                        mac,
+                                        ip: v4,
+                                        is_active: true,
+                                    },
+                                    IpAddr::V6(v6) => DeviceUpdate::NdpSeen {
+                                        mac,
+                                        ip: v6,
+                                        is_active: true,
+                                    },
+                                };
+                                let _ = ctx_c.apply(update);
+                            }
+                        });
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!(
+                        service = "DiscoveryServicePinger",
+                        lost = n,
+                        "Event bus lagged"
+                    );
+                }
+                Err(_) => break,
+            }
+        }
+    });
 }
