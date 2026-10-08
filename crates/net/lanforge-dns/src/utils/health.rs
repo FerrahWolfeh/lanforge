@@ -51,7 +51,7 @@ impl UpstreamHealth {
         self.last_success_ts.store(now, Ordering::Relaxed);
 
         self.rtt_ewma_us
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |old| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |old| {
                 if old == 0 {
                     Some(rtt_us)
                 } else {
