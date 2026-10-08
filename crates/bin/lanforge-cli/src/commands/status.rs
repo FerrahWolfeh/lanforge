@@ -26,6 +26,7 @@ impl StatusArgs {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn render_status_dashboard(status: &StatusResponse, printer: &Printer, verbose: bool) {
     println!();
     let symbol = if printer.ascii { "==" } else { "◆" };

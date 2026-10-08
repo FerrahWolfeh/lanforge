@@ -15,6 +15,7 @@ use lanforge_types::network::dns::adblock::{AdblockSourceFormat, AdblockUrlKind}
 use lanforge_types::network::dns::{
     AdblockCheckResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse, DnsStatsResponse,
 };
+use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::TrafficConfig;
 use lanforge_types::network::firewall::FirewallStatus;
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
@@ -516,6 +517,24 @@ impl LanforgeClient {
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.pppoe_disconnect().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn pppoe_config(&self) -> Result<Box<PppoeConfig>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(self.http_get("/pppoe/config").await?));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.pppoe_config().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn update_pppoe_config(&self, cfg: PppoeConfig) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_post("/pppoe/config", &cfg).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.update_pppoe_config(Box::new(cfg)).await.map_err(|e| eyre!("{e}"))
     }
 
     pub async fn ra_trigger(&self) -> Result<SimpleSuccess> {
