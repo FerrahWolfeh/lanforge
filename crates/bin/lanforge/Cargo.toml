@@ -224,3 +224,4 @@ tempfile = "3.10.1"
 serde_json = { workspace = true }
 lanforge-api-dispatch = { workspace = true }
 lanforge-api = { workspace = true }
+dhcproto = "0.15.0"

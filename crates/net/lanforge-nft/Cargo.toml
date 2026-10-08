@@ -15,6 +15,7 @@ lanforge-types = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "rt"] }
 tracing = { workspace = true }
+parking_lot = { workspace = true }
 nftables = "0.6.3"
 serde_json.workspace = true
 

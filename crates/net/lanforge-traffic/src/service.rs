@@ -23,6 +23,7 @@ use crate::tuning::apply_tuning;
     shutdown_timeout = 3,
     describe = "NIC Hardware Tuning & CAKE Bufferbloat SQM".to_string()
 )]
+#[derive(Clone)]
 pub struct TrafficService {
     cfg: TrafficConfig,
     active_wan: Option<String>,
@@ -30,6 +31,7 @@ pub struct TrafficService {
     is_pppoe_active: bool,
     tuned_interfaces: Vec<String>,
     effective_cpu_mask: String,
+    inert: bool,
 }
 
 impl TrafficService {
@@ -43,7 +45,34 @@ impl TrafficService {
             is_pppoe_active: false,
             tuned_interfaces: Vec::new(),
             effective_cpu_mask: cpu_mask,
+            inert: false,
         }
+    }
+
+    /// Creates an inert instance of `TrafficService` for rootless testing and dry-run execution.
+    #[must_use]
+    pub fn inert(cfg: TrafficConfig) -> Self {
+        let cpu_mask = crate::tuning::cpu::resolve_effective_cpu_mask(&cfg.tuning.cpu_mask);
+        Self {
+            cfg,
+            active_wan: None,
+            active_ifb: None,
+            is_pppoe_active: false,
+            tuned_interfaces: Vec::new(),
+            effective_cpu_mask: cpu_mask,
+            inert: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_inert(mut self, inert: bool) -> Self {
+        self.inert = inert;
+        self
+    }
+
+    #[must_use]
+    pub const fn is_inert(&self) -> bool {
+        self.inert
     }
 
     fn publish_status(&self, ctx: &LanforgeContext, state: ServiceState) {
@@ -114,14 +143,23 @@ impl TrafficService {
             return;
         }
 
-        // Clean up existing if on different interface
-        if let Some(ref current) = self.active_wan
-            && current != iface
-        {
-            clear_sqm(current, &self.cfg.sqm.ingress_device).await;
-        }
+        let ifb = if self.inert {
+            let dev = if self.cfg.sqm.ingress_device.trim().is_empty() {
+                "ifb4lanforge".to_string()
+            } else {
+                self.cfg.sqm.ingress_device.clone()
+            };
+            Some(dev)
+        } else {
+            // Clean up existing if on different interface
+            if let Some(ref current) = self.active_wan
+                && current != iface
+            {
+                clear_sqm(current, &self.cfg.sqm.ingress_device).await;
+            }
+            apply_sqm(iface, &self.cfg.sqm, is_pppoe).await
+        };
 
-        let ifb = apply_sqm(iface, &self.cfg.sqm, is_pppoe).await;
         self.active_wan = Some(iface.to_string());
         self.active_ifb.clone_from(&ifb);
 
@@ -135,11 +173,13 @@ impl TrafficService {
 
     /// Clears any active SQM configuration.
     async fn clear_sqm_internal(&mut self, ctx: &LanforgeContext) {
-        if let Some(ref wan) = self.active_wan.take() {
-            clear_sqm(wan, &self.cfg.sqm.ingress_device).await;
+        if let Some(wan) = self.active_wan.take() {
+            if !self.inert {
+                clear_sqm(&wan, &self.cfg.sqm.ingress_device).await;
+            }
             self.active_ifb = None;
             let _ = ctx.bus().publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::SqmCleared {
-                interface: wan.clone(),
+                interface: wan,
             })));
         }
     }
@@ -175,7 +215,11 @@ impl TrafficService {
 
         if is_tuning_enabled {
             let default_ifaces = Self::resolve_default_interfaces(ctx);
-            let tuned = apply_tuning(&self.cfg.tuning, &default_ifaces).await;
+            let tuned = if self.inert {
+                default_ifaces.clone()
+            } else {
+                apply_tuning(&self.cfg.tuning, &default_ifaces).await
+            };
             self.effective_cpu_mask =
                 crate::tuning::cpu::resolve_effective_cpu_mask(&self.cfg.tuning.cpu_mask);
             self.tuned_interfaces.clone_from(&tuned);
@@ -197,7 +241,11 @@ impl TrafficService {
 
         let wan = self.active_wan.as_deref();
         let ifb = self.active_ifb.as_deref();
-        let initial_snapshot = crate::collect_traffic_telemetry(wan, ifb).await;
+        let initial_snapshot = if self.inert {
+            crate::TrafficTelemetryResponse::default()
+        } else {
+            crate::collect_traffic_telemetry(wan, ifb).await
+        };
         ctx.set_traffic_telemetry(initial_snapshot);
         true
     }
@@ -215,7 +263,11 @@ impl TrafficService {
         if tuning_changed {
             if new_cfg.tuning.enabled {
                 let default_ifaces = Self::resolve_default_interfaces(ctx);
-                let tuned = apply_tuning(&new_cfg.tuning, &default_ifaces).await;
+                let tuned = if self.inert {
+                    default_ifaces
+                } else {
+                    apply_tuning(&new_cfg.tuning, &default_ifaces).await
+                };
                 self.effective_cpu_mask =
                     crate::tuning::cpu::resolve_effective_cpu_mask(&new_cfg.tuning.cpu_mask);
                 self.tuned_interfaces = tuned;
@@ -270,7 +322,11 @@ impl TrafficService {
         let mut changed = false;
         if self.cfg.tuning.enabled {
             let default_ifaces = Self::resolve_default_interfaces(ctx);
-            let tuned = apply_tuning(&self.cfg.tuning, &default_ifaces).await;
+            let tuned = if self.inert {
+                default_ifaces
+            } else {
+                apply_tuning(&self.cfg.tuning, &default_ifaces).await
+            };
             if tuned != self.tuned_interfaces {
                 self.tuned_interfaces = tuned;
                 changed = true;
@@ -299,10 +355,12 @@ impl TrafficService {
         loop {
             tokio::select! {
                 _ = telemetry_tick.tick() => {
-                    let wan = self.active_wan.as_deref();
-                    let ifb = self.active_ifb.as_deref();
-                    let snapshot = crate::collect_traffic_telemetry(wan, ifb).await;
-                    ctx.set_traffic_telemetry(snapshot);
+                    if !self.inert {
+                        let wan = self.active_wan.as_deref();
+                        let ifb = self.active_ifb.as_deref();
+                        let snapshot = crate::collect_traffic_telemetry(wan, ifb).await;
+                        ctx.set_traffic_telemetry(snapshot);
+                    }
                 }
 
                 traffic_event = traffic_rx.recv() => {

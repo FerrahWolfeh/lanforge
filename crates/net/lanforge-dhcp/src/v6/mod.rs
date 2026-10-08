@@ -63,7 +63,7 @@ use std::time::{Duration, SystemTime};
 use tracing::{info, warn};
 
 use crate::traits::DhcpPool;
-use config::Dhcpv6Config;
+pub use config::Dhcpv6Config;
 use pool::Ipv6Pool;
 use server::{Dhcpv6Server, HandleResult};
 

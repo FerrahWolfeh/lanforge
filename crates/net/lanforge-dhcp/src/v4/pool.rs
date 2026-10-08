@@ -234,7 +234,9 @@ impl IpPool {
             let ip = Ipv4Addr::from(ip_u32);
 
             self.remove_from_available(ip);
-            if ctx.get_mac_by_ip(IpAddr::V4(ip)).is_none() {
+            if ctx.get_mac_by_ip(IpAddr::V4(ip)).is_none()
+                && !ctx.get_static_registry().v4.contains_key(&ip)
+            {
                 return Some(ip);
             }
         }
@@ -250,7 +252,9 @@ impl IpPool {
             let ip = Ipv4Addr::from(ip_u32);
 
             self.remove_from_available(ip);
-            if ctx.get_mac_by_ip(IpAddr::V4(ip)).is_none() {
+            if ctx.get_mac_by_ip(IpAddr::V4(ip)).is_none()
+                && !ctx.get_static_registry().v4.contains_key(&ip)
+            {
                 return Some(ip);
             }
         }
@@ -261,7 +265,9 @@ impl IpPool {
             let declined_list: Vec<Ipv4Addr> = self.declined.keys().copied().collect();
             self.declined.clear();
             for ip in declined_list {
-                self.add_to_available(ip);
+                if self.is_in_range(ip) && !ctx.get_static_registry().v4.contains_key(&ip) {
+                    self.add_to_available(ip);
+                }
             }
 
             while !self.available.is_empty() {
@@ -271,7 +277,9 @@ impl IpPool {
                 let ip = Ipv4Addr::from(ip_u32);
 
                 self.remove_from_available(ip);
-                if ctx.get_mac_by_ip(IpAddr::V4(ip)).is_none() {
+                if ctx.get_mac_by_ip(IpAddr::V4(ip)).is_none()
+                    && !ctx.get_static_registry().v4.contains_key(&ip)
+                {
                     return Some(ip);
                 }
             }
@@ -281,10 +289,12 @@ impl IpPool {
     }
 
     fn add_to_available(&mut self, ip: Ipv4Addr) {
-        self.available.insert(u32::from(ip));
+        if self.is_in_range(ip) {
+            self.available.insert(u32::from(ip));
+        }
     }
 
-    fn remove_from_available(&mut self, ip: Ipv4Addr) {
+    pub fn remove_from_available(&mut self, ip: Ipv4Addr) {
         self.available.remove(u32::from(ip));
     }
 }

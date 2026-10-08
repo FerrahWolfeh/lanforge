@@ -55,6 +55,7 @@ use std::time::{Duration, Instant, SystemTime};
 use tracing::{debug, info, warn};
 
 pub use config::Dhcpv4Config;
+pub use io::{Dhcpv4SyntheticChannels, Dhcpv4SyntheticHandle, Dhcpv4SyntheticReply};
 use crate::traits::DhcpPool;
 use io::Dhcpv4Transport;
 use lanforge_core::context::{LanforgeContext, ServiceHandle};
@@ -72,12 +73,42 @@ use lanforge_core::context::{LanforgeContext, ServiceHandle};
 pub struct Dhcpv4Service {
     cfg: Dhcpv4Config,
     ctx: LanforgeContext,
+    synthetic: Option<Dhcpv4SyntheticChannels>,
 }
 
 impl Dhcpv4Service {
     #[must_use]
     pub const fn new(cfg: Dhcpv4Config, ctx: LanforgeContext) -> Self {
-        Self { cfg, ctx }
+        Self {
+            cfg,
+            ctx,
+            synthetic: None,
+        }
+    }
+
+    /// Creates a synthetic instance of `Dhcpv4Service` for rootless testing and simulation.
+    #[must_use]
+    pub fn synthetic(cfg: Dhcpv4Config, ctx: LanforgeContext) -> (Dhcpv4SyntheticHandle, Self) {
+        let (in_tx, in_rx) = tokio::sync::mpsc::channel(64);
+        let (out_tx, out_rx) = tokio::sync::mpsc::channel(64);
+
+        let handle = Dhcpv4SyntheticHandle::new(in_tx, out_rx);
+
+        let service = Self {
+            cfg,
+            ctx,
+            synthetic: Some(Dhcpv4SyntheticChannels {
+                in_rx: std::sync::Arc::new(tokio::sync::Mutex::new(in_rx)),
+                out_tx,
+            }),
+        };
+
+        (handle, service)
+    }
+
+    #[must_use]
+    pub const fn is_synthetic(&self) -> bool {
+        self.synthetic.is_some()
     }
 }
 
@@ -299,14 +330,18 @@ impl Dhcpv4Service {
         };
 
         let mut server = DhcpServer::new(current_cfg.clone(), self.ctx.clone());
-        let transport = Dhcpv4Transport::new(&current_cfg.iface, current_cfg.port)?;
+        let transport = if let Some(ref syn) = self.synthetic {
+            Dhcpv4Transport::synthetic(syn.clone())
+        } else {
+            Dhcpv4Transport::new(&current_cfg.iface, current_cfg.port)?
+        };
 
         // Pre-allocate static reservations to avoid collisions with dynamic pool
         let registry = self.ctx.get_static_registry();
         server.pool.reserve_statics(registry.v4_ips());
         // Ensure server_id and router are never leased dynamically to clients
-        server.pool.decline(current_cfg.server_id);
-        server.pool.decline(current_cfg.router);
+        server.pool.remove_from_available(current_cfg.server_id);
+        server.pool.remove_from_available(current_cfg.router);
 
         self.reconcile_and_report(&mut server, &transport, &current_cfg);
 
@@ -578,7 +613,7 @@ impl Dhcpv4Service {
                     match ip {
                         Some(v) => {
                             info!("DHCPv4: New static reservation via CLI: {mac} -> {v}");
-                            server.pool.decline(*v);
+                            server.pool.remove_from_available(*v);
                             info!("DHCPv4: Handled statically.");
                         }
                         None => {

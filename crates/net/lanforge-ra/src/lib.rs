@@ -300,6 +300,32 @@ impl RaState {
     }
 }
 
+/// Test handle for injecting synthetic `ICMPv6` packets into `RaService` and capturing generated RAs.
+#[derive(Clone)]
+pub struct RaSyntheticHandle {
+    rs_tx: tokio::sync::mpsc::Sender<(Vec<u8>, SocketAddrV6)>,
+    ra_rx: std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Vec<u8>>>>,
+}
+
+impl RaSyntheticHandle {
+    pub async fn send_rs(&self, packet: Vec<u8>, src: SocketAddrV6) {
+        let _ = self.rs_tx.send((packet, src)).await;
+    }
+
+    pub async fn recv_ra(&self) -> Option<Vec<u8>> {
+        self.ra_rx.lock().await.recv().await
+    }
+}
+
+pub type RaSyntheticRsRx =
+    std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<(Vec<u8>, SocketAddrV6)>>>;
+
+#[derive(Clone)]
+pub struct RaSyntheticChannels {
+    pub rs_rx: RaSyntheticRsRx,
+    pub ra_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+}
+
 #[lanforge_macros::lanforge_service(
     id = "ra",
     name = "RA Server",
@@ -312,12 +338,45 @@ impl RaState {
 pub struct RaService {
     cfg: RaConfig,
     ctx: LanforgeContext,
+    synthetic: Option<RaSyntheticChannels>,
 }
 
 impl RaService {
     #[must_use]
     pub const fn new(cfg: RaConfig, ctx: LanforgeContext) -> Self {
-        Self { cfg, ctx }
+        Self {
+            cfg,
+            ctx,
+            synthetic: None,
+        }
+    }
+
+    /// Creates a synthetic instance of `RaService` for rootless testing and simulation.
+    #[must_use]
+    pub fn synthetic(cfg: RaConfig, ctx: LanforgeContext) -> (RaSyntheticHandle, Self) {
+        let (rs_tx, rs_rx) = tokio::sync::mpsc::channel(64);
+        let (ra_tx, ra_rx) = tokio::sync::mpsc::channel(64);
+
+        let handle = RaSyntheticHandle {
+            rs_tx,
+            ra_rx: std::sync::Arc::new(tokio::sync::Mutex::new(ra_rx)),
+        };
+
+        let service = Self {
+            cfg,
+            ctx,
+            synthetic: Some(RaSyntheticChannels {
+                rs_rx: std::sync::Arc::new(tokio::sync::Mutex::new(rs_rx)),
+                ra_tx,
+            }),
+        };
+
+        (handle, service)
+    }
+
+    #[must_use]
+    pub const fn is_synthetic(&self) -> bool {
+        self.synthetic.is_some()
     }
 
     async fn resolve_interface_resources(
@@ -400,9 +459,125 @@ impl RaService {
             other_config = u8::from(current_cfg.other_config),
             max_interval_secs = current_cfg.max_interval.as_secs(),
             router_lifetime_secs = current_cfg.effective_router_lifetime().as_secs(),
+            synthetic = self.synthetic.is_some(),
             "RA: Server active"
         );
 
+        if let Some(ref syn) = self.synthetic {
+            self.run_synthetic_server(current_cfg, syn).await
+        } else {
+            self.run_kernel_server(current_cfg).await
+        }
+    }
+
+    async fn run_synthetic_server(
+        &self,
+        current_cfg: RaConfig,
+        syn: &RaSyntheticChannels,
+    ) -> Result<RunResult, CoreError> {
+        let iface_index = self.ctx.target_ifindex().unwrap_or(1);
+        let mac = self
+            .ctx
+            .with_state(|state| {
+                state
+                    .interfaces
+                    .interface_ips
+                    .get(&iface_index)
+                    .and_then(|i| i.mac)
+            })
+            .map_or([0x02, 0x11, 0x22, 0x33, 0x44, 0x55], |m| m.0);
+
+        let mut state = RaState::new();
+
+        // Immediate RA on startup
+        send_ra_internal(
+            &self.ctx,
+            RaSender::Synthetic(&syn.ra_tx),
+            &current_cfg,
+            mac,
+            iface_index,
+            None,
+            &mut state,
+        )
+        .map_err(|e| CoreError::Generic(e.to_string()))?;
+        state.record_multicast();
+
+        let mut next_ra_at = Instant::now() + state.next_interval(&current_cfg);
+
+        // Update live status in context
+        let initial_status = state.build_status(&current_cfg, &self.ctx, Some(next_ra_at));
+        let _ = self.ctx.apply(DeviceUpdate::RaStatusUpdated {
+            status: Some(Box::new(initial_status)),
+        });
+
+        let mut handle = self.ctx.service_handle_network();
+        let rs_rx = syn.rs_rx.clone();
+
+        loop {
+            let now = Instant::now();
+            let sleep_duration = if next_ra_at > now {
+                next_ra_at - now
+            } else {
+                Duration::ZERO
+            };
+
+            let ctx = RaContext {
+                sender: RaSender::Synthetic(&syn.ra_tx),
+                mac,
+                iface_index,
+                lctx: &self.ctx,
+            };
+
+            tokio::select! {
+                // 1. Periodic Advertisement & Timers
+                () = tokio::time::sleep(sleep_duration) => {
+                    Self::perform_periodic_ra(ctx, &current_cfg, &mut state, &mut next_ra_at);
+                }
+
+                // 2. Synthetic Solicitation packets
+                recv_res = async { rs_rx.lock().await.recv().await } => {
+                    let Some((data, src_sa)) = recv_res else {
+                        return Ok(RunResult::Shutdown);
+                    };
+                    self.process_rs_packet(
+                        &data,
+                        Some(*src_sa.ip()),
+                        &current_cfg,
+                        ctx,
+                        &mut state,
+                        next_ra_at,
+                    ).await;
+                }
+
+                // 3. EventBus signals
+                res = handle.next_event() => {
+                    let Some(timed_event) = res else {
+                        return Ok(RunResult::Shutdown);
+                    };
+                    if matches!(
+                        timed_event.event,
+                        LanforgeEvent::System(SystemEvent::ConfigRaChanged)
+                    ) {
+                        return Ok(RunResult::ConfigChanged);
+                    }
+                    lanforge_core::match_event!(timed_event, {
+                        LanforgeEvent::Network(NetworkEvent::PrefixChanged(..)) => {
+                            info!("RA: Prefix change detected — sending immediate RA burst");
+                            state.initial_sent = 0;
+                            next_ra_at = Instant::now();
+                        }
+                        LanforgeEvent::Network(NetworkEvent::RaTriggerRequested) => {
+                            info!("RA: Immediate advertisement burst requested via API");
+                            state.initial_sent = 0;
+                            next_ra_at = Instant::now();
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    async fn run_kernel_server(&self, current_cfg: RaConfig) -> Result<RunResult, CoreError> {
         let iface_index = self.ctx.target_ifindex().ok_or_else(|| {
             CoreError::Generic("Target interface index is not configured in context".to_string())
         })?;
@@ -414,7 +589,7 @@ impl RaService {
         // Immediate RA on startup
         send_ra_internal(
             &self.ctx,
-            &async_socket,
+            RaSender::Socket(&async_socket),
             &current_cfg,
             mac,
             iface_index,
@@ -444,7 +619,7 @@ impl RaService {
             };
 
             let ctx = RaContext {
-                socket: &async_socket,
+                sender: RaSender::Socket(&async_socket),
                 mac,
                 iface_index,
                 lctx: &self.ctx,
@@ -588,10 +763,22 @@ impl AsyncService for RaService {
 }
 
 
+#[derive(Clone, Copy)]
+enum RaSender<'a> {
+    Socket(&'a AsyncFd<Socket>),
+    Synthetic(&'a tokio::sync::mpsc::Sender<Vec<u8>>),
+}
+
+impl RaSender<'_> {
+    const fn is_synthetic(&self) -> bool {
+        matches!(self, Self::Synthetic(_))
+    }
+}
+
 /// Thread-safe context for Router Advertisement operations.
 #[derive(Clone, Copy)]
 struct RaContext<'a> {
-    socket: &'a AsyncFd<Socket>,
+    sender: RaSender<'a>,
     mac: [u8; 6],
     iface_index: u32,
     lctx: &'a LanforgeContext,
@@ -606,7 +793,7 @@ impl RaService {
     ) {
         if let Err(e) = send_ra_internal(
             ctx.lctx,
-            ctx.socket,
+            ctx.sender,
             cfg,
             ctx.mac,
             ctx.iface_index,
@@ -620,6 +807,87 @@ impl RaService {
             *next_ra_at = Instant::now() + interval;
             debug!("Next periodic RA in {:.1}s", interval.as_secs_f64());
             let status = state.build_status(cfg, ctx.lctx, Some(*next_ra_at));
+            let _ = ctx.lctx.apply(DeviceUpdate::RaStatusUpdated {
+                status: Some(Box::new(status)),
+            });
+        }
+    }
+
+    async fn process_rs_packet(
+        &self,
+        data: &[u8],
+        rs_src: Option<Ipv6Addr>,
+        cfg: &RaConfig,
+        ctx: RaContext<'_>,
+        state: &mut RaState,
+        next_ra_at: Instant,
+    ) {
+        if data.first() == Some(&ICMPV6_TYPE_RS) {
+            state.record_solicitation_received();
+            debug!("RS received from {rs_src:?}");
+
+            let delay_ms = if ctx.sender.is_synthetic() {
+                0
+            } else {
+                rand::rng().random_range(0..MAX_RA_DELAY_TIME_MS)
+            };
+            if delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+
+            let dst = rs_src.filter(|ip| !ip.is_unspecified());
+            match dst {
+                Some(unicast_dst) if state.can_unicast_now(&unicast_dst) => {
+                    if let Err(e) = send_ra_internal(
+                        ctx.lctx,
+                        ctx.sender,
+                        cfg,
+                        ctx.mac,
+                        ctx.iface_index,
+                        Some(unicast_dst),
+                        state,
+                    ) {
+                        warn!("RA unicast error: {e:?}");
+                    } else {
+                        debug!("RA unicast -> {unicast_dst}");
+                        state.record_unicast(unicast_dst);
+                    }
+                }
+                None if state.can_multicast_now() => {
+                    if let Err(e) = send_ra_internal(
+                        ctx.lctx,
+                        ctx.sender,
+                        cfg,
+                        ctx.mac,
+                        ctx.iface_index,
+                        None,
+                        state,
+                    ) {
+                        warn!("RA multicast error: {e:?}");
+                    } else {
+                        debug!("RA multicast -> ff02::1");
+                        state.record_multicast();
+                    }
+                }
+                _ => {
+                    debug!("RS discarded: rate limit active");
+                    state.record_solicitation_ignored();
+                }
+            }
+
+            // Passive discovery: se conseguirmos o MAC do cara que pediu o RA,
+            // avisamos o sistema para tentar o prober de SLAAC.
+            if let Some(src) = rs_src
+                && let Some(mac) = ctx.lctx.get_mac_by_ip(IpAddr::V6(src))
+            {
+                tracing::event!(target:(module_path!()),tracing::Level::DEBUG,"RS trigger: emitindo RsReceived para {}",mac);
+                let _ = ctx
+                    .lctx
+                    .bus()
+                    .publish(LanforgeEvent::Network(NetworkEvent::RsReceived { mac }));
+            }
+
+            let status = state.build_status(cfg, ctx.lctx, Some(next_ra_at));
             let _ = ctx.lctx.apply(DeviceUpdate::RaStatusUpdated {
                 status: Some(Box::new(status)),
             });
@@ -645,76 +913,11 @@ impl RaService {
             Ok((n, src_sa)) => {
                 guard.clear_ready();
                 if n > 0 {
-                    let data = &buf[..n];
-                    if data.first() == Some(&ICMPV6_TYPE_RS) {
-                        state.record_solicitation_received();
-                        let rs_src: Option<Ipv6Addr> = src_sa.as_socket().and_then(|s| match s {
-                            SocketAddr::V6(v6) => Some(*v6.ip()),
-                            SocketAddr::V4(_) => None,
-                        });
-                        debug!("RS received from {rs_src:?}");
-
-                        // RFC 4861: Random delay before responding to RS
-                        let delay_ms = rand::rng().random_range(0..MAX_RA_DELAY_TIME_MS);
-                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-
-                        let dst = rs_src.filter(|ip| !ip.is_unspecified());
-                        match dst {
-                            Some(unicast_dst) if state.can_unicast_now(&unicast_dst) => {
-                                if let Err(e) = send_ra_internal(
-                                    ctx.lctx,
-                                    ctx.socket,
-                                    cfg,
-                                    ctx.mac,
-                                    ctx.iface_index,
-                                    Some(unicast_dst),
-                                    state,
-                                ) {
-                                    warn!("RA unicast error: {e:?}");
-                                } else {
-                                    debug!("RA unicast -> {unicast_dst}");
-                                    state.record_unicast(unicast_dst);
-                                }
-                            }
-                            None if state.can_multicast_now() => {
-                                if let Err(e) = send_ra_internal(
-                                    ctx.lctx,
-                                    ctx.socket,
-                                    cfg,
-                                    ctx.mac,
-                                    ctx.iface_index,
-                                    None,
-                                    state,
-                                ) {
-                                    warn!("RA multicast error: {e:?}");
-                                } else {
-                                    debug!("RA multicast -> ff02::1");
-                                    state.record_multicast();
-                                }
-                            }
-                            _ => {
-                                debug!("RS discarded: rate limit active");
-                                state.record_solicitation_ignored();
-                            }
-                        }
-
-                        // Passive discovery: se conseguirmos o MAC do cara que pediu o RA,
-                        // avisamos o sistema para tentar o prober de SLAAC.
-                        if let Some(src) = rs_src
-                            && let Some(mac) = ctx.lctx.get_mac_by_ip(IpAddr::V6(src))
-                        {
-                            tracing::event!(target:(module_path!()),tracing::Level::DEBUG,"RS trigger: emitindo RsReceived para {}",mac);
-                            let _ = ctx
-                                .lctx
-                                .bus()
-                                .publish(LanforgeEvent::Network(NetworkEvent::RsReceived { mac }));
-                        }
-
-                        let status = state.build_status(cfg, ctx.lctx, Some(next_ra_at));
-                        let _ = ctx.lctx.apply(DeviceUpdate::RaStatusUpdated {
-                            status: Some(Box::new(status)),
-                        });
-                    }
+                    let rs_src: Option<Ipv6Addr> = src_sa.as_socket().and_then(|s| match s {
+                        SocketAddr::V6(v6) => Some(*v6.ip()),
+                        SocketAddr::V4(_) => None,
+                    });
+                    self.process_rs_packet(&buf[..n], rs_src, cfg, ctx, state, next_ra_at).await;
                 }
             }
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
@@ -724,13 +927,12 @@ impl RaService {
         }
         Ok(())
     }
-
 }
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn send_ra_internal(
     lctx: &LanforgeContext,
-    socket: &AsyncFd<Socket>,
+    sender: RaSender<'_>,
     cfg: &RaConfig,
     mac: [u8; 6],
     iface_index: u32,
@@ -739,9 +941,11 @@ fn send_ra_internal(
 ) -> Result<(), NetworkError> {
     let if_ips = lctx.get_interface_state(iface_index);
 
-    let src_ll = if_ips
-        .link_local
-        .ok_or(NetworkError::NoLinkLocal(iface_index))?;
+    let src_ll = match if_ips.link_local {
+        Some(ll) => ll,
+        None if sender.is_synthetic() => Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0200, 0, 0, 1),
+        None => return Err(NetworkError::NoLinkLocal(iface_index)),
+    };
     let gua = if_ips.gua;
     let ula = if_ips.ula;
 
@@ -769,10 +973,16 @@ fn send_ra_internal(
     pkt[2] = (csum >> 8) as u8;
     pkt[3] = (csum & 0xFF) as u8;
 
-    socket
-        .get_ref()
-        .send_to(&pkt, &dst_sa)
-        .map_err(|e| NetworkError::Socket(format!("ICMPv6 send_to: {e}")))?;
+    match sender {
+        RaSender::Socket(sock) => {
+            sock.get_ref()
+                .send_to(&pkt, &dst_sa)
+                .map_err(|e| NetworkError::Socket(format!("ICMPv6 send_to: {e}")))?;
+        }
+        RaSender::Synthetic(tx) => {
+            let _ = tx.try_send(pkt);
+        }
+    }
     Ok(())
 }
 
