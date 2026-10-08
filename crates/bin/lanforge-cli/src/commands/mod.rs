@@ -9,6 +9,7 @@ pub mod ra;
 pub mod reload;
 pub mod service;
 pub mod status;
+pub mod traffic;
 pub mod watch;
 pub mod wol;
 
@@ -23,5 +24,6 @@ pub use ra::RaArgs;
 pub use reload::ReloadArgs;
 pub use service::ServiceArgs;
 pub use status::StatusArgs;
+pub use traffic::TrafficArgs;
 pub use watch::WatchArgs;
 pub use wol::WolArgs;

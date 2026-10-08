@@ -15,8 +15,12 @@ use lanforge_types::network::dns::adblock::{AdblockSourceFormat, AdblockUrlKind}
 use lanforge_types::network::dns::{
     AdblockCheckResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse, DnsStatsResponse,
 };
+use lanforge_types::network::TrafficConfig;
 use lanforge_types::network::firewall::FirewallStatus;
-use lanforge_types::system::{PppoeStatusResponse, RaStatusResponse, ServiceAction};
+use lanforge_types::network::traffic::TrafficTelemetryResponse;
+use lanforge_types::system::{
+    PppoeStatusResponse, RaStatusResponse, ServiceAction, TrafficStatusResponse,
+};
 use lanforge_types::update::LeaseTarget;
 
 #[cfg(feature = "remote")]
@@ -824,6 +828,42 @@ impl LanforgeClient {
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.host_import(hosts).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn traffic_status(&self) -> Result<Box<TrafficStatusResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(self.http_get("/traffic/status").await?));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.traffic_status().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn traffic_telemetry(&self) -> Result<Box<TrafficTelemetryResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(self.http_get("/traffic/telemetry").await?));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.traffic_telemetry().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn traffic_config(&self) -> Result<Box<TrafficConfig>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(self.http_get("/traffic/config").await?));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.traffic_config().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn update_traffic_config(&self, cfg: TrafficConfig) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_post("/traffic/config", &cfg).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.update_traffic_config(Box::new(cfg)).await.map_err(|e| eyre!("{e}"))
     }
 }
 

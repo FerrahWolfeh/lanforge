@@ -60,6 +60,9 @@ async fn main() -> Result<()> {
         Some(Command::Firewall(args)) => {
             args.execute(&client, &printer).await?;
         }
+        Some(Command::Traffic(args)) => {
+            args.execute(&client, &printer).await?;
+        }
         Some(Command::Db(args)) => {
             args.execute(&client, &printer).await?;
         }

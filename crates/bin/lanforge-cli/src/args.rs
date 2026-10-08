@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use crate::commands::{
     DbArgs, DevicesArgs, DhcpArgs, DnsArgs, FirewallArgs, HostArgs, PppoeArgs, RaArgs, ReloadArgs,
-    ServiceArgs, StatusArgs, WatchArgs, WolArgs,
+    ServiceArgs, StatusArgs, TrafficArgs, WatchArgs, WolArgs,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -83,6 +83,9 @@ pub enum Command {
     Dhcp(DhcpArgs),
     /// Manage nftables firewall and NAT orchestrator (status, reload)
     Firewall(FirewallArgs),
+    /// Manage network traffic shaping (`SQM` / `CAKE`), `NIC` hardware tuning, and live rates
+    #[command(alias = "qos")]
+    Traffic(TrafficArgs),
     /// Embedded database maintenance (vacuum, prune, clean)
     Db(DbArgs),
 }
