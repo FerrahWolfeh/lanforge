@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use crate::commands::{
-    DbArgs, DevicesArgs, DhcpArgs, DnsArgs, FirewallArgs, PppoeArgs, RaArgs, ReloadArgs,
+    DbArgs, DevicesArgs, DhcpArgs, DnsArgs, FirewallArgs, HostArgs, PppoeArgs, RaArgs, ReloadArgs,
     ServiceArgs, StatusArgs, WatchArgs, WolArgs,
 };
 
@@ -65,6 +65,9 @@ pub enum Command {
     /// Inspect and manage connected and discovered network devices (list, show, purge)
     #[command(alias = "device")]
     Devices(DevicesArgs),
+    /// Manage static hosts, DHCP reservations, and local DNS overrides
+    #[command(alias = "hosts")]
+    Host(HostArgs),
     /// Send Wake-on-LAN magic packet to power on a networked device
     #[command(alias = "wake")]
     Wol(WolArgs),

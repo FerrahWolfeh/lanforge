@@ -5,10 +5,12 @@ use comfy_table::{Table, presets};
 use serde::Serialize;
 
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct Printer {
     pub json: bool,
     pub no_color: bool,
     pub ascii: bool,
+    pub yes: bool,
 }
 
 impl Printer {
@@ -18,7 +20,14 @@ impl Printer {
             json,
             no_color,
             ascii,
+            yes: false,
         }
+    }
+
+    #[must_use]
+    pub const fn with_yes(mut self, yes: bool) -> Self {
+        self.yes = yes;
+        self
     }
 
     /// Prints a serializable struct as formatted JSON to stdout.

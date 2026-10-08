@@ -3,8 +3,9 @@ use color_eyre::eyre::{Context, Result, eyre};
 use tokio::net::UnixStream;
 
 use lanforge_api::api::{
-    DeviceListQuery, DevicesResponse, DhcpReconcileResponse, HttpErrorResponse, HttpWrappedResponse,
-    ServiceBannersResponse, SimpleSuccess, StatusResponse, WhoisResponse,
+    DeviceListQuery, DevicesResponse, DhcpReconcileResponse, HostConfigEntry, HostsResponse,
+    HttpErrorResponse, HttpWrappedResponse, ServiceBannersResponse, SimpleSuccess, StatusResponse,
+    WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::identifiers::MacAddr;
@@ -334,6 +335,29 @@ impl LanforgeClient {
         let body_bytes = Bytes::from(serde_json::to_vec(body)?);
         let (status, bytes) = self
             .send_request(Method::PUT, path, Some(body_bytes))
+            .await?;
+        if status == StatusCode::NO_CONTENT {
+            if let Ok(wrapper) =
+                serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
+            {
+                return Ok(T::unwrap(wrapper));
+            }
+            if let Ok(wrapper) = serde_json::from_str::<T::Wrapper>("null") {
+                return Ok(T::unwrap(wrapper));
+            }
+        }
+        Self::decode_bytes(&bytes)
+    }
+
+    #[cfg(feature = "remote")]
+    pub async fn http_patch<B: serde::Serialize + Send + Sync, T: HttpWrappedResponse>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T> {
+        let body_bytes = Bytes::from(serde_json::to_vec(body)?);
+        let (status, bytes) = self
+            .send_request(Method::PATCH, path, Some(body_bytes))
             .await?;
         if status == StatusCode::NO_CONTENT {
             if let Ok(wrapper) =
@@ -680,6 +704,61 @@ impl LanforgeClient {
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.db_log_clean().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn host_list(&self) -> Result<HostsResponse> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_get("/hosts").await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.host_list().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn host_add(&self, entry: HostConfigEntry) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_post("/hosts", &entry).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.host_add(Box::new(entry)).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn host_set(
+        &self,
+        mac: MacAddr,
+        field: String,
+        value: String,
+    ) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self
+                .http_patch(
+                    &format!("/hosts/{mac}"),
+                    &serde_json::json!({ "field": field, "value": value }),
+                )
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.host_set(mac, field, value).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn host_remove(&self, mac: MacAddr) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_delete(&format!("/hosts/{mac}")).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.host_remove(mac).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn host_import(&self, hosts: Vec<HostConfigEntry>) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_post("/hosts/import", &hosts).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.host_import(hosts).await.map_err(|e| eyre!("{e}"))
     }
 }
 

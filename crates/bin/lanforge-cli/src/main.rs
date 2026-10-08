@@ -15,7 +15,7 @@ async fn main() -> Result<()> {
         colored::control::set_override(false);
     }
 
-    let printer = Printer::new(cli.json, cli.no_color, cli.ascii);
+    let printer = Printer::new(cli.json, cli.no_color, cli.ascii).with_yes(cli.yes);
 
     #[cfg(feature = "remote")]
     let client = LanforgeClient::new(cli.socket, cli.remote, cli.token)?;
@@ -34,6 +34,9 @@ async fn main() -> Result<()> {
             args.execute(&client, &printer).await?;
         }
         Some(Command::Devices(args)) => {
+            args.execute(&client, &printer).await?;
+        }
+        Some(Command::Host(args)) => {
             args.execute(&client, &printer).await?;
         }
         Some(Command::Wol(args)) => {
