@@ -45,7 +45,10 @@ async fn test_tftp_path_traversal_prevention() {
     let ctx_service = ctx.clone();
 
     tokio::spawn(async move {
-        service.serve(&ctx_service).await.expect("TFTP service failed to run");
+        service
+            .serve(&ctx_service)
+            .await
+            .expect("TFTP service failed to run");
     });
 
     // Wait for service to bind and register port
@@ -113,7 +116,7 @@ async fn test_tftp_path_traversal_prevention() {
     // --- Part C: Verify Option Negotiation (RFC 2347/2348: tsize and blksize) ---
     let mut opt_packet = Vec::new();
     opt_packet.extend_from_slice(&1u16.to_be_bytes()); // RRQ
-    opt_packet.extend_from_slice(b"valid.txt\0octet\0blksize\01024\0tsize\00\0");
+    opt_packet.extend_from_slice(b"valid.txt\0octet\0blksize\01024\0tsize\x00\0");
     client.send_to(&opt_packet, tftp_addr).await.unwrap();
 
     let (n3, server_session_addr3) =

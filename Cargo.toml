@@ -41,20 +41,20 @@ lanforge-traffic = { path = "crates/net/lanforge-traffic" }
 lanforge-api-dispatch = { path = "crates/api/lanforge-api-dispatch" }
 
 # Third party
-hotpath = { version = "0.26.0", default-features = false }
+hotpath = { version = "0.28.6", default-features = false }
 tikv-jemallocator = { version = "0.7.0", features = ["profiling"] }
-tokio = { version = "1.53.1" }
+tokio = { version = "1.53.2" }
 serde = { version = "1.0.229", features = ["derive"] }
 tracing = { version = "0.1.44" }
-thiserror = { version = "2.0.20" }
-hyper = { version = "1.11.1", default-features = false }
-hyper-util = { version = "0.1.13", default-features = false }
+thiserror = { version = "2.0.21" }
+hyper = { version = "1.12.0", default-features = false }
+hyper-util = { version = "0.1.21", default-features = false }
 hyper-rustls = { version = "0.27.10", default-features = false }
 http-body-util = { version = "0.1.5" }
 serde_json = { version = "1.0.151" }
 chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.7", features = ["cargo", "derive", "env"] }
-smallvec = { version = "1.16.1", features = [
+smallvec = { version = "1.16.2", features = [
     "union",
     "const_generics",
     "serde",
@@ -65,7 +65,7 @@ rustls = { version = "0.23.45", default-features = false, features = [
     "logging",
     "tls12",
 ] }
-tokio-rustls = { version = "0.26.5", default-features = false, features = [
+tokio-rustls = { version = "0.26.6", default-features = false, features = [
     "logging",
     "tls12",
 ] }
@@ -81,16 +81,16 @@ netlink-packet-core = "0.9.0"
 netlink-sys = "0.9.0"
 socket2 = { version = "0.6.5", features = ["all"] }
 rand = "0.10.3"
-libc = "0.2.189"
+libc = "0.2.190"
 pnet = "0.35.0"
 bytes = "1.12.1"
 bytesize = "2.7.0"
-uuid = { version = "1.26.1", features = ["v4", "serde"] }
+uuid = { version = "1.27.0", features = ["v4", "serde"] }
 argon2 = { version = "0.6.0" }
 password-hash = { version = "0.6.1" }
 hex = "0.4.3"
 base64 = "0.23.1"
-toml = "1.1.6"
+toml = "1.1.7"
 sd-notify = "0.5.0"
 
 [profile.release]

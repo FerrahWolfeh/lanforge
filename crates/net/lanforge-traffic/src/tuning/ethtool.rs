@@ -172,7 +172,9 @@ async fn run_ethtool_ring(iface: &str, rx: u32, tx: u32) -> bool {
         Ok(out) => out.status.success(),
         Err(e) => {
             if e.kind() == std::io::ErrorKind::NotFound {
-                warn!("ethtool binary not found. Please install ethtool ('sudo dnf install -y ethtool' on Fedora)");
+                warn!(
+                    "ethtool binary not found. Please install ethtool ('sudo dnf install -y ethtool' on Fedora)"
+                );
             }
             false
         }
@@ -249,7 +251,9 @@ pub async fn disable_eee(iface: &str) {
         }
         Err(e) => {
             if e.kind() == std::io::ErrorKind::NotFound {
-                warn!("ethtool binary not found. Please install ethtool ('sudo dnf install -y ethtool' on Fedora)");
+                warn!(
+                    "ethtool binary not found. Please install ethtool ('sudo dnf install -y ethtool' on Fedora)"
+                );
             } else {
                 debug!(iface = %iface, error = %e, "Could not run ethtool to toggle EEE");
             }
@@ -261,7 +265,14 @@ pub async fn disable_eee(iface: &str) {
 pub async fn apply_udp_gro_forwarding(iface: &str) {
     let ethtool_bin = resolve_ethtool_binary();
     let res = Command::new(ethtool_bin)
-        .args(["-K", iface, "rx-udp-gro-forwarding", "on", "rx-gro-list", "off"])
+        .args([
+            "-K",
+            iface,
+            "rx-udp-gro-forwarding",
+            "on",
+            "rx-gro-list",
+            "off",
+        ])
         .output()
         .await;
 
@@ -288,7 +299,7 @@ mod tests {
 
     #[test]
     fn test_parse_ethtool_g_output() {
-        let sample = r#"
+        let sample = r"
 Ring parameters for enp39s0:
 Pre-set maximums:
 RX:			256
@@ -302,7 +313,7 @@ RX:			256
 RX Mini:		n/a
 RX Jumbo:		n/a
 TX:			256
-"#;
+";
         let parsed = parse_ethtool_g_output(sample).unwrap();
         assert_eq!(parsed.max_rx, Some(256));
         assert_eq!(parsed.max_tx, Some(256));
@@ -312,7 +323,7 @@ TX:			256
 
     #[test]
     fn test_parse_ethtool_g_output_large() {
-        let sample = r#"
+        let sample = r"
 Ring parameters for eth0:
 Pre-set maximums:
 RX:			1024
@@ -320,7 +331,7 @@ TX:			1024
 Current hardware settings:
 RX:			512
 TX:			512
-"#;
+";
         let parsed = parse_ethtool_g_output(sample).unwrap();
         assert_eq!(parsed.max_rx, Some(1024));
         assert_eq!(parsed.max_tx, Some(1024));
@@ -330,23 +341,23 @@ TX:			512
 
     #[test]
     fn test_parse_ethtool_eee_status() {
-        let enabled_sample = r#"
+        let enabled_sample = r"
 ETHTOOL_GEEE:
 	Supported EEE link modes:  1000baseT/Full
 	Advertised EEE link modes:  1000baseT/Full
 	Link partner advertised EEE link modes:  1000baseT/Full
 	EEE status: enabled - active
 	Tx LPI: 17 (us)
-"#;
+";
         assert_eq!(parse_ethtool_eee_status(enabled_sample), Some(true));
 
-        let disabled_sample = r#"
+        let disabled_sample = r"
 ETHTOOL_GEEE:
 	Supported EEE link modes:  1000baseT/Full
 	Advertised EEE link modes:  Not reported
 	Link partner advertised EEE link modes:  Not reported
 	EEE status: disabled
-"#;
+";
         assert_eq!(parse_ethtool_eee_status(disabled_sample), Some(false));
     }
 }

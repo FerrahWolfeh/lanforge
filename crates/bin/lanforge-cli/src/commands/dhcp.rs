@@ -297,7 +297,12 @@ fn render_dhcp_status(
         "DISABLED".red().bold().to_string()
     };
     let v4_lease = format_lease_duration(options.v4.lease_time);
-    println!("  {:<16} {}  ·  Default Lease: {}", "IPv4 Service:".dimmed(), v4_state, v4_lease.white());
+    println!(
+        "  {:<16} {}  ·  Default Lease: {}",
+        "IPv4 Service:".dimmed(),
+        v4_state,
+        v4_lease.white()
+    );
 
     let v6_state = if options.v6.enabled {
         "ENABLED".green().bold().to_string()
@@ -305,10 +310,19 @@ fn render_dhcp_status(
         "DISABLED".red().bold().to_string()
     };
     let v6_lease = format_lease_duration(options.v6.lease_time);
-    println!("  {:<16} {}  ·  Default Lease: {}", "IPv6 Service:".dimmed(), v6_state, v6_lease.white());
+    println!(
+        "  {:<16} {}  ·  Default Lease: {}",
+        "IPv6 Service:".dimmed(),
+        v6_state,
+        v6_lease.white()
+    );
 
     let tftp_state = if options.tftp.enabled {
-        format!("{} ({})", "ENABLED".green().bold(), options.tftp.listen_addr)
+        format!(
+            "{} ({})",
+            "ENABLED".green().bold(),
+            options.tftp.listen_addr
+        )
     } else {
         "DISABLED".dimmed().to_string()
     };
@@ -397,7 +411,11 @@ fn render_progress_bar(percent: f32, width: usize, ascii: bool) -> String {
     if ascii {
         format!("[{}{}]", "#".repeat(filled), "-".repeat(empty))
     } else {
-        format!("[{}{}]", "█".repeat(filled).bright_cyan(), "░".repeat(empty).dimmed())
+        format!(
+            "[{}{}]",
+            "█".repeat(filled).bright_cyan(),
+            "░".repeat(empty).dimmed()
+        )
     }
 }
 
@@ -469,8 +487,10 @@ async fn list_leases(client: &LanforgeClient, printer: &Printer, args: LeasesArg
             m.hostname.to_lowercase().contains(&needle)
                 || m.mac.to_string().to_lowercase().contains(&needle)
                 || m.v4.is_some_and(|ip| ip.to_string().contains(&needle))
-                || m.v6.is_some_and(|ip| ip.to_string().to_lowercase().contains(&needle))
-                || m.v6_prefix.is_some_and(|ip| ip.to_string().to_lowercase().contains(&needle))
+                || m.v6
+                    .is_some_and(|ip| ip.to_string().to_lowercase().contains(&needle))
+                || m.v6_prefix
+                    .is_some_and(|ip| ip.to_string().to_lowercase().contains(&needle))
         });
     }
 
@@ -613,7 +633,13 @@ async fn release_lease(
     printer: &Printer,
     args: LeaseActionArgs,
 ) -> Result<()> {
-    let mac = resolve_or_prompt_mac(client, printer, args.target, "Select client lease to release:").await?;
+    let mac = resolve_or_prompt_mac(
+        client,
+        printer,
+        args.target,
+        "Select client lease to release:",
+    )
+    .await?;
 
     if std::io::stdout().is_terminal() && !printer.yes {
         let confirmed = Confirm::new(&format!("Release active DHCP lease for MAC {mac}?"))
@@ -633,7 +659,10 @@ async fn release_lease(
     }
 
     let target_str = target.map_or_else(|| "all leases".to_string(), |t| format!("lease {t}"));
-    printer.success(&format!("Released {target_str} for MAC {mac}: {}", resp.message));
+    printer.success(&format!(
+        "Released {target_str} for MAC {mac}: {}",
+        resp.message
+    ));
     Ok(())
 }
 
@@ -642,7 +671,13 @@ async fn renew_lease(
     printer: &Printer,
     args: LeaseActionArgs,
 ) -> Result<()> {
-    let mac = resolve_or_prompt_mac(client, printer, args.target, "Select client lease to renew:").await?;
+    let mac = resolve_or_prompt_mac(
+        client,
+        printer,
+        args.target,
+        "Select client lease to renew:",
+    )
+    .await?;
     let target = resolve_target(args.v4, args.iaid, args.prefix);
     let resp = client.lease_renew(mac, target.clone()).await?;
 
@@ -651,7 +686,10 @@ async fn renew_lease(
     }
 
     let target_str = target.map_or_else(|| "all leases".to_string(), |t| format!("lease {t}"));
-    printer.success(&format!("Renewed {target_str} for MAC {mac}: {}", resp.message));
+    printer.success(&format!(
+        "Renewed {target_str} for MAC {mac}: {}",
+        resp.message
+    ));
     Ok(())
 }
 
@@ -724,7 +762,9 @@ async fn execute_options(
             client.update_dhcp_options(resp.options).await?;
             printer.success(&format!(
                 "Default gateway updated: {} -> {}",
-                old_gw.map_or_else(|| "none".to_string(), |g| g.to_string()).yellow(),
+                old_gw
+                    .map_or_else(|| "none".to_string(), |g| g.to_string())
+                    .yellow(),
                 ip.to_string().green().bold()
             ));
         }
@@ -775,7 +815,11 @@ async fn execute_options_set(
         resp.options.v4.dns_servers = dns;
     }
     if let Some(domain) = set_args.domain {
-        resp.options.v4.domain_name = if domain.is_empty() { None } else { Some(domain) };
+        resp.options.v4.domain_name = if domain.is_empty() {
+            None
+        } else {
+            Some(domain)
+        };
     }
     if let Some(search) = set_args.search_domains {
         resp.options.v4.search_domains = search;
@@ -819,7 +863,11 @@ async fn execute_options_set(
 
 fn render_dhcp_options(opts: &DhcpOptionsConfig, _printer: &Printer) {
     println!();
-    println!(" {} {}", "●".bright_cyan(), "DHCP SERVER OPTIONS".bold().white());
+    println!(
+        " {} {}",
+        "●".bright_cyan(),
+        "DHCP SERVER OPTIONS".bold().white()
+    );
     println!();
     render_v4_options(&opts.v4);
     println!();
@@ -839,17 +887,27 @@ fn render_v4_options(v4: &Dhcpv4Options) {
     println!(
         "    {:<28} {}",
         "Default Gateway (Opt 3):".dimmed(),
-        v4.router.map_or_else(|| "none".yellow().to_string(), |g| g.to_string().cyan().bold().to_string())
+        v4.router.map_or_else(
+            || "none".yellow().to_string(),
+            |g| g.to_string().cyan().bold().to_string()
+        )
     );
     println!(
         "    {:<28} {}",
         "Subnet Mask (Opt 1):".dimmed(),
-        v4.subnet_mask.map_or_else(|| "none".to_string(), |m| format_mask_with_cidr(m).cyan().to_string())
+        v4.subnet_mask.map_or_else(
+            || "none".to_string(),
+            |m| format_mask_with_cidr(m).cyan().to_string()
+        )
     );
     let dns_v4 = if v4.dns_servers.is_empty() {
         "—".dimmed().to_string()
     } else {
-        v4.dns_servers.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+        v4.dns_servers
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     println!("    {:<28} {dns_v4}", "DNS Resolvers (Opt 6):".dimmed());
     println!(
@@ -862,11 +920,18 @@ fn render_v4_options(v4: &Dhcpv4Options) {
     } else {
         v4.search_domains.join(", ")
     };
-    println!("    {:<28} {search_v4}", "Search Domains (Opt 119):".dimmed());
+    println!(
+        "    {:<28} {search_v4}",
+        "Search Domains (Opt 119):".dimmed()
+    );
     let ntp_v4 = if v4.ntp_servers.is_empty() {
         "—".dimmed().to_string()
     } else {
-        v4.ntp_servers.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+        v4.ntp_servers
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     println!("    {:<28} {ntp_v4}", "NTP Servers (Opt 42):".dimmed());
     println!(
@@ -896,7 +961,11 @@ fn render_v6_options(v6: &Dhcpv6Options) {
     let dns_v6 = if v6.dns_servers.is_empty() {
         "—".dimmed().to_string()
     } else {
-        v6.dns_servers.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+        v6.dns_servers
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     println!("    {:<28} {dns_v6}", "DNS Resolvers (Opt 23):".dimmed());
     let search_v6 = if v6.search_domains.is_empty() {
@@ -904,7 +973,10 @@ fn render_v6_options(v6: &Dhcpv6Options) {
     } else {
         v6.search_domains.join(", ")
     };
-    println!("    {:<28} {search_v6}", "Search Domains (Opt 24):".dimmed());
+    println!(
+        "    {:<28} {search_v6}",
+        "Search Domains (Opt 24):".dimmed()
+    );
     let ntp_v6 = if v6.ntp_servers.is_empty() {
         "—".dimmed().to_string()
     } else {
@@ -930,9 +1002,17 @@ fn render_tftp_options(tftp: &TftpOptions) {
         "DISABLED".dimmed().to_string()
     };
     println!("  TFTP / PXE Service: {tftp_status}");
-    println!("    {:<28} {}", "Listen Address:".dimmed(), tftp.listen_addr);
+    println!(
+        "    {:<28} {}",
+        "Listen Address:".dimmed(),
+        tftp.listen_addr
+    );
     println!("    {:<28} {}", "Root Directory:".dimmed(), tftp.root_dir);
-    println!("    {:<28} {} bytes", "Block Size:".dimmed(), tftp.block_size);
+    println!(
+        "    {:<28} {} bytes",
+        "Block Size:".dimmed(),
+        tftp.block_size
+    );
     println!("    {:<28} {}s", "Timeout:".dimmed(), tftp.timeout);
 }
 
@@ -1016,11 +1096,7 @@ async fn scope_add_v4(
     Ok(())
 }
 
-async fn scope_remove_v4(
-    client: &LanforgeClient,
-    printer: &Printer,
-    target: &str,
-) -> Result<()> {
+async fn scope_remove_v4(client: &LanforgeClient, printer: &Printer, target: &str) -> Result<()> {
     let mut pools = client.dhcp_pools_config().await?;
     let index_opt = target.parse::<usize>().ok().and_then(|idx| {
         if idx > 0 && idx <= pools.v4_pools.len() {
@@ -1032,12 +1108,16 @@ async fn scope_remove_v4(
 
     let remove_idx = index_opt.or_else(|| {
         pools.v4_pools.iter().position(|p| {
-            p.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(target))
+            p.name
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(target))
         })
     });
 
     let Some(idx) = remove_idx else {
-        bail!("No IPv4 scope found matching target '{target}'. Use 'lanforge dhcp scopes list' to view scopes.");
+        bail!(
+            "No IPv4 scope found matching target '{target}'. Use 'lanforge dhcp scopes list' to view scopes."
+        );
     };
 
     let removed = pools.v4_pools.remove(idx);
@@ -1078,11 +1158,7 @@ async fn scope_add_v6(
     Ok(())
 }
 
-async fn scope_remove_v6(
-    client: &LanforgeClient,
-    printer: &Printer,
-    target: &str,
-) -> Result<()> {
+async fn scope_remove_v6(client: &LanforgeClient, printer: &Printer, target: &str) -> Result<()> {
     let mut pools = client.dhcp_pools_config().await?;
     let index_opt = target.parse::<usize>().ok().and_then(|idx| {
         if idx > 0 && idx <= pools.v6_pools.len() {
@@ -1094,12 +1170,16 @@ async fn scope_remove_v6(
 
     let remove_idx = index_opt.or_else(|| {
         pools.v6_pools.iter().position(|p| {
-            p.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(target))
+            p.name
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(target))
         })
     });
 
     let Some(idx) = remove_idx else {
-        bail!("No IPv6 scope found matching target '{target}'. Use 'lanforge dhcp scopes list' to view scopes.");
+        bail!(
+            "No IPv6 scope found matching target '{target}'. Use 'lanforge dhcp scopes list' to view scopes."
+        );
     };
 
     pools.v6_pools.remove(idx);
@@ -1112,7 +1192,11 @@ async fn scope_remove_v6(
 
 fn render_dhcp_scopes(pools: &DhcpPoolsConfigResponse, printer: &Printer) {
     println!();
-    println!(" {} {}", "●".bright_cyan(), "CONFIGURED DHCP ADDRESS SCOPES".bold().white());
+    println!(
+        " {} {}",
+        "●".bright_cyan(),
+        "CONFIGURED DHCP ADDRESS SCOPES".bold().white()
+    );
     println!();
 
     if pools.v4_pools.is_empty() {
@@ -1245,11 +1329,8 @@ mod tests {
             parse_subnet_mask("/16").unwrap(),
             Ipv4Addr::new(255, 255, 0, 0)
         );
-        assert_eq!(
-            parse_subnet_mask("/32").unwrap(),
-            Ipv4Addr::new(255, 255, 255, 255)
-        );
-        assert_eq!(parse_subnet_mask("/0").unwrap(), Ipv4Addr::new(0, 0, 0, 0));
+        assert_eq!(parse_subnet_mask("/32").unwrap(), Ipv4Addr::BROADCAST);
+        assert_eq!(parse_subnet_mask("/0").unwrap(), Ipv4Addr::UNSPECIFIED);
         assert!(parse_subnet_mask("/33").is_err());
         assert!(parse_subnet_mask("not-a-mask").is_err());
     }

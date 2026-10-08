@@ -35,11 +35,7 @@ pub fn validate_firewall_candidate(
     compute_diff(candidate, current, &mut diff_summary);
 
     let valid = errors.is_empty();
-    let tx_id = if valid {
-        Some(tx_id_generator())
-    } else {
-        None
-    };
+    let tx_id = if valid { Some(tx_id_generator()) } else { None };
 
     FirewallValidationReport {
         valid,
@@ -271,7 +267,11 @@ fn diff_globals(candidate: &FirewallConfig, current: &FirewallConfig, diff: &mut
 
 fn diff_zones(candidate: &FirewallConfig, current: &FirewallConfig, diff: &mut Vec<String>) {
     let curr_zones: HashMap<&str, _> = current.zones.iter().map(|z| (z.name.as_str(), z)).collect();
-    let cand_zones: HashMap<&str, _> = candidate.zones.iter().map(|z| (z.name.as_str(), z)).collect();
+    let cand_zones: HashMap<&str, _> = candidate
+        .zones
+        .iter()
+        .map(|z| (z.name.as_str(), z))
+        .collect();
 
     for (name, z) in &cand_zones {
         if let Some(curr_z) = curr_zones.get(name) {
@@ -350,7 +350,11 @@ fn diff_forwardings(candidate: &FirewallConfig, current: &FirewallConfig, diff: 
     }
 }
 
-fn diff_port_forwards(candidate: &FirewallConfig, current: &FirewallConfig, diff: &mut Vec<String>) {
+fn diff_port_forwards(
+    candidate: &FirewallConfig,
+    current: &FirewallConfig,
+    diff: &mut Vec<String>,
+) {
     for pf in &candidate.port_forwards {
         if !current.port_forwards.contains(pf) {
             diff.push(format!(
@@ -409,7 +413,12 @@ mod tests {
         let report = validate_firewall_candidate(&candidate, &current, &[], || "tx-test".into());
         assert!(!report.valid);
         assert!(report.tx_id.is_none());
-        assert!(report.errors.iter().any(|e| e.contains("Port forward collision")));
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("Port forward collision"))
+        );
     }
 
     #[test]
@@ -422,7 +431,12 @@ mod tests {
 
         let report = validate_firewall_candidate(&candidate, &current, &[], || "tx-test".into());
         assert!(!report.valid);
-        assert!(report.errors.iter().any(|e| e.contains("Interface overlap")));
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("Interface overlap"))
+        );
     }
 
     #[test]
@@ -431,13 +445,22 @@ mod tests {
         let mut candidate = current.clone();
 
         // Find internal zone, set input policy to Drop and clear open ports (remove SSH and WebUI)
-        let internal = candidate.zones.iter_mut().find(|z| z.name == "internal").unwrap();
+        let internal = candidate
+            .zones
+            .iter_mut()
+            .find(|z| z.name == "internal")
+            .unwrap();
         internal.input_policy = FirewallPolicy::Drop;
         internal.open_ports.clear();
 
         let report = validate_firewall_candidate(&candidate, &current, &[], || "tx-test".into());
         assert!(!report.valid);
-        assert!(report.errors.iter().any(|e| e.contains("Anti-lockout guard")));
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("Anti-lockout guard"))
+        );
     }
 
     #[test]
@@ -456,12 +479,17 @@ mod tests {
             enable_hairpin: true,
         });
 
-        let report = validate_firewall_candidate(&candidate, &current, &[], || "tx-valid-123".into());
+        let report =
+            validate_firewall_candidate(&candidate, &current, &[], || "tx-valid-123".into());
         assert!(report.valid);
         assert_eq!(report.tx_id.as_deref(), Some("tx-valid-123"));
-        assert!(report.errors.is_empty());
-        assert!(report.diff_summary.iter().any(|d| d.contains("Flowtable offload: true -> false")));
+        assert_eq!(report.errors, [] as [String; 0]);
+        assert!(
+            report
+                .diff_summary
+                .iter()
+                .any(|d| d.contains("Flowtable offload: true -> false"))
+        );
         assert!(report.diff_summary.iter().any(|d| d.contains("32400")));
     }
 }
-

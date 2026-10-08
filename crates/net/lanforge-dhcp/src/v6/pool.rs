@@ -146,9 +146,7 @@ impl PoolRange {
                     end_suffix,
                 }
             } else {
-                tracing::warn!(
-                    "[DHCPv6] Invalid Floating range suffixes. Falling back to empty."
-                );
+                tracing::warn!("[DHCPv6] Invalid Floating range suffixes. Falling back to empty.");
                 Self::Floating {
                     start_suffix: [0; 8],
                     end_suffix: [0; 8],
@@ -653,7 +651,8 @@ impl Ipv6Pool {
             };
 
             // 1. Deterministic Candidate (Stability)
-            let det_offset = Self::generate_deterministic_u128(&prefix, target_duid.as_bytes(), size);
+            let det_offset =
+                Self::generate_deterministic_u128(&prefix, target_duid.as_bytes(), size);
             let det_ip = Ipv6Addr::from((start + (det_offset % size)).to_be_bytes());
             if is_available_fn(&det_ip) {
                 return Some(det_ip);
@@ -914,7 +913,8 @@ mod tests {
         // Pool esgotado
         assert!(
             pool.allocate(&ctx, &Duid::new(duid(4)), 1, Some(mac(4)), None)
-                .is_empty()
+                .is_empty(),
+            "expected allocation to return no IPs"
         );
     }
 
@@ -1072,9 +1072,9 @@ mod tests {
         let first_ip = ips1[0];
         commit_lease(&ctx, Some(mac(1)), &duid(1), 1, first_ip);
 
-        assert!(
-            pool.allocate(&ctx, &Duid::new(duid(2)), 1, Some(mac(2)), None)
-                .is_empty()
+        assert_eq!(
+            pool.allocate(&ctx, &Duid::new(duid(2)), 1, Some(mac(2)), None),
+            [] as [Ipv6Addr; 0]
         ); // Exhausted
 
         release_mac(&ctx, mac(1));
@@ -1159,9 +1159,9 @@ mod tests {
         assert_ne!(ip1, ip3);
 
         // Pool exhausted
-        assert!(
-            pool.allocate(&ctx, &Duid::new(duid(4)), 1, None, None)
-                .is_empty()
+        assert_eq!(
+            pool.allocate(&ctx, &Duid::new(duid(4)), 1, None, None),
+            [] as [Ipv6Addr; 0]
         );
 
         // Release one and allocate again — the freed IP should be reused

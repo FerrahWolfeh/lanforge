@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lanforge_types::network::traffic::{
-    CakeQdiscStats, CakeTinStats, ConntrackStats, InterfaceTrafficStats, InterfaceThroughputPoint,
+    CakeQdiscStats, CakeTinStats, ConntrackStats, InterfaceThroughputPoint, InterfaceTrafficStats,
     SqmTelemetryStats, TrafficHistorySample, TrafficTelemetryResponse,
 };
 use serde::Deserialize;
@@ -130,11 +130,7 @@ impl TrafficCollector {
 
     /// Periodic telemetry tick: samples interface counters into the ring buffer
     /// without building the entire response or cloning history.
-    pub async fn record_tick(
-        &mut self,
-        wan_iface: Option<&str>,
-        ifb_iface: Option<&str>,
-    ) {
+    pub async fn record_tick(&mut self, wan_iface: Option<&str>, ifb_iface: Option<&str>) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -201,33 +197,29 @@ impl TrafficCollector {
             self.history.push_back(point);
         }
 
-        let resolved_wan = wan_iface
-            .map(String::from)
-            .or_else(|| {
-                interfaces.iter().find_map(|i| {
-                    if i.interface == "ppp0" || i.interface == "wan0" || i.interface == "wan" {
-                        Some(i.interface.clone())
-                    } else {
-                        None
-                    }
-                })
-            });
+        let resolved_wan = wan_iface.map(String::from).or_else(|| {
+            interfaces.iter().find_map(|i| {
+                if i.interface == "ppp0" || i.interface == "wan0" || i.interface == "wan" {
+                    Some(i.interface.clone())
+                } else {
+                    None
+                }
+            })
+        });
 
-        let resolved_ifb = ifb_iface
-            .map(String::from)
-            .or_else(|| {
-                sqm.as_ref()
-                    .and_then(|s| s.ingress.as_ref().map(|i| i.dev.clone()))
-                    .or_else(|| {
-                        interfaces.iter().find_map(|i| {
-                            if i.interface.starts_with("ifb") {
-                                Some(i.interface.clone())
-                            } else {
-                                None
-                            }
-                        })
+        let resolved_ifb = ifb_iface.map(String::from).or_else(|| {
+            sqm.as_ref()
+                .and_then(|s| s.ingress.as_ref().map(|i| i.dev.clone()))
+                .or_else(|| {
+                    interfaces.iter().find_map(|i| {
+                        if i.interface.starts_with("ifb") {
+                            Some(i.interface.clone())
+                        } else {
+                            None
+                        }
                     })
-            });
+                })
+        });
 
         TrafficTelemetryResponse {
             timestamp: now,
@@ -314,12 +306,13 @@ impl Default for TrafficCollector {
 }
 
 /// Global entry point to record a background telemetry tick.
-pub async fn record_traffic_telemetry_tick(
-    wan_iface: Option<&str>,
-    ifb_iface: Option<&str>,
-) {
+pub async fn record_traffic_telemetry_tick(wan_iface: Option<&str>, ifb_iface: Option<&str>) {
     let collector = COLLECTOR.get_or_init(|| Mutex::new(TrafficCollector::new()));
-    collector.lock().await.record_tick(wan_iface, ifb_iface).await;
+    collector
+        .lock()
+        .await
+        .record_tick(wan_iface, ifb_iface)
+        .await;
 }
 
 /// Global entry point to query telemetry.
@@ -334,7 +327,11 @@ pub async fn collect_traffic_telemetry(
 
 /// Parses raw `/proc/net/dev` content and computes instantaneous rate.
 #[must_use]
-#[allow(clippy::cast_precision_loss, clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation
+)]
 pub fn parse_proc_net_dev<S: ::std::hash::BuildHasher>(
     content: &str,
     prev_snapshots: &mut HashMap<String, (Instant, u64, u64), S>,
@@ -364,18 +361,34 @@ pub fn parse_proc_net_dev<S: ::std::hash::BuildHasher>(
         };
 
         let mut fields = data.split_whitespace();
-        let Some(rx_bytes_str) = fields.next() else { continue; };
-        let Some(rx_packets_str) = fields.next() else { continue; };
-        let Some(rx_errors_str) = fields.next() else { continue; };
-        let Some(rx_dropped_str) = fields.next() else { continue; };
+        let Some(rx_bytes_str) = fields.next() else {
+            continue;
+        };
+        let Some(rx_packets_str) = fields.next() else {
+            continue;
+        };
+        let Some(rx_errors_str) = fields.next() else {
+            continue;
+        };
+        let Some(rx_dropped_str) = fields.next() else {
+            continue;
+        };
         // Skip 4 fields (fifo, frame, compressed, multicast)
         if fields.nth(3).is_none() {
             continue;
         }
-        let Some(tx_bytes_str) = fields.next() else { continue; };
-        let Some(tx_packets_str) = fields.next() else { continue; };
-        let Some(tx_errors_str) = fields.next() else { continue; };
-        let Some(tx_dropped_str) = fields.next() else { continue; };
+        let Some(tx_bytes_str) = fields.next() else {
+            continue;
+        };
+        let Some(tx_packets_str) = fields.next() else {
+            continue;
+        };
+        let Some(tx_errors_str) = fields.next() else {
+            continue;
+        };
+        let Some(tx_dropped_str) = fields.next() else {
+            continue;
+        };
 
         let rx_bytes = rx_bytes_str.parse::<u64>().unwrap_or(0);
         let rx_packets = rx_packets_str.parse::<u64>().unwrap_or(0);
@@ -440,7 +453,8 @@ fn read_sysctl_u32(path: &str) -> Option<u32> {
 #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 pub fn read_conntrack_stats() -> Option<ConntrackStats> {
     let active_connections = read_sysctl_u32("/proc/sys/net/netfilter/nf_conntrack_count")?;
-    let max_connections = read_sysctl_u32("/proc/sys/net/netfilter/nf_conntrack_max").unwrap_or(65536);
+    let max_connections =
+        read_sysctl_u32("/proc/sys/net/netfilter/nf_conntrack_max").unwrap_or(65536);
 
     let utilization_percent = if max_connections > 0 {
         ((f64::from(active_connections) / f64::from(max_connections)) * 100.0) as f32
@@ -627,7 +641,7 @@ mod tests {
         assert_eq!(ppp0.tins.len(), 2);
         assert_eq!(ppp0.tins[0].name, "Bulk");
         assert_eq!(ppp0.tins[1].name, "Best Effort");
-        assert_eq!(ppp0.tins[1].sent_packets, 1728127);
+        assert_eq!(ppp0.tins[1].sent_packets, 1_728_127);
 
         let ifb = &parsed[1];
         assert_eq!(ifb.dev, "ifb4ppp0");
@@ -647,12 +661,12 @@ mod tests {
 
         assert_eq!(ifaces.len(), 2);
         assert_eq!(ifaces[0].interface, "lan0");
-        assert_eq!(ifaces[0].rx_bytes, 1000000);
-        assert_eq!(ifaces[0].tx_bytes, 2000000);
+        assert_eq!(ifaces[0].rx_bytes, 1_000_000);
+        assert_eq!(ifaces[0].tx_bytes, 2_000_000);
 
         assert_eq!(ifaces[1].interface, "ppp0");
-        assert_eq!(ifaces[1].rx_bytes, 5000000);
-        assert_eq!(ifaces[1].tx_bytes, 1000000);
+        assert_eq!(ifaces[1].rx_bytes, 5_000_000);
+        assert_eq!(ifaces[1].tx_bytes, 1_000_000);
     }
 
     #[tokio::test]

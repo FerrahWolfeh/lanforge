@@ -42,7 +42,10 @@ pub fn render_status_dashboard(status: &StatusResponse, printer: &Printer, verbo
     print_kv(
         "Memory",
         format_bytes(status.resources.memory_rss_bytes),
-        Some(format!("Virtual: {}", format_bytes(status.resources.memory_vms_bytes))),
+        Some(format!(
+            "Virtual: {}",
+            format_bytes(status.resources.memory_vms_bytes)
+        )),
     );
     print_kv(
         "Database",
@@ -73,7 +76,11 @@ pub fn render_status_dashboard(status: &StatusResponse, printer: &Printer, verbo
         (Some(ip), None) => ip.to_string(),
         _ => "none".to_string(),
     };
-    print_kv("LAN", ipv4_desc, Some(format!("({})", status.network.lan_iface)));
+    print_kv(
+        "LAN",
+        ipv4_desc,
+        Some(format!("({})", status.network.lan_iface)),
+    );
 
     if let Some(gua) = status.network.gua {
         print_kv("IPv6 GUA", gua.to_string(), None::<String>);
@@ -101,7 +108,11 @@ pub fn render_status_dashboard(status: &StatusResponse, printer: &Printer, verbo
             };
 
             if uptime_str.is_empty() {
-                println!("    {dot} {:<24} {}", banner.name.white().bold(), summary.dimmed());
+                println!(
+                    "    {dot} {:<24} {}",
+                    banner.name.white().bold(),
+                    summary.dimmed()
+                );
             } else {
                 println!(
                     "    {dot} {:<24} {}  {}",
@@ -121,7 +132,11 @@ pub fn render_status_dashboard(status: &StatusResponse, printer: &Printer, verbo
             if banner.stats.is_empty() {
                 continue;
             }
-            println!("    {} ({})", banner.name.bold(), banner.state.as_str().cyan());
+            println!(
+                "    {} ({})",
+                banner.name.bold(),
+                banner.state.as_str().cyan()
+            );
             for (key, val) in &banner.stats {
                 println!("      {:<20} {}", format!("{key}:").dimmed(), val);
             }
@@ -143,7 +158,12 @@ fn print_section_title(title: &str, printer: &Printer) {
 fn print_kv(key: &str, value: impl std::fmt::Display, details: Option<impl std::fmt::Display>) {
     match details {
         Some(det) => {
-            println!("    {:<14} {}  {}", key.bold().white(), value, det.to_string().dimmed());
+            println!(
+                "    {:<14} {}  {}",
+                key.bold().white(),
+                value,
+                det.to_string().dimmed()
+            );
         }
         None => {
             println!("    {:<14} {}", key.bold().white(), value);
@@ -184,7 +204,11 @@ fn resolve_wan_info(status: &StatusResponse) -> (String, String) {
 
 fn format_service_summary(banner: &ServiceBanner) -> String {
     let stat = |key: &str| -> Option<&str> {
-        banner.stats.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+        banner
+            .stats
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
     };
 
     match banner.id.as_str() {
@@ -223,7 +247,8 @@ fn format_service_summary(banner: &ServiceBanner) -> String {
         }
         "http_api" => {
             let listen = stat("listen").unwrap_or("[::]:8080");
-            let auth = stat("auth_enabled").map_or("", |a| if a == "true" { " · Auth enabled" } else { "" });
+            let auth = stat("auth_enabled")
+                .map_or("", |a| if a == "true" { " · Auth enabled" } else { "" });
             format!("Listening on {listen}{auth}")
         }
         "control_api" => {
@@ -293,7 +318,7 @@ mod tests {
             services: ServicesStatus::default(),
             db: DbStatus {
                 path: "/var/lib/lanforge/lanforge.redb".to_string(),
-                size_bytes: 131072,
+                size_bytes: 131_072,
                 last_flush_secs_ago: 0,
             },
             network: NetworkStatus {
@@ -305,8 +330,8 @@ mod tests {
                 ula: Some("fd97:f00d:cafe:3731::1".parse().unwrap()),
             },
             resources: ResourcesStatus {
-                memory_rss_bytes: 21286092,
-                memory_vms_bytes: 2899102924,
+                memory_rss_bytes: 21_286_092,
+                memory_vms_bytes: 2_899_102_924,
             },
             devices: DevicesStats {
                 total: 29,
@@ -345,9 +370,7 @@ mod tests {
                     name: "DHCPv6 Server".to_string(),
                     state: ServiceState::Online,
                     uptime_secs: 2733,
-                    stats: vec![
-                        (Cow::Borrowed("leases_active"), "0".to_string()),
-                    ],
+                    stats: vec![(Cow::Borrowed("leases_active"), "0".to_string())],
                 },
                 ServiceBanner {
                     id: "dns".to_string(),

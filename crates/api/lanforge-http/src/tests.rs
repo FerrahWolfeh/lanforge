@@ -9,7 +9,7 @@ async fn test_auth_manager_token_lifecycle() {
     let token = auth
         .generate_token("admin", "admin")
         .expect("Token generation failed");
-    assert!(!token.is_empty());
+    assert_ne!(token, "");
 
     // Validate
     let claims = auth
@@ -166,13 +166,19 @@ async fn test_handle_login() {
 #[cfg(feature = "server")]
 #[tokio::test]
 async fn test_handle_logout() {
+    use axum::http::StatusCode;
     use axum::http::header::SET_COOKIE;
     use axum::response::IntoResponse;
-    use axum::http::StatusCode;
 
-    let response = crate::routes::auth::handle_logout().await.into_response();
+    use crate::routes::auth::handle_logout;
+
+    let response = handle_logout().await.into_response();
     assert_eq!(response.status(), StatusCode::OK);
 
     let cookies: Vec<_> = response.headers().get_all(SET_COOKIE).iter().collect();
-    assert!(cookies.iter().any(|c| c.to_str().unwrap().contains("Max-Age=0")));
+    assert!(
+        cookies
+            .iter()
+            .any(|c| c.to_str().unwrap().contains("Max-Age=0"))
+    );
 }

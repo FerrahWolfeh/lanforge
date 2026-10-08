@@ -17,9 +17,12 @@ pub fn detect_online_cpus_from_path(path: &Path) -> Vec<usize> {
         return cpus;
     }
 
-    let fallback_count = std::thread::available_parallelism()
-        .map_or(4, std::num::NonZeroUsize::get);
-    debug!(fallback_count, "Falling back to available parallelism for CPU count");
+    let fallback_count =
+        std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get);
+    debug!(
+        fallback_count,
+        "Falling back to available parallelism for CPU count"
+    );
     (0..fallback_count).collect()
 }
 
@@ -95,7 +98,10 @@ pub fn resolve_effective_cpu_mask(configured: &str) -> String {
         mask
     } else {
         // Strip optional 0x prefix if user passed it
-        let cleaned = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")).unwrap_or(trimmed);
+        let cleaned = trimmed
+            .strip_prefix("0x")
+            .or_else(|| trimmed.strip_prefix("0X"))
+            .unwrap_or(trimmed);
         cleaned.to_lowercase()
     }
 }
@@ -106,8 +112,14 @@ mod tests {
 
     #[test]
     fn test_parse_cpu_range_list() {
-        assert_eq!(parse_cpu_range_list("0-7").unwrap(), vec![0, 1, 2, 3, 4, 5, 6, 7]);
-        assert_eq!(parse_cpu_range_list("0-3,5-6").unwrap(), vec![0, 1, 2, 3, 5, 6]);
+        assert_eq!(
+            parse_cpu_range_list("0-7").unwrap(),
+            vec![0, 1, 2, 3, 4, 5, 6, 7]
+        );
+        assert_eq!(
+            parse_cpu_range_list("0-3,5-6").unwrap(),
+            vec![0, 1, 2, 3, 5, 6]
+        );
         assert_eq!(parse_cpu_range_list("0\n").unwrap(), vec![0]);
     }
 
@@ -130,6 +142,6 @@ mod tests {
         assert_eq!(resolve_effective_cpu_mask("0xff"), "ff");
         assert_eq!(resolve_effective_cpu_mask("FF"), "ff");
         assert_eq!(resolve_effective_cpu_mask("0x1f"), "1f");
-        assert!(!resolve_effective_cpu_mask("auto").is_empty());
+        assert_ne!(resolve_effective_cpu_mask("auto"), "");
     }
 }

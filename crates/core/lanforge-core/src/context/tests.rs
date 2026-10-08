@@ -68,7 +68,9 @@ async fn test_wait_for_service_dependency() {
 
     // 1. When already online, wait_for_dependency should return Ok(()) immediately
     ctx.set_service_state("dns", ServiceState::Online);
-    let res = ctx.wait_for_dependency(ServiceDependency::Service("dns")).await;
+    let res = ctx
+        .wait_for_dependency(ServiceDependency::Service("dns"))
+        .await;
     assert!(res.is_ok());
 
     // 2. When not online, it should wait for ServiceReady event
@@ -103,7 +105,7 @@ async fn test_dynamic_pppoe_config() {
     cfg.username = "test_user".to_string();
     cfg.wan_iface = "eth42".to_string();
 
-    ctx.update_pppoe_config(cfg.clone());
+    ctx.update_pppoe_config(cfg);
 
     let retrieved = ctx.get_pppoe_config();
     assert!(retrieved.is_some());
