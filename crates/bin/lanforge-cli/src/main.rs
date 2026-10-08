@@ -33,6 +33,9 @@ async fn main() -> Result<()> {
         Some(Command::Watch(args)) => {
             args.execute(&client, &printer).await?;
         }
+        Some(Command::Devices(args)) => {
+            args.execute(&client, &printer).await?;
+        }
         Some(Command::Wol(args)) => {
             args.execute(&client, &printer).await?;
         }

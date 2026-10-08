@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use crate::commands::{
-    DbArgs, DhcpArgs, DnsArgs, FirewallArgs, PppoeArgs, RaArgs, ReloadArgs, ServiceArgs,
-    StatusArgs, WatchArgs, WolArgs,
+    DbArgs, DevicesArgs, DhcpArgs, DnsArgs, FirewallArgs, PppoeArgs, RaArgs, ReloadArgs,
+    ServiceArgs, StatusArgs, WatchArgs, WolArgs,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -62,6 +62,9 @@ pub enum Command {
     /// Stream live daemon events in real-time (devices, DHCP, DNS, firewall, `PPPoE`)
     #[command(alias = "events")]
     Watch(WatchArgs),
+    /// Inspect and manage connected and discovered network devices (list, show, purge)
+    #[command(alias = "device")]
+    Devices(DevicesArgs),
     /// Send Wake-on-LAN magic packet to power on a networked device
     #[command(alias = "wake")]
     Wol(WolArgs),

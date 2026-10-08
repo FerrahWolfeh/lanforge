@@ -21,31 +21,17 @@ pub enum DbSubcommand {
 
 impl DbArgs {
     pub async fn execute(self, client: &LanforgeClient, printer: &Printer) -> Result<()> {
-        match self.subcommand {
-            DbSubcommand::Vacuum => {
-                let resp = client.db_vacuum().await?;
-                if printer.json {
-                    return printer.print_json(&resp);
-                }
-                printer.success(&format!("Database compacted: {}", resp.message));
-                Ok(())
-            }
-            DbSubcommand::Prune => {
-                let resp = client.db_prune().await?;
-                if printer.json {
-                    return printer.print_json(&resp);
-                }
-                printer.success(&format!("Database pruned: {}", resp.message));
-                Ok(())
-            }
-            DbSubcommand::Clean => {
-                let resp = client.db_log_clean().await?;
-                if printer.json {
-                    return printer.print_json(&resp);
-                }
-                printer.success(&format!("Database log buffers cleaned: {}", resp.message));
-                Ok(())
-            }
+        let (resp, action_desc) = match self.subcommand {
+            DbSubcommand::Vacuum => (client.db_vacuum().await?, "compacted"),
+            DbSubcommand::Prune => (client.db_prune().await?, "pruned"),
+            DbSubcommand::Clean => (client.db_log_clean().await?, "log buffers cleaned"),
+        };
+
+        if printer.json {
+            return printer.print_json(&resp);
         }
+
+        printer.success(&format!("Database {action_desc}: {}", resp.message));
+        Ok(())
     }
 }

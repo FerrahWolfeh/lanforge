@@ -65,7 +65,6 @@ color-eyre = "0.6.5"
 colored = "3.1.1"
 inquire = "0.9.4"
 comfy-table = "7.1"
-mac_oui = { version = "0.4.11", features = ["with-db"] }
 duration-str = "0.21.0"
 ratatui = { version = "0.30.1", features = ["crossterm"], optional = true }
 crossterm = { version = "0.29.0", optional = true }

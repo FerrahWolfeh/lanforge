@@ -3,8 +3,8 @@ use color_eyre::eyre::{Context, Result, eyre};
 use tokio::net::UnixStream;
 
 use lanforge_api::api::{
-    DhcpReconcileResponse, HttpErrorResponse, HttpWrappedResponse, ServiceBannersResponse,
-    SimpleSuccess, StatusResponse,
+    DeviceListQuery, DevicesResponse, DhcpReconcileResponse, HttpErrorResponse, HttpWrappedResponse,
+    ServiceBannersResponse, SimpleSuccess, StatusResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::identifiers::MacAddr;
@@ -348,6 +348,7 @@ impl LanforgeClient {
         Self::decode_bytes(&bytes)
     }
 
+
     // High-level API calls
     pub async fn status(&self) -> Result<Box<StatusResponse>> {
         #[cfg(feature = "remote")]
@@ -411,6 +412,53 @@ impl LanforgeClient {
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.wol(target).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn list_devices(&self, query: DeviceListQuery) -> Result<DevicesResponse> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            let mut qs = Vec::new();
+            if let Some(f) = &query.filter {
+                qs.push(format!("filter={}", urlencoding(f)));
+            }
+            if let Some(m) = &query.method {
+                qs.push(format!("sort={}", urlencoding(m)));
+            }
+            if let Some(l) = query.limit {
+                qs.push(format!("limit={l}"));
+            }
+            if let Some(o) = query.offset {
+                qs.push(format!("offset={o}"));
+            }
+            let q_str = if qs.is_empty() {
+                String::new()
+            } else {
+                format!("?{}", qs.join("&"))
+            };
+            return self.http_get(&format!("/devices{q_str}")).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.list_devices(Box::new(query)).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn whois(&self, target: String) -> Result<Box<WhoisResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(
+                self.http_get(&format!("/devices/{}", urlencoding(&target))).await?,
+            ));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.whois(target).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn purge(&self, mac: MacAddr) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_delete(&format!("/devices/{mac}")).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.purge(mac).await.map_err(|e| eyre!("{e}"))
     }
 
     pub async fn pppoe_status(&self) -> Result<Box<PppoeStatusResponse>> {

@@ -1,4 +1,5 @@
 pub mod db;
+pub mod devices;
 pub mod dhcp;
 pub mod dns;
 pub mod firewall;
@@ -11,6 +12,7 @@ pub mod watch;
 pub mod wol;
 
 pub use db::DbArgs;
+pub use devices::DevicesArgs;
 pub use dhcp::DhcpArgs;
 pub use dns::DnsArgs;
 pub use firewall::FirewallArgs;
