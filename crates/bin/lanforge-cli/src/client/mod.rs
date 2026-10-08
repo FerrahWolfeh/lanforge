@@ -3,12 +3,14 @@ use color_eyre::eyre::{Context, Result, eyre};
 use tokio::net::UnixStream;
 
 use lanforge_api::api::{
-    DeviceListQuery, DevicesResponse, DhcpReconcileResponse, HostConfigEntry, HostsResponse,
-    HttpErrorResponse, HttpWrappedResponse, ServiceBannersResponse, SimpleSuccess, StatusResponse,
-    WhoisResponse,
+    DeviceListQuery, DevicesResponse, DhcpOptionsResponse, DhcpPoolsConfigResponse,
+    DhcpPoolsResponse, DhcpReconcileResponse, HostConfigEntry, HostsResponse,
+    HttpErrorResponse, HttpWrappedResponse, LeasesResponse, ServiceBannersResponse,
+    SimpleSuccess, StatusResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::adblock::{AdblockSourceFormat, AdblockUrlKind};
 use lanforge_types::network::dns::{
     AdblockCheckResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse, DnsStatsResponse,
@@ -632,6 +634,69 @@ impl LanforgeClient {
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.dns_adblock_url_remove(url).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dhcp_pools(&self) -> Result<DhcpPoolsResponse> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_get("/dhcp/pools").await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dhcp_pools().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn leases(&self, count: bool) -> Result<LeasesResponse> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_get(&format!("/dhcp/leases?count={count}")).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.leases(count).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dhcp_options(&self) -> Result<Box<DhcpOptionsResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(self.http_get("/dhcp/options").await?));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dhcp_options().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn update_dhcp_options(&self, options: DhcpOptionsConfig) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_put("/dhcp/options", &options).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.update_dhcp_options(Box::new(options)).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dhcp_pools_config(&self) -> Result<Box<DhcpPoolsConfigResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(self.http_get("/dhcp/pools/config").await?));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dhcp_pools_config().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn update_dhcp_pools_config(
+        &self,
+        v4_pools: Vec<Dhcpv4Pool>,
+        v6_pools: Vec<Dhcpv6Pool>,
+    ) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self
+                .http_put(
+                    "/dhcp/pools/config",
+                    &serde_json::json!({ "v4_pools": v4_pools, "v6_pools": v6_pools }),
+                )
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.update_dhcp_pools_config(v4_pools, v6_pools).await.map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dhcp_reconcile(&self) -> Result<DhcpReconcileResponse> {
