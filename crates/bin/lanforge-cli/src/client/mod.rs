@@ -26,6 +26,7 @@ use lanforge_types::network::firewall::{
     FirewallValidationReport,
 };
 use lanforge_types::network::pppoe::PppoeConfig;
+use lanforge_types::network::ra::RaServerConfig;
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
 use lanforge_types::network::{DnsRecordType, TrafficConfig};
 use lanforge_types::system::{
@@ -625,6 +626,24 @@ impl LanforgeClient {
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.ra_status().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn ra_config(&self) -> Result<Box<RaServerConfig>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(self.http_get("/ra/config").await?));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.ra_config().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn update_ra_config(&self, cfg: RaServerConfig) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_post("/ra/config", &cfg).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.update_ra_config(Box::new(cfg)).await.map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dns_stats(&self) -> Result<Box<DnsStatsResponse>> {
