@@ -1,7 +1,8 @@
 use clap::{Parser, Subcommand};
 use crate::commands::{
-    ConfigArgs, DbArgs, DevicesArgs, DhcpArgs, DnsArgs, FirewallArgs, HostArgs, PppoeArgs, RaArgs,
-    ReloadArgs, ServiceArgs, StatusArgs, TrafficArgs, WatchArgs, WolArgs,
+    AuthArgs, ConfigArgs, DbArgs, DevicesArgs, DhcpArgs, DnsArgs, FirewallArgs, HostArgs,
+    PppoeArgs, RaArgs, ReloadArgs, ServiceArgs, StatusArgs, TrafficArgs, UserArgs, WatchArgs,
+    WolArgs,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -90,4 +91,10 @@ pub enum Command {
     Db(DbArgs),
     /// Inspect, export, import, and validate system configuration
     Config(ConfigArgs),
+    /// Manage router user accounts and roles (list, add, delete, passwd)
+    #[command(alias = "users")]
+    User(UserArgs),
+    /// Manage API authentication tokens and access keys (list, generate, delete, renew)
+    #[command(alias = "token", alias = "tokens")]
+    Auth(AuthArgs),
 }

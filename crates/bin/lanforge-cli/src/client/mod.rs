@@ -4,14 +4,16 @@ use color_eyre::eyre::{Context, Result, eyre};
 use tokio::net::UnixStream;
 
 use lanforge_api::api::{
-    DeviceListQuery, DevicesResponse, DhcpOptionsResponse, DhcpPoolsConfigResponse,
-    DhcpPoolsResponse, DhcpReconcileResponse, DnsAllowlistResponse, DnsAnalyticsResponse,
-    DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
-    DnsReverseResolversResponse, DnsRewritesResponse, DnsUpstreamsResponse, HostConfigEntry,
-    HostsResponse, HttpErrorResponse, HttpWrappedResponse, LeasesResponse, ServiceBannersResponse,
-    SimpleSuccess, StatusResponse, SystemConfigExport, SystemConfigImportResponse, WhoisResponse,
+    AuthTokenResponse, AuthTokensResponse, CreateUserPayload, DeviceListQuery, DevicesResponse,
+    DhcpOptionsResponse, DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse,
+    DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse,
+    DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse,
+    DnsUpstreamsResponse, HostConfigEntry, HostsResponse, HttpErrorResponse, HttpWrappedResponse,
+    LeasesResponse, ServiceBannersResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
+    SystemConfigImportResponse, UserListResponse, UserResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
+use lanforge_types::auth::ApiScopes;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::adblock::{
@@ -665,6 +667,142 @@ impl LanforgeClient {
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.system_config_import(Box::new(config)).await.map_err(|e| eyre!("{e}"))
+    }
+
+    // --- User Accounts ---
+
+    pub async fn user_list(&self) -> Result<UserListResponse> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_get("/users").await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.user_list().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn user_create(
+        &self,
+        username: String,
+        password: String,
+        role: Option<String>,
+    ) -> Result<Box<UserResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(
+                self.http_post(
+                    "/users",
+                    &serde_json::json!({
+                        "username": username,
+                        "password": password,
+                        "role": role,
+                    }),
+                )
+                .await?,
+            ));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.user_create(Box::new(CreateUserPayload {
+            username,
+            password,
+            role,
+        }))
+        .await
+        .map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn user_delete(&self, username: String) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_delete(&format!("/users/{username}")).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.user_delete(username).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn user_passwd(
+        &self,
+        username: String,
+        new_password: String,
+    ) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self
+                .http_put(
+                    &format!("/users/{username}/password"),
+                    &serde_json::json!({ "password": new_password }),
+                )
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.user_passwd(username, new_password)
+            .await
+            .map_err(|e| eyre!("{e}"))
+    }
+
+    // --- API Authentication Tokens ---
+
+    pub async fn ak_list(&self) -> Result<AuthTokensResponse> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_get("/auth/tokens").await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.ak_list().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn ak_generate(
+        &self,
+        name: String,
+        scopes: Option<ApiScopes>,
+        expires_at: Option<i64>,
+    ) -> Result<Box<AuthTokenResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            let scopes_payload = scopes.as_ref().map(|s| {
+                s.iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<Vec<_>>()
+            });
+            return Ok(Box::new(
+                self.http_post(
+                    "/auth/tokens",
+                    &serde_json::json!({
+                        "name": name,
+                        "scopes": scopes_payload,
+                        "expires_at": expires_at,
+                    }),
+                )
+                .await?,
+            ));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.ak_generate(name, scopes, expires_at)
+            .await
+            .map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn ak_delete(&self, id_or_name: String) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_delete(&format!("/auth/tokens/{id_or_name}")).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.ak_delete(id_or_name).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn ak_renew(&self, id_or_name: String) -> Result<Box<AuthTokenResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(
+                self.http_post(
+                    &format!("/auth/tokens/{id_or_name}/renew"),
+                    &serde_json::json!({}),
+                )
+                .await?,
+            ));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.ak_renew(id_or_name).await.map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dns_stats(&self) -> Result<Box<DnsStatsResponse>> {

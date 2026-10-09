@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod config;
 pub mod db;
 pub mod devices;
@@ -11,8 +12,11 @@ pub mod reload;
 pub mod service;
 pub mod status;
 pub mod traffic;
+pub mod user;
 pub mod watch;
 pub mod wol;
+
+pub use auth::AuthArgs;
 
 pub use config::ConfigArgs;
 pub use db::DbArgs;
@@ -27,5 +31,6 @@ pub use reload::ReloadArgs;
 pub use service::ServiceArgs;
 pub use status::StatusArgs;
 pub use traffic::TrafficArgs;
+pub use user::UserArgs;
 pub use watch::WatchArgs;
 pub use wol::WolArgs;
