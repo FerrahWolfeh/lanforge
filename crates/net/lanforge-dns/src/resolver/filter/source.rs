@@ -213,6 +213,12 @@ pub fn compile_source_artifacts(
         }
     }
 
+    if blocks.is_empty() && allows.is_empty() && badfilters.is_empty() {
+        return Err(DnsError::Generic(format!(
+            "Source '{url}' parsed into zero rules (empty content or incompatible syntax)"
+        )));
+    }
+
     // Build per-source block FST
     let block_fst_path = sources_dir.join(format!("{source_id}.block.fst"));
     build_sorted_fst_map(blocks, &block_fst_path)?;
@@ -450,10 +456,10 @@ fn merge_fst_stream(
         let mut first_src_idx = 0u16;
         let mut first = true;
         for iv in items {
-            let (flags, src_idx) = decode_val(iv.value);
+            let (flags, _) = decode_val(iv.value);
             combined_flags = MatchFlags(combined_flags.0 | flags.0);
-            if first {
-                first_src_idx = src_idx;
+            if first || flags.is_important() {
+                first_src_idx = (iv.index as u16).min(u16::MAX - 1);
                 first = false;
             }
         }
