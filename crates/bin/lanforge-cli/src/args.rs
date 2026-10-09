@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
 use crate::commands::{
     AuthArgs, ConfigArgs, DbArgs, DevicesArgs, DhcpArgs, DnsArgs, FirewallArgs, HostArgs,
-    PppoeArgs, RaArgs, ReloadArgs, ServiceArgs, StatusArgs, TrafficArgs, UserArgs, WatchArgs,
-    WolArgs,
+    PppoeArgs, RaArgs, ReloadArgs, ServiceArgs, SetupArgs, StatusArgs, TrafficArgs, UserArgs,
+    WatchArgs, WolArgs,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -97,4 +97,7 @@ pub enum Command {
     /// Manage API authentication tokens and access keys (list, generate, delete, renew)
     #[command(alias = "token", alias = "tokens")]
     Auth(AuthArgs),
+    /// First-run router onboarding setup wizard and hardware topology inspection
+    #[command(alias = "init", alias = "wizard")]
+    Setup(SetupArgs),
 }

@@ -9,8 +9,9 @@ use lanforge_api::api::{
     DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse,
     DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse,
     DnsUpstreamsResponse, HostConfigEntry, HostsResponse, HttpErrorResponse, HttpWrappedResponse,
-    LeasesResponse, ServiceBannersResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
-    SystemConfigImportResponse, UserListResponse, UserResponse, WhoisResponse,
+    LeasesResponse, ServiceBannersResponse, SetupPayload, SetupResponse, SetupStatusResponse,
+    SimpleSuccess, StatusResponse, SystemConfigExport, SystemConfigImportResponse, UserListResponse,
+    UserResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::auth::ApiScopes;
@@ -803,6 +804,28 @@ impl LanforgeClient {
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.ak_renew(id_or_name).await.map_err(|e| eyre!("{e}"))
+    }
+
+    // --- First-Run Setup & Onboarding ---
+
+    pub async fn system_setup_status(&self) -> Result<Box<SetupStatusResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(self.http_get("/system/setup-status").await?));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.system_setup_status().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn system_setup(&self, payload: SetupPayload) -> Result<Box<SetupResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(self.http_post("/system/setup", &payload).await?));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.system_setup(Box::new(payload))
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dns_stats(&self) -> Result<Box<DnsStatsResponse>> {

@@ -75,6 +75,9 @@ async fn main() -> Result<()> {
         Some(Command::Auth(args)) => {
             args.execute(&client, &printer).await?;
         }
+        Some(Command::Setup(args)) => {
+            args.execute(&client, &printer).await?;
+        }
         None => {
             // Default behavior when no subcommand is specified: show router status dashboard
             StatusArgs::default().execute(&client, &printer).await?;
