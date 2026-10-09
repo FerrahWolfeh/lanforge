@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand};
 use crate::commands::{
     AuthArgs, ConfigArgs, DbArgs, DevicesArgs, DhcpArgs, DnsArgs, FirewallArgs, HostArgs,
-    PppoeArgs, RaArgs, ReloadArgs, ServiceArgs, SetupArgs, StatusArgs, TrafficArgs, UserArgs,
-    WatchArgs, WolArgs,
+    LoginArgs, PppoeArgs, RaArgs, ReloadArgs, ServiceArgs, SetupArgs, ShutdownArgs, StatusArgs,
+    TrafficArgs, UserArgs, WatchArgs, WolArgs,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -100,4 +100,9 @@ pub enum Command {
     /// First-run router onboarding setup wizard and hardware topology inspection
     #[command(alias = "init", alias = "wizard")]
     Setup(SetupArgs),
+    /// Gracefully shut down the Lanforge router daemon
+    #[command(alias = "poweroff", alias = "halt")]
+    Shutdown(ShutdownArgs),
+    /// Save remote daemon credentials for CLI management
+    Login(LoginArgs),
 }
