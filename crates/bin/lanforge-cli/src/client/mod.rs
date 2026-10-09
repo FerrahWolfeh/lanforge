@@ -1,24 +1,30 @@
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use color_eyre::eyre::{Context, Result, eyre};
 use tokio::net::UnixStream;
 
 use lanforge_api::api::{
     DeviceListQuery, DevicesResponse, DhcpOptionsResponse, DhcpPoolsConfigResponse,
-    DhcpPoolsResponse, DhcpReconcileResponse, HostConfigEntry, HostsResponse,
-    HttpErrorResponse, HttpWrappedResponse, LeasesResponse, ServiceBannersResponse,
+    DhcpPoolsResponse, DhcpReconcileResponse, DnsAllowlistResponse, DnsAnalyticsResponse,
+    DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
+    DnsReverseResolversResponse, DnsRewritesResponse, DnsUpstreamsResponse, HostConfigEntry,
+    HostsResponse, HttpErrorResponse, HttpWrappedResponse, LeasesResponse, ServiceBannersResponse,
     SimpleSuccess, StatusResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
-use lanforge_types::network::dns::adblock::{AdblockSourceFormat, AdblockUrlKind};
+use lanforge_types::network::dns::adblock::{
+    AdblockSourceFormat, AdblockUrlKind, BlockingMode, RewriteRule,
+};
+use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::dns::{
     AdblockCheckResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse, DnsStatsResponse,
 };
-use lanforge_types::network::pppoe::PppoeConfig;
-use lanforge_types::network::TrafficConfig;
 use lanforge_types::network::firewall::FirewallStatus;
+use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
+use lanforge_types::network::{DnsRecordType, TrafficConfig};
 use lanforge_types::system::{
     PppoeStatusResponse, RaStatusResponse, ServiceAction, TrafficStatusResponse,
 };
@@ -379,6 +385,69 @@ impl LanforgeClient {
         Self::decode_bytes(&bytes)
     }
 
+    #[cfg(feature = "remote")]
+    pub async fn http_delete_with_body<B: serde::Serialize + Send + Sync, T: HttpWrappedResponse>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T> {
+        let body_bytes = Bytes::from(serde_json::to_vec(body)?);
+        let (status, bytes) = self
+            .send_request(Method::DELETE, path, Some(body_bytes))
+            .await?;
+        if status == StatusCode::NO_CONTENT {
+            if let Ok(wrapper) =
+                serde_json::from_str::<T::Wrapper>(r#"{"data":{"message":"Success"}}"#)
+            {
+                return Ok(T::unwrap(wrapper));
+            }
+            if let Ok(wrapper) = serde_json::from_str::<T::Wrapper>("null") {
+                return Ok(T::unwrap(wrapper));
+            }
+        }
+        Self::decode_bytes(&bytes)
+    }
+
+    #[cfg(feature = "remote")]
+    pub async fn http_stream_url(
+        &self,
+        full_url: &str,
+    ) -> Result<futures::stream::BoxStream<'static, std::result::Result<Bytes, color_eyre::Report>>> {
+        use futures::StreamExt;
+        let uri: Uri = full_url
+            .parse()
+            .map_err(|e| eyre!("Invalid URL '{full_url}': {e}"))?;
+
+        let mut builder = Request::builder().method(Method::GET).uri(uri);
+        if let Some(t) = &self.token {
+            builder = builder.header("Authorization", format!("Bearer {t}"));
+        }
+        let req = builder
+            .body(Full::default())
+            .map_err(|e| eyre!("Failed to build request: {e}"))?;
+        let resp = self
+            .http_client
+            .request(req)
+            .await
+            .map_err(|e| eyre!("HTTP stream request failed: {e}"))?;
+
+        let body = resp.into_body();
+        let stream = futures::stream::unfold(body, |mut body| async move {
+            match body.frame().await {
+                Some(Ok(frame)) => {
+                    if let Ok(data) = frame.into_data() {
+                        Some((Ok(data), body))
+                    } else {
+                        Some((Ok(Bytes::new()), body))
+                    }
+                }
+                Some(Err(e)) => Some((Err(eyre!("HTTP stream frame error: {e}")), body)),
+                None => None,
+            }
+        });
+        Ok(stream.boxed())
+    }
+
 
     // High-level API calls
     pub async fn status(&self) -> Result<Box<StatusResponse>> {
@@ -564,13 +633,163 @@ impl LanforgeClient {
         rpc.dns_stats().await.map_err(|e| eyre!("{e}"))
     }
 
-    pub async fn dns_adblock_status(&self) -> Result<Box<DnsAdblockStatusResponse>> {
+    pub async fn dns_analytics(
+        &self,
+        limit: Option<usize>,
+        client: Option<String>,
+    ) -> Result<Box<DnsAnalyticsResponse>> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return Ok(Box::new(self.http_get("/dns/adblock").await?));
+            let mut qs = Vec::new();
+            if let Some(l) = limit {
+                qs.push(format!("limit={l}"));
+            }
+            if let Some(c) = &client {
+                qs.push(format!("client={}", urlencoding(c)));
+            }
+            let q_str = if qs.is_empty() {
+                String::new()
+            } else {
+                format!("?{}", qs.join("&"))
+            };
+            return Ok(Box::new(
+                self.http_get(&format!("/dns/analytics{q_str}")).await?,
+            ));
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_adblock_status().await.map_err(|e| eyre!("{e}"))
+        rpc.dns_analytics(limit, client).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_upstreams(&self) -> Result<DnsUpstreamsResponse> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_get("/dns/upstreams").await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_upstreams().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_upstream_add(
+        &self,
+        addr: SocketAddr,
+        protocol: UpstreamProtocol,
+        domain: Option<String>,
+    ) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            let mut qs = vec![
+                format!("addr={}", urlencoding(&addr.to_string())),
+                format!("protocol={}", urlencoding(&protocol.to_string())),
+            ];
+            if let Some(d) = &domain {
+                qs.push(format!("domain={}", urlencoding(d)));
+            }
+            return self
+                .http_post(
+                    &format!("/dns/upstreams?{}", qs.join("&")),
+                    &serde_json::json!({}),
+                )
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_upstream_add(addr, protocol, domain)
+            .await
+            .map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_upstream_remove(
+        &self,
+        addr: SocketAddr,
+        protocol: UpstreamProtocol,
+        domain: Option<String>,
+    ) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            let mut qs = vec![
+                format!("addr={}", urlencoding(&addr.to_string())),
+                format!("protocol={}", urlencoding(&protocol.to_string())),
+            ];
+            if let Some(d) = &domain {
+                qs.push(format!("domain={}", urlencoding(d)));
+            }
+            return self
+                .http_delete(&format!("/dns/upstreams?{}", qs.join("&")))
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_upstream_remove(addr, protocol, domain)
+            .await
+            .map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_upstream_clear(&self) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_delete("/dns/upstreams/clear").await;
+        }
+        let upstreams = self.dns_upstreams().await?;
+        for u in upstreams.upstreams {
+            let _ = self
+                .dns_upstream_remove(u.target, u.protocol, u.domain)
+                .await;
+        }
+        Ok(SimpleSuccess {
+            message: "All DNS upstreams cleared successfully".to_string(),
+        })
+    }
+
+    pub async fn dns_query(
+        &self,
+        name: String,
+        record_type: Option<DnsRecordType>,
+    ) -> Result<Box<DnsQueryResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            let mut qs = vec![format!("name={}", urlencoding(&name))];
+            if let Some(rt) = record_type {
+                qs.push(format!("type={}", urlencoding(&rt.to_string())));
+            }
+            return Ok(Box::new(
+                self.http_get(&format!("/dns/query?{}", qs.join("&"))).await?,
+            ));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_query(name, record_type).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_cache_dump(
+        &self,
+        limit: Option<usize>,
+        offset: Option<usize>,
+        q: Option<String>,
+        kind: Option<DnsRecordType>,
+    ) -> Result<DnsCacheResponse> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            let mut qs = Vec::new();
+            if let Some(l) = limit {
+                qs.push(format!("limit={l}"));
+            }
+            if let Some(o) = offset {
+                qs.push(format!("offset={o}"));
+            }
+            if let Some(ref query) = q {
+                qs.push(format!("q={}", urlencoding(query)));
+            }
+            if let Some(k) = kind {
+                qs.push(format!("kind={}", urlencoding(&k.to_string())));
+            }
+            let q_str = if qs.is_empty() {
+                String::new()
+            } else {
+                format!("?{}", qs.join("&"))
+            };
+            return self.http_get(&format!("/dns/cache{q_str}")).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_cache_dump(limit, offset, q, kind)
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dns_cache_flush(&self) -> Result<SimpleSuccess> {
@@ -582,10 +801,85 @@ impl LanforgeClient {
         rpc.dns_cache_flush().await.map_err(|e| eyre!("{e}"))
     }
 
+    pub async fn dns_cache_stats_ext(&self) -> Result<Box<DnsCacheStatsExtResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(self.http_get("/dns/cache/stats").await?));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_cache_stats_ext().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_query_log(
+        &self,
+        follow: bool,
+        limit: Option<usize>,
+        client: Option<String>,
+        offset: Option<usize>,
+    ) -> Result<DnsQueryLogResponse> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            let mut qs = Vec::new();
+            if let Some(l) = limit {
+                qs.push(format!("limit={l}"));
+            }
+            if let Some(c) = &client {
+                qs.push(format!("client={}", urlencoding(c)));
+            }
+            if let Some(o) = offset {
+                qs.push(format!("offset={o}"));
+            }
+            let q_str = if qs.is_empty() {
+                String::new()
+            } else {
+                format!("?{}", qs.join("&"))
+            };
+            return self.http_get(&format!("/dns/logs{q_str}")).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_query_log(follow, limit, client, offset)
+            .await
+            .map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_adblock_status(&self) -> Result<Box<DnsAdblockStatusResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(self.http_get("/dns/adblock").await?));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_adblock_status().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_adblock_set(
+        &self,
+        enabled: bool,
+        duration_secs: Option<u64>,
+    ) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self
+                .http_put(
+                    "/dns/adblock",
+                    &serde_json::json!({ "enabled": enabled, "duration_secs": duration_secs }),
+                )
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_adblock_set(enabled, duration_secs)
+            .await
+            .map_err(|e| eyre!("{e}"))
+    }
+
     pub async fn dns_block(&self, domain: String) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return self.http_post("/dns/adblock/block", &serde_json::json!({ "domain": domain })).await;
+            return self
+                .http_post(
+                    "/dns/adblock/block",
+                    &serde_json::json!({ "domain": domain }),
+                )
+                .await;
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.dns_block(domain).await.map_err(|e| eyre!("{e}"))
@@ -594,19 +888,50 @@ impl LanforgeClient {
     pub async fn dns_allow(&self, domain: String) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return self.http_post("/dns/adblock/allow", &serde_json::json!({ "domain": domain })).await;
+            return self
+                .http_post(
+                    "/dns/adblock/allow",
+                    &serde_json::json!({ "domain": domain }),
+                )
+                .await;
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.dns_allow(domain).await.map_err(|e| eyre!("{e}"))
     }
 
-    pub async fn dns_adblock_set(&self, enabled: bool, duration_secs: Option<u64>) -> Result<SimpleSuccess> {
+    pub async fn dns_unallow(&self, domain: String) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return self.http_put("/dns/adblock", &serde_json::json!({ "enabled": enabled, "duration_secs": duration_secs })).await;
+            return self
+                .http_delete(&format!("/dns/adblock/allow/{}", urlencoding(&domain)))
+                .await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_adblock_set(enabled, duration_secs).await.map_err(|e| eyre!("{e}"))
+        rpc.dns_unallow(domain).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_allowlist(&self) -> Result<DnsAllowlistResponse> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_get("/dns/adblock/allowlist").await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_allowlist().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_adblock_check(&self, domain: String) -> Result<Box<AdblockCheckResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(
+                self.http_get(&format!(
+                    "/dns/adblock/check?domain={}",
+                    urlencoding(&domain)
+                ))
+                .await?,
+            ));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_adblock_check(domain).await.map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dns_adblock_sources(&self) -> Result<DnsAdblockSourcesResponse> {
@@ -616,15 +941,6 @@ impl LanforgeClient {
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.dns_adblock_sources().await.map_err(|e| eyre!("{e}"))
-    }
-
-    pub async fn dns_adblock_check(&self, domain: String) -> Result<Box<AdblockCheckResponse>> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return Ok(Box::new(self.http_get(&format!("/dns/adblock/check?domain={}", urlencoding(&domain))).await?));
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.dns_adblock_check(domain).await.map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dns_adblock_url_add(
@@ -652,11 +968,166 @@ impl LanforgeClient {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
             return self
-                .http_delete(&format!("/dns/adblock/sources?url={}", urlencoding(&url)))
+                .http_delete_with_body(
+                    "/dns/adblock/sources",
+                    &serde_json::json!({ "url": url }),
+                )
                 .await;
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.dns_adblock_url_remove(url).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_adblock_config_set(
+        &self,
+        mode: Option<BlockingMode>,
+        ipv4: Option<Ipv4Addr>,
+        ipv6: Option<Ipv6Addr>,
+    ) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self
+                .http_post(
+                    "/dns/adblock/config",
+                    &serde_json::json!({
+                        "blocking_mode": mode,
+                        "blocking_ip_v4": ipv4,
+                        "blocking_ip_v6": ipv6,
+                    }),
+                )
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_adblock_config_set(mode, ipv4, ipv6)
+            .await
+            .map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_adblock_reload(&self) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self
+                .http_post("/dns/adblock/reload", &serde_json::json!({}))
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_adblock_reload().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_rewrites(&self) -> Result<DnsRewritesResponse> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_get("/dns/rewrites").await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_rewrites().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_rewrite_add(&self, rule: RewriteRule) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self
+                .http_post(
+                    "/dns/rewrites",
+                    &serde_json::json!({
+                        "domain": rule.domain,
+                        "rtype": rule.rtype,
+                        "answer": rule.answer.to_string(),
+                    }),
+                )
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_rewrite_add(Box::new(rule))
+            .await
+            .map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_rewrite_remove(&self, id: i64) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_delete(&format!("/dns/rewrites/{id}")).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_rewrite_remove(id).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_rewrite_clear(&self) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_delete("/dns/rewrites").await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_rewrite_clear().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_rewrite_import(&self, rules: Vec<RewriteRule>) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_post("/dns/rewrites/import", &rules).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_rewrite_import(rules).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_rewrite_export(&self) -> Result<DnsRewritesResponse> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_get("/dns/rewrites/export").await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_rewrite_export().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_reverse_resolver_list(&self) -> Result<DnsReverseResolversResponse> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_get("/dns/reverse-resolvers").await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_reverse_resolver_list()
+            .await
+            .map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_reverse_resolver_add(
+        &self,
+        subnet: String,
+        resolver_uri: String,
+    ) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self
+                .http_post(
+                    &format!(
+                        "/dns/reverse-resolvers?subnet={}&resolver_uri={}",
+                        urlencoding(&subnet),
+                        urlencoding(&resolver_uri)
+                    ),
+                    &serde_json::json!({}),
+                )
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_reverse_resolver_add(subnet, resolver_uri)
+            .await
+            .map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn dns_reverse_resolver_remove(&self, subnet: String) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self
+                .http_delete(&format!(
+                    "/dns/reverse-resolvers?subnet={}",
+                    urlencoding(&subnet)
+                ))
+                .await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.dns_reverse_resolver_remove(subnet)
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dhcp_pools(&self) -> Result<DhcpPoolsResponse> {

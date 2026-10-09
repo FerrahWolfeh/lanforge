@@ -3,7 +3,6 @@ pub mod config;
 pub mod db;
 pub mod devices;
 pub mod dhcp;
-pub mod dns;
 pub mod host;
 pub mod init;
 pub mod lease;
