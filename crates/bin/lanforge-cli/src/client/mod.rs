@@ -21,7 +21,10 @@ use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::dns::{
     AdblockCheckResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse, DnsStatsResponse,
 };
-use lanforge_types::network::firewall::FirewallStatus;
+use lanforge_types::network::firewall::{
+    FirewallCommitRequest, FirewallCommitResponse, FirewallConfig, FirewallStatus,
+    FirewallValidationReport,
+};
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
 use lanforge_types::network::{DnsRecordType, TrafficConfig};
@@ -1236,6 +1239,66 @@ impl LanforgeClient {
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.firewall_reload().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn firewall_config(&self) -> Result<Box<FirewallConfig>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(self.http_get("/firewall/config").await?));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.firewall_config().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn update_firewall_config(&self, cfg: FirewallConfig) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_post("/firewall/config", &cfg).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.update_firewall_config(Box::new(cfg)).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn firewall_propose(
+        &self,
+        candidate: FirewallConfig,
+    ) -> Result<Box<FirewallValidationReport>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(self.http_post("/firewall/propose", &candidate).await?));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.firewall_propose(Box::new(candidate)).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn firewall_commit(
+        &self,
+        req: FirewallCommitRequest,
+    ) -> Result<Box<FirewallCommitResponse>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(self.http_post("/firewall/commit", &req).await?));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.firewall_commit(Box::new(req)).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn firewall_confirm(&self, tx_id: String) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_post("/firewall/confirm", &serde_json::json!({ "tx_id": tx_id })).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.firewall_confirm(tx_id).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn firewall_abort(&self, tx_id: String) -> Result<SimpleSuccess> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_post("/firewall/abort", &serde_json::json!({ "tx_id": tx_id })).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.firewall_abort(tx_id).await.map_err(|e| eyre!("{e}"))
     }
 
     pub async fn db_vacuum(&self) -> Result<SimpleSuccess> {
