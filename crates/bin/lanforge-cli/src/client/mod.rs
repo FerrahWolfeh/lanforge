@@ -9,7 +9,7 @@ use lanforge_api::api::{
     DnsCacheResponse, DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse,
     DnsReverseResolversResponse, DnsRewritesResponse, DnsUpstreamsResponse, HostConfigEntry,
     HostsResponse, HttpErrorResponse, HttpWrappedResponse, LeasesResponse, ServiceBannersResponse,
-    SimpleSuccess, StatusResponse, WhoisResponse,
+    SimpleSuccess, StatusResponse, SystemConfigExport, SystemConfigImportResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::identifiers::MacAddr;
@@ -644,6 +644,27 @@ impl LanforgeClient {
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.update_ra_config(Box::new(cfg)).await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn system_config_export(&self) -> Result<Box<SystemConfigExport>> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return Ok(Box::new(self.http_get("/config").await?));
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.system_config_export().await.map_err(|e| eyre!("{e}"))
+    }
+
+    pub async fn system_config_import(
+        &self,
+        config: SystemConfigExport,
+    ) -> Result<SystemConfigImportResponse> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            return self.http_post("/config", &config).await;
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.system_config_import(Box::new(config)).await.map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dns_stats(&self) -> Result<Box<DnsStatsResponse>> {

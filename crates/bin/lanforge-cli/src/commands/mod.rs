@@ -1,3 +1,4 @@
+pub mod config;
 pub mod db;
 pub mod devices;
 pub mod dhcp;
@@ -13,6 +14,7 @@ pub mod traffic;
 pub mod watch;
 pub mod wol;
 
+pub use config::ConfigArgs;
 pub use db::DbArgs;
 pub use devices::DevicesArgs;
 pub use dhcp::DhcpArgs;

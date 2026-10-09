@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use crate::commands::{
-    DbArgs, DevicesArgs, DhcpArgs, DnsArgs, FirewallArgs, HostArgs, PppoeArgs, RaArgs, ReloadArgs,
-    ServiceArgs, StatusArgs, TrafficArgs, WatchArgs, WolArgs,
+    ConfigArgs, DbArgs, DevicesArgs, DhcpArgs, DnsArgs, FirewallArgs, HostArgs, PppoeArgs, RaArgs,
+    ReloadArgs, ServiceArgs, StatusArgs, TrafficArgs, WatchArgs, WolArgs,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -88,4 +88,6 @@ pub enum Command {
     Traffic(TrafficArgs),
     /// Embedded database maintenance (vacuum, prune, clean)
     Db(DbArgs),
+    /// Inspect, export, import, and validate system configuration
+    Config(ConfigArgs),
 }
