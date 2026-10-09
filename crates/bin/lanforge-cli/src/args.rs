@@ -75,7 +75,7 @@ pub enum Command {
     Reload(ReloadArgs),
     /// Manage `PPPoE` WAN session (status, reconnect, disconnect)
     Pppoe(PppoeArgs),
-    /// Manage IPv6 Router Advertisement daemon (status, trigger)
+    /// Manage IPv6 Router Advertisement daemon (status, trigger, config, prefixes, RDNSS, DNSSL)
     Ra(RaArgs),
     /// Manage DNS resolver, cache, and adblock filter rules
     Dns(DnsArgs),
