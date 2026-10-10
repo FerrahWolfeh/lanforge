@@ -569,7 +569,7 @@ mod tests {
         let enc = encrypt_secrets_block(password, &plaintext).expect("encryption succeeds");
         assert_eq!(enc.salt.len(), 32);
         assert_eq!(enc.nonce.len(), 24);
-        assert!(!enc.ciphertext.is_empty());
+        assert_ne!(enc.ciphertext, "");
 
         let decrypted_bytes =
             decrypt_secrets_block(password, &enc).expect("decryption succeeds with correct pass");

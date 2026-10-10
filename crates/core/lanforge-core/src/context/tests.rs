@@ -34,8 +34,7 @@ async fn test_core_state_concurrency_stress() {
             for _ in 0..100 {
                 let devices = ctx.all_devices();
                 for dev in devices {
-                    let _mac = dev.mac;
-                    let _hostname = dev.hostname.name.clone();
+                    let _ = (&dev.mac, &dev.hostname.name);
                 }
                 let _ = ctx.get_device(&MacAddr([0x00, 0x11, 0x22, 0x33, 0, 0]));
                 tokio::task::yield_now().await;
@@ -101,9 +100,11 @@ async fn test_dynamic_pppoe_config() {
 
     assert!(ctx.get_pppoe_config().is_none());
 
-    let mut cfg = PppoeConfig::default();
-    cfg.username = "test_user".to_string();
-    cfg.wan_iface = "eth42".to_string();
+    let cfg = PppoeConfig {
+        username: "test_user".to_string(),
+        wan_iface: "eth42".to_string(),
+        ..Default::default()
+    };
 
     ctx.update_pppoe_config(cfg);
 

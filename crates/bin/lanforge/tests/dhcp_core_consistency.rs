@@ -8,7 +8,7 @@ use lanforge_core::bus::{EventBus, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::AsyncService;
-use lanforge_dhcp::{Dhcpv4Config, Dhcpv4Service};
+use lanforge_dhcp::{Dhcpv4Config, Dhcpv4Service, Dhcpv4Transport};
 use lanforge_types::device::{IPv4State, Origin};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
@@ -111,7 +111,8 @@ async fn test_dynamic_to_static_lease_transition_consistency() {
     let (cfg, pool) = create_test_config();
     ctx.update_dhcp_v4_pools(vec![pool]);
 
-    let (dhcp_handle, service) = Dhcpv4Service::synthetic(cfg.clone(), ctx.clone());
+    let (dhcp_handle, transport) = Dhcpv4Transport::inert();
+    let service = Dhcpv4Service::with_transport(cfg.clone(), ctx.clone(), transport);
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
@@ -235,7 +236,8 @@ async fn test_static_lease_outside_pool_bounds() {
     let (cfg, pool) = create_test_config();
     ctx.update_dhcp_v4_pools(vec![pool]);
 
-    let (dhcp_handle, service) = Dhcpv4Service::synthetic(cfg.clone(), ctx.clone());
+    let (dhcp_handle, transport) = Dhcpv4Transport::inert();
+    let service = Dhcpv4Service::with_transport(cfg.clone(), ctx.clone(), transport);
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
@@ -292,7 +294,8 @@ async fn test_ip_stealing_prevention() {
     let (cfg, pool) = create_test_config();
     ctx.update_dhcp_v4_pools(vec![pool]);
 
-    let (dhcp_handle, service) = Dhcpv4Service::synthetic(cfg.clone(), ctx.clone());
+    let (dhcp_handle, transport) = Dhcpv4Transport::inert();
+    let service = Dhcpv4Service::with_transport(cfg.clone(), ctx.clone(), transport);
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
@@ -354,7 +357,8 @@ async fn test_dhcp_decline_quarantine_consistency() {
     let (cfg, pool) = create_test_config();
     ctx.update_dhcp_v4_pools(vec![pool]);
 
-    let (dhcp_handle, service) = Dhcpv4Service::synthetic(cfg.clone(), ctx.clone());
+    let (dhcp_handle, transport) = Dhcpv4Transport::inert();
+    let service = Dhcpv4Service::with_transport(cfg.clone(), ctx.clone(), transport);
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
@@ -415,7 +419,8 @@ async fn test_eventbus_ip_deleted_recovers_pool() {
     cfg.pools = vec![small_pool.clone()];
     ctx.update_dhcp_v4_pools(vec![small_pool]);
 
-    let (dhcp_handle, service) = Dhcpv4Service::synthetic(cfg.clone(), ctx.clone());
+    let (dhcp_handle, transport) = Dhcpv4Transport::inert();
+    let service = Dhcpv4Service::with_transport(cfg.clone(), ctx.clone(), transport);
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });

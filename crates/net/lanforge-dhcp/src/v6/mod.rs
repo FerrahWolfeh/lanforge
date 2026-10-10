@@ -64,6 +64,7 @@ use tracing::{info, warn};
 
 use crate::traits::DhcpPool;
 pub use config::Dhcpv6Config;
+pub use io::Dhcpv6Transport;
 use pool::Ipv6Pool;
 use server::{Dhcpv6Server, HandleResult};
 
@@ -98,12 +99,30 @@ use lanforge_core::service::{AsyncService, ServiceDependency};
 pub struct Dhcpv6Service {
     config: Dhcpv6Config,
     ctx: LanforgeContext,
+    transport: Option<io::Dhcpv6Transport>,
 }
 
 impl Dhcpv6Service {
     #[must_use]
     pub const fn new(config: Dhcpv6Config, ctx: LanforgeContext) -> Self {
-        Self { config, ctx }
+        Self {
+            config,
+            ctx,
+            transport: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_transport(
+        config: Dhcpv6Config,
+        ctx: LanforgeContext,
+        transport: io::Dhcpv6Transport,
+    ) -> Self {
+        Self {
+            config,
+            ctx,
+            transport: Some(transport),
+        }
     }
 }
 
@@ -321,7 +340,10 @@ impl Dhcpv6Service {
         self.initialize_pool_reservations(&mut server, &current_cfg);
 
         // Setup transport socket
-        let transport = io::Dhcpv6Transport::new(&current_cfg.iface, current_cfg.port)?;
+        let transport = match self.transport {
+            Some(ref t) => t.clone(),
+            None => io::Dhcpv6Transport::new(&current_cfg.iface, current_cfg.port)?,
+        };
         self.publish_pool_stats(&server);
 
         let mut buf = [0u8; 2048];

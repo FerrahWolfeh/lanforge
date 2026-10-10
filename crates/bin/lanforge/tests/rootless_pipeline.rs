@@ -163,11 +163,11 @@ async fn test_rootless_pipeline_e2e() {
     let mut traffic_service = TrafficService::inert(traffic_cfg);
     assert!(traffic_service.is_inert());
 
-    let (ra_handle, mut ra_service) = RaService::synthetic(RaConfig::default(), ctx.clone());
-    assert!(ra_service.is_synthetic());
+    let (ra_handle, ra_trans) = lanforge_transport::Icmp6Transport::inert();
+    let mut ra_service = RaService::with_transport(RaConfig::default(), ctx.clone(), ra_trans);
 
-    let (dhcp_handle, mut dhcp_service) = Dhcpv4Service::synthetic(dhcp_cfg.clone(), ctx.clone());
-    assert!(dhcp_service.is_synthetic());
+    let (dhcp_handle, dhcp_trans) = lanforge_dhcp::Dhcpv4Transport::inert();
+    let mut dhcp_service = Dhcpv4Service::with_transport(dhcp_cfg.clone(), ctx.clone(), dhcp_trans);
 
     // -----------------------------------------------------------------------
     // 3. Spawn All Services as Background Async Tasks
@@ -198,7 +198,7 @@ async fn test_rootless_pipeline_e2e() {
     // -----------------------------------------------------------------------
 
     // RA Service emits initial unsolicited multicast RA
-    let initial_ra = timeout(Duration::from_millis(500), ra_handle.recv_ra())
+    let initial_ra = timeout(Duration::from_millis(500), ra_handle.recv_payload())
         .await
         .expect("Timeout waiting for initial RA")
         .expect("RA channel closed");
@@ -262,10 +262,10 @@ async fn test_rootless_pipeline_e2e() {
     // Send RS from client link-local IP
     let rs_packet = vec![133, 0, 0, 0, 0, 0, 0, 0];
     let client_v6_src = SocketAddrV6::new(client_v6, 0, 0, 0);
-    ra_handle.send_rs(rs_packet, client_v6_src).await;
+    ra_handle.inject(rs_packet, client_v6_src).await;
 
     // Receive unicast RA reply
-    let unicast_ra = timeout(Duration::from_millis(500), ra_handle.recv_ra())
+    let unicast_ra = timeout(Duration::from_millis(500), ra_handle.recv_payload())
         .await
         .expect("Timeout waiting for unicast RA response")
         .expect("RA channel closed");
@@ -338,7 +338,7 @@ async fn test_rootless_pipeline_e2e() {
 
     // Trigger RA burst
     let _ = bus.publish(LanforgeEvent::Network(NetworkEvent::RaTriggerRequested));
-    let burst_ra = timeout(Duration::from_millis(500), ra_handle.recv_ra())
+    let burst_ra = timeout(Duration::from_millis(500), ra_handle.recv_payload())
         .await
         .expect("Timeout waiting for triggered burst RA")
         .expect("RA channel closed");

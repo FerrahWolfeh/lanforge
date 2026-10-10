@@ -23,7 +23,7 @@ fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
 }
 
 #[tokio::test]
-async fn test_ra_synthetic_full_lifecycle() {
+async fn test_ra_inert_full_lifecycle() {
     let (ctx, bus) = create_test_context();
     let mut net_sub = bus.subscribe_network();
 
@@ -59,19 +59,20 @@ async fn test_ra_synthetic_full_lifecycle() {
 
     let cfg = RaConfig::default();
 
-    // 2. Initialize synthetic service
-    let (handle, service) = RaService::synthetic(cfg, ctx.clone());
-    assert!(service.is_synthetic());
+    // 2. Initialize service with inert transport
+    let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
+    assert!(transport.is_inert());
+    let service = RaService::with_transport(cfg, ctx.clone(), transport);
 
     // 3. Spawn service task
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
 
-    // 4. Verify initial startup multicast RA is emitted to synthetic handle
-    let startup_ra = timeout(Duration::from_millis(500), handle.recv_ra())
+    // 4. Verify initial startup multicast RA is emitted to inert handle
+    let startup_ra = timeout(Duration::from_millis(500), handle.recv_payload())
         .await
-        .expect("Timeout waiting for initial synthetic RA")
+        .expect("Timeout waiting for initial inert RA")
         .expect("RA channel closed unexpectedly");
 
     // Router Advertisement has ICMPv6 type = 134 (0x86)
@@ -103,12 +104,12 @@ async fn test_ra_synthetic_full_lifecycle() {
         0, 0, 0, 0,   // Reserved
     ];
     let client_src = SocketAddrV6::new(client_ip, 0, 0, 0);
-    handle.send_rs(rs_packet, client_src).await;
+    handle.inject(rs_packet, client_src).await;
 
     // 7. Verify unicast RA response is received by client
-    let unicast_ra = timeout(Duration::from_millis(500), handle.recv_ra())
+    let unicast_ra = timeout(Duration::from_millis(500), handle.recv_payload())
         .await
-        .expect("Timeout waiting for unicast synthetic RA response")
+        .expect("Timeout waiting for unicast inert RA response")
         .expect("RA channel closed unexpectedly");
 
     assert_eq!(unicast_ra[0], 134, "Expected unicast ICMPv6 RA response");

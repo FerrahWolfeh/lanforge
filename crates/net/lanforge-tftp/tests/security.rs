@@ -10,6 +10,7 @@ use std::time::Duration;
 use tokio::net::UdpSocket;
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn test_tftp_path_traversal_prevention() {
     // 1. Create a temp root and directory structure
     let temp_dir = tempfile::tempdir().unwrap();
@@ -116,7 +117,7 @@ async fn test_tftp_path_traversal_prevention() {
     // --- Part C: Verify Option Negotiation (RFC 2347/2348: tsize and blksize) ---
     let mut opt_packet = Vec::new();
     opt_packet.extend_from_slice(&1u16.to_be_bytes()); // RRQ
-    opt_packet.extend_from_slice(b"valid.txt\0octet\0blksize\01024\0tsize\x00\0");
+    opt_packet.extend_from_slice(b"valid.txt\0octet\0blksize\x001024\0tsize\x00\0");
     client.send_to(&opt_packet, tftp_addr).await.unwrap();
 
     let (n3, server_session_addr3) =

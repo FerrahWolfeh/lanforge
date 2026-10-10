@@ -916,6 +916,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assert_is_empty, clippy::nonminimal_bool)]
     fn test_ra_server_config_prefix_manipulation() {
         let mut cfg = RaServerConfig::default();
         assert!(cfg.prefixes.is_empty());

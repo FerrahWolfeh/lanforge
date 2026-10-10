@@ -5,6 +5,7 @@ use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceDependency};
+use lanforge_transport::UdpTransport;
 use lanforge_types::system::ServiceState;
 use parking_lot::RwLock;
 use std::net::SocketAddr;
@@ -87,13 +88,19 @@ impl AsyncService for TftpService {
         }
 
         let mut actual_bound = Vec::new();
-        let mut sockets = Vec::new();
+        let mut transports = Vec::new();
 
         for addr in addrs {
-            let socket = bind_udp_dual_stack(addr)?;
-            let local_addr = socket.local_addr().map_err(CoreError::Io)?;
-            actual_bound.push(local_addr.to_string());
-            sockets.push(Arc::new(socket));
+            let transport = match addr {
+                SocketAddr::V6(v6) if v6.ip().is_unspecified() => {
+                    UdpTransport::dual_stack(v6.port()).map_err(CoreError::Io)?
+                }
+                _ => UdpTransport::bind_single(addr).map_err(CoreError::Io)?,
+            };
+            for local_addr in transport.local_addrs().map_err(CoreError::Io)? {
+                actual_bound.push(local_addr.to_string());
+            }
+            transports.push(transport);
         }
 
         let bound_str = actual_bound.join(", ");
@@ -106,21 +113,21 @@ impl AsyncService for TftpService {
 
         let cfg_shared = Arc::new(self.cfg.clone());
         let mut reader_handles = Vec::new();
-        for socket in sockets {
+        for transport in transports {
             let cfg = Arc::clone(&cfg_shared);
             let mut shutdown_rx = shutdown_tx.subscribe();
             reader_handles.push(tokio::spawn(async move {
                 let mut buf = [0u8; 1024];
                 loop {
                     tokio::select! {
-                        res = socket.recv_from(&mut buf) => {
+                        res = transport.recv(&mut buf) => {
                             match res {
                                 Ok((size, src)) => {
                                     let data = SmallVec::<[u8; 512]>::from_slice(&buf[..size]);
-                                    let socket_clone = Arc::clone(&socket);
+                                    let trans_clone = transport.clone();
                                     let cfg_clone = Arc::clone(&cfg);
                                     tokio::spawn(async move {
-                                        if let Err(e) = handle_packet(socket_clone, src, &data, &cfg_clone).await {
+                                        if let Err(e) = handle_packet(&trans_clone, src, &data, &cfg_clone).await {
                                             debug!("TFTP error handling request from {src}: {e}");
                                         }
                                     });
@@ -170,7 +177,7 @@ impl AsyncService for TftpService {
 }
 
 async fn handle_packet(
-    socket: Arc<UdpSocket>,
+    transport: &UdpTransport,
     src: SocketAddr,
     data: &[u8],
     cfg: &TftpConfig,
@@ -183,11 +190,11 @@ async fn handle_packet(
     match opcode {
         1 => {
             // RRQ
-            handle_rrq(socket, src, &data[2..], cfg).await
+            handle_rrq(transport, src, &data[2..], cfg).await
         }
         _ => {
             // We only support RRQ for now
-            send_error(&socket, src, 4, "Illegal TFTP operation (RRQ only)").await
+            send_error(transport, src, 4, "Illegal TFTP operation (RRQ only)").await
         }
     }
 }
@@ -222,13 +229,13 @@ fn parse_rrq_options<'a>(mut parts: impl Iterator<Item = &'a [u8]>, cfg: &TftpCo
 }
 
 async fn validate_rrq_path(
-    socket: &UdpSocket,
+    transport: &UdpTransport,
     src: SocketAddr,
     filename_bytes: &[u8],
     root_dir: &std::path::Path,
 ) -> Result<Option<(std::path::PathBuf, u64, String)>, TftpError> {
     let Ok(filename) = std::str::from_utf8(filename_bytes) else {
-        send_error(socket, src, 0, "Invalid UTF-8 filename").await?;
+        send_error(transport, src, 0, "Invalid UTF-8 filename").await?;
         return Ok(None);
     };
 
@@ -241,20 +248,20 @@ async fn validate_rrq_path(
                 | std::path::Component::Prefix(_)
         )
     }) {
-        send_error(socket, src, 2, "Access violation").await?;
+        send_error(transport, src, 2, "Access violation").await?;
         return Ok(None);
     }
 
     let path = root_dir.join(rel_path);
     if !path.starts_with(root_dir) {
-        send_error(socket, src, 2, "Access violation").await?;
+        send_error(transport, src, 2, "Access violation").await?;
         return Ok(None);
     }
 
     let meta = match tokio::fs::metadata(&path).await {
         Ok(m) if m.is_file() => m,
         _ => {
-            send_error(socket, src, 1, "File not found").await?;
+            send_error(transport, src, 1, "File not found").await?;
             return Ok(None);
         }
     };
@@ -264,14 +271,7 @@ async fn validate_rrq_path(
 
 async fn bind_session_socket(src: SocketAddr) -> Result<(UdpSocket, SocketAddr), TftpError> {
     match src {
-        SocketAddr::V6(v6) => {
-            if let Some(v4) = v6.ip().to_ipv4_mapped() {
-                let v4_addr = SocketAddr::new(std::net::IpAddr::V4(v4), v6.port());
-                Ok((UdpSocket::bind("0.0.0.0:0").await?, v4_addr))
-            } else {
-                Ok((UdpSocket::bind("[::]:0").await?, src))
-            }
-        }
+        SocketAddr::V6(_) => Ok((UdpSocket::bind("[::]:0").await?, src)),
         SocketAddr::V4(_) => Ok((UdpSocket::bind("0.0.0.0:0").await?, src)),
     }
 }
@@ -338,7 +338,7 @@ async fn transfer_file(
 }
 
 async fn handle_rrq(
-    socket: Arc<UdpSocket>,
+    transport: &UdpTransport,
     src: SocketAddr,
     data: &[u8],
     cfg: &TftpConfig,
@@ -349,7 +349,7 @@ async fn handle_rrq(
         .ok_or_else(|| TftpError::Protocol("Missing filename".into()))?;
 
     let Some((path, file_len, filename)) =
-        validate_rrq_path(&socket, src, filename_bytes, &cfg.root_dir).await?
+        validate_rrq_path(transport, src, filename_bytes, &cfg.root_dir).await?
     else {
         return Ok(());
     };
@@ -422,78 +422,8 @@ async fn handle_oack_handshake(
     }
 }
 
-fn bind_udp_dual_stack(addr: SocketAddr) -> Result<tokio::net::UdpSocket, CoreError> {
-    match addr {
-        SocketAddr::V6(v6) if v6.ip().is_unspecified() => {
-            let socket_res = (|| -> std::io::Result<socket2::Socket> {
-                let s = socket2::Socket::new(
-                    socket2::Domain::IPV6,
-                    socket2::Type::DGRAM,
-                    Some(socket2::Protocol::UDP),
-                )?;
-                s.set_only_v6(false)?;
-                s.set_nonblocking(true)?;
-                s.bind(&socket2::SockAddr::from(addr))?;
-                Ok(s)
-            })();
-
-            match socket_res {
-                Ok(s) => {
-                    let std_sock: std::net::UdpSocket = s.into();
-                    tokio::net::UdpSocket::from_std(std_sock).map_err(CoreError::Io)
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "TFTP: IPv6 dual-stack UDP bind to {} failed ({}), falling back to 0.0.0.0:{}",
-                        addr,
-                        e,
-                        v6.port()
-                    );
-                    let v4_addr = SocketAddr::from(([0, 0, 0, 0], v6.port()));
-                    let s = socket2::Socket::new(
-                        socket2::Domain::IPV4,
-                        socket2::Type::DGRAM,
-                        Some(socket2::Protocol::UDP),
-                    )
-                    .map_err(CoreError::Io)?;
-                    s.set_nonblocking(true).map_err(CoreError::Io)?;
-                    s.bind(&socket2::SockAddr::from(v4_addr))
-                        .map_err(CoreError::Io)?;
-                    let std_sock: std::net::UdpSocket = s.into();
-                    tokio::net::UdpSocket::from_std(std_sock).map_err(CoreError::Io)
-                }
-            }
-        }
-        SocketAddr::V6(_) => {
-            let s = socket2::Socket::new(
-                socket2::Domain::IPV6,
-                socket2::Type::DGRAM,
-                Some(socket2::Protocol::UDP),
-            )
-            .map_err(CoreError::Io)?;
-            s.set_only_v6(true).map_err(CoreError::Io)?;
-            s.set_nonblocking(true).map_err(CoreError::Io)?;
-            s.bind(&socket2::SockAddr::from(addr)).map_err(CoreError::Io)?;
-            let std_sock: std::net::UdpSocket = s.into();
-            tokio::net::UdpSocket::from_std(std_sock).map_err(CoreError::Io)
-        }
-        SocketAddr::V4(_) => {
-            let s = socket2::Socket::new(
-                socket2::Domain::IPV4,
-                socket2::Type::DGRAM,
-                Some(socket2::Protocol::UDP),
-            )
-            .map_err(CoreError::Io)?;
-            s.set_nonblocking(true).map_err(CoreError::Io)?;
-            s.bind(&socket2::SockAddr::from(addr)).map_err(CoreError::Io)?;
-            let std_sock: std::net::UdpSocket = s.into();
-            tokio::net::UdpSocket::from_std(std_sock).map_err(CoreError::Io)
-        }
-    }
-}
-
 async fn send_error(
-    socket: &UdpSocket,
+    transport: &UdpTransport,
     src: SocketAddr,
     code: u16,
     msg: &str,
@@ -506,7 +436,7 @@ async fn send_error(
     packet[4..4 + msg_len].copy_from_slice(&msg_bytes[..msg_len]);
     packet[4 + msg_len] = 0;
     let total_len = 5 + msg_len;
-    socket.send_to(&packet[..total_len], src).await?;
+    transport.send(&packet[..total_len], &src).await?;
     Ok(())
 }
 

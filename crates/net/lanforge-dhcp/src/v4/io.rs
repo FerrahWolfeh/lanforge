@@ -6,11 +6,12 @@ use parking_lot::Mutex;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::sync::Arc;
 use tokio::net::UdpSocket as TokioUdpSocket;
 
-/// A captured `DHCPv4` reply dispatched by `Dhcpv4Transport` in synthetic mode.
+/// A captured `DHCPv4` reply dispatched by `Dhcpv4Transport` in inert mode.
 #[derive(Debug, Clone)]
-pub struct Dhcpv4SyntheticReply {
+pub struct Dhcpv4InertReply {
     pub packet: Vec<u8>,
     pub server_id: Ipv4Addr,
     pub broadcast: bool,
@@ -20,8 +21,8 @@ pub struct Dhcpv4SyntheticReply {
     pub port: u16,
 }
 
-impl Dhcpv4SyntheticReply {
-    /// Decodes the synthetic DHCP packet into a structured `Message`.
+impl Dhcpv4InertReply {
+    /// Decodes the inert DHCP packet into a structured `Message`.
     ///
     /// # Errors
     ///
@@ -31,30 +32,31 @@ impl Dhcpv4SyntheticReply {
     }
 }
 
-pub type Dhcpv4SyntheticInRx =
-    std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<(Vec<u8>, SocketAddr)>>>;
+pub type Dhcpv4InertInRx =
+    Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<(Vec<u8>, SocketAddr)>>>;
 
 #[derive(Clone)]
-pub struct Dhcpv4SyntheticChannels {
-    pub in_rx: Dhcpv4SyntheticInRx,
-    pub out_tx: tokio::sync::mpsc::Sender<Dhcpv4SyntheticReply>,
+pub struct Dhcpv4InertChannels {
+    pub in_rx: Dhcpv4InertInRx,
+    pub out_tx: tokio::sync::mpsc::Sender<Dhcpv4InertReply>,
 }
 
 /// Test handle for injecting synthetic `DHCPv4` packets and receiving outgoing replies without raw sockets or root.
 #[derive(Clone)]
-pub struct Dhcpv4SyntheticHandle {
+pub struct Dhcpv4InertHandle {
     in_tx: tokio::sync::mpsc::Sender<(Vec<u8>, SocketAddr)>,
-    out_rx: std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Dhcpv4SyntheticReply>>>,
+    out_rx: Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Dhcpv4InertReply>>>,
 }
 
-impl Dhcpv4SyntheticHandle {
-    pub(crate) fn new(
+impl Dhcpv4InertHandle {
+    #[must_use]
+    pub fn new(
         in_tx: tokio::sync::mpsc::Sender<(Vec<u8>, SocketAddr)>,
-        out_rx: tokio::sync::mpsc::Receiver<Dhcpv4SyntheticReply>,
+        out_rx: tokio::sync::mpsc::Receiver<Dhcpv4InertReply>,
     ) -> Self {
         Self {
             in_tx,
-            out_rx: std::sync::Arc::new(tokio::sync::Mutex::new(out_rx)),
+            out_rx: Arc::new(tokio::sync::Mutex::new(out_rx)),
         }
     }
 
@@ -63,23 +65,30 @@ impl Dhcpv4SyntheticHandle {
         let _ = self.in_tx.send((packet, src)).await;
     }
 
+    /// Injects a synthetic incoming packet into the transport.
+    pub async fn inject(&self, packet: Vec<u8>, src: SocketAddr) {
+        self.send_packet(packet, src).await;
+    }
+
     /// Awaits and receives the next outgoing `DHCPv4` reply (e.g. OFFER or ACK).
-    pub async fn recv_reply(&self) -> Option<Dhcpv4SyntheticReply> {
+    pub async fn recv_reply(&self) -> Option<Dhcpv4InertReply> {
         self.out_rx.lock().await.recv().await
     }
 }
 
+#[derive(Clone)]
 enum TransportBackend {
     Kernel {
-        socket: TokioUdpSocket,
-        raw_tx: Mutex<RawSender>,
+        socket: Arc<TokioUdpSocket>,
+        raw_tx: Arc<Mutex<RawSender>>,
     },
-    Synthetic {
-        channels: Dhcpv4SyntheticChannels,
+    Inert {
+        channels: Dhcpv4InertChannels,
     },
 }
 
 /// Encapsulates raw socket I/O and L2 injection for the `DHCPv4` service.
+#[derive(Clone)]
 pub struct Dhcpv4Transport {
     backend: TransportBackend,
 }
@@ -91,25 +100,41 @@ impl Dhcpv4Transport {
         let raw_tx = RawSender::new(iface).map_err(|e| CoreError::Generic(e.to_string()))?;
         Ok(Self {
             backend: TransportBackend::Kernel {
-                socket,
-                raw_tx: Mutex::new(raw_tx),
+                socket: Arc::new(socket),
+                raw_tx: Arc::new(Mutex::new(raw_tx)),
             },
         })
     }
 
-    /// Creates a synthetic in-memory transport for rootless testing.
+    /// Creates an in-memory inert transport for rootless testing and simulation.
     #[must_use]
-    pub const fn synthetic(channels: Dhcpv4SyntheticChannels) -> Self {
-        Self {
-            backend: TransportBackend::Synthetic { channels },
-        }
+    pub fn inert() -> (Dhcpv4InertHandle, Self) {
+        let (in_tx, in_rx) = tokio::sync::mpsc::channel(64);
+        let (out_tx, out_rx) = tokio::sync::mpsc::channel(64);
+        let handle = Dhcpv4InertHandle::new(in_tx, out_rx);
+        let channels = Dhcpv4InertChannels {
+            in_rx: Arc::new(tokio::sync::Mutex::new(in_rx)),
+            out_tx,
+        };
+        (
+            handle,
+            Self {
+                backend: TransportBackend::Inert { channels },
+            },
+        )
+    }
+
+    /// Returns `true` if operating in inert testing mode.
+    #[must_use]
+    pub const fn is_inert(&self) -> bool {
+        matches!(self.backend, TransportBackend::Inert { .. })
     }
 
     /// Receives a packet asynchronously from the transport.
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
         match &self.backend {
             TransportBackend::Kernel { socket, .. } => socket.recv_from(buf).await,
-            TransportBackend::Synthetic { channels } => {
+            TransportBackend::Inert { channels } => {
                 let mut rx = channels.in_rx.lock().await;
                 match rx.recv().await {
                     Some((packet, addr)) => {
@@ -119,7 +144,7 @@ impl Dhcpv4Transport {
                     }
                     None => Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
-                        "Synthetic DHCPv4 channel closed",
+                        "Inert DHCPv4 channel closed",
                     )),
                 }
             }
@@ -127,7 +152,7 @@ impl Dhcpv4Transport {
     }
 
     /// Sends a DHCP reply, either via raw L2 socket (unicast/broadcast) or via the UDP socket to a relay agent,
-    /// or into the synthetic channels when operating rootless.
+    /// or into the inert channels when operating rootless.
     #[allow(clippy::too_many_arguments)]
     pub fn send_reply(
         &self,
@@ -159,8 +184,8 @@ impl Dhcpv4Transport {
                         .map_err(|e| CoreError::Generic(format!("Failed to send to relay agent: {e}")))
                 }
             }
-            TransportBackend::Synthetic { channels } => {
-                let reply = Dhcpv4SyntheticReply {
+            TransportBackend::Inert { channels } => {
+                let reply = Dhcpv4InertReply {
                     packet: packet.to_vec(),
                     server_id,
                     broadcast,
@@ -170,7 +195,7 @@ impl Dhcpv4Transport {
                     port,
                 };
                 channels.out_tx.try_send(reply).map_err(|e| {
-                    CoreError::Generic(format!("Failed to deliver synthetic DHCP reply: {e}"))
+                    CoreError::Generic(format!("Failed to deliver inert DHCP reply: {e}"))
                 })
             }
         }

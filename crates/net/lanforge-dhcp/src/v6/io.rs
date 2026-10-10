@@ -1,4 +1,5 @@
 use lanforge_core::error::CoreError;
+use lanforge_transport::{InertHandle, UdpTransport};
 use std::io;
 use std::net::{Ipv6Addr, SocketAddr, UdpSocket};
 use tokio::net::UdpSocket as TokioUdpSocket;
@@ -6,8 +7,9 @@ use tokio::net::UdpSocket as TokioUdpSocket;
 const ALL_DHCP_RELAY_AGENTS_AND_SERVERS: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 1, 2);
 
 /// Encapsulates UDP socket I/O and MAC address reading for the `DHCPv6` service.
+#[derive(Clone)]
 pub struct Dhcpv6Transport {
-    socket: TokioUdpSocket,
+    inner: UdpTransport,
 }
 
 fn if_nametoindex(iface: &str) -> u32 {
@@ -42,16 +44,31 @@ impl Dhcpv6Transport {
         let socket = TokioUdpSocket::from_std(std_socket)
             .map_err(|e| CoreError::Generic(format!("tokio UdpSocket conversion: {e}")))?;
 
-        Ok(Self { socket })
+        Ok(Self {
+            inner: UdpTransport::from_tokio(socket),
+        })
     }
 
-    /// Receives a packet asynchronously from the UDP socket.
+    /// Creates an in-memory inert transport for rootless testing and simulation.
+    #[must_use]
+    pub fn inert() -> (InertHandle<SocketAddr>, Self) {
+        let (handle, inner) = UdpTransport::inert();
+        (handle, Self { inner })
+    }
+
+    /// Returns `true` if operating in inert testing mode.
+    #[must_use]
+    pub fn is_inert(&self) -> bool {
+        self.inner.is_inert()
+    }
+
+    /// Receives a packet asynchronously from the UDP transport.
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        self.socket.recv_from(buf).await
+        self.inner.recv(buf).await
     }
 
-    /// Sends a `DHCPv6` reply to the destination address.
+    /// Sends a `DHCPv6` reply to the destination address synchronously.
     pub fn send_reply(&self, packet: &[u8], dest: SocketAddr) -> io::Result<usize> {
-        self.socket.try_send_to(packet, dest)
+        self.inner.try_send(packet, &dest)
     }
 }

@@ -2,26 +2,26 @@ use crate::error::DnsError;
 use crate::pipeline::DnsPipelineRequest;
 use crate::server::DnsContext;
 use lanforge_dns_wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
+use lanforge_transport::UdpTransport;
 use lanforge_types::network::dns::TransportProtocol;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 use tracing::{error, trace};
 
-pub fn spawn_udp_worker(ctx: Arc<DnsContext>, socket: Arc<UdpSocket>) -> JoinHandle<()> {
+pub fn spawn_udp_worker(ctx: Arc<DnsContext>, transport: UdpTransport) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut buf = vec![0u8; 1500]; // Standard MTU-ish buffer
         loop {
-            match socket.recv_from(&mut buf).await {
+            match transport.recv(&mut buf).await {
                 Ok((len, src)) => {
                     let task_ctx = Arc::clone(&ctx);
-                    let task_socket = Arc::clone(&socket);
+                    let task_transport = transport.clone();
                     let data = buf[..len].to_vec();
 
                     tokio::spawn(async move {
-                        if let Err(e) = handle_udp_query(task_ctx, task_socket, &data, src).await {
+                        if let Err(e) = handle_udp_query(task_ctx, task_transport, &data, src).await {
                             trace!("UDP query handling failed: {:?}", e);
                         }
                     });
@@ -38,7 +38,7 @@ pub fn spawn_udp_worker(ctx: Arc<DnsContext>, socket: Arc<UdpSocket>) -> JoinHan
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 async fn handle_udp_query(
     ctx: Arc<DnsContext>,
-    socket: Arc<UdpSocket>,
+    transport: UdpTransport,
     data: &[u8],
     src: SocketAddr,
 ) -> Result<(), DnsError> {
@@ -65,7 +65,7 @@ async fn handle_udp_query(
             false,
             &mut resp_buf,
         );
-        socket.send_to(&resp_buf, src).await?;
+        transport.send(&resp_buf, &src).await?;
         return Ok(());
     }
 
@@ -101,7 +101,7 @@ async fn handle_udp_query(
     }
 
     if !resp_buf.is_empty() {
-        socket.send_to(&resp_buf, src).await?;
+        transport.send(&resp_buf, &src).await?;
     }
 
     Ok(())

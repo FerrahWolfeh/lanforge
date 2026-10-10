@@ -11,8 +11,8 @@ pub mod traits;
 pub mod v4;
 pub mod v6;
 
-pub use v4::{Dhcpv4Config, Dhcpv4Service, Dhcpv4SyntheticHandle, Dhcpv4SyntheticReply};
-pub use v6::{Dhcpv6Config, Dhcpv6Service};
+pub use v4::{Dhcpv4Config, Dhcpv4InertHandle, Dhcpv4InertReply, Dhcpv4Service, Dhcpv4Transport};
+pub use v6::{Dhcpv6Config, Dhcpv6Service, Dhcpv6Transport};
 
 #[cfg(test)]
 pub mod test_utils;

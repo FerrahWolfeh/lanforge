@@ -7,6 +7,7 @@ A high-performance, resource-efficient Rust-based router and LAN orchestration p
 - `core/lanforge-types` (L0) - Foundational crate. Contains core domain types (`Device`, `MacAddr`, `Duid`), event definitions (`LanforgeEvent`), and state update protocols (`DeviceUpdate`). **Rule:** Must never depend on any other workspace crate.
 - `core/lanforge-core` (L1) - The "brain" of the project. Orchestrates global state transitions, event bus, and context management. Depends on `lanforge-types`.
 - `core/lanforge-crypto` (L1) - Foundational security crate. Encapsulates password hashing (Argon2id), key derivation, and cryptographic utilities.
+- `net/lanforge-transport` (L1) - Foundational transport crate. Implements dual-stack Y-architecture (`UdpTransport`, `DualTcpListener`, `Icmp6Transport`), lock-free rate limiting, atomic metrics, and pure dependency injection (`InertHandle`) for rootless simulation.
 - `api/lanforge-api` (L1) - Shared API protocol definitions, DTOs, and RPC trait contracts. Used by both CLI and Daemon.
 - `api/lanforge-api-dispatch` (L2) - Server-side RPC protocol handlers. Depends on `core`, `api`, and `crypto`. Operates decoupled from database persistence via event-driven CQRS.
 - `api/lanforge-uds`, `api/lanforge-http` (L2) - Communication endpoints exposing the API via Unix Domain Sockets or HTTP/WebSockets.
@@ -56,6 +57,11 @@ Inter-service communication is powered by a multi-topic broadcast bus:
   - **Router Host Services**: Controlled strictly by Host Rules in the `external` zone (`input` chain).
   - **Internal LAN Services**: Controlled by explicit Port Forwarding rules (IPv4 DNAT) or IPv6 Pinholes (routed directly without NAT) matching specific target IP and port in the `forward` chain.
 - **Unified Port Forwarding**: The WebUI manages both IPv4 DNAT and IPv6 routed pinholes in a single, unified interface with automatic device recognition, static lease pinning, and dual-stack rule creation.
+
+## 5. Transport Layer & Inert Simulation (`lanforge-transport`)
+- **Dual-Stack Native ("Y" Architecture)**: Avoid hybrid sockets (`IPV6_V6ONLY = false`) to eliminate kernel IPv4-mapped address translation (`::ffff:x.x.x.x`). Services bind native IPv4 and IPv6 independently while exposing unified async streams (`UdpTransport`, `DualTcpListener`).
+- **Rootless & Zero-Mock Daemons**: Domain services (`RaService`, `Dhcpv4Service`, `Dhcpv6Service`, `DnsService`, etc.) must not contain mock branches, synthetic flags, or simulation-specific conditionals.
+- **Pure Dependency Injection**: Tests and simulations instantiate in-memory transports via `(handle, transport) = ...::inert()` and pass them to services via `Service::with_transport(cfg, ctx, transport)`.
 
 ---
 

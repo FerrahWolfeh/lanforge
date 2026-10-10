@@ -259,12 +259,12 @@ impl AsyncService for DnsService {
         }
 
         for addr in &addrs {
-            let socket = Arc::new(crate::server::transport::net::bind_udp(*addr).map_err(CoreError::Io)?);
+            let transport = crate::server::transport::net::bind_udp(*addr).map_err(CoreError::Io)?;
             info!(%addr, "DNS: UDP listening");
             for _ in 0..parallelism {
                 workers.push(crate::server::worker::udp::spawn_udp_worker(
                     Arc::clone(&dns_ctx),
-                    Arc::clone(&socket),
+                    transport.clone(),
                 ));
             }
         }

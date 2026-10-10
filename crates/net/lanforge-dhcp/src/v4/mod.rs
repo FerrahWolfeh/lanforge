@@ -55,9 +55,8 @@ use std::time::{Duration, Instant, SystemTime};
 use tracing::{debug, info, warn};
 
 pub use config::Dhcpv4Config;
-pub use io::{Dhcpv4SyntheticChannels, Dhcpv4SyntheticHandle, Dhcpv4SyntheticReply};
+pub use io::{Dhcpv4InertChannels, Dhcpv4InertHandle, Dhcpv4InertReply, Dhcpv4Transport};
 use crate::traits::DhcpPool;
-use io::Dhcpv4Transport;
 use lanforge_core::context::{LanforgeContext, ServiceHandle};
 
 /// `DHCPv4` Server Service.
@@ -73,7 +72,7 @@ use lanforge_core::context::{LanforgeContext, ServiceHandle};
 pub struct Dhcpv4Service {
     cfg: Dhcpv4Config,
     ctx: LanforgeContext,
-    synthetic: Option<Dhcpv4SyntheticChannels>,
+    transport: Option<Dhcpv4Transport>,
 }
 
 impl Dhcpv4Service {
@@ -82,33 +81,21 @@ impl Dhcpv4Service {
         Self {
             cfg,
             ctx,
-            synthetic: None,
+            transport: None,
         }
     }
 
-    /// Creates a synthetic instance of `Dhcpv4Service` for rootless testing and simulation.
     #[must_use]
-    pub fn synthetic(cfg: Dhcpv4Config, ctx: LanforgeContext) -> (Dhcpv4SyntheticHandle, Self) {
-        let (in_tx, in_rx) = tokio::sync::mpsc::channel(64);
-        let (out_tx, out_rx) = tokio::sync::mpsc::channel(64);
-
-        let handle = Dhcpv4SyntheticHandle::new(in_tx, out_rx);
-
-        let service = Self {
+    pub const fn with_transport(
+        cfg: Dhcpv4Config,
+        ctx: LanforgeContext,
+        transport: Dhcpv4Transport,
+    ) -> Self {
+        Self {
             cfg,
             ctx,
-            synthetic: Some(Dhcpv4SyntheticChannels {
-                in_rx: std::sync::Arc::new(tokio::sync::Mutex::new(in_rx)),
-                out_tx,
-            }),
-        };
-
-        (handle, service)
-    }
-
-    #[must_use]
-    pub const fn is_synthetic(&self) -> bool {
-        self.synthetic.is_some()
+            transport: Some(transport),
+        }
     }
 }
 
@@ -330,10 +317,9 @@ impl Dhcpv4Service {
         };
 
         let mut server = DhcpServer::new(current_cfg.clone(), self.ctx.clone());
-        let transport = if let Some(ref syn) = self.synthetic {
-            Dhcpv4Transport::synthetic(syn.clone())
-        } else {
-            Dhcpv4Transport::new(&current_cfg.iface, current_cfg.port)?
+        let transport = match self.transport {
+            Some(ref t) => t.clone(),
+            None => Dhcpv4Transport::new(&current_cfg.iface, current_cfg.port)?,
         };
 
         // Pre-allocate static reservations to avoid collisions with dynamic pool

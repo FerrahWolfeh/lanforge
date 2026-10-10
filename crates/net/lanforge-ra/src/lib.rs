@@ -68,22 +68,15 @@ use crate::error::NetworkError;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceDependency};
+use lanforge_transport::Icmp6Transport;
 use rand::RngExt;
-use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use std::collections::HashMap;
-use std::io::{self, ErrorKind};
-use std::mem::{MaybeUninit, size_of};
-use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
-use std::os::unix::io::AsRawFd;
-use std::ptr::{from_mut, from_ref};
+use std::io;
+use std::net::{IpAddr, Ipv6Addr, SocketAddrV6};
 use std::time::{Duration, Instant};
-use tokio::io::unix::{AsyncFd, AsyncFdReadyGuard};
 use tracing::{debug, info, warn};
 
-// ICMP6_FILTER = 1 (linux/icmpv6.h — not exposed by libc crate)
-const ICMP6_FILTER: libc::c_int = 1;
 const ALL_NODES_MULTICAST: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1);
-const ALL_ROUTERS_MULTICAST: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 2);
 
 // ---------------------------------------------------------------------------
 // Runtime State — Handles RFC-compliant timing
@@ -300,32 +293,6 @@ impl RaState {
     }
 }
 
-/// Test handle for injecting synthetic `ICMPv6` packets into `RaService` and capturing generated RAs.
-#[derive(Clone)]
-pub struct RaSyntheticHandle {
-    rs_tx: tokio::sync::mpsc::Sender<(Vec<u8>, SocketAddrV6)>,
-    ra_rx: std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<Vec<u8>>>>,
-}
-
-impl RaSyntheticHandle {
-    pub async fn send_rs(&self, packet: Vec<u8>, src: SocketAddrV6) {
-        let _ = self.rs_tx.send((packet, src)).await;
-    }
-
-    pub async fn recv_ra(&self) -> Option<Vec<u8>> {
-        self.ra_rx.lock().await.recv().await
-    }
-}
-
-pub type RaSyntheticRsRx =
-    std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<(Vec<u8>, SocketAddrV6)>>>;
-
-#[derive(Clone)]
-pub struct RaSyntheticChannels {
-    pub rs_rx: RaSyntheticRsRx,
-    pub ra_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
-}
-
 #[lanforge_macros::lanforge_service(
     id = "ra",
     name = "RA Server",
@@ -338,7 +305,7 @@ pub struct RaSyntheticChannels {
 pub struct RaService {
     cfg: RaConfig,
     ctx: LanforgeContext,
-    synthetic: Option<RaSyntheticChannels>,
+    transport: Option<Icmp6Transport>,
 }
 
 impl RaService {
@@ -347,42 +314,24 @@ impl RaService {
         Self {
             cfg,
             ctx,
-            synthetic: None,
+            transport: None,
         }
     }
 
-    /// Creates a synthetic instance of `RaService` for rootless testing and simulation.
+    /// Creates an instance of `RaService` with an injected transport.
     #[must_use]
-    pub fn synthetic(cfg: RaConfig, ctx: LanforgeContext) -> (RaSyntheticHandle, Self) {
-        let (rs_tx, rs_rx) = tokio::sync::mpsc::channel(64);
-        let (ra_tx, ra_rx) = tokio::sync::mpsc::channel(64);
-
-        let handle = RaSyntheticHandle {
-            rs_tx,
-            ra_rx: std::sync::Arc::new(tokio::sync::Mutex::new(ra_rx)),
-        };
-
-        let service = Self {
+    pub const fn with_transport(cfg: RaConfig, ctx: LanforgeContext, transport: Icmp6Transport) -> Self {
+        Self {
             cfg,
             ctx,
-            synthetic: Some(RaSyntheticChannels {
-                rs_rx: std::sync::Arc::new(tokio::sync::Mutex::new(rs_rx)),
-                ra_tx,
-            }),
-        };
-
-        (handle, service)
-    }
-
-    #[must_use]
-    pub const fn is_synthetic(&self) -> bool {
-        self.synthetic.is_some()
+            transport: Some(transport),
+        }
     }
 
     async fn resolve_interface_resources(
         &self,
         iface_index: u32,
-    ) -> Result<([u8; 6], AsyncFd<Socket>), CoreError> {
+    ) -> Result<([u8; 6], Icmp6Transport), CoreError> {
         // Parallel optimization: Wait for interface data ONLY if not already present
         if self
             .ctx
@@ -424,12 +373,10 @@ impl RaService {
             })?
             .0;
 
-        let socket = create_ra_socket(&self.cfg.iface, iface_index)
+        let transport = Icmp6Transport::bind(&self.cfg.iface, iface_index)
             .map_err(|e| CoreError::Generic(e.to_string()))?;
-        socket.set_nonblocking(true).map_err(CoreError::Io)?;
-        let async_socket = AsyncFd::new(socket).map_err(CoreError::Io)?;
 
-        Ok((mac, async_socket))
+        Ok((mac, transport))
     }
 
     async fn wait_for_config_change_or_shutdown(&self) -> Result<RunResult, CoreError> {
@@ -448,6 +395,7 @@ impl RaService {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn run_server(&self, current_cfg: RaConfig) -> Result<RunResult, CoreError> {
         current_cfg
             .validate()
@@ -459,137 +407,34 @@ impl RaService {
             other_config = u8::from(current_cfg.other_config),
             max_interval_secs = current_cfg.max_interval.as_secs(),
             router_lifetime_secs = current_cfg.effective_router_lifetime().as_secs(),
-            synthetic = self.synthetic.is_some(),
             "RA: Server active"
         );
 
-        if let Some(ref syn) = self.synthetic {
-            self.run_synthetic_server(current_cfg, syn).await
-        } else {
-            self.run_kernel_server(current_cfg).await
-        }
-    }
-
-    async fn run_synthetic_server(
-        &self,
-        current_cfg: RaConfig,
-        syn: &RaSyntheticChannels,
-    ) -> Result<RunResult, CoreError> {
         let iface_index = self.ctx.target_ifindex().unwrap_or(1);
-        let mac = self
-            .ctx
-            .with_state(|state| {
-                state
-                    .interfaces
-                    .interface_ips
-                    .get(&iface_index)
-                    .and_then(|i| i.mac)
-            })
-            .map_or([0x02, 0x11, 0x22, 0x33, 0x44, 0x55], |m| m.0);
 
-        let mut state = RaState::new();
-
-        // Immediate RA on startup
-        send_ra_internal(
-            &self.ctx,
-            RaSender::Synthetic(&syn.ra_tx),
-            &current_cfg,
-            mac,
-            iface_index,
-            None,
-            &mut state,
-        )
-        .map_err(|e| CoreError::Generic(e.to_string()))?;
-        state.record_multicast();
-
-        let mut next_ra_at = Instant::now() + state.next_interval(&current_cfg);
-
-        // Update live status in context
-        let initial_status = state.build_status(&current_cfg, &self.ctx, Some(next_ra_at));
-        let _ = self.ctx.apply(DeviceUpdate::RaStatusUpdated {
-            status: Some(Box::new(initial_status)),
-        });
-
-        let mut handle = self.ctx.service_handle_network();
-        let rs_rx = syn.rs_rx.clone();
-
-        loop {
-            let now = Instant::now();
-            let sleep_duration = if next_ra_at > now {
-                next_ra_at - now
-            } else {
-                Duration::ZERO
-            };
-
-            let ctx = RaContext {
-                sender: RaSender::Synthetic(&syn.ra_tx),
-                mac,
-                iface_index,
-                lctx: &self.ctx,
-            };
-
-            tokio::select! {
-                // 1. Periodic Advertisement & Timers
-                () = tokio::time::sleep(sleep_duration) => {
-                    Self::perform_periodic_ra(ctx, &current_cfg, &mut state, &mut next_ra_at);
-                }
-
-                // 2. Synthetic Solicitation packets
-                recv_res = async { rs_rx.lock().await.recv().await } => {
-                    let Some((data, src_sa)) = recv_res else {
-                        return Ok(RunResult::Shutdown);
-                    };
-                    self.process_rs_packet(
-                        &data,
-                        Some(*src_sa.ip()),
-                        &current_cfg,
-                        ctx,
-                        &mut state,
-                        next_ra_at,
-                    ).await;
-                }
-
-                // 3. EventBus signals
-                res = handle.next_event() => {
-                    let Some(timed_event) = res else {
-                        return Ok(RunResult::Shutdown);
-                    };
-                    if matches!(
-                        timed_event.event,
-                        LanforgeEvent::System(SystemEvent::ConfigRaChanged)
-                    ) {
-                        return Ok(RunResult::ConfigChanged);
-                    }
-                    lanforge_core::match_event!(timed_event, {
-                        LanforgeEvent::Network(NetworkEvent::PrefixChanged(..)) => {
-                            info!("RA: Prefix change detected — sending immediate RA burst");
-                            state.initial_sent = 0;
-                            next_ra_at = Instant::now();
-                        }
-                        LanforgeEvent::Network(NetworkEvent::RaTriggerRequested) => {
-                            info!("RA: Immediate advertisement burst requested via API");
-                            state.initial_sent = 0;
-                            next_ra_at = Instant::now();
-                        }
-                    });
-                }
+        let (mac, transport) = match self.transport {
+            Some(ref t) => {
+                let mac = self
+                    .ctx
+                    .with_state(|state| {
+                        state
+                            .interfaces
+                            .interface_ips
+                            .get(&iface_index)
+                            .and_then(|i| i.mac)
+                    })
+                    .map_or([0x02, 0x11, 0x22, 0x33, 0x44, 0x55], |m| m.0);
+                (mac, t.clone())
             }
-        }
-    }
-
-    async fn run_kernel_server(&self, current_cfg: RaConfig) -> Result<RunResult, CoreError> {
-        let iface_index = self.ctx.target_ifindex().ok_or_else(|| {
-            CoreError::Generic("Target interface index is not configured in context".to_string())
-        })?;
-
-        let (mac, async_socket) = self.resolve_interface_resources(iface_index).await?;
+            None => self.resolve_interface_resources(iface_index).await?,
+        };
 
         let mut state = RaState::new();
 
         // Immediate RA on startup
         send_ra_internal(
             &self.ctx,
-            RaSender::Socket(&async_socket),
+            &transport,
             &current_cfg,
             mac,
             iface_index,
@@ -619,7 +464,7 @@ impl RaService {
             };
 
             let ctx = RaContext {
-                sender: RaSender::Socket(&async_socket),
+                transport: &transport,
                 mac,
                 iface_index,
                 lctx: &self.ctx,
@@ -632,8 +477,19 @@ impl RaService {
                 }
 
                 // 2. Packet processing (RS)
-                res = async_socket.readable() => {
-                    self.handle_rs_packet(res, &mut buf, &current_cfg, ctx, &mut state, next_ra_at).await?;
+                recv_res = transport.recv(&mut buf) => {
+                    match recv_res {
+                        Ok((n, src_sa)) => {
+                            let rs_src: Option<Ipv6Addr> = if src_sa.ip().is_unspecified() {
+                                None
+                            } else {
+                                Some(*src_sa.ip())
+                            };
+                            self.process_rs_packet(&buf[..n], rs_src, &current_cfg, ctx, &mut state, next_ra_at).await;
+                        }
+                        Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                        Err(e) => warn!("RA transport error: {e}"),
+                    }
                 }
 
                 // 3. EventBus signals
@@ -763,22 +619,11 @@ impl AsyncService for RaService {
 }
 
 
-#[derive(Clone, Copy)]
-enum RaSender<'a> {
-    Socket(&'a AsyncFd<Socket>),
-    Synthetic(&'a tokio::sync::mpsc::Sender<Vec<u8>>),
-}
-
-impl RaSender<'_> {
-    const fn is_synthetic(&self) -> bool {
-        matches!(self, Self::Synthetic(_))
-    }
-}
 
 /// Thread-safe context for Router Advertisement operations.
 #[derive(Clone, Copy)]
 struct RaContext<'a> {
-    sender: RaSender<'a>,
+    transport: &'a Icmp6Transport,
     mac: [u8; 6],
     iface_index: u32,
     lctx: &'a LanforgeContext,
@@ -793,7 +638,7 @@ impl RaService {
     ) {
         if let Err(e) = send_ra_internal(
             ctx.lctx,
-            ctx.sender,
+            ctx.transport,
             cfg,
             ctx.mac,
             ctx.iface_index,
@@ -826,7 +671,7 @@ impl RaService {
             state.record_solicitation_received();
             debug!("RS received from {rs_src:?}");
 
-            let delay_ms = if ctx.sender.is_synthetic() {
+            let delay_ms = if ctx.transport.is_inert() {
                 0
             } else {
                 rand::rng().random_range(0..MAX_RA_DELAY_TIME_MS)
@@ -840,7 +685,7 @@ impl RaService {
                 Some(unicast_dst) if state.can_unicast_now(&unicast_dst) => {
                     if let Err(e) = send_ra_internal(
                         ctx.lctx,
-                        ctx.sender,
+                        ctx.transport,
                         cfg,
                         ctx.mac,
                         ctx.iface_index,
@@ -856,7 +701,7 @@ impl RaService {
                 None if state.can_multicast_now() => {
                     if let Err(e) = send_ra_internal(
                         ctx.lctx,
-                        ctx.sender,
+                        ctx.transport,
                         cfg,
                         ctx.mac,
                         ctx.iface_index,
@@ -893,46 +738,12 @@ impl RaService {
             });
         }
     }
-
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    async fn handle_rs_packet(
-        &self,
-        res: io::Result<AsyncFdReadyGuard<'_, Socket>>,
-        buf: &mut [u8],
-        cfg: &RaConfig,
-        ctx: RaContext<'_>,
-        state: &mut RaState,
-        next_ra_at: Instant,
-    ) -> Result<(), CoreError> {
-        let mut guard = res.map_err(CoreError::Io)?;
-        let res = guard
-            .get_inner()
-            .recv_from(unsafe { &mut *from_mut(buf).cast::<[MaybeUninit<u8>; 1500]>() });
-
-        match res {
-            Ok((n, src_sa)) => {
-                guard.clear_ready();
-                if n > 0 {
-                    let rs_src: Option<Ipv6Addr> = src_sa.as_socket().and_then(|s| match s {
-                        SocketAddr::V6(v6) => Some(*v6.ip()),
-                        SocketAddr::V4(_) => None,
-                    });
-                    self.process_rs_packet(&buf[..n], rs_src, cfg, ctx, state, next_ra_at).await;
-                }
-            }
-            Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                guard.clear_ready();
-            }
-            Err(e) => warn!("RA socket error: {e}"),
-        }
-        Ok(())
-    }
 }
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
 fn send_ra_internal(
     lctx: &LanforgeContext,
-    sender: RaSender<'_>,
+    transport: &Icmp6Transport,
     cfg: &RaConfig,
     mac: [u8; 6],
     iface_index: u32,
@@ -943,7 +754,7 @@ fn send_ra_internal(
 
     let src_ll = match if_ips.link_local {
         Some(ll) => ll,
-        None if sender.is_synthetic() => Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0200, 0, 0, 1),
+        None if transport.is_inert() => Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0200, 0, 0, 1),
         None => return Err(NetworkError::NoLinkLocal(iface_index)),
     };
     let gua = if_ips.gua;
@@ -962,7 +773,7 @@ fn send_ra_internal(
     let deprecated_list = state.deprecated_list(now);
 
     let dst_ip: Ipv6Addr = unicast_dst.unwrap_or(ALL_NODES_MULTICAST);
-    let dst_sa = SockAddr::from(SocketAddrV6::new(dst_ip, 0, 0, iface_index));
+    let dst_sa = SocketAddrV6::new(dst_ip, 0, 0, iface_index);
 
     let gua_info = gua
         .as_ref()
@@ -973,118 +784,11 @@ fn send_ra_internal(
     pkt[2] = (csum >> 8) as u8;
     pkt[3] = (csum & 0xFF) as u8;
 
-    match sender {
-        RaSender::Socket(sock) => {
-            sock.get_ref()
-                .send_to(&pkt, &dst_sa)
-                .map_err(|e| NetworkError::Socket(format!("ICMPv6 send_to: {e}")))?;
-        }
-        RaSender::Synthetic(tx) => {
-            let _ = tx.try_send(pkt);
-        }
-    }
+    transport
+        .send(&pkt, &dst_sa)
+        .map_err(|e| NetworkError::Socket(format!("ICMPv6 send: {e}")))?;
+
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Raw ICMPv6 Socket Configuration
-// ---------------------------------------------------------------------------
-
-fn create_ra_socket(iface: &str, iface_index: u32) -> Result<Socket, NetworkError> {
-    let sock = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6)).map_err(|e| {
-        NetworkError::Socket(format!(
-            "Failed to create raw ICMPv6 socket — CAP_NET_RAW required: {e}"
-        ))
-    })?;
-
-    // Bind to the LAN interface — keeps traffic contained even on multi-homed hosts.
-    sock.bind_device(Some(iface.as_bytes()))
-        .map_err(|e| NetworkError::Socket(format!("SO_BINDTODEVICE({iface}): {e}")))?;
-
-    // RFC 4861 §6.1.2: Receivers MUST discard RAs with hop limit != 255.
-    sock.set_multicast_hops_v6(255)
-        .map_err(|e| NetworkError::Socket(format!("IPV6_MULTICAST_HOPS=255: {e}")))?;
-    set_sockopt_int(&sock, libc::IPPROTO_IPV6, libc::IPV6_UNICAST_HOPS, 255)
-        .map_err(|e| NetworkError::Socket(format!("IPV6_UNICAST_HOPS=255: {e}")))?;
-
-    // Joins ff02::2 (all-routers) to receive Router Solicitations.
-    // The kernel doesn't pass multicast traffic if the socket isn't subscribed.
-    sock.join_multicast_v6(&ALL_ROUTERS_MULTICAST, iface_index)
-        .map_err(|e| NetworkError::Socket(format!("join_multicast_v6(ff02::2): {e}")))?;
-
-    // ICMP6_FILTER: tells the kernel to reject all ICMPv6 types except RS (133).
-    // On RPi4, this reduces context switches and CPU usage in high-traffic NDP environments.
-    set_icmp6_filter_rs_only(&sock)
-        .map_err(|e| NetworkError::Socket(format!("ICMP6_FILTER: {e}")))?;
-
-    sock.set_nonblocking(false)
-        .map_err(|e| NetworkError::Socket(format!("O_NONBLOCK(false): {e}")))?;
-
-    info!("RA: ICMPv6 raw socket active (RS only), subscribed to ff02::2");
-    Ok(sock)
-}
-
-/// Configures `ICMP6_FILTER` to accept only RS (type 133), blocking everything else.
-///
-/// The filter is a 256-bit mask (32 bytes) processed in kernel space.
-/// Crucial on `RPi4` to avoid unnecessary process wakeups.
-fn set_icmp6_filter_rs_only(sock: &Socket) -> io::Result<()> {
-    // All bits = 1 → block all (ICMP6_FILTER_SETBLOCKALL)
-    let mut filter = [0xFFu8; 32];
-    // Clear the bit for RS type → let it pass (ICMP6_FILTER_SETPASS(133))
-    let t = ICMPV6_TYPE_RS as usize;
-    filter[t / 8] &= !(1u8 << (t % 8));
-
-    set_sockopt_raw(sock, libc::IPPROTO_ICMPV6, ICMP6_FILTER, &filter)
-}
-
-// ---------------------------------------------------------------------------
-// setsockopt wrappers not exposed by socket2
-// ---------------------------------------------------------------------------
-
-fn set_sockopt_int(
-    sock: &Socket,
-    level: libc::c_int,
-    opt: libc::c_int,
-    val: i32,
-) -> io::Result<()> {
-    let v = val as libc::c_int;
-    let ret = unsafe {
-        libc::setsockopt(
-            sock.as_raw_fd(),
-            level,
-            opt,
-            from_ref(&v).cast::<libc::c_void>(),
-            libc::socklen_t::try_from(size_of::<libc::c_int>()).unwrap_or_default(),
-        )
-    };
-    if ret == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
-}
-
-fn set_sockopt_raw(
-    sock: &Socket,
-    level: libc::c_int,
-    opt: libc::c_int,
-    data: &[u8],
-) -> io::Result<()> {
-    let ret = unsafe {
-        libc::setsockopt(
-            sock.as_raw_fd(),
-            level,
-            opt,
-            data.as_ptr().cast::<libc::c_void>(),
-            libc::socklen_t::try_from(data.len()).unwrap_or_default(),
-        )
-    };
-    if ret == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
 }
 
 #[cfg(test)]

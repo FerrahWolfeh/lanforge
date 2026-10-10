@@ -1,0 +1,27 @@
+[package]
+name = "lanforge-transport"
+version = "0.1.0"
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = [
+    "time",
+    "net",
+    "io-util",
+    "macros",
+    "sync",
+] }
+socket2 = { workspace = true }
+libc = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+[features]
+default = ["inert"]
+inert = []
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }

@@ -479,8 +479,8 @@ mod tests {
         let lt_duration: PrefixLifetime = serde_json::from_str("\"30d\"").unwrap();
         assert_eq!(lt_duration, PrefixLifetime::Secs(30 * 86400));
 
-        let lt_inf: PrefixLifetime = serde_json::from_str("\"infinity\"").unwrap();
-        assert_eq!(lt_inf, PrefixLifetime::Infinity);
+        let lt_infinity: PrefixLifetime = serde_json::from_str("\"infinity\"").unwrap();
+        assert_eq!(lt_infinity, PrefixLifetime::Infinity);
     }
 
     #[test]

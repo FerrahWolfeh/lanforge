@@ -8,7 +8,7 @@ use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::AsyncService;
-use lanforge_dhcp::{Dhcpv4Config, Dhcpv4Service};
+use lanforge_dhcp::{Dhcpv4Config, Dhcpv4Service, Dhcpv4Transport};
 use lanforge_types::device::{IPv4State, Origin};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
@@ -88,9 +88,10 @@ async fn test_dhcpv4_synthetic_full_lifecycle() {
     // 1. Configure pool in context
     ctx.update_dhcp_v4_pools(cfg.pools.clone());
 
-    // 2. Initialize synthetic service
-    let (handle, service) = Dhcpv4Service::synthetic(cfg.clone(), ctx.clone());
-    assert!(service.is_synthetic());
+    // 2. Initialize inert service
+    let (handle, transport) = Dhcpv4Transport::inert();
+    assert!(transport.is_inert());
+    let service = Dhcpv4Service::with_transport(cfg.clone(), ctx.clone(), transport);
 
     // 3. Spawn service task
     let mut service_clone = service.clone();

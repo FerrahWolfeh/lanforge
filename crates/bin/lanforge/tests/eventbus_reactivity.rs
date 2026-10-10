@@ -323,13 +323,14 @@ async fn test_ra_eventbus_reactivity() {
         dnssl: vec![],
     });
 
-    let (ra_handle, service) = RaService::synthetic(RaConfig::default(), ctx.clone());
+    let (ra_handle, ra_trans) = lanforge_transport::Icmp6Transport::inert();
+    let service = RaService::with_transport(RaConfig::default(), ctx.clone(), ra_trans);
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
 
     // Initial startup multicast RA
-    let initial_ra = timeout(Duration::from_millis(500), ra_handle.recv_ra())
+    let initial_ra = timeout(Duration::from_millis(500), ra_handle.recv_payload())
         .await
         .expect("Timeout waiting for initial RA")
         .expect("RA channel closed");
@@ -346,7 +347,7 @@ async fn test_ra_eventbus_reactivity() {
         },
     ))));
 
-    let prefix_burst_ra = timeout(Duration::from_millis(500), ra_handle.recv_ra())
+    let prefix_burst_ra = timeout(Duration::from_millis(500), ra_handle.recv_payload())
         .await
         .expect("Timeout waiting for prefix burst RA")
         .expect("RA channel closed");
@@ -354,7 +355,7 @@ async fn test_ra_eventbus_reactivity() {
 
     // 2. NetworkEvent::RaTriggerRequested -> Emits immediate RA burst
     let _ = bus.publish(LanforgeEvent::Network(NetworkEvent::RaTriggerRequested));
-    let manual_burst_ra = timeout(Duration::from_millis(500), ra_handle.recv_ra())
+    let manual_burst_ra = timeout(Duration::from_millis(500), ra_handle.recv_payload())
         .await
         .expect("Timeout waiting for manual burst RA")
         .expect("RA channel closed");
@@ -401,7 +402,8 @@ async fn test_dhcp_eventbus_reactivity() {
         ..Default::default()
     };
 
-    let (dhcp_handle, service) = Dhcpv4Service::synthetic(dhcp_cfg.clone(), ctx.clone());
+    let (dhcp_handle, dhcp_trans) = lanforge_dhcp::Dhcpv4Transport::inert();
+    let service = Dhcpv4Service::with_transport(dhcp_cfg.clone(), ctx.clone(), dhcp_trans);
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
@@ -553,8 +555,10 @@ async fn test_cross_domain_wan_transition_cascade() {
 
     let mut nft_service = NftService::inert();
     let mut traffic_service = TrafficService::inert(traffic_cfg);
-    let (_ra_handle, mut ra_service) = RaService::synthetic(RaConfig::default(), ctx.clone());
-    let (_dhcp_handle, mut dhcp_service) = Dhcpv4Service::synthetic(dhcp_cfg, ctx.clone());
+    let (_ra_handle, ra_trans) = lanforge_transport::Icmp6Transport::inert();
+    let mut ra_service = RaService::with_transport(RaConfig::default(), ctx.clone(), ra_trans);
+    let (_dhcp_handle, dhcp_trans) = lanforge_dhcp::Dhcpv4Transport::inert();
+    let mut dhcp_service = Dhcpv4Service::with_transport(dhcp_cfg, ctx.clone(), dhcp_trans);
 
     let c1 = ctx.clone();
     let t_nft = tokio::spawn(async move { nft_service.serve(&c1).await });
