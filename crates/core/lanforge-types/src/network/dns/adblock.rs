@@ -298,6 +298,71 @@ impl Display for BlockingMode {
     }
 }
 
+/// Compact 2-byte representation of a local 24-hour time of day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TimeOfDay {
+    pub hour: u8,   // 0..=23
+    pub minute: u8, // 0..=59
+}
+
+impl TimeOfDay {
+    pub const DEFAULT: Self = Self { hour: 3, minute: 0 };
+
+    #[must_use]
+    pub const fn new(hour: u8, minute: u8) -> Option<Self> {
+        if hour < 24 && minute < 60 {
+            Some(Self { hour, minute })
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
+    pub const fn new_or_default(hour: u8, minute: u8) -> Self {
+        if hour < 24 && minute < 60 {
+            Self { hour, minute }
+        } else {
+            Self::DEFAULT
+        }
+    }
+
+    #[must_use]
+    pub const fn minute_of_day(&self) -> u16 {
+        self.hour as u16 * 60 + self.minute as u16
+    }
+}
+
+impl Default for TimeOfDay {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+impl Display for TimeOfDay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:02}:{:02}", self.hour, self.minute)
+    }
+}
+
+impl FromStr for TimeOfDay {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (h_str, m_str) = s
+            .split_once(':')
+            .ok_or_else(|| format!("Invalid time format '{s}', expected HH:MM"))?;
+        let hour: u8 = h_str
+            .trim()
+            .parse()
+            .map_err(|_| format!("Invalid hour in '{s}'"))?;
+        let minute: u8 = m_str
+            .trim()
+            .parse()
+            .map_err(|_| format!("Invalid minute in '{s}'"))?;
+        Self::new(hour, minute).ok_or_else(|| format!("Time out of bounds: {hour:02}:{minute:02}"))
+    }
+}
+
 /// Adblock configuration as stored in DB.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct AdblockDbConfig {
@@ -305,8 +370,7 @@ pub struct AdblockDbConfig {
     pub blocking_mode: BlockingMode,
     pub blocking_ip_v4: Option<Ipv4Addr>,
     pub blocking_ip_v6: Option<Ipv6Addr>,
-    pub refresh_hours: u32,
-    pub refresh_at_night: bool,
+    pub refresh_time: TimeOfDay,
 }
 
 impl Default for AdblockDbConfig {
@@ -316,8 +380,7 @@ impl Default for AdblockDbConfig {
             blocking_mode: BlockingMode::default(),
             blocking_ip_v4: None,
             blocking_ip_v6: None,
-            refresh_hours: 12,
-            refresh_at_night: false,
+            refresh_time: TimeOfDay::DEFAULT,
         }
     }
 }
@@ -623,5 +686,29 @@ mod tests {
             panic!("Expected Service answer");
         }
         assert_eq!(srv_mac.to_string(), "srv:my-app:udp:e0:d5:5e:e2:d4:89:5000");
+    }
+
+    #[test]
+    fn test_time_of_day() {
+        assert_eq!(TimeOfDay::DEFAULT, TimeOfDay { hour: 3, minute: 0 });
+        assert_eq!(TimeOfDay::DEFAULT.to_string(), "03:00");
+        assert_eq!(TimeOfDay::DEFAULT.minute_of_day(), 180);
+
+        let parsed: TimeOfDay = "04:15".parse().unwrap();
+        assert_eq!(parsed, TimeOfDay { hour: 4, minute: 15 });
+        assert_eq!(parsed.minute_of_day(), 255);
+
+        assert!("24:00".parse::<TimeOfDay>().is_err());
+        assert!("23:60".parse::<TimeOfDay>().is_err());
+        assert!("invalid".parse::<TimeOfDay>().is_err());
+
+        assert_eq!(
+            TimeOfDay::new_or_default(25, 0),
+            TimeOfDay::DEFAULT
+        );
+
+        let json = serde_json::to_string(&parsed).unwrap();
+        let deserialized: TimeOfDay = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, parsed);
     }
 }

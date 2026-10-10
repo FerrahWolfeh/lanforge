@@ -649,8 +649,7 @@ mod tests {
             "dns_adblock_config": {
                 "enabled": true,
                 "blocking_mode": "nxdomain",
-                "refresh_hours": 24,
-                "refresh_at_night": false
+                "refresh_time": { "hour": 3, "minute": 0 }
             },
             "dns_adblock_urls": [],
             "dns_allowlist": []

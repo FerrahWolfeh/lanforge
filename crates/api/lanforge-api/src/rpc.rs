@@ -17,7 +17,7 @@ use lanforge_types::{
         dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool},
         dns::{
             DnsRecordType,
-            adblock::{AdblockSourceFormat, AdblockUrlKind, BlockingMode, RewriteRule},
+            adblock::{AdblockSourceFormat, AdblockUrlKind, BlockingMode, RewriteRule, TimeOfDay},
             upstream::UpstreamProtocol,
         },
         firewall::{
@@ -171,6 +171,7 @@ pub trait LanforgeRpc {
         blocking_mode: Option<BlockingMode>,
         blocking_ip_v4: Option<Ipv4Addr>,
         blocking_ip_v6: Option<Ipv6Addr>,
+        refresh_time: Option<TimeOfDay>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn dns_adblock_reload(
         &self,

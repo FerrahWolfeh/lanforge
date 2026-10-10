@@ -545,6 +545,17 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                         }
                     }
 
+                    let adblock_cfg = dns_ctx.ctx.get_dns_adblock();
+                    let next_update = if adblock_cfg.enabled {
+                        let target = crate::server::worker::compute_next_refresh_target(
+                            chrono::Local::now(),
+                            adblock_cfg.refresh_time,
+                        );
+                        Some(target.timestamp() as u64)
+                    } else {
+                        None
+                    };
+
                     DnsResponse::AdblockStatus(
                         lanforge_types::network::dns::DnsAdblockStatusResponse {
                             enabled: adblocker.is_enabled(),
@@ -560,6 +571,7 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                             blocking_ip_v6: runtime_cfg.ipv6,
                             exceptions_size: adblocker.exceptions_size(),
                             last_update,
+                            next_update,
                             sources_ok,
                             sources_failing,
                         },

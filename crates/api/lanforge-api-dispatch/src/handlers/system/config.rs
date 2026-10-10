@@ -337,8 +337,7 @@ impl ClientContext {
             blocking_mode,
             blocking_ip_v4,
             blocking_ip_v6,
-            refresh_hours,
-            refresh_at_night,
+            refresh_time,
         } = dns_adblock_config;
 
         let mut adblock_cfg_success = true;
@@ -391,24 +390,13 @@ impl ClientContext {
         if adblock_cfg_success
             && let Err(e) = storage
                 .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
-                    key: "refresh_hours".into(),
-                    value: refresh_hours.to_string(),
+                    key: "refresh_time".into(),
+                    value: refresh_time.to_string(),
                 })
                 .await
         {
             adblock_cfg_success = false;
-            adblock_cfg_err = Some(format!("Failed to set refresh_hours: {e}"));
-        }
-        if adblock_cfg_success
-            && let Err(e) = storage
-                .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
-                    key: "refresh_at_night".into(),
-                    value: if refresh_at_night { "true".into() } else { "false".into() },
-                })
-                .await
-        {
-            adblock_cfg_success = false;
-            adblock_cfg_err = Some(format!("Failed to set refresh_at_night: {e}"));
+            adblock_cfg_err = Some(format!("Failed to set refresh_time: {e}"));
         }
         if !adblock_cfg_success {
             total_success = false;

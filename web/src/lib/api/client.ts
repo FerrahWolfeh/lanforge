@@ -65,7 +65,8 @@ import type {
 	TrafficConfig,
 	TrafficStatusResponse,
 	TrafficTelemetryResponse,
-	SseEvent
+	SseEvent,
+	TimeOfDay
 } from './types';
 import { parseTimedEvent } from './types';
 
@@ -493,6 +494,7 @@ export const dnsAdblockConfigSet = (config: {
 	blocking_mode?: BlockingMode;
 	blocking_ip_v4?: string | null;
 	blocking_ip_v6?: string | null;
+	refresh_time?: TimeOfDay;
 }) => post<void>('/dns/adblock/config', config);
 export const dnsAdblockRules = async (): Promise<AdblockRuleEntry[]> =>
 	extractList<AdblockRuleEntry>(await get<any>('/dns/adblock/rules'), 'rules');

@@ -18,7 +18,7 @@ use lanforge_types::auth::ApiScopes;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::adblock::{
-    AdblockSourceFormat, AdblockUrlKind, BlockingMode, RewriteRule,
+    AdblockSourceFormat, AdblockUrlKind, BlockingMode, RewriteRule, TimeOfDay,
 };
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::dns::{
@@ -1187,6 +1187,7 @@ impl LanforgeClient {
         mode: Option<BlockingMode>,
         ipv4: Option<Ipv4Addr>,
         ipv6: Option<Ipv6Addr>,
+        refresh_time: Option<TimeOfDay>,
     ) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
@@ -1197,12 +1198,13 @@ impl LanforgeClient {
                         "blocking_mode": mode,
                         "blocking_ip_v4": ipv4,
                         "blocking_ip_v6": ipv6,
+                        "refresh_time": refresh_time,
                     }),
                 )
                 .await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_adblock_config_set(mode, ipv4, ipv6)
+        rpc.dns_adblock_config_set(mode, ipv4, ipv6, refresh_time)
             .await
             .map_err(|e| eyre!("{e}"))
     }

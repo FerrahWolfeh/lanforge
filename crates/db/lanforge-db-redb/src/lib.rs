@@ -37,7 +37,7 @@ impl fmt::Debug for RedbDatabase {
 
 impl RedbDatabase {
     /// Current database schema version.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
     /// Opens or creates the `redb` database at the specified file path.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
@@ -265,6 +265,7 @@ impl RedbDatabase {
 
     fn migrate_step(&self, from_version: u32) -> Result<(), DbError> {
         match from_version {
+            1 => self.migrate_v1_to_v2(),
             #[cfg(test)]
             999 => Ok(()),
             _ => Err(DbError::Validation(format!(
@@ -272,12 +273,69 @@ impl RedbDatabase {
             ))),
         }
     }
+
+    fn migrate_v1_to_v2(&self) -> Result<(), DbError> {
+        let existing_raw = {
+            let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+            let Ok(table) = read_txn.open_table(TABLE_CONFIG) else {
+                return Ok(());
+            };
+            table.get("adblock_config")
+                .map_err(|e| DbError::Backend(e.to_string()))?
+                .map(|val| val.value().to_vec())
+        };
+
+        if let Some(raw_bytes) = existing_raw {
+            let raw: serde_json::Value = serde_json::from_slice(&raw_bytes)
+                .map_err(|e| DbError::Backend(format!("V1 adblock_config parse failed: {e}")))?;
+
+            let enabled = raw.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+            let blocking_mode: lanforge_types::network::dns::adblock::BlockingMode = raw
+                .get("blocking_mode")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            let blocking_ip_v4 = raw
+                .get("blocking_ip_v4")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .flatten();
+            let blocking_ip_v6 = raw
+                .get("blocking_ip_v6")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .flatten();
+
+            let new_cfg = lanforge_types::network::dns::adblock::AdblockDbConfig {
+                enabled,
+                blocking_mode,
+                blocking_ip_v4,
+                blocking_ip_v6,
+                refresh_time: lanforge_types::network::dns::adblock::TimeOfDay::DEFAULT,
+            };
+
+            let new_bytes = serde_json::to_vec(&new_cfg)
+                .map_err(|e| DbError::Backend(format!("V2 adblock_config serialization error: {e}")))?;
+
+            let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+            {
+                let mut table = write_txn
+                    .open_table(TABLE_CONFIG)
+                    .map_err(|e| DbError::Backend(e.to_string()))?;
+                table
+                    .insert("adblock_config", new_bytes.as_slice())
+                    .map_err(|e| DbError::Backend(e.to_string()))?;
+                tracing::info!("Migrated adblock_config to schema v2 (TimeOfDay)");
+            }
+            write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        }
+
+        Ok(())
+    }
 }
 
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lanforge_db_core::AdblockStore;
     use lanforge_db_core::{DeviceStore, UserStore};
     use lanforge_types::device::Device;
     use lanforge_types::identifiers::MacAddr;
@@ -612,5 +670,51 @@ mod tests {
         let backup_path = temp_dir.path().join("test_migration.redb.v999.bak");
         assert!(backup_path.exists(), "backup file {backup_path:?} should exist");
         assert!(std::fs::metadata(&backup_path).unwrap().len() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_v1_to_v2_migration() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test_v1_v2.redb");
+
+        // 1. Initialize DB at v1 with legacy adblock config JSON
+        {
+            let db = RedbDatabase::open(&db_path).unwrap();
+            db.set_schema_version(1).unwrap();
+
+            // Insert legacy V1 JSON into TABLE_CONFIG
+            let legacy_json = serde_json::json!({
+                "enabled": true,
+                "blocking_mode": "null_ip",
+                "blocking_ip_v4": "192.168.1.5",
+                "blocking_ip_v6": null,
+                "refresh_hours": 12,
+                "refresh_at_night": true
+            });
+            let bytes = serde_json::to_vec(&legacy_json).unwrap();
+
+            let write_txn = db.db.read().begin_write().unwrap();
+            {
+                let mut table = write_txn.open_table(TABLE_CONFIG).unwrap();
+                table.insert("adblock_config", bytes.as_slice()).unwrap();
+            }
+            write_txn.commit().unwrap();
+        }
+
+        // 2. Re-open DB, which triggers ensure_schema_and_migrate to v2
+        {
+            let db = RedbDatabase::open(&db_path).unwrap();
+            assert_eq!(db.schema_version().unwrap(), 2);
+
+            let loaded = db.load_adblock_config().await.unwrap();
+            assert!(loaded.enabled);
+            assert_eq!(loaded.blocking_mode, lanforge_types::network::dns::adblock::BlockingMode::NullIp);
+            assert_eq!(loaded.blocking_ip_v4, Some("192.168.1.5".parse().unwrap()));
+            assert_eq!(loaded.refresh_time, lanforge_types::network::dns::adblock::TimeOfDay::DEFAULT);
+        }
+
+        // 3. Verify backup file was created
+        let backup = temp_dir.path().join("test_v1_v2.redb.v1.bak");
+        assert!(backup.exists());
     }
 }

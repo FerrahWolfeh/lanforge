@@ -126,7 +126,6 @@ async fn test_adblock_live_comprehensive_battery() {
     ctx_instance.update_dns_adblock(AdblockDbConfig {
         enabled: true,
         blocking_mode: BlockingMode::NullIp,
-        refresh_hours: 12,
         ..Default::default()
     });
 

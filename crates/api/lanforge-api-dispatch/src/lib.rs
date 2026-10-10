@@ -15,7 +15,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
-use lanforge_types::network::dns::adblock::{BlockingMode, RewriteRule};
+use lanforge_types::network::dns::adblock::{BlockingMode, RewriteRule, TimeOfDay};
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::firewall::{
     FirewallCommitRequest, FirewallCommitResponse, FirewallConfig, FirewallStatus,
@@ -416,9 +416,15 @@ impl LanforgeRpc for ClientContext {
         blocking_mode: Option<BlockingMode>,
         blocking_ip_v4: Option<Ipv4Addr>,
         blocking_ip_v6: Option<Ipv6Addr>,
+        refresh_time: Option<TimeOfDay>,
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self
-            .handle_dns_adblock_config_set(blocking_mode, blocking_ip_v4, blocking_ip_v6)
+            .handle_dns_adblock_config_set(
+                blocking_mode,
+                blocking_ip_v4,
+                blocking_ip_v6,
+                refresh_time,
+            )
             .await
         {
             Response::Success(s) => Ok(s),

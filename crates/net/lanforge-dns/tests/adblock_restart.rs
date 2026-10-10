@@ -58,7 +58,6 @@ async fn boot_and_check(cache_dir: &Path, port: u16, domain: &str, timeout: Dura
     }]);
     ctx_instance.update_dns_adblock(AdblockDbConfig {
         enabled: true,
-        refresh_hours: 12,
         ..Default::default()
     });
 
@@ -86,7 +85,7 @@ async fn boot_and_check(cache_dir: &Path, port: u16, domain: &str, timeout: Dura
 }
 
 /// Reproduces the "adblock blocks nothing after restart" bug:
-/// the compiled cache on disk is older than `refresh_hours`, so the manager skips the
+/// the compiled cache on disk is older than the freshness threshold, so the manager skips the
 /// disk load, upstream answers 304, the source fingerprint is unchanged and the merge
 /// (the only place that loads the FST into memory) is skipped, leaving the blocklist empty.
 #[cfg(feature = "adblock")]
@@ -102,7 +101,7 @@ async fn test_restart_with_stale_cache_and_304_still_blocks() {
     );
     assert!(temp_dir.path().join("adblock/block.fst").exists());
 
-    // Age the merged cache beyond refresh_hours (simulates a daemon restarted >12h later).
+    // Age the merged cache beyond freshness threshold (simulates a daemon restarted later).
     let manifest_path = temp_dir.path().join("adblock/manifest.json");
     let mut manifest = AdblockManifest::load_or_default(&manifest_path);
     assert!(manifest.merged_blocks >= 3, "manifest should record merged blocks");

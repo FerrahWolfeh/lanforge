@@ -233,12 +233,8 @@ pub fn generate_toml_from_export(
         out.push_str(&format!("blocking_ip_v6 = \"{ip}\"\n"));
     }
     out.push_str(&format!(
-        "adblock_refresh_hours = {}\n",
-        export.dns_adblock_config.refresh_hours
-    ));
-    out.push_str(&format!(
-        "adblock_refresh_at_night = {}\n",
-        export.dns_adblock_config.refresh_at_night
+        "adblock_refresh_time = \"{}\"\n",
+        export.dns_adblock_config.refresh_time
     ));
 
     let block_urls: Vec<String> = export
@@ -509,8 +505,7 @@ mod tests {
                 blocking_mode: BlockingMode::NxDomain,
                 blocking_ip_v4: None,
                 blocking_ip_v6: None,
-                refresh_hours: 6,
-                refresh_at_night: false,
+                refresh_time: lanforge_types::network::dns::adblock::TimeOfDay { hour: 4, minute: 30 },
             },
             dns_adblock_urls: vec![
                 AdblockUrlEntry {
@@ -556,8 +551,7 @@ mod tests {
 
         assert!(toml_str.contains("adblock_enabled = true"));
         assert!(toml_str.contains("blocking_mode = \"nxdomain\""));
-        assert!(toml_str.contains("adblock_refresh_hours = 6"));
-        assert!(toml_str.contains("adblock_refresh_at_night = false"));
+        assert!(toml_str.contains("adblock_refresh_time = \"04:30\""));
         assert!(toml_str.contains("adblock_urls = [\"https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts\"]"));
         assert!(toml_str.contains("adblock_allowlist_urls = [\"https://example.com/allowlist.txt\"]"));
         assert!(toml_str.contains("allowlist = [\"safe-subdomain.example.com\"]"));

@@ -24,9 +24,11 @@ use crate::resolver::filter::source::{
 use crate::resolver::filter::DiskBlocklist;
 
 #[cfg(feature = "adblock")]
+use chrono::Datelike;
+#[cfg(feature = "adblock")]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 #[cfg(feature = "adblock")]
-use lanforge_types::network::dns::adblock::AdblockSourceFormat;
+use lanforge_types::network::dns::adblock::{AdblockSourceFormat, TimeOfDay};
 use tokio::task::JoinHandle;
 #[cfg(feature = "adblock")]
 use tracing::{debug, error, info, warn};
@@ -98,7 +100,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                     .unwrap_or_default()
                                     .as_secs();
                                 let elapsed = now.saturating_sub(manifest.last_merge);
-                                if elapsed < u64::from(db_cfg.refresh_hours) * 3600 {
+                                if elapsed < 20 * 3600 {
                                     skip_download_pass = true;
                                     info!(
                                         fingerprint = format_args!("{:016x}", manifest.fingerprint),
@@ -399,6 +401,12 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     );
                 }
 
+                // Wait for valid NTP time if un-synced SBC boot (e.g. 1970)
+                while chrono::Local::now().year() < 2024 {
+                    warn!("Adblock: system clock appears un-synchronized; waiting 15s for NTP...");
+                    tokio::time::sleep(Duration::from_secs(15)).await;
+                }
+
                 // Refresh scheduling: if any configured source failed, retry with backoff
                 let max_failures = configured_sources
                     .iter()
@@ -409,10 +417,13 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     .max()
                     .unwrap_or(0);
 
-                let scheduled_refresh = compute_next_refresh(db_cfg.refresh_hours, db_cfg.refresh_at_night);
+                let now_local = chrono::Local::now();
+                let target_time = compute_next_refresh_target(now_local, db_cfg.refresh_time);
+                let scheduled_dur = (target_time - now_local).to_std().unwrap_or(Duration::from_secs(60));
+
                 let sleep_dur = if max_failures > 0 {
                     let backoff = compute_retry_backoff(max_failures);
-                    let retry_dur = backoff.min(scheduled_refresh);
+                    let retry_dur = backoff.min(scheduled_dur);
                     warn!(
                         failures = max_failures,
                         retry_in_mins = retry_dur.as_secs() / 60,
@@ -421,18 +432,30 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     retry_dur
                 } else {
                     info!(
-                        hours = format_args!("{:.1}", scheduled_refresh.as_secs_f64() / 3600.0),
-                        "Adblock: next scheduled refresh"
+                        target = %target_time.format("%Y-%m-%d %H:%M:%S"),
+                        hours = format_args!("{:.1}", scheduled_dur.as_secs_f64() / 3600.0),
+                        "Adblock: next scheduled daily update check"
                     );
-                    scheduled_refresh
+                    scheduled_dur
                 };
+
+                let alarm = tokio::time::sleep(sleep_dur);
+                tokio::pin!(alarm);
 
                 // Wait for next refresh or reload signal
                 loop {
                     tokio::select! {
-                        _ = tokio::time::sleep(sleep_dur) => {
-                            info!("Adblock: scheduled refresh starting");
+                        () = &mut alarm => {
+                            info!("Adblock: daily scheduled refresh triggered");
                             break;
+                        }
+                        _ = tokio::time::sleep(Duration::from_secs(1800)) => {
+                            // Periodic 30m sanity check: detect NTP clock adjustments
+                            let current = chrono::Local::now();
+                            if current >= target_time {
+                                info!("Adblock: wall-clock target reached during periodic check");
+                                break;
+                            }
                         }
                         Ok(evt) = rx.recv() => {
                             match evt.event {
@@ -488,37 +511,29 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
     })
 }
 
-/// Computes how long to sleep before the next blocklist refresh.
-/// If `prefer_night` is true, targets the next occurrence of 03:00 local time
-/// that is at least `min_hours` in the future.
+/// Computes the next local DateTime when the daily blocklist check should trigger.
 #[cfg(feature = "adblock")]
-fn compute_next_refresh(min_hours: u32, prefer_night: bool) -> Duration {
-    let min_hours = if min_hours == 0 { 12 } else { min_hours };
-    let base = Duration::from_secs(u64::from(min_hours) * 3600);
-    if !prefer_night {
-        return base;
-    }
-
-    let now = chrono::Local::now();
-    let mut next = now
+pub fn compute_next_refresh_target(
+    now: chrono::DateTime<chrono::Local>,
+    refresh_time: TimeOfDay,
+) -> chrono::DateTime<chrono::Local> {
+    let today_target = now
         .date_naive()
-        .and_hms_opt(3, 0, 0)
-        .unwrap()
+        .and_hms_opt(refresh_time.hour as u32, refresh_time.minute as u32, 0)
+        .unwrap_or_else(|| {
+            now.date_naive()
+                .and_hms_opt(3, 0, 0)
+                .expect("03:00 is a valid time")
+        })
         .and_local_timezone(chrono::Local)
-        .unwrap();
+        .latest()
+        .unwrap_or(now);
 
-    // If 03:00 today has already passed, or it's too soon, target tomorrow
-    if next <= now || (next - now).to_std().unwrap_or(Duration::ZERO) < base {
-        next += chrono::Duration::days(1);
+    if now < today_target {
+        today_target
+    } else {
+        today_target + chrono::Duration::days(1)
     }
-
-    // Ensure it's at least min_hours away
-    let mut diff = (next - now).to_std().unwrap_or(base);
-    if diff < base {
-        diff = base;
-    }
-
-    diff
 }
 
 /// Computes backoff duration based on consecutive failure count.
@@ -548,9 +563,25 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_next_refresh() {
-        let dur = compute_next_refresh(12, false);
-        assert_eq!(dur, Duration::from_secs(12 * 3600));
+    fn test_compute_next_refresh_target() {
+        use chrono::TimeZone;
+        let local_now = chrono::Local
+            .with_ymd_and_hms(2026, 10, 10, 2, 0, 0)
+            .unwrap();
+        let target = compute_next_refresh_target(local_now, TimeOfDay { hour: 3, minute: 0 });
+        assert_eq!(
+            target,
+            chrono::Local.with_ymd_and_hms(2026, 10, 10, 3, 0, 0).unwrap()
+        );
+
+        let local_later = chrono::Local
+            .with_ymd_and_hms(2026, 10, 10, 4, 0, 0)
+            .unwrap();
+        let target_tomorrow = compute_next_refresh_target(local_later, TimeOfDay { hour: 3, minute: 0 });
+        assert_eq!(
+            target_tomorrow,
+            chrono::Local.with_ymd_and_hms(2026, 10, 11, 3, 0, 0).unwrap()
+        );
     }
 }
 

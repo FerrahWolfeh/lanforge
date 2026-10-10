@@ -40,7 +40,6 @@ async fn test_dns_adblock_update_failure_and_fallback() {
     }]);
     ctx_instance.update_dns_adblock(AdblockDbConfig {
         enabled: true,
-        refresh_hours: 12,
         ..Default::default()
     });
 

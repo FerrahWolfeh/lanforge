@@ -878,6 +878,11 @@ export interface AdblockCheckResponse {
 	source_matches: AdblockSourceMatch[];
 }
 
+export interface TimeOfDay {
+	hour: number;
+	minute: number;
+}
+
 export interface DnsAdblockStatusResponse {
 	enabled: boolean;
 	disabled_until?: number | null;
@@ -886,6 +891,7 @@ export interface DnsAdblockStatusResponse {
 	allowlist_size: number;
 	exceptions_size?: number;
 	last_update?: number | null;
+	next_update?: number | null;
 	sources_ok?: number;
 	sources_failing?: number;
 	blocking_mode: BlockingMode;
@@ -1246,8 +1252,7 @@ export interface AdblockDbConfig {
 	blocking_mode: string;
 	blocking_ip_v4?: string | null;
 	blocking_ip_v6?: string | null;
-	refresh_hours: number;
-	refresh_at_night: boolean;
+	refresh_time: TimeOfDay;
 }
 
 export interface AdblockRuleEntry {

@@ -14,7 +14,7 @@ use lanforge_types::events::{DnsEvent, LanforgeEvent};
 use lanforge_types::events::TimedEvent;
 use lanforge_types::network::dns::adblock::{
     AdblockSourceFormat, AdblockUrlKind, BlockingMode, FilterAction, FilterOrigin, RewriteAnswer,
-    RewriteRule,
+    RewriteRule, TimeOfDay,
 };
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::dns::QueryResult;
@@ -339,6 +339,10 @@ pub struct DnsAdblockConfigArgs {
     /// Custom IPv6 address sinkhole target (when mode is custom-ip)
     #[arg(long = "ip-v6")]
     pub ip_v6: Option<Ipv6Addr>,
+
+    /// Daily scheduled update check time (HH:MM in 24h format, e.g. 03:00)
+    #[arg(long = "refresh-time")]
+    pub refresh_time: Option<TimeOfDay>,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq, Default)]
@@ -1756,7 +1760,7 @@ async fn reload_adblock_sources(client: &LanforgeClient, printer: &Printer) -> R
 }
 
 async fn execute_adblock_config(args: DnsAdblockConfigArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
-    if args.mode.is_none() && args.ip_v4.is_none() && args.ip_v6.is_none() {
+    if args.mode.is_none() && args.ip_v4.is_none() && args.ip_v6.is_none() && args.refresh_time.is_none() {
         let status = client.dns_adblock_status().await?;
         if printer.json {
             return printer.print_json(&serde_json::json!({
@@ -1779,7 +1783,7 @@ async fn execute_adblock_config(args: DnsAdblockConfigArgs, client: &LanforgeCli
     }
 
     let resp = client
-        .dns_adblock_config_set(args.mode, args.ip_v4, args.ip_v6)
+        .dns_adblock_config_set(args.mode, args.ip_v4, args.ip_v6, args.refresh_time)
         .await?;
 
     if printer.json {

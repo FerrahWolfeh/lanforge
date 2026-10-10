@@ -741,8 +741,7 @@ async fn test_system_config_contract() {
             "blocking_mode": "null_ip",
             "blocking_ip_v4": null,
             "blocking_ip_v6": null,
-            "refresh_hours": 24,
-            "refresh_at_night": false
+            "refresh_time": { "hour": 3, "minute": 0 }
         },
         "dns_adblock_urls": [],
         "dns_allowlist": [],
@@ -784,8 +783,7 @@ async fn test_system_config_contract() {
             "blocking_mode": "null_ip",
             "blocking_ip_v4": null,
             "blocking_ip_v6": null,
-            "refresh_hours": 24,
-            "refresh_at_night": false
+            "refresh_time": { "hour": 3, "minute": 0 }
         },
         "dns_adblock_urls": [],
         "dns_allowlist": [],
@@ -821,8 +819,7 @@ async fn test_system_config_contract() {
             "blocking_mode": "null_ip",
             "blocking_ip_v4": null,
             "blocking_ip_v6": null,
-            "refresh_hours": 24,
-            "refresh_at_night": false
+            "refresh_time": { "hour": 3, "minute": 0 }
         },
         "dns_adblock_urls": [],
         "dns_allowlist": [],

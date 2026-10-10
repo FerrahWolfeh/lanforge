@@ -45,8 +45,8 @@ async fn test_db_worker_lifecycle_mock() {
 #[tokio::test]
 async fn test_lanforge_db_schema_version() {
     let db = crate::LanforgeDb::open_in_memory().await.unwrap();
-    assert_eq!(db.schema_version().unwrap(), 1);
+    assert_eq!(db.schema_version().unwrap(), 2);
 
     let log_db = LogDb::open(":memory:").await.unwrap();
-    assert_eq!(log_db.schema_version().unwrap(), 1);
+    assert_eq!(log_db.schema_version().unwrap(), 2);
 }

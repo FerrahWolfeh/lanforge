@@ -9,7 +9,7 @@ use lanforge_macros::ServiceConfig;
 use lanforge_types::network::{
     ListenConfig,
     dns::{
-        adblock::{AdblockRuleEntry, BlockingMode, RewriteRule},
+        adblock::{AdblockRuleEntry, BlockingMode, RewriteRule, TimeOfDay},
         upstream::UpstreamEntry,
     },
 };
@@ -95,10 +95,9 @@ pub struct DnsConfig {
     /// List of URLs to fetch allowlists from.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adblock_allowlist_urls: Vec<String>,
-    /// Hours between blocklist refreshes.
-    pub adblock_refresh_hours: u32,
-    /// Whether to prefer refreshing at night.
-    pub adblock_refresh_at_night: bool,
+    /// Local time of day to perform daily blocklist update check.
+    #[serde(default)]
+    pub adblock_refresh_time: TimeOfDay,
     /// How to respond to blocked queries.
     pub blocking_mode: BlockingMode,
     /// Custom IPv4 address for `BlockingMode::CustomIp`.
@@ -161,8 +160,7 @@ impl Default for DnsConfig {
             adblock_cache_dir: None,
             adblock_urls: Vec::new(),
             adblock_allowlist_urls: Vec::new(),
-            adblock_refresh_hours: 12,
-            adblock_refresh_at_night: true,
+            adblock_refresh_time: TimeOfDay::DEFAULT,
             blocking_mode: BlockingMode::default(),
             blocking_ip_v4: None,
             blocking_ip_v6: None,

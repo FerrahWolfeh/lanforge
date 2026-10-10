@@ -7,7 +7,7 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use lanforge_types::network::dns::adblock::{
-    AdblockSourceFormat, AdblockUrlKind, BlockingMode,
+    AdblockSourceFormat, AdblockUrlKind, BlockingMode, TimeOfDay,
 };
 use serde::Deserialize;
 
@@ -38,6 +38,7 @@ pub struct AdblockConfigSetRequest {
     pub blocking_mode: Option<BlockingMode>,
     pub blocking_ip_v4: Option<Ipv4Addr>,
     pub blocking_ip_v6: Option<Ipv6Addr>,
+    pub refresh_time: Option<TimeOfDay>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -116,6 +117,7 @@ async fn handle_adblock_config_set(
             payload.blocking_mode,
             payload.blocking_ip_v4,
             payload.blocking_ip_v6,
+            payload.refresh_time,
         )
         .await,
         Success => NoContent

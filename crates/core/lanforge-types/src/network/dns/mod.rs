@@ -679,6 +679,8 @@ pub struct DnsAdblockStatusResponse {
     #[serde(default)]
     pub last_update: Option<u64>,
     #[serde(default)]
+    pub next_update: Option<u64>,
+    #[serde(default)]
     pub sources_ok: usize,
     #[serde(default)]
     pub sources_failing: usize,

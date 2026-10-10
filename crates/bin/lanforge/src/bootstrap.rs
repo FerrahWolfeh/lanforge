@@ -451,8 +451,7 @@ impl Bootstrapper {
                 blocking_mode: cfg.dns_toml.blocking_mode,
                 blocking_ip_v4: cfg.dns_toml.blocking_ip_v4,
                 blocking_ip_v6: cfg.dns_toml.blocking_ip_v6,
-                refresh_hours: cfg.dns_toml.adblock_refresh_hours,
-                refresh_at_night: cfg.dns_toml.adblock_refresh_at_night,
+                refresh_time: cfg.dns_toml.adblock_refresh_time,
             };
             db.save_adblock_config(&adblock_cfg).await?;
         }

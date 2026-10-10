@@ -363,12 +363,11 @@ impl AdblockStore for RedbDatabase {
                         Some(value.parse().map_err(|e| DbError::Validation(format!("Invalid IPv6: {e}")))?)
                     };
                 }
-                "refresh_hours" => {
-                    if let Ok(v) = value.parse() {
-                        cfg.refresh_hours = v;
+                "refresh_time" => {
+                    if let Ok(tod) = value.parse() {
+                        cfg.refresh_time = tod;
                     }
                 }
-                "refresh_at_night" => cfg.refresh_at_night = value == "true",
                 _ => {}
             }
             self.save_adblock_config(&cfg).await?;

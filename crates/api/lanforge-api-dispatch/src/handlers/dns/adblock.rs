@@ -15,7 +15,7 @@ use tracing::error;
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::AdblockRuleAction;
 use lanforge_types::network::dns::adblock::{
-    AdblockSourceFormat, AdblockUrlKind, BlockingMode,
+    AdblockSourceFormat, AdblockUrlKind, BlockingMode, TimeOfDay,
 };
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -109,6 +109,7 @@ impl ClientContext {
                 blocking_ip_v6: res.blocking_ip_v6,
                 exceptions_size: res.exceptions_size,
                 last_update: res.last_update,
+                next_update: res.next_update,
                 sources_ok: res.sources_ok,
                 sources_failing: res.sources_failing,
             }));
@@ -264,6 +265,7 @@ impl ClientContext {
         blocking_mode: Option<BlockingMode>,
         blocking_ip_v4: Option<Ipv4Addr>,
         blocking_ip_v6: Option<Ipv6Addr>,
+        refresh_time: Option<TimeOfDay>,
     ) -> Response {
         let Some(storage) = self.ctx.storage_handle() else {
             return Response::Error {
@@ -307,6 +309,23 @@ impl ClientContext {
                 error: format!("Failed to update blocking_ip_v6: {e}"),
             };
         }
+        if let Some(time) = refresh_time
+            && let Err(e) = storage
+                .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                    key: "refresh_time".into(),
+                    value: time.to_string(),
+                })
+                .await
+        {
+            return Response::Error {
+                error: format!("Failed to update refresh_time: {e}"),
+            };
+        }
+
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
 
         Response::Success(SimpleSuccess {
             message: "DNS Adblock configuration updated".to_string(),
@@ -319,6 +338,7 @@ impl ClientContext {
         _blocking_mode: Option<BlockingMode>,
         _blocking_ip_v4: Option<Ipv4Addr>,
         _blocking_ip_v6: Option<Ipv6Addr>,
+        _refresh_time: Option<TimeOfDay>,
     ) -> Response {
         Response::Error {
             error: "Adblock support not enabled in this build. Recompile with --features adblock."
