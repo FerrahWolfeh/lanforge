@@ -24,7 +24,7 @@ use lanforge_types::network::firewall::{
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::RaServerConfig;
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
-use lanforge_types::network::TrafficConfig;
+use lanforge_types::network::{QueryResult, TrafficConfig};
 use lanforge_types::system::{PppoeStatusResponse, RaStatusResponse, TrafficStatusResponse};
 use lanforge_types::update::LeaseTarget;
 
@@ -441,14 +441,21 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn dns_query_log(
         &self,
         follow: bool,
         n: Option<usize>,
         client: Option<String>,
+        domain: Option<String>,
+        qtype: Option<DnsRecordType>,
+        result: Option<QueryResult>,
         offset: Option<usize>,
     ) -> Result<DnsQueryLogResponse, RpcCallError> {
-        match self.handle_dns_query_log(n, client, follow, offset).await {
+        match self
+            .handle_dns_query_log(n, client, domain, qtype, result, follow, offset)
+            .await
+        {
             Response::DnsQueryLog(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),

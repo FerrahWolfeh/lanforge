@@ -69,12 +69,14 @@
 
 	const RESULT_FILTERS = [
 		{ value: "", label: "All Outcomes" },
-		{ value: "forwarded", label: "Forwarded" },
-		{ value: "local", label: "Local" },
-		{ value: "cached", label: "Cached" },
-		{ value: "cachedblock", label: "Cached Block" },
-		{ value: "rewrite", label: "Rewritten" },
 		{ value: "blocked", label: "Blocked" },
+		{ value: "cachedblock", label: "Cached Block" },
+		{ value: "forwarded", label: "Forwarded" },
+		{ value: "cached", label: "Cached" },
+		{ value: "rewritten", label: "Rewritten" },
+		{ value: "local", label: "Local" },
+		{ value: "nxdomain", label: "NXDomain" },
+		{ value: "error", label: "Error" },
 	];
 
 	const typeVariants: Record<string, string> = {
@@ -107,7 +109,8 @@
 
 	function formatTime(ts: number): string {
 		if (!ts) return "—";
-		const d = new Date(ts);
+		const ms = ts < 1e11 ? ts * 1000 : ts;
+		const d = new Date(ms);
 		return d.toLocaleTimeString(undefined, {
 			hour12: false,
 			hour: "2-digit",
@@ -171,8 +174,7 @@
 		if (
 			lower === "cachedblock" ||
 			lower === "cached_block" ||
-			(lower.includes("block") && cached) ||
-			(lower.includes("cached") && lower.includes("block"))
+			(lower.includes("block") && cached)
 		) {
 			return {
 				label: "Cached Block",
@@ -195,6 +197,18 @@
 			return {
 				label: "Local",
 				class: "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20",
+			};
+		}
+		if (lower === "nxdomain") {
+			return {
+				label: "NXDomain",
+				class: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
+			};
+		}
+		if (lower === "error") {
+			return {
+				label: "Error",
+				class: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20",
 			};
 		}
 		if (cached || lower === "cached") {

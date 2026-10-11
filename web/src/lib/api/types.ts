@@ -757,6 +757,16 @@ export interface DnsAnalyticsResponse {
 	top_blocked_clients?: TopClientEntry[];
 }
 
+export type QueryResult =
+	| 'local'
+	| 'forwarded'
+	| 'blocked'
+	| 'nxdomain'
+	| 'error'
+	| 'cached'
+	| 'rewritten'
+	| 'cachedblock';
+
 export interface DnsQueryLogEntry {
 	timestamp: number;
 	src_ip: string;
@@ -764,7 +774,7 @@ export interface DnsQueryLogEntry {
 	src_hostname?: string | null;
 	domain: string;
 	qtype: DnsRecordType;
-	result: string;
+	result: QueryResult | string;
 	upstream_us: number;
 	cached: boolean;
 	answer?: string | null;

@@ -171,16 +171,65 @@
 		if (entry.src_hostname) return `${entry.src_hostname} (${entry.src_ip})`;
 		return entry.src_ip;
 	});
-	const isCachedBlock = $derived.by(() => {
-		if (!entry) return false;
-		const r = entry.result.toLowerCase();
-		return (
-			r === "cachedblock" ||
-			r === "cached_block" ||
-			(entry.cached && (r.includes("block") || r.includes("deny"))) ||
-			(r.includes("cached") && r.includes("block"))
-		);
-	});
+	function getResultBadge(result: string, cached: boolean, filter?: any) {
+		if (filter?.action === "allow") {
+			return {
+				label: "Allowed (@@)",
+				class: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
+			};
+		}
+		const lower = (result || "").toLowerCase();
+		if (lower === "cachedblock" || lower === "cached_block" || (lower.includes("block") && cached)) {
+			return {
+				label: "Cached Block",
+				class: "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20",
+			};
+		}
+		if (lower.includes("block") || lower.includes("deny")) {
+			return {
+				label: "Blocked",
+				class: "bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20",
+			};
+		}
+		if (lower === "rewritten" || lower.includes("rewrite")) {
+			return {
+				label: "Rewritten",
+				class: "bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20",
+			};
+		}
+		if (lower === "local") {
+			return {
+				label: "Local",
+				class: "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20",
+			};
+		}
+		if (lower === "nxdomain") {
+			return {
+				label: "NXDomain",
+				class: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
+			};
+		}
+		if (lower === "error") {
+			return {
+				label: "Error",
+				class: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20",
+			};
+		}
+		if (cached || lower === "cached") {
+			return {
+				label: "Cached",
+				class: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
+			};
+		}
+		return {
+			label: "Forwarded",
+			class: "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20",
+		};
+	}
+
+	const badgeInfo = $derived(
+		entry ? getResultBadge(entry.result, entry.cached, entry.filter) : { label: "—", class: "" }
+	);
 </script>
 
 <Dialog.Root bind:open>
@@ -266,18 +315,9 @@
 							<div class="flex flex-wrap items-center gap-2 min-w-0 flex-1">
 								<Badge
 									variant="outline"
-									class="text-[11px] font-mono border font-medium uppercase shrink-0 {isCachedBlock
-										? 'bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20'
-										: entry.result.toLowerCase().includes('block')
-											? 'bg-rose-500/10 text-rose-500 border-rose-500/20'
-											: entry.cached
-												? 'bg-blue-500/10 text-blue-500 border-blue-500/20'
-												: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'}"
+									class="text-[11px] font-mono border font-medium uppercase shrink-0 {badgeInfo.class}"
 								>
-									{isCachedBlock ? "CachedBlock" : entry.result}
-									{#if entry.cached && !isCachedBlock}
-										(Cached)
-									{/if}
+									{badgeInfo.label}
 								</Badge>
 								<span class="font-mono text-xs break-all text-foreground/90 leading-relaxed">
 									{answerClean}

@@ -525,6 +525,7 @@ pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {
             }
 
             client_methods.push(quote! {
+                #[allow(clippy::too_many_arguments)]
                 pub async fn #method_name(&mut self, #(#args),*) -> Result<#inner_type, LanforgeRpcError<#global_error_type>> {
                     let req = RpcRequest::#variant_name { #(#arg_names),* };
                     match self.call(req).await? {

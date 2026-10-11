@@ -29,21 +29,51 @@ struct QueryFilterRow<'a> {
     domain: std::borrow::Cow<'a, str>,
     #[serde(default)]
     src_mac: Option<MacAddr>,
+    #[serde(default)]
+    qtype: Option<DnsRecordType>,
+    #[serde(default)]
+    result: Option<QueryResult>,
 }
 
 impl QueryFilterRow<'_> {
-    fn matches(&self, filter_lower: &str) -> bool {
-        let ip_str = self.src_ip.to_string();
-        if ip_str.contains(filter_lower) {
-            return true;
-        }
-        if let Some(mac) = self.src_mac {
-            let mac_str = mac.to_string().to_lowercase();
-            if mac_str.contains(filter_lower) {
-                return true;
+    fn matches(
+        &self,
+        client_filter_lower: Option<&str>,
+        domain_filter_lower: Option<&str>,
+        qtype_filter: Option<DnsRecordType>,
+        result_filter: Option<QueryResult>,
+    ) -> bool {
+        if let Some(cf) = client_filter_lower {
+            let ip_str = self.src_ip.to_string();
+            let mut matched = ip_str.contains(cf);
+            if !matched && let Some(mac) = self.src_mac {
+                let mac_str = mac.to_string().to_lowercase();
+                matched = mac_str.contains(cf);
+            }
+            if !matched {
+                return false;
             }
         }
-        self.domain.to_lowercase().contains(filter_lower)
+
+        if let Some(df) = domain_filter_lower
+            && !self.domain.to_lowercase().contains(df)
+        {
+            return false;
+        }
+
+        if let Some(qt) = qtype_filter
+            && self.qtype != Some(qt)
+        {
+            return false;
+        }
+
+        if let Some(res) = result_filter
+            && self.result != Some(res)
+        {
+            return false;
+        }
+
+        true
     }
 }
 
@@ -615,6 +645,9 @@ impl LogStore for RedbDatabase {
         limit: usize,
         offset: Option<usize>,
         client: Option<String>,
+        domain: Option<String>,
+        qtype: Option<DnsRecordType>,
+        result: Option<QueryResult>,
     ) -> BoxFuture<'_, Result<(Vec<QueryLogEntry>, usize), DbError>> {
         Box::pin(async move {
             let read_txn = self
@@ -630,9 +663,13 @@ impl LogStore for RedbDatabase {
 
             let offset = offset.unwrap_or(0);
             let client_filter = client.as_deref().map(|c| c.trim()).filter(|c| !c.is_empty());
+            let domain_filter = domain.as_deref().map(|d| d.trim()).filter(|d| !d.is_empty());
+            let has_filters =
+                client_filter.is_some() || domain_filter.is_some() || qtype.is_some() || result.is_some();
 
-            if let Some(cf) = client_filter {
-                let cf_lower = cf.to_lowercase();
+            if has_filters {
+                let cf_lower = client_filter.map(|c| c.to_lowercase());
+                let df_lower = domain_filter.map(|d| d.to_lowercase());
                 let mut matched_total = 0;
                 let mut entries = Vec::with_capacity(limit);
 
@@ -645,7 +682,12 @@ impl LogStore for RedbDatabase {
                     let bytes = val.value();
                     let filter_row: QueryFilterRow = serde_json::from_slice(bytes)
                         .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                    if filter_row.matches(&cf_lower) {
+                    if filter_row.matches(
+                        cf_lower.as_deref(),
+                        df_lower.as_deref(),
+                        qtype,
+                        result,
+                    ) {
                         if matched_total >= offset && entries.len() < limit {
                             let entry: QueryLogEntry = serde_json::from_slice(bytes)
                                 .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;

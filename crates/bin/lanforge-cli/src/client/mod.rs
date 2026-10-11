@@ -31,7 +31,7 @@ use lanforge_types::network::firewall::{
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::RaServerConfig;
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
-use lanforge_types::network::{DnsRecordType, TrafficConfig};
+use lanforge_types::network::{DnsRecordType, QueryResult, TrafficConfig};
 use lanforge_types::system::{
     PppoeStatusResponse, RaStatusResponse, ServiceAction, TrafficStatusResponse,
 };
@@ -1014,11 +1014,15 @@ impl LanforgeClient {
         rpc.dns_cache_stats_ext().await.map_err(|e| eyre!("{e}"))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn dns_query_log(
         &self,
         follow: bool,
         limit: Option<usize>,
         client: Option<String>,
+        domain: Option<String>,
+        qtype: Option<DnsRecordType>,
+        result: Option<QueryResult>,
         offset: Option<usize>,
     ) -> Result<DnsQueryLogResponse> {
         #[cfg(feature = "remote")]
@@ -1029,6 +1033,15 @@ impl LanforgeClient {
             }
             if let Some(c) = &client {
                 qs.push(format!("client={}", urlencoding(c)));
+            }
+            if let Some(d) = &domain {
+                qs.push(format!("domain={}", urlencoding(d)));
+            }
+            if let Some(qt) = qtype {
+                qs.push(format!("qtype={qt}"));
+            }
+            if let Some(res) = result {
+                qs.push(format!("result={res}"));
             }
             if let Some(o) = offset {
                 qs.push(format!("offset={o}"));
@@ -1041,7 +1054,7 @@ impl LanforgeClient {
             return self.http_get(&format!("/dns/logs{q_str}")).await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_query_log(follow, limit, client, offset)
+        rpc.dns_query_log(follow, limit, client, domain, qtype, result, offset)
             .await
             .map_err(|e| eyre!("{e}"))
     }

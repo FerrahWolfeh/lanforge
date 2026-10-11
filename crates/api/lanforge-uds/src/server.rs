@@ -275,6 +275,9 @@ where
                 follow,
                 n,
                 client,
+                domain,
+                qtype,
+                result,
                 offset,
             } => {
                 let resp = ctx
@@ -282,6 +285,9 @@ where
                         follow,
                         n,
                         client: client.clone(),
+                        domain,
+                        qtype,
+                        result,
                         offset,
                     })
                     .await;

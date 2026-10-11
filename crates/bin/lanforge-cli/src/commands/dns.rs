@@ -844,8 +844,21 @@ fn format_log_entry(entry: &DnsQueryLogEntry, ip_to_host: &HashMap<String, Strin
 
 async fn execute_logs(args: DnsLogsArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
     if !args.follow {
+        let result_filter = if args.blocked {
+            Some(QueryResult::Blocked)
+        } else {
+            None
+        };
         let resp = client
-            .dns_query_log(false, Some(args.limit), args.client, args.offset)
+            .dns_query_log(
+                false,
+                Some(args.limit),
+                args.client,
+                args.domain.clone(),
+                None,
+                result_filter,
+                args.offset,
+            )
             .await?;
 
         if printer.json {
@@ -895,6 +908,12 @@ async fn follow_dns_logs(args: DnsLogsArgs, client: &LanforgeClient, printer: &P
         if let Some(ref c) = args.client {
             params.push(format!("client={c}"));
         }
+        if let Some(ref d) = args.domain {
+            params.push(format!("domain={d}"));
+        }
+        if args.blocked {
+            params.push("result=blocked".to_string());
+        }
         let url = format!("{base}/api/v1/dns/logs?{}", params.join("&"));
         let mut stream = client.http_stream_url(&url).await?;
         println!("Streaming DNS queries from remote gateway (Ctrl+C to stop)...");
@@ -938,8 +957,21 @@ async fn follow_dns_logs(args: DnsLogsArgs, client: &LanforgeClient, printer: &P
 
     // Local UDS stream
     let mut rpc = client.connect_rpc().await?;
+    let result_filter = if args.blocked {
+        Some(QueryResult::Blocked)
+    } else {
+        None
+    };
     let _ = rpc
-        .dns_query_log(true, Some(args.limit), args.client, args.offset)
+        .dns_query_log(
+            true,
+            Some(args.limit),
+            args.client,
+            args.domain.clone(),
+            None,
+            result_filter,
+            args.offset,
+        )
         .await?;
 
     println!("Streaming live DNS queries from local daemon (Ctrl+C to stop)...");

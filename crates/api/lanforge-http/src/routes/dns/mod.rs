@@ -17,7 +17,7 @@ use axum::{
 use futures::stream::Stream;
 use lanforge_api::api::LogMeta;
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
-use lanforge_types::network::DnsRecordType;
+use lanforge_types::network::{DnsRecordType, QueryResult};
 use serde::Deserialize;
 
 use crate::routes::create_client_ctx;
@@ -41,6 +41,10 @@ pub struct DnsLogQuery {
     pub limit: Option<usize>,
     pub offset: Option<usize>,
     pub client: Option<String>,
+    pub domain: Option<String>,
+    #[serde(default, alias = "type", alias = "qtype")]
+    pub qtype: Option<DnsRecordType>,
+    pub result: Option<QueryResult>,
     #[serde(default)]
     pub follow: bool,
 }
@@ -100,8 +104,16 @@ async fn handle_dns_logs(
     } else {
         let ctx = create_client_ctx(&state);
         crate::http_response!(
-            ctx.handle_dns_query_log(params.limit, params.client, false, params.offset)
-                .await,
+            ctx.handle_dns_query_log(
+                params.limit,
+                params.client,
+                params.domain,
+                params.qtype,
+                params.result,
+                false,
+                params.offset
+            )
+            .await,
             DnsQueryLog,
             res => res.entries, LogMeta {
                 total: res.total,
@@ -119,6 +131,9 @@ fn handle_dns_logs_follow(
     let mut rx = state.ctx.bus().subscribe_dns();
     let filter = params.client;
     let filter_ip: Option<std::net::IpAddr> = filter.as_deref().and_then(|f| f.parse().ok());
+    let domain_filter = params.domain.map(|d| d.to_lowercase());
+    let qtype_filter = params.qtype;
+    let result_filter = params.result;
     let ctx_inner = state.ctx;
 
     async_stream::try_stream! {
@@ -151,16 +166,36 @@ fn handle_dns_logs_follow(
                 });
 
                 if let Some(f) = &filter {
-                    let ip_matches = filter_ip.is_some_and(|target_ip| entry.src_ip == target_ip);
-                    let host_matches = src_hostname.as_deref() == Some(f.as_str());
-                    if !ip_matches && !host_matches {
+                    let f_lower = f.to_lowercase();
+                    let ip_matches = filter_ip.is_some_and(|target_ip| entry.src_ip == target_ip)
+                        || entry.src_ip.to_string().contains(f);
+                    let mac_matches = mac.is_some_and(|m| m.to_string().to_lowercase().contains(&f_lower));
+                    let host_matches = src_hostname.as_deref().is_some_and(|h| h.to_lowercase().contains(&f_lower));
+                    if !ip_matches && !mac_matches && !host_matches {
                         continue;
                     }
                 }
 
+                if let Some(df) = &domain_filter
+                    && !entry.domain.to_lowercase().contains(df)
+                {
+                    continue;
+                }
+
+                if let Some(qt) = qtype_filter
+                    && entry.qtype != qt
+                {
+                    continue;
+                }
+
+                if let Some(rf) = result_filter
+                    && entry.result != rf
+                {
+                    continue;
+                }
+
                 let src_ip_str = entry.src_ip.to_string();
                 let src_mac_str = mac.map(|m| m.to_string());
-                let result_str = entry.result.to_string();
 
                 let payload = serde_json::json!({
                     "timestamp": entry.timestamp,
@@ -169,11 +204,12 @@ fn handle_dns_logs_follow(
                     "src_hostname": &src_hostname,
                     "domain": entry.domain.as_ref(),
                     "qtype": entry.qtype,
-                    "result": &result_str,
+                    "result": entry.result,
                     "upstream_us": entry.upstream_us,
                     "cached": entry.cached,
                     "answer": entry.answer,
                     "protocol": entry.protocol,
+                    "filter": entry.filter,
                     "event": {
                         "Dns": {
                             "QueryResolved": {
@@ -183,10 +219,11 @@ fn handle_dns_logs_follow(
                                 "src_hostname": &src_hostname,
                                 "domain": entry.domain.as_ref(),
                                 "qtype": entry.qtype,
-                                "result": &result_str,
+                                "result": entry.result,
                                 "upstream_us": entry.upstream_us,
                                 "cached": entry.cached,
                                 "answer": entry.answer,
+                                "filter": entry.filter,
                             }
                         }
                     }

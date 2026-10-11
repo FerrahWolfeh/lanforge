@@ -1,6 +1,7 @@
 use crate::ClientContext;
 use lanforge_api::api::{DnsQueryLogEntry, DnsQueryLogResponse, DnsQueryResponse, Response};
 use lanforge_types::network::dns::{DnsRecordEntry, DnsRecordType};
+use lanforge_types::network::QueryResult;
 use std::{collections::HashMap, net::IpAddr, time::Instant};
 
 impl ClientContext {
@@ -46,10 +47,14 @@ impl ClientContext {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn handle_dns_query_log(
         &self,
         n: Option<usize>,
         client: Option<String>,
+        domain: Option<String>,
+        qtype: Option<DnsRecordType>,
+        result: Option<QueryResult>,
         _follow: bool,
         offset: Option<usize>,
     ) -> Response {
@@ -65,6 +70,9 @@ impl ClientContext {
                 limit,
                 offset,
                 client,
+                domain,
+                qtype,
+                result,
             })
             .await
         {

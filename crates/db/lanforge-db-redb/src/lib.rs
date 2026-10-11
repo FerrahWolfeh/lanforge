@@ -573,10 +573,30 @@ mod tests {
         };
         db.record_dns_queries_batch(&[query1, query2]).await.unwrap();
 
-        let (queries, total) = db.get_dns_query_history(10, None, None).await.unwrap();
+        let (queries, total) = db
+            .get_dns_query_history(10, None, None, None, None, None)
+            .await
+            .unwrap();
         assert_eq!(total, 2);
         assert_eq!(queries.len(), 2);
         assert_eq!(queries[0].domain.as_ref(), "bad-ads.net"); // Latest first
+
+        // Test filtering by domain
+        let (queries_domain, total_domain) = db
+            .get_dns_query_history(10, None, None, Some("bad-ads".to_string()), None, None)
+            .await
+            .unwrap();
+        assert_eq!(total_domain, 1);
+        assert_eq!(queries_domain.len(), 1);
+        assert_eq!(queries_domain[0].domain.as_ref(), "bad-ads.net");
+
+        // Test filtering by outcome/result
+        let (queries_blocked, total_blocked) = db
+            .get_dns_query_history(10, None, None, None, None, Some(QueryResult::Blocked))
+            .await
+            .unwrap();
+        assert_eq!(total_blocked, 1);
+        assert_eq!(queries_blocked[0].result, QueryResult::Blocked);
 
         let top_domains = db.get_dns_top_domains(5).await.unwrap();
         assert_eq!(top_domains.len(), 1);
@@ -617,7 +637,10 @@ mod tests {
         db.clear_logs().await.unwrap();
         let history_after_clear = db.get_history(10).await.unwrap();
         assert_eq!(history_after_clear.len(), 0);
-        let (queries_after_clear, total_after_clear) = db.get_dns_query_history(10, None, None).await.unwrap();
+        let (queries_after_clear, total_after_clear) = db
+            .get_dns_query_history(10, None, None, None, None, None)
+            .await
+            .unwrap();
         assert_eq!(total_after_clear, 0);
         assert_eq!(queries_after_clear.len(), 0);
     }

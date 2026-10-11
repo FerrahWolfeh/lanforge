@@ -366,9 +366,12 @@ impl DbWorker {
                 limit,
                 offset,
                 client,
+                domain,
+                qtype,
+                result,
             } => {
                 let (queries, total) = log_db
-                    .get_dns_query_history(limit, offset, client)
+                    .get_dns_query_history(limit, offset, client, domain, qtype, result)
                     .await
                     .map_err(|e| e.to_string())?;
                 Ok(StorageQueryResult::DnsQueryHistory { queries, total })

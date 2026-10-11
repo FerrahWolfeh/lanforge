@@ -21,7 +21,7 @@ use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
-use lanforge_types::network::{DnsReverseResolver, IpSubnet, QueryLogEntry, TrafficConfig};
+use lanforge_types::network::{DnsReverseResolver, IpSubnet, QueryLogEntry, QueryResult, TrafficConfig};
 
 /// Database error enum encapsulating all database failures.
 #[derive(Debug, thiserror::Error)]
@@ -715,6 +715,9 @@ pub trait LogStore: Send + Sync {
         limit: usize,
         offset: Option<usize>,
         client: Option<String>,
+        domain: Option<String>,
+        qtype: Option<DnsRecordType>,
+        result: Option<QueryResult>,
     ) -> BoxFuture<'_, Result<(Vec<QueryLogEntry>, usize), DbError>>;
 
     /// Retrieves top domains by query count.

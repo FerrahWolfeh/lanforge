@@ -12,7 +12,7 @@ use crate::network::dns::adblock::{
 };
 use crate::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 use crate::network::dns::DnsRecordType;
-use crate::network::{IpSubnet, QueryLogEntry};
+use crate::network::{IpSubnet, QueryLogEntry, QueryResult};
 
 /// Detailed bucket metrics for DNS query activity.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -98,6 +98,9 @@ pub enum StorageQuery {
         limit: usize,
         offset: Option<usize>,
         client: Option<String>,
+        domain: Option<String>,
+        qtype: Option<DnsRecordType>,
+        result: Option<QueryResult>,
     },
     GetDnsAnalytics {
         limit: usize,

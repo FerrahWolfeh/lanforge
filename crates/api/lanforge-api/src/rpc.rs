@@ -27,7 +27,7 @@ use lanforge_types::{
         pppoe::PppoeConfig,
         ra::RaServerConfig,
         traffic::TrafficTelemetryResponse,
-        TrafficConfig,
+        QueryResult, TrafficConfig,
     },
     system::{PppoeStatusResponse, RaStatusResponse, ServiceAction, TrafficStatusResponse},
     update::LeaseTarget,
@@ -39,6 +39,7 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr},
 };
 
+#[allow(clippy::too_many_arguments)]
 #[lanforge_rpc]
 pub trait LanforgeRpc {
     fn status(&self) -> impl Future<Output = Result<Box<StatusResponse>, RpcCallError>> + Send;
@@ -176,11 +177,15 @@ pub trait LanforgeRpc {
     fn dns_adblock_reload(
         &self,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    #[allow(clippy::too_many_arguments)]
     fn dns_query_log(
         &self,
         follow: bool,
         n: Option<usize>,
         client: Option<String>,
+        domain: Option<String>,
+        qtype: Option<DnsRecordType>,
+        result: Option<QueryResult>,
         offset: Option<usize>,
     ) -> impl Future<Output = Result<DnsQueryLogResponse, RpcCallError>> + Send;
     fn dns_adblock_status(

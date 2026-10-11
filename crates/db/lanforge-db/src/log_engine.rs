@@ -3,8 +3,8 @@
 use lanforge_core::bus::TimedEvent;
 use lanforge_db_core::{BoxFuture, DbError, DnsQueryRateBucket, LogStore};
 use lanforge_db_redb::RedbDatabase;
-use lanforge_types::network::dns::DnsLifetimeStats;
-use lanforge_types::network::QueryLogEntry;
+use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType};
+use lanforge_types::network::{QueryLogEntry, QueryResult};
 use std::net::IpAddr;
 use std::path::Path;
 
@@ -128,8 +128,13 @@ impl LogDb {
         limit: usize,
         offset: Option<usize>,
         client: Option<String>,
+        domain: Option<String>,
+        qtype: Option<DnsRecordType>,
+        result: Option<QueryResult>,
     ) -> Result<(Vec<QueryLogEntry>, usize), DbError> {
-        self.inner.get_dns_query_history(limit, offset, client).await
+        self.inner
+            .get_dns_query_history(limit, offset, client, domain, qtype, result)
+            .await
     }
 
     pub async fn get_dns_top_domains(&self, limit: usize) -> Result<Vec<(String, u64)>, DbError> {
@@ -259,8 +264,12 @@ impl LogStore for LogDb {
         limit: usize,
         offset: Option<usize>,
         client: Option<String>,
+        domain: Option<String>,
+        qtype: Option<DnsRecordType>,
+        result: Option<QueryResult>,
     ) -> BoxFuture<'_, Result<(Vec<QueryLogEntry>, usize), DbError>> {
-        self.inner.get_dns_query_history(limit, offset, client)
+        self.inner
+            .get_dns_query_history(limit, offset, client, domain, qtype, result)
     }
 
     fn get_dns_top_domains(

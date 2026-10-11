@@ -1,35 +1,49 @@
 <script lang="ts">
 	import { Button } from "$lib/components/ui/button";
+	import { Badge } from "$lib/components/ui/badge";
+	import * as Tabs from "$lib/components/ui/tabs";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import ListFilterIcon from "@lucide/svelte/icons/list-filter";
+	import HistoryIcon from "@lucide/svelte/icons/history";
 	import RadioIcon from "@lucide/svelte/icons/radio";
-	import PauseIcon from "@lucide/svelte/icons/pause";
-	import PlayIcon from "@lucide/svelte/icons/play";
-	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
-	import { dnsQueryLog, dnsLogSseUrl, dnsStats } from "$lib/api/client";
-	import type { DnsQueryLogEntry, DnsStatsResponse } from "$lib/api/types";
+	import { dnsQueryLog, dnsLogSseUrl, dnsStats, dnsRewriteAdd } from "$lib/api/client";
+	import type { DnsQueryLogEntry, DnsStatsResponse, RewriteRule } from "$lib/api/types";
 
 	// Child components
 	import DnsLogStatsCards from "./components/DnsLogStatsCards.svelte";
 	import DnsLogTable from "./components/DnsLogTable.svelte";
+	import DnsLogLiveTail from "./components/DnsLogLiveTail.svelte";
+	import DnsLogDetailDialog from "./components/DnsLogDetailDialog.svelte";
+	import DnsRewriteDialog from "../rewrites/components/DnsRewriteDialog.svelte";
 
-	let loading = $state(true);
-	let isLive = $state(true);
+	let activeTab = $state<"history" | "live">("history");
 	let stats = $state<DnsStatsResponse | null>(null);
-	let entries = $state<DnsQueryLogEntry[]>([]);
-	let total = $state(0);
 
-	// Filters & Pagination
+	// --- Tab 1: Query History State ---
+	let historyLoading = $state(true);
+	let historyEntries = $state<DnsQueryLogEntry[]>([]);
+	let historyTotal = $state(0);
 	let searchQuery = $state("");
 	let selectedType = $state("");
 	let selectedResult = $state("");
 	let limit = $state(50);
 	let offset = $state(0);
+	let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 
-	let searchTimeout: ReturnType<typeof setTimeout> | null = null;
+	// --- Tab 2: Live Stream State ---
+	let liveEntries = $state<DnsQueryLogEntry[]>([]);
+	let isLivePaused = $state(false);
+	let isLiveConnected = $state(false);
+	let bufferLimit = $state(200);
 	let eventSource: EventSource | null = null;
+
+	// --- Shared Dialog States ---
+	let inspectRecord = $state<DnsQueryLogEntry | null>(null);
+	let inspectDialogOpen = $state(false);
+	let rewriteDialogOpen = $state(false);
+	let activeRewriteRule = $state<RewriteRule | null>(null);
 
 	async function loadDaemonStats() {
 		try {
@@ -41,39 +55,65 @@
 	}
 
 	async function loadHistoricalLogs() {
-		loading = true;
+		historyLoading = true;
 		try {
 			await loadDaemonStats();
 			const res = await dnsQueryLog({
+				domain: searchQuery.trim() || undefined,
+				qtype: selectedType || undefined,
+				result: selectedResult || undefined,
 				limit,
 				offset,
-				client: searchQuery.trim() || undefined,
 			});
 			if (res) {
-				entries = res.entries;
-				total = res.total;
+				historyEntries = res.entries;
+				historyTotal = res.total;
 			}
 		} catch {
 			toast.error("Failed to load historical DNS query logs");
 		} finally {
-			loading = false;
+			historyLoading = false;
 		}
 	}
 
-	function startSseStream() {
-		stopSseStream();
-		if (!isLive) return;
+	function handleSearchInput(q: string) {
+		searchQuery = q;
+		offset = 0;
+		if (searchDebounce) clearTimeout(searchDebounce);
+		searchDebounce = setTimeout(() => {
+			loadHistoricalLogs();
+		}, 300);
+	}
 
+	function handleTypeSelect(kind: string) {
+		selectedType = kind;
+		offset = 0;
+		loadHistoricalLogs();
+	}
+
+	function handleResultSelect(res: string) {
+		selectedResult = res;
+		offset = 0;
+		loadHistoricalLogs();
+	}
+
+	function handlePageChange(newOffset: number) {
+		offset = newOffset;
+		loadHistoricalLogs();
+	}
+
+	// --- Live SSE Stream Life-cycle ---
+	function startLiveStream() {
+		stopLiveStream();
 		try {
-			const url = dnsLogSseUrl({
-				client: searchQuery.trim() || undefined,
-			});
+			const url = dnsLogSseUrl();
 			eventSource = new EventSource(url);
+			isLiveConnected = true;
 
 			eventSource.onmessage = (event) => {
+				if (isLivePaused) return;
 				try {
 					const parsed = JSON.parse(event.data);
-					// Extract event payload
 					const dnsEv =
 						parsed.event?.Dns?.QueryResolved ??
 						parsed.event?.QueryResolved ??
@@ -90,183 +130,95 @@
 						const newEntry: DnsQueryLogEntry = {
 							timestamp: ts,
 							src_ip: String(dnsEv.src_ip ?? "127.0.0.1"),
-							src_mac: dnsEv.src_mac
-								? String(dnsEv.src_mac)
-								: null,
-							src_hostname: dnsEv.src_hostname
-								? String(dnsEv.src_hostname)
-								: null,
+							src_mac: dnsEv.src_mac ? String(dnsEv.src_mac) : null,
+							src_hostname: dnsEv.src_hostname ? String(dnsEv.src_hostname) : null,
 							domain: String(dnsEv.domain ?? ""),
 							qtype: (dnsEv.qtype ?? "A") as any,
-							result:
-								typeof dnsEv.result === "string"
-									? dnsEv.result
-									: String(dnsEv.result ?? "Allowed"),
+							result: String(dnsEv.result ?? "forwarded").toLowerCase(),
 							upstream_us: Number(dnsEv.upstream_us ?? 0),
 							cached: Boolean(dnsEv.cached),
 							answer: dnsEv.answer ? String(dnsEv.answer) : null,
+							filter: dnsEv.filter ?? null,
 						};
 
-						// Prepend to live entries list and bump total
-						entries = [newEntry, ...entries.slice(0, 499)];
-						total += 1;
+						liveEntries = [newEntry, ...liveEntries.slice(0, bufferLimit - 1)];
 					}
 				} catch {
-					// Ignore invalid SSE packet frame
+					// Ignore invalid frame
 				}
 			};
 
 			eventSource.onerror = () => {
-				// Reconnect handled automatically by browser EventSource
+				isLiveConnected = false;
 			};
 		} catch {
-			// fallback silently
+			isLiveConnected = false;
 		}
 	}
 
-	function stopSseStream() {
+	function stopLiveStream() {
 		if (eventSource) {
 			eventSource.close();
 			eventSource = null;
 		}
+		isLiveConnected = false;
 	}
 
-	function toggleLiveFeed() {
-		isLive = !isLive;
-		if (isLive) {
-			toast.info("Resumed live DNS query feed");
-			startSseStream();
+	function toggleLivePause() {
+		isLivePaused = !isLivePaused;
+		if (isLivePaused) {
+			toast.info("Paused live stream updates");
 		} else {
-			stopSseStream();
-			toast.info("Paused live DNS query feed");
+			toast.info("Resumed live stream updates");
 		}
 	}
 
-	function handleSearchInput(q: string) {
-		searchQuery = q;
-		offset = 0;
-		if (searchTimeout) clearTimeout(searchTimeout);
-		searchTimeout = setTimeout(() => {
-			if (isLive) {
-				startSseStream();
-			} else {
-				loadHistoricalLogs();
-			}
-		}, 300);
+	function clearLiveBuffer() {
+		liveEntries = [];
+		toast.success("Cleared live tail buffer");
 	}
 
-	function handleTypeSelect(kind: string) {
-		selectedType = kind;
-		offset = 0;
-		if (!isLive) {
-			loadHistoricalLogs();
-		}
-	}
-
-	function handleResultSelect(res: string) {
-		selectedResult = res;
-		offset = 0;
-		if (!isLive) {
-			loadHistoricalLogs();
-		}
-	}
-
-	function handlePageChange(newOffset: number) {
-		offset = newOffset;
-		if (isLive) {
-			isLive = false;
-			stopSseStream();
-		}
-		loadHistoricalLogs();
-	}
-
-	function clearLogBuffer() {
-		entries = [];
-		total = 0;
-		toast.success("Cleared log view buffer");
-	}
-
-	// Filtered list derived state for client-side filtering of live SSE buffer
-	const filteredEntries = $derived.by(() => {
-		let list = entries;
-		if (searchQuery.trim()) {
-			const q = searchQuery.toLowerCase().trim();
-			list = list.filter(
-				(e) =>
-					e.domain.toLowerCase().includes(q) ||
-					e.src_ip.toLowerCase().includes(q) ||
-					(e.src_hostname && e.src_hostname.toLowerCase().includes(q)) ||
-					(e.src_mac && e.src_mac.toLowerCase().includes(q)) ||
-					(e.answer && e.answer.toLowerCase().includes(q)),
-			);
-		}
-		if (selectedType) {
-			list = list.filter((e) => e.qtype === selectedType);
-		}
-		if (selectedResult) {
-			const resLow = selectedResult.toLowerCase();
-			if (resLow === "blocked") {
-				list = list.filter((e) => {
-					const r = e.result.toLowerCase();
-					const isBlock = r.includes("block") || r.includes("deny");
-					const isCached =
-						e.cached ||
-						r.includes("cached") ||
-						r === "cachedblock" ||
-						r === "cached_block";
-					return isBlock && !isCached;
-				});
-			} else if (resLow === "cachedblock" || resLow === "cached_block") {
-				list = list.filter((e) => {
-					const r = e.result.toLowerCase();
-					return (
-						r === "cachedblock" ||
-						r === "cached_block" ||
-						(e.cached && (r.includes("block") || r.includes("deny"))) ||
-						(r.includes("cached") && r.includes("block"))
-					);
-				});
-			} else if (resLow === "cached") {
-				list = list.filter((e) => {
-					const r = e.result.toLowerCase();
-					const isBlock = r.includes("block") || r.includes("deny");
-					return (
-						(e.cached || r === "cached") &&
-						!isBlock &&
-						r !== "cachedblock" &&
-						r !== "cached_block"
-					);
-				});
-			} else if (resLow === "local") {
-				list = list.filter((e) => e.result.toLowerCase() === "local");
-			} else if (resLow === "rewrite") {
-				list = list.filter((e) =>
-					e.result.toLowerCase().includes("rewrite"),
-				);
-			} else if (resLow === "forwarded") {
-				list = list.filter((e) => {
-					const r = e.result.toLowerCase();
-					return (
-						r === "forwarded" ||
-						(!e.cached &&
-							!r.includes("block") &&
-							!r.includes("deny") &&
-							r !== "local" &&
-							!r.includes("rewrite"))
-					);
-				});
+	// Tab switcher lifecycle watcher
+	$effect(() => {
+		if (activeTab === "live") {
+			if (!eventSource) {
+				startLiveStream();
 			}
 		}
-		return list;
 	});
+
+	function handleInspect(entry: DnsQueryLogEntry) {
+		inspectRecord = entry;
+		inspectDialogOpen = true;
+	}
+
+	function handleOpenRewrite(domain: string, target: string) {
+		activeRewriteRule = {
+			domain,
+			rtype: "A",
+			answer: target && target !== "—" ? { kind: "static", value: target } : { kind: "static", value: "127.0.0.1" },
+			enabled: true,
+		} as any;
+		rewriteDialogOpen = true;
+	}
+
+	async function handleSaveRewrite(payload: any) {
+		try {
+			await dnsRewriteAdd(payload);
+			toast.success(`Created DNS rewrite rule for ${payload.domain}`);
+			rewriteDialogOpen = false;
+		} catch (err: any) {
+			toast.error(err?.message ?? "Failed to save DNS rewrite rule");
+			throw err;
+		}
+	}
 
 	onMount(() => {
 		loadHistoricalLogs();
-		startSseStream();
 	});
 
 	onDestroy(() => {
-		stopSseStream();
+		stopLiveStream();
 	});
 </script>
 
@@ -276,89 +228,131 @@
 
 <div class="space-y-6">
 	<!-- Top Action Bar -->
-	<div
-		class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
-	>
+	<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 		<div>
-			<h1
-				class="text-2xl font-bold tracking-tight flex items-center gap-2"
-			>
-				<ListFilterIcon class="h-6 w-6 text-primary" />
+			<h1 class="text-2xl font-bold tracking-tight flex items-center gap-2">
+				<ListFilterIcon class="size-6 text-primary" />
 				DNS Query Log
 			</h1>
 			<p class="text-sm text-muted-foreground">
-				Real-time monitoring, telemetry breakdown, and client query
-				audit trail.
+				Network resolution telemetry, live packet stream, and client query audit trail.
 			</p>
 		</div>
 
 		<div class="flex items-center gap-2">
-			<!-- Live Feed Toggle Button -->
-			<Button
-				variant={isLive ? "default" : "outline"}
-				size="sm"
-				onclick={toggleLiveFeed}
-				class="gap-2"
-			>
-				{#if isLive}
-					<PauseIcon class="h-4 w-4" />
-					Pause Stream
-				{:else}
-					<PlayIcon class="h-4 w-4" />
-					Live Feed
-				{/if}
-			</Button>
-
 			<Button
 				variant="outline"
 				size="sm"
-				onclick={() => loadHistoricalLogs()}
-				disabled={loading}
+				onclick={() => {
+					if (activeTab === "history") {
+						loadHistoricalLogs();
+					} else {
+						startLiveStream();
+					}
+				}}
+				disabled={historyLoading && activeTab === "history"}
 				class="gap-2"
 			>
 				<RefreshCwIcon
-					class="h-4 w-4 {loading ? 'animate-spin' : ''}"
+					class="size-3.5 {historyLoading && activeTab === 'history' ? 'animate-spin' : ''}"
 				/>
 				Refresh
-			</Button>
-
-			<Button
-				variant="ghost"
-				size="sm"
-				onclick={clearLogBuffer}
-				class="gap-2 text-muted-foreground hover:text-foreground"
-			>
-				<Trash2Icon class="h-4 w-4" />
-				Clear View
 			</Button>
 		</div>
 	</div>
 
 	<!-- Top Metric Summary Cards -->
 	<DnsLogStatsCards
-		{loading}
-		{isLive}
-		entries={filteredEntries}
-		{total}
+		loading={historyLoading}
+		isLive={isLiveConnected && !isLivePaused}
+		entries={activeTab === "live" ? liveEntries : historyEntries}
+		total={historyTotal}
 		{stats}
 	/>
 
-	<!-- DNS Query Log Data Table -->
-	<DnsLogTable
-		{loading}
-		entries={filteredEntries}
-		{total}
-		{searchQuery}
-		{selectedType}
-		{selectedResult}
-		{limit}
-		{offset}
-		onSearchChange={handleSearchInput}
-		onTypeChange={handleTypeSelect}
-		onResultChange={handleResultSelect}
-		onPageChange={handlePageChange}
-		onAddRewrite={(domain, target) => {
-			toast.info(`Creating rewrite rule for ${domain}`);
-		}}
-	/>
+	<!-- Tabbed Rules View (Consistent with Adblock rules & SQM tabs style) -->
+	<Tabs.Root bind:value={activeTab} class="space-y-4">
+		<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+			<div class="overflow-x-auto no-scrollbar w-full sm:w-auto -mx-1 px-1 py-0.5">
+				<Tabs.List class="inline-flex w-max h-9 p-1">
+					<Tabs.Trigger value="history" class="gap-1.5 text-xs shrink-0">
+						<HistoryIcon class="size-3.5 text-primary" />
+						<span>Query History</span>
+						{#if historyTotal > 0}
+							<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-[10px] font-mono">
+								{historyTotal.toLocaleString()}
+							</Badge>
+						{/if}
+					</Tabs.Trigger>
+
+					<Tabs.Trigger value="live" class="gap-1.5 text-xs shrink-0">
+						<RadioIcon
+							class="size-3.5 {isLiveConnected && !isLivePaused
+								? 'text-emerald-500 animate-pulse'
+								: 'text-muted-foreground'}"
+						/>
+						<span>Live Stream</span>
+						{#if liveEntries.length > 0}
+							<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-[10px] font-mono">
+								{liveEntries.length}
+							</Badge>
+						{/if}
+					</Tabs.Trigger>
+				</Tabs.List>
+			</div>
+		</div>
+
+		<!-- Container 1: Query History Tab Content (Preserved DOM state via hidden toggle) -->
+		<div class={activeTab === "history" ? "block space-y-4" : "hidden"}>
+			<DnsLogTable
+				loading={historyLoading}
+				entries={historyEntries}
+				total={historyTotal}
+				{searchQuery}
+				{selectedType}
+				{selectedResult}
+				{limit}
+				{offset}
+				onSearchChange={handleSearchInput}
+				onTypeChange={handleTypeSelect}
+				onResultChange={handleResultSelect}
+				onPageChange={handlePageChange}
+				onAddRewrite={handleOpenRewrite}
+			/>
+		</div>
+
+		<!-- Container 2: Live Stream Tab Content (Preserved DOM state via hidden toggle) -->
+		<div class={activeTab === "live" ? "block space-y-4" : "hidden"}>
+			<DnsLogLiveTail
+				entries={liveEntries}
+				isPaused={isLivePaused}
+				isConnected={isLiveConnected}
+				{bufferLimit}
+				onTogglePause={toggleLivePause}
+				onClearBuffer={clearLiveBuffer}
+				onInspect={handleInspect}
+				onAddRewrite={handleOpenRewrite}
+				onBufferLimitChange={(newLimit) => {
+					bufferLimit = newLimit;
+					if (liveEntries.length > newLimit) {
+						liveEntries = liveEntries.slice(0, newLimit);
+					}
+				}}
+			/>
+		</div>
+	</Tabs.Root>
 </div>
+
+<!-- Shared Query Inspection Dialog -->
+<DnsLogDetailDialog
+	bind:open={inspectDialogOpen}
+	entry={inspectRecord}
+	onAddRewrite={handleOpenRewrite}
+/>
+
+<!-- Shared DNS Rewrite Creation Dialog -->
+<DnsRewriteDialog
+	bind:open={rewriteDialogOpen}
+	rule={activeRewriteRule}
+	onSave={handleSaveRewrite}
+/>

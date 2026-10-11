@@ -388,6 +388,9 @@ export const dnsQuery = (name: string, type?: string) =>
 	get<unknown>('/dns/query', { name, ...(type && { record_type: type }) });
 export const dnsQueryLog = async (params?: {
 	client?: string;
+	domain?: string;
+	qtype?: string;
+	result?: string;
 	limit?: number;
 	offset?: number;
 }): Promise<{ entries: DnsQueryLogEntry[]; total: number }> =>
@@ -719,10 +722,19 @@ export function eventsUrl(params?: { filter?: string; initial?: number }): strin
 /**
  * Build the URL for the DNS log SSE stream.
  */
-export function dnsLogSseUrl(params?: { client?: string; limit?: number }): string {
+export function dnsLogSseUrl(params?: {
+	client?: string;
+	domain?: string;
+	qtype?: string;
+	result?: string;
+	limit?: number;
+}): string {
 	const url = new URL('/api/v1/dns/logs', window.location.origin);
 	url.searchParams.set('follow', 'true');
 	if (params?.client) url.searchParams.set('client', params.client);
+	if (params?.domain) url.searchParams.set('domain', params.domain);
+	if (params?.qtype) url.searchParams.set('qtype', params.qtype);
+	if (params?.result) url.searchParams.set('result', params.result);
 	if (params?.limit) url.searchParams.set('limit', String(params.limit));
 	const token = getToken();
 	if (token) url.searchParams.set('token', token);
