@@ -22,6 +22,7 @@
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
 	import PageHeader from "$lib/components/PageHeader.svelte";
 	import StatusBadge from "$lib/components/StatusBadge.svelte";
+	import HelpPopover from "$lib/components/HelpPopover.svelte";
 	import DnsAdblockSettingsModal from "./components/DnsAdblockSettingsModal.svelte";
 	import {
 		dnsAdblockStatus,
@@ -145,6 +146,37 @@
 					/>
 				{/if}
 			{/if}
+			<HelpPopover
+				title="Zero-Copy Reversed-FST Filtering Architecture"
+				description="High-performance domain sinkhole evaluation (~0.2µs wire latency) across three operational tiers."
+				contentClass="w-80 sm:w-[460px]"
+			>
+				{#snippet children()}
+					<div class="flex flex-col gap-2.5 text-xs text-muted-foreground">
+						<div class="flex flex-col gap-0.5 border-l-2 border-emerald-500/80 pl-2.5">
+							<span class="font-semibold text-foreground flex items-center gap-1.5">
+								<span class="size-1.5 rounded-full bg-emerald-500"></span>
+								Tier 1: In-Memory Overrides & Exceptions
+							</span>
+							<span>User custom rules and <code class="text-primary font-mono font-medium">@@</code> exceptions evaluated in-memory with priority override and <code class="text-amber-500 font-mono font-medium">$important</code> handling.</span>
+						</div>
+						<div class="flex flex-col gap-0.5 border-l-2 border-sky-500/80 pl-2.5">
+							<span class="font-semibold text-foreground flex items-center gap-1.5">
+								<span class="size-1.5 rounded-full bg-sky-500"></span>
+								Tier 2: Zero-Copy Mmap Reversed FST
+							</span>
+							<span>Finite State Transducer on disk (<code class="text-foreground font-mono">blocklist.fst</code>). Traverses reversed labels (<code class="text-foreground font-mono">com.doubleclick</code>) for deterministic suffix & exact matching in ~0.2µs with zero heap bloat.</span>
+						</div>
+						<div class="flex flex-col gap-0.5 border-l-2 border-purple-500/80 pl-2.5">
+							<span class="font-semibold text-foreground flex items-center gap-1.5">
+								<span class="size-1.5 rounded-full bg-purple-500"></span>
+								Tier 3: Incremental HTTP Manifest Cache
+							</span>
+							<span>Per-source ETag & Last-Modified conditional downloads. Merges sorted lists via streaming multi-way k-merge, skipping unchanged sources entirely.</span>
+						</div>
+					</div>
+				{/snippet}
+			</HelpPopover>
 		{/snippet}
 
 		{#snippet actions()}

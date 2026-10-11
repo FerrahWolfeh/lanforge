@@ -6,7 +6,6 @@
 	import RotateCwIcon from "@lucide/svelte/icons/rotate-cw";
 	import FolderIcon from "@lucide/svelte/icons/folder";
 	import RadioIcon from "@lucide/svelte/icons/radio";
-	import NetworkIcon from "@lucide/svelte/icons/network";
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
 	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
@@ -18,9 +17,6 @@
 		enabled = false,
 		listenAddr = "0.0.0.0:69",
 		rootDir = "/var/lib/lanforge/tftp",
-		blockSize = 512,
-		timeoutSecs = 5,
-		maxRetries = 3,
 		serviceActionLoading = null,
 		onServiceControl
 	}: {
@@ -30,15 +26,12 @@
 		enabled: boolean;
 		listenAddr: string;
 		rootDir: string;
-		blockSize: number;
-		timeoutSecs: number;
-		maxRetries: number;
 		serviceActionLoading: string | null;
 		onServiceControl: (action: "Start" | "Stop" | "Restart") => void;
 	} = $props();
 </script>
 
-<StatCardGrid cols={4}>
+<StatCardGrid cols={3}>
 	<!-- Card 1: Service Lifecycle -->
 	<StatCard
 		label="Service Lifecycle"
@@ -144,21 +137,6 @@
 		{#snippet footer()}
 			<StatCardFooterItem label="Permissions" value="0755 Read" />
 			<StatCardFooterItem label="Path" value={rootDir.split("/").pop() || "tftp"} />
-		{/snippet}
-	</StatCard>
-
-	<!-- Card 4: Transfer Tuning -->
-	<StatCard
-		label="Transfer Tuning"
-		value={`${blockSize} B`}
-		icon={NetworkIcon}
-		color="violet"
-		subtext={`Max ${maxRetries} block retries`}
-		{loading}
-	>
-		{#snippet footer()}
-			<StatCardFooterItem label="Timeout" value={`${timeoutSecs}s`} />
-			<StatCardFooterItem label="Retries" value={`${maxRetries} attempts`} />
 		{/snippet}
 	</StatCard>
 </StatCardGrid>

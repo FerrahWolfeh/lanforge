@@ -327,9 +327,6 @@
 		{enabled}
 		{listenAddr}
 		{rootDir}
-		{blockSize}
-		{timeoutSecs}
-		{maxRetries}
 		{serviceActionLoading}
 		onServiceControl={handleServiceControl}
 	/>

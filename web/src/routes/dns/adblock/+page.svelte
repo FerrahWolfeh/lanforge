@@ -1,13 +1,9 @@
 <script lang="ts">
 	import { onMount } from "svelte";
 	import { toast } from "svelte-sonner";
-	import CpuIcon from "@lucide/svelte/icons/cpu";
-	import HardDriveIcon from "@lucide/svelte/icons/hard-drive";
-	import ZapIcon from "@lucide/svelte/icons/zap";
 	import SearchIcon from "@lucide/svelte/icons/search";
 	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
-	import ExternalLinkIcon from "@lucide/svelte/icons/external-link";
 	import * as Card from "$lib/components/ui/card";
 	import { Button } from "$lib/components/ui/button";
 	import { Input } from "$lib/components/ui/input";
@@ -294,53 +290,4 @@
 		topBlockedClients={analytics?.top_blocked_clients ?? []}
 		onAllowedDomain={() => loadAllData()}
 	/>
-
-	<!-- Engine Architecture & Hardware Efficiency Card -->
-	<Card.Root class="border-border/60 bg-muted/20">
-		<Card.Header class="pb-3 border-b border-border/50">
-			<div class="flex items-center justify-between">
-				<div class="flex items-center gap-2">
-					<CpuIcon class="size-4 text-primary" />
-					<Card.Title class="text-sm font-semibold">
-						Zero-Copy Reversed-FST Filtering Architecture
-					</Card.Title>
-				</div>
-				<Badge variant="outline" class="font-mono text-[11px] gap-1">
-					<ZapIcon class="size-3 text-amber-500" />
-					~0.2µs Query Evaluation
-				</Badge>
-			</div>
-		</Card.Header>
-		<Card.Content class="p-4 grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-			<div class="flex flex-col gap-1.5 p-3 rounded-lg border bg-card">
-				<div class="flex items-center gap-1.5 font-semibold text-foreground">
-					<span class="size-2 rounded-full bg-emerald-500"></span>
-					Tier 1: In-Memory Overrides & Exceptions
-				</div>
-				<p class="text-muted-foreground">
-					User custom rules and adblock <code class="text-primary font-mono">@@</code> exceptions evaluated in-memory with priority override and <code class="text-amber-500 font-mono">$important</code> handling.
-				</p>
-			</div>
-
-			<div class="flex flex-col gap-1.5 p-3 rounded-lg border bg-card">
-				<div class="flex items-center gap-1.5 font-semibold text-foreground">
-					<span class="size-2 rounded-full bg-sky-500"></span>
-					Tier 2: Zero-Copy Mmap Reversed FST
-				</div>
-				<p class="text-muted-foreground">
-					Finite State Transducer compiled on disk (<code class="text-primary font-mono">blocklist.fst</code>). Traverses reversed labels (<code class="text-foreground font-mono">com.doubleclick</code>) for deterministic suffix & exact matching in ~0.2µs with zero heap bloat.
-				</p>
-			</div>
-
-			<div class="flex flex-col gap-1.5 p-3 rounded-lg border bg-card">
-				<div class="flex items-center gap-1.5 font-semibold text-foreground">
-					<span class="size-2 rounded-full bg-purple-500"></span>
-					Tier 3: Incremental HTTP Manifest Cache
-				</div>
-				<p class="text-muted-foreground">
-					Per-source ETag & Last-Modified conditional downloads. Merges sorted lists via streaming multi-way k-merge, skipping unchanged sources entirely.
-				</p>
-			</div>
-		</Card.Content>
-	</Card.Root>
 </div>
