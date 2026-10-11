@@ -388,9 +388,9 @@
 	];
 </script>
 
-<Card.Root class="relative overflow-hidden border-border/70 shadow-xs">
+<Card.Root class="relative overflow-hidden border-border/70 shadow-xs py-0 gap-0">
 	<!-- Glow Header -->
-	<Card.Header class="pb-3 border-b border-border/50 bg-gradient-to-r from-sky-500/5 via-transparent to-emerald-500/5">
+	<Card.Header class="pt-5 sm:pt-6 pb-3.5 px-4 sm:px-6 border-b border-border/50 bg-gradient-to-r from-sky-500/10 via-transparent to-emerald-500/10">
 		<div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
 			<!-- Title & Mode Switcher -->
 			<div class="flex flex-col sm:flex-row sm:items-center gap-3">
@@ -699,6 +699,7 @@
 										? String(v)
 										: dt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 								}}
+								valueFormatter={(v) => formatBps(Number(v) || 0)}
 							/>
 						{/snippet}
 					</AreaChart>
@@ -741,6 +742,7 @@
 									}
 									return String(v);
 								}}
+								valueFormatter={(v) => `${Number(v).toLocaleString()} queries`}
 							/>
 						{/snippet}
 					</AreaChart>
