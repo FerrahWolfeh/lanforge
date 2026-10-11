@@ -15,6 +15,14 @@
 	import DeviceTable from "./components/DeviceTable.svelte";
 	import DeviceWhoisModal from "./components/DeviceWhoisModal.svelte";
 	import DevicePromoteModal from "./components/DevicePromoteModal.svelte";
+	import MonitorIcon from "@lucide/svelte/icons/monitor";
+	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
+	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+
+	const lanTabs: NavTabItem[] = [
+		{ label: "Discovered Devices", href: "/network/devices", icon: MonitorIcon },
+		{ label: "Static Hosts", href: "/network/hosts", icon: BookmarkIcon },
+	];
 
 	let devices = $state<DeviceEntry[]>([]);
 	let meta = $state<{ total: number; online: number } | null>(null);
@@ -164,6 +172,9 @@
 	<p class="text-muted-foreground text-xs sm:text-sm">
 		Discovered LAN endpoints tracked via ARP, NDP, and DHCP.
 	</p>
+
+	<!-- LAN Inventory Tabs -->
+	<NavTabs tabs={lanTabs} ariaLabel="LAN inventory navigation" />
 
 	<!-- Device Table with integrated DataTableCard -->
 	<DeviceTable

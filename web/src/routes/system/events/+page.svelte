@@ -10,6 +10,16 @@
 	import PauseIcon from "@lucide/svelte/icons/pause";
 	import PlayIcon from "@lucide/svelte/icons/play";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
+	import ServerIcon from "@lucide/svelte/icons/server";
+	import LayersIcon from "@lucide/svelte/icons/layers";
+	import ActivityIcon from "@lucide/svelte/icons/activity";
+	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+
+	const systemTabs: NavTabItem[] = [
+		{ label: "System Status", href: "/system", icon: ServerIcon },
+		{ label: "Services & Daemons", href: "/system/services", icon: LayersIcon },
+		{ label: "Event Stream", href: "/system/events", icon: ActivityIcon },
+	];
 
 	let loading = $state(true);
 	let isLive = $state(true);
@@ -192,6 +202,9 @@
 			</Button>
 		</div>
 	</div>
+
+	<!-- System Diagnostics Sub-Navigation Tabs -->
+	<NavTabs tabs={systemTabs} ariaLabel="System diagnostics navigation" />
 
 	<!-- Stats & Metric Cards -->
 	<EventStatsCards

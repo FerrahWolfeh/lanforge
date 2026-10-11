@@ -36,6 +36,16 @@
 	import DnsDigModal from "./components/DnsDigModal.svelte";
 	import DnsTuningModal from "./components/DnsTuningModal.svelte";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
+	import GlobeIcon from "@lucide/svelte/icons/globe";
+	import DatabaseIcon from "@lucide/svelte/icons/database";
+	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
+	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+
+	const dnsTabs: NavTabItem[] = [
+		{ label: "Resolver & Analytics", href: "/dns/resolver", icon: GlobeIcon },
+		{ label: "Cache Inspection", href: "/dns/cache", icon: DatabaseIcon },
+		{ label: "Custom Rewrites", href: "/dns/rewrites", icon: BookmarkIcon },
+	];
 
 	let statsData = $state<DnsStatsResponse | null>(null);
 	let analyticsData = $state<DnsAnalyticsResponse | null>(null);
@@ -226,6 +236,9 @@
 				</Button>
 			</div>
 		</div>
+
+		<!-- DNS Sub-Navigation Tabs -->
+		<NavTabs tabs={dnsTabs} ariaLabel="DNS system navigation" />
 
 		<!-- 1. Top Summary Metric Cards -->
 		<DnsResolverTopCards {loading} {statsData} {upstreams} />

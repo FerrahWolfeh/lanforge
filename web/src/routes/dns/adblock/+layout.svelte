@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { page } from "$app/state";
 	import ShieldIcon from "@lucide/svelte/icons/shield";
 	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
@@ -20,6 +19,8 @@
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
+	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import DnsAdblockSettingsModal from "./components/DnsAdblockSettingsModal.svelte";
 	import {
 		dnsAdblockStatus,
 		dnsAdblockSet,
@@ -32,28 +33,13 @@
 	let status = $state<DnsAdblockStatusResponse | null>(null);
 	let loadingStatus = $state(true);
 	let reloadingLists = $state(false);
+	let settingsOpen = $state(false);
 
-	const tabs = [
+	const tabs: NavTabItem[] = [
 		{ label: "Overview", href: "/dns/adblock", icon: LayoutDashboardIcon },
 		{ label: "Blocklists", href: "/dns/adblock/lists", icon: ListIcon },
-		{ label: "Custom Rules", href: "/dns/adblock/rules", icon: SlidersIcon },
-		{
-			label: "Blocked Services",
-			href: "/dns/adblock/services",
-			icon: BanIcon,
-		},
-		{
-			label: "Settings",
-			href: "/dns/adblock/settings",
-			icon: SettingsIcon,
-		},
+		{ label: "Filtering Rules", href: "/dns/adblock/rules", icon: SlidersIcon },
 	];
-
-	function isTabActive(href: string) {
-		const p: string = page.url.pathname;
-		if (href === "/dns/adblock") return p === "/dns/adblock" || p === "/dns/adblock/";
-		return p === href || p.startsWith(href + "/");
-	}
 
 	async function fetchStatus() {
 		try {
@@ -256,6 +242,18 @@
 					Update Lists
 				</Button>
 
+				<!-- Settings Dialog Trigger -->
+				<Button
+					variant="outline"
+					size="sm"
+					onclick={() => (settingsOpen = true)}
+					class="gap-1.5 text-xs"
+					title="Configure sinkhole policy, custom IPs, and automated refresh schedule"
+				>
+					<SettingsIcon class="size-3.5" />
+					Settings
+				</Button>
+
 				<!-- Master Toggle Switch -->
 				<div
 					class="flex items-center gap-2 pl-2 border-l border-border/60"
@@ -271,23 +269,13 @@
 	</div>
 
 	<!-- Navigation Tabs -->
-	<nav class="flex items-center gap-1 rounded-lg bg-muted/60 p-1 overflow-x-auto">
-		{#each tabs as tab (tab.href)}
-			<a
-				href={tab.href}
-				class={[
-					"flex items-center gap-2 rounded-md px-3.5 py-1.5 text-sm font-medium transition-colors shrink-0",
-					isTabActive(tab.href)
-						? "bg-background text-foreground shadow-sm font-semibold"
-						: "text-muted-foreground hover:text-foreground hover:bg-background/50",
-				].join(" ")}
-			>
-				<tab.icon class="size-4" />
-				<span>{tab.label}</span>
-			</a>
-		{/each}
-	</nav>
+	<NavTabs {tabs} ariaLabel="Adblock section navigation" />
 
 	<!-- Page Content -->
 	{@render children()}
 </div>
+
+<DnsAdblockSettingsModal
+	bind:open={settingsOpen}
+	onUpdated={fetchStatus}
+/>

@@ -14,6 +14,12 @@
 	import UserTable from "./components/UserTable.svelte";
 	import UserCreateDialog from "./components/UserCreateDialog.svelte";
 	import UserPasswordDialog from "./components/UserPasswordDialog.svelte";
+	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+
+	const accessTabs: NavTabItem[] = [
+		{ label: "Users & Access", href: "/system/users", icon: UsersIcon },
+		{ label: "API & Auth Keys", href: "/system/keys", icon: KeyRoundIcon },
+	];
 
 	let users = $state<UserInfo[]>([]);
 	let isLoading = $state(true);
@@ -65,17 +71,6 @@
 		</div>
 
 		<div class="flex items-center gap-2 self-start sm:self-center">
-			<a href="/system/keys">
-				<Button
-					variant="ghost"
-					size="sm"
-					class="rounded-xl cursor-pointer text-xs"
-				>
-					<KeyRoundIcon data-icon="inline-start" />
-					API Keys
-				</Button>
-			</a>
-
 			<Button
 				variant="outline"
 				size="sm"
@@ -100,6 +95,9 @@
 			</Button>
 		</div>
 	</div>
+
+	<!-- Access Control Sub-Navigation Tabs -->
+	<NavTabs tabs={accessTabs} ariaLabel="Access and authentication navigation" />
 
 	<!-- KPI Summary Cards -->
 	<UserStatsCards {users} {isLoading} />

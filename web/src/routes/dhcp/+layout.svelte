@@ -1,22 +1,18 @@
 <script lang="ts">
-	import { page } from "$app/state";
 	import NetworkIcon from "@lucide/svelte/icons/network";
 	import ServerIcon from "@lucide/svelte/icons/server";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import LayersIcon from "@lucide/svelte/icons/layers";
 
+	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+
 	let { children } = $props();
 
-	const tabs = [
+	const tabs: NavTabItem[] = [
 		{ label: "Active Leases", href: "/dhcp/leases", icon: NetworkIcon },
 		{ label: "Scopes & Pools", href: "/dhcp/pools", icon: LayersIcon },
 		{ label: "Server Options", href: "/dhcp/server", icon: SlidersIcon },
 	];
-
-	function isTabActive(href: string) {
-		const p = page.url.pathname;
-		return p === href || (href !== "/dhcp" && p.startsWith(href));
-	}
 </script>
 
 <div class="flex flex-col gap-6 w-full">
@@ -37,22 +33,7 @@
 		</div>
 
 		<!-- Nav Tabs (Horizontal Scroll on Mobile) -->
-		<nav class="flex items-center gap-1 rounded-lg bg-muted/60 p-1 overflow-x-auto w-full no-scrollbar">
-			{#each tabs as tab (tab.href)}
-				<a
-					href={tab.href}
-					class={[
-						"flex items-center gap-2 rounded-md px-3.5 py-1.5 text-sm font-medium transition-colors shrink-0",
-						isTabActive(tab.href)
-							? "bg-background text-foreground shadow-sm font-semibold"
-							: "text-muted-foreground hover:text-foreground hover:bg-background/50",
-					].join(" ")}
-				>
-					<tab.icon class="size-4" />
-					<span>{tab.label}</span>
-				</a>
-			{/each}
-		</nav>
+		<NavTabs {tabs} ariaLabel="DHCP server navigation" />
 	</div>
 
 	<!-- Tab Content Slot -->

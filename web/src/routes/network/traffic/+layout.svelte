@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { page } from "$app/state";
 	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import GaugeIcon from "@lucide/svelte/icons/gauge";
@@ -12,22 +11,18 @@
 	import { onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
 
+	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+
 	let { children } = $props();
 
 	let status = $state<TrafficStatusResponse | null>(null);
 	let loading = $state(false);
 
-	const tabs = [
+	const tabs: NavTabItem[] = [
 		{ label: "Overview", href: "/network/traffic", icon: ActivityIcon },
 		{ label: "Bufferbloat (CAKE)", href: "/network/traffic/sqm", icon: GaugeIcon },
 		{ label: "Hardware Tuning", href: "/network/traffic/tuning", icon: CpuIcon },
 	];
-
-	function isTabActive(href: string) {
-		const p: string = page.url.pathname;
-		if (href === "/network/traffic") return p === "/network/traffic" || p === "/network/traffic/";
-		return p === href || p.startsWith(href + "/");
-	}
 
 	async function fetchStatus() {
 		loading = true;
@@ -109,23 +104,8 @@
 		</div>
 	</div>
 
-	<!-- Navigation Tabs Bar (Consistent with Adblock layout) -->
-	<nav class="flex items-center gap-1 rounded-lg bg-muted/60 p-1 overflow-x-auto">
-		{#each tabs as tab (tab.href)}
-			<a
-				href={tab.href}
-				class={[
-					"flex items-center gap-2 rounded-md px-3.5 py-1.5 text-sm font-medium transition-colors shrink-0",
-					isTabActive(tab.href)
-						? "bg-background text-foreground shadow-sm font-semibold"
-						: "text-muted-foreground hover:text-foreground hover:bg-background/50",
-				].join(" ")}
-			>
-				<tab.icon class="size-4" />
-				<span>{tab.label}</span>
-			</a>
-		{/each}
-	</nav>
+	<!-- Navigation Tabs Bar -->
+	<NavTabs {tabs} ariaLabel="Traffic & SQM navigation" />
 
 	<!-- Page Content -->
 	{@render children()}

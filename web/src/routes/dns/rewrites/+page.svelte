@@ -8,8 +8,18 @@
 	import FileUpIcon from "@lucide/svelte/icons/file-up";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import AlertTriangleIcon from "@lucide/svelte/icons/alert-triangle";
+	import GlobeIcon from "@lucide/svelte/icons/globe";
+	import DatabaseIcon from "@lucide/svelte/icons/database";
+	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
+	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+
+	const dnsTabs: NavTabItem[] = [
+		{ label: "Resolver & Analytics", href: "/dns/resolver", icon: GlobeIcon },
+		{ label: "Cache Inspection", href: "/dns/cache", icon: DatabaseIcon },
+		{ label: "Custom Rewrites", href: "/dns/rewrites", icon: BookmarkIcon },
+	];
 	import {
 		dnsRewriteList,
 		dnsRewriteAdd,
@@ -193,6 +203,9 @@
 			</Button>
 		</div>
 	</div>
+
+	<!-- DNS Sub-Navigation Tabs -->
+	<NavTabs tabs={dnsTabs} ariaLabel="DNS system navigation" />
 
 	<!-- Top Metric Summary Cards -->
 	<DnsRewriteStatsCards {loading} {rules} />

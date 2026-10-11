@@ -4,9 +4,18 @@
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import DatabaseIcon from "@lucide/svelte/icons/database";
+	import GlobeIcon from "@lucide/svelte/icons/globe";
+	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
 	import AlertTriangleIcon from "@lucide/svelte/icons/alert-triangle";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
+	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+
+	const dnsTabs: NavTabItem[] = [
+		{ label: "Resolver & Analytics", href: "/dns/resolver", icon: GlobeIcon },
+		{ label: "Cache Inspection", href: "/dns/cache", icon: DatabaseIcon },
+		{ label: "Custom Rewrites", href: "/dns/rewrites", icon: BookmarkIcon },
+	];
 	import { createPolling, createDebounce } from "$lib/utils/polling";
 	import {
 		dnsCacheDump,
@@ -170,6 +179,9 @@
 			</Button>
 		</div>
 	</div>
+
+	<!-- DNS Sub-Navigation Tabs -->
+	<NavTabs tabs={dnsTabs} ariaLabel="DNS system navigation" />
 
 	<!-- Top Metric Summary Cards -->
 	<DnsCacheStatsCards {loading} {stats} />

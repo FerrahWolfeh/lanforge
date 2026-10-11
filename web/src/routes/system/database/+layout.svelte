@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { page } from "$app/state";
 	import { onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
 	import { Badge } from "$lib/components/ui/badge";
@@ -14,23 +13,18 @@
 	import WrenchIcon from "@lucide/svelte/icons/wrench";
 	import FileDownIcon from "@lucide/svelte/icons/file-down";
 
+	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
 	import DbStatsCards from "./components/DbStatsCards.svelte";
 	import { dbState, formatBytes, formatTimeAgo } from "./dbState.svelte";
 
 	let { children } = $props();
 
-	const tabs = [
+	const tabs: NavTabItem[] = [
 		{ label: "Inventory", href: "/system/database", icon: LayersIcon },
 		{ label: "Storage Settings", href: "/system/database/settings", icon: SlidersIcon },
 		{ label: "Maintenance", href: "/system/database/maintenance", icon: WrenchIcon },
 		{ label: "Backup & Restore", href: "/system/database/backup", icon: FileDownIcon },
 	];
-
-	function isTabActive(href: string) {
-		const p = page.url.pathname;
-		if (href === "/system/database") return p === "/system/database" || p === "/system/database/";
-		return p === href || p.startsWith(href + "/");
-	}
 
 	onMount(() => {
 		dbState.loadAll();
@@ -144,23 +138,8 @@
 		{formatTimeAgo}
 	/>
 
-	<!-- Scrollable Nav Pillbar (like DNS Adblock) -->
-	<nav class="flex items-center gap-1 rounded-lg bg-muted/60 p-1 overflow-x-auto w-full no-scrollbar">
-		{#each tabs as tab (tab.href)}
-			<a
-				href={tab.href}
-				class={[
-					"flex items-center gap-2 rounded-md px-3.5 py-1.5 text-sm font-medium transition-colors shrink-0",
-					isTabActive(tab.href)
-						? "bg-background text-foreground shadow-sm font-semibold"
-						: "text-muted-foreground hover:text-foreground hover:bg-background/50",
-				].join(" ")}
-			>
-				<tab.icon class="size-4" />
-				<span>{tab.label}</span>
-			</a>
-		{/each}
-	</nav>
+	<!-- Navigation Tabs Bar -->
+	<NavTabs {tabs} ariaLabel="Database storage navigation" />
 
 	<!-- Page Content Slot -->
 	{@render children()}

@@ -23,6 +23,15 @@
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import SearchIcon from "@lucide/svelte/icons/search";
 	import ExternalLinkIcon from "@lucide/svelte/icons/external-link";
+	import ActivityIcon from "@lucide/svelte/icons/activity";
+	import LayersIcon from "@lucide/svelte/icons/layers";
+	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+
+	const systemTabs: NavTabItem[] = [
+		{ label: "System Status", href: "/system", icon: ServerIcon },
+		{ label: "Services & Daemons", href: "/system/services", icon: LayersIcon },
+		{ label: "Event Stream", href: "/system/events", icon: ActivityIcon },
+	];
 	import Loader2Icon from "@lucide/svelte/icons/loader-2";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 	import ShieldIcon from "@lucide/svelte/icons/shield";
@@ -213,6 +222,9 @@
 			</Button>
 		</div>
 	</div>
+
+	<!-- System Diagnostics Sub-Navigation Tabs -->
+	<NavTabs tabs={systemTabs} ariaLabel="System diagnostics navigation" />
 
 	<!-- Top Metric Summary Cards -->
 	<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">

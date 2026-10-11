@@ -15,6 +15,12 @@
 	import TokenValidatorCard from "./components/TokenValidatorCard.svelte";
 	import TokenCreateDialog from "./components/TokenCreateDialog.svelte";
 	import TokenSecretModal from "./components/TokenSecretModal.svelte";
+	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+
+	const accessTabs: NavTabItem[] = [
+		{ label: "Users & Access", href: "/system/users", icon: UsersIcon },
+		{ label: "API & Auth Keys", href: "/system/keys", icon: KeyRoundIcon },
+	];
 
 	let tokens = $state<AuthToken[]>([]);
 	let isLoading = $state(true);
@@ -61,17 +67,6 @@
 		</div>
 
 		<div class="flex items-center gap-2 self-start sm:self-center">
-			<a href="/system/users">
-				<Button
-					variant="ghost"
-					size="sm"
-					class="rounded-xl cursor-pointer text-xs"
-				>
-					<UsersIcon data-icon="inline-start" />
-					Users
-				</Button>
-			</a>
-
 			<Button
 				variant="outline"
 				size="sm"
@@ -96,6 +91,9 @@
 			</Button>
 		</div>
 	</div>
+
+	<!-- Access Control Sub-Navigation Tabs -->
+	<NavTabs tabs={accessTabs} ariaLabel="Access and authentication navigation" />
 
 	<!-- KPI Summary Cards -->
 	<TokenStatsCards {tokens} {isLoading} />

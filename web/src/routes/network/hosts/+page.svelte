@@ -12,6 +12,14 @@
 
 	import HostTable from "./components/HostTable.svelte";
 	import HostDialog from "./components/HostDialog.svelte";
+	import MonitorIcon from "@lucide/svelte/icons/monitor";
+	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
+	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+
+	const lanTabs: NavTabItem[] = [
+		{ label: "Discovered Devices", href: "/network/devices", icon: MonitorIcon },
+		{ label: "Static Hosts", href: "/network/hosts", icon: BookmarkIcon },
+	];
 
 	let hosts = $state<HostConfigEntry[]>([]);
 	let discoveredDevices = $state<DeviceEntry[]>([]);
@@ -117,6 +125,9 @@
 	<p class="text-muted-foreground text-xs sm:text-sm">
 		Fixed IP reservations, DNS name overrides, and interface suffixes.
 	</p>
+
+	<!-- LAN Inventory Tabs -->
+	<NavTabs tabs={lanTabs} ariaLabel="LAN inventory navigation" />
 
 	<!-- Host Table with integrated DataTableCard -->
 	<HostTable
