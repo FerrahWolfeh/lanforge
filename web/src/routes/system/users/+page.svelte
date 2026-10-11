@@ -58,7 +58,7 @@
 	<title>Users & Access — Lanforge</title>
 </svelte:head>
 
-<div class="flex flex-col gap-6 max-w-6xl mx-auto w-full pb-12">
+<div class="flex flex-col gap-6 w-full pb-12">
 	<!-- Top Header -->
 	<PageHeader
 		title="Users & Access"
