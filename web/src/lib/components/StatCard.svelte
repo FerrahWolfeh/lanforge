@@ -119,8 +119,8 @@
 
 <Card.Root
 	class={cn(
-		"relative overflow-hidden transition-all hover:border-zinc-700/80 rounded-xl bg-card border border-border/60 shadow-xs flex flex-col justify-between",
-		href ? "cursor-pointer group" : "",
+		"group relative overflow-hidden transition-all duration-200 hover:border-primary/40 hover:shadow-md rounded-xl bg-card border border-border/60 shadow-xs flex flex-col justify-between",
+		href ? "cursor-pointer" : "",
 		className
 	)}
 >
@@ -151,9 +151,8 @@
 				{:else if Icon}
 					<div
 						class={cn(
-							"flex size-8 items-center justify-center rounded-lg border shrink-0 transition-transform",
-							colorStyles.box,
-							href ? "group-hover:scale-105" : ""
+							"flex size-8 items-center justify-center rounded-lg border shrink-0 transition-transform duration-200 group-hover:scale-105",
+							colorStyles.box
 						)}
 					>
 						<Icon class="size-4" />

@@ -2,8 +2,7 @@
 	import "./layout.css";
 	import favicon from "$lib/assets/favicon.svg";
 	import { page } from "$app/state";
-	import { fly } from "svelte/transition";
-	import { cubicOut } from "svelte/easing";
+	import { onNavigate } from "$app/navigation";
 	import { ModeWatcher } from "mode-watcher";
 	import { Toaster } from "$lib/components/ui/sonner";
 	import { auth } from "$lib/stores/auth.svelte";
@@ -13,11 +12,29 @@
 	import AppSidebar from "$lib/components/AppSidebar.svelte";
 	import Topbar from "$lib/components/Topbar.svelte";
 	import CommandPalette from "$lib/components/CommandPalette.svelte";
+	import NavigationProgressBar from "$lib/components/NavigationProgressBar.svelte";
 	import { commandState } from "$lib/stores/command.svelte";
 	import { createPolling } from "$lib/utils";
 
 	let { children } = $props();
 	let uptime = $state(0);
+	let mainContentEl = $state<HTMLElement | null>(null);
+
+	onNavigate((navigation) => {
+		// Reset scroll position on route changes
+		if (navigation.from?.url.pathname !== navigation.to?.url.pathname) {
+			mainContentEl?.scrollTo({ top: 0, behavior: "instant" });
+		}
+
+		if (!document.startViewTransition) return;
+
+		return new Promise((resolve) => {
+			document.startViewTransition(async () => {
+				resolve();
+				await navigation.complete;
+			});
+		});
+	});
 
 	const isAuthPage = $derived(page.url.pathname === "/login" || page.url.pathname === "/setup");
 
@@ -137,24 +154,22 @@
 		<!-- Main Application Shell (Sidebar Inset Layout) -->
 		<div id="app-shell" class="flex h-screen w-full overflow-hidden bg-sidebar text-sidebar-foreground">
 			<!-- Desktop Sidebar (Permanently mounted and static) -->
-			<div class="hidden lg:flex lg:shrink-0">
+			<div id="app-sidebar" class="hidden lg:flex lg:shrink-0">
 				<AppSidebar />
 			</div>
 
 			<!-- Main Inset Content Area (Floating Elevated Panel Card) -->
 			<div
-				class="flex flex-1 flex-col overflow-hidden min-h-0 lg:my-2.5 lg:mr-2.5 lg:rounded-2xl lg:border lg:border-sidebar-border/80 bg-background text-foreground lg:shadow-xs transition-all duration-300"
+				class="relative flex flex-1 flex-col overflow-hidden min-h-0 lg:my-2.5 lg:mr-2.5 lg:rounded-2xl lg:border lg:border-sidebar-border/80 bg-background text-foreground lg:shadow-xs transition-all duration-300"
 			>
+				<NavigationProgressBar />
 				<Topbar {uptime} />
-				<main class="flex-1 overflow-y-auto p-3 sm:p-6 flex flex-col min-h-0">
-					{#key page.url.pathname}
-						<div
-							in:fly={{ y: 8, duration: 200, easing: cubicOut }}
-							class="page-content-compositor w-full flex-1 flex flex-col min-h-0"
-						>
-							{@render children()}
-						</div>
-					{/key}
+				<main
+					id="page-content"
+					bind:this={mainContentEl}
+					class="page-content-compositor flex-1 overflow-y-auto p-3 sm:p-6 flex flex-col min-h-0"
+				>
+					{@render children()}
 				</main>
 			</div>
 		</div>

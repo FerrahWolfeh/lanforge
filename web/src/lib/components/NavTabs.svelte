@@ -60,15 +60,53 @@
 
 		return currentPath === target || currentPath.startsWith(`${target}/`);
 	}
+	let navEl = $state<HTMLElement | null>(null);
+	let pillStyle = $state({ left: 0, top: 0, width: 0, height: 0, opacity: 0 });
+
+	function updatePill() {
+		if (!navEl) return;
+		const activeEl = navEl.querySelector<HTMLElement>('[aria-current="page"], [aria-selected="true"]');
+		if (activeEl) {
+			pillStyle = {
+				left: activeEl.offsetLeft,
+				top: activeEl.offsetTop,
+				width: activeEl.offsetWidth,
+				height: activeEl.offsetHeight,
+				opacity: 1,
+			};
+		} else {
+			pillStyle = { ...pillStyle, opacity: 0 };
+		}
+	}
+
+	$effect(() => {
+		// Recompute pill position when currentPath, value, or tabs list changes
+		currentPath;
+		value;
+		tabs;
+		const handle = requestAnimationFrame(updatePill);
+		return () => cancelAnimationFrame(handle);
+	});
 </script>
 
+<svelte:window onresize={updatePill} />
+
 <nav
+	bind:this={navEl}
 	class={[
-		"flex items-center gap-1 rounded-xl bg-muted/70 border border-border/70 p-1 overflow-x-auto w-full no-scrollbar shadow-2xs",
+		"relative flex items-center gap-1 rounded-xl bg-muted/70 border border-border/70 p-1 overflow-x-auto w-full no-scrollbar shadow-2xs",
 		className,
 	].join(" ")}
 	aria-label={ariaLabel}
 >
+	<!-- Sliding Active Indicator Pill -->
+	{#if pillStyle.opacity > 0}
+		<div
+			class="pointer-events-none absolute rounded-lg bg-background shadow-xs border border-border/50 transition-all duration-200 ease-out z-0"
+			style="left: {pillStyle.left}px; top: {pillStyle.top}px; width: {pillStyle.width}px; height: {pillStyle.height}px; opacity: {pillStyle.opacity};"
+		></div>
+	{/if}
+
 	{#each tabs as tab (tab.href ?? tab.value ?? tab.label)}
 		{@const active = isTabActive(tab)}
 		{#if tab.href}
@@ -77,15 +115,15 @@
 				title={tab.title ?? tab.label}
 				aria-current={active ? "page" : undefined}
 				class={[
-					"flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs sm:text-sm font-medium transition-all shrink-0 select-none outline-none focus-visible:ring-2 focus-visible:ring-ring",
+					"relative z-10 flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs sm:text-sm font-medium transition-all shrink-0 select-none outline-none focus-visible:ring-2 focus-visible:ring-ring",
 					active
-						? "bg-background text-foreground shadow-xs font-semibold border border-border/50"
-						: "text-muted-foreground hover:text-foreground hover:bg-background/40",
+						? "text-foreground font-semibold"
+						: "text-muted-foreground hover:text-foreground hover:bg-background/30",
 					tab.disabled ? "opacity-50 pointer-events-none cursor-not-allowed" : "",
 				].join(" ")}
 			>
 				{#if tab.icon}
-					<tab.icon class="size-4 shrink-0 {active ? 'text-primary' : 'text-muted-foreground'}" />
+					<tab.icon class="size-4 shrink-0 transition-colors {active ? 'text-primary' : 'text-muted-foreground'}" />
 				{/if}
 				<span>{tab.label}</span>
 				{#if tab.badge !== undefined && tab.badge !== null && tab.badge !== ""}
@@ -111,15 +149,15 @@
 					}
 				}}
 				class={[
-					"flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs sm:text-sm font-medium transition-all shrink-0 select-none cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring",
+					"relative z-10 flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs sm:text-sm font-medium transition-all shrink-0 select-none cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring",
 					active
-						? "bg-background text-foreground shadow-xs font-semibold border border-border/50"
-						: "text-muted-foreground hover:text-foreground hover:bg-background/40",
+						? "text-foreground font-semibold"
+						: "text-muted-foreground hover:text-foreground hover:bg-background/30",
 					tab.disabled ? "opacity-50 pointer-events-none cursor-not-allowed" : "",
 				].join(" ")}
 			>
 				{#if tab.icon}
-					<tab.icon class="size-4 shrink-0 {active ? 'text-primary' : 'text-muted-foreground'}" />
+					<tab.icon class="size-4 shrink-0 transition-colors {active ? 'text-primary' : 'text-muted-foreground'}" />
 				{/if}
 				<span>{tab.label}</span>
 				{#if tab.badge !== undefined && tab.badge !== null && tab.badge !== ""}

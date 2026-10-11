@@ -66,6 +66,7 @@
 </script>
 
 <header
+	id="app-topbar"
 	class="gpu-accelerated sticky top-0 z-30 flex h-16 w-full shrink-0 items-center justify-between border-b border-border/70 bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60 lg:px-6 lg:rounded-t-2xl"
 >
 	<div class="flex items-center gap-3 min-w-0">
@@ -122,14 +123,19 @@
 				<Tooltip.Trigger
 					class="flex items-center gap-2 px-2.5 py-1 rounded-lg hover:bg-accent/60 transition-colors border border-border/40"
 				>
-					<span
-						class={[
-							"size-2 rounded-full transition-all",
-							uptime > 0
-								? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)] animate-pulse"
-								: "bg-zinc-500",
-						].join(" ")}
-					></span>
+					<span class="relative flex size-2 shrink-0">
+						{#if uptime > 0}
+							<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+						{/if}
+						<span
+							class={[
+								"relative inline-flex size-2 rounded-full transition-all",
+								uptime > 0
+									? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.9)]"
+									: "bg-zinc-500",
+							].join(" ")}
+						></span>
+					</span>
 					<span class="text-xs font-medium text-muted-foreground hidden sm:inline">
 						{uptime > 0 ? "Live" : "Offline"}
 					</span>

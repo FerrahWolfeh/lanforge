@@ -194,16 +194,19 @@
 							href={item.href}
 							onclick={onNavigate}
 							title={isCollapsed ? (isDbgOnly ? `${item.title} (Debug: Disabled on daemon)` : item.title) : undefined}
-							class="flex items-center h-10 w-full rounded-xl text-xs font-medium overflow-hidden transition-[background-color,color,box-shadow] duration-150 ease-out transform-gpu will-change-[background-color,color] {active
-								? 'bg-primary text-primary-foreground font-semibold shadow-xs'
+							class="group relative flex items-center h-10 w-full rounded-xl text-xs font-medium overflow-hidden transition-all duration-200 ease-out active:scale-[0.98] transform-gpu {active
+								? 'bg-primary text-primary-foreground font-semibold shadow-xs shadow-primary/20'
 								: 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'}"
 							aria-label={item.title}
 						>
+							{#if active}
+								<span class="absolute left-1 top-2.5 bottom-2.5 w-1 rounded-full bg-primary-foreground/90 transition-all duration-200"></span>
+							{/if}
 							<div class="size-10 shrink-0 flex items-center justify-center">
 								<Icon
-									class="size-4 shrink-0 transition-colors duration-150 ease-out {active
+									class="size-4 shrink-0 transition-transform duration-200 ease-out group-hover:scale-110 {active
 										? 'text-primary-foreground'
-										: 'text-muted-foreground'}"
+										: 'text-muted-foreground group-hover:text-sidebar-accent-foreground'}"
 								/>
 							</div>
 							<span
