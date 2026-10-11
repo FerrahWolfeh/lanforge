@@ -1,9 +1,5 @@
 <script lang="ts">
-	import * as Card from "$lib/components/ui/card";
-	import * as Alert from "$lib/components/ui/alert";
-	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
-	import { Skeleton } from "$lib/components/ui/skeleton";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import ShieldOffIcon from "@lucide/svelte/icons/shield-off";
 	import AlertTriangleIcon from "@lucide/svelte/icons/alert-triangle";
@@ -11,6 +7,9 @@
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
+	import StatCard from "$lib/components/StatCard.svelte";
+	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
+	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 	import type { FirewallStatus } from "$lib/api/types";
 
 	interface Props {
@@ -81,143 +80,91 @@
 	{/if}
 
 	<!-- 4-Card Stats Grid -->
-	<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+	<StatCardGrid cols={4}>
 		<!-- Card 1: Operation Mode -->
-		<Card.Root class="p-4">
-			{#if loading && !status}
-				<div class="flex flex-col gap-2">
-					<Skeleton class="h-4 w-24" />
-					<Skeleton class="h-6 w-32" />
-					<Skeleton class="h-3 w-20" />
-				</div>
-			{:else if status}
-				<div class="flex items-center justify-between">
-					<span class="text-xs font-medium text-muted-foreground">Operation Mode</span>
-					{#if status.mode === "full"}
-						<Badge variant="outline" class="border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px]">
-							Standalone
-						</Badge>
-					{:else if status.mode === "minimal"}
-						<Badge variant="outline" class="border-primary/30 bg-primary/10 text-primary text-[10px]">
-							Coexistence
-						</Badge>
-					{:else}
-						<Badge variant="secondary" class="text-[10px]">
-							Disabled
-						</Badge>
-					{/if}
-				</div>
-				<div class="mt-2 flex items-baseline gap-2">
-					<span class="text-xl font-bold tracking-tight text-foreground capitalize">
-						{status.mode || (status.enabled ? "full" : "disabled")}
-					</span>
-				</div>
-				<p class="mt-1 text-[11px] text-muted-foreground">
-					{#if status.mode === "full"}
-						Authoritative standalone gateway
-					{:else if status.mode === "minimal"}
-						Helper table with system firewall
-					{:else}
-						Kernel nftables unmanaged
-					{/if}
-				</p>
-			{:else}
-				<div class="flex items-center gap-2 text-xs text-muted-foreground">
-					<AlertTriangleIcon class="size-4 text-destructive" />
-					<span>Firewall status unavailable</span>
-				</div>
-			{/if}
-		</Card.Root>
+		<StatCard
+			label="Operation Mode"
+			value={status ? (status.mode === "full" ? "Standalone" : status.mode === "minimal" ? "Coexistence" : "Disabled") : "—"}
+			icon={status?.mode === "full" ? ShieldCheckIcon : ShieldOffIcon}
+			color={status?.mode === "full" ? "emerald" : status?.mode === "minimal" ? "primary" : "zinc"}
+			badge={status ? {
+				text: status.mode === "full" ? "Authoritative" : status.mode === "minimal" ? "Coexistence" : "Disabled",
+				variant: status.mode === "full" ? "online" : status.mode === "minimal" ? "warning" : "dormant",
+				showDot: true
+			} : undefined}
+			subtext={status ? (status.mode === "full" ? "Authoritative standalone gateway" : status.mode === "minimal" ? "Helper table with system firewall" : "Kernel nftables unmanaged") : "Firewall status unavailable"}
+			loading={loading && !status}
+		>
+			{#snippet footer()}
+				<StatCardFooterItem label="Backend" value="nftables" />
+				<StatCardFooterItem
+					label="Engine"
+					value={status?.enabled ? "Active" : "Inactive"}
+					color={status?.enabled ? "text-emerald-500" : "text-muted-foreground"}
+				/>
+			{/snippet}
+		</StatCard>
 
 		<!-- Card 2: Active Rules & Ports -->
-		<Card.Root class="p-4">
-			{#if loading && !status}
-				<div class="flex flex-col gap-2">
-					<Skeleton class="h-4 w-24" />
-					<Skeleton class="h-6 w-32" />
-					<Skeleton class="h-3 w-20" />
-				</div>
-			{:else if status}
-				<div class="flex items-center justify-between">
-					<span class="text-xs font-medium text-muted-foreground">Filtering Rules</span>
-					<ActivityIcon class="size-4 text-muted-foreground" />
-				</div>
-				<div class="mt-2 flex items-baseline gap-2">
-					<span class="text-xl font-bold tracking-tight text-foreground font-mono">
-						{status.rules_count}
-					</span>
-					<span class="text-xs text-muted-foreground font-mono">
-						/ {status.open_ports_count} open ports
-					</span>
-				</div>
-				<p class="mt-1 text-[11px] text-muted-foreground">
-					{status.default_drop_active ? "Default Drop policy active" : "Default Accept policy"}
-				</p>
-			{:else}
-				<div class="flex items-center gap-2 text-xs text-muted-foreground">
-					<AlertTriangleIcon class="size-4 text-destructive" />
-					<span>Rules unavailable</span>
-				</div>
-			{/if}
-		</Card.Root>
+		<StatCard
+			label="Filtering Rules"
+			value={status ? status.rules_count : "—"}
+			icon={LayersIcon}
+			color="sky"
+			subtext={status ? (status.default_drop_active ? "Default Drop policy active" : "Default Accept policy") : "Rules unavailable"}
+			loading={loading && !status}
+		>
+			{#snippet footer()}
+				<StatCardFooterItem label="Open Ports" value={status ? status.open_ports_count : "—"} />
+				<StatCardFooterItem
+					label="Default Policy"
+					value={status ? (status.default_drop_active ? "DROP" : "ACCEPT") : "—"}
+					color={status?.default_drop_active ? "text-emerald-500" : "text-amber-500"}
+				/>
+			{/snippet}
+		</StatCard>
 
 		<!-- Card 3: Flowtable Offload -->
-		<Card.Root class="p-4">
-			{#if loading && !status}
-				<div class="flex flex-col gap-2">
-					<Skeleton class="h-4 w-24" />
-					<Skeleton class="h-6 w-32" />
-					<Skeleton class="h-3 w-20" />
-				</div>
-			{:else if status}
-				<div class="flex items-center justify-between">
-					<span class="text-xs font-medium text-muted-foreground">Flowtable Offload</span>
-					<ZapIcon class="size-4 {status.flow_offload_active ? 'text-amber-500' : 'text-muted-foreground'}" />
-				</div>
-				<div class="mt-2 flex items-baseline gap-2">
-					<span class="text-xl font-bold tracking-tight text-foreground">
-						{status.flow_offload_active ? "Accelerated" : "Disabled"}
-					</span>
-				</div>
-				<p class="mt-1 text-[11px] text-muted-foreground">
-					{status.flow_offload_active ? "Line-rate kernel fast-path bypass" : "Standard routing stack traversal"}
-				</p>
-			{:else}
-				<div class="flex items-center gap-2 text-xs text-muted-foreground">
-					<AlertTriangleIcon class="size-4 text-destructive" />
-					<span>Offload status unavailable</span>
-				</div>
-			{/if}
-		</Card.Root>
+		<StatCard
+			label="Flowtable Offload"
+			value={status ? (status.flow_offload_active ? "Accelerated" : "Disabled") : "—"}
+			icon={ZapIcon}
+			color={status?.flow_offload_active ? "amber" : "zinc"}
+			badge={status ? {
+				text: status.flow_offload_active ? "Hardware / Fast-Path" : "Disabled",
+				variant: status.flow_offload_active ? "online" : "dormant",
+				showDot: true
+			} : undefined}
+			subtext={status ? (status.flow_offload_active ? "Line-rate fast-path bypass" : "Standard routing stack traversal") : "Offload status unavailable"}
+			loading={loading && !status}
+		>
+			{#snippet footer()}
+				<StatCardFooterItem
+					label="Fast-Path"
+					value={status?.flow_offload_active ? "Enabled" : "Disabled"}
+					color={status?.flow_offload_active ? "text-amber-500" : "text-muted-foreground"}
+				/>
+				<StatCardFooterItem label="Bypass" value="L3 / L4 Netlink" />
+			{/snippet}
+		</StatCard>
 
 		<!-- Card 4: Dataplane & Runtime -->
-		<Card.Root class="p-4">
-			{#if loading && !status}
-				<div class="flex flex-col gap-2">
-					<Skeleton class="h-4 w-24" />
-					<Skeleton class="h-6 w-32" />
-					<Skeleton class="h-3 w-20" />
-				</div>
-			{:else if status}
-				<div class="flex items-center justify-between">
-					<span class="text-xs font-medium text-muted-foreground">Dataplane Status</span>
-					<CpuIcon class="size-4 text-muted-foreground" />
-				</div>
-				<div class="mt-2 flex items-baseline gap-2">
-					<span class="text-xl font-bold tracking-tight text-foreground">
-						{status.enabled ? "Active" : "Inactive"}
-					</span>
-					<span class="text-[10px] text-muted-foreground font-mono">nftables</span>
-				</div>
-				<p class="mt-1 text-[11px] text-muted-foreground">
-					Last applied: {formatSecsAgo(status.last_applied_secs_ago)}
-				</p>
-			{:else}
-				<div class="flex items-center gap-2 text-xs text-muted-foreground">
-					<AlertTriangleIcon class="size-4 text-destructive" />
-					<span>Dataplane unavailable</span>
-				</div>
-			{/if}
-		</Card.Root>
-	</div>
+		<StatCard
+			label="Dataplane Status"
+			value={status ? (status.enabled ? "Active" : "Inactive") : "—"}
+			icon={CpuIcon}
+			color={status?.enabled ? "emerald" : "zinc"}
+			subtext={status ? `Last applied: ${formatSecsAgo(status.last_applied_secs_ago)}` : "Dataplane unavailable"}
+			loading={loading && !status}
+		>
+			{#snippet footer()}
+				<StatCardFooterItem label="Last Sync" value={status ? formatSecsAgo(status.last_applied_secs_ago) : "—"} />
+				<StatCardFooterItem
+					label="Transaction"
+					value={activeTxId ? "In Flight" : "Committed"}
+					color={activeTxId ? "text-amber-500" : "text-emerald-500"}
+				/>
+			{/snippet}
+		</StatCard>
+	</StatCardGrid>
 </div>

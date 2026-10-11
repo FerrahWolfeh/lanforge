@@ -10,6 +10,7 @@
 	import { onMount, onDestroy } from "svelte";
 	import { dnsQueryLog, dnsLogSseUrl, dnsStats, dnsRewriteAdd } from "$lib/api/client";
 	import type { DnsQueryLogEntry, DnsStatsResponse, RewriteRule } from "$lib/api/types";
+	import PageHeader from "$lib/components/PageHeader.svelte";
 
 	// Child components
 	import DnsLogStatsCards from "./components/DnsLogStatsCards.svelte";
@@ -228,18 +229,12 @@
 
 <div class="space-y-6">
 	<!-- Top Action Bar -->
-	<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-		<div>
-			<h1 class="text-2xl font-bold tracking-tight flex items-center gap-2">
-				<ListFilterIcon class="size-6 text-primary" />
-				DNS Query Log
-			</h1>
-			<p class="text-sm text-muted-foreground">
-				Network resolution telemetry, live packet stream, and client query audit trail.
-			</p>
-		</div>
-
-		<div class="flex items-center gap-2">
+	<PageHeader
+		title="DNS Query Log"
+		description="Network resolution telemetry, live packet stream, and client query audit trail."
+		icon={ListFilterIcon}
+	>
+		{#snippet actions()}
 			<Button
 				variant="outline"
 				size="sm"
@@ -258,8 +253,8 @@
 				/>
 				Refresh
 			</Button>
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
 	<!-- Top Metric Summary Cards -->
 	<DnsLogStatsCards

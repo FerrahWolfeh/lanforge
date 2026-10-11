@@ -1,12 +1,12 @@
 <script lang="ts">
-	import * as Card from "$lib/components/ui/card";
-	import { Skeleton } from "$lib/components/ui/skeleton";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import ZapIcon from "@lucide/svelte/icons/zap";
 	import ShieldIcon from "@lucide/svelte/icons/shield";
 	import ServerIcon from "@lucide/svelte/icons/server";
-	import DatabaseIcon from "@lucide/svelte/icons/database";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
+	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
+	import StatCard from "$lib/components/StatCard.svelte";
+	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 	import type { DnsStatsResponse, DnsUpstreamEntry } from "$lib/api/types";
 
 	let {
@@ -23,14 +23,17 @@
 		if (!statsData) return 0;
 		const cacheTotal = statsData.cache_hits + (statsData.cache_misses ?? 0);
 		if (cacheTotal === 0) return 0;
-		return Math.round(
-			(statsData.cache_hits / cacheTotal) * 100,
-		);
+		return Math.round((statsData.cache_hits / cacheTotal) * 100);
 	});
 
 	const cacheMissesCount = $derived.by(() => {
 		if (!statsData) return 0;
 		return statsData.cache_misses ?? 0;
+	});
+
+	const blockPct = $derived.by(() => {
+		if (!statsData || statsData.total_requests === 0) return "0.0%";
+		return `${((statsData.blocked_queries / statsData.total_requests) * 100).toFixed(1)}%`;
 	});
 
 	const upstreamStats = $derived.by(() => {
@@ -40,6 +43,8 @@
 			return {
 				display: "2 / 2",
 				subtitle: "System default resolvers (1.1.1.1, 8.8.8.8)",
+				healthy: 2,
+				total: 2,
 			};
 		}
 		const healthy = list.filter(
@@ -51,160 +56,127 @@
 		return {
 			display: `${healthy} / ${total}`,
 			subtitle: `${healthy} of ${total} upstreams operational`,
+			healthy,
+			total,
 		};
 	});
 </script>
 
-<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-	<!-- Total Processed Queries -->
-	<Card.Root
-		class="relative overflow-hidden transition-all hover:border-zinc-700"
+<StatCardGrid cols={4}>
+	<!-- Card 1: Total DNS Queries -->
+	<StatCard
+		label="Total DNS Queries"
+		value={statsData ? statsData.total_requests.toLocaleString() : null}
+		subtext="Lifetime queries processed"
+		icon={ActivityIcon}
+		color="sky"
+		{loading}
+		popover={{
+			title: "DNS Query Engine",
+			description: "Total recursive, authoritative, and cached queries handled across UDP and TCP port 53.",
+		}}
+		badge={{
+			text: "Port 53",
+			variant: "sky",
+		}}
 	>
-		<Card.Content class="flex flex-col gap-3 p-5">
-			<div class="flex items-center justify-between">
-				<span
-					class="text-muted-foreground text-xs font-semibold uppercase tracking-wider"
-				>
-					Total DNS Queries
-				</span>
-				<div
-					class="flex size-8 items-center justify-center rounded-lg border bg-sky-500/10 border-sky-500/20"
-				>
-					<ActivityIcon class="size-4 text-sky-400" />
-				</div>
-			</div>
-			{#if loading || !statsData}
-				<Skeleton class="h-8 w-28" />
-				<Skeleton class="h-3.5 w-36" />
-			{:else}
-				<div class="flex flex-col gap-0.5">
-					<span
-						class="text-foreground text-3xl font-bold tabular-nums tracking-tight"
-					>
-						{statsData.total_requests.toLocaleString()}
-					</span>
-					<span class="text-muted-foreground text-xs font-medium">
-						Lifetime queries processed
-					</span>
-				</div>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+		{#snippet footer()}
+			<StatCardFooterItem
+				label="Cache Hits"
+				value={statsData?.cache_hits?.toLocaleString() ?? "—"}
+				color="text-emerald-400"
+			/>
+			<StatCardFooterItem
+				label="Upstream Resolves"
+				value={(statsData?.recursions ?? cacheMissesCount).toLocaleString()}
+			/>
+		{/snippet}
+	</StatCard>
 
-	<!-- Cache Hit Ratio -->
-	<Card.Root
-		class="relative overflow-hidden transition-all hover:border-zinc-700"
+	<!-- Card 2: Cache Hit Ratio -->
+	<StatCard
+		label="Cache Hit Ratio"
+		value={`${cacheHitPct}%`}
+		subtext={`${statsData?.cache_hits.toLocaleString() ?? 0} hits / ${cacheMissesCount.toLocaleString()} misses`}
+		icon={ZapIcon}
+		color="emerald"
+		{loading}
+		popover={{
+			title: "Zero-Latency Memory Cache",
+			description: "Queries resolved directly from memory without forwarding to upstream DNS resolvers.",
+		}}
+		badge={{
+			text: cacheHitPct >= 70 ? "Optimal" : "Active",
+			variant: "online",
+		}}
 	>
-		<Card.Content class="flex flex-col gap-3 p-5">
-			<div class="flex items-center justify-between">
-				<span
-					class="text-muted-foreground text-xs font-semibold uppercase tracking-wider"
+		{#snippet footer()}
+			<StatCardFooterItem
+				label="Hits"
+				value={statsData?.cache_hits?.toLocaleString() ?? "—"}
+				color="text-emerald-400"
+			/>
+			<div class="flex flex-col gap-0.5 min-w-0">
+				<span class="text-[11px] text-muted-foreground truncate">Inspection</span>
+				<a
+					href="/dns/cache"
+					class="text-[11px] text-primary hover:underline font-medium flex items-center gap-0.5 truncate"
 				>
-					Cache Hit Ratio
-				</span>
-				<div
-					class="flex size-8 items-center justify-center rounded-lg border bg-emerald-500/10 border-emerald-500/20"
-				>
-					<ZapIcon class="size-4 text-emerald-400" />
-				</div>
+					<span>Cache Table</span>
+					<ArrowRightIcon class="size-3 shrink-0" />
+				</a>
 			</div>
-			{#if loading || !statsData}
-				<Skeleton class="h-8 w-28" />
-				<Skeleton class="h-3.5 w-20" />
-			{:else}
-				<div class="flex flex-col gap-1">
-					<span
-						class="text-emerald-400 text-3xl font-bold tabular-nums tracking-tight"
-					>
-						{cacheHitPct}%
-					</span>
-					<div class="flex items-center justify-between gap-1 text-xs">
-						<span class="text-muted-foreground text-xs font-medium truncate">
-							{statsData.cache_hits.toLocaleString()} hits / {cacheMissesCount.toLocaleString()} misses
-						</span>
-						<a
-							href="/dns/cache"
-							class="text-[11px] text-primary hover:underline font-medium flex items-center gap-0.5 shrink-0"
-						>
-							<span>Cache Table</span>
-							<ArrowRightIcon class="size-3" />
-						</a>
-					</div>
-				</div>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+		{/snippet}
+	</StatCard>
 
-	<!-- Blocked Queries -->
-	<Card.Root
-		class="relative overflow-hidden transition-all hover:border-zinc-700"
+	<!-- Card 3: Blocked Queries -->
+	<StatCard
+		label="Blocked Queries"
+		value={statsData ? statsData.blocked_queries.toLocaleString() : null}
+		subtext="Lifetime adblock & rule matches"
+		icon={ShieldIcon}
+		color="rose"
+		{loading}
+		popover={{
+			title: "DNS Domain Filtering",
+			description: "Adware, tracking, telemetry, and custom rewrite domains blocked with NXDOMAIN or 0.0.0.0.",
+		}}
+		badge={{
+			text: `${blockPct} Block Rate`,
+			variant: "error",
+		}}
 	>
-		<Card.Content class="flex flex-col gap-3 p-5">
-			<div class="flex items-center justify-between">
-				<span
-					class="text-muted-foreground text-xs font-semibold uppercase tracking-wider"
-				>
-					Blocked Queries
-				</span>
-				<div
-					class="flex size-8 items-center justify-center rounded-lg border bg-rose-500/10 border-rose-500/20"
-				>
-					<ShieldIcon class="size-4 text-rose-400" />
-				</div>
-			</div>
-			{#if loading || !statsData}
-				<Skeleton class="h-8 w-28" />
-				<Skeleton class="h-3.5 w-20" />
-			{:else}
-				<div class="flex flex-col gap-0.5">
-					<span
-						class="text-rose-400 text-3xl font-bold tabular-nums tracking-tight"
-					>
-						{statsData.blocked_queries.toLocaleString()}
-					</span>
-					<span class="text-muted-foreground text-xs font-medium">
-						Lifetime adblock &amp; rule matches
-					</span>
-				</div>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+		{#snippet footer()}
+			<StatCardFooterItem label="Block Rate" value={blockPct} color="text-rose-400" />
+			<StatCardFooterItem label="Filtering Mode" value="Zero-Copy FST" />
+		{/snippet}
+	</StatCard>
 
-	<!-- Upstream Health -->
-	<Card.Root
-		class="relative overflow-hidden transition-all hover:border-zinc-700"
+	<!-- Card 4: Upstreams Active -->
+	<StatCard
+		label="Upstreams Active"
+		value={upstreamStats.display}
+		subtext={upstreamStats.subtitle}
+		icon={ServerIcon}
+		color="indigo"
+		{loading}
+		popover={{
+			title: "Upstream Resolvers",
+			description: "Health-checked recursive resolvers configured for WAN domain resolution.",
+		}}
+		badge={{
+			text: upstreamStats.healthy === upstreamStats.total ? "All Operational" : "Degraded",
+			variant: upstreamStats.healthy === upstreamStats.total ? "online" : "warning",
+			showDot: true,
+		}}
 	>
-		<Card.Content class="flex flex-col gap-3 p-5">
-			<div class="flex items-center justify-between">
-				<span
-					class="text-muted-foreground text-xs font-semibold uppercase tracking-wider"
-				>
-					Upstreams Active
-				</span>
-				<div
-					class="flex size-8 items-center justify-center rounded-lg border bg-indigo-500/10 border-indigo-500/20"
-				>
-					<ServerIcon class="size-4 text-indigo-400" />
-				</div>
-			</div>
-			{#if loading}
-				<Skeleton class="h-8 w-20" />
-				<Skeleton class="h-3.5 w-28" />
-			{:else}
-				<div class="flex flex-col gap-0.5">
-					<span
-						class="text-indigo-400 text-3xl font-bold tabular-nums tracking-tight"
-					>
-						{upstreamStats.display}
-					</span>
-					<span
-						class="text-muted-foreground text-xs font-medium truncate"
-						title={upstreamStats.subtitle}
-					>
-						{upstreamStats.subtitle}
-					</span>
-				</div>
-			{/if}
-		</Card.Content>
-	</Card.Root>
-</div>
+		{#snippet footer()}
+			<StatCardFooterItem
+				label="Operational"
+				value={`${upstreamStats.healthy} / ${upstreamStats.total}`}
+				color="text-emerald-400"
+			/>
+			<StatCardFooterItem label="Failover" value="Concurrent" />
+		{/snippet}
+	</StatCard>
+</StatCardGrid>

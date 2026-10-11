@@ -1,9 +1,11 @@
 <script lang="ts">
-	import * as Card from "$lib/components/ui/card";
 	import NetworkIcon from "@lucide/svelte/icons/network";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import ClockIcon from "@lucide/svelte/icons/clock";
+	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
+	import StatCard from "$lib/components/StatCard.svelte";
+	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 	import type { RaStatusResponse } from "$lib/api/types";
 
 	let {
@@ -43,121 +45,101 @@
 	}
 </script>
 
-<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
+<StatCardGrid cols={4}>
 	<!-- Card 1: Operational Interface -->
-	<Card.Root>
-		<Card.Header class="pb-2 p-3 sm:p-4">
-			<Card.Description class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
-				<span>Interface</span>
-				<NetworkIcon class="size-4 text-muted-foreground" />
-			</Card.Description>
-			<Card.Title class="text-base font-bold font-mono">
-				{status?.interface ?? "Not bound"}
-			</Card.Title>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-1.5 text-xs text-muted-foreground pt-0 p-3 sm:p-4">
-			<div class="flex justify-between items-center">
-				<span class="text-[11px]">Service State:</span>
-				<div class="flex items-center gap-1.5">
-					{#if status?.enabled}
-						<span class="size-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-						<span class="font-medium text-emerald-600 dark:text-emerald-400">Announcing</span>
-					{:else}
-						<span class="size-1.5 rounded-full bg-muted-foreground/40"></span>
-						<span class="font-medium text-muted-foreground">Idle</span>
-					{/if}
-				</div>
-			</div>
-			<div class="flex flex-col gap-0.5 border-t pt-1.5">
-				<span class="text-[10px] text-muted-foreground">Link-Local:</span>
-				<span class="font-mono text-[11px] text-foreground font-medium select-all truncate" title={status?.link_local ?? "—"}>
-					{status?.link_local ?? "—"}
-				</span>
-			</div>
-		</Card.Content>
-	</Card.Root>
+	<StatCard
+		label="Interface"
+		value={status?.interface ?? "Not bound"}
+		subtext={status?.enabled ? "Announcing autonomous SLAAC routes" : "Daemon idle or unbound"}
+		icon={NetworkIcon}
+		color="indigo"
+		popover={{
+			title: "IPv6 Router Advertisements",
+			description: "Periodic multicast ICMPv6 router advertisements (RFC 4861) sent to ff02::1.",
+		}}
+		badge={{
+			text: status?.enabled ? "Announcing" : "Idle",
+			variant: status?.enabled ? "online" : "dormant",
+			showDot: true,
+			pulse: true,
+		}}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Link-Local" value={status?.link_local ?? "—"} />
+			<StatCardFooterItem label="State" value={status?.enabled ? "Active" : "Stopped"} color={status?.enabled ? "text-emerald-400" : "text-zinc-500"} />
+		{/snippet}
+	</StatCard>
 
-	<!-- Card 2: Prefixes State -->
-	<Card.Root>
-		<Card.Header class="pb-2 p-3 sm:p-4">
-			<Card.Description class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
-				<span>Prefix Subnets</span>
-				<GlobeIcon class="size-4 text-muted-foreground" />
-			</Card.Description>
-			<Card.Title class="text-base font-bold font-mono">
-				{(status?.prefixes ?? []).length} Announced
-			</Card.Title>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-1.5 text-xs text-muted-foreground pt-0 p-3 sm:p-4">
-			<div class="flex justify-between items-center">
-				<span class="text-[11px]">GUA Delegated:</span>
-				<span class="font-mono text-[11px] text-foreground font-medium select-all truncate max-w-[160px]" title={status?.active_gua_prefix ?? "—"}>
-					{status?.active_gua_prefix ?? "None"}
-				</span>
-			</div>
-			<div class="flex justify-between items-center border-t pt-1.5">
-				<span class="text-[11px]">Active ULA:</span>
-				<span class="font-mono text-[11px] text-foreground font-medium select-all truncate max-w-[160px]" title={status?.active_ula_prefix ?? "—"}>
-					{status?.active_ula_prefix ?? "None"}
-				</span>
-			</div>
-		</Card.Content>
-	</Card.Root>
+	<!-- Card 2: Prefix Subnets -->
+	<StatCard
+		label="Prefix Subnets"
+		value={`${(status?.prefixes ?? []).length} Announced`}
+		subtext="SLAAC autoconfiguration prefixes"
+		icon={GlobeIcon}
+		color="emerald"
+		popover={{
+			title: "Announced IPv6 Prefixes",
+			description: "GUA and ULA prefixes advertised for stateless client address generation.",
+		}}
+		badge={{
+			text: status?.active_gua_prefix ? "GUA / ULA" : "Prefix Scope",
+			variant: "online",
+		}}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="GUA Delegated" value={status?.active_gua_prefix ?? "None"} color="text-emerald-400" />
+			<StatCardFooterItem label="Active ULA" value={status?.active_ula_prefix ?? "None"} />
+		{/snippet}
+	</StatCard>
 
 	<!-- Card 3: Packet Telemetry -->
-	<Card.Root>
-		<Card.Header class="pb-2 p-3 sm:p-4">
-			<Card.Description class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
-				<span>Packet Telemetry</span>
-				<ActivityIcon class="size-4 text-muted-foreground" />
-			</Card.Description>
-			<Card.Title class="text-base font-bold font-mono flex items-center gap-2">
-				<span>{(status?.sent_multicast_ras ?? 0) + (status?.sent_unicast_ras ?? 0)}</span>
-				<span class="text-xs font-normal text-muted-foreground">Total RAs</span>
-			</Card.Title>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-1 text-xs text-muted-foreground pt-0 p-3 sm:p-4">
-			<div class="flex justify-between items-center">
-				<span>Multicast / Unicast:</span>
-				<span class="font-mono font-medium text-foreground">
-					{status?.sent_multicast_ras ?? 0} / {status?.sent_unicast_ras ?? 0}
-				</span>
-			</div>
-			<div class="flex justify-between items-center">
-				<span>RS Solicitations:</span>
-				<span class="font-mono font-medium text-foreground">
-					{status?.received_solicitations ?? 0}
-					{#if (status?.ignored_solicitations ?? 0) > 0}
-						<span class="text-amber-500 font-normal">({status?.ignored_solicitations} drop)</span>
-					{/if}
-				</span>
-			</div>
-		</Card.Content>
-	</Card.Root>
+	<StatCard
+		label="Packet Telemetry"
+		value={(status?.sent_multicast_ras ?? 0) + (status?.sent_unicast_ras ?? 0)}
+		subtext="Total ICMPv6 RAs transmitted"
+		icon={ActivityIcon}
+		color="sky"
+		popover={{
+			title: "ICMPv6 Telemetry",
+			description: "Counts of periodic unsolicited multicast RAs and unicast replies to client router solicitations (RS).",
+		}}
+		badge={{
+			text: "ICMPv6",
+			variant: "sky",
+		}}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem
+				label="Multi / Unicast"
+				value={`${status?.sent_multicast_ras ?? 0} / ${status?.sent_unicast_ras ?? 0}`}
+			/>
+			<StatCardFooterItem
+				label="RS Solicitations"
+				value={status?.received_solicitations ?? 0}
+				color="text-sky-400"
+			/>
+		{/snippet}
+	</StatCard>
 
 	<!-- Card 4: Timing & Schedule -->
-	<Card.Root>
-		<Card.Header class="pb-2 p-3 sm:p-4">
-			<Card.Description class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider">
-				<span>Convergence</span>
-				<ClockIcon class="size-4 text-muted-foreground" />
-			</Card.Description>
-			<Card.Title class="text-base font-bold flex items-center gap-2">
-				<span class="text-primary font-mono">{formatCountdown(status?.next_ra_in_secs)}</span>
-				<span class="text-xs font-normal text-muted-foreground">Next RA</span>
-			</Card.Title>
-		</Card.Header>
-		<Card.Content class="flex flex-col gap-1 text-xs text-muted-foreground pt-0 p-3 sm:p-4">
-			<div class="flex justify-between items-center">
-				<span>Last Sent / Recv:</span>
-				<span class="text-foreground text-[11px] truncate">
-					{formatSeconds(status?.last_ra_sent_secs_ago)} / {formatSeconds(status?.last_rs_received_secs_ago)}
-				</span>
-			</div>
-			<div class="flex justify-between items-center">
-				<span>Service Uptime:</span>
-				<span class="text-foreground">{formatUptime(status?.uptime_secs)}</span>
-			</div>
-		</Card.Content>
-	</Card.Root>
-</div>
+	<StatCard
+		label="Convergence"
+		value={formatCountdown(status?.next_ra_in_secs)}
+		subtext={`Last sent ${formatSeconds(status?.last_ra_sent_secs_ago)}`}
+		icon={ClockIcon}
+		color="amber"
+		popover={{
+			title: "Cadence & Intervals",
+			description: "Randomized timer scheduling between MinRtrAdvInterval and MaxRtrAdvInterval.",
+		}}
+		badge={{
+			text: "Scheduled",
+			variant: "warning",
+		}}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Uptime" value={formatUptime(status?.uptime_secs)} />
+			<StatCardFooterItem label="Last RS Recv" value={formatSeconds(status?.last_rs_received_secs_ago)} />
+		{/snippet}
+	</StatCard>
+</StatCardGrid>

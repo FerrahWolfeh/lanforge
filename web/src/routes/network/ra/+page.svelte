@@ -28,6 +28,8 @@
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import ZapIcon from "@lucide/svelte/icons/zap";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
+	import PageHeader from "$lib/components/PageHeader.svelte";
+	import StatusBadge from "$lib/components/StatusBadge.svelte";
 
 	import RaStatsCards from "./components/RaStatsCards.svelte";
 	import RaStatusTab from "./components/RaStatusTab.svelte";
@@ -242,36 +244,19 @@
 
 <div class="flex flex-col gap-6 w-full">
 	<!-- Page Header -->
-	<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-		<div class="flex flex-col gap-1">
-			<div class="flex items-center gap-2">
-				<RadioIcon class="size-6 text-primary" />
-				<h1 class="text-2xl font-bold tracking-tight">
-					IPv6 Router Advertisement
-				</h1>
-				{#if status?.enabled}
-					<Badge
-						variant="outline"
-						class="bg-emerald-500/10 text-emerald-600 border-emerald-500/20 font-medium"
-					>
-						<span class="relative flex size-2 mr-1.5">
-							<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-							<span class="relative inline-flex rounded-full size-2 bg-emerald-500"></span>
-						</span>
-						Active
-					</Badge>
-				{:else}
-					<Badge variant="secondary" class="text-muted-foreground">
-						Idle / Disabled
-					</Badge>
-				{/if}
-			</div>
-			<p class="text-xs sm:text-sm text-muted-foreground">
-				Autonomous SLAAC orchestration, RFC 4861/8106 ICMPv6 telemetry, and runtime parameters.
-			</p>
-		</div>
-
-		<div class="flex items-center gap-2">
+	<PageHeader
+		title="IPv6 Router Advertisement"
+		description="Autonomous SLAAC orchestration, RFC 4861/8106 ICMPv6 telemetry, and runtime parameters."
+		icon={RadioIcon}
+	>
+		{#snippet badge()}
+			{#if status?.enabled}
+				<StatusBadge variant="online" showDot={true} pulse={true} text="Active" />
+			{:else}
+				<StatusBadge variant="dormant" text="Idle / Disabled" />
+			{/if}
+		{/snippet}
+		{#snippet actions()}
 			<Button
 				variant="outline"
 				size="sm"
@@ -292,8 +277,8 @@
 				<ZapIcon class="size-3.5 {triggering ? 'animate-pulse' : ''}" />
 				<span>Trigger Burst</span>
 			</Button>
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
 	{#if capabilitiesState.isLoaded && !capabilitiesState.isActualEnabled("ra")}
 		<div class="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-900 dark:text-amber-200 flex items-start gap-3">

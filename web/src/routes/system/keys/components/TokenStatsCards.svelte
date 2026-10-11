@@ -1,10 +1,11 @@
 <script lang="ts">
-	import * as Card from "$lib/components/ui/card";
-	import { Skeleton } from "$lib/components/ui/skeleton";
 	import KeyIcon from "@lucide/svelte/icons/key";
 	import CheckCircle2Icon from "@lucide/svelte/icons/check-circle-2";
 	import ClockIcon from "@lucide/svelte/icons/clock";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
+	import StatCard from "$lib/components/StatCard.svelte";
+	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
+	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 	import type { AuthToken } from "$lib/api/types";
 
 	let {
@@ -28,76 +29,93 @@
 	const adminCount = $derived(tokens.filter((t) => t.scopes.includes("admin")).length);
 </script>
 
-<div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+<StatCardGrid cols={4}>
 	<!-- Total Tokens -->
-	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
-		<Card.Header class="pb-2">
-			<Card.Description class="text-xs font-medium">Total Keys</Card.Description>
-			<Card.Title class="text-2xl font-bold text-foreground">
-				{#if isLoading}
-					<Skeleton class="h-8 w-12 rounded-lg" />
-				{:else}
-					{totalCount}
-				{/if}
-			</Card.Title>
-		</Card.Header>
-		<Card.Content class="pt-0 text-[11px] text-muted-foreground flex items-center gap-1.5">
-			<KeyIcon class="size-3.5 text-primary" />
-			<span>Registered database tokens</span>
-		</Card.Content>
-	</Card.Root>
+	<StatCard
+		label="Total Keys"
+		value={totalCount}
+		icon={KeyIcon}
+		color="primary"
+		subtext="Registered database tokens"
+		loading={isLoading}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Storage" value="Embedded redb" />
+			<StatCardFooterItem label="Scheme" value="Bearer Token" />
+		{/snippet}
+	</StatCard>
 
 	<!-- Active Tokens -->
-	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
-		<Card.Header class="pb-2">
-			<Card.Description class="text-xs font-medium">Active Tokens</Card.Description>
-			<Card.Title class="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
-				{#if isLoading}
-					<Skeleton class="h-8 w-12 rounded-lg" />
-				{:else}
-					{activeCount}
-				{/if}
-			</Card.Title>
-		</Card.Header>
-		<Card.Content class="pt-0 text-[11px] text-muted-foreground flex items-center gap-1.5">
-			<CheckCircle2Icon class="size-3.5 text-emerald-500" />
-			<span>Within validity period</span>
-		</Card.Content>
-	</Card.Root>
+	<StatCard
+		label="Active Tokens"
+		value={activeCount}
+		icon={CheckCircle2Icon}
+		color="emerald"
+		badge={{
+			text: "Valid",
+			variant: "online",
+			showDot: true
+		}}
+		subtext="Within validity period"
+		loading={isLoading}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem
+				label="Validation"
+				value="Passing"
+				color="text-emerald-500"
+			/>
+			<StatCardFooterItem
+				label="Active Ratio"
+				value={`${Math.round((activeCount / (totalCount || 1)) * 100)}%`}
+			/>
+		{/snippet}
+	</StatCard>
 
 	<!-- Expired Tokens -->
-	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
-		<Card.Header class="pb-2">
-			<Card.Description class="text-xs font-medium">Expired Tokens</Card.Description>
-			<Card.Title class="text-2xl font-bold {expiredCount > 0 ? 'text-amber-500' : 'text-muted-foreground'}">
-				{#if isLoading}
-					<Skeleton class="h-8 w-12 rounded-lg" />
-				{:else}
-					{expiredCount}
-				{/if}
-			</Card.Title>
-		</Card.Header>
-		<Card.Content class="pt-0 text-[11px] text-muted-foreground flex items-center gap-1.5">
-			<ClockIcon class="size-3.5 text-amber-500" />
-			<span>Require renewal</span>
-		</Card.Content>
-	</Card.Root>
+	<StatCard
+		label="Expired Tokens"
+		value={expiredCount}
+		icon={ClockIcon}
+		color={expiredCount > 0 ? "amber" : "zinc"}
+		badge={expiredCount > 0 ? {
+			text: "Expired",
+			variant: "warning",
+			showDot: true
+		} : {
+			text: "0 Expired",
+			variant: "online",
+			showDot: true
+		}}
+		subtext={expiredCount > 0 ? "Require renewal or removal" : "All tokens within validity window"}
+		loading={isLoading}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem
+				label="Expired"
+				value={expiredCount}
+				color={expiredCount > 0 ? "text-amber-500" : "text-muted-foreground"}
+			/>
+			<StatCardFooterItem
+				label="Action"
+				value={expiredCount > 0 ? "Needs Review" : "Healthy"}
+				color={expiredCount > 0 ? "text-amber-500" : "text-emerald-500"}
+			/>
+		{/snippet}
+	</StatCard>
 
 	<!-- Admin Scope -->
-	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
-		<Card.Header class="pb-2">
-			<Card.Description class="text-xs font-medium">Admin Scope</Card.Description>
-			<Card.Title class="text-2xl font-bold text-foreground">
-				{#if isLoading}
-					<Skeleton class="h-8 w-12 rounded-lg" />
-				{:else}
-					{adminCount}
-				{/if}
-			</Card.Title>
-		</Card.Header>
-		<Card.Content class="pt-0 text-[11px] text-muted-foreground flex items-center gap-1.5">
-			<ShieldCheckIcon class="size-3.5 text-primary" />
-			<span>Full permission scope</span>
-		</Card.Content>
-	</Card.Root>
-</div>
+	<StatCard
+		label="Admin Privilege"
+		value={adminCount}
+		icon={ShieldCheckIcon}
+		color="violet"
+		subtext="Full administrative scope"
+		loading={isLoading}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Security Level" value="Root / Admin" />
+			<StatCardFooterItem label="Scopes" value={`${adminCount} admin`} />
+		{/snippet}
+	</StatCard>
+</StatCardGrid>

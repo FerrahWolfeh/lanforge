@@ -15,6 +15,7 @@
 	import UserCreateDialog from "./components/UserCreateDialog.svelte";
 	import UserPasswordDialog from "./components/UserPasswordDialog.svelte";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import PageHeader from "$lib/components/PageHeader.svelte";
 
 	const accessTabs: NavTabItem[] = [
 		{ label: "Users & Access", href: "/system/users", icon: UsersIcon },
@@ -59,18 +60,12 @@
 
 <div class="flex flex-col gap-6 max-w-6xl mx-auto w-full pb-12">
 	<!-- Top Header -->
-	<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-		<div class="flex flex-col gap-1">
-			<h1 class="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2.5">
-				<UsersIcon class="size-6 text-primary" />
-				Users & Access
-			</h1>
-			<p class="text-xs text-muted-foreground">
-				Manage local user accounts for web authentication and permission controls in Lanforge.
-			</p>
-		</div>
-
-		<div class="flex items-center gap-2 self-start sm:self-center">
+	<PageHeader
+		title="Users & Access"
+		description="Manage local user accounts for web authentication and permission controls in Lanforge."
+		icon={UsersIcon}
+	>
+		{#snippet actions()}
 			<Button
 				variant="outline"
 				size="sm"
@@ -93,8 +88,8 @@
 				<UserPlusIcon data-icon="inline-start" />
 				New User
 			</Button>
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
 	<!-- Access Control Sub-Navigation Tabs -->
 	<NavTabs tabs={accessTabs} ariaLabel="Access and authentication navigation" />

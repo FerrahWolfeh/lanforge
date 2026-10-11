@@ -14,7 +14,14 @@
 	import HostDialog from "./components/HostDialog.svelte";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
 	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
+	import NetworkIcon from "@lucide/svelte/icons/network";
+	import GlobeIcon from "@lucide/svelte/icons/globe";
+	import TagIcon from "@lucide/svelte/icons/tag";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import PageHeader from "$lib/components/PageHeader.svelte";
+	import StatCard from "$lib/components/StatCard.svelte";
+	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
+	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 
 	const lanTabs: NavTabItem[] = [
 		{ label: "Discovered Devices", href: "/network/devices", icon: MonitorIcon },
@@ -114,6 +121,10 @@
 		reader.readAsText(file);
 		target.value = "";
 	}
+
+	const v4Count = $derived(hosts.filter((h) => h.v4 || h.v4_fixed).length);
+	const v6SuffixCount = $derived(hosts.filter((h) => h.v6_suffix).length);
+	const hostnameCount = $derived(hosts.filter((h) => h.hostname).length);
 </script>
 
 <svelte:head>
@@ -121,13 +132,79 @@
 </svelte:head>
 
 <div class="flex flex-col gap-5">
-	<!-- Page Description Toolbar -->
-	<p class="text-muted-foreground text-xs sm:text-sm">
-		Fixed IP reservations, DNS name overrides, and interface suffixes.
-	</p>
+	<!-- Page Header -->
+	<PageHeader
+		title="Static Hosts & Reservations"
+		description="Fixed IP reservations, DNS name overrides, and predictable interface suffixes."
+		icon={BookmarkIcon}
+	/>
 
 	<!-- LAN Inventory Tabs -->
 	<NavTabs tabs={lanTabs} ariaLabel="LAN inventory navigation" />
+
+	<!-- Vitals Cards Grid -->
+	<StatCardGrid cols={4}>
+		<StatCard
+			label="Static Reservations"
+			value={hosts.length}
+			subtext="Pinned MAC-to-IP/hostname rules"
+			icon={BookmarkIcon}
+			color="emerald"
+			{loading}
+			badge={{
+				text: "Static Leases",
+				variant: "online",
+				showDot: true,
+			}}
+		>
+			{#snippet footer()}
+				<StatCardFooterItem label="Allocation" value="Deterministic" />
+				<StatCardFooterItem label="Persistence" value="Saved to redb" color="text-emerald-400" />
+			{/snippet}
+		</StatCard>
+
+		<StatCard
+			label="IPv4 Pinned Leases"
+			value={v4Count}
+			subtext="Fixed IPv4 assignments"
+			icon={NetworkIcon}
+			color="sky"
+			{loading}
+		>
+			{#snippet footer()}
+				<StatCardFooterItem label="DHCP Pool" value="Excluded" />
+				<StatCardFooterItem label="Lease Window" value="Infinite" />
+			{/snippet}
+		</StatCard>
+
+		<StatCard
+			label="IPv6 Suffix Overrides"
+			value={v6SuffixCount}
+			subtext="Configured IID tokens"
+			icon={GlobeIcon}
+			color="indigo"
+			{loading}
+		>
+			{#snippet footer()}
+				<StatCardFooterItem label="Prefix Extension" value="Dynamic" />
+				<StatCardFooterItem label="Token Strategy" value="Stateless SLAAC" />
+			{/snippet}
+		</StatCard>
+
+		<StatCard
+			label="DNS Hostname Aliases"
+			value={hostnameCount}
+			subtext="Custom local domain mappings"
+			icon={TagIcon}
+			color="amber"
+			{loading}
+		>
+			{#snippet footer()}
+				<StatCardFooterItem label="Resolution" value="Authoritative" />
+				<StatCardFooterItem label="Reverse PTR" value="Synthesized" />
+			{/snippet}
+		</StatCard>
+	</StatCardGrid>
 
 	<!-- Host Table with integrated DataTableCard -->
 	<HostTable

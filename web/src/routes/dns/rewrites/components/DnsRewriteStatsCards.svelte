@@ -1,10 +1,11 @@
 <script lang="ts">
-	import * as Card from "$lib/components/ui/card";
-	import { Skeleton } from "$lib/components/ui/skeleton";
 	import ArrowRightLeftIcon from "@lucide/svelte/icons/arrow-right-left";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import LaptopIcon from "@lucide/svelte/icons/laptop";
 	import ServerIcon from "@lucide/svelte/icons/server";
+	import StatCard from "$lib/components/StatCard.svelte";
+	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
+	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 	import { type RewriteRule, formatRewriteAnswer } from "$lib/api/types";
 
 	let {
@@ -18,16 +19,15 @@
 	const totalCount = $derived(rules.length);
 
 	const deviceCount = $derived(
-		rules.filter((r) => formatRewriteAnswer(r.answer).startsWith("dev:"))
-			.length,
+		rules.filter((r) => formatRewriteAnswer(r.answer).startsWith("dev:")).length
 	);
 
 	const srvCount = $derived(
 		rules.filter(
 			(r) =>
 				r.rtype === "SRV" ||
-				formatRewriteAnswer(r.answer).startsWith("srv:"),
-		).length,
+				formatRewriteAnswer(r.answer).startsWith("srv:")
+		).length
 	);
 
 	const staticCount = $derived(
@@ -38,113 +38,73 @@
 				!ans.startsWith("srv:") &&
 				r.rtype !== "SRV"
 			);
-		}).length,
+		}).length
 	);
 </script>
 
-<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-	<!-- Total Active Rewrites -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header
-			class="flex flex-row items-center justify-between pb-2 space-y-0"
-		>
-			<Card.Title class="text-sm font-medium">Total Rewrites</Card.Title>
-			<ArrowRightLeftIcon class="h-4 w-4 text-muted-foreground" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading}
-				<Skeleton class="h-8 w-24 mb-1" />
-				<Skeleton class="h-3 w-32" />
-			{:else}
-				<div class="text-2xl font-bold">
-					{totalCount.toLocaleString()}
-				</div>
-				<p class="text-xs text-muted-foreground mt-1">
-					Active DNS response overrides
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+<StatCardGrid cols={4}>
+	<!-- Card 1: Total Active Rewrites -->
+	<StatCard
+		label="Total Rewrites"
+		value={totalCount}
+		icon={ArrowRightLeftIcon}
+		color="emerald"
+		subtext="Active DNS response overrides"
+		{loading}
+		badge={{
+			text: "Ruleset",
+			variant: "online",
+			showDot: true
+		}}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Override Scope" value="Authoritative" />
+			<StatCardFooterItem label="Execution" value="Zero-RTT Cache" />
+		{/snippet}
+	</StatCard>
 
-	<!-- Static Overrides -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header
-			class="flex flex-row items-center justify-between pb-2 space-y-0"
-		>
-			<Card.Title class="text-sm font-medium">Static Overrides</Card.Title
-			>
-			<GlobeIcon class="h-4 w-4 text-muted-foreground" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading}
-				<Skeleton class="h-8 w-20 mb-1" />
-				<Skeleton class="h-3 w-28" />
-			{:else}
-				<div class="text-2xl font-bold">
-					{staticCount.toLocaleString()}
-				</div>
-				<p class="text-xs text-muted-foreground mt-1">
-					Standard A / AAAA / CNAME targets
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+	<!-- Card 2: Static Overrides -->
+	<StatCard
+		label="Static Overrides"
+		value={staticCount}
+		icon={GlobeIcon}
+		color="sky"
+		subtext="Standard A / AAAA / CNAME targets"
+		{loading}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Record Types" value="A / AAAA / TXT" />
+			<StatCardFooterItem label="Wildcards" value="Supported" />
+		{/snippet}
+	</StatCard>
 
-	<!-- Dynamic Device Bindings -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header
-			class="flex flex-row items-center justify-between pb-2 space-y-0"
-		>
-			<Card.Title class="text-sm font-medium">Device Bindings</Card.Title>
-			<LaptopIcon class="h-4 w-4 text-blue-500" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading}
-				<Skeleton class="h-8 w-20 mb-1" />
-				<Skeleton class="h-3 w-28" />
-			{:else}
-				<div
-					class="text-2xl font-bold text-blue-600 dark:text-blue-400"
-				>
-					{deviceCount.toLocaleString()}
-				</div>
-				<p class="text-xs text-muted-foreground mt-1">
-					Dynamic <code
-						class="font-mono text-[11px] bg-muted px-1 rounded"
-						>dev:</code
-					> targets
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+	<!-- Card 3: Dynamic Device Bindings -->
+	<StatCard
+		label="Device Bindings"
+		value={deviceCount}
+		icon={LaptopIcon}
+		color="indigo"
+		subtext="Dynamic dev: host bindings"
+		{loading}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Binding Target" value="LAN Inventory" />
+			<StatCardFooterItem label="Sync Mode" value="Live IP Tracking" />
+		{/snippet}
+	</StatCard>
 
-	<!-- SRV Service Records -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header
-			class="flex flex-row items-center justify-between pb-2 space-y-0"
-		>
-			<Card.Title class="text-sm font-medium"
-				>SRV Service Rules</Card.Title
-			>
-			<ServerIcon class="h-4 w-4 text-amber-500" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading}
-				<Skeleton class="h-8 w-20 mb-1" />
-				<Skeleton class="h-3 w-28" />
-			{:else}
-				<div
-					class="text-2xl font-bold text-amber-600 dark:text-amber-400"
-				>
-					{srvCount.toLocaleString()}
-				</div>
-				<p class="text-xs text-muted-foreground mt-1">
-					Dynamic <code
-						class="font-mono text-[11px] bg-muted px-1 rounded"
-						>srv:</code
-					> service mappings
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
-</div>
+	<!-- Card 4: SRV Service Records -->
+	<StatCard
+		label="SRV Service Rules"
+		value={srvCount}
+		icon={ServerIcon}
+		color="amber"
+		subtext="Dynamic srv: service mappings"
+		{loading}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Discovery" value="RFC 2782 SRV" />
+			<StatCardFooterItem label="Routing" value="Port & Priority" />
+		{/snippet}
+	</StatCard>
+</StatCardGrid>

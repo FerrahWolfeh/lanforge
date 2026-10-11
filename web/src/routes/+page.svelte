@@ -25,6 +25,10 @@
 	} from "$lib/api/types";
 	import Sparkline from "$lib/components/ui/sparkline.svelte";
 	import TrafficActivityChart from "$lib/components/TrafficActivityChart.svelte";
+	import PageHeader from "$lib/components/PageHeader.svelte";
+	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
+	import StatCard from "$lib/components/StatCard.svelte";
+	import StatusDot from "$lib/components/StatusDot.svelte";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
@@ -227,20 +231,20 @@
 				? `${onlineDevicesCount} online on LAN`
 				: "LAN host activity",
 			icon: WifiIcon,
-			color: "text-emerald-400",
-			bgColor: "bg-emerald-500/10 border-emerald-500/20",
+			color: "emerald" as const,
 			sparklineData: devicesSparkline,
 			sparklineColor: "#10b981",
+			href: "/network/devices",
 		},
 		{
 			label: "DHCP Leases",
 			value: leasesData ? leasesData.length.toString() : null,
 			subtext: "Active IPv4/v6 leases",
 			icon: NetworkIcon,
-			color: "text-teal-400",
-			bgColor: "bg-teal-500/10 border-teal-500/20",
+			color: "teal" as const,
 			sparklineData: leasesSparkline,
 			sparklineColor: "#14b8a6",
+			href: "/dhcp/leases",
 		},
 		{
 			label: "DNS Queries",
@@ -249,10 +253,10 @@
 				? `${dnsData.cache_hits.toLocaleString()} cache hits`
 				: "Total requests",
 			icon: GlobeIcon,
-			color: "text-sky-400",
-			bgColor: "bg-sky-500/10 border-sky-500/20",
+			color: "sky" as const,
 			sparklineData: dnsSparkline,
 			sparklineColor: "#0ea5e9",
+			href: "/dns/resolver",
 		},
 		{
 			label: "Network Traffic",
@@ -263,10 +267,10 @@
 				? `${formatBps(totalRxBps)} ↓ • ${formatBps(totalTxBps)} ↑`
 				: "Aggregate throughput",
 			icon: ActivityIcon,
-			color: "text-indigo-400",
-			bgColor: "bg-indigo-500/10 border-indigo-500/20",
+			color: "indigo" as const,
 			sparklineData: trafficSparkline,
 			sparklineColor: "#6366f1",
+			href: "/network/traffic",
 		},
 		{
 			label: "Firewall Conntrack",
@@ -277,10 +281,10 @@
 				? `${conntrack.utilization_percent.toFixed(1)}% session capacity`
 				: "Active stateful sessions",
 			icon: ShieldCheckIcon,
-			color: "text-violet-400",
-			bgColor: "bg-violet-500/10 border-violet-500/20",
+			color: "violet" as const,
 			sparklineData: conntrackSparkline,
 			sparklineColor: "#8b5cf6",
+			href: "/firewall",
 		},
 	]);
 
@@ -296,15 +300,6 @@
 
 	function getBanner(id: string, name: string): ServiceBanner | undefined {
 		return bannersMap.get(id.toLowerCase()) ?? bannersMap.get(name.toLowerCase());
-	}
-
-	function getStatusDotColor(banner?: ServiceBanner) {
-		if (!banner) return "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]";
-		const s = banner.state.toLowerCase();
-		if (s === "online" || s === "active") return "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]";
-		if (s === "starting") return "bg-amber-500 animate-pulse";
-		if (s === "inactive" || s === "offline") return "bg-zinc-500";
-		return "bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.8)]";
 	}
 
 	const subsystemServices = [
@@ -373,18 +368,12 @@
 
 <div class="flex flex-col gap-5 sm:gap-6">
 	<!-- Page Header -->
-	<div
-		class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+	<PageHeader
+		title="Router Dashboard"
+		description="Network status, DHCP leases, DNS activity, and connected devices"
+		icon={MonitorIcon}
 	>
-		<div>
-			<h1 class="text-foreground text-xl sm:text-2xl font-bold tracking-tight">
-				Router Dashboard
-			</h1>
-			<p class="text-muted-foreground text-xs sm:text-sm mt-0.5">
-				Network status, DHCP leases, DNS activity, and connected devices
-			</p>
-		</div>
-		<div class="flex items-center gap-2">
+		{#snippet actions()}
 			<Button
 				variant="outline"
 				size="sm"
@@ -409,61 +398,24 @@
 				{/if}
 				Scan Network
 			</Button>
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
 	<!-- Top Stat Cards (Core Router Metrics) -->
-	<div class="grid grid-cols-1 gap-3 sm:gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+	<StatCardGrid cols={5}>
 		{#each statCards as card (card.label)}
-			<Card.Root
-				class="relative overflow-hidden transition-all hover:border-zinc-700"
-			>
-				<Card.Content class="flex flex-col gap-2.5 p-4 sm:p-5">
-					<div class="flex items-center justify-between">
-						<span
-							class="text-muted-foreground text-xs font-semibold uppercase tracking-wider"
-						>
-							{card.label}
-						</span>
-						<div
-							class={[
-								"flex size-8 items-center justify-center rounded-lg border",
-								card.bgColor,
-							].join(" ")}
-						>
-							<card.icon
-								class={["size-4", card.color].join(" ")}
-							/>
-						</div>
-					</div>
-
-					{#if loadingData || card.value === null}
-						<Skeleton class="h-8 w-28" />
-						<Skeleton class="h-3.5 w-20" />
-						<Skeleton class="h-7 w-full mt-2" />
-					{:else}
-						<div class="flex flex-col gap-0.5">
-							<span
-								class="text-foreground text-2xl sm:text-3xl font-bold tabular-nums tracking-tight truncate"
-								title={card.value}
-							>
-								{card.value}
-							</span>
-							<span
-								class="text-muted-foreground text-xs font-medium truncate"
-								title={card.subtext}
-							>
-								{card.subtext}
-							</span>
-						</div>
-						<div class="mt-2 pt-1 border-t border-border/40">
-							<Sparkline data={card.sparklineData} color={card.sparklineColor} height={28} />
-						</div>
-					{/if}
-				</Card.Content>
-			</Card.Root>
+			<StatCard
+				label={card.label}
+				value={card.value}
+				subtext={card.subtext}
+				icon={card.icon}
+				color={card.color}
+				href={card.href}
+				sparkline={{ data: card.sparklineData, color: card.sparklineColor, height: 28 }}
+				loading={loadingData || card.value === null}
+			/>
 		{/each}
-	</div>
+	</StatCardGrid>
 
 	<!-- Gateway Network Activity Hero Chart -->
 	<TrafficActivityChart
@@ -509,7 +461,6 @@
 			<Card.Content class="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
 				{#each subsystemServices as svc (svc.name)}
 					{@const banner = getBanner(svc.id, svc.name)}
-					{@const dotClass = getStatusDotColor(banner)}
 					<a
 						href={svc.href}
 						class="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/20 p-4 transition-all hover:bg-muted/40 hover:border-zinc-700 group"
@@ -522,7 +473,7 @@
 								{#if banner}
 									<span class="text-muted-foreground text-[10px] capitalize font-mono">{banner.state}</span>
 								{/if}
-								<span class="size-2 rounded-full {dotClass}"></span>
+								<StatusDot state={banner?.state ?? "online"} size="sm" />
 							</div>
 						</div>
 

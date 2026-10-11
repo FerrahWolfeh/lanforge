@@ -14,6 +14,8 @@
 	import FileDownIcon from "@lucide/svelte/icons/file-down";
 
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import PageHeader from "$lib/components/PageHeader.svelte";
+	import StatusBadge from "$lib/components/StatusBadge.svelte";
 	import DbStatsCards from "./components/DbStatsCards.svelte";
 	import { dbState, formatBytes, formatTimeAgo } from "./dbState.svelte";
 
@@ -43,72 +45,46 @@
 
 <div class="flex flex-col gap-6 w-full">
 	<!-- Page Header -->
-	<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-		<div class="flex items-center gap-3">
-			<div class="flex size-11 items-center justify-center rounded-2xl bg-primary/10 text-primary shrink-0">
-				<DatabaseIcon class="size-6" />
-			</div>
-			<div class="flex flex-col gap-1">
-				<div class="flex flex-wrap items-center gap-2.5">
-					<h1 class="text-2xl font-bold tracking-tight">Database & Persistence</h1>
-					{#if dbState.loading && !dbState.systemStatus}
-						<Skeleton class="h-5 w-28 rounded-full" />
-					{:else if dbState.isInMemory}
-						<div class="flex items-center gap-1.5">
-							<Badge
-								variant="outline"
-								class="border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400 font-medium text-xs gap-1.5"
-							>
-								<AlertTriangleIcon class="size-3" />
-								Volatile / In-Memory
-							</Badge>
-							<HelpPopover
-								title="Volatile Storage Mode"
-								description="Running in-memory without redb. All runtime state is kept in process memory and resets when Lanforge restarts."
-							>
-								{#snippet children()}
-									<div class="flex flex-col gap-2 text-xs">
-										<p class="text-muted-foreground leading-relaxed">
-											To persist leases, hosts, and DNS rules across restarts, switch to a permanent path (e.g. <code class="font-mono text-foreground font-semibold">/var/lib/lanforge/lanforge.redb</code>) in Storage Settings.
-										</p>
-										<div class="flex gap-2 pt-1">
-											<Button variant="outline" size="sm" class="flex-1 text-xs h-7" href="/system/database/settings">
-												Settings
-											</Button>
-											<Button variant="outline" size="sm" class="flex-1 text-xs h-7" href="/system/database/backup">
-												Backups
-											</Button>
-										</div>
-									</div>
-								{/snippet}
-							</HelpPopover>
+	<PageHeader
+		title="Database & Persistence"
+		description="Storage engine health, persistent inventory, background flushes, and configuration management."
+		icon={DatabaseIcon}
+	>
+		{#snippet badge()}
+			{#if dbState.loading && !dbState.systemStatus}
+				<Skeleton class="h-5 w-28 rounded-full" />
+			{:else if dbState.isInMemory}
+				<StatusBadge variant="warning" text="Volatile / In-Memory" showDot />
+				<HelpPopover
+					title="Volatile Storage Mode"
+					description="Running in-memory without redb. All runtime state is kept in process memory and resets when Lanforge restarts."
+				>
+					{#snippet children()}
+						<div class="flex flex-col gap-2 text-xs">
+							<p class="text-muted-foreground leading-relaxed">
+								To persist leases, hosts, and DNS rules across restarts, switch to a permanent path (e.g. <code class="font-mono text-foreground font-semibold">/var/lib/lanforge/lanforge.redb</code>) in Storage Settings.
+							</p>
+							<div class="flex gap-2 pt-1">
+								<Button variant="outline" size="sm" class="flex-1 text-xs h-7" href="/system/database/settings">
+									Settings
+								</Button>
+								<Button variant="outline" size="sm" class="flex-1 text-xs h-7" href="/system/database/backup">
+									Backups
+								</Button>
+							</div>
 						</div>
-					{:else}
-						<div class="flex items-center gap-1.5">
-							<Badge
-								variant="outline"
-								class="border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium text-xs"
-							>
-								<span class="relative flex size-2 mr-1.5">
-									<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-									<span class="relative inline-flex rounded-full size-2 bg-emerald-500"></span>
-								</span>
-								redb (Connected)
-							</Badge>
-							<HelpPopover
-								title="Persistent Storage Engine"
-								description="Using an embedded redb database on disk. Leases, reservations, and configuration are persisted across reboots."
-							/>
-						</div>
-					{/if}
-				</div>
-				<p class="text-sm text-muted-foreground">
-					Storage engine health, persistent inventory, background flushes, and configuration management.
-				</p>
-			</div>
-		</div>
+					{/snippet}
+				</HelpPopover>
+			{:else}
+				<StatusBadge variant="online" text="redb (Connected)" showDot />
+				<HelpPopover
+					title="Persistent Storage Engine"
+					description="Using an embedded redb database on disk. Leases, reservations, and configuration are persisted across reboots."
+				/>
+			{/if}
+		{/snippet}
 
-		<div class="flex flex-wrap items-center gap-2">
+		{#snippet actions()}
 			<Button
 				variant="outline"
 				size="sm"
@@ -122,8 +98,8 @@
 				/>
 				Refresh
 			</Button>
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
 	<!-- Top 4 High-Density Metric Cards -->
 	<DbStatsCards

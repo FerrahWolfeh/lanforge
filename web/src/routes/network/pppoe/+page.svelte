@@ -38,6 +38,8 @@
 	import PppoeTimersTab from "./components/PppoeTimersTab.svelte";
 	import PppoeEbpfModal from "./components/PppoeEbpfModal.svelte";
 	import FloatingSaveBar from "$lib/components/FloatingSaveBar.svelte";
+	import PageHeader from "$lib/components/PageHeader.svelte";
+	import StatusBadge from "$lib/components/StatusBadge.svelte";
 
 	// Page state
 	let status = $state<PppoeStatusResponse | null>(null);
@@ -258,99 +260,89 @@
 
 <div class="flex flex-col gap-6 w-full">
 	<!-- Page Header -->
-	<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-		<div class="flex items-center gap-3.5">
-			<div class="flex size-11 items-center justify-center rounded-2xl bg-primary/10 text-primary shrink-0">
-				<PlugZapIcon class="size-6" />
-			</div>
-			<div class="flex flex-col gap-1">
-				<div class="flex flex-wrap items-center gap-2.5">
-					<h1 class="text-2xl font-bold tracking-tight">PPPoE WAN Concentrator</h1>
-					{#if status?.state === "connected"}
-						<Badge
-							variant="outline"
-							class="border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium text-xs"
-						>
-							<span class="relative flex size-2 mr-1.5">
-								<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-								<span class="relative inline-flex rounded-full size-2 bg-emerald-500"></span>
-							</span>
-							Connected
-						</Badge>
-					{:else if status?.state === "reconnecting"}
-						<Badge
-							variant="outline"
-							class="border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400 font-medium text-xs"
-						>
-							<RefreshCwIcon class="size-3 mr-1 animate-spin" />
-							Reconnecting
-						</Badge>
-					{:else if status?.state === "authenticating"}
-						<Badge
-							variant="outline"
-							class="border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400 font-medium text-xs"
-						>
-							<KeyIcon class="size-3 mr-1 animate-pulse" />
-							Authenticating
-						</Badge>
-					{:else}
-						<Badge variant="secondary" class="text-muted-foreground text-xs font-medium">
-							Disconnected
-						</Badge>
-					{/if}
-				</div>
-				<p class="text-sm text-muted-foreground">
-					Carrier broadband link orchestration, credentials, MSS clamping, and eBPF Fast-Path.
-				</p>
-			</div>
-		</div>
+	<PageHeader
+		title="PPPoE WAN Concentrator"
+		description="Carrier broadband link orchestration, credentials, MSS clamping, and eBPF Fast-Path."
+		icon={PlugZapIcon}
+	>
+		{#snippet badge()}
+			{#if status?.state === "connected"}
+				<StatusBadge
+					variant="online"
+					showDot={true}
+					pulse={true}
+					text="Connected"
+				/>
+			{:else if status?.state === "reconnecting"}
+				<StatusBadge
+					variant="starting"
+					showDot={true}
+					pulse={true}
+					text="Reconnecting"
+				/>
+			{:else if status?.state === "authenticating"}
+				<StatusBadge
+					variant="warning"
+					showDot={true}
+					pulse={true}
+					text="Authenticating"
+				/>
+			{:else}
+				<StatusBadge
+					variant="dormant"
+					text="Disconnected"
+				/>
+			{/if}
+		{/snippet}
 
-		<div class="flex flex-wrap items-center gap-2">
+		{#snippet actions()}
 			<Button
 				variant="outline"
 				size="sm"
 				onclick={() => loadAll()}
 				disabled={loading}
-				class="transition-transform duration-150 active:scale-95 transform-gpu"
+				class="h-8 text-xs gap-1.5 transition-transform duration-150 active:scale-95 transform-gpu"
 			>
 				<RefreshCwIcon class={loading ? "animate-spin size-3.5" : "size-3.5"} data-icon="inline-start" />
-				Refresh
+				<span>Refresh</span>
 			</Button>
+
 			<Button
 				variant={status?.state === "connected" ? "outline" : "default"}
 				size="sm"
 				onclick={handleConnectOrReconnect}
 				disabled={reconnecting || loading}
-				class="transition-transform duration-150 active:scale-95 transform-gpu shadow-sm"
+				class="h-8 text-xs gap-1.5 transition-transform duration-150 active:scale-95 transform-gpu shadow-sm"
 			>
 				{#if reconnecting}
 					<RefreshCwIcon class="animate-spin size-3.5" data-icon="inline-start" />
-					Connecting...
+					<span>Connecting...</span>
 				{:else if status?.state === "connected"}
 					<RefreshCwIcon class="size-3.5" data-icon="inline-start" />
-					Reconnect
+					<span>Reconnect</span>
 				{:else}
 					<PlayIcon class="size-3.5" data-icon="inline-start" />
-					Connect
+					<span>Connect</span>
 				{/if}
 			</Button>
+
 			<Button
 				variant="destructive"
 				size="sm"
 				onclick={handleDisconnect}
 				disabled={disconnecting || loading || status?.state === "disconnected"}
-				class="transition-transform duration-150 active:scale-95 transform-gpu"
+				class="h-8 text-xs gap-1.5 transition-transform duration-150 active:scale-95 transform-gpu"
 			>
 				{#if disconnecting}
 					<RefreshCwIcon class="animate-spin size-3.5" data-icon="inline-start" />
-					Disconnecting...
+					<span>Disconnecting...</span>
 				{:else}
 					<XCircleIcon class="size-3.5" data-icon="inline-start" />
-					Disconnect
+					<span>Disconnect</span>
 				{/if}
 			</Button>
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
 	<!-- Top Stats Overview Grid -->
 	<PppoeStatsCards

@@ -7,6 +7,9 @@
 	import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
 	import { toast } from "svelte-sonner";
 	import HelpPopover from "$lib/components/HelpPopover.svelte";
+	import HardDriveDownloadIcon from "@lucide/svelte/icons/hard-drive-download";
+	import PageHeader from "$lib/components/PageHeader.svelte";
+	import StatusBadge from "$lib/components/StatusBadge.svelte";
 
 	import TftpVitalsCards from "./components/TftpVitalsCards.svelte";
 	import TftpServerCard from "./components/TftpServerCard.svelte";
@@ -236,51 +239,45 @@
 
 <div class="flex flex-col gap-6">
 	<!-- Page Header -->
-	<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-		<div>
-			<div class="flex items-center gap-2.5">
-				<h1 class="text-foreground text-2xl font-bold tracking-tight">
-					TFTP Server & Netboot
-				</h1>
-				<Badge
-					variant={isServiceActive ? "default" : "secondary"}
-					class="font-mono text-[10px] uppercase tracking-wider"
-				>
-					{serviceState}
-				</Badge>
-				<HelpPopover
-					title="TFTP Netboot Setup"
-					description="TFTP (Trivial File Transfer Protocol) server for PXE/UEFI network boot and automated operating system provisioning."
-				>
-					{#snippet children()}
-						<div class="flex flex-col gap-2.5 text-xs text-muted-foreground">
-							<div class="flex flex-col gap-0.5 border-l-2 border-primary/50 pl-2">
-								<span class="font-semibold text-foreground">1. Root Directory</span>
-								<span>Copy kernels or bootloaders (e.g. <code class="text-foreground">ipxe.efi</code>) to <code class="text-foreground">{rootDir}</code>.</span>
-							</div>
-							<div class="flex flex-col gap-0.5 border-l-2 border-primary/50 pl-2">
-								<span class="font-semibold text-foreground">2. Active Daemon</span>
-								<span>Enable the TFTP server. Ensure UDP port 69 is accessible.</span>
-							</div>
-							<div class="flex flex-col gap-0.5 border-l-2 border-primary/50 pl-2">
-								<span class="font-semibold text-foreground">3. DHCP Options 66 & 67</span>
-								<span>Option 66 points to the Lanforge IP and Option 67 specifies the NBP executable.</span>
-							</div>
-							<div class="flex flex-col gap-0.5 border-l-2 border-primary/50 pl-2">
-								<span class="font-semibold text-foreground">4. PXE Client Boot</span>
-								<span>BIOS/UEFI clients configured for network boot will load the bootloader automatically.</span>
-							</div>
+	<PageHeader
+		title="TFTP Server & Netboot"
+		description="TFTP file server for PXE network boot and operating system provisioning."
+		icon={HardDriveDownloadIcon}
+	>
+		{#snippet badge()}
+			<StatusBadge
+				variant={isServiceActive ? "online" : "dormant"}
+				text={serviceState}
+				showDot
+			/>
+			<HelpPopover
+				title="TFTP Netboot Setup"
+				description="TFTP (Trivial File Transfer Protocol) server for PXE/UEFI network boot and automated operating system provisioning."
+			>
+				{#snippet children()}
+					<div class="flex flex-col gap-2.5 text-xs text-muted-foreground">
+						<div class="flex flex-col gap-0.5 border-l-2 border-primary/50 pl-2">
+							<span class="font-semibold text-foreground">1. Root Directory</span>
+							<span>Copy kernels or bootloaders (e.g. <code class="text-foreground">ipxe.efi</code>) to <code class="text-foreground">{rootDir}</code>.</span>
 						</div>
-					{/snippet}
-				</HelpPopover>
-			</div>
-			<p class="text-muted-foreground text-sm mt-0.5">
-				TFTP file server for PXE network boot and operating system provisioning
-			</p>
-		</div>
+						<div class="flex flex-col gap-0.5 border-l-2 border-primary/50 pl-2">
+							<span class="font-semibold text-foreground">2. Active Daemon</span>
+							<span>Enable the TFTP server. Ensure UDP port 69 is accessible.</span>
+						</div>
+						<div class="flex flex-col gap-0.5 border-l-2 border-primary/50 pl-2">
+							<span class="font-semibold text-foreground">3. DHCP Options 66 & 67</span>
+							<span>Option 66 points to the Lanforge IP and Option 67 specifies the NBP executable.</span>
+						</div>
+						<div class="flex flex-col gap-0.5 border-l-2 border-primary/50 pl-2">
+							<span class="font-semibold text-foreground">4. PXE Client Boot</span>
+							<span>BIOS/UEFI clients configured for network boot will load the bootloader automatically.</span>
+						</div>
+					</div>
+				{/snippet}
+			</HelpPopover>
+		{/snippet}
 
-		<!-- Action Bar -->
-		<div class="flex items-center gap-2">
+		{#snippet actions()}
 			<Button
 				variant="outline"
 				size="sm"
@@ -319,8 +316,8 @@
 					Save Changes
 				</Button>
 			{/if}
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
 	<!-- Vitals / Stat Cards -->
 	<TftpVitalsCards

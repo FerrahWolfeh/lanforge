@@ -1,10 +1,11 @@
 <script lang="ts">
-	import * as Card from "$lib/components/ui/card";
-	import { Skeleton } from "$lib/components/ui/skeleton";
 	import RadioIcon from "@lucide/svelte/icons/radio";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import ServerIcon from "@lucide/svelte/icons/server";
+	import StatCard from "$lib/components/StatCard.svelte";
+	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
+	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 	import { formatUptime } from "$lib/utils";
 	import type { SseEvent, StatusResponse } from "$lib/api/types";
 
@@ -45,137 +46,88 @@
 	});
 </script>
 
-<div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-	<!-- Stream Status Card -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header class="flex flex-row items-center justify-between pb-2 space-y-0">
-			<Card.Title class="text-sm font-medium">Stream Status</Card.Title>
-			<RadioIcon
-				class="h-4 w-4 {reconnecting
-					? 'text-amber-500 animate-spin'
-					: isLive
-						? 'text-emerald-500 animate-pulse'
-						: 'text-muted-foreground'}"
+<StatCardGrid cols={4}>
+	<!-- Card 1: Stream Status -->
+	<StatCard
+		label="Stream Status"
+		value={reconnecting ? "Reconnecting" : isLive ? "Live Stream" : "Paused"}
+		icon={RadioIcon}
+		color={reconnecting ? "amber" : isLive ? "emerald" : "zinc"}
+		badge={{
+			text: reconnecting ? "Connecting" : isLive ? "Active SSE" : "Paused",
+			variant: reconnecting ? "warning" : isLive ? "online" : "dormant",
+			showDot: true
+		}}
+		subtext={reconnecting ? "Retrying internal SSE connection" : isLive ? "Connected to internal event bus" : "Incoming stream updates paused"}
+		loading={loading && events.length === 0}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Protocol" value="SSE / EventStream" />
+			<StatCardFooterItem
+				label="Feed State"
+				value={isLive ? "Streaming" : "Halted"}
+				color={isLive ? "text-emerald-500" : "text-amber-500"}
 			/>
-		</Card.Header>
-		<Card.Content>
-			{#if loading && events.length === 0}
-				<Skeleton class="h-8 w-24 mb-1" />
-				<Skeleton class="h-3 w-32" />
-			{:else}
-				<div class="flex items-center gap-2">
-					<div class="text-2xl font-bold">
-						{#if reconnecting}
-							Reconnecting...
-						{:else if isLive}
-							Live Stream
-						{:else}
-							Paused
-						{/if}
-					</div>
-					<span
-						class="h-2.5 w-2.5 rounded-full {reconnecting
-							? 'bg-amber-500 animate-ping'
-							: isLive
-								? 'bg-emerald-500 animate-ping'
-								: 'bg-amber-500'}"
-					></span>
-				</div>
-				<p class="text-xs text-muted-foreground mt-1">
-					{#if reconnecting}
-						Retrying SSE bus connection
-					{:else if isLive}
-						Connected to internal event bus
-					{:else}
-						Incoming stream updates paused
-					{/if}
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+		{/snippet}
+	</StatCard>
 
-	<!-- Buffer & Events Count Card -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header class="flex flex-row items-center justify-between pb-2 space-y-0">
-			<Card.Title class="text-sm font-medium">Buffer Utilization</Card.Title>
-			<ActivityIcon class="h-4 w-4 text-primary" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading && events.length === 0}
-				<Skeleton class="h-8 w-28 mb-1" />
-				<Skeleton class="h-3 w-32" />
-			{:else}
-				<div class="text-2xl font-bold">
-					{events.length}
-					<span class="text-xs text-muted-foreground font-normal">
-						/ {bufferLimit} max
-					</span>
-				</div>
-				<div class="mt-2 h-1.5 w-full bg-secondary rounded-full overflow-hidden">
-					<div
-						class="h-full bg-primary transition-all duration-300"
-						style="width: {bufferUsagePct}%"
-					></div>
-				</div>
-				<p class="text-xs text-muted-foreground mt-1.5">
-					{bufferUsagePct}% memory capacity used
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+	<!-- Card 2: Buffer Utilization -->
+	<StatCard
+		label="Buffer Utilization"
+		value={events.length}
+		icon={ActivityIcon}
+		color="sky"
+		subtext={`${bufferUsagePct}% capacity (${bufferLimit} max)`}
+		loading={loading && events.length === 0}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Buffer Limit" value={`${bufferLimit} slots`} />
+			<StatCardFooterItem
+				label="Memory Ratio"
+				value={`${bufferUsagePct}%`}
+				color={bufferUsagePct > 80 ? "text-amber-500" : "text-sky-500"}
+			/>
+		{/snippet}
+	</StatCard>
 
-	<!-- Top Subsystem Activity Card -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header class="flex flex-row items-center justify-between pb-2 space-y-0">
-			<Card.Title class="text-sm font-medium">Active Subsystems</Card.Title>
-			<LayersIcon class="h-4 w-4 text-sky-500" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading && events.length === 0}
-				<Skeleton class="h-8 w-24 mb-1" />
-				<Skeleton class="h-3 w-36" />
-			{:else}
-				<div class="text-2xl font-bold capitalize">
-					{topTopic.name}
-					<span class="text-xs text-muted-foreground font-normal">
-						({topTopic.count} events)
-					</span>
-				</div>
-				<p class="text-xs text-muted-foreground mt-1.5 truncate">
-					{#if Object.keys(topicCounts).length > 0}
-						{Object.entries(topicCounts)
-							.slice(0, 3)
-							.map(([k, v]) => `${k}: ${v}`)
-							.join(" · ")}
-					{:else}
-						No events in buffer
-					{/if}
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+	<!-- Card 3: Top Subsystem Activity -->
+	<StatCard
+		label="Active Subsystems"
+		value={topTopic.name ? topTopic.name.charAt(0).toUpperCase() + topTopic.name.slice(1) : "None"}
+		icon={LayersIcon}
+		color="violet"
+		subtext={`${topTopic.count} recent events`}
+		loading={loading && events.length === 0}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Unique Topics" value={Object.keys(topicCounts).length} />
+			<StatCardFooterItem label="Primary Bus" value={topTopic.name} />
+		{/snippet}
+	</StatCard>
 
-	<!-- Daemon Health Card -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header class="flex flex-row items-center justify-between pb-2 space-y-0">
-			<Card.Title class="text-sm font-medium">Daemon Health</Card.Title>
-			<ServerIcon class="h-4 w-4 text-emerald-500" />
-		</Card.Header>
-		<Card.Content>
-			{#if status}
-				<div class="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
-					Healthy
-				</div>
-				<p class="text-xs text-muted-foreground mt-1">
-					Uptime: {formatUptime(status.uptime_secs)} · v{status.version}
-				</p>
-			{:else if loading}
-				<Skeleton class="h-8 w-20 mb-1" />
-				<Skeleton class="h-3 w-28" />
-			{:else}
-				<div class="text-2xl font-bold text-muted-foreground">Online</div>
-				<p class="text-xs text-muted-foreground mt-1">Status details loaded</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
-</div>
+	<!-- Card 4: Daemon Health -->
+	<StatCard
+		label="Daemon Health"
+		value={status ? "Healthy" : "Online"}
+		icon={ServerIcon}
+		color="emerald"
+		badge={{
+			text: "Operational",
+			variant: "online",
+			showDot: true
+		}}
+		subtext={status ? `v${status.version}` : "Status details loaded"}
+		loading={loading && !status}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem
+				label="System Uptime"
+				value={status ? formatUptime(status.uptime_secs) : "—"}
+			/>
+			<StatCardFooterItem
+				label="Build"
+				value={status ? `v${status.version}` : "—"}
+			/>
+		{/snippet}
+	</StatCard>
+</StatCardGrid>

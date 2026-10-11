@@ -1,10 +1,11 @@
 <script lang="ts">
-	import * as Card from "$lib/components/ui/card";
-	import { Skeleton } from "$lib/components/ui/skeleton";
-	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
-	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import DatabaseIcon from "@lucide/svelte/icons/database";
+	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
 	import PercentIcon from "@lucide/svelte/icons/percent";
+	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
+	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
+	import StatCard from "$lib/components/StatCard.svelte";
+	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 	import type { DnsAdblockStatusResponse, DnsStatsResponse } from "$lib/api/types";
 
 	let {
@@ -25,102 +26,110 @@
 	const blockedQueries = $derived(stats?.blocked_queries ?? 0);
 
 	const blockPercentage = $derived.by(() => {
-		if (totalQueries === 0) return 0;
+		if (totalQueries === 0) return "0.0";
 		return ((blockedQueries / totalQueries) * 100).toFixed(1);
 	});
 	const exceptionsDomains = $derived(status?.exceptions_size ?? 0);
 	const totalAllowedOrExceptions = $derived(allowlistDomains + exceptionsDomains);
 </script>
 
-<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-	<!-- Total Blocklist Domains -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header class="flex flex-row items-center justify-between pb-2">
-			<Card.Title class="text-sm font-medium">Domains on Blocklist</Card.Title>
-			<DatabaseIcon class="size-4 text-primary" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading && !status}
-				<Skeleton class="h-8 w-28 mb-1" />
-				<Skeleton class="h-3 w-36" />
-			{:else}
-				<div class="text-2xl font-bold tracking-tight">
-					{blocklistDomains.toLocaleString()}
-				</div>
-				<p class="text-xs text-muted-foreground mt-1">
-					Compiled in zero-copy FST ({sourceCount} remote {sourceCount === 1 ? "source" : "sources"})
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+<StatCardGrid cols={4}>
+	<!-- Card 1: Blocklist Domains -->
+	<StatCard
+		label="Domains on Blocklist"
+		value={status ? blocklistDomains.toLocaleString() : null}
+		subtext={`Compiled in zero-copy FST (${sourceCount} sources)`}
+		icon={DatabaseIcon}
+		color="indigo"
+		{loading}
+		popover={{
+			title: "Blocklist Domain Finite-State Transducer",
+			description: "High-speed in-memory FST compiled from active remote blocklist sources and local adblock rules.",
+		}}
+		badge={{
+			text: `${sourceCount} ${sourceCount === 1 ? 'Source' : 'Sources'}`,
+			variant: "indigo",
+		}}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Format" value="Zero-Copy FST" />
+			<StatCardFooterItem label="Memory Mode" value="Immutable" />
+		{/snippet}
+	</StatCard>
 
-	<!-- Blocked Queries -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header class="flex flex-row items-center justify-between pb-2">
-			<Card.Title class="text-sm font-medium">Queries Blocked</Card.Title>
-			<ShieldAlertIcon class="size-4 text-rose-500" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading && !stats}
-				<Skeleton class="h-8 w-28 mb-1" />
-				<Skeleton class="h-3 w-36" />
-			{:else}
-				<div class="text-2xl font-bold tracking-tight text-rose-500 dark:text-rose-400">
-					{blockedQueries.toLocaleString()}
-				</div>
-				<p class="text-xs text-muted-foreground mt-1">
-					Out of {totalQueries.toLocaleString()} total DNS requests
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+	<!-- Card 2: Blocked Queries -->
+	<StatCard
+		label="Queries Blocked"
+		value={stats ? blockedQueries.toLocaleString() : null}
+		subtext={`Out of ${totalQueries.toLocaleString()} total DNS requests`}
+		icon={ShieldAlertIcon}
+		color="rose"
+		{loading}
+		popover={{
+			title: "Blocked Ad & Tracker Queries",
+			description: "Real-time query resolutions blocked by rule matches and returned as NXDOMAIN or 0.0.0.0.",
+		}}
+		badge={{
+			text: "Filtered",
+			variant: "error",
+		}}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Blocked" value={blockedQueries.toLocaleString()} color="text-rose-400" />
+			<StatCardFooterItem label="Total Processed" value={totalQueries.toLocaleString()} />
+		{/snippet}
+	</StatCard>
 
-	<!-- Block Percentage -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header class="flex flex-row items-center justify-between pb-2">
-			<Card.Title class="text-sm font-medium">Block Percentage</Card.Title>
-			<PercentIcon class="size-4 text-amber-500" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading && !stats}
-				<Skeleton class="h-8 w-28 mb-1" />
-				<Skeleton class="h-3 w-36" />
-			{:else}
-				<div class="text-2xl font-bold tracking-tight">
-					{blockPercentage}%
-				</div>
-				<div class="w-full bg-muted rounded-full h-1.5 mt-2.5 overflow-hidden">
-					<div
-						class="bg-rose-500 h-1.5 rounded-full transition-all duration-500"
-						style="width: {Math.min(100, Math.max(0, Number(blockPercentage)))}%"
-					></div>
-				</div>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+	<!-- Card 3: Block Percentage -->
+	<StatCard
+		label="Block Percentage"
+		value={`${blockPercentage}%`}
+		subtext="Ratio of blocked queries across all clients"
+		icon={PercentIcon}
+		color="amber"
+		{loading}
+		popover={{
+			title: "Ad & Telemetry Ratio",
+			description: "Percentage of total network DNS lookups intercepted by the adblocking engine.",
+		}}
+		badge={{
+			text: `${blockPercentage}%`,
+			variant: "warning",
+		}}
+	>
+		<div class="h-1.5 w-full overflow-hidden rounded-full bg-muted mt-2">
+			<div
+				class="h-full bg-rose-500 transition-all duration-500"
+				style={`width: ${Math.min(100, Math.max(0, Number(blockPercentage)))}%`}
+			></div>
+		</div>
 
-	<!-- Allowlist & @@ Exceptions -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header class="flex flex-row items-center justify-between pb-2">
-			<Card.Title class="text-sm font-medium">Exceptions & Allowlist</Card.Title>
-			<ShieldCheckIcon class="size-4 text-emerald-500" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading && !status}
-				<Skeleton class="h-8 w-28 mb-1" />
-				<Skeleton class="h-3 w-36" />
-			{:else}
-				<div class="text-2xl font-bold tracking-tight text-emerald-600 dark:text-emerald-400">
-					{totalAllowedOrExceptions.toLocaleString()}
-				</div>
-				<p class="text-xs text-muted-foreground mt-1">
-					{#if exceptionsDomains > 0}
-						{allowlistDomains.toLocaleString()} manual, {exceptionsDomains.toLocaleString()} list @@ rules
-					{:else}
-						Whitelisted domains taking precedence
-					{/if}
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
-</div>
+		{#snippet footer()}
+			<StatCardFooterItem label="Block Rate" value={`${blockPercentage}%`} color="text-rose-400" />
+			<StatCardFooterItem label="Allowed Rate" value={`${(100 - Number(blockPercentage)).toFixed(1)}%`} color="text-emerald-400" />
+		{/snippet}
+	</StatCard>
+
+	<!-- Card 4: Exceptions & Allowlist -->
+	<StatCard
+		label="Allowlist & Exceptions"
+		value={status ? totalAllowedOrExceptions.toLocaleString() : null}
+		subtext={exceptionsDomains > 0 ? `${allowlistDomains} manual, ${exceptionsDomains} @@ rules` : "Whitelisted domains taking precedence"}
+		icon={ShieldCheckIcon}
+		color="emerald"
+		{loading}
+		popover={{
+			title: "Allowlist & Override Rules",
+			description: "Domains and Adblock Plus exception rules (@@) that bypass blocklists.",
+		}}
+		badge={{
+			text: "Whitelisted",
+			variant: "online",
+		}}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Manual Whitelist" value={allowlistDomains} color="text-emerald-400" />
+			<StatCardFooterItem label="Exception Rules" value={exceptionsDomains} />
+		{/snippet}
+	</StatCard>
+</StatCardGrid>

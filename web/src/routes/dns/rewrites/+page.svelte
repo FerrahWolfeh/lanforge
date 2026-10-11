@@ -14,6 +14,7 @@
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import PageHeader from "$lib/components/PageHeader.svelte";
 
 	const dnsTabs: NavTabItem[] = [
 		{ label: "Resolver & Analytics", href: "/dns/resolver", icon: GlobeIcon },
@@ -131,23 +132,12 @@
 
 <div class="space-y-6">
 	<!-- Top Action Bar -->
-	<div
-		class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
+	<PageHeader
+		title="DNS Rewrites"
+		description="Custom DNS response overrides, domain wildcards, and dynamic LAN device bindings."
+		icon={ArrowRightLeftIcon}
 	>
-		<div>
-			<h1
-				class="text-2xl font-bold tracking-tight flex items-center gap-2"
-			>
-				<ArrowRightLeftIcon class="h-6 w-6 text-primary" />
-				DNS Rewrites
-			</h1>
-			<p class="text-sm text-muted-foreground">
-				Custom DNS response overrides, domain wildcards, and dynamic LAN
-				device bindings.
-			</p>
-		</div>
-
-		<div class="flex flex-wrap items-center gap-2">
+		{#snippet actions()}
 			<!-- Add Rule Button -->
 			<Button size="sm" onclick={handleOpenAdd} class="gap-2">
 				<PlusIcon class="h-4 w-4" />
@@ -201,8 +191,8 @@
 				<Trash2Icon class="h-4 w-4" />
 				Clear All
 			</Button>
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
 	<!-- DNS Sub-Navigation Tabs -->
 	<NavTabs tabs={dnsTabs} ariaLabel="DNS system navigation" />

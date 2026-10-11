@@ -20,6 +20,8 @@
 	import { onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import PageHeader from "$lib/components/PageHeader.svelte";
+	import StatusBadge from "$lib/components/StatusBadge.svelte";
 	import DnsAdblockSettingsModal from "./components/DnsAdblockSettingsModal.svelte";
 	import {
 		dnsAdblockStatus,
@@ -116,61 +118,36 @@
 
 <div class="flex flex-col gap-6">
 	<!-- Adblock Header Banner -->
-	<div
-		class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between border-b pb-5"
+	<PageHeader
+		title="Adblock & Domain Filtering"
+		description="Zero-copy FST sinkhole blocking ads, trackers, and telemetry at sub-microsecond wire latency."
+		icon={ShieldIcon}
+		class="border-b pb-5"
 	>
-		<div>
-			<div class="flex flex-wrap items-center gap-3">
-				<div
-					class="p-2 rounded-lg bg-primary/10 text-primary border border-primary/20 shrink-0"
-				>
-					<ShieldIcon class="h-6 w-6" />
-				</div>
-				<div>
-					<div class="flex items-center gap-2.5">
-						<h1 class="text-2xl font-bold tracking-tight">
-							Adblock & Domain Filtering
-						</h1>
-						{#if status}
-							{#if status.enabled}
-								<Badge
-									variant="outline"
-									class="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 gap-1.5 font-mono text-xs px-2.5 py-0.5"
-								>
-									<span
-										class="size-1.5 rounded-full bg-emerald-500 animate-pulse"
-									></span>
-									Active
-								</Badge>
-							{:else if status.remaining_secs && status.remaining_secs > 0}
-								<Badge
-									variant="outline"
-									class="bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20 gap-1.5 font-mono text-xs px-2.5 py-0.5"
-								>
-									<ClockIcon class="size-3" />
-									Paused ({formatRemaining(status.remaining_secs)})
-								</Badge>
-							{:else}
-								<Badge
-									variant="outline"
-									class="bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20 gap-1.5 font-mono text-xs px-2.5 py-0.5"
-								>
-									<BanIcon class="size-3" />
-									Disabled
-								</Badge>
-							{/if}
-						{/if}
-					</div>
-					<p class="text-sm text-muted-foreground mt-0.5">
-						Zero-copy FST sinkhole blocking ads, trackers, and telemetry
-						at sub-microsecond wire latency.
-					</p>
-				</div>
-			</div>
-		</div>
+		{#snippet badge()}
+			{#if status}
+				{#if status.enabled}
+					<StatusBadge
+						variant="online"
+						showDot={true}
+						pulse={true}
+						text="Active"
+					/>
+				{:else if status.remaining_secs && status.remaining_secs > 0}
+					<StatusBadge
+						variant="warning"
+						text={`Paused (${formatRemaining(status.remaining_secs)})`}
+					/>
+				{:else}
+					<StatusBadge
+						variant="error"
+						text="Disabled"
+					/>
+				{/if}
+			{/if}
+		{/snippet}
 
-		<!-- Global Control Action Bar -->
-		<div class="flex flex-wrap items-center gap-3">
+		{#snippet actions()}
 			{#if status}
 				<!-- Pause Dropdown Menu -->
 				<DropdownMenu.Root>
@@ -180,7 +157,7 @@
 								variant="outline"
 								size="sm"
 								{...props}
-								class="gap-2 text-xs"
+								class="gap-2 text-xs h-8"
 							>
 								{#if status?.enabled}
 									<PauseIcon class="size-3.5 text-amber-500" />
@@ -233,7 +210,7 @@
 					size="sm"
 					onclick={handleReloadLists}
 					disabled={reloadingLists}
-					class="gap-2 text-xs"
+					class="gap-1.5 text-xs h-8"
 					title="Trigger background download & compilation of all blocklists"
 				>
 					<RefreshCwIcon
@@ -247,7 +224,7 @@
 					variant="outline"
 					size="sm"
 					onclick={() => (settingsOpen = true)}
-					class="gap-1.5 text-xs"
+					class="gap-1.5 text-xs h-8"
 					title="Configure sinkhole policy, custom IPs, and automated refresh schedule"
 				>
 					<SettingsIcon class="size-3.5" />
@@ -265,8 +242,8 @@
 					/>
 				</div>
 			{/if}
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
 	<!-- Navigation Tabs -->
 	<NavTabs {tabs} ariaLabel="Adblock section navigation" />

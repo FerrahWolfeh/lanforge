@@ -34,6 +34,7 @@
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import PageHeader from "$lib/components/PageHeader.svelte";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
 	import type { ServerCapabilities } from "$lib/api/types";
 
@@ -157,16 +158,12 @@
 	<title>System — Lanforge</title>
 </svelte:head>
 
-<div class="flex items-center justify-between">
-	<div>
-		<h1 class="text-foreground text-2xl font-bold tracking-tight">
-			System
-		</h1>
-		<p class="text-muted-foreground text-sm">
-			Daemon status and operations
-		</p>
-	</div>
-	<div class="flex flex-wrap items-center gap-2">
+<PageHeader
+	title="System"
+	description="Daemon status, hardware resources, and service operations."
+	icon={ServerIcon}
+>
+	{#snippet actions()}
 		<Button
 			variant="outline"
 			size="sm"
@@ -224,8 +221,8 @@
 				</AlertDialog.Footer>
 			</AlertDialog.Content>
 		</AlertDialog.Root>
-	</div>
-</div>
+	{/snippet}
+</PageHeader>
 
 <!-- System Diagnostics Sub-Navigation Tabs -->
 <NavTabs tabs={systemTabs} ariaLabel="System diagnostics navigation" />

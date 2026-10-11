@@ -40,6 +40,7 @@
 	import DatabaseIcon from "@lucide/svelte/icons/database";
 	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import PageHeader from "$lib/components/PageHeader.svelte";
 
 	const dnsTabs: NavTabItem[] = [
 		{ label: "Resolver & Analytics", href: "/dns/resolver", icon: GlobeIcon },
@@ -198,19 +199,12 @@
 <Tooltip.Provider>
 	<div class="flex flex-col gap-6">
 		<!-- Page Header -->
-		<div
-			class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between"
+		<PageHeader
+			title="DNS Resolver & Analytics"
+			description="Recursive DNS resolver, query cache, and upstream forwarders"
+			icon={GlobeIcon}
 		>
-			<div>
-				<h1 class="text-2xl font-bold tracking-tight">
-					DNS Resolver & Analytics
-				</h1>
-				<p class="text-muted-foreground text-xs">
-					Recursive DNS resolver, query cache, and upstream forwarders
-				</p>
-			</div>
-
-			<div class="flex flex-wrap items-center gap-2 mt-1 sm:mt-0">
+			{#snippet actions()}
 				<Button
 					variant="outline"
 					size="sm"
@@ -225,17 +219,17 @@
 					size="sm"
 					onclick={loadAllData}
 					disabled={loading}
-					class="text-xs h-8"
+					class="text-xs h-8 gap-1.5"
 				>
 					<RefreshCwIcon
 						class={["size-3.5", loading ? "animate-spin" : ""].join(
 							" ",
 						)}
 					/>
-					Refresh
+					<span>Refresh</span>
 				</Button>
-			</div>
-		</div>
+			{/snippet}
+		</PageHeader>
 
 		<!-- DNS Sub-Navigation Tabs -->
 		<NavTabs tabs={dnsTabs} ariaLabel="DNS system navigation" />

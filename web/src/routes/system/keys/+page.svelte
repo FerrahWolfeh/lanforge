@@ -16,6 +16,7 @@
 	import TokenCreateDialog from "./components/TokenCreateDialog.svelte";
 	import TokenSecretModal from "./components/TokenSecretModal.svelte";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import PageHeader from "$lib/components/PageHeader.svelte";
 
 	const accessTabs: NavTabItem[] = [
 		{ label: "Users & Access", href: "/system/users", icon: UsersIcon },
@@ -55,18 +56,12 @@
 
 <div class="flex flex-col gap-6 max-w-6xl mx-auto w-full pb-12">
 	<!-- Top Header -->
-	<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-		<div class="flex flex-col gap-1">
-			<h1 class="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2.5">
-				<KeyRoundIcon class="size-6 text-primary" />
-				Authentication & API Keys
-			</h1>
-			<p class="text-xs text-muted-foreground">
-				Manage long-lived Bearer API tokens for integrations, automation scripts, and remote clients.
-			</p>
-		</div>
-
-		<div class="flex items-center gap-2 self-start sm:self-center">
+	<PageHeader
+		title="Authentication & API Keys"
+		description="Manage long-lived Bearer API tokens for integrations, automation scripts, and remote clients."
+		icon={KeyRoundIcon}
+	>
+		{#snippet actions()}
 			<Button
 				variant="outline"
 				size="sm"
@@ -89,8 +84,8 @@
 				<PlusIcon data-icon="inline-start" />
 				New API Key
 			</Button>
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
 	<!-- Access Control Sub-Navigation Tabs -->
 	<NavTabs tabs={accessTabs} ariaLabel="Access and authentication navigation" />

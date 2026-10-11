@@ -1,10 +1,11 @@
 <script lang="ts">
-	import * as Card from "$lib/components/ui/card";
-	import { Skeleton } from "$lib/components/ui/skeleton";
 	import ListFilterIcon from "@lucide/svelte/icons/list-filter";
 	import RadioIcon from "@lucide/svelte/icons/radio";
 	import ShieldAlertIcon from "@lucide/svelte/icons/shield-alert";
 	import GaugeIcon from "@lucide/svelte/icons/gauge";
+	import StatCard from "$lib/components/StatCard.svelte";
+	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
+	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 	import type { DnsQueryLogEntry, DnsStatsResponse } from "$lib/api/types";
 
 	let {
@@ -63,124 +64,77 @@
 	}
 </script>
 
-<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-	<!-- Total Logged Queries -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header
-			class="flex flex-row items-center justify-between pb-2 space-y-0"
-		>
-			<Card.Title class="text-sm font-medium font-medium"
-				>Logged Queries</Card.Title
-			>
-			<ListFilterIcon class="h-4 w-4 text-muted-foreground" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading && entries.length === 0}
-				<Skeleton class="h-8 w-28 mb-1" />
-				<Skeleton class="h-3 w-36" />
-			{:else}
-				<div class="text-2xl font-bold">
-					{totalQueries.toLocaleString()}
-				</div>
-				<p class="text-xs text-muted-foreground mt-1">
-					{entries.length} queries loaded in view
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+<StatCardGrid cols={4}>
+	<!-- Card 1: Total Logged Queries -->
+	<StatCard
+		label="Logged Queries"
+		value={totalQueries.toLocaleString()}
+		icon={ListFilterIcon}
+		color="sky"
+		subtext={`${entries.length} queries loaded in view`}
+		loading={loading && entries.length === 0}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Audit Storage" value="Ring Buffer" />
+			<StatCardFooterItem label="Telemetry" value="Audit Trail" />
+		{/snippet}
+	</StatCard>
 
-	<!-- Live Stream Status -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header
-			class="flex flex-row items-center justify-between pb-2 space-y-0"
-		>
-			<Card.Title class="text-sm font-medium">Stream Status</Card.Title>
-			<RadioIcon
-				class="h-4 w-4 {isLive
-					? 'text-emerald-500 animate-pulse'
-					: 'text-muted-foreground'}"
+	<!-- Card 2: Live Stream Status -->
+	<StatCard
+		label="Stream Status"
+		value={isLive ? "Live Stream" : "Paused"}
+		icon={RadioIcon}
+		color={isLive ? "emerald" : "zinc"}
+		badge={{
+			text: isLive ? "Active SSE" : "Paused",
+			variant: isLive ? "online" : "dormant",
+			showDot: true
+		}}
+		subtext={isLive ? "Streaming incoming events via SSE" : "Real-time updates suspended"}
+		loading={loading && entries.length === 0}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Transport" value="SSE Stream" />
+			<StatCardFooterItem
+				label="Feed Status"
+				value={isLive ? "Online" : "Paused"}
+				color={isLive ? "text-emerald-500" : "text-amber-500"}
 			/>
-		</Card.Header>
-		<Card.Content>
-			{#if loading && entries.length === 0}
-				<Skeleton class="h-8 w-24 mb-1" />
-				<Skeleton class="h-3 w-32" />
-			{:else}
-				<div class="flex items-center gap-2">
-					<div class="text-2xl font-bold">
-						{isLive ? "Live Feed" : "Paused"}
-					</div>
-					<span
-						class="h-2.5 w-2.5 rounded-full {isLive
-							? 'bg-emerald-500 animate-ping'
-							: 'bg-amber-500'}"
-					></span>
-				</div>
-				<p class="text-xs text-muted-foreground mt-1">
-					{isLive
-						? "Streaming incoming events via SSE"
-						: "Real-time updates suspended"}
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+		{/snippet}
+	</StatCard>
 
-	<!-- Block Ratio -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header
-			class="flex flex-row items-center justify-between pb-2 space-y-0"
-		>
-			<Card.Title class="text-sm font-medium">Blocked Ratio</Card.Title>
-			<ShieldAlertIcon class="h-4 w-4 text-rose-500" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading && entries.length === 0}
-				<Skeleton class="h-8 w-20 mb-1" />
-				<Skeleton class="h-3 w-28" />
-			{:else}
-				<div class="text-2xl font-bold">
-					{blockRatio}%
-					<span class="text-xs text-muted-foreground font-normal">
-						({blockedCount} blocked)
-					</span>
-				</div>
-				<div
-					class="mt-2 h-1.5 w-full bg-secondary rounded-full overflow-hidden"
-				>
-					<div
-						class="h-full bg-rose-500 transition-all duration-300"
-						style="width: {blockRatio}%"
-					></div>
-				</div>
-				<p class="text-xs text-muted-foreground mt-1.5">
-					Filtered by adblock rules or blacklists
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+	<!-- Card 3: Block Ratio -->
+	<StatCard
+		label="Blocked Ratio"
+		value={`${blockRatio}%`}
+		icon={ShieldAlertIcon}
+		color="rose"
+		subtext={`${blockedCount.toLocaleString()} blocked requests`}
+		loading={loading && entries.length === 0}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Protection" value="Adblock / Blacklist" />
+			<StatCardFooterItem
+				label="Drop Rate"
+				value={`${blockRatio}%`}
+				color={blockRatio > 0 ? "text-rose-500" : "text-emerald-500"}
+			/>
+		{/snippet}
+	</StatCard>
 
-	<!-- Avg Upstream Latency -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header
-			class="flex flex-row items-center justify-between pb-2 space-y-0"
-		>
-			<Card.Title class="text-sm font-medium"
-				>Avg Upstream Latency</Card.Title
-			>
-			<GaugeIcon class="h-4 w-4 text-muted-foreground" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading && entries.length === 0}
-				<Skeleton class="h-8 w-24 mb-1" />
-				<Skeleton class="h-3 w-32" />
-			{:else}
-				<div class="text-2xl font-bold font-mono">
-					{formatLatency(avgLatencyUs)}
-				</div>
-				<p class="text-xs text-muted-foreground mt-1">
-					Microsecond resolution per query
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
-</div>
+	<!-- Card 4: Avg Upstream Latency -->
+	<StatCard
+		label="Upstream Latency"
+		value={formatLatency(avgLatencyUs)}
+		icon={GaugeIcon}
+		color="violet"
+		subtext="Average upstream response time"
+		loading={loading && entries.length === 0}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Sample Size" value={`${entries.length} queries`} />
+			<StatCardFooterItem label="Resolution" value="µs Precision" />
+		{/snippet}
+	</StatCard>
+</StatCardGrid>

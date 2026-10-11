@@ -10,6 +10,7 @@
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import PageHeader from "$lib/components/PageHeader.svelte";
 
 	const dnsTabs: NavTabItem[] = [
 		{ label: "Resolver & Analytics", href: "/dns/resolver", icon: GlobeIcon },
@@ -138,47 +139,36 @@
 
 <div class="space-y-6">
 	<!-- Top Action Bar -->
-	<div
-		class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
+	<PageHeader
+		title="DNS Cache Inspection"
+		description="Inspect live in-memory DNS resolution records, memory footprint, and lifetime expirations."
+		icon={DatabaseIcon}
 	>
-		<div>
-			<h1
-				class="text-2xl font-bold tracking-tight flex items-center gap-2"
-			>
-				<DatabaseIcon class="h-6 w-6 text-primary" />
-				DNS Cache Inspection
-			</h1>
-			<p class="text-sm text-muted-foreground">
-				Inspect live in-memory DNS resolution records, memory footprint,
-				and lifetime expirations.
-			</p>
-		</div>
-
-		<div class="flex items-center gap-2">
+		{#snippet actions()}
 			<Button
 				variant="outline"
 				size="sm"
 				onclick={() => refreshAll(true)}
 				disabled={loading}
-				class="gap-2"
+				class="gap-1.5 h-8 text-xs"
 			>
 				<RefreshCwIcon
-					class="h-4 w-4 {loading ? 'animate-spin' : ''}"
+					class="size-3.5 {loading ? 'animate-spin' : ''}"
 				/>
-				Refresh
+				<span>Refresh</span>
 			</Button>
 
 			<Button
 				variant="destructive"
 				size="sm"
 				onclick={() => (flushModalOpen = true)}
-				class="gap-2"
+				class="gap-1.5 h-8 text-xs"
 			>
-				<Trash2Icon class="h-4 w-4" />
-				Flush Cache
+				<Trash2Icon class="size-3.5" />
+				<span>Flush Cache</span>
 			</Button>
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
 	<!-- DNS Sub-Navigation Tabs -->
 	<NavTabs tabs={dnsTabs} ariaLabel="DNS system navigation" />

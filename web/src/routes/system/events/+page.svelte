@@ -14,6 +14,8 @@
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import PageHeader from "$lib/components/PageHeader.svelte";
+	import StatusBadge from "$lib/components/StatusBadge.svelte";
 
 	const systemTabs: NavTabItem[] = [
 		{ label: "System Status", href: "/system", icon: ServerIcon },
@@ -155,15 +157,22 @@
 
 <div class="space-y-6">
 	<!-- Page Header -->
-	<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-		<div>
-			<h1 class="text-2xl font-bold tracking-tight">System Events</h1>
-			<p class="text-sm text-muted-foreground mt-0.5">
-				Real-time monitoring of daemon lifecycles, network discovery, firewall changes, and DHCP leases.
-			</p>
-		</div>
+	<PageHeader
+		title="System Events"
+		description="Real-time monitoring of daemon lifecycles, network discovery, firewall changes, and DHCP leases."
+		icon={ActivityIcon}
+	>
+		{#snippet badge()}
+			{#if reconnecting}
+				<StatusBadge variant="warning" text="Reconnecting" showDot />
+			{:else if isLive}
+				<StatusBadge variant="online" text="Live Stream" showDot />
+			{:else}
+				<StatusBadge variant="dormant" text="Paused" showDot />
+			{/if}
+		{/snippet}
 
-		<div class="flex items-center gap-2">
+		{#snippet actions()}
 			<Button
 				variant={isLive ? "outline" : "default"}
 				size="sm"
@@ -200,8 +209,8 @@
 				<Trash2Icon class="size-3.5" />
 				<span class="hidden sm:inline">Clear</span>
 			</Button>
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
 	<!-- System Diagnostics Sub-Navigation Tabs -->
 	<NavTabs tabs={systemTabs} ariaLabel="System diagnostics navigation" />

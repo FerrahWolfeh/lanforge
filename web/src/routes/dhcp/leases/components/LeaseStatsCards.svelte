@@ -1,10 +1,11 @@
 <script lang="ts">
-	import * as Card from "$lib/components/ui/card";
-	import { Badge } from "$lib/components/ui/badge";
-	import { Skeleton } from "$lib/components/ui/skeleton";
 	import NetworkIcon from "@lucide/svelte/icons/network";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import ClockIcon from "@lucide/svelte/icons/clock";
+	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
+	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
+	import StatCard from "$lib/components/StatCard.svelte";
+	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 
 	let {
 		loading = false,
@@ -19,97 +20,109 @@
 		v6Count?: number;
 		expiringSoonCount?: number;
 	} = $props();
+
+	const v4Pct = $derived(
+		totalCount > 0 ? Math.round((v4Count / totalCount) * 100) : 0
+	);
+	const v6Pct = $derived(
+		totalCount > 0 ? Math.round((v6Count / totalCount) * 100) : 0
+	);
 </script>
 
-<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-	<!-- Total Leases -->
-	<Card.Root>
-		<Card.Header class="flex flex-row items-center justify-between pb-2 p-3 sm:p-4">
-			<Card.Title class="text-xs font-medium text-muted-foreground">
-				Total Leases
-			</Card.Title>
-			<NetworkIcon class="size-3.5 sm:size-4 text-muted-foreground" />
-		</Card.Header>
-		<Card.Content class="p-3 sm:p-4 pt-0">
-			{#if loading}
-				<Skeleton class="h-7 w-12" />
-			{:else}
-				<div class="text-xl sm:text-2xl font-bold font-mono">{totalCount}</div>
-				<p class="text-[11px] text-muted-foreground mt-0.5 hidden sm:block">
-					Dynamic IPv4 & IPv6 allocations
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+<StatCardGrid cols={4}>
+	<!-- Card 1: Total Leases -->
+	<StatCard
+		label="Active Leases"
+		value={totalCount}
+		subtext="Dynamic allocations active on LAN"
+		icon={NetworkIcon}
+		color="indigo"
+		{loading}
+		popover={{
+			title: "DHCP Lease Table",
+			description: "Active IPv4 dynamic leases and IPv6 stateful allocations tracked in memory and persisted in redb.",
+		}}
+		badge={{
+			text: "Live",
+			variant: "indigo",
+		}}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="IPv4 Leases" value={v4Count} color="text-emerald-400" />
+			<StatCardFooterItem label="IPv6 Leases" value={v6Count} color="text-sky-400" />
+		{/snippet}
+	</StatCard>
 
-	<!-- IPv4 Leases -->
-	<Card.Root>
-		<Card.Header class="flex flex-row items-center justify-between pb-2 p-3 sm:p-4">
-			<Card.Title class="text-xs font-medium text-muted-foreground">
-				IPv4 Leases
-			</Card.Title>
-			<Badge variant="secondary" class="text-[10px] px-1.5 py-0 font-mono">
-				v4
-			</Badge>
-		</Card.Header>
-		<Card.Content class="p-3 sm:p-4 pt-0">
-			{#if loading}
-				<Skeleton class="h-7 w-12" />
-			{:else}
-				<div class="text-xl sm:text-2xl font-bold font-mono text-emerald-400">{v4Count}</div>
-				<p class="text-[11px] text-muted-foreground mt-0.5 hidden sm:block">
-					Standard RFC 2131 dynamic pools
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+	<!-- Card 2: IPv4 Dynamic Leases -->
+	<StatCard
+		label="IPv4 Leases"
+		value={v4Count}
+		subtext="Standard RFC 2131 dynamic allocations"
+		icon={ShieldCheckIcon}
+		color="emerald"
+		{loading}
+		popover={{
+			title: "DHCPv4 Pool Allocation",
+			description: "Dynamic addresses assigned to LAN clients with gateway (opt 3) and DNS (opt 6) configuration.",
+		}}
+		badge={{
+			text: `${v4Pct}% of total`,
+			variant: "online",
+		}}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Protocol" value="UDP Port 67" />
+			<StatCardFooterItem label="Allocation" value="RFC 2131" />
+		{/snippet}
+	</StatCard>
 
-	<!-- IPv6 Leases -->
-	<Card.Root>
-		<Card.Header class="flex flex-row items-center justify-between pb-2 p-3 sm:p-4">
-			<Card.Title class="text-xs font-medium text-muted-foreground">
-				DHCPv6 & PD
-			</Card.Title>
-			<GlobeIcon class="size-3.5 sm:size-4 text-muted-foreground" />
-		</Card.Header>
-		<Card.Content class="p-3 sm:p-4 pt-0">
-			{#if loading}
-				<Skeleton class="h-7 w-12" />
-			{:else}
-				<div class="text-xl sm:text-2xl font-bold font-mono text-sky-400">{v6Count}</div>
-				<p class="text-[11px] text-muted-foreground mt-0.5 hidden sm:block">
-					IA_NA addresses & IA_PD prefixes
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+	<!-- Card 3: IPv6 & Prefix Delegation -->
+	<StatCard
+		label="DHCPv6 & PD"
+		value={v6Count}
+		subtext="IA_NA addresses & IA_PD delegated prefixes"
+		icon={GlobeIcon}
+		color="sky"
+		{loading}
+		popover={{
+			title: "DHCPv6 Stateful Protocol",
+			description: "RFC 8415 stateful address allocation and downstream router prefix delegation (IA_PD).",
+		}}
+		badge={{
+			text: `${v6Pct}% of total`,
+			variant: "sky",
+		}}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Protocol" value="UDP Port 547" />
+			<StatCardFooterItem label="Assignment" value="RFC 8415" />
+		{/snippet}
+	</StatCard>
 
-	<!-- Expiring Soon -->
-	<Card.Root>
-		<Card.Header class="flex flex-row items-center justify-between pb-2 p-3 sm:p-4">
-			<Card.Title class="text-xs font-medium text-muted-foreground">
-				Expiring Soon
-			</Card.Title>
-			<ClockIcon class="size-3.5 sm:size-4 text-amber-500" />
-		</Card.Header>
-		<Card.Content class="p-3 sm:p-4 pt-0">
-			{#if loading}
-				<Skeleton class="h-7 w-12" />
-			{:else}
-				<div class="flex items-center gap-1.5">
-					<span class="text-xl sm:text-2xl font-bold font-mono text-foreground">
-						{expiringSoonCount}
-					</span>
-					{#if expiringSoonCount > 0}
-						<Badge variant="secondary" class="bg-amber-500/10 text-amber-500 text-[10px] px-1 py-0 font-mono">
-							&lt; 1h
-						</Badge>
-					{/if}
-				</div>
-				<p class="text-[11px] text-muted-foreground mt-0.5 hidden sm:block">
-					Leases requiring renewal soon
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
-</div>
+	<!-- Card 4: Expiring Soon / Churn -->
+	<StatCard
+		label="Expiring Soon"
+		value={expiringSoonCount}
+		subtext="Leases pending T1/T2 client renewal"
+		icon={ClockIcon}
+		color={expiringSoonCount > 0 ? "amber" : "zinc"}
+		{loading}
+		popover={{
+			title: "Lease Expiration & Churn",
+			description: "Clients that have not renewed within the T1 half-life and are entering the T2 rebind window.",
+		}}
+		badge={{
+			text: expiringSoonCount > 0 ? "< 1h Window" : "Healthy",
+			variant: expiringSoonCount > 0 ? "warning" : "online",
+		}}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem
+				label="Status"
+				value={expiringSoonCount > 0 ? "Pending Renewal" : "Stable"}
+				color={expiringSoonCount > 0 ? "text-amber-400" : "text-emerald-400"}
+			/>
+			<StatCardFooterItem label="T1 Half-life" value="50% Lease" />
+		{/snippet}
+	</StatCard>
+</StatCardGrid>

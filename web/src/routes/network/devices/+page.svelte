@@ -17,7 +17,14 @@
 	import DevicePromoteModal from "./components/DevicePromoteModal.svelte";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
 	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
+	import WifiIcon from "@lucide/svelte/icons/wifi";
+	import GlobeIcon from "@lucide/svelte/icons/globe";
+	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import PageHeader from "$lib/components/PageHeader.svelte";
+	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
+	import StatCard from "$lib/components/StatCard.svelte";
+	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 
 	const lanTabs: NavTabItem[] = [
 		{ label: "Discovered Devices", href: "/network/devices", icon: MonitorIcon },
@@ -161,6 +168,16 @@
 		}
 	});
 
+	const onlineCount = $derived(
+		meta?.online ?? devices.filter((d) => d.online).length
+	);
+	const totalCount = $derived(meta?.total ?? devices.length);
+	const dualStackCount = $derived(
+		devices.filter((d) => (d.v4 || d.display_v4) && (d.v6 || d.display_v6)).length
+	);
+	const staticCount = $derived(
+		devices.filter((d) => d.origin === "Static").length
+	);
 </script>
 
 <svelte:head>
@@ -168,13 +185,93 @@
 </svelte:head>
 
 <div class="flex flex-col gap-5">
-	<!-- Page Description -->
-	<p class="text-muted-foreground text-xs sm:text-sm">
-		Discovered LAN endpoints tracked via ARP, NDP, and DHCP.
-	</p>
+	<!-- Page Header -->
+	<PageHeader
+		title="Network Devices"
+		description="Discovered LAN endpoints tracked via ARP, NDP, and DHCP."
+		icon={MonitorIcon}
+	/>
 
 	<!-- LAN Inventory Tabs -->
 	<NavTabs tabs={lanTabs} ariaLabel="LAN inventory navigation" />
+
+	<!-- Vitals Cards Grid -->
+	<StatCardGrid cols={4}>
+		<StatCard
+			label="Connected Endpoints"
+			value={`${onlineCount} / ${totalCount}`}
+			subtext={`${onlineCount} active hosts responding on LAN`}
+			icon={WifiIcon}
+			color="emerald"
+			{loading}
+			badge={{
+				text: "L2/L3 Active",
+				variant: "online",
+				showDot: true,
+			}}
+		>
+			{#snippet footer()}
+				<StatCardFooterItem label="Online Hosts" value={onlineCount} color="text-emerald-400" />
+				<StatCardFooterItem label="Offline Hosts" value={Math.max(0, totalCount - onlineCount)} />
+			{/snippet}
+		</StatCard>
+
+		<StatCard
+			label="Dual-Stack Adoption"
+			value={dualStackCount}
+			subtext="Hosts with both IPv4 and IPv6 routes"
+			icon={GlobeIcon}
+			color="sky"
+			{loading}
+			badge={{
+				text: totalCount > 0 ? `${Math.round((dualStackCount / totalCount) * 100)}% Dual-Stack` : "IPv4 / IPv6",
+				variant: "sky",
+			}}
+		>
+			{#snippet footer()}
+				<StatCardFooterItem label="Dual-Stack" value={dualStackCount} color="text-sky-400" />
+				<StatCardFooterItem label="Single-Stack" value={Math.max(0, totalCount - dualStackCount)} />
+			{/snippet}
+		</StatCard>
+
+		<StatCard
+			label="Static Reservations"
+			value={staticCount}
+			subtext="Pinned fixed IP leases and DHCP mappings"
+			icon={BookmarkIcon}
+			color="indigo"
+			{loading}
+			badge={{
+				text: "Pinned",
+				variant: "indigo",
+			}}
+		>
+			{#snippet footer()}
+				<StatCardFooterItem label="Fixed Leases" value={staticCount} color="text-indigo-400" />
+				<StatCardFooterItem label="Dynamic Scope" value={Math.max(0, totalCount - staticCount)} />
+			{/snippet}
+		</StatCard>
+
+		<StatCard
+			label="Neighbor Monitor"
+			value="Kernel Netlink"
+			subtext="Passive ARP & NDP neighbor tracking"
+			icon={ActivityIcon}
+			color="violet"
+			{loading}
+			badge={{
+				text: scanning ? "Scanning..." : "Passive Active",
+				variant: scanning ? "starting" : "online",
+				showDot: true,
+				pulse: true,
+			}}
+		>
+			{#snippet footer()}
+				<StatCardFooterItem label="Protocol" value="ARP / NDP" />
+				<StatCardFooterItem label="Monitoring" value="Zero Overhead" color="text-emerald-400" />
+			{/snippet}
+		</StatCard>
+	</StatCardGrid>
 
 	<!-- Device Table with integrated DataTableCard -->
 	<DeviceTable

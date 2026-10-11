@@ -1,10 +1,11 @@
 <script lang="ts">
-	import * as Card from "$lib/components/ui/card";
-	import { Skeleton } from "$lib/components/ui/skeleton";
 	import UsersIcon from "@lucide/svelte/icons/users";
 	import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
 	import WrenchIcon from "@lucide/svelte/icons/wrench";
 	import EyeIcon from "@lucide/svelte/icons/eye";
+	import StatCard from "$lib/components/StatCard.svelte";
+	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
+	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 	import type { UserInfo } from "$lib/api/types";
 
 	let {
@@ -22,76 +23,73 @@
 	const viewerCount = $derived(safeUsers.filter((u) => u.role === "viewer").length);
 </script>
 
-<div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+<StatCardGrid cols={4}>
 	<!-- Total Users -->
-	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
-		<Card.Header class="pb-2">
-			<Card.Description class="text-xs font-medium">Total Users</Card.Description>
-			<Card.Title class="text-2xl font-bold text-foreground">
-				{#if isLoading}
-					<Skeleton class="h-8 w-12 rounded-lg" />
-				{:else}
-					{totalCount}
-				{/if}
-			</Card.Title>
-		</Card.Header>
-		<Card.Content class="pt-0 text-[11px] text-muted-foreground flex items-center gap-1.5">
-			<UsersIcon class="size-3.5 text-primary" />
-			<span>Active local accounts</span>
-		</Card.Content>
-	</Card.Root>
+	<StatCard
+		label="Total Users"
+		value={totalCount}
+		icon={UsersIcon}
+		color="primary"
+		subtext="Active local accounts"
+		loading={isLoading}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Security Model" value="Argon2id" />
+			<StatCardFooterItem label="Access Policy" value="RBAC" />
+		{/snippet}
+	</StatCard>
 
 	<!-- Admin Users -->
-	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
-		<Card.Header class="pb-2">
-			<Card.Description class="text-xs font-medium">Administrators</Card.Description>
-			<Card.Title class="text-2xl font-bold text-foreground">
-				{#if isLoading}
-					<Skeleton class="h-8 w-12 rounded-lg" />
-				{:else}
-					{adminCount}
-				{/if}
-			</Card.Title>
-		</Card.Header>
-		<Card.Content class="pt-0 text-[11px] text-muted-foreground flex items-center gap-1.5">
-			<ShieldCheckIcon class="size-3.5 text-primary" />
-			<span>Full system control</span>
-		</Card.Content>
-	</Card.Root>
+	<StatCard
+		label="Administrators"
+		value={adminCount}
+		icon={ShieldCheckIcon}
+		color="emerald"
+		badge={{
+			text: "Superuser",
+			variant: "online",
+			showDot: true
+		}}
+		subtext="Full system configuration"
+		loading={isLoading}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem
+				label="Privilege"
+				value="Unrestricted"
+				color="text-emerald-500"
+			/>
+			<StatCardFooterItem label="Accounts" value={`${adminCount} admin`} />
+		{/snippet}
+	</StatCard>
 
 	<!-- Operator Users -->
-	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
-		<Card.Header class="pb-2">
-			<Card.Description class="text-xs font-medium">Operators</Card.Description>
-			<Card.Title class="text-2xl font-bold text-foreground">
-				{#if isLoading}
-					<Skeleton class="h-8 w-12 rounded-lg" />
-				{:else}
-					{operatorCount}
-				{/if}
-			</Card.Title>
-		</Card.Header>
-		<Card.Content class="pt-0 text-[11px] text-muted-foreground flex items-center gap-1.5">
-			<WrenchIcon class="size-3.5 text-sky-500" />
-			<span>Daily network operations</span>
-		</Card.Content>
-	</Card.Root>
+	<StatCard
+		label="Operators"
+		value={operatorCount}
+		icon={WrenchIcon}
+		color="sky"
+		subtext="Network operations & telemetry"
+		loading={isLoading}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Privilege" value="Maintenance" />
+			<StatCardFooterItem label="Accounts" value={`${operatorCount} op`} />
+		{/snippet}
+	</StatCard>
 
 	<!-- Viewer Users -->
-	<Card.Root class="rounded-2xl border-border/70 bg-card shadow-xs">
-		<Card.Header class="pb-2">
-			<Card.Description class="text-xs font-medium">Viewers</Card.Description>
-			<Card.Title class="text-2xl font-bold text-foreground">
-				{#if isLoading}
-					<Skeleton class="h-8 w-12 rounded-lg" />
-				{:else}
-					{viewerCount}
-				{/if}
-			</Card.Title>
-		</Card.Header>
-		<Card.Content class="pt-0 text-[11px] text-muted-foreground flex items-center gap-1.5">
-			<EyeIcon class="size-3.5 text-muted-foreground" />
-			<span>Read-only access</span>
-		</Card.Content>
-	</Card.Root>
-</div>
+	<StatCard
+		label="Viewers"
+		value={viewerCount}
+		icon={EyeIcon}
+		color="zinc"
+		subtext="Read-only telemetry access"
+		loading={isLoading}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Privilege" value="Read-Only" />
+			<StatCardFooterItem label="Accounts" value={`${viewerCount} view`} />
+		{/snippet}
+	</StatCard>
+</StatCardGrid>

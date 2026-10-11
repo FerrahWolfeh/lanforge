@@ -20,6 +20,10 @@
 	import ZapIcon from "@lucide/svelte/icons/zap";
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import InfoIcon from "@lucide/svelte/icons/info";
+	import ArrowRightLeftIcon from "@lucide/svelte/icons/arrow-right-left";
+	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
+	import PageHeader from "$lib/components/PageHeader.svelte";
+	import StatusBadge from "$lib/components/StatusBadge.svelte";
 
 	import {
 		firewallStatus,
@@ -277,59 +281,38 @@
 
 <div class="flex flex-col gap-6 w-full pb-16">
 	<!-- Page Header -->
-	<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-		<div class="flex items-center gap-3.5">
-			<div class="flex size-11 items-center justify-center rounded-2xl bg-primary/10 text-primary shrink-0">
-				<ShieldIcon class="size-6" />
-			</div>
-			<div class="flex flex-col gap-1">
-				<div class="flex flex-wrap items-center gap-2.5">
-					<h1 class="text-2xl font-bold tracking-tight">Firewall & Security</h1>
-					<HelpPopover
-						title="Firewall Architecture & Safety"
-						description="How network zones, kernel packet filtering, and safety rollbacks work in Lanforge."
-					>
-						<div class="flex flex-col gap-2 text-xs text-muted-foreground leading-relaxed">
-							<p>
-								<strong class="text-foreground">Network Zones:</strong> Group physical and virtual interfaces into security domains (e.g. LAN, WAN, containers, VPNs).
-							</p>
-							<p>
-								<strong class="text-foreground">Traffic Matrix:</strong> Control routed forwarding between zones with one-click toggles.
-							</p>
-							<p>
-								<strong class="text-foreground">Safe 3-Way Apply:</strong> Changes are verified first with <em>Review & Apply</em>. Committing starts an automatic 20-second rollback timer: if network access drops, previous rules are restored to prevent lockouts.
-							</p>
-						</div>
-					</HelpPopover>
-					{#if draft?.mode === "full"}
-						<Badge
-							variant="outline"
-							class="border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium text-xs"
-						>
-							<span class="relative flex size-2 mr-1.5">
-								<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-								<span class="relative inline-flex rounded-full size-2 bg-emerald-500"></span>
-							</span>
-							Full Router
-						</Badge>
-					{:else if draft?.mode === "minimal"}
-						<Badge variant="outline" class="border-primary/25 bg-primary/10 text-primary font-medium text-xs">
-							Minimal Helper
-						</Badge>
-					{:else if draft !== null}
-						<Badge variant="secondary" class="text-muted-foreground text-xs font-medium">
-							Disabled
-						</Badge>
-					{/if}
+	<PageHeader
+		title="Firewall & Security"
+		description="Configure zone policies, inter-zone routing, port forwarding, and kernel acceleration."
+		icon={ShieldIcon}
+	>
+		{#snippet badge()}
+			<HelpPopover
+				title="Firewall Architecture & Safety"
+				description="How network zones, kernel packet filtering, and safety rollbacks work in Lanforge."
+			>
+				<div class="flex flex-col gap-2 text-xs text-muted-foreground leading-relaxed">
+					<p>
+						<strong class="text-foreground">Network Zones:</strong> Group physical and virtual interfaces into security domains (e.g. LAN, WAN, containers, VPNs).
+					</p>
+					<p>
+						<strong class="text-foreground">Traffic Matrix:</strong> Control routed forwarding between zones with one-click toggles.
+					</p>
+					<p>
+						<strong class="text-foreground">Safe 3-Way Apply:</strong> Changes are verified first with <em>Review & Apply</em>. Committing starts an automatic 20-second rollback timer: if network access drops, previous rules are restored to prevent lockouts.
+					</p>
 				</div>
-				<p class="text-sm text-muted-foreground">
-					Configure zone policies, inter-zone routing, port forwarding, and kernel acceleration.
-				</p>
-			</div>
-		</div>
+			</HelpPopover>
+			{#if draft?.mode === "full"}
+				<StatusBadge variant="online" text="Full Router" showDot />
+			{:else if draft?.mode === "minimal"}
+				<StatusBadge variant="warning" text="Minimal Helper" showDot />
+			{:else if draft !== null}
+				<StatusBadge variant="dormant" text="Disabled" showDot />
+			{/if}
+		{/snippet}
 
-		<!-- Action buttons -->
-		<div class="flex flex-wrap items-center gap-2.5">
+		{#snippet actions()}
 			<Button
 				variant="outline"
 				size="sm"
@@ -368,8 +351,8 @@
 					{/if}
 				</Button>
 			{/if}
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
 	<!-- Live Status Cards Grid -->
 	<FirewallStatsCards
@@ -423,12 +406,27 @@
 		{#if draft.mode === "full"}
 			<!-- Full Standalone Router: 5 Tabs -->
 			<Tabs.Root bind:value={activeTab} class="w-full">
-				<Tabs.List class="flex w-full overflow-x-auto justify-start sm:inline-flex sm:w-auto p-1 mb-4 no-scrollbar">
-					<Tabs.Trigger value="zones">Zones</Tabs.Trigger>
-					<Tabs.Trigger value="matrix">Traffic Matrix</Tabs.Trigger>
-					<Tabs.Trigger value="portforward">Port Forwarding</Tabs.Trigger>
-					<Tabs.Trigger value="hostrules">Host Rules</Tabs.Trigger>
-					<Tabs.Trigger value="tuning">Acceleration & Tuning</Tabs.Trigger>
+				<Tabs.List class="flex w-full overflow-x-auto justify-start sm:inline-flex sm:w-auto p-1 mb-4 no-scrollbar bg-muted/60 border border-border/50 rounded-xl gap-1">
+					<Tabs.Trigger value="zones" class="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg">
+						<LayersIcon class="size-3.5" />
+						<span>Zones</span>
+					</Tabs.Trigger>
+					<Tabs.Trigger value="matrix" class="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg">
+						<ArrowRightLeftIcon class="size-3.5" />
+						<span>Traffic Matrix</span>
+					</Tabs.Trigger>
+					<Tabs.Trigger value="portforward" class="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg">
+						<ArrowRightIcon class="size-3.5" />
+						<span>Port Forwarding</span>
+					</Tabs.Trigger>
+					<Tabs.Trigger value="hostrules" class="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg">
+						<ShieldCheckIcon class="size-3.5" />
+						<span>Host Rules</span>
+					</Tabs.Trigger>
+					<Tabs.Trigger value="tuning" class="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg">
+						<ZapIcon class="size-3.5" />
+						<span>Acceleration & Tuning</span>
+					</Tabs.Trigger>
 				</Tabs.List>
 
 				<Tabs.Content value="zones">

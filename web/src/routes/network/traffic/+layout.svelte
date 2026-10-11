@@ -12,6 +12,8 @@
 	import { createPolling } from "$lib/utils/polling";
 
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import PageHeader from "$lib/components/PageHeader.svelte";
+	import StatusBadge from "$lib/components/StatusBadge.svelte";
 
 	let { children } = $props();
 
@@ -52,57 +54,38 @@
 
 <div class="flex flex-col gap-6 w-full pb-24">
 	<!-- Page Header -->
-	<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-		<div class="flex items-center gap-3.5">
-			<div class="flex size-11 items-center justify-center rounded-2xl bg-primary/10 text-primary shrink-0">
-				<SlidersHorizontalIcon class="size-6" />
-			</div>
-			<div class="flex flex-col gap-1">
-				<div class="flex flex-wrap items-center gap-2.5">
-					<h1 class="text-2xl font-bold tracking-tight">Traffic & Network Tuning</h1>
-					{#if status?.sqm_active}
-						<Badge
-							variant="outline"
-							class="border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium text-xs"
-						>
-							<span class="relative flex size-2 mr-1.5">
-								<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-								<span class="relative inline-flex rounded-full size-2 bg-emerald-500"></span>
-							</span>
-							CAKE Active ({status.download_mbps}M / {status.upload_mbps}M)
-						</Badge>
-					{:else if status?.tuning_applied}
-						<Badge
-							variant="outline"
-							class="border-primary/25 bg-primary/10 text-primary font-medium text-xs"
-						>
-							NICs Tuned
-						</Badge>
-					{:else}
-						<Badge variant="secondary" class="text-muted-foreground text-xs font-medium">
-							Dormant
-						</Badge>
-					{/if}
-				</div>
-				<p class="text-xs sm:text-sm text-muted-foreground">
-					Hardware network interface optimization, kernel offloads, and CAKE bufferbloat management.
-				</p>
-			</div>
-		</div>
-
-		<div class="flex items-center gap-2">
+	<PageHeader
+		title="Traffic & Network Tuning"
+		description="Hardware network interface optimization, kernel offloads, and CAKE bufferbloat management."
+		icon={SlidersHorizontalIcon}
+	>
+		{#snippet badge()}
+			{#if status?.sqm_active}
+				<StatusBadge
+					variant="online"
+					showDot={true}
+					pulse={true}
+					text={`CAKE Active (${status.download_mbps}M / ${status.upload_mbps}M)`}
+				/>
+			{:else if status?.tuning_applied}
+				<StatusBadge variant="primary" text="NICs Tuned" />
+			{:else}
+				<StatusBadge variant="dormant" text="Dormant" />
+			{/if}
+		{/snippet}
+		{#snippet actions()}
 			<Button
 				variant="outline"
 				size="sm"
 				onclick={fetchStatus}
 				disabled={loading}
-				class="h-9 gap-1.5 text-xs transition-transform duration-150 active:scale-95 transform-gpu"
+				class="h-8 gap-1.5 text-xs transition-transform duration-150 active:scale-95 transform-gpu"
 			>
 				<RefreshCwIcon class={`size-3.5 ${loading ? "animate-spin" : ""}`} />
 				<span>Refresh</span>
 			</Button>
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
 	<!-- Navigation Tabs Bar -->
 	<NavTabs {tabs} ariaLabel="Traffic & SQM navigation" />

@@ -1,10 +1,12 @@
 <script lang="ts">
-	import * as Card from "$lib/components/ui/card";
-	import { Skeleton } from "$lib/components/ui/skeleton";
 	import DatabaseIcon from "@lucide/svelte/icons/database";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
 	import ClockIcon from "@lucide/svelte/icons/clock";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
+	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
+	import StatCard from "$lib/components/StatCard.svelte";
+	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
+	import { formatBytes } from "$lib/utils";
 	import type { DnsCacheStatsExtResponse } from "$lib/api/types";
 
 	let {
@@ -14,14 +16,6 @@
 		loading?: boolean;
 		stats?: DnsCacheStatsExtResponse | null;
 	} = $props();
-
-	function formatBytes(bytes: number): string {
-		if (bytes === 0) return "0 B";
-		const k = 1024;
-		const sizes = ["B", "KB", "MB", "GB"];
-		const i = Math.floor(Math.log(bytes) / Math.log(k));
-		return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
-	}
 
 	function formatTtl(secs: number): string {
 		if (secs <= 0) return "0s";
@@ -33,117 +27,111 @@
 
 	const usagePct = $derived.by(() => {
 		if (!stats || !stats.capacity || stats.capacity === 0) return 0;
-		return Math.min(
-			100,
-			Math.round((stats.total_entries / stats.capacity) * 100),
-		);
+		return Math.min(100, Math.round((stats.total_entries / stats.capacity) * 100));
 	});
 </script>
 
-<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-	<!-- Occupancy -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header
-			class="flex flex-row items-center justify-between pb-2 space-y-0"
-		>
-			<Card.Title class="text-sm font-medium">Cache Occupancy</Card.Title>
-			<DatabaseIcon class="h-4 w-4 text-muted-foreground" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading}
-				<Skeleton class="h-8 w-28 mb-1" />
-				<Skeleton class="h-3 w-36" />
-			{:else}
-				<div class="text-2xl font-bold">
-					{(stats?.total_entries ?? 0).toLocaleString()}
-					<span class="text-xs text-muted-foreground font-normal">
-						/ {(stats?.capacity ?? 10000).toLocaleString()}
-					</span>
-				</div>
-				<div
-					class="mt-2 h-1.5 w-full bg-secondary rounded-full overflow-hidden"
-				>
-					<div
-						class="h-full bg-primary transition-all duration-300"
-						style="width: {usagePct}%"
-					></div>
-				</div>
-				<p class="text-xs text-muted-foreground mt-1.5">
-					{usagePct}% max capacity utilized
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+<StatCardGrid cols={4}>
+	<!-- Card 1: Occupancy -->
+	<StatCard
+		label="Cache Occupancy"
+		value={stats ? `${stats.total_entries.toLocaleString()} / ${stats.capacity.toLocaleString()}` : null}
+		subtext={`${usagePct}% capacity utilized`}
+		icon={DatabaseIcon}
+		color="indigo"
+		{loading}
+		popover={{
+			title: "Cache Entry Table",
+			description: "Active record entries cached in memory with remaining time-to-live values.",
+		}}
+		badge={{
+			text: `${usagePct}% Full`,
+			variant: usagePct > 85 ? "warning" : "indigo",
+		}}
+	>
+		<div class="h-1.5 w-full overflow-hidden rounded-full bg-muted mt-2">
+			<div
+				class="h-full bg-indigo-500 transition-all duration-500"
+				style={`width: ${usagePct}%`}
+			></div>
+		</div>
 
-	<!-- Memory Footprint -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header
-			class="flex flex-row items-center justify-between pb-2 space-y-0"
-		>
-			<Card.Title class="text-sm font-medium">Memory Footprint</Card.Title
-			>
-			<CpuIcon class="h-4 w-4 text-muted-foreground" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading}
-				<Skeleton class="h-8 w-24 mb-1" />
-				<Skeleton class="h-3 w-32" />
-			{:else}
-				<div class="text-2xl font-bold">
-					{formatBytes(stats?.memory_usage_bytes ?? 0)}
-				</div>
-				<p class="text-xs text-muted-foreground mt-1">
-					In-memory hash index overhead
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+		{#snippet footer()}
+			<StatCardFooterItem label="Active Entries" value={stats?.total_entries.toLocaleString() ?? "—"} />
+			<StatCardFooterItem label="Total Capacity" value={stats?.capacity.toLocaleString() ?? "10,000"} />
+		{/snippet}
+	</StatCard>
 
-	<!-- Average TTL -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header
-			class="flex flex-row items-center justify-between pb-2 space-y-0"
-		>
-			<Card.Title class="text-sm font-medium"
-				>Average Remaining TTL</Card.Title
-			>
-			<ClockIcon class="h-4 w-4 text-muted-foreground" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading}
-				<Skeleton class="h-8 w-24 mb-1" />
-				<Skeleton class="h-3 w-32" />
-			{:else}
-				<div class="text-2xl font-bold">
-					{formatTtl(stats?.average_ttl_secs ?? 0)}
-				</div>
-				<p class="text-xs text-muted-foreground mt-1">
-					Min TTL enforced: {stats?.min_ttl ?? 0}s
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+	<!-- Card 2: Memory Footprint -->
+	<StatCard
+		label="Memory Footprint"
+		value={stats ? formatBytes(stats.memory_usage_bytes) : null}
+		subtext="In-memory hash index and wire buffers"
+		icon={CpuIcon}
+		color="sky"
+		{loading}
+		popover={{
+			title: "RAM Utilization",
+			description: "Real-time RAM consumed by cached DNS response buffers and index lookups.",
+		}}
+		badge={{
+			text: "RAM Allocation",
+			variant: "sky",
+		}}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Index Storage" value="Zero-copy Wire" />
+			<StatCardFooterItem label="Allocated" value={formatBytes(stats?.memory_usage_bytes ?? 0)} color="text-sky-400" />
+		{/snippet}
+	</StatCard>
 
-	<!-- Evictions -->
-	<Card.Root class="relative overflow-hidden">
-		<Card.Header
-			class="flex flex-row items-center justify-between pb-2 space-y-0"
-		>
-			<Card.Title class="text-sm font-medium">Cache Evictions</Card.Title>
-			<Trash2Icon class="h-4 w-4 text-muted-foreground" />
-		</Card.Header>
-		<Card.Content>
-			{#if loading}
-				<Skeleton class="h-8 w-20 mb-1" />
-				<Skeleton class="h-3 w-28" />
-			{:else}
-				<div class="text-2xl font-bold">
-					{(stats?.evictions ?? 0).toLocaleString()}
-				</div>
-				<p class="text-xs text-muted-foreground mt-1">
-					Entries cleared due to capacity pressure
-				</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
-</div>
+	<!-- Card 3: Average TTL -->
+	<StatCard
+		label="Average TTL"
+		value={stats ? formatTtl(stats.average_ttl_secs) : null}
+		subtext={`Enforced minimum: ${stats?.min_ttl ?? 0}s`}
+		icon={ClockIcon}
+		color="amber"
+		{loading}
+		popover={{
+			title: "TTL Lifespan",
+			description: "Average remaining time before cached records expire and require upstream revalidation.",
+		}}
+		badge={{
+			text: `Min ${stats?.min_ttl ?? 0}s`,
+			variant: "warning",
+		}}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem label="Remaining Avg" value={formatTtl(stats?.average_ttl_secs ?? 0)} color="text-amber-400" />
+			<StatCardFooterItem label="Min Clamped" value={`${stats?.min_ttl ?? 0}s`} />
+		{/snippet}
+	</StatCard>
+
+	<!-- Card 4: Evictions -->
+	<StatCard
+		label="Cache Evictions"
+		value={stats ? stats.evictions.toLocaleString() : null}
+		subtext="Cleared under capacity pressure"
+		icon={Trash2Icon}
+		color={(stats?.evictions ?? 0) > 0 ? "rose" : "emerald"}
+		{loading}
+		popover={{
+			title: "Cache Eviction Policy",
+			description: "Records purged early using least-recently-used (LRU) policy when max capacity is reached.",
+		}}
+		badge={{
+			text: (stats?.evictions ?? 0) === 0 ? "0 Clean" : "Evicting",
+			variant: (stats?.evictions ?? 0) === 0 ? "online" : "error",
+		}}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem
+				label="Eviction Pressure"
+				value={(stats?.evictions ?? 0) === 0 ? "None" : "Capacity Limit"}
+				color={(stats?.evictions ?? 0) === 0 ? "text-emerald-400" : "text-rose-400"}
+			/>
+			<StatCardFooterItem label="Policy" value="Adaptive LRU" />
+		{/snippet}
+	</StatCard>
+</StatCardGrid>

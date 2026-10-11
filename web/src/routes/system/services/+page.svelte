@@ -26,6 +26,10 @@
 	import ActivityIcon from "@lucide/svelte/icons/activity";
 	import LayersIcon from "@lucide/svelte/icons/layers";
 	import NavTabs, { type NavTabItem } from "$lib/components/NavTabs.svelte";
+	import PageHeader from "$lib/components/PageHeader.svelte";
+	import StatCard from "$lib/components/StatCard.svelte";
+	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
+	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 
 	const systemTabs: NavTabItem[] = [
 		{ label: "System Status", href: "/system", icon: ServerIcon },
@@ -192,14 +196,12 @@
 
 <div class="flex flex-col gap-6">
 	<!-- Page Header -->
-	<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-		<div>
-			<h1 class="text-foreground text-2xl font-bold tracking-tight">Services & Subsystems</h1>
-			<p class="text-muted-foreground text-sm">
-				View runtime status, telemetry, and control daemon services. Click <strong>Configure</strong> to change boot defaults.
-			</p>
-		</div>
-		<div class="flex flex-wrap items-center gap-2">
+	<PageHeader
+		title="Services & Subsystems"
+		description="View runtime status, telemetry, and control daemon services. Click Configure to change boot defaults."
+		icon={LayersIcon}
+	>
+		{#snippet actions()}
 			<Button
 				variant="outline"
 				size="sm"
@@ -220,74 +222,100 @@
 				<RotateCwIcon class={["size-3.5", reloadingConfig ? "animate-spin" : ""].join(" ")} />
 				Reload Config
 			</Button>
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
 	<!-- System Diagnostics Sub-Navigation Tabs -->
 	<NavTabs tabs={systemTabs} ariaLabel="System diagnostics navigation" />
 
 	<!-- Top Metric Summary Cards -->
-	<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+	<StatCardGrid cols={4}>
 		<!-- Total Services -->
-		<Card.Root>
-			<Card.Content class="p-4 flex items-center justify-between">
-				<div class="flex flex-col">
-					<span class="text-muted-foreground text-xs font-medium">Total Services</span>
-					<span class="text-foreground font-mono text-2xl font-bold">
-						{loading ? "—" : totalCount}
-					</span>
-				</div>
-				<div class="bg-muted flex size-9 items-center justify-center rounded-lg border border-border/60">
-					<ServerIcon class="size-4 text-foreground" />
-				</div>
-			</Card.Content>
-		</Card.Root>
+		<StatCard
+			label="Total Services"
+			value={loading ? "—" : totalCount}
+			icon={ServerIcon}
+			color="primary"
+			subtext="Managed background daemons"
+			{loading}
+		>
+			{#snippet footer()}
+				<StatCardFooterItem label="Orchestrator" value="Supervisor" />
+				<StatCardFooterItem label="Topology" value="Modular Daemons" />
+			{/snippet}
+		</StatCard>
 
 		<!-- Online Services -->
-		<Card.Root>
-			<Card.Content class="p-4 flex items-center justify-between">
-				<div class="flex flex-col">
-					<span class="text-muted-foreground text-xs font-medium">Online / Active</span>
-					<span class="text-emerald-500 font-mono text-2xl font-bold">
-						{loading ? "—" : onlineCount}
-					</span>
-				</div>
-				<div class="bg-emerald-500/10 flex size-9 items-center justify-center rounded-lg border border-emerald-500/20">
-					<CircleCheckIcon class="size-4 text-emerald-500" />
-				</div>
-			</Card.Content>
-		</Card.Root>
+		<StatCard
+			label="Online / Active"
+			value={loading ? "—" : onlineCount}
+			icon={CircleCheckIcon}
+			color="emerald"
+			badge={{
+				text: "Active",
+				variant: "online",
+				showDot: true
+			}}
+			subtext={`${onlineCount} running daemons`}
+			{loading}
+		>
+			{#snippet footer()}
+				<StatCardFooterItem
+					label="Health Ratio"
+					value={`${Math.round((onlineCount / (totalCount || 1)) * 100)}%`}
+					color="text-emerald-500"
+				/>
+				<StatCardFooterItem label="State" value="Active / Healthy" color="text-emerald-500" />
+			{/snippet}
+		</StatCard>
 
 		<!-- Inactive Services -->
-		<Card.Root>
-			<Card.Content class="p-4 flex items-center justify-between">
-				<div class="flex flex-col">
-					<span class="text-muted-foreground text-xs font-medium">Inactive / Standby</span>
-					<span class="text-muted-foreground font-mono text-2xl font-bold">
-						{loading ? "—" : inactiveCount}
-					</span>
-				</div>
-				<div class="bg-muted flex size-9 items-center justify-center rounded-lg border border-border/60">
-					<PowerOffIcon class="size-4 text-muted-foreground" />
-				</div>
-			</Card.Content>
-		</Card.Root>
+		<StatCard
+			label="Inactive / Standby"
+			value={loading ? "—" : inactiveCount}
+			icon={PowerOffIcon}
+			color="zinc"
+			subtext="Disabled or dormant modules"
+			{loading}
+		>
+			{#snippet footer()}
+				<StatCardFooterItem label="Resources" value="Zero Overhead" />
+				<StatCardFooterItem label="Schedule" value="On-Demand" />
+			{/snippet}
+		</StatCard>
 
 		<!-- Degraded / Error Services -->
-		<Card.Root>
-			<Card.Content class="p-4 flex items-center justify-between">
-				<div class="flex flex-col">
-					<span class="text-muted-foreground text-xs font-medium">Degraded / Error</span>
-					<span class={["font-mono text-2xl font-bold", errorCount > 0 ? "text-rose-500" : "text-muted-foreground"].join(" ")}>
-						{loading ? "—" : errorCount}
-					</span>
-				</div>
-				<div class={["flex size-9 items-center justify-center rounded-lg border", errorCount > 0 ? "bg-rose-500/10 border-rose-500/20" : "bg-muted border-border/60"].join(" ")}>
-					<TriangleAlertIcon class={["size-4", errorCount > 0 ? "text-rose-500" : "text-muted-foreground"].join(" ")} />
-				</div>
-			</Card.Content>
-		</Card.Root>
-	</div>
+		<StatCard
+			label="Degraded / Error"
+			value={loading ? "—" : errorCount}
+			icon={TriangleAlertIcon}
+			color={errorCount > 0 ? "rose" : "zinc"}
+			badge={errorCount > 0 ? {
+				text: "Fault Detected",
+				variant: "error",
+				showDot: true
+			} : {
+				text: "0 Faults",
+				variant: "online",
+				showDot: true
+			}}
+			subtext={errorCount > 0 ? "Fault backoff detected" : "All daemons operating smoothly"}
+			{loading}
+		>
+			{#snippet footer()}
+				<StatCardFooterItem
+					label="Faults"
+					value={errorCount}
+					color={errorCount > 0 ? "text-destructive" : "text-muted-foreground"}
+				/>
+				<StatCardFooterItem
+					label="Backoff State"
+					value={errorCount > 0 ? "Retrying" : "None"}
+					color={errorCount > 0 ? "text-destructive" : "text-emerald-500"}
+				/>
+			{/snippet}
+		</StatCard>
+	</StatCardGrid>
 
 	<!-- Filter & Search Toolbar -->
 	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
