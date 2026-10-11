@@ -7,7 +7,6 @@
 
 	import LayoutDashboardIcon from "@lucide/svelte/icons/layout-dashboard";
 	import MonitorIcon from "@lucide/svelte/icons/monitor";
-	import BookmarkIcon from "@lucide/svelte/icons/bookmark";
 	import WifiIcon from "@lucide/svelte/icons/wifi";
 	import PlugZapIcon from "@lucide/svelte/icons/plug-zap";
 	import SlidersHorizontalIcon from "@lucide/svelte/icons/sliders-horizontal";
@@ -16,9 +15,7 @@
 	import ShieldIcon from "@lucide/svelte/icons/shield";
 	import ServerIcon from "@lucide/svelte/icons/server";
 	import HardDriveDownloadIcon from "@lucide/svelte/icons/hard-drive-download";
-	import LayersIcon from "@lucide/svelte/icons/layers";
 	import DatabaseIcon from "@lucide/svelte/icons/database";
-	import KeyRoundIcon from "@lucide/svelte/icons/key-round";
 	import UsersIcon from "@lucide/svelte/icons/users";
 
 	interface Props {
@@ -53,7 +50,6 @@
 			header: "NETWORK",
 			items: [
 				{ title: "Devices", href: "/network/devices", icon: MonitorIcon },
-				{ title: "Static Hosts", href: "/network/hosts", icon: BookmarkIcon },
 				{ title: "Firewall", href: "/firewall", icon: ShieldIcon, cap: "firewall" },
 				{ title: "Traffic & SQM", href: "/network/traffic", icon: SlidersHorizontalIcon, cap: "traffic" },
 				{ title: "PPPoE WAN", href: "/network/pppoe", icon: PlugZapIcon, cap: "pppoe" },
@@ -65,8 +61,6 @@
 			items: [
 				{ title: "DNS Resolver", href: "/dns/resolver", icon: GlobeIcon, cap: "dns" },
 				{ title: "Query Log", href: "/dns/log", icon: ActivityIcon, cap: "dns" },
-				{ title: "Custom Rewrites", href: "/dns/rewrites", icon: BookmarkIcon, cap: "dns" },
-				{ title: "DNS Cache", href: "/dns/cache", icon: DatabaseIcon, cap: "dns" },
 				{ title: "Adblock", href: "/dns/adblock", icon: ShieldIcon, cap: "adblock" },
 			],
 		},
@@ -81,11 +75,8 @@
 			header: "SYSTEM",
 			items: [
 				{ title: "System Status", href: "/system", icon: ServerIcon },
-				{ title: "Services", href: "/system/services", icon: LayersIcon },
-				{ title: "System Events", href: "/system/events", icon: ActivityIcon },
 				{ title: "Database", href: "/system/database", icon: DatabaseIcon },
-				{ title: "Users", href: "/system/users", icon: UsersIcon },
-				{ title: "Auth Keys", href: "/system/keys", icon: KeyRoundIcon },
+				{ title: "Users & Access", href: "/system/users", icon: UsersIcon },
 			],
 		},
 	];
@@ -107,10 +98,30 @@
 
 	function isActive(href: string): boolean {
 		if (href === "/") return currentPath === "/";
-		if (href === "/system") return currentPath === "/system" || currentPath === "/system/";
+		if (href === "/system") {
+			return (
+				currentPath === "/system" ||
+				currentPath === "/system/" ||
+				currentPath.startsWith("/system/services") ||
+				currentPath.startsWith("/system/events")
+			);
+		}
+		if (href === "/system/users") {
+			return currentPath.startsWith("/system/users") || currentPath.startsWith("/system/keys");
+		}
+		if (href === "/network/devices") {
+			return currentPath.startsWith("/network/devices") || currentPath.startsWith("/network/hosts");
+		}
+		if (href === "/dns/resolver") {
+			return (
+				currentPath === "/dns" ||
+				currentPath.startsWith("/dns/resolver") ||
+				currentPath.startsWith("/dns/cache") ||
+				currentPath.startsWith("/dns/rewrites")
+			);
+		}
 		if (href.startsWith("/dhcp")) return currentPath.startsWith("/dhcp");
 		if (href.startsWith("/dns/adblock")) return currentPath.startsWith("/dns/adblock");
-		if (href === "/dns/resolver") return currentPath === "/dns" || currentPath.startsWith("/dns/resolver");
 		return currentPath === href || currentPath.startsWith(href + "/");
 	}
 </script>

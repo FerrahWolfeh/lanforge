@@ -64,7 +64,7 @@
 
 <nav
 	class={[
-		"flex items-center gap-1 rounded-lg bg-muted/60 p-1 overflow-x-auto w-full no-scrollbar",
+		"flex items-center gap-1 rounded-xl bg-muted/70 border border-border/70 p-1 overflow-x-auto w-full no-scrollbar shadow-2xs",
 		className,
 	].join(" ")}
 	aria-label={ariaLabel}
@@ -77,15 +77,15 @@
 				title={tab.title ?? tab.label}
 				aria-current={active ? "page" : undefined}
 				class={[
-					"flex items-center gap-2 rounded-md px-3.5 py-1.5 text-sm font-medium transition-colors shrink-0 select-none outline-none focus-visible:ring-2 focus-visible:ring-ring",
+					"flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs sm:text-sm font-medium transition-all shrink-0 select-none outline-none focus-visible:ring-2 focus-visible:ring-ring",
 					active
-						? "bg-background text-foreground shadow-xs font-semibold"
-						: "text-muted-foreground hover:text-foreground hover:bg-background/50",
+						? "bg-background text-foreground shadow-xs font-semibold border border-border/50"
+						: "text-muted-foreground hover:text-foreground hover:bg-background/40",
 					tab.disabled ? "opacity-50 pointer-events-none cursor-not-allowed" : "",
 				].join(" ")}
 			>
 				{#if tab.icon}
-					<tab.icon class="size-4 shrink-0" />
+					<tab.icon class="size-4 shrink-0 {active ? 'text-primary' : 'text-muted-foreground'}" />
 				{/if}
 				<span>{tab.label}</span>
 				{#if tab.badge !== undefined && tab.badge !== null && tab.badge !== ""}
@@ -111,15 +111,15 @@
 					}
 				}}
 				class={[
-					"flex items-center gap-2 rounded-md px-3.5 py-1.5 text-sm font-medium transition-colors shrink-0 select-none cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring",
+					"flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs sm:text-sm font-medium transition-all shrink-0 select-none cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring",
 					active
-						? "bg-background text-foreground shadow-xs font-semibold"
-						: "text-muted-foreground hover:text-foreground hover:bg-background/50",
+						? "bg-background text-foreground shadow-xs font-semibold border border-border/50"
+						: "text-muted-foreground hover:text-foreground hover:bg-background/40",
 					tab.disabled ? "opacity-50 pointer-events-none cursor-not-allowed" : "",
 				].join(" ")}
 			>
 				{#if tab.icon}
-					<tab.icon class="size-4 shrink-0" />
+					<tab.icon class="size-4 shrink-0 {active ? 'text-primary' : 'text-muted-foreground'}" />
 				{/if}
 				<span>{tab.label}</span>
 				{#if tab.badge !== undefined && tab.badge !== null && tab.badge !== ""}

@@ -158,11 +158,12 @@
 	<title>System — Lanforge</title>
 </svelte:head>
 
-<PageHeader
-	title="System"
-	description="Daemon status, hardware resources, and service operations."
-	icon={ServerIcon}
->
+<div class="flex flex-col gap-6 w-full pb-12">
+	<PageHeader
+		title="System"
+		description="Daemon status, hardware resources, and service operations."
+		icon={ServerIcon}
+	>
 	{#snippet actions()}
 		<Button
 			variant="outline"
@@ -625,3 +626,4 @@
 		</Card.Content>
 	</Card.Root>
 {/if}
+</div>
