@@ -1,25 +1,26 @@
-# Lanforge Networking Architecture (`lanforge-dhcp`, `lanforge-ra`, `lanforge-ndp`, `lanforge-wol`, `lanforge-probe`, `lanforge-host`)
+# Lanforge Networking Architecture (`lanforge-dhcp`, `lanforge-ra`, `lanforge-discovery`, `lanforge-wol`, `lanforge-nft`, `lanforge-pppoe`, `lanforge-transport`)
 
-Low-level networking and address assignment protocols for the Lanforge daemon.
-Implements DHCPv4, DHCPv6, RA, NDP, mDNS, WoL, and interface monitoring — all integrating with `lanforge-core` via `LanforgeContext`, `EventBus`, and `DeviceUpdate` events.
+Low-level networking, address assignment, security, and WAN routing protocols for the Lanforge daemon.
+Implements DHCPv4, DHCPv6, RA, Discovery (ARP/NDP/mDNS), WoL, PPPoE WAN client, and Netlink/nftables firewall — all integrating with `lanforge-core` via `LanforgeContext`, `EventBus`, and `DeviceUpdate` events.
 
 ---
 
 ## Overview
 
-The networking engine of Lanforge is modularized into specialized crates. It manages every aspect of LAN client lifecycle: IP address assignment (DHCPv4/v6), router advertisement broadcasting (RA/ICMPv6), neighbor discovery (NDP/ARP), mDNS hostname probing, Wake-on-LAN, and interface address tracking. All services run either as `SyncService` (blocking I/O for DHCP) or `AsyncService` (async for RA, NDP, mDNS, ifmon).
+The networking engine of Lanforge is modularized into specialized crates. It manages every aspect of LAN and WAN lifecycle: IP address assignment (DHCPv4/v6), router advertisement broadcasting (RA/ICMPv6), neighbor discovery (NDP/ARP), mDNS hostname probing, Wake-on-LAN, WAN PPPoE sessions, and zero-downtime firewalling. All background services run cooperatively as `AsyncService` under central supervision.
 
 ### Crate Breakdown
 
 | Crate | Purpose |
 | :--- | :--- |
-| `lanforge-dhcp` | DHCPv4 and DHCPv6 servers, IP pools, L2 raw packet injection |
-| `lanforge-ra` | ICMPv6 Router Advertisement daemon, RDNSS/DNSSL options |
-| `lanforge-ndp` | Netlink neighbor tracking, ARP/NDP probing, subnet scanning |
-| `lanforge-wol` | Wake-on-LAN magic packet injection |
-| `lanforge-probe` | Active/passive discovery: mDNS prober and LLDP topology monitor |
-| `lanforge-host` | Netlink interface address monitoring (`IFA_CACHEINFO`, link-local, GUA, ULA) |
-| `lanforge-dns-wire` | Zero-allocation DNS wire parser and encoder for hot-path routing and mDNS |
+| `lanforge-transport` | Foundation: Dual-stack Y-architecture transports (`UdpTransport`, `DualTcpListener`, `Icmp6Transport`), lock-free rate limiting, atomic metrics, and rootless simulation handles (`InertHandle`). |
+| `lanforge-dhcp` | DHCPv4 (L2 raw socket DORA state machine) and DHCPv6 (`IA_NA`/`IA_PD` SARR state machine) servers. |
+| `lanforge-ra` | ICMPv6 Router Advertisement daemon, RDNSS/DNSSL options, and dynamic WAN prefix absorption. |
+| `lanforge-discovery` | Consolidated network discovery: Netlink neighbor tracking (ARP/NDP), active probing, and mDNS scraping. |
+| `lanforge-wol` | Wake-on-LAN magic packet injection. |
+| `lanforge-nft` | Stateful Netlink/nftables firewall engine with in-place zero-downtime ruleset reloads. |
+| `lanforge-pppoe` | Async PPPoE client with PADI/PADR discovery, LCP/IPCP negotiation, kernel PPP interface binding, and LCP keepalives. |
+| `lanforge-dns-wire` | Zero-allocation DNS wire parser and encoder for hot-path routing and mDNS. |
 
 ---
 
@@ -27,56 +28,42 @@ The networking engine of Lanforge is modularized into specialized crates. It man
 
 ```mermaid
 graph TD
-    CTX["LanforgeContext\nshared state"]
-
-    subgraph "lanforge-host"
-        IFMON["ifmon.rs\nInterface Monitor"]
-    end
+    CTX["LanforgeContext\nshared state & EventBus"]
+    TRANS["lanforge-transport\nUdpTransport / Icmp6Transport"]
 
     subgraph "lanforge-dhcp"
         DHCP["dhcp/\nDHCPv4 + DHCPv6"]
-        ID["dhcp/identity.rs\nDeviceIdentity"]
-        V4["dhcp/v4/"]
-        V6["dhcp/v6/"]
-        V4 --> V4CFG["config.rs\nDhcpv4Config"]
-        V4 --> V4POOL["pool.rs\nIpPool\nroaring bitmap"]
-        V4 --> V4RAW["raw.rs\nRawSender\nAF_PACKET"]
-        V4 --> V4SRV["server.rs\nDhcpServer\nDORA state machine"]
-        V4 --> V4SVC["mod.rs\nDhcpv4Service\nSyncService"]
-        V6 --> V6CFG["config.rs\nDhcpv6Config"]
-        V6 --> V6POOL["pool.rs\nIpv6Pool\nmulti-prefix"]
-        V6 --> V6SRV["server.rs\nDhcpv6Server\nSARR state machine"]
-        V6 --> V6SVC["mod.rs\nDhcpv6Service\nSyncService"]
+        V4["dhcp/v4/ (DORA)\nRawSender AF_PACKET"]
+        V6["dhcp/v6/ (SARR)\nIA_NA + IA_PD"]
     end
 
     subgraph "lanforge-ra"
-        RA["ra/\nRouter Advertisements"]
-        RA --> RACFG["config.rs\nRaConfig\nPrefixConfig"]
-        RA --> RAPKT["packet.rs\nbuild_ra_packet\nicmpv6_checksum"]
-        RA --> RASVC["mod.rs\nRaService\nAsyncService"]
+        RA["ra/\nRouter Advertisements\nICMPv6 type 133/134"]
     end
 
-    subgraph "lanforge-ndp"
-        NDP["ndp/\nNeighbor Monitor"]
-        NDP --> NDPUTILS["utils.rs\nnetlink helpers"]
-        NDP --> NDPSVC["mod.rs\nNeighborMonitor\nAsyncService"]
+    subgraph "lanforge-discovery"
+        DISC["discovery/\nARP/NDP & mDNS"]
     end
 
-    subgraph "lanforge-probe"
-        MDNS["mdns.rs\nmDNS Prober"]
-        LLDP["lldp.rs\nLLDP Monitor"]
+    subgraph "lanforge-pppoe"
+        PPPOE["pppoe/\nDiscovery, LCP, IPCP & Kernel PPP"]
+    end
+
+    subgraph "lanforge-nft"
+        NFT["nft/\nStateful Netlink/nftables Firewall"]
     end
 
     subgraph "lanforge-wol"
-        WOL["wol.rs\nWake-on-LAN"]
+        WOL["wol/\nWake-on-LAN"]
     end
 
-    IFMON --> CTX
-    DHCP --> CTX
-    RA --> CTX
-    NDP --> CTX
-    MDNS --> CTX
-    LLDP --> CTX
+    DHCP --> TRANS
+    RA --> TRANS
+    DISC --> CTX
+    PPPOE --> CTX
+    NFT --> CTX
+    WOL --> CTX
+    TRANS --> CTX
 ```
 
 ---
@@ -87,49 +74,41 @@ graph TD
 
 | Service | Model | Reason |
 | :--- | :--- | :--- |
-| `Dhcpv4Service` | `SyncService` | Blocking UDP with 200ms timeout — simpler than async raw sockets |
-| `Dhcpv6Service` | `SyncService` | Same reasoning as DHCPv4 |
-| `RaService` | `AsyncService` | Raw ICMPv6 socket via `AsyncFd` for tokio readiness |
-| `AddressMonitor` | `AsyncService` | Netlink broadcast + async refresh |
-| `NeighborMonitor` | `AsyncService` | Netlink neighbor events + async subnet scans |
-| `MdnsProber` | `AsyncService` | Spawn-blocking UDP listeners (port 5353 `SO_REUSEPORT`) |
+| `Dhcpv4Service` | `SyncService` | Dedicated synchronous thread handling L2 raw socket packet reception and DORA responses. |
+| `Dhcpv6Service` | `SyncService` | Dedicated synchronous thread handling raw UDPv6 socket packet processing and SARR responses. |
+| `RaService` | `AsyncService` | Async ICMPv6 socket with immediate solicit responses and periodic multicast loop. |
+| `DiscoveryService` | `AsyncService` | Unified Netlink route/neighbor listener + async active prober + mDNS listener. |
+| `PppoeService` | `AsyncService` | Asynchronous discovery, LCP/IPCP state machine, and kernel PPP interface lifecycle. |
+| `FirewallService` | `AsyncService` | Reactive event listener compiling and applying stateful Netlink/nftables rulesets in-place. |
+| `DnsService` | `AsyncService` | Dual UDP/TCP event loop with zero-allocation wire triage, DoT/DoQ/DoH, and micro-adblocker. |
 
 ### Bootstrap Sequence
 
 ```mermaid
 sequenceDiagram
-    participant MGR as Service Manager
-    participant IF as AddressMonitor
-    participant NDP as NeighborMonitor
+    participant SUP as ServiceSupervisor
+    participant DISC as DiscoveryService
     participant RA as RaService
     participant D4 as Dhcpv4Service
     participant D6 as Dhcpv6Service
-    participant MDNS as MdnsProber
+    participant DNS as DnsService
+    participant NFT as FirewallService
     participant CTX as LanforgeContext
 
-    MGR->>IF: run() - initial_scan()
-    IF->>CTX: InterfaceIpsChanged (GUA/ULA/Link-Local)
-    IF-->>MGR: ready
-
-    MGR->>NDP: run() - bootstrap_table()
-    NDP->>CTX: SlaacSynced, NdpSeen, ArpSeen
-    NDP-->>MGR: ready
-
-    MGR->>RA: run() - startup burst
-    RA->>CTX: PrefixChanged events
-    RA-->>MGR: ready
-
-    MGR->>D4: run() - wait_for_db + wait_for_interfaces
-    D4->>CTX: V4LeaseGranted, DhcpHostnameHint
-    D4-->>MGR: ready
-
-    MGR->>D6: run() - wait_for_db + wait_for_interfaces
-    D6->>CTX: V6LeaseGranted, V6PrefixAssigned
-    D6-->>MGR: ready
-
-    MGR->>MDNS: run() - passive listeners
-    MDNS->>CTX: DhcpHostnameHint
-    MDNS-->>MGR: ready
+    SUP->>CTX: init state & DB worker
+    SUP->>NFT: start firewall
+    NFT-->>SUP: ready (baseline rules applied)
+    SUP->>DISC: start discovery
+    DISC->>CTX: initial netlink interface & neighbor sync
+    DISC-->>SUP: ready
+    SUP->>DNS: start DNS
+    DNS-->>SUP: ready (sockets bound)
+    SUP->>RA: start RA
+    RA-->>SUP: ready
+    SUP->>D4: start DHCPv4
+    D4-->>SUP: ready
+    SUP->>D6: start DHCPv6
+    D6-->>SUP: ready
 ```
 
 ---

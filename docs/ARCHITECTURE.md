@@ -20,74 +20,94 @@ The system is built on a **device-first** philosophy. Lanforge maintains the pri
 
 ## 📦 Workspace Overview
 
-The project is organized as a modular Rust workspace consisting of 13 crates.
+The project is organized as a modular Rust workspace consisting of 18 crates structured by architectural layers (L0 to L3).
 
 ```mermaid
 graph TD
-    Main["lanforge daemon"] --> Core["lanforge-core"]
-    CLI["lanforge-cli"] --> API["lanforge-api"]
+    Main["lanforge daemon (L3)"] --> Core["lanforge-core (L1)"]
+    CLI["lanforge-cli (L3)"] --> API["lanforge-api (L1)"]
+    Lab["lanforge-lab (L3)"] --> Core
     
-    subgraph "Interface Layer"
+    subgraph "Interface & API Layer (L1/L2)"
         API
-        HTTP["lanforge-http"]
-        TUI["Ratatui TUI"]
+        Dispatch["lanforge-api-dispatch (L2)"]
+        UDS["lanforge-uds (L2)"]
+        HTTP["lanforge-http (L2)"]
+        WebUI["lanforge-webui (L2)"]
     end
 
-    subgraph "Core Engine"
+    subgraph "Core Engine (L0/L1)"
         Core
-        Macros["lanforge-macros"]
-        Types["lanforge-types"]
+        Crypto["lanforge-crypto (L1)"]
+        Macros["lanforge-macros (L0)"]
+        Types["lanforge-types (L0)"]
     end
 
-    subgraph "Services Layer"
-        DHCP["lanforge-dhcp"]
-        RA["lanforge-ra"]
-        NDP["lanforge-ndp"]
-        WOL["lanforge-wol"]
-        Probe["lanforge-probe"]
-        Host["lanforge-host"]
-        DNS["lanforge-dns"]
-        TFTP["lanforge-tftp"]
+    subgraph "Transport & Services Layer (L1/L2)"
+        Transport["lanforge-transport (L1)"]
+        DHCP["lanforge-dhcp (L2)"]
+        RA["lanforge-ra (L2)"]
+        DNS["lanforge-dns (L2)"]
+        DNSWire["lanforge-dns-wire (L2)"]
+        NFT["lanforge-nft (L2)"]
+        PPPoE["lanforge-pppoe (L2)"]
+        Discovery["lanforge-discovery (L2)"]
+        Traffic["lanforge-traffic (L2)"]
+        TFTP["lanforge-tftp (L2)"]
+        WOL["lanforge-wol (L2)"]
     end
 
-    subgraph "Persistence"
+    subgraph "Persistence (L2)"
+        DBCore["lanforge-db-core"]
+        DBRedb["lanforge-db-redb"]
         DB["lanforge-db"]
     end
 
-    DHCP --> Core
-    RA --> Core
-    NDP --> Core
-    WOL --> Core
-    Probe --> Core
-    Host --> Core
-    DNS --> Core
+    Transport --> Core
+    DHCP --> Transport
+    RA --> Transport
+    DNS --> Transport
+    NFT --> Core
+    PPPoE --> Core
+    Discovery --> Core
+    Traffic --> Core
     TFTP --> Core
+    WOL --> Core
     DB --> Core
-    HTTP --> Core
-    API --> Core
-    HTTP --> DNS
+    HTTP --> WebUI
+    HTTP --> Dispatch
+    UDS --> Dispatch
+    Dispatch --> Core
 ```
 
 ### Crate Responsibilities
 
-| Crate | Responsibility |
-| :--- | :--- |
-| `lanforge-types` (L0) | Fundamental domain types (`Device`, `MacAddr`, `Duid`), shared events, and update protocols. |
-| `lanforge-macros` (L0) | Procedural macros for service registration (`#[lanforge_service]`) and CLI boilerplate. |
-| `lanforge-core` (L1) | The "Brain". Manages the `LanforgeContext`, `ManagedTable`, and the broadcast `EventBus`. |
-| `lanforge-dhcp` (L2) | Protocol implementations: DHCPv4 and DHCPv6 servers with stateful pools and L2 injection. |
-| `lanforge-ra` (L2) | ICMPv6 Router Advertisement daemon supporting RDNSS, DNSSL, and dynamic prefixes. |
-| `lanforge-ndp` (L2) | Netlink neighbor tracking, active ARP/NDP probing, and subnet scanning. |
-| `lanforge-wol` (L2) | Wake-on-LAN magic packet injection. |
-| `lanforge-probe` (L2) | Active and passive discovery probers: mDNS scraping and LLDP topology monitoring. |
-| `lanforge-host` (L2) | Netlink interface address monitoring (`IFA_CACHEINFO`, link-local, GUA, ULA). |
-| `lanforge-dns` (L2) | Recursive/Authoritative resolver. Supports DoT, DoQ, Adblocking, and Upstream Health management. |
-| `lanforge-api` (L2) | Shared API definitions and JSON-RPC over Unix Domain Sockets (UDS). |
-| `lanforge-http` (L2) | REST API, Prometheus exporter, and DNS-over-HTTPS (DoH) entry point. |
-| `lanforge-db` (L2) | Embedded pure-Rust persistence (`redb` / volatile tmpfs) with SD-card friendly write debouncing. |
-| `lanforge-tftp` (L2) | Minimal TFTP server for network bootstrapping (PXE). |
-| `lanforge` (L3) | The main daemon binary. Handles bootstrapping and service orchestration. |
-| `lanforge-cli` (L3) | Comprehensive administrative tool and TUI dashboard. |
+| Crate | Layer | Responsibility |
+| :--- | :---: | :--- |
+| `lanforge-types` | L0 | Fundamental domain types (`Device`, `MacAddr`, `Duid`), shared events, and update protocols. No workspace dependencies. |
+| `lanforge-macros` | L0 | Procedural macros for service registration (`#[lanforge_service]`) and internal boilerplate. |
+| `lanforge-core` | L1 | The "Brain". Manages the `LanforgeContext`, Copy-on-Write state, and the topic-isolated `EventBus`. |
+| `lanforge-crypto` | L1 | Foundational security: Argon2id password hashing, key derivation, and token utilities. |
+| `lanforge-transport` | L1 | Dual-stack Y-architecture transports (`UdpTransport`, `DualTcpListener`, `Icmp6Transport`), lock-free rate limiting, atomic metrics, and pure DI (`InertHandle`). |
+| `lanforge-api` | L1 | Shared API definitions, DTOs, and RPC trait contracts used by CLI and daemon. |
+| `lanforge-api-dispatch` | L2 | Server-side RPC protocol handlers decoupled from DB persistence via event-driven CQRS. |
+| `lanforge-uds` | L2 | High-throughput Unix Domain Socket API server for local CLI administration. |
+| `lanforge-http` | L2 | REST API, SSE event streaming, Prometheus metrics, and embedded WebUI HTTP server (`axum`). |
+| `lanforge-webui` | L2 | Rust embed crate serving the pre-built SvelteKit production static bundle. |
+| `lanforge-dhcp` | L2 | Protocol implementations: DHCPv4 (L2 Raw Sockets) and DHCPv6 (`IA_NA`/`IA_PD`) servers. |
+| `lanforge-ra` | L2 | ICMPv6 Router Advertisement daemon supporting dynamic SLAAC, RDNSS, DNSSL, and WAN prefix absorption. |
+| `lanforge-pppoe` | L2 | Native PPPoE WAN client with discovery, LCP/IPCP negotiation, kernel PPP binding, and LCP keepalives. |
+| `lanforge-nft` | L2 | Stateful Netlink/nftables firewall engine with zero-downtime atomic rule updates (~5ms). |
+| `lanforge-traffic` | L2 | Interface packet and bandwidth traffic accounting and ring buffers. |
+| `lanforge-discovery` | L2 | Real-time discovery consolidating Netlink neighbor tracking (ARP/NDP), active probing, and mDNS scraping. |
+| `lanforge-dns` | L2 | Authoritative/recursive DNS resolver with micro-adblocker, DoT, DoQ, and DoH. |
+| `lanforge-dns-wire` | L2 | Zero-allocation DNS wire parser and encoder for hot-path queries. |
+| `lanforge-tftp` | L2 | Minimal TFTP server for network bootstrapping (PXE). |
+| `lanforge-wol` | L2 | Wake-on-LAN magic packet injection. |
+| `lanforge-db` | L2 | Embedded persistence backed by `redb` (with volatile tmpfs fallback) and batched write debouncing. |
+| `lanforge` | L3 | Main daemon binary (`lanforged`). Handles system bootstrap, supervisor lifecycle, and signal handling. |
+| `lanforge-cli` | L3 | Comprehensive administrative CLI tool (`lanforge`). |
+| `lanforge-lab` | L3 | Rootless simulation engine and interactive testbed for automated testing. |
 
 ---
 
@@ -168,11 +188,19 @@ If the `http` feature is enabled, Lanforge exposes a `/metrics` endpoint, allowi
 
 ---
 
-## 🗺️ Roadmap Recap
+## 🗺️ Architectural Status
 
-- **Stable**: DHCPv4/v6, RA, DNS (DoT/DoQ), UDS API, Embedded redb Persistence, TUI.
-- **In Progress**: Advanced Topology Mapping, Enhanced mDNS Scraping.
-- **Planned**: Integrated Web UI, Active Probing Engine.
-- **Phase 6 — Webview**: Embedded visual interface (Next.js/Axum).
-- **Phase 7 — Observability**: Integrated Prometheus metrics exporter.
-- **Phase 8 — PPPoE monitor**: (Postponed) Better integration with WAN link status.
+- **Operational / Production-Ready**:
+  - DHCPv4 (L2 raw sockets) & DHCPv6 (IA_NA & IA_PD).
+  - Dynamic IPv6 Router Advertisements (RA / SLAAC / RDNSS / DNSSL).
+  - Authoritative & Recursive DNS (DoT, DoQ, DoH, zero-allocation micro-adblocker).
+  - Native PPPoE WAN client with kernel PPP binding & LCP echo keepalives.
+  - Stateful Netlink/nftables firewall with in-place zero-downtime ruleset reloads.
+  - Device discovery (Netlink ARP/NDP, mDNS passive/active, LLDP topology).
+  - Embedded SvelteKit WebUI with real-time SSE streaming.
+  - Unix Domain Socket & HTTP REST JSON-RPC APIs.
+  - Embedded `redb` ACID storage with write debouncing.
+  - `lanforge-lab` rootless network testbed and simulation harness.
+- **Active Evolutions**:
+  - Continuous traffic accounting & flow analytics.
+  - Enhanced WAN failover & multi-uplink metrics.

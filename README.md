@@ -1,101 +1,124 @@
 # lanforge 🚀
 
-> **Unified Network Orchestration for Linux Edge Gateways.**
+> **Unified Network Orchestration, Routing, and LAN Gateway for Linux.**
 
-**lanforge** is a modern, single-process network daemon built in Rust. It replaces the fragmented stack of `radvd`, `dnsmasq`, and various custom tracking scripts typically used on Raspberry Pi routers and Linux gateways. 
+**lanforge** is a high-performance, resource-efficient network daemon built in Rust. Designed for Linux edge gateways, domestic homelabs, and SBC appliances (Raspberry Pi, NanoPi, x86 mini-PCs), it replaces the fragmented combination of `radvd`, `dnsmasq`, `nftables` scripts, and external adblockers with an integrated, single-process platform.
 
-By maintaining a **unified, reactive identity table** for every device on your network, Lanforge ensures that hostnames, IPv4/IPv6 leases, and SLAAC addresses are always consistent, persistent, and instantly available—even across reboots.
+Maintaining a **unified, reactive identity table** for every device on your network, Lanforge keeps hostnames, IPv4/IPv6 leases, and SLAAC addresses persistent, consistent, and instantly available across reboots.
 
 ---
 
 ## ✨ Key Features
 
-- **🌐 Comprehensive Address Management**
-  - **DHCPv4 Server**: High-performance implementation using Layer 2 Raw Sockets for maximum compatibility.
-  - **DHCPv6 Server**: Supports Stateful Address Assignment (IA_NA) and Prefix Delegation (IA_PD).
-  - **Router Advertisements (RA)**: Dynamic RA with RDNSS and DNSSL support; automatically adapts to WAN prefix changes.
-  - **SLAAC Tracking**: Advanced correlation of IPv6 SLAAC addresses to physical devices.
+- **🌐 Core LAN & Addressing Engine**
+  - **DHCPv4 Server**: High-performance Layer 2 Raw Socket implementation with dynamic pools and static host pinning.
+  - **DHCPv6 Server**: Stateful Address Assignment (`IA_NA`) and Prefix Delegation (`IA_PD`).
+  - **Router Advertisements (RA)**: Dynamic IPv6 RA with RDNSS and DNSSL, automatically adapting to WAN prefix changes.
+  - **SLAAC Tracking**: Real-time correlation of IPv6 SLAAC addresses to physical MAC/DUID identities.
 
-- **🔍 Intelligent Device Discovery**
-  - **Passive Monitoring**: Real-time tracking via Netlink (ARP/NDP) and mDNS sniffing.
-  - **Active Probing**: Direct mDNS queries and LLDP topology extraction to build a rich map of your network.
-  - **Vendor Resolution**: Integrated MAC OUI lookup for easy device identification.
+- **🛡️ Stateful Firewall & Traffic Security (`lanforge-nft`)**
+  - **Zero-Downtime Compilation**: Stateful Netlink/nftables ruleset compiled and applied in-place (~5ms) without dropping active sockets or reloading services.
+  - **Strict WAN Boundary**: Default `DROP` policy on external interfaces (`ppp0`, `wan0`), restricted DNAT verification, and granular port forwarding / IPv6 pinholes.
 
-- **🛡️ Modern DNS Stack**
-  - **Unified Resolver**: Combines authoritative local resolution with recursive upstream forwarding.
-  - **Secure Protocols**: Support for **DNS-over-TLS (DoT)**, **DNS-over-QUIC (DoQ)**, and **DNS-over-HTTPS (DoH)**.
-  - **Micro-Adblocker**: Ultra-fast, zero-allocation domain filtering with support for custom blocklists and allowlists.
+- **⚡ PPPoE WAN Client (`lanforge-pppoe`)**
+  - Native asynchronous PPPoE discovery, session management, and kernel PPP interface binding with automatic link recovery and LCP keepalives.
 
-- **🛠️ Management & Observability**
-  - **Interactive TUI**: A real-time dashboard built with `ratatui` for visual network monitoring.
-  - **Powerful CLI**: Manage leases, trigger scans, perform "Whois" on devices, and control the adblocker.
-  - **Rich APIs**: JSON-RPC over Unix Domain Sockets (UDS) and a feature-gated REST/HTTP API.
+- **🔍 Network Discovery & Device Tracking (`lanforge-discovery`, `lanforge-wol`)**
+  - **Passive & Active Discovery**: Real-time tracking via Netlink (ARP/NDP), mDNS sniffing, active probes, and LLDP topology extraction.
+  - **Vendor Resolution**: Integrated MAC OUI lookup for effortless device identification.
+  - **Wake-on-LAN (WoL)**: Magic packet injection directly from CLI, WebUI, or API.
 
-- **💾 Resilient Persistence**
-  - **Atomic State**: Backed by embedded `redb` (or volatile in-memory/tmpfs).
-  - **SD-Card Friendly**: Intelligent write-debounce logic minimizes disk I/O, preserving edge hardware longevity.
+- **🔒 High-Performance DNS Stack (`lanforge-dns`, `lanforge-dns-wire`)**
+  - **Authoritative & Recursive Resolver**: Blazing fast local resolution combined with encrypted upstream forwarding.
+  - **Modern Transports**: Native support for **DNS-over-TLS (DoT)**, **DNS-over-QUIC (DoQ)**, and **DNS-over-HTTPS (DoH)**.
+  - **Micro-Adblocker**: Zero-allocation hot-path domain filtering with custom blocklists, allowlists, and real-time query logging.
+
+- **🖥️ Modern WebUI & Rich APIs**
+  - **Embedded SvelteKit WebUI**: Full-featured, responsive management dashboard built with SvelteKit, shadcn-svelte, and Tailwind CSS.
+  - **Rich APIs**: JSON-RPC over Unix Domain Sockets (UDS) and REST / Server-Sent Events (SSE) over HTTP.
+  - **Admin CLI & Lab Testbed**: Complete `lanforge` CLI tool and `lanforge-lab` rootless simulation testbed.
+
+- **💾 Resilient Embedded Persistence (`lanforge-db`)**
+  - **Atomic Storage**: Embedded `redb` database with transactional state updates (or volatile in-memory/tmpfs mode).
+  - **SD-Card Friendly**: Intelligent batched and debounced write cycles to preserve flash memory longevity.
 
 ---
 
 ## 🏗️ Architecture
 
-Lanforge follows a reactive, event-driven architecture centered around a shared `LanforgeContext`.
+Lanforge follows a reactive, event-driven CQRS architecture centered around `LanforgeContext` and a topic-isolated broadcast `EventBus`:
 
 ```mermaid
 graph TD
-    subgraph "Sensors & Protocols"
-        Netlink[Netlink Monitor]
+    subgraph "Hardware & Network Protocols"
+        Netlink[Netlink / ARP / NDP]
         DHCP[DHCP v4/v6]
-        mDNS[mDNS Prober]
-        LLDP[LLDP Monitor]
+        RA[IPv6 Router Advertisements]
+        PPPoE[PPPoE WAN Client]
+        mDNS[mDNS & LLDP Discovery]
     end
 
-    subgraph "Core Engine"
+    subgraph "Core Orchestration"
         Ctx[LanforgeContext]
-        Bus[EventBus]
+        Bus[Topic-Isolated EventBus]
         Table[Managed Identity Table]
+        NFT[Stateful Netlink Firewall]
     end
 
-    subgraph "Actuators & Interfaces"
-        DNS[DNS Resolver]
-        RA[RA Service]
-        API[UDS/HTTP API]
-        TUI[Ratatui Dashboard]
+    subgraph "Resolvers & Interfaces"
+        DNS[Authoritative & Recursive DNS]
+        WebUI[Embedded SvelteKit WebUI]
+        API[HTTP / SSE & UDS APIs]
+        CLI[lanforge CLI]
     end
 
-    Netlink -- Event --> Bus
-    DHCP -- Update --> Ctx
-    Bus -- Notify --> DNS
-    Ctx -- State --> Table
-    Table -- Resolve --> DNS
-    Table -- Display --> TUI
+    Netlink --> Bus
+    PPPoE --> Bus
+    DHCP --> Ctx
+    Bus --> DNS
+    Bus --> NFT
+    Ctx --> Table
+    Table --> DNS
+    Table --> WebUI
+    API --> Ctx
+    CLI --> API
 ```
 
-See [**ARCHITECTURE.md**](docs/ARCHITECTURE.md) for a deep dive into the design decisions and internal mechanics.
+See [**ARCHITECTURE.md**](docs/ARCHITECTURE.md) and [**NETWORKING_ARCH.md**](docs/NETWORKING_ARCH.md) for deep dives into system internals and invariants.
 
 ---
 
 ## 🚀 Quick Start
 
 ### 1. Build
-Requires Rust 1.75+ and `cap-net-raw` capabilities.
+Requires Rust 1.85+ (Edition 2024), Node.js / pnpm (for WebUI), and standard Linux build tools.
+
 ```bash
+# Build the WebUI assets
+cd web && pnpm install && pnpm build && cd ..
+
+# Build the release binaries (lanforged daemon and lanforge CLI)
 cargo build --release
 ```
 
 ### 2. Install
-The included systemd unit handles the necessary capabilities for raw socket access.
-```bash
-# Install binary and config
-sudo install -Dm755 target/release/lanforge /usr/local/sbin/lanforge
-sudo install -Dm644 contrib/lanforge.toml /etc/lanforge/lanforge.toml
+The release binaries and systemd unit can be installed directly:
 
-# Enable and start
+```bash
+# Install binaries
+sudo install -Dm755 target/release/lanforge /usr/local/bin/lanforged
+sudo install -Dm755 target/release/lanforge-cli /usr/local/bin/lanforge
+
+# Install configuration and systemd service
+sudo install -Dm640 contrib/lanforge.toml /etc/lanforge/lanforge.toml
+sudo install -Dm644 contrib/lanforge.service /etc/systemd/system/lanforge.service
+
+# Enable and start the service
+sudo systemctl daemon-reload
 sudo systemctl enable --now lanforge
 ```
 
-### 3. Configure
-A minimal `lanforge.toml` example:
+### 3. Minimal Configuration (`/etc/lanforge/lanforge.toml`)
 ```toml
 [system]
 iface = "eth0"
@@ -114,37 +137,36 @@ range_end = "192.168.1.250"
 [dns]
 enabled = true
 listen = "0.0.0.0:53"
+
+[http]
+enabled = true
+listen = "0.0.0.0:8096"
+webui = true
 ```
 
 ---
 
-## ⌨️ CLI & TUI
+## ⌨️ Administration & WebUI
 
-Lanforge comes with a powerful CLI (`lanforge-cli`) to interact with the running daemon.
+Once running, you can access the WebUI directly at `http://<router-ip>:8096/` or manage the daemon via the `lanforge` CLI:
 
 ```bash
-# View the interactive dashboard
-lanforge tui
+# Check system status and service health
+lanforge status
 
-# List all discovered devices with vendor info
+# List all discovered devices with MAC/IP/vendor details
 lanforge devices --show-vendor
 
-# Monitor the internal event bus in real-time
+# Monitor real-time system events
 lanforge log --follow
 
-# Check DNS stats and manage the adblocker
+# Check DNS metrics and toggle adblocking
 lanforge dns stats
 lanforge dns adblock enable
 ```
 
 ---
 
-## 🗺️ Project Status
-
-Lanforge is currently in active development. Major core features (DHCP, RA, DNS, TUI) are stable and used in production home-lab environments.
-
----
-
 ## 📄 License
 
-Mozilla Public License 2.0 © FerrahWolfeh
+GPL-3.0-or-later © [Ferrah Aiko](https://github.com/FerrahWolfeh)

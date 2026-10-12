@@ -5,10 +5,7 @@ debug_leases.db-shm
 debug_leases.db-wal
 test.db
 .env
-*.md
 .vscode/settings.json
-!docs/**/*.md
-!deploy/**/*.md
 _extra
 
 # WebUI

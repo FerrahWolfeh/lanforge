@@ -1,4 +1,4 @@
-# Service Specification: Auxiliary Services (`tftp`, `wol`, `discovery`, `host`)
+# Service Specification: Auxiliary Services (`tftp`, `wol`, `discovery`)
 
 ## 1. Overview & System Role
 
@@ -6,8 +6,7 @@ Lanforge incorporates several specialized auxiliary services under `crates/net/`
 
 - **`lanforge-tftp`**: Trivial File Transfer Protocol server for PXE network booting.
 - **`lanforge-wol`**: Wake-on-LAN (WOL) Magic Packet generator and target management.
-- **`lanforge-discovery`**: Passive and active network host discovery (mDNS, ARP, NDP scan).
-- **`lanforge-host`**: System interface monitoring, link state detection, and host metrics.
+- **`lanforge-discovery`**: Passive and active network host discovery (mDNS, ARP, NDP scan, Netlink interface address and carrier monitoring).
 
 ---
 
@@ -21,17 +20,14 @@ Lanforge incorporates several specialized auxiliary services under `crates/net/`
 - **Magic Packet Transmission:** Sends raw Ethernet / UDP broadcast Magic Packets (6x `0xFF` + 16x MAC address) to wake sleeping devices.
 - **API & Event Trigger:** Executed via API calls or automated schedules, publishing `LanforgeEvent` notifications when a wake signal is dispatched.
 
-### C. Network Discovery (`lanforge-discovery`)
-- **Passive Sniffing:** Listens for mDNS (`.local` queries), ARP requests, and IPv6 NDP messages to discover un-leased or statically configured devices on the wire.
+### C. Network Discovery & Interface Monitor (`lanforge-discovery`)
+- **Passive Sniffing & Link State:** Listens for mDNS (`.local` queries), ARP requests, IPv6 NDP messages, and Netlink interface carrier changes to discover un-leased or statically configured devices and monitor interface states.
 - **Proactive Inventory Updates:** Dispatches `DeviceUpdate::Discovered` to `LanforgeContext` so non-DHCP devices still appear in Lanforge's device map.
-
-### D. Host Interface Monitor (`lanforge-host`)
-- **Link State Detection:** Monitors network interface status (UP/DOWN, carrier loss, IP address changes).
-- **Event Bus Alerts:** Broadcasts `LanforgeEvent::Network` on link status changes, allowing services (such as RA or DHCP) to re-bind or refresh interface sockets.
+- **Event Bus Alerts:** Broadcasts `LanforgeEvent::Network` on link status changes, allowing dependent services (such as RA, Firewall or DHCP) to adapt in-place.
 
 ---
 
 ## 3. System Invariants
 
 1. **Integrated Device Visibility:** Devices discovered via passive network sniffing (`lanforge-discovery`) are tracked in the same central inventory as DHCP and PPPoE clients.
-2. **Resilient Network Binding:** Link up/down state changes captured by `lanforge-host` trigger automatic socket re-binding across all active network daemons.
+2. **Resilient Network Binding:** Link up/down state changes captured by `lanforge-discovery` trigger automatic in-place socket updates across active network daemons.
