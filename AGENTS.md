@@ -4,17 +4,18 @@
 A high-performance, resource-efficient Rust-based router and LAN orchestration platform designed for domestic homelabs and OpenWrt/SBC gateway appliances. Features integrated DHCPv4/v6, IPv6 RA, authoritative/recursive DNS with adblocking, PPPoE WAN client, stateful Netlink/nftables firewall, TFTP, network discovery with MAC/DUID/IP device tracking, embedded redb persistence, Unix Domain Socket and HTTP APIs, alongside an admin CLI and modern SvelteKit WebUI.
 
 ## Module Crate Architecture
-- `core/lanforge-types` (L0) - Foundational crate. Contains core domain types (`Device`, `MacAddr`, `Duid`), event definitions (`LanforgeEvent`), and state update protocols (`DeviceUpdate`). **Rule:** Must never depend on any other workspace crate.
-- `core/lanforge-core` (L1) - The "brain" of the project. Orchestrates global state transitions, event bus, and context management. Depends on `lanforge-types`.
-- `core/lanforge-crypto` (L1) - Foundational security crate. Encapsulates password hashing (Argon2id), key derivation, and cryptographic utilities.
-- `net/lanforge-transport` (L1) - Foundational transport crate. Implements dual-stack Y-architecture (`UdpTransport`, `DualTcpListener`, `Icmp6Transport`), lock-free rate limiting, atomic metrics, and pure dependency injection (`InertHandle`) for rootless simulation.
-- `api/lanforge-api` (L1) - Shared API protocol definitions, DTOs, and RPC trait contracts. Used by both CLI and Daemon.
-- `api/lanforge-api-dispatch` (L2) - Server-side RPC protocol handlers. Depends on `core`, `api`, and `crypto`. Operates decoupled from database persistence via event-driven CQRS.
-- `api/lanforge-uds`, `api/lanforge-http` (L2) - Communication endpoints exposing the API via Unix Domain Sockets or HTTP/WebSockets.
-- `net/lanforge-dhcp`, `net/lanforge-ra`, `net/lanforge-dns`, `net/lanforge-dns-wire`, `net/lanforge-pppoe`, `net/lanforge-nft`, `net/lanforge-discovery`, `net/lanforge-wol`, `net/lanforge-tftp` (L2) - Specialized network service crates.
-- `db/lanforge-db` (L2) - Embedded data persistence backed by `redb`.
-- `bin/lanforge`, `bin/lanforge-cli`, `bin/lanforge-lab` (L3) - Entry-point binaries for daemon, admin CLI, and testbed simulation.
-- `core/lanforge-macros` (L0) - Internal procedural macros for service registration and boilerplate.
+- `crates/core/lanforge-types` (L0) - Foundational crate. Contains core domain types (`Device`, `MacAddr`, `Duid`), event definitions (`LanforgeEvent`), and state update protocols (`DeviceUpdate`). **Rule:** Must never depend on any other workspace crate.
+- `crates/core/lanforge-core` (L1) - The "brain" of the project. Orchestrates global state transitions, event bus, and context management. Depends on `lanforge-types`.
+- `crates/core/lanforge-crypto` (L1) - Foundational security crate. Encapsulates password hashing (Argon2id), key derivation, and cryptographic utilities.
+- `crates/core/lanforge-macros` (L0) - Internal procedural macros for service registration and boilerplate.
+- `crates/net/lanforge-transport` (L1) - Foundational transport crate. Implements dual-stack Y-architecture (`UdpTransport`, `DualTcpListener`, `Icmp6Transport`), lock-free rate limiting, atomic metrics, and pure dependency injection (`InertHandle`) for rootless simulation.
+- `crates/net/lanforge-dhcp`, `crates/net/lanforge-ra`, `crates/net/lanforge-dns`, `crates/net/lanforge-dns-wire`, `crates/net/lanforge-pppoe`, `crates/net/lanforge-nft`, `crates/net/lanforge-discovery`, `crates/net/lanforge-traffic`, `crates/net/lanforge-wol`, `crates/net/lanforge-tftp` (L2) - Specialized network service crates.
+- `crates/api/lanforge-api` (L1) - Shared API protocol definitions, DTOs, and RPC trait contracts. Used by both CLI and Daemon.
+- `crates/api/lanforge-api-dispatch` (L2) - Server-side RPC protocol handlers. Depends on `core`, `api`, and `crypto`. Operates decoupled from database persistence via event-driven CQRS.
+- `crates/api/lanforge-uds`, `crates/api/lanforge-http` (L2) - Communication endpoints exposing the API via Unix Domain Sockets or HTTP/WebSockets.
+- `crates/webui/lanforge-webui` (L2) - Embedded WebUI asset distribution crate.
+- `crates/db/lanforge-db`, `crates/db/lanforge-db-core`, `crates/db/lanforge-db-redb` (L2) - Embedded data persistence backed by `redb`.
+- `crates/bin/lanforge`, `crates/bin/lanforge-cli`, `crates/bin/lanforge-lab` (L3) - Entry-point binaries for daemon, admin CLI, and testbed simulation.
 - `web/` - Front-end WebUI application (SvelteKit + shadcn-svelte + Tailwind CSS).
 
 ---
@@ -91,43 +92,3 @@ Lanforge runs on single-board computers (Raspberry Pi, NanoPi, OpenWrt routers) 
 - **Scoped Borrowing**: Use closures (`ctx.with_state`, `ctx.with_config`) rather than cloning full `Vec` or struct structures.
 - **Zero-Copy Wire Protocols**: Borrow subslices (`&[u8]`, `&str`) when decoding packets instead of allocating owned strings.
 - **Batched I/O**: High-frequency disk writes, audit logs, and metrics must be batched (e.g. `DbWorker` 5s tick) rather than committed per-packet or per-event.
-
----
-
-# Claude-only guidelines
-- If you are Claude, you are the user's project and implementation planner. You must not write code unless explicitly allowed.
-
----
-
-# Behavioral Guidelines to Reduce Common LLM Mistakes
-
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
-
-## 1. Think Before Coding
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
-- State assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them — don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-
-## 2. Simplicity First
-**Minimum code that solves the problem. Nothing speculative.**
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- If you write 200 lines and it could be 50, rewrite it.
-
-## 3. Surgical Changes
-**Touch only what you must. Clean up only your own mess.**
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- Every changed line should trace directly to the user's request.
-
-## 4. Goal-Driven Execution
-**Define success criteria. Loop until verified.**
-- Transform tasks into verifiable goals with automated checks.
-- For multi-step tasks, state a brief plan:
-  ```
-  1. [Step] → verify: [check]
-  2. [Step] → verify: [check]
-  ```

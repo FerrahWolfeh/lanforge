@@ -1,13 +1,13 @@
-# Lanforge Networking Architecture (`lanforge-dhcp`, `lanforge-ra`, `lanforge-discovery`, `lanforge-wol`, `lanforge-nft`, `lanforge-pppoe`, `lanforge-transport`)
+# Lanforge Networking Architecture (`lanforge-dhcp`, `lanforge-ra`, `lanforge-discovery`, `lanforge-wol`, `lanforge-nft`, `lanforge-pppoe`, `lanforge-traffic`, `lanforge-tftp`, `lanforge-transport`)
 
 Low-level networking, address assignment, security, and WAN routing protocols for the Lanforge daemon.
-Implements DHCPv4, DHCPv6, RA, Discovery (ARP/NDP/mDNS), WoL, PPPoE WAN client, and Netlink/nftables firewall — all integrating with `lanforge-core` via `LanforgeContext`, `EventBus`, and `DeviceUpdate` events.
+Implements DHCPv4, DHCPv6, RA, Discovery (ARP/NDP/mDNS), WoL, PPPoE WAN client, Netlink/nftables firewall, SQM traffic shaping, and TFTP network boot — all integrating with `lanforge-core` via `LanforgeContext`, `EventBus`, and `DeviceUpdate` events.
 
 ---
 
 ## Overview
 
-The networking engine of Lanforge is modularized into specialized crates. It manages every aspect of LAN and WAN lifecycle: IP address assignment (DHCPv4/v6), router advertisement broadcasting (RA/ICMPv6), neighbor discovery (NDP/ARP), mDNS hostname probing, Wake-on-LAN, WAN PPPoE sessions, and zero-downtime firewalling. All background services run cooperatively as `AsyncService` under central supervision.
+The networking engine of Lanforge is modularized into specialized crates. It manages every aspect of LAN and WAN lifecycle: IP address assignment (DHCPv4/v6), router advertisement broadcasting (RA/ICMPv6), neighbor discovery (NDP/ARP), mDNS hostname probing, Wake-on-LAN, WAN PPPoE sessions, zero-downtime firewalling, traffic queue management, and network bootstrapping. All background services run cooperatively as `AsyncService` (or `SyncService` where raw synchronous packet processing is required) under central supervision.
 
 ### Crate Breakdown
 
@@ -20,6 +20,8 @@ The networking engine of Lanforge is modularized into specialized crates. It man
 | `lanforge-wol` | Wake-on-LAN magic packet injection. |
 | `lanforge-nft` | Stateful Netlink/nftables firewall engine with in-place zero-downtime ruleset reloads. |
 | `lanforge-pppoe` | Async PPPoE client with PADI/PADR discovery, LCP/IPCP negotiation, kernel PPP interface binding, and LCP keepalives. |
+| `lanforge-traffic` | SQM bufferbloat mitigation (CAKE / fq_codel), interface offload controls, and per-device traffic accounting. |
+| `lanforge-tftp` | RFC 1350/2347 TFTP server for network bootstrapping (PXE/iPXE) integrated with DHCP Option 66/67. |
 | `lanforge-dns-wire` | Zero-allocation DNS wire parser and encoder for hot-path routing and mDNS. |
 
 ---
@@ -53,15 +55,25 @@ graph TD
         NFT["nft/\nStateful Netlink/nftables Firewall"]
     end
 
+    subgraph "lanforge-traffic"
+        TRAFFIC["traffic/\nSQM CAKE & Offload Tuning"]
+    end
+
+    subgraph "lanforge-tftp"
+        TFTP["tftp/\nTFTP PXE Server"]
+    end
+
     subgraph "lanforge-wol"
         WOL["wol/\nWake-on-LAN"]
     end
 
     DHCP --> TRANS
     RA --> TRANS
+    TFTP --> TRANS
     DISC --> CTX
     PPPOE --> CTX
     NFT --> CTX
+    TRAFFIC --> CTX
     WOL --> CTX
     TRANS --> CTX
 ```
@@ -80,6 +92,8 @@ graph TD
 | `DiscoveryService` | `AsyncService` | Unified Netlink route/neighbor listener + async active prober + mDNS listener. |
 | `PppoeService` | `AsyncService` | Asynchronous discovery, LCP/IPCP state machine, and kernel PPP interface lifecycle. |
 | `FirewallService` | `AsyncService` | Reactive event listener compiling and applying stateful Netlink/nftables rulesets in-place. |
+| `TrafficService` | `AsyncService` | SQM Linux tc queue discipline management (CAKE/fq_codel) and hardware offloading control. |
+| `TftpService` | `AsyncService` | Async UDP TFTP server for PXE/iPXE bootloader transfers. |
 | `DnsService` | `AsyncService` | Dual UDP/TCP event loop with zero-allocation wire triage, DoT/DoQ/DoH, and micro-adblocker. |
 
 ### Bootstrap Sequence

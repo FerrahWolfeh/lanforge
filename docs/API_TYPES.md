@@ -1,8 +1,6 @@
 # Lanforge API & Type Specification
 
-This document provides a comprehensive overview of the Lanforge API endpoints, data structures, and the relationships between them. Lanforge uses an RPC-based communication model (via Unix Domain Sockets or HTTP) defined in the `LanforgeRpc` trait.
-
-> **Note for implementors:** This document reflects the current implemented state of `lanforge-api`. It is the authoritative reference for types and endpoint signatures. `API.md` describes the intended v3 surface (which is a superset of what is here), and `CLI.md` describes the CLI frontend built against it.
+This document provides a comprehensive overview of the Lanforge API data structures, schemas, and native types. Lanforge uses an RPC-based communication model (via Unix Domain Sockets or HTTP) defined in the `LanforgeRpc` trait.
 
 ## API Architecture
 
@@ -107,7 +105,7 @@ classDiagram
 | `scan` | None | `SimpleSuccess` | Triggers an immediate network scan (ARP/NDP/mDNS). |
 | `log` | `follow: bool`, `n: Option<usize>`, `filter: Option<Vec<EventKind>>` | `HybridStream<Event>` | **HybridStream.** Retrieves system event log history and optionally streams live events. Backing endpoint for the CLI `watch` command. Server-side filtering by `EventKind`. |
 | `shutdown` | None | `SimpleSuccess` | Gracefully shuts down the daemon. |
-| `context_dump` | `only_devices: bool`, `only_orphans: bool` | `JSON Value` | **TUI-internal only.** Dumps the entire internal state for debugging. Not exposed via CLI. |
+| `context_dump` | `only_devices: bool`, `only_orphans: bool` | `JSON Value` | Internal diagnostic endpoint. Dumps the entire state for simulation and debugging. |
 
 ### 2. Device & Host Management
 

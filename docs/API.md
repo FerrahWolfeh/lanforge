@@ -1,165 +1,193 @@
-# Lanforge API Specification
+# Lanforge RPC API Specification
 
-This document outlines the JSON-RPC-like API provided by the `lanforged` daemon over its Unix Domain Socket (UDS) and HTTP interface.
-
-## HybridStream Pattern
-
-Several endpoints support a unified streaming contract used throughout the API:
-
-- `n: Option<usize>` — number of historical entries to replay before streaming. `None` or `0` means no replay.
-- `follow: bool` — if `false`, emits up to `n` entries and closes. If `true`, emits the `n` historical entries then keeps the connection open, streaming new events from the event bus as they arrive.
-- Entries are always emitted oldest-first, so the stream reads chronologically.
-
-Endpoints that follow this pattern are marked **HybridStream**.
+This document specifies the JSON-RPC interface implemented by the `lanforged` daemon. The RPC contract is defined in the `LanforgeRpc` trait (`lanforge-api`) and is exposed locally over Unix Domain Sockets (UDS) and remotely via the HTTP/REST gateway (`lanforge-http`).
 
 ---
 
-## Categories
+## 1. Streaming Contract (`HybridStream`)
 
-### System
-
-| Method | Description | Streaming | Input | Output |
-| :--- | :--- | :--- | :--- | :--- |
-| `status` | Returns daemon uptime, version, ServerCapabilities, and general health. | No | No | Status api type |
-| `service_banners` | Retrieves aggregated status banners and real-time metrics from all registered decoupled services. | No | No | ServiceBanners api type |
-| `reload` | Soft reboot; reloads configuration from disk. | No | No | Empty on success, error on failure |
-| `scan` | Triggers an immediate network scan (ARP/NDP). | No | No | Empty on success, error on failure |
-| `shutdown` | Gracefully shuts down the daemon and exits. | No | No | Empty on success, error on failure |
-| `log` | Retrieves entries from the system event log and optionally streams live events. Backing endpoint for the CLI `watch` command. Follows the **HybridStream** pattern. | Optional | `follow: bool`, `n: Option<usize>`, `filter: Option<Vec<EventKind>>` | HybridStream of Event entries |
-| `system_config_export` | Bulk exports the full system configuration from the database. | No | No | SystemConfigExport api type |
-| `system_config_import` | Bulk imports system configuration, replacing or merging tables. | No | SystemConfigExport api type | Empty on success, error on failure |
-| `context_dump` | Dumps full program state as JSON. **TUI-internal only — not exposed via CLI.** | Yes | `only_devices: bool`, `only_orphans: bool` | JSON Value stream |
-
-> `filter` in `log` is evaluated server-side. The daemon retains only events whose `EventKind` is present in the filter list before emitting them. An absent or empty filter passes all events through.
+Endpoints supporting event streaming implement the **HybridStream** contract:
+- `n: Option<usize>` — Number of historical entries to replay before streaming. `None` or `0` means no historical replay.
+- `follow: bool` — If `false`, emits up to `n` entries and closes. If `true`, replays `n` historical entries and keeps the stream open, broadcasting new events from the `EventBus` as they occur.
+- Entries are always transmitted oldest-first (chronologically).
 
 ---
 
-### Devices (Discovery)
+## 2. API Method Reference
 
-| Method | Description | Input | Output |
-| :--- | :--- | :--- | :--- |
-| `list_devices` | Returns a list of all discovered and known devices. | Optional: `filter`, `vendor`, `method`, `format`, `limit`, `offset` | List of device api types |
-| `whois` | Returns detailed information and history for a specific device. | MAC, IP, or Hostname | Device api type |
-| `wol` | Triggers a Wake-on-LAN magic packet for a device. | MAC or Hostname | Empty on success, error on failure |
-| `topology` | Returns the inferred physical network topology. | No | Topology api type |
-| `purge` | Removes a device's data from both memory and database. Propagates deletion to all subsystems via the event bus (including removal of any associated `dev:` DNS rewrites). | MAC or Hostname | Empty on success, error on failure |
+### System & Daemon Management
 
----
-
-### Hosts (Static Configuration)
-
-| Method | Description | Input | Output |
-| :--- | :--- | :--- | :--- |
-| `host_list` | Lists all manually configured static hosts. | No | List of static host api types |
-| `host_add` | Adds or updates a static host configuration (full upsert). | Static host api type | Empty on success, error on failure |
-| `host_set` | Updates a single field (`hostname`, `v4`, `v6_suffix`) for an existing host entry. | MAC, field name, new value | Empty on success, error on failure |
-| `host_remove` | Removes a static host configuration. | MAC or Hostname | Empty on success, error on failure |
-| `host_import` | Bulk imports static device configurations. | List of static host api types | Empty on success, error on failure |
-| `host_export` | Bulk exports all static host configurations. | No | List of static host api types |
-
-> `host_add` performs a full upsert. `host_set` performs a partial field update. Both promote the device to `Static` origin.
+| Method | Parameters | Return Type | Description |
+|:-------|:-----------|:------------|:------------|
+| `status` | None | `StatusResponse` | Full router status (uptime, resources, active interfaces, database vitals). |
+| `service_banners` | None | `ServiceBannersResponse` | Real-time status banners and metrics from all registered background services. |
+| `service_control` | `id: String`, `action: ServiceAction` | `SimpleSuccess` | Controls a background service (`Start`, `Stop`, `Restart`). |
+| `reload` | None | `SimpleSuccess` | In-place configuration reload across active services. |
+| `shutdown` | None | `SimpleSuccess` | Gracefully shuts down the router daemon. |
+| `log` | `follow: bool`, `n: Option<usize>`, `filter: Option<Vec<EventKind>>` | `Stream<Event>` | Retrieves system event history and optionally streams live events. |
+| `system_setup_status` | None | `SetupStatusResponse` | Checks onboarding completion and network hardware readiness. |
+| `system_setup` | `payload: SetupPayload` | `SetupResponse` | Completes initial first-run router provisioning. |
+| `system_config_export` | None | `SystemConfigExport` | Exports entire database configuration (hosts, DNS, tokens, pools). |
+| `system_config_import` | `config: SystemConfigExport` | `SystemConfigImportResponse` | Bulk imports system configuration into the database. |
+| `context_dump` | `only_devices: bool`, `only_orphans: bool` | `serde_json::Value` | Diagnostic state inspection dump. |
 
 ---
 
-### DNS Resolver
+### Device Discovery & Inventory
 
-| Method | Description | Streaming | Input | Output |
-| :--- | :--- | :--- | :--- | :--- |
-| `dns_stats` | Returns performance and state counters of the DNS resolver. | No | No | DNS stats api type |
-| `dns_analytics` | Returns top domains, top clients, query rates, and protocol stats. | No | `limit: Option<usize>` | DNS analytics api type |
-| `dns_query` | Performs a diagnostic DNS resolution via the daemon. Supports automatic PTR reverse lookup formatting when an IP address is provided. | No | Domain name or hostname (PTR), optional record type | DNS query result api type |
-| `dns_query_log` | Retrieves or streams the DNS query history. Follows the **HybridStream** pattern. | Optional | `follow: bool`, `n: Option<usize>`, `client: Option<String>`, `offset: Option<usize>` | HybridStream of DNS query log entry api types |
-| `dns_upstreams` | Returns health and performance statistics for all configured upstream resolvers. | No | No | List of DNS upstream status api types |
-| `dns_upstream_add` | Adds a new runtime upstream resolver to the database. | No | Upstream config payload (`addr`, `protocol`, `domain`) | Empty on success, error on failure |
-| `dns_upstream_remove` | Removes a runtime upstream resolver from the database. | No | Upstream ID or address | Empty on success, error on failure |
-| `dns_rewrite_list` | Returns all DNS rewrite rules. | No | No | List of DNS rewrite rule api types |
-| `dns_rewrite_add` | Adds a new DNS rewrite rule or updates an existing one. A, AAAA, and CNAME rules for the same domain follow individual merging rules (see note). | No | DNS rewrite rule api type | Empty on success, error on failure |
-| `dns_rewrite_remove` | Removes a DNS rewrite rule by ID. | No | Rule ID | Empty on success, error on failure |
-| `dns_rewrite_clear` | Removes all DNS rewrite rules. | No | No | Empty on success, error on failure |
-| `dns_rewrite_import` | Bulk imports DNS rewrite rules, additively merging with existing rules if the same domain exists. | No | List of DNS rewrite rule api types | Empty on success, error on failure |
-| `dns_rewrite_export` | Bulk exports all DNS rewrite rules. | No | No | List of DNS rewrite rule api types |
-
-> **`dev:` rewrites:** The `answer` field of a rewrite rule accepts the special prefix `dev:<hostname>`. This creates a dynamic rewrite resolved by `lanforge-dns` against the current known addresses of the named device. The rewrite is automatically updated whenever the device's IP changes (via event bus propagation from `lanforge-core`), and is removed when the device is purged. For `dev:` entries, the daemon enriches the returned rewrite rule objects with their currently resolved IP addresses (`resolved_ips`), allowing clients to display live target addresses without secondary L1 requests.
->
-> **Merging rules:** Separate A and AAAA rules for the same domain are allowed. CNAME rules require that no other CNAME exists for that domain (one CNAME per domain).
+| Method | Parameters | Return Type | Description |
+|:-------|:-----------|:------------|:------------|
+| `list_devices` | `query: DeviceListQuery` | `DevicesResponse` | Lists discovered network devices with pagination and filters. |
+| `whois` | `target: String` (MAC, IP, hostname) | `WhoisResponse` | Returns detailed identity, lease history, and SLAAC addresses. |
+| `wol` | `target: String` (MAC or hostname) | `SimpleSuccess` | Dispatches a Wake-on-LAN Ethernet magic packet. |
+| `purge` | `mac: MacAddr` | `SimpleSuccess` | Removes a device from active state and storage, clearing dynamic DNS mappings. |
+| `transient_host_list` | None | `TransientHostsResponse` | Lists transient discovered hostnames pending static promotion. |
 
 ---
 
-### DNS Cache
+### Static Host Reservations
 
-| Method | Description | Input | Output |
-| :--- | :--- | :--- | :--- |
-| `dns_cache_flush` | Clears all entries from the DNS cache. | No | Empty on success, error on failure |
-| `dns_cache_dump` | Lists all current entries in the DNS cache with optional search and type filtering. | Optional: `limit`, `offset`, `q` (search query), `kind` (record type) | List of DNS cache entry api types |
-| `dns_cache_stats_ext` | Returns in-depth cache statistics and memory usage. | No | DNS cache stats api type |
-
----
-
-### DNS Adblock (Filter)
-
-| Method | Description | Input | Output |
-| :--- | :--- | :--- | :--- |
-| `dns_adblock_status` | Current filter status (enabled, size, active timer if any). | No | DNS adblock status api type |
-| `dns_adblock_set` | Toggles the adblocker on or off, optionally for a duration (see note). | `enabled: bool`, `duration_secs: Option<u64>` | Empty on success, error on failure |
-| `dns_adblock_config_set` | Updates adblock configuration (blocking mode and target IPs). | `blocking_mode: Option<BlockingMode>`, `blocking_ip_v4: Option<Ipv4Addr>`, `blocking_ip_v6: Option<Ipv6Addr>` | Empty on success, error on failure |
-| `dns_adblock_reload` | Triggers a reload of all blocklists and allowlists from their source URLs. | No | Empty on success, error on failure |
-| `dns_adblock_urls` | Lists configured source URLs for blocklists and allowlists. | No | List of DNS adblock URL api types |
-| `dns_adblock_url_add` | Adds a new source URL for blocklists or allowlists. | DNS adblock URL api type | Empty on success, error on failure |
-| `dns_adblock_url_remove` | Removes a source URL. | DNS adblock URL api type | Empty on success, error on failure |
-| `dns_adblock_allowlist` | Lists all domains currently in the allowlist. | No | List of allowlist entry api types (id, domain) |
-| `dns_block` | Persistently blocks a domain (rewrite to `0.0.0.0`). | Domain name | Empty on success, error on failure |
-| `dns_allow` | Adds a domain to the allowlist (bypasses all filters). | Domain name | Empty on success, error on failure |
-| `dns_unallow` | Removes a domain from the allowlist. | Domain name or allowlist entry ID | Empty on success, error on failure |
-
-> **`dns_adblock_set` timer semantics:**
-> - Calling with `enabled: true` immediately enables adblocking and cancels any active disable timer.
-> - Calling with `enabled: false` and a `duration_secs` always resets to a fresh countdown with the new value, overwriting any previous timer.
-> - Calling with `enabled: false` and `duration_secs: None` disables adblocking permanently (no timer).
+| Method | Parameters | Return Type | Description |
+|:-------|:-----------|:------------|:------------|
+| `host_list` | None | `HostsResponse` | Lists all static host reservations. |
+| `host_add` | `entry: HostConfigEntry` | `SimpleSuccess` | Creates or updates a static host reservation. |
+| `host_set` | `mac: MacAddr`, `field: String`, `value: String` | `SimpleSuccess` | Updates a specific field (`hostname`, `v4`, `v6_suffix`) on a host. |
+| `host_remove` | `mac: MacAddr` | `SimpleSuccess` | Deletes a static host reservation. |
+| `host_import` | `hosts: Vec<HostConfigEntry>` | `SimpleSuccess` | Bulk imports static host configurations. |
 
 ---
 
-### DHCP
+### DHCPv4 & DHCPv6
 
-| Method | Description | Input | Output |
-| :--- | :--- | :--- | :--- |
-| `leases` | Lists all active DHCPv4/v6 leases. | `count: bool` | List of DHCP lease api types |
-| `dhcp_pools` | Returns utilization statistics for all DHCP pools. | No | DHCP pool stats api type |
-| `lease_renew` | Forces a lease renewal for a specific device. | MAC or Hostname, `target: Option<LeaseTarget>` (V4/V6/Both) | Empty on success, error on failure |
-| `lease_release` | Forces a lease release for a specific device. | MAC or Hostname, `target: Option<LeaseTarget>` (V4/V6/Both) | Empty on success, error on failure |
-
----
-
-### Database
-
-| Method | Description | Input | Output |
-| :--- | :--- | :--- | :--- |
-| `db_vacuum` | Performs a compact / vacuum operation on the persistent database. | No | Empty on success, error on failure |
-| `db_prune` | Prunes old history and log entries based on retention policy. | No | Empty on success, error on failure |
-| `db_log_clean` | Clears the transient system event log from the database. | No | Empty on success, error on failure |
-| `db_reset` | Wipes the entire database. **DANGEROUS.** | No | Empty on success, error on failure |
+| Method | Parameters | Return Type | Description |
+|:-------|:-----------|:------------|:------------|
+| `leases` | `count: bool` | `LeasesResponse` | Returns active DHCPv4 and DHCPv6 leases with lease expiration timestamps. |
+| `dhcp_pools` | None | `DhcpPoolsResponse` | Returns utilization metrics for all configured dynamic pools. |
+| `dhcp_options` | None | `DhcpOptionsResponse` | Inspects global DHCP options (PXE boot, DNS, NTP, custom codes). |
+| `update_dhcp_options` | `options: DhcpOptionsConfig` | `SimpleSuccess` | Updates global DHCP options in-place. |
+| `dhcp_pools_config` | None | `DhcpPoolsConfigResponse` | Returns pool configuration definitions (IPv4/IPv6 ranges). |
+| `update_dhcp_pools_config` | `v4_pools: Vec<Dhcpv4Pool>`, `v6_pools: Vec<Dhcpv6Pool>` | `SimpleSuccess` | Updates address assignment pools. |
+| `dhcp_reconcile` | None | `DhcpReconcileResponse` | Reconciles lease state against current active interfaces. |
+| `lease_renew` | `mac: MacAddr`, `target: Option<LeaseTarget>` | `SimpleSuccess` | Forces lease renewal for a client (`V4`, `V6`, or `Both`). |
+| `lease_release` | `mac: MacAddr`, `target: Option<LeaseTarget>` | `SimpleSuccess` | Releases an active lease allocation. |
 
 ---
 
-### Users & Management
+### DNS Resolver & Filtering
 
-| Method | Description | Input | Output |
-| :--- | :--- | :--- | :--- |
-| `user_create` | Creates a new user account with Argon2id password hash and specified role (`admin`, `operator`, `viewer`). | `username: String`, `password: String`, `role: Option<String>` | User response api type |
-| `user_list` | Lists all registered user accounts with role and last login. | No | User list response api type |
-| `user_delete` | Deletes a user account by username. | `username: String` | Empty on success, error on failure |
-| `user_passwd` | Updates password for a user account. | `username: String`, `new_password: String` | Empty on success, error on failure |
+| Method | Parameters | Return Type | Description |
+|:-------|:-----------|:------------|:------------|
+| `dns_stats` | None | `DnsStatsResponse` | Resolver performance counters (queries, cache hits, blocks). |
+| `dns_analytics` | `limit: Option<usize>`, `client: Option<String>` | `DnsAnalyticsResponse` | Top queried domains, top clients, and query type trends. |
+| `dns_query` | `name: String`, `record_type: Option<DnsRecordType>` | `DnsQueryResponse` | Diagnostic DNS query through the local resolver engine. |
+| `dns_query_log` | `follow: bool`, `n: Option<usize>`, filters... | `DnsQueryLogResponse` | Retrieves or streams query audit logs (**HybridStream**). |
+| `dns_upstreams` | None | `DnsUpstreamsResponse` | Health, latency, and status of configured upstream resolvers. |
+| `dns_upstream_add` | `addr: SocketAddr`, `protocol: UpstreamProtocol`, `domain: Option<String>` | `SimpleSuccess` | Adds an upstream forwarding resolver (UDP, DoT, DoQ, DoH). |
+| `dns_upstream_remove` | `addr: SocketAddr`, `protocol: UpstreamProtocol`, `domain: Option<String>` | `SimpleSuccess` | Removes an upstream forwarding resolver. |
+| `dns_rewrites` | None | `DnsRewritesResponse` | Lists local DNS rewrite rules (including dynamic `dev:` and `srv:`). |
+| `dns_rewrite_add` | `rule: RewriteRule` | `SimpleSuccess` | Adds or updates a local DNS rewrite rule. |
+| `dns_rewrite_remove` | `id: i64` | `SimpleSuccess` | Deletes a DNS rewrite rule by ID. |
+| `dns_rewrite_clear` | None | `SimpleSuccess` | Clears all local DNS rewrite rules. |
+| `dns_rewrite_import` | `rules: Vec<RewriteRule>` | `SimpleSuccess` | Bulk imports DNS rewrite rules. |
+| `dns_rewrite_export` | None | `DnsRewritesResponse` | Bulk exports DNS rewrite rules. |
+| `dns_reverse_resolver_add` | `subnet: String`, `resolver_uri: String` | `SimpleSuccess` | Registers subnet reverse lookup routing. |
+| `dns_reverse_resolver_remove` | `subnet: String` | `SimpleSuccess` | Removes a subnet reverse resolver. |
+| `dns_reverse_resolver_list` | None | `DnsReverseResolversResponse` | Lists subnet reverse lookup routing rules. |
 
 ---
 
-### Auth (UDS & HTTP)
+### DNS Cache & Adblock
 
-API key generation endpoints are restricted to local UDS connections or admin sessions. User authentication & token verification operates across both UDS and HTTP.
+| Method | Parameters | Return Type | Description |
+|:-------|:-----------|:------------|:------------|
+| `dns_cache_dump` | `limit: Option<usize>`, `offset: Option<usize>`, `q: Option<String>`, `kind: Option<DnsRecordType>` | `DnsCacheResponse` | Inspects cached DNS resource records. |
+| `dns_cache_flush` | None | `SimpleSuccess` | Clears the in-memory DNS record cache immediately. |
+| `dns_cache_stats_ext` | None | `DnsCacheStatsExtResponse` | Detailed cache statistics and memory utilization. |
+| `dns_adblock_status` | None | `DnsAdblockStatusResponse` | Current adblocking state, list sizes, and pause timers. |
+| `dns_adblock_set` | `enabled: bool`, `duration_secs: Option<u64>` | `SimpleSuccess` | Toggles adblocking on/off, optionally with an auto-resume timer. |
+| `dns_adblock_config_set` | `blocking_mode`, `ip_v4`, `ip_v6`, `refresh_time` | `SimpleSuccess` | Updates sinkhole blocking mode and daily update schedule. |
+| `dns_adblock_reload` | None | `SimpleSuccess` | Triggers background compilation of all filter list sources. |
+| `dns_adblock_url_list` | None | `DnsAdblockUrlsResponse` | Lists configured remote filter list sources. |
+| `dns_adblock_url_add` | `url: String`, `kind: AdblockUrlKind`, `format: Option<AdblockSourceFormat>` | `SimpleSuccess` | Adds a remote blocklist/allowlist source URL. |
+| `dns_adblock_url_remove` | `url: String` | `SimpleSuccess` | Removes a remote filter list source. |
+| `dns_adblock_sources` | None | `DnsAdblockSourcesResponse` | Returns detailed metadata on loaded filter sources. |
+| `dns_adblock_check` | `domain: String` | `AdblockCheckResponse` | Tests whether a domain is blocked and identifies matching rules. |
+| `dns_allowlist` | None | `DnsAllowlistResponse` | Lists custom allowlist entries. |
+| `dns_block` | `domain: String` | `SimpleSuccess` | Adds a domain to the local custom blocklist. |
+| `dns_allow` | `domain: String` | `SimpleSuccess` | Adds a domain to the local custom allowlist. |
+| `dns_unallow` | `domain: String` | `SimpleSuccess` | Removes a domain from the custom allowlist. |
 
-| Method | Description | Input | Output |
-| :--- | :--- | :--- | :--- |
-| `ak_generate` | Generates a new API token. **UDS-only.** | Token name, optional scopes, optional expires_at | API token api type (includes secret, shown once) |
-| `ak_delete` | Deletes an existing API token. | API token ID or name | Empty on success, error on failure |
-| `ak_renew` | Regenerates an API token (deletes old, creates new). | API token ID or name | API token api type (new secret, shown once) |
-| `ak_list` | Lists all API tokens (metadata only — no secret keys). | No | List of API token api types |
-| `ak_validate` | Validates a provided API token. Used by the CLI `login` flow over HTTP. | API token string | Boolean (true if valid) |
+---
 
+### Stateful Firewall & NAT (`lanforge-nft`)
+
+| Method | Parameters | Return Type | Description |
+|:-------|:-----------|:------------|:------------|
+| `firewall_status` | None | `FirewallStatus` | Active firewall state, zone assignments, and rule counts. |
+| `firewall_config` | None | `FirewallConfig` | Retrieves active firewall configuration (zones, rules, NAT). |
+| `update_firewall_config` | `cfg: FirewallConfig` | `SimpleSuccess` | Updates firewall configuration in-place. |
+| `firewall_reload` | None | `SimpleSuccess` | Recompiles and commits Netlink/nftables ruleset (~5ms). |
+| `firewall_propose` | `candidate: FirewallConfig` | `FirewallValidationReport` | Dry-run validates a candidate firewall configuration. |
+| `firewall_commit` | `req: FirewallCommitRequest` | `FirewallCommitResponse` | Transactional two-phase commit for candidate firewall rules. |
+| `firewall_confirm` | `tx_id: String` | `SimpleSuccess` | Confirms transaction, preventing automatic rollback. |
+| `firewall_abort` | `tx_id: String` | `SimpleSuccess` | Aborts pending transaction and rolls back to previous state. |
+
+---
+
+### PPPoE WAN Client (`lanforge-pppoe`)
+
+| Method | Parameters | Return Type | Description |
+|:-------|:-----------|:------------|:------------|
+| `pppoe_status` | None | `PppoeStatusResponse` | Session state, uptime, assigned WAN IP, MTU, and LCP stats. |
+| `pppoe_config` | None | `PppoeConfig` | Retrieves PPPoE credentials and interface settings. |
+| `update_pppoe_config` | `cfg: PppoeConfig` | `SimpleSuccess` | Updates PPPoE configuration. |
+| `pppoe_reconnect` | None | `SimpleSuccess` | Cooperatively terminates session (PADT) and renegotiates. |
+| `pppoe_disconnect` | None | `SimpleSuccess` | Tears down the WAN PPPoE session. |
+
+---
+
+### IPv6 Router Advertisements (`lanforge-ra`)
+
+| Method | Parameters | Return Type | Description |
+|:-------|:-----------|:------------|:------------|
+| `ra_status` | None | `RaStatusResponse` | Advertised prefixes, RDNSS, lifetime, flags (M/O), and stats. |
+| `ra_config` | None | `RaServerConfig` | Retrieves Router Advertisement server configuration. |
+| `update_ra_config` | `cfg: RaServerConfig` | `SimpleSuccess` | Updates Router Advertisement settings in-place. |
+| `ra_trigger` | None | `SimpleSuccess` | Dispatches an immediate unsolicited Router Advertisement. |
+
+---
+
+### Traffic Shaping & SQM (`lanforge-traffic`)
+
+| Method | Parameters | Return Type | Description |
+|:-------|:-----------|:------------|:------------|
+| `traffic_status` | None | `TrafficStatusResponse` | Active queue disciplines, interface tuning, and status. |
+| `traffic_config` | None | `TrafficConfig` | Retrieves SQM and NIC hardware offloading settings. |
+| `update_traffic_config` | `cfg: TrafficConfig` | `SimpleSuccess` | Applies updated SQM parameters and tuning masks. |
+| `traffic_telemetry` | None | `TrafficTelemetryResponse` | Live packet rates, dropped packets, and interface throughput. |
+
+---
+
+### Database Maintenance (`lanforge-db`)
+
+| Method | Parameters | Return Type | Description |
+|:-------|:-----------|:------------|:------------|
+| `db_vacuum` | None | `SimpleSuccess` | Compacts database and reclaims fragmented storage. |
+| `db_prune` | None | `SimpleSuccess` | Prunes historical query and event logs per retention policy. |
+| `db_log_clean` | None | `SimpleSuccess` | Clears transient event log records. |
+| `db_reset` | None | `SimpleSuccess` | Wipes the database (**destructive action**). |
+
+---
+
+### Users & Authentication
+
+| Method | Parameters | Return Type | Description |
+|:-------|:-----------|:------------|:------------|
+| `user_list` | None | `UserListResponse` | Lists user accounts, roles, and last login timestamps. |
+| `user_create` | `payload: CreateUserPayload` | `UserResponse` | Creates user account with Argon2id hashed password. |
+| `user_delete` | `username: String` | `SimpleSuccess` | Deletes a user account. |
+| `user_passwd` | `username: String`, `new_password: String` | `SimpleSuccess` | Updates password for a user account. |
+| `ak_list` | None | `AuthTokensResponse` | Lists active API tokens (metadata only — no secret keys). |
+| `ak_generate` | `name: String`, `scopes`, `expires_at` | `AuthTokenResponse` | Generates a new API token (secret returned once). |
+| `ak_delete` | `id_or_name: String` | `SimpleSuccess` | Revokes an API token. |
+| `ak_renew` | `id_or_name: String` | `AuthTokenResponse` | Re-issues an API token with a fresh secret key. |

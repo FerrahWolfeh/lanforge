@@ -1,6 +1,6 @@
 # Lanforge Architectural Specifications - Master Index
 
-Welcome to the architectural specifications suite for **Lanforge**. This directory contains structured technical documentation explaining the inner workings, system invariants, data flows, and runtime behavior of Lanforge for both human engineers and LLMs.
+Welcome to the architectural specifications suite for **Lanforge**. This directory contains structured technical documentation explaining the inner workings, system invariants, data flows, and runtime behavior of Lanforge for engineers and contributors.
 
 ---
 
@@ -34,6 +34,8 @@ Welcome to the architectural specifications suite for **Lanforge**. This directo
 | **`services/05-auxiliary-services.md`** (`docs/spec/services/05-auxiliary-services.md`) | `lanforge-tftp`, `wol`, etc. | Overview of auxiliary homelab services: TFTP boot serving, Wake-on-LAN (WOL), passive host discovery, and link state monitoring. |
 | **`services/05-01-tftp-boot-server.md`** (`docs/spec/services/05-01-tftp-boot-server.md`) | `lanforge-tftp` | TFTP UDP 69 packet loop, read request handling, RFC 2347 option negotiation (`blksize`, `tsize`), block ACK tracking, and PXE bootloader serving. |
 | **`services/05-02-discovery-and-wol.md`** (`docs/spec/services/05-02-discovery-and-wol.md`) | `lanforge-discovery`, `wol` | Passive mDNS/ARP/NDP packet sniffing for host inventory updates, and Wake-on-LAN (WOL) Magic Packet generation. |
+| **`lanforge-nft`** | `crates/net/lanforge-nft` | Stateful Netlink/nftables firewall engine, zones, inter-zone policy matrix, host rules, and atomic reloads. |
+| **`lanforge-traffic`** | `crates/net/lanforge-traffic` | SQM bufferbloat traffic shaping (CAKE / fq_codel), hardware NIC offload tuning, and interface telemetry. |
 
 ---
 

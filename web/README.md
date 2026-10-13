@@ -1,4 +1,4 @@
-# Lanforge WebUI 🌐
+# Lanforge WebUI
 
 Modern, responsive management dashboard for Lanforge built with **SvelteKit**, **shadcn-svelte**, and **Tailwind CSS**.
 
@@ -6,9 +6,9 @@ The WebUI compiles to a production static SPA bundle (`adapter-static`), which i
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
-- **Framework**: [SvelteKit](https://svelte.dev/) with Svelte 5 and `adapter-static`.
+- **Framework**: [SvelteKit](https://svelte.dev/) with Svelte 5 runes and `adapter-static`.
 - **UI Components**: [shadcn-svelte](https://shadcn-svelte.com/) with Catppuccin Mocha aesthetic tokens.
 - **Styling**: [Tailwind CSS v4](https://tailwindcss.com/).
 - **Icons**: [Lucide Svelte](https://lucide.dev/).
@@ -16,7 +16,7 @@ The WebUI compiles to a production static SPA bundle (`adapter-static`), which i
 
 ---
 
-## 🚀 Development Workflow
+## Development Workflow
 
 ```bash
 # 1. Install dependencies
@@ -32,13 +32,12 @@ pnpm check
 pnpm build
 ```
 
-When developing locally with `pnpm dev`, API requests proxy to your running Lanforge daemon instance (default port `:8096`).
+When developing locally with `pnpm dev`, API requests proxy to your running Lanforge daemon instance (default port `:8088`).
 
 ---
 
-## 📂 Architecture & Guidelines
+## Architecture & Guidelines
 
 - **Strict English Only**: All user-facing text (labels, placeholders, toasts, tooltips, dialogs) and code comments must be in English.
 - **Client-Side Hydration**: Because Lanforge embeds a static SPA bundle, data fetching is strictly client-side post-hydration.
 - **EventFeed Integration**: The global real-time event feed listens to SSE events persistently without breaking across page transitions.
-

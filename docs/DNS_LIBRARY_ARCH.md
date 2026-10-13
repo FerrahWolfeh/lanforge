@@ -10,9 +10,14 @@ High-performance authoritative LAN DNS server for the Lanforge daemon. Features 
 
 ### Dependencies
 
+| Crate | Responsibility |
+| :--- | :--- |
 | `lanforge-core` | `LanforgeContext` for device lookup, `EventBus`, service traits |
-| `moka` (sync) | Synchronous response cache with TTL-based expiry |
-| `tokio` | UDP/TCP listeners, oneshot channels, timeouts |
+| `lanforge-types` | Domain types, DNS record types, adblock models, rewrite rules |
+| `lanforge-transport` | Dual-stack Y-architecture UDP/TCP transports |
+| `lanforge-dns-wire` | Zero-allocation DNS wire parser, questions, headers, label iterators |
+| `dashmap` / `parking_lot` | High-throughput concurrent in-memory cache with TTL-based expiration |
+| `tokio` | Async event loops, oneshot channels, timeouts |
 | `tracing` | Diagnostic logging |
 | `thiserror` | `DnsError` |
 
@@ -27,7 +32,7 @@ graph TD
     lib --> response["response.rs\nResponseBuilder"]
     lib --> upstream["upstream.rs\nUpstreamManager"]
     lib --> cache["cache.rs\nDnsCache"]
-    lib --> wire["wire/\nWireHeader, WireQuestion, WireLabelIter"]
+    lib --> wire_crate["lanforge-dns-wire\nWireHeader, WireQuestion, WireLabelIter"]
     lib --> utils["utils.rs\nARPA, hostname extraction, lowercase"]
     lib --> stats["stats.rs\nDnsStats atomic counters"]
     lib --> config["config.rs\nDnsConfig"]
@@ -35,12 +40,11 @@ graph TD
 
     server --> resolver
     server --> upstream
-    server --> wire
+    server --> wire_crate
     server --> utils
     resolver --> response
     resolver --> utils
     upstream --> cache
-    wire --> qtypes["wire/qtypes.rs\nQType enum"]
 ```
 
 ---

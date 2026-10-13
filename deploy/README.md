@@ -1,119 +1,115 @@
-# Guia de Implantação do Lanforge (Systemd & Edge Gateway no Fedora Server)
+# Lanforge Deployment Guide (Systemd & Linux Edge Gateways)
 
-Este diretório contém a infraestrutura de implantação para o **Lanforge** em roteadores e gateways edge baseados em Linux (especialmente Fedora Server).
-
----
-
-## 1. O Que Foi Aprimorado no Lanforge?
-
-1. **Systemd Native Signaling (`Type=notify` via `sd-notify`)**:
-   - O daemon `lanforged` utiliza o protocolo oficial do systemd.
-   - Só emite `READY=1` e `Status="Operational (... services active on <iface>)"` após **todos os subsistemas internos** (DHCP, DNS, RA, DB worker, UDS, HTTP) estarem 100% iniciados e com sockets abertos.
-2. **Watchdog do Systemd (`WatchdogSec=30s`)**:
-   - O daemon monitora automaticamente a variável `WATCHDOG_USEC` injetada pelo systemd.
-   - Mantém uma task leve em background enviando `WATCHDOG=1` a cada 15 segundos. Se a thread principal ou o reactor assíncrono travar em deadlock, o systemd reinicia o roteador automaticamente.
-3. **Graceful Stopping (`STOPPING=1`)**:
-   - Ao receber `SIGTERM` ou `SIGINT`, emite `STOPPING=1` e `Status="Shutting down..."`, cancelando serviços e gravando o cache de banco de dados (`redb`) com segurança antes de sair.
-4. **Atualização Atômica Sem Queda da Rede**:
-   - As atualizações baixam os binários para `/tmp`, realizam a substituição atômica via `install` (evitando erro de `Text file busy`) e reiniciam o daemon em ~150 milissegundos.
-5. **Acesso CLI Desprivilegiado (Sem `sudo`)**:
-   - O socket UDS em `/run/lanforge/control.sock` possui grupo `lanforge` (permissão `0750`). Qualquer usuário local no grupo `lanforge` pode executar `lanforge status`, `lanforge lease list`, `lanforge whois`, etc. sem necessidade de `sudo`.
+This directory contains production deployment configurations, scripts, and systemd units for deploying **Lanforge** on Linux edge gateways and SBC routers (e.g. Fedora Server, Debian/Ubuntu, Arch Linux ARM).
 
 ---
 
-## 2. Hierarquia de Diretórios (Padrão FHS)
+## 1. Systemd Integration & Architecture
 
-| Componente | Caminho no Sistema | Permissões | Descrição |
-| :--- | :--- | :--- | :--- |
-| **Daemon** | `/usr/local/bin/lanforged` | `0755 root:root` | Roteador e orquestrador central (WebUI embutida). |
-| **CLI / TUI** | `/usr/local/bin/lanforge` | `0755 root:root` | Ferramenta administrativa para gerência local e remota. |
-| **Updater** | `/usr/local/bin/lanforge-update` | `0755 root:root` | Script de atualização atômica via pull da estação de trabalho. |
-| **Configuração** | `/etc/lanforge/lanforge.toml` | `0640 root:lanforge` | Arquivo de configuração principal (WebUI na porta 8096). |
-| **Ambiente** | `/etc/lanforge/lanforge.env` | `0640 root:lanforge` | Variáveis de ambiente e hosts de build. |
-| **Banco Persistente** | `/var/lib/lanforge/config.redb` | `0750 root:lanforge` | Dados persistentes (usuários, hosts estáticos, rewrites). |
-| **Runtime Temporário** | `/run/lanforge/control.sock` | `0750 root:lanforge` | Socket de controle UDS em `tmpfs`. |
+1. **Native Systemd Signaling (`Type=notify`)**:
+   - The `lanforged` daemon integrates directly with `sd-notify`.
+   - Emits `READY=1` and status metrics only after **all internal subsystems** (DHCP, DNS, RA, DB worker, UDS, HTTP) have successfully initialized and bound their respective sockets.
+2. **Systemd Watchdog Supervision (`WatchdogSec=30s`)**:
+   - The daemon automatically detects `WATCHDOG_USEC` injected by systemd.
+   - A dedicated heartbeat worker emits `WATCHDOG=1` every 15 seconds. If the async runtime or main thread encounters a deadlock, systemd restarts the daemon automatically.
+3. **Graceful Teardown (`STOPPING=1`)**:
+   - Upon receiving `SIGTERM` or `SIGINT`, the daemon signals `STOPPING=1`, cooperatively shuts down active services, commits persistent state to `redb`, and terminates cleanly.
+4. **Atomic In-Place Binaries Replacement**:
+   - Update scripts download release binaries to `/tmp` and perform atomic installations via `install -Dm755` (preventing `Text file busy` errors) with near-instantaneous service restarts (< 200ms).
+5. **Unprivileged CLI Administration**:
+   - The UDS control socket at `/run/lanforge/control.sock` is owned by group `lanforge` with permissions `0750`. Local users in the `lanforge` group can execute `lanforge status`, `lanforge dhcp leases`, `lanforge devices`, etc. without requiring `sudo`.
 
 ---
 
-## 3. Workflows de Atualização
+## 2. Directory Hierarchy (FHS Compliance)
 
-### Modo A: PULL Direto do Mini PC (Recomendado para o dia a dia)
+| Component | Filesystem Path | Permissions | Description |
+|:----------|:----------------|:------------|:------------|
+| **Daemon** | `/usr/local/bin/lanforged` | `0755 root:root` | Core router and orchestration daemon. |
+| **CLI Client** | `/usr/local/bin/lanforge` | `0755 root:root` | Command-line management client. |
+| **Updater** | `/usr/local/bin/lanforge-update` | `0755 root:root` | Script for atomic workstation pull updates. |
+| **Configuration** | `/etc/lanforge/lanforge.toml` | `0640 root:lanforge` | Primary configuration file (default HTTP port 8088). |
+| **Environment** | `/etc/lanforge/lanforge.env` | `0640 root:lanforge` | Environment variables and build station configuration. |
+| **Persistent DB** | `/var/lib/lanforge/config.redb` | `0750 root:lanforge` | Persistent state storage (users, static hosts, DNS rules). |
+| **Runtime Socket** | `/run/lanforge/control.sock` | `0750 root:lanforge` | Local UDS control socket in `tmpfs`. |
 
-Estando conectado via SSH no Mini PC (gateway), basta rodar:
+---
+
+## 3. Remote Deployment Workflows
+
+### Mode A: Direct PULL from the Gateway (Recommended)
+
+From an SSH session on the gateway router:
 
 ```bash
 sudo lanforge-update user@workstation
-# Ou apenas 'sudo lanforge-update' caso BUILD_HOST esteja configurado em /etc/lanforge/lanforge.env
+# Or bare 'sudo lanforge-update' if BUILD_HOST is set in /etc/lanforge/lanforge.env
 ```
 
-O script:
-1. Conecta via SCP na estação de compilação configurada;
-2. Puxa os binários `lanforged` e `lanforge` gerados na pasta de release;
-3. Valida a integridade dos binários;
-4. Instala atomicamente em `/usr/local/bin/`;
-5. Aplica `restorecon` para validação do SELinux;
-6. Reinicia o serviço `systemctl restart lanforge` (downtime < 200ms);
-7. Exibe o status operacional do systemd.
+The updater script:
+1. Connects via SCP to the designated workstation build directory.
+2. Retrieves newly compiled `lanforged` and `lanforge` release binaries.
+3. Validates binary integrity.
+4. Installs binaries atomically to `/usr/local/bin/`.
+5. Restores SELinux labels (`restorecon`).
+6. Restarts the service with minimal downtime (`systemctl restart lanforge`).
 
-*Dica: Defina a estação de compilação editando `/etc/lanforge/lanforge.env` (`BUILD_HOST=usuario@host`).*
+### Mode B: Direct PUSH from Workstation
 
----
-
-### Modo B: PUSH a partir da Estação de Trabalho
-
-Estando na estação de trabalho onde você desenvolve:
+From your local development machine:
 
 ```bash
-# Compila lanforged e lanforge (CLI) e envia para o gateway
+# Build and deploy both daemon and CLI to the gateway
 TARGET=user@gateway ./deploy/deploy-remote.sh
 
-# Se alterou a WebUI e deseja recompilar o frontend antes:
+# Recompile WebUI static bundle prior to deployment
 TARGET=user@gateway ./deploy/deploy-remote.sh --ui
 
-# Para compilar e enviar apenas o daemon:
+# Deploy only the daemon binary
 TARGET=user@gateway ./deploy/deploy-remote.sh --daemon
 
-# Para compilar e enviar apenas a CLI:
+# Deploy only the CLI binary
 TARGET=user@gateway ./deploy/deploy-remote.sh --cli
 ```
 
 ---
 
-## 4. Setup Inicial de um Novo Gateway
+## 4. Initial Gateway Setup
 
-Para configurar uma máquina Fedora Server do zero:
+To bootstrap a clean Linux machine from scratch:
 
 ```bash
-# Opção 1: Via script de push da estação de trabalho
+# Option 1: Remote push from development workstation
 TARGET=user@gateway ./deploy/deploy-remote.sh --setup
 
-# Opção 2: Localmente no Gateway
+# Option 2: Locally on the gateway machine
 sudo ./deploy/install.sh
 ```
 
-O instalador automático:
-- Cria o grupo `lanforge`;
-- Adiciona o usuário atual ao grupo `lanforge`;
-- Cria os diretórios `/etc/lanforge` e `/var/lib/lanforge` com permissões adequadas;
-- Instala a unit `lanforge.service` no systemd;
-- Configura o SELinux (`http_port_t` na porta 8096 e fcontext FHS);
-- Recarrega o systemd.
+The automated installer:
+- Creates the system `lanforge` group.
+- Adds the current user to the `lanforge` group.
+- Creates `/etc/lanforge` and `/var/lib/lanforge` directories with secure permissions.
+- Installs the systemd unit `lanforge.service`.
+- Configures SELinux network policies and FHS contexts.
+- Reloads the systemd daemon.
 
 ---
 
-## 5. Operação e Monitoramento
+## 5. Operations & Monitoring
 
 ```bash
-# Iniciar / Ativar no boot
+# Enable and start service on boot
 sudo systemctl enable --now lanforge
 
-# Verificar status detalhado e watchdog
+# Inspect service status and watchdog health
 systemctl status lanforge
 
-# Acompanhar logs em tempo real
+# Follow system logs in real-time
 journalctl -u lanforge -f
 
-# Usar a CLI sem sudo (para usuários do grupo lanforge)
+# Run unprivileged CLI commands (for users in the lanforge group)
 lanforge status
-lanforge lease list
+lanforge dhcp leases
+lanforge devices --online
 ```

@@ -4,7 +4,7 @@ import { defineConfig, loadEnv } from 'vite';
 
 export default defineConfig(({ mode }) => {
 	const env = { ...loadEnv(mode, process.cwd(), ''), ...loadEnv(mode, import.meta.dirname, '') };
-	const target = env.VITE_API_TARGET || 'http://192.168.3.1:8096';
+	const target = env.VITE_API_TARGET || 'http://127.0.0.1:8088';
 
 	return {
 		plugins: [

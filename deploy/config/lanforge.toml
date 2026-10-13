@@ -35,8 +35,8 @@ socket_path = "/run/lanforge/control.sock"
 [http]
 # REST API and Web Console interface.
 enabled = true
-# Listen address (dual-stack wildcard [::]:8096 covers IPv6 and IPv4).
-listen = "[::]:8096"
+# Listen address (dual-stack wildcard [::]:8088 covers IPv6 and IPv4).
+listen = "[::]:8088"
 # Enable HTTPS (inherits global system TLS if cert paths omitted).
 https_enabled = false
 # Allow plaintext HTTP for local network / reverse proxy access.

@@ -443,7 +443,7 @@ fn generate_setup_toml(
 
     s.push_str("[http]\n");
     s.push_str("enabled = true\n");
-    s.push_str("listen = \"0.0.0.0:8096\"\n");
+    s.push_str("listen = \"0.0.0.0:8088\"\n");
     s.push_str("allow_plaintext_http = true\n\n");
 
     if let Some(ref ra) = payload.ra {

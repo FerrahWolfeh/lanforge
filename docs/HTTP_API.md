@@ -1,8 +1,7 @@
 # Lanforge HTTP API — Specification
 
-This document defines the RESTful HTTP API exposed by `lanforged` via Axum. It wraps the same RPC surface defined in `API.md` and `API_TYPES.md` but uses proper HTTP semantics, JSON envelopes, SSE streaming, and standard status codes.
+The HTTP API powers the embedded WebUI and remote CLI administration (`lanforge --remote`).
 
-The HTTP API serves two consumers: the **CLI remote mode** (current) and a **future WebUI** (planned). Design decisions account for both.
 
 ---
 
@@ -369,6 +368,69 @@ Record type is inferred server-side. `rtype` may be passed explicitly to overrid
 ```
 
 This route is unauthenticated alongside `/login` and `/status`. Used by CLI and WebUI to confirm token validity.
+
+---
+
+### Firewall & NAT
+
+| Method | Path | RPC | Description |
+|:-------|:-----|:----|:-----------|
+| `GET` | `/api/v1/firewall/status` | `firewall_status` | Active firewall status and zone counters |
+| `GET` | `/api/v1/firewall/config` | `firewall_config` | Active firewall configuration (zones, rules, NAT) |
+| `POST` | `/api/v1/firewall/config` | `update_firewall_config` | Update firewall rules and zones in-place |
+| `POST` | `/api/v1/firewall/reload` | `firewall_reload` | Trigger in-place Netlink/nftables recompile |
+| `POST` | `/api/v1/firewall/propose` | `firewall_propose` | Validate a candidate firewall configuration |
+| `POST` | `/api/v1/firewall/commit` | `firewall_commit` | Two-phase commit of candidate rules |
+| `POST` | `/api/v1/firewall/confirm` | `firewall_confirm` | Confirm candidate transaction |
+| `POST` | `/api/v1/firewall/abort` | `firewall_abort` | Abort pending transaction and rollback |
+
+---
+
+### PPPoE WAN Client
+
+| Method | Path | RPC | Description |
+|:-------|:-----|:----|:-----------|
+| `GET` | `/api/v1/pppoe/status` | `pppoe_status` | WAN session status, IP address, uptime, LCP stats |
+| `GET` | `/api/v1/pppoe/config` | `pppoe_config` | PPPoE credentials and configuration |
+| `POST` | `/api/v1/pppoe/config` | `update_pppoe_config` | Update PPPoE settings |
+| `POST` | `/api/v1/pppoe/reconnect` | `pppoe_reconnect` | Terminate session and redial |
+| `POST` | `/api/v1/pppoe/disconnect` | `pppoe_disconnect` | Disconnect PPPoE session |
+
+---
+
+### IPv6 Router Advertisements
+
+| Method | Path | RPC | Description |
+|:-------|:-----|:----|:-----------|
+| `GET` | `/api/v1/ra/status` | `ra_status` | Advertised prefixes, RDNSS, lifetime, flags (M/O) |
+| `GET` | `/api/v1/ra/config` | `ra_config` | Router Advertisement configuration |
+| `POST` | `/api/v1/ra/config` | `update_ra_config` | Update Router Advertisement settings |
+| `POST` | `/api/v1/ra/trigger` | `ra_trigger` | Dispatch an immediate unsolicited RA |
+
+---
+
+### Traffic Shaping & SQM
+
+| Method | Path | RPC | Description |
+|:-------|:-----|:----|:-----------|
+| `GET` | `/api/v1/traffic/status` | `traffic_status` | Active SQM queue disciplines and tuning state |
+| `GET` | `/api/v1/traffic/telemetry` | `traffic_telemetry` | Interface packet throughput and drop counters |
+| `GET` | `/api/v1/traffic/config` | `traffic_config` | Traffic shaping and hardware offload configuration |
+| `POST` | `/api/v1/traffic/config` | `update_traffic_config` | Update SQM rules and interface masks |
+
+---
+
+### System Services & Setup
+
+| Method | Path | RPC | Description |
+|:-------|:-----|:----|:-----------|
+| `GET` | `/api/v1/system/setup-status` | `system_setup_status` | Check first-run onboarding status |
+| `POST` | `/api/v1/system/setup` | `system_setup` | Complete first-run setup wizard |
+| `GET` | `/api/v1/system/service_banners` | `service_banners` | Real-time status banners of all services |
+| `POST` | `/api/v1/system/services/{id}/control` | `service_control` | Start, stop, or restart a background service |
+| `GET` | `/api/v1/system/config/export` | `system_config_export` | Bulk export database configuration |
+| `POST` | `/api/v1/system/config/import` | `system_config_import` | Bulk import database configuration |
+
 
 ---
 
