@@ -171,8 +171,11 @@ pub const fn parse_ipcp_nak(
 
 #[must_use]
 pub const fn parse_peer_ip(data: &[u8], len: usize) -> Option<Ipv4Addr> {
+    if data.len() < 6 {
+        return None;
+    }
     let mut offset = 6;
-    let end = 2 + len;
+    let end = if 2 + len < data.len() { 2 + len } else { data.len() };
     while offset + 2 <= end {
         let opt_type = data[offset];
         let opt_len = data[offset + 1] as usize;
@@ -194,8 +197,11 @@ pub const fn parse_peer_ip(data: &[u8], len: usize) -> Option<Ipv4Addr> {
 
 #[must_use]
 pub fn parse_peer_v6_ifid(data: &[u8], len: usize) -> Option<Ipv6Addr> {
+    if data.len() < 6 {
+        return None;
+    }
     let mut offset = 6;
-    let end = 2 + len;
+    let end = if 2 + len < data.len() { 2 + len } else { data.len() };
     while offset + 2 <= end {
         let opt_type = data[offset];
         let opt_len = data[offset + 1] as usize;

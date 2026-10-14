@@ -1,9 +1,9 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
 use arbitrary::Arbitrary;
-use lanforge_dns::resolver::recursive::cache::{DnsCache, CacheKey};
+use lanforge_dns::resolver::recursive::cache::{CacheKey, DnsCache};
 use lanforge_dns_wire::WireQuestion;
+use libfuzzer_sys::fuzz_target;
 
 #[derive(Arbitrary, Debug)]
 enum CacheAction {
@@ -48,7 +48,7 @@ fuzz_target!(|input: FuzzDnsCacheInput| {
                 is_block,
                 ttl_offsets,
             } => {
-                let key = CacheKey { qname, qtype, qclass };
+                let key = CacheKey::new(qname, qtype, qclass);
                 cache.insert(key, response_data, ttl_offsets, min_ttl_found, is_block);
             }
             CacheAction::GetWire { query_data } => {

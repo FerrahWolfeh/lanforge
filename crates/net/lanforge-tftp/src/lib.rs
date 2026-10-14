@@ -199,12 +199,14 @@ async fn handle_packet(
     }
 }
 
-struct RrqOptions {
-    blksize: Option<u16>,
-    tsize: bool,
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RrqOptions {
+    pub blksize: Option<u16>,
+    pub tsize: bool,
 }
 
-fn parse_rrq_options<'a>(mut parts: impl Iterator<Item = &'a [u8]>, cfg: &TftpConfig) -> RrqOptions {
+#[must_use]
+pub fn parse_rrq_options<'a>(mut parts: impl Iterator<Item = &'a [u8]>, cfg: &TftpConfig) -> RrqOptions {
     let mut blksize = None;
     let mut tsize = false;
 
@@ -228,15 +230,15 @@ fn parse_rrq_options<'a>(mut parts: impl Iterator<Item = &'a [u8]>, cfg: &TftpCo
     RrqOptions { blksize, tsize }
 }
 
-async fn validate_rrq_path(
-    transport: &UdpTransport,
-    src: SocketAddr,
+/// Validates that a requested filename is valid UTF-8 and stays strictly inside `root_dir`.
+///
+/// Prevents path traversal vulnerabilities (`..`, root directory escape, prefixes).
+pub fn sanitize_rrq_path(
     filename_bytes: &[u8],
     root_dir: &std::path::Path,
-) -> Result<Option<(std::path::PathBuf, u64, String)>, TftpError> {
+) -> Result<(std::path::PathBuf, String), &'static str> {
     let Ok(filename) = std::str::from_utf8(filename_bytes) else {
-        send_error(transport, src, 0, "Invalid UTF-8 filename").await?;
-        return Ok(None);
+        return Err("Invalid UTF-8 filename");
     };
 
     let rel_path = std::path::Path::new(filename);
@@ -248,15 +250,31 @@ async fn validate_rrq_path(
                 | std::path::Component::Prefix(_)
         )
     }) {
-        send_error(transport, src, 2, "Access violation").await?;
-        return Ok(None);
+        return Err("Access violation");
     }
 
     let path = root_dir.join(rel_path);
     if !path.starts_with(root_dir) {
-        send_error(transport, src, 2, "Access violation").await?;
-        return Ok(None);
+        return Err("Access violation");
     }
+
+    Ok((path, filename.to_string()))
+}
+
+async fn validate_rrq_path(
+    transport: &UdpTransport,
+    src: SocketAddr,
+    filename_bytes: &[u8],
+    root_dir: &std::path::Path,
+) -> Result<Option<(std::path::PathBuf, u64, String)>, TftpError> {
+    let (path, filename) = match sanitize_rrq_path(filename_bytes, root_dir) {
+        Ok(res) => res,
+        Err(err) => {
+            let code = if err.contains("UTF-8") { 0 } else { 2 };
+            send_error(transport, src, code, err).await?;
+            return Ok(None);
+        }
+    };
 
     let meta = match tokio::fs::metadata(&path).await {
         Ok(m) if m.is_file() => m,

@@ -1,14 +1,16 @@
 #![no_main]
+#![allow(clippy::upper_case_acronyms)]
 
-use libfuzzer_sys::fuzz_target;
 use arbitrary::Arbitrary;
-use std::sync::Arc;
-use std::net::{Ipv4Addr, Ipv6Addr};
-use lanforge_dns_wire::{WireEncoder, WireDecoder};
+use lanforge_dns_wire::{WireDecoder, WireEncoder};
+use lanforge_types::network::dns::{DnsSoaData, DnsSvcbData};
 use lanforge_types::network::{
     DnsClass, DnsHeader, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType,
-    DnsResponseCode, DnsSoaData, DnsSvcbData,
+    DnsResponseCode,
 };
+use libfuzzer_sys::fuzz_target;
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::sync::Arc;
 
 #[derive(Arbitrary, Debug)]
 struct FuzzDnsHeader {
@@ -27,70 +29,101 @@ struct FuzzDnsHeader {
 
 #[derive(Arbitrary, Debug)]
 enum FuzzDnsResponseCode {
-    NoError, FormErr, ServFail, NXDomain, NotImp, Refused, YXDomain, YXRRSet, NXRRSet, NotAuth, NotZone, BADVERS, Unknown(u8)
+    NoError,
+    FormErr,
+    ServFail,
+    NXDomain,
+    NotImp,
+    Refused,
+    YXDomain,
+    YXRRSet,
+    NXRRSet,
+    NotAuth,
+    NotZone,
+    BADVERS,
+    Unknown(u8),
 }
 
 impl From<FuzzDnsResponseCode> for DnsResponseCode {
     fn from(val: FuzzDnsResponseCode) -> Self {
         match val {
-            FuzzDnsResponseCode::NoError => DnsResponseCode::NoError,
-            FuzzDnsResponseCode::FormErr => DnsResponseCode::FormErr,
-            FuzzDnsResponseCode::ServFail => DnsResponseCode::ServFail,
-            FuzzDnsResponseCode::NXDomain => DnsResponseCode::NXDomain,
-            FuzzDnsResponseCode::NotImp => DnsResponseCode::NotImp,
-            FuzzDnsResponseCode::Refused => DnsResponseCode::Refused,
-            FuzzDnsResponseCode::YXDomain => DnsResponseCode::YXDomain,
-            FuzzDnsResponseCode::YXRRSet => DnsResponseCode::YXRRSet,
-            FuzzDnsResponseCode::NXRRSet => DnsResponseCode::NXRRSet,
-            FuzzDnsResponseCode::NotAuth => DnsResponseCode::NotAuth,
-            FuzzDnsResponseCode::NotZone => DnsResponseCode::NotZone,
-            FuzzDnsResponseCode::BADVERS => DnsResponseCode::BADVERS,
-            FuzzDnsResponseCode::Unknown(v) => DnsResponseCode::Unknown(v),
+            FuzzDnsResponseCode::NoError => Self::NoError,
+            FuzzDnsResponseCode::FormErr => Self::FormErr,
+            FuzzDnsResponseCode::ServFail => Self::ServFail,
+            FuzzDnsResponseCode::NXDomain => Self::NXDomain,
+            FuzzDnsResponseCode::NotImp => Self::NotImp,
+            FuzzDnsResponseCode::Refused => Self::Refused,
+            FuzzDnsResponseCode::YXDomain => Self::YXDomain,
+            FuzzDnsResponseCode::YXRRSet => Self::YXRRSet,
+            FuzzDnsResponseCode::NXRRSet => Self::NXRRSet,
+            FuzzDnsResponseCode::NotAuth => Self::NotAuth,
+            FuzzDnsResponseCode::NotZone => Self::NotZone,
+            FuzzDnsResponseCode::BADVERS => Self::BADVERS,
+            FuzzDnsResponseCode::Unknown(v) => Self::Unknown(v),
         }
     }
 }
 
 #[derive(Arbitrary, Debug)]
 enum FuzzDnsRecordType {
-    A, NS, CNAME, SOA, PTR, HINFO, MX, TXT, AAAA, SRV, OPT, SVCB, HTTPS, ANY, Unknown(u16)
+    A,
+    NS,
+    CNAME,
+    SOA,
+    PTR,
+    HINFO,
+    MX,
+    TXT,
+    AAAA,
+    SRV,
+    OPT,
+    SVCB,
+    HTTPS,
+    ANY,
+    Unknown(u16),
 }
 
 impl From<FuzzDnsRecordType> for DnsRecordType {
     fn from(val: FuzzDnsRecordType) -> Self {
         match val {
-            FuzzDnsRecordType::A => DnsRecordType::A,
-            FuzzDnsRecordType::NS => DnsRecordType::NS,
-            FuzzDnsRecordType::CNAME => DnsRecordType::CNAME,
-            FuzzDnsRecordType::SOA => DnsRecordType::SOA,
-            FuzzDnsRecordType::PTR => DnsRecordType::PTR,
-            FuzzDnsRecordType::HINFO => DnsRecordType::HINFO,
-            FuzzDnsRecordType::MX => DnsRecordType::MX,
-            FuzzDnsRecordType::TXT => DnsRecordType::TXT,
-            FuzzDnsRecordType::AAAA => DnsRecordType::AAAA,
-            FuzzDnsRecordType::SRV => DnsRecordType::SRV,
-            FuzzDnsRecordType::OPT => DnsRecordType::OPT,
-            FuzzDnsRecordType::SVCB => DnsRecordType::SVCB,
-            FuzzDnsRecordType::HTTPS => DnsRecordType::HTTPS,
-            FuzzDnsRecordType::ANY => DnsRecordType::ANY,
-            FuzzDnsRecordType::Unknown(v) => DnsRecordType::Unknown(v),
+            FuzzDnsRecordType::A => Self::A,
+            FuzzDnsRecordType::NS => Self::NS,
+            FuzzDnsRecordType::CNAME => Self::CNAME,
+            FuzzDnsRecordType::SOA => Self::SOA,
+            FuzzDnsRecordType::PTR => Self::PTR,
+            FuzzDnsRecordType::HINFO => Self::HINFO,
+            FuzzDnsRecordType::MX => Self::MX,
+            FuzzDnsRecordType::TXT => Self::TXT,
+            FuzzDnsRecordType::AAAA => Self::AAAA,
+            FuzzDnsRecordType::SRV => Self::SRV,
+            FuzzDnsRecordType::OPT => Self::OPT,
+            FuzzDnsRecordType::SVCB => Self::SVCB,
+            FuzzDnsRecordType::HTTPS => Self::HTTPS,
+            FuzzDnsRecordType::ANY => Self::ANY,
+            FuzzDnsRecordType::Unknown(v) => Self::Unknown(v),
         }
     }
 }
 
 #[derive(Arbitrary, Debug)]
 enum FuzzDnsClass {
-    IN, CS, CH, HS, ANY, Unknown(u16)
+    IN,
+    CS,
+    CH,
+    HS,
+    ANY,
+    Unknown(u16),
 }
 
 impl From<FuzzDnsClass> for DnsClass {
     fn from(val: FuzzDnsClass) -> Self {
         match val {
-            FuzzDnsClass::IN => DnsClass::IN,
-            FuzzDnsClass::CS => DnsClass::CS,
-            FuzzDnsClass::CH => DnsClass::CH,
-            FuzzDnsClass::HS => DnsClass::HS,
-            FuzzDnsClass::ANY => DnsClass::ANY,
-            FuzzDnsClass::Unknown(v) => DnsClass::Unknown(v),
+            FuzzDnsClass::IN => Self::IN,
+            FuzzDnsClass::CS => Self::CS,
+            FuzzDnsClass::CH => Self::CH,
+            FuzzDnsClass::HS => Self::HS,
+            FuzzDnsClass::ANY => Self::ANY,
+            FuzzDnsClass::Unknown(v) => Self::Unknown(v),
         }
     }
 }
@@ -141,17 +174,28 @@ enum FuzzDnsRData {
 impl From<FuzzDnsRData> for DnsRData {
     fn from(val: FuzzDnsRData) -> Self {
         match val {
-            FuzzDnsRData::A(ip) => DnsRData::A(Ipv4Addr::from(ip)),
-            FuzzDnsRData::AAAA(ip) => DnsRData::AAAA(Ipv6Addr::from(ip)),
-            FuzzDnsRData::CNAME(s) => DnsRData::CNAME(Arc::from(s)),
-            FuzzDnsRData::PTR(s) => DnsRData::PTR(Arc::from(s)),
-            FuzzDnsRData::MX { preference, exchange } => DnsRData::MX {
+            FuzzDnsRData::A(ip) => Self::A(Ipv4Addr::from(ip)),
+            FuzzDnsRData::AAAA(ip) => Self::AAAA(Ipv6Addr::from(ip)),
+            FuzzDnsRData::CNAME(s) => Self::CNAME(Arc::from(s)),
+            FuzzDnsRData::PTR(s) => Self::PTR(Arc::from(s)),
+            FuzzDnsRData::MX {
+                preference,
+                exchange,
+            } => Self::MX {
                 preference,
                 exchange: Arc::from(exchange),
             },
-            FuzzDnsRData::NS(s) => DnsRData::NS(Arc::from(s)),
-            FuzzDnsRData::TXT(list) => DnsRData::TXT(list.into_iter().map(Arc::from).collect()),
-            FuzzDnsRData::SOA { mname, rname, serial, refresh, retry, expire, minimum } => DnsRData::SOA(Box::new(DnsSoaData {
+            FuzzDnsRData::NS(s) => Self::NS(Arc::from(s)),
+            FuzzDnsRData::TXT(list) => Self::TXT(list.into_iter().map(Arc::from).collect()),
+            FuzzDnsRData::SOA {
+                mname,
+                rname,
+                serial,
+                refresh,
+                retry,
+                expire,
+                minimum,
+            } => Self::SOA(Box::new(DnsSoaData {
                 mname: Arc::from(mname),
                 rname: Arc::from(rname),
                 serial,
@@ -160,24 +204,37 @@ impl From<FuzzDnsRData> for DnsRData {
                 expire,
                 minimum,
             })),
-            FuzzDnsRData::SRV { priority, weight, port, target } => DnsRData::SRV {
+            FuzzDnsRData::SRV {
+                priority,
+                weight,
+                port,
+                target,
+            } => Self::SRV {
                 priority,
                 weight,
                 port,
                 target: Arc::from(target),
             },
-            FuzzDnsRData::OPT { options } => DnsRData::OPT { options },
-            FuzzDnsRData::HTTPS { svc_priority, svc_domain, params } => DnsRData::HTTPS(Box::new(DnsSvcbData {
+            FuzzDnsRData::OPT { options } => Self::OPT { options },
+            FuzzDnsRData::HTTPS {
+                svc_priority,
+                svc_domain,
+                params,
+            } => Self::HTTPS(Box::new(DnsSvcbData {
                 svc_priority,
                 svc_domain: Arc::from(svc_domain),
                 params,
             })),
-            FuzzDnsRData::SVCB { svc_priority, svc_domain, params } => DnsRData::SVCB(Box::new(DnsSvcbData {
+            FuzzDnsRData::SVCB {
+                svc_priority,
+                svc_domain,
+                params,
+            } => Self::SVCB(Box::new(DnsSvcbData {
                 svc_priority,
                 svc_domain: Arc::from(svc_domain),
                 params,
             })),
-            FuzzDnsRData::Unknown(bytes) => DnsRData::Unknown(bytes),
+            FuzzDnsRData::Unknown(bytes) => Self::Unknown(bytes),
         }
     }
 }
@@ -191,7 +248,7 @@ struct FuzzDnsQuestion {
 
 impl From<FuzzDnsQuestion> for DnsQuestion {
     fn from(val: FuzzDnsQuestion) -> Self {
-        DnsQuestion {
+        Self {
             name: Arc::from(val.name),
             qtype: DnsRecordType::from(val.qtype),
             qclass: DnsClass::from(val.qclass),
@@ -210,7 +267,7 @@ struct FuzzDnsRecord {
 
 impl From<FuzzDnsRecord> for DnsRecord {
     fn from(val: FuzzDnsRecord) -> Self {
-        DnsRecord {
+        Self {
             name: Arc::from(val.name),
             rtype: DnsRecordType::from(val.rtype),
             rclass: DnsClass::from(val.rclass),
@@ -261,9 +318,10 @@ fuzz_target!(|msg: FuzzDnsMessage| {
 
     // Decode from wire format
     let mut decoder = WireDecoder::new(&encoded_bytes);
-    let decoded_msg = decoder.decode_message();
-
-    if let Some(_decoded) = decoded_msg {
-        // Successful roundtrip
+    if let Some(decoded_msg) = decoder.decode_message() {
+        let owned = decoded_msg.to_owned();
+        // Re-encode decoded message: ensures encoder never panics on valid decoded messages
+        let mut re_encoder = WireEncoder::new();
+        let _re_encoded = re_encoder.encode_message(&owned);
     }
 });

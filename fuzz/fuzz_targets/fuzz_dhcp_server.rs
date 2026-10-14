@@ -1,4 +1,5 @@
 #![no_main]
+#![allow(clippy::field_reassign_with_default)]
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
@@ -10,9 +11,9 @@ use lanforge_core::bus::EventBus;
 use lanforge_core::context::state::State;
 use lanforge_core::context::LanforgeContext;
 use lanforge_dhcp::v4::config::Dhcpv4Config;
-use lanforge_dhcp::v4::server::{DhcpServer, HandleResult};
+use lanforge_dhcp::v4::server::DhcpServer;
 
-use dhcproto::v4::{self, DhcpOption, HType, Message, MessageType, Opcode, UnknownOption};
+use dhcproto::v4::{DhcpOption, HType, Message, MessageType, Opcode, UnknownOption};
 use dhcproto::Encodable;
 
 #[derive(Arbitrary, Debug)]
@@ -82,11 +83,16 @@ struct FuzzDhcpPacket {
     giaddr: [u8; 4],
     chaddr: Vec<u8>,
     sname: String,
-    file: String,
     msg_type: FuzzMessageType,
     req_ip: Option<[u8; 4]>,
     server_id: Option<[u8; 4]>,
     custom_options: Vec<FuzzDhcpOption>,
+}
+
+#[derive(Arbitrary, Debug)]
+enum FuzzPacketInput {
+    Structured(FuzzDhcpPacket),
+    Raw(Vec<u8>),
 }
 
 #[derive(Arbitrary, Debug)]
@@ -98,7 +104,7 @@ struct FuzzDhcpServerInput {
     dns: Vec<[u8; 4]>,
     subnet_mask: [u8; 4],
     server_id: [u8; 4],
-    packets: Vec<FuzzDhcpPacket>,
+    packets: Vec<FuzzPacketInput>,
 }
 
 fuzz_target!(|input: FuzzDhcpServerInput| {
@@ -125,55 +131,60 @@ fuzz_target!(|input: FuzzDhcpServerInput| {
         tftp_server: None,
         boot_file: None,
         options: HashMap::new(),
+        ntp_servers: Vec::new(),
     };
 
     let mut server = DhcpServer::new(cfg, ctx);
 
     // 3. Process packets
-    for fuzz_pkt in input.packets {
-        // Build dhcproto::v4::Message
-        let mut msg = Message::default();
-        msg.set_opcode(Opcode::from(fuzz_pkt.opcode));
-        msg.set_htype(match fuzz_pkt.htype % 2 {
-            0 => HType::Eth,
-            _ => HType::Unknown(fuzz_pkt.htype),
-        });
-        msg.set_xid(fuzz_pkt.xid);
-        msg.set_secs(fuzz_pkt.secs);
-        msg.set_flags(dhcproto::v4::Flags::from(fuzz_pkt.flags));
-        msg.set_ciaddr(Ipv4Addr::from(fuzz_pkt.ciaddr));
-        msg.set_yiaddr(Ipv4Addr::from(fuzz_pkt.yiaddr));
-        msg.set_siaddr(Ipv4Addr::from(fuzz_pkt.siaddr));
-        msg.set_giaddr(Ipv4Addr::from(fuzz_pkt.giaddr));
-        msg.set_chaddr(&fuzz_pkt.chaddr);
-        msg.set_sname(fuzz_pkt.sname.as_bytes());
-        // msg.set_file(fuzz_pkt.file);
+    for pkt_input in input.packets {
+        match pkt_input {
+            FuzzPacketInput::Raw(raw_bytes) => {
+                let _ = server.handle_packet(&raw_bytes, None);
+            }
+            FuzzPacketInput::Structured(fuzz_pkt) => {
+                let mut msg = Message::default();
+                msg.set_opcode(Opcode::from(fuzz_pkt.opcode));
+                msg.set_htype(match fuzz_pkt.htype % 2 {
+                    0 => HType::Eth,
+                    _ => HType::Unknown(fuzz_pkt.htype),
+                });
+                msg.set_xid(fuzz_pkt.xid);
+                msg.set_secs(fuzz_pkt.secs);
+                msg.set_flags(dhcproto::v4::Flags::from(fuzz_pkt.flags));
+                msg.set_ciaddr(Ipv4Addr::from(fuzz_pkt.ciaddr));
+                msg.set_yiaddr(Ipv4Addr::from(fuzz_pkt.yiaddr));
+                msg.set_siaddr(Ipv4Addr::from(fuzz_pkt.siaddr));
+                msg.set_giaddr(Ipv4Addr::from(fuzz_pkt.giaddr));
+                msg.set_chaddr(&fuzz_pkt.chaddr);
+                msg.set_sname(fuzz_pkt.sname.as_bytes());
 
-        let opts = msg.opts_mut();
-        opts.insert(DhcpOption::MessageType(MessageType::from(
-            fuzz_pkt.msg_type,
-        )));
+                let opts = msg.opts_mut();
+                opts.insert(DhcpOption::MessageType(MessageType::from(
+                    fuzz_pkt.msg_type,
+                )));
 
-        if let Some(req) = fuzz_pkt.req_ip {
-            opts.insert(DhcpOption::RequestedIpAddress(Ipv4Addr::from(req)));
-        }
-        if let Some(sid) = fuzz_pkt.server_id {
-            opts.insert(DhcpOption::ServerIdentifier(Ipv4Addr::from(sid)));
-        }
+                if let Some(req) = fuzz_pkt.req_ip {
+                    opts.insert(DhcpOption::RequestedIpAddress(Ipv4Addr::from(req)));
+                }
+                if let Some(sid) = fuzz_pkt.server_id {
+                    opts.insert(DhcpOption::ServerIdentifier(Ipv4Addr::from(sid)));
+                }
 
-        for opt in fuzz_pkt.custom_options {
-            opts.insert(DhcpOption::Unknown(UnknownOption::new(
-                opt.code.into(),
-                opt.data,
-            )));
-        }
+                for opt in fuzz_pkt.custom_options {
+                    opts.insert(DhcpOption::Unknown(UnknownOption::new(
+                        opt.code.into(),
+                        opt.data,
+                    )));
+                }
 
-        // Encode Message to raw bytes
-        let mut encoded = Vec::new();
-        let mut enc = dhcproto::Encoder::new(&mut encoded);
-        if msg.encode(&mut enc).is_ok() {
-            // Feed to server
-            let _ = server.handle_packet(&encoded, None);
+                // Encode Message to raw bytes
+                let mut encoded = Vec::new();
+                let mut enc = dhcproto::Encoder::new(&mut encoded);
+                if msg.encode(&mut enc).is_ok() {
+                    let _ = server.handle_packet(&encoded, None);
+                }
+            }
         }
     }
 });
