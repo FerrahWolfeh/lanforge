@@ -3,7 +3,8 @@ use std::path::Path;
 
 use crate::error::DnsError;
 use crate::resolver::filter::engine::{
-    build_fst_map, encode_val, reverse_domain_key, DiskFilterMap, MatchCandidate,
+    build_fst_map, encode_reversed_domain, encode_val, reverse_domain_key, DiskFilterMap,
+    MatchCandidate,
 };
 use crate::resolver::filter::parse::MatchFlags;
 
@@ -67,6 +68,25 @@ impl DiskBlocklist {
     #[inline]
     pub fn match_block(&self, domain: &str) -> Option<MatchCandidate> {
         self.block_map.match_domain(domain)
+    }
+
+    /// Encodes the reversed domain once and matches against both allow and block maps.
+    #[inline]
+    pub fn match_domain_pair(
+        &self,
+        domain: &str,
+    ) -> (Option<MatchCandidate>, Option<MatchCandidate>) {
+        let mut key_buf = [0u8; 256];
+        let Some(len) = encode_reversed_domain(domain, &mut key_buf) else {
+            return (None, None);
+        };
+        let rev_key = &key_buf[..len];
+        let allow_cand = self
+            .allow_map
+            .as_ref()
+            .and_then(|m| m.match_reversed(rev_key));
+        let block_cand = self.block_map.match_reversed(rev_key);
+        (allow_cand, block_cand)
     }
 
     /// Match against the source allow/exception map.

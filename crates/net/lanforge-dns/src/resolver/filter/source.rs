@@ -20,7 +20,7 @@ use lanforge_types::network::dns::adblock::AdblockSourceFormat;
 
 use crate::error::DnsError;
 use crate::resolver::filter::engine::{
-    decode_val, encode_val, reverse_domain_key, LABEL_SEPARATOR,
+    build_fst_map, decode_val, encode_val, reverse_domain_key, LABEL_SEPARATOR,
 };
 use crate::resolver::filter::manifest::SourceManifestEntry;
 use crate::resolver::filter::parse::{parse_source, MatchFlags, RuleAction};
@@ -192,8 +192,8 @@ pub fn compile_source_artifacts(
 
     let parse_res = parse_source(content, format);
 
-    let mut blocks = Vec::new();
-    let mut allows = Vec::new();
+    let mut blocks = Vec::with_capacity(parse_res.stats.blocks as usize);
+    let mut allows = Vec::with_capacity(parse_res.stats.exceptions as usize);
     let mut badfilters = HashSet::new();
 
     for rule in parse_res.rules {
@@ -221,11 +221,11 @@ pub fn compile_source_artifacts(
 
     // Build per-source block FST
     let block_fst_path = sources_dir.join(format!("{source_id}.block.fst"));
-    build_sorted_fst_map(blocks, &block_fst_path)?;
+    build_fst_map(blocks, &block_fst_path)?;
 
     // Build per-source allow FST
     let allow_fst_path = sources_dir.join(format!("{source_id}.allow.fst"));
-    build_sorted_fst_map(allows, &allow_fst_path)?;
+    build_fst_map(allows, &allow_fst_path)?;
 
     // Write badfilter file if any
     let bad_path = sources_dir.join(format!("{source_id}.bad"));
@@ -269,69 +269,6 @@ pub fn compile_source_artifacts(
     })
 }
 
-/// Builds an FST Map from a vector of (reversed_key, encoded_val) ensuring unique sorted order.
-fn build_sorted_fst_map(mut entries: Vec<(String, u64)>, target_path: &Path) -> Result<(), DnsError> {
-    entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-
-    let parent = target_path.parent().unwrap_or_else(|| Path::new("."));
-    if !parent.as_os_str().is_empty() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
-    let tmp_file = tempfile::Builder::new()
-        .prefix("src-fst-")
-        .suffix(".tmp")
-        .tempfile_in(parent)
-        .map_err(|e| DnsError::Generic(format!("Failed to create source FST tempfile: {e}")))?;
-
-    let mut writer = BufWriter::new(tmp_file);
-    let mut builder = MapBuilder::new(&mut writer)
-        .map_err(|e| DnsError::Generic(format!("MapBuilder creation failed: {e}")))?;
-
-    let mut last_key: Option<String> = None;
-    let mut last_val: u64 = 0;
-
-    for (key, val) in entries {
-        if let Some(prev) = &last_key {
-            if prev == &key {
-                let (prev_flags, prev_src) = decode_val(last_val);
-                let (cur_flags, _) = decode_val(val);
-                let combined = MatchFlags(prev_flags.0 | cur_flags.0);
-                last_val = encode_val(combined, prev_src);
-                continue;
-            } else {
-                builder
-                    .insert(prev.as_bytes(), last_val)
-                    .map_err(|e| DnsError::Generic(format!("FST insertion error: {e}")))?;
-            }
-        }
-        last_key = Some(key);
-        last_val = val;
-    }
-
-    if let Some(prev) = last_key {
-        builder
-            .insert(prev.as_bytes(), last_val)
-            .map_err(|e| DnsError::Generic(format!("FST insertion error: {e}")))?;
-    }
-
-    builder
-        .finish()
-        .map_err(|e| DnsError::Generic(format!("MapBuilder finish failed: {e}")))?;
-
-    std::io::Write::flush(&mut writer)
-        .map_err(|e| DnsError::Generic(format!("MapBuilder flush failed: {e}")))?;
-
-    let tmp_file = writer
-        .into_inner()
-        .map_err(|e| DnsError::Generic(format!("Buffer unwrap failed: {e}")))?;
-
-    tmp_file
-        .persist(target_path)
-        .map_err(|e| DnsError::Generic(format!("Atomic persist failed: {e}")))?;
-
-    Ok(())
-}
 
 /// Merges all source block and allow FSTs into the final `block.fst` and `allow.fst`.
 /// Applies $badfilter removals, union of flags, and single-pass descendant pruning.

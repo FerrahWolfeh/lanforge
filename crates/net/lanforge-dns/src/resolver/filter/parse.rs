@@ -117,24 +117,23 @@ pub fn detect_format(content: &str) -> AdblockSourceFormat {
         }
 
         // Header metadata hints
-        let lower = trimmed.to_ascii_lowercase();
-        if lower.starts_with("[adblock")
-            || lower.contains("syntax: adblock")
-            || lower.contains("syntax: adp")
-        {
-            return AdblockSourceFormat::Adblock;
-        }
-        if lower.contains("syntax: hosts") {
-            return AdblockSourceFormat::Hosts;
-        }
-        if lower.contains("syntax: wildcard") {
-            return AdblockSourceFormat::WildcardDomains;
-        }
-        if lower.contains("syntax: domains") {
-            return AdblockSourceFormat::Domains;
-        }
-
-        if trimmed.starts_with('#') || trimmed.starts_with('!') {
+        if trimmed.starts_with('[') || trimmed.starts_with('#') || trimmed.starts_with('!') {
+            let lower = trimmed.to_ascii_lowercase();
+            if lower.starts_with("[adblock")
+                || lower.contains("syntax: adblock")
+                || lower.contains("syntax: adp")
+            {
+                return AdblockSourceFormat::Adblock;
+            }
+            if lower.contains("syntax: hosts") {
+                return AdblockSourceFormat::Hosts;
+            }
+            if lower.contains("syntax: wildcard") {
+                return AdblockSourceFormat::WildcardDomains;
+            }
+            if lower.contains("syntax: domains") {
+                return AdblockSourceFormat::Domains;
+            }
             continue;
         }
 
@@ -260,16 +259,16 @@ fn parse_adblock_line(
         let mut has_unsupported = false;
 
         for m in mod_part.split(',') {
-            let m_clean = m.trim().to_ascii_lowercase();
+            let m_clean = m.trim();
             if m_clean.is_empty() {
                 continue;
             }
-            match m_clean.as_str() {
-                "important" => is_important = true,
-                "badfilter" => is_badfilter = true,
-                _ => {
-                    has_unsupported = true;
-                }
+            if m_clean.eq_ignore_ascii_case("important") {
+                is_important = true;
+            } else if m_clean.eq_ignore_ascii_case("badfilter") {
+                is_badfilter = true;
+            } else {
+                has_unsupported = true;
             }
         }
 
@@ -449,59 +448,43 @@ fn parse_domains_line(
 /// Returns `None` if invalid, loopback, or an IP address.
 #[must_use]
 pub fn sanitize_domain(raw: &str) -> Option<String> {
-    let mut domain = raw.trim();
-    if domain.ends_with('.') {
-        domain = &domain[..domain.len() - 1];
-    }
-
+    let domain = raw.trim().trim_end_matches('.');
     if domain.is_empty() || domain.len() > 253 {
         return None;
     }
 
-    let lower = domain.to_ascii_lowercase();
+    let mut label_count = 0usize;
+    let mut last_label_all_digits = true;
 
-    // Check against ignored / loopback / special names
-    match lower.as_str() {
-        "localhost"
-        | "localhost.localdomain"
-        | "broadcasthost"
-        | "local"
-        | "0.0.0.0"
-        | "ip6-localhost"
-        | "ip6-loopback"
-        | "ip6-localnet"
-        | "ip6-mcastprefix"
-        | "ip6-allnodes"
-        | "ip6-allrouters"
-        | "ip6-allhosts" => return None,
-        _ => {}
-    }
-
-    // Discard IP address literals
-    if IpAddr::from_str(&lower).is_ok() {
-        return None;
-    }
-
-    // Validate labels: at least 2 labels
-    let mut label_count = 0;
-    for label in lower.split('.') {
-        if label.is_empty() || label.len() > 63 {
+    for label in domain.split('.') {
+        let bytes = label.as_bytes();
+        if bytes.is_empty() || bytes.len() > 63 {
             return None;
         }
-        // Label must only contain a-z, 0-9, '-', '_'
-        for &b in label.as_bytes() {
-            if !b.is_ascii_alphanumeric() && b != b'-' && b != b'_' {
+        let mut all_digits = true;
+        for &b in bytes {
+            if b.is_ascii_digit() {
+                continue;
+            }
+            if b.is_ascii_alphabetic() || b == b'-' || b == b'_' {
+                all_digits = false;
+            } else {
                 return None;
             }
         }
+        last_label_all_digits = all_digits;
         label_count += 1;
     }
 
-    if label_count < 2 {
+    if label_count < 2 || last_label_all_digits {
         return None;
     }
 
-    Some(lower)
+    if domain.eq_ignore_ascii_case("localhost.localdomain") {
+        return None;
+    }
+
+    Some(domain.to_ascii_lowercase())
 }
 
 #[cfg(test)]

@@ -39,11 +39,11 @@ pub struct AdBlocker {
     pub allowlist: RwLock<Arc<HashSet<Box<str>>>>,
     pub custom_blocks: RwLock<Arc<HashSet<Box<str>>>>,
     pub timer: Arc<AdblockTimerState>,
-    pub config: RwLock<Arc<AdblockRuntimeConfig>>,
+    pub config: RwLock<AdblockRuntimeConfig>,
     per_ip_stats: DashMap<IpAddr, AtomicU64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AdblockRuntimeConfig {
     pub mode: BlockingMode,
     pub ipv4: Option<Ipv4Addr>,
@@ -86,7 +86,7 @@ impl AdBlocker {
             allowlist: RwLock::new(Arc::new(HashSet::new())),
             custom_blocks: RwLock::new(Arc::new(HashSet::new())),
             timer: Arc::new(AdblockTimerState::new(enabled)),
-            config: RwLock::new(Arc::new(AdblockRuntimeConfig::default())),
+            config: RwLock::new(AdblockRuntimeConfig::default()),
             per_ip_stats: DashMap::new(),
         }
     }
@@ -150,8 +150,7 @@ impl AdBlocker {
         }
         let block_guard = self.blocklist.read();
         if let Some(bl) = block_guard.as_ref() {
-            let allow_cand = bl.match_allow(qname);
-            let block_cand = bl.match_block(qname);
+            let (allow_cand, block_cand) = bl.match_domain_pair(qname);
 
             match (allow_cand, block_cand) {
                 (Some(a), Some(b)) => {
@@ -199,13 +198,46 @@ impl AdBlocker {
 
     #[inline]
     pub fn should_block(&self, qname: &str) -> bool {
-        match self.check_domain(qname) {
-            Some(m) => m.action == FilterAction::Block,
-            None => false,
+        if !self.is_enabled() {
+            return false;
         }
+        {
+            let allow = self.allowlist.read();
+            if Self::find_matching_rule(&allow, qname).is_some() {
+                return false;
+            }
+        }
+        {
+            let custom_blocks = self.custom_blocks.read();
+            if Self::find_matching_rule(&custom_blocks, qname).is_some() {
+                return true;
+            }
+        }
+        let block_guard = self.blocklist.read();
+        let Some(bl) = block_guard.as_ref() else {
+            return false;
+        };
+        let mut key_buf = [0u8; 256];
+        let Some(len) = engine::encode_reversed_domain(qname, &mut key_buf) else {
+            return false;
+        };
+        let rev_key = &key_buf[..len];
+        let Some(b) = bl.block_map.match_reversed(rev_key) else {
+            return false;
+        };
+        if b.flags.is_important() {
+            return true;
+        }
+        bl.allow_map
+            .as_ref()
+            .and_then(|m| m.match_reversed(rev_key))
+            .is_none()
     }
 
     fn find_matching_rule<'a>(set: &'a HashSet<Box<str>>, qname: &str) -> Option<&'a str> {
+        if set.is_empty() {
+            return None;
+        }
         if let Some(r) = set.get(qname) {
             return Some(r);
         }
@@ -223,6 +255,10 @@ impl AdBlocker {
     }
 
     pub fn inc_ip_stats(&self, ip: IpAddr) {
+        if let Some(counter) = self.per_ip_stats.get(&ip) {
+            counter.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
         self.per_ip_stats
             .entry(ip)
             .or_insert_with(|| AtomicU64::new(0))
@@ -240,16 +276,70 @@ impl AdBlocker {
         debug!("Adblock: blocklist cleared");
     }
 
+    #[must_use]
+    pub fn normalize_custom_domain(raw: &str) -> Option<Box<str>> {
+        let mut s = raw.trim();
+        if let Some(rest) = s.strip_prefix("@@") {
+            s = rest;
+        }
+        if let Some(rest) = s.strip_prefix("||") {
+            s = rest;
+        } else if let Some(rest) = s.strip_prefix("*.") {
+            s = rest;
+        } else if let Some(rest) = s.strip_prefix('|') {
+            s = rest;
+        }
+        if let Some((before_mod, _)) = s.split_once('$') {
+            s = before_mod;
+        }
+        s = s
+            .trim_end_matches('^')
+            .trim_end_matches('|')
+            .trim_end_matches('.');
+        if s.is_empty() {
+            return None;
+        }
+        Some(s.to_ascii_lowercase().into_boxed_str())
+    }
+
+    pub fn sync_from_context(&self, ctx: &lanforge_core::context::LanforgeContext) {
+        let mut allow_set: HashSet<Box<str>> = ctx
+            .get_dns_allowlist()
+            .into_iter()
+            .filter_map(|d| Self::normalize_custom_domain(&d))
+            .collect();
+        let mut block_set: HashSet<Box<str>> = HashSet::new();
+        for rule in ctx.get_dns_adblock_rules() {
+            if rule.enabled
+                && let Some(norm) = Self::normalize_custom_domain(&rule.domain)
+            {
+                if rule.is_allow() {
+                    allow_set.insert(norm);
+                } else if rule.is_block() {
+                    block_set.insert(norm);
+                }
+            }
+        }
+        *self.allowlist.write() = Arc::new(allow_set);
+        *self.custom_blocks.write() = Arc::new(block_set);
+    }
+
     pub fn replace_allowlist(&self, new_list: HashSet<String>) {
-        let count = new_list.len();
-        let boxed_set: HashSet<Box<str>> = new_list.into_iter().map(Box::from).collect();
+        let boxed_set: HashSet<Box<str>> = new_list
+            .into_iter()
+            .filter_map(|d| Self::normalize_custom_domain(&d))
+            .collect();
+        let count = boxed_set.len();
         *self.allowlist.write() = Arc::new(boxed_set);
         debug!("Adblock: allowlist updated with {} entries", count);
     }
 
     pub fn replace_custom_blocks(&self, new_blocks: HashSet<String>) {
-        let count = new_blocks.len();
-        let boxed_set: HashSet<Box<str>> = new_blocks.into_iter().map(Box::from).collect();
+        let boxed_set: HashSet<Box<str>> = new_blocks
+            .into_iter()
+            .filter_map(|d| Self::normalize_custom_domain(&d))
+            .collect();
+        let count = boxed_set.len();
         *self.custom_blocks.write() = Arc::new(boxed_set);
         debug!("Adblock: custom blocks updated with {} entries", count);
     }
@@ -260,36 +350,44 @@ impl AdBlocker {
         ipv4: Option<Ipv4Addr>,
         ipv6: Option<Ipv6Addr>,
     ) {
-        *self.config.write() = Arc::new(AdblockRuntimeConfig { mode, ipv4, ipv6 });
+        *self.config.write() = AdblockRuntimeConfig { mode, ipv4, ipv6 };
         debug!("Adblock: runtime config updated (mode: {:?})", mode);
     }
 
     pub fn add_block(&self, domain: &str) {
-        let mut list_lock = self.custom_blocks.write();
-        let mut new_set = (**list_lock).clone();
-        new_set.insert(Box::from(domain.to_lowercase()));
-        *list_lock = Arc::new(new_set);
+        if let Some(norm) = Self::normalize_custom_domain(domain) {
+            let mut list_lock = self.custom_blocks.write();
+            let mut new_set = (**list_lock).clone();
+            new_set.insert(norm);
+            *list_lock = Arc::new(new_set);
+        }
     }
 
     pub fn remove_block(&self, domain: &str) {
-        let mut list_lock = self.custom_blocks.write();
-        let mut new_set = (**list_lock).clone();
-        new_set.remove(domain.to_lowercase().as_str());
-        *list_lock = Arc::new(new_set);
+        if let Some(norm) = Self::normalize_custom_domain(domain) {
+            let mut list_lock = self.custom_blocks.write();
+            let mut new_set = (**list_lock).clone();
+            new_set.remove(norm.as_ref());
+            *list_lock = Arc::new(new_set);
+        }
     }
 
     pub fn add_allow(&self, domain: &str) {
-        let mut list_lock = self.allowlist.write();
-        let mut new_set = (**list_lock).clone();
-        new_set.insert(Box::from(domain.to_lowercase()));
-        *list_lock = Arc::new(new_set);
+        if let Some(norm) = Self::normalize_custom_domain(domain) {
+            let mut list_lock = self.allowlist.write();
+            let mut new_set = (**list_lock).clone();
+            new_set.insert(norm);
+            *list_lock = Arc::new(new_set);
+        }
     }
 
     pub fn remove_allow(&self, domain: &str) {
-        let mut list_lock = self.allowlist.write();
-        let mut new_set = (**list_lock).clone();
-        new_set.remove(domain.to_lowercase().as_str());
-        *list_lock = Arc::new(new_set);
+        if let Some(norm) = Self::normalize_custom_domain(domain) {
+            let mut list_lock = self.allowlist.write();
+            let mut new_set = (**list_lock).clone();
+            new_set.remove(norm.as_ref());
+            *list_lock = Arc::new(new_set);
+        }
     }
 
     #[must_use]
@@ -467,7 +565,7 @@ impl AdBlocker {
     ) {
         let edns = WireOptScanner::scan(data, header, question);
         let ra = !ctx.recursive.is_empty();
-        let config = Arc::clone(&*self.config.read());
+        let config = *self.config.read();
 
         match config.mode {
             BlockingMode::NxDomain => {
@@ -475,21 +573,21 @@ impl AdBlocker {
             }
             BlockingMode::NullIp => {
                 let qtype = DnsRecordType::from(question.qtype());
-                let ips = if qtype == DnsRecordType::AAAA {
-                    vec![IpAddr::V6(Ipv6Addr::UNSPECIFIED)]
+                let ip = if qtype == DnsRecordType::AAAA {
+                    IpAddr::V6(Ipv6Addr::UNSPECIFIED)
                 } else {
-                    vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)]
+                    IpAddr::V4(Ipv4Addr::UNSPECIFIED)
                 };
-                WireResponseWriter::write_ip_response(data, question, &ips, 3600, edns, ra, resp);
+                WireResponseWriter::write_ip_response(data, question, &[ip], 3600, edns, ra, resp);
             }
             BlockingMode::CustomIp => {
                 let qtype = DnsRecordType::from(question.qtype());
-                let ips = if qtype == DnsRecordType::AAAA {
-                    vec![IpAddr::V6(config.ipv6.unwrap_or(Ipv6Addr::UNSPECIFIED))]
+                let ip = if qtype == DnsRecordType::AAAA {
+                    IpAddr::V6(config.ipv6.unwrap_or(Ipv6Addr::UNSPECIFIED))
                 } else {
-                    vec![IpAddr::V4(config.ipv4.unwrap_or(Ipv4Addr::UNSPECIFIED))]
+                    IpAddr::V4(config.ipv4.unwrap_or(Ipv4Addr::UNSPECIFIED))
                 };
-                WireResponseWriter::write_ip_response(data, question, &ips, 3600, edns, ra, resp);
+                WireResponseWriter::write_ip_response(data, question, &[ip], 3600, edns, ra, resp);
             }
             BlockingMode::Refused => {
                 WireResponseWriter::write_error_response(data, question, 5, edns, ra, resp);
@@ -517,7 +615,7 @@ impl AdBlocker {
 
         if self.should_block(&domain) {
             resp.clear();
-            let config = Arc::clone(&*self.config.read());
+            let config = *self.config.read();
             match config.mode {
                 BlockingMode::NxDomain => {
                     resp.extend_from_slice(&rb.nxdomain()?);

@@ -33,6 +33,12 @@ impl Middleware for AdblockMiddleware {
                 filter.inc_ip_stats(req.src_ip);
                 ctx.stats.inc_blocked();
 
+                let answer = if ctx.query_log.is_some() {
+                    Some("BLOCKED".to_string())
+                } else {
+                    None
+                };
+
                 ctx.record_log(DnsLogEvent {
                     src_ip: req.src_ip,
                     src_mac: None,
@@ -41,7 +47,7 @@ impl Middleware for AdblockMiddleware {
                     result: QueryResult::Blocked,
                     upstream_us: 0,
                     cached: false,
-                    answer: Some("BLOCKED".to_string()),
+                    answer,
                     protocol: req.protocol,
                     filter: Some(Box::new(m)),
                 });

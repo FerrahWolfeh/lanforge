@@ -97,9 +97,6 @@ impl DnsService {
         #[cfg(feature = "adblock")]
         let db_adblock = self.ctx.get_dns_adblock();
         let db_rewrites = self.ctx.get_dns_rewrites();
-        #[cfg(feature = "adblock")]
-        let db_allowlist = self.ctx.get_dns_allowlist();
-
         let rewrites = Arc::new(RewriteStore::new());
         rewrites.replace_rules(db_rewrites);
 
@@ -111,7 +108,7 @@ impl DnsService {
                 adblock_enabled,
             );
             let blocker = AdBlocker::new(adblock_enabled);
-            blocker.replace_allowlist(db_allowlist.into_iter().collect());
+            blocker.sync_from_context(&self.ctx);
             blocker.replace_config(
                 db_adblock.blocking_mode,
                 db_adblock.blocking_ip_v4,
@@ -379,13 +376,29 @@ impl AsyncService for DnsService {
                                 info!("DNS: Rewrites reloaded");
                             }
                             #[cfg(feature = "adblock")]
-                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigAllowlistChanged) => {
-                                info!("DNS: Reloading allowlist");
+                            lanforge_core::bus::LanforgeEvent::Dns(
+                                lanforge_core::bus::DnsEvent::ConfigAllowlistChanged
+                                | lanforge_core::bus::DnsEvent::ConfigAdblockRulesChanged,
+                            ) => {
+                                info!("DNS: Reloading allowlist and custom adblock rules");
                                 if let Some(filter) = &dns_ctx.filter {
-                                    let allow = self.ctx.get_dns_allowlist();
-                                    filter.replace_allowlist(allow.into_iter().collect());
+                                    filter.sync_from_context(&self.ctx);
                                     dns_ctx.cache.invalidate_all();
-                                    info!("DNS: Allowlist reloaded");
+                                    info!("DNS: Allowlist and custom rules reloaded");
+                                }
+                            }
+                            #[cfg(feature = "adblock")]
+                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::AdblockBlock(domain)) => {
+                                if let Some(filter) = &dns_ctx.filter {
+                                    filter.add_block(&domain);
+                                    dns_ctx.cache.invalidate_all();
+                                }
+                            }
+                            #[cfg(feature = "adblock")]
+                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::AdblockAllow(domain)) => {
+                                if let Some(filter) = &dns_ctx.filter {
+                                    filter.add_allow(&domain);
+                                    dns_ctx.cache.invalidate_all();
                                 }
                             }
                             #[cfg(feature = "adblock")]

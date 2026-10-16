@@ -50,13 +50,14 @@ pub fn encode_reversed_domain(domain: &str, out: &mut [u8; 256]) -> Option<usize
         }
         first = false;
         let bytes = label.as_bytes();
-        if pos + bytes.len() > out.len() {
+        let next_pos = pos + bytes.len();
+        if next_pos > out.len() {
             return None;
         }
-        for &b in bytes {
-            out[pos] = b.to_ascii_lowercase();
-            pos += 1;
-        }
+        let dest = &mut out[pos..next_pos];
+        dest.copy_from_slice(bytes);
+        dest.make_ascii_lowercase();
+        pos = next_pos;
     }
 
     Some(pos)
@@ -158,7 +159,12 @@ impl DiskFilterMap {
     pub fn match_domain(&self, domain: &str) -> Option<MatchCandidate> {
         let mut key_buf = [0u8; 256];
         let len = encode_reversed_domain(domain, &mut key_buf)?;
-        match_reversed_key(self.map.as_fst(), &key_buf[..len])
+        self.match_reversed(&key_buf[..len])
+    }
+
+    #[inline]
+    pub fn match_reversed(&self, rev_key: &[u8]) -> Option<MatchCandidate> {
+        match_reversed_key(self.map.as_fst(), rev_key)
     }
 }
 

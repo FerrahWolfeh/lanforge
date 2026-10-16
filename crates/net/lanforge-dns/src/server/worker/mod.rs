@@ -2,8 +2,6 @@ pub mod tcp;
 pub mod udp;
 
 #[cfg(feature = "adblock")]
-use std::collections::HashSet;
-#[cfg(feature = "adblock")]
 use std::path::Path;
 #[cfg(feature = "adblock")]
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -190,9 +188,9 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                 let url = entry.url.clone();
                                 let s_dir = sources_dir.clone();
                                 let format = entry.format;
-                                let text = String::from_utf8_lossy(&body).into_owned();
 
                                 let comp_res = tokio::task::spawn_blocking(move || {
+                                    let text = String::from_utf8_lossy(&body);
                                     compile_source_artifacts(
                                         source_id,
                                         source_idx,
@@ -370,26 +368,8 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     }
                 }
 
-                // Compile allowlist: manual allowlist + allow rules
-                let mut full_allowlist = HashSet::new();
-                for domain in ctx.ctx.get_dns_allowlist() {
-                    full_allowlist.insert(domain.to_lowercase());
-                }
-                for rule in ctx.ctx.get_dns_adblock_rules() {
-                    if rule.enabled && rule.is_allow() {
-                        full_allowlist.insert(rule.domain.to_lowercase());
-                    }
-                }
-                filter.replace_allowlist(full_allowlist);
-
-                // Compile custom manual blocklist
-                let mut custom_blocks = HashSet::new();
-                for rule in ctx.ctx.get_dns_adblock_rules() {
-                    if rule.enabled && rule.is_block() {
-                        custom_blocks.insert(rule.domain.to_lowercase());
-                    }
-                }
-                filter.replace_custom_blocks(custom_blocks);
+                // Compile allowlist and custom manual blocklist
+                filter.sync_from_context(&ctx.ctx);
                 ctx.cache.invalidate_all();
 
                 // Ensure enabled after first successful load (if it was intended to be enabled)
@@ -475,22 +455,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                 }
                                 LanforgeEvent::Dns(DnsEvent::ConfigAllowlistChanged | DnsEvent::ConfigAdblockRulesChanged) => {
                                     info!("Adblock: custom rules/allowlist changed, updating in-memory filter");
-                                    let mut allow_set = HashSet::new();
-                                    for domain in ctx.ctx.get_dns_allowlist() {
-                                        allow_set.insert(domain.to_lowercase());
-                                    }
-                                    let mut block_set = HashSet::new();
-                                    for rule in ctx.ctx.get_dns_adblock_rules() {
-                                        if rule.enabled {
-                                            if rule.is_allow() {
-                                                allow_set.insert(rule.domain.to_lowercase());
-                                            } else if rule.is_block() {
-                                                block_set.insert(rule.domain.to_lowercase());
-                                            }
-                                        }
-                                    }
-                                    filter.replace_allowlist(allow_set);
-                                    filter.replace_custom_blocks(block_set);
+                                    filter.sync_from_context(&ctx.ctx);
                                     ctx.cache.invalidate_all();
                                 }
                                 LanforgeEvent::Dns(DnsEvent::AdblockBlock(domain)) => {
