@@ -233,6 +233,10 @@ pub fn parse_rrq_options<'a>(mut parts: impl Iterator<Item = &'a [u8]>, cfg: &Tf
 /// Validates that a requested filename is valid UTF-8 and stays strictly inside `root_dir`.
 ///
 /// Prevents path traversal vulnerabilities (`..`, root directory escape, prefixes).
+///
+/// # Errors
+///
+/// Returns an error if the filename is invalid UTF-8 or violates path containment.
 pub fn sanitize_rrq_path(
     filename_bytes: &[u8],
     root_dir: &std::path::Path,
@@ -284,7 +288,7 @@ async fn validate_rrq_path(
         }
     };
 
-    Ok(Some((path, meta.len(), filename.to_string())))
+    Ok(Some((path, meta.len(), filename)))
 }
 
 async fn bind_session_socket(src: SocketAddr) -> Result<(UdpSocket, SocketAddr), TftpError> {
