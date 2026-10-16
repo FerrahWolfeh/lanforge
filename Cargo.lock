@@ -2548,6 +2548,7 @@ dependencies = [
  "chrono",
  "dashmap",
  "fst",
+ "futures",
  "globset",
  "hotpath",
  "http-body-util",

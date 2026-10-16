@@ -8,11 +8,15 @@ use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRecordType, UpstreamHealthSnapshot,
 };
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use tokio::sync::broadcast::Sender;
 use tokio::task::JoinSet;
+use tokio::time::{Instant, sleep};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -68,6 +72,14 @@ fn domain_to_labels(d: &str) -> Vec<Vec<u8>> {
         .filter(|s| !s.is_empty())
         .map(|s| s.as_bytes().to_ascii_lowercase())
         .collect()
+}
+
+fn hedge_delay(m: &UpstreamManager) -> Duration {
+    match m.health.rtt_ewma_us.load(Ordering::Relaxed) {
+        0 => Duration::from_millis(400),
+        ewma => Duration::from_micros(u64::from(ewma) * 3)
+            .clamp(Duration::from_millis(150), Duration::from_millis(1000)),
+    }
 }
 
 pub struct UpstreamStrategy {
@@ -380,7 +392,6 @@ impl UpstreamStrategy {
         header: &WireHeader<'_>,
         question: &WireQuestion<'_>,
     ) -> Result<Resolved, DnsError> {
-        let mut last_err = DnsError::UpstreamTimeout;
         let mut available: Vec<_> = tier
             .iter()
             .filter(|m| m.health.status() != UpstreamStatus::Degraded)
@@ -388,20 +399,70 @@ impl UpstreamStrategy {
         if available.is_empty() {
             available = tier.iter().collect();
         }
+        if available.is_empty() {
+            return Err(DnsError::UpstreamTimeout);
+        }
 
-        for mgr in available {
-            match mgr.forward_with_parsed(data, header, question).await {
-                Ok((data, cached, is_block)) => {
-                    return Ok(Resolved {
-                        data,
-                        cached,
-                        is_block,
-                        coalesced: false,
-                    });
+        if available.len() == 1 {
+            let mgr = available[0];
+            return match mgr.forward_with_parsed(data, header, question).await {
+                Ok((data, cached, is_block)) => Ok(Resolved {
+                    data,
+                    cached,
+                    is_block,
+                    coalesced: false,
+                }),
+                Err(e) => Err(e),
+            };
+        }
+
+        let mut futs = FuturesUnordered::new();
+        let mut next_idx = 0;
+
+        let first_mgr = available[next_idx];
+        next_idx += 1;
+        futs.push(first_mgr.forward_with_parsed(data, header, question));
+
+        let mut hedge_timer = Box::pin(sleep(hedge_delay(first_mgr)));
+        let mut last_err = DnsError::UpstreamTimeout;
+
+        while !futs.is_empty() || next_idx < available.len() {
+            tokio::select! {
+                res = futs.next(), if !futs.is_empty() => {
+                    match res {
+                        Some(Ok((data, cached, is_block))) => {
+                            return Ok(Resolved {
+                                data,
+                                cached,
+                                is_block,
+                                coalesced: false,
+                            });
+                        }
+                        Some(Err(e)) => {
+                            last_err = e;
+                            if next_idx < available.len() {
+                                let next_mgr = available[next_idx];
+                                next_idx += 1;
+                                futs.push(next_mgr.forward_with_parsed(data, header, question));
+                                if next_idx < available.len() {
+                                    hedge_timer.as_mut().reset(Instant::now() + hedge_delay(next_mgr));
+                                }
+                            }
+                        }
+                        None => {}
+                    }
                 }
-                Err(e) => last_err = e,
+                _ = &mut hedge_timer, if next_idx < available.len() => {
+                    let next_mgr = available[next_idx];
+                    next_idx += 1;
+                    futs.push(next_mgr.forward_with_parsed(data, header, question));
+                    if next_idx < available.len() {
+                        hedge_timer.as_mut().reset(Instant::now() + hedge_delay(next_mgr));
+                    }
+                }
             }
         }
+
         Err(last_err)
     }
 
