@@ -41,6 +41,7 @@ impl Middleware for UpstreamMiddleware {
                         ctx.stats.inc_cache_hit();
                     } else {
                         ctx.stats.inc_cache_miss();
+                        ctx.stats.inc_recursive();
                     }
 
                     let result = if is_block {
@@ -84,7 +85,23 @@ impl Middleware for UpstreamMiddleware {
                     Ok(true)
                 }
                 Err(e) => {
+                    let elapsed = start.elapsed().as_micros() as u32;
                     ctx.stats.inc_failed();
+                    ctx.stats.inc_upstream_error();
+
+                    ctx.record_log(DnsLogEvent {
+                        src_ip: req.src_ip,
+                        src_mac: None,
+                        domain: req.domain.clone(),
+                        qtype: DnsRecordType::from(req.question.qtype()),
+                        result: QueryResult::Error,
+                        upstream_us: elapsed,
+                        cached: false,
+                        answer: Some(format!("SERVFAIL: {e}")),
+                        protocol: req.protocol,
+                        filter: req.filter_match.lock().clone(),
+                    });
+
                     Err(e)
                 }
             }

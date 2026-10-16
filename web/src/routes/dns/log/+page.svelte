@@ -8,6 +8,7 @@
 	import RadioIcon from "@lucide/svelte/icons/radio";
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
+	import { page } from "$app/state";
 	import { dnsQueryLog, dnsLogSseUrl, dnsStats, dnsRewriteAdd } from "$lib/api/client";
 	import type { DnsQueryLogEntry, DnsStatsResponse, RewriteRule } from "$lib/api/types";
 	import PageHeader from "$lib/components/PageHeader.svelte";
@@ -215,6 +216,10 @@
 	}
 
 	onMount(() => {
+		const resultParam = page.url.searchParams.get("result");
+		if (resultParam) {
+			selectedResult = resultParam;
+		}
 		loadHistoricalLogs();
 	});
 

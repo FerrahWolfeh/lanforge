@@ -26,9 +26,9 @@
 		return Math.round((statsData.cache_hits / cacheTotal) * 100);
 	});
 
-	const cacheMissesCount = $derived.by(() => {
+	const cacheHitsCount = $derived.by(() => {
 		if (!statsData) return 0;
-		return statsData.cache_misses ?? 0;
+		return statsData.cache_hits ?? 0;
 	});
 
 	const blockPct = $derived.by(() => {
@@ -36,15 +36,39 @@
 		return `${((statsData.blocked_queries / statsData.total_requests) * 100).toFixed(1)}%`;
 	});
 
+	const resolvedCount = $derived.by(() => {
+		if (!statsData) return 0;
+		if (typeof statsData.resolved_total === "number" && statsData.resolved_total > 0) {
+			return statsData.resolved_total;
+		}
+		return Math.max(0, statsData.total_requests - statsData.blocked_queries);
+	});
+
+	const forwardedCount = $derived.by(() => {
+		if (!statsData) return 0;
+		if (typeof statsData.recursions === "number" && statsData.recursions > 0) {
+			return statsData.recursions;
+		}
+		return statsData.cache_misses ?? 0;
+	});
+
+	const upstreamErrorsCount = $derived.by(() => {
+		if (!statsData) return 0;
+		if (typeof statsData.upstream_errors === "number" && statsData.upstream_errors > 0) {
+			return statsData.upstream_errors;
+		}
+		return statsData.failed_total ?? 0;
+	});
+
 	const upstreamStats = $derived.by(() => {
 		const list = upstreams ?? [];
 		const total = list.length;
 		if (total === 0) {
 			return {
-				display: "2 / 2",
-				subtitle: "System default resolvers (1.1.1.1, 8.8.8.8)",
-				healthy: 2,
-				total: 2,
+				display: "0 / 0",
+				subtitle: "No upstream forwarders configured",
+				healthy: 0,
+				total: 0,
 			};
 		}
 		const healthy = list.filter(
@@ -55,10 +79,32 @@
 		).length;
 		return {
 			display: `${healthy} / ${total}`,
-			subtitle: `${healthy} of ${total} upstreams operational`,
+			subtitle:
+				healthy === total
+					? "All configured forwarders healthy"
+					: `${total - healthy} of ${total} forwarders degraded`,
 			healthy,
 			total,
 		};
+	});
+
+	const avgUpstreamLatency = $derived.by(() => {
+		const list = upstreams ?? [];
+		const rtts = list
+			.map((u) => {
+				if (u.rtt_ewma_us !== undefined && u.rtt_ewma_us !== null && u.rtt_ewma_us > 0) {
+					return u.rtt_ewma_us / 1000;
+				}
+				if (u.latency_ms !== undefined && u.latency_ms !== null && u.latency_ms > 0) {
+					return u.latency_ms;
+				}
+				return null;
+			})
+			.filter((r): r is number => r !== null);
+
+		if (rtts.length === 0) return null;
+		const avg = rtts.reduce((a, b) => a + b, 0) / rtts.length;
+		return `${avg.toFixed(1)} ms`;
 	});
 </script>
 
@@ -82,13 +128,14 @@
 	>
 		{#snippet footer()}
 			<StatCardFooterItem
-				label="Cache Hits"
-				value={statsData?.cache_hits?.toLocaleString() ?? "—"}
+				label="Resolved"
+				value={statsData ? resolvedCount.toLocaleString() : "—"}
 				color="text-emerald-400"
 			/>
 			<StatCardFooterItem
-				label="Upstream Resolves"
-				value={(statsData?.recursions ?? cacheMissesCount).toLocaleString()}
+				label="Local / Rewrites"
+				value={statsData?.auth_queries !== undefined ? statsData.auth_queries.toLocaleString() : "—"}
+				color="text-sky-400"
 			/>
 		{/snippet}
 	</StatCard>
@@ -97,7 +144,7 @@
 	<StatCard
 		label="Cache Hit Ratio"
 		value={`${cacheHitPct}%`}
-		subtext={`${statsData?.cache_hits.toLocaleString() ?? 0} hits / ${cacheMissesCount.toLocaleString()} misses`}
+		subtext={`${cacheHitsCount.toLocaleString()} queries served from memory`}
 		icon={ZapIcon}
 		color="emerald"
 		{loading}
@@ -106,14 +153,15 @@
 			description: "Queries resolved directly from memory without forwarding to upstream DNS resolvers.",
 		}}
 		badge={{
-			text: cacheHitPct >= 70 ? "Optimal" : "Active",
-			variant: "online",
+			text: cacheHitPct >= 70 ? "Optimal" : (cacheHitPct > 0 ? "Active" : "Standby"),
+			variant: cacheHitPct >= 70 ? "online" : (cacheHitPct > 0 ? "emerald" : "zinc"),
+			showDot: cacheHitPct > 0,
 		}}
 	>
 		{#snippet footer()}
 			<StatCardFooterItem
-				label="Hits"
-				value={statsData?.cache_hits?.toLocaleString() ?? "—"}
+				label="Active Records"
+				value={statsData?.cache_entries !== undefined ? statsData.cache_entries.toLocaleString() : "—"}
 				color="text-emerald-400"
 			/>
 			<div class="flex flex-col gap-0.5 min-w-0">
@@ -133,7 +181,7 @@
 	<StatCard
 		label="Blocked Queries"
 		value={statsData ? statsData.blocked_queries.toLocaleString() : null}
-		subtext="Lifetime adblock & rule matches"
+		subtext="Ads, trackers & malicious domains"
 		icon={ShieldIcon}
 		color="rose"
 		{loading}
@@ -142,41 +190,79 @@
 			description: "Adware, tracking, telemetry, and custom rewrite domains blocked with NXDOMAIN or 0.0.0.0.",
 		}}
 		badge={{
-			text: `${blockPct} Block Rate`,
-			variant: "error",
-		}}
-	>
-		{#snippet footer()}
-			<StatCardFooterItem label="Block Rate" value={blockPct} color="text-rose-400" />
-			<StatCardFooterItem label="Filtering Mode" value="Zero-Copy FST" />
-		{/snippet}
-	</StatCard>
-
-	<!-- Card 4: Upstreams Active -->
-	<StatCard
-		label="Upstreams Active"
-		value={upstreamStats.display}
-		subtext={upstreamStats.subtitle}
-		icon={ServerIcon}
-		color="indigo"
-		{loading}
-		popover={{
-			title: "Upstream Resolvers",
-			description: "Health-checked recursive resolvers configured for WAN domain resolution.",
-		}}
-		badge={{
-			text: upstreamStats.healthy === upstreamStats.total ? "All Operational" : "Degraded",
-			variant: upstreamStats.healthy === upstreamStats.total ? "online" : "warning",
+			text: "Adblock Active",
+			variant: "rose",
 			showDot: true,
 		}}
 	>
 		{#snippet footer()}
 			<StatCardFooterItem
-				label="Operational"
-				value={`${upstreamStats.healthy} / ${upstreamStats.total}`}
+				label="Block Rate"
+				value={blockPct}
+				color="text-rose-400"
+			/>
+			<div class="flex flex-col gap-0.5 min-w-0">
+				<span class="text-[11px] text-muted-foreground truncate">Rules & Lists</span>
+				<a
+					href="/dns/adblock"
+					class="text-[11px] text-primary hover:underline font-medium flex items-center gap-0.5 truncate"
+				>
+					<span>Adblock Engine</span>
+					<ArrowRightIcon class="size-3 shrink-0" />
+				</a>
+			</div>
+		{/snippet}
+	</StatCard>
+
+	<!-- Card 4: Upstream Resolvers -->
+	<StatCard
+		label="Upstream Resolvers"
+		value={upstreamStats.display}
+		subtext={upstreamStats.subtitle}
+		icon={ServerIcon}
+		color="indigo"
+		{loading}
+		footerCols={3}
+		popover={{
+			title: "Upstream Resolvers",
+			description: "Health-checked recursive resolvers configured for WAN domain resolution.",
+		}}
+		badge={{
+			text: upstreamStats.total === 0 ? "None" : (upstreamStats.healthy === upstreamStats.total ? "Operational" : "Degraded"),
+			variant: upstreamStats.total === 0 ? "zinc" : (upstreamStats.healthy === upstreamStats.total ? "online" : "warning"),
+			showDot: upstreamStats.total > 0,
+		}}
+	>
+		{#snippet footer()}
+			<StatCardFooterItem
+				label="Forwarded"
+				value={statsData ? forwardedCount.toLocaleString() : "—"}
+				color="text-indigo-400"
+			/>
+			{#if upstreamErrorsCount > 0}
+				<div class="flex flex-col gap-0.5 min-w-0">
+					<span class="text-[11px] text-muted-foreground truncate">Failed</span>
+					<a
+						href="/dns/log?result=error"
+						class="text-[11px] text-rose-400 hover:underline font-semibold flex items-center gap-0.5 truncate"
+						title="View failed queries in query log"
+					>
+						<span>{upstreamErrorsCount.toLocaleString()}</span>
+						<ArrowRightIcon class="size-2.5 shrink-0" />
+					</a>
+				</div>
+			{:else}
+				<StatCardFooterItem
+					label="Failed"
+					value={statsData ? "0" : "—"}
+					color="text-muted-foreground"
+				/>
+			{/if}
+			<StatCardFooterItem
+				label="Avg Latency"
+				value={avgUpstreamLatency ?? "—"}
 				color="text-emerald-400"
 			/>
-			<StatCardFooterItem label="Failover" value="Concurrent" />
 		{/snippet}
 	</StatCard>
 </StatCardGrid>
