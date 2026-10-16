@@ -116,62 +116,71 @@ impl EventBus {
         self.publish_timed(TimedEvent::new(event))
     }
 
+    #[inline]
+    fn send_if_subscribed(tx: &broadcast::Sender<TimedEvent>, event: &TimedEvent) {
+        if tx.receiver_count() > 0 {
+            let _ = tx.send(event.clone());
+        }
+    }
+
     #[must_use]
     pub fn publish_timed(&self, event: TimedEvent) -> usize {
-        // Dispatch to domain topic channel
+        // Dispatch to domain topic channel only when receivers exist
         match &event.event {
             LanforgeEvent::System(SystemEvent::Shutdown) => {
-                // Broadcast shutdown to every topic channel to unblock listeners immediately
-                let _ = self.system.send(event.clone());
-                let _ = self.network.send(event.clone());
-                let _ = self.device.send(event.clone());
-                let _ = self.dns.send(event.clone());
-                let _ = self.storage.send(event.clone());
-                let _ = self.pppoe.send(event.clone());
-                let _ = self.firewall.send(event.clone());
-                let _ = self.traffic.send(event.clone());
+                Self::send_if_subscribed(&self.system, &event);
+                Self::send_if_subscribed(&self.network, &event);
+                Self::send_if_subscribed(&self.device, &event);
+                Self::send_if_subscribed(&self.dns, &event);
+                Self::send_if_subscribed(&self.storage, &event);
+                Self::send_if_subscribed(&self.pppoe, &event);
+                Self::send_if_subscribed(&self.firewall, &event);
+                Self::send_if_subscribed(&self.traffic, &event);
             }
             LanforgeEvent::System(SystemEvent::ConfigRaChanged) => {
-                let _ = self.system.send(event.clone());
-                let _ = self.network.send(event.clone());
+                Self::send_if_subscribed(&self.system, &event);
+                Self::send_if_subscribed(&self.network, &event);
             }
             LanforgeEvent::System(
                 SystemEvent::ConfigDhcpV4Changed
                 | SystemEvent::ConfigDhcpV6Changed
                 | SystemEvent::ConfigDhcpOptionsChanged,
             ) => {
-                let _ = self.system.send(event.clone());
-                let _ = self.device.send(event.clone());
+                Self::send_if_subscribed(&self.system, &event);
+                Self::send_if_subscribed(&self.device, &event);
             }
             LanforgeEvent::System(_) => {
-                let _ = self.system.send(event.clone());
+                Self::send_if_subscribed(&self.system, &event);
             }
             LanforgeEvent::Network(_) => {
-                let _ = self.network.send(event.clone());
+                Self::send_if_subscribed(&self.network, &event);
             }
             LanforgeEvent::Device(_) => {
-                let _ = self.device.send(event.clone());
+                Self::send_if_subscribed(&self.device, &event);
             }
             LanforgeEvent::Dns(_) => {
-                let _ = self.dns.send(event.clone());
+                Self::send_if_subscribed(&self.dns, &event);
             }
             LanforgeEvent::Storage(_) => {
-                let _ = self.storage.send(event.clone());
+                Self::send_if_subscribed(&self.storage, &event);
             }
             LanforgeEvent::Pppoe(_) => {
-                let _ = self.pppoe.send(event.clone());
-                let _ = self.dns.send(event.clone());
+                Self::send_if_subscribed(&self.pppoe, &event);
+                Self::send_if_subscribed(&self.dns, &event);
             }
             LanforgeEvent::Firewall(_) => {
-                let _ = self.firewall.send(event.clone());
+                Self::send_if_subscribed(&self.firewall, &event);
             }
             LanforgeEvent::Traffic(_) => {
-                let _ = self.traffic.send(event.clone());
+                Self::send_if_subscribed(&self.traffic, &event);
             }
         }
 
-        // Always publish to global bus for full stream receivers (SSE, CLI TUI, log buffers)
-        self.global.send(event).unwrap_or(0)
+        if self.global.receiver_count() > 0 {
+            self.global.send(event).unwrap_or(0)
+        } else {
+            0
+        }
     }
 }
 

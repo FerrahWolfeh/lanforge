@@ -44,7 +44,7 @@ pub struct StaticEntry {
     pub ignored_log_domains: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct CliHostUpdate {
     pub hostname: FieldUpdate<String>,
     pub duid: FieldUpdate<Duid>,

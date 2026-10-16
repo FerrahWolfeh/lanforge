@@ -281,10 +281,21 @@ impl State {
     #[must_use]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn get_by_hostname(&self, hostname: &str) -> Option<Arc<Device>> {
-        let mac = if hostname.as_bytes().iter().any(u8::is_ascii_uppercase) {
-            self.indices
-                .name_index
-                .get(&hostname.to_ascii_lowercase())?
+        let bytes = hostname.as_bytes();
+        let mac = if bytes.iter().any(u8::is_ascii_uppercase) {
+            if bytes.len() <= 256 {
+                let mut buf = [0u8; 256];
+                for (dst, &src) in buf[..bytes.len()].iter_mut().zip(bytes) {
+                    *dst = src.to_ascii_lowercase();
+                }
+                // SAFETY: `hostname` é UTF-8 válido e `to_ascii_lowercase` preserva UTF-8 válido.
+                let lower = std::str::from_utf8(&buf[..bytes.len()]).ok()?;
+                self.indices.name_index.get(lower)?
+            } else {
+                self.indices
+                    .name_index
+                    .get(&hostname.to_ascii_lowercase())?
+            }
         } else {
             self.indices.name_index.get(hostname)?
         };
@@ -475,11 +486,12 @@ impl State {
         self.devices.values().cloned()
     }
 
-    /// Centralized device mutation helper.
-    pub(crate) fn mutate_device(
+    /// Internal helper to mutate a device and map its change into a `DeviceEvent`.
+    fn mutate_device_with<C>(
         &mut self,
         mac: MacAddr,
-        f: impl FnOnce(&mut Device) -> Option<NetworkChange>,
+        f: impl FnOnce(&mut Device) -> Option<C>,
+        make_event: impl FnOnce(MacAddr, C, Option<String>) -> DeviceEvent,
     ) -> EventVec {
         let was_in_table = self.devices.contains_key(&mac);
         let mut dev_arc = self
@@ -505,19 +517,7 @@ impl State {
                             hostname: hostname.clone(),
                         }));
                     }
-                    if change.is_persistent() {
-                        events.push(LanforgeEvent::Device(DeviceEvent::NetworkUpdate {
-                            mac,
-                            change: Box::new(change),
-                            hostname,
-                        }));
-                    } else {
-                        events.push(LanforgeEvent::Device(DeviceEvent::NetworkActivity {
-                            mac,
-                            change: Box::new(change),
-                            hostname,
-                        }));
-                    }
+                    events.push(LanforgeEvent::Device(make_event(mac, change, hostname)));
                 }
             }
 
@@ -545,11 +545,33 @@ impl State {
             }
             self.devices.insert(mac, dev_arc);
         } else if was_worthy {
-            // Device was worthy but now isn't. Signal removal from active state and drop it.
             events.push(LanforgeEvent::Device(DeviceEvent::Purged { mac }));
         }
 
         events
+    }
+
+    /// Centralized device mutation helper for network changes.
+    pub(crate) fn mutate_device(
+        &mut self,
+        mac: MacAddr,
+        f: impl FnOnce(&mut Device) -> Option<NetworkChange>,
+    ) -> EventVec {
+        self.mutate_device_with(mac, f, |mac, change, hostname| {
+            if change.is_persistent() {
+                DeviceEvent::NetworkUpdate {
+                    mac,
+                    change: Box::new(change),
+                    hostname,
+                }
+            } else {
+                DeviceEvent::NetworkActivity {
+                    mac,
+                    change: Box::new(change),
+                    hostname,
+                }
+            }
+        })
     }
 
     /// Centralized device mutation helper for administrative changes.
@@ -558,67 +580,11 @@ impl State {
         mac: MacAddr,
         f: impl FnOnce(&mut Device) -> Option<AdminChange>,
     ) -> EventVec {
-        let was_in_table = self.devices.contains_key(&mac);
-        let mut dev_arc = self
-            .devices
-            .remove(&mac)
-            .unwrap_or_else(|| Arc::new(Device::new(mac)));
-
-        let was_worthy = was_in_table && dev_arc.is_worthy();
-        let was_status = dev_arc.status;
-        let mut events = EventVec::new();
-
-        {
-            let dev = Arc::make_mut(&mut dev_arc);
-            self.unindex_device(dev);
-
-            if let Some(change) = f(dev) {
-                let is_worthy = dev.is_worthy();
-                if is_worthy || was_worthy {
-                    let hostname = Some(dev.hostname.name.clone());
-                    if !was_worthy && is_worthy {
-                        events.push(LanforgeEvent::Device(DeviceEvent::Discovered {
-                            mac,
-                            hostname: hostname.clone(),
-                        }));
-                    }
-                    events.push(LanforgeEvent::Device(DeviceEvent::AdminUpdate {
-                        mac,
-                        change: Box::new(change),
-                        hostname,
-                    }));
-                }
-            }
-
-            dev.status = dev.evaluate_status(SystemTime::now(), None);
-
-            if dev.is_worthy() {
-                self.index_device(mac, dev);
-            }
-        }
-
-        let is_worthy = dev_arc.is_worthy();
-        if is_worthy {
-            let now_status = dev_arc.status;
-            if was_status != now_status {
-                let hostname = dev_arc.hostname.name.clone();
-                events.push(LanforgeEvent::Device(DeviceEvent::NetworkUpdate {
-                    mac,
-                    change: Box::new(NetworkChange::StatusChanged {
-                        online: now_status == DeviceStatus::Online,
-                        status: now_status,
-                        hostname: Some(hostname.clone()),
-                    }),
-                    hostname: Some(hostname),
-                }));
-            }
-            self.devices.insert(mac, dev_arc);
-        } else if was_worthy {
-            // Device was worthy but now isn't. Signal removal from active state and drop it.
-            events.push(LanforgeEvent::Device(DeviceEvent::Purged { mac }));
-        }
-
-        events
+        self.mutate_device_with(mac, f, |mac, change, hostname| DeviceEvent::AdminUpdate {
+            mac,
+            change: Box::new(change),
+            hostname,
+        })
     }
 
     pub fn promote_device_to_index(&mut self, mac: MacAddr) {

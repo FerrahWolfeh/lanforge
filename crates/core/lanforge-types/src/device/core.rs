@@ -432,6 +432,9 @@ impl Device {
                 changed = true;
             }
         } else {
+            if self.seen_v4.len() >= 4 {
+                self.seen_v4.remove(0);
+            }
             self.seen_v4.push((
                 ip,
                 if is_active {
@@ -455,20 +458,18 @@ impl Device {
         hostname: &str,
         origin: HostnameOrigin,
     ) -> Option<NetworkChange> {
-        let hostname = Hostname::sanitize(hostname);
-        if hostname.is_empty() {
+        if origin < self.hostname.origin {
             return None;
         }
-        if origin >= self.hostname.origin && self.hostname.name != hostname {
-            self.hostname = Hostname {
-                name: hostname,
-                origin,
-            };
-            return Some(NetworkChange::HostnameHint {
-                hostname: self.hostname.name.clone(),
-            });
+        let hostname = Hostname::sanitize(hostname);
+        if hostname.is_empty() || self.hostname.name == hostname {
+            return None;
         }
-        None
+        self.hostname = Hostname {
+            name: hostname.clone(),
+            origin,
+        };
+        Some(NetworkChange::HostnameHint { hostname })
     }
 
     #[must_use]

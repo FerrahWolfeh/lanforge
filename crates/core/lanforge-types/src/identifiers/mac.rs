@@ -42,13 +42,17 @@ impl MacAddr {
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 6 {
-            return None;
-        }
         let mut bytes = [0u8; 6];
-        for (i, part) in parts.iter().enumerate() {
-            bytes[i] = u8::from_str_radix(part, 16).ok()?;
+        let mut parts = s.split(':');
+        for b in &mut bytes {
+            let part = parts.next()?;
+            if part.is_empty() || part.len() > 2 {
+                return None;
+            }
+            *b = u8::from_str_radix(part, 16).ok()?;
+        }
+        if parts.next().is_some() {
+            return None;
         }
         Some(Self(bytes))
     }
@@ -154,21 +158,18 @@ impl MacAddr {
     #[must_use]
     pub fn eq_str(&self, s: &str) -> bool {
         let s = s.trim();
-        // Try parsing directly (covers standard colon format)
         if let Some(parsed) = Self::parse(s) {
-            return self == &parsed;
+            return *self == parsed;
         }
 
-        // Try parsing a 12-character hex string without colons
-        let clean = s.replace(':', "");
-        if clean.len() == 12 {
+        // Fast-path para string de 12 caracteres hexadecimais sem ':'
+        if s.len() == 12 && !s.as_bytes().contains(&b':') {
             let mut bytes = [0u8; 6];
-            for i in 0..6 {
-                if let Ok(b) = u8::from_str_radix(&clean[i * 2..i * 2 + 2], 16) {
-                    bytes[i] = b;
-                } else {
+            for (i, b) in bytes.iter_mut().enumerate() {
+                let Ok(val) = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16) else {
                     return false;
-                }
+                };
+                *b = val;
             }
             return self.0 == bytes;
         }

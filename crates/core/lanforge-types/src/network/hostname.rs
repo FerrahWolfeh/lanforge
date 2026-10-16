@@ -41,7 +41,12 @@ pub struct Hostname {
 impl Hostname {
     #[must_use]
     pub fn sanitize(name: &str) -> String {
-        name.replace('\0', "").trim().to_string()
+        let trimmed = name.trim_matches(|c: char| c.is_whitespace() || c == '\0');
+        if trimmed.as_bytes().contains(&0) {
+            trimmed.replace('\0', "").trim().to_string()
+        } else {
+            trimmed.to_string()
+        }
     }
 
     #[must_use]

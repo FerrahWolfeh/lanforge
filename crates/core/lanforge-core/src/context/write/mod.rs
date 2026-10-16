@@ -116,13 +116,21 @@ impl LanforgeContext {
     fn debounce_update(&self, update: DeviceUpdate) -> Option<DeviceUpdate> {
         let state = self.inner.state.load();
         match update {
-            DeviceUpdate::ArpSeen { mac, ip, .. } if should_debounce_arp(&state, mac, ip) => None,
-            DeviceUpdate::NdpSeen { mac, ip, .. } if should_debounce_ndp(&state, mac, ip) => None,
-            DeviceUpdate::SlaacObserved { mac, addr, .. }
-                if should_debounce_slaac(&state, mac, addr) =>
-            {
-                None
-            }
+            DeviceUpdate::ArpSeen {
+                mac,
+                ip,
+                is_active,
+            } if should_debounce_arp(&state, mac, ip, is_active) => None,
+            DeviceUpdate::NdpSeen {
+                mac,
+                ip,
+                is_active,
+            } if should_debounce_ndp(&state, mac, ip, is_active) => None,
+            DeviceUpdate::SlaacObserved {
+                mac,
+                addr,
+                is_active,
+            } if should_debounce_slaac(&state, mac, addr, is_active) => None,
             DeviceUpdate::NeighborBatch { mut entries } => {
                 debounce_neighbor_entries(&state, &mut entries);
                 if entries.is_empty() {
@@ -130,6 +138,22 @@ impl LanforgeContext {
                 } else {
                     Some(DeviceUpdate::NeighborBatch { entries })
                 }
+            }
+            DeviceUpdate::DeviceInterfaceSeen { mac, ref iface }
+                if state
+                    .devices
+                    .get(&mac)
+                    .is_some_and(|dev| dev.iface.as_deref() == Some(iface.as_str())) =>
+            {
+                None
+            }
+            DeviceUpdate::ClassHint { mac, class }
+                if state
+                    .devices
+                    .get(&mac)
+                    .is_some_and(|dev| dev.class == class) =>
+            {
+                None
             }
             _ => Some(update),
         }
@@ -145,43 +169,52 @@ fn should_debounce_arp(
     state: &crate::context::state::State,
     mac: lanforge_types::identifiers::MacAddr,
     ip: std::net::Ipv4Addr,
+    is_active: bool,
 ) -> bool {
-    state.devices.get(&mac).is_some_and(|dev| {
-        is_recently_seen(dev) && dev.seen_v4.iter().any(|(a, _)| *a == ip)
-    })
+    is_active
+        && state.devices.get(&mac).is_some_and(|dev| {
+            is_recently_seen(dev) && dev.seen_v4.iter().any(|(a, _)| *a == ip)
+        })
 }
 
 fn should_debounce_ndp(
     state: &crate::context::state::State,
     mac: lanforge_types::identifiers::MacAddr,
     ip: std::net::Ipv6Addr,
+    is_active: bool,
 ) -> bool {
-    state.devices.get(&mac).is_some_and(|dev| {
-        is_recently_seen(dev) && dev.v6.iter().any(|s| s.ip() == Some(ip))
-    })
+    is_active
+        && state.devices.get(&mac).is_some_and(|dev| {
+            is_recently_seen(dev) && dev.v6.iter().any(|s| s.ip() == Some(ip))
+        })
 }
 
 fn should_debounce_slaac(
     state: &crate::context::state::State,
     mac: lanforge_types::identifiers::MacAddr,
     addr: std::net::Ipv6Addr,
+    is_active: bool,
 ) -> bool {
-    state.devices.get(&mac).is_some_and(|dev| {
-        is_recently_seen(dev)
-            && dev.v6.iter().any(|s| match s {
-                IPv6State::Slaac(a, _) => *a == addr,
-                IPv6State::Dynamic(l) => l.ip == addr,
-                IPv6State::Static(suf, _) => suf.matches(addr),
-                _ => false,
-            })
-    })
+    is_active
+        && state.devices.get(&mac).is_some_and(|dev| {
+            is_recently_seen(dev)
+                && dev.v6.iter().any(|s| match s {
+                    IPv6State::Slaac(a, _) => *a == addr,
+                    IPv6State::Dynamic(l) => l.ip == addr,
+                    IPv6State::Static(suf, _) => suf.matches(addr),
+                    _ => false,
+                })
+        })
 }
 
 fn debounce_neighbor_entries(
     state: &crate::context::state::State,
     entries: &mut Vec<(lanforge_types::identifiers::MacAddr, IpAddr, bool)>,
 ) {
-    entries.retain(|(mac, ip, _)| {
+    entries.retain(|(mac, ip, is_active)| {
+        if !*is_active {
+            return true;
+        }
         state.devices.get(mac).is_none_or(|dev| {
             let has_ip = match *ip {
                 IpAddr::V4(v4) => dev.seen_v4.iter().any(|(a, _)| *a == v4),

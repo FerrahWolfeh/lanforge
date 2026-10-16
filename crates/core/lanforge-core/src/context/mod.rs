@@ -996,9 +996,11 @@ impl LanforgeContext {
     ///
     /// Returns `CoreError` if the wait condition cannot be met or the system shuts down.
     pub async fn wait_for_interfaces(&self) -> Result<(), CoreError> {
-        self.wait_for_condition(Self::is_if_ready, |event| {
-            matches!(event, LanforgeEvent::System(SystemEvent::InterfaceReady))
-        })
+        self.wait_for_condition(
+            || self.inner.bus.subscribe_system(),
+            Self::is_if_ready,
+            |event| matches!(event, LanforgeEvent::System(SystemEvent::InterfaceReady)),
+        )
         .await
     }
 
@@ -1008,9 +1010,11 @@ impl LanforgeContext {
     ///
     /// Returns `CoreError` if the wait condition cannot be met or the system shuts down.
     pub async fn wait_for_db(&self) -> Result<(), CoreError> {
-        self.wait_for_condition(Self::is_db_ready, |event| {
-            matches!(event, LanforgeEvent::System(SystemEvent::DbReady))
-        })
+        self.wait_for_condition(
+            || self.inner.bus.subscribe_system(),
+            Self::is_db_ready,
+            |event| matches!(event, LanforgeEvent::System(SystemEvent::DbReady)),
+        )
         .await
     }
 
@@ -1020,9 +1024,11 @@ impl LanforgeContext {
     ///
     /// Returns `CoreError` if the wait condition cannot be met or the system shuts down.
     pub async fn wait_for_pppoe(&self) -> Result<(), CoreError> {
-        self.wait_for_condition(Self::is_pppoe_ready, |event| {
-            matches!(event, LanforgeEvent::Pppoe(PppoeEvent::SessionUp(_)))
-        })
+        self.wait_for_condition(
+            || self.inner.bus.subscribe_pppoe(),
+            Self::is_pppoe_ready,
+            |event| matches!(event, LanforgeEvent::Pppoe(PppoeEvent::SessionUp(_))),
+        )
         .await
     }
 
@@ -1047,6 +1053,7 @@ impl LanforgeContext {
     /// Returns `CoreError::Shutdown` if the system shuts down before the service is online.
     pub async fn wait_for_service(&self, id: &str) -> Result<(), CoreError> {
         self.wait_for_condition(
+            || self.inner.bus.subscribe_system(),
             |ctx| ctx.get_service_state(id) == ServiceState::Online,
             |event| {
                 matches!(
@@ -1062,6 +1069,7 @@ impl LanforgeContext {
     /// or a matching event arrives on the bus.
     async fn wait_for_condition(
         &self,
+        subscribe: impl FnOnce() -> Receiver<TimedEvent>,
         is_ready: impl Fn(&Self) -> bool,
         event_matches: impl Fn(&LanforgeEvent) -> bool,
     ) -> Result<(), CoreError> {
@@ -1071,7 +1079,7 @@ impl LanforgeContext {
         if is_ready(self) {
             return Ok(());
         }
-        let mut rx = self.inner.bus.subscribe();
+        let mut rx = subscribe();
         loop {
             // Re-check after subscribing to avoid race
             if is_ready(self) {
@@ -1091,7 +1099,8 @@ impl LanforgeContext {
                         return Ok(());
                     }
                 }
-                Err(_) => return Err(CoreError::Shutdown),
+                Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => return Err(CoreError::Shutdown),
             }
         }
     }
