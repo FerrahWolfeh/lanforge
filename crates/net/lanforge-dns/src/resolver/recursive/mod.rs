@@ -30,9 +30,14 @@ use tracing::trace;
 
 const DOT_POOL_MAX: usize = 8;
 
+pub(crate) struct PendingQuery {
+    pub sent_at: Instant,
+    pub tx: Option<Sender<Vec<u8>>>,
+}
+
 pub struct UpstreamManager {
     pub(crate) socket: Arc<UdpSocket>,
-    pub(crate) pending: Arc<Mutex<HashMap<u16, Sender<Vec<u8>>>>>,
+    pub(crate) pending: Arc<Mutex<HashMap<u16, PendingQuery>>>,
     pub(crate) next_id: AtomicU16,
     pub cache: Arc<DnsCache>,
     pub target: UpstreamTarget,
@@ -58,7 +63,7 @@ impl UpstreamManager {
         } else {
             Arc::new(UdpSocket::bind("[::]:0").await?)
         };
-        let pending = Arc::new(Mutex::new(HashMap::<u16, Sender<Vec<u8>>>::new()));
+        let pending = Arc::new(Mutex::new(HashMap::<u16, PendingQuery>::new()));
 
         #[cfg(any(feature = "dot", feature = "doq"))]
         let mut root_cert_store = rustls::RootCertStore::empty();
@@ -130,6 +135,7 @@ impl UpstreamManager {
 
         let s = Arc::clone(&mgr.socket);
         let p = Arc::clone(&mgr.pending);
+        let health_rx = Arc::clone(&mgr.health);
         let upstream_addr = mgr.target.addr;
 
         let rx_task = tokio::spawn(async move {
@@ -142,12 +148,22 @@ impl UpstreamManager {
                         }
                         if len >= 2 {
                             let id = u16::from_be_bytes([buf[0], buf[1]]);
-                            let tx = {
+                            let entry = {
                                 let mut map = p.lock();
                                 map.remove(&id)
                             };
-                            if let Some(tx) = tx {
-                                let _ = tx.send(buf[..len].to_vec());
+                            if let Some(entry) = entry {
+                                if let Some(tx) = entry.tx {
+                                    let _ = tx.send(buf[..len].to_vec());
+                                } else if len >= 12 {
+                                    let rtt = entry
+                                        .sent_at
+                                        .elapsed()
+                                        .as_micros()
+                                        .try_into()
+                                        .unwrap_or(u32::MAX);
+                                    health_rx.record_success(rtt);
+                                }
                             }
                         }
                     }
@@ -180,24 +196,13 @@ impl UpstreamManager {
 
         let weak_mgr = Arc::downgrade(&mgr);
         let probe_task = tokio::spawn(async move {
-            const PROBE_QUERY: &[u8] = &[
-                0x00, 0x01, // ID: 1
-                0x01, 0x00, // Flags: RD=1
-                0x00, 0x01, // QDCOUNT: 1
-                0x00, 0x00, // ANCOUNT: 0
-                0x00, 0x00, // NSCOUNT: 0
-                0x00, 0x00, // ARCOUNT: 0
-                0x00, // QNAME: .
-                0x00, 0x01, // QTYPE: A (1)
-                0x00, 0x01, // QCLASS: IN (1)
-            ];
             loop {
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 if let Some(mgr_clone) = weak_mgr.upgrade() {
                     if mgr_clone.health.status() == UpstreamStatus::Degraded
                         && mgr_clone.health.is_eligible_for_probing()
                     {
-                        let _ = mgr_clone.forward(PROBE_QUERY).await;
+                        let _ = mgr_clone.probe().await;
                     }
                 } else {
                     break;
@@ -209,18 +214,8 @@ impl UpstreamManager {
         Ok(mgr)
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub async fn forward(&self, data: &[u8]) -> Result<(Vec<u8>, bool, bool), DnsError> {
-        let header = WireHeader::parse(data).ok_or(DnsError::WireParseError)?;
-        let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
-
-        if let Some((cached_resp, is_block)) = self.cache.get_wire(data, &question) {
-            return Ok((cached_resp, true, is_block));
-        }
-
-        let orig_id = header.id();
+    async fn send_query_wire(&self, data: &[u8]) -> Result<Vec<u8>, DnsError> {
         let start = Instant::now();
-
         let resp_result = match self.target.protocol {
             UpstreamProtocol::Udp => self.forward_udp(data, self.target.addr).await,
             UpstreamProtocol::Tls => self.forward_dot(data, &self.target).await,
@@ -250,19 +245,46 @@ impl UpstreamManager {
             }
         };
 
-        let resp_bytes = match resp_result {
+        match resp_result {
             Ok(resp) => {
                 let rtt = start.elapsed().as_micros().try_into().unwrap_or(u32::MAX);
                 self.health.record_success(rtt);
-                resp
+                Ok(resp)
             }
             Err(e) => {
                 self.health.record_failure();
-                return Err(e);
+                Err(e)
             }
-        };
+        }
+    }
 
-        let mut final_bytes = resp_bytes;
+    /// Sends a direct network probe bypassing the DNS cache to verify upstream recovery.
+    pub async fn probe(&self) -> Result<(), DnsError> {
+        const PROBE_QUERY: &[u8] = &[
+            0x00, 0x01, // ID: 1
+            0x01, 0x00, // Flags: RD=1
+            0x00, 0x01, // QDCOUNT: 1
+            0x00, 0x00, // ANCOUNT: 0
+            0x00, 0x00, // NSCOUNT: 0
+            0x00, 0x00, // ARCOUNT: 0
+            0x00, // QNAME: .
+            0x00, 0x01, // QTYPE: A (1)
+            0x00, 0x01, // QCLASS: IN (1)
+        ];
+        self.send_query_wire(PROBE_QUERY).await.map(|_| ())
+    }
+
+    /// Forwards a pre-parsed query to the upstream without repeating a cache lookup.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub async fn forward_with_parsed(
+        &self,
+        data: &[u8],
+        header: &WireHeader<'_>,
+        question: &WireQuestion<'_>,
+    ) -> Result<(Vec<u8>, bool, bool), DnsError> {
+        let orig_id = header.id();
+        let mut final_bytes = self.send_query_wire(data).await?;
+
         if final_bytes.len() >= 2 {
             let id_bytes = orig_id.to_be_bytes();
             final_bytes[0] = id_bytes[0];
@@ -272,7 +294,7 @@ impl UpstreamManager {
         let scanner = WireResponseScanner::new(&final_bytes);
         let (offsets, min_ttl) = scanner.scan_ttls();
 
-        let key = CacheKey::from_question(&question);
+        let key = CacheKey::from_question(question);
 
         // Only cache NOERROR (0) and NXDOMAIN (3)
         if let Some(resp_header) = WireHeader::parse(&final_bytes) {
@@ -286,31 +308,64 @@ impl UpstreamManager {
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub async fn forward(&self, data: &[u8]) -> Result<(Vec<u8>, bool, bool), DnsError> {
+        let header = WireHeader::parse(data).ok_or(DnsError::WireParseError)?;
+        let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
+
+        if let Some((cached_resp, is_block)) = self.cache.get_wire(data, &question) {
+            return Ok((cached_resp, true, is_block));
+        }
+
+        self.forward_with_parsed(data, &header, &question).await
+    }
+
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn forward_udp(&self, data: &[u8], upstream: SocketAddr) -> Result<Vec<u8>, DnsError> {
-        let internal_id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let internal_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let mut data_to_send = smallvec::SmallVec::<[u8; 512]>::from_slice(data);
         WireHeader::patch_id(&mut data_to_send, internal_id);
 
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().insert(internal_id, tx);
+        let now = Instant::now();
+        {
+            let mut map = self.pending.lock();
+            if map.len() > 64 {
+                map.retain(|_, v| now.duration_since(v.sent_at) < Duration::from_secs(5));
+            }
+            map.insert(
+                internal_id,
+                PendingQuery {
+                    sent_at: now,
+                    tx: Some(tx),
+                },
+            );
+        }
 
-        // RAII guard to ensure internal_id is always removed from pending map
-        // on timeout, cancellation, or socket send failure.
         struct PendingGuard<'a> {
-            pending: &'a Mutex<HashMap<u16, Sender<Vec<u8>>>>,
+            pending: &'a Mutex<HashMap<u16, PendingQuery>>,
             id: u16,
+            completed_or_timed_out: bool,
         }
         impl<'a> Drop for PendingGuard<'a> {
             fn drop(&mut self) {
-                self.pending.lock().remove(&self.id);
+                let mut map = self.pending.lock();
+                if self.completed_or_timed_out {
+                    map.remove(&self.id);
+                } else if let Some(entry) = map.get_mut(&self.id) {
+                    entry.tx = None;
+                }
             }
         }
-        let _guard = PendingGuard {
+        let mut guard = PendingGuard {
             pending: &self.pending,
             id: internal_id,
+            completed_or_timed_out: false,
         };
 
-        self.socket.send_to(&data_to_send, upstream).await?;
+        if let Err(e) = self.socket.send_to(&data_to_send, upstream).await {
+            guard.completed_or_timed_out = true;
+            return Err(DnsError::Io(e));
+        }
 
         let timeout_dur = if self.health.consecutive_failures.load(Ordering::Relaxed) >= 5 {
             Duration::from_millis(200)
@@ -318,7 +373,10 @@ impl UpstreamManager {
             Duration::from_secs(3)
         };
 
-        match timeout(timeout_dur, rx).await {
+        let res = timeout(timeout_dur, rx).await;
+        guard.completed_or_timed_out = true;
+
+        match res {
             Ok(Ok(resp_bytes)) => {
                 let header = WireHeader::parse(&resp_bytes).ok_or(DnsError::WireParseError)?;
                 if header.tc() {

@@ -50,6 +50,15 @@ impl<'a> DnsPipelineRequest<'a> {
 }
 
 pub trait Middleware: Send + Sync {
+    fn run_sync(
+        &self,
+        _ctx: &DnsContext,
+        _req: &DnsPipelineRequest<'_>,
+        _resp: &mut Vec<u8>,
+    ) -> Option<Result<bool, DnsError>> {
+        None
+    }
+
     fn run<'a>(
         &'a self,
         ctx: &'a DnsContext,
@@ -88,6 +97,12 @@ impl Pipeline {
         handle_reverse_dns_trigger(ctx, req.src_ip);
 
         for m in &self.middlewares {
+            if let Some(res) = m.run_sync(ctx, &req, resp) {
+                if res? {
+                    return Ok(());
+                }
+                continue;
+            }
             if m.run(ctx, req.clone(), resp).await? {
                 return Ok(());
             }

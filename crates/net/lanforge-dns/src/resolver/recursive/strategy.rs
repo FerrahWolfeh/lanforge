@@ -3,7 +3,7 @@ use crate::resolver::recursive::UpstreamManager;
 use crate::resolver::recursive::cache::CacheKey;
 use crate::utils::health::UpstreamStatus;
 use dashmap::DashMap;
-use lanforge_dns_wire::{WireDecoder, WireEncoder, WireQuestion};
+use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRecordType, UpstreamHealthSnapshot,
@@ -231,8 +231,18 @@ impl UpstreamStrategy {
     }
 
     pub async fn resolve(&self, data: &[u8]) -> Result<(Vec<u8>, bool, bool), DnsError> {
+        let header = WireHeader::parse(data).ok_or(DnsError::WireParseError)?;
         let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
-        let key = CacheKey::from_question(&question);
+        self.resolve_with_parsed(data, &header, &question).await
+    }
+
+    pub async fn resolve_with_parsed(
+        &self,
+        data: &[u8],
+        header: &WireHeader<'_>,
+        question: &WireQuestion<'_>,
+    ) -> Result<(Vec<u8>, bool, bool), DnsError> {
+        let key = CacheKey::from_question(question);
 
         let (mut rx, is_leader) = match self.in_flight.entry(key.clone()) {
             dashmap::Entry::Occupied(occ) => (Some(occ.get().subscribe()), false),
@@ -270,7 +280,7 @@ impl UpstreamStrategy {
             key: if is_leader { Some(key.clone()) } else { None },
         };
 
-        let res = self.resolve_internal(data, &question).await;
+        let res = self.resolve_internal(data, header, question).await;
 
         guard.key = None;
         if let Some((_, tx)) = self.in_flight.remove(&key) {
@@ -287,6 +297,7 @@ impl UpstreamStrategy {
     async fn resolve_internal(
         &self,
         data: &[u8],
+        header: &WireHeader<'_>,
         question: &WireQuestion<'_>,
     ) -> Result<(Vec<u8>, bool, bool), DnsError> {
         // 1. Check for matching conditional domain route (Split DNS)
@@ -296,7 +307,7 @@ impl UpstreamStrategy {
                 if tier.is_empty() {
                     continue;
                 }
-                match self.resolve_tier(tier, data).await {
+                match self.resolve_tier(tier, data, header, question).await {
                     Ok(resp) => return Ok(resp),
                     Err(e) => last_err = e,
                 }
@@ -309,7 +320,7 @@ impl UpstreamStrategy {
         if !self.has_global_upstreams() {
             let fallbacks = Arc::clone(&*self.fallback_upstreams.read());
             if !fallbacks.is_empty() {
-                return self.resolve_sequential(&fallbacks, data).await;
+                return self.resolve_sequential(&fallbacks, data, header, question).await;
             }
         }
         let tiers = Arc::clone(&*self.tiers.read());
@@ -318,7 +329,7 @@ impl UpstreamStrategy {
                 continue;
             }
 
-            match self.resolve_tier(tier, data).await {
+            match self.resolve_tier(tier, data, header, question).await {
                 Ok(resp) => return Ok(resp),
                 Err(e) => last_err = e,
             }
@@ -330,12 +341,14 @@ impl UpstreamStrategy {
         &self,
         tier: &[Arc<UpstreamManager>],
         data: &[u8],
+        header: &WireHeader<'_>,
+        question: &WireQuestion<'_>,
     ) -> Result<(Vec<u8>, bool, bool), DnsError> {
         match self.mode {
-            UpstreamMode::Sequential => self.resolve_sequential(tier, data).await,
-            UpstreamMode::Parallel => self.resolve_parallel(tier, data).await,
-            UpstreamMode::Fastest => self.resolve_fastest(tier, data).await,
-            UpstreamMode::RoundRobin => self.resolve_round_robin(tier, data).await,
+            UpstreamMode::Sequential => self.resolve_sequential(tier, data, header, question).await,
+            UpstreamMode::Parallel => self.resolve_parallel(tier, data, header, question).await,
+            UpstreamMode::Fastest => self.resolve_fastest(tier, data, header, question).await,
+            UpstreamMode::RoundRobin => self.resolve_round_robin(tier, data, header, question).await,
         }
     }
 
@@ -343,6 +356,8 @@ impl UpstreamStrategy {
         &self,
         tier: &[Arc<UpstreamManager>],
         data: &[u8],
+        header: &WireHeader<'_>,
+        question: &WireQuestion<'_>,
     ) -> Result<(Vec<u8>, bool, bool), DnsError> {
         let mut last_err = DnsError::UpstreamTimeout;
         let mut available: Vec<_> = tier
@@ -354,7 +369,7 @@ impl UpstreamStrategy {
         }
 
         for mgr in available {
-            match mgr.forward(data).await {
+            match mgr.forward_with_parsed(data, header, question).await {
                 Ok(resp) => return Ok(resp),
                 Err(e) => last_err = e,
             }
@@ -366,6 +381,8 @@ impl UpstreamStrategy {
         &self,
         tier: &[Arc<UpstreamManager>],
         data: &[u8],
+        _header: &WireHeader<'_>,
+        _question: &WireQuestion<'_>,
     ) -> Result<(Vec<u8>, bool, bool), DnsError> {
         let mut set = JoinSet::new();
 
@@ -377,10 +394,15 @@ impl UpstreamStrategy {
             available = tier.iter().collect();
         }
 
+        let shared_data = bytes::Bytes::copy_from_slice(data);
         for mgr in available {
             let mgr = Arc::clone(mgr);
-            let data = data.to_vec();
-            set.spawn(async move { mgr.forward(&data).await });
+            let shared_data = shared_data.clone();
+            set.spawn(async move {
+                let header = WireHeader::parse(&shared_data).ok_or(DnsError::WireParseError)?;
+                let question = WireQuestion::parse(&shared_data).ok_or(DnsError::WireParseError)?;
+                mgr.forward_with_parsed(&shared_data, &header, &question).await
+            });
         }
 
         let mut last_err = DnsError::UpstreamTimeout;
@@ -403,6 +425,8 @@ impl UpstreamStrategy {
         &self,
         tier: &[Arc<UpstreamManager>],
         data: &[u8],
+        header: &WireHeader<'_>,
+        question: &WireQuestion<'_>,
     ) -> Result<(Vec<u8>, bool, bool), DnsError> {
         let mut available: Vec<_> = tier
             .iter()
@@ -416,7 +440,7 @@ impl UpstreamStrategy {
 
         let mut last_err = DnsError::UpstreamTimeout;
         for mgr in available {
-            match mgr.forward(data).await {
+            match mgr.forward_with_parsed(data, header, question).await {
                 Ok(resp) => return Ok(resp),
                 Err(e) => last_err = e,
             }
@@ -428,6 +452,8 @@ impl UpstreamStrategy {
         &self,
         tier: &[Arc<UpstreamManager>],
         data: &[u8],
+        header: &WireHeader<'_>,
+        question: &WireQuestion<'_>,
     ) -> Result<(Vec<u8>, bool, bool), DnsError> {
         let mut available: Vec<_> = tier
             .iter()
@@ -444,7 +470,7 @@ impl UpstreamStrategy {
         for i in 0..len {
             let idx = (start + i) % len;
             let mgr = available[idx];
-            match mgr.forward(data).await {
+            match mgr.forward_with_parsed(data, header, question).await {
                 Ok(resp) => return Ok(resp),
                 Err(e) => last_err = e,
             }

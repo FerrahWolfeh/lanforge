@@ -28,7 +28,11 @@ impl Middleware for UpstreamMiddleware {
     ) -> Pin<Box<dyn Future<Output = Result<bool, DnsError>> + Send + 'a>> {
         Box::pin(async move {
             let start = Instant::now();
-            match ctx.recursive.resolve(req.data).await {
+            match ctx
+                .recursive
+                .resolve_with_parsed(req.data, req.header, req.question)
+                .await
+            {
                 Ok((upstream_resp, cached, is_block)) => {
                     let elapsed = start.elapsed().as_micros() as u32;
 
@@ -49,8 +53,6 @@ impl Middleware for UpstreamMiddleware {
                         QueryResult::Forwarded
                     };
 
-                    let src_mac = ctx.local.ctx.get_mac_by_ip(req.src_ip);
-
                     *resp = upstream_resp;
 
                     let answer = if ctx.query_log.is_some() {
@@ -61,7 +63,7 @@ impl Middleware for UpstreamMiddleware {
 
                     ctx.record_log(DnsLogEvent {
                         src_ip: req.src_ip,
-                        src_mac,
+                        src_mac: None,
                         domain: req.domain.clone(),
                         qtype: DnsRecordType::from(req.question.qtype()),
                         result,

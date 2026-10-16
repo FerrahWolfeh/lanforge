@@ -6,6 +6,8 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
+use smallvec::SmallVec;
+
 use lanforge_types::network::dns::adblock::{DnsService, DnsServiceProtocol};
 use lanforge_types::network::dns::{DnsSoaData, DnsSvcbData};
 use lanforge_types::network::{
@@ -338,9 +340,9 @@ impl<'a> WireResponseScanner<'a> {
     /// Identifies all TTL field offsets in the response (Answers, Authorities, and Additionals).
     /// Returns (offsets, min_ttl).
     #[must_use]
-    pub fn scan_ttls(&self) -> (Vec<usize>, u32) {
+    pub fn scan_ttls(&self) -> (SmallVec<[usize; 8]>, u32) {
         let Some(header) = WireHeader::parse(self.data) else {
-            return (Vec::new(), 0);
+            return (SmallVec::new(), 0);
         };
 
         let mut pos = 12; // Start after header
@@ -353,7 +355,7 @@ impl<'a> WireResponseScanner<'a> {
 
         let record_count =
             header.ancount() as usize + header.nscount() as usize + header.arcount() as usize;
-        let mut offsets = Vec::with_capacity(record_count);
+        let mut offsets = SmallVec::<[usize; 8]>::with_capacity(record_count);
         let mut min_ttl = u32::MAX;
 
         for _ in 0..record_count {

@@ -38,14 +38,24 @@ impl LocalResolver {
         hostname: &str,
         qtype: DnsRecordType,
     ) -> Option<SmallVec<[IpAddr; 8]>> {
+        self.resolve_ip_status(hostname, qtype).0
+    }
+
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[must_use]
+    pub fn resolve_ip_status(
+        &self,
+        hostname: &str,
+        qtype: DnsRecordType,
+    ) -> (Option<SmallVec<[IpAddr; 8]>>, bool) {
         if let Some(mac) = lanforge_types::identifiers::MacAddr::parse(hostname)
             && let Some(device) = self.ctx.get_device(&mac)
         {
-            return self.collect_device_ips_filtered(&device, qtype);
+            return (self.collect_device_ips_filtered(&device, qtype), true);
         }
 
         if let Some(device) = self.ctx.get_by_hostname(hostname) {
-            return self.collect_device_ips_filtered(&device, qtype);
+            return (self.collect_device_ips_filtered(&device, qtype), true);
         }
 
         // JIT Shadow Lookup
@@ -54,10 +64,10 @@ impl LocalResolver {
         if let Some(mac) = self.ctx.find_mac_by_hostname_jit(hostname, Some(threshold))
             && let Some(device) = self.ctx.get_device(&mac)
         {
-            return self.collect_device_ips_filtered(&device, qtype);
+            return (self.collect_device_ips_filtered(&device, qtype), true);
         }
 
-        None
+        (None, false)
     }
 
     #[must_use]
@@ -196,10 +206,14 @@ impl LocalResolver {
 
     #[must_use]
     pub fn collect_device_ips(&self, device: &Device) -> SmallVec<[IpAddr; 8]> {
-        let (sys_gua, sys_ula) = self
-            .ctx
-            .target_ifindex()
-            .map_or((None, None), |idx| self.ctx.get_interface_prefixes_opt(idx));
+        let (sys_gua, sys_ula) = if let Some(idx) = self.ctx.target_ifindex() {
+            self.ctx.with_state(|state| {
+                let ips = state.get_interface_ips(idx);
+                (ips.gua, ips.ula)
+            })
+        } else {
+            (None, None)
+        };
         let gua = sys_gua.or(self.cfg.gua_prefix);
         let ula = sys_ula.or(self.cfg.ula_prefix);
         device.all_addresses_sorted(gua, ula)
@@ -225,7 +239,8 @@ impl LocalResolver {
                     let safe_hostname = fast_lowercase(hostname_slice);
                     let edns = WireOptScanner::scan(data, header, question);
 
-                    if let Some(ips) = self.resolve_ip(&safe_hostname, qtype) {
+                    let (ips, device_exists) = self.resolve_ip_status(&safe_hostname, qtype);
+                    if let Some(ips) = ips {
                         WireResponseWriter::write_ip_response(
                             data,
                             question,
@@ -236,7 +251,7 @@ impl LocalResolver {
                             resp,
                         );
                         return true;
-                    } else if self.ctx.get_by_hostname(&safe_hostname).is_some() {
+                    } else if device_exists {
                         WireResponseWriter::write_error_response(
                             data,
                             question,
@@ -302,11 +317,12 @@ impl LocalResolver {
                 extract_local_hostname(qname, &self.cfg.multi_search_labels)
             {
                 let safe_hostname = fast_lowercase(hostname_slice);
-                if let Some(ips) = self.resolve_ip(&safe_hostname, qtype) {
+                let (ips, device_exists) = self.resolve_ip_status(&safe_hostname, qtype);
+                if let Some(ips) = ips {
                     resp.clear();
                     resp.extend_from_slice(&rb.success_ips(ips)?);
                     return Ok(true);
-                } else if self.ctx.get_by_hostname(&safe_hostname).is_some() {
+                } else if device_exists {
                     resp.clear();
                     resp.extend_from_slice(&rb.empty_noerror()?);
                     return Ok(true);

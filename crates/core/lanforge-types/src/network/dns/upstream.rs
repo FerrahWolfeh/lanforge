@@ -119,6 +119,25 @@ impl From<UpstreamEntry> for UpstreamEntryDe {
 }
 
 
+fn parse_secure_target(stripped: &str) -> (Option<String>, &str) {
+    stripped.find('@').map_or_else(
+        || {
+            if stripped.starts_with('[') || stripped.parse::<SocketAddr>().is_ok() {
+                (None, stripped)
+            } else if let Some(pos) = stripped.find(':') {
+                let (h, _) = stripped.split_at(pos);
+                (Some(h.to_string()), stripped)
+            } else {
+                (Some(stripped.to_string()), stripped)
+            }
+        },
+        |pos| {
+            let (h, rest) = stripped.split_at(pos);
+            (Some(h.to_string()), &rest[1..])
+        },
+    )
+}
+
 impl FromStr for UpstreamTarget {
     type Err = String;
 
@@ -128,22 +147,7 @@ impl FromStr for UpstreamTarget {
             .map_or((s, None), |idx| (&s[..idx], Some(s[idx + 1..].to_string())));
 
         if let Some(stripped) = s.strip_prefix("tls://") {
-            let (hostname, addr_str) = stripped.find('@').map_or_else(
-                || {
-                    let (hostname, addr_str) = stripped.find(':').map_or_else(
-                        || (Some(stripped.to_string()), stripped),
-                        |pos| {
-                            let (h, _) = stripped.split_at(pos);
-                            (Some(h.to_string()), stripped)
-                        },
-                    );
-                    (hostname, addr_str)
-                },
-                |pos| {
-                    let (h, rest) = stripped.split_at(pos);
-                    (Some(h.to_string()), &rest[1..])
-                },
-            );
+            let (hostname, addr_str) = parse_secure_target(stripped);
 
             let addr = addr_str
                 .parse()
@@ -155,22 +159,7 @@ impl FromStr for UpstreamTarget {
                 domain,
             })
         } else if let Some(stripped) = s.strip_prefix("quic://") {
-            let (hostname, addr_str) = stripped.find('@').map_or_else(
-                || {
-                    let (hostname, addr_str) = stripped.find(':').map_or_else(
-                        || (Some(stripped.to_string()), stripped),
-                        |pos| {
-                            let (h, _) = stripped.split_at(pos);
-                            (Some(h.to_string()), stripped)
-                        },
-                    );
-                    (hostname, addr_str)
-                },
-                |pos| {
-                    let (h, rest) = stripped.split_at(pos);
-                    (Some(h.to_string()), &rest[1..])
-                },
-            );
+            let (hostname, addr_str) = parse_secure_target(stripped);
 
             let addr = addr_str
                 .parse()
@@ -183,22 +172,7 @@ impl FromStr for UpstreamTarget {
                 domain,
             })
         } else if let Some(stripped) = s.strip_prefix("https://") {
-            let (hostname, addr_str) = stripped.find('@').map_or_else(
-                || {
-                    let (hostname, addr_str) = stripped.find(':').map_or_else(
-                        || (Some(stripped.to_string()), stripped),
-                        |pos| {
-                            let (h, _) = stripped.split_at(pos);
-                            (Some(h.to_string()), stripped)
-                        },
-                    );
-                    (hostname, addr_str)
-                },
-                |pos| {
-                    let (h, rest) = stripped.split_at(pos);
-                    (Some(h.to_string()), &rest[1..])
-                },
-            );
+            let (hostname, addr_str) = parse_secure_target(stripped);
 
             let addr = addr_str
                 .parse()

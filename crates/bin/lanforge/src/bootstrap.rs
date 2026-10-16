@@ -383,7 +383,7 @@ impl Bootstrapper {
                     .add_dns_upstream(
                         target.addr,
                         target.protocol,
-                        target.hostname.as_deref(),
+                        target.domain.as_deref(),
                     )
                     .await?;
             }

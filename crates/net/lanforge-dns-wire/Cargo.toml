@@ -7,6 +7,7 @@ authors.workspace = true
 
 [dependencies]
 lanforge-types = { workspace = true }
+smallvec = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [features]

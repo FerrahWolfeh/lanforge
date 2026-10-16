@@ -96,9 +96,8 @@ impl DnsContext {
 
         // Check if device is configured to suppress DNS logging
         let mac = event.src_mac.or_else(|| self.ctx.get_mac_by_ip(event.src_ip));
-        if let Some(mac) = mac
-            && let Some(dev) = self.ctx.get_device(&mac)
-        {
+        let dev = mac.and_then(|m| self.ctx.get_device(&m));
+        if let Some(dev) = &dev {
             if dev.ignore_dns_log {
                 return;
             }
@@ -114,19 +113,16 @@ impl DnsContext {
 
         // Check ignore_clients in QueryLogConfig (by IP, MAC, or hostname)
         if !self.cfg.query_log.ignore_clients.is_empty() {
-            let ip_str = event.src_ip.to_string();
-            let mac_str = mac.map(|m| m.to_string());
             for ignored in &self.cfg.query_log.ignore_clients {
-                if ignored.eq_ignore_ascii_case(&ip_str) {
+                if ignored.parse::<IpAddr>().ok() == Some(event.src_ip) {
                     return;
                 }
-                if let Some(ref m) = mac_str
-                    && ignored.eq_ignore_ascii_case(m)
-                {
+                if mac.is_some_and(|m| MacAddr::parse(ignored) == Some(m)) {
                     return;
                 }
-                if let Some(dev) = mac.and_then(|m| self.ctx.get_device(&m))
-                    && ignored.eq_ignore_ascii_case(&dev.hostname.name)
+                if dev
+                    .as_ref()
+                    .is_some_and(|d| ignored.eq_ignore_ascii_case(&d.hostname.name))
                 {
                     return;
                 }
@@ -145,7 +141,7 @@ impl DnsContext {
                 result: event.result,
                 upstream_us: event.upstream_us,
                 cached: event.cached,
-                src_mac: event.src_mac,
+                src_mac: mac,
                 answer: event.answer,
                 protocol: event.protocol,
                 filter: event.filter,

@@ -52,7 +52,7 @@ pub struct CachedResponse {
     pub data: Bytes,
     pub created_at: Instant,
     pub expires_at: Instant,
-    pub ttl_offsets: Vec<usize>,
+    pub ttl_offsets: SmallVec<[usize; 8]>,
     pub is_block: bool,
 }
 
@@ -76,11 +76,12 @@ impl DnsCache {
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     #[must_use]
-    pub fn get_wire(
+    pub fn get_wire_into(
         &self,
         query_data: &[u8],
         question: &WireQuestion<'_>,
-    ) -> Option<(Vec<u8>, bool)> {
+        out: &mut Vec<u8>,
+    ) -> Option<bool> {
         let key = CacheKey::from_question(question);
 
         let entry = self.cache.get(&key)?;
@@ -92,32 +93,45 @@ impl DnsCache {
         }
 
         let elapsed = now.duration_since(entry.created_at).as_secs() as u32;
-        let mut owned_data = entry.data.to_vec();
+        out.clear();
+        out.extend_from_slice(&entry.data);
 
         // 1. Patch ID
-        if owned_data.len() >= 2 {
-            owned_data[0] = query_data[0];
-            owned_data[1] = query_data[1];
+        if out.len() >= 2 && query_data.len() >= 2 {
+            out[0] = query_data[0];
+            out[1] = query_data[1];
         }
 
         // 2. TTL Scrubbing
         if elapsed > 0 {
             for &offset in &entry.ttl_offsets {
-                if offset + 4 <= owned_data.len() {
+                if offset + 4 <= out.len() {
                     let current_ttl = u32::from_be_bytes([
-                        owned_data[offset],
-                        owned_data[offset + 1],
-                        owned_data[offset + 2],
-                        owned_data[offset + 3],
+                        out[offset],
+                        out[offset + 1],
+                        out[offset + 2],
+                        out[offset + 3],
                     ]);
                     let new_ttl = current_ttl.saturating_sub(elapsed);
                     let ttl_bytes = new_ttl.to_be_bytes();
-                    owned_data[offset..offset + 4].copy_from_slice(&ttl_bytes);
+                    out[offset..offset + 4].copy_from_slice(&ttl_bytes);
                 }
             }
         }
 
-        Some((owned_data, entry.is_block))
+        Some(entry.is_block)
+    }
+
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    #[must_use]
+    pub fn get_wire(
+        &self,
+        query_data: &[u8],
+        question: &WireQuestion<'_>,
+    ) -> Option<(Vec<u8>, bool)> {
+        let mut out = Vec::new();
+        let is_block = self.get_wire_into(query_data, question, &mut out)?;
+        Some((out, is_block))
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -125,10 +139,11 @@ impl DnsCache {
         &self,
         mut key: CacheKey,
         response_data: Vec<u8>,
-        ttl_offsets: Vec<usize>,
+        ttl_offsets: impl Into<SmallVec<[usize; 8]>>,
         min_ttl_found: u32,
         is_block: bool,
     ) {
+        let ttl_offsets = ttl_offsets.into();
         key.qname.make_ascii_lowercase();
         // Enforce capacity (batch random eviction if full)
         if self.cache.len() as u64 >= self.capacity && self.capacity > 0 {
