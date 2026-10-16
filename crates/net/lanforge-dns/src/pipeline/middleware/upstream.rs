@@ -33,28 +33,28 @@ impl Middleware for UpstreamMiddleware {
                 .resolve_with_parsed(req.data, req.header, req.question)
                 .await
             {
-                Ok((upstream_resp, cached, is_block)) => {
+                Ok(r) => {
                     let elapsed = start.elapsed().as_micros() as u32;
 
                     ctx.stats.inc_resolved();
-                    if cached {
+                    if r.cached {
                         ctx.stats.inc_cache_hit();
-                    } else {
+                    } else if !r.coalesced {
                         ctx.stats.inc_cache_miss();
                         ctx.stats.inc_recursive();
                     }
 
-                    let result = if is_block {
+                    let result = if r.is_block {
                         #[cfg(feature = "adblock")]
                         ctx.stats.inc_blocked();
                         QueryResult::CachedBlock
-                    } else if cached {
+                    } else if r.cached {
                         QueryResult::Cached
                     } else {
                         QueryResult::Forwarded
                     };
 
-                    *resp = upstream_resp;
+                    *resp = r.data;
 
                     let answer = if ctx.query_log.is_some() {
                         extract_first_answer_summary(resp, req.question.wire_len())
@@ -69,14 +69,14 @@ impl Middleware for UpstreamMiddleware {
                         qtype: DnsRecordType::from(req.question.qtype()),
                         result,
                         upstream_us: elapsed,
-                        cached,
+                        cached: r.cached,
                         answer,
                         protocol: req.protocol,
                         filter: req.filter_match.lock().clone(),
                     });
 
                     // Update cache size counter in real-time
-                    if !cached && let Some(mgr) = ctx.recursive.all_upstreams().next() {
+                    if !r.cached && !r.coalesced && let Some(mgr) = ctx.recursive.all_upstreams().next() {
                         ctx.stats
                             .cache_entries
                             .store(mgr.cache.cache.len() as u64, Ordering::Relaxed);

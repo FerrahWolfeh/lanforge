@@ -4,7 +4,7 @@ pub mod strategy;
 pub use cache::DnsCache;
 
 use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
-pub use strategy::{UpstreamMode, UpstreamStrategy};
+pub use strategy::{Resolved, UpstreamMode, UpstreamStrategy};
 use tokio::task::{JoinHandle, yield_now};
 #[cfg(feature = "dot")]
 use tokio_rustls::TlsConnector;

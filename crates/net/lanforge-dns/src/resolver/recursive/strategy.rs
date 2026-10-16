@@ -26,6 +26,15 @@ pub enum UpstreamMode {
 
 type InFlightTx = Sender<Result<(Vec<u8>, bool, bool), String>>;
 
+#[derive(Debug, Clone)]
+pub struct Resolved {
+    pub data: Vec<u8>,
+    pub cached: bool,
+    pub is_block: bool,
+    /// Served from another in-flight query's upstream answer (no extra upstream I/O).
+    pub coalesced: bool,
+}
+
 #[derive(Clone)]
 pub struct ConditionalRoute {
     pub domain: String,
@@ -230,7 +239,7 @@ impl UpstreamStrategy {
         None
     }
 
-    pub async fn resolve(&self, data: &[u8]) -> Result<(Vec<u8>, bool, bool), DnsError> {
+    pub async fn resolve(&self, data: &[u8]) -> Result<Resolved, DnsError> {
         let header = WireHeader::parse(data).ok_or(DnsError::WireParseError)?;
         let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
         self.resolve_with_parsed(data, &header, &question).await
@@ -241,7 +250,7 @@ impl UpstreamStrategy {
         data: &[u8],
         header: &WireHeader<'_>,
         question: &WireQuestion<'_>,
-    ) -> Result<(Vec<u8>, bool, bool), DnsError> {
+    ) -> Result<Resolved, DnsError> {
         let key = CacheKey::from_question(question);
 
         let (mut rx, is_leader) = match self.in_flight.entry(key.clone()) {
@@ -255,7 +264,19 @@ impl UpstreamStrategy {
 
         if let Some(ref mut rx) = rx {
             match rx.recv().await {
-                Ok(Ok(res)) => return Ok(res),
+                Ok(Ok((mut data, cached, is_block))) => {
+                    if data.len() >= 2 {
+                        let id_bytes = header.id().to_be_bytes();
+                        data[0] = id_bytes[0];
+                        data[1] = id_bytes[1];
+                    }
+                    return Ok(Resolved {
+                        data,
+                        cached,
+                        is_block,
+                        coalesced: true,
+                    });
+                }
                 Ok(Err(e)) => return Err(DnsError::Generic(e)),
                 Err(_) => {
                     // Leader task dropped/panicked, fall through to resolve_internal
@@ -286,7 +307,7 @@ impl UpstreamStrategy {
         if let Some((_, tx)) = self.in_flight.remove(&key) {
             let _ = tx.send(
                 res.as_ref()
-                    .map(|(v, c, b)| (v.clone(), *c, *b))
+                    .map(|r| (r.data.clone(), r.cached, r.is_block))
                     .map_err(|e| e.to_string()),
             );
         }
@@ -299,7 +320,7 @@ impl UpstreamStrategy {
         data: &[u8],
         header: &WireHeader<'_>,
         question: &WireQuestion<'_>,
-    ) -> Result<(Vec<u8>, bool, bool), DnsError> {
+    ) -> Result<Resolved, DnsError> {
         // 1. Check for matching conditional domain route (Split DNS)
         if let Some(route) = self.find_conditional_route(question) {
             let mut last_err = DnsError::Refused;
@@ -343,7 +364,7 @@ impl UpstreamStrategy {
         data: &[u8],
         header: &WireHeader<'_>,
         question: &WireQuestion<'_>,
-    ) -> Result<(Vec<u8>, bool, bool), DnsError> {
+    ) -> Result<Resolved, DnsError> {
         match self.mode {
             UpstreamMode::Sequential => self.resolve_sequential(tier, data, header, question).await,
             UpstreamMode::Parallel => self.resolve_parallel(tier, data, header, question).await,
@@ -358,7 +379,7 @@ impl UpstreamStrategy {
         data: &[u8],
         header: &WireHeader<'_>,
         question: &WireQuestion<'_>,
-    ) -> Result<(Vec<u8>, bool, bool), DnsError> {
+    ) -> Result<Resolved, DnsError> {
         let mut last_err = DnsError::UpstreamTimeout;
         let mut available: Vec<_> = tier
             .iter()
@@ -370,7 +391,14 @@ impl UpstreamStrategy {
 
         for mgr in available {
             match mgr.forward_with_parsed(data, header, question).await {
-                Ok(resp) => return Ok(resp),
+                Ok((data, cached, is_block)) => {
+                    return Ok(Resolved {
+                        data,
+                        cached,
+                        is_block,
+                        coalesced: false,
+                    });
+                }
                 Err(e) => last_err = e,
             }
         }
@@ -383,7 +411,7 @@ impl UpstreamStrategy {
         data: &[u8],
         _header: &WireHeader<'_>,
         _question: &WireQuestion<'_>,
-    ) -> Result<(Vec<u8>, bool, bool), DnsError> {
+    ) -> Result<Resolved, DnsError> {
         let mut set = JoinSet::new();
 
         let mut available: Vec<_> = tier
@@ -408,9 +436,14 @@ impl UpstreamStrategy {
         let mut last_err = DnsError::UpstreamTimeout;
         while let Some(res) = set.join_next().await {
             match res {
-                Ok(Ok(resp)) => {
+                Ok(Ok((data, cached, is_block))) => {
                     set.abort_all();
-                    return Ok(resp);
+                    return Ok(Resolved {
+                        data,
+                        cached,
+                        is_block,
+                        coalesced: false,
+                    });
                 }
                 Ok(Err(e)) => last_err = e,
                 Err(e) => {
@@ -427,7 +460,7 @@ impl UpstreamStrategy {
         data: &[u8],
         header: &WireHeader<'_>,
         question: &WireQuestion<'_>,
-    ) -> Result<(Vec<u8>, bool, bool), DnsError> {
+    ) -> Result<Resolved, DnsError> {
         let mut available: Vec<_> = tier
             .iter()
             .filter(|m| m.health.status() != UpstreamStatus::Degraded)
@@ -441,7 +474,14 @@ impl UpstreamStrategy {
         let mut last_err = DnsError::UpstreamTimeout;
         for mgr in available {
             match mgr.forward_with_parsed(data, header, question).await {
-                Ok(resp) => return Ok(resp),
+                Ok((data, cached, is_block)) => {
+                    return Ok(Resolved {
+                        data,
+                        cached,
+                        is_block,
+                        coalesced: false,
+                    });
+                }
                 Err(e) => last_err = e,
             }
         }
@@ -454,7 +494,7 @@ impl UpstreamStrategy {
         data: &[u8],
         header: &WireHeader<'_>,
         question: &WireQuestion<'_>,
-    ) -> Result<(Vec<u8>, bool, bool), DnsError> {
+    ) -> Result<Resolved, DnsError> {
         let mut available: Vec<_> = tier
             .iter()
             .filter(|m| m.health.status() != UpstreamStatus::Degraded)
@@ -471,7 +511,14 @@ impl UpstreamStrategy {
             let idx = (start + i) % len;
             let mgr = available[idx];
             match mgr.forward_with_parsed(data, header, question).await {
-                Ok(resp) => return Ok(resp),
+                Ok((data, cached, is_block)) => {
+                    return Ok(Resolved {
+                        data,
+                        cached,
+                        is_block,
+                        coalesced: false,
+                    });
+                }
                 Err(e) => last_err = e,
             }
         }
@@ -496,8 +543,8 @@ impl UpstreamStrategy {
         let mut encoder = WireEncoder::new();
         let wire_query = encoder.encode_message(&query);
 
-        let (wire_resp, _, _) = self.resolve(&wire_query).await?;
-        let mut decoder = WireDecoder::new(&wire_resp);
+        let res = self.resolve(&wire_query).await?;
+        let mut decoder = WireDecoder::new(&res.data);
         decoder.decode_message().ok_or(DnsError::WireParseError)
     }
 }
