@@ -65,7 +65,11 @@ impl UpstreamHealth {
     pub fn record_failure(&self) {
         self.total_queries.fetch_add(1, Ordering::Relaxed);
         self.total_failures.fetch_add(1, Ordering::Relaxed);
-        self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+        let _ = self.consecutive_failures.try_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |v| Some(v.saturating_add(1)),
+        );
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -123,5 +127,30 @@ impl UpstreamHealth {
             },
             domain,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_consecutive_failures_saturation_never_overflows() {
+        let health = UpstreamHealth::new();
+        assert_eq!(health.status(), UpstreamStatus::Healthy);
+
+        // Record 300 failures (greater than u8::MAX = 255)
+        for _ in 0..300 {
+            health.record_failure();
+        }
+
+        assert_eq!(health.consecutive_failures.load(Ordering::Relaxed), u8::MAX);
+        assert_eq!(health.status(), UpstreamStatus::Degraded);
+        assert_eq!(health.total_failures.load(Ordering::Relaxed), 300);
+
+        // Success resets consecutive failures to 0 and recovers status to Healthy
+        health.record_success(1500);
+        assert_eq!(health.consecutive_failures.load(Ordering::Relaxed), 0);
+        assert_eq!(health.status(), UpstreamStatus::Healthy);
     }
 }

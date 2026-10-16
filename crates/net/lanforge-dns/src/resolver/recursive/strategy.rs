@@ -469,7 +469,10 @@ impl UpstreamStrategy {
         if available.is_empty() {
             available = tier.to_vec();
         }
-        available.sort_by_key(|m| m.health.rtt_ewma_us.load(Ordering::Relaxed));
+        available.sort_by_key(|m| match m.health.rtt_ewma_us.load(Ordering::Relaxed) {
+            0 => u32::MAX,
+            v => v,
+        });
 
         let mut last_err = DnsError::UpstreamTimeout;
         for mgr in available {
