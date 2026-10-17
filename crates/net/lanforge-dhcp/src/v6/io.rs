@@ -72,3 +72,63 @@ impl Dhcpv6Transport {
         self.inner.try_send(packet, &dest)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::Dhcpv6PacketBuilder;
+    use lanforge_types::identifiers::Duid;
+    use tokio::time::{Duration, timeout};
+
+    #[test]
+    fn should_initialize_inert_transport_and_report_is_inert() {
+        let (_handle, transport) = Dhcpv6Transport::inert();
+        assert!(transport.is_inert(), "Inert transport must return true for is_inert()");
+    }
+
+    #[tokio::test]
+    async fn should_receive_and_send_replies_in_inert_mode() {
+        let (handle, transport) = Dhcpv6Transport::inert();
+        let client_duid = Duid::new(vec![0x00, 0x03, 0x00, 0x01, 0x01, 0x02, 0x03, 0x04]);
+        let client_addr: SocketAddr = "[fe80::100]:546".parse().unwrap();
+        let solicit_bytes = Dhcpv6PacketBuilder::solicit(client_duid).build();
+
+        // 1. Inject solicit from synthetic client
+        handle.inject(solicit_bytes.clone(), client_addr).await;
+
+        let mut buf = [0u8; 1024];
+        let (len, peer) = timeout(Duration::from_millis(500), transport.recv(&mut buf))
+            .await
+            .expect("Recv timed out")
+            .expect("Recv failed");
+
+        assert_eq!(&buf[..len], solicit_bytes.as_slice());
+        assert_eq!(peer, client_addr);
+
+        // 2. Send synthetic advertise reply
+        let advertise_bytes = b"SYNTHETIC_ADVERTISE_REPLY";
+        let sent = transport
+            .send_reply(advertise_bytes, client_addr)
+            .expect("send_reply failed");
+        assert_eq!(sent, advertise_bytes.len());
+
+        // 3. Verify reply captured by InertHandle
+        let (reply_packet, dest) = timeout(Duration::from_millis(500), handle.recv_reply())
+            .await
+            .expect("recv_reply timed out")
+            .expect("Expected captured reply");
+
+        assert_eq!(reply_packet, advertise_bytes);
+        assert_eq!(dest, client_addr);
+    }
+
+    #[tokio::test]
+    async fn should_return_unexpected_eof_when_handle_channel_closed() {
+        let (handle, transport) = Dhcpv6Transport::inert();
+        drop(handle);
+
+        let mut buf = [0u8; 64];
+        let err = transport.recv(&mut buf).await.expect_err("Expected EOF error");
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+}

@@ -113,6 +113,8 @@ pub struct Dhcpv6Server {
     pub ctx: LanforgeContext,
     /// Precompiled custom options to avoid runtime string decoding on the packet hot-path.
     pub precompiled_custom_options: Vec<(u16, Vec<u8>)>,
+    /// Recent IP assignments keyed by (DUID, IAID) to propagate to context state.
+    pub last_assignments: std::collections::HashMap<(Duid, u32), Vec<Ipv6Addr>>,
 }
 
 impl Dhcpv6Server {
@@ -132,6 +134,7 @@ impl Dhcpv6Server {
             prefix_lifetimes: None,
             ctx,
             precompiled_custom_options,
+            last_assignments: std::collections::HashMap::new(),
         }
     }
 
@@ -525,6 +528,8 @@ impl Dhcpv6Server {
             .allocate(&self.ctx, client_duid, iana.id, mac, requested_ip);
 
         if !ips.is_empty() {
+            self.last_assignments
+                .insert((client_duid.clone(), iana.id), ips.clone());
             let (pref, valid) = self.get_effective_lifetimes(client_duid, identity);
             let mut ia_opts = DhcpOptions::new();
             let ip_list: Vec<String> = ips.iter().map(ToString::to_string).collect();
@@ -1110,6 +1115,9 @@ impl Dhcpv6Server {
     /// Returns the last assignment for a given DUID and IAID.
     #[must_use]
     pub fn last_assignment_for(&self, duid: &Duid, iaid: u32) -> Vec<Ipv6Addr> {
+        if let Some(ips) = self.last_assignments.get(&(duid.clone(), iaid)) {
+            return ips.clone();
+        }
         self.pool.lookup(&self.ctx, duid, iaid)
     }
 

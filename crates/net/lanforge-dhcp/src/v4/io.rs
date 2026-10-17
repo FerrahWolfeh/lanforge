@@ -223,3 +223,101 @@ fn bind_dhcp_socket_async(iface: &str, port: u16) -> Result<TokioUdpSocket, Core
     TokioUdpSocket::from_std(std_socket)
         .map_err(|e| CoreError::Generic(format!("tokio UdpSocket conversion: {e}")))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::Dhcpv4PacketBuilder;
+    use dhcproto::v4::MessageType;
+    use tokio::time::{Duration, timeout};
+
+    #[test]
+    fn should_initialize_inert_transport_and_report_is_inert() {
+        let (_handle, transport) = Dhcpv4Transport::inert();
+        assert!(transport.is_inert(), "Inert transport must return true for is_inert()");
+    }
+
+    #[tokio::test]
+    async fn should_send_and_receive_via_inert_channels() {
+        let (handle, transport) = Dhcpv4Transport::inert();
+        let mac = MacAddr([0xAA, 0xBB, 0xCC, 0x11, 0x22, 0x33]);
+        let src = SocketAddr::from(([192, 168, 1, 50], 68));
+        let packet = Dhcpv4PacketBuilder::discover(mac).build();
+
+        handle.inject(packet.clone(), src).await;
+
+        let mut buf = [0u8; 1024];
+        let (len, peer) = timeout(Duration::from_millis(500), transport.recv(&mut buf))
+            .await
+            .expect("Recv timed out")
+            .expect("Recv failed");
+
+        assert_eq!(&buf[..len], packet.as_slice());
+        assert_eq!(peer, src);
+    }
+
+    #[tokio::test]
+    async fn should_send_inert_reply_and_decode_message() {
+        let (handle, transport) = Dhcpv4Transport::inert();
+        let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+        let server_id = Ipv4Addr::new(192, 168, 1, 1);
+        let offered_ip = Ipv4Addr::new(192, 168, 1, 105);
+
+        let offer_packet = Dhcpv4PacketBuilder::request(mac, offered_ip, server_id).build();
+
+        transport
+            .send_reply(
+                &offer_packet,
+                server_id,
+                true,
+                offered_ip,
+                Ipv4Addr::UNSPECIFIED,
+                mac,
+                68,
+            )
+            .expect("send_reply failed");
+
+        let reply = timeout(Duration::from_millis(500), handle.recv_reply())
+            .await
+            .expect("recv_reply timed out")
+            .expect("Expected inert reply");
+
+        assert_eq!(reply.server_id, server_id);
+        assert!(reply.broadcast);
+        assert_eq!(reply.dest_ip, offered_ip);
+        assert_eq!(reply.mac, mac);
+        assert_eq!(reply.port, 68);
+
+        let decoded = reply.message().expect("Failed to decode reply message");
+        assert_eq!(
+            decoded.opts().get(dhcproto::v4::OptionCode::MessageType),
+            Some(&dhcproto::v4::DhcpOption::MessageType(MessageType::Request))
+        );
+    }
+
+    #[tokio::test]
+    async fn should_truncate_when_recv_buffer_is_smaller() {
+        let (handle, transport) = Dhcpv4Transport::inert();
+        let mac = MacAddr([1, 2, 3, 4, 5, 6]);
+        let src = SocketAddr::from(([0, 0, 0, 0], 68));
+        let packet = Dhcpv4PacketBuilder::discover(mac).build();
+
+        handle.inject(packet.clone(), src).await;
+
+        let mut small_buf = [0u8; 8];
+        let (len, peer) = transport.recv(&mut small_buf).await.expect("Recv failed");
+        assert_eq!(len, 8);
+        assert_eq!(&small_buf, &packet[..8]);
+        assert_eq!(peer, src);
+    }
+
+    #[tokio::test]
+    async fn should_return_unexpected_eof_when_handle_channel_closed() {
+        let (handle, transport) = Dhcpv4Transport::inert();
+        drop(handle);
+
+        let mut buf = [0u8; 64];
+        let err = transport.recv(&mut buf).await.expect_err("Expected EOF error");
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+}

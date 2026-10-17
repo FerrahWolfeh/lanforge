@@ -193,6 +193,7 @@ impl AsyncService for Dhcpv6Service {
                 }
             }
 
+            ctx.set_service_state("dhcpv6", ServiceState::Online);
             match self.run_server(pools).await? {
                 RunResult::Shutdown => break,
                 RunResult::ConfigChanged => {}
