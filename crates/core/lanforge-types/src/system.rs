@@ -253,6 +253,9 @@ pub enum RunResult {
 pub enum PppoeSessionState {
     #[default]
     Disconnected,
+    WaitingForCarrier,
+    WaitingForTerminal,
+    Discovering,
     Authenticating,
     Connected,
     Reconnecting,
@@ -277,6 +280,9 @@ pub struct PppoeStatusResponse {
     pub reconnect_attempts: u32,
     pub last_error: Option<String>,
     pub auth: Option<crate::network::pppoe::AuthMethod>,
+    pub terminal_reachable: Option<bool>,
+    pub terminal_mac: Option<MacAddr>,
+    pub terminal_rtt_us: Option<u32>,
 }
 
 /// Status response payload for Network Traffic & SQM.

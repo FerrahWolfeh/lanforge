@@ -1098,7 +1098,24 @@ export interface SetupResponse {
 
 export type PppoeDataplane = 'kernel' | 'ebpf';
 export type PppoeAuthMethod = 'none' | 'pap' | 'chap_md5';
-export type PppoeSessionState = 'disconnected' | 'authenticating' | 'connected' | 'reconnecting';
+export type PppoeSessionState =
+	| 'disconnected'
+	| 'waiting_for_carrier'
+	| 'waiting_for_terminal'
+	| 'discovering'
+	| 'authenticating'
+	| 'connected'
+	| 'reconnecting';
+
+export interface TerminalProbeConfig {
+	enabled: boolean;
+	target_ip: string;
+	sender_ip?: string | null;
+	iface?: string | null;
+	timeout_ms: number;
+	poll_interval_secs: number;
+	max_wait_secs: number;
+}
 
 export interface PppoeNftablesConfig {
 	enabled: boolean;
@@ -1128,6 +1145,7 @@ export interface PppoeConfig {
 	send_padt_on_shutdown: boolean;
 	discovery_padi_retries: number;
 	discovery_padi_timeout_secs: number;
+	terminal_probe?: TerminalProbeConfig;
 	nftables: PppoeNftablesConfig;
 }
 
@@ -1148,6 +1166,9 @@ export interface PppoeStatusResponse {
 	reconnect_attempts: number;
 	last_error: string | null;
 	auth?: PppoeAuthMethod | null;
+	terminal_reachable?: boolean | null;
+	terminal_mac?: string | null;
+	terminal_rtt_us?: number | null;
 }
 
 

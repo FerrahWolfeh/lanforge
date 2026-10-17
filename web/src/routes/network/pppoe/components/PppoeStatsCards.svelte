@@ -2,6 +2,8 @@
 	import CheckCircleIcon from "@lucide/svelte/icons/check-circle";
 	import XCircleIcon from "@lucide/svelte/icons/x-circle";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+	import AlertCircleIcon from "@lucide/svelte/icons/alert-circle";
+	import RadioIcon from "@lucide/svelte/icons/radio";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import ServerIcon from "@lucide/svelte/icons/server";
 	import CpuIcon from "@lucide/svelte/icons/cpu";
@@ -60,8 +62,8 @@
 			description: "Point-to-Point Protocol over Ethernet session state negotiated with carrier access concentrator.",
 		}}
 		badge={{
-			text: status?.state ?? "Offline",
-			variant: status?.state === "connected" ? "online" : status?.state === "reconnecting" || status?.state === "authenticating" ? "starting" : "dormant",
+			text: status?.state ? status.state.replace(/_/g, " ") : "Offline",
+			variant: status?.state === "connected" ? "online" : status?.state === "reconnecting" || status?.state === "authenticating" || status?.state === "discovering" || status?.state === "waiting_for_carrier" || status?.state === "waiting_for_terminal" ? "starting" : "dormant",
 			showDot: true,
 			pulse: true,
 		}}
@@ -77,6 +79,15 @@
 				{:else if status?.state === "authenticating"}
 					<RefreshCwIcon class="size-5 text-amber-500 shrink-0 animate-spin" />
 					<span class="text-base text-amber-400 font-bold">Authenticating...</span>
+				{:else if status?.state === "discovering"}
+					<RadioIcon class="size-5 text-cyan-500 shrink-0 animate-pulse" />
+					<span class="text-base text-cyan-400 font-bold">Discovering BNG...</span>
+				{:else if status?.state === "waiting_for_carrier"}
+					<AlertCircleIcon class="size-5 text-amber-500 shrink-0" />
+					<span class="text-base text-amber-400 font-bold">Waiting for Carrier</span>
+				{:else if status?.state === "waiting_for_terminal"}
+					<RefreshCwIcon class="size-5 text-amber-500 shrink-0 animate-spin" />
+					<span class="text-base text-amber-400 font-bold">Waiting for ONT...</span>
 				{:else}
 					<XCircleIcon class="size-5 text-muted-foreground shrink-0" />
 					<span class="text-base text-muted-foreground font-normal">Offline / Idle</span>

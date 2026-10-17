@@ -32,6 +32,12 @@ pub enum PppoeError {
     #[error("PPPoE session terminated remotely: {0}")]
     Terminated(String),
 
+    #[error("No carrier on {0}")]
+    CarrierDown(String),
+
+    #[error("Terminal {0} unreachable on {1}")]
+    TerminalUnreachable(std::net::Ipv4Addr, String),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 

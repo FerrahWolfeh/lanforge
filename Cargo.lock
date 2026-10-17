@@ -2696,6 +2696,7 @@ dependencies = [
  "hotpath",
  "lanforge-core",
  "lanforge-macros",
+ "lanforge-transport",
  "lanforge-types",
  "libc",
  "md-5",

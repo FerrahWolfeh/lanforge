@@ -10,9 +10,13 @@ use tokio::io::unix::AsyncFd;
 use tokio::time::interval;
 use tracing::{debug, info, warn};
 
+use lanforge_transport::ArpProber;
+use std::net::Ipv4Addr;
+
 pub const PPP_IP: u16 = 0x0021;
 pub const PPP_IPV6: u16 = 0x0057;
 
+#[allow(clippy::too_many_lines)]
 pub async fn run_keepalive(
     chan_fd: &OwnedFd,
     ctx: &LanforgeContext,
@@ -20,6 +24,7 @@ pub async fn run_keepalive(
     peer_magic: u32,
     interval_secs: u64,
     max_failures: u32,
+    prober: Option<(&ArpProber, Ipv4Addr, Option<Ipv4Addr>, Duration)>,
 ) -> Result<(), PppoeError> {
     let async_chan_fd = AsyncFd::new(chan_fd.try_clone()?)?;
     let mut echo_id: u8 = 0;
@@ -50,7 +55,34 @@ pub async fn run_keepalive(
                     }
 
                     failed_echoes += 1;
+                    if failed_echoes > 1 {
+                        warn!(
+                            missed = failed_echoes,
+                            max = max_failures,
+                            "Missing LCP Echo-Reply from ISP Access Concentrator"
+                        );
+                    }
                     if max_failures > 0 && failed_echoes > max_failures {
+                        warn!(
+                            missed = failed_echoes,
+                            max = max_failures,
+                            "LCP keepalive failure threshold exceeded, disconnecting PPPoE session"
+                        );
+                        if let Some((arp, target_ip, sender_ip, timeout)) = prober {
+                            if let Ok(Some(reply)) = arp.probe(target_ip, sender_ip, timeout).await {
+                                info!(
+                                    target_ip = %target_ip,
+                                    rtt_ms = reply.rtt.as_secs_f64() * 1000.0,
+                                    "Terminal responded to probe: local hardware underlay is intact, failure is upstream with ISP/optical link"
+                                );
+                                return Err(PppoeError::KeepAliveTimeout);
+                            }
+                            warn!(
+                                target_ip = %target_ip,
+                                "Terminal failed to respond to probe: local hardware/terminal crash or cable disconnected"
+                            );
+                            return Err(PppoeError::TerminalUnreachable(target_ip, "wan".into()));
+                        }
                         return Err(PppoeError::KeepAliveTimeout);
                     }
                 }
@@ -184,6 +216,13 @@ fn handle_lcp_frame(
 
     match code {
         LCP_ECHO_REP => {
+            if *failed_echoes > 1 {
+                info!(
+                    id,
+                    missed = *failed_echoes,
+                    "LCP keepalive recovered, received Echo-Reply from ISP Access Concentrator"
+                );
+            }
             *failed_echoes = 0;
             debug!(id, "Received LCP Echo-Reply from BRAS");
         }

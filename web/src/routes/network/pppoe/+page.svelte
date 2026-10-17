@@ -287,6 +287,27 @@
 					pulse={true}
 					text="Authenticating"
 				/>
+			{:else if status?.state === "discovering"}
+				<StatusBadge
+					variant="starting"
+					showDot={true}
+					pulse={true}
+					text="Discovering BNG"
+				/>
+			{:else if status?.state === "waiting_for_carrier"}
+				<StatusBadge
+					variant="warning"
+					showDot={true}
+					pulse={true}
+					text="Waiting for Carrier"
+				/>
+			{:else if status?.state === "waiting_for_terminal"}
+				<StatusBadge
+					variant="warning"
+					showDot={true}
+					pulse={true}
+					text="Waiting for ONT"
+				/>
 			{:else}
 				<StatusBadge
 					variant="dormant"

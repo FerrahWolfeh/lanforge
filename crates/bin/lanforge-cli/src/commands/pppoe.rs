@@ -190,6 +190,9 @@ fn format_session_badge(state: PppoeSessionState) -> String {
     match state {
         PppoeSessionState::Connected => "[CONNECTED]".green().bold().to_string(),
         PppoeSessionState::Authenticating => "[AUTHENTICATING]".yellow().bold().to_string(),
+        PppoeSessionState::Discovering => "[DISCOVERING]".cyan().bold().to_string(),
+        PppoeSessionState::WaitingForCarrier => "[WAITING FOR CARRIER]".yellow().bold().to_string(),
+        PppoeSessionState::WaitingForTerminal => "[WAITING FOR TERMINAL]".yellow().bold().to_string(),
         PppoeSessionState::Reconnecting => "[RECONNECTING]".yellow().bold().to_string(),
         PppoeSessionState::Disconnected => "[DISCONNECTED]".red().bold().to_string(),
     }
@@ -241,6 +244,18 @@ fn render_pppoe_session_details(status: &PppoeStatusResponse) {
 
     if status.reconnect_attempts > 0 {
         println!("    {:<24} {}", "Retry Attempts:".dimmed(), status.reconnect_attempts.to_string().yellow());
+    }
+
+    if let Some(reachable) = status.terminal_reachable {
+        let terminal_str = if reachable {
+            status.terminal_rtt_us.map_or_else(
+                || "Reachable".green().bold().to_string(),
+                |rtt| format!("Reachable ({:.2} ms)", f64::from(rtt) / 1000.0).green().bold().to_string(),
+            )
+        } else {
+            "Unreachable (check cable/power)".red().bold().to_string()
+        };
+        println!("    {:<24} {terminal_str}", "Terminal (ONT):".dimmed());
     }
 
     if let Some(err) = &status.last_error {
@@ -599,5 +614,8 @@ mod tests {
     fn test_format_session_badge() {
         assert!(format_session_badge(PppoeSessionState::Connected).contains("CONNECTED"));
         assert!(format_session_badge(PppoeSessionState::Disconnected).contains("DISCONNECTED"));
+        assert!(format_session_badge(PppoeSessionState::WaitingForCarrier).contains("WAITING FOR CARRIER"));
+        assert!(format_session_badge(PppoeSessionState::WaitingForTerminal).contains("WAITING FOR TERMINAL"));
+        assert!(format_session_badge(PppoeSessionState::Discovering).contains("DISCOVERING"));
     }
 }

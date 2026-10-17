@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::net::Ipv4Addr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -97,6 +98,43 @@ impl Default for PppoeNftablesConfig {
     }
 }
 
+/// Configuration for the optional GPON ONT / modem underlay probe (Layer 2 ARP).
+///
+/// Opt-in. The probe is a *soft gate*: if the terminal does not answer within
+/// `max_wait_secs`, `PPPoE` dials anyway. It must never block the WAN indefinitely.
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(default)]
+pub struct TerminalProbeConfig {
+    pub enabled: bool,
+    /// Management IP of the ONT / modem (e.g. `192.168.1.1`).
+    pub target_ip: Ipv4Addr,
+    /// Optional sender IP inside the ARP payload. `None` = `0.0.0.0` (RFC 5227 probe).
+    pub sender_ip: Option<Ipv4Addr>,
+    /// Interface used for probing. `None` = parent of `wan_iface`
+    /// (e.g. `wan0` when `PPPoE` runs on `wan0.10`), since ONT management is usually untagged.
+    pub iface: Option<String>,
+    /// Per-probe ARP reply timeout.
+    pub timeout_ms: u64,
+    /// Interval between probes while waiting for the terminal.
+    pub poll_interval_secs: u64,
+    /// Soft-gate deadline: after this, dial `PPPoE` regardless of probe result.
+    pub max_wait_secs: u64,
+}
+
+impl Default for TerminalProbeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            target_ip: Ipv4Addr::new(192, 168, 1, 1),
+            sender_ip: None,
+            iface: None,
+            timeout_ms: 1000,
+            poll_interval_secs: 2,
+            max_wait_secs: 10,
+        }
+    }
+}
+
 /// Configuration structure for `PPPoE` service.
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default)]
@@ -116,6 +154,7 @@ pub struct PppoeConfig {
     pub send_padt_on_shutdown: bool,
     pub discovery_padi_retries: u32,
     pub discovery_padi_timeout_secs: u64,
+    pub terminal_probe: TerminalProbeConfig,
     pub nftables: PppoeNftablesConfig,
 }
 
@@ -137,7 +176,9 @@ impl Default for PppoeConfig {
             send_padt_on_shutdown: true,
             discovery_padi_retries: 5,
             discovery_padi_timeout_secs: 3,
+            terminal_probe: TerminalProbeConfig::default(),
             nftables: PppoeNftablesConfig::default(),
         }
     }
 }
+

@@ -404,3 +404,110 @@ async fn test_pppoe_cleanup_guarantees_session_down_on_abort() {
         assert!(s.interfaces.pppoe_status.is_none());
     });
 }
+
+#[tokio::test]
+async fn test_pppoe_with_terminal_probe_enabled_reports_terminal_status() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "wan0".into(),
+        username: "client1".into(),
+        terminal_probe: lanforge_types::network::pppoe::TerminalProbeConfig {
+            enabled: true,
+            target_ip: Ipv4Addr::new(192, 168, 1, 1),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    ctx.update_pppoe_config(cfg.clone());
+
+    let mut service = PppoeService::inert(cfg, ctx.clone());
+    let ctx_clone = ctx.clone();
+    let handle = tokio::spawn(async move { service.serve(&ctx_clone).await });
+
+    let _ = wait_for_session_up(&mut pppoe_sub).await;
+
+    // Verify terminal status is reflected in global state
+    ctx.with_state(|s| {
+        let status = s.interfaces.pppoe_status.as_ref().expect("status set");
+        assert_eq!(status.terminal_reachable, Some(true));
+        assert_eq!(
+            status.terminal_mac,
+            Some(lanforge_types::identifiers::MacAddr([0x3c, 0x84, 0x6a, 0xbc, 0x8c, 0xe5]))
+        );
+        assert_eq!(status.terminal_rtt_us, Some(800));
+    });
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = handle.await;
+}
+
+#[tokio::test]
+async fn test_pppoe_with_injected_prober_reports_probe_response() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+
+    let (handle_prober, prober) =
+        lanforge_transport::ArpProber::inert([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
+
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "wan0".into(),
+        username: "client1".into(),
+        terminal_probe: lanforge_types::network::pppoe::TerminalProbeConfig {
+            enabled: true,
+            target_ip: Ipv4Addr::new(192, 168, 1, 1),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    ctx.update_pppoe_config(cfg.clone());
+
+    let mut service = PppoeService::inert(cfg, ctx.clone()).with_prober(prober);
+    let ctx_clone = ctx.clone();
+
+    // Spawn inert prober mock responder in background
+    let responder = tokio::spawn(async move {
+        // Wait for ARP request from prober
+        if let Some(_req) = handle_prober.recv_payload().await {
+            let target_mac = [0xde, 0xad, 0xbe, 0xef, 0x00, 0x01];
+            // Format an ARP reply
+            let mut reply_frame = Vec::with_capacity(42);
+            reply_frame.extend_from_slice(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x01]); // Dst MAC
+            reply_frame.extend_from_slice(&target_mac); // Src MAC
+            reply_frame.extend_from_slice(&[0x08, 0x06]); // Eth type: ARP
+            reply_frame.extend_from_slice(&[0x00, 0x01]); // HTYPE
+            reply_frame.extend_from_slice(&[0x08, 0x00]); // PTYPE
+            reply_frame.push(6); // HLEN
+            reply_frame.push(4); // PLEN
+            reply_frame.extend_from_slice(&[0x00, 0x02]); // Opcode: reply
+            reply_frame.extend_from_slice(&target_mac); // Sender MAC
+            reply_frame.extend_from_slice(&[192, 168, 1, 1]); // Sender IP
+            reply_frame.extend_from_slice(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x01]); // Target MAC
+            reply_frame.extend_from_slice(&[0, 0, 0, 0]); // Target IP
+            handle_prober.inject(reply_frame, ()).await;
+        }
+    });
+
+    let service_handle = tokio::spawn(async move { service.serve(&ctx_clone).await });
+
+    let _ = wait_for_session_up(&mut pppoe_sub).await;
+    let _ = responder.await;
+
+    // Verify injected prober results in global state
+    ctx.with_state(|s| {
+        let status = s.interfaces.pppoe_status.as_ref().expect("status set");
+        assert_eq!(status.terminal_reachable, Some(true));
+        assert_eq!(
+            status.terminal_mac,
+            Some(lanforge_types::identifiers::MacAddr([0xde, 0xad, 0xbe, 0xef, 0x00, 0x01]))
+        );
+        assert!(status.terminal_rtt_us.is_some());
+    });
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = service_handle.await;
+}
+
