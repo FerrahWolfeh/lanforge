@@ -8,8 +8,10 @@ use lanforge_core::service::AsyncService;
 use lanforge_traffic::TrafficService;
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
 use lanforge_types::events::traffic::TrafficEvent;
+use lanforge_types::events::TimedEvent;
 use lanforge_types::network::traffic::{NicTuningConfig, SqmConfig, SqmDiffserv, TrafficConfig};
 use lanforge_types::system::ServiceState;
+use tokio::sync::broadcast;
 use tokio::time::timeout;
 
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
@@ -19,6 +21,34 @@ fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
 
     ctx.set_target_interface_name("lan0".to_string());
     (ctx, bus)
+}
+
+async fn wait_for_sqm_applied(sub: &mut broadcast::Receiver<TimedEvent>) -> (u32, u32) {
+    loop {
+        let evt = timeout(Duration::from_millis(500), sub.recv())
+            .await
+            .expect("Timeout waiting for SqmApplied")
+            .expect("Recv error");
+        if let LanforgeEvent::Traffic(ref e) = evt.event
+            && let TrafficEvent::SqmApplied { download_mbps, upload_mbps, .. } = **e
+        {
+            return (download_mbps, upload_mbps);
+        }
+    }
+}
+
+async fn wait_for_sqm_cleared(sub: &mut broadcast::Receiver<TimedEvent>) {
+    loop {
+        let evt = timeout(Duration::from_millis(500), sub.recv())
+            .await
+            .expect("Timeout waiting for SqmCleared")
+            .expect("Recv error");
+        if let LanforgeEvent::Traffic(ref e) = evt.event
+            && let TrafficEvent::SqmCleared { .. } = **e
+        {
+            return;
+        }
+    }
 }
 
 #[tokio::test]
@@ -137,5 +167,145 @@ async fn test_traffic_service_inert_full_lifecycle() {
         .expect("Join error");
     assert!(serve_res.is_ok());
 
+    service.cleanup(&ctx).await.expect("Cleanup must succeed");
+}
+
+#[tokio::test]
+async fn test_traffic_reacts_to_config_change_in_place() {
+    let (ctx, bus) = create_test_context();
+    let mut traffic_sub = bus.subscribe_traffic();
+
+    let cfg = TrafficConfig {
+        tuning: NicTuningConfig {
+            enabled: true,
+            cpu_mask: "0-3".into(),
+            ..Default::default()
+        },
+        sqm: SqmConfig {
+            enabled: true,
+            interface: "auto".into(),
+            download_mbps: 300,
+            upload_mbps: 150,
+            diffserv: SqmDiffserv::Diffserv4,
+            ingress_device: "ifb4lanforge".into(),
+            ..Default::default()
+        },
+    };
+
+    ctx.update_traffic_config(cfg.clone());
+    let mut service = TrafficService::inert(cfg);
+    let mut service_clone = service.clone();
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Drain initial startup events
+    while traffic_sub.try_recv().is_ok() {}
+
+    // 1. Update bandwidth limits in-place (300/150 -> 800/400)
+    let mut new_cfg = ctx.get_traffic_config().unwrap_or_default();
+    new_cfg.sqm.download_mbps = 800;
+    new_cfg.sqm.upload_mbps = 400;
+    ctx.update_traffic_config(new_cfg);
+
+    let (down, up) = wait_for_sqm_applied(&mut traffic_sub).await;
+    assert_eq!(down, 800);
+    assert_eq!(up, 400);
+
+    let status = ctx.with_state(|s| s.interfaces.traffic_status.clone()).unwrap();
+    assert_eq!(status.download_mbps, 800);
+    assert_eq!(status.upload_mbps, 400);
+
+    // 2. Disable SQM in-place
+    let mut disabled_cfg = ctx.get_traffic_config().unwrap_or_default();
+    disabled_cfg.sqm.enabled = false;
+    ctx.update_traffic_config(disabled_cfg);
+
+    wait_for_sqm_cleared(&mut traffic_sub).await;
+
+    let status_disabled = ctx.with_state(|s| s.interfaces.traffic_status.clone()).unwrap();
+    assert!(!status_disabled.sqm_active);
+
+    // 3. Re-enable SQM in-place
+    let mut reenabled_cfg = ctx.get_traffic_config().unwrap_or_default();
+    reenabled_cfg.sqm.enabled = true;
+    ctx.update_traffic_config(reenabled_cfg);
+
+    let (down_re, up_re) = wait_for_sqm_applied(&mut traffic_sub).await;
+    assert_eq!(down_re, 800);
+    assert_eq!(up_re, 400);
+
+    let status_reenabled = ctx.with_state(|s| s.interfaces.traffic_status.clone()).unwrap();
+    assert!(status_reenabled.sqm_active);
+
+    // Cleanup
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = serve_handle.await;
+    service.cleanup(&ctx).await.expect("Cleanup must succeed");
+}
+
+#[tokio::test]
+async fn test_traffic_inactive_when_all_disabled() {
+    let (ctx, _bus) = create_test_context();
+
+    let cfg = TrafficConfig {
+        tuning: NicTuningConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        sqm: SqmConfig {
+            enabled: false,
+            ..Default::default()
+        },
+    };
+
+    let mut service = TrafficService::inert(cfg);
+    // When both are disabled, serve() must complete immediately with Ok(())
+    timeout(Duration::from_millis(500), service.serve(&ctx)).await
+        .expect("serve() must not hang when features are disabled")
+        .expect("serve() must return Ok(())");
+
+    assert_eq!(ctx.get_service_state("traffic"), ServiceState::Inactive);
+}
+
+#[tokio::test]
+async fn test_traffic_reacts_to_interface_ready() {
+    let (ctx, bus) = create_test_context();
+    let mut traffic_sub = bus.subscribe_traffic();
+
+    let cfg = TrafficConfig {
+        tuning: NicTuningConfig {
+            enabled: true,
+            cpu_mask: "0-3".into(),
+            ..Default::default()
+        },
+        sqm: SqmConfig {
+            enabled: false,
+            ..Default::default()
+        },
+    };
+
+    let mut service = TrafficService::inert(cfg);
+    let mut service_clone = service.clone();
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Drain initial startup event
+    let _ = timeout(Duration::from_millis(500), traffic_sub.recv()).await.unwrap().unwrap();
+
+    // Change target interface to lan1 and notify
+    ctx.set_target_interface_name("lan1".to_string());
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::InterfaceReady));
+
+    // Allow event to process
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let status = ctx.with_state(|s| s.interfaces.traffic_status.clone()).unwrap();
+    assert!(status.tuned_interfaces.contains(&"lan1".to_string()));
+
+    // Cleanup
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = serve_handle.await;
     service.cleanup(&ctx).await.expect("Cleanup must succeed");
 }

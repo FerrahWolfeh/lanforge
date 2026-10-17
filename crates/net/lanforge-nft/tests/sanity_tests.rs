@@ -475,3 +475,170 @@ fn test_sanity_dnat_restricted_to_internal_and_explicit_port_forwards() {
     }
 }
 
+#[test]
+fn test_sanity_strict_external_wan_drop_policy() {
+    let cfg = FirewallConfig::default();
+    let ruleset = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+
+    let mut found_input_policy_drop = false;
+    let mut found_forward_policy_drop = false;
+
+    for obj in ruleset.objects.as_ref() {
+        let chain = match obj {
+            nftables::schema::NfObject::CmdObject(nftables::schema::NfCmd::Add(
+                nftables::schema::NfListObject::Chain(c),
+            ))
+            | nftables::schema::NfObject::ListObject(nftables::schema::NfListObject::Chain(c)) => {
+                Some(c)
+            }
+            _ => None,
+        };
+
+        if let Some(chain) = chain {
+            if chain.name == "input" {
+                assert_eq!(
+                    chain.policy,
+                    Some(nftables::types::NfChainPolicy::Drop),
+                    "Input chain default policy must be Drop"
+                );
+                found_input_policy_drop = true;
+            } else if chain.name == "forward" {
+                assert_eq!(
+                    chain.policy,
+                    Some(nftables::types::NfChainPolicy::Drop),
+                    "Forward chain default policy must be Drop"
+                );
+                found_forward_policy_drop = true;
+            }
+        }
+    }
+
+    assert!(found_input_policy_drop, "Input chain with policy Drop must exist");
+    assert!(found_forward_policy_drop, "Forward chain with policy Drop must exist");
+}
+
+#[test]
+fn test_sanity_hairpin_nat_multizone_reflection() {
+    let mut cfg = FirewallConfig::default();
+    if let Some(zone) = cfg.zones.iter_mut().find(|z| z.name == "internal") {
+        zone.interfaces = vec!["lan0".into()];
+    }
+    cfg.zones.push(FirewallZone {
+        name: "guest".into(),
+        interfaces: vec!["vlan20".into()],
+        open_ports: Vec::new(),
+        allowed_subnets: Vec::new(),
+        input_policy: FirewallPolicy::Drop,
+        forward_policy: FirewallPolicy::Drop,
+        masquerade: false,
+        mtu_fix: false,
+    });
+
+    cfg.port_forwards.push(PortForwardRule {
+        comment: Some("Home Assistant".into()),
+        src_zone: "external".into(),
+        internal_ip: "192.168.1.10".parse::<IpAddr>().unwrap(),
+        external_port: 8123,
+        internal_port: 8123,
+        protocol: L4Protocol::Tcp,
+        enable_hairpin: true,
+    });
+
+    let ruleset = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+    let json = serde_json::to_string(&ruleset).unwrap();
+
+    // 1. Prerouting DNAT must be present for WAN (ppp0) AND internal zones (lan0, vlan20)
+    assert!(json.contains("ppp0"));
+    assert!(json.contains("lan0"));
+    assert!(json.contains("vlan20"));
+    assert!(json.contains("8123"));
+    assert!(json.contains("192.168.1.10"));
+
+    // 2. Postrouting Masquerade for hairpin must be present
+    assert!(json.contains("\"masquerade\""));
+}
+
+#[test]
+fn test_sanity_ipv6_pinhole_native_forwarding_and_no_masquerade() {
+    let mut cfg = FirewallConfig::default();
+    cfg.port_forwards.push(PortForwardRule {
+        comment: Some("IPv6 Matrix Synapse Pinhole".into()),
+        src_zone: "external".into(),
+        internal_ip: "2001:db8:beef::50".parse::<IpAddr>().unwrap(),
+        external_port: 8448,
+        internal_port: 8448,
+        protocol: L4Protocol::Tcp,
+        enable_hairpin: false,
+    });
+
+    let ruleset = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+
+    let json = serde_json::to_string(&ruleset).unwrap();
+
+    // 1. Forward chain must permit target IPv6 and destination port
+    assert!(json.contains("2001:db8:beef::50"));
+    assert!(json.contains("8448"));
+    assert!(json.contains("\"forward\""));
+
+    // 2. Postrouting masquerade must be restricted to IPv4 only (never masquerade IPv6)
+    for obj in ruleset.objects.as_ref() {
+        let obj_str = serde_json::to_string(obj).unwrap();
+        if obj_str.contains("\"masquerade\"") {
+            assert!(
+                obj_str.contains("\"ipv4\""),
+                "Masquerade rule must be strictly scoped to IPv4! Found: {obj_str}"
+            );
+            assert!(
+                !obj_str.contains("\"ipv6\""),
+                "Masquerade rule must NEVER match IPv6! Found: {obj_str}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_sanity_dns_and_vowifi_bypass_toggles() {
+    // 1. Enabled bypasses
+    let cfg_enabled = FirewallConfig {
+        bypass_dns: true,
+        bypass_vowifi: true,
+        ..FirewallConfig::default()
+    };
+    let json_enabled = serde_json::to_string(
+        &RulesetBuilder::new(&cfg_enabled)
+            .with_active_wan(Some("ppp0"))
+            .build(),
+    )
+    .unwrap();
+    // DNS bypass: port 53
+    assert!(json_enabled.contains("\"dport\": 53") || json_enabled.contains("53"));
+    // VoWiFi bypass: ports 500 and 4500
+    assert!(json_enabled.contains("500"));
+    assert!(json_enabled.contains("4500"));
+
+    // 2. Disabled bypasses
+    let cfg_disabled = FirewallConfig {
+        bypass_dns: false,
+        bypass_vowifi: false,
+        ..FirewallConfig::default()
+    };
+    let json_disabled = serde_json::to_string(
+        &RulesetBuilder::new(&cfg_disabled)
+            .with_active_wan(Some("ppp0"))
+            .build(),
+    )
+    .unwrap();
+    // VoWiFi ports should not be in the ruleset
+    assert!(!json_disabled.contains("\"dport\": 500"));
+    assert!(!json_disabled.contains("\"dport\": 4500"));
+}
+

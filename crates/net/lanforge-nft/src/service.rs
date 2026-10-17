@@ -137,6 +137,7 @@ impl NftService {
     ) {
         if !cfg.enabled || cfg.mode == FirewallMode::Disabled {
             info!("Firewall is disabled in configuration, flushing and removing nftables table");
+            ctx.set_service_state("firewall", lanforge_types::system::ServiceState::Inactive);
             Self::cleanup_table_internal(&cfg.table_name, self.inert).await;
             return;
         }
@@ -200,6 +201,7 @@ impl NftService {
 
         match result {
             Ok(()) => {
+                ctx.set_service_state("firewall", lanforge_types::system::ServiceState::Online);
                 info!(
                     table = %table,
                     zones = cfg.zones.len(),
@@ -351,8 +353,10 @@ impl AsyncService for NftService {
             .get_firewall_config()
             .map_or_else(|| "lanforge".into(), |c| c.table_name);
         let inert = self.inert;
+        let ctx_clone = ctx.clone();
         async move {
             info!(table = %table, "Firewall service shutting down, removing nftables table from kernel");
+            ctx_clone.set_service_state("firewall", lanforge_types::system::ServiceState::Inactive);
             Self::cleanup_table_internal(&table, inert).await;
             Ok(())
         }
