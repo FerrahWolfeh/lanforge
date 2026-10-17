@@ -36,4 +36,6 @@ pub enum DnsEvent {
     ConfigAdblockRulesChanged,
     /// DNS upstreams changed in the database.
     ConfigUpstreamsChanged,
+    /// DNS upstream resolution mode changed.
+    ConfigUpstreamModeChanged(crate::network::dns::UpstreamMode),
 }

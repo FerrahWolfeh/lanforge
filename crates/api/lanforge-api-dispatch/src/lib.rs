@@ -5,7 +5,7 @@ use lanforge_api::api::{
     DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockSourcesResponse,
     DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse,
     DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse,
-    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry,
+    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry,
     HostsResponse, LeasesResponse, Response, RpcCallError, SetupPayload, SetupResponse,
     SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
     SystemConfigImportResponse, TransientHostsResponse, WhoisResponse,
@@ -16,7 +16,7 @@ use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{BlockingMode, RewriteRule, TimeOfDay};
-use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamProtocol};
 use lanforge_types::network::firewall::{
     FirewallCommitRequest, FirewallCommitResponse, FirewallConfig, FirewallStatus,
     FirewallValidationReport,
@@ -352,6 +352,25 @@ impl LanforgeRpc for ClientContext {
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_dns_upstream_remove(addr, protocol, domain).await {
             Response::Success(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn dns_upstream_mode_get(&self) -> Result<DnsUpstreamModeResponse, RpcCallError> {
+        match self.handle_dns_upstream_mode_get().await {
+            Response::DnsUpstreamMode(r) => Ok(r),
+            Response::Error { error } => Err(Self::map_error(error)),
+            _ => Err(RpcCallError::InvalidResponseType),
+        }
+    }
+
+    async fn dns_upstream_mode_set(
+        &self,
+        mode: UpstreamMode,
+    ) -> Result<DnsUpstreamModeResponse, RpcCallError> {
+        match self.handle_dns_upstream_mode_set(mode).await {
+            Response::DnsUpstreamMode(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
         }

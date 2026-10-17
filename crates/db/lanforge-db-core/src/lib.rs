@@ -17,7 +17,7 @@ use lanforge_types::network::dns::adblock::{
     AdblockDbConfig, AdblockRuleAction, AdblockSourceFormat, AdblockUrlKind, RewriteAnswer,
     RewriteRule,
 };
-use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
+use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
@@ -376,6 +376,16 @@ pub trait DnsUpstreamStore: Send + Sync {
 
     /// Clears all registered DNS upstream servers.
     fn clear_dns_upstreams(&self) -> BoxFuture<'_, Result<(), DbError>>;
+
+    /// Loads the configured upstream resolution mode, if set.
+    fn load_dns_upstream_mode(&self) -> BoxFuture<'_, Result<Option<UpstreamMode>, DbError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Saves the upstream resolution mode.
+    fn save_dns_upstream_mode(&self, _mode: UpstreamMode) -> BoxFuture<'_, Result<(), DbError>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// Handles dynamic DHCP pools and configuration.

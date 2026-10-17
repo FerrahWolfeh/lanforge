@@ -336,6 +336,9 @@ impl Bootstrapper {
             let list = upstreams.into_iter().map(|row| row.to_target()).collect();
             ctx.update_dns_upstreams(list);
         }
+        if let Ok(Some(mode)) = db.load_dns_upstream_mode().await {
+            ctx.update_dns_upstream_mode(mode);
+        }
         if let Ok(rewrites) = db.load_dns_rewrites().await {
             ctx.update_dns_rewrites(rewrites);
         }

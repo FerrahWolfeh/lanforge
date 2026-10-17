@@ -627,6 +627,17 @@ impl DbWorker {
                 ctx.update_dns_upstreams(Vec::new());
                 Ok(StorageQueryResult::Success)
             }
+            StorageQuery::GetDnsUpstreamMode => {
+                let mode = db.load_dns_upstream_mode().await.map_err(|e| e.to_string())?;
+                Ok(StorageQueryResult::DnsUpstreamMode(mode))
+            }
+            StorageQuery::SetDnsUpstreamMode(mode) => {
+                db.save_dns_upstream_mode(mode)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                ctx.update_dns_upstream_mode(mode);
+                Ok(StorageQueryResult::Success)
+            }
             StorageQuery::AddReverseResolver { subnet, resolver } => {
                 db.add_dns_reverse_resolver(&subnet, &resolver)
                     .await

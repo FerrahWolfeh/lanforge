@@ -441,6 +441,8 @@ export const dnsUpstreamRemove = (entry: { addr: string; protocol: string; domai
 	});
 };
 export const dnsUpstreamClear = () => del<void>('/dns/upstreams/clear');
+export const dnsUpstreamModeGet = () => get<{ mode: string }>('/dns/upstreams/mode');
+export const dnsUpstreamModeSet = (mode: string) => put<{ mode: string }>('/dns/upstreams/mode', { mode });
 
 export const dnsReverseResolverList = async (): Promise<ReverseResolverEntry[]> =>
 	extractList<ReverseResolverEntry>(await get<any>('/dns/reverse-resolvers'), 'resolvers');

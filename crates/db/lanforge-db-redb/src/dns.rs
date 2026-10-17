@@ -13,7 +13,7 @@ use lanforge_types::network::dns::adblock::{
     AdblockDbConfig, AdblockRuleAction, AdblockSourceFormat, AdblockUrlKind, RewriteAnswer,
     RewriteRule,
 };
-use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
+use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
 use redb::{ReadableDatabase, ReadableTable};
 
@@ -792,6 +792,47 @@ impl DnsUpstreamStore for RedbDatabase {
             let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
             {
                 let _ = write_txn.delete_table(TABLE_DNS_UPSTREAMS);
+            }
+            write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+            Ok(())
+        })
+    }
+
+    fn load_dns_upstream_mode(&self) -> BoxFuture<'_, Result<Option<UpstreamMode>, DbError>> {
+        Box::pin(async move {
+            let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+            let table = match read_txn.open_table(TABLE_CONFIG) {
+                Ok(t) => t,
+                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+                Err(e) => return Err(DbError::Backend(e.to_string())),
+            };
+
+            match table.get("dns_upstream_mode").map_err(|e| DbError::Backend(e.to_string()))? {
+                Some(val) => {
+                    let mode_str = std::str::from_utf8(val.value())
+                        .map_err(|e| DbError::Backend(format!("UTF-8 decode error: {e}")))?;
+                    let mode: UpstreamMode = mode_str
+                        .parse()
+                        .map_err(|e| DbError::Backend(format!("Invalid mode: {e}")))?;
+                    Ok(Some(mode))
+                }
+                None => Ok(None),
+            }
+        })
+    }
+
+    fn save_dns_upstream_mode(&self, mode: UpstreamMode) -> BoxFuture<'_, Result<(), DbError>> {
+        Box::pin(async move {
+            let mode_str = mode.to_string();
+            let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+            {
+                let mut table = write_txn
+                    .open_table(TABLE_CONFIG)
+                    .map_err(|e| DbError::Backend(e.to_string()))?;
+
+                table
+                    .insert("dns_upstream_mode", mode_str.as_bytes())
+                    .map_err(|e| DbError::Backend(e.to_string()))?;
             }
             write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
             Ok(())

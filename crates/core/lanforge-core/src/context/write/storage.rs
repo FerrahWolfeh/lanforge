@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
-use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamTarget};
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
@@ -148,6 +148,20 @@ impl LanforgeContext {
         let _ = self
             .bus_ref()
             .publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamsChanged));
+    }
+
+    /// Returns the currently configured DNS upstream resolution mode.
+    #[must_use]
+    pub fn get_dns_upstream_mode(&self) -> UpstreamMode {
+        self.inner.config.read().dns_upstream_mode
+    }
+
+    /// Updates the configured DNS upstream resolution mode and publishes the change event.
+    pub fn update_dns_upstream_mode(&self, mode: UpstreamMode) {
+        self.inner.config.write().dns_upstream_mode = mode;
+        let _ = self
+            .bus_ref()
+            .publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamModeChanged(mode)));
     }
 
     /// Updates the configured DNS rewrites and publishes the change event.

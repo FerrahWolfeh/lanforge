@@ -65,7 +65,7 @@ use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::events::FirewallEvent;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
-use lanforge_types::network::dns::upstream::UpstreamTarget;
+use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamTarget};
 use lanforge_types::network::firewall::{
     DynamicPortRequest, FirewallConfig, FirewallValidationReport, L4Protocol,
 };
@@ -199,8 +199,9 @@ pub struct DynamicConfig {
     /// Full RA server runtime configuration.
     pub ra_config: Option<RaServerConfig>,
     /// Configured DNS upstreams.
-
     pub dns_upstreams: Vec<UpstreamTarget>,
+    /// Configured DNS upstream resolution strategy mode.
+    pub dns_upstream_mode: UpstreamMode,
     /// Configured DNS rewrites.
     pub dns_rewrites: Vec<RewriteRule>,
     /// Configured DNS allowlist.

@@ -374,3 +374,20 @@ impl HttpWrappedResponse for AdblockCheckResponse {
         wrapper.data
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DnsUpstreamModeResponse {
+    pub mode: lanforge_types::network::dns::UpstreamMode,
+}
+
+impl HttpWrappedResponse for DnsUpstreamModeResponse {
+    type Wrapper = HttpDataResponse<DnsUpstreamModeResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}

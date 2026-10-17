@@ -18,17 +18,11 @@ use tokio::sync::broadcast::Sender;
 use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum UpstreamMode {
-    #[default]
-    Sequential,
-    Parallel,
-    Fastest,
-    RoundRobin,
-}
+pub use lanforge_types::network::dns::UpstreamMode;
 
 type InFlightTx = Sender<Result<(Vec<u8>, bool, bool), String>>;
+type QueryResult = (std::net::SocketAddr, Result<(Vec<u8>, bool, bool), DnsError>);
+type QueryFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = QueryResult> + Send + 'a>>;
 
 #[derive(Debug, Clone)]
 pub struct Resolved {
@@ -83,7 +77,7 @@ fn hedge_delay(m: &UpstreamManager) -> Duration {
 }
 
 pub struct UpstreamStrategy {
-    pub mode: UpstreamMode,
+    mode: parking_lot::RwLock<UpstreamMode>,
     /// Upstreams grouped by protocol tier. Index 0 = tier 0 (TLS/QUIC), etc.
     tiers: parking_lot::RwLock<Arc<[Vec<Arc<UpstreamManager>>]>>,
     /// Conditional split-DNS domain routes sorted descending by label length.
@@ -97,7 +91,7 @@ impl UpstreamStrategy {
     #[must_use]
     pub fn new(mode: UpstreamMode, upstreams: Vec<Arc<UpstreamManager>>) -> Self {
         let strategy = Self {
-            mode,
+            mode: parking_lot::RwLock::new(mode),
             tiers: parking_lot::RwLock::new(Arc::from(Vec::<Vec<Arc<UpstreamManager>>>::new())),
             conditional_routes: parking_lot::RwLock::new(Arc::from(Vec::<Arc<ConditionalRoute>>::new())),
             fallback_upstreams: parking_lot::RwLock::new(Arc::from(Vec::<Arc<UpstreamManager>>::new())),
@@ -106,6 +100,14 @@ impl UpstreamStrategy {
         };
         strategy.replace_upstreams(upstreams);
         strategy
+    }
+
+    pub fn mode(&self) -> UpstreamMode {
+        *self.mode.read()
+    }
+
+    pub fn set_mode(&self, mode: UpstreamMode) {
+        *self.mode.write() = mode;
     }
 
     pub fn replace_upstreams(&self, upstreams: Vec<Arc<UpstreamManager>>) {
@@ -377,7 +379,7 @@ impl UpstreamStrategy {
         header: &WireHeader<'_>,
         question: &WireQuestion<'_>,
     ) -> Result<Resolved, DnsError> {
-        match self.mode {
+        match self.mode() {
             UpstreamMode::Sequential => self.resolve_sequential(tier, data, header, question).await,
             UpstreamMode::Parallel => self.resolve_parallel(tier, data, header, question).await,
             UpstreamMode::Fastest => self.resolve_fastest(tier, data, header, question).await,
@@ -412,16 +414,30 @@ impl UpstreamStrategy {
                     is_block,
                     coalesced: false,
                 }),
-                Err(e) => Err(e),
+                Err(e) => {
+                    tracing::debug!(upstream = %mgr.target.addr, error = %e, "DNS upstream attempt failed");
+                    Err(DnsError::Generic(format!("via {}: {e}", mgr.target.addr)))
+                }
             };
         }
+
+        let run_query = |mgr: &Arc<UpstreamManager>| -> QueryFuture<'_> {
+            let addr = mgr.target.addr;
+            let mgr = Arc::clone(mgr);
+            Box::pin(async move {
+                (
+                    addr,
+                    mgr.forward_with_parsed(data, header, question).await,
+                )
+            })
+        };
 
         let mut futs = FuturesUnordered::new();
         let mut next_idx = 0;
 
         let first_mgr = available[next_idx];
         next_idx += 1;
-        futs.push(first_mgr.forward_with_parsed(data, header, question));
+        futs.push(run_query(first_mgr));
 
         let mut hedge_timer = Box::pin(sleep(hedge_delay(first_mgr)));
         let mut last_err = DnsError::UpstreamTimeout;
@@ -430,7 +446,7 @@ impl UpstreamStrategy {
             tokio::select! {
                 res = futs.next(), if !futs.is_empty() => {
                     match res {
-                        Some(Ok((data, cached, is_block))) => {
+                        Some((_addr, Ok((data, cached, is_block)))) => {
                             return Ok(Resolved {
                                 data,
                                 cached,
@@ -438,12 +454,13 @@ impl UpstreamStrategy {
                                 coalesced: false,
                             });
                         }
-                        Some(Err(e)) => {
-                            last_err = e;
+                        Some((addr, Err(e))) => {
+                            tracing::debug!(upstream = %addr, error = %e, "DNS upstream attempt failed");
+                            last_err = DnsError::Generic(format!("via {addr}: {e}"));
                             if next_idx < available.len() {
                                 let next_mgr = available[next_idx];
                                 next_idx += 1;
-                                futs.push(next_mgr.forward_with_parsed(data, header, question));
+                                futs.push(run_query(next_mgr));
                                 if next_idx < available.len() {
                                     hedge_timer.as_mut().reset(Instant::now() + hedge_delay(next_mgr));
                                 }
@@ -455,7 +472,7 @@ impl UpstreamStrategy {
                 _ = &mut hedge_timer, if next_idx < available.len() => {
                     let next_mgr = available[next_idx];
                     next_idx += 1;
-                    futs.push(next_mgr.forward_with_parsed(data, header, question));
+                    futs.push(run_query(next_mgr));
                     if next_idx < available.len() {
                         hedge_timer.as_mut().reset(Instant::now() + hedge_delay(next_mgr));
                     }
@@ -488,9 +505,16 @@ impl UpstreamStrategy {
             let mgr = Arc::clone(mgr);
             let shared_data = shared_data.clone();
             set.spawn(async move {
+                let addr = mgr.target.addr;
                 let header = WireHeader::parse(&shared_data).ok_or(DnsError::WireParseError)?;
                 let question = WireQuestion::parse(&shared_data).ok_or(DnsError::WireParseError)?;
-                mgr.forward_with_parsed(&shared_data, &header, &question).await
+                match mgr.forward_with_parsed(&shared_data, &header, &question).await {
+                    Ok(resp) => Ok(resp),
+                    Err(e) => {
+                        tracing::debug!(upstream = %addr, error = %e, "DNS upstream attempt failed");
+                        Err(DnsError::Generic(format!("via {addr}: {e}")))
+                    }
+                }
             });
         }
 
@@ -546,7 +570,10 @@ impl UpstreamStrategy {
                         coalesced: false,
                     });
                 }
-                Err(e) => last_err = e,
+                Err(e) => {
+                    tracing::debug!(upstream = %mgr.target.addr, error = %e, "DNS upstream attempt failed");
+                    last_err = DnsError::Generic(format!("via {}: {e}", mgr.target.addr));
+                }
             }
         }
         Err(last_err)
@@ -583,7 +610,10 @@ impl UpstreamStrategy {
                         coalesced: false,
                     });
                 }
-                Err(e) => last_err = e,
+                Err(e) => {
+                    tracing::debug!(upstream = %mgr.target.addr, error = %e, "DNS upstream attempt failed");
+                    last_err = DnsError::Generic(format!("via {}: {e}", mgr.target.addr));
+                }
             }
         }
         Err(last_err)

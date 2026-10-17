@@ -155,6 +155,8 @@ pub enum StorageQuery {
         domain: Option<String>,
     },
     ClearDnsUpstreams,
+    GetDnsUpstreamMode,
+    SetDnsUpstreamMode(crate::network::dns::UpstreamMode),
 
     AddReverseResolver {
         subnet: IpSubnet,
@@ -182,4 +184,5 @@ pub enum StorageQueryResult {
     },
     DnsAnalytics(DnsAnalyticsData),
     LogHistory(Vec<crate::events::TimedEvent>),
+    DnsUpstreamMode(Option<crate::network::dns::UpstreamMode>),
 }

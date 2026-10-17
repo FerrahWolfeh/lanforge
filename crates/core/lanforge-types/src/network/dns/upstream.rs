@@ -52,6 +52,41 @@ impl UpstreamProtocol {
     }
 }
 
+/// Upstream resolution strategy mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum UpstreamMode {
+    #[default]
+    Sequential,
+    Parallel,
+    Fastest,
+    RoundRobin,
+}
+
+impl std::str::FromStr for UpstreamMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "sequential" => Ok(Self::Sequential),
+            "parallel" => Ok(Self::Parallel),
+            "fastest" => Ok(Self::Fastest),
+            "roundrobin" | "round-robin" | "round_robin" => Ok(Self::RoundRobin),
+            _ => Err(format!("Invalid upstream mode: {s}")),
+        }
+    }
+}
+
+impl std::fmt::Display for UpstreamMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sequential => write!(f, "sequential"),
+            Self::Parallel => write!(f, "parallel"),
+            Self::Fastest => write!(f, "fastest"),
+            Self::RoundRobin => write!(f, "roundrobin"),
+        }
+    }
+}
+
 /// An upstream resolver target with protocol and optional hostname for verification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(try_from = "String", into = "String")]

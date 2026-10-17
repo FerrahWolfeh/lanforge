@@ -20,7 +20,7 @@ use lanforge_types::network::dns::adblock::{
     AdblockDbConfig, AdblockRuleAction, AdblockSourceFormat, AdblockUrlKind, RewriteAnswer,
     RewriteRule,
 };
-use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
+use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
@@ -490,6 +490,14 @@ impl DnsUpstreamStore for LanforgeDb {
 
     fn clear_dns_upstreams(&self) -> BoxFuture<'_, Result<(), DbError>> {
         self.inner.clear_dns_upstreams()
+    }
+
+    fn load_dns_upstream_mode(&self) -> BoxFuture<'_, Result<Option<UpstreamMode>, DbError>> {
+        self.inner.load_dns_upstream_mode()
+    }
+
+    fn save_dns_upstream_mode(&self, mode: UpstreamMode) -> BoxFuture<'_, Result<(), DbError>> {
+        self.inner.save_dns_upstream_mode(mode)
     }
 }
 

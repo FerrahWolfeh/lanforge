@@ -19,7 +19,7 @@ use lanforge_types::network::dns::{
     DnsCacheEntry, DnsCacheResponse, DnsCacheStatsExtResponse, DnsClass, DnsLifetimeStats,
     DnsMessage, DnsQuestion, DnsRecordEntry, DnsRecordType, DnsRequest, DnsResponse,
     DnsStatsResponse, FilterMatch, FilterOrigin, TransportProtocol,
-    upstream::{UpstreamProtocol, UpstreamTarget},
+    upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget},
 };
 use lanforge_types::system::ServiceState;
 use std::collections::{HashMap, HashSet};
@@ -126,7 +126,13 @@ impl DnsService {
         let soa_master_ns: Arc<str> = Arc::from(format!("ns.{domain_base}"));
         let soa_mailbox: Arc<str> = Arc::from(format!("hostmaster.{domain_base}"));
 
-        let recursive = Arc::new(UpstreamStrategy::new(self.cfg.upstream_mode, upstreams));
+        let initial_mode = self.ctx.get_dns_upstream_mode();
+        let mode = if initial_mode != UpstreamMode::Sequential {
+            initial_mode
+        } else {
+            self.cfg.upstream_mode
+        };
+        let recursive = Arc::new(UpstreamStrategy::new(mode, upstreams));
 
         let query_log = if self.cfg.query_log.enabled {
             Some(Arc::new(QueryRing::new(self.cfg.query_log.ring_size)))
@@ -363,6 +369,10 @@ impl AsyncService for DnsService {
                                     dns_ctx.cache.invalidate_all();
                                     info!("DNS: Cache invalidated after upstream reload");
                                 }
+                            }
+                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigUpstreamModeChanged(mode)) => {
+                                info!(?mode, "DNS: Upstream resolution mode changed");
+                                dns_ctx.recursive.set_mode(mode);
                             }
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::CacheFlush) => {
                                 info!("DNS: Flushing cache");

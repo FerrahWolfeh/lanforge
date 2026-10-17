@@ -1,11 +1,11 @@
 use crate::ClientContext;
 use lanforge_api::api::{
-    DnsAnalyticsResponse, DnsStatsResponse, DnsUpstreamsResponse, ProtocolStatEntry,
+    DnsAnalyticsResponse, DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse, ProtocolStatEntry,
     QueryRateEntry, QueryTypeEntry, Response, SimpleSuccess, TopClientEntry, TopDomainEntry,
 };
 use lanforge_types::network::dns::{
     DnsRecordType, DnsRequest, DnsResponse, UpstreamStatus,
-    upstream::UpstreamProtocol,
+    upstream::{UpstreamMode, UpstreamProtocol},
 };
 use std::{collections::HashMap, net::IpAddr};
 
@@ -157,6 +157,22 @@ impl ClientContext {
                 error: format!("Failed to clear upstreams: {e}"),
             },
         }
+    }
+
+    pub async fn handle_dns_upstream_mode_get(&self) -> Response {
+        let mode = self.ctx.get_dns_upstream_mode();
+        Response::DnsUpstreamMode(DnsUpstreamModeResponse { mode })
+    }
+
+    pub async fn handle_dns_upstream_mode_set(&self, mode: UpstreamMode) -> Response {
+        if let Some(storage) = self.ctx.storage_handle() {
+            let _ = storage
+                .send_query(lanforge_types::storage::StorageQuery::SetDnsUpstreamMode(mode))
+                .await;
+        } else {
+            self.ctx.update_dns_upstream_mode(mode);
+        }
+        Response::DnsUpstreamMode(DnsUpstreamModeResponse { mode })
     }
 
     pub async fn handle_dns_analytics(

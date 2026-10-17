@@ -1,12 +1,12 @@
 use std::net::SocketAddr;
 
 use axum::{
-    Router,
+    Json, Router,
     extract::{Query, State},
     response::IntoResponse,
     routing::{delete, get},
 };
-use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamProtocol};
 use serde::Deserialize;
 
 use crate::routes::create_client_ctx;
@@ -61,6 +61,11 @@ pub struct ReverseResolverRemoveRequest {
     pub subnet: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpstreamModeRequest {
+    pub mode: UpstreamMode,
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
@@ -71,11 +76,33 @@ pub fn router() -> Router<AppState> {
         )
         .route("/upstreams/clear", delete(handle_dns_upstream_clear))
         .route(
+            "/upstreams/mode",
+            get(handle_dns_upstream_mode_get)
+                .put(handle_dns_upstream_mode_set)
+                .post(handle_dns_upstream_mode_set),
+        )
+        .route(
             "/reverse-resolvers",
             get(handle_reverse_resolver_list)
                 .post(handle_reverse_resolver_add)
                 .delete(handle_reverse_resolver_remove),
         )
+}
+
+async fn handle_dns_upstream_mode_get(State(state): State<AppState>) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(ctx.handle_dns_upstream_mode_get().await, DnsUpstreamMode)
+}
+
+async fn handle_dns_upstream_mode_set(
+    State(state): State<AppState>,
+    Json(payload): Json<UpstreamModeRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_dns_upstream_mode_set(payload.mode).await,
+        DnsUpstreamMode
+    )
 }
 
 async fn handle_dns_upstreams(State(state): State<AppState>) -> impl IntoResponse {

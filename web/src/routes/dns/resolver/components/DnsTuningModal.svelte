@@ -12,7 +12,7 @@
 	import DatabaseIcon from "@lucide/svelte/icons/database";
 	import ArrowRightIcon from "@lucide/svelte/icons/arrow-right";
 
-	import { dnsCacheFlush } from "$lib/api/client";
+	import { dnsCacheFlush, dnsUpstreamModeGet, dnsUpstreamModeSet } from "$lib/api/client";
 	import type { DnsStatsResponse } from "$lib/api/types";
 
 	let {
@@ -26,7 +26,50 @@
 	} = $props();
 
 	let flushing = $state(false);
+	let loadingMode = $state(false);
+	let savingMode = $state(false);
 	let selectedMode = $state<"sequential" | "parallel" | "fastest" | "roundrobin">("sequential");
+
+	$effect(() => {
+		if (open) {
+			loadMode();
+		}
+	});
+
+	async function loadMode() {
+		loadingMode = true;
+		try {
+			const res = await dnsUpstreamModeGet();
+			if (res?.mode) {
+				const m = res.mode.toLowerCase();
+				if (m === "fastest" || m === "parallel" || m === "roundrobin" || m === "sequential") {
+					selectedMode = m;
+				}
+			}
+		} catch (err) {
+			console.error("Failed to load upstream resolution mode:", err);
+		} finally {
+			loadingMode = false;
+		}
+	}
+
+	async function handleSelectMode(mode: "sequential" | "parallel" | "fastest" | "roundrobin") {
+		if (selectedMode === mode && !savingMode) return;
+		const prev = selectedMode;
+		selectedMode = mode;
+		savingMode = true;
+		try {
+			await dnsUpstreamModeSet(mode);
+			const target = MODES.find((m) => m.id === mode);
+			toast.success(`DNS upstream mode set to ${target?.name ?? mode}`);
+			await onReload();
+		} catch (err: any) {
+			selectedMode = prev;
+			toast.error(`Failed to update DNS upstream mode: ${err.message || String(err)}`);
+		} finally {
+			savingMode = false;
+		}
+	}
 
 	const MODES = [
 		{
@@ -84,24 +127,29 @@
 		<div class="flex flex-col gap-4 py-2">
 			<!-- Strategy Selection -->
 			<div class="flex flex-col gap-2">
-				<Label class="text-xs font-semibold text-foreground uppercase tracking-wider">
-					Upstream Resolution Strategy
-				</Label>
+				<div class="flex items-center justify-between">
+					<Label class="text-xs font-semibold text-foreground uppercase tracking-wider">
+						Upstream Resolution Strategy
+					</Label>
+					{#if loadingMode}
+						<span class="text-[10px] text-muted-foreground animate-pulse">Loading mode...</span>
+					{:else if savingMode}
+						<span class="text-[10px] text-primary animate-pulse">Saving mode...</span>
+					{/if}
+				</div>
 				<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
 					{#each MODES as m (m.id)}
 						{@const selected = selectedMode === m.id}
 						<button
 							type="button"
+							disabled={savingMode || loadingMode}
 							class={[
-								"flex flex-col text-left p-2.5 rounded-lg border transition-all cursor-pointer",
+								"flex flex-col text-left p-2.5 rounded-lg border transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed",
 								selected
 									? "border-primary bg-primary/5 ring-1 ring-primary/40"
 									: "border-border/60 bg-muted/20 hover:bg-muted/40",
 							].join(" ")}
-							onclick={() => {
-								selectedMode = m.id;
-								toast.info(`Selected ${m.name} upstream mode`);
-							}}
+							onclick={() => handleSelectMode(m.id)}
 						>
 							<div class="flex w-full items-center justify-between gap-1">
 								<span class="text-xs font-semibold text-foreground">{m.name}</span>

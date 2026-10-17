@@ -340,6 +340,7 @@ const fn event_topic_and_kind(event: &LanforgeEvent) -> (&'static str, &'static 
             DnsEvent::ConfigAdblockChanged => "ConfigAdblockChanged",
             DnsEvent::ConfigAdblockRulesChanged => "ConfigAdblockRulesChanged",
             DnsEvent::ConfigUpstreamsChanged => "ConfigUpstreamsChanged",
+            DnsEvent::ConfigUpstreamModeChanged(_) => "ConfigUpstreamModeChanged",
         }),
     }
 }

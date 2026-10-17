@@ -56,6 +56,8 @@ pub enum Response {
     DnsAnalytics(Box<DnsAnalyticsResponse>),
     /// Response for DNS upstreams status.
     DnsUpstreams(DnsUpstreamsResponse),
+    /// Response for DNS upstream mode.
+    DnsUpstreamMode(DnsUpstreamModeResponse),
     /// Response for a DNS diagnostic query.
     DnsQuery(Box<DnsQueryResponse>),
     /// Response for DNS query logs.

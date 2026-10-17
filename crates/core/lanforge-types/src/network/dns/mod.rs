@@ -1,9 +1,6 @@
 use crate::{
     identifiers::MacAddr,
-    network::dns::{
-        adblock::{AdblockUrlKind, BlockingMode},
-        upstream::UpstreamProtocol,
-    },
+    network::dns::adblock::{AdblockUrlKind, BlockingMode},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -15,6 +12,7 @@ use std::{
 pub mod adblock;
 pub use adblock::{AdblockSourceFormat, FilterAction, FilterMatch, FilterOrigin};
 pub mod upstream;
+pub use upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget};
 
 /// Supported DNS record types in Lanforge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]

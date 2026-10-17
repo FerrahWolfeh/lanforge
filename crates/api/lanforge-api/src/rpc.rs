@@ -4,7 +4,7 @@ use crate::api::{
     DhcpReconcileResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse, DnsAdblockUrlsResponse,
     DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse,
     DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse,
-    DnsStatsResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry, HostsResponse,
+    DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry, HostsResponse,
     LeasesResponse, RpcCallError, ServiceBannersResponse, SetupPayload, SetupResponse,
     SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
     SystemConfigImportResponse, TransientHostsResponse, UserListResponse, UserResponse,
@@ -18,7 +18,7 @@ use lanforge_types::{
         dns::{
             DnsRecordType,
             adblock::{AdblockSourceFormat, AdblockUrlKind, BlockingMode, RewriteRule, TimeOfDay},
-            upstream::UpstreamProtocol,
+            upstream::{UpstreamMode, UpstreamProtocol},
         },
         firewall::{
             FirewallCommitRequest, FirewallCommitResponse, FirewallConfig, FirewallStatus,
@@ -146,6 +146,13 @@ pub trait LanforgeRpc {
         protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
+    fn dns_upstream_mode_get(
+        &self,
+    ) -> impl Future<Output = Result<DnsUpstreamModeResponse, RpcCallError>> + Send;
+    fn dns_upstream_mode_set(
+        &self,
+        mode: UpstreamMode,
+    ) -> impl Future<Output = Result<DnsUpstreamModeResponse, RpcCallError>> + Send;
     fn dns_query(
         &self,
         name: String,
