@@ -42,14 +42,17 @@ use lanforge_core::bus::{DeviceEvent, LanforgeEvent, NetworkChange, NetworkEvent
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceDependency};
+use lanforge_transport::ArpProber;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::NeighborEvent;
 use lanforge_types::system::ServiceState;
 use lanforge_types::update::DeviceUpdate;
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use netlink_sys::SocketAddr;
-use rtnetlink::Handle;
+use parking_lot::Mutex;
 use rtnetlink::packet_route::RouteNetlinkMessage;
+use rtnetlink::Handle;
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -394,7 +397,7 @@ impl AsyncService for DiscoveryService {
 }
 
 fn spawn_active_pinger(ctx: &LanforgeContext, ping_interval_secs: u64) {
-    let pinger = match IcmpPinger::new(ctx.clone()) {
+    let pinger = match IcmpPinger::new() {
         Ok(p) => {
             info!("Discovery: Active ICMP ping probe initialized");
             Arc::new(p)
@@ -468,7 +471,34 @@ fn spawn_sweep_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext, ping_interval
     });
 }
 
+fn get_or_create_arp_prober(
+    cache: &Mutex<HashMap<String, ArpProber>>,
+    iface_name: &str,
+) -> Option<ArpProber> {
+    {
+        let guard = cache.lock();
+        if let Some(p) = guard.get(iface_name) {
+            return Some(p.clone());
+        }
+    }
+
+    let ifaces = pnet::datalink::interfaces();
+    for iface in ifaces {
+        if iface.name == iface_name
+            && let Some(mac) = iface.mac
+            && let Ok(prober) = ArpProber::bind(iface.index, mac.octets())
+        {
+            cache.lock().insert(iface_name.to_string(), prober.clone());
+            return Some(prober);
+        }
+    }
+    None
+}
+
 fn spawn_jit_offline_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext) {
+    let prober_cache: Arc<Mutex<HashMap<String, ArpProber>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+
     tokio::spawn(async move {
         let mut bus_rx = ctx.bus().subscribe_device();
         let mut seq_counter = 0u16;
@@ -487,16 +517,17 @@ fn spawn_jit_offline_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext) {
                         seq_counter = seq_counter.wrapping_add(1);
                         let pinger_c = pinger.clone();
                         let ctx_c = ctx.clone();
+                        let probers_c = prober_cache.clone();
                         let target_ip = *ip;
                         tokio::spawn(async move {
                             debug!(
                                 "DiscoveryService: JIT verification ping triggered for offline transition of {target_ip}"
                             );
-                            if matches!(
+                            let ping_ok = matches!(
                                 pinger_c.ping(target_ip, seq_counter).await,
                                 Ok(true)
-                            ) && let Some(mac) = ctx_c.get_mac_by_ip(target_ip)
-                            {
+                            );
+                            if ping_ok && let Some(mac) = ctx_c.get_mac_by_ip(target_ip) {
                                 let update = match target_ip {
                                     IpAddr::V4(v4) => DeviceUpdate::ArpSeen {
                                         mac,
@@ -510,6 +541,36 @@ fn spawn_jit_offline_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext) {
                                     },
                                 };
                                 let _ = ctx_c.apply(update);
+                            } else if !ping_ok && let IpAddr::V4(v4) = target_ip {
+                                let dev_opt = ctx_c.with_state(|state| {
+                                    state.get_mac_by_ip(target_ip).and_then(|mac| {
+                                        state.devices.get(&mac).map(|d| (mac, d.iface.clone()))
+                                    })
+                                });
+                                if let Some((mac, Some(ref iface_name))) = dev_opt
+                                    && let Some(prober) = get_or_create_arp_prober(&probers_c, iface_name)
+                                {
+                                    debug!(
+                                        target_ip = %v4,
+                                        iface = %iface_name,
+                                        "ICMP ping failed, running fallback ARP probe to verify if device is firewalled..."
+                                    );
+                                    if let Ok(Some(reply)) =
+                                        prober.probe(v4, None, Duration::from_millis(500)).await
+                                    {
+                                        debug!(
+                                            target_ip = %v4,
+                                            rtt_us = reply.rtt.as_micros(),
+                                            "Device responded to ARP probe; keeping device online (ICMP was dropped by host firewall)"
+                                        );
+                                        let update = DeviceUpdate::ArpSeen {
+                                            mac,
+                                            ip: v4,
+                                            is_active: true,
+                                        };
+                                        let _ = ctx_c.apply(update);
+                                    }
+                                }
                             }
                         });
                     }

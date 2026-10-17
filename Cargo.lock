@@ -2526,6 +2526,7 @@ dependencies = [
  "lanforge-core",
  "lanforge-dns-wire",
  "lanforge-macros",
+ "lanforge-transport",
  "lanforge-types",
  "libc",
  "netlink-packet-core",

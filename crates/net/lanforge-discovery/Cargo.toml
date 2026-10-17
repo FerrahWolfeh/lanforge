@@ -11,6 +11,7 @@ lanforge-core = { workspace = true }
 lanforge-macros = { workspace = true }
 lanforge-types = { workspace = true }
 lanforge-dns-wire = { workspace = true }
+lanforge-transport = { workspace = true }
 
 # Workspace
 thiserror = { workspace = true }

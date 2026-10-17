@@ -8,6 +8,7 @@
 //! - **Transparent Metrics & Rate Limiting** (`TransportMetrics`, `RateLimiter`): Zero-overhead counters and bounded token buckets.
 
 pub mod arp;
+pub mod icmp;
 pub mod icmp6;
 pub mod inert;
 pub mod limiter;
@@ -16,6 +17,7 @@ pub mod tcp;
 pub mod udp;
 
 pub use arp::{ArpProber, ArpReply};
+pub use icmp::{parse_icmpv4_echo_reply, parse_icmpv6_echo_reply, IcmpPinger};
 pub use icmp6::Icmp6Transport;
 pub use inert::InertHandle;
 pub use limiter::{RateLimitConfig, RateLimiter};

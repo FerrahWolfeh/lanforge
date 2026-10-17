@@ -12,6 +12,7 @@ tokio = { workspace = true, features = [
     "io-util",
     "macros",
     "sync",
+    "rt",
 ] }
 socket2 = { workspace = true }
 libc = { workspace = true }
