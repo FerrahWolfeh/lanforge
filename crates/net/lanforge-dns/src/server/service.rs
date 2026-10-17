@@ -46,6 +46,7 @@ pub struct DnsService {
     cfg: Arc<DnsConfig>,
     stats: Arc<DnsStats>,
     ctx: LanforgeContext,
+    custom_transport: Option<lanforge_transport::UdpTransport>,
 }
 
 impl DnsService {
@@ -62,7 +63,33 @@ impl DnsService {
             cfg: Arc::new(cfg),
             stats,
             ctx,
+            custom_transport: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_transport(
+        cfg: DnsConfig,
+        ctx: LanforgeContext,
+        transport: lanforge_transport::UdpTransport,
+    ) -> Self {
+        let stats = Arc::new(DnsStats::with_lifetime(&DnsLifetimeStats::default()));
+        ctx.register_service_state("dns::stats", Arc::clone(&stats));
+        Self {
+            cfg: Arc::new(cfg),
+            stats,
+            ctx,
+            custom_transport: Some(transport),
+        }
+    }
+
+    #[must_use]
+    pub fn inert(
+        cfg: DnsConfig,
+        ctx: LanforgeContext,
+    ) -> (lanforge_transport::InertHandle<SocketAddr>, Self) {
+        let (handle, transport) = lanforge_transport::UdpTransport::inert();
+        (handle, Self::with_transport(cfg, ctx, transport))
     }
 
     #[must_use]
@@ -250,29 +277,49 @@ impl AsyncService for DnsService {
         let dns_handle = lanforge_core::context::DnsHandle::new(tx);
         ctx.set_dns_handle(dns_handle);
 
-        let parallelism = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-        info!(handlers = parallelism, "DNS: Starting service");
+        let is_inert = self.custom_transport.as_ref().is_some_and(|t| t.is_inert());
+        let parallelism = if is_inert {
+            1
+        } else {
+            std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
+        };
+        info!(handlers = parallelism, is_inert, "DNS: Starting service");
 
         let mut workers = Vec::new();
-        let addrs = self.cfg.listen.addrs();
-        if addrs.is_empty() {
-            return Err(CoreError::Generic(
-                "No DNS listen addresses configured".to_string(),
-            ));
-        }
-
-        for addr in &addrs {
-            let transport = crate::server::transport::net::bind_udp(*addr).map_err(CoreError::Io)?;
-            info!(%addr, "DNS: UDP listening");
+        if let Some(ref transport) = self.custom_transport {
+            info!("DNS: Custom/inert UDP transport active");
             for _ in 0..parallelism {
                 workers.push(crate::server::worker::udp::spawn_udp_worker(
                     Arc::clone(&dns_ctx),
                     transport.clone(),
                 ));
             }
+        } else {
+            let addrs = self.cfg.listen.addrs();
+            if addrs.is_empty() {
+                return Err(CoreError::Generic(
+                    "No DNS listen addresses configured".to_string(),
+                ));
+            }
+
+            for addr in &addrs {
+                let transport =
+                    crate::server::transport::net::bind_udp(*addr).map_err(CoreError::Io)?;
+                info!(%addr, "DNS: UDP listening");
+                for _ in 0..parallelism {
+                    workers.push(crate::server::worker::udp::spawn_udp_worker(
+                        Arc::clone(&dns_ctx),
+                        transport.clone(),
+                    ));
+                }
+            }
         }
 
-        let tcp_worker = crate::server::worker::tcp::spawn_tcp_worker(Arc::clone(&dns_ctx));
+        let tcp_worker = if !is_inert {
+            Some(crate::server::worker::tcp::spawn_tcp_worker(Arc::clone(&dns_ctx)))
+        } else {
+            None
+        };
 
         #[cfg(feature = "adblock")]
         info!("DNS: Adblock feature compiled in");
@@ -303,6 +350,8 @@ impl AsyncService for DnsService {
                 }
             })
         };
+
+        ctx.set_service_state("dns", ServiceState::Online);
 
         loop {
             if !ctx.is_running() {
@@ -451,13 +500,16 @@ impl AsyncService for DnsService {
         for w in workers {
             w.abort();
         }
-        tcp_worker.abort();
+        if let Some(w) = tcp_worker {
+            w.abort();
+        }
         cache_worker.abort();
         mpsc_worker.abort();
         #[cfg(feature = "adblock")]
         if let Some(w) = adblock_worker {
             w.abort();
         }
+        ctx.set_service_state("dns", ServiceState::Inactive);
 
         Ok(())
     }

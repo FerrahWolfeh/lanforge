@@ -199,3 +199,39 @@ impl Default for DnsStats {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_initialize_with_lifetime_and_record_metrics() {
+        let lifetime = DnsLifetimeStats {
+            total_requests: 100,
+            upstream_errors: 5,
+            auth_queries: 20,
+            recursions: 80,
+            resolved_total: 95,
+            failed_total: 5,
+            #[cfg(feature = "adblock")]
+            blocked_queries: 12,
+            proto_udp: 90,
+            proto_tcp: 10,
+            proto_dot: 0,
+            proto_doq: 0,
+            proto_doh: 0,
+        };
+
+        let stats = DnsStats::with_lifetime(&lifetime);
+        stats.inc_protocol(TransportProtocol::Udp);
+        stats.cache_hits.fetch_add(3, Ordering::Relaxed);
+        stats.cache_misses.fetch_add(2, Ordering::Relaxed);
+
+        let snap = stats.snapshot();
+        assert_eq!(snap.requests_total, 100);
+        assert_eq!(snap.proto_udp, 91);
+        assert_eq!(snap.cache_hits, 3);
+        assert_eq!(snap.cache_misses, 2);
+    }
+}
+

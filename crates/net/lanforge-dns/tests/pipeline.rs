@@ -1,11 +1,11 @@
 mod common;
 use common::*;
 use lanforge_dns::resolver::recursive::cache::CacheKey;
-use lanforge_dns_wire::{WireDecoder, WireEncoder, WireResponseScanner};
+use lanforge_dns_wire::{WireEncoder, WireResponseScanner};
 use lanforge_types::device::TransientOrigin;
 use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::dns::{
-    DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode,
+    DnsClass, DnsMessage, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode,
     adblock::RewriteRule,
 };
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
@@ -21,17 +21,9 @@ async fn pipeline_nxdomain_basic() {
     let cfg = mock_config();
     let ctx = mock_dns_context(ctx_instance, cfg).await;
 
-    let mut query = DnsMessage::new();
-    query.header.id = 0x1234;
-    query.header.qdcount = 1;
-    query.questions.push(DnsQuestion {
-        name: Arc::from("nonexistent.lan"),
-        qtype: DnsRecordType::A,
-        qclass: DnsClass::IN,
-    });
-
-    let mut encoder = WireEncoder::new();
-    let data = encoder.encode_message(&query);
+    let data = DnsPacketBuilder::query("nonexistent.lan", DnsRecordType::A)
+        .with_id(0x1234)
+        .build_bytes();
     let mut resp_buf = Vec::new();
 
     let has_resp = process_query_test(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
@@ -39,8 +31,7 @@ async fn pipeline_nxdomain_basic() {
         .unwrap();
 
     assert!(has_resp);
-    let mut decoder = WireDecoder::new(&resp_buf);
-    let resp = decoder.decode_message().unwrap();
+    let resp = parse_response(&resp_buf).expect("Valid response");
     assert_eq!(resp.header.rcode, DnsResponseCode::NXDomain);
 }
 
@@ -70,25 +61,22 @@ async fn pipeline_adblocking() {
     filter.replace_blocklist(bl);
     filter.set_enabled(true);
 
-    let mut query = DnsMessage::new();
-    query.header.qdcount = 1;
-    query.questions.push(DnsQuestion {
-        name: Arc::from("doubleclick.net"),
-        qtype: DnsRecordType::A,
-        qclass: DnsClass::IN,
-    });
-
-    let mut encoder = WireEncoder::new();
-    let data = encoder.encode_message(&query);
+    let data = DnsPacketBuilder::query("doubleclick.net", DnsRecordType::A)
+        .with_id(0x1234)
+        .build_bytes();
     let mut resp_buf = Vec::new();
 
-    let has_resp = process_query_test(&data, &dns_ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
-        .await
-        .unwrap();
+    let has_resp = process_query_test(
+        &data,
+        &dns_ctx,
+        "127.0.0.1".parse().unwrap(),
+        &mut resp_buf,
+    )
+    .await
+    .unwrap();
 
     assert!(has_resp);
-    let mut decoder = WireDecoder::new(&resp_buf);
-    let resp = decoder.decode_message().unwrap();
+    let resp = parse_response(&resp_buf).expect("Valid response");
 
     assert_eq!(resp.header.rcode, DnsResponseCode::NXDomain);
     assert_eq!(dns_ctx.stats.snapshot().blocked_queries, 1);
@@ -107,16 +95,9 @@ async fn pipeline_rewrite_rule() {
 
     let ctx = mock_dns_context(ctx_instance, cfg).await;
 
-    let mut query = DnsMessage::new();
-    query.header.qdcount = 1;
-    query.questions.push(DnsQuestion {
-        name: Arc::from("portal.local"),
-        qtype: DnsRecordType::A,
-        qclass: DnsClass::IN,
-    });
-
-    let mut encoder = WireEncoder::new();
-    let data = encoder.encode_message(&query);
+    let data = DnsPacketBuilder::query("portal.local", DnsRecordType::A)
+        .with_id(0x5678)
+        .build_bytes();
     let mut resp_buf = Vec::new();
 
     let has_resp = process_query_test(&data, &ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
@@ -124,8 +105,7 @@ async fn pipeline_rewrite_rule() {
         .unwrap();
 
     assert!(has_resp, "Should have a response for rewrite");
-    let mut decoder = WireDecoder::new(&resp_buf);
-    let resp = decoder.decode_message().unwrap();
+    let resp = parse_response(&resp_buf).expect("Valid response");
     assert_eq!(resp.header.rcode, DnsResponseCode::NoError);
     assert_eq!(resp.answers.len(), 1);
     if let DnsRData::A(ip) = &resp.answers[0].rdata {
@@ -156,28 +136,24 @@ async fn pipeline_cached_block() {
     filter.replace_blocklist(bl);
     filter.set_enabled(true);
 
-    let mut query = DnsMessage::new();
-    query.header.id = 0x1111;
-    query.header.qdcount = 1;
-    query.questions.push(DnsQuestion {
-        name: Arc::from("ads.com"),
-        qtype: DnsRecordType::A,
-        qclass: DnsClass::IN,
-    });
-
-    let mut encoder = WireEncoder::new();
-    let data = encoder.encode_message(&query);
+    let data = DnsPacketBuilder::query("ads.com", DnsRecordType::A)
+        .with_id(0x1111)
+        .build_bytes();
     let mut resp_buf = Vec::new();
 
     // 1. First query -> Should be Blocked
-    let has_resp = process_query_test(&data, &dns_ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
-        .await
-        .unwrap();
+    let has_resp = process_query_test(
+        &data,
+        &dns_ctx,
+        "127.0.0.1".parse().unwrap(),
+        &mut resp_buf,
+    )
+    .await
+    .unwrap();
     assert!(has_resp);
     assert_eq!(dns_ctx.stats.snapshot().blocked_queries, 1);
 
     // 2. Second query (same) -> Per D9, blocked queries are NOT cached.
-    // The query is evaluated fresh and blocked by the engine without polluting cache.
     let mut resp_buf2 = Vec::new();
     let has_resp2 = process_query_test(
         &data,
@@ -189,7 +165,6 @@ async fn pipeline_cached_block() {
     .unwrap();
     assert!(has_resp2);
 
-    // Check logs for the second query: still Blocked, no cache hit
     let recent = dns_ctx.query_log.as_ref().unwrap().get_recent(2);
     assert_eq!(recent[0].result, QueryResult::Blocked);
     assert_eq!(dns_ctx.stats.snapshot().blocked_queries, 2);
@@ -205,8 +180,6 @@ async fn pipeline_cached_block() {
         &mut resp_buf3,
     )
     .await;
-    // Without an upstream configured, an unblocked query is not served from cache
-    // (which would have returned Ok(true) with 0.0.0.0), but instead falls through to resolution.
     assert!(res3.is_err());
 }
 
@@ -234,14 +207,7 @@ async fn pipeline_transient_ip_reverse_dns_cached() {
     let dns_ctx = mock_dns_context(ctx_instance, cfg).await;
 
     // 2. Mock query and PTR answer that we insert into cache
-    let mut query = DnsMessage::new();
-    query.header.rd = true;
-    query.header.qdcount = 1;
-    query.questions.push(DnsQuestion {
-        name: Arc::from("5.0.64.100.in-addr.arpa"),
-        qtype: DnsRecordType::PTR,
-        qclass: DnsClass::IN,
-    });
+    let query = DnsPacketBuilder::query_ptr("100.64.0.5".parse().unwrap()).build_message();
     let query_bytes = WireEncoder::new().encode_message(&query);
     let question = lanforge_dns_wire::WireQuestion::parse(&query_bytes).unwrap();
 
@@ -269,18 +235,11 @@ async fn pipeline_transient_ip_reverse_dns_cached() {
 
     // 3. Send a dummy query with source IP = 100.64.0.5
     let client_ip = "100.64.0.5".parse::<IpAddr>().unwrap();
-    let mut dummy_query = DnsMessage::new();
-    dummy_query.header.id = 0x1111;
-    dummy_query.header.qdcount = 1;
-    dummy_query.questions.push(DnsQuestion {
-        name: Arc::from("nonexistent.lan"),
-        qtype: DnsRecordType::A,
-        qclass: DnsClass::IN,
-    });
-    let dummy_bytes = WireEncoder::new().encode_message(&dummy_query);
+    let dummy_bytes = DnsPacketBuilder::query("nonexistent.lan", DnsRecordType::A)
+        .with_id(0x1111)
+        .build_bytes();
     let mut resp_buf = Vec::new();
 
-    // This should trigger handle_reverse_dns_trigger in the pipeline run
     let has_resp = process_query_test(&dummy_bytes, &dns_ctx, client_ip, &mut resp_buf)
         .await
         .unwrap();

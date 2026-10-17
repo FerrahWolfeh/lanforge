@@ -10,3 +10,6 @@ pub mod resolver;
 pub mod server;
 pub mod telemetry;
 pub mod utils;
+
+#[cfg(test)]
+pub mod test_utils;

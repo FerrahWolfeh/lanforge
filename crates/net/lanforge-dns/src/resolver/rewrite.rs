@@ -322,3 +322,49 @@ impl Default for RewriteStore {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn should_match_exact_and_wildcard_domains() {
+        let store = RewriteStore::new();
+        store.replace_rules(vec![
+            RewriteRule {
+                id: None,
+                domain: "api.local".to_string(),
+                rtype: DnsRecordType::A,
+                answer: RewriteAnswer::A(Ipv4Addr::new(10, 0, 0, 1)),
+            },
+            RewriteRule {
+                id: None,
+                domain: "*.corp.internal".to_string(),
+                rtype: DnsRecordType::A,
+                answer: RewriteAnswer::A(Ipv4Addr::new(10, 0, 0, 2)),
+            },
+        ]);
+
+        // Exact match
+        let ans = store.resolve_rewrite("api.local").expect("Should match api.local");
+        assert_eq!(ans, RewriteAnswer::A(Ipv4Addr::new(10, 0, 0, 1)));
+
+        // Wildcard subdomain
+        let ans2 = store
+            .resolve_rewrite("service.corp.internal")
+            .expect("Should match service.corp.internal");
+        assert_eq!(ans2, RewriteAnswer::A(Ipv4Addr::new(10, 0, 0, 2)));
+
+        // Wildcard base domain
+        let ans3 = store
+            .resolve_rewrite("corp.internal")
+            .expect("Should match base corp.internal");
+        assert_eq!(ans3, RewriteAnswer::A(Ipv4Addr::new(10, 0, 0, 2)));
+
+        // Non-matching
+        assert!(store.resolve_rewrite("other.local").is_none());
+    }
+}
+
+

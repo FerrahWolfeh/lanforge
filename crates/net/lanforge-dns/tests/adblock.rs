@@ -1,25 +1,21 @@
+#[path = "common/mod.rs"]
 mod common;
-use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent};
-use lanforge_core::context::LanforgeContext;
-use lanforge_core::context::state::State;
+
+use common::{DnsPacketBuilder, init_test_context, parse_response, wait_for_service_online};
+use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 use lanforge_core::service::AsyncService;
 use lanforge_dns::config::DnsConfig;
 use lanforge_dns::server::service::DnsService;
-use lanforge_dns_wire::{WireDecoder, WireEncoder};
 use lanforge_types::network::dns::adblock::AdblockUrlKind;
-use lanforge_types::network::dns::{
-    DnsClass, DnsMessage, DnsQuestion, DnsRecordType, DnsResponseCode,
-};
-use std::sync::Arc;
+use lanforge_types::network::dns::{DnsRecordType, DnsResponseCode};
+use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UdpSocket as TokioUdpSocket;
 
 #[cfg(feature = "adblock")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_adblock_service_lifecycle_and_rebuild() {
     // 1. Spawn a mock HTTP server to host our blocklist
-
     use lanforge_types::network::dns::AdblockUrlEntry;
     use lanforge_types::network::dns::adblock::{AdblockDbConfig, BlockingMode};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -42,21 +38,18 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     let temp_dir = tempfile::tempdir().unwrap();
     let cache_dir_path = temp_dir.path().to_str().unwrap().to_string();
 
-    let bus = Arc::new(EventBus::new());
-    let table = State::new();
-    let ctx = LanforgeContext::new(bus, table, None);
+    let ctx = init_test_context();
 
     // 2. Setup Config with adblock compiled but disabled at start
     let cfg = DnsConfig {
         enabled: true,
-        listen: "127.0.0.1:1073".parse().unwrap(),
         adblock_enabled: false,
         adblock_cache_dir: Some(cache_dir_path.clone()),
-        ..Default::default()
+        ..common::mock_config()
     };
 
-    // 3. Start DNS Service
-    let mut service = DnsService::new(cfg, ctx.clone());
+    // 3. Start DNS Service in inert mode
+    let (handle, mut service) = DnsService::inert(cfg, ctx.clone());
     let ctx_service = ctx.clone();
     ctx.set_db_ready(true);
     ctx.set_pppoe_ready(true);
@@ -65,32 +58,18 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
         service.serve(&ctx_service).await.expect("Service failed");
     });
 
-    // Wait for service to bind socket
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    wait_for_service_online(&ctx, "dns").await;
 
-    // 4. Test: If disabled, it should do nothing (queries are not blocked)
-    let client_sock = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
-    client_sock.connect("127.0.0.1:1073").await.unwrap();
+    let client_addr: SocketAddr = "192.168.1.100:54326".parse().unwrap();
+    let query_bytes = DnsPacketBuilder::query("ads.example.com", DnsRecordType::A)
+        .with_id(1001)
+        .build_bytes();
 
-    let mut query = DnsMessage::new();
-    query.header.id = 1001;
-    query.header.qdcount = 1;
-    query.questions.push(DnsQuestion {
-        name: Arc::from("ads.example.com"),
-        qtype: DnsRecordType::A,
-        qclass: DnsClass::IN,
-    });
+    // 4. Test: If disabled, it should do nothing (queries are not blocked -> ServFail without upstreams)
+    handle.inject(query_bytes.clone(), client_addr).await;
 
-    let query_bytes = WireEncoder::new().encode_message(&query);
-    client_sock.send(&query_bytes).await.unwrap();
-
-    let mut buf = [0u8; 1024];
-    let n = tokio::time::timeout(Duration::from_secs(2), client_sock.recv(&mut buf))
-        .await
-        .expect("Timeout waiting for DNS response")
-        .unwrap();
-
-    let response = WireDecoder::new(&buf[..n]).decode_message().unwrap();
+    let (reply1, _) = handle.recv_reply().await.expect("Expected DNS reply");
+    let response = parse_response(&reply1).expect("Valid DNS message");
     assert_eq!(
         response.header.rcode,
         DnsResponseCode::ServFail,
@@ -98,7 +77,6 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     );
 
     // 5. Test: Enabling it in the DB and trigger toggle on the fly
-    // Let's add blocklist URL to the DB first
     let url = format!("http://127.0.0.1:{}/blocklist.txt", port);
     ctx.update_dns_adblock_urls(vec![AdblockUrlEntry {
         id: Some(1),
@@ -132,7 +110,7 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
             fst_built = true;
             break;
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
     assert!(
         fst_built,
@@ -140,20 +118,17 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     );
 
     // Give it a brief moment to update memory blocker with new FST
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // 6. Test: Query should now be blocked!
-    client_sock.send(&query_bytes).await.unwrap();
-    let n2 = tokio::time::timeout(Duration::from_secs(2), client_sock.recv(&mut buf))
-        .await
-        .unwrap()
-        .unwrap();
-    let response2 = WireDecoder::new(&buf[..n2]).decode_message().unwrap();
-    // Default blocking mode is NullIp, which returns 0.0.0.0
+    handle.inject(query_bytes.clone(), client_addr).await;
+    let (reply2, _) = handle.recv_reply().await.expect("Expected blocked reply");
+    let response2 = parse_response(&reply2).expect("Valid DNS message");
+    // Default blocking mode is NullIp, which returns 0.0.0.0 (NoError with answers)
     assert_eq!(response2.header.rcode, DnsResponseCode::NoError);
     assert!(!response2.answers.is_empty());
 
-    // Change blocking mode to Refused
+    // 7. Change blocking mode to Refused
     ctx.update_dns_adblock(AdblockDbConfig {
         enabled: true,
         blocking_mode: BlockingMode::Refused,
@@ -163,15 +138,12 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
         .bus()
         .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
     let _ = ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::CacheFlush));
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Query again, should be Refused
-    client_sock.send(&query_bytes).await.unwrap();
-    let n3 = tokio::time::timeout(Duration::from_secs(2), client_sock.recv(&mut buf))
-        .await
-        .unwrap()
-        .unwrap();
-    let response3 = WireDecoder::new(&buf[..n3]).decode_message().unwrap();
+    handle.inject(query_bytes.clone(), client_addr).await;
+    let (reply3, _) = handle.recv_reply().await.expect("Expected refused reply");
+    let response3 = parse_response(&reply3).expect("Valid DNS message");
     assert_eq!(response3.header.rcode, DnsResponseCode::Refused);
 
     // 8. Test: Toggle off during runtime
@@ -189,15 +161,12 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
             duration_secs: None,
         }));
     let _ = ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::CacheFlush));
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Query should not be blocked anymore
-    client_sock.send(&query_bytes).await.unwrap();
-    let n4 = tokio::time::timeout(Duration::from_secs(2), client_sock.recv(&mut buf))
-        .await
-        .unwrap()
-        .unwrap();
-    let response4 = WireDecoder::new(&buf[..n4]).decode_message().unwrap();
+    handle.inject(query_bytes, client_addr).await;
+    let (reply4, _) = handle.recv_reply().await.expect("Expected unblocked reply");
+    let response4 = parse_response(&reply4).expect("Valid DNS message");
     assert_eq!(response4.header.rcode, DnsResponseCode::ServFail);
 
     ctx.terminate();

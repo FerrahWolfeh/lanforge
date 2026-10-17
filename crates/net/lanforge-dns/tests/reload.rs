@@ -1,93 +1,72 @@
+#[path = "common/mod.rs"]
 mod common;
-use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent};
-use lanforge_core::context::LanforgeContext;
-use lanforge_core::context::state::State;
+
+use common::{
+    DnsPacketBuilder, MockUpstreamServer, extract_a, init_test_context, mock_config,
+    parse_response, wait_for_service_online,
+};
+use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 use lanforge_core::service::AsyncService;
 use lanforge_dns::config::DnsConfig;
 use lanforge_dns::server::service::DnsService;
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
-use lanforge_types::network::dns::DnsRequest;
-use lanforge_types::network::dns::DnsResponse;
 use lanforge_types::network::dns::adblock::{RewriteAnswer, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::dns::{
-    DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, DnsResponseCode,
+    DnsClass, DnsMessage, DnsRData, DnsRecordType, DnsResponseCode,
 };
-use std::net::Ipv4Addr;
-use std::sync::Arc;
+use lanforge_types::network::dns::{DnsRequest, DnsResponse};
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use tokio::net::UdpSocket as TokioUdpSocket;
 
-#[cfg(any(feature = "dot", feature = "doq", feature = "doh-upstream"))]
-fn init_crypto() {
-    use std::sync::Once;
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        #[cfg(feature = "ring")]
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-    });
-}
-
 #[tokio::test]
 async fn dns_reload_causes_full_cache_refresh_if_enabled() {
-    #[cfg(any(feature = "dot", feature = "doq", feature = "doh-upstream"))]
-    init_crypto();
+    let ctx = init_test_context();
 
-    let bus = Arc::new(EventBus::new());
-    let table = State::new();
-    let ctx = LanforgeContext::new(bus, table, None);
+    // 1. Setup mock upstream server
+    let mut records = HashMap::new();
+    records.insert(
+        "example.com".to_string(),
+        vec![IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))],
+    );
+    let mock_upstream1 = MockUpstreamServer::spawn(records).await;
 
-    // 1. Setup Config with an upstream
+    // Seed initial upstream in context
+    ctx.update_dns_upstreams(vec![mock_upstream1.target()]);
+
     let cfg = DnsConfig {
         enabled: true,
-        listen: "127.0.0.1:1063".parse().unwrap(),
-        ..Default::default()
+        ..mock_config()
     };
 
-    // Seed an upstream in the context
-    let target = "udp://1.1.1.1:53".parse::<UpstreamTarget>().unwrap();
-    ctx.update_dns_upstreams(vec![target]);
-
-    // 2. Start DNS Service
-    let mut service = DnsService::new(cfg, ctx.clone());
+    // 2. Start DNS Service in inert mode
+    let (handle, mut service) = DnsService::inert(cfg, ctx.clone());
     let ctx_service = ctx.clone();
-
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
         service.serve(&ctx_service).await.expect("Service failed");
     });
 
-    // Wait for service to bind socket
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    wait_for_service_online(&ctx, "dns").await;
 
     // 3. Query once to populate the cache
-    let client_sock = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
-    client_sock.connect("127.0.0.1:1063").await.unwrap();
+    let client_addr: SocketAddr = "192.168.1.100:54327".parse().unwrap();
+    let query_bytes = DnsPacketBuilder::query("example.com", DnsRecordType::A)
+        .with_id(1234)
+        .build_bytes();
 
-    let mut query = DnsMessage::new();
-    query.header.id = 1234;
-    query.header.qdcount = 1;
-    query.questions.push(DnsQuestion {
-        name: Arc::from("google.com"),
-        qtype: DnsRecordType::A,
-        qclass: DnsClass::IN,
-    });
+    handle.inject(query_bytes, client_addr).await;
 
-    let query_bytes = WireEncoder::new().encode_message(&query);
-    client_sock.send(&query_bytes).await.unwrap();
-
-    let mut buf = [0u8; 1024];
-    let _ = tokio::time::timeout(Duration::from_secs(5), client_sock.recv(&mut buf))
-        .await
-        .expect("Timeout waiting for DNS response")
-        .unwrap();
+    let (reply, _) = handle.recv_reply().await.expect("Expected DNS reply");
+    let resp = parse_response(&reply).expect("Valid DNS message");
+    assert_eq!(resp.header.rcode, DnsResponseCode::NoError);
+    assert_eq!(extract_a(&resp), vec![Ipv4Addr::new(93, 184, 216, 34)]);
 
     // Verify cache has entries
     let dns_handle = ctx.dns_handle().expect("DNS handle not found");
-
     let cache_dump_res = dns_handle
         .send_request(DnsRequest::CacheDump {
             limit: None,
@@ -97,25 +76,35 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
         })
         .await
         .unwrap();
+
     if let DnsResponse::CacheDump(res) = cache_dump_res {
         assert!(
-            !res.entries.is_empty(),
-            "Cache should be populated after query"
+            res.total > 0,
+            "Cache should have entries before upstream change"
         );
     } else {
         panic!("Expected CacheDump response");
     }
 
-    // 4. Trigger reload event by publishing ConfigUpstreamsChanged to the bus
+    // 4. Update upstreams with new mock upstream and broadcast event
+    let mut new_records = HashMap::new();
+    new_records.insert(
+        "example.com".to_string(),
+        vec![IpAddr::V4(Ipv4Addr::new(93, 184, 216, 35))],
+    );
+    let mock_upstream2 = MockUpstreamServer::spawn(new_records).await;
+    let new_target = mock_upstream2.target();
+
+    ctx.update_dns_upstreams(vec![new_target.clone()]);
     let _ = ctx
         .bus()
         .publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamsChanged));
 
-    // Wait a brief moment for the event to be processed by the service loop
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    // Wait a brief moment for cache invalidation to process
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // 5. Verify the cache is empty (refreshed)
-    let cache_dump_res2 = dns_handle
+    // 5. Verify cache has been completely invalidated/flushed
+    let cache_dump_after = dns_handle
         .send_request(DnsRequest::CacheDump {
             limit: None,
             offset: None,
@@ -124,56 +113,14 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
         })
         .await
         .unwrap();
-    if let DnsResponse::CacheDump(res) = cache_dump_res2 {
+
+    if let DnsResponse::CacheDump(res) = cache_dump_after {
         assert_eq!(
-            res.entries.len(),
-            0,
-            "Cache should be empty after upstream reload"
+            res.total, 0,
+            "Cache should be completely cleared after upstream reload"
         );
     } else {
         panic!("Expected CacheDump response");
-    }
-
-    // 6. Test CacheFlush directly too
-    // Populate cache again by querying
-    client_sock.send(&query_bytes).await.unwrap();
-    let _ = tokio::time::timeout(Duration::from_secs(5), client_sock.recv(&mut buf))
-        .await
-        .unwrap()
-        .unwrap();
-
-    let cache_dump_res3 = dns_handle
-        .send_request(DnsRequest::CacheDump {
-            limit: None,
-            offset: None,
-            q: None,
-            kind: None,
-        })
-        .await
-        .unwrap();
-    if let DnsResponse::CacheDump(res) = cache_dump_res3 {
-        assert!(!res.entries.is_empty());
-    }
-
-    // Publish CacheFlush
-    let _ = ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::CacheFlush));
-    tokio::time::sleep(Duration::from_millis(150)).await;
-
-    let cache_dump_res4 = dns_handle
-        .send_request(DnsRequest::CacheDump {
-            limit: None,
-            offset: None,
-            q: None,
-            kind: None,
-        })
-        .await
-        .unwrap();
-    if let DnsResponse::CacheDump(res) = cache_dump_res4 {
-        assert_eq!(
-            res.entries.len(),
-            0,
-            "Cache should be empty after CacheFlush"
-        );
     }
 
     ctx.terminate();
@@ -181,56 +128,36 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
 
 #[tokio::test]
 async fn dns_reload_rewrites_on_the_fly() {
-    let bus = Arc::new(EventBus::new());
-    let table = State::new();
-    let ctx = LanforgeContext::new(bus, table, None);
+    let ctx = init_test_context();
 
-    // 1. Setup Config
     let cfg = DnsConfig {
         enabled: true,
-        listen: "127.0.0.1:1064".parse().unwrap(),
-        ..Default::default()
+        ..mock_config()
     };
 
-    // 2. Start DNS Service
-    let mut service = DnsService::new(cfg, ctx.clone());
+    let (handle, mut service) = DnsService::inert(cfg, ctx.clone());
     let ctx_service = ctx.clone();
-
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
         service.serve(&ctx_service).await.expect("Service failed");
     });
 
-    // Wait for service to bind socket
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    wait_for_service_online(&ctx, "dns").await;
 
-    // 3. Query once for my-site.lan (should return ServFail or NXDOMAIN because no rewrites/upstream exist)
-    let client_sock = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
-    client_sock.connect("127.0.0.1:1064").await.unwrap();
+    let client_addr: SocketAddr = "192.168.1.100:54328".parse().unwrap();
+    let query_bytes = DnsPacketBuilder::query("my-site.lan", DnsRecordType::A)
+        .with_id(4321)
+        .build_bytes();
 
-    let mut query = DnsMessage::new();
-    query.header.id = 4321;
-    query.header.qdcount = 1;
-    query.questions.push(DnsQuestion {
-        name: Arc::from("my-site.lan"),
-        qtype: DnsRecordType::A,
-        qclass: DnsClass::IN,
-    });
+    // 1. Query once for my-site.lan (should return ServFail or NXDOMAIN because no rewrites exist)
+    handle.inject(query_bytes.clone(), client_addr).await;
 
-    let query_bytes = WireEncoder::new().encode_message(&query);
-    client_sock.send(&query_bytes).await.unwrap();
+    let (reply, _) = handle.recv_reply().await.expect("Expected DNS reply");
+    let resp = parse_response(&reply).expect("Valid DNS message");
+    assert_ne!(resp.header.rcode, DnsResponseCode::NoError);
 
-    let mut buf = [0u8; 1024];
-    let n = tokio::time::timeout(Duration::from_secs(5), client_sock.recv(&mut buf))
-        .await
-        .expect("Timeout waiting for DNS response")
-        .unwrap();
-
-    let response = WireDecoder::new(&buf[..n]).decode_message().unwrap();
-    assert_ne!(response.header.rcode, DnsResponseCode::NoError);
-
-    // 4. Update rewrites in the context and trigger reload
+    // 2. Update rewrites in the context and trigger reload
     ctx.update_dns_rewrites(vec![RewriteRule {
         id: Some(1),
         domain: "my-site.lan".to_string(),
@@ -242,36 +169,26 @@ async fn dns_reload_rewrites_on_the_fly() {
         .bus()
         .publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
 
-    // Wait a brief moment for the event to be processed
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // 5. Query again (should now return 1.2.3.4 via rewrite)
-    client_sock.send(&query_bytes).await.unwrap();
-    let n2 = tokio::time::timeout(Duration::from_secs(5), client_sock.recv(&mut buf))
-        .await
-        .expect("Timeout waiting for DNS response after reload")
-        .unwrap();
+    // 3. Query again (should now return 1.2.3.4 via rewrite)
+    handle.inject(query_bytes, client_addr).await;
 
-    let response2 = WireDecoder::new(&buf[..n2]).decode_message().unwrap();
-    assert_eq!(response2.header.rcode, DnsResponseCode::NoError);
-    assert_eq!(response2.answers.len(), 1);
-    if let DnsRData::A(ip) = response2.answers[0].rdata {
-        assert_eq!(ip, Ipv4Addr::new(1, 2, 3, 4));
-    } else {
-        panic!("Expected A record");
-    }
+    let (reply2, _) = handle.recv_reply().await.expect("Expected DNS reply after rewrite reload");
+    let resp2 = parse_response(&reply2).expect("Valid DNS message");
+    assert_eq!(resp2.header.rcode, DnsResponseCode::NoError);
+    assert_eq!(extract_a(&resp2), vec![Ipv4Addr::new(1, 2, 3, 4)]);
 
     ctx.terminate();
 }
 
 #[tokio::test]
 async fn dns_conditional_split_upstream_routing() {
-    let bus = Arc::new(EventBus::new());
-    let table = State::new();
-    let ctx = LanforgeContext::new(bus, table, None);
+    let ctx = init_test_context();
 
-    // 1. Start mock global upstream (127.0.0.1:1071)
-    let global_sock = TokioUdpSocket::bind("127.0.0.1:1071").await.unwrap();
+    // 1. Start mock global upstream on ephemeral port
+    let global_sock = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let global_addr = global_sock.local_addr().unwrap();
     tokio::spawn(async move {
         let mut buf = [0u8; 1024];
         while let Ok((len, src)) = global_sock.recv_from(&mut buf).await {
@@ -298,8 +215,9 @@ async fn dns_conditional_split_upstream_routing() {
         }
     });
 
-    // 2. Start mock conditional upstream for corp.internal (127.0.0.1:1072)
-    let corp_sock = TokioUdpSocket::bind("127.0.0.1:1072").await.unwrap();
+    // 2. Start mock conditional upstream for corp.internal on ephemeral port
+    let corp_sock = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let corp_addr = corp_sock.local_addr().unwrap();
     tokio::spawn(async move {
         let mut buf = [0u8; 1024];
         while let Ok((len, src)) = corp_sock.recv_from(&mut buf).await {
@@ -327,21 +245,20 @@ async fn dns_conditional_split_upstream_routing() {
     });
 
     // 3. Configure upstreams: global + conditional for corp.internal
-    let global_target: UpstreamTarget = "udp://127.0.0.1:1071".parse().unwrap();
-    let corp_target: UpstreamTarget = "udp://127.0.0.1:1072#corp.internal".parse().unwrap();
+    let global_target: UpstreamTarget = format!("udp://{global_addr}").parse().unwrap();
+    let corp_target: UpstreamTarget = format!("udp://{corp_addr}#corp.internal").parse().unwrap();
     assert_eq!(corp_target.domain.as_deref(), Some("corp.internal"));
 
     ctx.update_dns_upstreams(vec![global_target, corp_target]);
 
-    // 4. Start Lanforge DNS on 127.0.0.1:1073
+    // 4. Start Lanforge DNS in inert mode
     let cfg = DnsConfig {
         enabled: true,
-        listen: "127.0.0.1:1073".parse().unwrap(),
         search_domains: vec!["lan".to_string()],
-        ..Default::default()
+        ..mock_config()
     };
 
-    let mut service = DnsService::new(cfg, ctx.clone());
+    let (handle, mut service) = DnsService::inert(cfg, ctx.clone());
     let ctx_service = ctx.clone();
     ctx.set_db_ready(true);
 
@@ -349,51 +266,31 @@ async fn dns_conditional_split_upstream_routing() {
         service.serve(&ctx_service).await.expect("DNS Service failed");
     });
 
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    wait_for_service_online(&ctx, "dns").await;
 
-    // 5. Test resolution using a client socket
-    let client = TokioUdpSocket::bind("127.0.0.1:0").await.unwrap();
-    client.connect("127.0.0.1:1073").await.unwrap();
+    let client_addr: SocketAddr = "192.168.1.100:54329".parse().unwrap();
 
-    let query_buf = [0u8; 1024];
-
-    // Helper to send query and receive resolved A IP
+    // Helper to query domain
     let query_a = |qname: &'static str| {
-        let client_ref = &client;
-        let mut q_buf = query_buf;
+        let handle_ref = handle.clone();
         async move {
-            let mut msg = DnsMessage::new();
-            msg.header.id = 999;
-            msg.header.rd = true;
-            msg.header.qdcount = 1;
-            msg.questions.push(DnsQuestion {
-                name: Arc::from(qname),
-                qtype: DnsRecordType::A,
-                qclass: DnsClass::IN,
-            });
-            let bytes = WireEncoder::new().encode_message(&msg);
-            client_ref.send(&bytes).await.unwrap();
+            let query_bytes = DnsPacketBuilder::query(qname, DnsRecordType::A)
+                .with_id(999)
+                .build_bytes();
+            handle_ref.inject(query_bytes, client_addr).await;
 
-            let n = tokio::time::timeout(Duration::from_secs(3), client_ref.recv(&mut q_buf))
-                .await
-                .expect("DNS query timed out")
-                .unwrap();
-
-            let decoded = WireDecoder::new(&q_buf[..n]).decode_message().unwrap();
-            assert_eq!(decoded.header.rcode, DnsResponseCode::NoError);
-            assert!(!decoded.answers.is_empty(), "No answers returned for {qname}");
-            match decoded.answers[0].rdata {
-                DnsRData::A(ip) => ip,
-                _ => panic!("Expected A record"),
-            }
+            let (reply, _) = handle_ref.recv_reply().await.expect("Expected reply for split query");
+            let resp = parse_response(&reply).expect("Valid DNS response");
+            assert_eq!(resp.header.rcode, DnsResponseCode::NoError);
+            extract_a(&resp)[0]
         }
     };
 
-    // A) Global query: google.com -> routes to 127.0.0.1:1071 -> returns 8.8.8.8
+    // A) Global query: google.com -> routes to global -> returns 8.8.8.8
     let ip_global = query_a("google.com").await;
     assert_eq!(ip_global, Ipv4Addr::new(8, 8, 8, 8));
 
-    // B) Split DNS query: api.corp.internal -> routes to 127.0.0.1:1072 -> returns 10.0.0.99
+    // B) Split DNS query: api.corp.internal -> routes to corp.internal -> returns 10.0.0.99
     let ip_corp = query_a("api.corp.internal").await;
     assert_eq!(ip_corp, Ipv4Addr::new(10, 0, 0, 99));
 

@@ -27,3 +27,44 @@ pub fn bind_tcp(addr: SocketAddr) -> io::Result<DualTcpListener> {
         _ => DualTcpListener::bind_single(addr),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
+
+    #[tokio::test]
+    async fn should_bind_single_udp_to_ephemeral_port() {
+        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
+        let transport = bind_udp(addr).expect("bind_udp should succeed");
+        let local_addrs = transport.local_addrs().expect("local_addrs should succeed");
+        assert_eq!(local_addrs.len(), 1);
+        assert_ne!(local_addrs[0].port(), 0);
+    }
+
+    #[tokio::test]
+    async fn should_bind_single_tcp_to_ephemeral_port() {
+        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
+        let listener = bind_tcp(addr).expect("bind_tcp should succeed");
+        let local_addrs = listener.local_addrs().expect("local_addrs should succeed");
+        assert_eq!(local_addrs.len(), 1);
+        assert_ne!(local_addrs[0].port(), 0);
+    }
+
+    #[tokio::test]
+    async fn should_bind_dual_udp_on_unspecified_v6() {
+        let addr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
+        let transport = bind_udp(addr).expect("dual bind_udp should succeed");
+        let local_addrs = transport.local_addrs().expect("local_addrs should succeed");
+        assert!(!local_addrs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn should_bind_dual_tcp_on_unspecified_v6() {
+        let addr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
+        let listener = bind_tcp(addr).expect("dual bind_tcp should succeed");
+        let local_addrs = listener.local_addrs().expect("local_addrs should succeed");
+        assert!(!local_addrs.is_empty());
+    }
+}
+

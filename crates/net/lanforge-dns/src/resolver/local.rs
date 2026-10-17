@@ -338,3 +338,69 @@ impl LocalResolver {
         Ok(false)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{init_test_context, mock_config};
+    use lanforge_types::identifiers::MacAddr;
+    use lanforge_types::update::DeviceUpdate;
+    use std::net::Ipv4Addr;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn should_resolve_device_by_hostname_and_mac() {
+        let ctx = init_test_context();
+        let mac = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x11]);
+        let ip = Ipv4Addr::new(10, 0, 0, 42);
+
+        let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
+            mac,
+            ip,
+            expires: SystemTime::now() + Duration::from_secs(3600),
+        });
+        let _ = ctx.apply(DeviceUpdate::DhcpHostnameHint {
+            mac,
+            hostname: "printer".to_string(),
+        });
+
+        let resolver = LocalResolver::new(Arc::new(mock_config()), ctx);
+
+        // Resolve by hostname
+        let ips = resolver.resolve_ip("printer", DnsRecordType::A).expect("Must resolve printer");
+        assert_eq!(ips.as_slice(), &[IpAddr::V4(ip)]);
+
+        // Resolve by MAC string
+        let mac_str = mac.to_string();
+        let ips_mac = resolver.resolve_ip(&mac_str, DnsRecordType::A).expect("Must resolve MAC");
+        assert_eq!(ips_mac.as_slice(), &[IpAddr::V4(ip)]);
+
+        // Unknown device
+        assert!(resolver.resolve_ip("unknown", DnsRecordType::A).is_none());
+    }
+
+    #[test]
+    fn should_resolve_ptr_for_known_ip() {
+        let ctx = init_test_context();
+        let mac = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x22]);
+        let ip = Ipv4Addr::new(10, 0, 0, 99);
+
+        let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
+            mac,
+            ip,
+            expires: SystemTime::now() + Duration::from_secs(3600),
+        });
+        let _ = ctx.apply(DeviceUpdate::DhcpHostnameHint {
+            mac,
+            hostname: "nas-box".to_string(),
+        });
+
+        let resolver = LocalResolver::new(Arc::new(mock_config()), ctx);
+
+        let ptr_query = "99.0.0.10.in-addr.arpa";
+        let (host, domain) = resolver.resolve_ptr(ptr_query).unwrap().expect("Must resolve PTR");
+        assert_eq!(host, "nas-box");
+        assert_eq!(domain, "lan");
+    }
+}
+
