@@ -20,7 +20,7 @@ fn setup() -> LanforgeContext {
     LanforgeContext::new(bus, State::new(), None)
 }
 
-// --- apply_update: casos básicos ---
+// --- apply_update: basic cases ---
 
 #[test]
 fn apply_update_v4_lease_granted() {
@@ -44,9 +44,9 @@ fn apply_update_v4_idempotent() {
     let expires = SystemTime::now() + Duration::from_hours(1);
 
     let _ = ctx.apply(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
-    // Mesma info novamente — não deve ser dirty
+    // Same info again - should not be dirty
     let changed = ctx.apply(DeviceUpdate::V4LeaseGranted { mac, ip, expires });
-    assert!(!changed, "Lease idêntico não deveria marcar dirty");
+    assert!(!changed, "Identical lease should not mark dirty");
 }
 
 #[test]
@@ -54,7 +54,7 @@ fn apply_update_hostname_hint_respects_static() {
     let ctx = setup();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
-    // Simula device estático via API correta
+    // Simulate static device via correct API
     ctx.add_static_device(
         mac,
         "static-host".to_string(),
@@ -70,7 +70,7 @@ fn apply_update_hostname_hint_respects_static() {
         hostname: "dynamic-host".to_string(),
     });
 
-    assert!(!changed, "Hint não deve sobrescrever device estático");
+    assert!(!changed, "Hint should not overwrite static device");
     assert_eq!(
         ctx.read().devices().next().unwrap().hostname.name,
         "static-host"
@@ -105,7 +105,7 @@ fn apply_update_slaac_deduplicates() {
         addr,
         is_active: true
     }));
-    // Duplicata — não deve marcar dirty
+    // Duplicate - should not mark dirty
     assert!(!ctx.apply(DeviceUpdate::SlaacObserved {
         mac,
         addr,
@@ -137,7 +137,7 @@ fn apply_update_slaac_excludes_managed_addr() {
     })));
 
     // 2. Observe the same IP via SLAAC
-    // A tabela reconstrói índices de DNS automaticamente no final de apply_update (changed=true)
+    // The table automatically rebuilds DNS indices at the end of apply_update (changed=true)
     let _ = ctx.apply(DeviceUpdate::SlaacObserved {
         mac,
         addr: ip,
@@ -209,7 +209,7 @@ fn apply_update_duid_associated() {
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let duid = Duid::new(vec![1, 2, 3, 4]);
 
-    // Setup inicial via update para ser clean
+    // Initial setup via update to keep clean
     let _ = ctx.apply(DeviceUpdate::MdnsHostnameHint {
         mac,
         hostname: "DuidHost".to_string(),
@@ -221,10 +221,10 @@ fn apply_update_duid_associated() {
         iaid: 1,
     }));
 
-    let found = ctx.get_by_duid(&duid).expect("deve encontrar via DUID");
+    let found = ctx.get_by_duid(&duid).expect("should find device via DUID");
     assert_eq!(found.hostname.name, "DuidHost");
 
-    // Mesmo DUID novamente — não dirty
+    // Same DUID again - not dirty
     assert!(!ctx.apply(DeviceUpdate::DuidAssociated {
         mac: Some(mac),
         duid,
@@ -238,7 +238,7 @@ fn apply_update_ndp_seen_not_dirty() {
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let ip: Ipv6Addr = "fe80::1".parse().unwrap();
 
-    // NdpSeen nunca marca dirty (só bump de last_seen e cache)
+    // NdpSeen never marks dirty (only bump last_seen and cache)
     assert!(!ctx.apply(DeviceUpdate::NdpSeen {
         mac,
         ip,
@@ -573,10 +573,10 @@ fn apply_update_duid_associated_resolves_orphan() {
     assert!(changed);
     assert!(
         !ctx.discovery().orphaned_v6.contains_key(&ip),
-        "Órfão deveria ter sido resolvido"
+        "Orphaned v6 should have been resolved"
     );
 
-    let dev = ctx.get_device(&mac).expect("Device deve ter sido criado");
+    let dev = ctx.get_device(&mac).expect("Device should have been created");
     assert_eq!(dev.duid.as_ref(), Some(&duid));
     assert!(
         dev.v6
@@ -585,35 +585,35 @@ fn apply_update_duid_associated_resolves_orphan() {
     );
 }
 
-// --- Novos testes de Worthy e Prioridade ---
+// --- Device Worthiness and Priority Tests ---
 
 #[test]
 fn test_is_worthy_logic() {
     let mac = MacAddr([1, 2, 3, 4, 5, 6]);
     let mut dev = Device::new(mac);
 
-    // 1. Vazio -> Não digno
+    // 1. Empty -> Not worthy
     assert!(!dev.is_worthy());
 
-    // 2. Com hostname -> Digno
+    // 2. With hostname -> Worthy
     dev.hostname.name = "host".to_string();
     assert!(dev.is_worthy());
     dev.hostname.name.clear();
 
-    // 3. Com IPv4 (visto ou lease) -> Digno
+    // 3. With IPv4 (seen or lease) -> Worthy
     dev.seen_v4
         .push(("1.1.1.1".parse().unwrap(), SystemTime::now()));
     assert!(dev.is_worthy());
     dev.seen_v4.clear();
 
-    // 4. Com IPv6 Link-Local -> Não digno
+    // 4. With IPv6 Link-Local -> Not worthy
     dev.v6.push(IPv6State::Slaac(
         "fe80::1".parse().unwrap(),
         SystemTime::now(),
     ));
     assert!(!dev.is_worthy());
 
-    // 5. Com IPv6 ULA -> Digno
+    // 5. With IPv6 ULA -> Worthy
     dev.v6.push(IPv6State::Slaac(
         "fd00::1".parse().unwrap(),
         SystemTime::now(),
@@ -621,7 +621,7 @@ fn test_is_worthy_logic() {
     assert!(dev.is_worthy());
     dev.v6.clear();
 
-    // 6. Com Suffix (Intencional) -> Digno
+    // 6. With Suffix (Intentional) -> Worthy
     dev.v6.push(IPv6State::Static(
         Ipv6AddrOrSuffix::parse("::1").unwrap(),
         SystemTime::now(),
@@ -1235,3 +1235,346 @@ fn test_get_mac_by_ip_ula_and_suffix_resolution() {
     });
     assert_eq!(ctx.get_mac_by_ip(IpAddr::V6(ndp_ip)), Some(mac));
 }
+
+#[test]
+fn test_neighbor_batch_fast_path_single_mac() {
+    let ctx = setup();
+    let mac = MacAddr([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc]);
+    let v4_1: Ipv4Addr = "192.168.1.51".parse().unwrap();
+    let v4_2: Ipv4Addr = "192.168.1.52".parse().unwrap();
+    let v6_ll: Ipv6Addr = "fe80::1234".parse().unwrap();
+    let v6_gua: Ipv6Addr = "2001:db8::1234".parse().unwrap();
+
+    let batch = vec![
+        (mac, IpAddr::V4(v4_1), true),
+        (mac, IpAddr::V4(v4_2), true),
+        (mac, IpAddr::V6(v6_ll), true),
+        (mac, IpAddr::V6(v6_gua), true),
+    ];
+
+    let changed = ctx.apply(DeviceUpdate::NeighborBatch { entries: batch });
+    assert!(changed);
+
+    let dev = ctx.get_device(&mac).expect("Device should be created");
+    assert!(dev.seen_v4.iter().any(|(ip, _)| *ip == v4_1));
+    assert!(dev.seen_v4.iter().any(|(ip, _)| *ip == v4_2));
+    assert!(dev.v6.iter().any(|s| s.ip() == Some(v6_gua)));
+    assert_eq!(ctx.get_mac_from_ndp_cache(&v6_ll), Some(mac));
+    assert_eq!(ctx.get_mac_from_ndp_cache(&v6_gua), Some(mac));
+}
+
+#[test]
+fn test_neighbor_batch_multi_mac() {
+    let ctx = setup();
+    let mac1 = MacAddr([0x11, 0x11, 0x11, 0x11, 0x11, 0x11]);
+    let mac2 = MacAddr([0x22, 0x22, 0x22, 0x22, 0x22, 0x22]);
+
+    let batch = vec![
+        (mac1, IpAddr::V4("192.168.1.101".parse().unwrap()), true),
+        (mac2, IpAddr::V4("192.168.1.102".parse().unwrap()), true),
+        (mac1, IpAddr::V6("2001:db8::1111".parse().unwrap()), true),
+        (mac2, IpAddr::V6("2001:db8::2222".parse().unwrap()), true),
+    ];
+
+    let changed = ctx.apply(DeviceUpdate::NeighborBatch { entries: batch });
+    assert!(changed);
+
+    let dev1 = ctx.get_device(&mac1).expect("Device 1 should exist");
+    let dev2 = ctx.get_device(&mac2).expect("Device 2 should exist");
+
+    assert!(dev1.seen_v4.iter().any(|(ip, _)| *ip == "192.168.1.101".parse::<Ipv4Addr>().unwrap()));
+    assert!(dev2.seen_v4.iter().any(|(ip, _)| *ip == "192.168.1.102".parse::<Ipv4Addr>().unwrap()));
+}
+
+#[test]
+fn test_v6_prefix_delegation_lifecycle() {
+    let ctx = setup();
+    let mac = MacAddr([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x11]);
+    let duid = Duid::new(vec![1, 2, 3, 4]);
+    let prefix: Ipv6Addr = "2001:db8:feed::".parse().unwrap();
+    let len = 56;
+    let expires = SystemTime::now() + Duration::from_hours(2);
+
+    // Link DUID to MAC
+    let _ = ctx.apply(DeviceUpdate::DuidAssociated {
+        mac: Some(mac),
+        duid: duid.clone(),
+        iaid: 1,
+    });
+
+    // Assign IPv6 prefix delegation
+    let changed = ctx.apply(DeviceUpdate::V6PrefixAssigned(Box::new(V6PrefixUpdate {
+        mac: Some(mac),
+        duid,
+        iaid: 2,
+        prefix,
+        len,
+        expires,
+    })));
+    assert!(changed);
+    assert!(ctx.is_prefix_delegated(prefix, len));
+
+    let dev = ctx.get_device(&mac).unwrap();
+    assert_eq!(dev.v6_prefixes.len(), 1);
+    assert_eq!(dev.v6_prefixes[0].prefix, prefix);
+    assert_eq!(dev.v6_prefixes[0].len, len);
+
+    // Release prefix lease
+    let changed = ctx.apply(DeviceUpdate::LeaseReleased {
+        mac,
+        target: LeaseTarget::V6Prefix { iaid: 2 },
+    });
+    assert!(changed);
+    assert!(!ctx.is_prefix_delegated(prefix, len));
+}
+
+#[test]
+fn test_interface_prefix_renumbering_and_system_host() {
+    let ctx = setup();
+    let sys_mac = MacAddr([0x00, 0x00, 0x5e, 0x00, 0x53, 0x01]);
+    let mut sys_dev = Device::new(sys_mac);
+    sys_dev.origin = Origin::System;
+    sys_dev.hostname.name = "lanforge-router".to_string();
+    ctx.insert_device(sys_mac, sys_dev);
+
+    // Add static client with suffix ::55
+    let client_mac = MacAddr([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x55]);
+    let suf = Ipv6AddrOrSuffix::parse("::55").unwrap();
+    ctx.add_static_device(
+        client_mac,
+        "client-55".to_string(),
+        None,
+        None,
+        Some(suf),
+        None,
+        Origin::Static,
+    );
+
+    let mut net_rx = ctx.bus().subscribe_network();
+
+    // 1. Initial interface configuration
+    let ula1: Ipv6Addr = "fd00:1::".parse().unwrap();
+    let gua1: Ipv6Addr = "2001:db8:1::".parse().unwrap();
+    let if_state1 = lanforge_types::update::InterfaceState {
+        v4: Some(("192.168.1.1".parse().unwrap(), 24)),
+        link_local: Some("fe80::1".parse().unwrap()),
+        ula: Some(ula1),
+        gua: Some(gua1),
+        gua_preferred: 3600,
+        gua_valid: 7200,
+        ..Default::default()
+    };
+    let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+        ifindex: 1,
+        state: Box::new(if_state1),
+    });
+
+    // Check PrefixChanged event emitted
+    let mut prefix_changed = false;
+    while let Ok(ev) = net_rx.try_recv() {
+        if matches!(ev.event, LanforgeEvent::Network(crate::bus::NetworkEvent::PrefixChanged(_))) {
+            prefix_changed = true;
+        }
+    }
+    assert!(prefix_changed);
+
+    // Verify static suffix resolved IP is in index
+    assert_eq!(ctx.get_mac_by_ip("fd00:1::55".parse().unwrap()), Some(client_mac));
+
+    // Verify system host device updated
+    let sys_dev = ctx.get_device(&sys_mac).unwrap();
+    assert!(matches!(sys_dev.v4, IPv4State::Static(ip) if ip == "192.168.1.1".parse::<Ipv4Addr>().unwrap()));
+
+    // 2. Renumber interface prefix
+    let ula2: Ipv6Addr = "fd00:2::".parse().unwrap();
+    let gua2: Ipv6Addr = "2001:db8:2::".parse().unwrap();
+    let if_state2 = lanforge_types::update::InterfaceState {
+        ula: Some(ula2),
+        gua: Some(gua2),
+        ..Default::default()
+    };
+    let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+        ifindex: 1,
+        state: Box::new(if_state2),
+    });
+
+    // New ULA is resolvable
+    assert_eq!(ctx.get_mac_by_ip("fd00:2::55".parse().unwrap()), Some(client_mac));
+}
+
+#[test]
+fn test_prune_zombies_and_caches() {
+    let ctx = setup();
+    let active_mac = MacAddr([0xaa, 0x11, 0x22, 0x33, 0x44, 0x55]);
+    let zombie_mac = MacAddr([0xbb, 0x11, 0x22, 0x33, 0x44, 0x55]);
+    let sys_mac = MacAddr([0xcc, 0x11, 0x22, 0x33, 0x44, 0x55]);
+
+    // Active device
+    let mut active_dev = Device::new(active_mac);
+    active_dev.hostname.name = "active-dev".to_string();
+    active_dev.last_seen = SystemTime::now();
+    ctx.insert_device(active_mac, active_dev);
+
+    // Zombie device (>1h old, dynamic, no active leases)
+    let mut zombie_dev = Device::new(zombie_mac);
+    zombie_dev.hostname.name = "zombie-dev".to_string();
+    zombie_dev.last_seen = SystemTime::now() - Duration::from_hours(2);
+    ctx.insert_device(zombie_mac, zombie_dev);
+
+    // System device (>1h old, but Origin::System)
+    let mut sys_dev = Device::new(sys_mac);
+    sys_dev.origin = Origin::System;
+    sys_dev.hostname.name = "router".to_string();
+    sys_dev.last_seen = SystemTime::now() - Duration::from_hours(2);
+    ctx.insert_device(sys_mac, sys_dev);
+
+    let mut dev_rx = ctx.bus().subscribe_device();
+    let _ = ctx.apply(DeviceUpdate::PruneZombies);
+
+    // Zombie must be pruned; active and system must remain
+    assert!(ctx.get_device(&zombie_mac).is_none());
+    assert!(ctx.get_device(&active_mac).is_some());
+    assert!(ctx.get_device(&sys_mac).is_some());
+
+    let mut purged = false;
+    while let Ok(ev) = dev_rx.try_recv() {
+        if matches!(ev.event, LanforgeEvent::Device(DeviceEvent::Purged { mac }) if mac == zombie_mac) {
+            purged = true;
+        }
+    }
+    assert!(purged, "Must emit DeviceEvent::Purged for zombie");
+}
+
+#[test]
+fn test_reverse_resolvers_management() {
+    use lanforge_types::network::{DnsReverseResolver, IpSubnet};
+
+    let ctx = setup();
+    let subnet1 = IpSubnet::from_str("192.168.1.0/24").unwrap();
+    let subnet2 = IpSubnet::from_str("10.0.0.0/8").unwrap();
+
+    let res1 = DnsReverseResolver {
+        subnet: subnet1,
+        resolver: "192.168.1.1:53".parse().unwrap(),
+    };
+    let res2 = DnsReverseResolver {
+        subnet: subnet2,
+        resolver: "10.0.0.1:53".parse().unwrap(),
+    };
+
+    // Add resolver 1
+    let _ = ctx.apply(DeviceUpdate::AddReverseResolver {
+        resolver: Box::new(res1.clone()),
+    });
+    assert_eq!(ctx.read().reverse_resolvers.len(), 1);
+
+    // Add replacement resolver for same subnet
+    let res1_replacement = DnsReverseResolver {
+        subnet: subnet1,
+        resolver: "192.168.1.254:53".parse().unwrap(),
+    };
+    let _ = ctx.apply(DeviceUpdate::AddReverseResolver {
+        resolver: Box::new(res1_replacement.clone()),
+    });
+    assert_eq!(ctx.read().reverse_resolvers.len(), 1);
+    assert_eq!(ctx.read().reverse_resolvers[0].resolver, res1_replacement.resolver);
+
+    // Set list
+    let _ = ctx.apply(DeviceUpdate::SetReverseResolvers {
+        resolvers: vec![res1, res2],
+    });
+    assert_eq!(ctx.read().reverse_resolvers.len(), 2);
+
+    // Remove resolver
+    let _ = ctx.apply(DeviceUpdate::RemoveReverseResolver { subnet: subnet1 });
+    assert_eq!(ctx.read().reverse_resolvers.len(), 1);
+    assert_eq!(ctx.read().reverse_resolvers[0].subnet, subnet2);
+}
+
+#[test]
+fn test_device_debounce_mechanisms() {
+    let ctx = setup();
+    let mac = MacAddr([0xaa, 0xbb, 0xcc, 0x11, 0x22, 0x33]);
+    let ip = "192.168.1.99".parse::<Ipv4Addr>().unwrap();
+
+    // 1. First ARP seen: accepted
+    let changed = ctx.apply(DeviceUpdate::ArpSeen {
+        mac,
+        ip,
+        is_active: true,
+    });
+    assert!(changed);
+
+    // 2. Immediate second ARP seen for same active IP: debounced (returns false, no-op)
+    let changed = ctx.apply(DeviceUpdate::ArpSeen {
+        mac,
+        ip,
+        is_active: true,
+    });
+    assert!(!changed, "Rapid consecutive active ARP must be debounced");
+
+    // 3. First SLAAC seen: accepted
+    let slaac_ip = "fd00::99".parse::<Ipv6Addr>().unwrap();
+    let changed = ctx.apply(DeviceUpdate::SlaacObserved {
+        mac,
+        addr: slaac_ip,
+        is_active: true,
+    });
+    assert!(changed);
+
+    // 4. Immediate second SLAAC seen for same active IP: debounced
+    let changed = ctx.apply(DeviceUpdate::SlaacObserved {
+        mac,
+        addr: slaac_ip,
+        is_active: true,
+    });
+    assert!(!changed, "Rapid consecutive active SLAAC must be debounced");
+}
+
+#[test]
+fn test_class_hint_and_interface_seen() {
+    use lanforge_types::device::DeviceClass;
+
+    let ctx = setup();
+    let mac = MacAddr([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+
+    // 1. Initial device via hostname hint
+    let _ = ctx.apply(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "my-printer".to_string(),
+    });
+
+    // 2. Classify device as Printer
+    let changed = ctx.apply(DeviceUpdate::ClassHint {
+        mac,
+        class: DeviceClass::Printer,
+    });
+    assert!(changed);
+
+    let dev = ctx.get_device(&mac).unwrap();
+    assert_eq!(dev.class, DeviceClass::Printer);
+
+    // Repeating same class hint should debounce/no-op
+    let changed = ctx.apply(DeviceUpdate::ClassHint {
+        mac,
+        class: DeviceClass::Printer,
+    });
+    assert!(!changed);
+
+    // 3. Interface seen (updates dev.iface in-memory)
+    let _ = ctx.apply(DeviceUpdate::DeviceInterfaceSeen {
+        mac,
+        iface: "vlan.10".to_string(),
+    });
+
+    let dev = ctx.get_device(&mac).unwrap();
+    assert_eq!(dev.iface.as_deref(), Some("vlan.10"));
+
+    // Repeating same interface should debounce/no-op
+    let changed = ctx.apply(DeviceUpdate::DeviceInterfaceSeen {
+        mac,
+        iface: "vlan.10".to_string(),
+    });
+    assert!(!changed);
+}
+

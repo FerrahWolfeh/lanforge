@@ -542,36 +542,45 @@ impl LanforgeContext {
     ///
     /// Stores the port in context and broadcasts a `FirewallEvent::PortOpenRequested` on the bus.
     pub fn register_service_port(&self, request: DynamicPortRequest) {
-        {
+        let added = {
             let mut ports = self.inner.firewall_ports.write();
-            if !ports.iter().any(|p| {
+            if ports.iter().any(|p| {
                 p.service == request.service && p.port == request.port && p.protocol == request.protocol
             }) {
+                false
+            } else {
                 ports.push(request.clone());
+                true
             }
+        };
+        if added {
+            let _ = self
+                .inner
+                .bus
+                .publish(LanforgeEvent::Firewall(FirewallEvent::PortOpenRequested(
+                    Box::new(request),
+                )));
         }
-        let _ = self
-            .inner
-            .bus
-            .publish(LanforgeEvent::Firewall(FirewallEvent::PortOpenRequested(
-                Box::new(request),
-            )));
     }
 
     /// Releases a previously registered dynamic port requirement.
     pub fn release_service_port(&self, service: &str, port: u16, protocol: L4Protocol) {
-        {
+        let removed = {
             let mut ports = self.inner.firewall_ports.write();
+            let initial = ports.len();
             ports.retain(|p| !(p.service == service && p.port == port && p.protocol == protocol));
+            ports.len() != initial
+        };
+        if removed {
+            let _ = self
+                .inner
+                .bus
+                .publish(LanforgeEvent::Firewall(FirewallEvent::PortReleaseRequested {
+                    service: service.to_string(),
+                    port,
+                    protocol,
+                }));
         }
-        let _ = self
-            .inner
-            .bus
-            .publish(LanforgeEvent::Firewall(FirewallEvent::PortReleaseRequested {
-                service: service.to_string(),
-                port,
-                protocol,
-            }));
     }
 
     /// Returns all registered dynamic service ports.
