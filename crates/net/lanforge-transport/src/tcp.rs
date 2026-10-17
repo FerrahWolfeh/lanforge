@@ -122,3 +122,68 @@ impl DualTcpListener {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::time::{Duration, timeout};
+
+    #[tokio::test]
+    async fn should_bind_single_to_ephemeral_port_and_report_local_address() {
+        let loopback = SocketAddr::from(([127, 0, 0, 1], 0));
+        let listener = DualTcpListener::bind_single(loopback).expect("bind_single failed");
+
+        let addrs = listener.local_addrs().expect("local_addrs failed");
+        assert_eq!(addrs.len(), 1);
+        assert_ne!(addrs[0].port(), 0, "OS must assign an ephemeral port");
+        assert_eq!(addrs[0].ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+    }
+
+    #[tokio::test]
+    async fn should_accept_tcp_connections_and_transfer_data() {
+        let loopback = SocketAddr::from(([127, 0, 0, 1], 0));
+        let listener = DualTcpListener::bind_single(loopback).expect("bind_single failed");
+        let server_addr = listener.local_addrs().unwrap()[0];
+
+        let client_task = tokio::spawn(async move {
+            let mut client = TcpStream::connect(server_addr)
+                .await
+                .expect("Client failed to connect");
+            client.write_all(b"ping tcp").await.expect("Client write failed");
+
+            let mut reply = [0u8; 8];
+            client.read_exact(&mut reply).await.expect("Client read failed");
+            assert_eq!(&reply, b"pong tcp");
+        });
+
+        let (mut stream, client_addr) = timeout(Duration::from_millis(500), listener.accept())
+            .await
+            .expect("Accept timed out")
+            .expect("Accept failed");
+
+        assert_eq!(client_addr.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
+
+        let mut buf = [0u8; 8];
+        stream.read_exact(&mut buf).await.expect("Server read failed");
+        assert_eq!(&buf, b"ping tcp");
+
+        stream.write_all(b"pong tcp").await.expect("Server write failed");
+        client_task.await.expect("Client task panicked");
+    }
+
+    #[tokio::test]
+    async fn should_bind_dual_on_ephemeral_port_or_fallback() {
+        let v4_addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0);
+        let v6_addr = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0);
+
+        if let Ok(listener) = DualTcpListener::bind_dual(v4_addr, v6_addr) {
+            let addrs = listener.local_addrs().expect("local_addrs failed");
+            assert!(!addrs.is_empty(), "Must have at least one bound address");
+            for addr in addrs {
+                assert_ne!(addr.port(), 0, "Bound port must be non-zero");
+            }
+        }
+    }
+}

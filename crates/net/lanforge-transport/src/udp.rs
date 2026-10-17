@@ -289,3 +289,142 @@ impl UdpTransport {
         res
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::limiter::RateLimitConfig;
+    use std::net::SocketAddr;
+    use tokio::time::{Duration, timeout};
+
+    #[test]
+    fn should_report_inert_status_and_synthetic_addresses() {
+        let (_handle, transport) = UdpTransport::inert();
+        assert!(transport.is_inert(), "Inert transport must return true for is_inert()");
+
+        let addrs = transport.local_addrs().expect("local_addrs must succeed");
+        assert_eq!(
+            addrs,
+            vec![SocketAddr::from(([127, 0, 0, 1], 0))],
+            "Inert transport should report loopback placeholder address"
+        );
+    }
+
+    #[tokio::test]
+    async fn should_send_and_receive_in_inert_mode_updating_metrics() {
+        let (handle, transport) = UdpTransport::inert();
+        let client_addr: SocketAddr = "192.168.1.55:54321".parse().unwrap();
+        let payload = b"hello inert udp".to_vec();
+
+        // 1. Inject packet into transport
+        handle.inject(payload.clone(), client_addr).await;
+
+        let mut buf = [0u8; 128];
+        let (len, src) = timeout(Duration::from_millis(500), transport.recv(&mut buf))
+            .await
+            .expect("Recv timeout")
+            .expect("Recv failed");
+
+        assert_eq!(src, client_addr);
+        assert_eq!(&buf[..len], payload.as_slice());
+        assert_eq!(transport.metrics().rx_packets(), 1);
+        assert_eq!(transport.metrics().rx_bytes(), payload.len() as u64);
+
+        // 2. Send reply from transport
+        let reply = b"inert reply";
+        let sent = transport.send(reply, &src).await.expect("Send failed");
+        assert_eq!(sent, reply.len());
+        assert_eq!(transport.metrics().tx_packets(), 1);
+        assert_eq!(transport.metrics().tx_bytes(), reply.len() as u64);
+
+        // 3. Inspect reply on handle
+        let (out_packet, dst) = handle.recv_reply().await.expect("Expected reply on handle");
+        assert_eq!(out_packet, reply);
+        assert_eq!(dst, client_addr);
+    }
+
+    #[tokio::test]
+    async fn should_truncate_payload_when_recv_buffer_is_smaller() {
+        let (handle, transport) = UdpTransport::inert();
+        let client_addr: SocketAddr = "10.0.0.1:9000".parse().unwrap();
+
+        handle.inject(b"0123456789".to_vec(), client_addr).await;
+
+        let mut small_buf = [0u8; 4];
+        let (len, src) = transport.recv(&mut small_buf).await.expect("Recv failed");
+
+        assert_eq!(len, 4);
+        assert_eq!(&small_buf, b"0123");
+        assert_eq!(src, client_addr);
+    }
+
+    #[tokio::test]
+    async fn should_support_try_send_in_inert_mode() {
+        let (handle, transport) = UdpTransport::inert();
+        let dst: SocketAddr = "10.0.0.2:8000".parse().unwrap();
+
+        let n = transport.try_send(b"immediate", &dst).expect("try_send failed");
+        assert_eq!(n, 9);
+        assert_eq!(transport.metrics().tx_packets(), 1);
+
+        let (reply, out_dst) = handle.try_recv_reply().expect("Reply must be immediately available");
+        assert_eq!(reply, b"immediate");
+        assert_eq!(out_dst, dst);
+    }
+
+    #[tokio::test]
+    async fn should_return_unexpected_eof_when_handle_channel_closed() {
+        let (handle, transport) = UdpTransport::inert();
+        drop(handle);
+
+        let mut buf = [0u8; 64];
+        let err = transport.recv(&mut buf).await.expect_err("Expected EOF error");
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[tokio::test]
+    async fn should_apply_rate_limiter_and_record_drop_metrics_in_inert_mode() {
+        let (handle, transport) = UdpTransport::inert();
+        let client_addr: SocketAddr = "192.168.1.10:12345".parse().unwrap();
+
+        let limiter = RateLimiter::new(RateLimitConfig {
+            pps: 0,
+            burst: 1,
+            max_sources: 4,
+        });
+        transport.set_rate_limiter(limiter);
+
+        // Inject 2 packets from same source
+        handle.inject(b"pkt 1".to_vec(), client_addr).await;
+        handle.inject(b"pkt 2".to_vec(), client_addr).await;
+
+        // Also inject a 3rd packet from a different source so recv() doesn't hang
+        // (the 2nd packet from client_addr will be dropped by the rate limiter)
+        let other_client: SocketAddr = "192.168.1.20:12345".parse().unwrap();
+        handle.inject(b"pkt 3 from other".to_vec(), other_client).await;
+
+        let mut buf = [0u8; 64];
+
+        // 1st packet: client_addr (passes burst limit)
+        let (len, src) = transport.recv(&mut buf).await.unwrap();
+        assert_eq!(&buf[..len], b"pkt 1");
+        assert_eq!(src, client_addr);
+
+        // 2nd packet: client_addr (exceeds burst limit, silently dropped in recv() loop)
+        // 3rd packet: other_client (passes its own burst limit)
+        let (len, src) = transport.recv(&mut buf).await.unwrap();
+        assert_eq!(&buf[..len], b"pkt 3 from other");
+        assert_eq!(src, other_client);
+
+        assert_eq!(transport.metrics().dropped_packets(), 1);
+        assert_eq!(transport.metrics().rx_packets(), 2);
+    }
+
+    #[test]
+    fn should_ignore_multicast_join_in_inert_mode() {
+        let (_handle, transport) = UdpTransport::inert();
+        let multiaddr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1);
+        let res = transport.join_multicast_v6(&multiaddr, 0);
+        assert!(res.is_ok(), "Multicast join in inert mode must succeed as no-op");
+    }
+}

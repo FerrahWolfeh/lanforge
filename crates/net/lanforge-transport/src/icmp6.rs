@@ -231,3 +231,108 @@ fn set_sockopt_raw(
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::SocketAddrV6;
+    use tokio::time::{Duration, timeout};
+
+    #[test]
+    fn should_report_inert_status() {
+        let (_handle, transport) = Icmp6Transport::inert();
+        assert!(transport.is_inert(), "Inert transport must return true for is_inert()");
+        assert_eq!(transport.metrics().rx_packets(), 0);
+        assert_eq!(transport.metrics().tx_packets(), 0);
+    }
+
+    #[tokio::test]
+    async fn should_send_and_receive_icmp6_in_inert_mode() {
+        let (handle, transport) = Icmp6Transport::inert();
+        let src: SocketAddrV6 = "[fe80::1]:0".parse().unwrap();
+        let rs_packet = vec![133, 0, 0, 0, 0, 0, 0, 0];
+
+        // 1. Inject RS packet
+        handle.inject(rs_packet.clone(), src).await;
+
+        let mut buf = [0u8; 512];
+        let (len, from) = timeout(Duration::from_millis(500), transport.recv(&mut buf))
+            .await
+            .expect("Recv timeout")
+            .expect("Recv failed");
+
+        assert_eq!(&buf[..len], rs_packet.as_slice());
+        assert_eq!(from, src);
+        assert_eq!(transport.metrics().rx_packets(), 1);
+        assert_eq!(transport.metrics().rx_bytes(), rs_packet.len() as u64);
+
+        // 2. Send RA reply
+        let ra_packet = vec![134, 0, 0, 0];
+        let sent = transport.send(&ra_packet, &src).expect("Send failed");
+        assert_eq!(sent, ra_packet.len());
+        assert_eq!(transport.metrics().tx_packets(), 1);
+        assert_eq!(transport.metrics().tx_bytes(), ra_packet.len() as u64);
+
+        // 3. Inspect reply on handle
+        let (out_packet, dst) = handle.recv_reply().await.expect("Expected reply");
+        assert_eq!(out_packet, ra_packet);
+        assert_eq!(dst, src);
+    }
+
+    #[tokio::test]
+    async fn should_truncate_icmp6_payload_when_recv_buffer_is_smaller() {
+        let (handle, transport) = Icmp6Transport::inert();
+        let src: SocketAddrV6 = "[fe80::2]:0".parse().unwrap();
+        let data = vec![1, 2, 3, 4, 5, 6, 7, 8];
+
+        handle.inject(data, src).await;
+
+        let mut small_buf = [0u8; 3];
+        let (len, from) = transport.recv(&mut small_buf).await.expect("Recv failed");
+        assert_eq!(len, 3);
+        assert_eq!(&small_buf, &[1, 2, 3]);
+        assert_eq!(from, src);
+    }
+
+    #[tokio::test]
+    async fn should_return_unexpected_eof_when_handle_channel_closed() {
+        let (handle, transport) = Icmp6Transport::inert();
+        drop(handle);
+
+        let mut buf = [0u8; 64];
+        let err = transport.recv(&mut buf).await.expect_err("Expected EOF error");
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[tokio::test]
+    async fn should_support_synchronous_send_in_inert_mode() {
+        let (handle, transport) = Icmp6Transport::inert();
+        let target: SocketAddrV6 = "[ff02::1]:0".parse().unwrap();
+        let payload = vec![134, 0, 0, 0, 0, 0];
+
+        let n = transport.send(&payload, &target).expect("send failed");
+        assert_eq!(n, payload.len());
+        assert_eq!(transport.metrics().tx_packets(), 1);
+
+        let (reply, out_dst) = handle.try_recv_reply().expect("Expected immediate reply");
+        assert_eq!(reply, payload);
+        assert_eq!(out_dst, target);
+    }
+
+    #[test]
+    fn should_calculate_icmp6_filter_rs_bit_correctly() {
+        let mut filter = [0xFFu8; 32];
+        let t = ICMPV6_TYPE_RS as usize;
+        filter[t / 8] &= !(1u8 << (t % 8));
+
+        // ICMPV6_TYPE_RS is 133
+        // 133 / 8 = 16, 133 % 8 = 5
+        assert_eq!(filter[16], !(1u8 << 5));
+        // All other bytes must remain 0xFF (blocking all other ICMPv6 message types)
+        for (i, byte) in filter.iter().enumerate() {
+            if i != 16 {
+                assert_eq!(*byte, 0xFF, "Byte {i} must be 0xFF to filter out other ICMPv6 types");
+            }
+        }
+    }
+}
