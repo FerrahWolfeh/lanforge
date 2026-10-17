@@ -7,6 +7,7 @@
 	import { Switch } from "$lib/components/ui/switch";
 	import EyeIcon from "@lucide/svelte/icons/eye";
 	import EyeOffIcon from "@lucide/svelte/icons/eye-off";
+	import RouterIcon from "@lucide/svelte/icons/router";
 
 	import type {
 		PppoeAuthMethod,
@@ -22,6 +23,13 @@
 		formServiceName = $bindable(""),
 		formAcName = $bindable(""),
 		interfaceOptions = [],
+		formProbeEnabled = $bindable(false),
+		formProbeTargetIp = $bindable("192.168.1.1"),
+		formProbeSenderIp = $bindable(""),
+		formProbeIface = $bindable(""),
+		formProbeTimeoutMs = $bindable(1000),
+		formProbePollIntervalSecs = $bindable(2),
+		formProbeMaxWaitSecs = $bindable(10),
 	}: {
 		formEnabled?: boolean;
 		formWanIface?: string;
@@ -31,6 +39,13 @@
 		formServiceName?: string;
 		formAcName?: string;
 		interfaceOptions?: NetworkInterfaceInfo[];
+		formProbeEnabled?: boolean;
+		formProbeTargetIp?: string;
+		formProbeSenderIp?: string;
+		formProbeIface?: string;
+		formProbeTimeoutMs?: number;
+		formProbePollIntervalSecs?: number;
+		formProbeMaxWaitSecs?: number;
 	} = $props();
 
 	let showPassword = $state(false);
@@ -206,6 +221,155 @@
 					</p>
 				</div>
 			</div>
+		</Card.Content>
+	</Card.Root>
+
+	<!-- Underlay ONT & Modem Probe (Layer 2 ARP) -->
+	<Card.Root>
+		<Card.Header class="pb-3 border-b border-border/50">
+			<Card.Title class="text-base font-semibold flex items-center gap-2">
+				<RouterIcon class="size-4 text-primary" />
+				Underlay ONT & Modem Probe (Layer 2 ARP)
+			</Card.Title>
+			<Card.Description class="text-xs">
+				Optional pre-flight check. Probes your GPON ONT, SFP stick, or bridged modem via ARP before PPPoE discovery starts.
+			</Card.Description>
+		</Card.Header>
+		<Card.Content class="p-4 flex flex-col gap-5">
+			<!-- Probe Enable Switch -->
+			<div class="flex items-center justify-between rounded-xl border p-3.5 bg-muted/20">
+				<div class="flex flex-col gap-0.5">
+					<Label class="text-xs font-semibold">Enable Underlay Terminal Probe</Label>
+					<p class="text-[11px] text-muted-foreground">
+						Verifies that the underlay hardware (optical ONT or bridge modem) has finished booting before transmitting PPPoE discovery packets.
+					</p>
+				</div>
+				<Switch bind:checked={formProbeEnabled} />
+			</div>
+
+			{#if formProbeEnabled}
+				<div class="grid gap-4 sm:grid-cols-2 pt-2 border-t border-border/40">
+					<!-- Target Management IP -->
+					<div class="flex flex-col gap-1.5">
+						<Label for="probe_target_ip" class="text-xs font-semibold">ONT / Modem Management IPv4</Label>
+						<Input
+							id="probe_target_ip"
+							bind:value={formProbeTargetIp}
+							placeholder="192.168.1.1"
+							class="h-9 font-mono text-xs"
+						/>
+						<p class="text-[11px] text-muted-foreground">
+							Target IPv4 address of your ONT or modem (typically 192.168.1.1 or 192.168.100.1).
+						</p>
+					</div>
+
+					<!-- Probe Interface -->
+					<div class="flex flex-col gap-1.5">
+						<Label class="text-xs font-semibold">Probe Interface</Label>
+						{#if interfaceOptions.length > 0}
+							<Select.Root
+								type="single"
+								value={formProbeIface || "auto"}
+								onValueChange={(val) => {
+									formProbeIface = val === "auto" ? "" : (val ?? "");
+								}}
+							>
+								<Select.Trigger class="h-9 text-xs font-mono">
+									{formProbeIface ? formProbeIface : "Auto (Untagged parent of WAN)"}
+								</Select.Trigger>
+								<Select.Content>
+									<Select.Item value="auto" class="text-xs">
+										<span class="font-sans text-muted-foreground">Auto (Untagged parent of WAN)</span>
+									</Select.Item>
+									{#each interfaceOptions as iface (iface.name)}
+										<Select.Item value={iface.name} class="text-xs">
+											<div class="flex items-center justify-between w-full gap-3">
+												<span class="font-mono font-medium">{iface.name}</span>
+												{#if iface.is_physical}
+													<Badge variant="secondary" class="text-[9px] px-1 py-0 font-normal">Physical</Badge>
+												{/if}
+											</div>
+										</Select.Item>
+									{/each}
+								</Select.Content>
+							</Select.Root>
+						{:else}
+							<Input
+								id="probe_iface"
+								bind:value={formProbeIface}
+								placeholder="Auto (parent of WAN)"
+								class="h-9 font-mono text-xs"
+							/>
+						{/if}
+						<p class="text-[11px] text-muted-foreground">
+							Network interface for sending ARP probes. Defaults to untagged parent if WAN uses a VLAN.
+						</p>
+					</div>
+
+					<!-- Soft-Gate Max Wait Deadline -->
+					<div class="flex flex-col gap-1.5">
+						<Label for="probe_max_wait" class="text-xs font-semibold">Max Wait Deadline (seconds)</Label>
+						<Input
+							id="probe_max_wait"
+							type="number"
+							min="1"
+							max="60"
+							bind:value={formProbeMaxWaitSecs}
+							class="h-9 font-mono text-xs"
+						/>
+						<p class="text-[11px] text-muted-foreground">
+							Soft-gate deadline (default 10s). If the ONT does not reply within this limit, PPPoE dials anyway.
+						</p>
+					</div>
+
+					<!-- Poll Interval -->
+					<div class="flex flex-col gap-1.5">
+						<Label for="probe_poll_interval" class="text-xs font-semibold">Poll Interval (seconds)</Label>
+						<Input
+							id="probe_poll_interval"
+							type="number"
+							min="1"
+							max="30"
+							bind:value={formProbePollIntervalSecs}
+							class="h-9 font-mono text-xs"
+						/>
+						<p class="text-[11px] text-muted-foreground">
+							Frequency of ARP requests while waiting for the ONT to answer (default 2s).
+						</p>
+					</div>
+
+					<!-- Per-probe Reply Timeout -->
+					<div class="flex flex-col gap-1.5">
+						<Label for="probe_timeout" class="text-xs font-semibold">Probe Reply Timeout (ms)</Label>
+						<Input
+							id="probe_timeout"
+							type="number"
+							min="100"
+							max="10000"
+							step="100"
+							bind:value={formProbeTimeoutMs}
+							class="h-9 font-mono text-xs"
+						/>
+						<p class="text-[11px] text-muted-foreground">
+							Per-probe ARP response timeout (default 1000 ms).
+						</p>
+					</div>
+
+					<!-- Custom Sender IP -->
+					<div class="flex flex-col gap-1.5">
+						<Label for="probe_sender_ip" class="text-xs font-semibold">Sender IPv4 (Optional)</Label>
+						<Input
+							id="probe_sender_ip"
+							bind:value={formProbeSenderIp}
+							placeholder="0.0.0.0 (RFC 5227 Probe)"
+							class="h-9 font-mono text-xs"
+						/>
+						<p class="text-[11px] text-muted-foreground">
+							Source IP inside the ARP frame. Leave empty for standard 0.0.0.0 probe request.
+						</p>
+					</div>
+				</div>
+			{/if}
 		</Card.Content>
 	</Card.Root>
 </div>

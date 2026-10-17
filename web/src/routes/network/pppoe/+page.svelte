@@ -86,6 +86,15 @@
 	let formPadiRetries = $state(5);
 	let formPadiTimeout = $state(3);
 
+	// Terminal ONT Probe form fields
+	let formProbeEnabled = $state(false);
+	let formProbeTargetIp = $state("192.168.1.1");
+	let formProbeSenderIp = $state("");
+	let formProbeIface = $state("");
+	let formProbeTimeoutMs = $state(1000);
+	let formProbePollIntervalSecs = $state(2);
+	let formProbeMaxWaitSecs = $state(10);
+
 	// Dirty tracking
 	let isDirty = $derived.by(() => {
 		if (!config) return false;
@@ -110,6 +119,15 @@
 		if (Number(formPadiRetries) !== config.discovery_padi_retries) return true;
 		if (Number(formPadiTimeout) !== config.discovery_padi_timeout_secs) return true;
 
+		const tp = config.terminal_probe;
+		if (formProbeEnabled !== (tp?.enabled ?? false)) return true;
+		if (formProbeTargetIp !== (tp?.target_ip ?? "192.168.1.1")) return true;
+		if (formProbeSenderIp !== (tp?.sender_ip ?? "")) return true;
+		if (formProbeIface !== (tp?.iface ?? "")) return true;
+		if (Number(formProbeTimeoutMs) !== (tp?.timeout_ms ?? 1000)) return true;
+		if (Number(formProbePollIntervalSecs) !== (tp?.poll_interval_secs ?? 2)) return true;
+		if (Number(formProbeMaxWaitSecs) !== (tp?.max_wait_secs ?? 10)) return true;
+
 		return false;
 	});
 
@@ -130,6 +148,15 @@
 		formSendPadt = c.send_padt_on_shutdown;
 		formPadiRetries = c.discovery_padi_retries;
 		formPadiTimeout = c.discovery_padi_timeout_secs;
+
+		const tp = c.terminal_probe;
+		formProbeEnabled = tp?.enabled ?? false;
+		formProbeTargetIp = tp?.target_ip ?? "192.168.1.1";
+		formProbeSenderIp = tp?.sender_ip ?? "";
+		formProbeIface = tp?.iface ?? "";
+		formProbeTimeoutMs = tp?.timeout_ms ?? 1000;
+		formProbePollIntervalSecs = tp?.poll_interval_secs ?? 2;
+		formProbeMaxWaitSecs = tp?.max_wait_secs ?? 10;
 	}
 
 	async function loadAll(silent = false) {
@@ -189,6 +216,15 @@
 				send_padt_on_shutdown: formSendPadt,
 				discovery_padi_retries: Number(formPadiRetries) || 5,
 				discovery_padi_timeout_secs: Number(formPadiTimeout) || 3,
+				terminal_probe: {
+					enabled: formProbeEnabled,
+					target_ip: formProbeTargetIp.trim() || "192.168.1.1",
+					sender_ip: formProbeSenderIp.trim() ? formProbeSenderIp.trim() : null,
+					iface: formProbeIface.trim() ? formProbeIface.trim() : null,
+					timeout_ms: Number(formProbeTimeoutMs) || 1000,
+					poll_interval_secs: Number(formProbePollIntervalSecs) || 2,
+					max_wait_secs: Number(formProbeMaxWaitSecs) || 10,
+				},
 				nftables: config?.nftables ?? {
 					enabled: true,
 					table_name: "lanforge_pppoe",
@@ -395,6 +431,13 @@
 				bind:formServiceName
 				bind:formAcName
 				{interfaceOptions}
+				bind:formProbeEnabled
+				bind:formProbeTargetIp
+				bind:formProbeSenderIp
+				bind:formProbeIface
+				bind:formProbeTimeoutMs
+				bind:formProbePollIntervalSecs
+				bind:formProbeMaxWaitSecs
 			/>
 		</Tabs.Content>
 
