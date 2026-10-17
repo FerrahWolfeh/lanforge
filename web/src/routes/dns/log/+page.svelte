@@ -268,6 +268,11 @@
 		entries={activeTab === "live" ? liveEntries : historyEntries}
 		total={historyTotal}
 		{stats}
+		{selectedResult}
+		onSelectResult={(res) => {
+			activeTab = "history";
+			handleResultSelect(res);
+		}}
 	/>
 
 	<!-- Tabbed Rules View (Consistent with Adblock rules & SQM tabs style) -->
