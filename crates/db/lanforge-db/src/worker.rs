@@ -26,6 +26,7 @@ use lanforge_types::network::dns::adblock::AdblockRuleEntry;
 use lanforge_types::network::dns::{AdblockUrlEntry, DnsRequest, DnsResponse};
 use lanforge_types::network::{DnsReverseResolver, QueryLogEntry};
 use lanforge_types::storage::{DnsAnalyticsData, StorageQuery, StorageQueryResult};
+use lanforge_types::system::ServiceAction;
 use lanforge_types::update::DeviceUpdate;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -728,7 +729,11 @@ impl AsyncService for DbWorker {
         let db = self.db.clone();
         let log_db = self.log_db.clone();
 
-        let mut storage_rx = self.storage_rx.take().expect("storage_rx initialized");
+        let mut storage_rx = self.storage_rx.take().unwrap_or_else(|| {
+            let (tx, rx) = mpsc::channel(64);
+            ctx.set_storage_handle(StorageHandle::new(tx));
+            rx
+        });
         let mut bus_rx = ctx.bus().subscribe();
         let mut flush_interval: Interval = interval(Duration::from_secs(self.cfg.flush_interval));
         let mut last_prune = tokio::time::Instant::now();
@@ -834,6 +839,13 @@ impl AsyncService for DbWorker {
                                 let _ = log_db.save_dns_lifetime_stats(&stats).await;
                             }
                             break_loop = true;
+                        }
+                        LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) => {
+                            if id == "db" && matches!(action, ServiceAction::Stop | ServiceAction::Restart) {
+                                info!(action = ?action, "Database worker received service control, flushing and exiting loop");
+                                self.flush_batch(&db, &log_db).await;
+                                break_loop = true;
+                            }
                         }
                         #[cfg(feature = "adblock")]
                         LanforgeEvent::Dns(DnsEvent::QueryBlocked { src_addr, domain }) => {
