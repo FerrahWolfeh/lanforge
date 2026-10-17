@@ -99,6 +99,10 @@ pub async fn run_keepalive(
                         );
                         return Ok(());
                     }
+                    LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => {
+                        info!("PPPoE keepalive received ConfigPppoeChanged, disconnecting session to re-evaluate configuration");
+                        return Ok(());
+                    }
                     _ => {}
                 }
             }

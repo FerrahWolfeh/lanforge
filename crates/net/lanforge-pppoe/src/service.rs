@@ -21,6 +21,7 @@ use lanforge_types::system::{
 use lanforge_types::update::DeviceUpdate;
 use pnet::datalink::interfaces;
 use std::borrow::Cow;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -46,6 +47,7 @@ pub struct PppoeService {
     ctx: LanforgeContext,
     attempt: u32,
     active_session: Option<(MacAddr, MacAddr, u16)>,
+    inert: bool,
 }
 
 impl PppoeService {
@@ -59,7 +61,171 @@ impl PppoeService {
             ctx,
             attempt: 0,
             active_session: None,
+            inert: false,
         }
+    }
+
+    /// Creates an inert instance of `PppoeService` for rootless simulation and testing.
+    #[must_use]
+    pub fn inert(mut cfg: PppoeConfig, ctx: LanforgeContext) -> Self {
+        if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
+            cfg = dynamic_cfg;
+        }
+        Self {
+            cfg,
+            ctx,
+            attempt: 0,
+            active_session: None,
+            inert: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_inert(mut self, inert: bool) -> Self {
+        self.inert = inert;
+        self
+    }
+
+    #[must_use]
+    pub const fn is_inert(&self) -> bool {
+        self.inert
+    }
+
+    async fn teardown_active_session(&mut self, reason: String) {
+        let had_session = self.active_session.is_some() || self.ctx.is_pppoe_ready();
+        if let Some((wan_mac, ac_mac, session_id)) = self.active_session.take()
+            && self.cfg.send_padt_on_shutdown
+            && !self.inert
+        {
+            info!(
+                wan_iface = %self.cfg.wan_iface,
+                session_id,
+                "Sending PPPoE PADT frame during session teardown"
+            );
+            let _ = send_padt(&self.cfg.wan_iface, wan_mac, ac_mac, session_id);
+        }
+
+        if !self.inert {
+            deconfigure_interface(
+                &self.cfg.wan_iface,
+                self.cfg.dataplane == PppoeDataplane::Ebpf,
+                None,
+            )
+            .await;
+        }
+
+        self.ctx.set_pppoe_ready(false);
+        let _ = self
+            .ctx
+            .apply(DeviceUpdate::PppoeStatusUpdated { status: None });
+
+        if had_session {
+            info!(
+                wan_iface = %self.cfg.wan_iface,
+                reason = %reason,
+                "PPPoE session disconnected, publishing SessionDown"
+            );
+            let _ = self
+                .ctx
+                .bus()
+                .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionDown { reason }));
+        }
+    }
+
+    async fn run_inert_session_flow(&mut self) -> Result<(), PppoeError> {
+        if self.cfg.username == "fail_auth" {
+            sleep(Duration::from_millis(10)).await;
+            let reason = "PAP/CHAP authentication failed: invalid credentials".to_string();
+            let _ = self
+                .ctx
+                .bus()
+                .publish(LanforgeEvent::Pppoe(PppoeEvent::AuthFailed {
+                    reason: reason.clone(),
+                }));
+            return Err(PppoeError::AuthFailed(reason));
+        }
+
+        if self.cfg.username == "discovery_timeout" {
+            sleep(Duration::from_millis(10)).await;
+            return Err(PppoeError::DiscoveryTimeout);
+        }
+
+        let ac_mac = MacAddr([0x02, 0x00, 0x00, 0xac, 0x00, 0x01]);
+        let wan_mac = MacAddr([0x02, 0x00, 0x00, 0x00, 0x00, 0x02]);
+        let session_id = 0x0042;
+        self.active_session = Some((wan_mac, ac_mac, session_id));
+
+        let disc_res = crate::discovery::DiscoveryResult {
+            ac_mac,
+            ac_name: Some("lanforge-bras".into()),
+            session_id,
+        };
+        let lcp_res = crate::lcp::LcpNegotiated {
+            mru: self.cfg.mru,
+            auth_method: self.cfg.auth,
+            local_magic: 0x1234_5678,
+            peer_magic: 0x8765_4321,
+        };
+        let local_ip = Ipv4Addr::new(100, 64, 0, 2);
+        let peer_ip = Ipv4Addr::new(100, 64, 0, 1);
+        let ipcp_res = crate::ipcp::IpcpNegotiated {
+            local_ip: Some(local_ip),
+            peer_ip: Some(peer_ip),
+            dns: vec![
+                IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
+                IpAddr::V4(Ipv4Addr::new(1, 0, 0, 1)),
+            ],
+            local_v6_ll: None,
+            peer_v6_ll: None,
+        };
+
+        let interface_name = if self.cfg.dataplane == PppoeDataplane::Ebpf {
+            self.cfg.wan_iface.clone()
+        } else {
+            "ppp0".to_string()
+        };
+
+        self.publish_connected_status(&interface_name, &disc_res, &lcp_res, &ipcp_res);
+        self.ctx.set_service_state("pppoe", ServiceState::Online);
+
+        if self.cfg.username == "carrier_drop" {
+            sleep(Duration::from_millis(30)).await;
+            self.teardown_active_session("LCP Keepalive Echo timeout (carrier loss)".into())
+                .await;
+            return Err(PppoeError::KeepAliveTimeout);
+        }
+
+        let mut bus_rx = self.ctx.bus().subscribe_system();
+        loop {
+            tokio::select! {
+                event_res = bus_rx.recv() => {
+                    match event_res {
+                        Ok(timed) => match timed.event {
+                            LanforgeEvent::System(SystemEvent::Shutdown) => {
+                                info!("PPPoE inert keepalive received shutdown");
+                                self.teardown_active_session("Graceful shutdown".into()).await;
+                                return Ok(());
+                            }
+                            LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) if id == "pppoe" => {
+                                info!(action = ?action, "PPPoE inert keepalive received service control");
+                                self.teardown_active_session(format!("Service control {action:?}")).await;
+                                return Ok(());
+                            }
+                            LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => {
+                                info!("PPPoE inert keepalive received ConfigPppoeChanged");
+                                self.teardown_active_session("Configuration updated".into()).await;
+                                return Ok(());
+                            }
+                            _ => {}
+                        },
+                        Err(_) => break,
+                    }
+                }
+            }
+        }
+
+        self.teardown_active_session("Channel closed".into()).await;
+        Ok(())
     }
 
     fn get_interface_details(&self) -> Result<(u32, MacAddr), PppoeError> {
@@ -229,7 +395,7 @@ impl PppoeService {
         }
     }
 
-    fn publish_connected_status(
+    pub fn publish_connected_status(
         &mut self,
         interface_name: &str,
         disc_res: &crate::discovery::DiscoveryResult,
@@ -281,6 +447,10 @@ impl PppoeService {
     }
 
     async fn run_session_flow(&mut self) -> Result<(), PppoeError> {
+        if self.inert {
+            return self.run_inert_session_flow().await;
+        }
+
         let (ifindex, mac) = self.get_interface_details()?;
         let disc_res = self.perform_discovery(ifindex, mac).await?;
 
@@ -310,61 +480,14 @@ impl PppoeService {
         }
         .await;
 
-        if let Some((wan_mac, ac_mac, session_id)) = self.active_session.take()
-            && self.cfg.send_padt_on_shutdown
-        {
-            let _ = send_padt(&self.cfg.wan_iface, wan_mac, ac_mac, session_id);
-        }
-
-        deconfigure_interface(
-            &self.cfg.wan_iface,
-            self.cfg.dataplane == PppoeDataplane::Ebpf,
-            None,
-        )
-        .await;
-
         let reason = match &flow_res {
             Ok(()) => "Graceful shutdown".to_string(),
             Err(e) => e.to_string(),
         };
 
-        if flow_res.is_err() {
-            warn!(
-                wan_iface = %self.cfg.wan_iface,
-                error = %reason,
-                "PPPoE session disconnected due to error or carrier loss"
-            );
-        } else {
-            info!(
-                wan_iface = %self.cfg.wan_iface,
-                reason = %reason,
-                "PPPoE session disconnected cleanly"
-            );
-        }
-
-        self.ctx.set_pppoe_ready(false);
-        let _ = self
-            .ctx
-            .apply(DeviceUpdate::PppoeStatusUpdated { status: None });
-
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionDown { reason }));
+        self.teardown_active_session(reason).await;
 
         flow_res
-    }
-}
-
-fn is_shutdown_or_stop_event(event: &LanforgeEvent) -> bool {
-    match event {
-        LanforgeEvent::System(SystemEvent::Shutdown) => true,
-        LanforgeEvent::System(SystemEvent::ServiceControl { id, action })
-            if id == "pppoe" && matches!(action, ServiceAction::Stop | ServiceAction::Restart) =>
-        {
-            true
-        }
-        _ => false,
     }
 }
 
@@ -406,6 +529,7 @@ impl AsyncService for PppoeService {
         ]
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
             self.cfg = dynamic_cfg;
@@ -418,7 +542,7 @@ impl AsyncService for PppoeService {
             return Ok(());
         }
 
-        if self.cfg.dataplane == PppoeDataplane::Kernel && !Path::new("/dev/ppp").exists() {
+        if !self.inert && self.cfg.dataplane == PppoeDataplane::Kernel && !Path::new("/dev/ppp").exists() {
             warn!(
                 service = "PPPoE",
                 "/dev/ppp device unavailable (ppp_generic kernel module missing). Disabling PPPoE service."
@@ -434,7 +558,7 @@ impl AsyncService for PppoeService {
         }
 
         #[cfg(not(feature = "ebpf"))]
-        if self.cfg.dataplane == PppoeDataplane::Ebpf {
+        if !self.inert && self.cfg.dataplane == PppoeDataplane::Ebpf {
             warn!(
                 service = "PPPoE",
                 "eBPF dataplane requested but not compiled into this binary (compile with --features ebpf). Disabling PPPoE service."
@@ -459,16 +583,63 @@ impl AsyncService for PppoeService {
             tokio::select! {
                 biased;
                 event_res = bus_rx.recv() => {
-                    if let Ok(timed) = event_res && is_shutdown_or_stop_event(&timed.event) {
-                        info!("PPPoE service received shutdown/stop event, exiting serve loop");
-                        break 'main_loop;
+                    if let Ok(timed) = event_res {
+                        match &timed.event {
+                            LanforgeEvent::System(SystemEvent::Shutdown) => {
+                                info!("PPPoE service received shutdown event, exiting serve loop");
+                                self.teardown_active_session("Graceful shutdown".into()).await;
+                                break 'main_loop;
+                            }
+                            LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) if id == "pppoe" => {
+                                match action {
+                                    ServiceAction::Stop => {
+                                        info!("PPPoE service received stop command, transitioning to Inactive");
+                                        self.teardown_active_session("Service stopped".into()).await;
+                                        ctx.set_service_state("pppoe", ServiceState::Inactive);
+                                        break 'main_loop;
+                                    }
+                                    ServiceAction::Restart => {
+                                        info!("PPPoE service received restart command, restarting session");
+                                        self.teardown_active_session("Service restarted".into()).await;
+                                        self.attempt = 0;
+                                    }
+                                    ServiceAction::Start => {}
+                                }
+                            }
+                            LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => {
+                                info!("PPPoE service received ConfigPppoeChanged in main loop");
+                                self.teardown_active_session("Configuration updated".into()).await;
+                                if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
+                                    self.cfg = dynamic_cfg;
+                                }
+                                if !self.cfg.enabled {
+                                    info!("PPPoE service disabled via config change");
+                                    ctx.set_service_state("pppoe", ServiceState::Inactive);
+                                    break 'main_loop;
+                                }
+                                self.attempt = 0;
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 flow_res = self.run_session_flow() => {
                     match flow_res {
                         Ok(()) => {
-                            info!("PPPoE service session finished cleanly");
-                            break 'main_loop;
+                            if !ctx.is_running() {
+                                info!("PPPoE service session finished cleanly (daemon shutting down)");
+                                break 'main_loop;
+                            }
+                            if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
+                                self.cfg = dynamic_cfg;
+                            }
+                            if !self.cfg.enabled {
+                                info!("PPPoE service disabled in config, transitioning to Inactive");
+                                ctx.set_service_state("pppoe", ServiceState::Inactive);
+                                break 'main_loop;
+                            }
+                            info!("PPPoE session completed, reconnecting with active configuration");
+                            self.attempt = 0;
                         }
                         Err(e) => {
                             if !ctx.is_running() {
@@ -494,11 +665,39 @@ impl AsyncService for PppoeService {
                             tokio::select! {
                                 () = sleep(delay) => {}
                                 res = bus_rx.recv() => {
-                                    if let Ok(timed) = res
-                                        && is_shutdown_or_stop_event(&timed.event)
-                                    {
-                                        info!("PPPoE service received shutdown during reconnect delay");
-                                        break 'main_loop;
+                                    if let Ok(timed) = res {
+                                        match &timed.event {
+                                            LanforgeEvent::System(SystemEvent::Shutdown) => {
+                                                info!("PPPoE service received shutdown during reconnect delay");
+                                                break 'main_loop;
+                                            }
+                                            LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) if id == "pppoe" => {
+                                                match action {
+                                                    ServiceAction::Stop => {
+                                                        info!("PPPoE service received stop during reconnect delay");
+                                                        ctx.set_service_state("pppoe", ServiceState::Inactive);
+                                                        break 'main_loop;
+                                                    }
+                                                    ServiceAction::Restart => {
+                                                        info!("PPPoE service received restart during reconnect delay, retrying immediately");
+                                                        self.attempt = 0;
+                                                    }
+                                                    ServiceAction::Start => {}
+                                                }
+                                            }
+                                            LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => {
+                                                info!("PPPoE service received config change during reconnect delay, retrying immediately");
+                                                if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
+                                                    self.cfg = dynamic_cfg;
+                                                }
+                                                if !self.cfg.enabled {
+                                                    ctx.set_service_state("pppoe", ServiceState::Inactive);
+                                                    break 'main_loop;
+                                                }
+                                                self.attempt = 0;
+                                            }
+                                            _ => {}
+                                        }
                                     }
                                 }
                             }
@@ -511,25 +710,8 @@ impl AsyncService for PppoeService {
         Ok(())
     }
 
-    async fn cleanup(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
-        ctx.set_pppoe_ready(false);
-        if let Some((wan_mac, ac_mac, session_id)) = self.active_session.take()
-            && self.cfg.send_padt_on_shutdown
-        {
-            info!(
-                wan_iface = %self.cfg.wan_iface,
-                session_id,
-                "Sending PPPoE PADT frame during service cleanup"
-            );
-            let _ = send_padt(&self.cfg.wan_iface, wan_mac, ac_mac, session_id);
-        }
-        deconfigure_interface(
-            &self.cfg.wan_iface,
-            self.cfg.dataplane == PppoeDataplane::Ebpf,
-            None,
-        )
-        .await;
-        let _ = ctx.apply(DeviceUpdate::PppoeStatusUpdated { status: None });
+    async fn cleanup(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
+        self.teardown_active_session("Service stopped or shut down".to_string()).await;
         Ok(())
     }
 }
