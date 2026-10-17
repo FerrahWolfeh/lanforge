@@ -50,6 +50,7 @@ impl Middleware for RewriteMiddleware {
                 answer,
                 protocol: req.protocol,
                 filter: None,
+                coalesce_id: None,
             });
 
             return Some(Ok(true));

@@ -221,6 +221,8 @@ pub enum QueryResult {
     Rewritten = 6,
     /// Answered from the cache as a blocked domain.
     CachedBlock = 7,
+    /// Answered by coalescing with an in-flight upstream query.
+    Coalesced = 8,
 }
 
 impl std::fmt::Display for QueryResult {
@@ -234,6 +236,7 @@ impl std::fmt::Display for QueryResult {
             Self::Cached => write!(f, "Cached"),
             Self::Rewritten => write!(f, "Rewritten"),
             Self::CachedBlock => write!(f, "CachedBlock"),
+            Self::Coalesced => write!(f, "Coalesced"),
         }
     }
 }
@@ -287,6 +290,9 @@ pub struct QueryLogEntry {
     /// Adblock / filter match attribution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<Box<FilterMatch>>,
+    /// In-flight batch correlation ID when query was coalesced or was a coalesce leader.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coalesce_id: Option<u64>,
 }
 
 /// A single DNS record entry.

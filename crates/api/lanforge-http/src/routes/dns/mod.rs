@@ -210,6 +210,7 @@ fn handle_dns_logs_follow(
                     "answer": entry.answer,
                     "protocol": entry.protocol,
                     "filter": entry.filter,
+                    "coalesce_id": entry.coalesce_id,
                     "event": {
                         "Dns": {
                             "QueryResolved": {
@@ -224,6 +225,7 @@ fn handle_dns_logs_follow(
                                 "cached": entry.cached,
                                 "answer": entry.answer,
                                 "filter": entry.filter,
+                                "coalesce_id": entry.coalesce_id,
                             }
                         }
                     }

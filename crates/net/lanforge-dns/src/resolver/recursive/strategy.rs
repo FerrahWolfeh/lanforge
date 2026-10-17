@@ -12,7 +12,7 @@ use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::broadcast::Sender;
 use tokio::task::JoinSet;
@@ -20,7 +20,9 @@ use tokio::time::{Instant, sleep};
 
 pub use lanforge_types::network::dns::UpstreamMode;
 
-type InFlightTx = Sender<Result<(Vec<u8>, bool, bool), String>>;
+static COALESCE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+type InFlightTx = Sender<Result<(Vec<u8>, bool, bool, u64), String>>;
 type QueryResult = (std::net::SocketAddr, Result<(Vec<u8>, bool, bool), DnsError>);
 type QueryFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = QueryResult> + Send + 'a>>;
 
@@ -31,6 +33,8 @@ pub struct Resolved {
     pub is_block: bool,
     /// Served from another in-flight query's upstream answer (no extra upstream I/O).
     pub coalesced: bool,
+    /// In-flight batch correlation ID when query was coalesced or was a coalesce leader with followers.
+    pub coalesce_id: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -84,7 +88,7 @@ pub struct UpstreamStrategy {
     conditional_routes: parking_lot::RwLock<Arc<[Arc<ConditionalRoute>]>>,
     fallback_upstreams: parking_lot::RwLock<Arc<[Arc<UpstreamManager>]>>,
     pub rr_index: AtomicUsize,
-    in_flight: DashMap<CacheKey, InFlightTx>,
+    in_flight: DashMap<CacheKey, (InFlightTx, u64)>,
 }
 
 impl UpstreamStrategy {
@@ -268,17 +272,18 @@ impl UpstreamStrategy {
         let key = CacheKey::from_question(question);
 
         let (mut rx, is_leader) = match self.in_flight.entry(key.clone()) {
-            dashmap::Entry::Occupied(occ) => (Some(occ.get().subscribe()), false),
+            dashmap::Entry::Occupied(occ) => (Some(occ.get().0.subscribe()), false),
             dashmap::Entry::Vacant(vac) => {
-                let (tx, _) = tokio::sync::broadcast::channel(1);
-                vac.insert(tx);
+                let batch_id = COALESCE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+                let (tx, _) = tokio::sync::broadcast::channel(16);
+                vac.insert((tx, batch_id));
                 (None, true)
             }
         };
 
         if let Some(ref mut rx) = rx {
             match rx.recv().await {
-                Ok(Ok((mut data, cached, is_block))) => {
+                Ok(Ok((mut data, cached, is_block, batch_id))) => {
                     if data.len() >= 2 {
                         let id_bytes = header.id().to_be_bytes();
                         data[0] = id_bytes[0];
@@ -289,6 +294,7 @@ impl UpstreamStrategy {
                         cached,
                         is_block,
                         coalesced: true,
+                        coalesce_id: Some(batch_id),
                     });
                 }
                 Ok(Err(e)) => return Err(DnsError::Generic(e)),
@@ -299,7 +305,7 @@ impl UpstreamStrategy {
         }
 
         struct InFlightGuard<'a> {
-            in_flight: &'a DashMap<CacheKey, InFlightTx>,
+            in_flight: &'a DashMap<CacheKey, (InFlightTx, u64)>,
             key: Option<CacheKey>,
         }
         impl<'a> Drop for InFlightGuard<'a> {
@@ -315,13 +321,17 @@ impl UpstreamStrategy {
             key: if is_leader { Some(key.clone()) } else { None },
         };
 
-        let res = self.resolve_internal(data, header, question).await;
+        let mut res = self.resolve_internal(data, header, question).await;
 
         guard.key = None;
-        if let Some((_, tx)) = self.in_flight.remove(&key) {
+        if let Some((_, (tx, batch_id))) = self.in_flight.remove(&key) {
+            let followers = tx.receiver_count();
+            if followers > 0 && let Ok(ref mut r) = res {
+                r.coalesce_id = Some(batch_id);
+            }
             let _ = tx.send(
                 res.as_ref()
-                    .map(|r| (r.data.clone(), r.cached, r.is_block))
+                    .map(|r| (r.data.clone(), r.cached, r.is_block, batch_id))
                     .map_err(|e| e.to_string()),
             );
         }
@@ -413,6 +423,7 @@ impl UpstreamStrategy {
                     cached,
                     is_block,
                     coalesced: false,
+                    coalesce_id: None,
                 }),
                 Err(e) => {
                     tracing::debug!(upstream = %mgr.target.addr, error = %e, "DNS upstream attempt failed");
@@ -452,6 +463,7 @@ impl UpstreamStrategy {
                                 cached,
                                 is_block,
                                 coalesced: false,
+                                coalesce_id: None,
                             });
                         }
                         Some((addr, Err(e))) => {
@@ -528,6 +540,7 @@ impl UpstreamStrategy {
                         cached,
                         is_block,
                         coalesced: false,
+                        coalesce_id: None,
                     });
                 }
                 Ok(Err(e)) => last_err = e,
@@ -568,6 +581,7 @@ impl UpstreamStrategy {
                         cached,
                         is_block,
                         coalesced: false,
+                        coalesce_id: None,
                     });
                 }
                 Err(e) => {
@@ -608,6 +622,7 @@ impl UpstreamStrategy {
                         cached,
                         is_block,
                         coalesced: false,
+                        coalesce_id: None,
                     });
                 }
                 Err(e) => {

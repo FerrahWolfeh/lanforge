@@ -90,6 +90,12 @@ async fn test_coalesced_queries_patch_transaction_id_and_deduplicate() {
         .count();
     assert_eq!(coalesced_count, 2, "Expected exactly 2 coalesced responses");
 
+    // Verify all 3 queries share the exact same coalesce_id
+    let batch_id = res1.coalesce_id;
+    assert!(batch_id.is_some(), "Expected leader and followers to have coalesce_id");
+    assert_eq!(res2.coalesce_id, batch_id);
+    assert_eq!(res3.coalesce_id, batch_id);
+
     // Verify mock upstream received exactly 1 query packet
     assert_eq!(packet_count.load(Ordering::SeqCst), 1, "Expected exactly 1 packet to hit upstream");
 }
@@ -184,4 +190,19 @@ async fn test_coalesced_queries_pipeline_metrics() {
     assert_eq!(dns_ctx.stats.recursions.load(Ordering::Relaxed), 1);
     // None counted as cache hits (they are coalesced in-flight queries)
     assert_eq!(dns_ctx.stats.cache_hits.load(Ordering::Relaxed), 0);
+
+    // Query log verification:
+    if let Some(log) = &dns_ctx.query_log {
+        let entries = log.get_recent(10);
+        assert_eq!(entries.len(), 3);
+        let coalesced_count = entries
+            .iter()
+            .filter(|e| e.result == lanforge_types::network::dns::QueryResult::Coalesced)
+            .count();
+        assert_eq!(coalesced_count, 2, "Expected 2 log entries with QueryResult::Coalesced");
+        let batch_id = entries[0].coalesce_id;
+        assert!(batch_id.is_some(), "Expected batch coalesce_id to be populated in log");
+        assert_eq!(entries[1].coalesce_id, batch_id);
+        assert_eq!(entries[2].coalesce_id, batch_id);
+    }
 }

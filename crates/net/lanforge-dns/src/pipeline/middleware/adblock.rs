@@ -50,6 +50,7 @@ impl Middleware for AdblockMiddleware {
                     answer,
                     protocol: req.protocol,
                     filter: Some(Box::new(m)),
+                    coalesce_id: None,
                 });
                 return Some(Ok(true));
             }

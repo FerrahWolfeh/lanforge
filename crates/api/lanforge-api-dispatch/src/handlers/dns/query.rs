@@ -107,6 +107,7 @@ impl ClientContext {
                                 cached: q.cached,
                                 answer: q.answer,
                                 filter: q.filter,
+                                coalesce_id: q.coalesce_id,
                             }
                         })
                         .collect()

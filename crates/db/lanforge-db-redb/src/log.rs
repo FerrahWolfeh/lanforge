@@ -351,7 +351,7 @@ impl LogStore for RedbDatabase {
                                 bucket.blocked += 1;
                                 "blocked"
                             }
-                            QueryResult::Cached => {
+                            QueryResult::Cached | QueryResult::Coalesced => {
                                 bucket.cached += 1;
                                 "cached"
                             }
@@ -961,7 +961,7 @@ impl LogStore for RedbDatabase {
                         bucket.blocked += 1;
                         "blocked"
                     }
-                    QueryResult::Cached => {
+                    QueryResult::Cached | QueryResult::Coalesced => {
                         bucket.cached += 1;
                         "cached"
                     }

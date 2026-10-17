@@ -815,6 +815,7 @@ fn format_log_entry(entry: &DnsQueryLogEntry, ip_to_host: &HashMap<String, Strin
             QueryResult::Local => "Local".green().to_string(),
             QueryResult::Forwarded => "Forwarded".green().to_string(),
             QueryResult::Cached => "Cached".cyan().to_string(),
+            QueryResult::Coalesced => "Coalesced".cyan().bold().to_string(),
             QueryResult::NxDomain => "NxDomain".yellow().to_string(),
             QueryResult::Error => "Error".red().to_string(),
         };
@@ -945,6 +946,7 @@ async fn follow_dns_logs(args: DnsLogsArgs, client: &LanforgeClient, printer: &P
                             qtype: q.qtype,
                             upstream_us: q.upstream_us,
                             filter: None,
+                            coalesce_id: q.coalesce_id,
                         };
                         let cols = format_log_entry(&entry, &ip_to_host, printer);
                         println!("{}", cols.join(" │ "));
@@ -999,6 +1001,7 @@ async fn follow_dns_logs(args: DnsLogsArgs, client: &LanforgeClient, printer: &P
                         qtype: q.qtype,
                         upstream_us: q.upstream_us,
                         filter: None,
+                        coalesce_id: q.coalesce_id,
                     };
                     let cols = format_log_entry(&entry, &ip_to_host, printer);
                     println!("{}", cols.join(" │ "));
@@ -2047,6 +2050,7 @@ mod tests {
             qtype: DnsRecordType::A,
             upstream_us: 15_400,
             filter: None,
+            coalesce_id: None,
         };
         let host_map = HashMap::new();
         let printer = Printer::new(false, true, false);

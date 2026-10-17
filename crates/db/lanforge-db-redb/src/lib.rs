@@ -557,6 +557,7 @@ mod tests {
             answer: Some("93.184.216.34".to_string()),
             protocol: TransportProtocol::Udp,
             filter: None,
+            coalesce_id: None,
         };
         let query2 = QueryLogEntry {
             timestamp: 1700000020,
@@ -570,6 +571,7 @@ mod tests {
             answer: None,
             protocol: TransportProtocol::Udp,
             filter: None,
+            coalesce_id: None,
         };
         db.record_dns_queries_batch(&[query1, query2]).await.unwrap();
 

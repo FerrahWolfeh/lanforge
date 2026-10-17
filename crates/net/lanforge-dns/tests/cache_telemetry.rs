@@ -118,6 +118,7 @@ async fn query_logging_ring_buffer() {
             answer: Some("1.1.1.1".to_string()),
             protocol: TransportProtocol::Udp,
             filter: None,
+            coalesce_id: None,
         });
     }
 

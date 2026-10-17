@@ -765,7 +765,8 @@ export type QueryResult =
 	| 'error'
 	| 'cached'
 	| 'rewritten'
-	| 'cachedblock';
+	| 'cachedblock'
+	| 'coalesced';
 
 export interface DnsQueryLogEntry {
 	timestamp: number;
@@ -779,6 +780,7 @@ export interface DnsQueryLogEntry {
 	cached: boolean;
 	answer?: string | null;
 	filter?: FilterMatch | null;
+	coalesce_id?: number | null;
 }
 
 export interface DnsUpstreamEntry {

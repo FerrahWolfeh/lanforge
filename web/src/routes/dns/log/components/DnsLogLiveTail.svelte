@@ -185,6 +185,12 @@
 				class: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
 			};
 		}
+		if (lower === "coalesced") {
+			return {
+				label: "Coalesced",
+				class: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20",
+			};
+		}
 		return {
 			label: "Forwarded",
 			class: "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20",
@@ -369,8 +375,9 @@
 						{@const answerClean = cleanAnswer(entry.answer)}
 						{@const style = typeVariants[entry.qtype] || "bg-secondary text-secondary-foreground border-border"}
 						{@const badgeInfo = getResultBadge(entry.result, entry.cached, entry.filter)}
+						{@const isCoalesced = entry.result === "coalesced"}
 						<Table.Row
-							class="hover:bg-muted/50 transition-colors cursor-pointer group text-xs font-normal"
+							class="hover:bg-muted/50 transition-colors cursor-pointer group text-xs font-normal {entry.coalesce_id != null ? 'border-l-4 border-l-cyan-500/70' : ''}"
 							onclick={() => onInspect(entry)}
 						>
 							<!-- Time -->
@@ -404,7 +411,10 @@
 
 							<!-- Domain Name -->
 							<Table.Cell class="font-medium">
-								<div class="flex items-center gap-1.5">
+								<div class="flex items-center gap-1.5 {isCoalesced ? 'pl-2' : ''}">
+									{#if isCoalesced}
+										<span class="text-cyan-600 dark:text-cyan-400 font-mono text-[11px] shrink-0" title="Coalesced into in-flight query">↳</span>
+									{/if}
 									<span class="truncate max-w-[220px] font-mono text-foreground font-medium" title={domainClean}>
 										{domainClean}
 									</span>
@@ -435,13 +445,18 @@
 
 							<!-- Outcome -->
 							<Table.Cell>
-								<Badge
-									variant="outline"
-									class="px-2 py-0.5 text-[10px] font-mono border font-semibold {badgeInfo.class}"
-									title={entry.filter?.rule ? `Rule: ${entry.filter.rule}` : undefined}
-								>
-									{badgeInfo.label}
-								</Badge>
+								<div class="flex items-center gap-1.5 flex-wrap">
+									<Badge
+										variant="outline"
+										class="px-2 py-0.5 text-[10px] font-mono border font-semibold {badgeInfo.class}"
+										title={entry.filter?.rule ? `Rule: ${entry.filter.rule}` : undefined}
+									>
+										{badgeInfo.label}
+									</Badge>
+									{#if isCoalesced}
+										<span class="text-[10px] text-cyan-600 dark:text-cyan-400 font-mono" title={`Batch #${entry.coalesce_id}`}>multiplex</span>
+									{/if}
+								</div>
 							</Table.Cell>
 
 							<!-- Latency -->

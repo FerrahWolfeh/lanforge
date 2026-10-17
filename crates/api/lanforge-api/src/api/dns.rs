@@ -121,6 +121,8 @@ pub struct DnsQueryLogEntry {
     pub upstream_us: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<Box<FilterMatch>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coalesce_id: Option<u64>,
 }
 
 /// A response containing recent DNS query logs.

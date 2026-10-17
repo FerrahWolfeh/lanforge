@@ -13,6 +13,7 @@
 	import GaugeIcon from "@lucide/svelte/icons/gauge";
 	import EyeOffIcon from "@lucide/svelte/icons/eye-off";
 	import BellOffIcon from "@lucide/svelte/icons/bell-off";
+	import LayersIcon from "@lucide/svelte/icons/layers";
 	import { toast } from "svelte-sonner";
 	import { dnsBlock, dnsAllow, dnsQuery, hostSet } from "$lib/api/client";
 	import type { DnsQueryLogEntry } from "$lib/api/types";
@@ -221,6 +222,12 @@
 				class: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
 			};
 		}
+		if (lower === "coalesced") {
+			return {
+				label: "Coalesced",
+				class: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20",
+			};
+		}
 		return {
 			label: "Forwarded",
 			class: "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20",
@@ -403,6 +410,34 @@
 								</div>
 							</div>
 						</div>
+					</div>
+				{/if}
+
+				<!-- Coalesced Batch Attribution -->
+				{#if entry.coalesce_id != null}
+					<div class="rounded-lg border border-cyan-500/30 bg-cyan-500/5 p-3 text-xs space-y-1.5">
+						<div class="flex items-center justify-between">
+							<div class="flex items-center gap-1.5 font-medium text-cyan-700 dark:text-cyan-300">
+								<LayersIcon class="h-3.5 w-3.5" />
+								<span>
+									{#if entry.result === 'coalesced'}
+										In-Flight Coalesced Query
+									{:else}
+										Coalescing Batch Leader
+									{/if}
+								</span>
+							</div>
+							<Badge variant="outline" class="bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20 font-mono text-[10px]">
+								Batch #{entry.coalesce_id}
+							</Badge>
+						</div>
+						<p class="text-muted-foreground text-[11px] leading-relaxed">
+							{#if entry.result === 'coalesced'}
+								This query arrived while an identical request was already in-flight to upstream resolvers. It was served in-memory from the leader's upstream response without generating extra network I/O.
+							{:else}
+								This query initiated upstream network resolution and served as the leader for concurrent in-flight requests for this domain.
+							{/if}
+						</p>
 					</div>
 				{/if}
 

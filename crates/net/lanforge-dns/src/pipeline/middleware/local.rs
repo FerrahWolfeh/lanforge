@@ -48,6 +48,7 @@ impl Middleware for LocalResolverMiddleware {
                 answer,
                 protocol: req.protocol,
                 filter: None,
+                coalesce_id: None,
             });
 
             return Some(Ok(true));

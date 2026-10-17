@@ -50,6 +50,8 @@ impl Middleware for UpstreamMiddleware {
                         QueryResult::CachedBlock
                     } else if r.cached {
                         QueryResult::Cached
+                    } else if r.coalesced {
+                        QueryResult::Coalesced
                     } else {
                         QueryResult::Forwarded
                     };
@@ -73,6 +75,7 @@ impl Middleware for UpstreamMiddleware {
                         answer,
                         protocol: req.protocol,
                         filter: req.filter_match.lock().clone(),
+                        coalesce_id: r.coalesce_id,
                     });
 
                     // Update cache size counter in real-time
@@ -100,6 +103,7 @@ impl Middleware for UpstreamMiddleware {
                         answer: Some(format!("SERVFAIL: {e}")),
                         protocol: req.protocol,
                         filter: req.filter_match.lock().clone(),
+                        coalesce_id: None,
                     });
 
                     Err(e)

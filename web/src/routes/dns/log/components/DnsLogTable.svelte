@@ -52,6 +52,17 @@
 	let copiedItem = $state<string | null>(null);
 	let selectedRecord = $state<DnsQueryLogEntry | null>(null);
 	let dialogOpen = $state(false);
+	let hoveredCoalesceId = $state<number | null>(null);
+
+	const batchCounts = $derived.by(() => {
+		const counts = new Map<number, number>();
+		for (const e of entries) {
+			if (e.coalesce_id != null) {
+				counts.set(e.coalesce_id, (counts.get(e.coalesce_id) ?? 0) + 1);
+			}
+		}
+		return counts;
+	});
 
 	const RECORD_TYPES: DnsRecordType[] = [
 		"A",
@@ -73,6 +84,7 @@
 		{ value: "cachedblock", label: "Cached Block" },
 		{ value: "forwarded", label: "Forwarded" },
 		{ value: "cached", label: "Cached" },
+		{ value: "coalesced", label: "Coalesced" },
 		{ value: "rewritten", label: "Rewritten" },
 		{ value: "local", label: "Local" },
 		{ value: "nxdomain", label: "NXDomain" },
@@ -217,6 +229,12 @@
 				class: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20",
 			};
 		}
+		if (lower === "coalesced") {
+			return {
+				label: "Coalesced",
+				class: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border-cyan-500/20",
+			};
+		}
 		return {
 			label: "Forwarded",
 			class: "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20",
@@ -303,9 +321,19 @@
 							entry.cached,
 							entry.filter,
 						)}
+						{@const isCoalesced = entry.result === "coalesced"}
+						{@const isLeader = entry.coalesce_id != null && !isCoalesced}
+						{@const isBatchHovered = entry.coalesce_id != null && hoveredCoalesceId === entry.coalesce_id}
+						{@const batchSize = entry.coalesce_id != null ? (batchCounts.get(entry.coalesce_id) ?? 1) : 0}
 						<Table.Row
-							class="hover:bg-muted/50 transition-colors cursor-pointer group"
+							class="transition-colors cursor-pointer group {entry.coalesce_id != null ? 'border-l-4 border-l-cyan-500/70' : ''} {isBatchHovered ? 'bg-cyan-500/[0.08] dark:bg-cyan-500/[0.12]' : 'hover:bg-muted/50'}"
 							onclick={() => inspectRecord(entry)}
+							onmouseenter={() => {
+								if (entry.coalesce_id != null) hoveredCoalesceId = entry.coalesce_id;
+							}}
+							onmouseleave={() => {
+								if (entry.coalesce_id != null && hoveredCoalesceId === entry.coalesce_id) hoveredCoalesceId = null;
+							}}
 						>
 							<!-- Time -->
 							<Table.Cell
@@ -356,7 +384,10 @@
 
 							<!-- Domain Name -->
 							<Table.Cell class="font-medium text-xs">
-								<div class="flex items-center gap-1.5">
+								<div class="flex items-center gap-1.5 {isCoalesced ? 'pl-3' : ''}">
+									{#if isCoalesced}
+										<span class="text-cyan-600 dark:text-cyan-400 font-mono text-[11px] shrink-0" title="Coalesced into in-flight query">↳</span>
+									{/if}
 									<span
 										class="truncate max-w-[220px] font-mono text-foreground font-medium"
 										title={domainClean}
@@ -400,13 +431,30 @@
 
 							<!-- Outcome Status Badge -->
 							<Table.Cell>
-								<Badge
-									variant="outline"
-									class="px-2 py-0.5 text-[11px] font-mono border font-semibold {badgeInfo.class}"
-									title={entry.filter?.rule ? `Rule: ${entry.filter.rule}` : undefined}
-								>
-									{badgeInfo.label}
-								</Badge>
+								<div class="flex items-center gap-1.5 flex-wrap">
+									<Badge
+										variant="outline"
+										class="px-2 py-0.5 text-[11px] font-mono border font-semibold {badgeInfo.class}"
+										title={entry.filter?.rule ? `Rule: ${entry.filter.rule}` : undefined}
+									>
+										{badgeInfo.label}
+									</Badge>
+									{#if isLeader && batchSize > 1}
+										<span
+											class="inline-flex items-center px-1.5 py-0.5 text-[10px] rounded font-mono font-medium bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/20"
+											title={`Leader of batch #${entry.coalesce_id} with ${batchSize} concurrent queries`}
+										>
+											Leader ({batchSize}x)
+										</span>
+									{:else if isCoalesced}
+										<span
+											class="text-[10px] text-cyan-600 dark:text-cyan-400 font-mono"
+											title={`In-flight multiplexed from batch #${entry.coalesce_id}`}
+										>
+											multiplex
+										</span>
+									{/if}
+								</div>
 							</Table.Cell>
 
 							<!-- Latency -->

@@ -52,6 +52,7 @@ impl Middleware for CacheMiddleware {
                 answer,
                 protocol: req.protocol,
                 filter: req.filter_match.lock().clone(),
+                coalesce_id: None,
             });
 
             Some(Ok(true))

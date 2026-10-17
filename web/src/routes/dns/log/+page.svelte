@@ -141,6 +141,12 @@
 							cached: Boolean(dnsEv.cached),
 							answer: dnsEv.answer ? String(dnsEv.answer) : null,
 							filter: dnsEv.filter ?? null,
+							coalesce_id:
+								typeof dnsEv.coalesce_id === "number"
+									? dnsEv.coalesce_id
+									: typeof parsed.coalesce_id === "number"
+										? parsed.coalesce_id
+										: null,
 						};
 
 						liveEntries = [newEntry, ...liveEntries.slice(0, bufferLimit - 1)];

@@ -59,6 +59,7 @@ pub struct DnsLogEvent {
     pub answer: Option<String>,
     pub protocol: TransportProtocol,
     pub filter: Option<Box<FilterMatch>>,
+    pub coalesce_id: Option<u64>,
 }
 
 /// Checks if a domain matches an exact or wildcard pattern (e.g. `*.sonarr.tv`) without heap allocation.
@@ -145,6 +146,7 @@ impl DnsContext {
                 answer: event.answer,
                 protocol: event.protocol,
                 filter: event.filter,
+                coalesce_id: event.coalesce_id,
             };
             log.push(entry.clone());
 
