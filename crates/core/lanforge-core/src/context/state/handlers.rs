@@ -171,6 +171,18 @@ impl State {
             }
         }
 
+        let transient_name = self
+            .transient_hosts
+            .get(&IpAddr::V6(ip))
+            .map(|t| t.hostname.name.clone());
+        if let Some(name) = transient_name
+            && let Some(dev) = self.devices.get(&mac)
+            && dev.hostname.name.is_empty()
+        {
+            let h_events = self.handle_hostname_hint_mdns(mac, &name);
+            events.extend(h_events);
+        }
+
         events
     }
 
@@ -181,7 +193,19 @@ impl State {
         ip: Ipv4Addr,
         is_active: bool,
     ) -> EventVec {
-        self.mutate_device(mac, |dev| dev.apply_arp_observation(ip, is_active))
+        let mut events = self.mutate_device(mac, |dev| dev.apply_arp_observation(ip, is_active));
+        let transient_name = self
+            .transient_hosts
+            .get(&IpAddr::V4(ip))
+            .map(|t| t.hostname.name.clone());
+        if let Some(name) = transient_name
+            && let Some(dev) = self.devices.get(&mac)
+            && dev.hostname.name.is_empty()
+        {
+            let h_events = self.handle_hostname_hint_mdns(mac, &name);
+            events.extend(h_events);
+        }
+        events
     }
 
     pub(crate) fn handle_hostname_hint_dhcp(&mut self, mac: MacAddr, hostname: &str) -> EventVec {
@@ -624,6 +648,20 @@ impl State {
                     discovery.insert_ndp(*v6, first_mac);
                 }
             }
+            let matched_name = entries.iter().find_map(|(_, ip, _)| {
+                self.transient_hosts
+                    .get(ip)
+                    .map(|t| t.hostname.name.clone())
+            });
+            if let Some(name) = matched_name
+                && let Some(dev) = self.devices.get(&first_mac)
+                && dev.hostname.name.is_empty()
+            {
+                let mut events = events;
+                let h_events = self.handle_hostname_hint_mdns(first_mac, &name);
+                events.extend(h_events);
+                return events;
+            }
             return events;
         }
 
@@ -660,6 +698,19 @@ impl State {
                     discovery.insert_ndp(*v6, mac);
                 }
             }
+
+            let matched_name = updates.iter().find_map(|(ip, _)| {
+                self.transient_hosts
+                    .get(ip)
+                    .map(|t| t.hostname.name.clone())
+            });
+            if let Some(name) = matched_name
+                && let Some(dev) = self.devices.get(&mac)
+                && dev.hostname.name.is_empty()
+            {
+                let h_events = self.handle_hostname_hint_mdns(mac, &name);
+                events.extend(h_events);
+            }
         }
         events
     }
@@ -685,6 +736,15 @@ impl State {
         hostname: Hostname,
         origin: TransientOrigin,
     ) -> EventVec {
+        let mut events = EventVec::new();
+        if let Some(&mac) = self.indices.ip_index.get(&ip)
+            && let Some(dev) = self.devices.get(&mac)
+            && dev.hostname.name.is_empty()
+        {
+            let h_events = self.handle_hostname_hint_mdns(mac, &hostname.name);
+            events.extend(h_events);
+        }
+
         let host = TransientHost::new(hostname, origin);
         if self.transient_hosts.len() >= 1000 && !self.transient_hosts.contains_key(&ip) {
             let mut oldest_ip = None;
@@ -700,7 +760,8 @@ impl State {
             }
         }
         self.transient_hosts.insert(ip, host);
-        EventVec::new()
+
+        events
     }
 
     pub(crate) fn handle_add_reverse_resolver(&mut self, resolver: DnsReverseResolver) -> EventVec {

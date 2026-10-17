@@ -126,18 +126,10 @@ impl IcmpPinger {
                                     let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), n) };
                                     if let Some(sock_addr) = addr.as_socket() {
                                         let ip = sock_addr.ip();
-                                        if n >= 28 {
-                                            let ihl = ((bytes[0] & 0x0f) * 4) as usize;
-                                            if n >= ihl + 8 {
-                                                let icmp_type = bytes[ihl];
-                                                if icmp_type == 0 { // Echo Reply
-                                                    let id = u16::from_be_bytes([bytes[ihl + 4], bytes[ihl + 5]]);
-                                                    let seq = u16::from_be_bytes([bytes[ihl + 6], bytes[ihl + 7]]);
-                                                    let mut reg = registry.lock();
-                                                    if let Some(tx) = reg.remove(&(ip, id, seq)) {
-                                                        let _ = tx.send(());
-                                                    }
-                                                }
+                                        if let Some((id, seq)) = parse_icmpv4_echo_reply(bytes) {
+                                            let mut reg = registry.lock();
+                                            if let Some(tx) = reg.remove(&(ip, id, seq)) {
+                                                let _ = tx.send(());
                                             }
                                         }
                                     }
@@ -167,15 +159,10 @@ impl IcmpPinger {
                                     let bytes = unsafe { std::slice::from_raw_parts(buf.as_ptr().cast::<u8>(), n) };
                                     if let Some(sock_addr) = addr.as_socket() {
                                         let ip = sock_addr.ip();
-                                        if n >= 8 {
-                                            let icmp_type = bytes[0];
-                                            if icmp_type == 129 { // Echo Reply
-                                                let id = u16::from_be_bytes([bytes[4], bytes[5]]);
-                                                let seq = u16::from_be_bytes([bytes[6], bytes[7]]);
-                                                let mut reg = registry.lock();
-                                                if let Some(tx) = reg.remove(&(ip, id, seq)) {
-                                                    let _ = tx.send(());
-                                                }
+                                        if let Some((id, seq)) = parse_icmpv6_echo_reply(bytes) {
+                                            let mut reg = registry.lock();
+                                            if let Some(tx) = reg.remove(&(ip, id, seq)) {
+                                                let _ = tx.send(());
                                             }
                                         }
                                     }
@@ -263,6 +250,50 @@ impl IcmpPinger {
     }
 }
 
+/// Parses a raw IPv4 packet containing an ICMP Echo Reply.
+///
+/// IPv4 raw sockets deliver the full IP header along with the ICMP payload.
+/// This function verifies the IP header length (IHL) and extracts the ICMP
+/// Identifier and Sequence Number if the packet is an Echo Reply (Type 0).
+#[must_use]
+pub const fn parse_icmpv4_echo_reply(bytes: &[u8]) -> Option<(u16, u16)> {
+    if bytes.len() < 28 {
+        return None;
+    }
+    let ihl = ((bytes[0] & 0x0f) * 4) as usize;
+    if ihl < 20 || bytes.len() < ihl + 8 {
+        return None;
+    }
+    let icmp_type = bytes[ihl];
+    if icmp_type == 0 {
+        let id = u16::from_be_bytes([bytes[ihl + 4], bytes[ihl + 5]]);
+        let seq = u16::from_be_bytes([bytes[ihl + 6], bytes[ihl + 7]]);
+        Some((id, seq))
+    } else {
+        None
+    }
+}
+
+/// Parses an `ICMPv6` packet containing an `ICMPv6` Echo Reply.
+///
+/// On Linux raw sockets for `IPPROTO_ICMPV6`, the kernel strips the IPv6 header
+/// and delivers the `ICMPv6` message directly. This function extracts the
+/// `ICMPv6` Identifier and Sequence Number if the packet is an Echo Reply (Type 129).
+#[must_use]
+pub const fn parse_icmpv6_echo_reply(bytes: &[u8]) -> Option<(u16, u16)> {
+    if bytes.len() < 8 {
+        return None;
+    }
+    let icmp_type = bytes[0];
+    if icmp_type == 129 {
+        let id = u16::from_be_bytes([bytes[4], bytes[5]]);
+        let seq = u16::from_be_bytes([bytes[6], bytes[7]]);
+        Some((id, seq))
+    } else {
+        None
+    }
+}
+
 fn checksum(data: &[u8]) -> u16 {
     let mut sum = 0u32;
     let chunks = data.as_chunks::<2>();
@@ -276,4 +307,127 @@ fn checksum(data: &[u8]) -> u16 {
         sum = (sum & 0xffff) + (sum >> 16);
     }
     u16::try_from(!sum & 0xffff).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_icmpv4_echo_reply_standard_header() {
+        // Standard IPv4 packet: 20 bytes IP header (IHL = 5) + 8 bytes ICMP Echo Reply
+        let mut packet = vec![0u8; 28];
+        packet[0] = 0x45; // Version 4, IHL = 5 (20 bytes)
+        packet[20] = 0; // ICMP Type: Echo Reply
+        packet[21] = 0; // ICMP Code
+        packet[24..26].copy_from_slice(&0x1234u16.to_be_bytes()); // ID
+        packet[26..28].copy_from_slice(&0x0042u16.to_be_bytes()); // Seq
+
+        let res = parse_icmpv4_echo_reply(&packet);
+        assert_eq!(res, Some((0x1234, 0x0042)));
+    }
+
+    #[test]
+    fn test_parse_icmpv4_echo_reply_with_options() {
+        // IPv4 packet with options: 24 bytes IP header (IHL = 6) + 8 bytes ICMP Echo Reply
+        let mut packet = vec![0u8; 32];
+        packet[0] = 0x46; // Version 4, IHL = 6 (24 bytes)
+        packet[24] = 0; // ICMP Type: Echo Reply
+        packet[25] = 0; // ICMP Code
+        packet[28..30].copy_from_slice(&0xABCDu16.to_be_bytes()); // ID
+        packet[30..32].copy_from_slice(&0x0100u16.to_be_bytes()); // Seq
+
+        let res = parse_icmpv4_echo_reply(&packet);
+        assert_eq!(res, Some((0xABCD, 0x0100)));
+    }
+
+    #[test]
+    fn test_parse_icmpv4_non_reply_types() {
+        let mut packet = vec![0u8; 28];
+        packet[0] = 0x45;
+
+        // Type 8: Echo Request
+        packet[20] = 8;
+        assert_eq!(parse_icmpv4_echo_reply(&packet), None);
+
+        // Type 3: Destination Unreachable
+        packet[20] = 3;
+        assert_eq!(parse_icmpv4_echo_reply(&packet), None);
+
+        // Type 11: Time Exceeded
+        packet[20] = 11;
+        assert_eq!(parse_icmpv4_echo_reply(&packet), None);
+    }
+
+    #[test]
+    fn test_parse_icmpv4_truncated_and_corrupt() {
+        // Truncated: less than 28 bytes
+        assert_eq!(parse_icmpv4_echo_reply(&[]), None);
+        assert_eq!(parse_icmpv4_echo_reply(&[0x45; 27]), None);
+
+        // Invalid IHL (< 5, which means < 20 bytes IP header)
+        let mut packet = vec![0u8; 28];
+        packet[0] = 0x44; // IHL = 4 (16 bytes, invalid for IPv4)
+        assert_eq!(parse_icmpv4_echo_reply(&packet), None);
+
+        // Buffer shorter than IHL + 8
+        let mut packet = vec![0u8; 30];
+        packet[0] = 0x48; // IHL = 8 (32 bytes required for IP header alone)
+        assert_eq!(parse_icmpv4_echo_reply(&packet), None);
+    }
+
+    #[test]
+    fn test_parse_icmpv6_echo_reply() {
+        // Direct ICMPv6 packet: 8 bytes
+        let mut packet = [0u8; 8];
+        packet[0] = 129; // ICMPv6 Type: Echo Reply
+        packet[1] = 0; // Code
+        packet[4..6].copy_from_slice(&0xCAFEu16.to_be_bytes()); // ID
+        packet[6..8].copy_from_slice(&0x0007u16.to_be_bytes()); // Seq
+
+        let res = parse_icmpv6_echo_reply(&packet);
+        assert_eq!(res, Some((0xCAFE, 7)));
+    }
+
+    #[test]
+    fn test_parse_icmpv6_non_reply_types() {
+        let mut packet = [0u8; 8];
+
+        // Type 128: Echo Request
+        packet[0] = 128;
+        assert_eq!(parse_icmpv6_echo_reply(&packet), None);
+
+        // Type 135: Neighbor Solicitation
+        packet[0] = 135;
+        assert_eq!(parse_icmpv6_echo_reply(&packet), None);
+
+        // Type 136: Neighbor Advertisement
+        packet[0] = 136;
+        assert_eq!(parse_icmpv6_echo_reply(&packet), None);
+    }
+
+    #[test]
+    fn test_parse_icmpv6_truncated() {
+        assert_eq!(parse_icmpv6_echo_reply(&[]), None);
+        assert_eq!(parse_icmpv6_echo_reply(&[129u8; 7]), None);
+    }
+
+    #[test]
+    fn test_checksum_calculation() {
+        let mut packet = [0u8; 16];
+        packet[0] = 8; // Echo request
+        packet[1] = 0;
+        packet[4..6].copy_from_slice(&12345u16.to_be_bytes());
+        packet[6..8].copy_from_slice(&1u16.to_be_bytes());
+        packet[8..16].copy_from_slice(b"testping");
+
+        let cs = checksum(&packet);
+        assert_ne!(cs, 0);
+
+        // When the checksum is inserted into the packet at offset 2..4,
+        // recomputing checksum over the full packet must yield 0.
+        packet[2..4].copy_from_slice(&cs.to_be_bytes());
+        let verify = checksum(&packet);
+        assert_eq!(verify, 0, "Checksum verification should yield 0");
+    }
 }

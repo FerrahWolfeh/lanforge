@@ -77,18 +77,18 @@ fn ifindex_to_name(ifindex: u32) -> Option<String> {
 }
 
 #[derive(Default)]
-struct IfNameCache {
-    cache: std::collections::HashMap<u32, String>,
+pub(crate) struct IfNameCache {
+    pub(crate) cache: std::collections::HashMap<u32, String>,
 }
 
 impl IfNameCache {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             cache: std::collections::HashMap::new(),
         }
     }
 
-    fn get(&mut self, ifindex: u32) -> Option<&str> {
+    pub(crate) fn get(&mut self, ifindex: u32) -> Option<&str> {
         match self.cache.entry(ifindex) {
             std::collections::hash_map::Entry::Occupied(e) => Some(e.into_mut().as_str()),
             std::collections::hash_map::Entry::Vacant(e) => {
@@ -139,7 +139,7 @@ impl DiscoveryService {
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    fn flush_neighbor_batch(&self, batch: Vec<(MacAddr, IpAddr, bool)>) {
+    pub(crate) fn flush_neighbor_batch(&self, batch: Vec<(MacAddr, IpAddr, bool)>) {
         let start = Instant::now();
         let total = batch.len();
 
@@ -165,7 +165,7 @@ impl DiscoveryService {
             }));
     }
 
-    fn process_neighbor_event(
+    pub(crate) fn process_neighbor_event(
         &self,
         event: &NeighborEvent,
         ifname_cache: &mut IfNameCache,

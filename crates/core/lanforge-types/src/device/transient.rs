@@ -10,6 +10,7 @@ use std::time::SystemTime;
 pub enum TransientOrigin {
     Tailscale,
     Wireguard,
+    Mdns,
     #[default]
     LocalPtr,
 }

@@ -1,5 +1,9 @@
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::Arc;
 
+use lanforge_core::bus::{DeviceEvent, EventBus, LanforgeEvent};
+use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::state::State;
 use lanforge_core::utils::{ip_matches_prefix, mac_from_eui64_link_local};
 use lanforge_types::{identifiers::MacAddr, network::NeighborEvent, update::DeviceUpdate};
 use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload};
@@ -10,7 +14,26 @@ use rtnetlink::packet_route::{
     },
 };
 
+use crate::ndp::config::MonitorConfig;
 use crate::ndp::utils::{extract_neigh_info, parse_neighbor_msg};
+use crate::ndp::{DiscoveryService, IfNameCache};
+
+fn create_test_discovery_service(
+    ctx: LanforgeContext,
+    target_ifindexes: Vec<u32>,
+) -> DiscoveryService {
+    let (conn, handle, _) = rtnetlink::new_connection().unwrap();
+    tokio::spawn(conn);
+    let (_tx, messages) = tokio::sync::broadcast::channel(16);
+    let cfg = MonitorConfig {
+        enabled: true,
+        ping_enabled: false,
+        ping_interval_secs: 60,
+        batch_interval_ms: 50,
+        ..Default::default()
+    };
+    DiscoveryService::new(cfg, handle, messages, target_ifindexes, ctx)
+}
 
 fn is_relevant_neigh_event(msg: &NetlinkMessage<RouteNetlinkMessage>, target_prefix: &str) -> bool {
     match &msg.payload {
@@ -136,7 +159,7 @@ fn extract_neigh_info_handles_failed() {
 #[test]
 fn extract_neigh_info_requires_both_ip_and_mac() {
     let ip: IpAddr = "fe80::1".parse().unwrap();
-    // MAC ausente
+    // Missing MAC
     let msg = mock_neigh_msg(NeighbourState::Reachable, ip, None, false);
     assert!(extract_neigh_info(&msg).is_none());
 }
@@ -256,7 +279,7 @@ fn parse_neighbor_msg_only_active() {
     let ip: Ipv6Addr = "fe80::1".parse().unwrap();
     let mac = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
 
-    // 1. Mensagem válida (Reachable)
+    // 1. Valid message (Reachable)
     let mut msg = NeighbourMessage::default();
     msg.header.state = NeighbourState::Reachable;
     msg.header.family = AddressFamily::Inet6;
@@ -264,14 +287,14 @@ fn parse_neighbor_msg_only_active() {
         NeighbourAttribute::Destination(NeighbourAddress::Inet6(ip)),
         NeighbourAttribute::LinkLayerAddress(mac.to_vec()),
     ];
-    let event = parse_neighbor_msg(msg).expect("deve parsear");
+    let event = parse_neighbor_msg(msg).expect("should parse");
     if let NeighborEvent::Added { is_active, .. } = event {
         assert!(is_active);
     } else {
-        panic!("esperado Added");
+        panic!("expected Added");
     }
 
-    // 2. Mensagem inválida (Failed)
+    // 2. Invalid message (Failed)
     let mut msg_fail = NeighbourMessage::default();
     msg_fail.header.state = NeighbourState::Failed;
     assert!(parse_neighbor_msg(msg_fail).is_none());
@@ -285,4 +308,149 @@ fn extract_neigh_info_handles_delete() {
     let event = extract_neigh_info(&msg).expect("should extract delete");
 
     assert_eq!(event, NeighborEvent::Deleted { ip, ifindex: 2 });
+}
+
+#[tokio::test]
+async fn test_discovery_flush_neighbor_batch() {
+    let bus = Arc::new(EventBus::new());
+    let ctx = LanforgeContext::new(bus, State::new(), None);
+    let mut dev_rx = ctx.bus().subscribe_device();
+
+    let service = create_test_discovery_service(ctx.clone(), vec![2]);
+
+    let batch = vec![
+        (MacAddr([1, 2, 3, 4, 5, 1]), "192.168.1.101".parse().unwrap(), true),
+        (MacAddr([1, 2, 3, 4, 5, 2]), "192.168.1.102".parse().unwrap(), true),
+        (MacAddr([1, 2, 3, 4, 5, 3]), "192.168.1.103".parse().unwrap(), true),
+    ];
+
+    service.flush_neighbor_batch(batch);
+
+    // Verify all 3 devices are in state
+    assert_eq!(ctx.with_state(|s| s.devices.len()), 3);
+
+    // Verify summary event published
+    let mut found_summary = false;
+    while let Ok(timed_event) = dev_rx.try_recv() {
+        if let LanforgeEvent::Device(DeviceEvent::NeighborBatchSummary { total, new, .. }) = timed_event.event {
+            assert_eq!(total, 3);
+            assert_eq!(new, 3);
+            found_summary = true;
+            break;
+        }
+    }
+    assert!(found_summary, "NeighborBatchSummary must be published on bus");
+}
+
+#[tokio::test]
+async fn test_discovery_process_neighbor_event_batch_accumulation() {
+    let bus = Arc::new(EventBus::new());
+    let ctx = LanforgeContext::new(bus, State::new(), None);
+    let service = create_test_discovery_service(ctx.clone(), vec![2]);
+
+    let mut ifname_cache = IfNameCache::new();
+    let mut pending_batch = Vec::new();
+
+    // 1. Add 49 neighbor events: should NOT flush
+    for i in 1..=49 {
+        let event = NeighborEvent::Added {
+            mac: MacAddr([0xAA, 0xBB, 0x00, 0x00, 0x00, i]),
+            ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, i)),
+            is_active: true,
+            ifindex: 2,
+        };
+        service.process_neighbor_event(
+            &event,
+            &mut ifname_cache,
+            &ctx,
+            &mut pending_batch,
+            None,
+            None,
+        );
+    }
+
+    assert_eq!(pending_batch.len(), 49, "Batch should buffer 49 events without flushing");
+    assert_eq!(ctx.with_state(|s| s.devices.len()), 0, "No devices should be committed yet");
+
+    // 2. Add the 50th event: must trigger automatic flush
+    let event50 = NeighborEvent::Added {
+        mac: MacAddr([0xAA, 0xBB, 0x00, 0x00, 0x00, 50]),
+        ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 50)),
+        is_active: true,
+        ifindex: 2,
+    };
+    service.process_neighbor_event(
+        &event50,
+        &mut ifname_cache,
+        &ctx,
+        &mut pending_batch,
+        None,
+        None,
+    );
+
+    assert_eq!(pending_batch.len(), 0, "Batch must be emptied upon hitting threshold of 50");
+    assert_eq!(ctx.with_state(|s| s.devices.len()), 50, "All 50 devices must now be committed to state");
+}
+
+#[tokio::test]
+async fn test_discovery_process_neighbor_event_flushes_pending_on_non_added() {
+    let bus = Arc::new(EventBus::new());
+    let ctx = LanforgeContext::new(bus, State::new(), None);
+    let service = create_test_discovery_service(ctx.clone(), vec![2]);
+
+    let mut ifname_cache = IfNameCache::new();
+    let mut pending_batch = Vec::new();
+
+    // Buffer 5 events
+    for i in 1..=5 {
+        let event = NeighborEvent::Added {
+            mac: MacAddr([0x11, 0x22, 0x33, 0x44, 0x55, i]),
+            ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, i)),
+            is_active: true,
+            ifindex: 2,
+        };
+        service.process_neighbor_event(
+            &event,
+            &mut ifname_cache,
+            &ctx,
+            &mut pending_batch,
+            None,
+            None,
+        );
+    }
+    assert_eq!(pending_batch.len(), 5);
+    assert_eq!(ctx.with_state(|s| s.devices.len()), 0);
+
+    // Non-Added event (e.g. Failed) must flush pending batch before processing
+    let non_added = NeighborEvent::Failed {
+        ip: "10.0.0.99".parse().unwrap(),
+        ifindex: 2,
+    };
+    service.process_neighbor_event(
+        &non_added,
+        &mut ifname_cache,
+        &ctx,
+        &mut pending_batch,
+        None,
+        None,
+    );
+
+    assert_eq!(pending_batch.len(), 0, "Pending batch must be flushed on non-Added event");
+    assert_eq!(ctx.with_state(|s| s.devices.len()), 5, "The 5 buffered devices must be committed");
+}
+
+#[test]
+fn test_ifname_cache() {
+    let mut cache = IfNameCache::new();
+    assert!(cache.cache.is_empty());
+
+    // Insert dummy interface mapping
+    cache.cache.insert(42, "eth42".to_string());
+    assert_eq!(cache.get(42), Some("eth42"));
+
+    // Cache lookup should succeed without kernel call
+    assert_eq!(cache.get(42), Some("eth42"));
+
+    // Non-existent interface index returns None
+    assert_eq!(cache.get(999_999), None);
 }

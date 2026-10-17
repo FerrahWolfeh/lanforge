@@ -40,6 +40,14 @@ pub struct Hostname {
 
 impl Hostname {
     #[must_use]
+    pub fn new(name: impl Into<String>, origin: HostnameOrigin) -> Self {
+        Self {
+            name: name.into(),
+            origin,
+        }
+    }
+
+    #[must_use]
     pub fn sanitize(name: &str) -> String {
         let trimmed = name.trim_matches(|c: char| c.is_whitespace() || c == '\0');
         if trimmed.as_bytes().contains(&0) {
