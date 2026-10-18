@@ -156,7 +156,6 @@ async fn handle_doq_connection(
                     };
 
                     let mut resp_buf = Vec::with_capacity(512);
-                    let filter_match = parking_lot::Mutex::new(None);
                     match dns_ctx_arc
                         .pipeline
                         .run(
@@ -167,7 +166,6 @@ async fn handle_doq_connection(
                                 &question,
                                 peer.ip(),
                                 TransportProtocol::Quic,
-                                &filter_match,
                             ),
                             &mut resp_buf,
                         )

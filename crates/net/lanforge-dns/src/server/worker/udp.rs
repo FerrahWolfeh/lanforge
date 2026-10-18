@@ -12,19 +12,99 @@ use tracing::{error, trace};
 
 pub fn spawn_udp_worker(ctx: Arc<DnsContext>, transport: UdpTransport) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut buf = vec![0u8; 1500]; // Standard MTU-ish buffer
+        let mut buf = [0u8; 1500]; // Standard MTU-ish buffer on stack
+        let mut resp_buf = Vec::with_capacity(512); // Reused response buffer for inline fast-path
         loop {
             match transport.recv(&mut buf).await {
                 Ok((len, src)) => {
-                    let task_ctx = Arc::clone(&ctx);
-                    let task_transport = transport.clone();
-                    let data = buf[..len].to_vec();
+                    let len = len.min(buf.len());
+                    let packet_data = &buf[..len];
 
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_udp_query(task_ctx, task_transport, &data, src).await {
-                            trace!("UDP query handling failed: {:?}", e);
+                    let header = match WireHeader::parse(packet_data) {
+                        Some(h) => h,
+                        None => continue,
+                    };
+                    let question = match WireQuestion::parse(packet_data) {
+                        Some(q) => q,
+                        None => continue,
+                    };
+
+                    // Noise filtering (e.g. malformed IoT queries like empty qname or ":0")
+                    let mut labels = question.labels();
+                    let is_noise = match labels.next() {
+                        None => true,                                             // Empty qname (.)
+                        Some(l) if l == b":0" && labels.next().is_none() => true, // Literally ":0"
+                        _ => false,
+                    };
+
+                    let edns = WireOptScanner::scan(packet_data, &header, &question);
+
+                    if is_noise {
+                        resp_buf.clear();
+                        WireResponseWriter::write_error_response(
+                            packet_data,
+                            &question,
+                            1, // FORMERR
+                            edns,
+                            false,
+                            &mut resp_buf,
+                        );
+                        let _ = transport.send(&resp_buf, &src).await;
+                        continue;
+                    }
+
+                    resp_buf.clear();
+                    let mut req = DnsPipelineRequest::new(
+                        packet_data,
+                        &header,
+                        &question,
+                        src.ip(),
+                        TransportProtocol::Udp,
+                    );
+
+                    match ctx.pipeline.run_sync(&ctx, &mut req, &mut resp_buf) {
+                        Ok(true) => {
+                            // Handled synchronously in-place!
+                            // (Local LAN, Rewrite, Adblock, or Cache hit)
+                            // ZERO tokio::spawn, ZERO to_vec(), ZERO Arc<str> allocation!
+                            let _ = transport.send(&resp_buf, &src).await;
                         }
-                    });
+                        Ok(false) => {
+                            // Genuine cache miss! Upstream async network I/O needed.
+                            // Copy packet bytes into SmallVec<[u8; 128]> (stack buffer for <= 128B DNS queries;
+                            // safe heap spill if oversized EDNS0).
+                            let task_ctx = Arc::clone(&ctx);
+                            let task_transport = transport.clone();
+                            let data = smallvec::SmallVec::<[u8; 128]>::from_slice(packet_data);
+
+                            tokio::spawn(async move {
+                                if let Err(e) = handle_udp_upstream_query(
+                                    task_ctx,
+                                    task_transport,
+                                    data,
+                                    src,
+                                    edns,
+                                )
+                                .await
+                                {
+                                    trace!("UDP upstream query handling failed: {:?}", e);
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            trace!("Pipeline sync error (sending SERVFAIL): {:?}", e);
+                            resp_buf.clear();
+                            WireResponseWriter::write_error_response(
+                                packet_data,
+                                &question,
+                                2, // SERVFAIL
+                                edns,
+                                !ctx.recursive.is_empty(),
+                                &mut resp_buf,
+                            );
+                            let _ = transport.send(&resp_buf, &src).await;
+                        }
+                    }
                 }
                 Err(e) => {
                     error!("UDP worker receive error: {}", e);
@@ -36,72 +116,55 @@ pub fn spawn_udp_worker(ctx: Arc<DnsContext>, transport: UdpTransport) -> JoinHa
 }
 
 #[cfg_attr(feature = "hotpath", hotpath::measure)]
-async fn handle_udp_query(
+async fn handle_udp_upstream_query(
     ctx: Arc<DnsContext>,
     transport: UdpTransport,
-    data: &[u8],
+    data: smallvec::SmallVec<[u8; 128]>,
     src: SocketAddr,
+    edns: Option<WireOptScanner>,
 ) -> Result<(), DnsError> {
-    let header = WireHeader::parse(data).ok_or(DnsError::WireParseError)?;
-    let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
-
-    // Noise filtering (e.g. malformed IoT queries like empty qname or ":0")
-    let mut labels = question.labels();
-    let is_noise = match labels.next() {
-        None => true,                                             // Empty qname (.)
-        Some(l) if l == b":0" && labels.next().is_none() => true, // Literally ":0"
-        _ => false,
-    };
-
-    let edns = WireOptScanner::scan(data, &header, &question);
-
-    if is_noise {
-        let mut resp_buf = Vec::with_capacity(64);
-        WireResponseWriter::write_error_response(
-            data,
-            &question,
-            1, // FORMERR
-            edns,
-            false,
-            &mut resp_buf,
-        );
-        transport.send(&resp_buf, &src).await?;
-        return Ok(());
-    }
-
+    let header = WireHeader::parse(&data).ok_or(DnsError::WireParseError)?;
+    let question = WireQuestion::parse(&data).ok_or(DnsError::WireParseError)?;
     let mut resp_buf = Vec::with_capacity(512);
-    let filter_match = parking_lot::Mutex::new(None);
-    let run_res = ctx
-        .pipeline
-        .run(
-            &ctx,
-            DnsPipelineRequest::new(
-                data,
-                &header,
+
+    let req = DnsPipelineRequest::new(
+        &data,
+        &header,
+        &question,
+        src.ip(),
+        TransportProtocol::Udp,
+    );
+
+    match ctx.pipeline.run_upstream(&ctx, &req, &mut resp_buf).await {
+        Ok(true) => {
+            transport.send(&resp_buf, &src).await?;
+        }
+        Ok(false) => {
+            // Upstream produced no answer (e.g. unconfigured upstream) -> SERVFAIL
+            resp_buf.clear();
+            WireResponseWriter::write_error_response(
+                &data,
                 &question,
-                src.ip(),
-                TransportProtocol::Udp,
-                &filter_match,
-            ),
-            &mut resp_buf,
-        )
-        .await;
-
-    if let Err(e) = run_res {
-        trace!("Pipeline error (sending SERVFAIL): {:?}", e);
-        resp_buf.clear();
-        WireResponseWriter::write_error_response(
-            data,
-            &question,
-            2, // SERVFAIL
-            edns,
-            !ctx.recursive.is_empty(),
-            &mut resp_buf,
-        );
-    }
-
-    if !resp_buf.is_empty() {
-        transport.send(&resp_buf, &src).await?;
+                2, // SERVFAIL
+                edns,
+                !ctx.recursive.is_empty(),
+                &mut resp_buf,
+            );
+            transport.send(&resp_buf, &src).await?;
+        }
+        Err(e) => {
+            trace!("Pipeline upstream error (sending SERVFAIL): {:?}", e);
+            resp_buf.clear();
+            WireResponseWriter::write_error_response(
+                &data,
+                &question,
+                2, // SERVFAIL
+                edns,
+                !ctx.recursive.is_empty(),
+                &mut resp_buf,
+            );
+            transport.send(&resp_buf, &src).await?;
+        }
     }
 
     Ok(())

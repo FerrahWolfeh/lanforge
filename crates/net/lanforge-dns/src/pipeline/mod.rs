@@ -1,6 +1,6 @@
 pub mod middleware;
 
-use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
+use lanforge_dns_wire::{StackDomain, WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_types::device::TransientOrigin;
 use lanforge_types::network::dns::TransportProtocol;
 use lanforge_types::network::dns::{DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, FilterMatch};
@@ -8,11 +8,14 @@ use lanforge_types::network::{Hostname, HostnameOrigin};
 use lanforge_types::update::{DeviceUpdate, TransientHostUpdate};
 
 use crate::error::DnsError;
+use crate::pipeline::middleware::{
+    CacheMiddleware, LocalResolverMiddleware, RewriteMiddleware, UpstreamMiddleware,
+};
+#[cfg(feature = "adblock")]
+use crate::pipeline::middleware::AdblockMiddleware;
 use crate::resolver::recursive::UpstreamManager;
 use crate::server::DnsContext;
-use std::future::Future;
 use std::net::IpAddr;
-use std::pin::Pin;
 use std::sync::Arc;
 
 /// Represents a DNS query request passing through the pipeline.
@@ -23,8 +26,8 @@ pub struct DnsPipelineRequest<'a> {
     pub question: &'a WireQuestion<'a>,
     pub src_ip: IpAddr,
     pub protocol: TransportProtocol,
-    pub domain: Arc<str>,
-    pub filter_match: &'a parking_lot::Mutex<Option<Box<FilterMatch>>>,
+    pub domain: StackDomain,
+    pub filter_match: Option<Box<FilterMatch>>,
 }
 
 impl<'a> DnsPipelineRequest<'a> {
@@ -34,9 +37,8 @@ impl<'a> DnsPipelineRequest<'a> {
         question: &'a WireQuestion<'a>,
         src_ip: IpAddr,
         protocol: TransportProtocol,
-        filter_match: &'a parking_lot::Mutex<Option<Box<FilterMatch>>>,
     ) -> Self {
-        let domain = question.to_domain_lowercase_arc();
+        let domain = question.to_domain_lowercase_stack();
         Self {
             data,
             header,
@@ -44,7 +46,7 @@ impl<'a> DnsPipelineRequest<'a> {
             src_ip: src_ip.to_canonical(),
             protocol,
             domain,
-            filter_match,
+            filter_match: None,
         }
     }
 }
@@ -53,60 +55,95 @@ pub trait Middleware: Send + Sync {
     fn run_sync(
         &self,
         _ctx: &DnsContext,
-        _req: &DnsPipelineRequest<'_>,
+        _req: &mut DnsPipelineRequest<'_>,
         _resp: &mut Vec<u8>,
-    ) -> Option<Result<bool, DnsError>> {
-        None
+    ) -> Result<bool, DnsError> {
+        Ok(false)
     }
-
-    fn run<'a>(
-        &'a self,
-        ctx: &'a DnsContext,
-        req: DnsPipelineRequest<'a>,
-        resp: &'a mut Vec<u8>,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, DnsError>> + Send + 'a>>;
 }
 
 #[derive(Default)]
 pub struct Pipeline {
-    middlewares: Vec<Box<dyn Middleware>>,
+    pub rewrite: RewriteMiddleware,
+    pub local: LocalResolverMiddleware,
+    #[cfg(feature = "adblock")]
+    pub adblock: AdblockMiddleware,
+    pub cache: CacheMiddleware,
+    pub upstream: UpstreamMiddleware,
 }
 
 impl Pipeline {
     pub fn new() -> Self {
-        Self {
-            middlewares: Vec::new(),
-        }
+        Self::default()
     }
 
-    pub fn push<M: Middleware + 'static>(&mut self, m: M) {
-        self.middlewares.push(Box::new(m));
-    }
+    /// Backwards compatibility helper for existing service/test configurations.
+    pub fn push<M>(&mut self, _m: M) {}
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub async fn run(
+    /// Runs synchronous middleware in-place (Rewrite -> Local -> Adblock -> Cache).
+    ///
+    /// Returns `Ok(true)` if the query was fully answered synchronously without network I/O.
+    /// Returns `Ok(false)` on a cache miss that requires upstream recursive lookup.
+    #[inline]
+    pub fn run_sync(
         &self,
         ctx: &DnsContext,
-        req: DnsPipelineRequest<'_>,
+        req: &mut DnsPipelineRequest<'_>,
         resp: &mut Vec<u8>,
-    ) -> Result<(), DnsError> {
+    ) -> Result<bool, DnsError> {
         ctx.stats.inc_requests();
         ctx.stats.inc_protocol(req.protocol);
 
         // Trigger reverse DNS lookup in the background if the client IP is configured
         handle_reverse_dns_trigger(ctx, req.src_ip);
 
-        for m in &self.middlewares {
-            if let Some(res) = m.run_sync(ctx, &req, resp) {
-                if res? {
-                    return Ok(());
-                }
-                continue;
-            }
-            if m.run(ctx, req.clone(), resp).await? {
-                return Ok(());
-            }
+        // 1. Rewrite
+        if self.rewrite.run_sync(ctx, req, resp)? {
+            return Ok(true);
         }
+
+        // 2. Local
+        if self.local.run_sync(ctx, req, resp)? {
+            return Ok(true);
+        }
+
+        // 3. Adblock
+        #[cfg(feature = "adblock")]
+        if self.adblock.run_sync(ctx, req, resp)? {
+            return Ok(true);
+        }
+
+        // 4. Cache
+        if self.cache.run_sync(ctx, req, resp)? {
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    /// Runs the asynchronous recursive upstream resolver when `run_sync` returns `Ok(false)`.
+    #[inline]
+    pub async fn run_upstream(
+        &self,
+        ctx: &DnsContext,
+        req: &DnsPipelineRequest<'_>,
+        resp: &mut Vec<u8>,
+    ) -> Result<bool, DnsError> {
+        self.upstream.run(ctx, req, resp).await
+    }
+
+    /// Full pipeline execution combining synchronous fast-path with asynchronous upstream fallback.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub async fn run(
+        &self,
+        ctx: &DnsContext,
+        mut req: DnsPipelineRequest<'_>,
+        resp: &mut Vec<u8>,
+    ) -> Result<(), DnsError> {
+        if self.run_sync(ctx, &mut req, resp)? {
+            return Ok(());
+        }
+        self.run_upstream(ctx, &req, resp).await?;
         Ok(())
     }
 }

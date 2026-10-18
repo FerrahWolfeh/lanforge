@@ -152,7 +152,6 @@ async fn complex_ipv6_merging_logic() {
 async fn dns_suppresses_logging_for_ignored_client() {
     use lanforge_dns::server::DnsLogEvent;
     use lanforge_types::network::dns::{QueryResult, TransportProtocol};
-    use std::sync::Arc;
 
     let ctx = init_test_context();
     let mut cfg = mock_config();
@@ -173,7 +172,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
     dns_ctx.record_log(DnsLogEvent {
         src_ip: IpAddr::V4(ip1),
         src_mac: Some(mac1),
-        domain: Arc::from("example.com"),
+        domain: "example.com",
         qtype: DnsRecordType::A,
         result: QueryResult::Forwarded,
         upstream_us: 10,
@@ -195,7 +194,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
     dns_ctx.record_log(DnsLogEvent {
         src_ip: IpAddr::V4(ip1),
         src_mac: Some(mac1),
-        domain: Arc::from("example.com"),
+        domain: "example.com",
         qtype: DnsRecordType::A,
         result: QueryResult::Forwarded,
         upstream_us: 10,
@@ -211,7 +210,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
     dns_ctx.record_log(DnsLogEvent {
         src_ip: IpAddr::V4(ip2),
         src_mac: Some(mac2),
-        domain: Arc::from("example.com"),
+        domain: "example.com",
         qtype: DnsRecordType::A,
         result: QueryResult::Forwarded,
         upstream_us: 10,
@@ -227,7 +226,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
     dns_ctx.record_log(DnsLogEvent {
         src_ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 99)),
         src_mac: None,
-        domain: Arc::from("example.com"),
+        domain: "example.com",
         qtype: DnsRecordType::A,
         result: QueryResult::Forwarded,
         upstream_us: 10,
@@ -253,7 +252,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
     dns_ctx.record_log(DnsLogEvent {
         src_ip: IpAddr::V4(ip3),
         src_mac: Some(mac3),
-        domain: Arc::from("skyhook.sonarr.tv"),
+        domain: "skyhook.sonarr.tv",
         qtype: DnsRecordType::A,
         result: QueryResult::Forwarded,
         upstream_us: 10,
@@ -269,7 +268,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
     dns_ctx.record_log(DnsLogEvent {
         src_ip: IpAddr::V4(ip3),
         src_mac: Some(mac3),
-        domain: Arc::from("github.com"),
+        domain: "github.com",
         qtype: DnsRecordType::A,
         result: QueryResult::Forwarded,
         upstream_us: 10,
@@ -285,7 +284,7 @@ async fn dns_suppresses_logging_for_ignored_client() {
     dns_ctx.record_log(DnsLogEvent {
         src_ip: IpAddr::V4(ip2),
         src_mac: Some(mac2),
-        domain: Arc::from("skyhook.sonarr.tv"),
+        domain: "skyhook.sonarr.tv",
         qtype: DnsRecordType::A,
         result: QueryResult::Forwarded,
         upstream_us: 10,

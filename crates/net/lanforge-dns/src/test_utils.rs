@@ -101,7 +101,7 @@ pub fn create_test_dns_context(
         ctx: ctx.clone(),
         query_log: Some(Arc::new(crate::telemetry::QueryRing::new(100))),
         pipeline,
-        local: crate::resolver::LocalResolver::new(cfg_arc, ctx),
+        local: crate::resolver::LocalResolver::new(cfg_arc.clone(), ctx),
         recursive,
         cache,
         rewrites,
@@ -112,6 +112,9 @@ pub fn create_test_dns_context(
         soa_mailbox,
         reverse_managers: Arc::new(parking_lot::RwLock::new(HashMap::new())),
         resolving_ips: Arc::new(parking_lot::Mutex::new(std::collections::HashSet::new())),
+        compiled_ignore_clients: crate::server::CompiledIgnoreClients::compile(
+            &cfg_arc.query_log.ignore_clients,
+        ),
     })
 }
 

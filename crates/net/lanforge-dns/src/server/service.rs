@@ -8,7 +8,7 @@ use crate::resolver::{
     LocalResolver, RewriteStore,
     recursive::{DnsCache, UpstreamManager, UpstreamStrategy},
 };
-use crate::server::DnsContext;
+use crate::server::{CompiledIgnoreClients, DnsContext};
 use crate::telemetry::{DnsStats, DnsStatsSnapshot, QueryRing};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
@@ -193,6 +193,7 @@ impl DnsService {
             soa_mailbox,
             reverse_managers: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             resolving_ips: Arc::new(parking_lot::Mutex::new(HashSet::new())),
+            compiled_ignore_clients: CompiledIgnoreClients::compile(&self.cfg.query_log.ignore_clients),
         };
 
         let dns_ctx = Arc::new(dns_ctx);
@@ -843,14 +844,12 @@ async fn resolve_diagnostic_internal(
         return Err("Failed to parse query question".into());
     };
 
-    let filter_match = parking_lot::Mutex::new(None);
     let req = DnsPipelineRequest::new(
         &wire_query,
         &header,
         &question,
         IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
         TransportProtocol::Udp,
-        &filter_match,
     );
 
     if let Err(e) = dns_ctx.pipeline.run(dns_ctx, req, &mut resp_buf).await {

@@ -46,12 +46,65 @@ pub struct DnsContext {
     // Reverse DNS resolution managers and lock-free tracking
     pub reverse_managers: Arc<parking_lot::RwLock<HashMap<UpstreamTarget, Arc<UpstreamManager>>>>,
     pub resolving_ips: Arc<parking_lot::Mutex<HashSet<IpAddr>>>,
+
+    // Pre-compiled query log client ignore filters
+    pub compiled_ignore_clients: CompiledIgnoreClients,
 }
 
-pub struct DnsLogEvent {
+/// Pre-compiled ignore filter to eliminate string parsing and allocations on the DNS logging hot-path.
+#[derive(Debug, Clone, Default)]
+pub struct CompiledIgnoreClients {
+    pub ips: smallvec::SmallVec<[IpAddr; 4]>,
+    pub macs: smallvec::SmallVec<[MacAddr; 4]>,
+    pub hostnames: smallvec::SmallVec<[String; 4]>,
+}
+
+impl CompiledIgnoreClients {
+    #[must_use]
+    pub fn compile(raw: &[String]) -> Self {
+        let mut ips = smallvec::SmallVec::new();
+        let mut macs = smallvec::SmallVec::new();
+        let mut hostnames = smallvec::SmallVec::new();
+        for item in raw {
+            if let Ok(ip) = item.parse::<IpAddr>() {
+                ips.push(ip);
+            } else if let Some(mac) = MacAddr::parse(item) {
+                macs.push(mac);
+            } else {
+                hostnames.push(item.to_ascii_lowercase());
+            }
+        }
+        Self {
+            ips,
+            macs,
+            hostnames,
+        }
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn matches(&self, ip: IpAddr, mac: Option<MacAddr>, hostname: Option<&str>) -> bool {
+        if self.ips.contains(&ip) {
+            return true;
+        }
+        if let Some(m) = mac
+            && self.macs.contains(&m)
+        {
+            return true;
+        }
+        if let Some(host) = hostname
+            && self.hostnames.iter().any(|h| h.eq_ignore_ascii_case(host))
+        {
+            return true;
+        }
+        false
+    }
+}
+
+pub struct DnsLogEvent<'a> {
     pub src_ip: IpAddr,
     pub src_mac: Option<MacAddr>,
-    pub domain: Arc<str>,
+    pub domain: &'a str,
     pub qtype: DnsRecordType,
     pub result: QueryResult,
     pub upstream_us: u32,
@@ -84,50 +137,50 @@ pub fn matches_domain_pattern(domain: &str, pattern: &str) -> bool {
 }
 
 impl DnsContext {
-    pub fn record_log(&self, event: DnsLogEvent) {
+    pub fn record_log(&self, event: DnsLogEvent<'_>) {
         if self.query_log.is_none() {
             return;
         }
 
         // Noise filtering
-        if event.domain.is_empty() || event.domain.as_ref() == "." || event.domain.as_ref() == ":0"
-        {
+        if event.domain.is_empty() || event.domain == "." || event.domain == ":0" {
             return;
         }
 
-        // Check if device is configured to suppress DNS logging
-        let mac = event.src_mac.or_else(|| self.ctx.get_mac_by_ip(event.src_ip));
-        let dev = mac.and_then(|m| self.ctx.get_device(&m));
-        if let Some(dev) = &dev {
-            if dev.ignore_dns_log {
-                return;
-            }
-            if !dev.ignored_log_domains.is_empty() {
-                let domain = event.domain.as_ref();
-                for pattern in &dev.ignored_log_domains {
-                    if matches_domain_pattern(domain, pattern) {
-                        return;
+        // Check if device is configured to suppress DNS logging or matches ignore_clients (zero Device clones)
+        let (mac, should_ignore) = self.ctx.with_state(|state| {
+            let mac = event
+                .src_mac
+                .or_else(|| state.get_mac_by_ip(event.src_ip));
+            let dev = mac.as_ref().and_then(|m| state.devices.get(m));
+
+            if let Some(dev) = dev {
+                if dev.ignore_dns_log {
+                    return (mac, true);
+                }
+                if !dev.ignored_log_domains.is_empty() {
+                    let domain = event.domain;
+                    for pattern in &dev.ignored_log_domains {
+                        if matches_domain_pattern(domain, pattern) {
+                            return (mac, true);
+                        }
                     }
                 }
             }
-        }
 
-        // Check ignore_clients in QueryLogConfig (by IP, MAC, or hostname)
-        if !self.cfg.query_log.ignore_clients.is_empty() {
-            for ignored in &self.cfg.query_log.ignore_clients {
-                if ignored.parse::<IpAddr>().ok() == Some(event.src_ip) {
-                    return;
-                }
-                if mac.is_some_and(|m| MacAddr::parse(ignored) == Some(m)) {
-                    return;
-                }
-                if dev
-                    .as_ref()
-                    .is_some_and(|d| ignored.eq_ignore_ascii_case(&d.hostname.name))
-                {
-                    return;
-                }
+            let hostname = dev.map(|d| d.hostname.name.as_str());
+            if self
+                .compiled_ignore_clients
+                .matches(event.src_ip, mac, hostname)
+            {
+                return (mac, true);
             }
+
+            (mac, false)
+        });
+
+        if should_ignore {
+            return;
         }
 
         if let Some(log) = &self.query_log {
@@ -137,7 +190,7 @@ impl DnsContext {
                     .unwrap_or_default()
                     .as_secs(),
                 src_ip: event.src_ip,
-                domain: event.domain,
+                domain: Arc::from(event.domain),
                 qtype: event.qtype,
                 result: event.result,
                 upstream_us: event.upstream_us,

@@ -272,10 +272,10 @@ impl<'a> WireQuestion<'a> {
         domain
     }
 
-    /// Returns the domain name in standard dot-separated lowercase representation wrapped in `Arc<str>`,
-    /// constructed directly on stack without intermediate heap `String` allocation.
+    /// Returns the domain name in standard dot-separated lowercase representation as a [`StackDomain`],
+    /// constructed entirely on the stack with zero heap allocations and strict bounds checking.
     #[must_use]
-    pub fn to_domain_lowercase_arc(&self) -> Arc<str> {
+    pub fn to_domain_lowercase_stack(&self) -> StackDomain {
         let mut buf = [0u8; 256];
         let mut pos = 0;
         let mut first = true;
@@ -291,11 +291,163 @@ impl<'a> WireQuestion<'a> {
             }
             pos += take;
         }
-        if let Ok(s) = std::str::from_utf8(&buf[..pos]) {
-            Arc::from(s)
-        } else {
-            Arc::from(self.to_domain_lowercase())
+
+        // Ensure valid UTF-8 guarantees for zero-copy string slicing
+        if std::str::from_utf8(&buf[..pos]).is_err() {
+            for b in &mut buf[..pos] {
+                if !b.is_ascii() {
+                    *b = b'?';
+                }
+            }
         }
+
+        let len = pos.min(256) as u16;
+        StackDomain { buf, len }
+    }
+
+    /// Returns the domain name in standard dot-separated lowercase representation wrapped in `Arc<str>`,
+    /// constructed directly on stack without intermediate heap `String` allocation.
+    #[must_use]
+    pub fn to_domain_lowercase_arc(&self) -> Arc<str> {
+        self.to_domain_lowercase_stack().to_arc_str()
+    }
+}
+
+/// A stack-allocated DNS domain name (RFC 1035 max length is 253 octets + null / dots).
+///
+/// Guaranteed to be valid UTF-8. Implements `Deref<Target = str>`, `AsRef<str>`,
+/// `Borrow<str>`, `Display`, `Debug`, `PartialEq`, `Eq`, `Hash`.
+#[derive(Clone, Copy)]
+pub struct StackDomain {
+    buf: [u8; 256],
+    len: u16,
+}
+
+impl Default for StackDomain {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl StackDomain {
+    /// Creates an empty `StackDomain`.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            buf: [0u8; 256],
+            len: 0,
+        }
+    }
+
+    /// Creates a `StackDomain` from a string slice with saturation at 256 bytes.
+    #[must_use]
+    pub fn from_str_truncate(s: &str) -> Self {
+        let mut buf = [0u8; 256];
+        let bytes = s.as_bytes();
+        let take = bytes.len().min(256);
+        buf[..take].copy_from_slice(&bytes[..take]);
+        // Slice at char boundary if truncated
+        let valid_str = match std::str::from_utf8(&buf[..take]) {
+            Ok(v) => v,
+            Err(e) => std::str::from_utf8(&buf[..e.valid_up_to()]).unwrap_or(""),
+        };
+        let len = valid_str.len() as u16;
+        Self { buf, len }
+    }
+
+    /// Returns the domain name as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        let bound = (self.len as usize).min(self.buf.len());
+        std::str::from_utf8(&self.buf[..bound]).unwrap_or("")
+    }
+
+    /// Converts the stack domain into an owned `Arc<str>` on the heap.
+    #[must_use]
+    pub fn to_arc_str(&self) -> Arc<str> {
+        Arc::from(self.as_str())
+    }
+
+    /// Returns true if the domain is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Returns the length of the domain name in bytes.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.len as usize
+    }
+}
+
+impl std::ops::Deref for StackDomain {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for StackDomain {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::borrow::Borrow<str> for StackDomain {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::fmt::Display for StackDomain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::fmt::Debug for StackDomain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl PartialEq for StackDomain {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for StackDomain {}
+
+impl std::hash::Hash for StackDomain {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl PartialEq<str> for StackDomain {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for StackDomain {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<StackDomain> for str {
+    fn eq(&self, other: &StackDomain) -> bool {
+        self == other.as_str()
+    }
+}
+
+impl PartialEq<StackDomain> for &str {
+    fn eq(&self, other: &StackDomain) -> bool {
+        *self == other.as_str()
     }
 }
 

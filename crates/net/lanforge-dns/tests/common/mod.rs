@@ -17,7 +17,7 @@ use lanforge_dns::resolver::LocalResolver;
 use lanforge_dns::resolver::RewriteStore;
 use lanforge_dns::resolver::recursive::DnsCache;
 use lanforge_dns::resolver::recursive::UpstreamStrategy;
-use lanforge_dns::server::DnsContext;
+use lanforge_dns::server::{CompiledIgnoreClients, DnsContext};
 use lanforge_dns::telemetry::QueryRing;
 use lanforge_dns::telemetry::stats::DnsStats;
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
@@ -108,7 +108,7 @@ pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContex
         ctx: ctx.clone(),
         query_log: Some(Arc::new(QueryRing::new(100))),
         pipeline,
-        local: LocalResolver::new(cfg_arc, ctx),
+        local: LocalResolver::new(cfg_arc.clone(), ctx),
         recursive,
         cache,
         rewrites,
@@ -119,6 +119,7 @@ pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContex
         soa_mailbox,
         reverse_managers: Arc::new(RwLock::new(HashMap::new())),
         resolving_ips: Arc::new(Mutex::new(HashSet::new())),
+        compiled_ignore_clients: CompiledIgnoreClients::compile(&cfg_arc.query_log.ignore_clients),
     }
 }
 
@@ -144,7 +145,6 @@ pub async fn process_query_test(
 ) -> Result<bool, DnsError> {
     let header = WireHeader::parse(data).ok_or(DnsError::WireParseError)?;
     let question = WireQuestion::parse(data).ok_or(DnsError::WireParseError)?;
-    let filter_match = parking_lot::Mutex::new(None);
     ctx.pipeline
         .run(
             ctx,
@@ -154,7 +154,6 @@ pub async fn process_query_test(
                 &question,
                 src_ip,
                 TransportProtocol::Udp,
-                &filter_match,
             ),
             resp,
         )

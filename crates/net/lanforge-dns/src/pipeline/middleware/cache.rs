@@ -4,8 +4,6 @@ use crate::error::DnsError;
 use crate::pipeline::{DnsPipelineRequest, Middleware};
 use crate::server::{DnsContext, DnsLogEvent};
 use crate::utils::extract_first_answer_summary;
-use std::future::Future;
-use std::pin::Pin;
 
 #[derive(Default)]
 pub struct CacheMiddleware;
@@ -14,16 +12,14 @@ impl CacheMiddleware {
     pub fn new() -> Self {
         Self
     }
-}
 
-impl Middleware for CacheMiddleware {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    fn run_sync(
+    pub fn run_sync(
         &self,
         ctx: &DnsContext,
         req: &DnsPipelineRequest<'_>,
         resp: &mut Vec<u8>,
-    ) -> Option<Result<bool, DnsError>> {
+    ) -> Result<bool, DnsError> {
         if let Some(is_block) = ctx.cache.get_wire_into(req.data, req.question, resp) {
             ctx.stats.inc_cache_hit();
 
@@ -44,31 +40,32 @@ impl Middleware for CacheMiddleware {
             ctx.record_log(DnsLogEvent {
                 src_ip: req.src_ip,
                 src_mac: None,
-                domain: req.domain.clone(),
+                domain: &req.domain,
                 qtype: DnsRecordType::from(req.question.qtype()),
                 result,
                 upstream_us: 0,
                 cached: true,
                 answer,
                 protocol: req.protocol,
-                filter: req.filter_match.lock().clone(),
+                filter: req.filter_match.clone(),
                 coalesce_id: None,
             });
 
-            Some(Ok(true))
+            Ok(true)
         } else {
-            None
+            Ok(false)
         }
     }
+}
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    fn run<'a>(
-        &'a self,
-        ctx: &'a DnsContext,
-        req: DnsPipelineRequest<'a>,
-        resp: &'a mut Vec<u8>,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, DnsError>> + Send + 'a>> {
-        let res = self.run_sync(ctx, &req, resp).unwrap_or(Ok(false));
-        Box::pin(std::future::ready(res))
+impl Middleware for CacheMiddleware {
+    fn run_sync(
+        &self,
+        ctx: &DnsContext,
+        req: &mut DnsPipelineRequest<'_>,
+        resp: &mut Vec<u8>,
+    ) -> Result<bool, DnsError> {
+        CacheMiddleware::run_sync(self, ctx, req, resp)
     }
 }
+

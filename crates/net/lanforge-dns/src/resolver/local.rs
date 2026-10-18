@@ -5,6 +5,7 @@ use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::net::IpAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::config::DnsConfig;
 use crate::error::DnsError;
@@ -48,23 +49,58 @@ impl LocalResolver {
         hostname: &str,
         qtype: DnsRecordType,
     ) -> (Option<SmallVec<[IpAddr; 8]>>, bool) {
-        if let Some(mac) = lanforge_types::identifiers::MacAddr::parse(hostname)
-            && let Some(device) = self.ctx.get_device(&mac)
-        {
-            return (self.collect_device_ips_filtered(&device, qtype), true);
+        if !matches!(
+            qtype,
+            DnsRecordType::A | DnsRecordType::AAAA | DnsRecordType::ANY
+        ) {
+            return (None, false);
         }
 
-        if let Some(device) = self.ctx.get_by_hostname(hostname) {
-            return (self.collect_device_ips_filtered(&device, qtype), true);
-        }
+        let parsed_mac = lanforge_types::identifiers::MacAddr::parse(hostname);
+        let resolved_mac = self.ctx.with_state(|state| {
+            if let Some(ref mac) = parsed_mac
+                && state.devices.contains_key(mac)
+            {
+                return Some(*mac);
+            }
+            if let Some(mac) = state.indices.name_index.get(hostname).copied() {
+                return Some(mac);
+            }
+            None
+        });
 
-        // JIT Shadow Lookup
-        let threshold =
-            std::time::Duration::from_secs(u64::from(self.cfg.last_seen_threshold_days) * 86400);
-        if let Some(mac) = self.ctx.find_mac_by_hostname_jit(hostname, Some(threshold))
-            && let Some(device) = self.ctx.get_device(&mac)
-        {
-            return (self.collect_device_ips_filtered(&device, qtype), true);
+        let mac = match resolved_mac {
+            Some(m) => Some(m),
+            None => {
+                let threshold =
+                    Duration::from_secs(u64::from(self.cfg.last_seen_threshold_days) * 86400);
+                self.ctx.find_mac_by_hostname_jit(hostname, Some(threshold))
+            }
+        };
+
+        if let Some(mac) = mac {
+            let target_idx = self.ctx.target_ifindex();
+            return self.ctx.with_state(|state| {
+                if let Some(device) = state.devices.get(&mac) {
+                    let (sys_gua, sys_ula) = if let Some(idx) = target_idx {
+                        let ips = state.get_interface_ips(idx);
+                        (ips.gua, ips.ula)
+                    } else {
+                        (None, None)
+                    };
+                    let gua = sys_gua.or(self.cfg.gua_prefix);
+                    let ula = sys_ula.or(self.cfg.ula_prefix);
+                    let mut ips = device.all_addresses_sorted(gua, ula);
+                    ips.retain(|ip| match ip {
+                        IpAddr::V4(_) => matches!(qtype, DnsRecordType::A | DnsRecordType::ANY),
+                        IpAddr::V6(_) => matches!(qtype, DnsRecordType::AAAA | DnsRecordType::ANY),
+                    });
+                    let ret = if ips.is_empty() { None } else { Some(ips) };
+                    (ret, true)
+                } else {
+                    (None, false)
+                }
+            });
         }
 
         (None, false)
@@ -96,12 +132,14 @@ impl LocalResolver {
             return Ok(None);
         };
 
-        let Some(device) = self.ctx.get_by_ip(&target_ip) else {
-            return Ok(None);
-        };
+        let result = self.ctx.with_state(|state| {
+            let mac = state.get_mac_by_ip(target_ip)?;
+            let device = state.devices.get(&mac)?;
+            let (host, domain) = self.get_ptr_parts(device);
+            Some((host.into_owned(), domain.into_owned()))
+        });
 
-        let (host, domain) = self.get_ptr_parts(&device);
-        Ok(Some((host.into_owned(), domain.into_owned())))
+        Ok(result)
     }
 
     #[must_use]
@@ -151,8 +189,11 @@ impl LocalResolver {
     #[must_use]
     pub fn resolve_local(&self, qname: &str, qtype: DnsRecordType) -> Option<Vec<DnsRecord>> {
         let hostname = extract_local_hostname(qname, &self.cfg.multi_search_labels)?;
-        let device = self.ctx.get_by_hostname(hostname)?;
-        self.resolve_local_with_device(qname, &device, qtype)
+        self.ctx.with_state(|state| {
+            let mac = state.indices.name_index.get(hostname)?;
+            let device = state.devices.get(mac)?;
+            self.resolve_local_with_device(qname, device, qtype)
+        })
     }
 
     #[must_use]
@@ -278,8 +319,14 @@ impl LocalResolver {
                 if let Some(target_ip) = parse_arpa_wire(question.labels()) {
                     let edns = WireOptScanner::scan(data, header, question);
 
-                    if let Some(device) = self.ctx.get_by_ip(&target_ip) {
-                        let (host, domain) = self.get_ptr_parts(&device);
+                    let ptr_res = self.ctx.with_state(|state| {
+                        let mac = state.get_mac_by_ip(target_ip)?;
+                        let device = state.devices.get(&mac)?;
+                        let (host, domain) = self.get_ptr_parts(device);
+                        Some((host.into_owned(), domain.into_owned()))
+                    });
+
+                    if let Some((host, domain)) = ptr_res {
                         WireResponseWriter::write_ptr_response(
                             PtrResponseArgs {
                                 query_data: data,
