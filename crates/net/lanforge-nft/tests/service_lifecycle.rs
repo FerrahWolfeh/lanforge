@@ -13,7 +13,7 @@ use lanforge_types::network::firewall::{
     DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallZone, L4Protocol,
     PortForwardRule,
 };
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::{ServiceAction, ServiceState};
 use std::net::IpAddr;
 use tokio::sync::broadcast;
 use tokio::time::timeout;
@@ -466,6 +466,49 @@ async fn test_firewall_concurrent_dynamic_port_burst() {
     }
 
     // Cleanup
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = serve_handle.await;
+    service.cleanup(&ctx).await.expect("Cleanup must succeed");
+}
+
+#[tokio::test]
+async fn test_firewall_service_control_stop_and_restart() {
+    let (ctx, bus) = create_test_context();
+    let mut fw_sub = bus.subscribe_firewall();
+
+    let mut service = NftService::inert();
+    service.init(&ctx).await.expect("Init must succeed");
+    let _ = wait_for_ruleset_applied(&mut fw_sub).await;
+    assert_eq!(ctx.get_service_state("firewall"), ServiceState::Online);
+
+    let service_clone = service.clone();
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let mut s = service_clone;
+        s.serve(&ctx_clone).await
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Send Stop command
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {
+        id: "firewall".into(),
+        action: ServiceAction::Stop,
+    }));
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(ctx.get_service_state("firewall"), ServiceState::Inactive);
+
+    // Send Restart command
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {
+        id: "firewall".into(),
+        action: ServiceAction::Restart,
+    }));
+
+    let summary = wait_for_ruleset_applied(&mut fw_sub).await;
+    assert_eq!(summary.table, "lanforge");
+    assert_eq!(ctx.get_service_state("firewall"), ServiceState::Online);
+
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = serve_handle.await;
     service.cleanup(&ctx).await.expect("Cleanup must succeed");

@@ -1185,6 +1185,7 @@ impl<'a> RulesetBuilder<'a> {
         }
 
         // 2. Flowtable (if flow offload is enabled and WAN or LAN interfaces exist)
+        let internal_ifaces = self.resolve_internal_interfaces();
         let mut flow_devices: Vec<String> = Vec::new();
         if let Some(wan) = self.active_wan
             && !wan.is_empty()
@@ -1192,9 +1193,9 @@ impl<'a> RulesetBuilder<'a> {
         {
             flow_devices.push(wan.to_string());
         }
-        for iface in self.resolve_internal_interfaces() {
-            if !iface.starts_with("ifb") && !flow_devices.iter().any(|d| d == &iface) {
-                flow_devices.push(iface);
+        for iface in &internal_ifaces {
+            if !iface.starts_with("ifb") && !flow_devices.iter().any(|d| d == iface) {
+                flow_devices.push(iface.clone());
             }
         }
 
@@ -1219,7 +1220,6 @@ impl<'a> RulesetBuilder<'a> {
             }));
         }
 
-        let internal_ifaces = self.resolve_internal_interfaces();
         let has_mtu_fix = self.has_mtu_fix();
 
         // 3. Chain INPUT (Host protection)

@@ -1,6 +1,6 @@
 use crate::auth::authenticate;
 use crate::config::{PppoeConfig, PppoeCredentials};
-use crate::discovery::{PppoeDiscovery, send_padt};
+use crate::discovery::{send_padt, PppoeDiscovery};
 #[cfg(feature = "ebpf")]
 use crate::ebpf::EbpfSession;
 use crate::error::PppoeError;
@@ -19,14 +19,45 @@ use lanforge_types::network::pppoe::PppoeDataplane;
 use lanforge_types::system::{
     PppoeSessionState, PppoeStatusResponse, ServiceAction, ServiceState,
 };
-use pnet::datalink::interfaces;
+use smallvec::smallvec;
 use std::borrow::Cow;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::time::Duration;
-use tokio::time::sleep;
+use tokio::time::{sleep, Instant};
 use tracing::{debug, info, warn};
+
+#[derive(Debug, Clone)]
+struct ActiveSessionMeta {
+    wan_mac: MacAddr,
+    ac_mac: MacAddr,
+    session_id: u16,
+    peer_ip: Option<Ipv4Addr>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SystemInterrupt {
+    Shutdown,
+    Stop,
+    Restart,
+    ConfigChanged,
+}
+
+fn classify_system_event(event: &LanforgeEvent) -> Option<SystemInterrupt> {
+    match event {
+        LanforgeEvent::System(SystemEvent::Shutdown) => Some(SystemInterrupt::Shutdown),
+        LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) if id == "pppoe" => {
+            match action {
+                ServiceAction::Stop => Some(SystemInterrupt::Stop),
+                ServiceAction::Restart => Some(SystemInterrupt::Restart),
+                ServiceAction::Start => None,
+            }
+        }
+        LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => Some(SystemInterrupt::ConfigChanged),
+        _ => None,
+    }
+}
 
 /// Extracts the base physical device name from a potential VLAN interface (e.g. "eth0.10" -> "eth0").
 #[must_use]
@@ -38,7 +69,19 @@ pub fn resolve_parent_iface(iface: &str) -> &str {
 #[must_use]
 pub fn read_carrier(iface: &str) -> Option<bool> {
     let check = |name: &str| -> Option<bool> {
-        let path = format!("/sys/class/net/{name}/carrier");
+        let mut path_buf = [0u8; 64];
+        let prefix = b"/sys/class/net/";
+        let suffix = b"/carrier";
+        let name_bytes = name.as_bytes();
+        let total_len = prefix.len() + name_bytes.len() + suffix.len();
+        if total_len > path_buf.len() {
+            return None;
+        }
+        path_buf[..prefix.len()].copy_from_slice(prefix);
+        path_buf[prefix.len()..prefix.len() + name_bytes.len()].copy_from_slice(name_bytes);
+        path_buf[prefix.len() + name_bytes.len()..total_len].copy_from_slice(suffix);
+        let path = std::str::from_utf8(&path_buf[..total_len]).ok()?;
+
         let mut buf = [0u8; 8];
         let mut file = std::fs::File::open(path).ok()?;
         let n = file.read(&mut buf).ok()?;
@@ -79,7 +122,8 @@ pub struct PppoeService {
     cfg: PppoeConfig,
     ctx: LanforgeContext,
     attempt: u32,
-    active_session: Option<(MacAddr, MacAddr, u16)>,
+    active_session: Option<ActiveSessionMeta>,
+    connected_at: Option<Instant>,
     inert: bool,
     prober: Option<ArpProber>,
     terminal_status: Option<(bool, Option<MacAddr>, Option<u32>)>,
@@ -96,6 +140,7 @@ impl PppoeService {
             ctx,
             attempt: 0,
             active_session: None,
+            connected_at: None,
             inert: false,
             prober: None,
             terminal_status: None,
@@ -113,6 +158,7 @@ impl PppoeService {
             ctx,
             attempt: 0,
             active_session: None,
+            connected_at: None,
             inert: true,
             prober: None,
             terminal_status: None,
@@ -138,23 +184,25 @@ impl PppoeService {
 
     async fn teardown_active_session(&mut self, reason: String) {
         let had_session = self.active_session.is_some() || self.ctx.is_pppoe_ready();
-        if let Some((wan_mac, ac_mac, session_id)) = self.active_session.take()
+        let session_meta = self.active_session.take();
+        self.connected_at = None;
+        if let Some(ref meta) = session_meta
             && self.cfg.send_padt_on_shutdown
             && !self.inert
         {
             info!(
                 wan_iface = %self.cfg.wan_iface,
-                session_id,
+                session_id = meta.session_id,
                 "Sending PPPoE PADT frame during session teardown"
             );
-            let _ = send_padt(&self.cfg.wan_iface, wan_mac, ac_mac, session_id);
+            let _ = send_padt(&self.cfg.wan_iface, meta.wan_mac, meta.ac_mac, meta.session_id).await;
         }
 
         if !self.inert {
             deconfigure_interface(
                 &self.cfg.wan_iface,
                 self.cfg.dataplane == PppoeDataplane::Ebpf,
-                None,
+                session_meta.as_ref().and_then(|m| m.peer_ip),
             )
             .await;
         }
@@ -197,7 +245,14 @@ impl PppoeService {
         let ac_mac = MacAddr([0x02, 0x00, 0x00, 0xac, 0x00, 0x01]);
         let wan_mac = MacAddr([0x02, 0x00, 0x00, 0x00, 0x00, 0x02]);
         let session_id = 0x0042;
-        self.active_session = Some((wan_mac, ac_mac, session_id));
+        let local_ip = Ipv4Addr::new(100, 64, 0, 2);
+        let peer_ip = Ipv4Addr::new(100, 64, 0, 1);
+        self.active_session = Some(ActiveSessionMeta {
+            wan_mac,
+            ac_mac,
+            session_id,
+            peer_ip: Some(peer_ip),
+        });
 
         let disc_res = crate::discovery::DiscoveryResult {
             ac_mac,
@@ -210,12 +265,10 @@ impl PppoeService {
             local_magic: 0x1234_5678,
             peer_magic: 0x8765_4321,
         };
-        let local_ip = Ipv4Addr::new(100, 64, 0, 2);
-        let peer_ip = Ipv4Addr::new(100, 64, 0, 1);
         let ipcp_res = crate::ipcp::IpcpNegotiated {
             local_ip: Some(local_ip),
             peer_ip: Some(peer_ip),
-            dns: vec![
+            dns: smallvec![
                 IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
                 IpAddr::V4(Ipv4Addr::new(1, 0, 0, 1)),
             ],
@@ -271,23 +324,28 @@ impl PppoeService {
             tokio::select! {
                 event_res = bus_rx.recv() => {
                     match event_res {
-                        Ok(timed) => match timed.event {
-                            LanforgeEvent::System(SystemEvent::Shutdown) => {
+                        Ok(timed) => match classify_system_event(&timed.event) {
+                            Some(SystemInterrupt::Shutdown) => {
                                 info!("PPPoE inert keepalive received shutdown");
                                 self.teardown_active_session("Graceful shutdown".into()).await;
                                 return Ok(());
                             }
-                            LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) if id == "pppoe" => {
-                                info!(action = ?action, "PPPoE inert keepalive received service control");
-                                self.teardown_active_session(format!("Service control {action:?}")).await;
+                            Some(SystemInterrupt::Stop) => {
+                                info!("PPPoE inert keepalive received stop");
+                                self.teardown_active_session("Service control Stop".into()).await;
                                 return Ok(());
                             }
-                            LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => {
+                            Some(SystemInterrupt::Restart) => {
+                                info!("PPPoE inert keepalive received restart");
+                                self.teardown_active_session("Service control Restart".into()).await;
+                                return Ok(());
+                            }
+                            Some(SystemInterrupt::ConfigChanged) => {
                                 info!("PPPoE inert keepalive received ConfigPppoeChanged");
                                 self.teardown_active_session("Configuration updated".into()).await;
                                 return Ok(());
                             }
-                            _ => {}
+                            None => {}
                         },
                         Err(_) => break,
                     }
@@ -300,13 +358,44 @@ impl PppoeService {
     }
 
     fn find_interface_details(iface_name: &str) -> Option<(u32, MacAddr)> {
-        interfaces().into_iter().find_map(|iface| {
-            if iface.name == iface_name {
-                iface.mac.map(|mac| (iface.index, MacAddr(mac.octets())))
-            } else {
-                None
-            }
-        })
+        let mut ifname_buf = [0u8; libc::IF_NAMESIZE];
+        let if_bytes = iface_name.as_bytes();
+        if if_bytes.len() >= libc::IF_NAMESIZE || if_bytes.contains(&0) {
+            return None;
+        }
+        ifname_buf[..if_bytes.len()].copy_from_slice(if_bytes);
+        let ifindex = unsafe { libc::if_nametoindex(ifname_buf.as_ptr().cast()) };
+        if ifindex == 0 {
+            return None;
+        }
+
+        let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
+        if sock < 0 {
+            return None;
+        }
+
+        let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
+        for (i, &b) in if_bytes.iter().enumerate() {
+            ifr.ifr_name[i] = b.cast_signed();
+        }
+
+        let res = unsafe { libc::ioctl(sock, libc::SIOCGIFHWADDR, &mut ifr) };
+        unsafe { libc::close(sock) };
+
+        if res < 0 {
+            return None;
+        }
+
+        let hw = unsafe { ifr.ifr_ifru.ifru_hwaddr.sa_data };
+        let mac = [
+            hw[0].cast_unsigned(),
+            hw[1].cast_unsigned(),
+            hw[2].cast_unsigned(),
+            hw[3].cast_unsigned(),
+            hw[4].cast_unsigned(),
+            hw[5].cast_unsigned(),
+        ];
+        Some((ifindex, MacAddr(mac)))
     }
 
     fn get_interface_details(&self) -> Result<(u32, MacAddr), PppoeError> {
@@ -333,7 +422,12 @@ impl PppoeService {
             self.cfg.ac_name.clone(),
         );
         let disc_res = discovery.run().await?;
-        self.active_session = Some((mac, disc_res.ac_mac, disc_res.session_id));
+        self.active_session = Some(ActiveSessionMeta {
+            wan_mac: mac,
+            ac_mac: disc_res.ac_mac,
+            session_id: disc_res.session_id,
+            peer_ip: None,
+        });
         info!(
             ac_mac = %disc_res.ac_mac,
             ac_name = disc_res.ac_name.as_deref().unwrap_or("unknown"),
@@ -477,6 +571,7 @@ impl PppoeService {
         lcp_res: &crate::lcp::LcpNegotiated,
         ipcp_res: &crate::ipcp::IpcpNegotiated,
     ) {
+        self.connected_at = Some(Instant::now());
         let (terminal_reachable, terminal_mac, terminal_rtt_us) =
             self.terminal_status.map_or((None, None, None), |(r, m, rtt)| (Some(r), m, rtt));
 
@@ -492,7 +587,7 @@ impl PppoeService {
             ac_name: disc_res.ac_name.clone(),
             session_id: Some(disc_res.session_id),
             mru: Some(lcp_res.mru),
-            dns_servers: ipcp_res.dns.clone(),
+            dns_servers: ipcp_res.dns.to_vec(),
             uptime_secs: Some(0),
             reconnect_attempts: self.attempt,
             last_error: None,
@@ -516,7 +611,7 @@ impl PppoeService {
                     mru: lcp_res.mru,
                     ipv4: ipcp_res.local_ip,
                     ipv4_peer: ipcp_res.peer_ip,
-                    dns: ipcp_res.dns.clone(),
+                    dns: ipcp_res.dns.to_vec(),
                     ipv6_link_local: ipcp_res.local_v6_ll.is_some(),
                 },
             ))));
@@ -618,22 +713,20 @@ impl PppoeService {
                 }
                 res = bus_rx.recv() => {
                     let Ok(event) = res else { continue; };
-                    match event.event {
-                        LanforgeEvent::System(SystemEvent::Shutdown) => {
+                    match classify_system_event(&event.event) {
+                        Some(SystemInterrupt::Shutdown) => {
                             info!("PPPoE carrier wait interrupted by daemon shutdown");
                             return Err(PppoeError::NegotiationFailed("Shutdown received".into()));
                         }
-                        LanforgeEvent::System(SystemEvent::ServiceControl { ref id, ref action })
-                            if id == "pppoe" && matches!(action, ServiceAction::Stop | ServiceAction::Restart) =>
-                        {
-                            info!(action = ?action, "PPPoE carrier wait interrupted by service control");
+                        Some(SystemInterrupt::Stop | SystemInterrupt::Restart) => {
+                            info!("PPPoE carrier wait interrupted by service control");
                             return Err(PppoeError::NegotiationFailed("Service stopped or restarted".into()));
                         }
-                        LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => {
+                        Some(SystemInterrupt::ConfigChanged) => {
                             info!("PPPoE carrier wait interrupted by configuration update");
                             return Err(PppoeError::NegotiationFailed("Configuration changed".into()));
                         }
-                        _ => {}
+                        None => {}
                     }
                 }
             }
@@ -798,22 +891,20 @@ impl PppoeService {
                 }
                 res = bus_rx.recv() => {
                     let Ok(event) = res else { continue; };
-                    match event.event {
-                        LanforgeEvent::System(SystemEvent::Shutdown) => {
+                    match classify_system_event(&event.event) {
+                        Some(SystemInterrupt::Shutdown) => {
                             info!("PPPoE terminal wait interrupted by daemon shutdown");
                             return Err(PppoeError::NegotiationFailed("Shutdown received".into()));
                         }
-                        LanforgeEvent::System(SystemEvent::ServiceControl { ref id, ref action })
-                            if id == "pppoe" && matches!(action, ServiceAction::Stop | ServiceAction::Restart) =>
-                        {
-                            info!(action = ?action, "PPPoE terminal wait interrupted by service control");
+                        Some(SystemInterrupt::Stop | SystemInterrupt::Restart) => {
+                            info!("PPPoE terminal wait interrupted by service control");
                             return Err(PppoeError::NegotiationFailed("Service stopped or restarted".into()));
                         }
-                        LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => {
+                        Some(SystemInterrupt::ConfigChanged) => {
                             info!("PPPoE terminal wait interrupted by configuration update");
                             return Err(PppoeError::NegotiationFailed("Configuration changed".into()));
                         }
-                        _ => {}
+                        None => {}
                     }
                 }
             }
@@ -861,6 +952,9 @@ impl PppoeService {
             );
             self.publish_session_state(PppoeSessionState::Authenticating, None);
             let (session, lcp_res, ipcp_res) = self.negotiate_session(&disc_res, mac).await?;
+            if let Some(ref mut meta) = self.active_session {
+                meta.peer_ip = ipcp_res.peer_ip;
+            }
             let (interface_name, control_fd, _ebpf_session, _kernel_session) = self
                 .setup_dataplane(&session, &disc_res, mac, ifindex, &lcp_res, &ipcp_res)
                 .await?;
@@ -937,6 +1031,11 @@ impl AsyncService for PppoeService {
             (Cow::Borrowed("ppp_interface"), ppp_iface),
             (Cow::Borrowed("terminal"), term_str),
             (
+                Cow::Borrowed("uptime_secs"),
+                self.connected_at
+                    .map_or_else(|| "0".to_string(), |t| t.elapsed().as_secs().to_string()),
+            ),
+            (
                 Cow::Borrowed("reconnect_attempts"),
                 self.attempt.to_string(),
             ),
@@ -998,29 +1097,24 @@ impl AsyncService for PppoeService {
                 biased;
                 event_res = bus_rx.recv() => {
                     if let Ok(timed) = event_res {
-                        match &timed.event {
-                            LanforgeEvent::System(SystemEvent::Shutdown) => {
+                        match classify_system_event(&timed.event) {
+                            Some(SystemInterrupt::Shutdown) => {
                                 info!("PPPoE service received shutdown event, exiting serve loop");
                                 self.teardown_active_session("Graceful shutdown".into()).await;
                                 break 'main_loop;
                             }
-                            LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) if id == "pppoe" => {
-                                match action {
-                                    ServiceAction::Stop => {
-                                        info!("PPPoE service received stop command, transitioning to Inactive");
-                                        self.teardown_active_session("Service stopped".into()).await;
-                                        ctx.set_service_state("pppoe", ServiceState::Inactive);
-                                        break 'main_loop;
-                                    }
-                                    ServiceAction::Restart => {
-                                        info!("PPPoE service received restart command, restarting session");
-                                        self.teardown_active_session("Service restarted".into()).await;
-                                        self.attempt = 0;
-                                    }
-                                    ServiceAction::Start => {}
-                                }
+                            Some(SystemInterrupt::Stop) => {
+                                info!("PPPoE service received stop command, transitioning to Inactive");
+                                self.teardown_active_session("Service stopped".into()).await;
+                                ctx.set_service_state("pppoe", ServiceState::Inactive);
+                                break 'main_loop;
                             }
-                            LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => {
+                            Some(SystemInterrupt::Restart) => {
+                                info!("PPPoE service received restart command, restarting session");
+                                self.teardown_active_session("Service restarted".into()).await;
+                                self.attempt = 0;
+                            }
+                            Some(SystemInterrupt::ConfigChanged) => {
                                 info!("PPPoE service received ConfigPppoeChanged in main loop");
                                 self.teardown_active_session("Configuration updated".into()).await;
                                 if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
@@ -1033,7 +1127,7 @@ impl AsyncService for PppoeService {
                                 }
                                 self.attempt = 0;
                             }
-                            _ => {}
+                            None => {}
                         }
                     }
                 }
@@ -1085,26 +1179,21 @@ impl AsyncService for PppoeService {
                                 () = sleep(delay) => {}
                                 res = bus_rx.recv() => {
                                     if let Ok(timed) = res {
-                                        match &timed.event {
-                                            LanforgeEvent::System(SystemEvent::Shutdown) => {
+                                        match classify_system_event(&timed.event) {
+                                            Some(SystemInterrupt::Shutdown) => {
                                                 info!("PPPoE service received shutdown during reconnect delay");
                                                 break 'main_loop;
                                             }
-                                            LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) if id == "pppoe" => {
-                                                match action {
-                                                    ServiceAction::Stop => {
-                                                        info!("PPPoE service received stop during reconnect delay");
-                                                        ctx.set_service_state("pppoe", ServiceState::Inactive);
-                                                        break 'main_loop;
-                                                    }
-                                                    ServiceAction::Restart => {
-                                                        info!("PPPoE service received restart during reconnect delay, retrying immediately");
-                                                        self.attempt = 0;
-                                                    }
-                                                    ServiceAction::Start => {}
-                                                }
+                                            Some(SystemInterrupt::Stop) => {
+                                                info!("PPPoE service received stop during reconnect delay");
+                                                ctx.set_service_state("pppoe", ServiceState::Inactive);
+                                                break 'main_loop;
                                             }
-                                            LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => {
+                                            Some(SystemInterrupt::Restart) => {
+                                                info!("PPPoE service received restart during reconnect delay, retrying immediately");
+                                                self.attempt = 0;
+                                            }
+                                            Some(SystemInterrupt::ConfigChanged) => {
                                                 info!("PPPoE service received config change during reconnect delay, retrying immediately");
                                                 if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
                                                     self.cfg = dynamic_cfg;
@@ -1115,7 +1204,7 @@ impl AsyncService for PppoeService {
                                                 }
                                                 self.attempt = 0;
                                             }
-                                            _ => {}
+                                            None => {}
                                         }
                                     }
                                 }

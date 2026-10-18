@@ -113,146 +113,136 @@ pub fn setup_interface_ifreq(
     Ok(ifindex)
 }
 
-pub async fn assign_ipv4_address(ifindex: u32, local: Ipv4Addr, peer: Option<Ipv4Addr>) {
-    match rtnetlink::new_connection() {
-        Err(e) => warn!(error = %e, "Failed to open rtnetlink connection for IP addr"),
-        Ok((conn, handle, _)) => {
-            tokio::spawn(conn);
-            let mut req = handle.address().add(ifindex, IpAddr::V4(local), 32);
-            if let Some(peer_ip) = peer {
-                req.message_mut()
-                    .attributes
-                    .push(AddressAttribute::Address(IpAddr::V4(peer_ip)));
-                req.message_mut()
-                    .attributes
-                    .push(AddressAttribute::Local(IpAddr::V4(local)));
-            }
-            let result = req.replace().execute().await;
-            if let Err(e) = result
-                && !e.to_string().contains("File exists")
-            {
-                warn!(error = %e, "Failed to assign IPv4 address via rtnetlink");
-            }
-        }
+pub async fn assign_ipv4_address(
+    handle: &rtnetlink::Handle,
+    ifindex: u32,
+    local: Ipv4Addr,
+    peer: Option<Ipv4Addr>,
+) {
+    let mut req = handle.address().add(ifindex, IpAddr::V4(local), 32);
+    if let Some(peer_ip) = peer {
+        req.message_mut()
+            .attributes
+            .push(AddressAttribute::Address(IpAddr::V4(peer_ip)));
+        req.message_mut()
+            .attributes
+            .push(AddressAttribute::Local(IpAddr::V4(local)));
+    }
+    let result = req.replace().execute().await;
+    if let Err(e) = result
+        && !e.to_string().contains("File exists")
+    {
+        warn!(error = %e, "Failed to assign IPv4 address via rtnetlink");
     }
 }
 
-pub async fn add_ipv4_peer_route(ifindex: u32, peer: Ipv4Addr, local: Option<Ipv4Addr>) {
-    match rtnetlink::new_connection() {
-        Err(e) => warn!(error = %e, "Failed to open rtnetlink connection for peer route"),
-        Ok((conn, handle, _)) => {
-            tokio::spawn(conn);
-            let mut builder = RouteMessageBuilder::<Ipv4Addr>::new()
-                .destination_prefix(peer, 32)
-                .output_interface(ifindex)
-                .scope(RouteScope::Link)
-                .priority(50);
-            if let Some(src) = local {
-                builder = builder.source_prefix(src, 32);
-            }
-            let route = builder.build();
-            let result = handle.route().add(route).replace().execute().await;
-            if let Err(e) = result
-                && !e.to_string().contains("File exists")
-            {
-                warn!(error = %e, "Failed to install IPv4 on-link peer route");
-            }
-        }
+pub async fn add_ipv4_peer_route(
+    handle: &rtnetlink::Handle,
+    ifindex: u32,
+    peer: Ipv4Addr,
+    local: Option<Ipv4Addr>,
+) {
+    let mut builder = RouteMessageBuilder::<Ipv4Addr>::new()
+        .destination_prefix(peer, 32)
+        .output_interface(ifindex)
+        .scope(RouteScope::Link)
+        .priority(50);
+    if let Some(src) = local {
+        builder = builder.source_prefix(src, 32);
+    }
+    let route = builder.build();
+    let result = handle.route().add(route).replace().execute().await;
+    if let Err(e) = result
+        && !e.to_string().contains("File exists")
+    {
+        warn!(error = %e, "Failed to install IPv4 on-link peer route");
     }
 }
 
-pub async fn add_static_neighbour(ifindex: u32, peer: Ipv4Addr, mac: [u8; 6]) {
-    match rtnetlink::new_connection() {
-        Err(e) => warn!(error = %e, "Failed to open rtnetlink connection for neighbour"),
-        Ok((conn, handle, _)) => {
-            tokio::spawn(conn);
-            let mut req = handle.neighbours().add(ifindex, IpAddr::V4(peer));
-            req.message_mut().header.state = NeighbourState::Permanent;
-            req.message_mut()
-                .attributes
-                .push(NeighbourAttribute::LinkLayerAddress(mac.to_vec()));
-            let result = req.replace().execute().await;
-            if let Err(e) = result
-                && !e.to_string().contains("File exists")
-            {
-                warn!(error = %e, "Failed to install static neighbour entry");
-            } else {
-                debug!(ifindex, peer = %peer, "Installed static neighbour entry via rtnetlink");
-            }
-        }
+pub async fn add_static_neighbour(
+    handle: &rtnetlink::Handle,
+    ifindex: u32,
+    peer: Ipv4Addr,
+    mac: [u8; 6],
+) {
+    let mut req = handle.neighbours().add(ifindex, IpAddr::V4(peer));
+    req.message_mut().header.state = NeighbourState::Permanent;
+    req.message_mut()
+        .attributes
+        .push(NeighbourAttribute::LinkLayerAddress(mac.to_vec()));
+    let result = req.replace().execute().await;
+    if let Err(e) = result
+        && !e.to_string().contains("File exists")
+    {
+        warn!(error = %e, "Failed to install static neighbour entry");
+    } else {
+        debug!(ifindex, peer = %peer, "Installed static neighbour entry via rtnetlink");
     }
 }
 
-pub async fn add_ipv4_default_route(ifindex: u32, peer: Ipv4Addr) {
-    match rtnetlink::new_connection() {
-        Err(e) => warn!(error = %e, "Failed to open rtnetlink connection for route"),
-        Ok((conn, handle, _)) => {
-            tokio::spawn(conn);
-            let route = RouteMessageBuilder::<Ipv4Addr>::new()
-                .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
-                .gateway(peer)
-                .output_interface(ifindex)
-                .priority(100)
-                .build();
-            let result = handle.route().add(route).replace().execute().await;
-            if let Err(e) = result
-                && !e.to_string().contains("File exists")
-            {
-                warn!(error = %e, "Failed to install IPv4 default route");
-            }
-        }
+pub async fn add_ipv4_default_route(
+    handle: &rtnetlink::Handle,
+    ifindex: u32,
+    peer: Ipv4Addr,
+) {
+    let route = RouteMessageBuilder::<Ipv4Addr>::new()
+        .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
+        .gateway(peer)
+        .output_interface(ifindex)
+        .priority(100)
+        .build();
+    let result = handle.route().add(route).replace().execute().await;
+    if let Err(e) = result
+        && !e.to_string().contains("File exists")
+    {
+        warn!(error = %e, "Failed to install IPv4 default route");
     }
 }
 
 pub async fn add_ipv6_link_local(
+    handle: &rtnetlink::Handle,
     ifindex: u32,
     v6_ll: Ipv6Addr,
     peer_v6_ll: Option<Ipv6Addr>,
     peer_mac: Option<[u8; 6]>,
 ) {
-    match rtnetlink::new_connection() {
-        Err(e) => warn!(error = %e, "Failed to open rtnetlink connection for IPv6 addr"),
-        Ok((conn, handle, _)) => {
-            tokio::spawn(conn);
-            let mut req = handle.address().add(ifindex, IpAddr::V6(v6_ll), 64);
-            req.message_mut().header.flags |= AddressHeaderFlags::Nodad;
-            if let Some(peer) = peer_v6_ll {
-                req.message_mut()
-                    .attributes
-                    .push(AddressAttribute::Address(IpAddr::V6(peer)));
-                req.message_mut()
-                    .attributes
-                    .push(AddressAttribute::Local(IpAddr::V6(v6_ll)));
-            }
-            let result = req.execute().await;
-            if let Err(e) = result
-                && !e.to_string().contains("File exists")
-            {
-                warn!(error = %e, "Failed to assign IPv6 link-local address");
-            }
-
-            if let (Some(peer), Some(mac)) = (peer_v6_ll, peer_mac) {
-                let mut neigh_req = handle.neighbours().add(ifindex, IpAddr::V6(peer));
-                neigh_req.message_mut().header.state = NeighbourState::Permanent;
-                neigh_req
-                    .message_mut()
-                    .attributes
-                    .push(NeighbourAttribute::LinkLayerAddress(mac.to_vec()));
-                let _ = neigh_req.replace().execute().await;
-            }
-
-            // IPv6 default route
-            let mut route_builder = RouteMessageBuilder::<Ipv6Addr>::new()
-                .destination_prefix(Ipv6Addr::UNSPECIFIED, 0)
-                .output_interface(ifindex)
-                .priority(100);
-            if let Some(peer) = peer_v6_ll {
-                route_builder = route_builder.gateway(peer);
-            }
-            let route = route_builder.build();
-            let _ = handle.route().add(route).replace().execute().await;
-        }
+    let mut req = handle.address().add(ifindex, IpAddr::V6(v6_ll), 64);
+    req.message_mut().header.flags |= AddressHeaderFlags::Nodad;
+    if let Some(peer) = peer_v6_ll {
+        req.message_mut()
+            .attributes
+            .push(AddressAttribute::Address(IpAddr::V6(peer)));
+        req.message_mut()
+            .attributes
+            .push(AddressAttribute::Local(IpAddr::V6(v6_ll)));
     }
+    let result = req.execute().await;
+    if let Err(e) = result
+        && !e.to_string().contains("File exists")
+    {
+        warn!(error = %e, "Failed to assign IPv6 link-local address");
+    }
+
+    if let (Some(peer), Some(mac)) = (peer_v6_ll, peer_mac) {
+        let mut neigh_req = handle.neighbours().add(ifindex, IpAddr::V6(peer));
+        neigh_req.message_mut().header.state = NeighbourState::Permanent;
+        neigh_req
+            .message_mut()
+            .attributes
+            .push(NeighbourAttribute::LinkLayerAddress(mac.to_vec()));
+        let _ = neigh_req.replace().execute().await;
+    }
+
+    // IPv6 default route
+    let mut route_builder = RouteMessageBuilder::<Ipv6Addr>::new()
+        .destination_prefix(Ipv6Addr::UNSPECIFIED, 0)
+        .output_interface(ifindex)
+        .priority(100);
+    if let Some(peer) = peer_v6_ll {
+        route_builder = route_builder.gateway(peer);
+    }
+    let route = route_builder.build();
+    let _ = handle.route().add(route).replace().execute().await;
 }
 
 pub async fn deconfigure_routes_and_addrs(ifname: &str, is_ebpf: bool, peer_ip: Option<Ipv4Addr>) {

@@ -1,3 +1,4 @@
+use crate::ipcp::PacketBuf;
 use lanforge_types::identifiers::MacAddr;
 use smallvec::SmallVec;
 
@@ -31,9 +32,9 @@ pub struct PppoeDiscoveryFrame<'a> {
 
 impl<'a> PppoeDiscoveryFrame<'a> {
     #[must_use]
-    pub fn encode(&self) -> SmallVec<[u8; 256]> {
+    pub fn encode(&self) -> PacketBuf<256> {
         let total_tags_len: usize = self.tags.iter().map(|t| 4 + t.value.len()).sum();
-        let mut packet = SmallVec::with_capacity(20 + total_tags_len);
+        let mut packet = PacketBuf::<256>::new();
 
         packet.extend_from_slice(&self.dst_mac.0);
         packet.extend_from_slice(&self.src_mac.0);

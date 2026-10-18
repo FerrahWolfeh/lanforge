@@ -33,27 +33,34 @@ pub async fn configure_interface(
             "if_nametoindex returned 0; skipping rtnetlink operations"
         );
     } else {
-        // 2b. Assign point-to-point IPv4 peer address on the interface via rtnetlink
-        if let (Some(local), Some(peer)) = (local_ip, peer_ip) {
-            assign_ipv4_address(ifindex, local, Some(peer)).await;
-        }
+        match rtnetlink::new_connection() {
+            Err(e) => warn!(error = %e, "Failed to open rtnetlink connection"),
+            Ok((conn, handle, _)) => {
+                tokio::spawn(conn);
 
-        // 3. For Ethernet/veth interfaces in eBPF mode, add static ARP/neighbour mapping and on-link route for peer gateway
-        if !ifname.starts_with("ppp")
-            && let (Some(peer), Some(mac)) = (peer_ip, peer_mac)
-        {
-            add_static_neighbour(ifindex, peer, mac).await;
-            add_ipv4_peer_route(ifindex, peer, local_ip).await;
-        }
+                // 2b. Assign point-to-point IPv4 peer address on the interface via rtnetlink
+                if let (Some(local), Some(peer)) = (local_ip, peer_ip) {
+                    assign_ipv4_address(&handle, ifindex, local, Some(peer)).await;
+                }
 
-        // 4. Add IPv4 Default Route via rtnetlink
-        if let (Some(_local), Some(peer)) = (local_ip, peer_ip) {
-            add_ipv4_default_route(ifindex, peer).await;
-        }
+                // 3. For Ethernet/veth interfaces in eBPF mode, add static ARP/neighbour mapping and on-link route for peer gateway
+                if !ifname.starts_with("ppp")
+                    && let (Some(peer), Some(mac)) = (peer_ip, peer_mac)
+                {
+                    add_static_neighbour(&handle, ifindex, peer, mac).await;
+                    add_ipv4_peer_route(&handle, ifindex, peer, local_ip).await;
+                }
 
-        // 5. Set IPv6 Link-Local address with peer binding if negotiated via rtnetlink
-        if let Some(v6_ll) = local_v6_ll {
-            add_ipv6_link_local(ifindex, v6_ll, peer_v6_ll, peer_mac).await;
+                // 4. Add IPv4 Default Route via rtnetlink
+                if let (Some(_local), Some(peer)) = (local_ip, peer_ip) {
+                    add_ipv4_default_route(&handle, ifindex, peer).await;
+                }
+
+                // 5. Set IPv6 Link-Local address with peer binding if negotiated via rtnetlink
+                if let Some(v6_ll) = local_v6_ll {
+                    add_ipv6_link_local(&handle, ifindex, v6_ll, peer_v6_ll, peer_mac).await;
+                }
+            }
         }
     }
 
@@ -76,4 +83,7 @@ pub async fn deconfigure_interface(
     peer_ip: Option<Ipv4Addr>,
 ) {
     deconfigure_routes_and_addrs(ifname, is_ebpf, peer_ip).await;
+    if is_ebpf && !ifname.starts_with("ppp") {
+        sysctl::restore_interface_offloads(ifname);
+    }
 }

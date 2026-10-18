@@ -14,6 +14,7 @@ use lanforge_types::events::pppoe::PppoeEvent;
 use lanforge_types::events::system::SystemEvent;
 use lanforge_types::events::LanforgeEvent;
 use lanforge_types::network::firewall::{DynamicPortRequest, FirewallConfig, FirewallMode};
+use lanforge_types::system::ServiceAction;
 use tracing::{error, info, trace, warn};
 
 use crate::ruleset::RulesetBuilder;
@@ -149,7 +150,12 @@ impl NftService {
             .with_dynamic_ports(dynamic_ports)
             .build();
 
-        let json_payload = serde_json::to_string_pretty(&ruleset).unwrap_or_default();
+        let should_serialize = self.inert || tracing::enabled!(tracing::Level::TRACE);
+        let json_payload = if should_serialize {
+            serde_json::to_string_pretty(&ruleset).unwrap_or_default()
+        } else {
+            String::new()
+        };
         if !json_payload.is_empty() && tracing::enabled!(tracing::Level::TRACE) {
             trace!(payload = %json_payload, "Applying nftables ruleset payload");
         }
@@ -184,7 +190,9 @@ impl NftService {
 
             match res {
                 Ok(Ok(payload)) => {
-                    *last_ruleset.write() = Some(payload);
+                    if !payload.is_empty() {
+                        *last_ruleset.write() = Some(payload);
+                    }
                     Ok(())
                 }
                 Ok(Err((e, payload))) => Err((e, payload)),
@@ -327,6 +335,22 @@ impl AsyncService for NftService {
                     // System events: config reloads or shutdown
                     Ok(event) = sys_rx.recv() => {
                         match event.event {
+                            LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) if id == "firewall" => {
+                                match action {
+                                    ServiceAction::Stop => {
+                                        info!("Firewall service received Stop command, flushing table and marking Inactive");
+                                        let table = ctx
+                                            .get_firewall_config()
+                                            .map_or_else(|| "lanforge".into(), |c| c.table_name);
+                                        Self::cleanup_table_internal(&table, self.inert).await;
+                                        ctx.set_service_state("firewall", lanforge_types::system::ServiceState::Inactive);
+                                    }
+                                    ServiceAction::Start | ServiceAction::Restart => {
+                                        info!("Firewall service received Start/Restart command, reapplying ruleset");
+                                        self.reapply(&ctx).await;
+                                    }
+                                }
+                            }
                             LanforgeEvent::System(SystemEvent::ReloadConfig) => {
                                 info!("Firewall service reloading configuration");
                                 self.reapply(&ctx).await;

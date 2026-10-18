@@ -298,7 +298,7 @@ async fn exchange_padr(
     session_id.ok_or(PppoeError::DiscoveryTimeout)
 }
 
-pub fn send_padt(
+pub async fn send_padt(
     ifname: &str,
     wan_mac: MacAddr,
     ac_mac: MacAddr,
@@ -368,7 +368,7 @@ pub fn send_padt(
                 "Failed to transmit PPPoE PADT frame"
             );
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
 
     info!(

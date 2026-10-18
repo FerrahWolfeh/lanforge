@@ -93,13 +93,18 @@ pub async fn run_keepalive(
                 match read(chan_fd, &mut read_buf) {
                     Ok(n) if n > 0 => {
                         guard.clear_ready();
-                        handle_incoming_frame(
+                        let action = handle_incoming_frame(
                             chan_fd,
                             &read_buf[..n],
                             local_magic,
                             peer_magic,
                             &mut failed_echoes,
                         );
+                        if action == KeepaliveAction::PeerTerminated {
+                            return Err(PppoeError::LcpFailed(
+                                "Peer terminated session (LCP Terminate-Request)".into(),
+                            ));
+                        }
                     }
                     Ok(_) | Err(nix::errno::Errno::EWOULDBLOCK) => {
                         guard.clear_ready();
@@ -159,13 +164,19 @@ fn send_echo_request(fd: &OwnedFd, id: u8, magic: u32) -> Result<(), PppoeError>
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeepaliveAction {
+    Continue,
+    PeerTerminated,
+}
+
 fn handle_incoming_frame(
     fd: &OwnedFd,
     frame: &[u8],
     local_magic: u32,
     _peer_magic: u32,
     failed_echoes: &mut u32,
-) {
+) -> KeepaliveAction {
     let data = if frame.len() >= 2 && frame[0] == 0xff && frame[1] == 0x03 {
         &frame[2..]
     } else {
@@ -173,24 +184,26 @@ fn handle_incoming_frame(
     };
 
     if data.len() < 2 {
-        return;
+        return KeepaliveAction::Continue;
     }
 
     let proto = u16::from_be_bytes([data[0], data[1]]);
     if proto == PPP_LCP {
-        handle_lcp_frame(fd, &data[2..], local_magic, failed_echoes);
+        handle_lcp_frame(fd, &data[2..], local_magic, failed_echoes)
     } else if proto == PPP_IP || proto == PPP_IPV6 {
         debug!(
             proto = format_args!("{proto:#06x}"),
             len = data.len(),
             "Data plane packet received on control channel"
         );
+        KeepaliveAction::Continue
     } else {
         debug!(
             proto = format_args!("{proto:#06x}"),
             "Unknown PPP protocol received, sending Protocol-Reject"
         );
         send_protocol_reject(fd, proto, data);
+        KeepaliveAction::Continue
     }
 }
 
@@ -199,9 +212,9 @@ fn handle_lcp_frame(
     lcp_data: &[u8],
     local_magic: u32,
     failed_echoes: &mut u32,
-) {
+) -> KeepaliveAction {
     if lcp_data.len() < 4 {
-        return;
+        return KeepaliveAction::Continue;
     }
 
     let code = lcp_data[0];
@@ -209,7 +222,7 @@ fn handle_lcp_frame(
     let len = u16::from_be_bytes([lcp_data[2], lcp_data[3]]) as usize;
 
     if lcp_data.len() < len || len < 4 {
-        return;
+        return KeepaliveAction::Continue;
     }
 
     let payload = &lcp_data[4..len];
@@ -225,6 +238,7 @@ fn handle_lcp_frame(
             }
             *failed_echoes = 0;
             debug!(id, "Received LCP Echo-Reply from BRAS");
+            KeepaliveAction::Continue
         }
         LCP_ECHO_REQ => {
             let mut rep = [0u8; 512];
@@ -244,6 +258,7 @@ fn handle_lcp_frame(
                 }
             }
             let _ = write(fd, &rep[..rep_len]);
+            KeepaliveAction::Continue
         }
         LCP_TERM_REQ => {
             info!(id, "Peer sent LCP Terminate-Request, sending Terminate-Ack");
@@ -253,15 +268,19 @@ fn handle_lcp_frame(
             ack[3] = id;
             ack[4..6].copy_from_slice(&4u16.to_be_bytes());
             let _ = write(fd, &ack);
+            KeepaliveAction::PeerTerminated
         }
         LCP_TERM_ACK => {
             debug!(id, "Peer acknowledged LCP termination");
+            KeepaliveAction::Continue
         }
         LCP_CONF_REQ => {
             debug!(id, "Peer renegotiating LCP in active session");
+            KeepaliveAction::Continue
         }
         _ => {
             debug!(code, id, "Unhandled LCP packet in keepalive phase");
+            KeepaliveAction::Continue
         }
     }
 }

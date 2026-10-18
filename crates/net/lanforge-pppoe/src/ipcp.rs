@@ -23,6 +23,45 @@ pub struct PacketBuf<const N: usize> {
     pub len: usize,
 }
 
+impl<const N: usize> PacketBuf<N> {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            buf: [0u8; N],
+            len: 0,
+        }
+    }
+
+    #[inline]
+    pub const fn push(&mut self, b: u8) -> bool {
+        if self.len < N {
+            self.buf[self.len] = b;
+            self.len += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    pub fn extend_from_slice(&mut self, data: &[u8]) -> bool {
+        if self.len + data.len() <= N {
+            self.buf[self.len..self.len + data.len()].copy_from_slice(data);
+            self.len += data.len();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl<const N: usize> Default for PacketBuf<N> {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<const N: usize> std::ops::Deref for PacketBuf<N> {
     type Target = [u8];
     #[inline]
@@ -58,7 +97,7 @@ pub fn mac_to_eui64_link_local(mac: MacAddr) -> Ipv6Addr {
 pub struct IpcpNegotiated {
     pub local_ip: Option<Ipv4Addr>,
     pub peer_ip: Option<Ipv4Addr>,
-    pub dns: Vec<IpAddr>,
+    pub dns: SmallVec<[IpAddr; 2]>,
     pub local_v6_ll: Option<Ipv6Addr>,
     pub peer_v6_ll: Option<Ipv6Addr>,
 }
@@ -93,19 +132,22 @@ fn build_ipcp_req(id: u8, ip: Ipv4Addr, dns1: Ipv4Addr, dns2: Ipv4Addr, req_dns:
     PacketBuf { buf, len: total_len }
 }
 
-fn build_control_ack(proto: u16, id: u8, data: &[u8], len: usize) -> SmallVec<[u8; 128]> {
-    let mut ack_pkt = SmallVec::with_capacity(len + 2);
+fn build_control_ack(proto: u16, id: u8, data: &[u8], len: usize) -> PacketBuf<128> {
+    let mut ack_pkt = PacketBuf::<128>::new();
     ack_pkt.extend_from_slice(&proto.to_be_bytes());
     ack_pkt.push(0x02); // Configure-Ack
     ack_pkt.push(id);
     if data.len() >= 2 + len {
-        ack_pkt.extend_from_slice(&data[4..2 + len]);
+        let copy_end = (2 + len).min(4 + 122);
+        if copy_end > 4 {
+            ack_pkt.extend_from_slice(&data[4..copy_end]);
+        }
     }
     ack_pkt
 }
 
 #[inline]
-fn build_ipcp_ack(id: u8, data: &[u8], len: usize) -> SmallVec<[u8; 128]> {
+fn build_ipcp_ack(id: u8, data: &[u8], len: usize) -> PacketBuf<128> {
     build_control_ack(PPP_IPCP, id, data, len)
 }
 
@@ -122,7 +164,7 @@ fn build_ipv6cp_req(id: u8, ifid: [u8; 8]) -> PacketBuf<16> {
 }
 
 #[inline]
-fn build_ipv6cp_ack(id: u8, data: &[u8], len: usize) -> SmallVec<[u8; 128]> {
+fn build_ipv6cp_ack(id: u8, data: &[u8], len: usize) -> PacketBuf<128> {
     build_control_ack(PPP_IPV6CP, id, data, len)
 }
 
@@ -437,7 +479,7 @@ fn finalize_negotiation(
     v4: &IpcpV4State,
     v6: &IpcpV6State,
 ) -> Result<IpcpNegotiated, PppoeError> {
-    let mut dns = Vec::new();
+    let mut dns: SmallVec<[IpAddr; 2]> = SmallVec::new();
     if v4.assigned_dns1 != Ipv4Addr::UNSPECIFIED {
         dns.push(IpAddr::V4(v4.assigned_dns1));
     }

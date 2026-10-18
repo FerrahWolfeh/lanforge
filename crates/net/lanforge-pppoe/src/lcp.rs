@@ -1,5 +1,6 @@
 use crate::config::AuthMethod;
 use crate::error::PppoeError;
+use crate::ipcp::PacketBuf;
 use crate::session::PppoeSession;
 use rand::random;
 use smallvec::{SmallVec, smallvec};
@@ -40,9 +41,9 @@ pub struct LcpPacket<'a> {
 
 impl<'a> LcpPacket<'a> {
     #[must_use]
-    pub fn encode(&self) -> SmallVec<[u8; 128]> {
+    pub fn encode(&self) -> PacketBuf<128> {
         let opts_len: usize = self.options.iter().map(|o| 2 + o.data.len()).sum();
-        let mut pkt = SmallVec::with_capacity(6 + opts_len);
+        let mut pkt = PacketBuf::<128>::new();
         pkt.extend_from_slice(&PPP_LCP.to_be_bytes());
         pkt.push(self.code);
         pkt.push(self.id);
@@ -130,11 +131,12 @@ pub async fn negotiate_lcp(
     let mut negotiated_mru = desired_mru;
     let mut negotiated_auth = AuthMethod::None;
 
-    let mru_bytes = desired_mru.to_be_bytes();
+    let mut mru_bytes = desired_mru.to_be_bytes();
     let magic_bytes = local_magic.to_be_bytes();
 
-    let mut req_packet = build_conf_req(req_id, &mru_bytes, &magic_bytes);
-    session.send_ppp_frame(&req_packet.encode()).await?;
+    session
+        .send_ppp_frame(&build_conf_req(req_id, &mru_bytes, &magic_bytes).encode())
+        .await?;
 
     let lcp_timeout = Duration::from_secs(10);
     let start = Instant::now();
@@ -159,8 +161,9 @@ pub async fn negotiate_lcp(
         else {
             // Timeout, retransmit
             req_id = req_id.wrapping_add(1);
-            req_packet = build_conf_req(req_id, &mru_bytes, &magic_bytes);
-            session.send_ppp_frame(&req_packet.encode()).await?;
+            session
+                .send_ppp_frame(&build_conf_req(req_id, &mru_bytes, &magic_bytes).encode())
+                .await?;
             continue;
         };
 
@@ -187,9 +190,11 @@ pub async fn negotiate_lcp(
             LCP_CONF_NAK => {
                 if packet.id == req_id {
                     handle_conf_nak(&packet, &mut negotiated_mru);
+                    mru_bytes = negotiated_mru.to_be_bytes();
                     req_id = req_id.wrapping_add(1);
-                    req_packet = build_conf_req(req_id, &mru_bytes, &magic_bytes);
-                    session.send_ppp_frame(&req_packet.encode()).await?;
+                    session
+                        .send_ppp_frame(&build_conf_req(req_id, &mru_bytes, &magic_bytes).encode())
+                        .await?;
                 }
             }
             LCP_CONF_REQ => {
