@@ -157,8 +157,7 @@ impl DbWorker {
             db.save_snapshot(&snapshot).map(|()| len)
         } else {
             // Incremental flush (common)
-            let (lease_devices, base_devices) = {
-                let state = self.ctx.read();
+            let (lease_devices, base_devices) = self.ctx.with_state(|state| {
                 let mut lease = Vec::new();
                 let mut base = Vec::new();
                 for mac in &self.dirty_macs {
@@ -171,7 +170,7 @@ impl DbWorker {
                     }
                 }
                 (lease, base)
-            };
+            });
 
             let purges: Vec<MacAddr> = self.purged_macs.iter().copied().collect();
             let count = lease_devices.len() + base_devices.len() + purges.len();
@@ -808,7 +807,6 @@ impl AsyncService for DbWorker {
                         #[cfg(feature = "adblock")]
                         LanforgeEvent::Dns(DnsEvent::QueryBlocked { src_addr, domain }) => {
                             let src_mac = ctx
-                                .read()
                                 .get_mac_by_ip(*src_addr)
                                 .map(|m| m.to_string());
                             if let Err(e) = log_db

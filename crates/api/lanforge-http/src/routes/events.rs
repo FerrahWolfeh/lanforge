@@ -230,7 +230,7 @@ fn enrich_interface_info(ctx: &LanforgeContext, ifindex: u32) -> serde_json::Val
         map.insert("name".to_string(), serde_json::Value::String(name));
     }
 
-    let if_state = ctx.read().get_interface_ips(ifindex);
+    let if_state = ctx.get_interface_state(ifindex);
     if let Some((v4, prefix_len)) = if_state.v4 {
         map.insert("ipv4".to_string(), serde_json::Value::String(format!("{v4}/{prefix_len}")));
     }

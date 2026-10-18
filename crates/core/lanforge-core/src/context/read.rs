@@ -63,14 +63,8 @@ use crate::{
 impl LanforgeContext {
     /// Provides direct read access to the underlying device state.
     #[must_use]
-    pub fn read(&self) -> Guard<Arc<State>> {
+    pub(crate) fn read(&self) -> Guard<Arc<State>> {
         self.inner.state.load()
-    }
-
-    /// Captures a point-in-time snapshot of the authoritative state behind an `Arc`.
-    #[must_use]
-    pub fn snapshot(&self) -> Arc<State> {
-        self.inner.state.load_full()
     }
 
     /// Executes a read-only closure with direct access to the State.

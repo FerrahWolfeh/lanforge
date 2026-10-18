@@ -12,7 +12,7 @@ use lanforge_db::{
     PppoeConfigStore,
 };
 use lanforge_types::auth::{ApiScope, UserRole};
-use lanforge_types::device::{Device, DeviceStatus, Hostname, IPv4State};
+use lanforge_types::device::{DeviceStatus, Origin};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
 use lanforge_types::network::dns::DnsRecordType;
@@ -22,7 +22,7 @@ use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::storage::{StorageQuery, StorageQueryResult};
 use lanforge_types::system::ServiceAction;
-use lanforge_types::update::DeviceUpdate;
+use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
 use smallvec::smallvec;
 use tempfile::tempdir;
 use tokio::time::{sleep, timeout};
@@ -118,7 +118,7 @@ async fn test_db_worker_batches_and_flushes_devices() {
         });
     }
 
-    assert_eq!(ctx.read().devices.len(), 3);
+    assert_eq!(ctx.with_state(|s| s.devices.len()), 3);
 
     // Send Shutdown to trigger immediate batch flush and exit
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -218,17 +218,33 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
         let _ = storage.send_query(StorageQuery::IsProvisioned).await.expect("worker ready");
 
         // 1. Add 2 devices
-        let mut d1 = Device::new(mac1);
-        d1.hostname = Hostname::from("nas.lan".to_string());
-        d1.v4 = IPv4State::Static(Ipv4Addr::new(192, 168, 1, 50));
-        d1.status = DeviceStatus::Online;
-        ctx.with_state_mut(|s| { s.insert_device(mac1, d1); });
+        let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
+            mac: mac1,
+            update: Box::new(CliHostUpdate {
+                hostname: FieldUpdate::from(Some("nas.lan".to_string())),
+                duid: FieldUpdate::NoChange,
+                v4_static: FieldUpdate::from(Some(Ipv4Addr::new(192, 168, 1, 50))),
+                v6_suffix: FieldUpdate::NoChange,
+                origin: Origin::Static,
+                boot_file: FieldUpdate::NoChange,
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
+            }),
+        });
 
-        let mut d2 = Device::new(mac2);
-        d2.hostname = Hostname::from("printer.lan".to_string());
-        d2.v4 = IPv4State::Static(Ipv4Addr::new(192, 168, 1, 60));
-        d2.status = DeviceStatus::Online;
-        ctx.with_state_mut(|s| { s.insert_device(mac2, d2); });
+        let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
+            mac: mac2,
+            update: Box::new(CliHostUpdate {
+                hostname: FieldUpdate::from(Some("printer.lan".to_string())),
+                duid: FieldUpdate::NoChange,
+                v4_static: FieldUpdate::from(Some(Ipv4Addr::new(192, 168, 1, 60))),
+                v6_suffix: FieldUpdate::NoChange,
+                origin: Origin::Static,
+                boot_file: FieldUpdate::NoChange,
+                dns_fallback: FieldUpdate::NoChange,
+                class: FieldUpdate::NoChange,
+            }),
+        });
 
         // Signal table dirty to persist both devices
         let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::TableDirty));

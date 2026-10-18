@@ -245,7 +245,7 @@ impl LanforgeContext {
     }
 
     /// Executes a closure with exclusive write access to the state via Copy-on-Write.
-    pub fn with_state_mut<F, R>(&self, f: F) -> R
+    pub(crate) fn with_state_mut<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut State) -> R,
     {

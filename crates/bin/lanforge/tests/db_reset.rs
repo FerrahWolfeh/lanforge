@@ -120,16 +120,18 @@ async fn test_full_db_reset_chain() {
                 LanforgeEvent::Storage(StorageEvent::DbResetCompleted)
             ) {
                 ctx_loop.reset();
-                ctx_loop.with_state_mut(|state| {
-                    state.add_static_device(
-                        mac_static,
-                        "static-host".to_string(),
-                        None,
-                        Some(Ipv4Addr::new(192, 168, 1, 20)),
-                        None,
-                        None,
-                        Origin::Static,
-                    );
+                let _ = ctx_loop.apply(DeviceUpdate::CliHostUpdated {
+                    mac: mac_static,
+                    update: Box::new(CliHostUpdate {
+                        hostname: FieldUpdate::from(Some("static-host".to_string())),
+                        duid: FieldUpdate::NoChange,
+                        v4_static: FieldUpdate::from(Some(Ipv4Addr::new(192, 168, 1, 20))),
+                        v6_suffix: FieldUpdate::NoChange,
+                        origin: Origin::Static,
+                        boot_file: FieldUpdate::NoChange,
+                        dns_fallback: FieldUpdate::NoChange,
+                        class: FieldUpdate::NoChange,
+                    }),
                 });
                 break;
             }
@@ -149,19 +151,20 @@ async fn test_full_db_reset_chain() {
     // Wait for the chain to complete
     sleep(Duration::from_millis(1000)).await;
 
-    let state = ctx.read();
-    assert!(
-        !state.devices.contains_key(&mac_dyn),
-        "Dynamic device should be gone after reset"
-    );
-    assert!(
-        state.devices.contains_key(&mac_static),
-        "Static device should be re-seeded after reset"
-    );
-    assert_eq!(
-        state.devices.get(&mac_static).unwrap().hostname.name,
-        "static-host"
-    );
+    ctx.with_state(|state| {
+        assert!(
+            !state.devices.contains_key(&mac_dyn),
+            "Dynamic device should be gone after reset"
+        );
+        assert!(
+            state.devices.contains_key(&mac_static),
+            "Static device should be re-seeded after reset"
+        );
+        assert_eq!(
+            state.devices.get(&mac_static).unwrap().hostname.name,
+            "static-host"
+        );
+    });
 
     println!("✅ Reset chain verified!");
 }
