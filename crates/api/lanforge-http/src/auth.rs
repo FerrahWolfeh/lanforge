@@ -195,7 +195,7 @@ pub fn looks_like_jwt(token: &str) -> bool {
     dots == 2
 }
 
-pub async fn authenticate_token(
+pub fn authenticate_token(
     token: &str,
     auth_manager: &AuthManager,
     db: &dyn DatabaseStore,
@@ -219,7 +219,7 @@ pub async fn authenticate_token(
         .cast_signed();
 
     // 2. Validate against database API tokens
-    match db.validate_api_token(token, now).await {
+    match db.validate_api_token(token, now) {
         Ok(Some((name, scopes))) => Ok(AuthenticatedUser {
             name,
             role: "admin".to_string(),
@@ -255,6 +255,7 @@ where
 {
     type Rejection = HttpError;
 
+    #[allow(clippy::unused_async_trait_impl)]
     async fn from_request_parts(parts: &mut Parts, state: &S) -> HttpResult<Self> {
         let auth_manager = AuthManager::from_ref(state);
         let db = Arc::<dyn DatabaseStore>::from_ref(state);
@@ -262,7 +263,7 @@ where
             HttpError::Auth("Missing Authorization header, session cookie, or token parameter".into())
         })?;
 
-        authenticate_token(&token, &auth_manager, db.as_ref()).await
+        authenticate_token(&token, &auth_manager, db.as_ref())
     }
 }
 
@@ -322,7 +323,7 @@ pub async fn middleware(
     if cfg.auth_password_hash.is_none()
         && !auth_manager.has_users_cached()
     {
-        let count = db.count_users().await.unwrap_or(0);
+        let count = db.count_users().unwrap_or(0);
         if count == 0 {
             return Ok(next.run(req).await);
         }
@@ -332,7 +333,7 @@ pub async fn middleware(
     let token = extract_token(req.headers(), req.uri().query())
         .ok_or_else(|| HttpError::Auth("Missing Authorization header, session cookie, or token parameter".into()))?;
 
-    let user = authenticate_token(&token, &auth_manager, db.as_ref()).await?;
+    let user = authenticate_token(&token, &auth_manager, db.as_ref())?;
 
     req.extensions_mut().insert(user);
 

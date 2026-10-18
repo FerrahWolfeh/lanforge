@@ -345,21 +345,21 @@ mod tests {
         use lanforge_types::auth::UserRole;
         let db = RedbDatabase::open_temp().unwrap();
 
-        assert_eq!(db.count_users().await.unwrap(), 0);
-        let user = db.create_user("admin", "hash123", UserRole::Admin, 1000).await.unwrap();
+        assert_eq!(db.count_users().unwrap(), 0);
+        let user = db.create_user("admin", "hash123", UserRole::Admin, 1000).unwrap();
         assert_eq!(user.username, "admin");
         assert_eq!(user.role, UserRole::Admin);
-        assert_eq!(db.count_users().await.unwrap(), 1);
+        assert_eq!(db.count_users().unwrap(), 1);
 
-        let fetched = db.get_user_by_username("admin").await.unwrap().unwrap();
+        let fetched = db.get_user_by_username("admin").unwrap().unwrap();
         assert_eq!(fetched.password_hash, "hash123");
 
-        db.update_user_password("admin", "newhash", 1005).await.unwrap();
-        let updated = db.get_user_by_username("admin").await.unwrap().unwrap();
+        db.update_user_password("admin", "newhash", 1005).unwrap();
+        let updated = db.get_user_by_username("admin").unwrap().unwrap();
         assert_eq!(updated.password_hash, "newhash");
 
-        db.delete_user("admin").await.unwrap();
-        assert_eq!(db.count_users().await.unwrap(), 0);
+        db.delete_user("admin").unwrap();
+        assert_eq!(db.count_users().unwrap(), 0);
     }
 
     #[tokio::test]
@@ -370,17 +370,17 @@ mod tests {
         let mut dev = Device::new(mac);
         dev.hostname = "test-host".to_string().into();
 
-        db.upsert_device(&dev).await.unwrap();
+        db.upsert_device(&dev).unwrap();
 
-        let devices = db.load_all_devices().await.unwrap();
+        let devices = db.load_all_devices().unwrap();
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].hostname, "test-host".into());
 
-        let found_mac = db.find_mac_by_hostname("test-host").await.unwrap();
+        let found_mac = db.find_mac_by_hostname("test-host").unwrap();
         assert_eq!(found_mac, Some(mac));
 
-        db.remove_device(mac).await.unwrap();
-        assert_eq!(db.load_all_devices().await.unwrap().len(), 0);
+        db.remove_device(mac).unwrap();
+        assert_eq!(db.load_all_devices().unwrap().len(), 0);
     }
 
     #[tokio::test]
@@ -416,8 +416,8 @@ mod tests {
             domain_name: Some("lan".to_string()),
             ..Default::default()
         }];
-        db.save_dhcp_v4_pools(&pools).await.unwrap();
-        let loaded_pools = db.load_dhcp_v4_pools().await.unwrap();
+        db.save_dhcp_v4_pools(&pools).unwrap();
+        let loaded_pools = db.load_dhcp_v4_pools().unwrap();
         assert_eq!(loaded_pools.len(), 1);
         assert_eq!(loaded_pools[0].range_start, "192.168.1.10".parse::<std::net::Ipv4Addr>().unwrap());
 
@@ -426,8 +426,8 @@ mod tests {
             RAPrefix::ula("fd97:f00d:cafe:3731::"),
             RAPrefix::gua_dynamic(),
         ];
-        db.save_ra_prefixes(&prefixes).await.unwrap();
-        let loaded_prefixes = db.load_ra_prefixes().await.unwrap();
+        db.save_ra_prefixes(&prefixes).unwrap();
+        let loaded_prefixes = db.load_ra_prefixes().unwrap();
         assert_eq!(loaded_prefixes.len(), 2);
 
         // PPPoE
@@ -438,8 +438,8 @@ mod tests {
             wan_iface: "eth0.10".to_string(),
             ..Default::default()
         };
-        db.save_pppoe_config(&pppoe).await.unwrap();
-        let loaded_pppoe = db.load_pppoe_config().await.unwrap().unwrap();
+        db.save_pppoe_config(&pppoe).unwrap();
+        let loaded_pppoe = db.load_pppoe_config().unwrap().unwrap();
         assert_eq!(loaded_pppoe.username, "user@isp");
         assert_eq!(loaded_pppoe.wan_iface, "eth0.10");
     }
@@ -452,19 +452,19 @@ mod tests {
         let db = RedbDatabase::open_temp().unwrap();
 
         // 1. Initial should be None
-        assert!(db.load_firewall_config().await.unwrap().is_none());
+        assert!(db.load_firewall_config().unwrap().is_none());
 
         // 2. Seed default config
         let seed = FirewallConfig::default();
-        let seeded = db.seed_firewall_if_empty(&seed).await.unwrap();
+        let seeded = db.seed_firewall_if_empty(&seed).unwrap();
         assert!(seeded);
 
         // 3. Second seed should be no-op (returns false)
-        let seeded_again = db.seed_firewall_if_empty(&seed).await.unwrap();
+        let seeded_again = db.seed_firewall_if_empty(&seed).unwrap();
         assert!(!seeded_again);
 
         // 4. Load config and verify content
-        let mut loaded = db.load_firewall_config().await.unwrap().unwrap();
+        let mut loaded = db.load_firewall_config().unwrap().unwrap();
         assert_eq!(loaded.table_name, "lanforge");
         assert!(loaded.enabled);
 
@@ -483,9 +483,9 @@ mod tests {
             masquerade: false,
             mtu_fix: false,
         });
-        db.save_firewall_config(&loaded).await.unwrap();
+        db.save_firewall_config(&loaded).unwrap();
 
-        let reloaded = db.load_firewall_config().await.unwrap().unwrap();
+        let reloaded = db.load_firewall_config().unwrap().unwrap();
         assert_eq!(reloaded.zones.len(), loaded.zones.len());
         assert!(reloaded.zones.iter().any(|z| z.name == "dmz"));
     }
@@ -501,28 +501,28 @@ mod tests {
 
         // DNS Rewrites
         let ans = RewriteAnswer::A("192.168.1.1".parse().unwrap());
-        db.upsert_dns_rewrite("router.lan", DnsRecordType::A, &ans).await.unwrap();
-        let rewrites = db.load_dns_rewrites().await.unwrap();
+        db.upsert_dns_rewrite("router.lan", DnsRecordType::A, &ans).unwrap();
+        let rewrites = db.load_dns_rewrites().unwrap();
         assert_eq!(rewrites.len(), 1);
         assert_eq!(rewrites[0].domain, "router.lan");
 
         // Allowlist
-        db.add_dns_allowlist("example.com").await.unwrap();
-        let allowlist = db.load_dns_allowlist().await.unwrap();
+        db.add_dns_allowlist("example.com").unwrap();
+        let allowlist = db.load_dns_allowlist().unwrap();
         assert_eq!(allowlist.len(), 1);
         assert_eq!(allowlist[0].1, "example.com");
 
         // API Token
         let mut scopes = ApiScopes::new();
         scopes.push(ApiScope::Admin);
-        let token_id = db.store_api_token("secret-token", "test-token", &scopes, None, 1000).await.unwrap();
+        let token_id = db.store_api_token("secret-token", "test-token", &scopes, None, 1000).unwrap();
         assert!(token_id > 0);
 
-        let validated = db.validate_api_token("secret-token", 1001).await.unwrap().unwrap();
+        let validated = db.validate_api_token("secret-token", 1001).unwrap().unwrap();
         assert_eq!(validated.0, "test-token");
 
-        db.delete_api_token("secret-token").await.unwrap();
-        assert!(db.validate_api_token("secret-token", 1002).await.unwrap().is_none());
+        db.delete_api_token("secret-token").unwrap();
+        assert!(db.validate_api_token("secret-token", 1002).unwrap().is_none());
     }
 
     #[tokio::test]
@@ -538,10 +538,10 @@ mod tests {
         // 1. Record system logs
         let event1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::ReloadConfig));
         let event2 = TimedEvent::new(LanforgeEvent::System(SystemEvent::Shutdown));
-        db.record_log(&event1).await.unwrap();
-        db.record_log(&event2).await.unwrap();
+        db.record_log(&event1).unwrap();
+        db.record_log(&event2).unwrap();
 
-        let history = db.get_history(10).await.unwrap();
+        let history = db.get_history(10).unwrap();
         assert_eq!(history.len(), 2);
 
         // 2. Record DNS queries
@@ -573,11 +573,10 @@ mod tests {
             filter: None,
             coalesce_id: None,
         };
-        db.record_dns_queries_batch(&[query1, query2]).await.unwrap();
+        db.record_dns_queries_batch(&[query1, query2]).unwrap();
 
         let (queries, total) = db
             .get_dns_query_history(10, None, None, None, None, None)
-            .await
             .unwrap();
         assert_eq!(total, 2);
         assert_eq!(queries.len(), 2);
@@ -586,7 +585,6 @@ mod tests {
         // Test filtering by domain
         let (queries_domain, total_domain) = db
             .get_dns_query_history(10, None, None, Some("bad-ads".to_string()), None, None)
-            .await
             .unwrap();
         assert_eq!(total_domain, 1);
         assert_eq!(queries_domain.len(), 1);
@@ -595,34 +593,33 @@ mod tests {
         // Test filtering by outcome/result
         let (queries_blocked, total_blocked) = db
             .get_dns_query_history(10, None, None, None, None, Some(QueryResult::Blocked))
-            .await
             .unwrap();
         assert_eq!(total_blocked, 1);
         assert_eq!(queries_blocked[0].result, QueryResult::Blocked);
 
-        let top_domains = db.get_dns_top_domains(5).await.unwrap();
+        let top_domains = db.get_dns_top_domains(5).unwrap();
         assert_eq!(top_domains.len(), 1);
         assert_eq!(top_domains[0].0, "example.com");
 
-        let top_blocked = db.get_dns_top_blocked_domains(5).await.unwrap();
+        let top_blocked = db.get_dns_top_blocked_domains(5).unwrap();
         assert_eq!(top_blocked.len(), 1);
         assert_eq!(top_blocked[0].0, "bad-ads.net");
 
-        let top_clients = db.get_dns_top_clients(5).await.unwrap();
+        let top_clients = db.get_dns_top_clients(5).unwrap();
         assert_eq!(top_clients.len(), 1);
         assert_eq!(top_clients[0], ("192.168.1.50".to_string(), 2, 1));
 
-        let query_rate = db.get_dns_query_rate(1700000000).await.unwrap();
+        let query_rate = db.get_dns_query_rate(1700000000).unwrap();
         assert!(!query_rate.is_empty());
 
-        let detailed_rates = db.get_dns_query_rate_detailed(1700000000, 900).await.unwrap();
+        let detailed_rates = db.get_dns_query_rate_detailed(1700000000, 900).unwrap();
         assert_eq!(detailed_rates.len(), 1);
         assert_eq!(detailed_rates[0].total, 2);
         assert_eq!(detailed_rates[0].forwarded, 1);
         assert_eq!(detailed_rates[0].blocked, 1);
 
         // Test Lifetime Stats
-        let initial_lifetime = db.load_dns_lifetime_stats().await.unwrap();
+        let initial_lifetime = db.load_dns_lifetime_stats().unwrap();
         assert_eq!(initial_lifetime.total_requests, 0);
 
         let test_stats = lanforge_types::network::dns::DnsLifetimeStats {
@@ -631,17 +628,16 @@ mod tests {
             resolved_total: 1070,
             ..Default::default()
         };
-        db.save_dns_lifetime_stats(&test_stats).await.unwrap();
-        let loaded = db.load_dns_lifetime_stats().await.unwrap();
+        db.save_dns_lifetime_stats(&test_stats).unwrap();
+        let loaded = db.load_dns_lifetime_stats().unwrap();
         assert_eq!(loaded, test_stats);
 
         // 3. Clear logs
-        db.clear_logs().await.unwrap();
-        let history_after_clear = db.get_history(10).await.unwrap();
+        db.clear_logs().unwrap();
+        let history_after_clear = db.get_history(10).unwrap();
         assert_eq!(history_after_clear.len(), 0);
         let (queries_after_clear, total_after_clear) = db
             .get_dns_query_history(10, None, None, None, None, None)
-            .await
             .unwrap();
         assert_eq!(total_after_clear, 0);
         assert_eq!(queries_after_clear.len(), 0);
@@ -731,7 +727,7 @@ mod tests {
             let db = RedbDatabase::open(&db_path).unwrap();
             assert_eq!(db.schema_version().unwrap(), 2);
 
-            let loaded = db.load_adblock_config().await.unwrap();
+            let loaded = db.load_adblock_config().unwrap();
             assert!(loaded.enabled);
             assert_eq!(loaded.blocking_mode, lanforge_types::network::dns::adblock::BlockingMode::NullIp);
             assert_eq!(loaded.blocking_ip_v4, Some("192.168.1.5".parse().unwrap()));

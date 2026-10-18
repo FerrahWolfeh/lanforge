@@ -23,6 +23,8 @@ use lanforge_dns::server::service::DnsService;
 use lanforge_dns::server::transport::doq::DoqService;
 #[cfg(all(feature = "dns", feature = "dns-dot"))]
 use lanforge_dns::server::transport::dot::DotService;
+#[cfg(feature = "dns")]
+use lanforge_db::LogStore;
 #[cfg(feature = "http")]
 use lanforge_http::HttpService;
 #[cfg(feature = "pppoe")]
@@ -67,10 +69,9 @@ impl Daemon {
         loop {
             let sys_rx = self.ctx.bus().subscribe_system();
             let net_rx = self.ctx.bus().subscribe_network();
-            let sto_rx = self.ctx.bus().subscribe_storage();
 
             self.validate_features();
-            self.spawn_services().await;
+            self.spawn_services();
             let expected = self.registry.registered_ids();
 
             match run_event_loop(
@@ -78,7 +79,6 @@ impl Daemon {
                 self.ctx.clone(),
                 sys_rx,
                 net_rx,
-                sto_rx,
                 expected,
             )
             .await?
@@ -102,7 +102,7 @@ impl Daemon {
 
                     // 4. Reload configuration from disk
                     let mut new_cfg = Config::load();
-                    self.reload_db_configs(&mut new_cfg).await;
+                    self.reload_db_configs(&mut new_cfg);
                     let new_cfg = Arc::new(new_cfg);
                     self.bootstrap.cfg = new_cfg.clone();
 
@@ -124,20 +124,20 @@ impl Daemon {
         self.shutdown().await
     }
 
-    async fn reload_db_configs(&self, new_cfg: &mut Config) {
+    fn reload_db_configs(&self, new_cfg: &mut Config) {
         #[cfg(feature = "pppoe")]
-        if let Ok(Some(pppoe_db)) = self.bootstrap.db.load_pppoe_config().await {
+        if let Ok(Some(pppoe_db)) = self.bootstrap.db.load_pppoe_config() {
             new_cfg.pppoe_enabled = pppoe_db.enabled;
             new_cfg.pppoe_toml = pppoe_db.clone();
             self.ctx.update_pppoe_config(pppoe_db);
         }
         #[cfg(feature = "traffic")]
-        if let Ok(Some(traffic_db)) = self.bootstrap.db.load_traffic_config().await {
+        if let Ok(Some(traffic_db)) = self.bootstrap.db.load_traffic_config() {
             new_cfg.traffic_toml = traffic_db.clone();
             self.ctx.update_traffic_config(traffic_db);
         }
         #[cfg(feature = "nft")]
-        if let Ok(Some(firewall_db)) = self.bootstrap.db.load_firewall_config().await {
+        if let Ok(Some(firewall_db)) = self.bootstrap.db.load_firewall_config() {
             new_cfg.firewall_enabled = firewall_db.enabled;
             new_cfg.firewall_toml = firewall_db.clone();
             self.ctx.update_firewall_config(firewall_db);
@@ -188,7 +188,7 @@ impl Daemon {
         }
     }
 
-    async fn spawn_services(&mut self) {
+    fn spawn_services(&mut self) {
         let cfg = self.bootstrap.cfg.clone();
         let target_ifindex = self.bootstrap.target_ifindex;
         let rt_handle = self.bootstrap.rt_handle.clone();
@@ -229,7 +229,7 @@ impl Daemon {
         }
 
         #[cfg(feature = "dns")]
-        let dns_lifetime = log_db.load_dns_lifetime_stats().await.unwrap_or_default();
+        let dns_lifetime = log_db.load_dns_lifetime_stats().unwrap_or_default();
 
         crate::spawn_services!(self.registry, &self.ctx, {
             async [ctx, cfg, db, log_db] => DbWorker::new(cfg.database.clone(), ctx, db, log_db),

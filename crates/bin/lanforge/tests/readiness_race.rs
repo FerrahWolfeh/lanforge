@@ -28,10 +28,9 @@ async fn setup_test_bootstrap() -> BootstrapResult {
         ..Config::default()
     });
 
-    let db = Arc::new(LanforgeDb::open(&cfg.database).await.expect("open db"));
+    let db = Arc::new(LanforgeDb::open(&cfg.database).expect("open db"));
     let log_db = Arc::new(
         LogDb::open(&cfg.database.runtime_path)
-            .await
             .expect("open log_db"),
     );
 
@@ -68,7 +67,6 @@ async fn test_event_loop_pre_seeded_readiness_reconciliation() {
 
     let sys_rx = bus.subscribe_system();
     let net_rx = bus.subscribe_network();
-    let sto_rx = bus.subscribe_storage();
 
     let ctx_loop = ctx.clone();
     let bootstrap_loop = bootstrap.clone();
@@ -80,7 +78,6 @@ async fn test_event_loop_pre_seeded_readiness_reconciliation() {
             ctx_loop,
             sys_rx,
             net_rx,
-            sto_rx,
             expected_clone,
         )
         .await
@@ -125,7 +122,6 @@ async fn test_event_loop_concurrent_broadcast_readiness() {
     // Subscribe BEFORE spawning/publishing (pattern used in app.rs)
     let sys_rx = bus.subscribe_system();
     let net_rx = bus.subscribe_network();
-    let sto_rx = bus.subscribe_storage();
 
     let mut sys_listener = bus.subscribe_system();
 
@@ -139,7 +135,6 @@ async fn test_event_loop_concurrent_broadcast_readiness() {
             ctx_loop,
             sys_rx,
             net_rx,
-            sto_rx,
             expected_clone,
         )
         .await

@@ -57,8 +57,8 @@ pub mod worker;
 pub use engine::LanforgeDb;
 pub use error::LanforgeDbError;
 pub use lanforge_db_core::{
-    AdblockStore, ApiTokenEntry, ApiTokenStore, BoxFuture, DbError, DeviceStore, DhcpConfigStore,
-    DnsStore, DnsUpstreamEntry, DnsUpstreamStore, FirewallConfigStore, PppoeConfigStore,
+    AdblockStore, ApiTokenEntry, ApiTokenStore, DbError, DeviceStore, DhcpConfigStore,
+    DnsStore, DnsUpstreamEntry, DnsUpstreamStore, FirewallConfigStore, LogStore, PppoeConfigStore,
     RaConfigStore, TrafficConfigStore, UserEntry, UserStore, sanitize_db_url,
 };
 pub use log_engine::LogDb;

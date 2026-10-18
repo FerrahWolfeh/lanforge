@@ -56,7 +56,6 @@ async fn make_state(with_auth: bool) -> AppState {
             config_path: "memory".to_string(),
             ..Default::default()
         })
-        .await
         .unwrap(),
     );
     let log_db = Arc::new(LogDb::open_in_memory());
@@ -1115,7 +1114,6 @@ async fn test_events_contract() {
     state
         .log_db
         .record_logs_batch(&[ev1, ev2], &mut buf)
-        .await
         .unwrap();
 
     let router = build_router(state);

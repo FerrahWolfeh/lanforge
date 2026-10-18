@@ -62,7 +62,7 @@ async fn handle_events(
             )
             .into_response()
     } else {
-        handle_events_history_inner(&state, params).await.into_response()
+        handle_events_history_inner(&state, &params).into_response()
     }
 }
 
@@ -70,12 +70,12 @@ async fn handle_events_history(
     State(state): State<AppState>,
     Query(params): Query<EventsQuery>,
 ) -> Response {
-    handle_events_history_inner(&state, params).await
+    handle_events_history_inner(&state, &params)
 }
 
-async fn handle_events_history_inner(
+fn handle_events_history_inner(
     state: &AppState,
-    params: EventsQuery,
+    params: &EventsQuery,
 ) -> Response {
     let limit = params.limit.or(params.initial).unwrap_or(50).clamp(1, 500);
     let offset = params.offset.unwrap_or(0);
@@ -83,7 +83,6 @@ async fn handle_events_history_inner(
     let raw_events = state
         .log_db
         .get_history(limit + offset)
-        .await
         .unwrap_or_default();
 
     let filtered: Vec<serde_json::Value> = raw_events
@@ -403,7 +402,7 @@ fn handle_events_stream(
         // 1. Replay initial history from log_db if requested
         if let Some(n) = initial && n > 0 {
             let initial_limit = n.min(250);
-            if let Ok(history) = state.log_db.get_history(initial_limit).await {
+            if let Ok(history) = state.log_db.get_history(initial_limit) {
                 for ev in history {
                     if let LanforgeEvent::Dns(_) = &ev.event {
                         continue;

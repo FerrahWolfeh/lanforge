@@ -69,12 +69,10 @@ async fn test_full_db_reset_chain() {
     let ctx_db = ctx.clone();
     let db = Arc::new(
         LanforgeDb::open(&cfg.database)
-            .await
             .expect("Failed to open DB"),
     );
     let log_db = Arc::new(
         LogDb::open(&cfg.database.runtime_path)
-            .await
             .expect("Failed to open LogDB"),
     );
 

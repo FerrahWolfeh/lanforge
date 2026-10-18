@@ -91,7 +91,6 @@ async fn test_handle_login() {
             config_path: "memory".to_string(),
             ..Default::default()
         })
-        .await
         .unwrap(),
     );
     let log_db = Arc::new(LogDb::open_in_memory());

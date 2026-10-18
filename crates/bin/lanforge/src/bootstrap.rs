@@ -164,13 +164,13 @@ impl Bootstrapper {
         let bus = Arc::new(EventBus::new());
         let host_ifaces = interfaces();
         let target_ifindex = Self::find_target_interface(&mut cfg, &host_ifaces)?;
-        let (initial_table, db, log_db) = Self::init_device_table(&mut cfg, &host_ifaces).await?;
+        let (initial_table, db, log_db) = Self::init_device_table(&mut cfg, &host_ifaces)?;
         let db = Arc::new(db);
         let log_db = Arc::new(log_db);
         let cfg = Arc::new(cfg);
 
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
-        Self::populate_context(&ctx, &cfg, &db).await;
+        Self::populate_context(&ctx, &cfg, &db);
 
         let _ = bus.publish(LanforgeEvent::System(SystemEvent::StateReady));
 
@@ -189,7 +189,7 @@ impl Bootstrapper {
             ctx.set_pppoe_ready(true);
         }
 
-        if let Ok(Some(stored_gua)) = db.load_last_gua_prefix().await {
+        if let Ok(Some(stored_gua)) = db.load_last_gua_prefix() {
             info!("Bootstrapper: Restored stored GUA prefix from DB: {stored_gua}");
             let _ = ctx.signal_gua_change(target_ifindex, stored_gua, 7200, 7200);
         }
@@ -257,7 +257,7 @@ impl Bootstrapper {
         compiled
     }
 
-    async fn populate_context(ctx: &LanforgeContext, cfg: &Config, db: &LanforgeDb) {
+    fn populate_context(ctx: &LanforgeContext, cfg: &Config, db: &LanforgeDb) {
         if !cfg.system.iface.is_empty() {
             ctx.set_target_interface_name(cfg.system.iface.clone());
         }
@@ -269,7 +269,7 @@ impl Bootstrapper {
         {
             ctx.update_dhcp_v4_pools(cfg.dhcpv4_toml.pools.clone());
             ctx.update_dhcp_v6_pools(cfg.dhcpv6_toml.pools.clone());
-            if let Ok(Some(opts)) = db.load_dhcp_options().await {
+            if let Ok(Some(opts)) = db.load_dhcp_options() {
                 ctx.update_dhcp_options(opts);
             }
         }
@@ -300,7 +300,7 @@ impl Bootstrapper {
         ctx.set_compiled_caps(Self::build_compiled_caps());
 
         #[cfg(feature = "dns")]
-        Self::load_dns_state_into_context(db, ctx).await;
+        Self::load_dns_state_into_context(db, ctx);
 
         #[cfg(feature = "pppoe")]
         ctx.update_pppoe_config(cfg.pppoe_toml.clone());
@@ -331,24 +331,24 @@ impl Bootstrapper {
     }
 
     #[cfg(feature = "dns")]
-    async fn load_dns_state_into_context(db: &LanforgeDb, ctx: &LanforgeContext) {
-        if let Ok(upstreams) = db.load_dns_upstreams().await {
+    fn load_dns_state_into_context(db: &LanforgeDb, ctx: &LanforgeContext) {
+        if let Ok(upstreams) = db.load_dns_upstreams() {
             let list = upstreams.into_iter().map(|row| row.to_target()).collect();
             ctx.update_dns_upstreams(list);
         }
-        if let Ok(Some(mode)) = db.load_dns_upstream_mode().await {
+        if let Ok(Some(mode)) = db.load_dns_upstream_mode() {
             ctx.update_dns_upstream_mode(mode);
         }
-        if let Ok(rewrites) = db.load_dns_rewrites().await {
+        if let Ok(rewrites) = db.load_dns_rewrites() {
             ctx.update_dns_rewrites(rewrites);
         }
-        if let Ok(allowlist) = db.load_dns_allowlist().await {
+        if let Ok(allowlist) = db.load_dns_allowlist() {
             ctx.update_dns_allowlist(allowlist.into_iter().map(|(_, d)| d).collect());
         }
-        if let Ok(adblock) = db.load_adblock_config().await {
+        if let Ok(adblock) = db.load_adblock_config() {
             ctx.update_dns_adblock(adblock);
         }
-        if let Ok(urls) = db.load_adblock_urls().await {
+        if let Ok(urls) = db.load_adblock_urls() {
             ctx.update_dns_adblock_urls(
                 urls.into_iter()
                     .map(|(id, url, kind, format)| AdblockUrlEntry {
@@ -360,7 +360,7 @@ impl Bootstrapper {
                     .collect(),
             );
         }
-        if let Ok(rules) = db.load_adblock_rules().await {
+        if let Ok(rules) = db.load_adblock_rules() {
             ctx.update_dns_adblock_rules(
                 rules
                     .into_iter()
@@ -376,9 +376,9 @@ impl Bootstrapper {
     }
 
     #[cfg(feature = "dns")]
-    async fn load_dns_config(db: &LanforgeDb, cfg: &Config) -> Result<()> {
+    fn load_dns_config(db: &LanforgeDb, cfg: &Config) -> Result<()> {
         // Seed upstreams if empty in DB
-        let upstreams = db.load_dns_upstreams().await?;
+        let upstreams = db.load_dns_upstreams()?;
         if upstreams.is_empty() && !cfg.dns_toml.upstreams.is_empty() {
             for entry in &cfg.dns_toml.upstreams {
                 let target = &entry.target;
@@ -387,8 +387,7 @@ impl Bootstrapper {
                         target.addr,
                         target.protocol,
                         target.domain.as_deref(),
-                    )
-                    .await?;
+                    )?;
             }
             info!(
                 "Seeded {} DNS upstreams from configuration into database",
@@ -397,11 +396,10 @@ impl Bootstrapper {
         }
 
         // Seed rewrites if empty in DB
-        let rewrites = db.load_dns_rewrites().await?;
+        let rewrites = db.load_dns_rewrites()?;
         if rewrites.is_empty() && !cfg.dns_toml.rewrites.is_empty() {
             for rule in &cfg.dns_toml.rewrites {
-                db.upsert_dns_rewrite(&rule.domain, rule.rtype, &rule.answer)
-                    .await?;
+                db.upsert_dns_rewrite(&rule.domain, rule.rtype, &rule.answer)?;
             }
             info!(
                 "Seeded {} DNS rewrites from configuration into database",
@@ -410,10 +408,10 @@ impl Bootstrapper {
         }
 
         // Seed allowlist if empty in DB
-        let allowlist = db.load_dns_allowlist().await?;
+        let allowlist = db.load_dns_allowlist()?;
         if allowlist.is_empty() && !cfg.dns_toml.allowlist.is_empty() {
             for domain in &cfg.dns_toml.allowlist {
-                db.add_dns_allowlist(domain).await?;
+                db.add_dns_allowlist(domain)?;
             }
             info!(
                 "Seeded {} DNS allowlist domains from configuration into database",
@@ -422,7 +420,7 @@ impl Bootstrapper {
         }
 
         // Seed adblock urls if empty in DB
-        let adblock_urls = db.load_adblock_urls().await?;
+        let adblock_urls = db.load_adblock_urls()?;
         let is_new_adblock = adblock_urls.is_empty();
         if is_new_adblock {
             let mut count = 0;
@@ -431,8 +429,7 @@ impl Bootstrapper {
                     url,
                     AdblockUrlKind::Blocklist,
                     lanforge_types::network::dns::adblock::AdblockSourceFormat::Auto,
-                )
-                .await?;
+                )?;
                 count += 1;
             }
             for url in &cfg.dns_toml.adblock_allowlist_urls {
@@ -440,8 +437,7 @@ impl Bootstrapper {
                     url,
                     AdblockUrlKind::Allowlist,
                     lanforge_types::network::dns::adblock::AdblockSourceFormat::Auto,
-                )
-                .await?;
+                )?;
                 count += 1;
             }
             if count > 0 {
@@ -456,16 +452,16 @@ impl Bootstrapper {
                 blocking_ip_v6: cfg.dns_toml.blocking_ip_v6,
                 refresh_time: cfg.dns_toml.adblock_refresh_time,
             };
-            db.save_adblock_config(&adblock_cfg).await?;
+            db.save_adblock_config(&adblock_cfg)?;
         }
 
         // Seed adblock custom rules if empty in DB
-        let adblock_rules = db.load_adblock_rules().await?;
+        let adblock_rules = db.load_adblock_rules()?;
         if adblock_rules.is_empty() && !cfg.dns_toml.adblock_rules.is_empty() {
             for rule in &cfg.dns_toml.adblock_rules {
-                let id = db.add_adblock_rule(&rule.domain, rule.action).await?;
+                let id = db.add_adblock_rule(&rule.domain, rule.action)?;
                 if !rule.enabled {
-                    let _ = db.update_adblock_rule_status(id, false).await;
+                    let _ = db.update_adblock_rule_status(id, false);
                 }
             }
             info!(
@@ -477,19 +473,19 @@ impl Bootstrapper {
         Ok(())
     }
 
-    async fn init_device_table(
+    fn init_device_table(
         cfg: &mut Config,
         host_ifaces: &[pnet::datalink::NetworkInterface],
     ) -> Result<(State, LanforgeDb, LogDb)> {
-        let (db, log_db) = Self::open_databases(cfg).await?;
-        let user_count = db.count_users().await.unwrap_or(0);
+        let (db, log_db) = Self::open_databases(cfg)?;
+        let user_count = db.count_users().unwrap_or(0);
         let is_provisioned = Self::check_provisioning_mode(cfg, &db, user_count);
 
         if is_provisioned {
-            Self::seed_provisioned_configs(&db, cfg).await?;
+            Self::seed_provisioned_configs(&db, cfg)?;
         }
 
-        let mut table = db.load_table().await.unwrap_or_else(|e| {
+        let mut table = db.load_table().unwrap_or_else(|e| {
             warn!("Falha ao carregar DB ({e}), iniciando do zero");
             State::new()
         });
@@ -497,10 +493,10 @@ impl Bootstrapper {
         // 2c. Check/reconcile DHCPv4 topology sanity against physical interface and host identity
         #[cfg(feature = "dhcp")]
         if is_provisioned {
-            Self::reconcile_dhcp_v4_topology_sanity(&db, cfg, &table, host_ifaces).await?;
+            Self::reconcile_dhcp_v4_topology_sanity(&db, cfg, &table, host_ifaces);
         }
 
-        if let Ok(resolvers) = db.load_dns_reverse_resolvers().await {
+        if let Ok(resolvers) = db.load_dns_reverse_resolvers() {
             table.reverse_resolvers = resolvers;
         }
 
@@ -513,7 +509,7 @@ impl Bootstrapper {
         Ok((table, db, log_db))
     }
 
-    async fn open_databases(cfg: &Config) -> Result<(LanforgeDb, LogDb)> {
+    fn open_databases(cfg: &Config) -> Result<(LanforgeDb, LogDb)> {
         let db_target = if cfg.database.is_in_memory() {
             "in-memory".to_string()
         } else {
@@ -521,7 +517,7 @@ impl Bootstrapper {
         };
         info!("Loading database from {db_target}");
 
-        let db = match LanforgeDb::open(&cfg.database).await {
+        let db = match LanforgeDb::open(&cfg.database) {
             Ok(db) => db,
             Err(e) => {
                 warn!(
@@ -529,11 +525,11 @@ impl Bootstrapper {
                     lanforge_db::sanitize_db_url(&cfg.database.config_path)
                 );
                 warn!("Database: Entering RECOVERY MODE — running in-memory without disk persistence");
-                LanforgeDb::open_in_memory().await?
+                LanforgeDb::open_in_memory()?
             }
         };
 
-        let log_db = match LogDb::open(&cfg.database.runtime_path).await {
+        let log_db = match LogDb::open(&cfg.database.runtime_path) {
             Ok(ldb) => ldb,
             Err(e) => {
                 warn!(
@@ -585,30 +581,30 @@ impl Bootstrapper {
         is_provisioned
     }
 
-    async fn seed_provisioned_configs(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+    fn seed_provisioned_configs(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
         #[cfg(feature = "dhcp")]
-        Self::seed_dhcp_configs(db, cfg).await?;
+        Self::seed_dhcp_configs(db, cfg)?;
 
         #[cfg(feature = "ra")]
-        Self::seed_ra_configs(db, cfg).await?;
+        Self::seed_ra_configs(db, cfg)?;
 
         #[cfg(feature = "dns")]
-        Self::load_dns_config(db, cfg).await?;
+        Self::load_dns_config(db, cfg)?;
 
         #[cfg(feature = "pppoe")]
-        Self::seed_pppoe_config(db, cfg).await?;
+        Self::seed_pppoe_config(db, cfg)?;
 
         #[cfg(feature = "traffic")]
-        Self::seed_traffic_config(db, cfg).await?;
+        Self::seed_traffic_config(db, cfg)?;
 
         #[cfg(feature = "nft")]
-        Self::seed_firewall_config(db, cfg).await?;
+        Self::seed_firewall_config(db, cfg)?;
 
         Ok(())
     }
 
     #[cfg(feature = "dhcp")]
-    async fn seed_dhcp_configs(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+    fn seed_dhcp_configs(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
         let mut seed_v4 = Vec::new();
         for mut pool in cfg.dhcpv4_toml.get_effective_pools() {
             if pool.lease_time.is_none() {
@@ -630,13 +626,13 @@ impl Bootstrapper {
                 ..Default::default()
             });
         }
-        if db.seed_dhcp_v4_if_empty(&seed_v4).await? {
+        if db.seed_dhcp_v4_if_empty(&seed_v4)? {
             info!(
                 "Seeded {} DHCPv4 pools from configuration into database",
                 seed_v4.len()
             );
         }
-        cfg.dhcpv4_toml.pools = db.load_dhcp_v4_pools().await?;
+        cfg.dhcpv4_toml.pools = db.load_dhcp_v4_pools()?;
         cfg.dhcpv4_toml.range_start = None;
         cfg.dhcpv4_toml.range_end = None;
 
@@ -648,13 +644,13 @@ impl Bootstrapper {
             }
             seed_v6.push(p);
         }
-        if db.seed_dhcp_v6_if_empty(&seed_v6).await? {
+        if db.seed_dhcp_v6_if_empty(&seed_v6)? {
             info!(
                 "Seeded {} DHCPv6 pools from TOML configuration into database",
                 seed_v6.len()
             );
         }
-        cfg.dhcpv6_toml.pools = db.load_dhcp_v6_pools().await?;
+        cfg.dhcpv6_toml.pools = db.load_dhcp_v6_pools()?;
 
         let seed_opts = DhcpOptionsConfig {
             v4: Dhcpv4Options {
@@ -692,7 +688,7 @@ impl Bootstrapper {
             tftp: TftpOptions::default(),
         };
 
-        if db.seed_dhcp_options_if_empty(&seed_opts).await? {
+        if db.seed_dhcp_options_if_empty(&seed_opts)? {
             info!("Seeded DHCP & TFTP scope options from configuration into database");
         }
 
@@ -700,39 +696,39 @@ impl Bootstrapper {
     }
 
     #[cfg(feature = "ra")]
-    async fn seed_ra_configs(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
-        if db.seed_ra_prefixes_if_empty(&cfg.ra_toml.prefixes).await? {
+    fn seed_ra_configs(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+        if db.seed_ra_prefixes_if_empty(&cfg.ra_toml.prefixes)? {
             info!(
                 "Seeded {} RA prefixes from TOML configuration into database",
                 cfg.ra_toml.prefixes.len()
             );
         }
-        cfg.ra_toml.prefixes = db.load_ra_prefixes().await?;
+        cfg.ra_toml.prefixes = db.load_ra_prefixes()?;
 
-        if db.seed_ra_rdnss_if_empty(&cfg.ra_toml.rdnss).await? {
+        if db.seed_ra_rdnss_if_empty(&cfg.ra_toml.rdnss)? {
             info!(
                 "Seeded {} RA RDNSS options from TOML configuration into database",
                 cfg.ra_toml.rdnss.len()
             );
         }
-        cfg.ra_toml.rdnss = db.load_ra_rdnss().await?;
+        cfg.ra_toml.rdnss = db.load_ra_rdnss()?;
 
-        if db.seed_ra_dnssl_if_empty(&cfg.ra_toml.dnssl).await? {
+        if db.seed_ra_dnssl_if_empty(&cfg.ra_toml.dnssl)? {
             info!(
                 "Seeded {} RA DNSSL options from TOML configuration into database",
                 cfg.ra_toml.dnssl.len()
             );
         }
-        cfg.ra_toml.dnssl = db.load_ra_dnssl().await?;
+        cfg.ra_toml.dnssl = db.load_ra_dnssl()?;
         Ok(())
     }
 
     #[cfg(feature = "pppoe")]
-    async fn seed_pppoe_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
-        if db.seed_pppoe_if_empty(&cfg.pppoe_toml).await? {
+    fn seed_pppoe_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+        if db.seed_pppoe_if_empty(&cfg.pppoe_toml)? {
             info!("Seeded PPPoE configuration from TOML into database");
         }
-        if let Some(loaded) = db.load_pppoe_config().await? {
+        if let Some(loaded) = db.load_pppoe_config()? {
             cfg.pppoe_enabled = loaded.enabled;
             cfg.pppoe_toml = loaded;
         }
@@ -740,18 +736,18 @@ impl Bootstrapper {
     }
 
     #[cfg(feature = "traffic")]
-    async fn seed_traffic_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
-        if db.seed_traffic_if_empty(&cfg.traffic_toml).await? {
+    fn seed_traffic_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+        if db.seed_traffic_if_empty(&cfg.traffic_toml)? {
             info!("Seeded Traffic configuration from TOML into database");
         }
-        if let Some(loaded) = db.load_traffic_config().await? {
+        if let Some(loaded) = db.load_traffic_config()? {
             cfg.traffic_toml = loaded;
         }
         Ok(())
     }
 
     #[cfg(feature = "nft")]
-    async fn seed_firewall_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+    fn seed_firewall_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
         #[cfg(feature = "pppoe")]
         {
             if !cfg.pppoe_toml.nftables.flow_offload {
@@ -776,10 +772,10 @@ impl Bootstrapper {
             }
         }
 
-        if db.seed_firewall_if_empty(&cfg.firewall_toml).await? {
+        if db.seed_firewall_if_empty(&cfg.firewall_toml)? {
             info!("Seeded Firewall configuration from TOML into database");
         }
-        if let Some(mut loaded) = db.load_firewall_config().await? {
+        if let Some(mut loaded) = db.load_firewall_config()? {
             let mut modified = false;
             #[cfg(feature = "pppoe")]
             {
@@ -831,7 +827,7 @@ impl Bootstrapper {
                 }
             }
             if modified {
-                let _ = db.save_firewall_config(&loaded).await;
+                let _ = db.save_firewall_config(&loaded);
             }
             cfg.firewall_enabled = loaded.enabled;
             cfg.firewall_toml = loaded;
@@ -895,7 +891,7 @@ impl Bootstrapper {
     }
 
     /// Prints the user-friendly startup banner when all services are fully initialized and ready.
-    pub async fn print_startup_banner(cfg: &Config, target_ifindex: u32, db: &LanforgeDb) {
+    pub fn print_startup_banner(cfg: &Config, target_ifindex: u32, db: &LanforgeDb) {
         let host_ip = {
             let interfaces = pnet::datalink::interfaces();
             interfaces
@@ -908,7 +904,7 @@ impl Bootstrapper {
 
         let console_url = format!("http://{host_ip}:{http_port}");
         let is_first_run = !(db.is_provisioned().unwrap_or(false)
-            || db.count_users().await.unwrap_or(0) > 0
+            || db.count_users().unwrap_or(0) > 0
             || cfg.system.auto_provision);
         let db_desc = if db.is_in_memory() {
             if cfg.database.is_in_memory() {
@@ -979,19 +975,19 @@ impl Bootstrapper {
     }
 
     #[cfg(feature = "dhcp")]
-    async fn reconcile_dhcp_v4_topology_sanity(
+    fn reconcile_dhcp_v4_topology_sanity(
         db: &LanforgeDb,
         cfg: &mut Config,
         table: &State,
         all_ifaces: &[pnet::datalink::NetworkInterface],
-    ) -> Result<()> {
+    ) {
         let target_iface = all_ifaces
             .iter()
             .find(|i| !cfg.system.iface.is_empty() && i.name == cfg.system.iface)
             .or_else(|| all_ifaces.iter().find(|i| !i.is_loopback()));
 
         let Some(iface) = target_iface else {
-            return Ok(());
+            return;
         };
 
         let iface_v4 = iface.ips.iter().find_map(|ip| match ip {
@@ -1000,7 +996,7 @@ impl Bootstrapper {
         });
 
         let Some(v4) = iface_v4 else {
-            return Ok(());
+            return;
         };
 
         let iface_ip = v4.ip();
@@ -1021,22 +1017,20 @@ impl Bootstrapper {
                     .and_then(|d| d.v4.ip())
             });
 
-        Self::audit_and_heal_dhcp_options(db, cfg, &v4, iface_ip, iface_mask, prev_host_ip).await;
-        Self::audit_and_heal_dhcp_pools(db, cfg, &v4).await;
-
-        Ok(())
+        Self::audit_and_heal_dhcp_options(db, cfg, v4, iface_ip, iface_mask, prev_host_ip);
+        Self::audit_and_heal_dhcp_pools(db, cfg, v4);
     }
 
     #[cfg(feature = "dhcp")]
-    async fn audit_and_heal_dhcp_options(
+    fn audit_and_heal_dhcp_options(
         db: &LanforgeDb,
         cfg: &Config,
-        v4: &Ipv4Network,
+        v4: Ipv4Network,
         iface_ip: std::net::Ipv4Addr,
         iface_mask: std::net::Ipv4Addr,
         prev_host_ip: Option<std::net::Ipv4Addr>,
     ) {
-        let Ok(Some(mut opts)) = db.load_dhcp_options().await else {
+        let Ok(Some(mut opts)) = db.load_dhcp_options() else {
             return;
         };
         let mut opts_modified = false;
@@ -1077,7 +1071,7 @@ impl Bootstrapper {
         }
 
         if opts_modified {
-            if let Err(e) = db.save_dhcp_options(&opts).await {
+            if let Err(e) = db.save_dhcp_options(&opts) {
                 warn!("DHCPv4 Startup Sanity: Failed to persist auto-healed DHCP options to DB: {e}");
             } else {
                 info!("DHCPv4 Startup Sanity: Auto-healed DHCP options saved to database.");
@@ -1086,10 +1080,10 @@ impl Bootstrapper {
     }
 
     #[cfg(feature = "dhcp")]
-    async fn audit_and_heal_dhcp_pools(
+    fn audit_and_heal_dhcp_pools(
         db: &LanforgeDb,
         cfg: &mut Config,
-        v4: &Ipv4Network,
+        v4: Ipv4Network,
     ) {
         if cfg.dhcpv4_toml.pools.is_empty() {
             return;
@@ -1105,7 +1099,7 @@ impl Bootstrapper {
                 "DHCPv4 Startup Sanity: Stored DHCPv4 pools are outside interface '{}' subnet ({}). Auto-healing dynamic pools in database.",
                 cfg.system.iface, v4
             );
-            let derived = derive_dhcp_defaults_from_v4(v4);
+            let derived = derive_dhcp_defaults_from_v4(&v4);
             let healed_pool = Dhcpv4Pool {
                 name: Some("Auto-Healed LAN Scope".to_string()),
                 range_start: derived.range_start,
@@ -1117,7 +1111,7 @@ impl Bootstrapper {
                 ..Default::default()
             };
             cfg.dhcpv4_toml.pools = vec![healed_pool];
-            if let Err(e) = db.save_dhcp_v4_pools(&cfg.dhcpv4_toml.pools).await {
+            if let Err(e) = db.save_dhcp_v4_pools(&cfg.dhcpv4_toml.pools) {
                 warn!("DHCPv4 Startup Sanity: Failed to persist auto-healed pools to DB: {e}");
             } else {
                 info!("DHCPv4 Startup Sanity: Auto-healed dynamic pools saved to database.");

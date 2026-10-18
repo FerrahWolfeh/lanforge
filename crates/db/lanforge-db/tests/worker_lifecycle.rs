@@ -39,7 +39,7 @@ async fn test_db_worker_init_and_clean_shutdown() {
     let (ctx, bus) = create_test_context();
     let mut sys_sub = bus.subscribe_system();
 
-    let db = Arc::new(LanforgeDb::open_in_memory().await.unwrap());
+    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
     let log_db = Arc::new(LogDb::open_in_memory());
 
     let cfg = DatabaseConfig {
@@ -85,7 +85,7 @@ async fn test_db_worker_init_and_clean_shutdown() {
 async fn test_db_worker_batches_and_flushes_devices() {
     let (ctx, bus) = create_test_context();
 
-    let db = Arc::new(LanforgeDb::open_in_memory().await.unwrap());
+    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
     let log_db = Arc::new(LogDb::open_in_memory());
 
     let cfg = DatabaseConfig {
@@ -130,7 +130,7 @@ async fn test_db_worker_batches_and_flushes_devices() {
     assert!(metrics.devices_written.load(std::sync::atomic::Ordering::Relaxed) >= 3);
 
     // Verify devices exist in redb
-    let saved_devices = db.load_all_devices().await.expect("load devices");
+    let saved_devices = db.load_all_devices().expect("load devices");
     assert_eq!(saved_devices.len(), 3);
     for i in 1..=3u8 {
         let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, i]);
@@ -142,7 +142,7 @@ async fn test_db_worker_batches_and_flushes_devices() {
 async fn test_db_worker_purges_device_immediately() {
     let (ctx, bus) = create_test_context();
 
-    let db = Arc::new(LanforgeDb::open_in_memory().await.unwrap());
+    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
     let log_db = Arc::new(LogDb::open_in_memory());
 
     let cfg = DatabaseConfig {
@@ -177,7 +177,7 @@ async fn test_db_worker_purges_device_immediately() {
     sleep(Duration::from_millis(50)).await;
 
     // Verify it is purged from redb
-    let remaining = db.load_all_devices().await.expect("load devices");
+    let remaining = db.load_all_devices().expect("load devices");
     assert!(!remaining.iter().any(|d| d.mac == mac));
 
     // Clean exit
@@ -204,8 +204,8 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
     // === RUN 1: System Online, state updates and configurations applied ===
     {
         let (ctx, bus) = create_test_context();
-        let db = Arc::new(LanforgeDb::open(&cfg).await.expect("open redb"));
-        let log_db = Arc::new(LogDb::open(&cfg.runtime_path).await.expect("open logdb"));
+        let db = Arc::new(LanforgeDb::open(&cfg).expect("open redb"));
+        let log_db = Arc::new(LogDb::open(&cfg.runtime_path).expect("open logdb"));
 
         let mut worker = DbWorker::new(cfg.clone(), ctx.clone(), db.clone(), log_db);
         worker.init(&ctx).await.unwrap();
@@ -274,10 +274,10 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
 
     // === RUN 2: Router Reboot Simulation, hydration from persistent redb ===
     {
-        let db = LanforgeDb::open(&cfg).await.expect("re-open redb");
+        let db = LanforgeDb::open(&cfg).expect("re-open redb");
 
         // 1. Verify devices persisted and hydrated as Offline on boot
-        let restored_state = db.load_table().await.expect("load_table");
+        let restored_state = db.load_table().expect("load_table");
         assert_eq!(restored_state.devices.len(), 2);
 
         let dev1 = restored_state.devices.get(&mac1).expect("mac1 restored");
@@ -291,17 +291,17 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
         assert_eq!(dev2.status, DeviceStatus::Offline);
 
         // 2. Verify DHCPv4 pool survived
-        let pools = db.load_dhcp_v4_pools().await.expect("load pools");
+        let pools = db.load_dhcp_v4_pools().expect("load pools");
         assert_eq!(pools.len(), 1);
         assert_eq!(pools[0].name.as_deref(), Some("default_lan"));
         assert_eq!(pools[0].router, Some(Ipv4Addr::new(192, 168, 1, 1)));
 
         // 3. Verify Firewall config survived
-        let fw = db.load_firewall_config().await.expect("load fw");
+        let fw = db.load_firewall_config().expect("load fw");
         assert!(fw.is_some_and(|f| f.enabled));
 
         // 4. Verify PPPoE config survived
-        let pppoe = db.load_pppoe_config().await.expect("load pppoe");
+        let pppoe = db.load_pppoe_config().expect("load pppoe");
         let pppoe = pppoe.expect("pppoe exists");
         assert!(pppoe.enabled);
         assert_eq!(pppoe.username, "persisted_pppoe_user");
@@ -313,7 +313,7 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
 async fn test_db_worker_storage_query_dispatch() {
     let (ctx, bus) = create_test_context();
 
-    let db = Arc::new(LanforgeDb::open_in_memory().await.unwrap());
+    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
     let log_db = Arc::new(LogDb::open_in_memory());
 
     let cfg = DatabaseConfig {
@@ -412,7 +412,7 @@ async fn test_db_worker_storage_query_dispatch() {
 async fn test_db_worker_service_control_and_restart_resilience() {
     let (ctx, bus) = create_test_context();
 
-    let db = Arc::new(LanforgeDb::open_in_memory().await.unwrap());
+    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
     let log_db = Arc::new(LogDb::open_in_memory());
 
     let cfg = DatabaseConfig {

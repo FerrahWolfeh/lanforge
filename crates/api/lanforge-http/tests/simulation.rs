@@ -17,7 +17,6 @@ async fn init_test_context() -> (LanforgeContext, Arc<LanforgeDb>, Arc<LogDb>) {
             config_path: "memory".to_string(),
             ..Default::default()
         })
-        .await
         .unwrap(),
     );
     let log_db = Arc::new(LogDb::open_in_memory());

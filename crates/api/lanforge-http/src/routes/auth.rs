@@ -208,7 +208,7 @@ async fn handle_validate(
             .unwrap_or_default()
             .as_secs()
             .cast_signed();
-        match state.db.validate_api_token(&payload.token, now).await {
+        match state.db.validate_api_token(&payload.token, now) {
             Ok(Some(_)) => true,
             _ => state.auth.validate_token(&payload.token).is_ok(),
         }
@@ -216,11 +216,11 @@ async fn handle_validate(
     Json(serde_json::json!({ "data": { "valid": valid } }))
 }
 
-async fn check_auth_required(state: &AppState) -> bool {
+fn check_auth_required(state: &AppState) -> bool {
     state.cfg.auth_password_hash.is_some()
         || state.auth.has_users_cached()
         || {
-            let count = state.db.count_users().await.unwrap_or(0);
+            let count = state.db.count_users().unwrap_or(0);
             if count > 0 {
                 state.auth.set_has_users(true);
                 true
@@ -258,7 +258,7 @@ fn build_login_response(
         .into_response()
 }
 
-async fn authenticate_via_api_token(
+fn authenticate_via_api_token(
     state: &AppState,
     payload: &LoginRequest,
     ttl_secs: u64,
@@ -279,7 +279,7 @@ async fn authenticate_via_api_token(
             .unwrap_or_default()
             .as_secs()
             .cast_signed();
-        match state.db.validate_api_token(&token_str, now).await {
+        match state.db.validate_api_token(&token_str, now) {
             Ok(Some((name, _scopes))) => {
                 let session_token = state.auth.generate_token_with_ttl(&name, "admin", ttl_secs)?;
                 return Ok(Some((session_token, name, "api_token")));
@@ -294,7 +294,7 @@ async fn authenticate_via_api_token(
     Ok(None)
 }
 
-async fn authenticate_via_password(
+fn authenticate_via_password(
     state: &AppState,
     username: &str,
     password: &str,
@@ -310,12 +310,11 @@ async fn authenticate_via_password(
         .as_secs()
         .cast_signed();
 
-    if let Ok(Some(db_user)) = state.db.get_user_by_username(username).await {
+    if let Ok(Some(db_user)) = state.db.get_user_by_username(username) {
         if verify_password(&db_user.password_hash, password) {
             let _ = state
                 .db
-                .update_user_last_login(&db_user.username, now)
-                .await;
+                .update_user_last_login(&db_user.username, now);
             let session_token =
                 state
                     .auth
@@ -326,12 +325,12 @@ async fn authenticate_via_password(
     }
 
     // Bootstrapping / Fallback Admin seeding if no DB users exist
-    let user_count = state.db.count_users().await.unwrap_or(0);
+    let user_count = state.db.count_users().unwrap_or(0);
     if user_count == 0
         && let Some(hash) = &state.cfg.auth_password_hash
         && verify_password(hash, password)
     {
-        let _ = state.db.create_user("admin", hash, UserRole::Admin, now).await;
+        let _ = state.db.create_user("admin", hash, UserRole::Admin, now);
         let session_token = state
             .auth
             .generate_token_with_ttl("admin", "admin", ttl_secs)?;
@@ -345,7 +344,7 @@ pub async fn handle_login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,
 ) -> HttpResult<impl IntoResponse> {
-    let auth_required = check_auth_required(&state).await;
+    let auth_required = check_auth_required(&state);
     let username = payload
         .username
         .as_deref()
@@ -360,7 +359,7 @@ pub async fn handle_login(
     };
 
     if let Some((session_token, name, method)) =
-        authenticate_via_api_token(&state, &payload, ttl_secs).await?
+        authenticate_via_api_token(&state, &payload, ttl_secs)?
     {
         return Ok(build_login_response(
             session_token,
@@ -373,7 +372,7 @@ pub async fn handle_login(
 
     let password = payload.password.as_deref().unwrap_or_default();
     let (session_token, authed_user, method) =
-        authenticate_via_password(&state, &username, password, ttl_secs).await?;
+        authenticate_via_password(&state, &username, password, ttl_secs)?;
 
     Ok(build_login_response(
         session_token,
@@ -385,7 +384,7 @@ pub async fn handle_login(
 }
 
 async fn handle_status(State(state): State<AppState>, req: Request) -> impl IntoResponse {
-    let auth_required = check_auth_required(&state).await;
+    let auth_required = check_auth_required(&state);
 
     let authenticated = if let Some(token) = extract_token(req.headers(), req.uri().query()) {
         if looks_like_jwt(&token) && state.auth.validate_token(&token).is_ok() {
@@ -396,7 +395,7 @@ async fn handle_status(State(state): State<AppState>, req: Request) -> impl Into
                 .unwrap_or_default()
                 .as_secs()
                 .cast_signed();
-            match state.db.validate_api_token(&token, now).await {
+            match state.db.validate_api_token(&token, now) {
                 Ok(Some(_)) => true,
                 _ => state.auth.validate_token(&token).is_ok(),
             }
@@ -439,7 +438,7 @@ async fn handle_change_password(
         .as_secs()
         .cast_signed();
 
-    if let Ok(Some(db_user)) = state.db.get_user_by_username(&user.name).await {
+    if let Ok(Some(db_user)) = state.db.get_user_by_username(&user.name) {
         if let Some(old_pw) = &payload.old_password
             && !verify_password(&db_user.password_hash, old_pw)
         {
@@ -449,7 +448,6 @@ async fn handle_change_password(
         state
             .db
             .update_user_password(&user.name, &new_hash, now)
-            .await
             .map_err(|e| HttpError::Internal(e.to_string()))?;
         Ok((
             StatusCode::OK,

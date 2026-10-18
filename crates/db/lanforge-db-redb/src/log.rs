@@ -5,7 +5,7 @@ use crate::tables::{
     TABLE_CONFIG, TABLE_DNS_BLOCKED, TABLE_DNS_QUERIES, TABLE_DNS_TELEMETRY, TABLE_LOG_EVENTS,
 };
 use lanforge_core::bus::TimedEvent;
-use lanforge_db_core::{BoxFuture, DbError, DnsQueryRateBucket, LogStore};
+use lanforge_db_core::{DbError, DnsQueryRateBucket, LogStore};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType, TransportProtocol};
 use lanforge_types::network::{QueryLogEntry, QueryResult};
@@ -123,7 +123,7 @@ struct ProtocolResultRow {
 
 impl RedbDatabase {
     /// Auto-prunes older events and caps table sizes to prevent unbounded disk growth.
-    pub async fn maybe_prune(&self, now_secs: i64) -> Result<(), DbError> {
+    pub fn maybe_prune(&self, now_secs: i64) -> Result<(), DbError> {
         let last = self.last_prune.load(Ordering::Relaxed);
         if now_secs - last >= 60
             && self
@@ -132,7 +132,7 @@ impl RedbDatabase {
                 .is_ok()
         {
             let cutoff = now_secs - (7 * 24 * 3600);
-            self.prune_logs(cutoff).await?;
+            self.prune_logs(cutoff)?;
         }
         Ok(())
     }
@@ -141,8 +141,7 @@ impl RedbDatabase {
     pub fn get_dns_block_history(
         &self,
         limit: usize,
-    ) -> BoxFuture<'_, Result<Vec<serde_json::Value>, DbError>> {
-        Box::pin(async move {
+    ) -> Result<Vec<serde_json::Value>, DbError> {
             let read_txn = self
                 .db
                 .read()
@@ -172,25 +171,20 @@ impl RedbDatabase {
                 }));
             }
             Ok(result)
-        })
     }
 }
 
 impl LogStore for RedbDatabase {
-    fn record_log<'a>(&'a self, timed_event: &'a TimedEvent) -> BoxFuture<'a, Result<(), DbError>> {
-        Box::pin(async move {
-            let mut buf = Vec::with_capacity(256);
-            self.record_logs_batch(std::slice::from_ref(timed_event), &mut buf)
-                .await
-        })
+    fn record_log(&self, timed_event: &TimedEvent) -> Result<(), DbError> {
+        let mut buf = Vec::with_capacity(256);
+        self.record_logs_batch(std::slice::from_ref(timed_event), &mut buf)
     }
 
-    fn record_logs_batch<'a>(
-        &'a self,
-        events: &'a [TimedEvent],
-        bytes_buf: &'a mut Vec<u8>,
-    ) -> BoxFuture<'a, Result<(), DbError>> {
-        Box::pin(async move {
+    fn record_logs_batch(
+        &self,
+        events: &[TimedEvent],
+        bytes_buf: &mut Vec<u8>,
+    ) -> Result<(), DbError> {
             if events.is_empty() {
                 return Ok(());
             }
@@ -228,20 +222,18 @@ impl LogStore for RedbDatabase {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs() as i64;
-            self.maybe_prune(now_secs).await?;
+            self.maybe_prune(now_secs)?;
 
             Ok(())
-        })
     }
 
-    fn record_dns_block<'a>(
-        &'a self,
-        timed_event: &'a TimedEvent,
+    fn record_dns_block(
+        &self,
+        timed_event: &TimedEvent,
         src_ip: IpAddr,
-        domain: &'a str,
+        domain: &str,
         src_mac: Option<String>,
-    ) -> BoxFuture<'a, Result<(), DbError>> {
-        Box::pin(async move {
+    ) -> Result<(), DbError> {
             let ts = timed_event
                 .timestamp
                 .duration_since(UNIX_EPOCH)
@@ -279,17 +271,15 @@ impl LogStore for RedbDatabase {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs() as i64;
-            self.maybe_prune(now_secs).await?;
+            self.maybe_prune(now_secs)?;
 
             Ok(())
-        })
     }
 
-    fn record_dns_queries_batch<'a>(
-        &'a self,
-        entries: &'a [QueryLogEntry],
-    ) -> BoxFuture<'a, Result<(), DbError>> {
-        Box::pin(async move {
+    fn record_dns_queries_batch(
+        &self,
+        entries: &[QueryLogEntry],
+    ) -> Result<(), DbError> {
             if entries.is_empty() {
                 return Ok(());
             }
@@ -410,21 +400,19 @@ impl LogStore for RedbDatabase {
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs() as i64;
-            self.maybe_prune(now_secs).await?;
+            self.maybe_prune(now_secs)?;
 
             Ok(())
-        })
     }
 
-    fn record_dns_query<'a>(
-        &'a self,
-        entry: &'a QueryLogEntry,
-    ) -> BoxFuture<'a, Result<(), DbError>> {
+    fn record_dns_query(
+        &self,
+        entry: &QueryLogEntry,
+    ) -> Result<(), DbError> {
         self.record_dns_queries_batch(std::slice::from_ref(entry))
     }
 
-    fn clear_logs(&self) -> BoxFuture<'_, Result<(), DbError>> {
-        Box::pin(async move {
+    fn clear_logs(&self) -> Result<(), DbError> {
             let write_txn = self
                 .db
                 .read()
@@ -440,11 +428,9 @@ impl LogStore for RedbDatabase {
                 .commit()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             Ok(())
-        })
     }
 
-    fn prune_logs(&self, before: i64) -> BoxFuture<'_, Result<(), DbError>> {
-        Box::pin(async move {
+    fn prune_logs(&self, before: i64) -> Result<(), DbError> {
             let cutoff = before.max(0) as u64;
             let write_txn = self
                 .db
@@ -607,11 +593,9 @@ impl LogStore for RedbDatabase {
                 .commit()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             Ok(())
-        })
     }
 
-    fn get_history(&self, limit: usize) -> BoxFuture<'_, Result<Vec<TimedEvent>, DbError>> {
-        Box::pin(async move {
+    fn get_history(&self, limit: usize) -> Result<Vec<TimedEvent>, DbError> {
             let read_txn = self
                 .db
                 .read()
@@ -637,7 +621,6 @@ impl LogStore for RedbDatabase {
             }
             entries.reverse();
             Ok(entries)
-        })
     }
 
     fn get_dns_query_history(
@@ -648,8 +631,7 @@ impl LogStore for RedbDatabase {
         domain: Option<String>,
         qtype: Option<DnsRecordType>,
         result: Option<QueryResult>,
-    ) -> BoxFuture<'_, Result<(Vec<QueryLogEntry>, usize), DbError>> {
-        Box::pin(async move {
+    ) -> Result<(Vec<QueryLogEntry>, usize), DbError> {
             let read_txn = self
                 .db
                 .read()
@@ -719,14 +701,12 @@ impl LogStore for RedbDatabase {
 
                 Ok((entries, total))
             }
-        })
     }
 
     fn get_dns_top_domains(
         &self,
         limit: usize,
-    ) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>> {
-        Box::pin(async move {
+    ) -> Result<Vec<(String, u64)>, DbError> {
             let read_txn = self
                 .db
                 .read()
@@ -758,15 +738,13 @@ impl LogStore for RedbDatabase {
             vec.sort_by_key(|b| std::cmp::Reverse(b.1));
             vec.truncate(limit);
             Ok(vec)
-        })
     }
 
-    fn get_dns_top_domains_for_client<'a>(
-        &'a self,
-        client: &'a str,
+    fn get_dns_top_domains_for_client(
+        &self,
+        client: &str,
         limit: usize,
-    ) -> BoxFuture<'a, Result<Vec<(String, u64)>, DbError>> {
-        Box::pin(async move {
+    ) -> Result<Vec<(String, u64)>, DbError> {
             let read_txn = self
                 .db
                 .read()
@@ -805,11 +783,9 @@ impl LogStore for RedbDatabase {
             vec.sort_by_key(|b| std::cmp::Reverse(b.1));
             vec.truncate(limit);
             Ok(vec)
-        })
     }
 
-    fn get_dns_query_types(&self) -> BoxFuture<'_, Result<Vec<(u16, u64)>, DbError>> {
-        Box::pin(async move {
+    fn get_dns_query_types(&self) -> Result<Vec<(u16, u64)>, DbError> {
             let read_txn = self
                 .db
                 .read()
@@ -832,14 +808,12 @@ impl LogStore for RedbDatabase {
             let mut vec: Vec<(u16, u64)> = counts.into_iter().collect();
             vec.sort_by_key(|b| std::cmp::Reverse(b.1));
             Ok(vec)
-        })
     }
 
     fn get_dns_query_rate(
         &self,
         since_secs: u64,
-    ) -> BoxFuture<'_, Result<Vec<(u64, u64)>, DbError>> {
-        Box::pin(async move {
+    ) -> Result<Vec<(u64, u64)>, DbError> {
             let read_txn = self
                 .db
                 .read()
@@ -866,15 +840,13 @@ impl LogStore for RedbDatabase {
             let mut vec: Vec<(u64, u64)> = buckets.into_iter().collect();
             vec.sort_by_key(|a| a.0);
             Ok(vec)
-        })
     }
 
     fn get_dns_query_rate_detailed(
         &self,
         since_secs: u64,
         bucket_secs: u64,
-    ) -> BoxFuture<'_, Result<Vec<DnsQueryRateBucket>, DbError>> {
-        Box::pin(async move {
+    ) -> Result<Vec<DnsQueryRateBucket>, DbError> {
             let read_txn = self
                 .db
                 .read()
@@ -1006,14 +978,12 @@ impl LogStore for RedbDatabase {
             let mut vec: Vec<DnsQueryRateBucket> = buckets.into_values().collect();
             vec.sort_by_key(|a| a.timestamp);
             Ok(vec)
-        })
     }
 
     fn get_dns_top_clients(
         &self,
         limit: usize,
-    ) -> BoxFuture<'_, Result<Vec<(String, u64, u64)>, DbError>> {
-        Box::pin(async move {
+    ) -> Result<Vec<(String, u64, u64)>, DbError> {
             let read_txn = self
                 .db
                 .read()
@@ -1046,11 +1016,9 @@ impl LogStore for RedbDatabase {
                 .map(|(ip, (total, blocked))| (ip.to_string(), total, blocked))
                 .collect();
             Ok(result)
-        })
     }
 
-    fn get_dns_protocol_stats(&self) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>> {
-        Box::pin(async move {
+    fn get_dns_protocol_stats(&self) -> Result<Vec<(String, u64)>, DbError> {
             let read_txn = self
                 .db
                 .read()
@@ -1088,14 +1056,12 @@ impl LogStore for RedbDatabase {
                 ("doh".to_string(), doh),
             ];
             Ok(vec)
-        })
     }
 
     fn get_dns_top_blocked_domains(
         &self,
         limit: usize,
-    ) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>> {
-        Box::pin(async move {
+    ) -> Result<Vec<(String, u64)>, DbError> {
             let read_txn = self
                 .db
                 .read()
@@ -1126,14 +1092,12 @@ impl LogStore for RedbDatabase {
             vec.sort_by_key(|b| std::cmp::Reverse(b.1));
             vec.truncate(limit);
             Ok(vec)
-        })
     }
 
     fn get_dns_top_blocked_clients(
         &self,
         limit: usize,
-    ) -> BoxFuture<'_, Result<Vec<(String, u64)>, DbError>> {
-        Box::pin(async move {
+    ) -> Result<Vec<(String, u64)>, DbError> {
             let read_txn = self
                 .db
                 .read()
@@ -1164,14 +1128,12 @@ impl LogStore for RedbDatabase {
                 .map(|(ip, count)| (ip.to_string(), count))
                 .collect();
             Ok(result)
-        })
     }
 
     fn get_dns_blocked_query_rate(
         &self,
         since_secs: u64,
-    ) -> BoxFuture<'_, Result<Vec<(u64, u64)>, DbError>> {
-        Box::pin(async move {
+    ) -> Result<Vec<(u64, u64)>, DbError> {
             let read_txn = self
                 .db
                 .read()
@@ -1202,11 +1164,9 @@ impl LogStore for RedbDatabase {
             let mut vec: Vec<(u64, u64)> = buckets.into_iter().collect();
             vec.sort_by_key(|a| a.0);
             Ok(vec)
-        })
     }
 
-    fn load_dns_lifetime_stats(&self) -> BoxFuture<'_, Result<DnsLifetimeStats, DbError>> {
-        Box::pin(async move {
+    fn load_dns_lifetime_stats(&self) -> Result<DnsLifetimeStats, DbError> {
             let read_txn = self
                 .db
                 .read()
@@ -1229,14 +1189,12 @@ impl LogStore for RedbDatabase {
                 }
                 None => Ok(DnsLifetimeStats::default()),
             }
-        })
     }
 
-    fn save_dns_lifetime_stats<'a>(
-        &'a self,
-        stats: &'a DnsLifetimeStats,
-    ) -> BoxFuture<'a, Result<(), DbError>> {
-        Box::pin(async move {
+    fn save_dns_lifetime_stats(
+        &self,
+        stats: &DnsLifetimeStats,
+    ) -> Result<(), DbError> {
             let bytes = serde_json::to_vec(stats)
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
             let write_txn = self
@@ -1256,6 +1214,5 @@ impl LogStore for RedbDatabase {
                 .commit()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             Ok(())
-        })
     }
 }
