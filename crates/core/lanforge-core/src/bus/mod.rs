@@ -15,41 +15,60 @@ pub use lanforge_types::events::{
     SystemEvent, TrafficEvent,
 };
 
+/// Domain-specific event topics for isolated subscriber channels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(usize)]
+pub enum EventTopic {
+    System = 0,
+    Network = 1,
+    Device = 2,
+    Dns = 3,
+    Storage = 4,
+    Pppoe = 5,
+    Firewall = 6,
+    Traffic = 7,
+}
+
+impl EventTopic {
+    pub const COUNT: usize = 8;
+    pub const ALL: [Self; Self::COUNT] = [
+        Self::System,
+        Self::Network,
+        Self::Device,
+        Self::Dns,
+        Self::Storage,
+        Self::Pppoe,
+        Self::Firewall,
+        Self::Traffic,
+    ];
+
+    #[inline]
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+}
+
 pub struct EventBus {
     global: broadcast::Sender<TimedEvent>,
-    system: broadcast::Sender<TimedEvent>,
-    network: broadcast::Sender<TimedEvent>,
-    device: broadcast::Sender<TimedEvent>,
-    dns: broadcast::Sender<TimedEvent>,
-    storage: broadcast::Sender<TimedEvent>,
-    pppoe: broadcast::Sender<TimedEvent>,
-    firewall: broadcast::Sender<TimedEvent>,
-    traffic: broadcast::Sender<TimedEvent>,
+    topics: [broadcast::Sender<TimedEvent>; EventTopic::COUNT],
 }
 
 impl EventBus {
     #[must_use]
     pub fn new() -> Self {
         let (global, _) = broadcast::channel(1024);
-        let (system, _) = broadcast::channel(256);
-        let (network, _) = broadcast::channel(256);
-        let (device, _) = broadcast::channel(512);
-        let (dns, _) = broadcast::channel(512);
-        let (storage, _) = broadcast::channel(128);
-        let (pppoe, _) = broadcast::channel(128);
-        let (firewall, _) = broadcast::channel(128);
-        let (traffic, _) = broadcast::channel(128);
-        Self {
-            global,
-            system,
-            network,
-            device,
-            dns,
-            storage,
-            pppoe,
-            firewall,
-            traffic,
-        }
+        let topics = [
+            broadcast::channel(256).0, // System
+            broadcast::channel(256).0, // Network
+            broadcast::channel(512).0, // Device
+            broadcast::channel(512).0, // Dns
+            broadcast::channel(128).0, // Storage
+            broadcast::channel(128).0, // Pppoe
+            broadcast::channel(128).0, // Firewall
+            broadcast::channel(128).0, // Traffic
+        ];
+        Self { global, topics }
     }
 
     /// Subscribes to the global event stream (receives all system events).
@@ -58,52 +77,58 @@ impl EventBus {
         self.global.subscribe()
     }
 
+    /// Subscribes to an explicit domain topic.
+    #[must_use]
+    pub fn subscribe_topic(&self, topic: EventTopic) -> Receiver<TimedEvent> {
+        self.topics[topic.index()].subscribe()
+    }
+
     /// Subscribes exclusively to system lifecycle and ready events.
     #[must_use]
     pub fn subscribe_system(&self) -> Receiver<TimedEvent> {
-        self.system.subscribe()
+        self.subscribe_topic(EventTopic::System)
     }
 
     /// Subscribes exclusively to network interface, prefix, and discovery trigger events.
     #[must_use]
     pub fn subscribe_network(&self) -> Receiver<TimedEvent> {
-        self.network.subscribe()
+        self.subscribe_topic(EventTopic::Network)
     }
 
     /// Subscribes exclusively to host device mutations and DHCP transactions.
     #[must_use]
     pub fn subscribe_device(&self) -> Receiver<TimedEvent> {
-        self.device.subscribe()
+        self.subscribe_topic(EventTopic::Device)
     }
 
     /// Subscribes exclusively to DNS resolution, cache, and adblock events.
     #[must_use]
     pub fn subscribe_dns(&self) -> Receiver<TimedEvent> {
-        self.dns.subscribe()
+        self.subscribe_topic(EventTopic::Dns)
     }
 
     /// Subscribes exclusively to storage and database lifecycle events.
     #[must_use]
     pub fn subscribe_storage(&self) -> Receiver<TimedEvent> {
-        self.storage.subscribe()
+        self.subscribe_topic(EventTopic::Storage)
     }
 
     /// Subscribes exclusively to `PPPoE` connection and keepalive events.
     #[must_use]
     pub fn subscribe_pppoe(&self) -> Receiver<TimedEvent> {
-        self.pppoe.subscribe()
+        self.subscribe_topic(EventTopic::Pppoe)
     }
 
     /// Subscribes exclusively to firewall ruleset and dynamic port events.
     #[must_use]
     pub fn subscribe_firewall(&self) -> Receiver<TimedEvent> {
-        self.firewall.subscribe()
+        self.subscribe_topic(EventTopic::Firewall)
     }
 
     /// Subscribes exclusively to traffic, NIC tuning, and SQM events.
     #[must_use]
     pub fn subscribe_traffic(&self) -> Receiver<TimedEvent> {
-        self.traffic.subscribe()
+        self.subscribe_topic(EventTopic::Traffic)
     }
 
     #[must_use]
@@ -123,56 +148,56 @@ impl EventBus {
         }
     }
 
+    #[inline]
+    fn send_topic(&self, topic: EventTopic, event: &TimedEvent) {
+        Self::send_if_subscribed(&self.topics[topic.index()], event);
+    }
+
     #[must_use]
     pub fn publish_timed(&self, event: TimedEvent) -> usize {
         // Dispatch to domain topic channel only when receivers exist
         match &event.event {
             LanforgeEvent::System(SystemEvent::Shutdown) => {
-                Self::send_if_subscribed(&self.system, &event);
-                Self::send_if_subscribed(&self.network, &event);
-                Self::send_if_subscribed(&self.device, &event);
-                Self::send_if_subscribed(&self.dns, &event);
-                Self::send_if_subscribed(&self.storage, &event);
-                Self::send_if_subscribed(&self.pppoe, &event);
-                Self::send_if_subscribed(&self.firewall, &event);
-                Self::send_if_subscribed(&self.traffic, &event);
+                for topic in EventTopic::ALL {
+                    self.send_topic(topic, &event);
+                }
             }
             LanforgeEvent::System(SystemEvent::ConfigRaChanged) => {
-                Self::send_if_subscribed(&self.system, &event);
-                Self::send_if_subscribed(&self.network, &event);
+                self.send_topic(EventTopic::System, &event);
+                self.send_topic(EventTopic::Network, &event);
             }
             LanforgeEvent::System(
                 SystemEvent::ConfigDhcpV4Changed
                 | SystemEvent::ConfigDhcpV6Changed
                 | SystemEvent::ConfigDhcpOptionsChanged,
             ) => {
-                Self::send_if_subscribed(&self.system, &event);
-                Self::send_if_subscribed(&self.device, &event);
+                self.send_topic(EventTopic::System, &event);
+                self.send_topic(EventTopic::Device, &event);
             }
             LanforgeEvent::System(_) => {
-                Self::send_if_subscribed(&self.system, &event);
+                self.send_topic(EventTopic::System, &event);
             }
             LanforgeEvent::Network(_) => {
-                Self::send_if_subscribed(&self.network, &event);
+                self.send_topic(EventTopic::Network, &event);
             }
             LanforgeEvent::Device(_) => {
-                Self::send_if_subscribed(&self.device, &event);
+                self.send_topic(EventTopic::Device, &event);
             }
             LanforgeEvent::Dns(_) => {
-                Self::send_if_subscribed(&self.dns, &event);
+                self.send_topic(EventTopic::Dns, &event);
             }
             LanforgeEvent::Storage(_) => {
-                Self::send_if_subscribed(&self.storage, &event);
+                self.send_topic(EventTopic::Storage, &event);
             }
             LanforgeEvent::Pppoe(_) => {
-                Self::send_if_subscribed(&self.pppoe, &event);
-                Self::send_if_subscribed(&self.dns, &event);
+                self.send_topic(EventTopic::Pppoe, &event);
+                self.send_topic(EventTopic::Dns, &event);
             }
             LanforgeEvent::Firewall(_) => {
-                Self::send_if_subscribed(&self.firewall, &event);
+                self.send_topic(EventTopic::Firewall, &event);
             }
             LanforgeEvent::Traffic(_) => {
-                Self::send_if_subscribed(&self.traffic, &event);
+                self.send_topic(EventTopic::Traffic, &event);
             }
         }
 

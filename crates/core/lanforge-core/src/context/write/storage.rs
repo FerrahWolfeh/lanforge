@@ -16,23 +16,23 @@ use crate::context::LanforgeContext;
 impl LanforgeContext {
     /// Updates the configured `DHCPv4` pools and publishes the change event.
     pub fn update_dhcp_v4_pools(&self, pools: Vec<Dhcpv4Pool>) {
-        self.inner.config.write().dhcp_v4_pools = pools;
-        let _ = self
-            .bus_ref()
-            .publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed));
+        self.update_config_and_notify(
+            |cfg| cfg.dhcp_v4_pools = pools,
+            LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed),
+        );
     }
 
     /// Updates the configured `DHCPv6` pools and publishes the change event.
     pub fn update_dhcp_v6_pools(&self, pools: Vec<Dhcpv6Pool>) {
-        self.inner.config.write().dhcp_v6_pools = pools;
-        let _ = self
-            .bus_ref()
-            .publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV6Changed));
+        self.update_config_and_notify(
+            |cfg| cfg.dhcp_v6_pools = pools,
+            LanforgeEvent::System(SystemEvent::ConfigDhcpV6Changed),
+        );
     }
 
     /// Updates the configured DHCP & TFTP options and broadcasts config change events.
     pub fn update_dhcp_options(&self, options: DhcpOptionsConfig) {
-        self.inner.config.write().dhcp_options = options;
+        self.update_config(|cfg| cfg.dhcp_options = options);
         let _ = self
             .bus_ref()
             .publish(LanforgeEvent::System(SystemEvent::ConfigTftpChanged));
@@ -48,116 +48,108 @@ impl LanforgeContext {
         rdnss: Vec<RdnssConfig>,
         dnssl: Vec<DnsslConfig>,
     ) {
-        {
-            let mut cfg = self.inner.config.write();
-            cfg.ra_prefixes = prefixes;
-            cfg.ra_rdnss = rdnss;
-            cfg.ra_dnssl = dnssl;
-        }
-        let _ = self
-            .bus_ref()
-            .publish(LanforgeEvent::System(SystemEvent::ConfigRaChanged));
+        self.update_config_and_notify(
+            |cfg| {
+                cfg.ra.prefixes = prefixes;
+                cfg.ra.rdnss = rdnss;
+                cfg.ra.dnssl = dnssl;
+            },
+            LanforgeEvent::System(SystemEvent::ConfigRaChanged),
+        );
     }
 
     /// Updates the full RA server configuration and publishes the change event.
     pub fn update_ra_server_config(&self, config: RaServerConfig) {
-        {
-            let mut cfg = self.inner.config.write();
-            cfg.ra_prefixes.clone_from(&config.prefixes);
-            cfg.ra_rdnss.clone_from(&config.rdnss);
-            cfg.ra_dnssl.clone_from(&config.dnssl);
-            cfg.ra_config = Some(config);
-
-        }
-        let _ = self
-            .bus_ref()
-            .publish(LanforgeEvent::System(SystemEvent::ConfigRaChanged));
+        self.update_config_and_notify(
+            |cfg| cfg.ra = config,
+            LanforgeEvent::System(SystemEvent::ConfigRaChanged),
+        );
     }
 
     /// Updates the dynamic `PPPoE` configuration in context and publishes change event.
     pub fn update_pppoe_config(&self, config: PppoeConfig) {
-        self.inner.config.write().pppoe = Some(config);
-        let _ = self
-            .bus_ref()
-            .publish(LanforgeEvent::System(SystemEvent::ConfigPppoeChanged));
+        self.update_config_and_notify(
+            |cfg| cfg.pppoe = Some(config),
+            LanforgeEvent::System(SystemEvent::ConfigPppoeChanged),
+        );
     }
 
     /// Updates the dynamic firewall configuration in context and publishes change event.
     pub fn update_firewall_config(&self, config: FirewallConfig) {
-        self.inner.config.write().firewall = Some(config);
-        let _ = self
-            .bus_ref()
-            .publish(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));
+        self.update_config_and_notify(
+            |cfg| cfg.firewall = Some(config),
+            LanforgeEvent::Firewall(FirewallEvent::RulesetChanged),
+        );
     }
 
     /// Updates the dynamic traffic and SQM configuration in context and publishes change event.
     pub fn update_traffic_config(&self, config: TrafficConfig) {
-        self.inner.config.write().traffic = Some(config);
-        let _ = self
-            .bus_ref()
-            .publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::RulesetChanged)));
+        self.update_config_and_notify(
+            |cfg| cfg.traffic = Some(config),
+            LanforgeEvent::Traffic(Box::new(TrafficEvent::RulesetChanged)),
+        );
     }
 
     /// Updates the configured DNS upstreams and publishes the change event.
     pub fn update_dns_upstreams(&self, upstreams: Vec<UpstreamTarget>) {
-        self.inner.config.write().dns_upstreams = upstreams;
-        let _ = self
-            .bus_ref()
-            .publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamsChanged));
+        self.update_config_and_notify(
+            |cfg| cfg.dns_upstreams = upstreams,
+            LanforgeEvent::Dns(DnsEvent::ConfigUpstreamsChanged),
+        );
     }
 
     /// Returns the currently configured DNS upstream resolution mode.
     #[must_use]
     pub fn get_dns_upstream_mode(&self) -> UpstreamMode {
-        self.inner.config.read().dns_upstream_mode
+        self.with_config(|cfg| cfg.dns_upstream_mode)
     }
 
     /// Updates the configured DNS upstream resolution mode and publishes the change event.
     pub fn update_dns_upstream_mode(&self, mode: UpstreamMode) {
-        self.inner.config.write().dns_upstream_mode = mode;
-        let _ = self
-            .bus_ref()
-            .publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamModeChanged(mode)));
+        self.update_config_and_notify(
+            |cfg| cfg.dns_upstream_mode = mode,
+            LanforgeEvent::Dns(DnsEvent::ConfigUpstreamModeChanged(mode)),
+        );
     }
 
     /// Updates the configured DNS rewrites and publishes the change event.
     pub fn update_dns_rewrites(&self, rewrites: Vec<RewriteRule>) {
-        self.inner.config.write().dns_rewrites = rewrites;
-        let _ = self
-            .bus_ref()
-            .publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
+        self.update_config_and_notify(
+            |cfg| cfg.dns_rewrites = rewrites,
+            LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged),
+        );
     }
 
     /// Updates the configured DNS allowlist and publishes the change event.
     pub fn update_dns_allowlist(&self, allowlist: Vec<String>) {
-        self.inner.config.write().dns_allowlist = allowlist;
-        let _ = self
-            .bus_ref()
-            .publish(LanforgeEvent::Dns(DnsEvent::ConfigAllowlistChanged));
+        self.update_config_and_notify(
+            |cfg| cfg.dns_allowlist = allowlist,
+            LanforgeEvent::Dns(DnsEvent::ConfigAllowlistChanged),
+        );
     }
 
     /// Updates the configured DNS adblock config and publishes the change event.
     pub fn update_dns_adblock(&self, adblock: AdblockDbConfig) {
-        self.inner.config.write().dns_adblock = adblock;
-        let _ = self
-            .bus_ref()
-            .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
+        self.update_config_and_notify(
+            |cfg| cfg.dns_adblock = adblock,
+            LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged),
+        );
     }
 
     /// Updates the configured DNS adblock URLs and publishes the change event.
     pub fn update_dns_adblock_urls(&self, urls: Vec<AdblockUrlEntry>) {
-        self.inner.config.write().dns_adblock_urls = urls;
-        let _ = self
-            .bus_ref()
-            .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
+        self.update_config_and_notify(
+            |cfg| cfg.dns_adblock_urls = urls,
+            LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged),
+        );
     }
 
     /// Updates the configured DNS custom adblock rules and publishes the change event.
     pub fn update_dns_adblock_rules(&self, rules: Vec<AdblockRuleEntry>) {
-        self.inner.config.write().dns_adblock_rules = rules;
-        let _ = self
-            .bus_ref()
-            .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockRulesChanged));
+        self.update_config_and_notify(
+            |cfg| cfg.dns_adblock_rules = rules,
+            LanforgeEvent::Dns(DnsEvent::ConfigAdblockRulesChanged),
+        );
     }
 
     /// Completely resets the in-memory state.

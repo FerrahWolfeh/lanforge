@@ -53,7 +53,7 @@
 //! - **Interface Ready**: Network interfaces are configured
 //! - **Running**: System is operational (false = shutdown)
 
-use crate::bus::{EventBus, LanforgeEvent, SystemEvent, TimedEvent};
+use crate::bus::{EventBus, EventTopic, LanforgeEvent, SystemEvent, TimedEvent};
 use crate::context::state::network::DhcpPoolStats;
 use crate::context::state::State;
 use crate::error::CoreError;
@@ -196,14 +196,8 @@ pub struct DynamicConfig {
     pub dhcp_v6_pools: Vec<Dhcpv6Pool>,
     /// Configured DHCP and TFTP scope options.
     pub dhcp_options: DhcpOptionsConfig,
-    /// Configured RA prefixes.
-    pub ra_prefixes: Vec<RAPrefix>,
-    /// Configured RA RDNSS.
-    pub ra_rdnss: Vec<RdnssConfig>,
-    /// Configured RA DNSSL.
-    pub ra_dnssl: Vec<DnsslConfig>,
-    /// Full RA server runtime configuration.
-    pub ra_config: Option<RaServerConfig>,
+    /// Configured Router Advertisement server runtime configuration.
+    pub ra: RaServerConfig,
     /// Configured DNS upstreams.
     pub dns_upstreams: Vec<UpstreamTarget>,
     /// Configured DNS upstream resolution strategy mode.
@@ -243,8 +237,10 @@ struct LanforgeContextInner {
     target_ifindex: Option<u32>,
     /// The primary LAN interface name (e.g. "lan0").
     target_ifname: RwLock<Option<String>>,
-    /// Consolidated dynamic subsystem configurations.
-    config: RwLock<DynamicConfig>,
+    /// Consolidated dynamic subsystem configurations, protected by an `ArcSwap` for wait-free reads.
+    config: ArcSwap<DynamicConfig>,
+    /// Serializes dynamic configuration mutations.
+    config_mutex: Mutex<()>,
     /// Central service execution runtime and status container.
     pub runtime: ServiceRuntime,
 }
@@ -282,7 +278,8 @@ impl LanforgeContext {
             discovery: Arc::new(state::cache::DiscoveryStore::default()),
             target_ifindex,
             target_ifname: RwLock::new(None),
-            config: RwLock::new(DynamicConfig::default()),
+            config: ArcSwap::from_pointee(DynamicConfig::default()),
+            config_mutex: Mutex::new(()),
             runtime: ServiceRuntime::new(bus),
         });
         Self { inner }
@@ -416,67 +413,55 @@ impl LanforgeContext {
         }
     }
 
+    /// Creates a dedicated `ServiceHandle` subscribing to an explicit domain topic.
+    #[must_use]
+    pub fn service_handle_topic(&self, topic: EventTopic) -> ServiceHandle {
+        ServiceHandle {
+            rx: self.inner.bus.subscribe_topic(topic),
+            ctx: self.clone(),
+        }
+    }
+
     /// Creates a dedicated `ServiceHandle` subscribing only to network events.
     #[must_use]
     pub fn service_handle_network(&self) -> ServiceHandle {
-        ServiceHandle {
-            rx: self.inner.bus.subscribe_network(),
-            ctx: self.clone(),
-        }
+        self.service_handle_topic(EventTopic::Network)
     }
 
     /// Creates a dedicated `ServiceHandle` subscribing only to DNS events.
     #[must_use]
     pub fn service_handle_dns(&self) -> ServiceHandle {
-        ServiceHandle {
-            rx: self.inner.bus.subscribe_dns(),
-            ctx: self.clone(),
-        }
+        self.service_handle_topic(EventTopic::Dns)
     }
 
     /// Creates a dedicated `ServiceHandle` subscribing only to device events.
     #[must_use]
     pub fn service_handle_device(&self) -> ServiceHandle {
-        ServiceHandle {
-            rx: self.inner.bus.subscribe_device(),
-            ctx: self.clone(),
-        }
+        self.service_handle_topic(EventTopic::Device)
     }
 
     /// Creates a dedicated `ServiceHandle` subscribing only to storage events.
     #[must_use]
     pub fn service_handle_storage(&self) -> ServiceHandle {
-        ServiceHandle {
-            rx: self.inner.bus.subscribe_storage(),
-            ctx: self.clone(),
-        }
+        self.service_handle_topic(EventTopic::Storage)
     }
 
     /// Creates a dedicated `ServiceHandle` subscribing only to `PPPoE` events.
     #[must_use]
     pub fn service_handle_pppoe(&self) -> ServiceHandle {
-        ServiceHandle {
-            rx: self.inner.bus.subscribe_pppoe(),
-            ctx: self.clone(),
-        }
+        self.service_handle_topic(EventTopic::Pppoe)
     }
 
     /// Creates a dedicated `ServiceHandle` subscribing only to firewall events.
     #[must_use]
     pub fn service_handle_firewall(&self) -> ServiceHandle {
-        ServiceHandle {
-            rx: self.inner.bus.subscribe_firewall(),
-            ctx: self.clone(),
-        }
+        self.service_handle_topic(EventTopic::Firewall)
     }
 
     /// Creates a dedicated `ServiceHandle` subscribing only to traffic events.
     #[must_use]
     pub fn service_handle_traffic(&self) -> ServiceHandle {
-        ServiceHandle {
-            rx: self.inner.bus.subscribe_traffic(),
-            ctx: self.clone(),
-        }
+        self.service_handle_topic(EventTopic::Traffic)
     }
 
     /// Registers a dynamic port requirement for an internal service (e.g. HTTP `WebUI`, DNS, DHCP).
@@ -530,10 +515,16 @@ impl LanforgeContext {
         self.inner.runtime.firewall_ports.read().clone()
     }
 
+    /// Returns a guard to the current dynamic subsystem configurations.
+    #[must_use]
+    pub fn config_guard(&self) -> arc_swap::Guard<Arc<DynamicConfig>> {
+        self.inner.config.load()
+    }
+
     /// Returns a copy of the current dynamic subsystem configurations.
     #[must_use]
     pub fn config(&self) -> DynamicConfig {
-        self.inner.config.read().clone()
+        (**self.inner.config.load()).clone()
     }
 
     /// Executes a closure with read access to the dynamic configurations.
@@ -541,7 +532,7 @@ impl LanforgeContext {
     where
         F: FnOnce(&DynamicConfig) -> R,
     {
-        f(&self.inner.config.read())
+        f(&self.inner.config.load())
     }
 
     /// Executes a closure with write access to the dynamic configurations.
@@ -549,7 +540,20 @@ impl LanforgeContext {
     where
         F: FnOnce(&mut DynamicConfig) -> R,
     {
-        f(&mut self.inner.config.write())
+        let _guard = self.inner.config_mutex.lock();
+        let current = self.inner.config.load();
+        let mut next = (**current).clone();
+        let res = f(&mut next);
+        self.inner.config.store(Arc::new(next));
+        res
+    }
+
+    pub(crate) fn update_config_and_notify<F>(&self, f: F, event: LanforgeEvent)
+    where
+        F: FnOnce(&mut DynamicConfig),
+    {
+        self.update_config(f);
+        let _ = self.bus_ref().publish(event);
     }
 
     /// Increments the DNS blocked queries counter.
@@ -617,7 +621,7 @@ impl LanforgeContext {
                 Cap::DhcpV6 => status.as_ref().is_none_or(|s| s.dhcp_v6_enabled),
                 Cap::Ra => {
                     let from_status = status.as_ref().is_none_or(|s| s.ra_enabled);
-                    let from_config = self.with_config(|c| c.ra_config.as_ref().is_none_or(|r| r.enabled));
+                    let from_config = self.with_config(|c| c.ra.enabled);
                     from_status && from_config
                 }
                 Cap::NdpDiscovery
@@ -659,70 +663,55 @@ impl LanforgeContext {
 
     #[must_use]
     pub fn get_dhcp_v4_pools(&self) -> Vec<Dhcpv4Pool> {
-        self.inner.config.read().dhcp_v4_pools.clone()
+        self.with_config(|c| c.dhcp_v4_pools.clone())
     }
 
     #[must_use]
     pub fn get_dhcp_v6_pools(&self) -> Vec<Dhcpv6Pool> {
-        self.inner.config.read().dhcp_v6_pools.clone()
+        self.with_config(|c| c.dhcp_v6_pools.clone())
     }
 
     #[must_use]
     pub fn get_dhcp_options(&self) -> DhcpOptionsConfig {
-        self.inner.config.read().dhcp_options.clone()
+        self.with_config(|c| c.dhcp_options.clone())
     }
 
     #[must_use]
     pub fn get_ra_prefixes(&self) -> Vec<RAPrefix> {
-        self.inner.config.read().ra_prefixes.clone()
+        self.with_config(|c| c.ra.prefixes.clone())
     }
 
     #[must_use]
     pub fn get_ra_rdnss(&self) -> Vec<RdnssConfig> {
-        self.inner.config.read().ra_rdnss.clone()
+        self.with_config(|c| c.ra.rdnss.clone())
     }
 
     #[must_use]
     pub fn get_ra_dnssl(&self) -> Vec<DnsslConfig> {
-        self.inner.config.read().ra_dnssl.clone()
+        self.with_config(|c| c.ra.dnssl.clone())
     }
 
     #[must_use]
     pub fn get_ra_server_config(&self) -> RaServerConfig {
-        let cfg = self.inner.config.read();
-        cfg.ra_config.as_ref().map_or_else(
-            || RaServerConfig {
-                prefixes: cfg.ra_prefixes.clone(),
-                rdnss: cfg.ra_rdnss.clone(),
-                dnssl: cfg.ra_dnssl.clone(),
-                ..Default::default()
-            },
-            |ra_cfg| {
-                let mut c = ra_cfg.clone();
-                c.prefixes.clone_from(&cfg.ra_prefixes);
-                c.rdnss.clone_from(&cfg.ra_rdnss);
-                c.dnssl.clone_from(&cfg.ra_dnssl);
-                c
-            },
-        )
+        self.with_config(|c| c.ra.clone())
     }
 
     /// Returns the current dynamic `PPPoE` configuration, if configured.
     #[must_use]
     pub fn get_pppoe_config(&self) -> Option<PppoeConfig> {
-        self.inner.config.read().pppoe.clone()
+        self.with_config(|c| c.pppoe.clone())
     }
 
     /// Returns the current dynamic firewall configuration, if configured.
     #[must_use]
     pub fn get_firewall_config(&self) -> Option<FirewallConfig> {
-        self.inner.config.read().firewall.clone()
+        self.with_config(|c| c.firewall.clone())
     }
 
     /// Returns the current dynamic traffic and SQM configuration, if configured.
     #[must_use]
     pub fn get_traffic_config(&self) -> Option<TrafficConfig> {
-        self.inner.config.read().traffic.clone()
+        self.with_config(|c| c.traffic.clone())
     }
 
     /// Stores the latest traffic telemetry snapshot.
@@ -813,32 +802,32 @@ impl LanforgeContext {
 
     #[must_use]
     pub fn get_dns_upstreams(&self) -> Vec<UpstreamTarget> {
-        self.inner.config.read().dns_upstreams.clone()
+        self.with_config(|c| c.dns_upstreams.clone())
     }
 
     #[must_use]
     pub fn get_dns_rewrites(&self) -> Vec<RewriteRule> {
-        self.inner.config.read().dns_rewrites.clone()
+        self.with_config(|c| c.dns_rewrites.clone())
     }
 
     #[must_use]
     pub fn get_dns_allowlist(&self) -> Vec<String> {
-        self.inner.config.read().dns_allowlist.clone()
+        self.with_config(|c| c.dns_allowlist.clone())
     }
 
     #[must_use]
     pub fn get_dns_adblock(&self) -> AdblockDbConfig {
-        self.inner.config.read().dns_adblock.clone()
+        self.with_config(|c| c.dns_adblock.clone())
     }
 
     #[must_use]
     pub fn get_dns_adblock_urls(&self) -> Vec<AdblockUrlEntry> {
-        self.inner.config.read().dns_adblock_urls.clone()
+        self.with_config(|c| c.dns_adblock_urls.clone())
     }
 
     #[must_use]
     pub fn get_dns_adblock_rules(&self) -> Vec<AdblockRuleEntry> {
-        self.inner.config.read().dns_adblock_rules.clone()
+        self.with_config(|c| c.dns_adblock_rules.clone())
     }
 
     /// Registers a decoupled status provider.
