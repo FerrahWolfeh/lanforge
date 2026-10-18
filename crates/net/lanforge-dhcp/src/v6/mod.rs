@@ -47,8 +47,8 @@ use lanforge_core::bus::{
 };
 use lanforge_core::context::{LanforgeContext, ServiceHandle};
 use lanforge_core::match_event;
-use lanforge_core::utils::mac_from_eui64_link_local;
 use lanforge_types::device::IPv6State;
+use lanforge_types::utils::mac_from_eui64_link_local;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::dhcp::Dhcpv6Pool;
@@ -250,7 +250,7 @@ impl Dhcpv6Service {
                 self.ctx
                     .get_interface_state(target_ifindex)
                     .link_local
-                    .and_then(|ll| lanforge_core::utils::mac_from_eui64_link_local(&ll))
+                    .and_then(|ll| mac_from_eui64_link_local(&ll))
             })
             .or_else(|| {
                 pnet::datalink::interfaces()

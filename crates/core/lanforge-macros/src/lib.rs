@@ -1,8 +1,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::parse::Parse;
 use syn::{
-    Data, DeriveInput, Fields, Ident, ItemStruct, ItemTrait, LitStr, Meta, parse_macro_input,
+    Data, DeriveInput, Ident, ItemStruct, ItemTrait, LitStr, Meta, parse_macro_input,
 };
 
 /// Attribute macro that automatically implements `LanforgeService` for a struct.
@@ -29,7 +28,6 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut base_backoff = quote! { 1 };
     let mut max_backoff = quote! { 60 };
     let mut shutdown_timeout = quote! { 3 };
-    let mut stack = quote! { 0 };
     let mut multi_threaded = quote! { false };
     let mut describe = None;
 
@@ -52,8 +50,6 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
                 || nv.path.is_ident("shutdown_timeout_secs")
             {
                 shutdown_timeout = quote! { #val };
-            } else if nv.path.is_ident("stack") {
-                stack = quote! { #val };
             } else if nv.path.is_ident("multi_threaded") {
                 multi_threaded = quote! { #val };
             } else if nv.path.is_ident("describe") {
@@ -95,7 +91,6 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
                     base_backoff: std::time::Duration::from_secs(#base_backoff as u64),
                     max_backoff: std::time::Duration::from_secs(#max_backoff as u64),
                     shutdown_timeout: std::time::Duration::from_secs(#shutdown_timeout as u64),
-                    stack_kb: #stack as usize,
                     multi_threaded: #multi_threaded,
                 }
             }
@@ -229,226 +224,6 @@ pub fn identifier_derive(input: TokenStream) -> TokenStream {
     .into()
 }
 
-#[proc_macro_derive(CommandDispatch, attributes(dispatch))]
-pub fn command_dispatch_derive(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let name = input.ident;
-
-    let variants = if let Data::Enum(data) = input.data {
-        data.variants.iter().map(|v| {
-            let ident = &v.ident;
-            let mut handler = None;
-            let mut bus_event = None;
-            let mut apply_update = None;
-            let mut success_msg = None;
-            let mut delegate = false;
-            let mut readonly = false;
-            let mut args = Vec::new();
-
-            for attr in &v.attrs {
-                if attr.path().is_ident("dispatch") {
-                    let _ = attr.parse_nested_meta(|meta| {
-                        if meta.path.is_ident("handler") {
-                            let value: LitStr = meta.value()?.parse()?;
-                            handler = Some(value.value());
-                        } else if meta.path.is_ident("bus") {
-                            let value: LitStr = meta.value()?.parse()?;
-                            bus_event = Some(value.value());
-                        } else if meta.path.is_ident("apply") {
-                            let value: LitStr = meta.value()?.parse()?;
-                            apply_update = Some(value.value());
-                        } else if meta.path.is_ident("message") {
-                            let value: LitStr = meta.value()?.parse()?;
-                            success_msg = Some(value.value());
-                        } else if meta.path.is_ident("delegate") {
-                            delegate = true;
-                        } else if meta.path.is_ident("readonly") {
-                            readonly = true;
-                        } else if meta.path.is_ident("args") {
-                            let content;
-                            syn::parenthesized!(content in meta.input);
-                            let arg_idents = content.parse_terminated(Ident::parse, syn::Token![,])?;
-                            args = arg_idents.into_iter().collect();
-                        }
-                        Ok(())
-                    });
-                }
-            }
-
-            let pattern = match &v.fields {
-                Fields::Named(f) => {
-                    let used_in_dispatch = bus_event.is_some() || apply_update.is_some();
-                    let mut captured = Vec::new();
-                    let mut has_unused = false;
-                    for field in &f.named {
-                        let id = field.ident.as_ref().unwrap();
-                        if used_in_dispatch || args.iter().any(|a| a == id) {
-                            captured.push(quote! { #id });
-                        } else {
-                            has_unused = true;
-                        }
-                    }
-                    if has_unused {
-                        quote! { { #(#captured),*, .. } }
-                    } else {
-                        quote! { { #(#captured),* } }
-                    }
-                }
-                Fields::Unnamed(f) => {
-                    let idents = (0..f.unnamed.len()).map(|i| Ident::new(&format!("_field_{}", i), ident.span()));
-                    quote! { ( #(#idents),* ) }
-                }
-                Fields::Unit => quote! {},
-            };
-
-            if delegate {
-                 match &v.fields {
-                    Fields::Unnamed(f) if f.unnamed.len() == 1 => {
-                        quote! {
-                            Self::#ident(_field_0) => _field_0.dispatch(ctx).await,
-                        }
-                    }
-                    _ => quote! {
-                        Self::#ident #pattern => crate::api::Response::Error { error: "Invalid delegate".into() },
-                    }
-                 }
-            } else if let Some(h) = handler {
-                let h_ident = Ident::new(&h, ident.span());
-                let arg_list = args.iter().map(|a| quote! { #a.clone() });
-                let log_stmt = if readonly {
-                    quote! { tracing::debug!("Dispatching readonly command: {}", stringify!(#ident)); }
-                } else {
-                    quote! {}
-                };
-                quote! {
-                    Self::#ident #pattern => {
-                        #log_stmt
-                        ctx.#h_ident(#(#arg_list),*).await
-                    },
-                }
-            } else if let Some(b) = bus_event {
-                let b_ident = Ident::new(&b, ident.span());
-                let msg = success_msg.unwrap_or_else(|| format!("{} action executed", ident));
-                let fields = match &v.fields {
-                    Fields::Named(f) => {
-                        let f_mappings = f.named.iter().map(|f| {
-                           let f_ident = &f.ident;
-                           quote! { #f_ident: #f_ident.clone() }
-                        });
-                        quote! { { #(#f_mappings),* } }
-                    },
-                    _ => quote! {},
-                };
-
-                quote! {
-                    Self::#ident #pattern => {
-                        let _ = ctx.ctx.bus().publish(lanforge_core::bus::LanforgeEvent::#b_ident #fields);
-                        crate::api::Response::Success(crate::api::SimpleSuccess {
-                            message: #msg.to_string(),
-                        })
-                    }
-                }
-            } else if let Some(a) = apply_update {
-                let a_ident = Ident::new(&a, ident.span());
-                let msg = success_msg.unwrap_or_else(|| format!("{} update applied", ident));
-
-                let fields = match &v.fields {
-                    Fields::Named(f) => {
-                        let f_mappings = f.named.iter().map(|f| {
-                           let f_ident = &f.ident;
-                           quote! { #f_ident: #f_ident.clone() }
-                        });
-                        quote! { { #(#f_mappings),* } }
-                    },
-                    _ => quote! {},
-                };
-
-                quote! {
-                    Self::#ident #pattern => {
-                        let _ = ctx.ctx.apply(lanforge_core::context::state::DeviceUpdate::#a_ident #fields);
-                        crate::api::Response::Success(crate::api::SimpleSuccess {
-                            message: #msg.to_string(),
-                        })
-                    }
-                }
-            } else {
-                quote! {
-                    Self::#ident #pattern => crate::api::Response::Error { error: "Unimplemented command".into() },
-                }
-            }
-        }).collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-
-    quote! {
-        impl #name {
-            pub async fn dispatch(&self, ctx: &crate::server::ClientContext) -> crate::api::Response {
-                match self {
-                    #(#variants)*
-                }
-            }
-        }
-    }.into()
-}
-
-/// Derive macro for generating the apply_update dispatch logic in State.
-#[proc_macro_derive(UpdateDispatch, attributes(handler))]
-pub fn update_dispatch_derive(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let name = input.ident;
-
-    let variants =
-        if let Data::Enum(data) = input.data {
-            data.variants.iter().map(|v| {
-            let ident = &v.ident;
-            let mut handler_name = None;
-
-            for attr in &v.attrs {
-                if attr.path().is_ident("handler")
-                    && let Ok(lit) = attr.parse_args::<LitStr>() {
-                        handler_name = Some(lit.value());
-                    }
-            }
-
-            // Fallback: convert VariantName to handle_variant_name
-            let h_ident = if let Some(h) = handler_name {
-                Ident::new(&h, ident.span())
-            } else {
-                let snake = to_snake_case(&ident.to_string());
-                Ident::new(&format!("handle_{}", snake), ident.span())
-            };
-
-            match &v.fields {
-                Fields::Named(f) => {
-                    let field_names: Vec<_> = f.named.iter().map(|f| &f.ident).collect();
-                    quote! {
-                        #name::#ident { #(#field_names),* } => self.#h_ident(#(#field_names),*),
-                    }
-                }
-                Fields::Unit => {
-                    quote! {
-                        #name::#ident => self.#h_ident(),
-                    }
-                }
-                _ => quote! {},
-            }
-        }).collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-
-    quote! {
-        impl State {
-            pub fn apply_update(&mut self, update: #name) -> crate::bus::EventVec {
-                match update {
-                    #(#variants)*
-                }
-            }
-        }
-    }
-    .into()
-}
 
 #[proc_macro_attribute]
 pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {
@@ -644,55 +419,6 @@ fn to_pascal_case(s: &str) -> String {
         }
     }
     pascal
-}
-
-fn to_snake_case(s: &str) -> String {
-    let mut snake = String::new();
-    for (i, ch) in s.char_indices() {
-        if ch.is_uppercase() {
-            if i > 0 {
-                snake.push('_');
-            }
-            snake.push(ch.to_ascii_lowercase());
-        } else {
-            snake.push(ch);
-        }
-    }
-    snake
-}
-
-/// Derive macro for generating `ServiceConfig` implementations.
-///
-/// # Attributes
-/// - `#[config(key = "dns")]`: Specifies the TOML section key (required).
-#[proc_macro_derive(ServiceConfig, attributes(config))]
-pub fn service_config_derive(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let name = input.ident;
-
-    let mut key = None;
-
-    for attr in &input.attrs {
-        if attr.path().is_ident("config") {
-            let _ = attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("key") {
-                    let value: LitStr = meta.value()?.parse()?;
-                    key = Some(value.value());
-                }
-                Ok(())
-            });
-        }
-    }
-
-    let key =
-        key.expect("ServiceConfig requires a 'key' attribute (e.g., #[config(key = \"dns\")])");
-
-    quote! {
-        impl lanforge_core::config::ServiceConfig for #name {
-            const KEY: &'static str = #key;
-        }
-    }
-    .into()
 }
 
 fn extract_rpc_return_type(ty: &syn::Type) -> (bool, syn::Type, Option<syn::Type>) {

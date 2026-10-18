@@ -46,10 +46,7 @@ impl ServiceRegistry {
         debug!("Spawning async service thread: {}", name);
 
         let ctx_spawn = ctx.clone();
-        let mut builder = std::thread::Builder::new().name(name.clone());
-        if meta.stack_kb > 0 {
-            builder = builder.stack_size(meta.stack_kb * 1024);
-        }
+        let builder = std::thread::Builder::new().name(name.clone());
 
         let name_thread = name.clone();
         let handle = builder
@@ -90,3 +87,36 @@ impl Default for ServiceRegistry {
         Self::new()
     }
 }
+
+/// DSL macro to simplify service registration and spawning.
+#[macro_export]
+macro_rules! spawn_services {
+    ($registry:expr, $ctx_ref:expr, {
+        $( $(#[$attr:meta])* $kind:ident $( [ $($clone:ident),* ] )? $( if $cond:expr )? => $ctor:expr ),* $(,)?
+    }) => {
+        $(
+            $(#[$attr])*
+            {
+                #[allow(unused_mut)]
+                let mut run = true;
+                $( run = $cond; )?
+                if run {
+                    $( $( let $clone = $clone.clone(); )* )?
+                    $crate::spawn_one!($registry, $ctx_ref, $kind, $ctor, $($($clone),*)?);
+                }
+            }
+        )*
+    };
+}
+
+/// Internal helper for `spawn_services!`. Do not use directly.
+#[macro_export]
+macro_rules! spawn_one {
+    ($registry:expr, $ctx_ref:expr, async, $ctor:expr, $($clone:ident),*) => {
+        $registry.spawn_async($ctx_ref, move || {
+            $( let $clone = $clone.clone(); )*
+            $ctor
+        })
+    };
+}
+

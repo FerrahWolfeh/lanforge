@@ -38,7 +38,6 @@
 //!             base_backoff: Duration::from_secs(1),
 //!             max_backoff: Duration::from_secs(30),
 //!             shutdown_timeout: Duration::from_secs(3),
-//!             stack_kb: 0,
 //!             multi_threaded: false,
 //!         }
 //!     }
@@ -106,7 +105,6 @@ use std::time::Duration;
 ///     base_backoff: Duration::from_secs(2),
 ///     max_backoff: Duration::from_secs(60),
 ///     shutdown_timeout: Duration::from_secs(3),
-///     stack_kb: 0,
 ///     multi_threaded: false,
 /// };
 /// ```
@@ -134,10 +132,6 @@ pub struct ServiceMeta {
     /// Maximum duration to wait for the service's async `run` loop to complete
     /// its cooperative shutdown and resource cleanup before forcibly aborting.
     pub shutdown_timeout: Duration,
-
-    /// **DEPRECATED**: Stack size for the service's dedicated OS thread, in KiB.
-    /// This is no longer used since all services are now async.
-    pub stack_kb: usize,
 
     /// If true, the service's dedicated thread uses a multi-threaded Tokio runtime
     /// instead of the default single-threaded one. This allows `tokio::spawn` calls

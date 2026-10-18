@@ -20,11 +20,7 @@ pub(crate) fn resolve_mac_hostname(state: &State, mac: MacAddr) -> Option<String
             return Some(d.dns_fallback.clone());
         }
     }
-    state
-        .static_entries
-        .get(&mac)
-        .filter(|e| !e.hostname.is_empty())
-        .map(|e| e.hostname.clone())
+    None
 }
 
 pub(crate) fn resolve_ip_identity(state: &State, ip: IpAddr) -> (Option<MacAddr>, Option<String>) {

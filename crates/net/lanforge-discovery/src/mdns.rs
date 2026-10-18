@@ -21,7 +21,6 @@
 //!
 //! Marked as `critical: false` — failure does not halt the daemon.
 
-use lanforge_macros::ServiceConfig;
 use lanforge_types::device::{DeviceClass, TransientOrigin};
 use lanforge_types::network::{
     DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, Hostname, HostnameOrigin,
@@ -52,8 +51,7 @@ const MDNS_IPV4: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 251);
 const MDNS_IPV6: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xfb);
 
 /// Configuration for the mDNS prober.
-#[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
-#[config(key = "mdns")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MdnsConfig {
     /// Whether background mDNS probing is enabled.

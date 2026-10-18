@@ -466,7 +466,7 @@ mod tests {
         });
 
         let res = pinger.ping_timeout(target_ip, seq, Duration::from_millis(500)).await;
-        assert_eq!(res.unwrap(), true);
+        assert!(res.unwrap());
         let _ = responder.await;
     }
 
@@ -475,6 +475,6 @@ mod tests {
         let (_handle, pinger) = IcmpPinger::inert();
         let target_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 99));
         let res = pinger.ping_timeout(target_ip, 1, Duration::from_millis(50)).await;
-        assert_eq!(res.unwrap(), false);
+        assert!(!res.unwrap());
     }
 }

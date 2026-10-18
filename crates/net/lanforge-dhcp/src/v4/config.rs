@@ -3,15 +3,13 @@
 //! Defines the `LAN` interface, address pool range, and `DHCP` options
 //! (`router`, `DNS`, `domain name`, `search domains`).
 
-use lanforge_macros::ServiceConfig;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 
 /// `DHCPv4` server configuration — built from the `[dhcp.v4]` TOML section.
-#[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
-#[config(key = "dhcp.v4")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Dhcpv4Config {
     /// Whether the `DHCPv4` service is enabled.

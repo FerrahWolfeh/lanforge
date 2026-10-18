@@ -3,7 +3,6 @@
 //! Supports multi-prefix operation (`ULA` + `GUA`) with flexible pool definitions:
 //! fixed ranges, floating suffix ranges, or single static addresses.
 
-use lanforge_macros::ServiceConfig;
 use lanforge_types::network::dhcp::Dhcpv6Pool;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -14,8 +13,7 @@ use std::net::Ipv6Addr;
 /// Supports both `IA_NA` (non-temporary addresses) and `IA_PD` (prefix delegation).
 /// The `ula_prefix` enables Unique Local Address assignment in addition to
 /// Global Unicast Addresses learned from RA.
-#[derive(Clone, Debug, Serialize, Deserialize, ServiceConfig)]
-#[config(key = "dhcp.v6")]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Dhcpv6Config {
     /// Whether the `DHCPv6` service is enabled.

@@ -1,9 +1,7 @@
-use lanforge_macros::ServiceConfig;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for the Unix Domain Socket (UDS) control service.
-#[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
-#[config(key = "api")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ApiConfig {
     /// Whether the control API is enabled.

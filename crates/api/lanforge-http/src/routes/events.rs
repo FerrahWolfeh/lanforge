@@ -208,15 +208,6 @@ fn enrich_device_info(ctx: &LanforgeContext, mac: MacAddr) -> serde_json::Value 
             if let Some(ref iface) = d.iface {
                 map.insert("iface".to_string(), serde_json::Value::String(iface.clone()));
             }
-        } else if let Some(static_host) = s.static_entries.get(&mac) {
-            if !static_host.hostname.is_empty() {
-                map.insert("hostname".to_string(), serde_json::Value::String(static_host.hostname.clone()));
-            }
-            if let Some(v4) = static_host.v4_static {
-                map.insert("ip".to_string(), serde_json::Value::String(v4.to_string()));
-            }
-            map.insert("origin".to_string(), serde_json::Value::String("Static".to_string()));
-            map.insert("is_static".to_string(), serde_json::Value::Bool(true));
         }
     });
 

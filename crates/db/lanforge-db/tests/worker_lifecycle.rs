@@ -171,7 +171,7 @@ async fn test_db_worker_purges_device_immediately() {
     sleep(Duration::from_millis(50)).await;
 
     // Purge the device (DeviceEvent::Purged causes immediate flush)
-    let _ = ctx.apply(DeviceUpdate::Purge(mac));
+    let _ = ctx.apply(DeviceUpdate::HostRemoved { mac });
 
     // Give worker time to process immediate purge flush
     sleep(Duration::from_millis(50)).await;

@@ -49,12 +49,9 @@
 //! All state is protected by `parking_lot::RwLock` inside an `Arc<LanforgeContextInner>`.
 //! The [`EventBus`](bus::EventBus) uses `tokio::sync::broadcast` for async event distribution.
 pub mod bus;
-pub mod config;
 pub mod context;
 pub mod error;
-pub mod firewall;
 pub mod macros;
 pub mod service;
-pub mod utils;
 
 pub use lanforge_types as types;

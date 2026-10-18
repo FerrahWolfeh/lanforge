@@ -11,13 +11,14 @@ pub mod tests;
 
 use crate::bus::{AdminChange, DeviceEvent, LanforgeEvent, NetworkChange};
 use lanforge_types::device::{
-    Device, DeviceClass, DeviceStatus, IPv6State, Ipv6AddrOrSuffix, Origin, TransientHost,
+    Device, DeviceClass, DeviceStatus, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin,
+    TransientHost,
 };
 use lanforge_types::events::EventVec;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::DnsReverseResolver;
 use lanforge_types::update::{
-    CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, LeaseTarget, StaticEntry,
+    CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, LeaseTarget,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -25,7 +26,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-pub use self::cache::{DiscoveryCache, DiscoveryStore};
+pub use self::cache::DiscoveryStore;
 pub use self::indices::Indices;
 pub use self::network::NetworkState;
 
@@ -157,9 +158,7 @@ impl State {
         discovery: &DiscoveryStore,
     ) -> EventVec {
         match update {
-            DeviceUpdate::HostRemoved { mac }
-            | DeviceUpdate::Remove(mac)
-            | DeviceUpdate::Purge(mac) => self.handle_host_removed(mac),
+            DeviceUpdate::HostRemoved { mac } => self.handle_host_removed(mac),
             DeviceUpdate::InterfaceIpsChanged { ifindex, state } => {
                 self.handle_interface_ips_changed(ifindex, &state)
             }
@@ -197,7 +196,6 @@ impl State {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct State {
     pub devices: HashMap<MacAddr, Arc<Device>>,
-    pub static_entries: HashMap<MacAddr, StaticEntry>,
     pub indices: Indices,
     pub interfaces: NetworkState,
 
@@ -373,15 +371,21 @@ impl State {
 
     pub fn rebuild_static_registry(&mut self) {
         let mut registry = StaticRegistry::default();
-        let mut entries: Vec<_> = self.static_entries.values().collect();
-        entries.sort_by_key(|e| e.mac); // Stable order
+        let mut static_devs: Vec<_> = self
+            .devices
+            .values()
+            .filter(|d| d.is_static())
+            .collect();
+        static_devs.sort_by_key(|d| d.mac);
 
-        for entry in entries {
-            if let Some(v4) = entry.v4_static {
-                registry.v4.entry(v4).or_insert(entry.mac);
+        for dev in static_devs {
+            if let IPv4State::Static(v4) = dev.v4 {
+                registry.v4.entry(v4).or_insert(dev.mac);
             }
-            if let Some(v6) = &entry.v6_suffix {
-                registry.v6.entry(*v6).or_insert(entry.mac);
+            for state in &dev.v6 {
+                if let IPv6State::Static(suf, _) = state {
+                    registry.v6.entry(*suf).or_insert(dev.mac);
+                }
             }
         }
         self.static_registry = Arc::new(registry);
@@ -415,14 +419,10 @@ impl State {
             .cloned()
             .unwrap_or_default()
     }
+
     #[must_use]
     pub fn get_duid_by_mac(&self, mac: MacAddr) -> Option<&Duid> {
         self.devices.get(&mac).and_then(|d| d.duid.as_ref())
-    }
-
-    pub fn add_static_entry(&mut self, mac: MacAddr, entry: StaticEntry) {
-        self.static_entries.insert(mac, entry);
-        self.rebuild_static_registry();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -641,11 +641,4 @@ impl StaticRegistry {
     pub fn v6_reservations(&self) -> impl Iterator<Item = Ipv6AddrOrSuffix> + '_ {
         self.v6.keys().copied()
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeviceTableStats {
-    pub total_devices: usize,
-    pub online_devices: usize,
-    pub static_entries: usize,
 }

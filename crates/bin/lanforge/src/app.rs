@@ -231,7 +231,7 @@ impl Daemon {
         #[cfg(feature = "dns")]
         let dns_lifetime = log_db.load_dns_lifetime_stats().await.unwrap_or_default();
 
-        lanforge_core::spawn_services!(self.registry, &self.ctx, {
+        crate::spawn_services!(self.registry, &self.ctx, {
             async [ctx, cfg, db, log_db] => DbWorker::new(cfg.database.clone(), ctx, db, log_db),
 
             #[cfg(feature = "discovery")]

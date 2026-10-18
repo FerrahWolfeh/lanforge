@@ -136,7 +136,6 @@ fn test_print_all_struct_sizes() {
     print_size::<TimedEvent>("TimedEvent");
     print_size::<EventVec>("EventVec");
     print_size::<LeaseTarget>("LeaseTarget");
-    print_size::<StaticEntry>("StaticEntry");
     print_size::<CliHostUpdate>("CliHostUpdate");
     print_size::<InterfaceState>("InterfaceState");
     print_size::<V6LeaseUpdate>("V6LeaseUpdate");

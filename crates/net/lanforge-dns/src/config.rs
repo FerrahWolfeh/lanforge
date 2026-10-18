@@ -5,7 +5,6 @@
 //! and IPv6 prefix settings.
 
 use crate::resolver::recursive::UpstreamMode;
-use lanforge_macros::ServiceConfig;
 use lanforge_types::network::{
     ListenConfig,
     dns::{
@@ -53,8 +52,7 @@ impl Default for QueryLogConfig {
 
 /// Configuration for the DNS service.
 #[allow(clippy::struct_excessive_bools)]
-#[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
-#[config(key = "dns")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DnsConfig {
     /// Whether the DNS service is enabled.

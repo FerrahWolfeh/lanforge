@@ -364,7 +364,7 @@ impl RaService {
                 self.ctx
                     .get_interface_state(iface_index)
                     .link_local
-                    .and_then(|ll| lanforge_core::utils::mac_from_eui64_link_local(&ll))
+                    .and_then(|ll| lanforge_types::utils::mac_from_eui64_link_local(&ll))
             })
             .ok_or_else(|| {
                 CoreError::Generic(format!(

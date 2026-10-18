@@ -46,7 +46,7 @@ use dhcproto::v6::{
 };
 use dhcproto::{Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::utils::mac_from_eui64_link_local;
+use lanforge_types::utils::mac_from_eui64_link_local;
 use lanforge_types::device::Device;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use std::net::Ipv6Addr;

@@ -16,9 +16,6 @@ pub struct DiscoveryStore {
     pub orphaned_v6: DashMap<Ipv6Addr, (Duid, u32, SystemTime)>,
 }
 
-/// Legacy type alias for backwards compatibility.
-pub type DiscoveryCache = DiscoveryStore;
-
 impl DiscoveryStore {
     #[must_use]
     pub fn new() -> Self {

@@ -1,4 +1,4 @@
-use lanforge_types::network::firewall::FirewallConfig;
+use super::FirewallConfig;
 use std::time::Instant;
 
 /// Internal state of an in-flight staged firewall transaction.

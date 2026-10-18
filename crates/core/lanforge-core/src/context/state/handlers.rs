@@ -9,7 +9,7 @@ use crate::bus::{
 use crate::context::state::cache::DiscoveryStore;
 use crate::context::state::network::DhcpPoolStats;
 use crate::context::state::{
-    CliHostUpdate, DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State, StaticEntry,
+    CliHostUpdate, DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State,
 };
 use lanforge_types::device::{
     DeviceStatus, Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification, Origin,
@@ -307,27 +307,8 @@ impl State {
             Some(result)
         });
 
-        // Update static entries table
-        if let Some(dev) = self.devices.get(&mac) {
-            self.static_entries.insert(
-                mac,
-                StaticEntry {
-                    mac,
-                    hostname: dev.hostname.name.clone(),
-                    duid: dev.duid.clone(),
-                    v4_static: dev.v4.ip(),
-                    v6_suffix: dev.v6.iter().find_map(|s| match s {
-                        IPv6State::Static(s, _) => Some(*s),
-                        _ => None,
-                    }),
-                    boot_file: dev.boot_file.clone(),
-                    origin: update.origin,
-                    ignore_dns_log: dev.ignore_dns_log,
-                    ignored_log_domains: dev.ignored_log_domains.clone(),
-                },
-            );
-            self.rebuild_static_registry();
-        }
+        // Rebuild static registry if needed
+        self.rebuild_static_registry();
 
         events
     }
@@ -337,9 +318,6 @@ impl State {
             dev.ignore_dns_log = ignore;
             None
         });
-        if let Some(entry) = self.static_entries.get_mut(&mac) {
-            entry.ignore_dns_log = ignore;
-        }
         EventVec::new()
     }
 
@@ -349,12 +327,9 @@ impl State {
         domains: Vec<String>,
     ) -> EventVec {
         self.mutate_device(mac, |dev| {
-            dev.ignored_log_domains.clone_from(&domains);
+            dev.ignored_log_domains = domains;
             None
         });
-        if let Some(entry) = self.static_entries.get_mut(&mac) {
-            entry.ignored_log_domains = domains;
-        }
         EventVec::new()
     }
 
@@ -364,7 +339,6 @@ impl State {
             if let Some(duid) = &dev.duid {
                 self.indices.duid_index.remove(duid);
             }
-            self.static_entries.remove(&mac);
             self.rebuild_static_registry();
             return vec![LanforgeEvent::Device(DeviceEvent::Purged { mac })].into();
         }
@@ -601,7 +575,6 @@ impl State {
 
     pub(crate) fn handle_reset(&mut self, discovery: &DiscoveryStore) -> EventVec {
         self.devices.clear();
-        self.static_entries.clear();
         self.rebuild_static_registry();
         self.indices.clear();
         discovery.clear();

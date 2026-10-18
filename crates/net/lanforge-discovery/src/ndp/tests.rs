@@ -4,7 +4,7 @@ use std::sync::Arc;
 use lanforge_core::bus::{DeviceEvent, EventBus, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::utils::{ip_matches_prefix, mac_from_eui64_link_local};
+use lanforge_types::utils::{ip_matches_prefix, mac_from_eui64_link_local};
 use lanforge_types::{identifiers::MacAddr, network::NeighborEvent, update::DeviceUpdate};
 use netlink_packet_core::{NetlinkHeader, NetlinkMessage, NetlinkPayload};
 use rtnetlink::packet_route::{

@@ -380,17 +380,12 @@ fn test_cli_host_updated_sync() {
     assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Static(Ipv6AddrOrSuffix::Suffix(b), _) if *b == lanforge_types::network::Ipv6Suffix([0,0,0,0,0,0,0,0x10]))));
     assert!(dev.is_static());
 
-    // 3. Verify static_entries sync
-    let entry = ctx
-        .read()
-        .static_entries
-        .get(&mac)
-        .expect("Should have static entry")
-        .clone();
-    assert_eq!(entry.hostname, "cli-host");
-    assert_eq!(entry.v4_static, Some("192.168.1.10".parse().unwrap()));
+    // 3. Verify device state
+    let dev = ctx.get_device(&mac).expect("Should have device");
+    assert_eq!(dev.hostname.name, "cli-host");
+    assert_eq!(dev.v4.ip(), Some("192.168.1.10".parse().unwrap()));
     assert!(
-        matches!(entry.v6_suffix, Some(Ipv6AddrOrSuffix::Suffix(b)) if b == lanforge_types::network::Ipv6Suffix([0,0,0,0,0,0,0,0x10]))
+        dev.v6.iter().any(|s| matches!(s, IPv6State::Static(Ipv6AddrOrSuffix::Suffix(b), _) if *b == lanforge_types::network::Ipv6Suffix([0,0,0,0,0,0,0,0x10])))
     );
 
     // 4. Partial update (Only hostname)
@@ -409,9 +404,9 @@ fn test_cli_host_updated_sync() {
     });
 
     assert!(changed);
-    let entry = ctx.read().static_entries.get(&mac).unwrap().clone();
-    assert_eq!(entry.hostname, "new-name");
-    assert_eq!(entry.v4_static, Some("192.168.1.10".parse().unwrap())); // Preserved
+    let dev = ctx.get_device(&mac).unwrap();
+    assert_eq!(dev.hostname.name, "new-name");
+    assert_eq!(dev.v4.ip(), Some("192.168.1.10".parse().unwrap())); // Preserved
 }
 
 #[test]

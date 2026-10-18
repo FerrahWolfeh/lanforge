@@ -104,7 +104,7 @@ impl ClientContext {
 
     pub async fn handle_purge(&self, mac: MacAddr) -> Response {
         // HostRemoved also purges from memory if it's dynamic
-        if !self.ctx.apply(DeviceUpdate::Purge(mac)) {
+        if !self.ctx.apply(DeviceUpdate::HostRemoved { mac }) {
             return Response::Error {
                 error: "Failed to purge device".to_string(),
             };

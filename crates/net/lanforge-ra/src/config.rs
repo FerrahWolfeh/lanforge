@@ -6,7 +6,6 @@
 //! - RFC 8106         — RDNSS and DNSSL
 
 use crate::error::NetworkError;
-use lanforge_macros::ServiceConfig;
 pub use lanforge_types::network::ra::RouterPriority;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
 use serde::{Deserialize, Serialize};
@@ -39,8 +38,7 @@ pub const LIFETIME_INFINITY: u32 = u32::MAX;
 /// Full RA service configuration for an interface.
 ///
 /// Maps directly to RA packet fields and options per RFC 4861 and RFC 8106.
-#[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
-#[config(key = "ra")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RaConfig {
     /// Network interface name (e.g., `"eth0"`).
@@ -85,8 +83,7 @@ pub struct RaConfig {
 }
 
 /// Simplified RA configuration used in the TOML file.
-#[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig, Default)]
-#[config(key = "ra")]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct RaServiceConfig {
     pub enabled: bool,

@@ -266,7 +266,7 @@ impl ClientContext {
     }
 
     pub async fn handle_host_remove(&self, mac: MacAddr) -> Response {
-        let _ = self.ctx.apply(DeviceUpdate::Remove(mac));
+        let _ = self.ctx.apply(DeviceUpdate::HostRemoved { mac });
 
         Response::Success(SimpleSuccess {
             message: "Host configuration removed".to_string(),

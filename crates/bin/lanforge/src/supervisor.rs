@@ -522,7 +522,6 @@ mod tests {
                 base_backoff: Duration::from_millis(1),
                 max_backoff: Duration::from_millis(10),
                 shutdown_timeout: Duration::from_millis(100),
-                stack_kb: 0,
                 multi_threaded: false,
             }
         }
@@ -562,7 +561,6 @@ mod tests {
                 base_backoff: Duration::from_millis(1),
                 max_backoff: Duration::from_millis(10),
                 shutdown_timeout: Duration::from_millis(100),
-                stack_kb: 1,
                 multi_threaded: false,
             }
         }
@@ -645,7 +643,6 @@ mod tests {
                 base_backoff: Duration::from_millis(5),
                 max_backoff: Duration::from_millis(20),
                 shutdown_timeout: Duration::from_millis(100),
-                stack_kb: 0,
                 multi_threaded: false,
             }
         }
@@ -695,7 +692,6 @@ mod tests {
                 base_backoff: Duration::from_millis(1),
                 max_backoff: Duration::from_millis(10),
                 shutdown_timeout: Duration::from_millis(100),
-                stack_kb: 0,
                 multi_threaded: false,
             }
         }
@@ -744,7 +740,6 @@ mod tests {
                 base_backoff: Duration::from_millis(1),
                 max_backoff: Duration::from_millis(10),
                 shutdown_timeout: Duration::from_millis(100),
-                stack_kb: 0,
                 multi_threaded: false,
             }
         }
@@ -834,7 +829,6 @@ mod tests {
                 base_backoff: Duration::from_millis(5),
                 max_backoff: Duration::from_millis(20),
                 shutdown_timeout: Duration::from_millis(100),
-                stack_kb: 0,
                 multi_threaded: false,
             }
         }
@@ -900,7 +894,6 @@ mod tests {
                 base_backoff: Duration::from_millis(5),
                 max_backoff: Duration::from_millis(20),
                 shutdown_timeout: Duration::from_secs(1),
-                stack_kb: 0,
                 multi_threaded: false,
             }
         }
@@ -970,7 +963,6 @@ mod tests {
                 base_backoff: Duration::from_millis(5),
                 max_backoff: Duration::from_millis(20),
                 shutdown_timeout: Duration::from_millis(50),
-                stack_kb: 0,
                 multi_threaded: false,
             }
         }

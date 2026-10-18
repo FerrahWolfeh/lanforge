@@ -148,19 +148,15 @@ fn handle_dns_logs_follow(
                 let (mac, src_hostname) = ctx_inner.with_state(|s| {
                     let mac = entry.src_mac.or_else(|| s.get_mac_by_ip(entry.src_ip));
                     let hostname = mac.and_then(|m| {
-                        if let Some(d) = s.devices.get(&m) {
-                            let name = d.display_hostname();
-                            if name != "?" && !name.is_empty() {
-                                return Some(name.to_string());
-                            }
-                            if !d.dns_fallback.is_empty() {
-                                return Some(d.dns_fallback.clone());
-                            }
+                        let d = s.devices.get(&m)?;
+                        let name = d.display_hostname();
+                        if name != "?" && !name.is_empty() {
+                            return Some(name.to_string());
                         }
-                        s.static_entries
-                            .get(&m)
-                            .filter(|e| !e.hostname.is_empty())
-                            .map(|e| e.hostname.clone())
+                        if !d.dns_fallback.is_empty() {
+                            return Some(d.dns_fallback.clone());
+                        }
+                        None
                     });
                     (mac, hostname)
                 });

@@ -1,11 +1,9 @@
 //! Configuration for the neighbor monitor and network tuning.
 
-use lanforge_macros::ServiceConfig;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for the network monitor and internal tuning.
-#[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
-#[config(key = "monitor")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MonitorConfig {
     /// Whether the neighbor monitor is enabled.

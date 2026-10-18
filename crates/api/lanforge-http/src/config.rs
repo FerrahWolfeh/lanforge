@@ -1,10 +1,8 @@
-use lanforge_macros::ServiceConfig;
 use lanforge_types::network::ListenConfig;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for the REST API and Metrics HTTP service.
-#[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
-#[config(key = "http")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct HttpConfig {

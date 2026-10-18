@@ -157,7 +157,7 @@ impl ClientContext {
             for mac in static_macs {
                 let _ = self
                     .ctx
-                    .apply(lanforge_types::update::DeviceUpdate::Remove(mac));
+                    .apply(lanforge_types::update::DeviceUpdate::HostRemoved { mac });
             }
 
             // Clear DNS rewrites, upstreams, adblock URLs, allowlist

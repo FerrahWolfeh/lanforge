@@ -29,21 +29,6 @@ impl<T> From<T> for FieldUpdate<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct StaticEntry {
-    pub mac: MacAddr,
-    pub hostname: String,
-    pub duid: Option<Duid>,
-    pub v4_static: Option<Ipv4Addr>,
-    pub v6_suffix: Option<Ipv6AddrOrSuffix>,
-    pub boot_file: Option<String>,
-    pub origin: Origin,
-    #[serde(default)]
-    pub ignore_dns_log: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ignored_log_domains: Vec<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct CliHostUpdate {
     pub hostname: FieldUpdate<String>,
@@ -189,10 +174,6 @@ pub enum DeviceUpdate {
     HostRemoved {
         mac: MacAddr,
     },
-    /// Explicit request to remove a device from the active table.
-    Remove(MacAddr),
-    /// Explicit request to purge a device from both memory and database.
-    Purge(MacAddr),
     LeaseReleased {
         mac: MacAddr,
         target: LeaseTarget,

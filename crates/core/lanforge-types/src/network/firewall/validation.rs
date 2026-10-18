@@ -1,4 +1,4 @@
-use lanforge_types::network::firewall::{
+use super::{
     DynamicPortRequest, FirewallConfig, FirewallPolicy, FirewallValidationReport, FirewallZone,
     L4Protocol, PortForwardRule, ZoneForwarding,
 };
@@ -382,7 +382,6 @@ fn diff_port_forwards(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lanforge_types::network::firewall::PortForwardRule;
     use std::net::Ipv4Addr;
 
     #[test]

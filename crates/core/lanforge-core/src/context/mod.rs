@@ -56,7 +56,6 @@
 use crate::bus::{EventBus, LanforgeEvent, PppoeEvent, SystemEvent, TimedEvent};
 use crate::context::state::State;
 use crate::error::CoreError;
-use crate::firewall::FirewallTransactionState;
 use crate::service::{ServiceDependency, StatusProvider};
 use lanforge_types::device::Device;
 use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
@@ -67,7 +66,8 @@ use lanforge_types::events::FirewallEvent;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
 use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamTarget};
 use lanforge_types::network::firewall::{
-    DynamicPortRequest, FirewallConfig, FirewallValidationReport, L4Protocol,
+    validate_firewall_candidate, DynamicPortRequest, FirewallConfig, FirewallTransactionState,
+    FirewallValidationReport, L4Protocol,
 };
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
@@ -801,7 +801,7 @@ impl LanforgeContext {
         let current = self.get_firewall_config().unwrap_or_default();
         let dynamic_ports = self.registered_service_ports();
 
-        let report = crate::firewall::validate_firewall_candidate(
+        let report = validate_firewall_candidate(
             &candidate,
             &current,
             &dynamic_ports,

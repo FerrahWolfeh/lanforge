@@ -1,11 +1,9 @@
-use lanforge_macros::ServiceConfig;
 use lanforge_types::network::ListenConfig;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Configuration for the TFTP service.
-#[derive(Debug, Clone, Serialize, Deserialize, ServiceConfig)]
-#[config(key = "tftp")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TftpConfig {
     /// Whether the TFTP service is enabled.
