@@ -30,6 +30,7 @@ rand = { workspace = true }
 pnet = { workspace = true }
 hex = { workspace = true }
 libc = { workspace = true }
+smallvec = { workspace = true }
 
 # Third party
 dhcproto = "0.15.0"

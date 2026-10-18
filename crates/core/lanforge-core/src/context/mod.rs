@@ -54,43 +54,24 @@
 //! - **Running**: System is operational (false = shutdown)
 
 use crate::bus::{EventBus, EventTopic, LanforgeEvent, SystemEvent, TimedEvent};
-use crate::context::state::network::DhcpPoolStats;
 use crate::context::state::State;
-use crate::error::CoreError;
-use crate::service::{ServiceDependency, StatusProvider};
 use lanforge_types::device::Device;
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
-use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::events::FirewallEvent;
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
-use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamTarget};
-use lanforge_types::network::firewall::{
-    validate_firewall_candidate, DynamicPortRequest, FirewallConfig, FirewallTransactionState,
-    FirewallValidationReport, L4Protocol,
-};
-use lanforge_types::network::pppoe::PppoeConfig;
-use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
-use lanforge_types::network::TrafficConfig;
-use lanforge_types::network::traffic::TrafficTelemetryResponse;
-use lanforge_types::system::{
-    Cap, PppoeStatusResponse, RaStatusResponse, ServerCapabilities, ServiceBanner, ServiceState,
-    SystemStatus, TrafficStatusResponse,
-};
-use lanforge_types::update::{DhcpV4PoolUpdate, DhcpV6PoolUpdate};
-use smallvec::SmallVec;
 
 use arc_swap::ArcSwap;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::time::{Instant, SystemTime};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+use std::time::SystemTime;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::RecvError;
 
 pub mod caps;
+pub mod config;
 pub mod dns_handle;
+pub mod firewall;
+pub mod lifecycle;
 pub mod read;
 pub mod runtime;
 pub mod state;
@@ -100,11 +81,10 @@ pub mod tests;
 pub mod write;
 
 pub use self::caps::CompiledCaps;
+pub use self::config::DynamicConfig;
 pub use self::dns_handle::DnsHandle;
 pub use self::runtime::ServiceRuntime;
 pub use self::storage_handle::StorageHandle;
-
-use std::sync::atomic::AtomicU64;
 
 /// Internal counters for tracking transient network events.
 ///
@@ -184,65 +164,32 @@ pub struct PersistenceSnapshot {
 
 #[derive(Clone)]
 pub struct LanforgeContext {
-    inner: Arc<LanforgeContextInner>,
-}
-
-/// Runtime subsystem configurations dynamically updateable via RPC/CLI/WebUI.
-#[derive(Debug, Clone, Default)]
-pub struct DynamicConfig {
-    /// Configured `DHCPv4` pools.
-    pub dhcp_v4_pools: Vec<Dhcpv4Pool>,
-    /// Configured `DHCPv6` pools.
-    pub dhcp_v6_pools: Vec<Dhcpv6Pool>,
-    /// Configured DHCP and TFTP scope options.
-    pub dhcp_options: DhcpOptionsConfig,
-    /// Configured Router Advertisement server runtime configuration.
-    pub ra: RaServerConfig,
-    /// Configured DNS upstreams.
-    pub dns_upstreams: Vec<UpstreamTarget>,
-    /// Configured DNS upstream resolution strategy mode.
-    pub dns_upstream_mode: UpstreamMode,
-    /// Configured DNS rewrites.
-    pub dns_rewrites: Vec<RewriteRule>,
-    /// Configured DNS allowlist.
-    pub dns_allowlist: Vec<String>,
-    /// Configured DNS adblock config.
-    pub dns_adblock: AdblockDbConfig,
-    /// Configured DNS adblock source URLs.
-    pub dns_adblock_urls: Vec<AdblockUrlEntry>,
-    /// Configured DNS custom adblock rules (allowlist & blocklist).
-    pub dns_adblock_rules: Vec<AdblockRuleEntry>,
-    /// Configured `PPPoE` client runtime configuration.
-    pub pppoe: Option<PppoeConfig>,
-    /// Configured firewall runtime configuration.
-    pub firewall: Option<FirewallConfig>,
-    /// Configured traffic management and SQM configuration.
-    pub traffic: Option<TrafficConfig>,
+    pub(crate) inner: Arc<LanforgeContextInner>,
 }
 
 /// Internal state shared behind an `Arc`.
 ///
 /// This is intentionally private to enforce access patterns — all interaction
 /// goes through the typed methods on [`LanforgeContext`].
-struct LanforgeContextInner {
+pub(crate) struct LanforgeContextInner {
     /// The event bus for broadcasting state changes.
-    bus: Arc<EventBus>,
+    pub(crate) bus: Arc<EventBus>,
     /// The device and interface state, protected by an `ArcSwap` for wait-free reads.
-    state: ArcSwap<state::State>,
+    pub(crate) state: ArcSwap<state::State>,
     /// Serializes state mutations without blocking readers.
-    writer_mutex: Mutex<()>,
+    pub(crate) writer_mutex: Mutex<()>,
     /// Volatile network discovery store (NDP cache, orphaned v6 leases).
-    discovery: Arc<state::cache::DiscoveryStore>,
+    pub(crate) discovery: Arc<state::cache::DiscoveryStore>,
     /// The network interface index to monitor for RA/DHCP.
-    target_ifindex: Option<u32>,
+    pub(crate) target_ifindex: Option<u32>,
     /// The primary LAN interface name (e.g. "lan0").
-    target_ifname: RwLock<Option<String>>,
+    pub(crate) target_ifname: RwLock<Option<String>>,
     /// Consolidated dynamic subsystem configurations, protected by an `ArcSwap` for wait-free reads.
-    config: ArcSwap<DynamicConfig>,
+    pub(crate) config: ArcSwap<DynamicConfig>,
     /// Serializes dynamic configuration mutations.
-    config_mutex: Mutex<()>,
+    pub(crate) config_mutex: Mutex<()>,
     /// Central service execution runtime and status container.
-    pub runtime: ServiceRuntime,
+    pub(crate) runtime: ServiceRuntime,
 }
 
 #[allow(clippy::missing_panics_doc)] // Temporary
@@ -464,98 +411,6 @@ impl LanforgeContext {
         self.service_handle_topic(EventTopic::Traffic)
     }
 
-    /// Registers a dynamic port requirement for an internal service (e.g. HTTP `WebUI`, DNS, DHCP).
-    ///
-    /// Stores the port in context and broadcasts a `FirewallEvent::PortOpenRequested` on the bus.
-    pub fn register_service_port(&self, request: DynamicPortRequest) {
-        let added = {
-            let mut ports = self.inner.runtime.firewall_ports.write();
-            if ports.iter().any(|p| {
-                p.service == request.service && p.port == request.port && p.protocol == request.protocol
-            }) {
-                false
-            } else {
-                ports.push(request.clone());
-                true
-            }
-        };
-        if added {
-            let _ = self
-                .inner
-                .bus
-                .publish(LanforgeEvent::Firewall(FirewallEvent::PortOpenRequested(
-                    Box::new(request),
-                )));
-        }
-    }
-
-    /// Releases a previously registered dynamic port requirement.
-    pub fn release_service_port(&self, service: &str, port: u16, protocol: L4Protocol) {
-        let removed = {
-            let mut ports = self.inner.runtime.firewall_ports.write();
-            let initial = ports.len();
-            ports.retain(|p| !(p.service == service && p.port == port && p.protocol == protocol));
-            ports.len() != initial
-        };
-        if removed {
-            let _ = self
-                .inner
-                .bus
-                .publish(LanforgeEvent::Firewall(FirewallEvent::PortReleaseRequested {
-                    service: service.to_string(),
-                    port,
-                    protocol,
-                }));
-        }
-    }
-
-    /// Returns all registered dynamic service ports.
-    #[must_use]
-    pub fn registered_service_ports(&self) -> Vec<DynamicPortRequest> {
-        self.inner.runtime.firewall_ports.read().clone()
-    }
-
-    /// Returns a guard to the current dynamic subsystem configurations.
-    #[must_use]
-    pub fn config_guard(&self) -> arc_swap::Guard<Arc<DynamicConfig>> {
-        self.inner.config.load()
-    }
-
-    /// Returns a copy of the current dynamic subsystem configurations.
-    #[must_use]
-    pub fn config(&self) -> DynamicConfig {
-        (**self.inner.config.load()).clone()
-    }
-
-    /// Executes a closure with read access to the dynamic configurations.
-    pub fn with_config<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&DynamicConfig) -> R,
-    {
-        f(&self.inner.config.load())
-    }
-
-    /// Executes a closure with write access to the dynamic configurations.
-    pub fn update_config<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&mut DynamicConfig) -> R,
-    {
-        let _guard = self.inner.config_mutex.lock();
-        let current = self.inner.config.load();
-        let mut next = (**current).clone();
-        let res = f(&mut next);
-        self.inner.config.store(Arc::new(next));
-        res
-    }
-
-    pub(crate) fn update_config_and_notify<F>(&self, f: F, event: LanforgeEvent)
-    where
-        F: FnOnce(&mut DynamicConfig),
-    {
-        self.update_config(f);
-        let _ = self.bus_ref().publish(event);
-    }
-
     /// Increments the DNS blocked queries counter.
     #[cfg(feature = "adblock")]
     pub fn inc_dns_blocked(&self) {
@@ -579,535 +434,6 @@ impl LanforgeContext {
         }
     }
 
-    /// Sets the global system status.
-    pub fn set_status(&self, status: SystemStatus) {
-        *self.inner.runtime.status.write() = Some(status);
-    }
-
-    /// Returns a copy of the current system status, if set.
-    #[must_use]
-    pub fn get_status(&self) -> Option<SystemStatus> {
-        self.inner.runtime.status.read().clone()
-    }
-
-    /// Sets the compiled capabilities for this daemon binary.
-    pub fn set_compiled_caps(&self, caps: SmallVec<[Cap; 32]>) {
-        *self.inner.runtime.compiled_caps.write() = caps;
-    }
-
-    /// Returns the compiled capabilities for this daemon binary.
-    #[must_use]
-    pub fn compiled_caps(&self) -> SmallVec<[Cap; 32]> {
-        self.inner.runtime.compiled_caps.read().clone()
-    }
-
-    /// Evaluates compiled vs enabled server capabilities based on runtime configuration.
-    #[must_use]
-    pub fn server_capabilities(&self) -> ServerCapabilities {
-        let compiled = self.compiled_caps();
-        let mut enabled = SmallVec::new();
-        let status = self.get_status();
-
-        for &cap in &compiled {
-            let is_enabled = match cap {
-                Cap::Dns => status.as_ref().is_none_or(|s| s.dns_enabled),
-                Cap::UpstreamUdpTcp | Cap::UpstreamDoT | Cap::UpstreamDoQ | Cap::UpstreamDoH => {
-                    status.as_ref().is_none_or(|s| s.dns_enabled)
-                }
-                Cap::DohDownstream => {
-                    status.as_ref().is_none_or(|s| s.dns_enabled && s.http_enabled)
-                }
-                Cap::DhcpV4 => status.as_ref().is_none_or(|s| s.dhcp_v4_enabled),
-                Cap::DhcpV6 => status.as_ref().is_none_or(|s| s.dhcp_v6_enabled),
-                Cap::Ra => {
-                    let from_status = status.as_ref().is_none_or(|s| s.ra_enabled);
-                    let from_config = self.with_config(|c| c.ra.enabled);
-                    from_status && from_config
-                }
-                Cap::NdpDiscovery
-                | Cap::MdnsProbe
-                | Cap::Uds
-                | Cap::Zstd
-                | Cap::Storage
-                | Cap::Ebpf => true,
-                Cap::Http => status.as_ref().is_none_or(|s| s.http_enabled),
-                Cap::Webui => status.as_ref().is_none_or(|s| s.http_enabled),
-                Cap::Pppoe => {
-                    let from_status = status.as_ref().is_none_or(|s| s.pppoe_enabled);
-                    let from_config = self.with_config(|c| c.pppoe.as_ref().is_none_or(|p| p.enabled));
-                    from_status && from_config
-                }
-                Cap::Tftp => status.as_ref().and_then(|s| s.boot_dir.as_ref()).is_some(),
-                Cap::Firewall => {
-                    let from_status = status.as_ref().is_none_or(|s| s.firewall_enabled);
-                    let from_config = self.with_config(|c| c.firewall.as_ref().is_none_or(|f| f.enabled));
-                    from_status && from_config
-                }
-                Cap::Traffic => {
-                    let from_status = status.as_ref().is_none_or(|s| s.traffic_enabled);
-                    let from_config = self.with_config(|c| {
-                        c.traffic.as_ref().is_none_or(|t| t.tuning.enabled || t.sqm.enabled)
-                    });
-                    from_status && from_config
-                }
-                Cap::Adblock => self.with_config(|c| c.dns_adblock.enabled),
-            };
-
-            if is_enabled {
-                enabled.push(cap);
-            }
-        }
-
-        ServerCapabilities { compiled, enabled }
-    }
-
-    #[must_use]
-    pub fn get_dhcp_v4_pools(&self) -> Vec<Dhcpv4Pool> {
-        self.with_config(|c| c.dhcp_v4_pools.clone())
-    }
-
-    #[must_use]
-    pub fn get_dhcp_v6_pools(&self) -> Vec<Dhcpv6Pool> {
-        self.with_config(|c| c.dhcp_v6_pools.clone())
-    }
-
-    #[must_use]
-    pub fn get_dhcp_options(&self) -> DhcpOptionsConfig {
-        self.with_config(|c| c.dhcp_options.clone())
-    }
-
-    #[must_use]
-    pub fn get_ra_prefixes(&self) -> Vec<RAPrefix> {
-        self.with_config(|c| c.ra.prefixes.clone())
-    }
-
-    #[must_use]
-    pub fn get_ra_rdnss(&self) -> Vec<RdnssConfig> {
-        self.with_config(|c| c.ra.rdnss.clone())
-    }
-
-    #[must_use]
-    pub fn get_ra_dnssl(&self) -> Vec<DnsslConfig> {
-        self.with_config(|c| c.ra.dnssl.clone())
-    }
-
-    #[must_use]
-    pub fn get_ra_server_config(&self) -> RaServerConfig {
-        self.with_config(|c| c.ra.clone())
-    }
-
-    /// Returns the current dynamic `PPPoE` configuration, if configured.
-    #[must_use]
-    pub fn get_pppoe_config(&self) -> Option<PppoeConfig> {
-        self.with_config(|c| c.pppoe.clone())
-    }
-
-    /// Returns the current dynamic firewall configuration, if configured.
-    #[must_use]
-    pub fn get_firewall_config(&self) -> Option<FirewallConfig> {
-        self.with_config(|c| c.firewall.clone())
-    }
-
-    /// Returns the current dynamic traffic and SQM configuration, if configured.
-    #[must_use]
-    pub fn get_traffic_config(&self) -> Option<TrafficConfig> {
-        self.with_config(|c| c.traffic.clone())
-    }
-
-    /// Stores the latest traffic telemetry snapshot.
-    pub fn set_traffic_telemetry(&self, telemetry: TrafficTelemetryResponse) {
-        self.inner.runtime.set_traffic_telemetry(telemetry);
-    }
-
-    /// Retrieves the latest traffic telemetry snapshot, if available.
-    #[must_use]
-    pub fn traffic_telemetry(&self) -> Option<Arc<TrafficTelemetryResponse>> {
-        self.inner.runtime.traffic_telemetry()
-    }
-
-    /// Evaluates a candidate firewall configuration, runs pre-flight sanity checks,
-    /// and stages it as an active pending transaction if valid.
-    #[must_use]
-    pub fn stage_firewall_transaction(&self, candidate: FirewallConfig) -> FirewallValidationReport {
-        let current = self.get_firewall_config().unwrap_or_default();
-        let dynamic_ports = self.registered_service_ports();
-
-        let report = validate_firewall_candidate(
-            &candidate,
-            &current,
-            &dynamic_ports,
-            || {
-                let id = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis();
-                format!("tx-{id:x}")
-            },
-        );
-
-        if let Some(ref tx_id) = report.tx_id {
-            let now = Instant::now();
-            let mut tx_lock = self.inner.runtime.firewall_tx.write();
-            *tx_lock = Some(FirewallTransactionState {
-                tx_id: tx_id.clone(),
-                candidate_config: candidate,
-                previous_config: Some(current),
-                created_at: now,
-                expires_at: now + std::time::Duration::from_secs(300),
-                auto_rollback_deadline: None,
-            });
-        }
-
-        report
-    }
-
-    /// Retrieves the staged firewall transaction if not expired.
-    #[must_use]
-    pub fn get_staged_firewall_transaction(&self) -> Option<FirewallTransactionState> {
-        let mut tx_lock = self.inner.runtime.firewall_tx.write();
-        if let Some(ref tx) = *tx_lock
-            && Instant::now() > tx.expires_at
-        {
-            *tx_lock = None;
-            return None;
-        }
-        tx_lock.clone()
-    }
-
-    /// Sets an auto-rollback deadline for the active staged transaction.
-    #[must_use]
-    pub fn set_firewall_transaction_rollback(&self, tx_id: &str, deadline: Instant) -> bool {
-        let mut tx_lock = self.inner.runtime.firewall_tx.write();
-        if let Some(ref mut tx) = *tx_lock
-            && tx.tx_id == tx_id
-        {
-            tx.auto_rollback_deadline = Some(deadline);
-            return true;
-        }
-        drop(tx_lock);
-        false
-    }
-
-    /// Clears the staged firewall transaction.
-    #[must_use]
-    pub fn clear_staged_firewall_transaction(&self, tx_id: Option<&str>) -> Option<FirewallTransactionState> {
-        let mut tx_lock = self.inner.runtime.firewall_tx.write();
-        if let Some(ref tx) = *tx_lock
-            && (tx_id.is_none() || tx_id == Some(tx.tx_id.as_str()))
-        {
-            return tx_lock.take();
-        }
-        None
-    }
-
-    #[must_use]
-    pub fn get_dns_upstreams(&self) -> Vec<UpstreamTarget> {
-        self.with_config(|c| c.dns_upstreams.clone())
-    }
-
-    #[must_use]
-    pub fn get_dns_rewrites(&self) -> Vec<RewriteRule> {
-        self.with_config(|c| c.dns_rewrites.clone())
-    }
-
-    #[must_use]
-    pub fn get_dns_allowlist(&self) -> Vec<String> {
-        self.with_config(|c| c.dns_allowlist.clone())
-    }
-
-    #[must_use]
-    pub fn get_dns_adblock(&self) -> AdblockDbConfig {
-        self.with_config(|c| c.dns_adblock.clone())
-    }
-
-    #[must_use]
-    pub fn get_dns_adblock_urls(&self) -> Vec<AdblockUrlEntry> {
-        self.with_config(|c| c.dns_adblock_urls.clone())
-    }
-
-    #[must_use]
-    pub fn get_dns_adblock_rules(&self) -> Vec<AdblockRuleEntry> {
-        self.with_config(|c| c.dns_adblock_rules.clone())
-    }
-
-    /// Registers a decoupled status provider.
-    pub fn register_status_provider(&self, provider: Arc<dyn StatusProvider>) {
-        self.inner.runtime.register_status_provider(self, provider);
-    }
-
-    /// Returns a list of all registered service status banners.
-    #[must_use]
-    pub fn service_banners(&self) -> Vec<ServiceBanner> {
-        self.inner.runtime.service_banners(self)
-    }
-
-    /// Returns a list of all registered status providers.
-    #[must_use]
-    pub fn status_providers(&self) -> Vec<Arc<dyn StatusProvider>> {
-        self.inner.runtime.status_providers()
-    }
-
-    /// Sets the decoupled DNS handle.
-    pub fn set_dns_handle(&self, handle: DnsHandle) {
-        *self.inner.runtime.dns_handle.write() = Some(handle);
-    }
-
-    /// Returns the decoupled DNS handle, if available.
-    #[must_use]
-    pub fn dns_handle(&self) -> Option<DnsHandle> {
-        self.inner.runtime.dns_handle.read().clone()
-    }
-
-    /// Sets the decoupled storage handle.
-    pub fn set_storage_handle(&self, handle: StorageHandle) {
-        *self.inner.runtime.storage_handle.write() = Some(handle);
-    }
-
-    /// Returns the decoupled storage handle, if available.
-    #[must_use]
-    pub fn storage_handle(&self) -> Option<StorageHandle> {
-        self.inner.runtime.storage_handle.read().clone()
-    }
-
-    /// Sets the dynamic state of a service.
-    pub fn set_service_state(&self, id: &str, state: ServiceState) {
-        self.inner.runtime.set_service_state(id, state);
-    }
-
-    /// Sets the start time of a service.
-    pub fn set_service_start(&self, id: &str, start: Instant) {
-        self.inner.runtime.set_service_start(id, start);
-    }
-
-    /// Clears the start time of a service.
-    pub fn clear_service_start(&self, id: &str) {
-        self.inner.runtime.clear_service_start(id);
-    }
-
-    /// Returns the dynamic state of a service, defaulting to Offline.
-    #[must_use]
-    pub fn get_service_state(&self, id: &str) -> ServiceState {
-        self.inner.runtime.get_service_state(id)
-    }
-
-    /// Returns the uptime of a service in seconds, or 0 if not running.
-    #[must_use]
-    pub fn get_service_uptime(&self, id: &str) -> u64 {
-        self.inner.runtime.get_service_uptime(id)
-    }
-
-    /// Registers an arbitrary typed shared service state.
-    pub fn provide_shared<T: std::any::Any + Send + Sync + 'static>(&self, instance: Arc<T>) {
-        self.inner.runtime.provide_shared(instance);
-    }
-
-    /// Retrieves an arbitrary typed shared service state by type.
-    #[must_use]
-    pub fn get_shared<T: std::any::Any + Send + Sync + 'static>(&self) -> Option<Arc<T>> {
-        self.inner.runtime.get_shared::<T>()
-    }
-
-    /// Stores the active `PPPoE` WAN status response.
-    pub fn set_pppoe_status(&self, status: Option<PppoeStatusResponse>) {
-        self.inner.runtime.set_pppoe_status(status);
-    }
-
-    /// Retrieves the active `PPPoE` WAN status response.
-    #[must_use]
-    pub fn pppoe_status(&self) -> Option<Arc<PppoeStatusResponse>> {
-        self.inner.runtime.pppoe_status()
-    }
-
-    /// Stores the active RA status response and synchronizes fallback prefixes with State.
-    pub fn set_ra_status(&self, status: Option<RaStatusResponse>) {
-        let (new_ula, new_gua) = status.as_ref().map_or((None, None), |s| {
-            (s.active_ula_prefix, s.active_gua_prefix)
-        });
-        let prefixes_changed = self.with_state_mut(|state| {
-            let changed = state.interfaces.ra_ula_fallback != new_ula
-                || state.interfaces.ra_gua_fallback != new_gua;
-            state.interfaces.ra_ula_fallback = new_ula;
-            state.interfaces.ra_gua_fallback = new_gua;
-            changed
-        });
-        if prefixes_changed {
-            self.rebuild_dns_indices();
-        }
-        self.inner.runtime.set_ra_status(status);
-    }
-
-    /// Retrieves the active RA status response.
-    #[must_use]
-    pub fn ra_status(&self) -> Option<Arc<RaStatusResponse>> {
-        self.inner.runtime.ra_status()
-    }
-
-    /// Stores the active Traffic & SQM status response.
-    pub fn set_traffic_status(&self, status: Option<TrafficStatusResponse>) {
-        self.inner.runtime.set_traffic_status(status);
-    }
-
-    /// Retrieves the active Traffic & SQM status response.
-    #[must_use]
-    pub fn traffic_status(&self) -> Option<Arc<TrafficStatusResponse>> {
-        self.inner.runtime.traffic_status()
-    }
-
-    /// Stores the active `DHCPv4` pool stats.
-    pub fn set_dhcp_v4_pool_stats(&self, stats: Option<DhcpPoolStats>) {
-        self.inner.runtime.set_dhcp_v4_pool_stats(stats);
-    }
-
-    /// Updates active `DHCPv4` pool stats from a pool update struct.
-    pub fn set_dhcp_v4_pool_update(&self, update: &DhcpV4PoolUpdate) {
-        self.inner.runtime.set_dhcp_v4_pool_update(update);
-    }
-
-    /// Retrieves the active `DHCPv4` pool stats.
-    #[must_use]
-    pub fn dhcp_v4_pool_stats(&self) -> Option<Arc<DhcpPoolStats>> {
-        self.inner.runtime.dhcp_v4_pool_stats()
-    }
-
-    /// Stores `DHCPv6` pool stats for an IAID.
-    pub fn set_dhcp_v6_pool_stats(&self, iaid: u32, stats: DhcpPoolStats) {
-        self.inner.runtime.set_dhcp_v6_pool_stats(iaid, stats);
-    }
-
-    /// Updates active `DHCPv6` pool stats from a pool update struct.
-    pub fn set_dhcp_v6_pool_update(&self, update: &DhcpV6PoolUpdate) {
-        self.inner.runtime.set_dhcp_v6_pool_update(update);
-    }
-
-    /// Retrieves all active `DHCPv6` pool stats.
-    #[must_use]
-    pub fn dhcp_v6_pool_stats(&self) -> HashMap<u32, DhcpPoolStats> {
-        self.inner.runtime.dhcp_v6_pool_stats()
-    }
-
-    /// Clears all active `DHCPv6` pool stats.
-    pub fn clear_dhcp_v6_pool_stats(&self) {
-        self.inner.runtime.clear_dhcp_v6_pool_stats();
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Lifecycle & Coordination
-// ---------------------------------------------------------------------------
-
-impl LanforgeContext {
-    /// Blocks until the network interfaces are ready.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CoreError` if the wait condition cannot be met or the system shuts down.
-    pub async fn wait_for_interfaces(&self) -> Result<(), CoreError> {
-        self.inner.runtime.wait_for_interfaces().await
-    }
-
-    /// Blocks until the database is ready.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CoreError` if the wait condition cannot be met or the system shuts down.
-    pub async fn wait_for_db(&self) -> Result<(), CoreError> {
-        self.inner.runtime.wait_for_db().await
-    }
-
-    /// Blocks until the `PPPoE` session is established (or short-circuits if `PPPoE` is disabled/ready).
-    ///
-    /// # Errors
-    ///
-    /// Returns `CoreError` if the wait condition cannot be met or the system shuts down.
-    pub async fn wait_for_pppoe(&self) -> Result<(), CoreError> {
-        self.inner.runtime.wait_for_pppoe().await
-    }
-
-    /// Blocks until the specified dependency is satisfied.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CoreError::Shutdown` if the system shuts down before the dependency is ready.
-    pub async fn wait_for_dependency(&self, dep: ServiceDependency) -> Result<(), CoreError> {
-        self.inner.runtime.wait_for_dependency(dep).await
-    }
-
-    /// Blocks until the specified service is `Online`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CoreError::Shutdown` if the system shuts down before the service is online.
-    pub async fn wait_for_service(&self, id: &str) -> Result<(), CoreError> {
-        self.inner.runtime.wait_for_service(id).await
-    }
-
-    /// Returns true if this instance is currently running.
-    ///
-    /// When false, the system is in shutdown mode and services should exit.
-    #[must_use]
-    pub fn is_running(&self) -> bool {
-        self.inner.runtime.is_running()
-    }
-
-    /// Sets the system lifecycle to shutdown mode for this instance.
-    pub fn terminate(&self) {
-        self.inner.runtime.terminate();
-    }
-
-    /// Resets the lifecycle flags (`running`, `db_ready`, `if_ready`, `pppoe_ready`) to initial state.
-    pub fn reset_lifecycle(&self) {
-        self.inner.runtime.reset_lifecycle();
-    }
-
-    /// Returns true if the database is ready.
-    ///
-    /// This flag is set by the database worker after successful initialization.
-    #[must_use]
-    pub fn is_db_ready(&self) -> bool {
-        self.inner.runtime.is_db_ready()
-    }
-
-    /// Sets the database readiness state.
-    pub fn set_db_ready(&self, ready: bool) {
-        self.inner.runtime.set_db_ready(ready);
-    }
-
-    /// Returns true if the system is running in recovery mode (in-memory fallback due to database unavailability).
-    #[must_use]
-    pub fn is_recovery_mode(&self) -> bool {
-        self.inner.runtime.is_recovery_mode()
-    }
-
-    /// Sets the recovery mode state.
-    pub fn set_recovery_mode(&self, recovery: bool) {
-        self.inner.runtime.set_recovery_mode(recovery);
-    }
-
-    /// Returns true if the network interfaces are ready.
-    ///
-    /// This flag is set after interface discovery completes successfully.
-    #[must_use]
-    pub fn is_if_ready(&self) -> bool {
-        self.inner.runtime.is_if_ready()
-    }
-
-    /// Sets the interface readiness state.
-    pub fn set_if_ready(&self, ready: bool) {
-        self.inner.runtime.set_if_ready(ready);
-    }
-
-    /// Returns true if the `PPPoE` session is ready.
-    ///
-    /// This flag is set when `PPPoE` session is established or if `PPPoE` is disabled.
-    #[must_use]
-    pub fn is_pppoe_ready(&self) -> bool {
-        self.inner.runtime.is_pppoe_ready()
-    }
-
-    /// Sets the `PPPoE` session readiness state.
-    pub fn set_pppoe_ready(&self, ready: bool) {
-        self.inner.runtime.set_pppoe_ready(ready);
-    }
 }
 
 /// Thread-safe metrics collected by the database worker.

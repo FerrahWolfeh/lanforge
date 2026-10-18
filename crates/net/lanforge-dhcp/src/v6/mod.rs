@@ -56,6 +56,7 @@ use lanforge_types::system::{RunResult, ServiceState};
 use lanforge_types::update::{
     DeviceUpdate, DhcpV6PoolUpdate, LeaseTarget, V6LeaseUpdate, V6PrefixUpdate,
 };
+use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::atomic::Ordering;
@@ -347,6 +348,7 @@ impl Dhcpv6Service {
         self.publish_pool_stats(&server);
 
         let mut buf = [0u8; 2048];
+        let mut resp_vec = Vec::with_capacity(1024);
         let mut handle = self.ctx.service_handle();
         let mut stats_timer = tokio::time::interval(Duration::from_mins(1));
 
@@ -361,7 +363,8 @@ impl Dhcpv6Service {
                 res = transport.recv(&mut buf) => {
                     match res {
                         Ok((len, peer)) => {
-                            self.handle_incoming_packet(&buf[..len], peer, &mut server, &transport, &handle);
+                            let len = len.min(buf.len());
+                            self.handle_incoming_packet(&buf[..len], peer, &mut server, &transport, &handle, &mut resp_vec);
                         }
                         Err(e) => warn!("DHCPv6 socket error: {e}"),
                     }
@@ -423,13 +426,14 @@ impl Dhcpv6Service {
         server: &mut Dhcpv6Server,
         transport: &io::Dhcpv6Transport,
         handle: &ServiceHandle,
+        resp_vec: &mut Vec<u8>,
     ) {
         let (peer_ip, scope_id) = match peer {
             SocketAddr::V6(v6) => (*v6.ip(), v6.scope_id()),
             SocketAddr::V4(_) => return,
         };
 
-        let mut resp_vec = Vec::with_capacity(1024);
+        resp_vec.clear();
         if let Ok(msg) = Message::decode(&mut Decoder::new(payload)) {
             let mut resolved_mac = msg
                 .opts()
@@ -482,7 +486,7 @@ impl Dhcpv6Service {
                 _ => {}
             }
 
-            let handle_res = server.handle_packet(&msg, peer_ip, resolved_mac, &mut resp_vec);
+            let handle_res = server.handle_packet(&msg, peer_ip, resolved_mac, resp_vec);
             if let HandleResult::Reply(
                 reply_bytes,
                 dest_ip,
@@ -665,6 +669,7 @@ fn apply_learned_state(
     config: &Dhcpv6Config,
 ) {
     let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
+    let mut updates = SmallVec::<[DeviceUpdate; 4]>::new();
 
     // 1. Process IA_NA (Non-temporary Addresses)
     for &iaid in &assigned_ias.na {
@@ -676,7 +681,7 @@ fn apply_learned_state(
         if assigned_ip_addrs.is_empty() {
             if let Some(duid) = learned_duid {
                 // No IPs assigned yet, but IAID is known
-                let _ = ctx.apply(DeviceUpdate::DuidAssociated {
+                updates.push(DeviceUpdate::DuidAssociated {
                     mac: opt_mac,
                     duid: duid.clone(),
                     iaid,
@@ -686,7 +691,7 @@ fn apply_learned_state(
             // One or more IPs assigned
             for ip in assigned_ip_addrs {
                 if let Some(duid) = learned_duid {
-                    let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
+                    updates.push(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
                         mac: opt_mac,
                         duid: duid.clone(),
                         iaid,
@@ -695,10 +700,11 @@ fn apply_learned_state(
                     })));
                 } else if let Some(mac) = opt_mac {
                     // Search for DUID in our table if not provided in packet
-                    if let Some(device) = ctx.get_device(&mac)
-                        && let Some(duid) = device.duid.clone()
-                    {
-                        let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(
+                    let found_duid = ctx.with_state(|state| {
+                        state.devices.get(&mac).and_then(|d| d.duid.clone())
+                    });
+                    if let Some(duid) = found_duid {
+                        updates.push(DeviceUpdate::V6LeaseGranted(Box::new(
                             V6LeaseUpdate {
                                 mac: Some(mac),
                                 duid,
@@ -715,7 +721,7 @@ fn apply_learned_state(
         if let Some(mac) = opt_mac
             && !config.iface.is_empty()
         {
-            let _ = ctx.apply(DeviceUpdate::DeviceInterfaceSeen {
+            updates.push(DeviceUpdate::DeviceInterfaceSeen {
                 mac,
                 iface: config.iface.clone(),
             });
@@ -729,7 +735,7 @@ fn apply_learned_state(
             .and_then(|duid| server.pool.lookup_prefix(ctx, duid, iaid));
 
         if let (Some(duid), Some((prefix, len))) = (learned_duid, assigned_prefix) {
-            let _ = ctx.apply(DeviceUpdate::V6PrefixAssigned(Box::new(V6PrefixUpdate {
+            updates.push(DeviceUpdate::V6PrefixAssigned(Box::new(V6PrefixUpdate {
                 mac: opt_mac,
                 duid: duid.clone(),
                 iaid,
@@ -743,16 +749,20 @@ fn apply_learned_state(
     // 3. Process Released/Declined IA_NAs and IA_PDs
     if let Some(mac) = opt_mac {
         for &iaid in &released_ias.na {
-            let _ = ctx.apply(DeviceUpdate::LeaseReleased {
+            updates.push(DeviceUpdate::LeaseReleased {
                 mac,
                 target: LeaseTarget::V6 { iaid },
             });
         }
         for &iaid in &released_ias.pd {
-            let _ = ctx.apply(DeviceUpdate::LeaseReleased {
+            updates.push(DeviceUpdate::LeaseReleased {
                 mac,
                 target: LeaseTarget::V6Prefix { iaid },
             });
         }
+    }
+
+    if !updates.is_empty() {
+        let _ = ctx.apply_batch(updates);
     }
 }

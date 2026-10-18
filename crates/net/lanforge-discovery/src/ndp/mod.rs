@@ -52,6 +52,7 @@ use netlink_sys::SocketAddr;
 use parking_lot::Mutex;
 use rtnetlink::packet_route::RouteNetlinkMessage;
 use rtnetlink::Handle;
+use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
@@ -423,7 +424,7 @@ fn spawn_sweep_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext, ping_interval
             sweep_timer.tick().await;
 
             let ips = ctx.with_state(|state| {
-                let mut all_ips = Vec::new();
+                let mut all_ips = SmallVec::<[IpAddr; 32]>::new();
                 for dev in state.devices.values() {
                     if dev.origin != lanforge_types::device::Origin::System {
                         if let Some(v4) = dev.v4.ip() {

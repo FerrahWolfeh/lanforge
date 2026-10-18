@@ -34,8 +34,8 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::AsyncService;
 use pnet::datalink::interfaces;
-use std::fmt::Write;
-use std::io::ErrorKind;
+use smallvec::SmallVec;
+use std::io::{ErrorKind, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
@@ -361,28 +361,32 @@ fn send_unicast_query(sock4: &UdpSocket, sock6: &UdpSocket, target: IpAddr) {
     let mut msg = DnsMessage::new();
     msg.header.qdcount = 1;
 
-    // Most devices respond to a PTR query for their own IP.
-    // Example: 1.1.168.192.in-addr.arpa.
-    let name = match target {
+    let mut name_buf = [0u8; 80];
+    let name_len = match target {
         IpAddr::V4(v4) => {
             let octets = v4.octets();
-            format!(
+            let mut cursor = std::io::Cursor::new(&mut name_buf[..]);
+            let _ = write!(
+                cursor,
                 "{}.{}.{}.{}.in-addr.arpa",
                 octets[3], octets[2], octets[1], octets[0]
-            )
+            );
+            usize::try_from(cursor.position()).unwrap_or(0)
         }
         IpAddr::V6(v6) => {
-            let mut name_str = String::new();
+            let mut cursor = std::io::Cursor::new(&mut name_buf[..]);
             for seg in v6.octets().iter().rev() {
-                let _ = write!(name_str, "{:x}.{:x}.", seg & 0xf, seg >> 4);
+                let _ = write!(cursor, "{:x}.{:x}.", seg & 0xf, seg >> 4);
             }
-            name_str.push_str("ip6.arpa");
-            name_str
+            let _ = cursor.write_all(b"ip6.arpa");
+            usize::try_from(cursor.position()).unwrap_or(0)
         }
     };
 
+    let name_len = name_len.min(name_buf.len());
+    let name_str = std::str::from_utf8(&name_buf[..name_len]).unwrap_or("");
     msg.questions.push(DnsQuestion {
-        name: Arc::from(name),
+        name: Arc::from(name_str),
         qtype: DnsRecordType::PTR,
         qclass: DnsClass::IN,
     });
@@ -404,6 +408,7 @@ fn send_unicast_query(sock4: &UdpSocket, sock6: &UdpSocket, target: IpAddr) {
     debug!("mDNS targeted probe sent to {}", target);
 }
 
+#[allow(clippy::too_many_lines)]
 pub(crate) fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: SocketAddr) {
     let mut decoder = WireDecoder::new(data);
     let Some(msg) = decoder.decode_message() else {
@@ -454,6 +459,7 @@ pub(crate) fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: Socke
     };
 
     let mac = ctx.get_mac_by_ip(from.ip());
+    let mut updates = SmallVec::<[DeviceUpdate; 4]>::new();
 
     // 1. Classification pass: check both record name (e.g. "_ipp._tcp.local") and rdata
     for record in msg.answers.iter().chain(msg.additionals.iter()) {
@@ -467,13 +473,13 @@ pub(crate) fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: Socke
         if let Some(class) = class
             && let Some(mac) = mac
         {
-            let _ = ctx.apply(DeviceUpdate::ClassHint { mac, class });
+            updates.push(DeviceUpdate::ClassHint { mac, class });
         }
     }
 
     // 2. Hostname resolution pass: prioritize SRV records (authoritative host in DNS-SD) over PTR
-    let mut srv_targets = Vec::new();
-    let mut ptr_targets = Vec::new();
+    let mut srv_targets = SmallVec::<[&str; 8]>::new();
+    let mut ptr_targets = SmallVec::<[&str; 8]>::new();
 
     for record in msg.answers.iter().chain(msg.additionals.iter()) {
         match &record.rdata {
@@ -483,7 +489,7 @@ pub(crate) fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: Socke
         }
     }
 
-    let candidate_targets: Vec<&str> = if srv_targets.is_empty() {
+    let candidate_targets: SmallVec<[&str; 8]> = if srv_targets.is_empty() {
         ptr_targets
     } else {
         srv_targets
@@ -497,12 +503,14 @@ pub(crate) fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: Socke
 
         if let Some(mac) = mac {
             // If it doesn't have a hostname yet, apply mDNS hostname hint
-            let has_hostname = ctx
-                .get_device(&mac)
-                .is_some_and(|dev| !dev.hostname.name.is_empty());
+            let has_hostname = ctx.with_state(|s| {
+                s.devices
+                    .get(&mac)
+                    .is_some_and(|dev| !dev.hostname.name.is_empty())
+            });
             if !has_hostname {
                 debug!("mDNS discovery: {} -> {}", from.ip(), clean_host);
-                let _ = ctx.apply(DeviceUpdate::MdnsHostnameHint {
+                updates.push(DeviceUpdate::MdnsHostnameHint {
                     mac,
                     hostname: clean_host.to_string(),
                 });
@@ -511,13 +519,17 @@ pub(crate) fn handle_mdns_packet(ctx: &LanforgeContext, data: &[u8], from: Socke
 
         // Always register in transient hosts to allow immediate reverse PTR lookup
         // and automatic correlation if MAC is learned later.
-        let _ = ctx.apply(DeviceUpdate::TransientHostResolved(Box::new(
+        updates.push(DeviceUpdate::TransientHostResolved(Box::new(
             TransientHostUpdate {
                 ip: from.ip(),
                 hostname: Hostname::new(clean_host, HostnameOrigin::Mdns),
                 origin: TransientOrigin::Mdns,
             },
         )));
+    }
+
+    if !updates.is_empty() {
+        let _ = ctx.apply_batch(updates);
     }
 }
 

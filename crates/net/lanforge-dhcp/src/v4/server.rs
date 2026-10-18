@@ -141,16 +141,10 @@ impl DhcpServer {
     /// the appropriate handler (Discover, Request, Release, Decline, Inform).
     /// The result (`HandleResult`) contains the response packet or signals
     /// a release/ignore action.
+    /// Processes a decoded DHCP message and returns a response action.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub fn handle_packet(&mut self, data: &[u8], device: Option<&Device>) -> HandleResult {
+    pub fn handle_message(&mut self, msg: &Message, device: Option<&Device>) -> HandleResult {
         self.last_assigned_ip = None;
-        let msg = match Message::decode(&mut Decoder::new(data)) {
-            Ok(m) => m,
-            Err(e) => {
-                debug!("Failed to decode packet: {e}");
-                return HandleResult::Ignore;
-            }
-        };
 
         // Only handle BOOTREQUEST (client → server)
         if msg.opcode() != Opcode::BootRequest {
@@ -178,22 +172,40 @@ impl DhcpServer {
 
         let identity = DeviceIdentity::resolve(
             mac,
-            Self::get_hostname(&msg),
-            Self::get_vendor_class(&msg),
+            Self::get_hostname(msg),
+            Self::get_vendor_class(msg),
             device,
         );
 
         match msg_type {
-            MessageType::Discover => self.handle_discover(&msg, &identity, broadcast, device),
-            MessageType::Request => self.handle_request(&msg, &identity, broadcast, device),
-            MessageType::Release => self.handle_release(&msg, &identity, device),
-            MessageType::Decline => self.handle_decline(&msg, &identity, device),
-            MessageType::Inform => self.handle_inform(&msg, &identity, device),
+            MessageType::Discover => self.handle_discover(msg, &identity, broadcast, device),
+            MessageType::Request => self.handle_request(msg, &identity, broadcast, device),
+            MessageType::Release => self.handle_release(msg, &identity, device),
+            MessageType::Decline => self.handle_decline(msg, &identity, device),
+            MessageType::Inform => self.handle_inform(msg, &identity, device),
             other => {
                 debug!("Ignoring message type: {other:?}");
                 HandleResult::Ignore
             }
         }
+    }
+
+    /// Processes a raw DHCP packet and returns a response action.
+    ///
+    /// Decodes the packet, determines the message type, and dispatches to
+    /// the appropriate handler (Discover, Request, Release, Decline, Inform).
+    /// The result (`HandleResult`) contains the response packet or signals
+    /// a release/ignore action.
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub fn handle_packet(&mut self, data: &[u8], device: Option<&Device>) -> HandleResult {
+        let msg = match Message::decode(&mut Decoder::new(data)) {
+            Ok(m) => m,
+            Err(e) => {
+                debug!("Failed to decode packet: {e}");
+                return HandleResult::Ignore;
+            }
+        };
+        self.handle_message(&msg, device)
     }
 
     // ── DISCOVER → OFFER ─────────────────────────────────────────────────

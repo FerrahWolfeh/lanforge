@@ -49,6 +49,7 @@ use lanforge_types::network::dhcp::Dhcpv4Pool;
 use lanforge_types::system::{RunResult, ServiceState};
 use lanforge_types::update::{DeviceUpdate, DhcpV4PoolUpdate, LeaseTarget};
 use server::{DhcpServer, HandleResult};
+use smallvec::SmallVec;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime};
@@ -431,14 +432,15 @@ impl Dhcpv4Service {
         if let Some(assigned_ip) = server.last_assignment_for() {
             let expires = SystemTime::now() + Duration::from_secs(u64::from(self.cfg.lease_time));
 
-            let _ = self.ctx.apply(DeviceUpdate::V4LeaseGranted {
+            let mut updates = SmallVec::<[DeviceUpdate; 3]>::new();
+            updates.push(DeviceUpdate::V4LeaseGranted {
                 mac,
                 ip: assigned_ip,
                 expires,
             });
 
             if !self.cfg.iface.is_empty() {
-                let _ = self.ctx.apply(DeviceUpdate::DeviceInterfaceSeen {
+                updates.push(DeviceUpdate::DeviceInterfaceSeen {
                     mac,
                     iface: self.cfg.iface.clone(),
                 });
@@ -447,10 +449,10 @@ impl Dhcpv4Service {
             if let Some(hostname) = req_hostname
                 && !hostname.is_empty()
             {
-                let _ = self
-                    .ctx
-                    .apply(DeviceUpdate::DhcpHostnameHint { mac, hostname });
+                updates.push(DeviceUpdate::DhcpHostnameHint { mac, hostname });
             }
+
+            let _ = self.ctx.apply_batch(updates);
         }
     }
 
@@ -472,10 +474,10 @@ impl Dhcpv4Service {
 
                 self.record_incoming_transaction(&msg, mac, handle);
 
-                let handle_res = {
-                    let device = self.ctx.get_device(&mac);
-                    server.handle_packet(data, device.as_deref())
-                };
+                let handle_res = self.ctx.with_state(|state| {
+                    let device = state.devices.get(&mac).map(std::sync::Arc::as_ref);
+                    server.handle_message(&msg, device)
+                });
 
                 match handle_res {
                     HandleResult::Reply {

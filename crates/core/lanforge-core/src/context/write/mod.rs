@@ -20,6 +20,60 @@ impl LanforgeContext {
         !self.apply_with_events(update).is_empty()
     }
 
+    /// Applies a batch of state mutations in a single transaction (single `CoW` clone)
+    /// and returns whether any state change occurred.
+    pub fn apply_batch<I>(&self, updates: I) -> bool
+    where
+        I: IntoIterator<Item = DeviceUpdate>,
+    {
+        !self.apply_batch_with_events(updates).is_empty()
+    }
+
+    /// Applies a batch of state mutations in a single transaction (single `CoW` clone)
+    /// and returns all events that were published to the bus.
+    #[must_use]
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    pub fn apply_batch_with_events<I>(&self, updates: I) -> EventVec
+    where
+        I: IntoIterator<Item = DeviceUpdate>,
+    {
+        let mut filtered = smallvec::SmallVec::<[DeviceUpdate; 4]>::new();
+        for update in updates {
+            self.update_metrics(&update);
+            if let Some(debounced) = self.debounce_update(update) {
+                filtered.push(debounced);
+            }
+        }
+
+        if filtered.is_empty() {
+            return EventVec::new();
+        }
+
+        let events = {
+            let _guard = self.inner.writer_mutex.lock();
+            let current = self.inner.state.load_full();
+            let mut new_state = (*current).clone();
+            let mut all_events = EventVec::new();
+            for update in filtered {
+                let evs = new_state.apply_update(update, &self.inner.discovery);
+                all_events.extend(evs);
+            }
+            self.inner.state.store(Arc::new(new_state));
+            all_events
+        };
+
+        if events.is_empty() {
+            return EventVec::new();
+        }
+
+        let bus = self.bus_ref();
+        for event in &events {
+            let _ = bus.publish(event.clone());
+        }
+
+        events
+    }
+
     /// Applies a state mutation and returns any events that were published to the bus.
     #[must_use]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
