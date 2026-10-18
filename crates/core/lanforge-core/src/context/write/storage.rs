@@ -7,10 +7,11 @@ use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamTarget};
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
-use lanforge_types::network::TrafficConfig;
-use lanforge_types::update::DeviceUpdate;
+use lanforge_types::events::EventVec;
+use lanforge_types::network::{DnsReverseResolver, IpSubnet, TrafficConfig};
 
 use crate::bus::{DnsEvent, FirewallEvent, LanforgeEvent, SystemEvent, TrafficEvent};
+use crate::context::state::State;
 use crate::context::LanforgeContext;
 
 impl LanforgeContext {
@@ -152,9 +153,41 @@ impl LanforgeContext {
         );
     }
 
+    /// Prunes stale discovery caches, transient hosts, and inactive zombie devices.
+    #[must_use]
+    pub fn prune_zombies(&self) -> EventVec {
+        let events = self.with_state_mut(|state| state.prune_zombies(&self.inner.discovery));
+        let bus = self.bus_ref();
+        for event in &events {
+            let _ = bus.publish(event.clone());
+        }
+        events
+    }
+
+    /// Rebuilds all device and DNS resolution indices.
+    pub fn rebuild_dns_indices(&self) {
+        self.with_state_mut(State::rebuild_indices);
+    }
+
     /// Completely resets the in-memory state.
     pub fn reset(&self) {
-        let _ = self.apply(DeviceUpdate::Reset);
+        self.with_state_mut(|state| state.reset(&self.inner.discovery));
+        self.inner.runtime.reset_lifecycle();
         *self.inner.runtime.last_db_flush.write() = None;
+    }
+
+    /// Adds or updates a custom reverse DNS resolver for a subnet.
+    pub fn add_reverse_resolver(&self, resolver: DnsReverseResolver) {
+        self.with_state_mut(|state| state.add_reverse_resolver(resolver));
+    }
+
+    /// Removes a custom reverse DNS resolver for a subnet.
+    pub fn remove_reverse_resolver(&self, subnet: IpSubnet) {
+        self.with_state_mut(|state| state.remove_reverse_resolver(subnet));
+    }
+
+    /// Sets or replaces all custom reverse DNS resolvers.
+    pub fn set_reverse_resolvers(&self, resolvers: Vec<DnsReverseResolver>) {
+        self.with_state_mut(|state| state.set_reverse_resolvers(resolvers));
     }
 }

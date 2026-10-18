@@ -27,7 +27,6 @@ use lanforge_types::network::dns::{AdblockUrlEntry, DnsRequest, DnsResponse};
 use lanforge_types::network::{DnsReverseResolver, QueryLogEntry};
 use lanforge_types::storage::{DnsAnalyticsData, StorageQuery, StorageQueryResult};
 use lanforge_types::system::ServiceAction;
-use lanforge_types::update::DeviceUpdate;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -643,25 +642,21 @@ impl DbWorker {
                 db.add_dns_reverse_resolver(&subnet, &resolver)
                     .await
                     .map_err(|e| e.to_string())?;
-                let _ = ctx.apply(DeviceUpdate::AddReverseResolver {
-                    resolver: Box::new(DnsReverseResolver { subnet, resolver }),
-                });
+                ctx.add_reverse_resolver(DnsReverseResolver { subnet, resolver });
                 Ok(StorageQueryResult::Success)
             }
             StorageQuery::RemoveReverseResolver(subnet) => {
                 db.remove_dns_reverse_resolver(&subnet)
                     .await
                     .map_err(|e| e.to_string())?;
-                let _ = ctx.apply(DeviceUpdate::RemoveReverseResolver { subnet });
+                ctx.remove_reverse_resolver(subnet);
                 Ok(StorageQueryResult::Success)
             }
             StorageQuery::ClearReverseResolvers => {
                 db.clear_dns_reverse_resolvers()
                     .await
                     .map_err(|e| e.to_string())?;
-                let _ = ctx.apply(DeviceUpdate::SetReverseResolvers {
-                    resolvers: Vec::new(),
-                });
+                ctx.set_reverse_resolvers(Vec::new());
                 Ok(StorageQueryResult::Success)
             }
         }

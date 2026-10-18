@@ -931,7 +931,7 @@ impl LanforgeContext {
             changed
         });
         if prefixes_changed {
-            let _ = self.apply(lanforge_types::update::DeviceUpdate::RebuildDnsIndices);
+            self.rebuild_dns_indices();
         }
         self.inner.runtime.set_ra_status(status);
     }

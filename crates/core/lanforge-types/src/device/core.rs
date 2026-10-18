@@ -8,11 +8,12 @@ use crate::device::state::{
     IPv4State, IPv6State, V4Lease, V6Lease, V6ObservationOrigin, V6PrefixLease,
 };
 
-use crate::events::NetworkChange;
+use crate::events::{AdminChange, NetworkChange};
 use crate::identifiers::{Duid, MacAddr};
 use crate::network::{
     Hostname, HostnameOrigin, IpClassification, Ipv6AddrOrSuffix, classify_ipv6, is_ula,
 };
+use crate::update::{CliHostUpdate, FieldUpdate, LeaseTarget};
 use crate::utils::serde::{
     deserialize_seen_v4, deserialize_time, deserialize_time_opt, serialize_seen_v4, serialize_time,
     serialize_time_opt,
@@ -120,7 +121,7 @@ impl DeviceClass {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Device {
     pub mac: MacAddr,
     pub hostname: Hostname,
@@ -905,6 +906,92 @@ impl Device {
                     LearningMethod::Unknown
                 }
             }
+        }
+    }
+
+    /// Applies administrative host updates from CLI or API.
+    #[allow(clippy::useless_let_if_seq)]
+    pub fn apply_cli_update(&mut self, update: CliHostUpdate) -> AdminChange {
+        let mut result = AdminChange::CliHostUpdated;
+
+        if let FieldUpdate::Set(h) = update.hostname {
+            let sanitized = Hostname::sanitize(&h);
+            self.hostname = Hostname {
+                name: sanitized.clone(),
+                origin: HostnameOrigin::Static,
+            };
+            result = AdminChange::HostnameChanged {
+                hostname: sanitized,
+            };
+        }
+        if let FieldUpdate::Set(d) = update.duid {
+            self.duid = Some(d);
+        }
+        if let FieldUpdate::Set(v4) = update.v4_static {
+            self.v4 = IPv4State::Static(v4);
+            result = AdminChange::V4StaticChanged { ip: Some(v4) };
+        } else if update.v4_static == FieldUpdate::Clear {
+            self.v4 = IPv4State::None;
+            result = AdminChange::V4StaticChanged { ip: None };
+        }
+        if let FieldUpdate::Set(v6) = update.v6_suffix {
+            self.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
+            self.v6.push(IPv6State::Static(v6, SystemTime::now()));
+            result = AdminChange::V6SuffixChanged { suffix: Some(v6) };
+        } else if update.v6_suffix == FieldUpdate::Clear {
+            self.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
+            result = AdminChange::V6SuffixChanged { suffix: None };
+        }
+        if let FieldUpdate::Set(bf) = update.boot_file {
+            let sanitized = bf.replace('\0', "").trim().to_string();
+            self.boot_file = if sanitized.is_empty() {
+                None
+            } else {
+                Some(sanitized)
+            };
+        } else if update.boot_file == FieldUpdate::Clear {
+            self.boot_file = None;
+        }
+        if let FieldUpdate::Set(df) = update.dns_fallback {
+            self.dns_fallback = df;
+        }
+        if let FieldUpdate::Set(c) = update.class {
+            self.class = c;
+            result = AdminChange::Classified { class: c };
+        }
+        self.origin = update.origin;
+        self.managed_at = Some(SystemTime::now());
+        result
+    }
+
+    /// Releases an address lease matching the target specification.
+    pub fn release_lease(&mut self, target: LeaseTarget) -> Option<NetworkChange> {
+        let changed = match target {
+            LeaseTarget::V4 => {
+                if matches!(self.v4, IPv4State::None) {
+                    false
+                } else {
+                    self.v4 = IPv4State::None;
+                    true
+                }
+            }
+            LeaseTarget::V6 { iaid } => {
+                let initial_len = self.v6.len();
+                self.v6
+                    .retain(|s| !matches!(s, IPv6State::Dynamic(l) if l.iaid == iaid));
+                self.v6.len() != initial_len
+            }
+            LeaseTarget::V6Prefix { iaid } => {
+                let initial_len = self.v6_prefixes.len();
+                self.v6_prefixes.retain(|p| p.iaid != iaid);
+                self.v6_prefixes.len() != initial_len
+            }
+        };
+
+        if changed {
+            Some(NetworkChange::LeaseExpired { target })
+        } else {
+            None
         }
     }
 }

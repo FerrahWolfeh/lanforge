@@ -4,7 +4,7 @@ use std::time::SystemTime;
 
 use crate::device::{DeviceClass, Origin, TransientOrigin};
 use crate::identifiers::{Duid, MacAddr};
-use crate::network::{DnsReverseResolver, Hostname, IpSubnet, Ipv6AddrOrSuffix};
+use crate::network::{Hostname, Ipv6AddrOrSuffix};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum FieldUpdate<T> {
@@ -188,8 +188,6 @@ pub enum DeviceUpdate {
         ifindex: u32,
         state: Box<InterfaceState>,
     },
-    PruneZombies,
-    RebuildDnsIndices,
     ClassHint {
         mac: MacAddr,
         class: DeviceClass,
@@ -198,19 +196,9 @@ pub enum DeviceUpdate {
         mac: MacAddr,
         iface: String,
     },
-    Reset,
     NeighborBatch {
         entries: Vec<(MacAddr, IpAddr, bool)>,
     },
     TransientHostResolved(Box<TransientHostUpdate>),
-    AddReverseResolver {
-        resolver: Box<DnsReverseResolver>,
-    },
-    RemoveReverseResolver {
-        subnet: IpSubnet,
-    },
-    SetReverseResolvers {
-        resolvers: Vec<DnsReverseResolver>,
-    },
 }
 

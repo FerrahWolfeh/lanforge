@@ -9,7 +9,6 @@ use lanforge_types::network::dns::{
     adblock::RewriteRule,
 };
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
-use lanforge_types::update::DeviceUpdate;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -200,9 +199,7 @@ async fn pipeline_transient_ip_reverse_dns_cached() {
         subnet,
         resolver: resolver_target,
     };
-    let _ = ctx_instance.apply(DeviceUpdate::AddReverseResolver {
-        resolver: Box::new(resolver_rule),
-    });
+    ctx_instance.add_reverse_resolver(resolver_rule);
 
     let dns_ctx = mock_dns_context(ctx_instance, cfg).await;
 

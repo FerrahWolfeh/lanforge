@@ -16,7 +16,7 @@ use lanforge_types::device::{
 };
 use lanforge_types::events::EventVec;
 use lanforge_types::identifiers::{Duid, MacAddr};
-use lanforge_types::network::DnsReverseResolver;
+use lanforge_types::network::{DnsReverseResolver, IpSubnet};
 use lanforge_types::update::{
     CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, LeaseTarget,
 };
@@ -60,7 +60,11 @@ impl State {
             | DeviceUpdate::IgnoredLogDomainsSet { .. }
             | DeviceUpdate::ClassHint { .. } => self.apply_host_meta_update(update, discovery),
 
-            _ => self.apply_system_service_update(update, discovery),
+            DeviceUpdate::HostRemoved { .. }
+            | DeviceUpdate::InterfaceIpsChanged { .. }
+            | DeviceUpdate::TransientHostResolved(_) => {
+                self.apply_system_service_update(update, discovery)
+            }
         }
     }
 
@@ -155,27 +159,15 @@ impl State {
     fn apply_system_service_update(
         &mut self,
         update: DeviceUpdate,
-        discovery: &DiscoveryStore,
+        _discovery: &DiscoveryStore,
     ) -> EventVec {
         match update {
             DeviceUpdate::HostRemoved { mac } => self.handle_host_removed(mac),
             DeviceUpdate::InterfaceIpsChanged { ifindex, state } => {
                 self.handle_interface_ips_changed(ifindex, &state)
             }
-            DeviceUpdate::PruneZombies => self.handle_prune_zombies(discovery),
-            DeviceUpdate::RebuildDnsIndices => self.handle_rebuild_dns_indices(),
-            DeviceUpdate::Reset => self.handle_reset(discovery),
             DeviceUpdate::TransientHostResolved(update) => {
                 self.handle_transient_host_resolved(update.ip, update.hostname, update.origin)
-            }
-            DeviceUpdate::AddReverseResolver { resolver } => {
-                self.handle_add_reverse_resolver(*resolver)
-            }
-            DeviceUpdate::RemoveReverseResolver { subnet } => {
-                self.handle_remove_reverse_resolver(subnet)
-            }
-            DeviceUpdate::SetReverseResolvers { resolvers } => {
-                self.handle_set_reverse_resolvers(resolvers)
             }
             _ => unreachable!(),
         }
@@ -189,7 +181,7 @@ impl State {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct State {
     pub devices: HashMap<MacAddr, Arc<Device>>,
-    pub indices: Indices,
+    pub indices: Arc<Indices>,
     pub interfaces: NetworkState,
 
     #[serde(skip)]
@@ -232,15 +224,16 @@ impl State {
 
     pub fn index_device(&mut self, mac: MacAddr, dev: &Device) {
         if self.indexing_enabled || dev.is_static() {
-            self.indices.index_device(mac, dev);
             let ula_prefix = self.active_ula_prefix();
             let gua_prefix = self.active_gua_prefix();
+            let indices = Arc::make_mut(&mut self.indices);
+            indices.index_device(mac, dev);
 
             for state in &dev.v6 {
                 if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(suf), _) = state {
                     for prefix in [ula_prefix, gua_prefix].into_iter().flatten() {
                         let full_ip = suf.resolve(prefix);
-                        self.indices.ip_index.insert(IpAddr::V6(full_ip), mac);
+                        indices.ip_index.insert(IpAddr::V6(full_ip), mac);
                     }
                 }
             }
@@ -248,15 +241,16 @@ impl State {
     }
 
     pub fn unindex_device(&mut self, dev: &Device) {
-        self.indices.unindex_device(dev);
         let ula_prefix = self.active_ula_prefix();
         let gua_prefix = self.active_gua_prefix();
+        let indices = Arc::make_mut(&mut self.indices);
+        indices.unindex_device(dev);
 
         for state in &dev.v6 {
             if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(suf), _) = state {
                 for prefix in [ula_prefix, gua_prefix].into_iter().flatten() {
                     let full_ip = suf.resolve(prefix);
-                    self.indices.ip_index.remove(&IpAddr::V6(full_ip));
+                    indices.ip_index.remove(&IpAddr::V6(full_ip));
                 }
             }
         }
@@ -459,16 +453,20 @@ impl State {
     }
 
     pub fn rebuild_indices(&mut self) {
-        self.indices.clear();
         let ula_prefix = self.active_ula_prefix();
         let gua_prefix = self.active_gua_prefix();
+        let indexing_enabled = self.indexing_enabled;
+        let indices = Arc::make_mut(&mut self.indices);
+        indices.clear();
         for (mac, dev) in &self.devices {
-            self.indices.index_device(*mac, dev);
-            for state in &dev.v6 {
-                if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(suf), _) = state {
-                    for prefix in [ula_prefix, gua_prefix].into_iter().flatten() {
-                        let full_ip = suf.resolve(prefix);
-                        self.indices.ip_index.insert(IpAddr::V6(full_ip), *mac);
+            if (indexing_enabled || dev.is_static()) && dev.is_worthy() {
+                indices.index_device(*mac, dev);
+                for state in &dev.v6 {
+                    if let IPv6State::Static(Ipv6AddrOrSuffix::Suffix(suf), _) = state {
+                        for prefix in [ula_prefix, gua_prefix].into_iter().flatten() {
+                            let full_ip = suf.resolve(prefix);
+                            indices.ip_index.insert(IpAddr::V6(full_ip), *mac);
+                        }
                     }
                 }
             }
@@ -486,46 +484,43 @@ impl State {
         f: impl FnOnce(&mut Device) -> Option<C>,
         make_event: impl FnOnce(MacAddr, C, Option<String>) -> DeviceEvent,
     ) -> EventVec {
-        let was_in_table = self.devices.contains_key(&mac);
-        let mut dev_arc = self
-            .devices
-            .remove(&mac)
-            .unwrap_or_else(|| Arc::new(Device::new(mac)));
+        let old_arc = self.devices.get(&mac).cloned();
+        let was_in_table = old_arc.is_some();
+        let mut dev = old_arc
+            .as_ref()
+            .map_or_else(|| Device::new(mac), |d| (**d).clone());
 
-        let was_worthy = was_in_table && dev_arc.is_worthy();
-        let was_status = dev_arc.status;
-        let mut events = EventVec::new();
+        let was_worthy = was_in_table && old_arc.as_ref().unwrap().is_worthy();
+        let was_status = dev.status;
 
-        {
-            let dev = Arc::make_mut(&mut dev_arc);
-            self.unindex_device(dev);
+        let change = f(&mut dev);
+        dev.status = dev.evaluate_status(SystemTime::now(), None);
 
-            if let Some(change) = f(dev) {
-                let is_worthy = dev.is_worthy();
-                if is_worthy || was_worthy {
-                    let hostname = Some(dev.hostname.name.clone());
-                    if !was_worthy && is_worthy {
-                        events.push(LanforgeEvent::Device(DeviceEvent::Discovered {
-                            mac,
-                            hostname: hostname.clone(),
-                        }));
-                    }
-                    events.push(LanforgeEvent::Device(make_event(mac, change, hostname)));
-                }
-            }
-
-            dev.status = dev.evaluate_status(SystemTime::now(), None);
-
-            if dev.is_worthy() {
-                self.index_device(mac, dev);
-            }
+        // Fast-path: no event from `f`, and device is completely unmodified
+        if change.is_none() && old_arc.as_deref() == Some(&dev) {
+            return EventVec::new();
         }
 
-        let is_worthy = dev_arc.is_worthy();
+        let is_worthy = dev.is_worthy();
+        let mut events = EventVec::new();
+
+        if let Some(change) = change
+            && (is_worthy || was_worthy)
+        {
+            let hostname = Some(dev.hostname.name.clone());
+            if !was_worthy && is_worthy {
+                events.push(LanforgeEvent::Device(DeviceEvent::Discovered {
+                    mac,
+                    hostname: hostname.clone(),
+                }));
+            }
+            events.push(LanforgeEvent::Device(make_event(mac, change, hostname)));
+        }
+
         if is_worthy {
-            let now_status = dev_arc.status;
+            let now_status = dev.status;
             if was_status != now_status {
-                let hostname = dev_arc.hostname.name.clone();
+                let hostname = dev.hostname.name.clone();
                 events.push(LanforgeEvent::Device(DeviceEvent::NetworkUpdate {
                     mac,
                     change: Box::new(NetworkChange::StatusChanged {
@@ -536,8 +531,27 @@ impl State {
                     hostname: Some(hostname),
                 }));
             }
-            self.devices.insert(mac, dev_arc);
+
+            // Surgical reindexing: only if worthy status changed or addressing/identity changed
+            let should_reindex = old_arc
+                .as_ref()
+                .is_none_or(|old| !was_worthy || needs_reindex(old, &dev));
+
+            if should_reindex {
+                if let Some(old) = &old_arc
+                    && was_worthy
+                {
+                    self.unindex_device(old);
+                }
+                self.index_device(mac, &dev);
+            }
+
+            self.devices.insert(mac, Arc::new(dev));
         } else if was_worthy {
+            if let Some(old) = &old_arc {
+                self.unindex_device(old);
+            }
+            self.devices.remove(&mac);
             events.push(LanforgeEvent::Device(DeviceEvent::Purged { mac }));
         }
 
@@ -589,35 +603,79 @@ impl State {
         }
     }
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub fn find_mac_by_hostname_jit(
-        &mut self,
-        hostname: &str,
-        last_seen_threshold: Option<Duration>,
-    ) -> Option<MacAddr> {
-        let now = SystemTime::now();
-
-        let found_mac = self.devices.iter().find_map(|(mac, dev)| {
-            if let (Some(threshold), Ok(elapsed)) =
-                (last_seen_threshold, now.duration_since(dev.last_seen))
-                && elapsed > threshold
-            {
-                return None;
-            }
-
-            if dev.hostname.name.eq_ignore_ascii_case(hostname)
-                || dev.dns_fallback.eq_ignore_ascii_case(hostname)
-            {
-                Some(*mac)
+    pub fn prune_zombies(&mut self, discovery: &DiscoveryStore) -> EventVec {
+        let max_age = Duration::from_hours(1);
+        let mut removed = Vec::new();
+        self.devices.retain(|mac, dev| {
+            if dev.origin != Origin::System && dev.is_zombie(max_age) {
+                removed.push(*mac);
+                false
             } else {
-                None
+                true
             }
         });
 
-        found_mac.inspect(|&mac| {
-            self.promote_device_to_index(mac);
-        })
+        // Prune discovery caches
+        let cache_max_age = Duration::from_hours(2);
+        discovery.prune_stale(cache_max_age);
+
+        // Prune transient hosts older than 4 hours
+        let now = SystemTime::now();
+        let transient_max_age = Duration::from_hours(4);
+        self.transient_hosts.retain(|_, host| {
+            now.duration_since(host.last_seen)
+                .is_ok_and(|d| d < transient_max_age)
+        });
+
+        if !removed.is_empty() {
+            self.rebuild_indices();
+            return removed
+                .into_iter()
+                .map(|mac| LanforgeEvent::Device(DeviceEvent::Purged { mac }))
+                .collect();
+        }
+        EventVec::new()
     }
+
+    pub fn reset(&mut self, discovery: &DiscoveryStore) {
+        self.devices.clear();
+        self.rebuild_static_registry();
+        Arc::make_mut(&mut self.indices).clear();
+        discovery.clear();
+        self.interfaces.clear();
+        self.transient_hosts.clear();
+        self.reverse_resolvers.clear();
+    }
+
+    pub fn add_reverse_resolver(&mut self, resolver: DnsReverseResolver) {
+        self.reverse_resolvers
+            .retain(|r| r.subnet != resolver.subnet);
+        self.reverse_resolvers.push(resolver);
+    }
+
+    pub fn remove_reverse_resolver(&mut self, subnet: IpSubnet) {
+        self.reverse_resolvers.retain(|r| r.subnet != subnet);
+    }
+
+    pub fn set_reverse_resolvers(&mut self, resolvers: Vec<DnsReverseResolver>) {
+        self.reverse_resolvers = resolvers;
+    }
+}
+
+#[inline]
+fn needs_reindex(old: &Device, new: &Device) -> bool {
+    old.hostname.name != new.hostname.name
+        || old.dns_fallback != new.dns_fallback
+        || old.duid != new.duid
+        || old.v4.ip() != new.v4.ip()
+        || old.seen_v4.len() != new.seen_v4.len()
+        || old.seen_v4.iter().zip(&new.seen_v4).any(|((a, _), (b, _))| a != b)
+        || old.v6.len() != new.v6.len()
+        || old.v6.iter().zip(&new.v6).any(|(a, b)| match (a, b) {
+            (IPv6State::Static(s1, _), IPv6State::Static(s2, _)) => s1 != s2,
+            (IPv6State::Static(..), _) | (_, IPv6State::Static(..)) => true,
+            _ => a.ip() != b.ip(),
+        })
 }
 
 #[derive(Debug, Clone, Default)]

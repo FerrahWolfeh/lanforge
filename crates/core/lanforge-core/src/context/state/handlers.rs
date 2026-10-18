@@ -8,14 +8,14 @@ use crate::bus::{
 };
 use crate::context::state::cache::DiscoveryStore;
 use crate::context::state::{
-    CliHostUpdate, DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State,
+    CliHostUpdate, DeviceClass, InterfaceState, LeaseTarget, State,
 };
 use lanforge_types::device::{
     DeviceStatus, Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification, Origin,
     TransientHost, TransientOrigin, V6ObservationOrigin, classify_ipv6,
 };
 use lanforge_types::identifiers::{Duid, MacAddr};
-use lanforge_types::network::{DnsReverseResolver, IpSubnet, Ipv6AddrOrSuffix};
+use lanforge_types::network::Ipv6AddrOrSuffix;
 
 impl State {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -251,63 +251,8 @@ impl State {
         mac: MacAddr,
         update: CliHostUpdate,
     ) -> EventVec {
-        let events = self.mutate_device_admin(mac, |dev| {
-            #[allow(clippy::useless_let_if_seq)]
-            let mut result = AdminChange::CliHostUpdated;
-
-            if let FieldUpdate::Set(h) = update.hostname {
-                let sanitized = Hostname::sanitize(&h);
-                dev.hostname = Hostname {
-                    name: sanitized.clone(),
-                    origin: HostnameOrigin::Static,
-                };
-                result = AdminChange::HostnameChanged {
-                    hostname: sanitized,
-                };
-            }
-            if let FieldUpdate::Set(d) = update.duid {
-                dev.duid = Some(d);
-            }
-            if let FieldUpdate::Set(v4) = update.v4_static {
-                dev.v4 = IPv4State::Static(v4);
-                result = AdminChange::V4StaticChanged { ip: Some(v4) };
-            } else if update.v4_static == FieldUpdate::Clear {
-                dev.v4 = IPv4State::None;
-                result = AdminChange::V4StaticChanged { ip: None };
-            }
-            if let FieldUpdate::Set(v6) = update.v6_suffix {
-                dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
-                dev.v6.push(IPv6State::Static(v6, SystemTime::now()));
-                result = AdminChange::V6SuffixChanged { suffix: Some(v6) };
-            } else if update.v6_suffix == FieldUpdate::Clear {
-                dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
-                result = AdminChange::V6SuffixChanged { suffix: None };
-            }
-            if let FieldUpdate::Set(bf) = update.boot_file {
-                let sanitized = bf.replace('\0', "").trim().to_string();
-                dev.boot_file = if sanitized.is_empty() {
-                    None
-                } else {
-                    Some(sanitized)
-                };
-            } else if update.boot_file == FieldUpdate::Clear {
-                dev.boot_file = None;
-            }
-            if let FieldUpdate::Set(df) = update.dns_fallback {
-                dev.dns_fallback = df;
-            }
-            if let FieldUpdate::Set(c) = update.class {
-                dev.class = c;
-                result = AdminChange::Classified { class: c };
-            }
-            dev.origin = update.origin;
-            dev.managed_at = Some(SystemTime::now());
-            Some(result)
-        });
-
-        // Rebuild static registry if needed
+        let events = self.mutate_device_admin(mac, |dev| Some(dev.apply_cli_update(update)));
         self.rebuild_static_registry();
-
         events
     }
 
@@ -333,10 +278,7 @@ impl State {
 
     pub(crate) fn handle_host_removed(&mut self, mac: MacAddr) -> EventVec {
         if let Some(dev) = self.devices.remove(&mac) {
-            self.indices.unindex_device(&dev);
-            if let Some(duid) = &dev.duid {
-                self.indices.duid_index.remove(duid);
-            }
+            self.unindex_device(&dev);
             self.rebuild_static_registry();
             return vec![LanforgeEvent::Device(DeviceEvent::Purged { mac })].into();
         }
@@ -344,35 +286,7 @@ impl State {
     }
 
     pub(crate) fn handle_lease_released(&mut self, mac: MacAddr, target: LeaseTarget) -> EventVec {
-        self.mutate_device(mac, |dev| {
-            let changed = match target {
-                LeaseTarget::V4 => {
-                    if matches!(dev.v4, IPv4State::None) {
-                        false
-                    } else {
-                        dev.v4 = IPv4State::None;
-                        true
-                    }
-                }
-                LeaseTarget::V6 { iaid } => {
-                    let initial_len = dev.v6.len();
-                    dev.v6
-                        .retain(|s| !matches!(s, IPv6State::Dynamic(l) if l.iaid == iaid));
-                    dev.v6.len() != initial_len
-                }
-                LeaseTarget::V6Prefix { iaid } => {
-                    let initial_len = dev.v6_prefixes.len();
-                    dev.v6_prefixes.retain(|p| p.iaid != iaid);
-                    dev.v6_prefixes.len() != initial_len
-                }
-            };
-
-            if changed {
-                Some(NetworkChange::LeaseExpired { target })
-            } else {
-                None
-            }
-        })
+        self.mutate_device(mac, |dev| dev.release_lease(target))
     }
 
     pub(crate) fn handle_ip_deleted(&mut self, ip: IpAddr, discovery: &DiscoveryStore) -> EventVec {
@@ -518,48 +432,6 @@ impl State {
         events
     }
 
-    pub(crate) fn handle_prune_zombies(&mut self, discovery: &DiscoveryStore) -> EventVec {
-        let max_age = Duration::from_hours(1);
-        let mut removed = Vec::new();
-        self.devices.retain(|mac, dev| {
-            if dev.origin != Origin::System && dev.is_zombie(max_age) {
-                removed.push(*mac);
-                false
-            } else {
-                true
-            }
-        });
-
-        // Prune discovery caches
-        let cache_max_age = Duration::from_hours(2);
-        discovery.prune_stale(cache_max_age);
-
-        // Prune transient hosts older than 4 hours
-        let now = SystemTime::now();
-        let transient_max_age = Duration::from_hours(4);
-        self.transient_hosts.retain(|_, host| {
-            now.duration_since(host.last_seen)
-                .is_ok_and(|d| d < transient_max_age)
-        });
-
-        if !removed.is_empty() {
-            self.rebuild_indices();
-            return removed
-                .into_iter()
-                .map(|mac| LanforgeEvent::Device(DeviceEvent::Purged { mac }))
-                .collect();
-        }
-        EventVec::new()
-    }
-
-    pub(crate) fn handle_rebuild_dns_indices(&mut self) -> EventVec {
-        self.indices.clear();
-        for (mac, dev) in &self.devices {
-            self.indices.index_device(*mac, dev);
-        }
-        EventVec::new()
-    }
-
     pub(crate) fn handle_class_hint(&mut self, mac: MacAddr, class: DeviceClass) -> EventVec {
         self.mutate_device_admin(mac, |dev| {
             if dev.class == class {
@@ -569,17 +441,6 @@ impl State {
                 Some(AdminChange::Classified { class })
             }
         })
-    }
-
-    pub(crate) fn handle_reset(&mut self, discovery: &DiscoveryStore) -> EventVec {
-        self.devices.clear();
-        self.rebuild_static_registry();
-        self.indices.clear();
-        discovery.clear();
-        self.interfaces.clear();
-        self.transient_hosts.clear();
-        self.reverse_resolvers.clear();
-        EventVec::new()
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -733,26 +594,6 @@ impl State {
         self.transient_hosts.insert(ip, host);
 
         events
-    }
-
-    pub(crate) fn handle_add_reverse_resolver(&mut self, resolver: DnsReverseResolver) -> EventVec {
-        self.reverse_resolvers
-            .retain(|r| r.subnet != resolver.subnet);
-        self.reverse_resolvers.push(resolver);
-        EventVec::new()
-    }
-
-    pub(crate) fn handle_remove_reverse_resolver(&mut self, subnet: IpSubnet) -> EventVec {
-        self.reverse_resolvers.retain(|r| r.subnet != subnet);
-        EventVec::new()
-    }
-
-    pub(crate) fn handle_set_reverse_resolvers(
-        &mut self,
-        resolvers: Vec<DnsReverseResolver>,
-    ) -> EventVec {
-        self.reverse_resolvers = resolvers;
-        EventVec::new()
     }
 
     pub(crate) fn handle_device_interface_seen(

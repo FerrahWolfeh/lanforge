@@ -289,9 +289,7 @@ async fn dns_simulation_transient_ip_reverse_dns() {
         subnet,
         resolver: resolver_target,
     };
-    let _ = ctx.apply(DeviceUpdate::AddReverseResolver {
-        resolver: Box::new(resolver_rule),
-    });
+    ctx.add_reverse_resolver(resolver_rule);
 
     // 3. Start DNS Service in inert mode
     let (handle, mut service) = DnsService::inert(cfg, ctx.clone());

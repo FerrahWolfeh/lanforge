@@ -1424,7 +1424,7 @@ fn test_prune_zombies_and_caches() {
     ctx.insert_device(sys_mac, sys_dev);
 
     let mut dev_rx = ctx.bus().subscribe_device();
-    let _ = ctx.apply(DeviceUpdate::PruneZombies);
+    let _ = ctx.prune_zombies();
 
     // Zombie must be pruned; active and system must remain
     assert!(ctx.get_device(&zombie_mac).is_none());
@@ -1458,9 +1458,7 @@ fn test_reverse_resolvers_management() {
     };
 
     // Add resolver 1
-    let _ = ctx.apply(DeviceUpdate::AddReverseResolver {
-        resolver: Box::new(res1.clone()),
-    });
+    ctx.add_reverse_resolver(res1.clone());
     assert_eq!(ctx.read().reverse_resolvers.len(), 1);
 
     // Add replacement resolver for same subnet
@@ -1468,20 +1466,16 @@ fn test_reverse_resolvers_management() {
         subnet: subnet1,
         resolver: "192.168.1.254:53".parse().unwrap(),
     };
-    let _ = ctx.apply(DeviceUpdate::AddReverseResolver {
-        resolver: Box::new(res1_replacement.clone()),
-    });
+    ctx.add_reverse_resolver(res1_replacement.clone());
     assert_eq!(ctx.read().reverse_resolvers.len(), 1);
     assert_eq!(ctx.read().reverse_resolvers[0].resolver, res1_replacement.resolver);
 
     // Set list
-    let _ = ctx.apply(DeviceUpdate::SetReverseResolvers {
-        resolvers: vec![res1, res2],
-    });
+    ctx.set_reverse_resolvers(vec![res1, res2]);
     assert_eq!(ctx.read().reverse_resolvers.len(), 2);
 
     // Remove resolver
-    let _ = ctx.apply(DeviceUpdate::RemoveReverseResolver { subnet: subnet1 });
+    ctx.remove_reverse_resolver(subnet1);
     assert_eq!(ctx.read().reverse_resolvers.len(), 1);
     assert_eq!(ctx.read().reverse_resolvers[0].subnet, subnet2);
 }
