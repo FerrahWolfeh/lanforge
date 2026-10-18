@@ -357,6 +357,7 @@ impl PppoeService {
         Ok(())
     }
 
+    #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
     fn find_interface_details(iface_name: &str) -> Option<(u32, MacAddr)> {
         let mut ifname_buf = [0u8; libc::IF_NAMESIZE];
         let if_bytes = iface_name.as_bytes();
@@ -364,7 +365,7 @@ impl PppoeService {
             return None;
         }
         ifname_buf[..if_bytes.len()].copy_from_slice(if_bytes);
-        let ifindex = unsafe { libc::if_nametoindex(ifname_buf.as_ptr().cast()) };
+        let ifindex = unsafe { libc::if_nametoindex(ifname_buf.as_ptr().cast::<libc::c_char>()) };
         if ifindex == 0 {
             return None;
         }
@@ -376,7 +377,7 @@ impl PppoeService {
 
         let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
         for (i, &b) in if_bytes.iter().enumerate() {
-            ifr.ifr_name[i] = b.cast_signed();
+            ifr.ifr_name[i] = b as libc::c_char;
         }
 
         let res = unsafe { libc::ioctl(sock, libc::SIOCGIFHWADDR, &mut ifr) };
@@ -388,12 +389,12 @@ impl PppoeService {
 
         let hw = unsafe { ifr.ifr_ifru.ifru_hwaddr.sa_data };
         let mac = [
-            hw[0].cast_unsigned(),
-            hw[1].cast_unsigned(),
-            hw[2].cast_unsigned(),
-            hw[3].cast_unsigned(),
-            hw[4].cast_unsigned(),
-            hw[5].cast_unsigned(),
+            hw[0] as u8,
+            hw[1] as u8,
+            hw[2] as u8,
+            hw[3] as u8,
+            hw[4] as u8,
+            hw[5] as u8,
         ];
         Some((ifindex, MacAddr(mac)))
     }
