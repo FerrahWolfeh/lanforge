@@ -105,22 +105,20 @@ impl AsyncService for Dhcpv4Service {
     }
 
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let (active_leases, pool_total, pool_available) = ctx.with_state(|state| {
-            let leases = u32::try_from(
+        let active_leases = ctx.with_state(|state| {
+            u32::try_from(
                 state
                     .devices
                     .values()
                     .filter(|dev| matches!(dev.v4, IPv4State::Dynamic(_)))
                     .count(),
             )
-            .unwrap_or(0);
-            let (total, avail) = state
-                .interfaces
-                .v4_pool
-                .as_ref()
-                .map_or((0, 0), |p| (p.total, p.available));
-            (leases, total, avail)
+            .unwrap_or(0)
         });
+        let (pool_total, pool_available) = ctx
+            .dhcp_v4_pool_stats()
+            .as_ref()
+            .map_or((0, 0), |p| (p.total, p.available));
         let v4_stats = ctx.dhcpv4_stats().snapshot();
         vec![
             (std::borrow::Cow::Borrowed("iface"), self.cfg.iface.clone()),
@@ -283,17 +281,15 @@ impl Dhcpv4Service {
             .range_end
             .or_else(|| current_cfg.pools.first().map(|p| p.range_end))
             .unwrap_or(Ipv4Addr::UNSPECIFIED);
-        let _ = self.ctx.apply(DeviceUpdate::DhcpV4PoolUpdated(Box::new(
-            DhcpV4PoolUpdate {
-                range_start,
-                range_end,
-                subnet_mask: current_cfg.subnet_mask,
-                total,
-                used,
-                available,
-                utilization_percent: util_pct,
-            },
-        )));
+        self.ctx.set_dhcp_v4_pool_update(&DhcpV4PoolUpdate {
+            range_start,
+            range_end,
+            subnet_mask: current_cfg.subnet_mask,
+            total,
+            used,
+            available,
+            utilization_percent: util_pct,
+        });
     }
 
     fn reconcile_and_report(

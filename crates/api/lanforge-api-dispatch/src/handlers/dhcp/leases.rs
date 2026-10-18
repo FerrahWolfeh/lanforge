@@ -41,39 +41,36 @@ impl ClientContext {
     }
 
     pub async fn handle_dhcp_pools(&self) -> Response {
-        let (v4_pools, v6_pools) = self.ctx.with_state(|state| {
-            let mut v4_pools = Vec::new();
-            let mut v6_pools = Vec::with_capacity(state.interfaces.v6_pools.len());
+        let mut v4_pools = Vec::new();
+        if let Some(pool) = self.ctx.dhcp_v4_pool_stats() {
+            v4_pools.push(DhcpPoolEntry {
+                pool_type: DhcpPoolType::V4,
+                range_start: pool.range_start,
+                range_end: pool.range_end,
+                prefix: pool.prefix,
+                prefix_len: pool.prefix_len,
+                total: pool.total,
+                used: pool.used,
+                available: pool.available,
+                utilization_percent: pool.utilization_percent,
+            });
+        }
 
-            if let Some(pool) = &state.interfaces.v4_pool {
-                v4_pools.push(DhcpPoolEntry {
-                    pool_type: DhcpPoolType::V4,
-                    range_start: pool.range_start,
-                    range_end: pool.range_end,
-                    prefix: pool.prefix,
-                    prefix_len: pool.prefix_len,
-                    total: pool.total,
-                    used: pool.used,
-                    available: pool.available,
-                    utilization_percent: pool.utilization_percent,
-                });
-            }
-
-            for pool in state.interfaces.v6_pools.values() {
-                v6_pools.push(DhcpPoolEntry {
-                    pool_type: DhcpPoolType::V6,
-                    range_start: pool.range_start,
-                    range_end: pool.range_end,
-                    prefix: pool.prefix,
-                    prefix_len: pool.prefix_len,
-                    total: pool.total,
-                    used: pool.used,
-                    available: pool.available,
-                    utilization_percent: pool.utilization_percent,
-                });
-            }
-            (v4_pools, v6_pools)
-        });
+        let v6_stats = self.ctx.dhcp_v6_pool_stats();
+        let mut v6_pools = Vec::with_capacity(v6_stats.len());
+        for pool in v6_stats.values() {
+            v6_pools.push(DhcpPoolEntry {
+                pool_type: DhcpPoolType::V6,
+                range_start: pool.range_start,
+                range_end: pool.range_end,
+                prefix: pool.prefix,
+                prefix_len: pool.prefix_len,
+                total: pool.total,
+                used: pool.used,
+                available: pool.available,
+                utilization_percent: pool.utilization_percent,
+            });
+        }
 
         Response::DhcpPools(DhcpPoolsResponse { v4_pools, v6_pools })
     }

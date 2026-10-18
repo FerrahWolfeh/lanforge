@@ -50,7 +50,7 @@ pub async fn handle_dns_query(
 
     let Some(dns_ctx) = state
         .ctx
-        .get_service_state_ref::<DnsContext>("dns::context")
+        .get_shared::<DnsContext>()
     else {
         return (StatusCode::SERVICE_UNAVAILABLE, "DNS engine not ready").into_response();
     };

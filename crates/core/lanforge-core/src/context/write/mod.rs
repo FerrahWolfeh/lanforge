@@ -60,30 +60,35 @@ impl LanforgeContext {
         match update {
             DeviceUpdate::ArpSeen { .. } => {
                 self.inner
+                    .runtime
                     .event_counters
                     .arp_seen
                     .fetch_add(1, Ordering::Relaxed);
             }
             DeviceUpdate::NdpSeen { .. } => {
                 self.inner
+                    .runtime
                     .event_counters
                     .ndp_seen
                     .fetch_add(1, Ordering::Relaxed);
             }
             DeviceUpdate::SlaacObserved { .. } => {
                 self.inner
+                    .runtime
                     .event_counters
                     .slaac_observed
                     .fetch_add(1, Ordering::Relaxed);
             }
             DeviceUpdate::V4LeaseGranted { .. } => {
                 self.inner
+                    .runtime
                     .event_counters
                     .dhcp_v4_leases
                     .fetch_add(1, Ordering::Relaxed);
             }
             DeviceUpdate::V6LeaseGranted(_) => {
                 self.inner
+                    .runtime
                     .event_counters
                     .dhcp_v6_leases
                     .fetch_add(1, Ordering::Relaxed);
@@ -93,12 +98,14 @@ impl LanforgeContext {
                     match ip {
                         IpAddr::V4(_) => {
                             self.inner
+                                .runtime
                                 .event_counters
                                 .arp_seen
                                 .fetch_add(1, Ordering::Relaxed);
                         }
                         IpAddr::V6(_) => {
                             self.inner
+                                .runtime
                                 .event_counters
                                 .ndp_seen
                                 .fetch_add(1, Ordering::Relaxed);

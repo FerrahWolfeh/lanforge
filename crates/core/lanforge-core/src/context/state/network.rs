@@ -49,30 +49,17 @@ pub struct NetworkState {
         deserialize_with = "deserialize_int_map"
     )]
     pub interface_ips: HashMap<u32, InterfaceState>,
-    /// Active `DHCPv4` pool metrics.
-    pub v4_pool: Option<DhcpPoolStats>,
-    /// Active `DHCPv6` pool metrics indexed by IAID.
-    #[serde(
-        serialize_with = "serialize_int_map",
-        deserialize_with = "deserialize_int_map"
-    )]
-    pub v6_pools: HashMap<u32, DhcpPoolStats>,
-    /// Active `PPPoE` WAN state.
-    pub pppoe_status: Option<Box<lanforge_types::system::PppoeStatusResponse>>,
-    /// Active `RA` (Router Advertisement) state.
-    pub ra_status: Option<Box<lanforge_types::system::RaStatusResponse>>,
-    /// Active Traffic & SQM state.
-    pub traffic_status: Option<Box<lanforge_types::system::TrafficStatusResponse>>,
+    /// Fallback ULA prefix from Router Advertisement.
+    pub ra_ula_fallback: Option<std::net::Ipv6Addr>,
+    /// Fallback GUA prefix from Router Advertisement.
+    pub ra_gua_fallback: Option<std::net::Ipv6Addr>,
 }
 
 impl NetworkState {
     pub fn clear(&mut self) {
         self.interface_ips.clear();
-        self.v4_pool = None;
-        self.v6_pools.clear();
-        self.pppoe_status = None;
-        self.ra_status = None;
-        self.traffic_status = None;
+        self.ra_ula_fallback = None;
+        self.ra_gua_fallback = None;
     }
 }
 

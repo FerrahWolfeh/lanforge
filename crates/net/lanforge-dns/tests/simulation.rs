@@ -187,7 +187,7 @@ async fn dns_simulation_cache_case_insensitive() {
     assert_eq!(extract_a(&resp1), vec![Ipv4Addr::new(142, 250, 190, 46)]);
 
     let hits_before = ctx
-        .get_service_state_ref::<DnsStats>("dns::stats")
+        .get_shared::<DnsStats>()
         .map(|s| s.cache_hits.load(Ordering::Relaxed))
         .unwrap_or(0);
 
@@ -204,7 +204,7 @@ async fn dns_simulation_cache_case_insensitive() {
     assert_eq!(extract_a(&resp2), vec![Ipv4Addr::new(142, 250, 190, 46)]);
 
     let hits_after = ctx
-        .get_service_state_ref::<DnsStats>("dns::stats")
+        .get_shared::<DnsStats>()
         .map(|s| s.cache_hits.load(Ordering::Relaxed))
         .unwrap_or(0);
 

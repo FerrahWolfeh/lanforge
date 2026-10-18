@@ -19,7 +19,6 @@ use lanforge_types::network::pppoe::PppoeDataplane;
 use lanforge_types::system::{
     PppoeSessionState, PppoeStatusResponse, ServiceAction, ServiceState,
 };
-use lanforge_types::update::DeviceUpdate;
 use pnet::datalink::interfaces;
 use std::borrow::Cow;
 use std::io::Read;
@@ -161,9 +160,7 @@ impl PppoeService {
         }
 
         self.ctx.set_pppoe_ready(false);
-        let _ = self
-            .ctx
-            .apply(DeviceUpdate::PppoeStatusUpdated { status: None });
+        self.ctx.set_pppoe_status(None);
 
         if had_session {
             warn!(
@@ -505,9 +502,7 @@ impl PppoeService {
             terminal_rtt_us,
         };
 
-        let _ = self.ctx.apply(DeviceUpdate::PppoeStatusUpdated {
-            status: Some(Box::new(pppoe_status)),
-        });
+        self.ctx.set_pppoe_status(Some(pppoe_status));
 
         let _ = self
             .ctx
@@ -560,9 +555,7 @@ impl PppoeService {
             terminal_rtt_us,
         };
 
-        let _ = self.ctx.apply(DeviceUpdate::PppoeStatusUpdated {
-            status: Some(Box::new(pppoe_status)),
-        });
+        self.ctx.set_pppoe_status(Some(pppoe_status));
     }
 
     async fn wait_for_carrier(&mut self) -> Result<(), PppoeError> {
@@ -914,30 +907,28 @@ impl AsyncService for PppoeService {
     }
 
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
-        let (state_str, local_ip, ppp_iface, term_str) = ctx.with_state(|state| {
-            state.interfaces.pppoe_status.as_ref().map_or_else(
-                || {
-                    (
-                        "disconnected".to_string(),
-                        "none".to_string(),
-                        "none".to_string(),
-                        "none".to_string(),
-                    )
-                },
-                |p| {
-                    (
-                        format!("{:?}", p.state),
-                        p.local_ip
-                            .map_or_else(|| "none".to_string(), |ip| ip.to_string()),
-                        p.interface.clone().unwrap_or_else(|| "none".to_string()),
-                        p.terminal_reachable.map_or_else(
-                            || "unprobed".to_string(),
-                            |r| if r { "reachable".to_string() } else { "unreachable".to_string() },
-                        ),
-                    )
-                },
-            )
-        });
+        let (state_str, local_ip, ppp_iface, term_str) = ctx.pppoe_status().map_or_else(
+            || {
+                (
+                    "disconnected".to_string(),
+                    "none".to_string(),
+                    "none".to_string(),
+                    "none".to_string(),
+                )
+            },
+            |p| {
+                (
+                    format!("{:?}", p.state),
+                    p.local_ip
+                        .map_or_else(|| "none".to_string(), |ip| ip.to_string()),
+                    p.interface.clone().unwrap_or_else(|| "none".to_string()),
+                    p.terminal_reachable.map_or_else(
+                        || "unprobed".to_string(),
+                        |r| if r { "reachable".to_string() } else { "unreachable".to_string() },
+                    ),
+                )
+            },
+        );
         vec![
             (Cow::Borrowed("wan_iface"), self.cfg.wan_iface.clone()),
             (Cow::Borrowed("username"), self.cfg.username.clone()),

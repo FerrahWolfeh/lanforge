@@ -83,7 +83,7 @@ async fn test_ra_inert_full_lifecycle() {
     assert_eq!(ctx.get_service_state("ra"), ServiceState::Online);
 
     // Verify status was updated in context
-    let initial_status = ctx.with_state(|state| state.interfaces.ra_status.clone());
+    let initial_status = ctx.ra_status();
     assert!(initial_status.is_some());
     let st = initial_status.unwrap();
     assert_eq!(st.sent_multicast_ras, 1);
@@ -130,7 +130,7 @@ async fn test_ra_inert_full_lifecycle() {
     assert_eq!(rs_evt, client_mac);
 
     // 9. Verify live status reflects the solicitation and response
-    let updated_status = ctx.with_state(|state| state.interfaces.ra_status.clone()).unwrap();
+    let updated_status = ctx.ra_status().unwrap();
     assert_eq!(updated_status.sent_multicast_ras, 1);
     assert_eq!(updated_status.sent_unicast_ras, 1);
     assert_eq!(updated_status.received_solicitations, 1);

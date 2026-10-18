@@ -60,7 +60,6 @@ use lanforge_types::network::ra::{
     MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS,
 };
 use lanforge_types::system::{RaStatusResponse, RunResult, ServiceState};
-use lanforge_types::update::DeviceUpdate;
 
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
@@ -448,9 +447,7 @@ impl RaService {
 
         // Update live status in context
         let initial_status = state.build_status(&current_cfg, &self.ctx, Some(next_ra_at));
-        let _ = self.ctx.apply(DeviceUpdate::RaStatusUpdated {
-            status: Some(Box::new(initial_status)),
-        });
+        self.ctx.set_ra_status(Some(initial_status));
 
         let mut buf = [0u8; 1500];
         let mut handle = self.ctx.service_handle_network();
@@ -527,7 +524,7 @@ impl AsyncService for RaService {
     }
 
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let ra_status = ctx.with_state(|state| state.interfaces.ra_status.clone());
+        let ra_status = ctx.ra_status();
         let if_state = ctx.get_interface_state(ctx.target_ifindex().unwrap_or(0));
         let prefixes = ctx.get_ra_prefixes();
         let mut list = vec![
@@ -587,7 +584,7 @@ impl AsyncService for RaService {
             if !ra_server_cfg.enabled {
                 info!("RA: Service disabled via runtime config — server idle");
                 ctx.set_service_state("ra", ServiceState::Inactive);
-                let _ = ctx.apply(DeviceUpdate::RaStatusUpdated { status: None });
+                ctx.set_ra_status(None);
                 match self.wait_for_config_change_or_shutdown().await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,
@@ -599,7 +596,7 @@ impl AsyncService for RaService {
 
             if current_cfg.prefixes.is_empty() {
                 warn!("RA: Service enabled but no prefixes configured — server idle");
-                let _ = ctx.apply(DeviceUpdate::RaStatusUpdated { status: None });
+                ctx.set_ra_status(None);
                 match self.wait_for_config_change_or_shutdown().await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,
@@ -613,7 +610,7 @@ impl AsyncService for RaService {
             }
         }
 
-        let _ = ctx.apply(DeviceUpdate::RaStatusUpdated { status: None });
+        ctx.set_ra_status(None);
         Ok(())
     }
 }
@@ -652,9 +649,7 @@ impl RaService {
             *next_ra_at = Instant::now() + interval;
             debug!("Next periodic RA in {:.1}s", interval.as_secs_f64());
             let status = state.build_status(cfg, ctx.lctx, Some(*next_ra_at));
-            let _ = ctx.lctx.apply(DeviceUpdate::RaStatusUpdated {
-                status: Some(Box::new(status)),
-            });
+            ctx.lctx.set_ra_status(Some(status));
         }
     }
 
@@ -733,9 +728,7 @@ impl RaService {
             }
 
             let status = state.build_status(cfg, ctx.lctx, Some(next_ra_at));
-            let _ = ctx.lctx.apply(DeviceUpdate::RaStatusUpdated {
-                status: Some(Box::new(status)),
-            });
+            ctx.lctx.set_ra_status(Some(status));
         }
     }
 }

@@ -79,16 +79,21 @@ impl ClientContext {
     }
 
     pub async fn handle_pppoe_status(&self) -> Response {
-        let pppoe_status = self.ctx.with_state(|s| s.interfaces.pppoe_status.clone());
-        let mut status = pppoe_status.unwrap_or_else(|| Box::new(lanforge_types::system::PppoeStatusResponse {
-            enabled: self
-                .ctx
-                .get_status()
-                .map(|s| s.pppoe_enabled)
-                .unwrap_or(false),
-            state: lanforge_types::system::PppoeSessionState::Disconnected,
-            ..Default::default()
-        }));
+        let pppoe_status = self.ctx.pppoe_status();
+        let mut status = pppoe_status.map_or_else(
+            || {
+                Box::new(lanforge_types::system::PppoeStatusResponse {
+                    enabled: self
+                        .ctx
+                        .get_status()
+                        .map(|s| s.pppoe_enabled)
+                        .unwrap_or(false),
+                    state: lanforge_types::system::PppoeSessionState::Disconnected,
+                    ..Default::default()
+                })
+            },
+            |p| Box::new((*p).clone()),
+        );
         if status.auth.is_none() {
             status.auth = self
                 .ctx
@@ -101,82 +106,79 @@ impl ClientContext {
 
 
     pub async fn handle_ra_status(&self) -> Response {
-        let ra_status = self.ctx.with_state(|s| s.interfaces.ra_status.clone());
-        let status = ra_status.unwrap_or_else(|| {
-            let target_ifindex = self.ctx.target_ifindex().unwrap_or(0);
-            let if_ips = self.ctx.get_interface_state(target_ifindex);
-            let cfg = self.ctx.get_ra_server_config();
-            Box::new(lanforge_types::system::RaStatusResponse {
-                enabled: self
-                    .ctx
-                    .get_status()
-                    .map(|s| s.ra_enabled)
-                    .unwrap_or(false),
-                interface: cfg.iface.clone(),
-                link_local: if_ips.link_local,
-                active_gua_prefix: if_ips.gua,
-                active_ula_prefix: if_ips.ula,
-                prefixes: cfg.prefixes.clone(),
-                rdnss: cfg.rdnss.clone(),
-                dnssl: cfg.dnssl.clone(),
-                managed: cfg.managed,
-                other_config: cfg.other_config,
-                hop_limit: cfg.hop_limit,
-                priority: cfg.priority,
-                max_interval_secs: cfg.max_interval_secs,
-                min_interval_secs: cfg.min_interval_secs.unwrap_or_else(|| (cfg.max_interval_secs / 3).max(3)),
-                router_lifetime_secs: cfg.lifetime_secs.unwrap_or(cfg.max_interval_secs * 3),
-                mtu: cfg.mtu,
-                uptime_secs: Some(self.uptime_secs),
-                ..Default::default()
-            })
-        });
+        let ra_status = self.ctx.ra_status();
+        let status = ra_status.map_or_else(
+            || {
+                let target_ifindex = self.ctx.target_ifindex().unwrap_or(0);
+                let if_ips = self.ctx.get_interface_state(target_ifindex);
+                let cfg = self.ctx.get_ra_server_config();
+                Box::new(lanforge_types::system::RaStatusResponse {
+                    enabled: self
+                        .ctx
+                        .get_status()
+                        .map(|s| s.ra_enabled)
+                        .unwrap_or(false),
+                    interface: cfg.iface.clone(),
+                    link_local: if_ips.link_local,
+                    active_gua_prefix: if_ips.gua,
+                    active_ula_prefix: if_ips.ula,
+                    prefixes: cfg.prefixes.clone(),
+                    rdnss: cfg.rdnss.clone(),
+                    dnssl: cfg.dnssl.clone(),
+                    managed: cfg.managed,
+                    other_config: cfg.other_config,
+                    hop_limit: cfg.hop_limit,
+                    priority: cfg.priority,
+                    max_interval_secs: cfg.max_interval_secs,
+                    min_interval_secs: cfg.min_interval_secs.unwrap_or_else(|| (cfg.max_interval_secs / 3).max(3)),
+                    router_lifetime_secs: cfg.lifetime_secs.unwrap_or(cfg.max_interval_secs * 3),
+                    mtu: cfg.mtu,
+                    uptime_secs: Some(self.uptime_secs),
+                    ..Default::default()
+                })
+            },
+            |r| Box::new((*r).clone()),
+        );
         Response::RaStatus(status)
     }
 
     pub async fn handle_traffic_status(&self) -> Response {
-        let traffic_status = self.ctx.with_state(|s| s.interfaces.traffic_status.clone());
-        let status = traffic_status.unwrap_or_else(|| {
-            let cfg = self.ctx.get_traffic_config().unwrap_or_default();
-            let service_state = self.ctx.get_service_state("traffic");
-            Box::new(lanforge_types::system::TrafficStatusResponse {
-                service_state,
-                tuning_applied: false,
-                tuned_interfaces: cfg.tuning.interfaces.clone(),
-                effective_cpu_mask: cfg.tuning.cpu_mask.clone(),
-                sqm_active: false,
-                wan_interface: None,
-                ingress_device: None,
-                download_mbps: cfg.sqm.download_mbps,
-                upload_mbps: cfg.sqm.upload_mbps,
-                overhead: cfg.sqm.overhead,
-                diffserv: cfg.sqm.diffserv,
-                flow_offload_suppressed: cfg.sqm.enabled,
-            })
-        });
+        let traffic_status = self.ctx.traffic_status();
+        let status = traffic_status.map_or_else(
+            || {
+                let cfg = self.ctx.get_traffic_config().unwrap_or_default();
+                let service_state = self.ctx.get_service_state("traffic");
+                Box::new(lanforge_types::system::TrafficStatusResponse {
+                    service_state,
+                    tuning_applied: false,
+                    tuned_interfaces: cfg.tuning.interfaces.clone(),
+                    effective_cpu_mask: cfg.tuning.cpu_mask.clone(),
+                    sqm_active: false,
+                    wan_interface: None,
+                    ingress_device: None,
+                    download_mbps: cfg.sqm.download_mbps,
+                    upload_mbps: cfg.sqm.upload_mbps,
+                    overhead: cfg.sqm.overhead,
+                    diffserv: cfg.sqm.diffserv,
+                    flow_offload_suppressed: cfg.sqm.enabled,
+                })
+            },
+            |t| Box::new((*t).clone()),
+        );
         Response::TrafficStatus(status)
     }
 
     pub async fn handle_traffic_telemetry(&self) -> Response {
         let telemetry = self.ctx.traffic_telemetry().map_or_else(
             || {
-                let (wan_iface, ingress_device) = self.ctx.with_state(|s| {
-                    let (w, i) = s
-                        .interfaces
-                        .traffic_status
-                        .as_ref()
-                        .map_or((None, None), |status| {
-                            (status.wan_interface.clone(), status.ingress_device.clone())
-                        });
-                    let fallback_wan = w.or_else(|| {
-                        s.interfaces
-                            .pppoe_status
-                            .as_ref()
-                            .and_then(|p| p.interface.clone())
-                    });
-                    (fallback_wan, i)
+                let traffic_st = self.ctx.traffic_status();
+                let (w, ingress_device) = traffic_st.as_ref().map_or((None, None), |status| {
+                    (status.wan_interface.clone(), status.ingress_device.clone())
                 });
-                let wan_iface = wan_iface.or_else(|| self.ctx.get_pppoe_config().map(|p| p.wan_iface));
+                let fallback_wan = w.or_else(|| {
+                    self.ctx.pppoe_status().as_ref().and_then(|p| p.interface.clone())
+                });
+                let wan_iface = fallback_wan.or_else(|| self.ctx.get_pppoe_config().map(|p| p.wan_iface));
 
                 lanforge_types::network::traffic::TrafficTelemetryResponse {
                     timestamp: std::time::SystemTime::now()
@@ -203,11 +205,8 @@ impl ClientContext {
         let internal_zone = cfg.zones.iter().find(|z| z.name == "internal");
         let lan_ifaces = internal_zone.map_or_else(Vec::new, |z| z.interfaces.clone());
         let external_zone = cfg.zones.iter().find(|z| z.name == "external" || z.name == "wan");
-        let pppoe_wan = self.ctx.with_state(|s| {
-            s.interfaces
-                .pppoe_status
-                .as_ref()
-                .and_then(|p| p.interface.clone().or_else(|| p.wan_iface.clone()))
+        let pppoe_wan = self.ctx.pppoe_status().as_ref().and_then(|p| {
+            p.interface.clone().or_else(|| p.wan_iface.clone())
         });
         let active_wan = external_zone
             .and_then(|z| z.interfaces.first().cloned())

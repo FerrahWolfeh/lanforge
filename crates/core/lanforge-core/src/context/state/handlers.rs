@@ -7,7 +7,6 @@ use crate::bus::{
     PrefixChangeDetails,
 };
 use crate::context::state::cache::DiscoveryStore;
-use crate::context::state::network::DhcpPoolStats;
 use crate::context::state::{
     CliHostUpdate, DeviceClass, FieldUpdate, InterfaceState, LeaseTarget, State,
 };
@@ -17,7 +16,6 @@ use lanforge_types::device::{
 };
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet, Ipv6AddrOrSuffix};
-use lanforge_types::update::{DhcpV4PoolUpdate, DhcpV6PoolUpdate};
 
 impl State {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -756,67 +754,6 @@ impl State {
         self.reverse_resolvers = resolvers;
         EventVec::new()
     }
-
-    pub(crate) fn handle_dhcp_v4_pool_updated(&mut self, update: &DhcpV4PoolUpdate) -> EventVec {
-        self.interfaces.v4_pool = Some(DhcpPoolStats {
-            range_start: Some(IpAddr::V4(update.range_start)),
-            range_end: Some(IpAddr::V4(update.range_end)),
-            prefix: None,
-            prefix_len: None,
-            total: update.total,
-            used: update.used,
-            available: update.available,
-            utilization_percent: update.utilization_percent,
-        });
-        EventVec::new()
-    }
-
-    pub(crate) fn handle_dhcp_v6_pool_updated(&mut self, update: &DhcpV6PoolUpdate) -> EventVec {
-        self.interfaces.v6_pools.insert(
-            update.pool_id,
-            DhcpPoolStats {
-                range_start: None,
-                range_end: None,
-                prefix: Some(IpAddr::V6(update.prefix)),
-                prefix_len: Some(update.prefix_len),
-                total: update.total,
-                used: update.used,
-                available: update.available,
-                utilization_percent: update.utilization_percent,
-            },
-        );
-        EventVec::new()
-    }
-
-    pub(crate) fn handle_pppoe_status_updated(
-        &mut self,
-        status: Option<Box<lanforge_types::system::PppoeStatusResponse>>,
-    ) -> EventVec {
-        self.interfaces.pppoe_status = status;
-        EventVec::new()
-    }
-
-    pub(crate) fn handle_ra_status_updated(
-        &mut self,
-        status: Option<Box<lanforge_types::system::RaStatusResponse>>,
-    ) -> EventVec {
-        let old_ula = self.interfaces.ra_status.as_ref().and_then(|r| r.active_ula_prefix);
-        let new_ula = status.as_ref().and_then(|r| r.active_ula_prefix);
-        self.interfaces.ra_status = status;
-        if old_ula != new_ula {
-            self.rebuild_indices();
-        }
-        EventVec::new()
-    }
-
-    pub(crate) fn handle_traffic_status_updated(
-        &mut self,
-        status: Option<Box<lanforge_types::system::TrafficStatusResponse>>,
-    ) -> EventVec {
-        self.interfaces.traffic_status = status;
-        EventVec::new()
-    }
-
 
     pub(crate) fn handle_device_interface_seen(
         &mut self,

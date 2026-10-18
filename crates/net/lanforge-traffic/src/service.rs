@@ -7,7 +7,6 @@ use lanforge_types::events::traffic::TrafficEvent;
 use lanforge_types::events::LanforgeEvent;
 use lanforge_types::network::TrafficConfig;
 use lanforge_types::system::{ServiceState, TrafficStatusResponse};
-use lanforge_types::update::DeviceUpdate;
 use tracing::{debug, info};
 
 use crate::sqm::{apply_sqm, clear_sqm};
@@ -90,9 +89,7 @@ impl TrafficService {
             diffserv: self.cfg.sqm.diffserv,
             flow_offload_suppressed: self.cfg.sqm.enabled,
         };
-        let _ = ctx.apply(DeviceUpdate::TrafficStatusUpdated {
-            status: Some(Box::new(status)),
-        });
+        ctx.set_traffic_status(Some(status));
     }
 
     /// Resolves default LAN and WAN interfaces from context.

@@ -87,11 +87,11 @@ async fn test_pppoe_inert_session_up_and_shutdown() {
     // 2. Verify state and readiness
     assert!(ctx.is_pppoe_ready());
     assert_eq!(ctx.get_service_state("pppoe"), ServiceState::Online);
-    ctx.with_state(|s| {
-        let status = s.interfaces.pppoe_status.as_ref().expect("status set");
+    {
+        let status = ctx.pppoe_status().expect("status set");
         assert_eq!(status.state, PppoeSessionState::Connected);
         assert_eq!(status.local_ip, Some(Ipv4Addr::new(100, 64, 0, 2)));
-    });
+    }
 
     // 3. Graceful shutdown
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -100,9 +100,7 @@ async fn test_pppoe_inert_session_up_and_shutdown() {
 
     // 4. Verify post-shutdown state
     assert!(!ctx.is_pppoe_ready());
-    ctx.with_state(|s| {
-        assert!(s.interfaces.pppoe_status.is_none());
-    });
+    assert!(ctx.pppoe_status().is_none());
 
     let res = timeout(Duration::from_secs(1), handle)
         .await
@@ -400,9 +398,7 @@ async fn test_pppoe_cleanup_guarantees_session_down_on_abort() {
     let reason = wait_for_session_down(&mut pppoe_sub).await;
     assert!(reason.contains("Service stopped or shut down"));
     assert!(!ctx.is_pppoe_ready());
-    ctx.with_state(|s| {
-        assert!(s.interfaces.pppoe_status.is_none());
-    });
+    assert!(ctx.pppoe_status().is_none());
 }
 
 #[tokio::test]
@@ -430,15 +426,15 @@ async fn test_pppoe_with_terminal_probe_enabled_reports_terminal_status() {
     let _ = wait_for_session_up(&mut pppoe_sub).await;
 
     // Verify terminal status is reflected in global state
-    ctx.with_state(|s| {
-        let status = s.interfaces.pppoe_status.as_ref().expect("status set");
+    {
+        let status = ctx.pppoe_status().expect("status set");
         assert_eq!(status.terminal_reachable, Some(true));
         assert_eq!(
             status.terminal_mac,
             Some(lanforge_types::identifiers::MacAddr([0x3c, 0x84, 0x6a, 0xbc, 0x8c, 0xe5]))
         );
         assert_eq!(status.terminal_rtt_us, Some(800));
-    });
+    }
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = handle.await;
@@ -497,15 +493,15 @@ async fn test_pppoe_with_injected_prober_reports_probe_response() {
     let _ = responder.await;
 
     // Verify injected prober results in global state
-    ctx.with_state(|s| {
-        let status = s.interfaces.pppoe_status.as_ref().expect("status set");
+    {
+        let status = ctx.pppoe_status().expect("status set");
         assert_eq!(status.terminal_reachable, Some(true));
         assert_eq!(
             status.terminal_mac,
             Some(lanforge_types::identifiers::MacAddr([0xde, 0xad, 0xbe, 0xef, 0x00, 0x01]))
         );
         assert!(status.terminal_rtt_us.is_some());
-    });
+    }
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = service_handle.await;

@@ -58,7 +58,7 @@ impl DnsService {
     #[must_use]
     pub fn with_lifetime(cfg: DnsConfig, ctx: LanforgeContext, lifetime: DnsLifetimeStats) -> Self {
         let stats = Arc::new(DnsStats::with_lifetime(&lifetime));
-        ctx.register_service_state("dns::stats", Arc::clone(&stats));
+        ctx.provide_shared(Arc::clone(&stats));
         Self {
             cfg: Arc::new(cfg),
             stats,
@@ -74,7 +74,7 @@ impl DnsService {
         transport: lanforge_transport::UdpTransport,
     ) -> Self {
         let stats = Arc::new(DnsStats::with_lifetime(&DnsLifetimeStats::default()));
-        ctx.register_service_state("dns::stats", Arc::clone(&stats));
+        ctx.provide_shared(Arc::clone(&stats));
         Self {
             cfg: Arc::new(cfg),
             stats,
@@ -271,7 +271,7 @@ impl AsyncService for DnsService {
         }
 
         let dns_ctx = self.init_dns_context().await?;
-        ctx.register_service_state("dns::context", Arc::clone(&dns_ctx));
+        ctx.provide_shared(Arc::clone(&dns_ctx));
 
         let (tx, mut mpsc_rx) = tokio::sync::mpsc::channel(100);
         let dns_handle = lanforge_core::context::DnsHandle::new(tx);

@@ -126,7 +126,7 @@ async fn handle_doq_connection(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let peer = connection.remote_address();
     let dns_ctx_arc = ctx
-        .get_service_state_ref::<DnsContext>("dns::context")
+        .get_shared::<DnsContext>()
         .ok_or("DNS engine not ready")?;
 
     loop {

@@ -1,9 +1,5 @@
 //! Storage and lifecycle state management.
 
-use std::any::Any;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
-
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
@@ -14,50 +10,10 @@ use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerCo
 use lanforge_types::network::TrafficConfig;
 use lanforge_types::update::DeviceUpdate;
 
-
 use crate::bus::{DnsEvent, FirewallEvent, LanforgeEvent, SystemEvent, TrafficEvent};
 use crate::context::LanforgeContext;
 
 impl LanforgeContext {
-    /// Sets the system lifecycle to shutdown mode for this instance.
-    pub fn terminate(&self) {
-        self.inner.running.store(false, Ordering::SeqCst);
-    }
-
-    /// Resets the lifecycle flags (`running`, `db_ready`, `if_ready`, `pppoe_ready`) to `true`/`false`/`true`/`false`.
-    /// Used during soft-reboot.
-    pub fn reset_lifecycle(&self) {
-        self.inner.running.store(true, Ordering::SeqCst);
-        self.inner.db_ready.store(false, Ordering::SeqCst);
-        self.inner.if_ready.store(true, Ordering::SeqCst);
-        self.inner.pppoe_ready.store(false, Ordering::SeqCst);
-        self.inner.service_states.write().clear();
-        self.inner.service_starts.write().clear();
-    }
-
-    /// Sets the database readiness state.
-    pub fn set_db_ready(&self, ready: bool) {
-        self.inner.db_ready.store(ready, Ordering::SeqCst);
-    }
-
-    /// Sets the interface readiness state.
-    pub fn set_if_ready(&self, ready: bool) {
-        self.inner.if_ready.store(ready, Ordering::SeqCst);
-    }
-
-    /// Sets the `PPPoE` session readiness state.
-    pub fn set_pppoe_ready(&self, ready: bool) {
-        self.inner.pppoe_ready.store(ready, Ordering::SeqCst);
-    }
-
-    /// Registers a shared service state or context.
-    pub fn register_service_state<T: Any + Send + Sync + 'static>(&self, key: &str, state: Arc<T>) {
-        self.inner
-            .shared_services
-            .write()
-            .insert(key.to_string(), state as Arc<dyn Any + Send + Sync>);
-    }
-
     /// Updates the configured `DHCPv4` pools and publishes the change event.
     pub fn update_dhcp_v4_pools(&self, pools: Vec<Dhcpv4Pool>) {
         self.inner.config.write().dhcp_v4_pools = pools;
@@ -207,6 +163,6 @@ impl LanforgeContext {
     /// Completely resets the in-memory state.
     pub fn reset(&self) {
         let _ = self.apply(DeviceUpdate::Reset);
-        *self.inner.last_db_flush.write() = None;
+        *self.inner.runtime.last_db_flush.write() = None;
     }
 }

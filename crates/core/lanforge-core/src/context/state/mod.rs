@@ -177,13 +177,6 @@ impl State {
             DeviceUpdate::SetReverseResolvers { resolvers } => {
                 self.handle_set_reverse_resolvers(resolvers)
             }
-            DeviceUpdate::DhcpV4PoolUpdated(ref update) => self.handle_dhcp_v4_pool_updated(update),
-            DeviceUpdate::DhcpV6PoolUpdated(ref update) => self.handle_dhcp_v6_pool_updated(update),
-            DeviceUpdate::PppoeStatusUpdated { status } => self.handle_pppoe_status_updated(status),
-            DeviceUpdate::RaStatusUpdated { status } => self.handle_ra_status_updated(status),
-            DeviceUpdate::TrafficStatusUpdated { status } => {
-                self.handle_traffic_status_updated(status)
-            }
             _ => unreachable!(),
         }
     }
@@ -225,7 +218,7 @@ impl State {
             .interface_ips
             .values()
             .find_map(|i| i.ula)
-            .or_else(|| self.interfaces.ra_status.as_ref().and_then(|ra| ra.active_ula_prefix))
+            .or(self.interfaces.ra_ula_fallback)
     }
 
     #[must_use]
@@ -234,7 +227,7 @@ impl State {
             .interface_ips
             .values()
             .find_map(|i| i.gua)
-            .or_else(|| self.interfaces.ra_status.as_ref().and_then(|ra| ra.active_gua_prefix))
+            .or(self.interfaces.ra_gua_fallback)
     }
 
     pub fn index_device(&mut self, mac: MacAddr, dev: &Device) {

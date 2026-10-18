@@ -27,10 +27,10 @@ impl ClientContext {
         let v4_pools = self.ctx.get_dhcp_v4_pools();
         let v6_pools = self.ctx.get_dhcp_v6_pools();
 
-        let (active_ula_prefix, active_gua_prefix) = self.ctx.with_state(|state| {
+        let (active_ula_prefix, active_gua_prefix) = {
             let mut ula = None;
             let mut gua = None;
-            for pool in state.interfaces.v6_pools.values() {
+            for pool in self.ctx.dhcp_v6_pool_stats().values() {
                 if let Some(IpAddr::V6(addr)) = pool.prefix {
                     let len = pool.prefix_len.unwrap_or(64);
                     let formatted = format!("{addr}/{len}");
@@ -42,7 +42,7 @@ impl ClientContext {
                 }
             }
             (ula, gua)
-        });
+        };
 
         Response::DhcpPoolsConfig(Box::new(DhcpPoolsConfigResponse {
             v4_pools,

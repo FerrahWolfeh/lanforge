@@ -120,7 +120,7 @@ async fn handle_dot_connection(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut tls_stream = acceptor.accept(stream).await?;
     let dns_ctx = ctx
-        .get_service_state_ref::<DnsContext>("dns::context")
+        .get_shared::<DnsContext>()
         .ok_or("DNS engine not ready")?;
 
     loop {

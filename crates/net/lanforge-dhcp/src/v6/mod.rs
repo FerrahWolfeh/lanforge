@@ -132,23 +132,22 @@ impl AsyncService for Dhcpv6Service {
     }
 
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
-        let (active_leases, pool_total, pool_available) = ctx.with_state(|state| {
-            let leases = u32::try_from(
+        let active_leases = ctx.with_state(|state| {
+            u32::try_from(
                 state
                     .devices
                     .values()
                     .filter(|dev| dev.v6.iter().any(|s| matches!(s, IPv6State::Dynamic(_))))
                     .count(),
             )
-            .unwrap_or(0);
-            let mut total = 0;
-            let mut avail = 0;
-            for pool in state.interfaces.v6_pools.values() {
-                total += pool.total;
-                avail += pool.available;
-            }
-            (leases, total, avail)
+            .unwrap_or(0)
         });
+        let mut pool_total = 0;
+        let mut pool_available = 0;
+        for pool in ctx.dhcp_v6_pool_stats().values() {
+            pool_total += pool.total;
+            pool_available += pool.available;
+        }
         let v6_stats = ctx.dhcpv6_stats().snapshot();
         vec![
             (Cow::Borrowed("iface"), self.config.iface.clone()),
@@ -401,20 +400,19 @@ impl Dhcpv6Service {
 impl Dhcpv6Service {
     fn publish_pool_stats(&self, server: &Dhcpv6Server) {
         let stats = server.pool.stats_per_prefix(&self.ctx);
+        self.ctx.clear_dhcp_v6_pool_stats();
         for (i, (prefix, prefix_len, total, used, available, utilization_percent)) in
             stats.into_iter().enumerate()
         {
-            let _ = self.ctx.apply(DeviceUpdate::DhcpV6PoolUpdated(Box::new(
-                DhcpV6PoolUpdate {
-                    pool_id: u32::try_from(i).unwrap_or(0),
-                    prefix,
-                    prefix_len,
-                    total,
-                    used,
-                    available,
-                    utilization_percent,
-                },
-            )));
+            self.ctx.set_dhcp_v6_pool_update(&DhcpV6PoolUpdate {
+                pool_id: u32::try_from(i).unwrap_or(0),
+                prefix,
+                prefix_len,
+                total,
+                used,
+                available,
+                utilization_percent,
+            });
         }
     }
 

@@ -149,11 +149,8 @@ impl ClientContext {
         if let Some(ext) = cfg.zones.iter_mut().find(|z| z.name == "external" || z.name == "wan")
             && ext.interfaces.is_empty()
         {
-            let pppoe_wan = self.ctx.with_state(|s| {
-                s.interfaces
-                    .pppoe_status
-                    .as_ref()
-                    .and_then(|p| p.interface.clone().or_else(|| p.wan_iface.clone()))
+            let pppoe_wan = self.ctx.pppoe_status().as_ref().and_then(|p| {
+                p.interface.clone().or_else(|| p.wan_iface.clone())
             });
             let wan = pppoe_wan.or_else(|| self.ctx.get_pppoe_config().map(|p| p.wan_iface));
             if let Some(w) = wan {

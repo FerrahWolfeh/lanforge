@@ -105,7 +105,7 @@ async fn test_traffic_service_inert_full_lifecycle() {
     ));
 
     // Verify status updated in context
-    let status = ctx.with_state(|s| s.interfaces.traffic_status.clone());
+    let status = ctx.traffic_status();
     assert!(status.is_some());
     let status = status.unwrap();
     assert!(status.tuning_applied);
@@ -138,7 +138,7 @@ async fn test_traffic_service_inert_full_lifecycle() {
         LanforgeEvent::Traffic(ref e) if matches!(**e, TrafficEvent::SqmApplied { ref interface, .. } if interface == "ppp0")
     ));
 
-    let status_after_pppoe = ctx.with_state(|s| s.interfaces.traffic_status.clone()).unwrap();
+    let status_after_pppoe = ctx.traffic_status().unwrap();
     assert!(status_after_pppoe.sqm_active);
     assert_eq!(status_after_pppoe.wan_interface, Some("ppp0".to_string()));
     assert_eq!(status_after_pppoe.service_state, ServiceState::Online);
@@ -212,7 +212,7 @@ async fn test_traffic_reacts_to_config_change_in_place() {
     assert_eq!(down, 800);
     assert_eq!(up, 400);
 
-    let status = ctx.with_state(|s| s.interfaces.traffic_status.clone()).unwrap();
+    let status = ctx.traffic_status().unwrap();
     assert_eq!(status.download_mbps, 800);
     assert_eq!(status.upload_mbps, 400);
 
@@ -223,7 +223,7 @@ async fn test_traffic_reacts_to_config_change_in_place() {
 
     wait_for_sqm_cleared(&mut traffic_sub).await;
 
-    let status_disabled = ctx.with_state(|s| s.interfaces.traffic_status.clone()).unwrap();
+    let status_disabled = ctx.traffic_status().unwrap();
     assert!(!status_disabled.sqm_active);
 
     // 3. Re-enable SQM in-place
@@ -235,7 +235,7 @@ async fn test_traffic_reacts_to_config_change_in_place() {
     assert_eq!(down_re, 800);
     assert_eq!(up_re, 400);
 
-    let status_reenabled = ctx.with_state(|s| s.interfaces.traffic_status.clone()).unwrap();
+    let status_reenabled = ctx.traffic_status().unwrap();
     assert!(status_reenabled.sqm_active);
 
     // Cleanup
@@ -301,7 +301,7 @@ async fn test_traffic_reacts_to_interface_ready() {
     // Allow event to process
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let status = ctx.with_state(|s| s.interfaces.traffic_status.clone()).unwrap();
+    let status = ctx.traffic_status().unwrap();
     assert!(status.tuned_interfaces.contains(&"lan1".to_string()));
 
     // Cleanup

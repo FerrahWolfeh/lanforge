@@ -53,12 +53,12 @@
 //! - **Interface Ready**: Network interfaces are configured
 //! - **Running**: System is operational (false = shutdown)
 
-use crate::bus::{EventBus, LanforgeEvent, PppoeEvent, SystemEvent, TimedEvent};
+use crate::bus::{EventBus, LanforgeEvent, SystemEvent, TimedEvent};
+use crate::context::state::network::DhcpPoolStats;
 use crate::context::state::State;
 use crate::error::CoreError;
 use crate::service::{ServiceDependency, StatusProvider};
 use lanforge_types::device::Device;
-use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
@@ -73,14 +73,18 @@ use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
 use lanforge_types::network::TrafficConfig;
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
-use lanforge_types::system::{Cap, ServerCapabilities, ServiceBanner, ServiceState, SystemStatus};
+use lanforge_types::system::{
+    Cap, PppoeStatusResponse, RaStatusResponse, ServerCapabilities, ServiceBanner, ServiceState,
+    SystemStatus, TrafficStatusResponse,
+};
+use lanforge_types::update::{DhcpV4PoolUpdate, DhcpV6PoolUpdate};
 use smallvec::SmallVec;
 
-use arc_swap::{ArcSwap, ArcSwapOption};
+use arc_swap::ArcSwap;
 use parking_lot::{Mutex, RwLock};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::time::{Instant, SystemTime};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::RecvError;
@@ -88,6 +92,7 @@ use tokio::sync::broadcast::error::RecvError;
 pub mod caps;
 pub mod dns_handle;
 pub mod read;
+pub mod runtime;
 pub mod state;
 pub mod storage_handle;
 #[cfg(test)]
@@ -96,6 +101,7 @@ pub mod write;
 
 pub use self::caps::CompiledCaps;
 pub use self::dns_handle::DnsHandle;
+pub use self::runtime::ServiceRuntime;
 pub use self::storage_handle::StorageHandle;
 
 use std::sync::atomic::AtomicU64;
@@ -237,57 +243,10 @@ struct LanforgeContextInner {
     target_ifindex: Option<u32>,
     /// The primary LAN interface name (e.g. "lan0").
     target_ifname: RwLock<Option<String>>,
-    /// System running flag — set to false on shutdown.
-    running: AtomicBool,
-    /// Database readiness flag.
-    db_ready: AtomicBool,
-    /// Recovery mode flag (in-memory fallback without disk persistence).
-    recovery_mode: AtomicBool,
-    /// Network interface readiness flag.
-    if_ready: AtomicBool,
-    /// `PPPoE` session readiness flag.
-    pppoe_ready: AtomicBool,
-    /// Generic registry for shared service states/contexts.
-    shared_services: RwLock<HashMap<String, Arc<dyn std::any::Any + Send + Sync>>>,
     /// Consolidated dynamic subsystem configurations.
     config: RwLock<DynamicConfig>,
-    /// Shared `DHCPv4` statistics.
-    dhcpv4_stats: Arc<Dhcpv4Stats>,
-    /// Shared `DHCPv6` statistics.
-    dhcpv6_stats: Arc<Dhcpv6Stats>,
-    /// Timestamp of the last successful database flush.
-    last_db_flush: RwLock<Option<SystemTime>>,
-    /// Internal counters for event rates.
-    event_counters: EventCounters,
-    /// Dynamic port requests from internal services (HTTP, DNS, DHCP, etc.).
-    firewall_ports: RwLock<Vec<DynamicPortRequest>>,
-    /// Staged candidate firewall transaction.
-    firewall_tx: RwLock<Option<FirewallTransactionState>>,
-
-    /// Global system status for reporting.
-    status: RwLock<Option<SystemStatus>>,
-    /// Global counter for active API clients (Control UDS, HTTP, etc.).
-    pub active_clients: Arc<AtomicUsize>,
-    /// Decoupled status providers.
-    status_providers: RwLock<BTreeMap<String, Arc<dyn StatusProvider>>>,
-    /// Decoupled DNS handle.
-    dns_handle: RwLock<Option<DnsHandle>>,
-    /// Decoupled Storage handle.
-    storage_handle: RwLock<Option<StorageHandle>>,
-    /// Dynamic service states.
-    service_states: RwLock<HashMap<String, ServiceState>>,
-    /// Dynamic service start times.
-    service_starts: RwLock<HashMap<String, Instant>>,
-    /// Context creation timestamp for calculating uptime.
-    start_time: Instant,
-    /// Database worker metrics.
-    db_metrics: DbWorkerMetrics,
-    /// Path to the active TOML configuration file on disk.
-    config_path: RwLock<Option<std::path::PathBuf>>,
-    /// Compiled daemon capabilities.
-    compiled_caps: RwLock<SmallVec<[Cap; 32]>>,
-    /// Latest traffic telemetry snapshot.
-    traffic_telemetry: ArcSwapOption<TrafficTelemetryResponse>,
+    /// Central service execution runtime and status container.
+    pub runtime: ServiceRuntime,
 }
 
 #[allow(clippy::missing_panics_doc)] // Temporary
@@ -317,40 +276,22 @@ impl LanforgeContext {
     #[must_use]
     pub fn new(bus: Arc<EventBus>, state: State, target_ifindex: Option<u32>) -> Self {
         let inner = Arc::new(LanforgeContextInner {
-            bus,
+            bus: bus.clone(),
             state: ArcSwap::from_pointee(state),
             writer_mutex: Mutex::new(()),
             discovery: Arc::new(state::cache::DiscoveryStore::default()),
             target_ifindex,
             target_ifname: RwLock::new(None),
-            running: AtomicBool::new(true),
-            db_ready: AtomicBool::new(false),
-            recovery_mode: AtomicBool::new(false),
-            if_ready: AtomicBool::new(false),
-            pppoe_ready: AtomicBool::new(false),
-            shared_services: RwLock::new(HashMap::new()),
             config: RwLock::new(DynamicConfig::default()),
-            dhcpv4_stats: Arc::new(Dhcpv4Stats::new()),
-            dhcpv6_stats: Arc::new(Dhcpv6Stats::new()),
-            last_db_flush: RwLock::new(None),
-            event_counters: EventCounters::default(),
-            firewall_ports: RwLock::new(Vec::new()),
-            firewall_tx: RwLock::new(None),
-
-            status: RwLock::new(None),
-            active_clients: Arc::new(AtomicUsize::new(0)),
-            status_providers: RwLock::new(BTreeMap::new()),
-            dns_handle: RwLock::new(None),
-            storage_handle: RwLock::new(None),
-            service_states: RwLock::new(HashMap::new()),
-            service_starts: RwLock::new(HashMap::new()),
-            start_time: Instant::now(),
-            db_metrics: DbWorkerMetrics::default(),
-            config_path: RwLock::new(None),
-            compiled_caps: RwLock::new(CompiledCaps::detect_default_compiled()),
-            traffic_telemetry: ArcSwapOption::empty(),
+            runtime: ServiceRuntime::new(bus),
         });
         Self { inner }
+    }
+
+    /// Access the underlying `ServiceRuntime` coordinator.
+    #[must_use]
+    pub fn runtime(&self) -> &ServiceRuntime {
+        &self.inner.runtime
     }
 
     /// Returns a reference to the volatile discovery store.
@@ -374,19 +315,19 @@ impl LanforgeContext {
 
     /// Sets the path to the active TOML configuration file.
     pub fn set_config_path(&self, path: impl Into<std::path::PathBuf>) {
-        *self.inner.config_path.write() = Some(path.into());
+        *self.inner.runtime.config_path.write() = Some(path.into());
     }
 
     /// Returns the path to the active TOML configuration file, if set.
     #[must_use]
     pub fn config_path(&self) -> Option<std::path::PathBuf> {
-        self.inner.config_path.read().clone()
+        self.inner.runtime.config_path.read().clone()
     }
 
     /// Returns the uptime of this context in seconds.
     #[must_use]
     pub fn uptime_secs(&self) -> u64 {
-        self.inner.start_time.elapsed().as_secs()
+        self.inner.runtime.start_time.elapsed().as_secs()
     }
 
     /// Returns the target interface index for this context.
@@ -429,7 +370,7 @@ impl LanforgeContext {
     ///
     /// Call this after a successful database write to track staleness.
     pub fn record_db_flush(&self) {
-        *self.inner.last_db_flush.write() = Some(SystemTime::now());
+        *self.inner.runtime.last_db_flush.write() = Some(SystemTime::now());
     }
 
     /// Returns the last database flush time, if any.
@@ -437,25 +378,25 @@ impl LanforgeContext {
     /// Used to determine if the in-memory state is synced to disk.
     #[must_use]
     pub fn last_db_flush(&self) -> Option<SystemTime> {
-        *self.inner.last_db_flush.read()
+        *self.inner.runtime.last_db_flush.read()
     }
 
     /// Access the global active API clients counter.
     #[must_use]
     pub fn active_clients(&self) -> Arc<AtomicUsize> {
-        self.inner.active_clients.clone()
+        self.inner.runtime.active_clients.clone()
     }
 
     /// Returns the internal event counters.
     #[must_use]
     pub fn counters(&self) -> &EventCounters {
-        &self.inner.event_counters
+        &self.inner.runtime.event_counters
     }
 
     /// Returns the database worker metrics.
     #[must_use]
     pub fn db_metrics(&self) -> &DbWorkerMetrics {
-        &self.inner.db_metrics
+        &self.inner.runtime.db_metrics
     }
 
     /// Creates a lightweight service handle for event-driven services.
@@ -543,7 +484,7 @@ impl LanforgeContext {
     /// Stores the port in context and broadcasts a `FirewallEvent::PortOpenRequested` on the bus.
     pub fn register_service_port(&self, request: DynamicPortRequest) {
         let added = {
-            let mut ports = self.inner.firewall_ports.write();
+            let mut ports = self.inner.runtime.firewall_ports.write();
             if ports.iter().any(|p| {
                 p.service == request.service && p.port == request.port && p.protocol == request.protocol
             }) {
@@ -566,7 +507,7 @@ impl LanforgeContext {
     /// Releases a previously registered dynamic port requirement.
     pub fn release_service_port(&self, service: &str, port: u16, protocol: L4Protocol) {
         let removed = {
-            let mut ports = self.inner.firewall_ports.write();
+            let mut ports = self.inner.runtime.firewall_ports.write();
             let initial = ports.len();
             ports.retain(|p| !(p.service == service && p.port == port && p.protocol == protocol));
             ports.len() != initial
@@ -586,7 +527,7 @@ impl LanforgeContext {
     /// Returns all registered dynamic service ports.
     #[must_use]
     pub fn registered_service_ports(&self) -> Vec<DynamicPortRequest> {
-        self.inner.firewall_ports.read().clone()
+        self.inner.runtime.firewall_ports.read().clone()
     }
 
     /// Returns a copy of the current dynamic subsystem configurations.
@@ -615,9 +556,10 @@ impl LanforgeContext {
     #[cfg(feature = "adblock")]
     pub fn inc_dns_blocked(&self) {
         self.inner
+            .runtime
             .event_counters
             .dns_blocked
-            .fetch_add(1, Ordering::Relaxed);
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Captures a snapshot of the device registry for database persistence.
@@ -635,24 +577,24 @@ impl LanforgeContext {
 
     /// Sets the global system status.
     pub fn set_status(&self, status: SystemStatus) {
-        *self.inner.status.write() = Some(status);
+        *self.inner.runtime.status.write() = Some(status);
     }
 
     /// Returns a copy of the current system status, if set.
     #[must_use]
     pub fn get_status(&self) -> Option<SystemStatus> {
-        self.inner.status.read().clone()
+        self.inner.runtime.status.read().clone()
     }
 
     /// Sets the compiled capabilities for this daemon binary.
     pub fn set_compiled_caps(&self, caps: SmallVec<[Cap; 32]>) {
-        *self.inner.compiled_caps.write() = caps;
+        *self.inner.runtime.compiled_caps.write() = caps;
     }
 
     /// Returns the compiled capabilities for this daemon binary.
     #[must_use]
     pub fn compiled_caps(&self) -> SmallVec<[Cap; 32]> {
-        self.inner.compiled_caps.read().clone()
+        self.inner.runtime.compiled_caps.read().clone()
     }
 
     /// Evaluates compiled vs enabled server capabilities based on runtime configuration.
@@ -785,13 +727,13 @@ impl LanforgeContext {
 
     /// Stores the latest traffic telemetry snapshot.
     pub fn set_traffic_telemetry(&self, telemetry: TrafficTelemetryResponse) {
-        self.inner.traffic_telemetry.store(Some(Arc::new(telemetry)));
+        self.inner.runtime.set_traffic_telemetry(telemetry);
     }
 
     /// Retrieves the latest traffic telemetry snapshot, if available.
     #[must_use]
     pub fn traffic_telemetry(&self) -> Option<Arc<TrafficTelemetryResponse>> {
-        self.inner.traffic_telemetry.load_full()
+        self.inner.runtime.traffic_telemetry()
     }
 
     /// Evaluates a candidate firewall configuration, runs pre-flight sanity checks,
@@ -816,7 +758,7 @@ impl LanforgeContext {
 
         if let Some(ref tx_id) = report.tx_id {
             let now = Instant::now();
-            let mut tx_lock = self.inner.firewall_tx.write();
+            let mut tx_lock = self.inner.runtime.firewall_tx.write();
             *tx_lock = Some(FirewallTransactionState {
                 tx_id: tx_id.clone(),
                 candidate_config: candidate,
@@ -833,7 +775,7 @@ impl LanforgeContext {
     /// Retrieves the staged firewall transaction if not expired.
     #[must_use]
     pub fn get_staged_firewall_transaction(&self) -> Option<FirewallTransactionState> {
-        let mut tx_lock = self.inner.firewall_tx.write();
+        let mut tx_lock = self.inner.runtime.firewall_tx.write();
         if let Some(ref tx) = *tx_lock
             && Instant::now() > tx.expires_at
         {
@@ -846,7 +788,7 @@ impl LanforgeContext {
     /// Sets an auto-rollback deadline for the active staged transaction.
     #[must_use]
     pub fn set_firewall_transaction_rollback(&self, tx_id: &str, deadline: Instant) -> bool {
-        let mut tx_lock = self.inner.firewall_tx.write();
+        let mut tx_lock = self.inner.runtime.firewall_tx.write();
         if let Some(ref mut tx) = *tx_lock
             && tx.tx_id == tx_id
         {
@@ -860,7 +802,7 @@ impl LanforgeContext {
     /// Clears the staged firewall transaction.
     #[must_use]
     pub fn clear_staged_firewall_transaction(&self, tx_id: Option<&str>) -> Option<FirewallTransactionState> {
-        let mut tx_lock = self.inner.firewall_tx.write();
+        let mut tx_lock = self.inner.runtime.firewall_tx.write();
         if let Some(ref tx) = *tx_lock
             && (tx_id.is_none() || tx_id == Some(tx.tx_id.as_str()))
         {
@@ -901,97 +843,162 @@ impl LanforgeContext {
 
     /// Registers a decoupled status provider.
     pub fn register_status_provider(&self, provider: Arc<dyn StatusProvider>) {
-        let banner = provider.banner(self);
-        self.inner
-            .status_providers
-            .write()
-            .insert(banner.id, provider);
+        self.inner.runtime.register_status_provider(self, provider);
     }
 
     /// Returns a list of all registered service status banners.
     #[must_use]
     pub fn service_banners(&self) -> Vec<ServiceBanner> {
-        let providers = self.inner.status_providers.read();
-        providers.values().map(|p| p.banner(self)).collect()
+        self.inner.runtime.service_banners(self)
     }
 
     /// Returns a list of all registered status providers.
     #[must_use]
     pub fn status_providers(&self) -> Vec<Arc<dyn StatusProvider>> {
-        self.inner
-            .status_providers
-            .read()
-            .values()
-            .cloned()
-            .collect()
+        self.inner.runtime.status_providers()
     }
 
     /// Sets the decoupled DNS handle.
     pub fn set_dns_handle(&self, handle: DnsHandle) {
-        *self.inner.dns_handle.write() = Some(handle);
+        *self.inner.runtime.dns_handle.write() = Some(handle);
     }
 
     /// Returns the decoupled DNS handle, if available.
     #[must_use]
     pub fn dns_handle(&self) -> Option<DnsHandle> {
-        self.inner.dns_handle.read().clone()
+        self.inner.runtime.dns_handle.read().clone()
     }
 
     /// Sets the decoupled storage handle.
     pub fn set_storage_handle(&self, handle: StorageHandle) {
-        *self.inner.storage_handle.write() = Some(handle);
+        *self.inner.runtime.storage_handle.write() = Some(handle);
     }
 
     /// Returns the decoupled storage handle, if available.
     #[must_use]
     pub fn storage_handle(&self) -> Option<StorageHandle> {
-        self.inner.storage_handle.read().clone()
+        self.inner.runtime.storage_handle.read().clone()
     }
 
     /// Sets the dynamic state of a service.
     pub fn set_service_state(&self, id: &str, state: ServiceState) {
-        self.inner
-            .service_states
-            .write()
-            .insert(id.to_string(), state);
+        self.inner.runtime.set_service_state(id, state);
     }
 
     /// Sets the start time of a service.
     pub fn set_service_start(&self, id: &str, start: Instant) {
-        self.inner
-            .service_starts
-            .write()
-            .insert(id.to_string(), start);
+        self.inner.runtime.set_service_start(id, start);
     }
 
     /// Clears the start time of a service.
     pub fn clear_service_start(&self, id: &str) {
-        self.inner.service_starts.write().remove(id);
+        self.inner.runtime.clear_service_start(id);
     }
 
     /// Returns the dynamic state of a service, defaulting to Offline.
     #[must_use]
     pub fn get_service_state(&self, id: &str) -> ServiceState {
-        self.inner
-            .service_states
-            .read()
-            .get(id)
-            .copied()
-            .unwrap_or(ServiceState::Offline)
+        self.inner.runtime.get_service_state(id)
     }
 
     /// Returns the uptime of a service in seconds, or 0 if not running.
     #[must_use]
     pub fn get_service_uptime(&self, id: &str) -> u64 {
-        if self.get_service_state(id) == ServiceState::Online {
-            self.inner
-                .service_starts
-                .read()
-                .get(id)
-                .map_or(0, |start| start.elapsed().as_secs())
-        } else {
-            0
+        self.inner.runtime.get_service_uptime(id)
+    }
+
+    /// Registers an arbitrary typed shared service state.
+    pub fn provide_shared<T: std::any::Any + Send + Sync + 'static>(&self, instance: Arc<T>) {
+        self.inner.runtime.provide_shared(instance);
+    }
+
+    /// Retrieves an arbitrary typed shared service state by type.
+    #[must_use]
+    pub fn get_shared<T: std::any::Any + Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        self.inner.runtime.get_shared::<T>()
+    }
+
+    /// Stores the active `PPPoE` WAN status response.
+    pub fn set_pppoe_status(&self, status: Option<PppoeStatusResponse>) {
+        self.inner.runtime.set_pppoe_status(status);
+    }
+
+    /// Retrieves the active `PPPoE` WAN status response.
+    #[must_use]
+    pub fn pppoe_status(&self) -> Option<Arc<PppoeStatusResponse>> {
+        self.inner.runtime.pppoe_status()
+    }
+
+    /// Stores the active RA status response and synchronizes fallback prefixes with State.
+    pub fn set_ra_status(&self, status: Option<RaStatusResponse>) {
+        let (new_ula, new_gua) = status.as_ref().map_or((None, None), |s| {
+            (s.active_ula_prefix, s.active_gua_prefix)
+        });
+        let prefixes_changed = self.with_state_mut(|state| {
+            let changed = state.interfaces.ra_ula_fallback != new_ula
+                || state.interfaces.ra_gua_fallback != new_gua;
+            state.interfaces.ra_ula_fallback = new_ula;
+            state.interfaces.ra_gua_fallback = new_gua;
+            changed
+        });
+        if prefixes_changed {
+            let _ = self.apply(lanforge_types::update::DeviceUpdate::RebuildDnsIndices);
         }
+        self.inner.runtime.set_ra_status(status);
+    }
+
+    /// Retrieves the active RA status response.
+    #[must_use]
+    pub fn ra_status(&self) -> Option<Arc<RaStatusResponse>> {
+        self.inner.runtime.ra_status()
+    }
+
+    /// Stores the active Traffic & SQM status response.
+    pub fn set_traffic_status(&self, status: Option<TrafficStatusResponse>) {
+        self.inner.runtime.set_traffic_status(status);
+    }
+
+    /// Retrieves the active Traffic & SQM status response.
+    #[must_use]
+    pub fn traffic_status(&self) -> Option<Arc<TrafficStatusResponse>> {
+        self.inner.runtime.traffic_status()
+    }
+
+    /// Stores the active `DHCPv4` pool stats.
+    pub fn set_dhcp_v4_pool_stats(&self, stats: Option<DhcpPoolStats>) {
+        self.inner.runtime.set_dhcp_v4_pool_stats(stats);
+    }
+
+    /// Updates active `DHCPv4` pool stats from a pool update struct.
+    pub fn set_dhcp_v4_pool_update(&self, update: &DhcpV4PoolUpdate) {
+        self.inner.runtime.set_dhcp_v4_pool_update(update);
+    }
+
+    /// Retrieves the active `DHCPv4` pool stats.
+    #[must_use]
+    pub fn dhcp_v4_pool_stats(&self) -> Option<Arc<DhcpPoolStats>> {
+        self.inner.runtime.dhcp_v4_pool_stats()
+    }
+
+    /// Stores `DHCPv6` pool stats for an IAID.
+    pub fn set_dhcp_v6_pool_stats(&self, iaid: u32, stats: DhcpPoolStats) {
+        self.inner.runtime.set_dhcp_v6_pool_stats(iaid, stats);
+    }
+
+    /// Updates active `DHCPv6` pool stats from a pool update struct.
+    pub fn set_dhcp_v6_pool_update(&self, update: &DhcpV6PoolUpdate) {
+        self.inner.runtime.set_dhcp_v6_pool_update(update);
+    }
+
+    /// Retrieves all active `DHCPv6` pool stats.
+    #[must_use]
+    pub fn dhcp_v6_pool_stats(&self) -> HashMap<u32, DhcpPoolStats> {
+        self.inner.runtime.dhcp_v6_pool_stats()
+    }
+
+    /// Clears all active `DHCPv6` pool stats.
+    pub fn clear_dhcp_v6_pool_stats(&self) {
+        self.inner.runtime.clear_dhcp_v6_pool_stats();
     }
 }
 
@@ -1006,12 +1013,7 @@ impl LanforgeContext {
     ///
     /// Returns `CoreError` if the wait condition cannot be met or the system shuts down.
     pub async fn wait_for_interfaces(&self) -> Result<(), CoreError> {
-        self.wait_for_condition(
-            || self.inner.bus.subscribe_system(),
-            Self::is_if_ready,
-            |event| matches!(event, LanforgeEvent::System(SystemEvent::InterfaceReady)),
-        )
-        .await
+        self.inner.runtime.wait_for_interfaces().await
     }
 
     /// Blocks until the database is ready.
@@ -1020,12 +1022,7 @@ impl LanforgeContext {
     ///
     /// Returns `CoreError` if the wait condition cannot be met or the system shuts down.
     pub async fn wait_for_db(&self) -> Result<(), CoreError> {
-        self.wait_for_condition(
-            || self.inner.bus.subscribe_system(),
-            Self::is_db_ready,
-            |event| matches!(event, LanforgeEvent::System(SystemEvent::DbReady)),
-        )
-        .await
+        self.inner.runtime.wait_for_db().await
     }
 
     /// Blocks until the `PPPoE` session is established (or short-circuits if `PPPoE` is disabled/ready).
@@ -1034,12 +1031,7 @@ impl LanforgeContext {
     ///
     /// Returns `CoreError` if the wait condition cannot be met or the system shuts down.
     pub async fn wait_for_pppoe(&self) -> Result<(), CoreError> {
-        self.wait_for_condition(
-            || self.inner.bus.subscribe_pppoe(),
-            Self::is_pppoe_ready,
-            |event| matches!(event, LanforgeEvent::Pppoe(PppoeEvent::SessionUp(_))),
-        )
-        .await
+        self.inner.runtime.wait_for_pppoe().await
     }
 
     /// Blocks until the specified dependency is satisfied.
@@ -1048,12 +1040,7 @@ impl LanforgeContext {
     ///
     /// Returns `CoreError::Shutdown` if the system shuts down before the dependency is ready.
     pub async fn wait_for_dependency(&self, dep: ServiceDependency) -> Result<(), CoreError> {
-        match dep {
-            ServiceDependency::Database => self.wait_for_db().await,
-            ServiceDependency::Interfaces => self.wait_for_interfaces().await,
-            ServiceDependency::PppoeWan => self.wait_for_pppoe().await,
-            ServiceDependency::Service(id) => self.wait_for_service(id).await,
-        }
+        self.inner.runtime.wait_for_dependency(dep).await
     }
 
     /// Blocks until the specified service is `Online`.
@@ -1062,57 +1049,7 @@ impl LanforgeContext {
     ///
     /// Returns `CoreError::Shutdown` if the system shuts down before the service is online.
     pub async fn wait_for_service(&self, id: &str) -> Result<(), CoreError> {
-        self.wait_for_condition(
-            || self.inner.bus.subscribe_system(),
-            |ctx| ctx.get_service_state(id) == ServiceState::Online,
-            |event| {
-                matches!(
-                    event,
-                    LanforgeEvent::System(SystemEvent::ServiceReady { name }) if name == id
-                )
-            },
-        )
-        .await
-    }
-
-    /// Generic async wait helper. Blocks until `is_ready()` returns true
-    /// or a matching event arrives on the bus.
-    async fn wait_for_condition(
-        &self,
-        subscribe: impl FnOnce() -> Receiver<TimedEvent>,
-        is_ready: impl Fn(&Self) -> bool,
-        event_matches: impl Fn(&LanforgeEvent) -> bool,
-    ) -> Result<(), CoreError> {
-        if !self.is_running() {
-            return Err(CoreError::Shutdown);
-        }
-        if is_ready(self) {
-            return Ok(());
-        }
-        let mut rx = subscribe();
-        loop {
-            // Re-check after subscribing to avoid race
-            if is_ready(self) {
-                return Ok(());
-            }
-            match rx.recv().await {
-                Ok(timed_event) => {
-                    if !self.is_running()
-                        || matches!(
-                            timed_event.event,
-                            LanforgeEvent::System(SystemEvent::Shutdown)
-                        )
-                    {
-                        return Err(CoreError::Shutdown);
-                    }
-                    if event_matches(&timed_event.event) {
-                        return Ok(());
-                    }
-                }
-                Err(RecvError::Lagged(_)) => {}
-                Err(RecvError::Closed) => return Err(CoreError::Shutdown),
-            }
-        }
+        self.inner.runtime.wait_for_service(id).await
     }
 
     /// Returns true if this instance is currently running.
@@ -1120,7 +1057,17 @@ impl LanforgeContext {
     /// When false, the system is in shutdown mode and services should exit.
     #[must_use]
     pub fn is_running(&self) -> bool {
-        self.inner.running.load(Ordering::Relaxed)
+        self.inner.runtime.is_running()
+    }
+
+    /// Sets the system lifecycle to shutdown mode for this instance.
+    pub fn terminate(&self) {
+        self.inner.runtime.terminate();
+    }
+
+    /// Resets the lifecycle flags (`running`, `db_ready`, `if_ready`, `pppoe_ready`) to initial state.
+    pub fn reset_lifecycle(&self) {
+        self.inner.runtime.reset_lifecycle();
     }
 
     /// Returns true if the database is ready.
@@ -1128,18 +1075,23 @@ impl LanforgeContext {
     /// This flag is set by the database worker after successful initialization.
     #[must_use]
     pub fn is_db_ready(&self) -> bool {
-        self.inner.db_ready.load(Ordering::SeqCst)
+        self.inner.runtime.is_db_ready()
+    }
+
+    /// Sets the database readiness state.
+    pub fn set_db_ready(&self, ready: bool) {
+        self.inner.runtime.set_db_ready(ready);
     }
 
     /// Returns true if the system is running in recovery mode (in-memory fallback due to database unavailability).
     #[must_use]
     pub fn is_recovery_mode(&self) -> bool {
-        self.inner.recovery_mode.load(Ordering::Relaxed)
+        self.inner.runtime.is_recovery_mode()
     }
 
     /// Sets the recovery mode state.
     pub fn set_recovery_mode(&self, recovery: bool) {
-        self.inner.recovery_mode.store(recovery, Ordering::Relaxed);
+        self.inner.runtime.set_recovery_mode(recovery);
     }
 
     /// Returns true if the network interfaces are ready.
@@ -1147,7 +1099,12 @@ impl LanforgeContext {
     /// This flag is set after interface discovery completes successfully.
     #[must_use]
     pub fn is_if_ready(&self) -> bool {
-        self.inner.if_ready.load(Ordering::SeqCst)
+        self.inner.runtime.is_if_ready()
+    }
+
+    /// Sets the interface readiness state.
+    pub fn set_if_ready(&self, ready: bool) {
+        self.inner.runtime.set_if_ready(ready);
     }
 
     /// Returns true if the `PPPoE` session is ready.
@@ -1155,7 +1112,12 @@ impl LanforgeContext {
     /// This flag is set when `PPPoE` session is established or if `PPPoE` is disabled.
     #[must_use]
     pub fn is_pppoe_ready(&self) -> bool {
-        self.inner.pppoe_ready.load(Ordering::SeqCst)
+        self.inner.runtime.is_pppoe_ready()
+    }
+
+    /// Sets the `PPPoE` session readiness state.
+    pub fn set_pppoe_ready(&self, ready: bool) {
+        self.inner.runtime.set_pppoe_ready(ready);
     }
 }
 

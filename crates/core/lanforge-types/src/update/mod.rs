@@ -212,16 +212,5 @@ pub enum DeviceUpdate {
     SetReverseResolvers {
         resolvers: Vec<DnsReverseResolver>,
     },
-    DhcpV4PoolUpdated(Box<DhcpV4PoolUpdate>),
-    DhcpV6PoolUpdated(Box<DhcpV6PoolUpdate>),
-    PppoeStatusUpdated {
-        status: Option<Box<crate::system::PppoeStatusResponse>>,
-    },
-    RaStatusUpdated {
-        status: Option<Box<crate::system::RaStatusResponse>>,
-    },
-    TrafficStatusUpdated {
-        status: Option<Box<crate::system::TrafficStatusResponse>>,
-    },
 }
 
