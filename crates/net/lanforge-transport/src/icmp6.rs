@@ -53,7 +53,7 @@ impl Icmp6Transport {
         set_icmp6_filter_rs_only(&sock)?;
 
         sock.set_nonblocking(true)?;
-        let async_fd = AsyncFd::new(sock)?;
+        let async_fd = unsafe { AsyncFd::register(sock)? };
 
         info!("ICMPv6: Raw socket bound on {iface} (index {iface_index}), listening for RS");
         Ok(Self {
@@ -104,7 +104,8 @@ impl Icmp6Transport {
 
                     // Read from raw socket
                     let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
-                    let mut socklen = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+                    let mut socklen =
+                        std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
 
                     let ret = unsafe {
                         libc::recvfrom(
@@ -123,7 +124,12 @@ impl Icmp6Transport {
                         let src = unsafe {
                             let sa = &*std::ptr::from_ref(&storage).cast::<libc::sockaddr_in6>();
                             let ip = Ipv6Addr::from(sa.sin6_addr.s6_addr);
-                            SocketAddrV6::new(ip, u16::from_be(sa.sin6_port), sa.sin6_flowinfo, sa.sin6_scope_id)
+                            SocketAddrV6::new(
+                                ip,
+                                u16::from_be(sa.sin6_port),
+                                sa.sin6_flowinfo,
+                                sa.sin6_scope_id,
+                            )
                         };
                         self.inner.metrics.record_rx(n);
                         return Ok((n, src));
@@ -241,7 +247,10 @@ mod tests {
     #[test]
     fn should_report_inert_status() {
         let (_handle, transport) = Icmp6Transport::inert();
-        assert!(transport.is_inert(), "Inert transport must return true for is_inert()");
+        assert!(
+            transport.is_inert(),
+            "Inert transport must return true for is_inert()"
+        );
         assert_eq!(transport.metrics().rx_packets(), 0);
         assert_eq!(transport.metrics().tx_packets(), 0);
     }
@@ -300,7 +309,10 @@ mod tests {
         drop(handle);
 
         let mut buf = [0u8; 64];
-        let err = transport.recv(&mut buf).await.expect_err("Expected EOF error");
+        let err = transport
+            .recv(&mut buf)
+            .await
+            .expect_err("Expected EOF error");
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 
@@ -331,7 +343,10 @@ mod tests {
         // All other bytes must remain 0xFF (blocking all other ICMPv6 message types)
         for (i, byte) in filter.iter().enumerate() {
             if i != 16 {
-                assert_eq!(*byte, 0xFF, "Byte {i} must be 0xFF to filter out other ICMPv6 types");
+                assert_eq!(
+                    *byte, 0xFF,
+                    "Byte {i} must be 0xFF to filter out other ICMPv6 types"
+                );
             }
         }
     }

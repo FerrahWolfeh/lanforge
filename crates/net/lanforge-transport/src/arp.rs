@@ -75,7 +75,7 @@ impl ArpProber {
             return Err(io::Error::last_os_error());
         }
 
-        let async_fd = AsyncFd::new(owned_fd)?;
+        let async_fd = unsafe { AsyncFd::register(owned_fd)? };
 
         Ok(Self {
             local_mac,
@@ -219,7 +219,7 @@ pub fn build_arp_probe(src_mac: [u8; 6], target: Ipv4Addr, sender: Option<Ipv4Ad
     let mut pkt = [0u8; 42];
     // Ethernet Header
     pkt[0..6].copy_from_slice(&[0xff; 6]); // Broadcast destination
-    pkt[6..12].copy_from_slice(&src_mac);  // Source MAC
+    pkt[6..12].copy_from_slice(&src_mac); // Source MAC
     pkt[12..14].copy_from_slice(&ETH_P_ARP.to_be_bytes()); // EtherType ARP
 
     // ARP Payload
@@ -255,7 +255,12 @@ pub fn parse_arp_reply(frame: &[u8], target: Ipv4Addr) -> Option<[u8; 6]> {
     let plen = frame[19];
     let opcode = u16::from_be_bytes([frame[20], frame[21]]);
 
-    if htype != ARP_HTYPE_ETHERNET || ptype != ARP_PTYPE_IPV4 || hlen != 6 || plen != 4 || opcode != ARP_OPCODE_REPLY {
+    if htype != ARP_HTYPE_ETHERNET
+        || ptype != ARP_PTYPE_IPV4
+        || hlen != 6
+        || plen != 4
+        || opcode != ARP_OPCODE_REPLY
+    {
         return None;
     }
 
@@ -360,7 +365,10 @@ mod tests {
             handle.inject(reply.to_vec(), ()).await;
         });
 
-        let res = prober.probe(target, None, Duration::from_millis(500)).await.expect("probe ok");
+        let res = prober
+            .probe(target, None, Duration::from_millis(500))
+            .await
+            .expect("probe ok");
         handle_task.await.unwrap();
 
         let reply = res.expect("Should receive reply");
@@ -374,7 +382,10 @@ mod tests {
 
         let (_handle, prober) = ArpProber::inert(local_mac);
 
-        let res = prober.probe(target, None, Duration::from_millis(50)).await.expect("probe ok");
+        let res = prober
+            .probe(target, None, Duration::from_millis(50))
+            .await
+            .expect("probe ok");
         assert!(res.is_none());
     }
 }

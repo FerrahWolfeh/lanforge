@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 use tokio::io::unix::AsyncFd;
 use tokio::sync::{oneshot, watch};
@@ -22,9 +22,7 @@ enum IcmpBackend {
         socket_v6: Option<Arc<AsyncFd<Socket>>>,
     },
     #[cfg(any(test, feature = "inert"))]
-    Inert {
-        port: InertPort<IpAddr>,
-    },
+    Inert { port: InertPort<IpAddr> },
 }
 
 /// Decoupled dual-stack ICMP Ping helper for active reachability checks.
@@ -46,7 +44,7 @@ impl IcmpPinger {
         let socket_v4 = match Socket::new(Domain::IPV4, Type::RAW, Some(Protocol::ICMPV4)) {
             Ok(s) => {
                 let _ = s.set_nonblocking(true);
-                Some(Arc::new(AsyncFd::new(s)?))
+                Some(Arc::new(unsafe { AsyncFd::register(s)? }))
             }
             Err(e) => {
                 warn!("Failed to create raw IPv4 ICMP socket: {e}");
@@ -69,7 +67,7 @@ impl IcmpPinger {
                             as libc::socklen_t,
                     );
                 }
-                Some(Arc::new(AsyncFd::new(s)?))
+                Some(Arc::new(unsafe { AsyncFd::register(s)? }))
             }
             Err(e) => {
                 warn!("Failed to create raw IPv6 ICMP socket: {e}");
@@ -128,7 +126,11 @@ impl IcmpPinger {
     }
 
     fn spawn_kernel_read_loop(&self, mut shutdown_rx: watch::Receiver<bool>) {
-        let IcmpBackend::Kernel { socket_v4, socket_v6 } = self.backend.as_ref() else {
+        let IcmpBackend::Kernel {
+            socket_v4,
+            socket_v6,
+        } = self.backend.as_ref()
+        else {
             return;
         };
         let registry = self.registry.clone();
@@ -223,7 +225,11 @@ impl IcmpPinger {
     }
 
     #[cfg(any(test, feature = "inert"))]
-    fn spawn_inert_read_loop(&self, port: InertPort<IpAddr>, mut shutdown_rx: watch::Receiver<bool>) {
+    fn spawn_inert_read_loop(
+        &self,
+        port: InertPort<IpAddr>,
+        mut shutdown_rx: watch::Receiver<bool>,
+    ) {
         let registry = self.registry.clone();
         tokio::spawn(async move {
             loop {
@@ -277,7 +283,10 @@ impl IcmpPinger {
         }
 
         let sent = match self.backend.as_ref() {
-            IcmpBackend::Kernel { socket_v4, socket_v6 } => match ip {
+            IcmpBackend::Kernel {
+                socket_v4,
+                socket_v6,
+            } => match ip {
                 IpAddr::V4(ip4) => socket_v4.as_ref().is_some_and(|s_v4| {
                     let mut packet = [0u8; PACKET_LEN];
                     packet[0] = 8; // Echo Request
@@ -465,7 +474,9 @@ mod tests {
             }
         });
 
-        let res = pinger.ping_timeout(target_ip, seq, Duration::from_millis(500)).await;
+        let res = pinger
+            .ping_timeout(target_ip, seq, Duration::from_millis(500))
+            .await;
         assert!(res.unwrap());
         let _ = responder.await;
     }
@@ -474,7 +485,9 @@ mod tests {
     async fn test_icmp_pinger_inert_timeout() {
         let (_handle, pinger) = IcmpPinger::inert();
         let target_ip = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 99));
-        let res = pinger.ping_timeout(target_ip, 1, Duration::from_millis(50)).await;
+        let res = pinger
+            .ping_timeout(target_ip, 1, Duration::from_millis(50))
+            .await;
         assert!(!res.unwrap());
     }
 }
