@@ -1,4 +1,7 @@
+use std::os::fd::OwnedFd;
+
 use thiserror::Error;
+use tokio::io::unix::AsyncFdRegisterError;
 
 #[derive(Debug, Error)]
 pub enum PppoeError {
@@ -43,4 +46,7 @@ pub enum PppoeError {
 
     #[error("Nix error: {0}")]
     Nix(#[from] nix::errno::Errno),
+
+    #[error("AsyncFd registration error: {0}")]
+    Fd(#[from] AsyncFdRegisterError<OwnedFd>),
 }

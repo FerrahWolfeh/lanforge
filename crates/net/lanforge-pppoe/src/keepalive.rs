@@ -26,7 +26,7 @@ pub async fn run_keepalive(
     max_failures: u32,
     prober: Option<(&ArpProber, Ipv4Addr, Option<Ipv4Addr>, Duration)>,
 ) -> Result<(), PppoeError> {
-    let async_chan_fd = AsyncFd::new(chan_fd.try_clone()?)?;
+    let async_chan_fd = unsafe { AsyncFd::register(chan_fd.try_clone()?)? };
     let mut echo_id: u8 = 0;
     let mut failed_echoes: u32 = 0;
 

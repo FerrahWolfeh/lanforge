@@ -34,8 +34,9 @@ impl RaEngine {
             ));
         }
 
-        let sock = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))
-            .map_err(|e| LabError::Socket(format!("Raw ICMPv6 socket requires CAP_NET_RAW: {e}")))?;
+        let sock = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6)).map_err(|e| {
+            LabError::Socket(format!("Raw ICMPv6 socket requires CAP_NET_RAW: {e}"))
+        })?;
 
         if let Some(iface) = &self.iface {
             let _ = sock.bind_device(Some(iface.as_bytes()));
@@ -44,7 +45,7 @@ impl RaEngine {
         let _ = sock.set_multicast_hops_v6(255);
         let _ = sock.set_nonblocking(true);
 
-        let async_fd = tokio::io::unix::AsyncFd::new(sock)
+        let async_fd = unsafe { tokio::io::unix::AsyncFd::register(sock) }
             .map_err(|e| LabError::Socket(format!("AsyncFd error: {e}")))?;
 
         // Build RS packet (Type: 133, Code: 0, Checksum: 0 (kernel calculates), Reserved: 0)
@@ -64,20 +65,27 @@ impl RaEngine {
         let res = tokio::time::timeout(self.timeout_duration, async {
             loop {
                 let mut guard = async_fd.readable().await.map_err(LabError::Io)?;
-                let res = guard
-                    .get_inner()
-                    .recv_from(unsafe { &mut *(&raw mut buf).cast::<[std::mem::MaybeUninit<u8>; 1500]>() });
+                let res = guard.get_inner().recv_from(unsafe {
+                    &mut *(&raw mut buf).cast::<[std::mem::MaybeUninit<u8>; 1500]>()
+                });
 
                 match res {
                     Ok((n, src_sa)) => {
                         guard.clear_ready();
                         if n >= 16 && buf[0] == ICMPV6_TYPE_RA {
-                            let src_ip = src_sa.as_socket().and_then(|s| match s {
-                                std::net::SocketAddr::V6(v6) => Some(*v6.ip()),
-                                std::net::SocketAddr::V4(_) => None,
-                            }).unwrap_or(Ipv6Addr::UNSPECIFIED);
+                            let src_ip = src_sa
+                                .as_socket()
+                                .and_then(|s| match s {
+                                    std::net::SocketAddr::V6(v6) => Some(*v6.ip()),
+                                    std::net::SocketAddr::V4(_) => None,
+                                })
+                                .unwrap_or(Ipv6Addr::UNSPECIFIED);
 
-                            return Ok(Self::parse_ra(&buf[..n], src_ip, start.elapsed().as_secs_f64() * 1000.0));
+                            return Ok(Self::parse_ra(
+                                &buf[..n],
+                                src_ip,
+                                start.elapsed().as_secs_f64() * 1000.0,
+                            ));
                         }
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -86,7 +94,8 @@ impl RaEngine {
                     Err(e) => return Err(LabError::Io(e)),
                 }
             }
-        }).await;
+        })
+        .await;
 
         res.unwrap_or_else(|_| Err(LabError::Timeout("Router Advertisement (RA)".to_string())))
     }
@@ -120,8 +129,10 @@ impl RaEngine {
                     let p_flags = opt_data[3];
                     let on_link = (p_flags & 0x80) != 0;
                     let auto_config = (p_flags & 0x40) != 0;
-                    let valid_lifetime = u32::from_be_bytes([opt_data[4], opt_data[5], opt_data[6], opt_data[7]]);
-                    let preferred_lifetime = u32::from_be_bytes([opt_data[8], opt_data[9], opt_data[10], opt_data[11]]);
+                    let valid_lifetime =
+                        u32::from_be_bytes([opt_data[4], opt_data[5], opt_data[6], opt_data[7]]);
+                    let preferred_lifetime =
+                        u32::from_be_bytes([opt_data[8], opt_data[9], opt_data[10], opt_data[11]]);
 
                     let mut p_bytes = [0u8; 16];
                     p_bytes.copy_from_slice(&opt_data[16..32]);

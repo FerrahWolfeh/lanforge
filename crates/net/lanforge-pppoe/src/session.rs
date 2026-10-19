@@ -68,7 +68,7 @@ impl PppoeSession {
             return Err(PppoeError::Nix(Errno::last()));
         }
 
-        let async_fd = AsyncFd::new(fd)?;
+        let async_fd = unsafe { AsyncFd::register(fd)? };
 
         Ok(Self { async_fd })
     }

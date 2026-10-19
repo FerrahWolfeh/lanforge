@@ -3,7 +3,7 @@ pub mod frame;
 use crate::error::PppoeError;
 use frame::{
     CODE_PADI, CODE_PADO, CODE_PADR, CODE_PADS, CODE_PADT, ETH_P_PPP_DISC, PppoeDiscoveryFrame,
-    Tag, TAG_AC_COOKIE, TAG_AC_NAME, TAG_HOST_UNIQ, TAG_SERVICE_NAME,
+    TAG_AC_COOKIE, TAG_AC_NAME, TAG_HOST_UNIQ, TAG_SERVICE_NAME, Tag,
 };
 use lanforge_types::identifiers::MacAddr;
 use nix::sys::socket::{AddressFamily, SockFlag, SockProtocol, SockType, socket};
@@ -51,7 +51,7 @@ impl PppoeDiscovery {
     #[allow(clippy::similar_names)]
     pub async fn run(&self) -> Result<DiscoveryResult, PppoeError> {
         let fd = bind_discovery_socket(self.ifindex)?;
-        let async_fd = AsyncFd::new(fd)?;
+        let async_fd = unsafe { AsyncFd::register(fd)? };
         let host_uniq: [u8; 4] = rand::random();
 
         // 1. Send PADI and wait for PADO
@@ -322,7 +322,9 @@ pub async fn send_padt(
     let mut ifname_buf = [0u8; libc::IF_NAMESIZE];
     let if_bytes = ifname.as_bytes();
     if if_bytes.len() >= libc::IF_NAMESIZE || if_bytes.contains(&0) {
-        return Err(PppoeError::NegotiationFailed("Invalid interface name".into()));
+        return Err(PppoeError::NegotiationFailed(
+            "Invalid interface name".into(),
+        ));
     }
     ifname_buf[..if_bytes.len()].copy_from_slice(if_bytes);
     let ifindex = unsafe { libc::if_nametoindex(ifname_buf.as_ptr().cast()) };
