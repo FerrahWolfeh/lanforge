@@ -71,12 +71,12 @@
 		if (dev.hostname && dev.hostname !== "—" && !dev.hostname.startsWith("<")) {
 			formHostname = dev.hostname;
 		}
-		const rawV4 = dev.v4?.ip || (dev.display_v4 && dev.display_v4 !== "—" ? dev.display_v4.replace(/\s*\?$/, "") : "");
+		const rawV4 = dev.v4?.ip || (dev.primary_v4 && dev.primary_v4 !== "—" ? dev.primary_v4.replace(/\s*\?$/, "") : "");
 		if (rawV4.trim()) {
 			formV4 = rawV4.trim();
 			if (fieldErrors.v4) fieldErrors.v4 = undefined;
 		}
-		const rawV6 = dev.v6?.ip || (dev.display_v6 && dev.display_v6 !== "—" ? dev.display_v6 : "");
+		const rawV6 = dev.v6?.ip || (dev.primary_v6 && dev.primary_v6 !== "—" ? dev.primary_v6 : "");
 		if (rawV6.trim()) formV6Suffix = rawV6.trim();
 		if (dev.ignore_dns_log !== undefined) {
 			formIgnoreDnsLog = dev.ignore_dns_log;

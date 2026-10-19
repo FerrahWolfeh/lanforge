@@ -120,8 +120,8 @@ impl ClientContext {
             ignore_dns_log: dev.ignore_dns_log,
             ignored_log_domains: dev.ignored_log_domains.clone(),
             duid: dev.duid.clone(),
-            display_v4: dev.display_v4(),
-            display_v6: dev.display_v6(gua_prefix, ula_prefix),
+            primary_v4: dev.primary_v4(),
+            primary_v6: dev.primary_v6(gua_prefix, ula_prefix),
             v4: match &dev.v4 {
                 IPv4State::Static(ip) => Some(Box::new(LeaseInfo {
                     ip: IpAddr::V4(*ip),
@@ -133,9 +133,13 @@ impl ClientContext {
                     expires: duration_since_epoch_u64(v.expires),
                     reserved: dev.is_static(),
                 })),
+                IPv4State::Discovery(ip, _) => Some(Box::new(LeaseInfo {
+                    ip: IpAddr::V4(*ip),
+                    expires: 0,
+                    reserved: false,
+                })),
                 IPv4State::None => None,
             },
-            seen_v4: dev.seen_v4.iter().map(|(ip, _)| *ip).collect(),
             v6: dev.primary_v6(gua_prefix, ula_prefix).map(|ip| {
                 let expires = dev
                     .v6

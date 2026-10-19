@@ -1,6 +1,5 @@
 use lanforge_types::auth::*;
 use lanforge_types::device::core::*;
-use lanforge_types::device::history::*;
 use lanforge_types::device::state::*;
 use lanforge_types::device::transient::*;
 use lanforge_types::dhcp::*;
@@ -51,9 +50,6 @@ fn test_print_all_struct_sizes() {
     print_size::<Device>("Device");
     print_size::<TransientHost>("TransientHost");
     print_size::<TransientOrigin>("TransientOrigin");
-    print_size::<LeaseHistoryEntry>("LeaseHistoryEntry");
-    print_size::<LeaseAction>("LeaseAction");
-    print_size::<LeaseKind>("LeaseKind");
 
     println!("\n=== NETWORK TYPES ===");
     print_size::<Ipv6Suffix>("Ipv6Suffix");

@@ -391,6 +391,33 @@ impl State {
     }
 
     #[must_use]
+    pub fn is_managed_slaac_prefix(&self, ip: &Ipv6Addr) -> bool {
+        for state in self.interfaces.interface_ips.values() {
+            if let Some(gua) = &state.gua
+                && lanforge_types::utils::network::ip_matches_prefix(ip, gua)
+            {
+                return true;
+            }
+            if let Some(ula) = &state.ula
+                && lanforge_types::utils::network::ip_matches_prefix(ip, ula)
+            {
+                return true;
+            }
+        }
+        if let Some(gua) = &self.interfaces.ra_gua_fallback
+            && lanforge_types::utils::network::ip_matches_prefix(ip, gua)
+        {
+            return true;
+        }
+        if let Some(ula) = &self.interfaces.ra_ula_fallback
+            && lanforge_types::utils::network::ip_matches_prefix(ip, ula)
+        {
+            return true;
+        }
+        false
+    }
+
+    #[must_use]
     pub fn get_interface_gua_at(&self, ifindex: u32) -> Option<(Ipv6Addr, u32, u32)> {
         let state = self.interfaces.interface_ips.get(&ifindex)?;
         state
@@ -482,7 +509,7 @@ impl State {
         &mut self,
         mac: MacAddr,
         f: impl FnOnce(&mut Device) -> Option<C>,
-        make_event: impl FnOnce(MacAddr, C, Option<String>) -> DeviceEvent,
+        make_event: impl FnOnce(MacAddr, C, Option<String>, bool) -> Option<DeviceEvent>,
     ) -> EventVec {
         let old_arc = self.devices.get(&mac).cloned();
         let was_in_table = old_arc.is_some();
@@ -502,6 +529,7 @@ impl State {
         }
 
         let is_worthy = dev.is_worthy();
+        let status_changed = is_worthy && was_status != dev.status;
         let mut events = EventVec::new();
 
         if let Some(change) = change
@@ -514,7 +542,9 @@ impl State {
                     hostname: hostname.clone(),
                 }));
             }
-            events.push(LanforgeEvent::Device(make_event(mac, change, hostname)));
+            if let Some(evt) = make_event(mac, change, hostname, status_changed) {
+                events.push(LanforgeEvent::Device(evt));
+            }
         }
 
         if is_worthy {
@@ -564,19 +594,28 @@ impl State {
         mac: MacAddr,
         f: impl FnOnce(&mut Device) -> Option<NetworkChange>,
     ) -> EventVec {
-        self.mutate_device_with(mac, f, |mac, change, hostname| {
+        self.mutate_device_with(mac, f, |mac, change, hostname, status_changed| {
+            if status_changed
+                && matches!(
+                    change,
+                    NetworkChange::ArpActivity { .. } | NetworkChange::NdpActivity { .. }
+                )
+            {
+                return None;
+            }
+
             if change.is_persistent() {
-                DeviceEvent::NetworkUpdate {
+                Some(DeviceEvent::NetworkUpdate {
                     mac,
                     change: Box::new(change),
                     hostname,
-                }
+                })
             } else {
-                DeviceEvent::NetworkActivity {
+                Some(DeviceEvent::NetworkActivity {
                     mac,
                     change: Box::new(change),
                     hostname,
-                }
+                })
             }
         })
     }
@@ -587,10 +626,12 @@ impl State {
         mac: MacAddr,
         f: impl FnOnce(&mut Device) -> Option<AdminChange>,
     ) -> EventVec {
-        self.mutate_device_with(mac, f, |mac, change, hostname| DeviceEvent::AdminUpdate {
-            mac,
-            change: Box::new(change),
-            hostname,
+        self.mutate_device_with(mac, f, |mac, change, hostname, _status_changed| {
+            Some(DeviceEvent::AdminUpdate {
+                mac,
+                change: Box::new(change),
+                hostname,
+            })
         })
     }
 
@@ -668,8 +709,6 @@ fn needs_reindex(old: &Device, new: &Device) -> bool {
         || old.dns_fallback != new.dns_fallback
         || old.duid != new.duid
         || old.v4.ip() != new.v4.ip()
-        || old.seen_v4.len() != new.seen_v4.len()
-        || old.seen_v4.iter().zip(&new.seen_v4).any(|((a, _), (b, _))| a != b)
         || old.v6.len() != new.v6.len()
         || old.v6.iter().zip(&new.v6).any(|(a, b)| match (a, b) {
             (IPv6State::Static(s1, _), IPv6State::Static(s2, _)) => s1 != s2,

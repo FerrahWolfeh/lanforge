@@ -1,7 +1,6 @@
 use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess, WhoisResponse};
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
-use lanforge_types::device::LeaseHistoryEntry;
 use lanforge_types::{identifiers::MacAddr, update::DeviceUpdate};
 use std::net::IpAddr;
 
@@ -32,21 +31,6 @@ impl ClientContext {
         );
 
         if let Some(dev) = device {
-            let mac = dev.mac;
-
-            // Fetch history from DB via storage handle
-            let history: Vec<LeaseHistoryEntry> = if let Some(storage) = self.ctx.storage_handle() {
-                match storage
-                    .send_query(lanforge_types::storage::StorageQuery::GetLeaseHistory(mac))
-                    .await
-                {
-                    Ok(lanforge_types::storage::StorageQueryResult::LeaseHistory(h)) => h,
-                    _ => Vec::new(),
-                }
-            } else {
-                Vec::new()
-            };
-
             // Build DeviceEntry
             let gua_prefix = self.current_gua;
             let status = self.ctx.get_status().unwrap_or_default();
@@ -54,7 +38,7 @@ impl ClientContext {
 
             let entry = self.map_device(dev.as_ref(), gua_prefix, ula_prefix);
 
-            Response::Whois(Box::new(WhoisResponse { entry, history }))
+            Response::Whois(Box::new(WhoisResponse { entry }))
         } else {
             Response::Error {
                 error: format!("Device '{target}' not found"),

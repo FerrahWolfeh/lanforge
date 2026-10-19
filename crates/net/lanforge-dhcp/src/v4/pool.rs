@@ -133,6 +133,13 @@ impl IpPool {
                             active_ips.insert(u32::from(lease.ip));
                         }
                     }
+                    IPv4State::Discovery(ip, ts) => {
+                        if now.duration_since(*ts).unwrap_or(Duration::MAX)
+                            < Device::ONLINE_THRESHOLD
+                        {
+                            active_ips.insert(u32::from(*ip));
+                        }
+                    }
                     IPv4State::None => {}
                 }
             }
@@ -210,6 +217,15 @@ impl IpPool {
                         lease.ip
                     );
                 }
+                IPv4State::Discovery(ip, _) => {
+                    if self.is_in_range(*ip) && !self.declined.contains_key(ip) {
+                        let owner = ctx.get_mac_by_ip(IpAddr::V4(*ip));
+                        if owner.is_none() || owner == Some(mac) {
+                            self.remove_from_available(*ip);
+                            return Some(*ip);
+                        }
+                    }
+                }
                 IPv4State::None => {}
             }
         }
@@ -218,7 +234,8 @@ impl IpPool {
         if let Some(req) = requested
             && self.is_in_range(req)
         {
-            if ctx.get_mac_by_ip(IpAddr::V4(req)).is_none() && !self.declined.contains_key(&req) {
+            let owner = ctx.get_mac_by_ip(IpAddr::V4(req));
+            if (owner.is_none() || owner == Some(mac)) && !self.declined.contains_key(&req) {
                 self.remove_from_available(req);
                 return Some(req);
             }

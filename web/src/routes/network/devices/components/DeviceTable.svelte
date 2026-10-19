@@ -68,10 +68,10 @@
 			const q = searchQuery.toLowerCase().trim();
 			const macMatch = dev.mac?.toLowerCase().includes(q);
 			const hostMatch = dev.hostname?.toLowerCase().includes(q);
-			const v4Match = (dev.display_v4 || dev.v4?.ip || "")
+			const v4Match = (dev.primary_v4 || dev.v4?.ip || "")
 				.toLowerCase()
 				.includes(q);
-			const v6Match = (dev.display_v6 || dev.v6?.ip || "")
+			const v6Match = (dev.primary_v6 || dev.v6?.ip || "")
 				.toLowerCase()
 				.includes(q);
 			return macMatch || hostMatch || v4Match || v6Match;
@@ -213,26 +213,26 @@
 			<!-- IP Addresses -->
 			<Table.Cell>
 				<div class="flex flex-col gap-0.5">
-					{#if dev.display_v4 || dev.v4?.ip}
+					{#if dev.primary_v4 || dev.v4?.ip}
 						<div class="flex items-center gap-1">
 							<span class="text-emerald-400 font-medium">
-								{dev.display_v4 || dev.v4?.ip}
+								{dev.primary_v4 || dev.v4?.ip}
 							</span>
 							<button
 								class="text-muted-foreground hover:text-foreground transition-colors p-0.5 cursor-pointer"
-								onclick={() => copyText(dev.display_v4 || dev.v4?.ip || "", "IPv4")}
+								onclick={() => copyText(dev.primary_v4 || dev.v4?.ip || "", "IPv4")}
 								title="Copy IPv4"
 							>
 								<CopyIcon class="size-2.5" />
 							</button>
 						</div>
 					{/if}
-					{#if dev.display_v6 || dev.v6?.ip}
+					{#if dev.primary_v6 || dev.v6?.ip}
 						<span class="text-sky-400 text-[10px] truncate max-w-[200px]">
-							{dev.display_v6 || dev.v6?.ip}
+							{dev.primary_v6 || dev.v6?.ip}
 						</span>
 					{/if}
-					{#if !dev.display_v4 && !dev.v4?.ip && !dev.display_v6 && !dev.v6?.ip}
+					{#if !dev.primary_v4 && !dev.v4?.ip && !dev.primary_v6 && !dev.v6?.ip}
 						<span class="text-muted-foreground font-sans text-xs">—</span>
 					{/if}
 				</div>
@@ -285,8 +285,8 @@
 							<CopyIcon class="size-3.5 text-muted-foreground" />
 							Copy MAC Address
 						</DropdownMenu.Item>
-						{#if dev.display_v4 || dev.v4?.ip}
-							<DropdownMenu.Item onclick={() => copyText(dev.display_v4 || dev.v4?.ip || "", "IPv4")} class="gap-2">
+						{#if dev.primary_v4 || dev.v4?.ip}
+							<DropdownMenu.Item onclick={() => copyText(dev.primary_v4 || dev.v4?.ip || "", "IPv4")} class="gap-2">
 								<CopyIcon class="size-3.5 text-muted-foreground" />
 								Copy IPv4 Address
 							</DropdownMenu.Item>

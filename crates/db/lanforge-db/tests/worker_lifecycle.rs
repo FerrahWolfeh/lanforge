@@ -298,12 +298,12 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
 
         let dev1 = restored_state.devices.get(&mac1).expect("mac1 restored");
         assert_eq!(dev1.display_hostname(), "nas.lan");
-        assert_eq!(dev1.display_v4(), "192.168.1.50");
+        assert_eq!(dev1.primary_v4(), Some(Ipv4Addr::new(192, 168, 1, 50)));
         assert_eq!(dev1.status, DeviceStatus::Offline, "Rebooted devices must initialize as Offline");
 
         let dev2 = restored_state.devices.get(&mac2).expect("mac2 restored");
         assert_eq!(dev2.display_hostname(), "printer.lan");
-        assert_eq!(dev2.display_v4(), "192.168.1.60");
+        assert_eq!(dev2.primary_v4(), Some(Ipv4Addr::new(192, 168, 1, 60)));
         assert_eq!(dev2.status, DeviceStatus::Offline);
 
         // 2. Verify DHCPv4 pool survived

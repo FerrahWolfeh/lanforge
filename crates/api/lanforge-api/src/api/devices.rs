@@ -5,7 +5,7 @@ use super::common::{HttpDataResponse, HttpPaginatedResponse, HttpWrappedResponse
 use lanforge_types::{
     device::{
         DeviceClass, DeviceStatus, IpClassification, Ipv6AddrOrSuffix, LearningMethod,
-        LeaseHistoryEntry, Origin, TransientOrigin,
+        Origin, TransientOrigin,
     },
     identifiers::{Duid, MacAddr},
     network::dhcp::empty_string_as_none,
@@ -104,10 +104,10 @@ pub struct DeviceEntry {
     pub last_seen: u64,
     /// Hostname, either broadcast by the device or manually set.
     pub hostname: String,
-    /// Human-readable primary `IPv4` display.
-    pub display_v4: String,
-    /// Human-readable primary `IPv6` display.
-    pub display_v6: String,
+    /// Primary `IPv4` address, if assigned or discovered.
+    pub primary_v4: Option<Ipv4Addr>,
+    /// Primary `IPv6` address, if assigned or discovered.
+    pub primary_v6: Option<Ipv6Addr>,
     /// Ingress network interface where the device was observed (e.g., "lan0.100").
     #[serde(default)]
     pub iface: Option<String>,
@@ -117,8 +117,6 @@ pub struct DeviceEntry {
     pub v4: Option<Box<LeaseInfo>>,
     /// Active `DHCPv6` lease information.
     pub v6: Option<Box<LeaseInfo>>,
-    /// List of all `IPv4` addresses seen for this device.
-    pub seen_v4: Vec<Ipv4Addr>,
     /// List of IPv6 addresses (SLAAC, GUA, etc.) tracked for this device.
     pub ipv6_addrs: Vec<Ipv6Entry>,
     /// Specific domains or wildcards to suppress from DNS query logs for this device.
@@ -160,8 +158,6 @@ pub struct DevicesMeta {
 pub struct WhoisResponse {
     /// Current device state.
     pub entry: DeviceEntry,
-    /// Historical lease assignments.
-    pub history: Vec<LeaseHistoryEntry>,
 }
 
 /// A single entry in the transient hosts list.

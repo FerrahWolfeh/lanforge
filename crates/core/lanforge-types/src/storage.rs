@@ -5,8 +5,6 @@ use std::net::SocketAddr;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::{ApiScopes, ApiTokenEntry, UserEntry, UserRole};
-use crate::device::LeaseHistoryEntry;
-use crate::identifiers::MacAddr;
 use crate::network::dns::adblock::{
     AdblockRuleAction, AdblockSourceFormat, AdblockUrlKind, RewriteAnswer,
 };
@@ -89,8 +87,7 @@ pub enum StorageQuery {
     ClearLogs,
     ResetDb,
 
-    // --- Device / Leases / Logs History ---
-    GetLeaseHistory(MacAddr),
+    // --- Leases / Logs History ---
     GetLogHistory(usize),
 
     // --- DNS Logs & Analytics ---
@@ -177,7 +174,6 @@ pub enum StorageQueryResult {
     ApiTokenInfo(Option<(String, ApiScopes, Option<i64>)>),
     User(Option<UserEntry>),
     Users(Vec<UserEntry>),
-    LeaseHistory(Vec<LeaseHistoryEntry>),
     DnsQueryHistory {
         queries: Vec<QueryLogEntry>,
         total: usize,

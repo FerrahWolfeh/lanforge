@@ -5,7 +5,7 @@ pub(crate) mod network;
 pub(crate) mod storage;
 
 use lanforge_types::{
-    device::{Device, IPv6State},
+    device::{Device, IPv4State, IPv6State},
     events::EventVec,
     update::DeviceUpdate,
 };
@@ -232,10 +232,13 @@ fn should_debounce_arp(
     ip: std::net::Ipv4Addr,
     is_active: bool,
 ) -> bool {
-    is_active
-        && state.devices.get(&mac).is_some_and(|dev| {
-            is_recently_seen(dev) && dev.seen_v4.iter().any(|(a, _)| *a == ip)
-        })
+    state.devices.get(&mac).is_some_and(|dev| {
+        if is_active {
+            is_recently_seen(dev) && dev.v4.ip() == Some(ip)
+        } else {
+            !matches!(dev.v4, IPv4State::None)
+        }
+    })
 }
 
 fn should_debounce_ndp(
@@ -244,10 +247,17 @@ fn should_debounce_ndp(
     ip: std::net::Ipv6Addr,
     is_active: bool,
 ) -> bool {
-    is_active
-        && state.devices.get(&mac).is_some_and(|dev| {
-            is_recently_seen(dev) && dev.v6.iter().any(|s| s.ip() == Some(ip))
-        })
+    state.devices.get(&mac).is_some_and(|dev| {
+        let has_ip = dev.v6.iter().any(|s| match s {
+            IPv6State::Static(s, _) => s.matches(ip),
+            _ => s.ip() == Some(ip),
+        });
+        if is_active {
+            is_recently_seen(dev) && has_ip
+        } else {
+            has_ip
+        }
+    })
 }
 
 fn should_debounce_slaac(
@@ -256,16 +266,19 @@ fn should_debounce_slaac(
     addr: std::net::Ipv6Addr,
     is_active: bool,
 ) -> bool {
-    is_active
-        && state.devices.get(&mac).is_some_and(|dev| {
-            is_recently_seen(dev)
-                && dev.v6.iter().any(|s| match s {
-                    IPv6State::Slaac(a, _) => *a == addr,
-                    IPv6State::Dynamic(l) => l.ip == addr,
-                    IPv6State::Static(suf, _) => suf.matches(addr),
-                    _ => false,
-                })
-        })
+    state.devices.get(&mac).is_some_and(|dev| {
+        let has_slaac = dev.v6.iter().any(|s| match s {
+            IPv6State::Slaac(a, _) => *a == addr,
+            IPv6State::Dynamic(l) => l.ip == addr,
+            IPv6State::Static(suf, _) => suf.matches(addr),
+            _ => false,
+        });
+        if is_active {
+            is_recently_seen(dev) && has_slaac
+        } else {
+            has_slaac
+        }
+    })
 }
 
 fn debounce_neighbor_entries(
@@ -273,15 +286,28 @@ fn debounce_neighbor_entries(
     entries: &mut Vec<(lanforge_types::identifiers::MacAddr, IpAddr, bool)>,
 ) {
     entries.retain(|(mac, ip, is_active)| {
-        if !*is_active {
+        let Some(dev) = state.devices.get(mac) else {
             return true;
+        };
+        match ip {
+            IpAddr::V4(v4) => {
+                if *is_active {
+                    !(is_recently_seen(dev) && dev.v4.ip() == Some(*v4))
+                } else {
+                    matches!(dev.v4, IPv4State::None)
+                }
+            }
+            IpAddr::V6(v6) => {
+                let has_ip = dev.v6.iter().any(|s| match s {
+                    IPv6State::Static(s, _) => s.matches(*v6),
+                    _ => s.ip() == Some(*v6),
+                });
+                if *is_active {
+                    !(is_recently_seen(dev) && has_ip)
+                } else {
+                    !has_ip
+                }
+            }
         }
-        state.devices.get(mac).is_none_or(|dev| {
-            let has_ip = match *ip {
-                IpAddr::V4(v4) => dev.seen_v4.iter().any(|(a, _)| *a == v4),
-                IpAddr::V6(v6) => dev.v6.iter().any(|s| s.ip() == Some(v6)),
-            };
-            !(is_recently_seen(dev) && has_ip)
-        })
     });
 }

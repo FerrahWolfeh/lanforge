@@ -122,7 +122,7 @@ impl ClientContext {
                             to_invalidate.push((dev.mac, lease.ip, hostname, reason));
                         }
                     }
-                    IPv4State::None => {}
+                    IPv4State::Discovery(..) | IPv4State::None => {}
                 }
             }
             (valid_count, static_count, to_invalidate)

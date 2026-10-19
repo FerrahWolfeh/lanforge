@@ -1,9 +1,9 @@
 #![allow(clippy::type_complexity)]
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 
 pub use lanforge_types::auth::{ApiScopes, ApiTokenEntry, UserEntry, UserInfo, UserRole};
-use lanforge_types::device::{Device, LeaseAction, LeaseHistoryEntry, LeaseKind};
+use lanforge_types::device::Device;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
@@ -125,18 +125,6 @@ pub trait DeviceStore: Send + Sync {
 
     /// Clears the devices tables cascade.
     fn reset(&self) -> Result<(), DbError>;
-
-    /// Records a DHCP lease lifecycle event.
-    fn record_lease_event(
-        &self,
-        mac: MacAddr,
-        ip: IpAddr,
-        lease_kind: LeaseKind,
-        action: LeaseAction,
-    ) -> Result<(), DbError>;
-
-    /// Retrieves up to 100 recent lease history entries for a MAC address.
-    fn get_lease_history(&self, mac: MacAddr) -> Result<Vec<LeaseHistoryEntry>, DbError>;
 
     /// Synchronizes a batch of device updates (full, base-only, and deletions) atomically.
     fn batch_sync_devices(

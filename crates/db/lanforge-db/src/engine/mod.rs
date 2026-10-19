@@ -1,6 +1,6 @@
 //! `LanforgeDb` facade wrapping `lanforge-db-redb`.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::Path;
 
 use lanforge_core::context::PersistenceSnapshot;
@@ -12,7 +12,7 @@ use lanforge_db_core::{
 };
 use lanforge_db_redb::RedbDatabase;
 use lanforge_types::auth::{ApiScopes, UserRole};
-use lanforge_types::device::{Device, DeviceStatus, LeaseAction, LeaseHistoryEntry, LeaseKind};
+use lanforge_types::device::{Device, DeviceStatus};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
@@ -197,23 +197,6 @@ impl DeviceStore for LanforgeDb {
 
     fn reset(&self) -> Result<(), DbError> {
         self.inner.reset()
-    }
-
-    fn record_lease_event(
-        &self,
-        mac: MacAddr,
-        ip: IpAddr,
-        lease_kind: LeaseKind,
-        action: LeaseAction,
-    ) -> Result<(), DbError> {
-        self.inner.record_lease_event(mac, ip, lease_kind, action)
-    }
-
-    fn get_lease_history(
-        &self,
-        mac: MacAddr,
-    ) -> Result<Vec<LeaseHistoryEntry>, DbError> {
-        self.inner.get_lease_history(mac)
     }
 
     fn batch_sync_devices(

@@ -52,6 +52,14 @@ pub struct V6PrefixLease {
 pub enum IPv4State {
     Static(Ipv4Addr),
     Dynamic(Box<V4Lease>),
+    Discovery(
+        Ipv4Addr,
+        #[serde(
+            serialize_with = "serialize_time",
+            deserialize_with = "deserialize_time"
+        )]
+        SystemTime,
+    ),
     #[default]
     None,
 }
@@ -60,7 +68,7 @@ impl IPv4State {
     #[must_use]
     pub fn ip(&self) -> Option<Ipv4Addr> {
         match self {
-            Self::Static(ip) => Some(*ip),
+            Self::Static(ip) | Self::Discovery(ip, _) => Some(*ip),
             Self::Dynamic(lease) => Some(lease.ip),
             Self::None => None,
         }

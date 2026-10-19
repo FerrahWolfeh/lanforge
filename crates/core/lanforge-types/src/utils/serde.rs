@@ -1,8 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 use crate::utils::{secs_to_system_time, system_time_to_secs};
-use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serializer};
-use std::net::Ipv4Addr;
 use std::time::SystemTime;
 
 pub fn serialize_time_opt<S>(time: &Option<SystemTime>, serializer: S) -> Result<S::Ok, S::Error>
@@ -22,20 +20,6 @@ where
     serializer.serialize_u64(system_time_to_secs(*time))
 }
 
-pub fn serialize_seen_v4<S>(
-    seen: &[(Ipv4Addr, SystemTime)],
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let mut seq = serializer.serialize_seq(Some(seen.len()))?;
-    for (ip, time) in seen {
-        seq.serialize_element(&(*ip, system_time_to_secs(*time)))?;
-    }
-    seq.end()
-}
-
 pub fn deserialize_time<'de, D>(deserializer: D) -> Result<SystemTime, D::Error>
 where
     D: Deserializer<'de>,
@@ -50,17 +34,4 @@ where
 {
     let opt_secs = Option::<u64>::deserialize(deserializer)?;
     Ok(opt_secs.map(secs_to_system_time))
-}
-
-pub fn deserialize_seen_v4<'de, D>(
-    deserializer: D,
-) -> Result<Vec<(Ipv4Addr, SystemTime)>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let raw = Vec::<(Ipv4Addr, u64)>::deserialize(deserializer)?;
-    Ok(raw
-        .into_iter()
-        .map(|(ip, secs)| (ip, secs_to_system_time(secs)))
-        .collect())
 }

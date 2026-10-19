@@ -36,6 +36,7 @@
 
 	let searchQuery = $state("");
 	let selectedTopic = $state("");
+	let showActivity = $state(false);
 	let pageIndex = $state(0);
 	let pageSize = $state(50);
 	let selectedEvent = $state<SseEvent | null>(null);
@@ -110,6 +111,10 @@
 	const filteredEvents = $derived.by(() => {
 		const q = searchQuery.trim().toLowerCase();
 		return events.filter((ev) => {
+			if (!showActivity && ev.kind === "NetworkActivity" && !q) {
+				return false;
+			}
+
 			if (selectedTopic) {
 				const topic = (ev.topic || "system").toLowerCase();
 				if (selectedTopic === "dhcp") {
@@ -241,6 +246,21 @@
 				{/each}
 			</Select.Content>
 		</Select.Root>
+
+		<!-- Transient Activity Toggle -->
+		<Button
+			variant={showActivity ? "secondary" : "outline"}
+			size="sm"
+			class="h-9 gap-1.5 text-xs"
+			onclick={() => {
+				showActivity = !showActivity;
+				pageIndex = 0;
+			}}
+			title={showActivity ? "Hide transient ARP/NDP activity events" : "Show transient ARP/NDP activity events"}
+		>
+			<ActivityIcon class="size-3.5 {showActivity ? 'text-emerald-500' : 'text-muted-foreground'}" />
+			<span>{showActivity ? "Activity: Shown" : "Activity: Hidden"}</span>
+		</Button>
 	{/snippet}
 
 	{#snippet actions()}

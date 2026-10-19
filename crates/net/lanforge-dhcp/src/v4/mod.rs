@@ -630,8 +630,8 @@ impl Dhcpv4Service {
                 .values()
                 .filter_map(|dev| match &dev.v4 {
                     IPv4State::Dynamic(lease) => Some((dev.mac, lease.ip)),
-                    // Static reservations (fixed IPs inside or outside pool ranges) MUST NOT be touched
-                    IPv4State::Static(_) | IPv4State::None => None,
+                    // Static reservations (fixed IPs inside or outside pool ranges) and discovered IPs MUST NOT be touched
+                    IPv4State::Static(_) | IPv4State::Discovery(..) | IPv4State::None => None,
                 })
                 .collect()
         });

@@ -43,6 +43,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceDependency};
 use lanforge_transport::ArpProber;
+use lanforge_types::device::{IPv4State, IPv6State, Origin};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::NeighborEvent;
 use lanforge_types::system::ServiceState;
@@ -56,7 +57,7 @@ use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::broadcast;
 use tokio::time::{interval, sleep};
 use tracing::{debug, error, info, warn};
@@ -152,21 +153,30 @@ impl DiscoveryService {
             .ctx
             .apply_with_events(DeviceUpdate::NeighborBatch { entries: batch });
 
-        // Diagnostic: Publish summary of the batch
+        // Diagnostic: Publish summary of the batch only if new devices were discovered
         let duration = start.elapsed();
         let new_count = events
             .iter()
             .filter(|e| matches!(e, LanforgeEvent::Device(DeviceEvent::Discovered { .. })))
             .count();
 
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::Device(DeviceEvent::NeighborBatchSummary {
+        if new_count > 0 {
+            let _ = self
+                .ctx
+                .bus()
+                .publish(LanforgeEvent::Device(DeviceEvent::NeighborBatchSummary {
+                    total,
+                    new: new_count,
+                    duration_ms: u64::try_from(duration.as_millis()).unwrap_or_default(),
+                }));
+        } else {
+            debug!(
+                service = "DiscoveryService",
                 total,
-                new: new_count,
-                duration_ms: u64::try_from(duration.as_millis()).unwrap_or_default(),
-            }));
+                duration_ms = duration.as_millis(),
+                "Neighbor batch processed with 0 new devices"
+            );
+        }
     }
 
     pub(crate) fn process_neighbor_event(
@@ -417,24 +427,52 @@ fn spawn_sweep_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext, ping_interval
     tokio::spawn(async move {
         let mut sweep_timer = interval(Duration::from_secs(ping_interval));
         let mut seq_counter = 0u16;
+        let sweep_threshold = Duration::from_secs(ping_interval);
         loop {
             if !ctx.is_running() {
                 break;
             }
             sweep_timer.tick().await;
 
+            let now = SystemTime::now();
             let ips = ctx.with_state(|state| {
                 let mut all_ips = SmallVec::<[IpAddr; 32]>::new();
                 for dev in state.devices.values() {
-                    if dev.origin != lanforge_types::device::Origin::System {
-                        if let Some(v4) = dev.v4.ip() {
-                            all_ips.push(IpAddr::V4(v4));
+                    if dev.origin == Origin::System {
+                        continue;
+                    }
+                    match &dev.v4 {
+                        IPv4State::Static(ip) => {
+                            let elapsed = now.duration_since(dev.last_seen).unwrap_or(Duration::MAX);
+                            if elapsed >= sweep_threshold {
+                                all_ips.push(IpAddr::V4(*ip));
+                            }
                         }
-                        for (v4_seen, _) in &dev.seen_v4 {
-                            all_ips.push(IpAddr::V4(*v4_seen));
+                        IPv4State::Dynamic(lease) => {
+                            let elapsed = now.duration_since(lease.last_seen).unwrap_or(Duration::MAX);
+                            if elapsed >= sweep_threshold {
+                                all_ips.push(IpAddr::V4(lease.ip));
+                            }
                         }
-                        for v6_state in &dev.v6 {
-                            if let Some(v6_ip) = v6_state.ip() {
+                        IPv4State::Discovery(ip, ts) => {
+                            let elapsed = now.duration_since(*ts).unwrap_or(Duration::MAX);
+                            if elapsed >= sweep_threshold {
+                                all_ips.push(IpAddr::V4(*ip));
+                            }
+                        }
+                        IPv4State::None => {}
+                    }
+                    for v6_state in &dev.v6 {
+                        if let Some(v6_ip) = v6_state.ip() {
+                            let ts = match v6_state {
+                                IPv6State::Static(_, ts)
+                                | IPv6State::Slaac(_, ts)
+                                | IPv6State::Discovery(_, ts)
+                                | IPv6State::LinkLocal(_, ts) => *ts,
+                                IPv6State::Dynamic(lease) => lease.last_seen,
+                            };
+                            let elapsed = now.duration_since(ts).unwrap_or(Duration::MAX);
+                            if elapsed >= sweep_threshold {
                                 all_ips.push(IpAddr::V6(v6_ip));
                             }
                         }

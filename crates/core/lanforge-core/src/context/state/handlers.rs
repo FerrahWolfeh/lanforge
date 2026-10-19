@@ -17,6 +17,13 @@ use lanforge_types::device::{
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::Ipv6AddrOrSuffix;
 
+type ProcessedNeighbor = (
+    IpAddr,
+    bool,
+    V6ObservationOrigin,
+    Option<(Duid, u32, SystemTime)>,
+);
+
 impl State {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn handle_v4_lease_granted(
@@ -97,6 +104,11 @@ impl State {
 
         let orphaned = discovery.remove_orphan(&ip);
         let orphaned_info = orphaned.clone();
+        let origin = if self.is_managed_slaac_prefix(&ip) {
+            V6ObservationOrigin::SlaacTracker
+        } else {
+            V6ObservationOrigin::NdpMonitor
+        };
 
         let mut events = self.mutate_device(mac, |dev| {
             let mut change = if let Some((duid, iaid, expires)) = &orphaned {
@@ -129,7 +141,7 @@ impl State {
                 None
             };
 
-            if let Some(c) = dev.apply_v6_observation(ip, is_active, V6ObservationOrigin::NdpMonitor) {
+            if let Some(c) = dev.apply_v6_observation(ip, is_active, origin) {
                 // If it's Link-Local and we are already worthy, don't trigger a dirty update.
                 // This keeps NdpSeen events quiet for background traffic.
                 if classify_ipv6(&ip) == IpClassification::LinkLocal && dev.is_worthy() {
@@ -443,6 +455,7 @@ impl State {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn handle_neighbor_batch(
         &mut self,
@@ -456,13 +469,40 @@ impl State {
         // FAST-PATH: If all entries belong to the same MAC (very common during discovery bursts for one device)
         let first_mac = entries[0].0;
         if entries.iter().all(|(mac, _, _)| *mac == first_mac) {
+            let processed_entries: Vec<ProcessedNeighbor> = entries
+                .iter()
+                .map(|(_, ip, active)| match ip {
+                    IpAddr::V4(_) => (*ip, *active, V6ObservationOrigin::NdpMonitor, None),
+                    IpAddr::V6(v6) => {
+                        let origin = if self.is_managed_slaac_prefix(v6) {
+                            V6ObservationOrigin::SlaacTracker
+                        } else {
+                            V6ObservationOrigin::NdpMonitor
+                        };
+                        let orphaned = discovery.remove_orphan(v6);
+                        (*ip, *active, origin, orphaned)
+                    }
+                })
+                .collect();
+
             let events = self.mutate_device(first_mac, |dev| {
                 let mut first_change = None;
-                for (_, ip, active) in &entries {
+                for (ip, active, origin, orphaned) in &processed_entries {
+                    if let (IpAddr::V6(v6), Some((duid, iaid, expires))) = (ip, orphaned) {
+                        let c = dev.apply_v6_lease(duid, *iaid, *v6, *expires);
+                        if first_change.is_none() {
+                            first_change = c;
+                        }
+                    }
                     let change = match ip {
                         IpAddr::V4(v4) => dev.apply_arp_observation(*v4, *active),
                         IpAddr::V6(v6) => {
-                            dev.apply_v6_observation(*v6, *active, V6ObservationOrigin::NdpMonitor)
+                            let c = dev.apply_v6_observation(*v6, *active, *origin);
+                            if classify_ipv6(v6) == IpClassification::LinkLocal && dev.is_worthy() {
+                                None
+                            } else {
+                                c
+                            }
                         }
                     };
                     if let Some(c) = change
@@ -498,21 +538,46 @@ impl State {
         }
 
         // SLOW-PATH: Multiple MACs in the same batch
-        // Re-implementing slow path more clearly
-        let mut grouped_updates: HashMap<MacAddr, Vec<(IpAddr, bool)>> = HashMap::new();
+        let mut grouped_updates: HashMap<MacAddr, Vec<ProcessedNeighbor>> = HashMap::new();
         for (mac, ip, active) in entries {
-            grouped_updates.entry(mac).or_default().push((ip, active));
+            let (origin, orphaned) = match &ip {
+                IpAddr::V4(_) => (V6ObservationOrigin::NdpMonitor, None),
+                IpAddr::V6(v6) => {
+                    let origin = if self.is_managed_slaac_prefix(v6) {
+                        V6ObservationOrigin::SlaacTracker
+                    } else {
+                        V6ObservationOrigin::NdpMonitor
+                    };
+                    let orphaned = discovery.remove_orphan(v6);
+                    (origin, orphaned)
+                }
+            };
+            grouped_updates
+                .entry(mac)
+                .or_default()
+                .push((ip, active, origin, orphaned));
         }
 
         let mut events = EventVec::new();
         for (mac, updates) in grouped_updates {
             let mut dev_events = self.mutate_device(mac, |dev| {
                 let mut first_change = None;
-                for (ip, active) in &updates {
+                for (ip, active, origin, orphaned) in &updates {
+                    if let (IpAddr::V6(v6), Some((duid, iaid, expires))) = (ip, orphaned) {
+                        let c = dev.apply_v6_lease(duid, *iaid, *v6, *expires);
+                        if first_change.is_none() {
+                            first_change = c;
+                        }
+                    }
                     let change = match ip {
                         IpAddr::V4(v4) => dev.apply_arp_observation(*v4, *active),
                         IpAddr::V6(v6) => {
-                            dev.apply_v6_observation(*v6, *active, V6ObservationOrigin::NdpMonitor)
+                            let c = dev.apply_v6_observation(*v6, *active, *origin);
+                            if classify_ipv6(v6) == IpClassification::LinkLocal && dev.is_worthy() {
+                                None
+                            } else {
+                                c
+                            }
                         }
                     };
                     if let Some(c) = change
@@ -525,13 +590,13 @@ impl State {
             });
             events.append(&mut dev_events);
 
-            for (ip, _) in &updates {
+            for (ip, _, _, _) in &updates {
                 if let IpAddr::V6(v6) = ip {
                     discovery.insert_ndp(*v6, mac);
                 }
             }
 
-            let matched_name = updates.iter().find_map(|(ip, _)| {
+            let matched_name = updates.iter().find_map(|(ip, _, _, _)| {
                 self.transient_hosts
                     .get(ip)
                     .map(|t| t.hostname.name.clone())

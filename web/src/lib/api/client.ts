@@ -34,7 +34,6 @@ import type {
 	DnsUpstreamEntry,
 	DnsUpstreamsResponse,
 	HostConfigEntry,
-	LeaseHistoryEntry,
 	LeaseTarget,
 	LoginRequest,
 	LoginResponse,
@@ -345,8 +344,7 @@ export const whois = async (target: string): Promise<WhoisResponse> => {
 	const res = await get<any>(`/devices/${encodeURIComponent(target)}`);
 	if (res && typeof res === 'object') {
 		const entry = (res.entry ?? res.data?.entry ?? res) as DeviceEntry;
-		const history = (res.history ?? res.data?.history ?? []) as LeaseHistoryEntry[];
-		return { entry, history };
+		return { entry };
 	}
 	throw new ApiError(404, `Device not found: ${target}`);
 };

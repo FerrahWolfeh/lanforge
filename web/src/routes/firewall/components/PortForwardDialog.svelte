@@ -133,13 +133,13 @@
 	// ── DeviceCombobox callback ───────────────────────────────────────────────
 	function handleDeviceSelect(dev: DeviceEntry) {
 		selectedDevice = dev;
-		const v4 = cleanIp(dev.v4?.ip || dev.display_v4);
+		const v4 = cleanIp(dev.v4?.ip || dev.primary_v4);
 		if (v4 && v4 !== "—") internalIp = v4;
 
-		// Extract GUA or ULA or primary display_v6
+		// Extract GUA or ULA or primary primary_v6
 		const v6Gua = dev.ipv6_addrs?.find((a) => a.kind.toLowerCase() === "gua")?.addr;
 		const v6Ula = dev.ipv6_addrs?.find((a) => a.kind.toLowerCase() === "ula")?.addr;
-		const primaryV6 = cleanIp(v6Gua || dev.display_v6 || v6Ula);
+		const primaryV6 = cleanIp(v6Gua || dev.primary_v6 || v6Ula);
 		if (primaryV6 && primaryV6 !== "—") internalIpv6 = primaryV6;
 
 		// Auto-switch mode based on available addresses
@@ -324,14 +324,14 @@
 					<div class="flex flex-wrap items-center gap-1.5 text-[11px] pt-1">
 						<span class="text-muted-foreground">Detected:</span>
 						<span class="font-semibold text-foreground">{selectedDevice.hostname || selectedDevice.mac}</span>
-						{#if selectedDevice.display_v4}
+						{#if selectedDevice.primary_v4}
 							<Badge variant="secondary" class="font-mono text-[10px] h-5">
-								v4: {selectedDevice.display_v4}
+								v4: {selectedDevice.primary_v4}
 							</Badge>
 						{/if}
-						{#if selectedDevice.display_v6}
+						{#if selectedDevice.primary_v6}
 							<Badge variant="secondary" class="font-mono text-[10px] h-5 text-purple-400">
-								v6: {selectedDevice.display_v6}
+								v6: {selectedDevice.primary_v6}
 							</Badge>
 						{/if}
 					</div>

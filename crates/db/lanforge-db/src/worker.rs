@@ -336,12 +336,6 @@ impl DbWorker {
                     .publish(LanforgeEvent::Storage(StorageEvent::DbResetCompleted));
                 Ok(StorageQueryResult::Success)
             }
-            StorageQuery::GetLeaseHistory(mac) => {
-                let history = db
-                    .get_lease_history(mac)
-                    .map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::LeaseHistory(history))
-            }
             StorageQuery::GetLogHistory(limit) => {
                 let history = log_db
                     .get_history(limit)

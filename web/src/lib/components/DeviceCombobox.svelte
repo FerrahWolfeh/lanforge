@@ -55,9 +55,9 @@
 				(d) =>
 					(d.hostname && d.hostname.toLowerCase().includes(q)) ||
 					(d.mac && d.mac.toLowerCase().includes(q)) ||
-					(d.display_v4 && d.display_v4.toLowerCase().includes(q)) ||
+					(d.primary_v4 && d.primary_v4.toLowerCase().includes(q)) ||
 					(d.v4?.ip && d.v4.ip.toLowerCase().includes(q)) ||
-					(d.display_v6 && d.display_v6.toLowerCase().includes(q)),
+					(d.primary_v6 && d.primary_v6.toLowerCase().includes(q)),
 			)
 			.slice(0, 8);
 	});
@@ -161,19 +161,19 @@
 						</span>
 					</div>
 					<div class="flex items-center gap-2 shrink-0">
-						{#if dev.display_v4 || dev.v4?.ip}
+						{#if dev.primary_v4 || dev.v4?.ip}
 							<span
 								class="text-emerald-500 font-mono text-[11px]"
 							>
-								{dev.display_v4 || dev.v4?.ip}
+								{dev.primary_v4 || dev.v4?.ip}
 							</span>
 						{/if}
-						{#if dev.display_v6}
+						{#if dev.primary_v6}
 							<span
 								class="text-purple-400 font-mono text-[10px] hidden sm:inline max-w-[130px] truncate"
-								title={dev.display_v6}
+								title={dev.primary_v6}
 							>
-								{dev.display_v6}
+								{dev.primary_v6}
 							</span>
 						{/if}
 						{#if isSelected}

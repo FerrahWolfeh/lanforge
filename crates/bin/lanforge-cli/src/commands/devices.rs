@@ -127,7 +127,7 @@ async fn list_devices(client: &LanforgeClient, printer: &Printer, args: ListArgs
 
 fn sort_devices(devices: &mut [DeviceEntry], sort_key: &str) {
     match sort_key {
-        "ip" => devices.sort_by(|a, b| a.display_v4.cmp(&b.display_v4)),
+        "ip" => devices.sort_by_key(|d| d.primary_v4),
         "mac" => devices.sort_by_key(|d| d.mac),
         "host" | "hostname" => devices.sort_by(|a, b| {
             a.hostname
@@ -189,17 +189,15 @@ pub fn render_devices_table(resp: &DevicesResponse, printer: &Printer) {
             dev.hostname.bold().cyan().to_string()
         };
 
-        let v4 = if dev.display_v4.is_empty() || dev.display_v4 == "-" {
-            "-".dimmed().to_string()
-        } else {
-            dev.display_v4.yellow().to_string()
-        };
+        let v4 = dev.primary_v4.map_or_else(
+            || "-".dimmed().to_string(),
+            |ip| ip.to_string().yellow().to_string(),
+        );
 
-        let v6 = if dev.display_v6.is_empty() || dev.display_v6 == "-" {
-            "-".dimmed().to_string()
-        } else {
-            dev.display_v6.dimmed().to_string()
-        };
+        let v6 = dev.primary_v6.map_or_else(
+            || "-".dimmed().to_string(),
+            |ip| ip.to_string().dimmed().to_string(),
+        );
 
         let mac = dev.mac.to_string();
         let last_seen = format_time_ago(i64::try_from(dev.last_seen).unwrap_or(0));
@@ -272,26 +270,30 @@ fn render_device_details(whois: &WhoisResponse, printer: &Printer) {
     };
     println!("    {:<20} {}", "Hostname:".dimmed(), host_str);
 
-    let v4_str = if dev.display_v4.is_empty() || dev.display_v4 == "-" {
-        "none".dimmed().to_string()
-    } else if let Some(v4_lease) = &dev.v4 {
-        if v4_lease.expires == 0 {
-            format!("{} (static reservation)", dev.display_v4.bold().yellow())
-        } else {
-            let rem = v4_lease.expires.saturating_sub(dev.last_seen);
-            format!(
-                "{} (lease valid: {} remaining)",
-                dev.display_v4.bold().yellow(),
-                format_duration_secs(rem)
+    let v4_str = dev.primary_v4.map_or_else(
+        || "none".dimmed().to_string(),
+        |ip| {
+            dev.v4.as_ref().map_or_else(
+                || ip.to_string().bold().yellow().to_string(),
+                |v4_lease| {
+                    if v4_lease.expires == 0 {
+                        format!("{} (static reservation)", ip.to_string().bold().yellow())
+                    } else {
+                        let rem = v4_lease.expires.saturating_sub(dev.last_seen);
+                        format!(
+                            "{} (lease valid: {} remaining)",
+                            ip.to_string().bold().yellow(),
+                            format_duration_secs(rem)
+                        )
+                    }
+                },
             )
-        }
-    } else {
-        dev.display_v4.bold().yellow().to_string()
-    };
+        },
+    );
     println!("    {:<20} {}", "IPv4 Address:".dimmed(), v4_str);
 
-    if !dev.display_v6.is_empty() && dev.display_v6 != "-" {
-        println!("    {:<20} {}", "Primary IPv6:".dimmed(), dev.display_v6.magenta());
+    if let Some(v6) = dev.primary_v6 {
+        println!("    {:<20} {}", "Primary IPv6:".dimmed(), v6.to_string().magenta());
     }
 
     if let Some(duid) = &dev.duid {
@@ -327,26 +329,6 @@ fn render_device_details(whois: &WhoisResponse, printer: &Printer) {
     );
     println!("    {:<20} {}", "Last Seen:".dimmed(), last_seen_str);
 
-    if !whois.history.is_empty() {
-        println!();
-        println!("    {}", "Lease History:".bold().white());
-        let mut hist_table = printer.new_table();
-        hist_table.set_header(vec!["IP Address", "Timestamp", "Type"]);
-
-        for h in &whois.history {
-            let ts_secs = h
-                .timestamp
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
-            hist_table.add_row(vec![
-                h.ip.to_string(),
-                format_time_ago(ts_secs),
-                format!("{:?} ({:?})", h.lease_type, h.action),
-            ]);
-        }
-        println!("{hist_table}");
-    }
-
     println!();
 }
 
@@ -380,8 +362,8 @@ mod tests {
                 DeviceEntry {
                     mac: MacAddr::from_str("00:11:22:33:44:55").unwrap(),
                     hostname: "my-phone".to_string(),
-                    display_v4: "192.168.3.100".to_string(),
-                    display_v6: "-".to_string(),
+                    primary_v4: Some("192.168.3.100".parse().unwrap()),
+                    primary_v6: None,
                     online: true,
                     status: DeviceStatus::Online,
                     learning_method: LearningMethod::DhcpV4,
@@ -395,8 +377,8 @@ mod tests {
                 DeviceEntry {
                     mac: MacAddr::from_str("00:aa:bb:cc:dd:ee").unwrap(),
                     hostname: "workstation".to_string(),
-                    display_v4: "192.168.3.50".to_string(),
-                    display_v6: "-".to_string(),
+                    primary_v4: Some("192.168.3.50".parse().unwrap()),
+                    primary_v6: None,
                     online: true,
                     status: DeviceStatus::Online,
                     learning_method: LearningMethod::DhcpV4,
@@ -425,8 +407,8 @@ mod tests {
                 DeviceEntry {
                     mac: MacAddr::from_str("00:11:22:33:44:55").unwrap(),
                     hostname: "iot-cam".to_string(),
-                    display_v4: "192.168.100.5".to_string(),
-                    display_v6: "-".to_string(),
+                    primary_v4: Some("192.168.100.5".parse().unwrap()),
+                    primary_v6: None,
                     online: true,
                     status: DeviceStatus::Online,
                     learning_method: LearningMethod::NdpArp,

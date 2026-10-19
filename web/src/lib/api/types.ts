@@ -277,27 +277,99 @@ export function formatEventPayload(
 		? `${deviceInfo.hostname}${deviceInfo.ip ? ` (${deviceInfo.ip})` : ''}`
 		: (deviceInfo?.ip || deviceInfo?.mac || (data?.hostname as string) || (data?.mac as string) || 'device');
 
-	// 1. Network Activity
-	if (kind === 'NetworkActivity' || (data && 'change' in data)) {
+	// 1. Device Network & Admin Updates / Activity
+	if (kind === 'NetworkUpdate' || kind === 'NetworkActivity' || kind === 'AdminUpdate' || (data && 'change' in data)) {
 		const change = data?.change;
 		if (typeof change === 'object' && change !== null) {
 			const keys = Object.keys(change);
 			if (keys.length > 0) {
-				const activityKind = keys[0];
-				const inner = (change as Record<string, Record<string, unknown>>)[activityKind];
-				if (activityKind === 'NdpActivity' && inner?.ip) {
+				const changeKind = keys[0];
+				const inner = (change as Record<string, Record<string, unknown>>)[changeKind];
+
+				// Reachability & status transitions
+				if (changeKind === 'StatusChanged') {
+					const status = inner?.status as string;
+					const isOnline = inner?.online === true || status === 'Online';
+					if (isOnline) {
+						return `${devLabel} is now online`;
+					} else if (status === 'Stale') {
+						return `${devLabel} marked as stale`;
+					} else {
+						return `${devLabel} went offline`;
+					}
+				}
+
+				// Addressing & Leases
+				if (changeKind === 'V4Assigned' && inner?.ip) {
+					return `IPv4 assigned to ${devLabel}: ${inner.ip}`;
+				}
+				if (changeKind === 'V6Assigned' && inner?.ip) {
+					return `IPv6 assigned to ${devLabel}: ${inner.ip}`;
+				}
+				if (changeKind === 'V6PrefixAssigned' && inner?.prefix) {
+					return `IPv6 prefix delegated to ${devLabel}: ${inner.prefix}/${inner.len ?? 64}`;
+				}
+				if (changeKind === 'SlaacObserved' && inner?.addr) {
+					return `Observed SLAAC on ${devLabel}: ${inner.addr}`;
+				}
+				if (changeKind === 'LeaseExpired') {
+					return `Lease expired for ${devLabel}`;
+				}
+				if (changeKind === 'IpDeleted' && inner?.ip) {
+					return `IP removed from ${devLabel}: ${inner.ip}`;
+				}
+				if (changeKind === 'IpOffline' && inner?.ip) {
+					return `IP offline for ${devLabel}: ${inner.ip}`;
+				}
+
+				// Metadata & Discovery hints
+				if (changeKind === 'HostnameHint' && inner?.hostname) {
+					return `Hostname updated for ${devLabel}: ${inner.hostname}`;
+				}
+				if (changeKind === 'DuidAssociated' && inner?.duid) {
+					return `DUID associated with ${devLabel}: ${inner.duid}`;
+				}
+
+				// Transient wire activity
+				if (changeKind === 'NdpActivity' && inner?.ip) {
 					return `${devLabel} active on NDP (${inner.ip})`;
 				}
-				if (activityKind === 'ArpActivity' && inner?.ip) {
+				if (changeKind === 'ArpActivity' && inner?.ip) {
 					return `${devLabel} active on ARP (${inner.ip})`;
 				}
-				if (activityKind === 'DhcpActivity' && inner?.ip) {
+				if (changeKind === 'DhcpActivity' && inner?.ip) {
 					return `${devLabel} active on DHCP (${inner.ip})`;
 				}
-				if (activityKind === 'L2Activity') {
+				if (changeKind === 'L2Activity') {
 					return `Layer 2 traffic detected from ${devLabel}`;
 				}
+
+				// Administrative changes
+				if (changeKind === 'HostnameChanged' && inner?.hostname) {
+					return `Hostname configured for ${devLabel}: ${inner.hostname}`;
+				}
+				if (changeKind === 'Classified' && inner?.class) {
+					return `${devLabel} classified as ${inner.class}`;
+				}
+				if (changeKind === 'V4StaticChanged') {
+					return inner?.ip ? `Static IPv4 set for ${devLabel}: ${inner.ip}` : `Static IPv4 removed for ${devLabel}`;
+				}
+				if (changeKind === 'V6SuffixChanged') {
+					return inner?.suffix ? `Static IPv6 suffix set for ${devLabel}: ${inner.suffix}` : `Static IPv6 suffix removed for ${devLabel}`;
+				}
+				if (changeKind === 'HostRemoved') {
+					return `Static host configuration removed for ${devLabel}`;
+				}
+				if (changeKind === 'CliHostUpdated') {
+					return `Host configuration updated for ${devLabel}`;
+				}
 			}
+		}
+		if (kind === 'AdminUpdate') {
+			return `Device configuration updated for ${devLabel}`;
+		}
+		if (kind === 'NetworkUpdate') {
+			return `Network parameters updated for ${devLabel}`;
 		}
 		return `Activity detected from ${devLabel}`;
 	}
@@ -347,9 +419,6 @@ export function formatEventPayload(
 	}
 	if (kind === 'DeviceOffline') {
 		return `${devLabel} went offline`;
-	}
-	if (kind === 'AdminUpdate') {
-		return `Device configuration updated for ${devLabel}`;
 	}
 
 	// 5. Network / Interfaces / WOL
@@ -501,10 +570,9 @@ export interface DeviceEntry {
 	online: boolean;
 	last_seen: string;
 	duid: string | null;
-	display_v4: string;
-	display_v6: string;
+	primary_v4: string | null;
+	primary_v6: string | null;
 	v4: LeaseInfo | null;
-	seen_v4: string[];
 	v6: LeaseInfo | null;
 	ipv6_addrs: Ipv6Entry[];
 	learning_method: string;
@@ -526,16 +594,8 @@ export interface DevicesResponse {
 	meta: DevicesMeta;
 }
 
-export interface LeaseHistoryEntry {
-	ip: string;
-	lease_type: 'V4' | 'V6' | string;
-	action: 'Assigned' | 'Released' | 'Expired' | string;
-	timestamp: { secs_since_epoch: number; nanos_since_epoch: number } | number | string;
-}
-
 export interface WhoisResponse {
 	entry: DeviceEntry;
-	history: LeaseHistoryEntry[];
 }
 
 export interface TransientHostEntry {

@@ -1377,8 +1377,8 @@ async fn resolve_target_ip(client: &LanforgeClient, target: &str) -> Result<IpAd
             if let Some(ref v4) = dev.v4 {
                 return Ok(v4.ip);
             }
-            if let Some(ip) = dev.seen_v4.first() {
-                return Ok(IpAddr::V4(*ip));
+            if let Some(ip) = dev.primary_v4 {
+                return Ok(IpAddr::V4(ip));
             }
             if let Some(ref v6) = dev.v6 {
                 return Ok(v6.ip);
@@ -1405,7 +1405,7 @@ async fn select_or_enter_device_ip(client: &LanforgeClient) -> Result<IpAddr> {
             };
             if let Some(ref v4) = dev.v4 {
                 options.push(format!("{} - {name} ({})", v4.ip, dev.mac));
-            } else if let Some(ip) = dev.seen_v4.first() {
+            } else if let Some(ip) = dev.primary_v4 {
                 options.push(format!("{ip} - {name} ({})", dev.mac));
             }
         }

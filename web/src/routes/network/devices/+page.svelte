@@ -38,7 +38,6 @@
 
 	// Details Modal State
 	let selectedDevice = $state<DeviceEntry | null>(null);
-	let whoisHistory = $state<any[]>([]);
 	let detailsOpen = $state(false);
 	let loadingDetails = $state(false);
 
@@ -102,12 +101,13 @@
 		selectedDevice = device;
 		detailsOpen = true;
 		loadingDetails = true;
-		whoisHistory = [];
 		try {
 			const res = await whois(device.mac);
-			whoisHistory = res?.history || [];
+			if (res?.entry) {
+				selectedDevice = res.entry;
+			}
 		} catch {
-			whoisHistory = [];
+			// keep fallback device
 		} finally {
 			loadingDetails = false;
 		}
@@ -116,8 +116,8 @@
 	function openPromoteModal(device: DeviceEntry) {
 		promoteMac = device.mac;
 		promoteHostname = device.hostname || "";
-		promoteV4 = device.display_v4 || device.v4?.ip || "";
-		promoteV6Suffix = device.display_v6 || device.v6?.ip || "";
+		promoteV4 = device.primary_v4 || device.v4?.ip || "";
+		promoteV6Suffix = device.primary_v6 || device.v6?.ip || "";
 		promoteOpen = true;
 	}
 
@@ -173,7 +173,7 @@
 	);
 	const totalCount = $derived(meta?.total ?? devices.length);
 	const dualStackCount = $derived(
-		devices.filter((d) => (d.v4 || d.display_v4) && (d.v6 || d.display_v6)).length
+		devices.filter((d) => (d.v4 || d.primary_v4) && (d.v6 || d.primary_v6)).length
 	);
 	const staticCount = $derived(
 		devices.filter((d) => d.origin === "Static").length
@@ -292,7 +292,6 @@
 <DeviceWhoisModal
 	bind:open={detailsOpen}
 	device={selectedDevice}
-	history={whoisHistory}
 	loading={loadingDetails}
 />
 

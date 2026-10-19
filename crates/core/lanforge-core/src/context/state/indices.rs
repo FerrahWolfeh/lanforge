@@ -50,9 +50,6 @@ impl Indices {
         if let Some(ip) = dev.v4.ip() {
             self.ip_index.insert(IpAddr::V4(ip), mac);
         }
-        for (ip, _) in &dev.seen_v4 {
-            self.ip_index.insert(IpAddr::V4(*ip), mac);
-        }
         for state in &dev.v6 {
             if let Some(ip) = state.ip() {
                 self.ip_index.insert(IpAddr::V6(ip), mac);
@@ -77,9 +74,6 @@ impl Indices {
 
         if let Some(ip) = dev.v4.ip() {
             self.ip_index.remove(&IpAddr::V4(ip));
-        }
-        for (ip, _) in &dev.seen_v4 {
-            self.ip_index.remove(&IpAddr::V4(*ip));
         }
         for state in &dev.v6 {
             if let Some(ip) = state.ip() {

@@ -596,10 +596,9 @@ fn test_is_worthy_logic() {
     dev.hostname.name.clear();
 
     // 3. With IPv4 (seen or lease) -> Worthy
-    dev.seen_v4
-        .push(("1.1.1.1".parse().unwrap(), SystemTime::now()));
+    dev.v4 = IPv4State::Discovery("1.1.1.1".parse().unwrap(), SystemTime::now());
     assert!(dev.is_worthy());
-    dev.seen_v4.clear();
+    dev.v4 = IPv4State::None;
 
     // 4. With IPv6 Link-Local -> Not worthy
     dev.v6.push(IPv6State::Slaac(
@@ -1028,8 +1027,8 @@ fn test_expire_stale_status_transition() {
 
         dev.managed_at = Some(managed_ts);
         dev.last_seen = activity_ts;
-        for (_, ts) in &mut dev.seen_v4 {
-            *ts = activity_ts;
+        if let IPv4State::Discovery(ip, _) = dev.v4 {
+            dev.v4 = IPv4State::Discovery(ip, activity_ts);
         }
     });
 
@@ -1070,11 +1069,8 @@ fn test_handle_arp_seen_deduplicates() {
     });
 
     let dev = ctx.get_device(&mac).unwrap();
-    assert_eq!(
-        dev.seen_v4.len(),
-        1,
-        "Should only have 1 entry for the same IP"
-    );
+    assert_eq!(dev.v4.ip(), Some(ip));
+    assert!(matches!(dev.v4, IPv4State::Discovery(i, _) if i == ip));
 }
 
 #[test]
@@ -1236,13 +1232,11 @@ fn test_neighbor_batch_fast_path_single_mac() {
     let ctx = setup();
     let mac = MacAddr([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc]);
     let v4_1: Ipv4Addr = "192.168.1.51".parse().unwrap();
-    let v4_2: Ipv4Addr = "192.168.1.52".parse().unwrap();
     let v6_ll: Ipv6Addr = "fe80::1234".parse().unwrap();
     let v6_gua: Ipv6Addr = "2001:db8::1234".parse().unwrap();
 
     let batch = vec![
         (mac, IpAddr::V4(v4_1), true),
-        (mac, IpAddr::V4(v4_2), true),
         (mac, IpAddr::V6(v6_ll), true),
         (mac, IpAddr::V6(v6_gua), true),
     ];
@@ -1251,8 +1245,7 @@ fn test_neighbor_batch_fast_path_single_mac() {
     assert!(changed);
 
     let dev = ctx.get_device(&mac).expect("Device should be created");
-    assert!(dev.seen_v4.iter().any(|(ip, _)| *ip == v4_1));
-    assert!(dev.seen_v4.iter().any(|(ip, _)| *ip == v4_2));
+    assert_eq!(dev.v4.ip(), Some(v4_1));
     assert!(dev.v6.iter().any(|s| s.ip() == Some(v6_gua)));
     assert_eq!(ctx.get_mac_from_ndp_cache(&v6_ll), Some(mac));
     assert_eq!(ctx.get_mac_from_ndp_cache(&v6_gua), Some(mac));
@@ -1277,8 +1270,8 @@ fn test_neighbor_batch_multi_mac() {
     let dev1 = ctx.get_device(&mac1).expect("Device 1 should exist");
     let dev2 = ctx.get_device(&mac2).expect("Device 2 should exist");
 
-    assert!(dev1.seen_v4.iter().any(|(ip, _)| *ip == "192.168.1.101".parse::<Ipv4Addr>().unwrap()));
-    assert!(dev2.seen_v4.iter().any(|(ip, _)| *ip == "192.168.1.102".parse::<Ipv4Addr>().unwrap()));
+    assert_eq!(dev1.v4.ip(), Some("192.168.1.101".parse::<Ipv4Addr>().unwrap()));
+    assert_eq!(dev2.v4.ip(), Some("192.168.1.102".parse::<Ipv4Addr>().unwrap()));
 }
 
 #[test]

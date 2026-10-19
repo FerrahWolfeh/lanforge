@@ -410,7 +410,8 @@ async fn run_add_wizard(
                         } else {
                             &d.hostname
                         };
-                        format!("{:<18}  {:<16}  ({})", d.mac, d.display_v4, h)
+                        let ip_str = d.primary_v4.map_or_else(|| "-".to_string(), |ip| ip.to_string());
+                        format!("{:<18}  {:<16}  ({})", d.mac, ip_str, h)
                     })
                     .collect();
 
@@ -426,8 +427,8 @@ async fn run_add_wizard(
                     if !dev.hostname.is_empty() && default_hostname.is_none() {
                         default_hostname = Some(dev.hostname.clone());
                     }
-                    if dev.display_v4 != "-" && default_v4.is_none() {
-                        default_v4 = Some(dev.display_v4.clone());
+                    if let Some(ip) = dev.primary_v4 && default_v4.is_none() {
+                        default_v4 = Some(ip.to_string());
                     }
                 }
             }

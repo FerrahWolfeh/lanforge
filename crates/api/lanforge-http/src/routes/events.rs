@@ -15,7 +15,6 @@ use futures::stream::Stream;
 use lanforge_api::api::{HttpPaginatedResponse, LogMeta};
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
-use lanforge_types::device::state::IPv4State;
 use lanforge_types::events::{
     DeviceEvent, DnsEvent, FirewallEvent, NetworkEvent, PppoeEvent, StorageEvent, SystemEvent,
     TimedEvent, TrafficEvent,
@@ -192,11 +191,7 @@ fn enrich_device_info(ctx: &LanforgeContext, mac: MacAddr) -> serde_json::Value 
                 map.insert("hostname".to_string(), serde_json::Value::String(d.dns_fallback.clone()));
             }
 
-            let ip = match &d.v4 {
-                IPv4State::Static(ip) => Some(ip.to_string()),
-                IPv4State::Dynamic(lease) => Some(lease.ip.to_string()),
-                IPv4State::None => d.seen_v4.first().map(|(ip, _)| ip.to_string()),
-            };
+            let ip = d.v4.ip().map(|ip| ip.to_string());
             if let Some(ip_str) = ip {
                 map.insert("ip".to_string(), serde_json::Value::String(ip_str));
             }

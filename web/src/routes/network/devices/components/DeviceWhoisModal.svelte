@@ -8,12 +8,10 @@
 	let {
 		open = $bindable(false),
 		device = null,
-		history = [],
 		loading = false,
 	}: {
 		open?: boolean;
 		device?: DeviceEntry | null;
-		history?: any[];
 		loading?: boolean;
 	} = $props();
 
@@ -61,13 +59,13 @@
 				<div class="flex justify-between items-center border-b border-border/50 pb-2">
 					<span class="text-muted-foreground font-medium">IPv4 Address</span>
 					<span class="font-mono text-emerald-400">
-						{device.display_v4 || device.v4?.ip || "—"}
+						{device.primary_v4 || device.v4?.ip || "—"}
 					</span>
 				</div>
 				<div class="flex justify-between items-center border-b border-border/50 pb-2">
 					<span class="text-muted-foreground font-medium">IPv6 Address</span>
 					<span class="font-mono text-sky-400 truncate max-w-[200px]">
-						{device.display_v6 || device.v6?.ip || "—"}
+						{device.primary_v6 || device.v6?.ip || "—"}
 					</span>
 				</div>
 				{#if device.duid}
@@ -86,22 +84,6 @@
 					<span class="text-muted-foreground font-medium">Last Reachable</span>
 					<span>{formatLastSeen(device.last_seen)}</span>
 				</div>
-
-				{#if history.length > 0}
-					<div class="flex flex-col gap-2 mt-2 pt-2 border-t border-border/60">
-						<span class="text-muted-foreground font-medium uppercase text-[10px] tracking-wider">
-							Lease History
-						</span>
-						<div class="flex flex-col gap-1 max-h-32 overflow-auto font-mono text-[11px]">
-							{#each history as h (h.ts || h.ip)}
-								<div class="flex justify-between text-muted-foreground">
-									<span>{h.ip}</span>
-									<span>{formatLastSeen(h.ts || h.expires)}</span>
-								</div>
-							{/each}
-						</div>
-					</div>
-				{/if}
 			</div>
 		{/if}
 	</Dialog.Content>

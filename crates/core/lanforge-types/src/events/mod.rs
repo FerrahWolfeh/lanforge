@@ -52,8 +52,8 @@ impl TimedEvent {
                 | DeviceEvent::LeaseRelease { .. }
                 | DeviceEvent::LeaseRenew { .. }
                 | DeviceEvent::DhcpV4Transaction { .. }
-                | DeviceEvent::DhcpV6Transaction { .. }
-                | DeviceEvent::NeighborBatchSummary { .. } => true,
+                | DeviceEvent::DhcpV6Transaction { .. } => true,
+                DeviceEvent::NeighborBatchSummary { new, .. } => *new > 0,
                 DeviceEvent::NetworkActivity { .. } => false,
             },
             LanforgeEvent::Network(e) => match e {

@@ -759,8 +759,7 @@ async fn fetch_device_map(client: &LanforgeClient) -> HashMap<String, String> {
             if !dev.hostname.is_empty() && dev.hostname != "<unknown>" {
                 if let Some(v4) = dev.v4 {
                     map.insert(v4.ip.to_string(), dev.hostname.clone());
-                }
-                for ip in dev.seen_v4 {
+                } else if let Some(ip) = dev.primary_v4 {
                     map.insert(ip.to_string(), dev.hostname.clone());
                 }
                 if let Some(v6) = dev.v6 {
