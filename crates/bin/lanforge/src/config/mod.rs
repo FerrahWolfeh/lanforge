@@ -3,11 +3,12 @@
 //! The configuration system uses a clean layered pipeline:
 //! 1. **Default**: Router-first fail-safe baseline values.
 //! 2. **Auto-Detect**: Hardware-aware LAN interface detection & RFC 4193 ULA generation.
-//! 3. **TOML**: Declarative files located at `/etc/lanforge/lanforge.toml` and modular configs.
+//! 3. **TOML**: Declarative settings from `/etc/lanforge/lanforge.toml`.
 //! 4. **CLI/Env**: Operational overrides passed via command line or environment variables.
 
 pub mod args;
 pub mod auto_detect;
+pub mod sync;
 pub mod toml;
 
 pub use args::CliArgs;
@@ -99,6 +100,7 @@ pub struct Config {
     pub traffic_toml: lanforge_traffic::TrafficConfig,
 
     pub config_path: String,
+    pub config_writable: bool,
 }
 
 impl Config {
@@ -106,9 +108,9 @@ impl Config {
     #[must_use]
     pub fn load() -> Self {
         let cli = CliArgs::parse();
+        let config_path = cli.resolved_config_path().to_string_lossy().to_string();
 
-        let mut toml_cfg = load_toml(&cli.config);
-        Self::load_modular_configs(&cli.config, &mut toml_cfg);
+        let mut toml_cfg = load_toml(&config_path);
 
         // 1. Resolve LAN interface with hardware-aware auto-detection
         let wan_iface = {
@@ -157,52 +159,6 @@ impl Config {
         Self::apply_cli_overrides(toml_cfg, &cli, search_domains)
     }
 
-    fn load_modular_configs(config_path: &str, toml_cfg: &mut toml::TomlConfig) {
-        let config_dir = Path::new(config_path)
-            .parent()
-            .unwrap_or_else(|| Path::new("/etc/lanforge"));
-
-        macro_rules! try_load_section {
-            ($file:expr, $field:expr, $typ:ty) => {
-                let path = config_dir.join($file);
-                if path.exists() {
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        if let Ok(sec) = ::toml::from_str::<$typ>(&content) {
-                            $field = sec;
-                        } else {
-                            tracing::warn!(
-                                "[config] Failed to parse modular config '{}'",
-                                path.display()
-                            );
-                        }
-                    }
-                }
-            };
-        }
-
-        try_load_section!("database.toml", toml_cfg.database, DatabaseConfig);
-        #[cfg(feature = "ra")]
-        try_load_section!("ra.toml", toml_cfg.ra, RaServiceConfig);
-        #[cfg(feature = "dhcp")]
-        try_load_section!("dhcp.toml", toml_cfg.dhcp, toml::DhcpCfg);
-        #[cfg(feature = "dns")]
-        try_load_section!("dns.toml", toml_cfg.dns, DnsConfig);
-        #[cfg(feature = "discovery")]
-        try_load_section!("monitor.toml", toml_cfg.monitor, MonitorConfig);
-        #[cfg(feature = "discovery")]
-        try_load_section!("mdns.toml", toml_cfg.mdns, MdnsConfig);
-        #[cfg(feature = "uds")]
-        try_load_section!("api.toml", toml_cfg.api, ApiConfig);
-        #[cfg(feature = "http")]
-        try_load_section!("http.toml", toml_cfg.http, HttpConfig);
-        #[cfg(feature = "tftp")]
-        try_load_section!("tftp.toml", toml_cfg.tftp, TftpConfig);
-        #[cfg(feature = "pppoe")]
-        try_load_section!("pppoe.toml", toml_cfg.pppoe, lanforge_pppoe::config::PppoeConfig);
-        #[cfg(feature = "nft")]
-        try_load_section!("firewall.toml", toml_cfg.firewall, lanforge_nft::FirewallConfig);
-    }
-
     fn resolve_search_domains(toml_cfg: &toml::TomlConfig) -> Vec<String> {
         let mut domains = Vec::with_capacity(4);
         for dom in &toml_cfg.system.search_domains {
@@ -234,41 +190,8 @@ impl Config {
         search_domains: Vec<String>,
     ) -> Self {
         Self {
-            system: {
-                let mut s = toml_cfg.system;
-                if let Some(ref iface) = cli.iface_lan {
-                    s.iface.clone_from(iface);
-                }
-                if let Some(ref target_prefix) = cli.target_prefix {
-                    s.target_prefix.clone_from(target_prefix);
-                }
-                if let Some(debounce) = cli.debounce_secs {
-                    s.debounce_secs = debounce;
-                }
-                if cli.auto_provision || cli.dev {
-                    s.auto_provision = true;
-                }
-                if cli.allow_unprivileged || cli.dev {
-                    s.allow_unprivileged = true;
-                }
-                s
-            },
-            database: {
-                let mut db = toml_cfg.database;
-                if cli.dev && cli.config_db_path.is_none() && (db.config_path.is_empty() || db.config_path == "/var/lib/lanforge/config.redb") {
-                    db.config_path = "memory".to_string();
-                }
-                if cli.dev && cli.runtime_db_path.is_none() && (db.runtime_path.is_empty() || db.runtime_path == "/run/lanforge/runtime.redb") {
-                    db.runtime_path = "memory".to_string();
-                }
-                if let Some(ref path) = cli.config_db_path {
-                    db.config_path.clone_from(path);
-                }
-                if let Some(ref path) = cli.runtime_db_path {
-                    db.runtime_path.clone_from(path);
-                }
-                db
-            },
+            system: Self::apply_system_overrides(toml_cfg.system, cli),
+            database: Self::apply_database_overrides(toml_cfg.database, cli),
             #[cfg(feature = "ra")]
             ra_enabled: toml_cfg.ra.enabled,
             #[cfg(feature = "ra")]
@@ -322,8 +245,52 @@ impl Config {
             traffic_enabled: toml_cfg.traffic.tuning.enabled || toml_cfg.traffic.sqm.enabled,
             #[cfg(feature = "traffic")]
             traffic_toml: toml_cfg.traffic,
-            config_path: cli.config.clone(),
+            config_path: cli.resolved_config_path().to_string_lossy().to_string(),
+            config_writable: if cli.dev {
+                false
+            } else {
+                cli.is_config_dir_writable()
+            },
         }
+    }
+
+    fn apply_system_overrides(mut system: SystemCfg, cli: &CliArgs) -> SystemCfg {
+        if let Some(ref iface) = cli.iface_lan {
+            system.iface.clone_from(iface);
+        }
+        if let Some(ref target_prefix) = cli.target_prefix {
+            system.target_prefix.clone_from(target_prefix);
+        }
+        if let Some(debounce) = cli.debounce_secs {
+            system.debounce_secs = debounce;
+        }
+        system.auto_provision |= cli.auto_provision || cli.dev;
+        system.allow_unprivileged |= cli.allow_unprivileged || cli.dev;
+        system
+    }
+
+    fn apply_database_overrides(mut database: DatabaseConfig, cli: &CliArgs) -> DatabaseConfig {
+        if cli.dev
+            && cli.config_db_path.is_none()
+            && (database.config_path.is_empty()
+                || database.config_path == "/var/lib/lanforge/config.redb")
+        {
+            database.config_path = "memory".to_string();
+        }
+        if cli.dev
+            && cli.runtime_db_path.is_none()
+            && (database.runtime_path.is_empty()
+                || database.runtime_path == "/run/lanforge/runtime.redb")
+        {
+            database.runtime_path = "memory".to_string();
+        }
+        if let Some(ref path) = cli.config_db_path {
+            database.config_path.clone_from(path);
+        }
+        if let Some(ref path) = cli.runtime_db_path {
+            database.runtime_path.clone_from(path);
+        }
+        database
     }
 
     /// Returns the path to the dedicated API password hash file.
@@ -359,7 +326,7 @@ impl Config {
 
         // Ensure at least one prefix exists if none configured
         if cfg.prefixes.is_empty() {
-            cfg.prefixes.push(RAPrefix::gua_dynamic());
+            add_default_ra_prefixes(&mut cfg.prefixes, self.resolve_ula_prefix());
         }
 
         // Add default search domains if none in RA config
@@ -531,15 +498,7 @@ impl Config {
     }
 
     fn resolve_ula_prefix(&self) -> Option<lanforge_types::network::Ipv6Prefix> {
-        if self.system.target_prefix.starts_with("fe80") {
-            None
-        } else {
-            self.system
-                .target_prefix
-                .parse::<std::net::Ipv6Addr>()
-                .ok()
-                .map(lanforge_types::network::Ipv6Prefix::from_addr)
-        }
+        parse_ula_prefix(&self.system.target_prefix)
     }
 
     #[cfg(feature = "dhcp")]
@@ -582,12 +541,16 @@ impl Config {
     }
 
     #[cfg(feature = "dns")]
-    fn resolve_dns_upstream(&self) -> Option<lanforge_types::network::dns::upstream::UpstreamTarget> {
+    fn resolve_dns_upstream(
+        &self,
+    ) -> Option<lanforge_types::network::dns::upstream::UpstreamTarget> {
         self.dns_toml.upstreams.first().map(|u| u.target.clone())
     }
 
     #[cfg(not(feature = "dns"))]
-    const fn resolve_dns_upstream(&self) -> Option<lanforge_types::network::dns::upstream::UpstreamTarget> {
+    const fn resolve_dns_upstream(
+        &self,
+    ) -> Option<lanforge_types::network::dns::upstream::UpstreamTarget> {
         None
     }
 
@@ -661,6 +624,65 @@ impl Config {
     }
 }
 
+#[cfg(feature = "ra")]
+fn add_default_ra_prefixes(
+    prefixes: &mut Vec<RAPrefix>,
+    ula: Option<lanforge_types::network::Ipv6Prefix>,
+) {
+    if !prefixes.is_empty() {
+        return;
+    }
+    if let Some(ula) = ula {
+        prefixes.push(RAPrefix::ula(&ula.to_addr().to_string()));
+    }
+    prefixes.push(RAPrefix::gua_dynamic());
+}
+
+fn parse_ula_prefix(raw: &str) -> Option<lanforge_types::network::Ipv6Prefix> {
+    let raw = raw.split('/').next()?;
+    let addr = raw.parse::<std::net::Ipv6Addr>().ok()?;
+    lanforge_types::network::is_ula(&addr)
+        .then(|| lanforge_types::network::Ipv6Prefix::from_addr(addr))
+}
+
+#[cfg(all(test, feature = "ra"))]
+mod config_default_tests {
+    use super::*;
+
+    #[test]
+    fn default_ra_announces_valid_ula_and_dynamic_gua() {
+        let ula = parse_ula_prefix("fd12:3456:789a::/64");
+        let mut prefixes = Vec::new();
+        add_default_ra_prefixes(&mut prefixes, ula);
+
+        assert_eq!(prefixes.len(), 2);
+        assert_eq!(prefixes[0].source, PrefixSource::Ula);
+        assert_eq!(
+            prefixes[0].resolved_address(),
+            Some("fd12:3456:789a::".parse().unwrap())
+        );
+        assert_eq!(prefixes[1].source, PrefixSource::AutoGua);
+    }
+
+    #[test]
+    fn default_ra_uses_only_dynamic_gua_without_valid_ula() {
+        for raw in ["", "2001:db8::1/64", "fe80::1/64", "not-an-ip"] {
+            let mut prefixes = Vec::new();
+            add_default_ra_prefixes(&mut prefixes, parse_ula_prefix(raw));
+            assert_eq!(prefixes.len(), 1, "input {raw:?}");
+            assert_eq!(prefixes[0].source, PrefixSource::AutoGua, "input {raw:?}");
+        }
+    }
+
+    #[test]
+    fn explicit_ra_prefixes_are_not_replaced_by_defaults() {
+        let mut prefixes = vec![RAPrefix::gua_dynamic()];
+        add_default_ra_prefixes(&mut prefixes, parse_ula_prefix("fd12::/64"));
+        assert_eq!(prefixes.len(), 1);
+        assert_eq!(prefixes[0].source, PrefixSource::AutoGua);
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -706,6 +728,7 @@ impl Default for Config {
             #[cfg(feature = "traffic")]
             traffic_toml: lanforge_traffic::TrafficConfig::default(),
             config_path: "/etc/lanforge/lanforge.toml".to_string(),
+            config_writable: true,
         }
     }
 }

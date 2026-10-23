@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use color_eyre::Result;
 use color_eyre::eyre::{bail, eyre};
 use colored::Colorize;
@@ -12,12 +14,15 @@ use lanforge_api::api::devices::HostConfigEntry;
 use lanforge_api::api::dns::{AllowlistEntry, DnsUpstreamConfig};
 use lanforge_api::api::system::ExportedApiToken;
 use lanforge_api::api::{ImportSection, SystemConfigExport, SystemConfigImportResponse};
+use lanforge_api::config_file::{ConfigFile, Section, section_hashes};
 use lanforge_types::network::DnsReverseResolver;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
+use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
+use lanforge_types::network::traffic::TrafficConfig;
 
 use crate::client::LanforgeClient;
 use crate::output::Printer;
@@ -28,25 +33,34 @@ pub struct ConfigArgs {
     pub subcommand: Option<ConfigSubcommand>,
 }
 
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    Toml,
+    Json,
+}
+
 #[derive(clap::Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum ConfigSubcommand {
     /// Show consolidated system configuration summary (default)
     Show,
-    /// Export system configuration snapshot to JSON
+    /// Export system configuration snapshot to TOML or JSON
     Export {
         /// Destination output file path (prints to stdout if omitted)
         #[arg(short = 'o', long)]
         output: Option<String>,
-        /// Encrypt the API tokens secrets block with a password
+        /// Export format (toml or json; defaults to toml, or auto-detected from output extension)
+        #[arg(long, value_enum)]
+        format: Option<ExportFormat>,
+        /// Encrypt the API tokens secrets block with a password (JSON only)
         #[arg(short = 'e', long)]
         encrypt_secrets: bool,
         /// Encryption password (if omitted and --encrypt-secrets is set, you will be prompted)
         #[arg(short = 'p', long)]
         password: Option<String>,
     },
-    /// Import system configuration from a JSON file
+    /// Import system configuration from a TOML or JSON file
     Import {
-        /// Input JSON configuration file path
+        /// Input configuration file path (.toml or .json)
         #[arg(value_name = "FILE")]
         file: Option<String>,
         /// Alternative flag for input file
@@ -55,15 +69,30 @@ pub enum ConfigSubcommand {
         /// Force overwrite existing records instead of merging
         #[arg(short = 'w', long)]
         overwrite: bool,
-        /// Decryption password (if file contains encrypted secrets and password is omitted, you will be prompted)
+        /// Decryption password (if JSON file contains encrypted secrets and password is omitted, you will be prompted)
         #[arg(short = 'p', long)]
         password: Option<String>,
     },
     /// Validate configuration file syntax and structure without modifying the daemon
     Validate {
-        /// Input JSON configuration file path
+        /// Input configuration file path (.toml or .json)
         #[arg(value_name = "FILE")]
         file: String,
+    },
+    /// Show differences between configuration file and live daemon database
+    Diff {
+        /// Configuration file path (defaults to /etc/lanforge/lanforge.toml or lanforge.toml)
+        #[arg(value_name = "FILE")]
+        file: Option<String>,
+    },
+    /// Edit configuration file in $EDITOR, validate, and optionally import
+    Edit {
+        /// Configuration file path (defaults to /etc/lanforge/lanforge.toml or lanforge.toml)
+        #[arg(value_name = "FILE")]
+        file: Option<String>,
+        /// Skip prompt and immediately import after editing if validation succeeds
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 }
 
@@ -104,6 +133,10 @@ pub struct FileConfigExport {
     #[serde(default)]
     pub dns_reverse_resolvers: Option<Vec<DnsReverseResolver>>,
     #[serde(default)]
+    pub firewall_config: Option<Box<FirewallConfig>>,
+    #[serde(default)]
+    pub traffic_config: Option<Box<TrafficConfig>>,
+    #[serde(default)]
     pub overwrite: bool,
 }
 
@@ -113,9 +146,10 @@ impl ConfigArgs {
             ConfigSubcommand::Show => show_config(client, printer).await,
             ConfigSubcommand::Export {
                 output,
+                format,
                 encrypt_secrets,
                 password,
-            } => export_config(client, printer, output, encrypt_secrets, password).await,
+            } => export_config(client, printer, output, format, encrypt_secrets, password).await,
             ConfigSubcommand::Import {
                 file,
                 file_flag,
@@ -128,6 +162,8 @@ impl ConfigArgs {
                 import_config(client, printer, &target_file, overwrite, password).await
             }
             ConfigSubcommand::Validate { file } => validate_config(printer, &file),
+            ConfigSubcommand::Diff { file } => diff_config(client, printer, file).await,
+            ConfigSubcommand::Edit { file, yes } => edit_config(client, printer, file, yes).await,
         }
     }
 }
@@ -225,7 +261,11 @@ fn render_config_summary(config: &SystemConfigExport, printer: &Printer) {
         };
         println!("   {:<22} {status}", "PPPoE WAN:".bold());
     } else {
-        println!("   {:<22} {}", "PPPoE WAN:".bold(), "Not configured".bright_black());
+        println!(
+            "   {:<22} {}",
+            "PPPoE WAN:".bold(),
+            "Not configured".bright_black()
+        );
     }
 
     // API Tokens
@@ -241,6 +281,23 @@ fn render_config_summary(config: &SystemConfigExport, printer: &Printer) {
 }
 
 // ============================================================================
+// File Path Resolution Helper
+// ============================================================================
+
+fn resolve_candidate_config_file(explicit: Option<&str>) -> PathBuf {
+    if let Some(f) = explicit {
+        return PathBuf::from(f);
+    }
+    for candidate in &["/etc/lanforge/lanforge.toml", "lanforge.toml"] {
+        let p = Path::new(candidate);
+        if p.exists() {
+            return p.to_path_buf();
+        }
+    }
+    PathBuf::from("/etc/lanforge/lanforge.toml")
+}
+
+// ============================================================================
 // Export Handler
 // ============================================================================
 
@@ -248,10 +305,39 @@ async fn export_config(
     client: &LanforgeClient,
     printer: &Printer,
     output: Option<String>,
+    format_arg: Option<ExportFormat>,
     encrypt_secrets: bool,
     password: Option<String>,
 ) -> Result<()> {
+    let resolved_format = format_arg.unwrap_or_else(|| {
+        output.as_ref().map_or(ExportFormat::Toml, |path| {
+            if Path::new(path)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+            {
+                ExportFormat::Json
+            } else {
+                ExportFormat::Toml
+            }
+        })
+    });
+
     let config = client.system_config_export().await?;
+
+    if resolved_format == ExportFormat::Toml {
+        let config_file = ConfigFile::from(&*config);
+        let rendered = config_file
+            .render_full()
+            .map_err(|e| eyre!("Failed to render configuration TOML: {e}"))?;
+
+        if let Some(ref path) = output {
+            std::fs::write(path, &rendered)?;
+            printer.success(&format!("Exported system configuration to {path}"));
+        } else {
+            print!("{rendered}");
+        }
+        return Ok(());
+    }
 
     let api_tokens_section = if let Some(tokens) = config.api_tokens {
         if encrypt_secrets || password.is_some() {
@@ -286,6 +372,8 @@ async fn export_config(
         pppoe_config: config.pppoe_config,
         dhcp_options: config.dhcp_options,
         dns_reverse_resolvers: config.dns_reverse_resolvers,
+        firewall_config: config.firewall_config,
+        traffic_config: config.traffic_config,
         overwrite: config.overwrite,
     };
 
@@ -313,42 +401,60 @@ async fn import_config(
     password: Option<String>,
 ) -> Result<()> {
     let content = std::fs::read_to_string(file_path)?;
-    let file_export: FileConfigExport = serde_json::from_str(&content)
-        .map_err(|e| eyre!("Failed to parse configuration file '{file_path}': {e}"))?;
 
-    let api_tokens = match file_export.api_tokens {
-        Some(ApiTokensExport::Encrypted(enc)) => {
-            let pass = match password {
-                Some(p) => p,
-                None => prompt_password("Enter password to decrypt secrets block:")?,
-            };
-            let plain_bytes = decrypt_secrets_block(&pass, &enc)?;
-            let tokens: Vec<ExportedApiToken> = serde_json::from_slice(&plain_bytes)
-                .map_err(|e| eyre!("Decrypted data is corrupted or invalid: {e}"))?;
-            Some(tokens)
+    let is_json = Path::new(file_path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+        || (serde_json::from_str::<serde_json::Value>(&content).is_ok()
+            && !content.trim_start().starts_with('[')
+            && !content.trim_start().starts_with('#'));
+
+    let system_config = if is_json {
+        let file_export: FileConfigExport = serde_json::from_str(&content)
+            .map_err(|e| eyre!("Failed to parse JSON configuration file '{file_path}': {e}"))?;
+
+        let api_tokens = match file_export.api_tokens {
+            Some(ApiTokensExport::Encrypted(enc)) => {
+                let pass = match password {
+                    Some(p) => p,
+                    None => prompt_password("Enter password to decrypt secrets block:")?,
+                };
+                let plain_bytes = decrypt_secrets_block(&pass, &enc)?;
+                let tokens: Vec<ExportedApiToken> = serde_json::from_slice(&plain_bytes)
+                    .map_err(|e| eyre!("Decrypted data is corrupted or invalid: {e}"))?;
+                Some(tokens)
+            }
+            Some(ApiTokensExport::Plain(tokens)) => Some(tokens),
+            None => None,
+        };
+
+        SystemConfigExport {
+            hosts: file_export.hosts,
+            dns_rewrites: file_export.dns_rewrites,
+            dns_upstreams: file_export.dns_upstreams,
+            dns_adblock_config: file_export.dns_adblock_config,
+            dns_adblock_urls: file_export.dns_adblock_urls,
+            dns_allowlist: file_export.dns_allowlist,
+            dns_adblock_rules: file_export.dns_adblock_rules,
+            api_tokens,
+            dhcp_v4_pools: file_export.dhcp_v4_pools,
+            dhcp_v6_pools: file_export.dhcp_v6_pools,
+            ra_prefixes: file_export.ra_prefixes,
+            ra_rdnss: file_export.ra_rdnss,
+            ra_dnssl: file_export.ra_dnssl,
+            pppoe_config: file_export.pppoe_config,
+            dhcp_options: file_export.dhcp_options,
+            dns_reverse_resolvers: file_export.dns_reverse_resolvers,
+            firewall_config: file_export.firewall_config,
+            traffic_config: file_export.traffic_config,
+            overwrite,
         }
-        Some(ApiTokensExport::Plain(tokens)) => Some(tokens),
-        None => None,
-    };
-
-    let system_config = SystemConfigExport {
-        hosts: file_export.hosts,
-        dns_rewrites: file_export.dns_rewrites,
-        dns_upstreams: file_export.dns_upstreams,
-        dns_adblock_config: file_export.dns_adblock_config,
-        dns_adblock_urls: file_export.dns_adblock_urls,
-        dns_allowlist: file_export.dns_allowlist,
-        dns_adblock_rules: file_export.dns_adblock_rules,
-        api_tokens,
-        dhcp_v4_pools: file_export.dhcp_v4_pools,
-        dhcp_v6_pools: file_export.dhcp_v6_pools,
-        ra_prefixes: file_export.ra_prefixes,
-        ra_rdnss: file_export.ra_rdnss,
-        ra_dnssl: file_export.ra_dnssl,
-        pppoe_config: file_export.pppoe_config,
-        dhcp_options: file_export.dhcp_options,
-        dns_reverse_resolvers: file_export.dns_reverse_resolvers,
-        overwrite,
+    } else {
+        let cfg = ConfigFile::parse(&content)
+            .map_err(|e| eyre!("Failed to parse TOML configuration '{file_path}': {e}"))?;
+        let mut export = SystemConfigExport::from(&cfg);
+        export.overwrite = overwrite;
+        export
     };
 
     let resp = client.system_config_import(system_config).await?;
@@ -396,27 +502,67 @@ fn validate_config(printer: &Printer, file_path: &str) -> Result<()> {
     let content = std::fs::read_to_string(file_path)
         .map_err(|e| eyre!("Failed to read file '{file_path}': {e}"))?;
 
-    let file_export: FileConfigExport = serde_json::from_str(&content)
-        .map_err(|e| eyre!("JSON validation failed: {e}"))?;
+    let is_json = Path::new(file_path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+        || (serde_json::from_str::<serde_json::Value>(&content).is_ok()
+            && !content.trim_start().starts_with('[')
+            && !content.trim_start().starts_with('#'));
 
-    let secrets_encrypted = if let Some(ApiTokensExport::Encrypted(ref enc)) = file_export.api_tokens {
-        if enc.salt.len() != 32 || hex::decode(&enc.salt).is_err() {
-            bail!("Invalid secrets block: salt must be 32 hexadecimal characters (16 bytes)");
+    if !is_json {
+        let cfg = ConfigFile::parse(&content).map_err(|e| eyre!("TOML validation failed: {e}"))?;
+
+        if printer.json {
+            let json_report = serde_json::json!({
+                "valid": true,
+                "format": "toml",
+                "hosts": cfg.hosts.len(),
+                "dhcp_v4_pools": cfg.dhcp.v4.pools.len(),
+                "dhcp_v6_pools": cfg.dhcp.v6.pools.len(),
+                "dns_rewrites": cfg.dns.rewrites.len(),
+                "dns_upstreams": cfg.dns.upstreams.len(),
+                "adblock_sources": cfg.adblock.sources.len(),
+            });
+            return printer.print_json(&json_report);
         }
-        if enc.nonce.len() != 24 || hex::decode(&enc.nonce).is_err() {
-            bail!("Invalid secrets block: nonce must be 24 hexadecimal characters (12 bytes)");
-        }
-        if enc.ciphertext.is_empty() || hex::decode(&enc.ciphertext).is_err() {
-            bail!("Invalid secrets block: ciphertext contains invalid hex characters");
-        }
-        true
-    } else {
-        false
-    };
+
+        println!();
+        printer.success(&format!(
+            "Configuration file '{file_path}' is structurally valid (TOML schema) and ready for import."
+        ));
+        println!("  · Static hosts: {}", cfg.hosts.len());
+        println!("  · DHCPv4 pools: {}", cfg.dhcp.v4.pools.len());
+        println!("  · DHCPv6 pools: {}", cfg.dhcp.v6.pools.len());
+        println!("  · DNS rewrites: {}", cfg.dns.rewrites.len());
+        println!("  · DNS upstreams: {}", cfg.dns.upstreams.len());
+        println!("  · Adblock source URLs: {}", cfg.adblock.sources.len());
+        println!();
+        return Ok(());
+    }
+
+    let file_export: FileConfigExport =
+        serde_json::from_str(&content).map_err(|e| eyre!("JSON validation failed: {e}"))?;
+
+    let secrets_encrypted =
+        if let Some(ApiTokensExport::Encrypted(ref enc)) = file_export.api_tokens {
+            if enc.salt.len() != 32 || hex::decode(&enc.salt).is_err() {
+                bail!("Invalid secrets block: salt must be 32 hexadecimal characters (16 bytes)");
+            }
+            if enc.nonce.len() != 24 || hex::decode(&enc.nonce).is_err() {
+                bail!("Invalid secrets block: nonce must be 24 hexadecimal characters (12 bytes)");
+            }
+            if enc.ciphertext.is_empty() || hex::decode(&enc.ciphertext).is_err() {
+                bail!("Invalid secrets block: ciphertext contains invalid hex characters");
+            }
+            true
+        } else {
+            false
+        };
 
     if printer.json {
         let json_report = serde_json::json!({
             "valid": true,
+            "format": "json",
             "hosts": file_export.hosts.len(),
             "dns_rewrites": file_export.dns_rewrites.len(),
             "dns_upstreams": file_export.dns_upstreams.len(),
@@ -428,12 +574,15 @@ fn validate_config(printer: &Printer, file_path: &str) -> Result<()> {
 
     println!();
     printer.success(&format!(
-        "Configuration file '{file_path}' is structurally valid and ready for import."
+        "Configuration file '{file_path}' is structurally valid (JSON schema) and ready for import."
     ));
     println!("  · Static hosts: {}", file_export.hosts.len());
     println!("  · DNS rewrites: {}", file_export.dns_rewrites.len());
     println!("  · DNS upstreams: {}", file_export.dns_upstreams.len());
-    println!("  · Adblock source URLs: {}", file_export.dns_adblock_urls.len());
+    println!(
+        "  · Adblock source URLs: {}",
+        file_export.dns_adblock_urls.len()
+    );
     if let Some(ref pools) = file_export.dhcp_v4_pools {
         println!("  · DHCPv4 pools: {}", pools.len());
     }
@@ -444,6 +593,207 @@ fn validate_config(printer: &Printer, file_path: &str) -> Result<()> {
         println!("  · API secrets block: Encrypted with Argon2id + ChaCha20Poly1305");
     }
     println!();
+
+    Ok(())
+}
+
+// ============================================================================
+// Diff Handler
+// ============================================================================
+
+async fn diff_config(
+    client: &LanforgeClient,
+    printer: &Printer,
+    file: Option<String>,
+) -> Result<()> {
+    let target_path = resolve_candidate_config_file(file.as_deref());
+    if !target_path.exists() {
+        bail!(
+            "Configuration file '{}' does not exist",
+            target_path.display()
+        );
+    }
+
+    let content = std::fs::read_to_string(&target_path)
+        .map_err(|e| eyre!("Failed to read '{}': {e}", target_path.display()))?;
+    let file_cfg = ConfigFile::parse(&content)
+        .map_err(|e| eyre!("Failed to parse '{}': {e}", target_path.display()))?;
+    let file_hashes = section_hashes(&file_cfg);
+
+    let live_export = client.system_config_export().await?;
+    let live_cfg = ConfigFile::from(&*live_export);
+    let live_hashes = section_hashes(&live_cfg);
+
+    if printer.json {
+        let mut diff_json = serde_json::Map::new();
+        for sec in Section::ALL {
+            let fh = file_hashes.get(&sec).copied();
+            let lh = live_hashes.get(&sec).copied();
+            let status = match (fh, lh) {
+                (Some(a), Some(b)) if a == b => "in_sync",
+                (Some(_), Some(_)) => "diverged",
+                (Some(_), None) => "only_in_file",
+                (None, Some(_)) => "only_in_db",
+                (None, None) => "absent",
+            };
+            diff_json.insert(
+                sec.name().to_string(),
+                serde_json::json!({
+                    "file_hash": fh,
+                    "db_hash": lh,
+                    "status": status,
+                }),
+            );
+        }
+        return printer.print_json(&serde_json::Value::Object(diff_json));
+    }
+
+    println!();
+    println!(
+        " {} {}",
+        "Configuration Diff:".bold().white(),
+        target_path.display().to_string().cyan()
+    );
+    println!(" ─────────────────────────────────────────────────────────────");
+
+    let mut in_sync_count = 0;
+    let mut diverged_count = 0;
+
+    for sec in Section::ALL {
+        let fh = file_hashes.get(&sec).copied();
+        let lh = live_hashes.get(&sec).copied();
+
+        let status_colored = match (fh, lh) {
+            (Some(a), Some(b)) if a == b => {
+                in_sync_count += 1;
+                "In Sync".green()
+            }
+            (Some(_), Some(_)) => {
+                diverged_count += 1;
+                "DIVERGED".yellow().bold()
+            }
+            (Some(_), None) => {
+                diverged_count += 1;
+                "File only".cyan()
+            }
+            (None, Some(_)) => {
+                diverged_count += 1;
+                "DB only".magenta()
+            }
+            (None, None) => "Default".bright_black(),
+        };
+
+        let dyn_marker = if sec.is_dynamic() { " (dynamic)" } else { "" };
+        println!(
+            "   {:<24} {:<15} {}",
+            format!("[{}]{dyn_marker}", sec.name()).bold(),
+            status_colored,
+            match (fh, lh) {
+                (Some(a), Some(b)) if a != b => format!("file:{a:016x} ≠ db:{b:016x}")
+                    .bright_black()
+                    .to_string(),
+                _ => String::new(),
+            }
+        );
+    }
+
+    println!(" ─────────────────────────────────────────────────────────────");
+    if diverged_count == 0 {
+        printer.success("All sections are completely in sync between file and live database.");
+    } else {
+        printer.warning(&format!("{diverged_count} section(s) differ between file and live database ({in_sync_count} in sync)."));
+    }
+    println!();
+
+    Ok(())
+}
+
+// ============================================================================
+// Edit Handler
+// ============================================================================
+
+async fn edit_config(
+    client: &LanforgeClient,
+    printer: &Printer,
+    file: Option<String>,
+    auto_yes: bool,
+) -> Result<()> {
+    let target_path = resolve_candidate_config_file(file.as_deref());
+
+    if !target_path.exists() {
+        let live_export = client.system_config_export().await?;
+        let live_cfg = ConfigFile::from(&*live_export);
+        let rendered = live_cfg
+            .render_full()
+            .map_err(|e| eyre!("Failed to render configuration: {e}"))?;
+        if let Some(parent) = target_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&target_path, &rendered)?;
+        printer.info(&format!(
+            "Created initial configuration file at '{}'",
+            target_path.display()
+        ));
+    }
+
+    let editor = std::env::var("EDITOR")
+        .or_else(|_| std::env::var("VISUAL"))
+        .unwrap_or_else(|_| "nano".to_string());
+
+    loop {
+        let status = std::process::Command::new(&editor)
+            .arg(&target_path)
+            .status()
+            .map_err(|e| eyre!("Failed to launch editor '{editor}': {e}"))?;
+
+        if !status.success() {
+            bail!("Editor exited with error status: {status}");
+        }
+
+        let content = std::fs::read_to_string(&target_path).map_err(|e| {
+            eyre!(
+                "Failed to read updated file '{}': {e}",
+                target_path.display()
+            )
+        })?;
+
+        match ConfigFile::parse(&content) {
+            Ok(parsed) => {
+                printer.success("Configuration syntax and schema validated successfully.");
+                let should_import = if auto_yes {
+                    true
+                } else {
+                    inquire::Confirm::new("Import edited configuration into daemon now?")
+                        .with_default(true)
+                        .prompt()
+                        .unwrap_or(false)
+                };
+
+                if should_import {
+                    let export = SystemConfigExport::from(&parsed);
+                    let resp = client.system_config_import(export).await?;
+                    render_import_results(&resp, printer);
+                } else {
+                    printer.info("Changes saved to file, but not imported into daemon.");
+                }
+                break;
+            }
+            Err(e) => {
+                printer.error(&format!("Validation failed: {e}"));
+                let retry =
+                    inquire::Confirm::new("Do you want to re-open the editor to fix the errors?")
+                        .with_default(true)
+                        .prompt()
+                        .unwrap_or(false);
+                if !retry {
+                    bail!(
+                        "Configuration edit aborted due to validation errors. File preserved at '{}'",
+                        target_path.display()
+                    );
+                }
+            }
+        }
+    }
 
     Ok(())
 }
@@ -530,6 +880,8 @@ pub const fn format_import_section(section: ImportSection) -> &'static str {
         ImportSection::PppoeConfig => "PPPoE configuration",
         ImportSection::DhcpOptions => "DHCP options",
         ImportSection::DnsReverseResolvers => "DNS reverse resolvers",
+        ImportSection::FirewallConfig => "firewall configuration",
+        ImportSection::TrafficConfig => "traffic configuration",
     }
 }
 
@@ -540,6 +892,8 @@ pub const fn is_singleton_section(section: ImportSection) -> bool {
         ImportSection::DnsAdblockConfig
             | ImportSection::PppoeConfig
             | ImportSection::DhcpOptions
+            | ImportSection::FirewallConfig
+            | ImportSection::TrafficConfig
     )
 }
 
@@ -607,6 +961,8 @@ mod tests {
             pppoe_config: None,
             dhcp_options: None,
             dns_reverse_resolvers: None,
+            firewall_config: None,
+            traffic_config: None,
             overwrite: false,
         };
 
@@ -658,8 +1014,30 @@ mod tests {
         let printer = Printer::new(false, true, true);
         assert!(validate_config(&printer, tmp.path().to_str().unwrap()).is_ok());
 
+        let mut toml_tmp = tempfile::Builder::new()
+            .suffix(".toml")
+            .tempfile()
+            .expect("temp toml");
+        let valid_toml = r#"
+[system]
+iface = "eth0"
+
+[dhcp.v4.pools.lan]
+range = "192.168.1.100-192.168.1.200"
+
+[hosts.nas]
+mac = "00:11:22:33:44:55"
+v4 = "192.168.1.10"
+"#;
+        toml_tmp
+            .write_all(valid_toml.as_bytes())
+            .expect("write tmp toml");
+        assert!(validate_config(&printer, toml_tmp.path().to_str().unwrap()).is_ok());
+
         let mut invalid_tmp = tempfile::NamedTempFile::new().expect("temp file");
-        invalid_tmp.write_all(b"not json at all").expect("write tmp");
+        invalid_tmp
+            .write_all(b"not json or toml {::")
+            .expect("write tmp");
         assert!(validate_config(&printer, invalid_tmp.path().to_str().unwrap()).is_err());
     }
 }

@@ -5,13 +5,16 @@ use clap::Parser;
 #[command(name = "lanforge", version, about, long_about = None)]
 pub struct CliArgs {
     /// Path to the TOML configuration file.
+    #[arg(short, long, env = "LANFORGE_CONFIG", conflicts_with = "config_dir")]
+    pub config: Option<String>,
+
+    /// Path to the configuration directory (e.g. `/etc/lanforge`).
     #[arg(
-        short,
-        long,
-        env = "LANFORGE_CONFIG",
-        default_value = "/etc/lanforge/lanforge.toml"
+        long = "config-dir",
+        env = "LANFORGE_CONFIG_DIR",
+        conflicts_with = "config"
     )]
-    pub config: String,
+    pub config_dir: Option<String>,
 
     /// Persistent configuration database path (e.g. `/var/lib/lanforge/config.redb`).
     #[arg(
@@ -66,4 +69,53 @@ pub struct CliArgs {
     /// Quick start in ephemeral development/profiling mode (in-memory DB if unconfigured, auto-provision enabled).
     #[arg(long = "dev", env = "LANFORGE_DEV")]
     pub dev: bool,
+}
+
+impl CliArgs {
+    /// Resolves the absolute path to the main TOML configuration file.
+    #[must_use]
+    pub fn resolved_config_path(&self) -> std::path::PathBuf {
+        match (&self.config, &self.config_dir) {
+            (Some(c), _) => std::path::PathBuf::from(c),
+            (None, Some(d)) => std::path::Path::new(d).join("lanforge.toml"),
+            (None, None) => std::path::PathBuf::from("/etc/lanforge/lanforge.toml"),
+        }
+    }
+
+    /// Resolves the configuration directory (e.g. `/etc/lanforge`).
+    #[must_use]
+    pub fn resolved_config_dir(&self) -> std::path::PathBuf {
+        match (&self.config_dir, &self.config) {
+            (Some(d), _) => std::path::PathBuf::from(d),
+            (None, Some(c)) => {
+                let p = std::path::Path::new(c);
+                p.parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .to_path_buf()
+            }
+            (None, None) => std::path::PathBuf::from("/etc/lanforge"),
+        }
+    }
+
+    /// Probes if the resolved configuration directory is writable by attempting to create and remove a temp file.
+    #[must_use]
+    pub fn is_config_dir_writable(&self) -> bool {
+        let dir = self.resolved_config_dir();
+        if !dir.exists() && std::fs::create_dir_all(&dir).is_err() {
+            return false;
+        }
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        let probe_file = dir.join(format!(".lanforge_probe_{}_{}", std::process::id(), nonce));
+        let Ok(file) = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe_file)
+        else {
+            return false;
+        };
+        drop(file);
+        std::fs::remove_file(probe_file).is_ok()
+    }
 }

@@ -1,237 +1,322 @@
-# Lanforge Production Configuration Template
-# Path: /etc/lanforge/lanforge.toml
+# ==============================================================================
+# Lanforge configuration reference
+# Install as /etc/lanforge/lanforge.toml. The daemon also writes live WebUI/API
+# changes back to this file while preserving comments in sections it does not edit.
+#
+# This example documents settings available from TOML, including builds without
+# the WebUI. Most built-in defaults are left out of the active configuration below;
+# see each section's comments for their values. Named tables use stable keys, for
+# example [dhcp.v4.pools.lan] and [hosts.nas].
+#
+# Inheritance used by this file:
+# - DHCP pools inherit their address-family lease, router, subnet mask, and DNS.
+# - DHCPv4/v6 and RA DNSSL inherit system.search_domains when their own list is empty.
+# - RA RDNSS inherits the DNS servers configured for DHCPv6 when no RDNSS table exists.
+# - monitor.interfaces defaults to system.iface. The primary interface is also
+#   automatically included in the firewall's internal zone at startup.
+# ==============================================================================
 
+# ------------------------------------------------------------------------------
+# [system] — identity and settings shared across network services
+# Defaults: iface is auto-detected; ula_prefix is generated as an RFC 4193 ULA;
+# debounce_secs = 2; search_domains is empty; auto_provision and
+# allow_unprivileged are false.
+# tls_cert / tls_key are inherited by HTTP and DNS services when they need TLS.
+# ------------------------------------------------------------------------------
 [system]
-# LAN interface where the daemon listens for requests (e.g., eth0, end0, br0).
 iface = "end0"
-
-# Target IPv6 SLAAC prefix used by the NDP (Neighbor Discovery Protocol) engine to track and
-# associate IPv6 SLAAC addresses with local LAN devices (e.g., "fd00:abcd:1234:1::/64").
-# If left empty (""), Lanforge automatically generates a unique RFC 4193-compliant random ULA prefix on first launch.
-target_prefix = ""
-
-# Global search domains announced to clients (DHCPv4, DHCPv6, RA).
 search_domains = ["lan", "home.arpa"]
-
-# Wait time (in seconds) before processing network event sequences (prevents flapping).
-debounce_secs = 2
-
-# Global TLS certificate and key (inherited by DNS and HTTP).
+# ula_prefix = "fd12:3456:789a::/64"
+# debounce_secs = 2
 # tls_cert = "/etc/lanforge/certs/lanforge.crt"
 # tls_key = "/etc/lanforge/certs/lanforge.key"
+# auto_provision = false
+# allow_unprivileged = false
 
+# ------------------------------------------------------------------------------
+# [database] — embedded persistent configuration and runtime state stores
+# Defaults: config_path = /var/lib/lanforge/config.redb;
+# runtime_path = /run/lanforge/runtime.redb; flush_interval = "60s".
+# ------------------------------------------------------------------------------
 [database]
-# Persistent configuration database (services, users, static hosts, DNS rewrites):
 config_path = "/var/lib/lanforge/config.redb"
-# Volatile runtime database in tmpfs (active leases, query logs, system event history):
 runtime_path = "/run/lanforge/runtime.redb"
-# Flush interval in seconds for persisting in-memory state:
-flush_interval = 60
+flush_interval = "60s"
 
+# ------------------------------------------------------------------------------
+# [api] — local Unix domain socket used by the CLI
+# Defaults: enabled = true; socket_path = /run/lanforge/control.sock.
+# ------------------------------------------------------------------------------
 [api]
-# UNIX socket control API for the CLI (lanforge <command>).
 enabled = true
 socket_path = "/run/lanforge/control.sock"
 
+# ------------------------------------------------------------------------------
+# [http] — REST API and embedded WebUI listener
+# Defaults: enabled = true; listen = "[::]:8088"; https_enabled = false;
+# allow_plaintext_http = true; doh_enabled = false. TLS files come from [system].
+# ------------------------------------------------------------------------------
 [http]
-# REST API and Web Console interface.
 enabled = true
-# Listen address (dual-stack wildcard [::]:8088 covers IPv6 and IPv4).
 listen = "[::]:8088"
-# Enable HTTPS (inherits global system TLS if cert paths omitted).
 https_enabled = false
-# Allow plaintext HTTP for local network / reverse proxy access.
 allow_plaintext_http = true
 doh_enabled = false
 
-
-# [ra] - Router Advertisement (RFC 4861)
-[ra]
-# Enables sending Router Advertisements for IPv6 autoconfiguration.
+# ------------------------------------------------------------------------------
+# [monitor] — ARP/NDP neighbor tracking and active discovery
+# Defaults: enabled = true; scan_pacing_ms = 10; stale_timeout_secs = 3600;
+# interfaces = [] (the primary [system].iface is used).
+# ------------------------------------------------------------------------------
+[monitor]
 enabled = true
-# Optional interface override (e.g., "lan0.100"). Defaults to [system].iface.
-# iface = "lan0.100"
+scan_pacing_ms = 50
+stale_timeout_secs = 3600
+# interfaces = ["end0", "br0"]
 
-# Defines the "Managed Configuration" (M) flag. If true, clients must use DHCPv6 for addresses.
-managed = true
-
-# Defines the "Other Configuration" (O) flag. If true, clients must use DHCPv6 for options (DNS, etc).
-other_config = true
-
-# Maximum time interval (in seconds) between unsolicited RA transmissions (4s to 1800s).
-max_interval = 200
-
-# Router lifetime (in seconds). If 0, the host will not be used as a gateway.
-lifetime = 600
-
-# MTU value advertised on the link (e.g., 1500, or 1492 for PPPoE connections).
-mtu = 1500
-
-[[ra.prefix]]
-# Prefix source: "ula" (static defined below) or "auto_gua" (detected from the interface).
-source = "ula"
-# IPv6 address/prefix in CIDR format.
-address = "fd97:f00d:cafe:3731::"
-on_link = true
-autonomous = true
-
-[[ra.prefix]]
-# Automatically detects the Global Unicast Address (GUA) prefix configured on the interface.
-source = "auto_gua"
-on_link = true
-autonomous = true
-
-[[ra.rdnss]]
-# List of IPv6 DNS resolvers to advertise via Router Advertisement (RFC 8106).
-servers = ["fd97:f00d:cafe:3731::1"]
-# Lifetime (in seconds) of the RDNSS record.
-lifetime = 600
-
-[[ra.dnssl]]
-# Search domains advertised via Router Advertisement.
-domains = ["lan"]
-lifetime = 600
-
-
-# [dhcp.v4] - DHCP Server for IPv4
-[dhcp.v4]
-# Enables the DHCPv4 service.
-enabled = true
-
-# Optional interface override (e.g., "lan0.100"). Defaults to [system].iface.
-# iface = "lan0.100"
-
-# Default lifetime (in seconds) of DHCP leases.
-lease_time = 86400
-
-# Default gateway (Router) advertised to IPv4 clients.
-router = "192.168.1.1"
-
-# IPv4 DNS servers provided to clients.
-dns = ["192.168.1.1"]
-
-# Subnet mask (default: 255.255.255.0).
-subnet_mask = "255.255.255.0"
-
-# Address pools for dynamic allocation.
-[[dhcp.v4.pools]]
-name = "Primary LAN Scope"
-range_start = "192.168.1.100"
-range_end = "192.168.1.250"
-
-
-# [dhcp.v6] - Stateful DHCPv6 Server
-[dhcp.v6]
-# Enables the DHCPv6 service (requires managed = true in [ra]).
-enabled = true
-
-# Lease time (in seconds) for IPv6 addresses.
-lease_time = 86400
-
-# DNS servers (Option 23).
-dns_servers = ["fd97:f00d:cafe:3731::1"]
-
-# Search domains (Option 24).
-search_domains = ["lan"]
-
-# Suffix-based pools (applies dynamically to active ULA and GUA prefixes).
-[[dhcp.v6.pools]]
-range_start = "::100"
-range_end = "::1fff"
-
-
-# [dns] - Built-in DNS Resolver & Adblocker
-[dns]
-# Enables the built-in DNS resolver for the local network.
-enabled = true
-
-# Address and port where the DNS server will listen (standard: "[::]:53" dual-stack, or list of addrs).
-listen = "[::]:53"
-
-# Local domain suffixes for internal hostname resolution.
-search_domains = ["lan"]
-
-# TTL (Time To Live) in seconds for local DNS responses.
-ttl = 60
-
-# Days to hide inactive devices from DNS.
-last_seen_threshold_days = 7
-
-# Built-in DNS Adblocker toggle
-adblock_enabled = false
-
-# Note: Operational configurations like Upstream Resolvers, DNS Rewrites,
-# and Adblock settings (blocklists, custom rules, allowlist) can be managed
-# dynamically via Web Console or CLI (`lanforge dns ...`).
-
-
-# [mdns] - mDNS Hostname & Device Discovery Prober
+# ------------------------------------------------------------------------------
+# [mdns] — multicast DNS hostname discovery
+# Defaults: enabled = true; probe_interval = 3600 seconds.
+# ------------------------------------------------------------------------------
 [mdns]
 enabled = true
-probe_interval = 3600
+probe_interval = "1h"
 
-
-# [tftp] - TFTP Boot Server
+# ------------------------------------------------------------------------------
+# [tftp] — TFTP/PXE server
+# Defaults: enabled = false; listen = "0.0.0.0:69";
+# root_dir = /var/lib/lanforge/tftp.
+# ------------------------------------------------------------------------------
 [tftp]
 enabled = false
+listen = "[::]:69"
 root_dir = "/var/lib/lanforge/tftp"
-listen_addr = "[::]:69"
 
-
-# [monitor] - Passive ARP/NDP Neighbor Discovery & Active Ping Sweeper
-[monitor]
-# Enables the passive neighbor monitor.
+# ------------------------------------------------------------------------------
+# [dhcp.v4] and [dhcp.v4.pools.<name>] — stateful DHCPv4
+# Server defaults: enabled = true; lease = "24h". Router, subnet mask, DNS,
+# domain_name, search_domains, and boot_file are optional global options.
+# Each pool requires range = "START-END" and may override the global options.
+# ------------------------------------------------------------------------------
+[dhcp.v4]
 enabled = true
-# Optional list of interfaces to monitor (e.g. ["lan0", "lan0.10", "lan0.100"]).
-# If omitted or empty, defaults to [system].iface.
-# ifaces = ["lan0", "lan0.10", "lan0.100"]
+lease = "24h"
+router = "192.168.1.1"
+subnet_mask = "255.255.255.0"
+dns = ["192.168.1.1"]
+# domain_name = "lan"
+# search_domains = ["lan"] # defaults to [system].search_domains
+# boot_file = "pxelinux.0"
 
-# [pppoe] - Integrated PPPoE WAN Concentrator & Fast-Path
-[pppoe]
-# Enables the PPPoE client service for WAN broadband connectivity.
+[dhcp.v4.pools.lan]
+range = "192.168.1.100-192.168.1.250"
+# lease = "12h" # omitted: inherit [dhcp.v4].lease
+# router = "192.168.1.1" # omitted: inherit [dhcp.v4].router
+# subnet_mask = "255.255.255.0" # omitted: inherit [dhcp.v4].subnet_mask
+# dns = ["192.168.1.1"] # omitted: inherit [dhcp.v4].dns
+
+# ------------------------------------------------------------------------------
+# [dhcp.v6] and [dhcp.v6.pools.<name>] — stateful DHCPv6
+# Defaults: enabled = true; lease = "24h". DNS, search_domains and pool-specific
+# lease/DNS are optional. IPv6 pool ranges accept address suffixes such as ::100.
+# ------------------------------------------------------------------------------
+[dhcp.v6]
+enabled = true
+lease = "24h"
+dns = ["fd97:f00d:cafe:3731::1"]
+# search_domains = ["lan"] # defaults to [system].search_domains
+
+[dhcp.v6.pools.lan]
+range = "::100-::1fff"
+# lease = "12h" # omitted: inherit [dhcp.v6].lease
+# dns = ["fd97:f00d:cafe:3731::1"] # omitted: inherit [dhcp.v6].dns
+
+# ------------------------------------------------------------------------------
+# [ra] — IPv6 Router Advertisements
+# Defaults: enabled = true; managed = true; other_config = true;
+# max_interval = "200s"; lifetime = "600s"; mtu = 1500.
+# Prefix source can be "ula", "auto_gua", or "static". A static prefix uses
+# prefix = "fd00::/64". on_link and autonomous default to true; prefix lifetimes
+# are optional durations. With no prefix tables, RA announces the system ULA
+# (when present) and auto-detects GUA from the primary interface. An explicit ULA
+# source inherits [system].ula_prefix when prefix is omitted.
+# ------------------------------------------------------------------------------
+[ra]
+enabled = true
+managed = true
+other_config = true
+max_interval = "200s"
+lifetime = "600s"
+mtu = 1500
+
+# Explicit prefix override examples:
+# [ra.prefixes.ula]
+# source = "ula" # inherits [system].ula_prefix
+# [ra.prefixes.gua]
+# source = "auto_gua"
+
+# RDNSS/DNSSL can be set explicitly when they differ from DHCP/global options.
+# With no [ra.rdnss.*] table, DHCPv6 DNS servers are announced automatically.
+# With no [ra.dnssl.*] table, [system].search_domains are announced automatically.
+# Example:
+# [ra.rdnss.lan]
+# servers = ["fd97:f00d:cafe:3731::1"]
+# lifetime = "600s"
+# [ra.dnssl.lan]
+# domains = ["lan", "home.arpa"]
+# lifetime = "600s"
+
+# ------------------------------------------------------------------------------
+# [dns] — authoritative rewrites and recursive DNS
+# Defaults: enabled = true; listen = "[::]:53".
+# Upstream addresses accept udp://, tls://, quic://, and https:// prefixes.
+# The URI scheme selects the protocol, so it does not need a separate protocol key.
+# The table key is a human-readable identifier. Set domain only for conditional
+# split-DNS forwarding; it is not inferred from the key.
+# ------------------------------------------------------------------------------
+[dns]
+enabled = true
+listen = "[::]:53"
+
+# A named upstream set accepts several endpoints with shared conditional-routing
+# options. Entries are tried according to the configured DNS upstream mode.
+[dns.upstreams.cloudflare]
+addresses = [
+  "udp://1.1.1.1:53",
+  "udp://1.0.0.1:53",
+  "udp://[2606:4700:4700::1111]:53",
+  "udp://[2606:4700:4700::1001]:53",
+]
+
+# Example conditional resolver:
+# [dns.upstreams.corporate]
+# addresses = ["tls://10.20.0.53:853", "tls://10.20.0.54:853"]
+# domain = "corp.example"
+
+[dns.rewrites."router.lan"]
+target = "192.168.1.1"
+# rtype = "A" # inferred from target when omitted
+# Special targets: "dev:<device-name-or-mac>" resolves a tracked device;
+# "dev:<device>|<fallback>" uses the fallback when the device has no address;
+# "srv:<service>:<tcp-or-udp>:<device>:<port>" creates an SRV answer, e.g.
+# "srv:https:tcp:nas:443". A MAC address can be used as the device identifier.
+
+# ------------------------------------------------------------------------------
+# [adblock] — DNS filtering
+# Defaults: enabled = false; blocking_mode = "nxdomain"; refresh_time = "04:00".
+# blocking_mode accepts nxdomain, null_ip, or custom_ip; custom responses use
+# blocking_ip_v4 / blocking_ip_v6. Sources are named tables; kind is blocklist or
+# allowlist, format accepts auto/adblock/hosts/domains/wildcard_domains. Custom
+# rules are keyed by domain.
+# ------------------------------------------------------------------------------
+[adblock]
 enabled = false
+blocking_mode = "nxdomain"
+refresh_time = "03:00"
+# blocking_ip_v4 = "0.0.0.0"
+# blocking_ip_v6 = "::"
+# allowlist = ["trusted.example"]
 
-# Data plane engine: "kernel" (default /dev/ppp) or "ebpf" (Generic XDP + TC Fast-Path).
-dataplane = "kernel"
+[adblock.sources.oisd]
+url = "https://small.oisd.nl"
+kind = "blocklist"
+format = "domains"
+# enabled = true
 
-# Physical WAN interface connected to ONT / modem (e.g., "eth1", "end1").
-wan_iface = "eth1"
-
-# ISP subscriber credentials.
-username = "user@isp.com"
-password = "secretpassword"
-
-# Authentication protocol: "chap_md5" (default), "pap", or "none".
-auth = "chap_md5"
-
-# Maximum Receive Unit (MRU). Standard is 1492 for PPPoE.
-mru = 1492
-
-# LCP Echo keepalive interval in seconds (default: 20s).
-lcp_echo_interval_secs = 20
-
-# Maximum consecutive failed keepalives before reconnecting (default: 5).
-lcp_echo_max_failures = 5
-
-# Reconnect delay in seconds after a disconnected session (default: 10s).
-reconnect_delay_secs = 10
-
-# Send PADT frame to BRAS on service shutdown (default: true).
-send_padt_on_shutdown = true
-
-# Discovery PADI retries and timeout.
-discovery_padi_retries = 5
-discovery_padi_timeout_secs = 3
-
-# nftables router tuning settings
-[pppoe.nftables]
+[adblock.rules."telemetry.microsoft.com"]
+action = "block" # block or allow
 enabled = true
-table_name = "lanforge"
+
+# ------------------------------------------------------------------------------
+# [firewall] — stateful nftables filtering and forwarding
+# Defaults: enabled/flow_offload/bypass_dns/bypass_vowifi = true;
+# default_input_policy/default_forward_policy = "drop".
+# Policies accept drop, accept, or reject. Zone policies default to accept.
+# ------------------------------------------------------------------------------
+[firewall]
+enabled = true
 flow_offload = true
-mss_clamping = true
 bypass_dns = true
 bypass_vowifi = true
-# Set to false if system firewall (e.g. firewalld in external zone) handles masquerade
+default_input_policy = "drop"
+default_forward_policy = "drop"
+# custom_rules_file = "/etc/lanforge/firewall.custom.nft"
+
+# Zone fields: interfaces, input, forward, masquerade, mtu_fix, open_ports,
+# allowed_subnets. Port entries use PORT/protocol, for example "51820/udp".
+[firewall.zones.external]
+interfaces = ["ppp0", "wan0"]
+input = "drop"
+forward = "drop"
 masquerade = true
-# LAN interfaces participating in flowtable offloading (defaults to system.iface if omitted)
-# lan_ifaces = ["enp2s0"]
+mtu_fix = true
+open_ports = ["51820/udp"]
+
+[firewall.zones.internal]
+# The primary system interface is included automatically.
+interfaces = ["br0"]
+input = "accept"
+forward = "accept"
+open_ports = ["53/udp", "53/tcp", "67/udp", "8088/tcp"]
+
+# Port forwards are also used for IPv6 pinholes. `to` is the target IP address;
+# `to_port` defaults to `port`.
+[firewall.port_forwards.web-server]
+proto = "tcp"
+port = 443
+to = "192.168.1.50"
+to_port = 443
+description = "Internal HTTPS Web Server"
+
+[firewall.port_forwards.wireguard]
+proto = "udp"
+port = 51820
+to = "192.168.1.10"
+
+# ------------------------------------------------------------------------------
+# [traffic] — NIC tuning and Smart Queue Management
+# Tuning defaults enabled = true, cpu_mask/rx_ring/tx_ring = "auto",
+# disable_eee = true, udp_gro_forwarding = true. SQM defaults disabled; set
+# interface and download_mbps/upload_mbps when enabling it.
+# ------------------------------------------------------------------------------
+[traffic.tuning]
+enabled = true
+# interfaces = ["end0"]
+# cpu_mask = "auto"
+# rps_flow_entries = 32768
+# rps_flow_cnt = 4096
+# rx_ring = "auto"
+# tx_ring = "auto"
+# disable_eee = true
+# udp_gro_forwarding = true
+
+[traffic.sqm]
+enabled = false
+# interface = "ppp0"
+# download_mbps = 300
+# upload_mbps = 50
+
+# ------------------------------------------------------------------------------
+# [pppoe] — PPPoE WAN client
+# Defaults: disabled; MRU = 1492. Credentials are intentionally left out.
+# ------------------------------------------------------------------------------
+[pppoe]
+enabled = false
+# wan_iface = "eth1"
+# username = "user@isp.com"
+# password = "change-me"
+# service_name = ""
+# mru = 1492
+
+# ------------------------------------------------------------------------------
+# [hosts.<name>] — static identities, DHCP reservations, and local DNS names
+# A MAC address identifies the client. v4 pins an IPv4 address; v6_suffix is
+# combined with the active IPv6 prefix, while v6 pins a full
+# address. dns defaults to true and can be false to suppress local DNS logging.
+# ------------------------------------------------------------------------------
+[hosts.nas]
+mac = "00:11:22:33:44:55"
+v4 = "192.168.1.10"
+# v6_suffix = "::10"
+# v6 = "fd97:f00d:cafe:3731::10"
+# dns = true

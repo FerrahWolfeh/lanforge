@@ -88,6 +88,8 @@ impl ClientContext {
         let pppoe_config = self.ctx.get_pppoe_config().map(Box::new);
         let dhcp_options = Some(Box::new(self.ctx.get_dhcp_options()));
         let dns_reverse_resolvers = Some(self.ctx.with_state(|s| s.reverse_resolvers.clone()));
+        let firewall_config = self.ctx.get_firewall_config().map(Box::new);
+        let traffic_config = self.ctx.get_traffic_config().map(Box::new);
 
         Response::SystemConfig(Box::new(SystemConfigExport {
             hosts,
@@ -106,6 +108,8 @@ impl ClientContext {
             pppoe_config,
             dhcp_options,
             dns_reverse_resolvers,
+            firewall_config,
+            traffic_config,
             overwrite: false,
         }))
     }
@@ -128,6 +132,8 @@ impl ClientContext {
             pppoe_config,
             dhcp_options,
             dns_reverse_resolvers,
+            firewall_config,
+            traffic_config,
             overwrite,
         } = config;
 
@@ -234,9 +240,10 @@ impl ClientContext {
             }
 
             // Clear API Tokens
-            if let Ok(lanforge_types::storage::StorageQueryResult::ApiTokens(existing_tokens)) = storage
-                .send_query(lanforge_types::storage::StorageQuery::LoadApiTokens)
-                .await
+            if let Ok(lanforge_types::storage::StorageQueryResult::ApiTokens(existing_tokens)) =
+                storage
+                    .send_query(lanforge_types::storage::StorageQuery::LoadApiTokens)
+                    .await
             {
                 for token in existing_tokens {
                     let _ = storage
@@ -250,7 +257,8 @@ impl ClientContext {
             // Clear Dynamic Configs by overwriting with empty lists
             self.ctx.update_dhcp_v4_pools(Vec::new());
             self.ctx.update_dhcp_v6_pools(Vec::new());
-            self.ctx.update_ra_config(Vec::new(), Vec::new(), Vec::new());
+            self.ctx
+                .update_ra_config(Vec::new(), Vec::new(), Vec::new());
             let _ = storage
                 .send_query(lanforge_types::storage::StorageQuery::ClearReverseResolvers)
                 .await;
@@ -343,10 +351,16 @@ impl ClientContext {
         let mut adblock_cfg_success = true;
         let mut adblock_cfg_err = None;
         if let Err(e) = storage
-            .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
-                key: "enabled".into(),
-                value: if enabled { "true".into() } else { "false".into() },
-            })
+            .send_query(
+                lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                    key: "enabled".into(),
+                    value: if enabled {
+                        "true".into()
+                    } else {
+                        "false".into()
+                    },
+                },
+            )
             .await
         {
             adblock_cfg_success = false;
@@ -354,10 +368,12 @@ impl ClientContext {
         }
         if adblock_cfg_success
             && let Err(e) = storage
-                .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
-                    key: "blocking_mode".into(),
-                    value: blocking_mode.to_string(),
-                })
+                .send_query(
+                    lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                        key: "blocking_mode".into(),
+                        value: blocking_mode.to_string(),
+                    },
+                )
                 .await
         {
             adblock_cfg_success = false;
@@ -366,10 +382,12 @@ impl ClientContext {
         if adblock_cfg_success
             && let Some(ip) = blocking_ip_v4
             && let Err(e) = storage
-                .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
-                    key: "blocking_ip_v4".into(),
-                    value: ip.to_string(),
-                })
+                .send_query(
+                    lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                        key: "blocking_ip_v4".into(),
+                        value: ip.to_string(),
+                    },
+                )
                 .await
         {
             adblock_cfg_success = false;
@@ -378,10 +396,12 @@ impl ClientContext {
         if adblock_cfg_success
             && let Some(ip) = blocking_ip_v6
             && let Err(e) = storage
-                .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
-                    key: "blocking_ip_v6".into(),
-                    value: ip.to_string(),
-                })
+                .send_query(
+                    lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                        key: "blocking_ip_v6".into(),
+                        value: ip.to_string(),
+                    },
+                )
                 .await
         {
             adblock_cfg_success = false;
@@ -389,10 +409,12 @@ impl ClientContext {
         }
         if adblock_cfg_success
             && let Err(e) = storage
-                .send_query(lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
-                    key: "refresh_time".into(),
-                    value: refresh_time.to_string(),
-                })
+                .send_query(
+                    lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
+                        key: "refresh_time".into(),
+                        value: refresh_time.to_string(),
+                    },
+                )
                 .await
         {
             adblock_cfg_success = false;
@@ -413,7 +435,10 @@ impl ClientContext {
         let mut url_success = true;
         let mut url_err = None;
         for u in dns_adblock_urls {
-            match self.handle_dns_adblock_url_add(u.url, u.kind, Some(u.format)).await {
+            match self
+                .handle_dns_adblock_url_add(u.url, u.kind, Some(u.format))
+                .await
+            {
                 Response::Success(_) => url_count += 1,
                 Response::Error { error } => {
                     url_success = false;
@@ -561,10 +586,13 @@ impl ClientContext {
             });
         }
         if ra_prefixes.is_some() || ra_rdnss.is_some() || ra_dnssl.is_some() {
-            let prefixes = ra_prefixes.clone().unwrap_or_else(|| self.ctx.get_ra_prefixes());
+            let prefixes = ra_prefixes
+                .clone()
+                .unwrap_or_else(|| self.ctx.get_ra_prefixes());
             let rdnss = ra_rdnss.clone().unwrap_or_else(|| self.ctx.get_ra_rdnss());
             let dnssl = ra_dnssl.clone().unwrap_or_else(|| self.ctx.get_ra_dnssl());
-            self.ctx.update_ra_config(prefixes.clone(), rdnss.clone(), dnssl.clone());
+            self.ctx
+                .update_ra_config(prefixes.clone(), rdnss.clone(), dnssl.clone());
             ra_dirty = false;
 
             if let Some(ref p) = ra_prefixes {
@@ -641,6 +669,26 @@ impl ClientContext {
             });
         }
 
+        if let Some(fw) = firewall_config {
+            self.ctx.update_firewall_config(*fw);
+            results.push(ImportResult {
+                section: ImportSection::FirewallConfig,
+                success: true,
+                count: 1,
+                error: None,
+            });
+        }
+
+        if let Some(tr) = traffic_config {
+            self.ctx.update_traffic_config(*tr);
+            results.push(ImportResult {
+                section: ImportSection::TrafficConfig,
+                success: true,
+                count: 1,
+                error: None,
+            });
+        }
+
         if dhcp_v4_dirty {
             self.ctx.update_dhcp_v4_pools(Vec::new());
         }
@@ -648,7 +696,8 @@ impl ClientContext {
             self.ctx.update_dhcp_v6_pools(Vec::new());
         }
         if ra_dirty {
-            self.ctx.update_ra_config(Vec::new(), Vec::new(), Vec::new());
+            self.ctx
+                .update_ra_config(Vec::new(), Vec::new(), Vec::new());
         }
 
         Response::SystemConfigImport(SystemConfigImportResponse {

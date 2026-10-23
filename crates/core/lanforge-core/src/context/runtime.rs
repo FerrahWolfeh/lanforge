@@ -17,8 +17,8 @@ use smallvec::SmallVec;
 use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime};
 use tokio::sync::watch;
 
@@ -60,6 +60,7 @@ pub struct ServiceRuntime {
     pub dns_handle: RwLock<Option<DnsHandle>>,
     pub storage_handle: RwLock<Option<StorageHandle>>,
     pub config_path: RwLock<Option<PathBuf>>,
+    pub config_writable: AtomicBool,
     pub compiled_caps: RwLock<SmallVec<[Cap; 32]>>,
 }
 
@@ -99,6 +100,7 @@ impl ServiceRuntime {
             dns_handle: RwLock::new(None),
             storage_handle: RwLock::new(None),
             config_path: RwLock::new(None),
+            config_writable: AtomicBool::new(true),
             compiled_caps: RwLock::new(CompiledCaps::detect_default_compiled()),
         }
     }
@@ -361,7 +363,11 @@ impl ServiceRuntime {
             .unwrap_or(0)
     }
 
-    pub fn register_status_provider(&self, ctx: &LanforgeContext, provider: Arc<dyn StatusProvider>) {
+    pub fn register_status_provider(
+        &self,
+        ctx: &LanforgeContext,
+        provider: Arc<dyn StatusProvider>,
+    ) {
         let banner = provider.banner(ctx);
         self.services
             .write()

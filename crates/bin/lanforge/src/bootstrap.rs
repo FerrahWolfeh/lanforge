@@ -9,11 +9,12 @@ use lanforge_db::{
     AdblockStore, DhcpConfigStore, DnsStore, DnsUpstreamStore, FirewallConfigStore, LanforgeDb,
     LogDb, PppoeConfigStore, RaConfigStore, TrafficConfigStore, UserStore,
 };
+#[cfg(feature = "dhcp")]
+use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
 use lanforge_discovery::refresh_interface;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
-#[cfg(feature = "dhcp")]
-use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
+use lanforge_types::network::Ipv6Prefix;
 #[cfg(feature = "dhcp")]
 use lanforge_types::network::dhcp::{
     DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, TftpOptions,
@@ -22,7 +23,6 @@ use lanforge_types::network::dhcp::{
 use lanforge_types::network::dns::AdblockUrlEntry;
 #[cfg(feature = "dns")]
 use lanforge_types::network::dns::adblock::{AdblockRuleEntry, AdblockUrlKind};
-use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::update::InterfaceState;
 use netlink_sys::SocketAddr;
 use pnet::datalink::interfaces;
@@ -30,6 +30,7 @@ use pnet::ipnetwork::{IpNetwork, Ipv4Network};
 use rtnetlink::new_connection;
 use rtnetlink::packet_core::NetlinkMessage;
 use rtnetlink::packet_route::RouteNetlinkMessage;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
@@ -265,6 +266,7 @@ impl Bootstrapper {
             ctx.set_recovery_mode(true);
         }
         ctx.set_config_path(&cfg.config_path);
+        ctx.set_config_writable(cfg.config_writable);
         #[cfg(feature = "dhcp")]
         {
             ctx.update_dhcp_v4_pools(cfg.dhcpv4_toml.pools.clone());
@@ -382,12 +384,8 @@ impl Bootstrapper {
         if upstreams.is_empty() && !cfg.dns_toml.upstreams.is_empty() {
             for entry in &cfg.dns_toml.upstreams {
                 let target = &entry.target;
-                let _ = db
-                    .add_dns_upstream(
-                        target.addr,
-                        target.protocol,
-                        target.domain.as_deref(),
-                    )?;
+                let _ =
+                    db.add_dns_upstream(target.addr, target.protocol, target.domain.as_deref())?;
             }
             info!(
                 "Seeded {} DNS upstreams from configuration into database",
@@ -482,6 +480,8 @@ impl Bootstrapper {
         let is_provisioned = Self::check_provisioning_mode(cfg, &db, user_count);
 
         if is_provisioned {
+            let config_path = PathBuf::from(&cfg.config_path);
+            crate::config::sync::sync_boot_config(&config_path, &db, cfg.config_writable)?;
             Self::seed_provisioned_configs(&db, cfg)?;
         }
 
@@ -524,7 +524,9 @@ impl Bootstrapper {
                     "Database: Persistent database unavailable at '{}' ({e})",
                     lanforge_db::sanitize_db_url(&cfg.database.config_path)
                 );
-                warn!("Database: Entering RECOVERY MODE — running in-memory without disk persistence");
+                warn!(
+                    "Database: Entering RECOVERY MODE — running in-memory without disk persistence"
+                );
                 LanforgeDb::open_in_memory()?
             }
         };
@@ -544,9 +546,8 @@ impl Bootstrapper {
     }
 
     fn check_provisioning_mode(cfg: &mut Config, db: &LanforgeDb, user_count: i64) -> bool {
-        let is_provisioned = db.is_provisioned().unwrap_or(false)
-            || (user_count > 0)
-            || cfg.system.auto_provision;
+        let is_provisioned =
+            db.is_provisioned().unwrap_or(false) || (user_count > 0) || cfg.system.auto_provision;
 
         if cfg.system.auto_provision && !db.is_provisioned().unwrap_or(false) {
             info!("Bootstrap: Auto-provisioning enabled via configuration/CLI");
@@ -780,7 +781,9 @@ impl Bootstrapper {
             #[cfg(feature = "pppoe")]
             {
                 if !cfg.pppoe_toml.nftables.flow_offload && loaded.flow_offload {
-                    info!("Firewall bootstrap: disabling flow_offload to match existing PPPoE/SQM configuration");
+                    info!(
+                        "Firewall bootstrap: disabling flow_offload to match existing PPPoE/SQM configuration"
+                    );
                     loaded.flow_offload = false;
                     modified = true;
                 }
@@ -788,7 +791,9 @@ impl Bootstrapper {
             #[cfg(feature = "traffic")]
             {
                 if cfg.traffic_toml.sqm.enabled && loaded.flow_offload {
-                    info!("Firewall bootstrap: disabling flow_offload because SQM (CAKE) traffic shaping is active");
+                    info!(
+                        "Firewall bootstrap: disabling flow_offload because SQM (CAKE) traffic shaping is active"
+                    );
                     loaded.flow_offload = false;
                     modified = true;
                 }
@@ -816,12 +821,18 @@ impl Bootstrapper {
             }
             // Auto-heal / ensure trusted zone includes container wildcard "podman*"
             if let Some(trusted_zone) = loaded.zones.iter_mut().find(|z| z.name == "trusted") {
-                if !trusted_zone.interfaces.iter().any(|i| i == "podman*" || i.starts_with("podman")) {
+                if !trusted_zone
+                    .interfaces
+                    .iter()
+                    .any(|i| i == "podman*" || i.starts_with("podman"))
+                {
                     info!("Firewall bootstrap: adding 'podman*' wildcard to trusted firewall zone");
                     trusted_zone.interfaces.push("podman*".into());
                     modified = true;
                 } else if !trusted_zone.interfaces.iter().any(|i| i == "podman*") {
-                    info!("Firewall bootstrap: ensuring 'podman*' wildcard in trusted firewall zone");
+                    info!(
+                        "Firewall bootstrap: ensuring 'podman*' wildcard in trusted firewall zone"
+                    );
                     trusted_zone.interfaces.push("podman*".into());
                     modified = true;
                 }
@@ -917,7 +928,10 @@ impl Bootstrapper {
             let size = db
                 .path()
                 .and_then(|p| std::fs::metadata(p).ok())
-                .map_or_else(|| "unknown".to_string(), |m| ByteSize::b(m.len()).to_string());
+                .map_or_else(
+                    || "unknown".to_string(),
+                    |m| ByteSize::b(m.len()).to_string(),
+                );
             format!("redb (schema v{schema}, {size})")
         };
 
@@ -1037,7 +1051,9 @@ impl Bootstrapper {
 
         match opts.v4.router {
             None => {
-                info!("DHCPv4 Startup Sanity: Gateway unconfigured / auto — advertising interface IP {iface_ip}.");
+                info!(
+                    "DHCPv4 Startup Sanity: Gateway unconfigured / auto — advertising interface IP {iface_ip}."
+                );
                 opts.v4.router = Some(iface_ip);
                 opts_modified = true;
             }
@@ -1053,7 +1069,9 @@ impl Bootstrapper {
                 } else if !v4.contains(r) {
                     warn!(
                         "DHCPv4 Startup Sanity: Database gateway '{r}' is outside interface '{}' subnet ({}/{}). Auto-healing database to {iface_ip}.",
-                        cfg.system.iface, v4.network(), v4.prefix()
+                        cfg.system.iface,
+                        v4.network(),
+                        v4.prefix()
                     );
                     opts.v4.router = Some(iface_ip);
                     opts_modified = true;
@@ -1072,7 +1090,9 @@ impl Bootstrapper {
 
         if opts_modified {
             if let Err(e) = db.save_dhcp_options(&opts) {
-                warn!("DHCPv4 Startup Sanity: Failed to persist auto-healed DHCP options to DB: {e}");
+                warn!(
+                    "DHCPv4 Startup Sanity: Failed to persist auto-healed DHCP options to DB: {e}"
+                );
             } else {
                 info!("DHCPv4 Startup Sanity: Auto-healed DHCP options saved to database.");
             }
@@ -1080,11 +1100,7 @@ impl Bootstrapper {
     }
 
     #[cfg(feature = "dhcp")]
-    fn audit_and_heal_dhcp_pools(
-        db: &LanforgeDb,
-        cfg: &mut Config,
-        v4: Ipv4Network,
-    ) {
+    fn audit_and_heal_dhcp_pools(db: &LanforgeDb, cfg: &mut Config, v4: Ipv4Network) {
         if cfg.dhcpv4_toml.pools.is_empty() {
             return;
         }
@@ -1124,7 +1140,9 @@ impl Bootstrapper {
         interfaces: &[pnet::datalink::NetworkInterface],
     ) -> Result<u32> {
         if !cfg.system.iface.is_empty()
-            && let Some(iface) = interfaces.iter().find(|iface| iface.name == cfg.system.iface)
+            && let Some(iface) = interfaces
+                .iter()
+                .find(|iface| iface.name == cfg.system.iface)
         {
             return Ok(iface.index);
         }
@@ -1177,8 +1195,13 @@ impl Bootstrapper {
     }
 
     fn log_welcome_banner(cfg: &Config, if_state: &InterfaceState) {
-        let ll_str = if_state.link_local.map_or_else(|| "none".to_string(), |ip| ip.to_string());
-        let gua_str = if_state.gua.map_or_else(|| "none".to_string(), |ip| Ipv6Prefix::from_addr(ip).to_string());
+        let ll_str = if_state
+            .link_local
+            .map_or_else(|| "none".to_string(), |ip| ip.to_string());
+        let gua_str = if_state.gua.map_or_else(
+            || "none".to_string(),
+            |ip| Ipv6Prefix::from_addr(ip).to_string(),
+        );
         info!(
             iface = %cfg.system.iface,
             link_local = %ll_str,

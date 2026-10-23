@@ -13,6 +13,13 @@
 //!
 //! All loggable events are immediately recorded in the in-memory `LogDb`.
 
+use lanforge_api::api::{
+    AllowlistEntry, DnsUpstreamConfig, ExportedApiToken, HostConfigEntry, SystemConfigExport,
+};
+use lanforge_api::config_file::{
+    ConfigFile, Section, SectionSet, patch_sections, section_hashes, toml_edit::DocumentMut,
+    write_toml_atomically,
+};
 use lanforge_core::bus::{
     DeviceEvent, DnsEvent, FirewallEvent, LanforgeEvent, StorageEvent, SystemEvent, TimedEvent,
     TrafficEvent,
@@ -72,6 +79,7 @@ pub struct DbWorker {
     dns_log_buffer: Vec<QueryLogEntry>,
     bytes_buf: Vec<u8>,
     storage_rx: Option<mpsc::Receiver<StorageQueryItem>>,
+    dirty_sections: lanforge_api::config_file::SectionSet,
 }
 
 impl DbWorker {
@@ -98,6 +106,7 @@ impl DbWorker {
             dns_log_buffer: Vec::with_capacity(128),
             bytes_buf: Vec::with_capacity(4096),
             storage_rx: Some(rx),
+            dirty_sections: lanforge_api::config_file::SectionSet::empty(),
         }
     }
 
@@ -114,8 +123,7 @@ impl DbWorker {
 
         // 1. Flush Logs
         if !self.log_buffer.is_empty() {
-            if let Err(e) = log_db.record_logs_batch(&self.log_buffer, &mut self.bytes_buf)
-            {
+            if let Err(e) = log_db.record_logs_batch(&self.log_buffer, &mut self.bytes_buf) {
                 error!("Failed to flush log batch: {e}");
                 had_error = true;
             } else {
@@ -136,7 +144,8 @@ impl DbWorker {
         // 2. Flush DNS Lifetime Stats (only when new queries were processed)
         if had_dns_queries
             && let Some(handle) = self.ctx.dns_handle()
-            && let Ok(DnsResponse::LifetimeStats(stats)) = handle.send_request(DnsRequest::LifetimeStats).await
+            && let Ok(DnsResponse::LifetimeStats(stats)) =
+                handle.send_request(DnsRequest::LifetimeStats).await
             && let Err(e) = log_db.save_dns_lifetime_stats(&stats)
         {
             error!("Failed to flush DNS lifetime stats: {e}");
@@ -216,6 +225,164 @@ impl DbWorker {
         metrics.last_error.store(had_error, Ordering::Relaxed);
     }
 
+    fn build_current_export(&self, db: &LanforgeDb) -> SystemConfigExport {
+        let hosts = self.ctx.with_state(|state| {
+            state
+                .devices
+                .values()
+                .filter(|dev| dev.origin != lanforge_types::device::Origin::Dynamic)
+                .map(|dev| HostConfigEntry {
+                    mac: dev.mac,
+                    hostname: dev.hostname.name.clone(),
+                    v4_fixed: match &dev.v4 {
+                        lanforge_types::device::IPv4State::Static(ip) => Some(*ip),
+                        _ => None,
+                    },
+                    v6_suffix: dev.v6.iter().find_map(|s| match s {
+                        lanforge_types::device::IPv6State::Static(suf, _) => Some(*suf),
+                        _ => None,
+                    }),
+                    origin: dev.origin,
+                    ignore_dns_log: dev.ignore_dns_log,
+                    ignored_log_domains: dev.ignored_log_domains.clone(),
+                })
+                .collect()
+        });
+
+        let dns_rewrites = self.ctx.get_dns_rewrites();
+
+        let dns_upstreams = self
+            .ctx
+            .get_dns_upstreams()
+            .into_iter()
+            .map(|row| DnsUpstreamConfig {
+                addr: row.addr,
+                protocol: row.protocol,
+                domain: row.domain,
+            })
+            .collect();
+
+        let dns_adblock_config = self.ctx.get_dns_adblock();
+        let dns_adblock_urls = self.ctx.get_dns_adblock_urls();
+        let dns_allowlist = self
+            .ctx
+            .get_dns_allowlist()
+            .into_iter()
+            .enumerate()
+            .map(|(id, domain)| AllowlistEntry {
+                id: id as i64 + 1,
+                domain,
+            })
+            .collect();
+
+        let dns_adblock_rules = Some(self.ctx.get_dns_adblock_rules());
+
+        let api_tokens = db.load_api_tokens().ok().map(|tokens| {
+            tokens
+                .into_iter()
+                .map(|t| ExportedApiToken {
+                    token: t.token,
+                    name: t.name,
+                    created_at: t.created_at,
+                    last_used: t.last_used,
+                    scopes: t.scopes,
+                    expires_at: t.expires_at,
+                })
+                .collect()
+        });
+
+        let dhcp_v4_pools = Some(self.ctx.get_dhcp_v4_pools());
+        let dhcp_v6_pools = Some(self.ctx.get_dhcp_v6_pools());
+        let ra_prefixes = Some(self.ctx.get_ra_prefixes());
+        let ra_rdnss = Some(self.ctx.get_ra_rdnss());
+        let ra_dnssl = Some(self.ctx.get_ra_dnssl());
+        let pppoe_config = self.ctx.get_pppoe_config().map(Box::new);
+        let dhcp_options = Some(Box::new(self.ctx.get_dhcp_options()));
+        let dns_reverse_resolvers = Some(self.ctx.with_state(|s| s.reverse_resolvers.clone()));
+        let firewall_config = self.ctx.get_firewall_config().map(Box::new);
+        let traffic_config = self.ctx.get_traffic_config().map(Box::new);
+
+        SystemConfigExport {
+            hosts,
+            dns_rewrites,
+            dns_upstreams,
+            dns_adblock_config,
+            dns_adblock_urls,
+            dns_allowlist,
+            dns_adblock_rules,
+            api_tokens,
+            dhcp_v4_pools,
+            dhcp_v6_pools,
+            ra_prefixes,
+            ra_rdnss,
+            ra_dnssl,
+            pppoe_config,
+            dhcp_options,
+            dns_reverse_resolvers,
+            firewall_config,
+            traffic_config,
+            overwrite: false,
+        }
+    }
+
+    async fn flush_live_config_to_file(&mut self, db: &LanforgeDb) {
+        if self.dirty_sections.is_empty() {
+            return;
+        }
+
+        if !self.ctx.is_config_writable() {
+            debug!("Config directory/file is read-only; skipping live write-back");
+            self.dirty_sections = SectionSet::empty();
+            return;
+        }
+
+        let Some(path) = self.ctx.config_path() else {
+            return;
+        };
+
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        let mut doc = existing.parse::<DocumentMut>().unwrap_or_default();
+
+        let export = self.build_current_export(db);
+        let config_file = ConfigFile::from(&export);
+
+        if let Err(e) = patch_sections(&mut doc, &config_file, self.dirty_sections) {
+            error!("Failed to patch TOML document: {e}");
+            return;
+        }
+
+        let rendered = doc.to_string();
+        if let Err(e) = write_toml_atomically(&path, &rendered) {
+            error!(
+                "Failed to write live config back to {}: {e}",
+                path.display()
+            );
+            return;
+        }
+
+        // Update hashes only after the file is safely replaced. If writing fails,
+        // the next boot must still see the old hash and reconcile the mismatch.
+        let hashes = section_hashes(&config_file);
+        for sec in Section::ALL {
+            if self.dirty_sections.contains(sec.as_bitflag())
+                && let Some(&hash) = hashes.get(&sec)
+                && let Err(e) = db.set_config_section_hash(sec.name(), hash)
+            {
+                warn!(
+                    "Failed to update config section hash for {}: {e}",
+                    sec.name()
+                );
+            }
+        }
+
+        debug!(
+            "Live config successfully written back to {} for dirty sections: {:?}",
+            path.display(),
+            self.dirty_sections
+        );
+        self.dirty_sections = SectionSet::empty();
+    }
+
     fn handle_storage_query(
         db: &LanforgeDb,
         log_db: &LogDb,
@@ -240,8 +407,7 @@ impl DbWorker {
                 Ok(StorageQueryResult::ApiTokens(tokens))
             }
             StorageQuery::DeleteApiToken(token) => {
-                db.delete_api_token(&token)
-                    .map_err(|e| e.to_string())?;
+                db.delete_api_token(&token).map_err(|e| e.to_string())?;
                 Ok(StorageQueryResult::Success)
             }
             StorageQuery::DeleteApiTokenByIdOrName(id_or_name) => {
@@ -295,8 +461,7 @@ impl DbWorker {
                 Ok(StorageQueryResult::Success)
             }
             StorageQuery::DeleteUser(username) => {
-                db.delete_user(&username)
-                    .map_err(|e| e.to_string())?;
+                db.delete_user(&username).map_err(|e| e.to_string())?;
                 Ok(StorageQueryResult::Success)
             }
             StorageQuery::CountUsers => {
@@ -337,9 +502,7 @@ impl DbWorker {
                 Ok(StorageQueryResult::Success)
             }
             StorageQuery::GetLogHistory(limit) => {
-                let history = log_db
-                    .get_history(limit)
-                    .map_err(|e| e.to_string())?;
+                let history = log_db.get_history(limit).map_err(|e| e.to_string())?;
                 Ok(StorageQueryResult::LogHistory(history))
             }
             StorageQuery::GetDnsQueryHistory {
@@ -408,22 +571,19 @@ impl DbWorker {
                 Ok(StorageQueryResult::Success)
             }
             StorageQuery::DeleteDnsRewrite(id) => {
-                db.delete_dns_rewrite_by_id(id)
-                    .map_err(|e| e.to_string())?;
+                db.delete_dns_rewrite_by_id(id).map_err(|e| e.to_string())?;
                 if let Ok(rewrites) = db.load_dns_rewrites() {
                     ctx.update_dns_rewrites(rewrites);
                 }
                 Ok(StorageQueryResult::Success)
             }
             StorageQuery::ClearDnsRewrites => {
-                db.clear_dns_rewrites()
-                    .map_err(|e| e.to_string())?;
+                db.clear_dns_rewrites().map_err(|e| e.to_string())?;
                 ctx.update_dns_rewrites(Vec::new());
                 Ok(StorageQueryResult::Success)
             }
             StorageQuery::AddDnsAllowlist(domain) => {
-                db.add_dns_allowlist(&domain)
-                    .map_err(|e| e.to_string())?;
+                db.add_dns_allowlist(&domain).map_err(|e| e.to_string())?;
                 if let Ok(rows) = db.load_dns_allowlist() {
                     ctx.update_dns_allowlist(rows.into_iter().map(|(_, d)| d).collect());
                 }
@@ -438,8 +598,7 @@ impl DbWorker {
                 Ok(StorageQueryResult::Success)
             }
             StorageQuery::ClearDnsAllowlist => {
-                db.clear_dns_allowlist()
-                    .map_err(|e| e.to_string())?;
+                db.clear_dns_allowlist().map_err(|e| e.to_string())?;
                 ctx.update_dns_allowlist(Vec::new());
                 Ok(StorageQueryResult::Success)
             }
@@ -469,8 +628,7 @@ impl DbWorker {
                 Ok(StorageQueryResult::Success)
             }
             StorageQuery::RemoveAdblockUrl(url) => {
-                db.remove_adblock_url(&url)
-                    .map_err(|e| e.to_string())?;
+                db.remove_adblock_url(&url).map_err(|e| e.to_string())?;
                 if let Ok(urls) = db.load_adblock_urls() {
                     ctx.update_dns_adblock_urls(
                         urls.into_iter()
@@ -486,8 +644,7 @@ impl DbWorker {
                 Ok(StorageQueryResult::Success)
             }
             StorageQuery::ClearAdblockUrls => {
-                db.clear_adblock_urls()
-                    .map_err(|e| e.to_string())?;
+                db.clear_adblock_urls().map_err(|e| e.to_string())?;
                 ctx.update_dns_adblock_urls(Vec::new());
                 Ok(StorageQueryResult::Success)
             }
@@ -510,8 +667,7 @@ impl DbWorker {
                 Ok(StorageQueryResult::Id(id))
             }
             StorageQuery::RemoveAdblockRule(id) => {
-                db.remove_adblock_rule(id)
-                    .map_err(|e| e.to_string())?;
+                db.remove_adblock_rule(id).map_err(|e| e.to_string())?;
                 if let Ok(rows) = db.load_adblock_rules() {
                     ctx.update_dns_adblock_rules(
                         rows.into_iter()
@@ -544,8 +700,7 @@ impl DbWorker {
                 Ok(StorageQueryResult::Success)
             }
             StorageQuery::ClearAdblockRules => {
-                db.clear_adblock_rules()
-                    .map_err(|e| e.to_string())?;
+                db.clear_adblock_rules().map_err(|e| e.to_string())?;
                 ctx.update_dns_adblock_rules(Vec::new());
                 Ok(StorageQueryResult::Success)
             }
@@ -558,9 +713,7 @@ impl DbWorker {
                     .add_dns_upstream(addr, protocol, domain.as_deref())
                     .map_err(|e| e.to_string())?;
                 if let Ok(rows) = db.load_dns_upstreams() {
-                    ctx.update_dns_upstreams(
-                        rows.into_iter().map(|r| r.to_target()).collect(),
-                    );
+                    ctx.update_dns_upstreams(rows.into_iter().map(|r| r.to_target()).collect());
                 }
                 Ok(StorageQueryResult::Id(id))
             }
@@ -572,15 +725,12 @@ impl DbWorker {
                 db.remove_dns_upstream(addr, protocol, domain.as_deref())
                     .map_err(|e| e.to_string())?;
                 if let Ok(rows) = db.load_dns_upstreams() {
-                    ctx.update_dns_upstreams(
-                        rows.into_iter().map(|r| r.to_target()).collect(),
-                    );
+                    ctx.update_dns_upstreams(rows.into_iter().map(|r| r.to_target()).collect());
                 }
                 Ok(StorageQueryResult::Success)
             }
             StorageQuery::ClearDnsUpstreams => {
-                db.clear_dns_upstreams()
-                    .map_err(|e| e.to_string())?;
+                db.clear_dns_upstreams().map_err(|e| e.to_string())?;
                 ctx.update_dns_upstreams(Vec::new());
                 Ok(StorageQueryResult::Success)
             }
@@ -589,8 +739,7 @@ impl DbWorker {
                 Ok(StorageQueryResult::DnsUpstreamMode(mode))
             }
             StorageQuery::SetDnsUpstreamMode(mode) => {
-                db.save_dns_upstream_mode(mode)
-                    .map_err(|e| e.to_string())?;
+                db.save_dns_upstream_mode(mode).map_err(|e| e.to_string())?;
                 ctx.update_dns_upstream_mode(mode);
                 Ok(StorageQueryResult::Success)
             }
@@ -691,6 +840,39 @@ impl AsyncService for DbWorker {
                 // Storage queries from API dispatch / handles
                 res = storage_rx.recv() => {
                     if let Some((query, resp_tx)) = res {
+                        match &query {
+                            StorageQuery::UpsertDnsRewrite { .. }
+                            | StorageQuery::DeleteDnsRewrite(_)
+                            | StorageQuery::ClearDnsRewrites
+                            | StorageQuery::AddDnsAllowlist(_)
+                            | StorageQuery::RemoveDnsAllowlist(_)
+                            | StorageQuery::ClearDnsAllowlist
+                            | StorageQuery::AddDnsUpstream { .. }
+                            | StorageQuery::RemoveDnsUpstream { .. }
+                            | StorageQuery::ClearDnsUpstreams
+                            | StorageQuery::SetDnsUpstreamMode(_)
+                            | StorageQuery::AddReverseResolver { .. }
+                            | StorageQuery::RemoveReverseResolver(_)
+                            | StorageQuery::ClearReverseResolvers => {
+                                self.dirty_sections |= SectionSet::DNS;
+                            }
+                            StorageQuery::SetAdblockConfigValue { .. }
+                            | StorageQuery::AddAdblockUrl { .. }
+                            | StorageQuery::RemoveAdblockUrl(_)
+                            | StorageQuery::ClearAdblockUrls
+                            | StorageQuery::AddAdblockRule { .. }
+                            | StorageQuery::RemoveAdblockRule(_)
+                            | StorageQuery::UpdateAdblockRuleStatus { .. }
+                            | StorageQuery::ClearAdblockRules => {
+                                self.dirty_sections |= SectionSet::ADBLOCK;
+                            }
+                            StorageQuery::StoreApiToken { .. }
+                            | StorageQuery::DeleteApiToken(_)
+                            | StorageQuery::DeleteApiTokenByIdOrName(_) => {
+                                self.dirty_sections |= SectionSet::API;
+                            }
+                            _ => {}
+                        }
                         let result = Self::handle_storage_query(&db, &log_db, ctx, query);
                         let _ = resp_tx.send(result);
                     }
@@ -736,6 +918,7 @@ impl AsyncService for DbWorker {
                         LanforgeEvent::Device(DeviceEvent::AdminUpdate { mac, .. }) => {
                             self.dirty_macs.insert(*mac);
                             self.purged_macs.remove(mac);
+                            self.dirty_sections |= SectionSet::HOSTS;
                         }
                         LanforgeEvent::Device(DeviceEvent::Discovered { mac, .. })
                         | LanforgeEvent::Device(DeviceEvent::Expired { mac, .. }) => {
@@ -747,6 +930,7 @@ impl AsyncService for DbWorker {
                             self.purged_macs.insert(*mac);
                             self.dirty_macs.remove(mac);
                             self.dirty_lease_macs.remove(mac);
+                            self.dirty_sections |= SectionSet::HOSTS;
 
                             // Flush immediately for administrative host removal
                             self.flush_batch(&db, &log_db).await;
@@ -784,6 +968,7 @@ impl AsyncService for DbWorker {
                         LanforgeEvent::System(SystemEvent::Shutdown) => {
                             info!("Database worker shutting down...");
                             self.flush_batch(&db, &log_db).await;
+                            self.flush_live_config_to_file(&db).await;
                             if let Some(handle) = self.ctx.dns_handle()
                                 && let Ok(DnsResponse::LifetimeStats(stats)) = handle.send_request(DnsRequest::LifetimeStats).await
                             {
@@ -795,6 +980,7 @@ impl AsyncService for DbWorker {
                             if id == "db" && matches!(action, ServiceAction::Stop | ServiceAction::Restart) {
                                 info!(action = ?action, "Database worker received service control, flushing and exiting loop");
                                 self.flush_batch(&db, &log_db).await;
+                                self.flush_live_config_to_file(&db).await;
                                 break_loop = true;
                             }
                         }
@@ -820,24 +1006,28 @@ impl AsyncService for DbWorker {
                             }
                         }
                         LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed) => {
+                            self.dirty_sections |= SectionSet::DHCP;
                             let pools = ctx.get_dhcp_v4_pools();
                             if let Err(e) = db.save_dhcp_v4_pools(&pools) {
                                 error!("Failed to persist DHCPv4 pools: {e}");
                             }
                         }
                         LanforgeEvent::System(SystemEvent::ConfigDhcpV6Changed) => {
+                            self.dirty_sections |= SectionSet::DHCP;
                             let pools = ctx.get_dhcp_v6_pools();
                             if let Err(e) = db.save_dhcp_v6_pools(&pools) {
                                 error!("Failed to persist DHCPv6 pools: {e}");
                             }
                         }
                         LanforgeEvent::System(SystemEvent::ConfigDhcpOptionsChanged) => {
+                            self.dirty_sections |= SectionSet::DHCP;
                             let opts = ctx.get_dhcp_options();
                             if let Err(e) = db.save_dhcp_options(&opts) {
                                 error!("Failed to persist DHCP options: {e}");
                             }
                         }
                         LanforgeEvent::System(SystemEvent::ConfigRaChanged) => {
+                            self.dirty_sections |= SectionSet::RA;
                             let prefixes = ctx.get_ra_prefixes();
                             let rdnss = ctx.get_ra_rdnss();
                             let dnssl = ctx.get_ra_dnssl();
@@ -846,6 +1036,7 @@ impl AsyncService for DbWorker {
                             let _ = db.save_ra_dnssl(&dnssl);
                         }
                         LanforgeEvent::Firewall(FirewallEvent::RulesetChanged) => {
+                            self.dirty_sections |= SectionSet::FIREWALL;
                             if let Some(cfg) = ctx.get_firewall_config()
                                 && let Err(e) = db.save_firewall_config(&cfg)
                             {
@@ -853,14 +1044,17 @@ impl AsyncService for DbWorker {
                             }
                         }
                         LanforgeEvent::Traffic(event) => {
-                            if matches!(**event, TrafficEvent::RulesetChanged)
-                                && let Some(cfg) = ctx.get_traffic_config()
-                                && let Err(e) = db.save_traffic_config(&cfg)
-                            {
-                                error!("Failed to persist Traffic config: {e}");
+                            if matches!(**event, TrafficEvent::RulesetChanged) {
+                                self.dirty_sections |= SectionSet::TRAFFIC;
+                                if let Some(cfg) = ctx.get_traffic_config()
+                                    && let Err(e) = db.save_traffic_config(&cfg)
+                                {
+                                    error!("Failed to persist Traffic config: {e}");
+                                }
                             }
                         }
                         LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => {
+                            self.dirty_sections |= SectionSet::PPPOE;
                             if let Some(cfg) = ctx.get_pppoe_config()
                                 && let Err(e) = db.save_pppoe_config(&cfg)
                             {
@@ -877,6 +1071,7 @@ impl AsyncService for DbWorker {
                 // Periodic flush
                 _ = flush_interval.tick() => {
                     self.flush_batch(&db, &log_db).await;
+                    self.flush_live_config_to_file(&db).await;
 
                     if last_prune.elapsed() >= Duration::from_secs(600) {
                         if let Err(e) = db.prune_zombies() {
@@ -896,6 +1091,7 @@ impl AsyncService for DbWorker {
         let db = self.db.clone();
         let log_db = self.log_db.clone();
         self.flush_batch(&db, &log_db).await;
+        self.flush_live_config_to_file(&db).await;
         Ok(())
     }
 }

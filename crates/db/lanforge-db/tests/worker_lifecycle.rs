@@ -2,6 +2,7 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use lanforge_api::config_file::{ConfigFile, Section};
 use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
@@ -60,7 +61,10 @@ async fn test_db_worker_init_and_clean_shutdown() {
         .await
         .expect("timeout")
         .expect("recv error");
-    assert!(matches!(evt.event, LanforgeEvent::System(SystemEvent::DbReady)));
+    assert!(matches!(
+        evt.event,
+        LanforgeEvent::System(SystemEvent::DbReady)
+    ));
 
     // 2. Spawn serve loop
     let ctx_clone = ctx.clone();
@@ -68,7 +72,10 @@ async fn test_db_worker_init_and_clean_shutdown() {
 
     // Verify storage handle works
     let storage = ctx.storage_handle().expect("storage handle present");
-    let res = storage.send_query(StorageQuery::IsProvisioned).await.expect("query error");
+    let res = storage
+        .send_query(StorageQuery::IsProvisioned)
+        .await
+        .expect("query error");
     assert!(matches!(res, StorageQueryResult::Boolean(false)));
 
     // 3. Graceful shutdown
@@ -101,7 +108,10 @@ async fn test_db_worker_batches_and_flushes_devices() {
 
     // Synchronization barrier: ensure worker.serve() has subscribed to the event bus
     let storage = ctx.storage_handle().expect("storage handle present");
-    let _ = storage.send_query(StorageQuery::IsProvisioned).await.expect("worker ready");
+    let _ = storage
+        .send_query(StorageQuery::IsProvisioned)
+        .await
+        .expect("worker ready");
 
     // Add 3 devices via real context state updates
     for i in 1..=3u8 {
@@ -122,19 +132,31 @@ async fn test_db_worker_batches_and_flushes_devices() {
 
     // Send Shutdown to trigger immediate batch flush and exit
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
-    let res = timeout(Duration::from_secs(1), handle).await.expect("timeout").expect("join error");
+    let res = timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("timeout")
+        .expect("join error");
     assert!(res.is_ok());
 
     // Verify atomic metrics
     let metrics = ctx.db_metrics();
-    assert!(metrics.devices_written.load(std::sync::atomic::Ordering::Relaxed) >= 3);
+    assert!(
+        metrics
+            .devices_written
+            .load(std::sync::atomic::Ordering::Relaxed)
+            >= 3
+    );
 
     // Verify devices exist in redb
     let saved_devices = db.load_all_devices().expect("load devices");
     assert_eq!(saved_devices.len(), 3);
     for i in 1..=3u8 {
         let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, i]);
-        assert!(saved_devices.iter().any(|d| d.mac == mac && d.display_hostname() == format!("host-{i}")));
+        assert!(
+            saved_devices
+                .iter()
+                .any(|d| d.mac == mac && d.display_hostname() == format!("host-{i}"))
+        );
     }
 }
 
@@ -158,13 +180,23 @@ async fn test_db_worker_purges_device_immediately() {
 
     // Synchronization barrier
     let storage = ctx.storage_handle().expect("storage handle present");
-    let _ = storage.send_query(StorageQuery::IsProvisioned).await.expect("worker ready");
+    let _ = storage
+        .send_query(StorageQuery::IsProvisioned)
+        .await
+        .expect("worker ready");
 
     // 1. Add device
     let mac = MacAddr([0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0x01]);
     let ip = Ipv4Addr::new(192, 168, 1, 99);
-    let _ = ctx.apply(DeviceUpdate::ArpSeen { mac, ip, is_active: true });
-    let _ = ctx.apply(DeviceUpdate::DhcpHostnameHint { mac, hostname: "to-be-purged".into() });
+    let _ = ctx.apply(DeviceUpdate::ArpSeen {
+        mac,
+        ip,
+        is_active: true,
+    });
+    let _ = ctx.apply(DeviceUpdate::DhcpHostnameHint {
+        mac,
+        hostname: "to-be-purged".into(),
+    });
 
     // Send TableDirty to flush it
     let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
@@ -215,7 +247,10 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
 
         // Synchronization barrier: ensure worker is active and subscribed
         let storage = ctx.storage_handle().expect("storage handle present");
-        let _ = storage.send_query(StorageQuery::IsProvisioned).await.expect("worker ready");
+        let _ = storage
+            .send_query(StorageQuery::IsProvisioned)
+            .await
+            .expect("worker ready");
 
         // 1. Add 2 devices
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
@@ -299,7 +334,11 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
         let dev1 = restored_state.devices.get(&mac1).expect("mac1 restored");
         assert_eq!(dev1.display_hostname(), "nas.lan");
         assert_eq!(dev1.primary_v4(), Some(Ipv4Addr::new(192, 168, 1, 50)));
-        assert_eq!(dev1.status, DeviceStatus::Offline, "Rebooted devices must initialize as Offline");
+        assert_eq!(
+            dev1.status,
+            DeviceStatus::Offline,
+            "Rebooted devices must initialize as Offline"
+        );
 
         let dev2 = restored_state.devices.get(&mac2).expect("mac2 restored");
         assert_eq!(dev2.display_hostname(), "printer.lan");
@@ -345,22 +384,37 @@ async fn test_db_worker_storage_query_dispatch() {
     let storage = ctx.storage_handle().expect("storage handle present");
 
     // 1. Provisioning queries
-    let is_prov = storage.send_query(StorageQuery::IsProvisioned).await.unwrap();
+    let is_prov = storage
+        .send_query(StorageQuery::IsProvisioned)
+        .await
+        .unwrap();
     assert!(matches!(is_prov, StorageQueryResult::Boolean(false)));
 
-    storage.send_query(StorageQuery::SetProvisioned(true)).await.unwrap();
-    let is_prov = storage.send_query(StorageQuery::IsProvisioned).await.unwrap();
+    storage
+        .send_query(StorageQuery::SetProvisioned(true))
+        .await
+        .unwrap();
+    let is_prov = storage
+        .send_query(StorageQuery::IsProvisioned)
+        .await
+        .unwrap();
     assert!(matches!(is_prov, StorageQueryResult::Boolean(true)));
 
     // 2. User management queries
-    storage.send_query(StorageQuery::CreateUser {
-        username: "admin".into(),
-        password_hash: "$argon2id$v=19$mockhash".into(),
-        role: UserRole::Admin,
-        now: 1_700_000_000,
-    }).await.unwrap();
+    storage
+        .send_query(StorageQuery::CreateUser {
+            username: "admin".into(),
+            password_hash: "$argon2id$v=19$mockhash".into(),
+            role: UserRole::Admin,
+            now: 1_700_000_000,
+        })
+        .await
+        .unwrap();
 
-    let user_res = storage.send_query(StorageQuery::GetUserByUsername("admin".into())).await.unwrap();
+    let user_res = storage
+        .send_query(StorageQuery::GetUserByUsername("admin".into()))
+        .await
+        .unwrap();
     if let StorageQueryResult::User(Some(user)) = user_res {
         assert_eq!(user.username, "admin");
         assert_eq!(user.role, UserRole::Admin);
@@ -372,15 +426,21 @@ async fn test_db_worker_storage_query_dispatch() {
     assert!(matches!(count_res, StorageQueryResult::Count(1)));
 
     // 3. API Token queries
-    storage.send_query(StorageQuery::StoreApiToken {
-        token: "tok_test_secret_123".into(),
-        name: "test-token".into(),
-        scopes: smallvec![ApiScope::Admin],
-        expires_at: None,
-        now: 1_700_000_000,
-    }).await.unwrap();
+    storage
+        .send_query(StorageQuery::StoreApiToken {
+            token: "tok_test_secret_123".into(),
+            name: "test-token".into(),
+            scopes: smallvec![ApiScope::Admin],
+            expires_at: None,
+            now: 1_700_000_000,
+        })
+        .await
+        .unwrap();
 
-    let tokens_res = storage.send_query(StorageQuery::LoadApiTokens).await.unwrap();
+    let tokens_res = storage
+        .send_query(StorageQuery::LoadApiTokens)
+        .await
+        .unwrap();
     if let StorageQueryResult::ApiTokens(tokens) = tokens_res {
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].name, "test-token");
@@ -388,35 +448,61 @@ async fn test_db_worker_storage_query_dispatch() {
         panic!("Tokens not found");
     }
 
-    storage.send_query(StorageQuery::DeleteApiToken("tok_test_secret_123".into())).await.unwrap();
-    let tokens_res2 = storage.send_query(StorageQuery::LoadApiTokens).await.unwrap();
+    storage
+        .send_query(StorageQuery::DeleteApiToken("tok_test_secret_123".into()))
+        .await
+        .unwrap();
+    let tokens_res2 = storage
+        .send_query(StorageQuery::LoadApiTokens)
+        .await
+        .unwrap();
     if let StorageQueryResult::ApiTokens(tokens) = tokens_res2 {
         assert!(tokens.is_empty());
     }
 
     // 4. DNS rewrites queries
-    storage.send_query(StorageQuery::UpsertDnsRewrite {
-        domain: "router.lan".into(),
-        rtype: DnsRecordType::A,
-        answer: RewriteAnswer::A(Ipv4Addr::new(192, 168, 1, 1)),
-    }).await.unwrap();
+    storage
+        .send_query(StorageQuery::UpsertDnsRewrite {
+            domain: "router.lan".into(),
+            rtype: DnsRecordType::A,
+            answer: RewriteAnswer::A(Ipv4Addr::new(192, 168, 1, 1)),
+        })
+        .await
+        .unwrap();
 
     // Verify context updated in-place
-    assert!(ctx.get_dns_rewrites().iter().any(|r| r.domain == "router.lan"));
+    assert!(
+        ctx.get_dns_rewrites()
+            .iter()
+            .any(|r| r.domain == "router.lan")
+    );
 
-    storage.send_query(StorageQuery::ClearDnsRewrites).await.unwrap();
+    storage
+        .send_query(StorageQuery::ClearDnsRewrites)
+        .await
+        .unwrap();
     assert!(ctx.get_dns_rewrites().is_empty());
 
     // 5. Upstream DNS queries
-    storage.send_query(StorageQuery::AddDnsUpstream {
-        addr: "9.9.9.9:53".parse().unwrap(),
-        protocol: UpstreamProtocol::Udp,
-        domain: None,
-    }).await.unwrap();
+    storage
+        .send_query(StorageQuery::AddDnsUpstream {
+            addr: "9.9.9.9:53".parse().unwrap(),
+            protocol: UpstreamProtocol::Udp,
+            domain: None,
+        })
+        .await
+        .unwrap();
 
-    assert!(ctx.get_dns_upstreams().iter().any(|u| u.addr == "9.9.9.9:53".parse().unwrap()));
+    assert!(
+        ctx.get_dns_upstreams()
+            .iter()
+            .any(|u| u.addr == "9.9.9.9:53".parse().unwrap())
+    );
 
-    storage.send_query(StorageQuery::ClearDnsUpstreams).await.unwrap();
+    storage
+        .send_query(StorageQuery::ClearDnsUpstreams)
+        .await
+        .unwrap();
     assert!(ctx.get_dns_upstreams().is_empty());
 
     // Clean exit
@@ -449,7 +535,10 @@ async fn test_db_worker_service_control_and_restart_resilience() {
 
     // Barrier 1: ensure Run 1 is active and subscribed
     let storage = ctx.storage_handle().expect("storage handle present");
-    let _ = storage.send_query(StorageQuery::IsProvisioned).await.unwrap();
+    let _ = storage
+        .send_query(StorageQuery::IsProvisioned)
+        .await
+        .unwrap();
 
     // 1. Issue ServiceAction::Restart
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {
@@ -459,12 +548,125 @@ async fn test_db_worker_service_control_and_restart_resilience() {
 
     // Barrier 2: give worker a moment to enter Run 2, then query storage
     sleep(Duration::from_millis(50)).await;
-    let storage2 = ctx.storage_handle().expect("storage handle present after restart");
-    let res = storage2.send_query(StorageQuery::IsProvisioned).await.unwrap();
+    let storage2 = ctx
+        .storage_handle()
+        .expect("storage handle present after restart");
+    let res = storage2
+        .send_query(StorageQuery::IsProvisioned)
+        .await
+        .unwrap();
     assert!(matches!(res, StorageQueryResult::Boolean(false)));
 
     // Clean exit
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
-    let res = timeout(Duration::from_secs(1), handle).await.expect("timeout").expect("join error");
+    let res = timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("timeout")
+        .expect("join error");
     assert!(res.is_ok());
+}
+
+#[tokio::test]
+async fn api_storage_mutation_is_written_to_valid_toml_on_worker_shutdown() {
+    let (ctx, bus) = create_test_context();
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("lanforge.toml");
+    let original =
+        "# Keep this operator comment\n[system]\niface = \"test0\"\n\n[http]\nenabled = false\n";
+    std::fs::write(&config_path, original).unwrap();
+    ctx.set_config_path(config_path.clone());
+    ctx.set_config_writable(true);
+
+    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
+    let log_db = Arc::new(LogDb::open_in_memory());
+    let cfg = DatabaseConfig {
+        flush_interval: 60,
+        ..DatabaseConfig::default()
+    };
+    let mut worker = DbWorker::new(cfg, ctx.clone(), db.clone(), log_db);
+    worker.init(&ctx).await.unwrap();
+
+    let ctx_clone = ctx.clone();
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone).await });
+    let storage = ctx.storage_handle().expect("storage handle present");
+    let _ = storage
+        .send_query(StorageQuery::IsProvisioned)
+        .await
+        .unwrap();
+    storage
+        .send_query(StorageQuery::UpsertDnsRewrite {
+            domain: "router.lan".to_string(),
+            rtype: DnsRecordType::A,
+            answer: RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 1)),
+        })
+        .await
+        .unwrap();
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("worker shutdown timed out")
+        .expect("worker task panicked")
+        .expect("worker failed");
+
+    let written = std::fs::read_to_string(&config_path).unwrap();
+    assert!(written.contains("# Keep this operator comment"));
+    assert!(written.contains("iface = \"test0\""));
+    assert!(written.contains("enabled = false"));
+    let parsed = ConfigFile::parse(&written).expect("worker output must remain valid TOML config");
+    assert_eq!(parsed.dns.rewrites["router.lan"].target, "192.0.2.1");
+    let expected_dns_hash = lanforge_api::config_file::section_hashes(&parsed)[&Section::Dns];
+    assert_eq!(
+        db.get_config_section_hash(Section::Dns.name()).unwrap(),
+        Some(expected_dns_hash)
+    );
+}
+
+#[tokio::test]
+async fn failed_live_toml_write_preserves_file_and_does_not_advance_hash() {
+    let (ctx, bus) = create_test_context();
+    let dir = tempdir().unwrap();
+    let config_path = dir.path().join("lanforge.toml");
+    std::fs::create_dir(&config_path).unwrap();
+    std::fs::write(config_path.join("keep"), "original").unwrap();
+    ctx.set_config_path(config_path.clone());
+    ctx.set_config_writable(true);
+
+    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
+    db.set_config_section_hash(Section::Dns.name(), 7).unwrap();
+    let log_db = Arc::new(LogDb::open_in_memory());
+    let mut worker = DbWorker::new(DatabaseConfig::default(), ctx.clone(), db.clone(), log_db);
+    worker.init(&ctx).await.unwrap();
+
+    let ctx_clone = ctx.clone();
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone).await });
+    let storage = ctx.storage_handle().expect("storage handle present");
+    let _ = storage
+        .send_query(StorageQuery::IsProvisioned)
+        .await
+        .unwrap();
+    storage
+        .send_query(StorageQuery::UpsertDnsRewrite {
+            domain: "router.lan".to_string(),
+            rtype: DnsRecordType::A,
+            answer: RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 1)),
+        })
+        .await
+        .unwrap();
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("worker shutdown timed out")
+        .expect("worker task panicked")
+        .expect("worker failed");
+
+    assert_eq!(
+        std::fs::read_to_string(config_path.join("keep")).unwrap(),
+        "original"
+    );
+    assert_eq!(
+        db.get_config_section_hash(Section::Dns.name()).unwrap(),
+        Some(7)
+    );
 }

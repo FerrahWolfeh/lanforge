@@ -268,6 +268,23 @@ impl LanforgeContext {
         self.inner.runtime.config_path.read().clone()
     }
 
+    /// Sets whether live write-back to the TOML configuration file is enabled.
+    pub fn set_config_writable(&self, writable: bool) {
+        self.inner
+            .runtime
+            .config_writable
+            .store(writable, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Returns whether live write-back to the TOML configuration file is enabled.
+    #[must_use]
+    pub fn is_config_writable(&self) -> bool {
+        self.inner
+            .runtime
+            .config_writable
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Returns the uptime of this context in seconds.
     #[must_use]
     pub fn uptime_secs(&self) -> u64 {
@@ -433,7 +450,6 @@ impl LanforgeContext {
             timestamp: SystemTime::now(),
         }
     }
-
 }
 
 /// Thread-safe metrics collected by the database worker.

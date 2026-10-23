@@ -19,5 +19,5 @@ The files are prefixed with numbers to suggest a logical loading order:
 To use these as a base for your configuration:
 
 1. Copy the desired sections into your `/etc/lanforge/lanforge.toml`.
-2. Customize the parameters (especially `system.iface` and `target_prefix`).
+2. Customize the parameters (especially `system.iface` and `system.ula_prefix`).
 3. Restart the `lanforged` daemon.

@@ -9,6 +9,7 @@ use lanforge_types::network::firewall::{
 };
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
+use lanforge_types::network::traffic::TrafficConfig;
 use lanforge_types::system::ServiceState;
 use serde::{Deserialize, Serialize};
 
@@ -293,6 +294,10 @@ pub struct SystemConfigExport {
     #[serde(default)]
     pub dns_reverse_resolvers: Option<Vec<DnsReverseResolver>>,
     #[serde(default)]
+    pub firewall_config: Option<Box<FirewallConfig>>,
+    #[serde(default)]
+    pub traffic_config: Option<Box<TrafficConfig>>,
+    #[serde(default)]
     pub overwrite: bool,
 }
 
@@ -363,6 +368,8 @@ pub enum ImportSection {
     PppoeConfig,
     DhcpOptions,
     DnsReverseResolvers,
+    FirewallConfig,
+    TrafficConfig,
 }
 
 impl ImportSection {
@@ -385,6 +392,8 @@ impl ImportSection {
             Self::PppoeConfig => "pppoe_config",
             Self::DhcpOptions => "dhcp_options",
             Self::DnsReverseResolvers => "dns_reverse_resolvers",
+            Self::FirewallConfig => "firewall_config",
+            Self::TrafficConfig => "traffic_config",
         }
     }
 }
@@ -450,7 +459,6 @@ impl HttpWrappedResponse for lanforge_types::network::ra::RaServerConfig {
         wrapper.data
     }
 }
-
 
 pub use lanforge_types::system::{
     NetworkInterfaceInfo, SetupPayload, SetupPppoeNftables, SetupRaConfig, SetupResponse,

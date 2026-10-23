@@ -350,16 +350,25 @@ async fn test_auth_middleware_contract() {
     );
 
     // Token generation via HTTP is permitted for authenticated admin
-    let (status, body) = authed_app.post("/api/v1/auth/tokens", &json!({"name": "test-token"})).await;
+    let (status, body) = authed_app
+        .post("/api/v1/auth/tokens", &json!({"name": "test-token"}))
+        .await;
     assert_eq!(
         status,
         StatusCode::OK,
         "Authenticated admin should be able to generate tokens"
     );
-    assert!(body["data"]["token"].as_str().unwrap().starts_with("lf_ak_"));
+    assert!(
+        body["data"]["token"]
+            .as_str()
+            .unwrap()
+            .starts_with("lf_ak_")
+    );
 
     // Unauthenticated token generation must return 401 Unauthorized
-    let (status, _) = unauthed_app.post("/api/v1/auth/tokens", &json!({"name": "test-token"})).await;
+    let (status, _) = unauthed_app
+        .post("/api/v1/auth/tokens", &json!({"name": "test-token"}))
+        .await;
     assert_eq!(
         status,
         StatusCode::UNAUTHORIZED,
@@ -841,8 +850,14 @@ async fn test_system_config_contract() {
         toml_headers.get(header::CONTENT_TYPE).unwrap(),
         "text/plain; charset=utf-8"
     );
-    assert!(toml_str.contains("[[devices]]"), "toml should contain [[devices]] section");
-    assert!(toml_str.contains("only-host"), "toml should contain the imported hostname");
+    assert!(
+        toml_str.contains("[hosts"),
+        "toml should contain [hosts] section"
+    );
+    assert!(
+        toml_str.contains("only-host"),
+        "toml should contain the imported hostname"
+    );
 
     let (toml_status2, toml_str2, _) = app.get_raw("/api/v1/config/toml").await;
     assert_eq!(toml_status2, StatusCode::OK);
@@ -954,12 +969,16 @@ async fn test_firewall_contract() {
     assert!(body["data"]["zones"].is_array());
 
     // 3. POST /api/v1/firewall/config
-    let mut config: FirewallConfig =
-        serde_json::from_value(body["data"].clone()).unwrap();
+    let mut config: FirewallConfig = serde_json::from_value(body["data"].clone()).unwrap();
     config.flow_offload = false;
     let (status, body) = app.post("/api/v1/firewall/config", &config).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(body["data"]["message"].as_str().unwrap().contains("updated"));
+    assert!(
+        body["data"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("updated")
+    );
 
     // Verify config was updated
     let (status, body) = app.get("/api/v1/firewall/config").await;
@@ -1005,7 +1024,9 @@ async fn test_firewall_transactional_handshake_contract() {
         enable_hairpin: true,
     });
 
-    let (status, body) = app.post("/api/v1/firewall/propose", &invalid_candidate).await;
+    let (status, body) = app
+        .post("/api/v1/firewall/propose", &invalid_candidate)
+        .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"]["valid"], false);
     assert!(body["data"]["tx_id"].is_null());
@@ -1026,7 +1047,10 @@ async fn test_firewall_transactional_handshake_contract() {
     let (status, body) = app.post("/api/v1/firewall/propose", &candidate).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"]["valid"], true);
-    let tx_id = body["data"]["tx_id"].as_str().expect("tx_id must be present").to_string();
+    let tx_id = body["data"]["tx_id"]
+        .as_str()
+        .expect("tx_id must be present")
+        .to_string();
     assert!(!body["data"]["diff_summary"].as_array().unwrap().is_empty());
 
     // 3. Commit with auto-rollback window
@@ -1043,13 +1067,23 @@ async fn test_firewall_transactional_handshake_contract() {
     let confirm_req = json!({ "tx_id": tx_id });
     let (status, body) = app.post("/api/v1/firewall/confirm", &confirm_req).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(body["data"]["message"].as_str().unwrap().contains("confirmed"));
+    assert!(
+        body["data"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("confirmed")
+    );
 
     // 5. Verify config has the new port forward
     let (status, body) = app.get("/api/v1/firewall/config").await;
     assert_eq!(status, StatusCode::OK);
     let updated_config: FirewallConfig = serde_json::from_value(body["data"].clone()).unwrap();
-    assert!(updated_config.port_forwards.iter().any(|pf| pf.external_port == 32400));
+    assert!(
+        updated_config
+            .port_forwards
+            .iter()
+            .any(|pf| pf.external_port == 32400)
+    );
 }
 
 #[tokio::test]
@@ -1060,7 +1094,9 @@ async fn test_users_contract() {
     let (status, body) = app.get("/api/v1/users").await;
     assert_eq!(status, StatusCode::OK);
     // body is {"data": {"users": [...]}}
-    let users = body["data"]["users"].as_array().expect("users array in data");
+    let users = body["data"]["users"]
+        .as_array()
+        .expect("users array in data");
     assert!(!users.is_empty(), "default admin user should exist");
     assert_eq!(users[0]["username"], "admin");
 
@@ -1093,23 +1129,25 @@ async fn test_traffic_telemetry_contract() {
     assert_eq!(status, StatusCode::OK);
 
     let data = &body["data"];
-    assert!(data["timestamp"].as_u64().is_some(), "timestamp must be present");
-    assert!(data["interfaces"].as_array().is_some(), "interfaces must be a list");
+    assert!(
+        data["timestamp"].as_u64().is_some(),
+        "timestamp must be present"
+    );
+    assert!(
+        data["interfaces"].as_array().is_some(),
+        "interfaces must be a list"
+    );
 }
 
 #[tokio::test]
 async fn test_events_contract() {
     let state = make_state(false).await;
-    let ev1 = lanforge_types::events::TimedEvent::new(
-        lanforge_core::bus::LanforgeEvent::System(
-            lanforge_types::events::SystemEvent::ReloadConfig,
-        ),
-    );
-    let ev2 = lanforge_types::events::TimedEvent::new(
-        lanforge_core::bus::LanforgeEvent::Firewall(
-            lanforge_types::events::FirewallEvent::RulesetFlushed,
-        ),
-    );
+    let ev1 = lanforge_types::events::TimedEvent::new(lanforge_core::bus::LanforgeEvent::System(
+        lanforge_types::events::SystemEvent::ReloadConfig,
+    ));
+    let ev2 = lanforge_types::events::TimedEvent::new(lanforge_core::bus::LanforgeEvent::Firewall(
+        lanforge_types::events::FirewallEvent::RulesetFlushed,
+    ));
     let mut buf = Vec::new();
     state
         .log_db
@@ -1147,4 +1185,3 @@ async fn test_events_contract() {
     let data = body["data"].as_array().expect("data array");
     assert_eq!(data.len(), 1);
 }
-

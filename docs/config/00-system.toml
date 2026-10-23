@@ -13,7 +13,7 @@ search_domains = ["lan", "homelab.local"]
 # tls_key = "/etc/lanforge/certs/lanforge.key"
 
 # IPv6 tracking prefix for local device identification.
-target_prefix = "fd00:cafe:f00d::"
+ula_prefix = "fd00:cafe:f00d::/64"
 
 # Event bus debouncing (seconds) to prevent thrashing.
 debounce_secs = 2

@@ -8,13 +8,13 @@ pub mod log;
 pub mod tables;
 pub mod user;
 
+use lanforge_db_core::DbError;
+use parking_lot::RwLock;
+use redb::{Database, ReadableDatabase, ReadableTable};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64};
-use parking_lot::RwLock;
-use redb::{Database, ReadableDatabase, ReadableTable};
-use lanforge_db_core::DbError;
 use tables::{TABLE_CONFIG, TABLE_DEVICES, TABLE_META, TABLE_USERS};
 
 pub use log::BlockedQueryEntry;
@@ -99,7 +99,10 @@ impl RedbDatabase {
             .open_table(TABLE_META)
             .map_err(|e| DbError::Backend(e.to_string()))?;
 
-        let current = match table.get(sequence).map_err(|e| DbError::Backend(e.to_string()))? {
+        let current = match table
+            .get(sequence)
+            .map_err(|e| DbError::Backend(e.to_string()))?
+        {
             Some(val) => {
                 let bytes = val.value();
                 if bytes.len() == 8 {
@@ -122,22 +125,35 @@ impl RedbDatabase {
 
     /// Generates the next sequential ID for a given sequence name atomically.
     pub fn next_id(&self, sequence: &str) -> Result<i64, DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self
+            .db
+            .read()
+            .begin_write()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         let next = Self::next_id_in_txn(&write_txn, sequence)?;
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        write_txn
+            .commit()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(next)
     }
 
     /// Checks whether the system has completed the onboarding provisioning.
     pub fn is_provisioned(&self) -> Result<bool, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self
+            .db
+            .read()
+            .begin_read()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_META) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(false),
             Err(e) => return Err(DbError::Backend(e.to_string())),
         };
 
-        match table.get("provisioned").map_err(|e| DbError::Backend(e.to_string()))? {
+        match table
+            .get("provisioned")
+            .map_err(|e| DbError::Backend(e.to_string()))?
+        {
             Some(val) => Ok(val.value() == [1u8]),
             None => Ok(false),
         }
@@ -145,7 +161,11 @@ impl RedbDatabase {
 
     /// Sets the onboarding provisioning state flag.
     pub fn set_provisioned(&self, provisioned: bool) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self
+            .db
+            .read()
+            .begin_write()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_META)
@@ -156,21 +176,30 @@ impl RedbDatabase {
                 .insert("provisioned", val.as_slice())
                 .map_err(|e| DbError::Backend(e.to_string()))?;
         }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        write_txn
+            .commit()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(())
     }
 
     /// Returns the current schema version stored in the database metadata table.
     /// If unversioned, returns 0.
     pub fn schema_version(&self) -> Result<u32, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self
+            .db
+            .read()
+            .begin_read()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_META) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(0),
             Err(e) => return Err(DbError::Backend(e.to_string())),
         };
 
-        match table.get("schema_version").map_err(|e| DbError::Backend(e.to_string()))? {
+        match table
+            .get("schema_version")
+            .map_err(|e| DbError::Backend(e.to_string()))?
+        {
             Some(val) => {
                 let bytes = val.value();
                 if bytes.len() == 4 {
@@ -187,7 +216,11 @@ impl RedbDatabase {
 
     /// Sets the schema version stored in the metadata table.
     pub fn set_schema_version(&self, version: u32) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self
+            .db
+            .read()
+            .begin_write()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_META)
@@ -196,8 +229,110 @@ impl RedbDatabase {
                 .insert("schema_version", version.to_be_bytes().as_slice())
                 .map_err(|e| DbError::Backend(e.to_string()))?;
         }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        write_txn
+            .commit()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(())
+    }
+
+    /// Retrieves a stored configuration section hash from the metadata table.
+    pub fn get_config_section_hash(&self, section: &str) -> Result<Option<u64>, DbError> {
+        let read_txn = self
+            .db
+            .read()
+            .begin_read()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        let table = match read_txn.open_table(TABLE_META) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(DbError::Backend(e.to_string())),
+        };
+
+        let key = format!("config_hash:{section}");
+        match table
+            .get(key.as_str())
+            .map_err(|e| DbError::Backend(e.to_string()))?
+        {
+            Some(val) => {
+                let bytes = val.value();
+                if bytes.len() == 8 {
+                    let mut arr = [0u8; 8];
+                    arr.copy_from_slice(bytes);
+                    Ok(Some(u64::from_be_bytes(arr)))
+                } else {
+                    Ok(None)
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Stores a configuration section hash in the metadata table.
+    pub fn set_config_section_hash(&self, section: &str, hash: u64) -> Result<(), DbError> {
+        let write_txn = self
+            .db
+            .read()
+            .begin_write()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        {
+            let mut table = write_txn
+                .open_table(TABLE_META)
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+            let key = format!("config_hash:{section}");
+            table
+                .insert(key.as_str(), hash.to_be_bytes().as_slice())
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+        }
+        write_txn
+            .commit()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Stores multiple configuration section hashes in the metadata table atomically.
+    pub fn set_config_section_hashes(
+        &self,
+        hashes: &std::collections::BTreeMap<String, u64>,
+    ) -> Result<(), DbError> {
+        let write_txn = self
+            .db
+            .read()
+            .begin_write()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        {
+            let mut table = write_txn
+                .open_table(TABLE_META)
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+            for (sec, hash) in hashes {
+                let key = format!("config_hash:{sec}");
+                table
+                    .insert(key.as_str(), hash.to_be_bytes().as_slice())
+                    .map_err(|e| DbError::Backend(e.to_string()))?;
+            }
+        }
+        write_txn
+            .commit()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Checks if any configuration section hashes have been stored in the metadata table.
+    pub fn has_config_section_hashes(&self) -> Result<bool, DbError> {
+        let read_txn = self
+            .db
+            .read()
+            .begin_read()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        let table = match read_txn.open_table(TABLE_META) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(false),
+            Err(e) => return Err(DbError::Backend(e.to_string())),
+        };
+
+        let iter = table
+            .range("config_hash:".."config_hash:\u{ffff}")
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        Ok(iter.count() > 0)
     }
 
     /// Checks if the database contains existing data from a legacy pre-versioned database.
@@ -240,7 +375,8 @@ impl RedbDatabase {
             if let Some(path) = &self.path
                 && path.exists()
             {
-                let backup_path = PathBuf::from(format!("{}.v{effective_version}.bak", path.display()));
+                let backup_path =
+                    PathBuf::from(format!("{}.v{effective_version}.bak", path.display()));
                 tracing::info!(
                     "Creating pre-migration database backup from {} to {}",
                     path.display(),
@@ -276,11 +412,16 @@ impl RedbDatabase {
 
     fn migrate_v1_to_v2(&self) -> Result<(), DbError> {
         let existing_raw = {
-            let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+            let read_txn = self
+                .db
+                .read()
+                .begin_read()
+                .map_err(|e| DbError::Backend(e.to_string()))?;
             let Ok(table) = read_txn.open_table(TABLE_CONFIG) else {
                 return Ok(());
             };
-            table.get("adblock_config")
+            table
+                .get("adblock_config")
                 .map_err(|e| DbError::Backend(e.to_string()))?
                 .map(|val| val.value().to_vec())
         };
@@ -289,7 +430,10 @@ impl RedbDatabase {
             let raw: serde_json::Value = serde_json::from_slice(&raw_bytes)
                 .map_err(|e| DbError::Backend(format!("V1 adblock_config parse failed: {e}")))?;
 
-            let enabled = raw.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+            let enabled = raw
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let blocking_mode: lanforge_types::network::dns::adblock::BlockingMode = raw
                 .get("blocking_mode")
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -311,10 +455,15 @@ impl RedbDatabase {
                 refresh_time: lanforge_types::network::dns::adblock::TimeOfDay::DEFAULT,
             };
 
-            let new_bytes = serde_json::to_vec(&new_cfg)
-                .map_err(|e| DbError::Backend(format!("V2 adblock_config serialization error: {e}")))?;
+            let new_bytes = serde_json::to_vec(&new_cfg).map_err(|e| {
+                DbError::Backend(format!("V2 adblock_config serialization error: {e}"))
+            })?;
 
-            let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+            let write_txn = self
+                .db
+                .read()
+                .begin_write()
+                .map_err(|e| DbError::Backend(e.to_string()))?;
             {
                 let mut table = write_txn
                     .open_table(TABLE_CONFIG)
@@ -324,13 +473,14 @@ impl RedbDatabase {
                     .map_err(|e| DbError::Backend(e.to_string()))?;
                 tracing::info!("Migrated adblock_config to schema v2 (TimeOfDay)");
             }
-            write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+            write_txn
+                .commit()
+                .map_err(|e| DbError::Backend(e.to_string()))?;
         }
 
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -346,7 +496,9 @@ mod tests {
         let db = RedbDatabase::open_temp().unwrap();
 
         assert_eq!(db.count_users().unwrap(), 0);
-        let user = db.create_user("admin", "hash123", UserRole::Admin, 1000).unwrap();
+        let user = db
+            .create_user("admin", "hash123", UserRole::Admin, 1000)
+            .unwrap();
         assert_eq!(user.username, "admin");
         assert_eq!(user.role, UserRole::Admin);
         assert_eq!(db.count_users().unwrap(), 1);
@@ -419,7 +571,10 @@ mod tests {
         db.save_dhcp_v4_pools(&pools).unwrap();
         let loaded_pools = db.load_dhcp_v4_pools().unwrap();
         assert_eq!(loaded_pools.len(), 1);
-        assert_eq!(loaded_pools[0].range_start, "192.168.1.10".parse::<std::net::Ipv4Addr>().unwrap());
+        assert_eq!(
+            loaded_pools[0].range_start,
+            "192.168.1.10".parse::<std::net::Ipv4Addr>().unwrap()
+        );
 
         // RA
         let prefixes = vec![
@@ -447,7 +602,9 @@ mod tests {
     #[tokio::test]
     async fn test_redb_firewall_store() {
         use lanforge_db_core::FirewallConfigStore;
-        use lanforge_types::network::firewall::{FirewallConfig, FirewallZone, HostPortRule, L4Protocol};
+        use lanforge_types::network::firewall::{
+            FirewallConfig, FirewallZone, HostPortRule, L4Protocol,
+        };
 
         let db = RedbDatabase::open_temp().unwrap();
 
@@ -501,7 +658,8 @@ mod tests {
 
         // DNS Rewrites
         let ans = RewriteAnswer::A("192.168.1.1".parse().unwrap());
-        db.upsert_dns_rewrite("router.lan", DnsRecordType::A, &ans).unwrap();
+        db.upsert_dns_rewrite("router.lan", DnsRecordType::A, &ans)
+            .unwrap();
         let rewrites = db.load_dns_rewrites().unwrap();
         assert_eq!(rewrites.len(), 1);
         assert_eq!(rewrites[0].domain, "router.lan");
@@ -515,14 +673,23 @@ mod tests {
         // API Token
         let mut scopes = ApiScopes::new();
         scopes.push(ApiScope::Admin);
-        let token_id = db.store_api_token("secret-token", "test-token", &scopes, None, 1000).unwrap();
+        let token_id = db
+            .store_api_token("secret-token", "test-token", &scopes, None, 1000)
+            .unwrap();
         assert!(token_id > 0);
 
-        let validated = db.validate_api_token("secret-token", 1001).unwrap().unwrap();
+        let validated = db
+            .validate_api_token("secret-token", 1001)
+            .unwrap()
+            .unwrap();
         assert_eq!(validated.0, "test-token");
 
         db.delete_api_token("secret-token").unwrap();
-        assert!(db.validate_api_token("secret-token", 1002).unwrap().is_none());
+        assert!(
+            db.validate_api_token("secret-token", 1002)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -646,7 +813,10 @@ mod tests {
     #[tokio::test]
     async fn test_schema_versioning_fresh_and_update() {
         let db = RedbDatabase::open_temp().unwrap();
-        assert_eq!(db.schema_version().unwrap(), RedbDatabase::CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            db.schema_version().unwrap(),
+            RedbDatabase::CURRENT_SCHEMA_VERSION
+        );
 
         db.set_schema_version(42).unwrap();
         assert_eq!(db.schema_version().unwrap(), 42);
@@ -660,7 +830,8 @@ mod tests {
         // Create db and artificially bump schema version to future
         {
             let db = RedbDatabase::open(&db_path).unwrap();
-            db.set_schema_version(RedbDatabase::CURRENT_SCHEMA_VERSION + 10).unwrap();
+            db.set_schema_version(RedbDatabase::CURRENT_SCHEMA_VERSION + 10)
+                .unwrap();
         }
 
         // Re-opening with current binary must fail with validation error
@@ -689,7 +860,10 @@ mod tests {
 
         // 2. Verify pre-migration backup file was created at <path>.v999.bak
         let backup_path = temp_dir.path().join("test_migration.redb.v999.bak");
-        assert!(backup_path.exists(), "backup file {backup_path:?} should exist");
+        assert!(
+            backup_path.exists(),
+            "backup file {backup_path:?} should exist"
+        );
         assert!(std::fs::metadata(&backup_path).unwrap().len() > 0);
     }
 
@@ -729,9 +903,15 @@ mod tests {
 
             let loaded = db.load_adblock_config().unwrap();
             assert!(loaded.enabled);
-            assert_eq!(loaded.blocking_mode, lanforge_types::network::dns::adblock::BlockingMode::NullIp);
+            assert_eq!(
+                loaded.blocking_mode,
+                lanforge_types::network::dns::adblock::BlockingMode::NullIp
+            );
             assert_eq!(loaded.blocking_ip_v4, Some("192.168.1.5".parse().unwrap()));
-            assert_eq!(loaded.refresh_time, lanforge_types::network::dns::adblock::TimeOfDay::DEFAULT);
+            assert_eq!(
+                loaded.refresh_time,
+                lanforge_types::network::dns::adblock::TimeOfDay::DEFAULT
+            );
         }
 
         // 3. Verify backup file was created

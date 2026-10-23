@@ -21,6 +21,7 @@ hotpath-alloc = [
 [dependencies]
 # Lanforge
 lanforge-core = { workspace = true }
+lanforge-api = { workspace = true }
 lanforge-macros = { workspace = true }
 lanforge-types = { workspace = true }
 lanforge-db-core = { path = "../lanforge-db-core" }

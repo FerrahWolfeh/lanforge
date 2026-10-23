@@ -160,6 +160,7 @@ smallvec = { workspace = true }
 
 # === L1 (Core APIs & Logic) ===
 lanforge-core = { workspace = true }
+lanforge-api = { workspace = true }
 
 # === L2 (Specialized Services - Required) ===
 lanforge-db = { workspace = true }

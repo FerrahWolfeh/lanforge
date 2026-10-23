@@ -1,6 +1,7 @@
 use crate::ClientContext;
 use lanforge_api::api::{
-    NetworkInterfaceInfo, Response, SetupPayload, SetupResponse, SetupStatusResponse, SetupWanConfig,
+    NetworkInterfaceInfo, Response, SetupPayload, SetupResponse, SetupStatusResponse,
+    SetupWanConfig,
 };
 use lanforge_crypto::hash_password;
 use lanforge_types::auth::UserRole;
@@ -36,10 +37,15 @@ impl ClientContext {
     pub async fn handle_setup_status(&self) -> Response {
         let is_provisioned = if let Some(storage) = self.ctx.storage_handle() {
             let prov = matches!(
-                storage.send_query(lanforge_types::storage::StorageQuery::IsProvisioned).await,
+                storage
+                    .send_query(lanforge_types::storage::StorageQuery::IsProvisioned)
+                    .await,
                 Ok(lanforge_types::storage::StorageQueryResult::Boolean(true))
             );
-            let has_users = match storage.send_query(lanforge_types::storage::StorageQuery::CountUsers).await {
+            let has_users = match storage
+                .send_query(lanforge_types::storage::StorageQuery::CountUsers)
+                .await
+            {
                 Ok(lanforge_types::storage::StorageQueryResult::Count(c)) => c > 0,
                 _ => false,
             };
@@ -76,7 +82,10 @@ impl ClientContext {
 
         let mut iface_infos = Vec::new();
         for iface in all_interfaces {
-            if iface.is_loopback() || iface.name.starts_with("ifb") || iface.name.starts_with("teql") {
+            if iface.is_loopback()
+                || iface.name.starts_with("ifb")
+                || iface.name.starts_with("teql")
+            {
                 continue;
             }
             let is_phys = is_physical_interface(&iface.name);
@@ -124,10 +133,15 @@ impl ClientContext {
 
         let is_provisioned = {
             let prov = matches!(
-                storage.send_query(lanforge_types::storage::StorageQuery::IsProvisioned).await,
+                storage
+                    .send_query(lanforge_types::storage::StorageQuery::IsProvisioned)
+                    .await,
                 Ok(lanforge_types::storage::StorageQueryResult::Boolean(true))
             );
-            let has_users = match storage.send_query(lanforge_types::storage::StorageQuery::CountUsers).await {
+            let has_users = match storage
+                .send_query(lanforge_types::storage::StorageQuery::CountUsers)
+                .await
+            {
                 Ok(lanforge_types::storage::StorageQueryResult::Count(c)) => c > 0,
                 _ => false,
             };
@@ -207,9 +221,7 @@ impl ClientContext {
             };
             self.ctx.update_dhcp_v4_pools(vec![pool]);
 
-            let mut opts = self
-                .ctx
-                .with_config(|cfg| cfg.dhcp_options.clone());
+            let mut opts = self.ctx.with_config(|cfg| cfg.dhcp_options.clone());
             opts.v4.enabled = true;
             opts.v4.router = Some(router_ip);
             opts.v4.subnet_mask = Some(subnet_mask);
@@ -319,9 +331,7 @@ impl ClientContext {
                     self.ctx.update_pppoe_config(pppoe_cfg);
                 }
                 SetupWanConfig::SystemGateway { gateway_ip } => {
-                    let mut opts = self
-                        .ctx
-                        .with_config(|cfg| cfg.dhcp_options.clone());
+                    let mut opts = self.ctx.with_config(|cfg| cfg.dhcp_options.clone());
                     opts.v4.router = Some(*gateway_ip);
                     self.ctx.update_dhcp_options(opts);
                 }
@@ -331,7 +341,9 @@ impl ClientContext {
         // 7. Seed initial Firewall configuration
         let wan_interface = if let Some(ref wan) = payload.wan {
             match wan {
-                SetupWanConfig::Pppoe { interface, vlan_id, .. } => {
+                SetupWanConfig::Pppoe {
+                    interface, vlan_id, ..
+                } => {
                     if let Some(vid) = vlan_id {
                         Some(format!("{interface}.{vid}"))
                     } else {
@@ -348,20 +360,35 @@ impl ClientContext {
         if let Some(mode) = payload.firewall_mode {
             initial_firewall.mode = mode;
         }
-        if let Some(SetupWanConfig::Pppoe { nftables: Some(nft), .. }) = payload.wan.as_ref() {
+        if let Some(SetupWanConfig::Pppoe {
+            nftables: Some(nft),
+            ..
+        }) = payload.wan.as_ref()
+        {
             initial_firewall.flow_offload = nft.flow_offload;
             initial_firewall.bypass_dns = nft.bypass_dns;
             initial_firewall.bypass_vowifi = nft.bypass_vowifi;
         }
-        if let Some(internal_zone) = initial_firewall.zones.iter_mut().find(|z| z.name == "internal") {
+        if let Some(internal_zone) = initial_firewall
+            .zones
+            .iter_mut()
+            .find(|z| z.name == "internal")
+        {
             internal_zone.interfaces = vec![payload.lan_iface.clone()];
         }
         if let Some(wan_if) = wan_interface
-            && let Some(external_zone) = initial_firewall.zones.iter_mut().find(|z| z.name == "external")
+            && let Some(external_zone) = initial_firewall
+                .zones
+                .iter_mut()
+                .find(|z| z.name == "external")
         {
             external_zone.interfaces = vec![wan_if];
         }
-        if !initial_firewall.forwardings.iter().any(|f| f.from == "internal" && f.to == "external") {
+        if !initial_firewall
+            .forwardings
+            .iter()
+            .any(|f| f.from == "internal" && f.to == "external")
+        {
             initial_firewall.forwardings.push(ZoneForwarding {
                 from: "internal".into(),
                 to: "external".into(),
@@ -374,7 +401,10 @@ impl ClientContext {
         let toml_paths = ["/etc/lanforge/lanforge.toml", "lanforge.toml"];
         for p in toml_paths {
             let path = Path::new(p);
-            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty() && !p.exists()) {
+            if let Some(parent) = path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty() && !p.exists())
+            {
                 let _ = std::fs::create_dir_all(parent);
             }
             if let Ok(()) = std::fs::write(path, &toml_content) {
@@ -413,98 +443,93 @@ fn generate_setup_toml(
     subnet_mask: Ipv4Addr,
     target_ula: &str,
 ) -> String {
-    let mut s = String::with_capacity(2048);
-    s.push_str("# ==============================================================================\n");
-    s.push_str("# Lanforge Configuration\n");
-    s.push_str("# Automatically generated by First-Run Onboarding Wizard\n");
-    s.push_str("# ==============================================================================\n\n");
+    let mut cfg = lanforge_api::config_file::ConfigFile::default();
+    cfg.system.iface = payload.lan_iface.clone();
+    let cleaned_ula = target_ula.trim_end_matches("/64").trim_end_matches("::");
+    cfg.system.ula_prefix = Some(format!("{cleaned_ula}::/64"));
+    cfg.system.search_domains = vec![payload.domain_name.clone()];
+    cfg.system.debounce_secs = Some(2);
+    cfg.system.auto_provision = true;
 
-    s.push_str("[general]\n");
-    s.push_str(&format!("iface_lan = \"{}\"\n\n", payload.lan_iface));
+    // DHCPv4
+    cfg.dhcp.v4.enabled = payload.dhcp_enabled;
+    cfg.dhcp.v4.router = Some(router_ip);
+    cfg.dhcp.v4.dns = vec![payload.lan_ip];
+    cfg.dhcp.v4.subnet_mask = Some(subnet_mask);
+    cfg.dhcp.v4.pools.insert(
+        "lan".to_string(),
+        lanforge_api::config_file::Dhcpv4PoolFile {
+            range: format!("{}-{}", payload.dhcp_pool_start, payload.dhcp_pool_end),
+            lease: Some(lanforge_api::config_file::HumanDuration(86400)),
+            router: Some(router_ip),
+            subnet_mask: Some(subnet_mask),
+            dns: vec![payload.lan_ip],
+        },
+    );
 
-    s.push_str("[system]\n");
-    s.push_str(&format!("iface = \"{}\"\n", payload.lan_iface));
-    let cleaned_ula = target_ula
-        .trim_end_matches("/64")
-        .trim_end_matches("::");
-    let ula_prefix_str = format!("{cleaned_ula}::/64");
-    s.push_str(&format!("target_prefix = \"{ula_prefix_str}\"\n"));
-    s.push_str(&format!("search_domains = [\"{}\"]\n", payload.domain_name));
-    s.push_str("debounce_secs = 2\n\n");
+    // DHCPv6
+    cfg.dhcp.v6.enabled = true;
+    cfg.dhcp.v6.search_domains = vec![payload.domain_name.clone()];
+    cfg.dhcp.v6.pools.insert(
+        "lan".to_string(),
+        lanforge_api::config_file::Dhcpv6PoolFile {
+            range: "::100-::1fff".to_string(),
+            lease: Some(lanforge_api::config_file::HumanDuration(86400)),
+            dns: Vec::new(),
+        },
+    );
 
-    s.push_str("[database]\n");
-    s.push_str("config_path = \"/var/lib/lanforge/config.redb\"\n");
-    s.push_str("runtime_path = \"/run/lanforge/runtime.redb\"\n");
-    s.push_str("flush_interval = 60\n\n");
-
-    s.push_str("[api]\n");
-    s.push_str("enabled = true\n");
-    s.push_str("socket_path = \"/run/lanforge/control.sock\"\n\n");
-
-    s.push_str("[http]\n");
-    s.push_str("enabled = true\n");
-    s.push_str("listen = \"0.0.0.0:8088\"\n");
-    s.push_str("allow_plaintext_http = true\n\n");
-
+    // RA
     if let Some(ref ra) = payload.ra {
-        s.push_str("# Router Advertisement (IPv6 SLAAC)\n");
-        s.push_str("[ra]\n");
-        s.push_str(&format!("enabled = {}\n", ra.enabled));
-        s.push_str(&format!("managed = {}\n", ra.managed));
-        s.push_str(&format!("other_config = {}\n", ra.other_config));
-        s.push_str("max_interval = 100\n");
-        s.push_str("router_lifetime = 300\n");
-        s.push_str("mtu = 1492\n\n");
+        cfg.ra.enabled = ra.enabled;
+        cfg.ra.managed = ra.managed;
+        cfg.ra.other_config = ra.other_config;
+        cfg.ra.max_interval = Some(lanforge_api::config_file::HumanDuration(100));
+        cfg.ra.lifetime = Some(lanforge_api::config_file::HumanDuration(300));
+        cfg.ra.mtu = Some(1492);
 
         if ra.ula_enabled {
-            let ula = ra.ula_prefix.clone().unwrap_or_else(|| target_ula.to_string());
-            s.push_str("[[ra.prefix]]\n");
-            s.push_str("source = \"ula\"\n");
-            s.push_str(&format!("address = \"{}\"\n", ula));
-            s.push_str("on_link = true\n");
-            s.push_str("autonomous = true\n\n");
+            let ula = ra
+                .ula_prefix
+                .clone()
+                .unwrap_or_else(|| target_ula.to_string());
+            cfg.ra.prefixes.insert(
+                "ula".to_string(),
+                lanforge_api::config_file::RaPrefixFile {
+                    source: Some("ula".to_string()),
+                    prefix: Some(ula),
+                    on_link: true,
+                    autonomous: true,
+                    valid_lifetime: None,
+                    preferred_lifetime: None,
+                },
+            );
         }
 
         if ra.auto_gua {
-            s.push_str("# Automatically advertise public GUA prefix delegated by ISP\n");
-            s.push_str("[[ra.prefix]]\n");
-            s.push_str("source = \"auto_gua\"\n\n");
+            cfg.ra.prefixes.insert(
+                "auto_gua".to_string(),
+                lanforge_api::config_file::RaPrefixFile {
+                    source: Some("auto_gua".to_string()),
+                    prefix: None,
+                    on_link: true,
+                    autonomous: true,
+                    valid_lifetime: None,
+                    preferred_lifetime: None,
+                },
+            );
         }
 
-        s.push_str("[[ra.dnssl]]\n");
-        s.push_str(&format!("domains = [\"{}\"]\n", payload.domain_name));
-        s.push_str("lifetime = 600\n\n");
+        cfg.ra.dnssl.insert(
+            "lan".to_string(),
+            lanforge_api::config_file::RaDnsslFile {
+                domains: vec![payload.domain_name.clone()],
+                lifetime: Some(lanforge_api::config_file::HumanDuration(600)),
+            },
+        );
     }
 
-    s.push_str("# DHCPv4 Server\n");
-    s.push_str("[dhcp.v4]\n");
-    s.push_str(&format!("enabled = {}\n", payload.dhcp_enabled));
-    s.push_str(&format!("range_start = \"{}\"\n", payload.dhcp_pool_start));
-    s.push_str(&format!("range_end = \"{}\"\n", payload.dhcp_pool_end));
-    s.push_str(&format!("router = \"{}\"\n", router_ip));
-    s.push_str(&format!("dns = [\"{}\"]\n", payload.lan_ip));
-    s.push_str(&format!("subnet_mask = \"{}\"\n", subnet_mask));
-    s.push_str("lease_time = 86400\n\n");
-
-    s.push_str("# DHCPv6 Server\n");
-    s.push_str("[dhcp.v6]\n");
-    s.push_str("enabled = true\n");
-    s.push_str("lease_time = 86400\n");
-    s.push_str(&format!("search_domains = [\"{}\"]\n\n", payload.domain_name));
-    s.push_str("[[dhcp.v6.pools]]\n");
-    s.push_str("range_start = \"::100\"\n");
-    s.push_str("range_end = \"::1fff\"\n\n");
-
-    s.push_str("# DNS Resolver & Local Adblocker\n");
-    s.push_str("[dns]\n");
-    s.push_str("enabled = true\n");
-    s.push_str("listen = \"0.0.0.0:53\"\n");
-    s.push_str("ttl = 60\n\n");
-
-    s.push_str("[mdns]\n");
-    s.push_str("enabled = true\n");
-    s.push_str("probe_interval = 3600\n\n");
-
+    // PPPoE
     if let Some(ref wan) = payload.wan {
         match wan {
             SetupWanConfig::Pppoe {
@@ -513,55 +538,24 @@ fn generate_setup_toml(
                 password,
                 vlan_id,
                 mtu,
-                nftables,
+                ..
             } => {
                 let wan_if = if let Some(vid) = vlan_id {
                     format!("{interface}.{vid}")
                 } else {
                     interface.clone()
                 };
-                s.push_str("# PPPoE Client & WAN Concentrator\n");
-                s.push_str("[pppoe]\n");
-                s.push_str("enabled = true\n");
-                s.push_str("dataplane = \"kernel\"\n");
-                s.push_str(&format!("wan_iface = \"{wan_if}\"\n"));
-                s.push_str(&format!("username = \"{username}\"\n"));
-                s.push_str(&format!("password = \"{password}\"\n"));
-                s.push_str("auth = \"chap_md5\"\n");
-                s.push_str(&format!("mru = {}\n", mtu.unwrap_or(1492)));
-                s.push_str("lcp_echo_interval_secs = 10\n");
-                s.push_str("lcp_echo_max_failures = 3\n");
-                s.push_str("reconnect_delay_secs = 10\n");
-                s.push_str("send_padt_on_shutdown = true\n\n");
-
-                s.push_str("[pppoe.nftables]\n");
-                s.push_str("enabled = true\n");
-                s.push_str("table_name = \"lanforge\"\n");
-                let flow_offload = nftables.as_ref().map(|n| n.flow_offload).unwrap_or(false);
-                let mss_clamping = nftables.as_ref().map(|n| n.mss_clamping).unwrap_or(true);
-                let bypass_dns = nftables.as_ref().map(|n| n.bypass_dns).unwrap_or(true);
-                let bypass_vowifi = nftables.as_ref().map(|n| n.bypass_vowifi).unwrap_or(true);
-                let masquerade = nftables.as_ref().map(|n| n.masquerade).unwrap_or(true);
-                s.push_str(&format!("flow_offload = {flow_offload}\n"));
-                s.push_str(&format!("mss_clamping = {mss_clamping}\n"));
-                s.push_str(&format!("bypass_dns = {bypass_dns}\n"));
-                s.push_str(&format!("bypass_vowifi = {bypass_vowifi}\n"));
-                s.push_str(&format!("masquerade = {masquerade}\n"));
-                s.push_str(&format!("lan_ifaces = [\"{}\"]\n\n", payload.lan_iface));
+                cfg.pppoe.enabled = true;
+                cfg.pppoe.wan_iface = Some(wan_if);
+                cfg.pppoe.username = Some(username.clone());
+                cfg.pppoe.password = Some(password.clone());
+                cfg.pppoe.mru = *mtu;
             }
             SetupWanConfig::SystemGateway { .. } => {}
         }
     }
 
-    s.push_str("# Firewall & NAT Orchestrator\n");
-    s.push_str("[firewall]\n");
-    s.push_str("enabled = true\n");
-    s.push_str("table_name = \"lanforge\"\n");
-    s.push_str("flow_offload = true\n");
-    s.push_str("bypass_dns = true\n");
-    s.push_str("bypass_vowifi = true\n\n");
-
-    s
+    cfg.render_full().unwrap_or_default()
 }
 
 fn detect_system_gateway() -> Option<Ipv4Addr> {
