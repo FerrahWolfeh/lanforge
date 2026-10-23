@@ -1,6 +1,6 @@
 use crate::auth::authenticate;
 use crate::config::{PppoeConfig, PppoeCredentials};
-use crate::discovery::{send_padt, PppoeDiscovery};
+use crate::discovery::{PppoeDiscovery, send_padt};
 #[cfg(feature = "ebpf")]
 use crate::ebpf::EbpfSession;
 use crate::error::PppoeError;
@@ -16,16 +16,14 @@ use lanforge_core::service::{AsyncService, ServiceDependency};
 use lanforge_transport::ArpProber;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::pppoe::PppoeDataplane;
-use lanforge_types::system::{
-    PppoeSessionState, PppoeStatusResponse, ServiceAction, ServiceState,
-};
+use lanforge_types::system::{PppoeSessionState, PppoeStatusResponse, ServiceAction, ServiceState};
 use smallvec::smallvec;
 use std::borrow::Cow;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 use std::time::Duration;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone)]
@@ -54,7 +52,9 @@ fn classify_system_event(event: &LanforgeEvent) -> Option<SystemInterrupt> {
                 ServiceAction::Start => None,
             }
         }
-        LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => Some(SystemInterrupt::ConfigChanged),
+        LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => {
+            Some(SystemInterrupt::ConfigChanged)
+        }
         _ => None,
     }
 }
@@ -95,11 +95,7 @@ pub fn read_carrier(iface: &str) -> Option<bool> {
 
     check(iface).or_else(|| {
         let parent = resolve_parent_iface(iface);
-        if parent == iface {
-            None
-        } else {
-            check(parent)
-        }
+        if parent == iface { None } else { check(parent) }
     })
 }
 
@@ -195,7 +191,13 @@ impl PppoeService {
                 session_id = meta.session_id,
                 "Sending PPPoE PADT frame during session teardown"
             );
-            let _ = send_padt(&self.cfg.wan_iface, meta.wan_mac, meta.ac_mac, meta.session_id).await;
+            let _ = send_padt(
+                &self.cfg.wan_iface,
+                meta.wan_mac,
+                meta.ac_mac,
+                meta.session_id,
+            )
+            .await;
         }
 
         if !self.inert {
@@ -413,7 +415,7 @@ impl PppoeService {
         ifindex: u32,
         mac: MacAddr,
     ) -> Result<crate::discovery::DiscoveryResult, PppoeError> {
-        info!("PPPoE: Starting discovery on {}", self.cfg.wan_iface);
+        info!(wan_iface = %self.cfg.wan_iface, "Starting PPPoE discovery");
         let discovery = PppoeDiscovery::new(
             ifindex,
             mac,
@@ -442,19 +444,27 @@ impl PppoeService {
         &self,
         disc_res: &crate::discovery::DiscoveryResult,
         mac: MacAddr,
-    ) -> Result<(PppoeSession, crate::lcp::LcpNegotiated, crate::ipcp::IpcpNegotiated), PppoeError> {
+    ) -> Result<
+        (
+            PppoeSession,
+            crate::lcp::LcpNegotiated,
+            crate::ipcp::IpcpNegotiated,
+        ),
+        PppoeError,
+    > {
         let session =
             PppoeSession::connect(&self.cfg.wan_iface, disc_res.ac_mac, disc_res.session_id)?;
 
-        info!("Negotiating LCP...");
+        debug!(wan_iface = %self.cfg.wan_iface, "Negotiating LCP");
         let lcp_res = negotiate_lcp(&session, self.cfg.mru, self.cfg.auth).await?;
-        info!(
+        debug!(
+            wan_iface = %self.cfg.wan_iface,
             mru = lcp_res.mru,
             auth = ?lcp_res.auth_method,
             "LCP negotiation succeeded"
         );
 
-        info!("Authenticating via {:?}...", lcp_res.auth_method);
+        debug!(wan_iface = %self.cfg.wan_iface, auth = ?lcp_res.auth_method, "Authenticating PPPoE session");
         let creds = PppoeCredentials {
             username: self.cfg.username.clone(),
             password: self.cfg.password.clone(),
@@ -469,11 +479,12 @@ impl PppoeService {
                 }));
             return Err(e);
         }
-        info!("Authentication successful");
+        debug!(wan_iface = %self.cfg.wan_iface, "PPPoE authentication succeeded");
 
-        info!("Negotiating IPCP / IPv6CP...");
+        debug!(wan_iface = %self.cfg.wan_iface, "Negotiating IPCP and IPv6CP");
         let ipcp_res = negotiate_ipcp(&session, mac).await?;
-        info!(
+        debug!(
+            wan_iface = %self.cfg.wan_iface,
             ipv4 = ?ipcp_res.local_ip,
             peer = ?ipcp_res.peer_ip,
             dns_count = ipcp_res.dns.len(),
@@ -573,8 +584,9 @@ impl PppoeService {
         ipcp_res: &crate::ipcp::IpcpNegotiated,
     ) {
         self.connected_at = Some(Instant::now());
-        let (terminal_reachable, terminal_mac, terminal_rtt_us) =
-            self.terminal_status.map_or((None, None, None), |(r, m, rtt)| (Some(r), m, rtt));
+        let (terminal_reachable, terminal_mac, terminal_rtt_us) = self
+            .terminal_status
+            .map_or((None, None, None), |(r, m, rtt)| (Some(r), m, rtt));
 
         let pppoe_status = PppoeStatusResponse {
             enabled: true,
@@ -621,13 +633,10 @@ impl PppoeService {
         self.attempt = 0;
     }
 
-    pub fn publish_session_state(
-        &self,
-        state: PppoeSessionState,
-        last_error: Option<String>,
-    ) {
-        let (terminal_reachable, terminal_mac, terminal_rtt_us) =
-            self.terminal_status.map_or((None, None, None), |(r, m, rtt)| (Some(r), m, rtt));
+    pub fn publish_session_state(&self, state: PppoeSessionState, last_error: Option<String>) {
+        let (terminal_reachable, terminal_mac, terminal_rtt_us) = self
+            .terminal_status
+            .map_or((None, None, None), |(r, m, rtt)| (Some(r), m, rtt));
 
         let pppoe_status = PppoeStatusResponse {
             enabled: true,
@@ -716,15 +725,15 @@ impl PppoeService {
                     let Ok(event) = res else { continue; };
                     match classify_system_event(&event.event) {
                         Some(SystemInterrupt::Shutdown) => {
-                            info!("PPPoE carrier wait interrupted by daemon shutdown");
+                            debug!(wan_iface = %self.cfg.wan_iface, "Carrier wait interrupted by daemon shutdown");
                             return Err(PppoeError::NegotiationFailed("Shutdown received".into()));
                         }
                         Some(SystemInterrupt::Stop | SystemInterrupt::Restart) => {
-                            info!("PPPoE carrier wait interrupted by service control");
+                            info!(wan_iface = %self.cfg.wan_iface, "Carrier wait interrupted by service control");
                             return Err(PppoeError::NegotiationFailed("Service stopped or restarted".into()));
                         }
                         Some(SystemInterrupt::ConfigChanged) => {
-                            info!("PPPoE carrier wait interrupted by configuration update");
+                            info!(wan_iface = %self.cfg.wan_iface, "Carrier wait interrupted by configuration update");
                             return Err(PppoeError::NegotiationFailed("Configuration changed".into()));
                         }
                         None => {}
@@ -750,7 +759,8 @@ impl PppoeService {
         let prober = if let Some(p) = self.prober.clone() {
             p
         } else {
-            let Some((probe_ifindex, probe_mac)) = Self::find_interface_details(probe_iface_name) else {
+            let Some((probe_ifindex, probe_mac)) = Self::find_interface_details(probe_iface_name)
+            else {
                 warn!(
                     target_ip = %self.cfg.terminal_probe.target_ip,
                     probe_iface = %probe_iface_name,
@@ -894,15 +904,15 @@ impl PppoeService {
                     let Ok(event) = res else { continue; };
                     match classify_system_event(&event.event) {
                         Some(SystemInterrupt::Shutdown) => {
-                            info!("PPPoE terminal wait interrupted by daemon shutdown");
+                            debug!(wan_iface = %self.cfg.wan_iface, "Terminal wait interrupted by daemon shutdown");
                             return Err(PppoeError::NegotiationFailed("Shutdown received".into()));
                         }
                         Some(SystemInterrupt::Stop | SystemInterrupt::Restart) => {
-                            info!("PPPoE terminal wait interrupted by service control");
+                            info!(wan_iface = %self.cfg.wan_iface, "Terminal wait interrupted by service control");
                             return Err(PppoeError::NegotiationFailed("Service stopped or restarted".into()));
                         }
                         Some(SystemInterrupt::ConfigChanged) => {
-                            info!("PPPoE terminal wait interrupted by configuration update");
+                            info!(wan_iface = %self.cfg.wan_iface, "Terminal wait interrupted by configuration update");
                             return Err(PppoeError::NegotiationFailed("Configuration changed".into()));
                         }
                         None => {}
@@ -965,6 +975,9 @@ impl PppoeService {
             info!(
                 interface = %interface_name,
                 dataplane = ?self.cfg.dataplane,
+                ipv4 = ?ipcp_res.local_ip,
+                peer = ?ipcp_res.peer_ip,
+                dns_count = ipcp_res.dns.len(),
                 "PPPoE session established, entering keepalive monitoring loop"
             );
 
@@ -1019,7 +1032,13 @@ impl AsyncService for PppoeService {
                     p.interface.clone().unwrap_or_else(|| "none".to_string()),
                     p.terminal_reachable.map_or_else(
                         || "unprobed".to_string(),
-                        |r| if r { "reachable".to_string() } else { "unreachable".to_string() },
+                        |r| {
+                            if r {
+                                "reachable".to_string()
+                            } else {
+                                "unreachable".to_string()
+                            }
+                        },
                     ),
                 )
             },
@@ -1056,7 +1075,10 @@ impl AsyncService for PppoeService {
             return Ok(());
         }
 
-        if !self.inert && self.cfg.dataplane == PppoeDataplane::Kernel && !Path::new("/dev/ppp").exists() {
+        if !self.inert
+            && self.cfg.dataplane == PppoeDataplane::Kernel
+            && !Path::new("/dev/ppp").exists()
+        {
             warn!(
                 service = "PPPoE",
                 "/dev/ppp device unavailable (ppp_generic kernel module missing). Disabling PPPoE service."
@@ -1156,10 +1178,11 @@ impl AsyncService for PppoeService {
                             }
                             self.attempt += 1;
                             warn!(
+                                wan_iface = %self.cfg.wan_iface,
                                 attempt = self.attempt,
                                 error = %e,
                                 delay_secs = self.cfg.reconnect_delay_secs,
-                                "PPPoE session error, scheduling reconnection"
+                                "PPPoE session failed; scheduling reconnection"
                             );
 
                             self.publish_session_state(
@@ -1220,7 +1243,8 @@ impl AsyncService for PppoeService {
     }
 
     async fn cleanup(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
-        self.teardown_active_session("Service stopped or shut down".to_string()).await;
+        self.teardown_active_session("Service stopped or shut down".to_string())
+            .await;
         Ok(())
     }
 }
@@ -1243,4 +1267,3 @@ mod tests {
         assert_eq!(read_carrier("nonexistent_iface_xyz_123"), None);
     }
 }
-

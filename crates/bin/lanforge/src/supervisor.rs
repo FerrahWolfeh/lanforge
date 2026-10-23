@@ -70,7 +70,7 @@ where
         ctx.set_service_start(id, Instant::now());
         let start = Instant::now();
 
-        debug!("▸ Starting async service: {}", description);
+        debug!(service = id, %description, "Starting async service");
 
         let ctrl = ServiceControl::new(meta.id, ctx.clone());
         let mut bus_rx = ctx.bus().subscribe_system();
@@ -93,14 +93,9 @@ where
 
         // 2. Resource Initialization Phase
         if let Err(err) = service.init(ctx).await {
-            let Some(backoff_needed) = evaluate_service_exit(
-                Err(err),
-                ctx,
-                id,
-                &description,
-                start,
-                &mut consecutive_failures,
-            ) else {
+            let Some(backoff_needed) =
+                evaluate_service_exit(Err(err), ctx, id, start, &mut consecutive_failures)
+            else {
                 teardown_service(&mut service, ctx, meta.shutdown_timeout).await;
                 return;
             };
@@ -119,15 +114,8 @@ where
         ctrl.signal_ready();
 
         // 4. Serve Phase
-        let outcome = execute_serve_phase(
-            &mut service,
-            ctx,
-            id,
-            &description,
-            &meta,
-            &mut bus_rx,
-        )
-        .await;
+        let outcome =
+            execute_serve_phase(&mut service, ctx, id, &description, &meta, &mut bus_rx).await;
 
         // 5. Cooperative Cleanup & Shutdown Hook
         teardown_service(&mut service, ctx, meta.shutdown_timeout).await;
@@ -136,7 +124,6 @@ where
             outcome,
             ctx,
             id,
-            &description,
             &meta,
             start,
             &mut consecutive_failures,
@@ -163,10 +150,7 @@ async fn resolve_dependencies<S: AsyncService>(
                 ctx.clear_service_start(id);
                 return Err(());
             }
-            warn!(
-                "Supervisor: {} failed waiting for dependency {:?}: {e}",
-                description, dep
-            );
+            warn!(service = id, %description, dependency = ?dep, error = %e, "Service dependency unavailable");
             return Ok(false);
         }
     }
@@ -189,27 +173,19 @@ async fn execute_serve_phase<S: AsyncService>(
         shutdown_or_control = next_control_event(bus_rx, id) => {
             match shutdown_or_control {
                 Some(SystemEvent::Shutdown) => {
-                    info!(
-                        "Supervisor: {} shutdown initiated, awaiting cooperative termination (timeout: {:.1}s)",
-                        description,
-                        meta.shutdown_timeout.as_secs_f64()
-                    );
+                    info!(service = id, %description, timeout_secs = meta.shutdown_timeout.as_secs_f64(), "Awaiting cooperative service shutdown");
                     match tokio::time::timeout(meta.shutdown_timeout, &mut serve_fut).await {
                         Ok(res) => {
-                            debug!("Supervisor: {} completed graceful shutdown: {:?}", description, res);
+                            debug!(service = id, result = ?res, "Service shutdown completed");
                         }
                         Err(_) => {
-                            warn!(
-                                "Supervisor: {} exceeded shutdown timeout of {:.1}s — forcing abort",
-                                description,
-                                meta.shutdown_timeout.as_secs_f64()
-                            );
+                            warn!(service = id, %description, timeout_secs = meta.shutdown_timeout.as_secs_f64(), "Service shutdown timed out; forcing abort");
                         }
                     }
                     ServiceRunOutcome::Shutdown
                 }
                 Some(SystemEvent::ServiceControl { action, .. }) => {
-                    info!("▪ {} control action requested: {:?}", description, action);
+                    info!(service = id, action = ?action, "Service control action received");
                     ServiceRunOutcome::Control(action)
                 }
                 None | Some(_) => ServiceRunOutcome::BusClosed,
@@ -226,7 +202,6 @@ async fn handle_service_run_outcome(
     outcome: ServiceRunOutcome,
     ctx: &LanforgeContext,
     id: &'static str,
-    description: &str,
     meta: &ServiceMeta,
     start: Instant,
     consecutive_failures: &mut u32,
@@ -255,14 +230,7 @@ async fn handle_service_run_outcome(
         }
         ServiceRunOutcome::BusClosed => None,
         ServiceRunOutcome::Exited(res) => {
-            let backoff_needed = evaluate_service_exit(
-                res,
-                ctx,
-                id,
-                description,
-                start,
-                consecutive_failures,
-            )?;
+            let backoff_needed = evaluate_service_exit(res, ctx, id, start, consecutive_failures)?;
 
             if backoff_needed
                 && handle_backoff(ctx, meta, consecutive_failures, bus_rx)
@@ -283,10 +251,7 @@ async fn teardown_service<S: AsyncService>(
 ) {
     let _ = tokio::time::timeout(timeout, service.cleanup(ctx)).await;
     if let Err(e) = service.on_shutdown() {
-        error!(
-            "Error during async service '{}' on_shutdown: {e}",
-            service.meta().display_name
-        );
+        error!(service = service.meta().id, error = %e, "Service shutdown hook failed");
     }
 }
 
@@ -345,14 +310,13 @@ fn evaluate_service_exit(
     res: Result<(), CoreError>,
     ctx: &LanforgeContext,
     id: &str,
-    description: &str,
     start: Instant,
     consecutive_failures: &mut u32,
 ) -> Option<bool> {
     match res {
         Ok(()) => {
             if !ctx.is_running() {
-                info!("▪ {} exited (shutdown)", description);
+                debug!(service = id, "Service exited during daemon shutdown");
                 ctx.set_service_state(id, ServiceState::Inactive);
                 ctx.clear_service_start(id);
                 return None;
@@ -360,7 +324,7 @@ fn evaluate_service_exit(
 
             // Clean intentional dormant transition (e.g. disabled in config or stopped by admin)
             if ctx.get_service_state(id) == ServiceState::Inactive {
-                debug!("▪ {} entered inactive state cleanly", description);
+                debug!(service = id, "Service entered inactive state");
                 *consecutive_failures = 0;
                 return Some(false);
             }
@@ -369,18 +333,18 @@ fn evaluate_service_exit(
             if uptime < MINIMUM_HEALTHY_UPTIME {
                 *consecutive_failures += 1;
                 warn!(
-                    "▪ {} exited Ok(()) after only {:.1}s (<{}s min), treating as soft failure ({consecutive_failures}x)",
-                    description,
-                    uptime.as_secs_f64(),
-                    MINIMUM_HEALTHY_UPTIME.as_secs()
+                    service = id,
+                    uptime_secs = uptime.as_secs_f64(),
+                    consecutive_failures = *consecutive_failures,
+                    "Service exited unexpectedly shortly after startup"
                 );
                 ctx.set_service_state(id, ServiceState::Error);
                 Some(true) // Apply backoff
             } else {
                 debug!(
-                    "▪ {} exited cleanly after {:.0}s, restarting",
-                    description,
-                    uptime.as_secs_f64()
+                    service = id,
+                    uptime_secs = uptime.as_secs_f64(),
+                    "Service exited cleanly; restarting"
                 );
                 *consecutive_failures = 0;
                 Some(false) // No backoff needed
@@ -388,10 +352,7 @@ fn evaluate_service_exit(
         }
         Err(err) => {
             *consecutive_failures += 1;
-            error!(
-                "✗ {} failed ({}x): {:#}",
-                description, *consecutive_failures, err
-            );
+            error!(service = id, consecutive_failures = *consecutive_failures, error = %err, "Service failed");
             ctx.set_service_state(id, ServiceState::Error);
             Some(true) // Apply backoff
         }
@@ -404,22 +365,23 @@ async fn handle_backoff(
     consecutive_failures: &mut u32,
     bus_rx: &mut Receiver<TimedEvent>,
 ) -> Option<()> {
-    let name = meta.display_name;
     let id = meta.id;
 
     if meta.max_retries > 0 && *consecutive_failures >= meta.max_retries {
         if meta.critical {
             error!(
-                "FATAL: Critical service '{}' failed after {} retries. Shutting down.",
-                name, consecutive_failures
+                service = id,
+                retries = *consecutive_failures,
+                "Critical service exhausted retries; shutting down daemon"
             );
             ctx.terminate();
             ctx.set_service_state(id, ServiceState::Error);
             return None;
         }
         warn!(
-            "Service '{}' exhausted {} retries — giving up",
-            name, meta.max_retries
+            service = id,
+            retries = meta.max_retries,
+            "Service exhausted retries; giving up"
         );
         ctx.set_service_state(id, ServiceState::Error);
         return None;
@@ -431,28 +393,28 @@ async fn handle_backoff(
     let backoff = exp.min(meta.max_backoff);
 
     warn!(
-        "Restarting async service '{}' in {:.1}s (attempt {}/{})",
-        name,
-        backoff.as_secs_f64(),
-        *consecutive_failures + 1,
-        if meta.max_retries == 0 {
-            "∞".into()
+        service = id,
+        delay_secs = backoff.as_secs_f64(),
+        attempt = *consecutive_failures + 1,
+        retry_limit = if meta.max_retries == 0 {
+            None
         } else {
-            meta.max_retries.to_string()
-        }
+            Some(meta.max_retries)
+        },
+        "Restarting service after failure"
     );
 
     tokio::select! {
         shutdown_or_control = next_control_event(bus_rx, id) => {
             match shutdown_or_control {
                 Some(SystemEvent::Shutdown) => {
-                    info!("Supervisor '{}' received shutdown signal during backoff, stopping", name);
+                    info!(service = id, "Shutdown received during restart delay");
                     ctx.set_service_state(id, ServiceState::Inactive);
                     ctx.clear_service_start(id);
                     None
                 }
                 Some(SystemEvent::ServiceControl { action, .. }) => {
-                    info!("Supervisor '{}' received control action during backoff: {:?}", name, action);
+                    info!(service = id, action = ?action, "Service control action received during restart delay");
                     match action {
                         ServiceAction::Stop => {
                             ctx.set_service_state(id, ServiceState::Inactive);

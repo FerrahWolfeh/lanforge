@@ -48,7 +48,7 @@ use crate::traits::DhcpPool;
 
 use super::config::Dhcpv4Config;
 use super::pool::IpPool;
-use crate::identity::{resolve_device, DeviceIdentity};
+use crate::identity::{DeviceIdentity, resolve_device};
 use crate::options::iter_custom_options;
 
 /// Outcome of processing a DHCP message from a client.
@@ -220,14 +220,17 @@ impl DhcpServer {
         let mac = identity.mac;
         let requested = Self::get_requested_ip(msg);
 
-        let Some(offered_ip) = self.pool.allocate_with_device(&self.ctx, mac, requested, device) else {
-            warn!("DHCPv4: Pool exhausted, no IP available for {identity}");
+        let Some(offered_ip) = self
+            .pool
+            .allocate_with_device(&self.ctx, mac, requested, device)
+        else {
+            warn!(client = %identity, "DHCPv4 address pool exhausted");
             return HandleResult::Ignore;
         };
 
         self.last_assigned_ip = Some(offered_ip);
 
-        info!("DHCPv4: {identity} is looking for an address -> Offering {offered_ip}");
+        debug!(client = %identity, offered_ip = %offered_ip, "DHCPv4 offer sent");
         let packet = self.build_reply(msg, MessageType::Offer, offered_ip, device);
         HandleResult::Reply {
             packet,
@@ -286,16 +289,27 @@ impl DhcpServer {
         let dev_ref = resolve_device(&self.ctx, mac, device, &mut dev_owned);
 
         let is_static_for_client = self.ctx.get_static_registry().v4.get(&wanted) == Some(&mac)
-            || dev_ref
-                .is_some_and(|d| matches!(d.v4, IPv4State::Static(ip) if ip == wanted));
+            || dev_ref.is_some_and(|d| matches!(d.v4, IPv4State::Static(ip) if ip == wanted));
 
-        if !is_static_for_client && !self.pool.is_valid_dynamic_ip(wanted, self.cfg.subnet_mask, Some(self.cfg.router)) {
-            warn!("DHCPv4: {identity} requested {wanted} which is outside configured pools or on a mismatched subnet; sending DHCPNAK");
-            return self.send_nak(msg, "Requested IP address is not valid for this subnet or dynamic pool");
+        if !is_static_for_client
+            && !self
+                .pool
+                .is_valid_dynamic_ip(wanted, self.cfg.subnet_mask, Some(self.cfg.router))
+        {
+            warn!(
+                "DHCPv4: {identity} requested {wanted} which is outside configured pools or on a mismatched subnet; sending DHCPNAK"
+            );
+            return self.send_nak(
+                msg,
+                "Requested IP address is not valid for this subnet or dynamic pool",
+            );
         }
 
         // Try to allocate
-        let Some(assigned_ip) = self.pool.allocate_with_device(&self.ctx, mac, Some(wanted), device) else {
+        let Some(assigned_ip) =
+            self.pool
+                .allocate_with_device(&self.ctx, mac, Some(wanted), device)
+        else {
             warn!("DHCPv4: {identity} requested {wanted} but it is not available");
             return self.send_nak(msg, "Requested IP not available");
         };
@@ -308,7 +322,7 @@ impl DhcpServer {
 
         self.last_assigned_ip = Some(assigned_ip);
 
-        info!("DHCPv4: Assigning {assigned_ip} to {identity}");
+        info!(client = %identity, ip = %assigned_ip, "DHCPv4 lease assigned");
         let packet = self.build_reply(msg, MessageType::Ack, assigned_ip, device);
         HandleResult::Reply {
             packet,
@@ -336,14 +350,11 @@ impl DhcpServer {
 
         let owned_ip = dev_ref.and_then(|d| d.v4.ip());
         if owned_ip != Some(ip) {
-            warn!(
-                "DHCPv4: RELEASE from {} for {} ignored: client does not own this lease.",
-                identity, ip
-            );
+            warn!(client = %identity, ip = %ip, "Ignoring DHCPv4 RELEASE for a lease the client does not own");
             return HandleResult::Ignore;
         }
 
-        info!("DHCPv4: {identity} released its address {ip}");
+        info!(client = %identity, ip = %ip, "DHCPv4 lease released");
         self.pool.release(&ip);
         HandleResult::Release { ip }
     }
@@ -363,18 +374,15 @@ impl DhcpServer {
 
             let owned_ip = dev_ref.and_then(|d| d.v4.ip());
             if owned_ip != Some(declined_ip) {
-                warn!(
-                    "DHCPv4: DECLINE from {} for {} ignored: client does not own this lease.",
-                    identity, declined_ip
-                );
+                warn!(client = %identity, ip = %declined_ip, "Ignoring DHCPv4 DECLINE for a lease the client does not own");
                 return HandleResult::Ignore;
             }
 
-            warn!("DHCPv4: {identity} declined {declined_ip} (address conflict)! Quarantining IP.");
+            warn!(client = %identity, ip = %declined_ip, "DHCPv4 client reported an address conflict; quarantining address");
             self.pool.decline(declined_ip);
             HandleResult::Release { ip: declined_ip }
         } else {
-            warn!("DHCPv4: {identity} declined an unspecified IP");
+            warn!(client = %identity, "DHCPv4 DECLINE did not include an address");
             HandleResult::Ignore
         }
     }
@@ -388,7 +396,7 @@ impl DhcpServer {
         device: Option<&Device>,
     ) -> HandleResult {
         let ip = msg.ciaddr();
-        info!("DHCPv4: {identity} ({ip}) requested configuration options");
+        debug!(client = %identity, ip = %ip, "DHCPv4 INFORM received");
 
         let packet = self.build_reply(msg, MessageType::Ack, Ipv4Addr::UNSPECIFIED, device);
 
@@ -464,7 +472,9 @@ impl DhcpServer {
 
         let pool_opt = self.pool.pool_for_ip(yiaddr);
         let pool_router = pool_opt.and_then(|p| p.router).unwrap_or(self.cfg.router);
-        let pool_mask = pool_opt.and_then(|p| p.subnet_mask).unwrap_or(self.cfg.subnet_mask);
+        let pool_mask = pool_opt
+            .and_then(|p| p.subnet_mask)
+            .unwrap_or(self.cfg.subnet_mask);
         let pool_dns = pool_opt.map_or(&self.cfg.dns, |p| {
             if p.dns_servers.is_empty() {
                 &self.cfg.dns
@@ -646,7 +656,10 @@ impl DhcpServer {
     fn add_custom_options(&self, opts: &mut v4::DhcpOptions) {
         if !self.precompiled_custom_options.is_empty() {
             for (code, data) in &self.precompiled_custom_options {
-                opts.insert(DhcpOption::Unknown(UnknownOption::new((*code).into(), data.clone())));
+                opts.insert(DhcpOption::Unknown(UnknownOption::new(
+                    (*code).into(),
+                    data.clone(),
+                )));
             }
         } else if !self.cfg.options.is_empty() {
             for (code, data) in iter_custom_options(&self.cfg.options, PROTECTED_OPTIONS) {
@@ -725,7 +738,11 @@ fn get_interface_mtu(iface: &str) -> Option<u16> {
     let mut file = std::fs::File::open(path).ok()?;
     let mut buf = [0u8; 16];
     let n = file.read(&mut buf).ok()?;
-    std::str::from_utf8(&buf[..n]).ok()?.trim().parse::<u16>().ok()
+    std::str::from_utf8(&buf[..n])
+        .ok()?
+        .trim()
+        .parse::<u16>()
+        .ok()
 }
 
 #[cfg(test)]
