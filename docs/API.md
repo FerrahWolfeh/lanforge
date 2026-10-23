@@ -172,7 +172,6 @@ Endpoints supporting event streaming implement the **HybridStream** contract:
 
 | Method | Parameters | Return Type | Description |
 |:-------|:-----------|:------------|:------------|
-| `db_vacuum` | None | `SimpleSuccess` | Compacts database and reclaims fragmented storage. |
 | `db_prune` | None | `SimpleSuccess` | Prunes historical query and event logs per retention policy. |
 | `db_log_clean` | None | `SimpleSuccess` | Clears transient event log records. |
 | `db_reset` | None | `SimpleSuccess` | Wipes the database (**destructive action**). |

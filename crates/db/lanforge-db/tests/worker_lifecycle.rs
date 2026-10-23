@@ -96,7 +96,7 @@ async fn test_db_worker_batches_and_flushes_devices() {
     let log_db = Arc::new(LogDb::open_in_memory());
 
     let cfg = DatabaseConfig {
-        flush_interval: 60, // we trigger flush via shutdown for determinism
+        flush_interval: 1,
         ..DatabaseConfig::default()
     };
 
@@ -122,15 +122,31 @@ async fn test_db_worker_batches_and_flushes_devices() {
             ip,
             is_active: true,
         });
-        let _ = ctx.apply(DeviceUpdate::DhcpHostnameHint {
+        let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
             mac,
-            hostname: format!("host-{i}"),
+            update: Box::new(CliHostUpdate {
+                hostname: FieldUpdate::Set(format!("host-{i}")),
+                ..CliHostUpdate::default()
+            }),
         });
     }
 
     assert_eq!(ctx.with_state(|s| s.devices.len()), 3);
 
-    // Send Shutdown to trigger immediate batch flush and exit
+    timeout(Duration::from_secs(3), async {
+        while ctx
+            .db_metrics()
+            .devices_written
+            .load(std::sync::atomic::Ordering::Relaxed)
+            < 3
+        {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("worker did not persist the device batch");
+
+    // Shutdown after the independent device-topic batch has been persisted.
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let res = timeout(Duration::from_secs(1), handle)
         .await

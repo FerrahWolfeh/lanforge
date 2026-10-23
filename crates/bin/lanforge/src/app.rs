@@ -29,14 +29,14 @@ use lanforge_db::LogStore;
 use lanforge_http::HttpService;
 #[cfg(feature = "pppoe")]
 use lanforge_db::PppoeConfigStore;
+#[cfg(feature = "nft")]
+use lanforge_db::FirewallConfigStore;
+#[cfg(feature = "traffic")]
+use lanforge_db::TrafficConfigStore;
 #[cfg(feature = "pppoe")]
 use lanforge_pppoe::PppoeService;
 #[cfg(feature = "nft")]
-use lanforge_db::FirewallConfigStore;
-#[cfg(feature = "nft")]
 use lanforge_nft::NftService;
-#[cfg(feature = "traffic")]
-use lanforge_db::TrafficConfigStore;
 #[cfg(feature = "traffic")]
 use lanforge_traffic::TrafficService;
 #[cfg(feature = "ra")]
@@ -265,7 +265,7 @@ impl Daemon {
             async [ctx, cfg] => ControlService::new(Arc::new(cfg.to_api_config()), ctx),
 
             #[cfg(feature = "http")]
-            async [ctx, cfg, db, log_db] => HttpService::new(Arc::new(cfg.to_http_config()), ctx, db, log_db),
+            async [ctx, cfg, db, log_db] => HttpService::new(Arc::new(cfg.to_http_config()), ctx, Arc::new(db.redb().clone()), log_db),
 
             #[cfg(feature = "tftp")]
             async [ctx, cfg] => TftpService::new(

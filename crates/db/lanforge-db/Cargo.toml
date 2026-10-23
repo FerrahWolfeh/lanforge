@@ -37,6 +37,7 @@ serde_json = { workspace = true }
 hotpath = { workspace = true, optional = true }
 futures.workspace = true
 parking_lot.workspace = true
+libc.workspace = true
 
 [dev-dependencies]
 tempfile = "3.27.0"

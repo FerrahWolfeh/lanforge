@@ -16,6 +16,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+postcard = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
@@ -23,3 +24,4 @@ uuid = { workspace = true }
 parking_lot = { workspace = true }
 redb = { workspace = true }
 tempfile = { workspace = true }
+libc = { workspace = true }

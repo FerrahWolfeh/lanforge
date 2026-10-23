@@ -392,9 +392,6 @@ fn render_network_event(time_str: &str, evt: &NetworkEvent, printer: &Printer) {
 
 fn render_storage_event(time_str: &str, evt: &StorageEvent, printer: &Printer) {
     match evt {
-        StorageEvent::DbVacuum => {
-            print_log(time_str, "DATABASE", "VACUUM".cyan(), "Database vacuum started".to_string(), printer);
-        }
         StorageEvent::DbLogClean => {
             print_log(time_str, "DATABASE", "CLEAN".cyan(), "Old audit logs pruned".to_string(), printer);
         }

@@ -282,7 +282,6 @@ const fn event_topic_and_kind(event: &LanforgeEvent) -> (&'static str, &'static 
             SystemEvent::ConfigPppoeChanged => "ConfigPppoeChanged",
         }),
         LanforgeEvent::Storage(s) => ("storage", match s {
-            StorageEvent::DbVacuum => "DbVacuum",
             StorageEvent::DbLogClean => "DbLogClean",
             StorageEvent::DbPrune => "DbPrune",
             StorageEvent::DbReset => "DbReset",

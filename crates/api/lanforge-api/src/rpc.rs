@@ -110,7 +110,6 @@ pub trait LanforgeRpc {
     fn dhcp_reconcile(
         &self,
     ) -> impl Future<Output = Result<DhcpReconcileResponse, RpcCallError>> + Send;
-    fn db_vacuum(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn db_log_clean(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn db_prune(&self) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn purge(

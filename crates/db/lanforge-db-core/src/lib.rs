@@ -3,7 +3,7 @@
 use std::net::SocketAddr;
 
 pub use lanforge_types::auth::{ApiScopes, ApiTokenEntry, UserEntry, UserInfo, UserRole};
-use lanforge_types::device::Device;
+use lanforge_types::device::{Device, Origin};
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
@@ -16,7 +16,7 @@ use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamProtocol, Ups
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
-use lanforge_types::network::{DnsReverseResolver, IpSubnet, QueryLogEntry, QueryResult, TrafficConfig};
+use lanforge_types::network::{DnsReverseResolver, Hostname, IpSubnet, Ipv6AddrOrSuffix, QueryLogEntry, QueryResult, TrafficConfig};
 
 /// Database error enum encapsulating all database failures.
 #[derive(Debug, thiserror::Error)]
@@ -117,9 +117,6 @@ pub trait DeviceStore: Send + Sync {
     /// Removes a device by its MAC address.
     fn remove_device(&self, mac: MacAddr) -> Result<(), DbError>;
 
-    /// Triggers VACUUM or backend storage optimization.
-    fn vacuum(&self) -> Result<(), DbError>;
-
     /// Prunes dynamic devices without hostname or active leases/addresses.
     fn prune_zombies(&self) -> Result<usize, DbError>;
 
@@ -145,6 +142,43 @@ pub trait DeviceStore: Send + Sync {
         Ok(())
     }
 }
+
+/// A user-managed host record stored separately from runtime observations.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct StaticHostEntry {
+    pub mac: MacAddr,
+    pub hostname: Hostname,
+    pub origin: Origin,
+    pub v4_fixed: Option<std::net::Ipv4Addr>,
+    pub v6_suffix: Option<Ipv6AddrOrSuffix>,
+    pub ignore_dns_log: bool,
+    pub ignored_log_domains: Vec<String>,
+}
+
+/// Configuration, metadata, and static host persistence contract.
+pub trait ConfigStore:
+    DnsStore + AdblockStore + DnsUpstreamStore + DhcpConfigStore + RaConfigStore
+    + PppoeConfigStore + FirewallConfigStore + TrafficConfigStore + Send + Sync
+{
+    fn get_meta(&self, key: &str) -> Result<Option<Vec<u8>>, DbError>;
+    fn set_meta(&self, key: &str, value: &[u8]) -> Result<(), DbError>;
+    fn load_static_hosts(&self) -> Result<Vec<StaticHostEntry>, DbError>;
+    fn upsert_static_host(&self, host: &StaticHostEntry) -> Result<(), DbError>;
+    fn remove_static_host(&self, mac: MacAddr) -> Result<(), DbError>;
+    fn clear_static_hosts(&self) -> Result<(), DbError>;
+}
+
+/// Device and lease state persistence contract.
+pub trait StateStore: DeviceStore {}
+impl<T: DeviceStore + ?Sized> StateStore for T {}
+
+/// User and API-token persistence contract.
+pub trait AuthStore: UserStore + ApiTokenStore {}
+impl<T: UserStore + ApiTokenStore + ?Sized> AuthStore for T {}
+
+/// Logs and telemetry persistence contract.
+pub trait TelemetryStore: LogStore {}
+impl<T: LogStore + ?Sized> TelemetryStore for T {}
 
 /// Handles local DNS rewrites, allowlists, and reverse resolvers.
 pub trait DnsStore: Send + Sync {
@@ -595,6 +629,21 @@ pub use lanforge_types::storage::DnsQueryRateBucket;
 
 /// Handles transient log operations.
 pub trait LogStore: Send + Sync {
+    /// Loads volatile device observations retained in the runtime database.
+    fn load_runtime_devices(&self) -> Result<Vec<Device>, DbError> { Ok(Vec::new()) }
+
+    /// Atomically writes a runtime device batch and removes deleted MACs.
+    fn sync_runtime_devices(
+        &self,
+        upserts: &[std::sync::Arc<Device>],
+        deletes: &[MacAddr],
+    ) -> Result<(), DbError> { let _ = (upserts, deletes); Ok(()) }
+
+    /// Replaces the volatile device snapshot atomically.
+    fn replace_runtime_devices(&self, upserts: &[std::sync::Arc<Device>]) -> Result<(), DbError> {
+        self.sync_runtime_devices(upserts, &[])
+    }
+
     /// Appends a single log event.
     fn record_log(&self, timed_event: &TimedEvent) -> Result<(), DbError>;
 
@@ -717,37 +766,10 @@ pub trait LogStore: Send + Sync {
 }
 
 /// Composite supertrait combining all persistence store traits into a single backend interface.
-pub trait DatabaseStore:
-    DeviceStore
-    + DnsStore
-    + AdblockStore
-    + ApiTokenStore
-    + DnsUpstreamStore
-    + DhcpConfigStore
-    + RaConfigStore
-    + PppoeConfigStore
-    + FirewallConfigStore
-    + TrafficConfigStore
-    + UserStore
-    + Send
-    + Sync
-{
-}
+pub trait DatabaseStore: ConfigStore + StateStore + AuthStore {}
 
 impl<T> DatabaseStore for T where
-    T: DeviceStore
-        + DnsStore
-        + AdblockStore
-        + ApiTokenStore
-        + DnsUpstreamStore
-        + DhcpConfigStore
-        + RaConfigStore
-        + PppoeConfigStore
-        + FirewallConfigStore
-        + TrafficConfigStore
-        + UserStore
-        + Send
-        + Sync
+    T: ConfigStore + StateStore + AuthStore
 {
 }
 

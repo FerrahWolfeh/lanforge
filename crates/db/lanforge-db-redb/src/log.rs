@@ -1,16 +1,20 @@
 //! LogStore implementation for `RedbDatabase`.
 
-use crate::RedbDatabase;
+use crate::{RedbDatabase, decode, encode, encode_into};
 use crate::tables::{
-    TABLE_CONFIG, TABLE_DNS_BLOCKED, TABLE_DNS_QUERIES, TABLE_DNS_TELEMETRY, TABLE_LOG_EVENTS,
+    TABLE_CONFIG, TABLE_DNS_BLOCKED, TABLE_DNS_QUERIES, TABLE_DNS_TELEMETRY,
+    TABLE_DNS_STATS_HOURLY, TABLE_LOG_EVENTS,
+    TABLE_RUNTIME_DEVICES,
 };
 use lanforge_core::bus::TimedEvent;
 use lanforge_db_core::{DbError, DnsQueryRateBucket, LogStore};
+use lanforge_types::device::{Device, Origin};
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType, TransportProtocol};
+use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType};
 use lanforge_types::network::{QueryLogEntry, QueryResult};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
 use std::net::IpAddr;
+use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -22,106 +26,145 @@ pub struct BlockedQueryEntry {
     pub domain: String,
 }
 
-#[derive(serde::Deserialize)]
-struct QueryFilterRow<'a> {
-    src_ip: IpAddr,
-    #[serde(borrow)]
-    domain: std::borrow::Cow<'a, str>,
-    #[serde(default)]
-    src_mac: Option<MacAddr>,
-    #[serde(default)]
-    qtype: Option<DnsRecordType>,
-    #[serde(default)]
-    result: Option<QueryResult>,
+const MAX_HOURLY_CARDINALITY: usize = 2_000;
+
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+struct HourlyDnsStats {
+    total: u64,
+    blocked: u64,
+    domains: BTreeMap<String, u64>,
+    clients: BTreeMap<String, u64>,
+    qtypes: BTreeMap<u16, u64>,
+    protocols: BTreeMap<String, u64>,
+    blocked_domains: BTreeMap<String, u64>,
+    blocked_clients: BTreeMap<String, u64>,
+    other_domains: u64,
+    other_clients: u64,
+    other_qtypes: u64,
+    other_protocols: u64,
+    other_blocked_domains: u64,
+    other_blocked_clients: u64,
+    client_domains: BTreeMap<String, u64>,
+    other_client_domains: u64,
 }
 
-impl QueryFilterRow<'_> {
-    fn matches(
-        &self,
-        client_filter_lower: Option<&str>,
-        domain_filter_lower: Option<&str>,
-        qtype_filter: Option<DnsRecordType>,
-        result_filter: Option<QueryResult>,
-    ) -> bool {
-        if let Some(cf) = client_filter_lower {
-            let ip_str = self.src_ip.to_string();
-            let mut matched = ip_str.contains(cf);
-            if !matched && let Some(mac) = self.src_mac {
-                let mac_str = mac.to_string().to_lowercase();
-                matched = mac_str.contains(cf);
-            }
-            if !matched {
-                return false;
-            }
-        }
-
-        if let Some(df) = domain_filter_lower
-            && !self.domain.to_lowercase().contains(df)
-        {
-            return false;
-        }
-
-        if let Some(qt) = qtype_filter
-            && self.qtype != Some(qt)
-        {
-            return false;
-        }
-
-        if let Some(res) = result_filter
-            && self.result != Some(res)
-        {
-            return false;
-        }
-
-        true
+fn bump_capped(map: &mut BTreeMap<String, u64>, key: String, other: &mut u64) {
+    if let Some(count) = map.get_mut(&key) {
+        *count += 1;
+    } else if map.len() < MAX_HOURLY_CARDINALITY {
+        map.insert(key, 1);
+    } else {
+        *other += 1;
     }
 }
 
-#[derive(serde::Deserialize)]
-struct DomainResultRow<'a> {
-    #[serde(borrow)]
-    domain: std::borrow::Cow<'a, str>,
-    result: QueryResult,
+fn bump_capped_qtype(map: &mut BTreeMap<u16, u64>, key: u16, other: &mut u64) {
+    if let Some(count) = map.get_mut(&key) {
+        *count += 1;
+    } else if map.len() < MAX_HOURLY_CARDINALITY {
+        map.insert(key, 1);
+    } else {
+        *other += 1;
+    }
 }
 
-#[derive(serde::Deserialize)]
-struct ClientDomainResultRow<'a> {
-    #[serde(borrow)]
-    domain: std::borrow::Cow<'a, str>,
-    result: QueryResult,
-    src_ip: IpAddr,
-    #[serde(default)]
-    src_mac: Option<MacAddr>,
+fn load_recent_hourly_stats(db: &RedbDatabase) -> Result<Vec<HourlyDnsStats>, DbError> {
+    let txn = db.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+    let table = match txn.open_table(TABLE_DNS_STATS_HOURLY) {
+        Ok(table) => table,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+        Err(error) => return Err(DbError::Backend(error.to_string())),
+    };
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let start = (now / 3600).saturating_sub(167) * 3600;
+    table.range(start..).map_err(|e| DbError::Backend(e.to_string()))?.take(168)
+        .map(|row| {
+            let (_, value) = row.map_err(|e| DbError::Backend(e.to_string()))?;
+            decode(value.value())
+        })
+        .collect()
 }
 
-#[derive(serde::Deserialize)]
-struct QTypeResultRow {
-    qtype: DnsRecordType,
-}
-
-#[derive(serde::Deserialize)]
-struct QueryRateDetailedRow {
-    result: QueryResult,
-    qtype: DnsRecordType,
-}
-
-#[derive(serde::Deserialize)]
-struct BlockedRateResultRow {
-    result: QueryResult,
-}
-
-#[derive(serde::Deserialize)]
-struct ClientResultRow {
-    src_ip: IpAddr,
-    result: QueryResult,
-}
-
-#[derive(serde::Deserialize)]
-struct ProtocolResultRow {
-    protocol: TransportProtocol,
+fn query_matches(
+    entry: &QueryLogEntry,
+    client_filter_lower: Option<&str>,
+    domain_filter_lower: Option<&str>,
+    qtype_filter: Option<DnsRecordType>,
+    result_filter: Option<QueryResult>,
+) -> bool {
+    if let Some(client) = client_filter_lower {
+        let ip_matches = entry.src_ip.to_string().contains(client);
+        let mac_matches = entry.src_mac.is_some_and(|mac| mac.to_string().to_lowercase().contains(client));
+        if !ip_matches && !mac_matches { return false; }
+    }
+    if domain_filter_lower.is_some_and(|domain| !entry.domain.to_lowercase().contains(domain)) {
+        return false;
+    }
+    if qtype_filter.is_some_and(|qtype| entry.qtype != qtype) { return false; }
+    if result_filter.is_some_and(|result| entry.result != result) { return false; }
+    true
 }
 
 impl RedbDatabase {
+    pub fn load_runtime_devices(&self) -> Result<Vec<Device>, DbError> {
+        let txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let table = match txn.open_table(TABLE_RUNTIME_DEVICES) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+            Err(error) => return Err(DbError::Backend(error.to_string())),
+        };
+        table.iter().map_err(|e| DbError::Backend(e.to_string()))?.map(|row| {
+            let (_, value) = row.map_err(|e| DbError::Backend(e.to_string()))?;
+            decode(value.value())
+        }).collect()
+    }
+
+    pub fn sync_runtime_devices(
+        &self,
+        upserts: &[std::sync::Arc<Device>],
+        deletes: &[MacAddr],
+    ) -> Result<(), DbError> {
+        if upserts.is_empty() && deletes.is_empty() { return Ok(()); }
+        let txn = self.begin_write()?;
+        let mut table = txn.open_table(TABLE_RUNTIME_DEVICES)
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        for mac in deletes {
+            table.remove(mac.0.as_slice()).map_err(|e| DbError::Backend(e.to_string()))?;
+        }
+        let mut bytes = Vec::with_capacity(512);
+        for device in upserts {
+            if device.origin == Origin::Dynamic {
+                encode_into(device.as_ref(), &mut bytes)?;
+                table.insert(device.mac.0.as_slice(), bytes.as_slice())
+                    .map_err(|e| DbError::Backend(e.to_string()))?;
+            } else {
+                table.remove(device.mac.0.as_slice()).map_err(|e| DbError::Backend(e.to_string()))?;
+            }
+        }
+        drop(table);
+        txn.commit().map_err(|e| DbError::Backend(e.to_string()))
+    }
+
+    pub fn replace_runtime_devices(&self, upserts: &[std::sync::Arc<Device>]) -> Result<(), DbError> {
+        let txn = self.begin_write()?;
+        let mut table = txn.open_table(TABLE_RUNTIME_DEVICES)
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        let keys: Vec<Vec<u8>> = table.iter().map_err(|e| DbError::Backend(e.to_string()))?
+            .map(|row| row.map(|(key, _)| key.value().to_vec()).map_err(|e| DbError::Backend(e.to_string())))
+            .collect::<Result<_, _>>()?;
+        for key in keys {
+            table.remove(key.as_slice()).map_err(|e| DbError::Backend(e.to_string()))?;
+        }
+        let mut bytes = Vec::with_capacity(512);
+        for device in upserts.iter().filter(|device| device.origin == Origin::Dynamic) {
+            encode_into(device.as_ref(), &mut bytes)?;
+            table.insert(device.mac.0.as_slice(), bytes.as_slice())
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+        }
+        drop(table);
+        txn.commit().map_err(|e| DbError::Backend(e.to_string()))
+    }
+
     /// Auto-prunes older events and caps table sizes to prevent unbounded disk growth.
     pub fn maybe_prune(&self, now_secs: i64) -> Result<(), DbError> {
         let last = self.last_prune.load(Ordering::Relaxed);
@@ -142,9 +185,7 @@ impl RedbDatabase {
         &self,
         limit: usize,
     ) -> Result<Vec<serde_json::Value>, DbError> {
-            let read_txn = self
-                .db
-                .read()
+            let read_txn = self.db
                 .begin_read()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             let table = match read_txn.open_table(TABLE_DNS_BLOCKED) {
@@ -161,7 +202,7 @@ impl RedbDatabase {
                 .take(limit)
             {
                 let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: BlockedQueryEntry = serde_json::from_slice(val.value())
+                let entry: BlockedQueryEntry = decode(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 result.push(serde_json::json!({
                     "timestamp": entry.timestamp,
@@ -175,6 +216,22 @@ impl RedbDatabase {
 }
 
 impl LogStore for RedbDatabase {
+    fn load_runtime_devices(&self) -> Result<Vec<Device>, DbError> {
+        RedbDatabase::load_runtime_devices(self)
+    }
+
+    fn sync_runtime_devices(
+        &self,
+        upserts: &[std::sync::Arc<Device>],
+        deletes: &[MacAddr],
+    ) -> Result<(), DbError> {
+        RedbDatabase::sync_runtime_devices(self, upserts, deletes)
+    }
+
+    fn replace_runtime_devices(&self, upserts: &[std::sync::Arc<Device>]) -> Result<(), DbError> {
+        RedbDatabase::replace_runtime_devices(self, upserts)
+    }
+
     fn record_log(&self, timed_event: &TimedEvent) -> Result<(), DbError> {
         let mut buf = Vec::with_capacity(256);
         self.record_logs_batch(std::slice::from_ref(timed_event), &mut buf)
@@ -189,9 +246,7 @@ impl LogStore for RedbDatabase {
                 return Ok(());
             }
 
-            let write_txn = self
-                .db
-                .read()
+            let write_txn = self.db
                 .begin_write()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             {
@@ -207,8 +262,7 @@ impl LogStore for RedbDatabase {
                         .as_secs();
                     let seq = self.log_seq.fetch_add(1, Ordering::Relaxed);
                     bytes_buf.clear();
-                    serde_json::to_writer(&mut *bytes_buf, event)
-                        .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+                    encode_into(event, bytes_buf)?;
                     table
                         .insert((ts, seq), bytes_buf.as_slice())
                         .map_err(|e| DbError::Backend(e.to_string()))?;
@@ -246,12 +300,9 @@ impl LogStore for RedbDatabase {
                 domain: domain.to_string(),
             };
             let mut bytes_buf = Vec::with_capacity(256);
-            serde_json::to_writer(&mut bytes_buf, &entry)
-                .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+            encode_into(&entry, &mut bytes_buf)?;
 
-            let write_txn = self
-                .db
-                .read()
+            let write_txn = self.db
                 .begin_write()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             {
@@ -284,9 +335,7 @@ impl LogStore for RedbDatabase {
                 return Ok(());
             }
 
-            let write_txn = self
-                .db
-                .read()
+            let write_txn = self.db
                 .begin_write()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             {
@@ -299,8 +348,7 @@ impl LogStore for RedbDatabase {
                     let ts = entry.timestamp;
                     let seq = self.log_seq.fetch_add(1, Ordering::Relaxed);
                     bytes_buf.clear();
-                    serde_json::to_writer(&mut bytes_buf, entry)
-                        .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+                    encode_into(entry, &mut bytes_buf)?;
                     table
                         .insert((ts, seq), bytes_buf.as_slice())
                         .map_err(|e| DbError::Backend(e.to_string()))?;
@@ -320,7 +368,7 @@ impl LogStore for RedbDatabase {
                                     .get(bucket_ts)
                                     .map_err(|e| DbError::Backend(e.to_string()))?
                                 {
-                                    Some(val) => serde_json::from_slice(val.value()).unwrap_or_else(|_| {
+                                    Some(val) => decode(val.value()).unwrap_or_else(|_| {
                                         DnsQueryRateBucket {
                                             timestamp: bucket_ts,
                                             ..Default::default()
@@ -384,12 +432,55 @@ impl LogStore for RedbDatabase {
                     }
 
                     for (bucket_ts, bucket) in cached_buckets {
-                        let val_bytes = serde_json::to_vec(&bucket)
+                        let val_bytes = encode(&bucket)
                             .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
                         table_telemetry
                             .insert(bucket_ts, val_bytes.as_slice())
                             .map_err(|e| DbError::Backend(e.to_string()))?;
                     }
+                }
+
+                let mut hourly = write_txn.open_table(TABLE_DNS_STATS_HOURLY)
+                    .map_err(|e| DbError::Backend(e.to_string()))?;
+                let mut buckets: std::collections::HashMap<u64, HourlyDnsStats> =
+                    std::collections::HashMap::with_capacity(2);
+                for entry in entries {
+                    let hour_ts = (entry.timestamp / 3600) * 3600;
+                    let stats = match buckets.entry(hour_ts) {
+                        std::collections::hash_map::Entry::Occupied(row) => row.into_mut(),
+                        std::collections::hash_map::Entry::Vacant(row) => {
+                            let existing = hourly.get(hour_ts)
+                                .map_err(|e| DbError::Backend(e.to_string()))?
+                                .map(|value| decode(value.value()))
+                                .transpose()?
+                                .unwrap_or_default();
+                            row.insert(existing)
+                        }
+                    };
+                    stats.total += 1;
+                    let client = entry.src_ip.to_string();
+                    bump_capped(&mut stats.clients, client.clone(), &mut stats.other_clients);
+                    bump_capped_qtype(&mut stats.qtypes, u16::from(entry.qtype), &mut stats.other_qtypes);
+                    let protocol = entry.protocol.to_string().to_ascii_lowercase();
+                    bump_capped(&mut stats.protocols, protocol, &mut stats.other_protocols);
+                    let is_blocked = matches!(entry.result, QueryResult::Blocked | QueryResult::CachedBlock);
+                    if is_blocked {
+                        stats.blocked += 1;
+                        bump_capped(&mut stats.blocked_domains, entry.domain.to_string(), &mut stats.other_blocked_domains);
+                        bump_capped(&mut stats.blocked_clients, client, &mut stats.other_blocked_clients);
+                    } else {
+                        bump_capped(&mut stats.domains, entry.domain.to_string(), &mut stats.other_domains);
+                        bump_capped(
+                            &mut stats.client_domains,
+                            format!("{}|{}", entry.src_ip, entry.domain),
+                            &mut stats.other_client_domains,
+                        );
+                    }
+                }
+                for (hour_ts, stats) in buckets {
+                    let bytes = encode(&stats)?;
+                    hourly.insert(hour_ts, bytes.as_slice())
+                        .map_err(|e| DbError::Backend(e.to_string()))?;
                 }
             }
             write_txn
@@ -413,9 +504,7 @@ impl LogStore for RedbDatabase {
     }
 
     fn clear_logs(&self) -> Result<(), DbError> {
-            let write_txn = self
-                .db
-                .read()
+            let write_txn = self.db
                 .begin_write()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             {
@@ -423,6 +512,7 @@ impl LogStore for RedbDatabase {
                 let _ = write_txn.delete_table(TABLE_DNS_QUERIES);
                 let _ = write_txn.delete_table(TABLE_DNS_BLOCKED);
                 let _ = write_txn.delete_table(TABLE_DNS_TELEMETRY);
+                let _ = write_txn.delete_table(TABLE_DNS_STATS_HOURLY);
             }
             write_txn
                 .commit()
@@ -432,9 +522,7 @@ impl LogStore for RedbDatabase {
 
     fn prune_logs(&self, before: i64) -> Result<(), DbError> {
             let cutoff = before.max(0) as u64;
-            let write_txn = self
-                .db
-                .read()
+            let write_txn = self.db
                 .begin_write()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             {
@@ -588,6 +676,17 @@ impl LogStore for RedbDatabase {
                         }
                     }
                 }
+
+                if let Ok(mut table) = write_txn.open_table(TABLE_DNS_STATS_HOURLY) {
+                    let hourly_cutoff = cutoff.saturating_sub(167 * 3600);
+                    let old: Vec<u64> = table.range(..hourly_cutoff)
+                        .map_err(|e| DbError::Backend(e.to_string()))?
+                        .map(|row| row.map(|(key, _)| key.value()).map_err(|e| DbError::Backend(e.to_string())))
+                        .collect::<Result<_, _>>()?;
+                    for hour in old {
+                        table.remove(hour).map_err(|e| DbError::Backend(e.to_string()))?;
+                    }
+                }
             }
             write_txn
                 .commit()
@@ -596,9 +695,7 @@ impl LogStore for RedbDatabase {
     }
 
     fn get_history(&self, limit: usize) -> Result<Vec<TimedEvent>, DbError> {
-            let read_txn = self
-                .db
-                .read()
+            let read_txn = self.db
                 .begin_read()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             let table = match read_txn.open_table(TABLE_LOG_EVENTS) {
@@ -615,7 +712,7 @@ impl LogStore for RedbDatabase {
                 .take(limit)
             {
                 let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let event: TimedEvent = serde_json::from_slice(val.value())
+                let event: TimedEvent = decode(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 entries.push(event);
             }
@@ -632,9 +729,7 @@ impl LogStore for RedbDatabase {
         qtype: Option<DnsRecordType>,
         result: Option<QueryResult>,
     ) -> Result<(Vec<QueryLogEntry>, usize), DbError> {
-            let read_txn = self
-                .db
-                .read()
+            let read_txn = self.db
                 .begin_read()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             let table = match read_txn.open_table(TABLE_DNS_QUERIES) {
@@ -662,17 +757,16 @@ impl LogStore for RedbDatabase {
                 {
                     let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
                     let bytes = val.value();
-                    let filter_row: QueryFilterRow = serde_json::from_slice(bytes)
+                    let entry: QueryLogEntry = decode(bytes)
                         .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                    if filter_row.matches(
+                    if query_matches(
+                        &entry,
                         cf_lower.as_deref(),
                         df_lower.as_deref(),
                         qtype,
                         result,
                     ) {
                         if matched_total >= offset && entries.len() < limit {
-                            let entry: QueryLogEntry = serde_json::from_slice(bytes)
-                                .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                             entries.push(entry);
                         }
                         matched_total += 1;
@@ -694,7 +788,7 @@ impl LogStore for RedbDatabase {
                     .take(limit)
                 {
                     let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                    let entry: QueryLogEntry = serde_json::from_slice(val.value())
+                    let entry: QueryLogEntry = decode(val.value())
                         .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                     entries.push(entry);
                 }
@@ -707,37 +801,26 @@ impl LogStore for RedbDatabase {
         &self,
         limit: usize,
     ) -> Result<Vec<(String, u64)>, DbError> {
-            let read_txn = self
-                .db
-                .read()
-                .begin_read()
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-            let table = match read_txn.open_table(TABLE_DNS_QUERIES) {
-                Ok(t) => t,
-                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-                Err(e) => return Err(DbError::Backend(e.to_string())),
-            };
-
-            let mut counts: std::collections::HashMap<String, u64> =
-                std::collections::HashMap::new();
-            for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-                let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: DomainResultRow = serde_json::from_slice(val.value())
-                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                if matches!(entry.result, QueryResult::Blocked | QueryResult::CachedBlock) {
-                    continue;
-                }
-                if let Some(count) = counts.get_mut(entry.domain.as_ref()) {
-                    *count += 1;
-                } else {
-                    counts.insert(entry.domain.to_string(), 1);
-                }
+        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let table = match read_txn.open_table(TABLE_DNS_STATS_HOURLY) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+            Err(error) => return Err(DbError::Backend(error.to_string())),
+        };
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let start = (now / 3600).saturating_sub(167) * 3600;
+        let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+        for row in table.range(start..).map_err(|e| DbError::Backend(e.to_string()))?.take(168) {
+            let (_, value) = row.map_err(|e| DbError::Backend(e.to_string()))?;
+            let stats: HourlyDnsStats = decode(value.value())?;
+            for (domain, count) in stats.domains {
+                *counts.entry(domain).or_default() += count;
             }
-
-            let mut vec: Vec<(String, u64)> = counts.into_iter().collect();
-            vec.sort_by_key(|b| std::cmp::Reverse(b.1));
-            vec.truncate(limit);
-            Ok(vec)
+        }
+        let mut rows: Vec<_> = counts.into_iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        rows.truncate(limit);
+        Ok(rows)
     }
 
     fn get_dns_top_domains_for_client(
@@ -745,9 +828,22 @@ impl LogStore for RedbDatabase {
         client: &str,
         limit: usize,
     ) -> Result<Vec<(String, u64)>, DbError> {
-            let read_txn = self
-                .db
-                .read()
+            if let Ok(ip) = client.parse::<IpAddr>() {
+                let prefix = format!("{ip}|");
+                let mut counts = BTreeMap::<String, u64>::new();
+                for bucket in load_recent_hourly_stats(self)? {
+                    for (key, count) in bucket.client_domains {
+                        if let Some(domain) = key.strip_prefix(&prefix) {
+                            *counts.entry(domain.to_string()).or_default() += count;
+                        }
+                    }
+                }
+                let mut rows: Vec<_> = counts.into_iter().collect();
+                rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                rows.truncate(limit);
+                return Ok(rows);
+            }
+            let read_txn = self.db
                 .begin_read()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             let table = match read_txn.open_table(TABLE_DNS_QUERIES) {
@@ -763,7 +859,7 @@ impl LogStore for RedbDatabase {
                 std::collections::HashMap::new();
             for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
                 let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: ClientDomainResultRow = serde_json::from_slice(val.value())
+                let entry: QueryLogEntry = decode(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 if matches!(entry.result, QueryResult::Blocked | QueryResult::CachedBlock) {
                     continue;
@@ -786,37 +882,18 @@ impl LogStore for RedbDatabase {
     }
 
     fn get_dns_query_types(&self) -> Result<Vec<(u16, u64)>, DbError> {
-            let read_txn = self
-                .db
-                .read()
-                .begin_read()
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-            let table = match read_txn.open_table(TABLE_DNS_QUERIES) {
-                Ok(t) => t,
-                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-                Err(e) => return Err(DbError::Backend(e.to_string())),
-            };
-
-            let mut counts: std::collections::HashMap<u16, u64> = std::collections::HashMap::new();
-            for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-                let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: QTypeResultRow = serde_json::from_slice(val.value())
-                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                *counts.entry(u16::from(entry.qtype)).or_insert(0) += 1;
-            }
-
-            let mut vec: Vec<(u16, u64)> = counts.into_iter().collect();
-            vec.sort_by_key(|b| std::cmp::Reverse(b.1));
-            Ok(vec)
+        let mut counts = BTreeMap::<u16, u64>::new();
+        for bucket in load_recent_hourly_stats(self)? {
+            for (qtype, count) in bucket.qtypes { *counts.entry(qtype).or_default() += count; }
+        }
+        Ok(counts.into_iter().collect())
     }
 
     fn get_dns_query_rate(
         &self,
         since_secs: u64,
     ) -> Result<Vec<(u64, u64)>, DbError> {
-            let read_txn = self
-                .db
-                .read()
+            let read_txn = self.db
                 .begin_read()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             let table = match read_txn.open_table(TABLE_DNS_QUERIES) {
@@ -847,9 +924,7 @@ impl LogStore for RedbDatabase {
         since_secs: u64,
         bucket_secs: u64,
     ) -> Result<Vec<DnsQueryRateBucket>, DbError> {
-            let read_txn = self
-                .db
-                .read()
+            let read_txn = self.db
                 .begin_read()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
 
@@ -865,7 +940,7 @@ impl LogStore for RedbDatabase {
                     .map_err(|e| DbError::Backend(e.to_string()))?
                 {
                     let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                    if let Ok(b) = serde_json::from_slice::<DnsQueryRateBucket>(val.value()) {
+                    if let Ok(b) = decode::<DnsQueryRateBucket>(val.value()) {
                         buckets.push(b);
                     }
                 }
@@ -919,7 +994,7 @@ impl LogStore for RedbDatabase {
             {
                 let (k, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
                 let (ts, _) = k.value();
-                let entry: QueryRateDetailedRow = serde_json::from_slice(val.value())
+                let entry: QueryLogEntry = decode(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 let bucket_ts = (ts / bsize) * bsize;
                 let bucket = buckets.entry(bucket_ts).or_insert_with(|| DnsQueryRateBucket {
@@ -980,196 +1055,70 @@ impl LogStore for RedbDatabase {
             Ok(vec)
     }
 
-    fn get_dns_top_clients(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<(String, u64, u64)>, DbError> {
-            let read_txn = self
-                .db
-                .read()
-                .begin_read()
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-            let table = match read_txn.open_table(TABLE_DNS_QUERIES) {
-                Ok(t) => t,
-                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-                Err(e) => return Err(DbError::Backend(e.to_string())),
-            };
-
-            let mut counts: std::collections::HashMap<IpAddr, (u64, u64)> =
-                std::collections::HashMap::new();
-            for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-                let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: ClientResultRow = serde_json::from_slice(val.value())
-                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                let c = counts.entry(entry.src_ip).or_insert((0, 0));
-                c.0 += 1;
-                if matches!(entry.result, QueryResult::Blocked | QueryResult::CachedBlock) {
-                    c.1 += 1;
-                }
-            }
-
-            let mut vec: Vec<(IpAddr, (u64, u64))> = counts.into_iter().collect();
-            vec.sort_by_key(|b| std::cmp::Reverse((b.1).0));
-            vec.truncate(limit);
-            let result = vec
-                .into_iter()
-                .map(|(ip, (total, blocked))| (ip.to_string(), total, blocked))
-                .collect();
-            Ok(result)
+    fn get_dns_top_clients(&self, limit: usize) -> Result<Vec<(String, u64, u64)>, DbError> {
+        let mut counts = BTreeMap::<String, (u64, u64)>::new();
+        for bucket in load_recent_hourly_stats(self)? {
+            for (client, count) in bucket.clients { counts.entry(client).or_default().0 += count; }
+            for (client, count) in bucket.blocked_clients { counts.entry(client).or_default().1 += count; }
+        }
+        let mut rows: Vec<_> = counts.into_iter().map(|(client, (total, blocked))| (client, total, blocked)).collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        rows.truncate(limit);
+        Ok(rows)
     }
 
     fn get_dns_protocol_stats(&self) -> Result<Vec<(String, u64)>, DbError> {
-            let read_txn = self
-                .db
-                .read()
-                .begin_read()
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-            let table = match read_txn.open_table(TABLE_DNS_QUERIES) {
-                Ok(t) => t,
-                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-                Err(e) => return Err(DbError::Backend(e.to_string())),
-            };
-
-            let mut udp = 0u64;
-            let mut tcp = 0u64;
-            let mut dot = 0u64;
-            let mut doq = 0u64;
-            let mut doh = 0u64;
-            for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-                let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: ProtocolResultRow = serde_json::from_slice(val.value())
-                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                match entry.protocol {
-                    TransportProtocol::Udp => udp += 1,
-                    TransportProtocol::Tcp => tcp += 1,
-                    TransportProtocol::Tls => dot += 1,
-                    TransportProtocol::Quic => doq += 1,
-                    TransportProtocol::Https => doh += 1,
-                }
-            }
-
-            let vec = vec![
-                ("udp".to_string(), udp),
-                ("tcp".to_string(), tcp),
-                ("dot".to_string(), dot),
-                ("doq".to_string(), doq),
-                ("doh".to_string(), doh),
-            ];
-            Ok(vec)
+        let mut counts = BTreeMap::<String, u64>::new();
+        for bucket in load_recent_hourly_stats(self)? {
+            for (protocol, count) in bucket.protocols { *counts.entry(protocol).or_default() += count; }
+        }
+        Ok(counts.into_iter().collect())
     }
 
-    fn get_dns_top_blocked_domains(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<(String, u64)>, DbError> {
-            let read_txn = self
-                .db
-                .read()
-                .begin_read()
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-            let table = match read_txn.open_table(TABLE_DNS_QUERIES) {
-                Ok(t) => t,
-                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-                Err(e) => return Err(DbError::Backend(e.to_string())),
-            };
-
-            let mut counts: std::collections::HashMap<String, u64> =
-                std::collections::HashMap::new();
-            for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-                let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: DomainResultRow = serde_json::from_slice(val.value())
-                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                if matches!(entry.result, QueryResult::Blocked | QueryResult::CachedBlock) {
-                    if let Some(count) = counts.get_mut(entry.domain.as_ref()) {
-                        *count += 1;
-                    } else {
-                        counts.insert(entry.domain.to_string(), 1);
-                    }
-                }
-            }
-
-            let mut vec: Vec<(String, u64)> = counts.into_iter().collect();
-            vec.sort_by_key(|b| std::cmp::Reverse(b.1));
-            vec.truncate(limit);
-            Ok(vec)
+    fn get_dns_top_blocked_domains(&self, limit: usize) -> Result<Vec<(String, u64)>, DbError> {
+        let mut counts = BTreeMap::<String, u64>::new();
+        for bucket in load_recent_hourly_stats(self)? {
+            for (domain, count) in bucket.blocked_domains { *counts.entry(domain).or_default() += count; }
+        }
+        let mut rows: Vec<_> = counts.into_iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        rows.truncate(limit);
+        Ok(rows)
     }
 
-    fn get_dns_top_blocked_clients(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<(String, u64)>, DbError> {
-            let read_txn = self
-                .db
-                .read()
-                .begin_read()
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-            let table = match read_txn.open_table(TABLE_DNS_QUERIES) {
-                Ok(t) => t,
-                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-                Err(e) => return Err(DbError::Backend(e.to_string())),
-            };
-
-            let mut counts: std::collections::HashMap<IpAddr, u64> =
-                std::collections::HashMap::new();
-            for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-                let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: ClientResultRow = serde_json::from_slice(val.value())
-                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                if matches!(entry.result, QueryResult::Blocked | QueryResult::CachedBlock) {
-                    *counts.entry(entry.src_ip).or_insert(0) += 1;
-                }
-            }
-
-            let mut vec: Vec<(IpAddr, u64)> = counts.into_iter().collect();
-            vec.sort_by_key(|b| std::cmp::Reverse(b.1));
-            vec.truncate(limit);
-            let result = vec
-                .into_iter()
-                .map(|(ip, count)| (ip.to_string(), count))
-                .collect();
-            Ok(result)
+    fn get_dns_top_blocked_clients(&self, limit: usize) -> Result<Vec<(String, u64)>, DbError> {
+        let mut counts = BTreeMap::<String, u64>::new();
+        for bucket in load_recent_hourly_stats(self)? {
+            for (client, count) in bucket.blocked_clients { *counts.entry(client).or_default() += count; }
+        }
+        let mut rows: Vec<_> = counts.into_iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        rows.truncate(limit);
+        Ok(rows)
     }
 
-    fn get_dns_blocked_query_rate(
-        &self,
-        since_secs: u64,
-    ) -> Result<Vec<(u64, u64)>, DbError> {
-            let read_txn = self
-                .db
-                .read()
-                .begin_read()
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-            let table = match read_txn.open_table(TABLE_DNS_QUERIES) {
-                Ok(t) => t,
-                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-                Err(e) => return Err(DbError::Backend(e.to_string())),
-            };
-
-            let mut buckets: std::collections::HashMap<u64, u64> =
-                std::collections::HashMap::new();
-            for item in table
-                .range((since_secs, 0)..)
-                .map_err(|e| DbError::Backend(e.to_string()))?
-            {
-                let (k, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let entry: BlockedRateResultRow = serde_json::from_slice(val.value())
-                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                if matches!(entry.result, QueryResult::Blocked | QueryResult::CachedBlock) {
-                    let (timestamp, _) = k.value();
-                    let bucket = (timestamp / 30) * 30;
-                    *buckets.entry(bucket).or_insert(0) += 1;
-                }
-            }
-
-            let mut vec: Vec<(u64, u64)> = buckets.into_iter().collect();
-            vec.sort_by_key(|a| a.0);
-            Ok(vec)
+    fn get_dns_blocked_query_rate(&self, since_secs: u64) -> Result<Vec<(u64, u64)>, DbError> {
+        let cutoff = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default()
+            .as_secs().saturating_sub(since_secs);
+        let txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let table = match txn.open_table(TABLE_DNS_STATS_HOURLY) {
+            Ok(table) => table,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+            Err(error) => return Err(DbError::Backend(error.to_string())),
+        };
+        table.range((cutoff / 3600) * 3600..)
+            .map_err(|e| DbError::Backend(e.to_string()))?
+            .take(168)
+            .map(|row| {
+                let (key, value) = row.map_err(|e| DbError::Backend(e.to_string()))?;
+                let stats: HourlyDnsStats = decode(value.value())?;
+                Ok((key.value(), stats.blocked))
+            })
+            .collect()
     }
 
     fn load_dns_lifetime_stats(&self) -> Result<DnsLifetimeStats, DbError> {
-            let read_txn = self
-                .db
-                .read()
+            let read_txn = self.db
                 .begin_read()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             let table = match read_txn.open_table(TABLE_CONFIG) {
@@ -1183,7 +1132,7 @@ impl LogStore for RedbDatabase {
                 .map_err(|e| DbError::Backend(e.to_string()))?
             {
                 Some(val) => {
-                    let stats: DnsLifetimeStats = serde_json::from_slice(val.value())
+                    let stats: DnsLifetimeStats = decode(val.value())
                         .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                     Ok(stats)
                 }
@@ -1195,11 +1144,9 @@ impl LogStore for RedbDatabase {
         &self,
         stats: &DnsLifetimeStats,
     ) -> Result<(), DbError> {
-            let bytes = serde_json::to_vec(stats)
+            let bytes = encode(stats)
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-            let write_txn = self
-                .db
-                .read()
+            let write_txn = self.db
                 .begin_write()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             {

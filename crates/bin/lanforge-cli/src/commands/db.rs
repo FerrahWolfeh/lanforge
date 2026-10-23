@@ -11,8 +11,6 @@ pub struct DbArgs {
 
 #[derive(clap::Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum DbSubcommand {
-    /// Compact embedded redb database pages and reclaim unused disk space
-    Vacuum,
     /// Prune expired dynamic leases, offline temporary devices, and stale records
     Prune,
     /// Clean system and audit log buffers from persistent database storage
@@ -22,7 +20,6 @@ pub enum DbSubcommand {
 impl DbArgs {
     pub async fn execute(self, client: &LanforgeClient, printer: &Printer) -> Result<()> {
         let (resp, action_desc) = match self.subcommand {
-            DbSubcommand::Vacuum => (client.db_vacuum().await?, "compacted"),
             DbSubcommand::Prune => (client.db_prune().await?, "pruned"),
             DbSubcommand::Clean => (client.db_log_clean().await?, "log buffers cleaned"),
         };

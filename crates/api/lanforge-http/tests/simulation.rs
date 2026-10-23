@@ -9,16 +9,15 @@ use lanforge_http::config::HttpConfig;
 use lanforge_http::server::HttpService;
 use std::sync::Arc;
 
-async fn init_test_context() -> (LanforgeContext, Arc<LanforgeDb>, Arc<LogDb>) {
+async fn init_test_context() -> (LanforgeContext, Arc<lanforge_db::RedbDatabase>, Arc<LogDb>) {
     let bus = Arc::new(EventBus::new());
     let table = State::new();
-    let db = Arc::new(
-        LanforgeDb::open(&DatabaseConfig {
+    let db = LanforgeDb::open(&DatabaseConfig {
             config_path: "memory".to_string(),
             ..Default::default()
         })
-        .unwrap(),
-    );
+        .unwrap();
+    let db = Arc::new(db.redb().clone());
     let log_db = Arc::new(LogDb::open_in_memory());
     (LanforgeContext::new(bus, table, None), db, log_db)
 }

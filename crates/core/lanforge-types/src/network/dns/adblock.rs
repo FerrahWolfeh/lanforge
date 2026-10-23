@@ -497,7 +497,7 @@ pub enum FilterOrigin {
 pub struct FilterMatch {
     pub action: FilterAction,
     pub origin: FilterOrigin,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub rule: Option<Box<str>>,
     #[serde(default)]
     pub important: bool,

@@ -81,7 +81,7 @@ A global event listener consumes `GET /api/v1/events` using Server-Sent Events (
 | `/dhcp/server` | **DHCP Options** | Network bootloader options (PXE Option 66/67) and raw DHCP option code definitions. |
 | `/firewall` | **Firewall Orchestrator** | Stateful Netlink/nftables zones, inter-zone policy matrix, host rules, and unified port forwards / IPv6 pinholes. |
 | `/tftp` | **TFTP Boot Server** | PXE bootloader file serving over UDP port 69 and transfer statistics. |
-| `/system/database` | **Database Maintenance** | Embedded `redb` database stats, transactional backups, vacuuming, and retention pruning. |
+| `/system/database` | **Database Maintenance** | Embedded `redb` database stats, transactional backups, and retention pruning. |
 | `/system/events` | **System Events** | Central audit log of all system transitions and hardware events. |
 | `/system/users` | **User Accounts** | Router administrative accounts, password updates, and role-based permissions (`admin`, `operator`, `viewer`). |
 | `/system/keys` | **API Tokens** | Token generation, scope assignment, and lifecycle management. |

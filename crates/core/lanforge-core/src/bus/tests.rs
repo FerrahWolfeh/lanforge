@@ -296,8 +296,8 @@ async fn topic_routing_matrix() {
     assert!(sys_rx.try_recv().is_err());
 
     // 6. StorageEvent -> storage only
-    let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::DbVacuum));
-    assert!(matches!(stg_rx.try_recv().unwrap().event, LanforgeEvent::Storage(StorageEvent::DbVacuum)));
+    let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::DbLogClean));
+    assert!(matches!(stg_rx.try_recv().unwrap().event, LanforgeEvent::Storage(StorageEvent::DbLogClean)));
     assert!(sys_rx.try_recv().is_err());
     assert!(dev_rx.try_recv().is_err());
 }

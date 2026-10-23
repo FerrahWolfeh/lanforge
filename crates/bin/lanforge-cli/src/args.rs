@@ -87,7 +87,7 @@ pub enum Command {
     /// Manage network traffic shaping (`SQM` / `CAKE`), `NIC` hardware tuning, and live rates
     #[command(alias = "qos")]
     Traffic(TrafficArgs),
-    /// Embedded database maintenance (vacuum, prune, clean)
+    /// Embedded database maintenance (prune, clean)
     Db(DbArgs),
     /// Inspect, export, import, and validate system configuration
     Config(ConfigArgs),

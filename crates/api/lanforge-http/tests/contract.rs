@@ -58,6 +58,7 @@ async fn make_state(with_auth: bool) -> AppState {
         })
         .unwrap(),
     );
+    let api_db = Arc::new(db.redb().clone());
     let log_db = Arc::new(LogDb::open_in_memory());
     let ctx = LanforgeContext::new(bus, table, None);
 
@@ -83,7 +84,7 @@ async fn make_state(with_auth: bool) -> AppState {
             ..Default::default()
         }),
         ctx,
-        db,
+        db: api_db,
         log_db,
         auth: Arc::new(AuthManager::new()),
         start_time: Instant::now(),
@@ -898,12 +899,6 @@ async fn test_db_and_cache_operations() {
 
     // (description, method, path, expected_status)
     let cases: &[(&str, &str, &str, StatusCode)] = &[
-        (
-            "db/vacuum",
-            "POST",
-            "/api/v1/db/vacuum",
-            StatusCode::NO_CONTENT,
-        ),
         (
             "db/prune",
             "POST",

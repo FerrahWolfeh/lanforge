@@ -4,23 +4,6 @@ use lanforge_types::storage::{StorageQuery, StorageQueryResult};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl ClientContext {
-    pub async fn handle_db_vacuum(&self) -> Response {
-        let Some(storage) = self.ctx.storage_handle() else {
-            return Response::Error {
-                error: "Storage service handle is not available".to_string(),
-            };
-        };
-
-        if let Err(e) = storage.send_query(StorageQuery::Vacuum).await {
-            return Response::Error {
-                error: format!("Database VACUUM failed: {e}"),
-            };
-        }
-        Response::Success(SimpleSuccess {
-            message: "Database VACUUM completed successfully".to_string(),
-        })
-    }
-
     pub async fn handle_db_log_clean(&self) -> Response {
         let Some(storage) = self.ctx.storage_handle() else {
             return Response::Error {

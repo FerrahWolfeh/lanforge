@@ -490,6 +490,35 @@ impl Bootstrapper {
             State::new()
         });
 
+        match log_db.load_runtime_devices() {
+            Ok(runtime_devices) => {
+                for mut runtime in runtime_devices {
+                    if let Some(persisted) = table.devices.get(&runtime.mac) {
+                        let persistent = persisted.as_ref();
+                        runtime.hostname = persistent.hostname.clone();
+                        runtime.origin = persistent.origin;
+                        runtime.managed_at = persistent.managed_at;
+                        runtime.duid.clone_from(&persistent.duid);
+                        runtime.class = persistent.class;
+                        runtime.boot_file.clone_from(&persistent.boot_file);
+                        runtime.ignore_dns_log = persistent.ignore_dns_log;
+                        runtime.ignored_log_domains.clone_from(&persistent.ignored_log_domains);
+                        if matches!(persistent.v4, lanforge_types::device::IPv4State::Dynamic(_)) {
+                            runtime.v4 = persistent.v4.clone();
+                        }
+                        runtime.v6.retain(|state| !matches!(state, lanforge_types::device::IPv6State::Dynamic(_)));
+                        runtime.v6.extend(persistent.v6.iter().filter(|state|
+                            matches!(state, lanforge_types::device::IPv6State::Dynamic(_))
+                        ).cloned());
+                        runtime.v6_prefixes.clone_from(&persistent.v6_prefixes);
+                    }
+                    runtime.status = lanforge_types::device::DeviceStatus::Offline;
+                    table.insert_device(runtime.mac, runtime);
+                }
+            }
+            Err(error) => warn!(%error, "Could not hydrate volatile device observations"),
+        }
+
         // 2c. Check/reconcile DHCPv4 topology sanity against physical interface and host identity
         #[cfg(feature = "dhcp")]
         if is_provisioned {

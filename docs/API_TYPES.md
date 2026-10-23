@@ -171,7 +171,6 @@ classDiagram
 
 | Method | Parameters | Return Type | Notes |
 | :--- | :--- | :--- | :--- |
-| `db_vacuum` | None | `SimpleSuccess` | Runs compact / `VACUUM` on the persistent database. |
 | `db_prune` | None | `SimpleSuccess` | Removes old history and log entries per retention policy. |
 | `db_log_clean` | None | `SimpleSuccess` | Clears the transient system event log from the database. |
 | `db_reset` | None | `SimpleSuccess` | **DANGEROUS.** Wipes the entire database. |

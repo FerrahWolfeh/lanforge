@@ -151,7 +151,7 @@ pub struct Device {
     #[serde(default)]
     pub ignore_dns_log: bool,
     /// Specific domains or wildcards (e.g. `*.sonarr.tv`) to suppress from DNS query logs for this device.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub ignored_log_domains: Vec<String>,
 }
 

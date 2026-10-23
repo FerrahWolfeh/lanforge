@@ -169,7 +169,6 @@ lanforge traffic rates                 # Real-time RX/TX rates per interface
 ### `db`
 Performs maintenance on the embedded `redb` database.
 ```bash
-lanforge db vacuum                     # Compact database and reclaim fragmented storage
 lanforge db prune                      # Prune historical query logs and event logs
 lanforge db clean                      # Clear transient runtime event logs
 ```

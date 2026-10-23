@@ -25,8 +25,8 @@ use lanforge_core::bus::{
     TrafficEvent,
 };
 use lanforge_db_core::{
-    AdblockStore, ApiTokenStore, DeviceStore, DhcpConfigStore, DnsStore, DnsUpstreamStore,
-    FirewallConfigStore, LogStore, PppoeConfigStore, RaConfigStore, TrafficConfigStore, UserStore,
+    AdblockStore, ApiTokenStore, DeviceStore, DnsStore, DnsUpstreamStore, LogStore, RaConfigStore,
+    UserStore,
 };
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::adblock::AdblockRuleEntry;
@@ -151,6 +151,46 @@ impl DbWorker {
             error!("Failed to flush DNS lifetime stats: {e}");
         }
 
+        // Config events can arrive many times during one worker tick. Read the
+        // latest context snapshot and commit every dirty section in one txn.
+        if !self.dirty_sections.is_empty() {
+            let result = db.write(|tx| {
+                if self.dirty_sections.contains(SectionSet::DHCP) {
+                    tx.set_config("dhcp_v4_pools", &self.ctx.get_dhcp_v4_pools())?;
+                    tx.set_config("dhcp_v6_pools", &self.ctx.get_dhcp_v6_pools())?;
+                    tx.set_config("dhcp_options", &self.ctx.get_dhcp_options())?;
+                }
+                if self.dirty_sections.contains(SectionSet::RA) {
+                    tx.set_config("ra_prefixes", &self.ctx.get_ra_prefixes())?;
+                    tx.set_config("ra_rdnss", &self.ctx.get_ra_rdnss())?;
+                    tx.set_config("ra_dnssl", &self.ctx.get_ra_dnssl())?;
+                }
+                if self.dirty_sections.contains(SectionSet::FIREWALL)
+                    && let Some(config) = self.ctx.get_firewall_config()
+                {
+                    tx.set_config("firewall_config", &config)?;
+                }
+                if self.dirty_sections.contains(SectionSet::TRAFFIC)
+                    && let Some(config) = self.ctx.get_traffic_config()
+                {
+                    tx.set_config("traffic_config", &config)?;
+                }
+                if self.dirty_sections.contains(SectionSet::PPPOE)
+                    && let Some(config) = self.ctx.get_pppoe_config()
+                {
+                    tx.set_config("pppoe_config", &config)?;
+                }
+                Ok(())
+            });
+            match result {
+                Ok(()) => {}
+                Err(e) => {
+                    error!("Failed to flush config snapshot: {e}");
+                    had_error = true;
+                }
+            }
+        }
+
         // 3. Flush Main DB
         if !self.dirty && self.dirty_macs.is_empty() && self.purged_macs.is_empty() {
             metrics.last_flush_ts.store(now, Ordering::Relaxed);
@@ -163,12 +203,16 @@ impl DbWorker {
             // Full flush requested (rare)
             let snapshot = self.ctx.snapshot_for_persistence();
             let len = snapshot.devices.len();
-            db.save_snapshot(&snapshot).map(|()| len)
+            let devices: Vec<_> = snapshot.devices.values().cloned().collect();
+            db.save_snapshot(&snapshot)
+                .and_then(|()| log_db.replace_runtime_devices(&devices))
+                .map(|()| len)
         } else {
             // Incremental flush (common)
-            let (lease_devices, base_devices) = self.ctx.with_state(|state| {
+            let (lease_devices, base_devices, missing_devices) = self.ctx.with_state(|state| {
                 let mut lease = Vec::new();
                 let mut base = Vec::new();
+                let mut missing = Vec::new();
                 for mac in &self.dirty_macs {
                     if let Some(device) = state.devices.get(mac).cloned() {
                         if self.dirty_lease_macs.contains(mac) {
@@ -176,15 +220,21 @@ impl DbWorker {
                         } else {
                             base.push(device);
                         }
+                    } else {
+                        missing.push(*mac);
                     }
                 }
-                (lease, base)
+                (lease, base, missing)
             });
 
-            let purges: Vec<MacAddr> = self.purged_macs.iter().copied().collect();
+            let mut purge_set = self.purged_macs.clone();
+            purge_set.extend(missing_devices);
+            let purges: Vec<MacAddr> = purge_set.into_iter().collect();
             let count = lease_devices.len() + base_devices.len() + purges.len();
 
-            let result = db.batch_sync_devices(&lease_devices, &base_devices, &purges);
+            let runtime_upserts: Vec<_> = lease_devices.iter().chain(&base_devices).cloned().collect();
+            let result = db.batch_sync_devices(&lease_devices, &base_devices, &purges)
+                .and_then(|()| log_db.sync_runtime_devices(&runtime_upserts, &purges));
             result.map(|()| count)
         };
 
@@ -474,10 +524,6 @@ impl DbWorker {
             }
             StorageQuery::SetProvisioned(p) => {
                 db.set_provisioned(p).map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::Vacuum => {
-                db.vacuum().map_err(|e| e.to_string())?;
                 Ok(StorageQueryResult::Success)
             }
             StorageQuery::PruneZombies => {
@@ -831,7 +877,14 @@ impl AsyncService for DbWorker {
             ctx.set_storage_handle(StorageHandle::new(tx));
             rx
         });
-        let mut bus_rx = ctx.bus().subscribe();
+        let mut system_rx = ctx.bus().subscribe_system();
+        let mut network_rx = ctx.bus().subscribe_network();
+        let mut device_rx = ctx.bus().subscribe_device();
+        let mut dns_rx = ctx.bus().subscribe_dns();
+        let mut storage_rx_events = ctx.bus().subscribe_storage();
+        let mut pppoe_rx = ctx.bus().subscribe_pppoe();
+        let mut firewall_rx = ctx.bus().subscribe_firewall();
+        let mut traffic_rx = ctx.bus().subscribe_traffic();
         let mut flush_interval: Interval = interval(Duration::from_secs(self.cfg.flush_interval));
         let mut last_prune = tokio::time::Instant::now();
 
@@ -879,7 +932,18 @@ impl AsyncService for DbWorker {
                 }
 
                 // Event handling
-                res = bus_rx.recv() => {
+                (topic, res) = async {
+                    tokio::select! {
+                        res = system_rx.recv() => (lanforge_core::bus::EventTopic::System, res),
+                        res = network_rx.recv() => (lanforge_core::bus::EventTopic::Network, res),
+                        res = device_rx.recv() => (lanforge_core::bus::EventTopic::Device, res),
+                        res = dns_rx.recv() => (lanforge_core::bus::EventTopic::Dns, res),
+                        res = storage_rx_events.recv() => (lanforge_core::bus::EventTopic::Storage, res),
+                        res = pppoe_rx.recv() => (lanforge_core::bus::EventTopic::Pppoe, res),
+                        res = firewall_rx.recv() => (lanforge_core::bus::EventTopic::Firewall, res),
+                        res = traffic_rx.recv() => (lanforge_core::bus::EventTopic::Traffic, res),
+                    }
+                } => {
                     let Ok(timed_event) = res else {
                         if let Err(RecvError::Lagged(n)) = res {
                             warn!(service = "DbWorker", lost = n, "Event bus lagged");
@@ -887,6 +951,19 @@ impl AsyncService for DbWorker {
                         }
                         break;
                     };
+                    let mirrored = matches!(
+                        (&timed_event.event, topic),
+                        (LanforgeEvent::System(SystemEvent::Shutdown), topic)
+                            if topic != lanforge_core::bus::EventTopic::System
+                    ) || matches!(
+                        (&timed_event.event, topic),
+                        (LanforgeEvent::System(SystemEvent::ConfigRaChanged), lanforge_core::bus::EventTopic::System)
+                            | (LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed | SystemEvent::ConfigDhcpV6Changed | SystemEvent::ConfigDhcpOptionsChanged), lanforge_core::bus::EventTopic::System)
+                    ) || matches!(
+                        (&timed_event.event, topic),
+                        (LanforgeEvent::Pppoe(_), lanforge_core::bus::EventTopic::Dns)
+                    );
+                    if mirrored { continue; }
                     // 1. Record in log database if loggable
                     if timed_event.is_loggable() {
                         self.log_buffer.push(timed_event.clone());
@@ -937,11 +1014,6 @@ impl AsyncService for DbWorker {
                         }
                         LanforgeEvent::Storage(StorageEvent::TableDirty) => {
                             self.dirty = true;
-                        }
-                        LanforgeEvent::Storage(StorageEvent::DbVacuum) => {
-                            if let Err(e) = db.vacuum() {
-                                error!("Vacuum error: {e}");
-                            }
                         }
                         LanforgeEvent::Storage(StorageEvent::DbLogClean) => {
                             if let Err(e) = log_db.clear_logs() {
@@ -1007,59 +1079,26 @@ impl AsyncService for DbWorker {
                         }
                         LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed) => {
                             self.dirty_sections |= SectionSet::DHCP;
-                            let pools = ctx.get_dhcp_v4_pools();
-                            if let Err(e) = db.save_dhcp_v4_pools(&pools) {
-                                error!("Failed to persist DHCPv4 pools: {e}");
-                            }
                         }
                         LanforgeEvent::System(SystemEvent::ConfigDhcpV6Changed) => {
                             self.dirty_sections |= SectionSet::DHCP;
-                            let pools = ctx.get_dhcp_v6_pools();
-                            if let Err(e) = db.save_dhcp_v6_pools(&pools) {
-                                error!("Failed to persist DHCPv6 pools: {e}");
-                            }
                         }
                         LanforgeEvent::System(SystemEvent::ConfigDhcpOptionsChanged) => {
                             self.dirty_sections |= SectionSet::DHCP;
-                            let opts = ctx.get_dhcp_options();
-                            if let Err(e) = db.save_dhcp_options(&opts) {
-                                error!("Failed to persist DHCP options: {e}");
-                            }
                         }
                         LanforgeEvent::System(SystemEvent::ConfigRaChanged) => {
                             self.dirty_sections |= SectionSet::RA;
-                            let prefixes = ctx.get_ra_prefixes();
-                            let rdnss = ctx.get_ra_rdnss();
-                            let dnssl = ctx.get_ra_dnssl();
-                            let _ = db.save_ra_prefixes(&prefixes);
-                            let _ = db.save_ra_rdnss(&rdnss);
-                            let _ = db.save_ra_dnssl(&dnssl);
                         }
                         LanforgeEvent::Firewall(FirewallEvent::RulesetChanged) => {
                             self.dirty_sections |= SectionSet::FIREWALL;
-                            if let Some(cfg) = ctx.get_firewall_config()
-                                && let Err(e) = db.save_firewall_config(&cfg)
-                            {
-                                error!("Failed to persist Firewall config: {e}");
-                            }
                         }
                         LanforgeEvent::Traffic(event) => {
                             if matches!(**event, TrafficEvent::RulesetChanged) {
                                 self.dirty_sections |= SectionSet::TRAFFIC;
-                                if let Some(cfg) = ctx.get_traffic_config()
-                                    && let Err(e) = db.save_traffic_config(&cfg)
-                                {
-                                    error!("Failed to persist Traffic config: {e}");
-                                }
                             }
                         }
                         LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => {
                             self.dirty_sections |= SectionSet::PPPOE;
-                            if let Some(cfg) = ctx.get_pppoe_config()
-                                && let Err(e) = db.save_pppoe_config(&cfg)
-                            {
-                                error!("Failed to persist PPPoE config: {e}");
-                            }
                         }
                     });
 

@@ -1,6 +1,6 @@
 //! `FirewallConfigStore` implementation for `RedbDatabase`.
 
-use crate::RedbDatabase;
+use crate::{RedbDatabase, decode, encode};
 use crate::tables::TABLE_CONFIG;
 use lanforge_db_core::{DbError, FirewallConfigStore};
 use lanforge_types::network::firewall::FirewallConfig;
@@ -8,9 +8,7 @@ use redb::ReadableDatabase;
 
 impl FirewallConfigStore for RedbDatabase {
     fn load_firewall_config(&self) -> Result<Option<FirewallConfig>, DbError> {
-        let read_txn = self
-            .db
-            .read()
+        let read_txn = self.db
             .begin_read()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_CONFIG) {
@@ -24,7 +22,7 @@ impl FirewallConfigStore for RedbDatabase {
             .map_err(|e| DbError::Backend(e.to_string()))?
         {
             Some(val) => {
-                let cfg: FirewallConfig = serde_json::from_slice(val.value())
+                let cfg: FirewallConfig = decode(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 Ok(Some(cfg))
             }
@@ -33,12 +31,10 @@ impl FirewallConfigStore for RedbDatabase {
     }
 
     fn save_firewall_config(&self, cfg: &FirewallConfig) -> Result<(), DbError> {
-        let bytes = serde_json::to_vec(cfg)
+        let bytes = encode(cfg)
             .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
-        let write_txn = self
-            .db
-            .read()
+        let write_txn = self.db
             .begin_write()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         {

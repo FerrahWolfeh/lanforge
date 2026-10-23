@@ -255,14 +255,6 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn db_vacuum(&self) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_db_vacuum().await {
-            Response::Success(s) => Ok(s),
-            Response::Error { error } => Err(Self::map_error(error)),
-            _ => Err(RpcCallError::InvalidResponseType),
-        }
-    }
-
     async fn db_log_clean(&self) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_db_log_clean().await {
             Response::Success(s) => Ok(s),

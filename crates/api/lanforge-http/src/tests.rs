@@ -86,13 +86,12 @@ async fn test_handle_login() {
     let bus = Arc::new(EventBus::new());
     let core_state = CoreState::new();
     let ctx = LanforgeContext::new(bus, core_state, None);
-    let db = Arc::new(
-        LanforgeDb::open(&DatabaseConfig {
-            config_path: "memory".to_string(),
-            ..Default::default()
-        })
-        .unwrap(),
-    );
+    let db = LanforgeDb::open(&DatabaseConfig {
+        config_path: "memory".to_string(),
+        ..Default::default()
+    })
+    .unwrap();
+    let db = Arc::new(db.redb().clone());
     let log_db = Arc::new(LogDb::open_in_memory());
 
     // 1. Test when auth is disabled (auth_password_hash = None)

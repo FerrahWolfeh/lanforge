@@ -87,7 +87,7 @@ async fn test_uds_log_streaming_filter() {
 
     // Populate history logs using TimedEvent::new() to automatically assign timestamps
     let log1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::ReloadConfig)); // matches ConfigReloaded
-    let log2 = TimedEvent::new(LanforgeEvent::Storage(StorageEvent::DbVacuum)); // filtered out
+    let log2 = TimedEvent::new(LanforgeEvent::Storage(StorageEvent::DbLogClean)); // filtered out
     let log1_clone = log1.clone();
     let log2_clone = log2.clone();
 
@@ -145,7 +145,7 @@ async fn test_uds_log_streaming_filter() {
 
     // 3. Publish dynamic live events to the bus
     let live1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::ReloadConfig)); // matches filter
-    let live2 = TimedEvent::new(LanforgeEvent::Storage(StorageEvent::DbVacuum)); // filtered out
+    let live2 = TimedEvent::new(LanforgeEvent::Storage(StorageEvent::DbLogClean)); // filtered out
 
     let _ = client_ctx.ctx.bus().publish(live1.event.clone());
     let _ = client_ctx.ctx.bus().publish(live2.event.clone());

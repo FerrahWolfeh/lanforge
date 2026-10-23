@@ -13,7 +13,6 @@ use crate::server::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/vacuum", post(handle_vacuum))
         .route("/prune", post(handle_prune))
         .route("/log-clean", post(handle_log_clean))
         .route("/stats", get(handle_stats))
@@ -30,11 +29,6 @@ async fn handle_stats(State(state): State<AppState>) -> impl IntoResponse {
         "last_error": metrics.last_error.load(Ordering::Relaxed),
     });
     (StatusCode::OK, Json(metrics_json)).into_response()
-}
-
-async fn handle_vacuum(State(state): State<AppState>) -> impl IntoResponse {
-    let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_db_vacuum().await, Success => NoContent)
 }
 
 async fn handle_prune(State(state): State<AppState>) -> impl IntoResponse {

@@ -81,7 +81,6 @@ pub enum StorageQuery {
     SetProvisioned(bool),
 
     // --- Maintenance ---
-    Vacuum,
     PruneZombies,
     PruneLogs { before: i64 },
     ClearLogs,

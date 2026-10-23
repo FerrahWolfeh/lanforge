@@ -3,11 +3,14 @@
 use lanforge_core::bus::TimedEvent;
 use lanforge_db_core::{DbError, DnsQueryRateBucket, LogStore};
 use lanforge_db_redb::RedbDatabase;
+use lanforge_types::device::Device;
+use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType};
 use lanforge_types::network::{QueryLogEntry, QueryResult};
 use std::net::IpAddr;
 use std::ops::Deref;
 use std::path::Path;
+use std::path::PathBuf;
 
 /// Compatibility alias for log database error.
 pub type LogBufError = DbError;
@@ -22,7 +25,12 @@ impl LogDb {
     /// Opens the runtime log database at the given path or URL.
     /// If path is empty or contains ":memory:", opens in-memory.
     pub fn open(url_or_path: &str) -> Result<Self, DbError> {
-        let is_memory = url_or_path.contains(":memory:") || url_or_path.is_empty();
+        let normalized = url_or_path.trim().to_ascii_lowercase();
+        let is_memory = normalized.is_empty()
+            || normalized == "memory"
+            || normalized == "none"
+            || normalized == "mock"
+            || normalized.contains(":memory:");
         if is_memory {
             return Ok(Self::open_in_memory());
         }
@@ -34,16 +42,29 @@ impl LogDb {
             .unwrap_or(url_or_path);
         let path_str = path_str.split('?').next().unwrap_or(path_str);
 
-        match RedbDatabase::open(path_str) {
-            Ok(db) => Ok(Self { inner: db }),
-            Err(DbError::Validation(e)) => Err(DbError::Validation(e)),
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to open runtime redb at {path_str}: {e}. Falling back to in-memory mode."
-                );
-                Ok(Self::open_in_memory())
+        let requested = PathBuf::from(path_str);
+        let mut candidates = vec![requested.clone(), PathBuf::from("/run/lanforge/runtime.redb")];
+        if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
+            candidates.push(PathBuf::from(xdg).join("lanforge/runtime.redb"));
+        }
+        candidates.push(PathBuf::from("/tmp/lanforge/runtime.redb"));
+        candidates.dedup();
+
+        let mut last_error = None;
+        for candidate in candidates {
+            match RedbDatabase::open_volatile(&candidate) {
+                Ok(db) => {
+                    warn_if_runtime_filesystem_is_persistent(candidate.parent().unwrap_or(Path::new("/")));
+                    return Ok(Self { inner: db });
+                }
+                Err(error) => {
+                    tracing::warn!(path = %candidate.display(), %error, "Runtime database path unavailable; trying fallback");
+                    last_error = Some(error);
+                }
             }
         }
+        tracing::warn!(error = ?last_error, "All runtime database paths failed; using in-memory mode");
+        Ok(Self::open_in_memory())
     }
 
     /// Opens an isolated in-memory runtime log database without file persistence.
@@ -78,6 +99,26 @@ impl LogDb {
     }
 }
 
+fn warn_if_runtime_filesystem_is_persistent(directory: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(path) = std::ffi::CString::new(directory.as_os_str().as_bytes()) else { return; };
+    // Linux TMPFS_MAGIC and RAMFS_MAGIC values from linux/magic.h.
+    const TMPFS_MAGIC: libc::c_long = 0x0102_1994;
+    const RAMFS_MAGIC: libc::c_long = 0x8584_58f6u32 as libc::c_long;
+    // SAFETY: `path` is a NUL-terminated pathname and `stats` points to writable storage.
+    let mut stats = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    let result = unsafe { libc::statfs(path.as_ptr(), stats.as_mut_ptr()) };
+    if result != 0 {
+        tracing::warn!(path = %directory.display(), error = %std::io::Error::last_os_error(), "Could not inspect runtime database filesystem; flash wear is possible");
+        return;
+    }
+    // SAFETY: statfs initialized stats after returning success.
+    let fs = unsafe { stats.assume_init() };
+    if fs.f_type != TMPFS_MAGIC && fs.f_type != RAMFS_MAGIC {
+        tracing::warn!(path = %directory.display(), filesystem_magic = fs.f_type, "Runtime database is not on tmpfs/ramfs; writes may increase flash wear");
+    }
+}
+
 impl Deref for LogDb {
     type Target = RedbDatabase;
 
@@ -87,6 +128,22 @@ impl Deref for LogDb {
 }
 
 impl LogStore for LogDb {
+    fn load_runtime_devices(&self) -> Result<Vec<Device>, DbError> {
+        self.inner.load_runtime_devices()
+    }
+
+    fn sync_runtime_devices(
+        &self,
+        upserts: &[std::sync::Arc<Device>],
+        deletes: &[MacAddr],
+    ) -> Result<(), DbError> {
+        self.inner.sync_runtime_devices(upserts, deletes)
+    }
+
+    fn replace_runtime_devices(&self, upserts: &[std::sync::Arc<Device>]) -> Result<(), DbError> {
+        self.inner.replace_runtime_devices(upserts)
+    }
+
     fn record_log(&self, timed_event: &TimedEvent) -> Result<(), DbError> {
         self.inner.record_log(timed_event)
     }

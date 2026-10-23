@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use crate::RedbDatabase;
+use crate::{RedbDatabase, decode, encode};
 use crate::tables::{
     TABLE_ADBLOCK_RULES, TABLE_ADBLOCK_URLS, TABLE_CONFIG, TABLE_DNS_ALLOWLIST, TABLE_DNS_REWRITES,
     TABLE_DNS_UPSTREAMS,
@@ -19,7 +19,7 @@ use redb::{ReadableDatabase, ReadableTable};
 
 impl DnsStore for RedbDatabase {
     fn load_dns_rewrites(&self) -> Result<Vec<RewriteRule>, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_DNS_REWRITES) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
@@ -29,7 +29,7 @@ impl DnsStore for RedbDatabase {
         let mut rules = Vec::new();
         for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
             let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-            let rule: RewriteRule = serde_json::from_slice(val.value())
+            let rule: RewriteRule = decode(val.value())
                 .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
             rules.push(rule);
         }
@@ -43,7 +43,7 @@ impl DnsStore for RedbDatabase {
         rtype: DnsRecordType,
         answer: &RewriteAnswer,
     ) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let table = write_txn
                 .open_table(TABLE_DNS_REWRITES)
@@ -52,7 +52,7 @@ impl DnsStore for RedbDatabase {
             let mut existing_id = None;
             for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
                 let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let r: RewriteRule = serde_json::from_slice(val.value())
+                let r: RewriteRule = decode(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 if r.domain.eq_ignore_ascii_case(domain) && r.rtype == rtype {
                     existing_id = Some(id.value());
@@ -74,7 +74,7 @@ impl DnsStore for RedbDatabase {
                 answer: answer.clone(),
             };
 
-            let bytes = serde_json::to_vec(&rule)
+            let bytes = encode(&rule)
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
             let mut table = write_txn
@@ -90,7 +90,7 @@ impl DnsStore for RedbDatabase {
     }
 
     fn delete_dns_rewrite_by_id(&self, id: i64) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_DNS_REWRITES)
@@ -103,7 +103,7 @@ impl DnsStore for RedbDatabase {
     }
 
     fn clear_dns_rewrites(&self) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let _ = write_txn.delete_table(TABLE_DNS_REWRITES);
         }
@@ -112,7 +112,7 @@ impl DnsStore for RedbDatabase {
     }
 
     fn load_dns_allowlist(&self) -> Result<Vec<(i64, String)>, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_DNS_ALLOWLIST) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
@@ -129,7 +129,7 @@ impl DnsStore for RedbDatabase {
     }
 
     fn add_dns_allowlist(&self, domain: &str) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let id = Self::next_id_in_txn(&write_txn, "dns_allowlist")?;
             let mut table = write_txn
@@ -145,7 +145,7 @@ impl DnsStore for RedbDatabase {
     }
 
     fn remove_dns_allowlist(&self, domain: &str) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_DNS_ALLOWLIST)
@@ -158,7 +158,7 @@ impl DnsStore for RedbDatabase {
     }
 
     fn clear_dns_allowlist(&self) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let _ = write_txn.delete_table(TABLE_DNS_ALLOWLIST);
         }
@@ -167,7 +167,7 @@ impl DnsStore for RedbDatabase {
     }
 
     fn load_dns_reverse_resolvers(&self) -> Result<Vec<DnsReverseResolver>, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_CONFIG) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
@@ -176,7 +176,7 @@ impl DnsStore for RedbDatabase {
 
         match table.get("dns_reverse_resolvers").map_err(|e| DbError::Backend(e.to_string()))? {
             Some(val) => {
-                let res: Vec<DnsReverseResolver> = serde_json::from_slice(val.value())
+                let res: Vec<DnsReverseResolver> = decode(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 Ok(res)
             }
@@ -196,10 +196,10 @@ impl DnsStore for RedbDatabase {
             resolver: resolver.clone(),
         });
 
-        let bytes = serde_json::to_vec(&resolvers)
+        let bytes = encode(&resolvers)
             .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_CONFIG)
@@ -220,10 +220,10 @@ impl DnsStore for RedbDatabase {
         let mut resolvers = self.load_dns_reverse_resolvers()?;
         resolvers.retain(|r| r.subnet != *subnet);
 
-        let bytes = serde_json::to_vec(&resolvers)
+        let bytes = encode(&resolvers)
             .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_CONFIG)
@@ -238,7 +238,7 @@ impl DnsStore for RedbDatabase {
     }
 
     fn clear_dns_reverse_resolvers(&self) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_CONFIG)
@@ -251,25 +251,11 @@ impl DnsStore for RedbDatabase {
     }
 }
 
-#[derive(serde::Deserialize)]
-#[serde(untagged)]
-enum StoredSourceTuple {
-    V2(String, AdblockUrlKind, bool, AdblockSourceFormat),
-    V1(String, AdblockUrlKind, bool),
-}
-
-impl StoredSourceTuple {
-    fn into_parts(self) -> (String, AdblockUrlKind, bool, AdblockSourceFormat) {
-        match self {
-            Self::V2(url, kind, enabled, format) => (url, kind, enabled, format),
-            Self::V1(url, kind, enabled) => (url, kind, enabled, AdblockSourceFormat::Auto),
-        }
-    }
-}
+type StoredSourceTuple = (String, AdblockUrlKind, bool, AdblockSourceFormat);
 
 impl AdblockStore for RedbDatabase {
     fn load_adblock_config(&self) -> Result<AdblockDbConfig, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_CONFIG) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(AdblockDbConfig::default()),
@@ -278,7 +264,7 @@ impl AdblockStore for RedbDatabase {
 
         match table.get("adblock_config").map_err(|e| DbError::Backend(e.to_string()))? {
             Some(val) => {
-                let cfg: AdblockDbConfig = serde_json::from_slice(val.value())
+                let cfg: AdblockDbConfig = decode(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 Ok(cfg)
             }
@@ -290,10 +276,10 @@ impl AdblockStore for RedbDatabase {
         &self,
         config: &AdblockDbConfig,
     ) -> Result<(), DbError> {
-        let bytes = serde_json::to_vec(config)
+        let bytes = encode(config)
             .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_CONFIG)
@@ -348,7 +334,7 @@ impl AdblockStore for RedbDatabase {
     fn load_adblock_urls(
         &self,
     ) -> Result<Vec<(i64, String, AdblockUrlKind, AdblockSourceFormat)>, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_ADBLOCK_URLS) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
@@ -358,9 +344,8 @@ impl AdblockStore for RedbDatabase {
         let mut urls = Vec::new();
         for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
             let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-            let (url, kind, _, format) = serde_json::from_slice::<StoredSourceTuple>(val.value())
-                .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?
-                .into_parts();
+            let (url, kind, _, format) = decode::<StoredSourceTuple>(val.value())
+                .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
             urls.push((id.value(), url, kind, format));
         }
         urls.sort_by_key(|(id, _, _, _)| *id);
@@ -373,10 +358,10 @@ impl AdblockStore for RedbDatabase {
         kind: AdblockUrlKind,
         format: AdblockSourceFormat,
     ) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let id = Self::next_id_in_txn(&write_txn, "adblock_urls")?;
-            let bytes = serde_json::to_vec(&(url, kind, true, format))
+            let bytes = encode(&(url, kind, true, format))
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
             let mut table = write_txn
@@ -392,7 +377,7 @@ impl AdblockStore for RedbDatabase {
     }
 
     fn remove_adblock_url(&self, url: &str) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = match write_txn.open_table(TABLE_ADBLOCK_URLS) {
                 Ok(t) => t,
@@ -404,7 +389,7 @@ impl AdblockStore for RedbDatabase {
                 let mut found = None;
                 for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
                     let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                    let (u, _, _): (String, AdblockUrlKind, bool) = serde_json::from_slice(val.value())
+                    let (u, _, _, _): StoredSourceTuple = decode(val.value())
                         .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                     if u == url {
                         found = Some(id.value());
@@ -423,7 +408,7 @@ impl AdblockStore for RedbDatabase {
     }
 
     fn clear_adblock_urls(&self) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let _ = write_txn.delete_table(TABLE_ADBLOCK_URLS);
         }
@@ -434,7 +419,7 @@ impl AdblockStore for RedbDatabase {
     fn load_adblock_sources(
         &self,
     ) -> Result<Vec<(i64, String, AdblockUrlKind, bool, AdblockSourceFormat)>, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_ADBLOCK_URLS) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
@@ -444,9 +429,8 @@ impl AdblockStore for RedbDatabase {
         let mut urls = Vec::new();
         for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
             let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-            let (url, kind, enabled, format) = serde_json::from_slice::<StoredSourceTuple>(val.value())
-                .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?
-                .into_parts();
+            let (url, kind, enabled, format) = decode::<StoredSourceTuple>(val.value())
+                .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
             urls.push((id.value(), url, kind, enabled, format));
         }
         urls.sort_by_key(|(id, _, _, _, _)| *id);
@@ -459,10 +443,10 @@ impl AdblockStore for RedbDatabase {
         kind: AdblockUrlKind,
         format: AdblockSourceFormat,
     ) -> Result<i64, DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         let id = {
             let id = Self::next_id_in_txn(&write_txn, "adblock_urls")?;
-            let bytes = serde_json::to_vec(&(url, kind, true, format))
+            let bytes = encode(&(url, kind, true, format))
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
             let mut table = write_txn
@@ -479,7 +463,7 @@ impl AdblockStore for RedbDatabase {
     }
 
     fn remove_adblock_source(&self, id: i64) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_ADBLOCK_URLS)
@@ -496,7 +480,7 @@ impl AdblockStore for RedbDatabase {
         id: i64,
         enabled: bool,
     ) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_ADBLOCK_URLS)
@@ -504,17 +488,17 @@ impl AdblockStore for RedbDatabase {
 
             let updated = {
                 if let Some(val) = table.get(id).map_err(|e| DbError::Backend(e.to_string()))? {
-                    let (url, kind, _): (String, AdblockUrlKind, bool) =
-                        serde_json::from_slice(val.value())
+                    let (url, kind, _, format): StoredSourceTuple =
+                        decode(val.value())
                             .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                    Some((url, kind, enabled))
+                    Some((url, kind, enabled, format))
                 } else {
                     None
                 }
             };
 
             if let Some(entry) = updated {
-                let bytes = serde_json::to_vec(&entry)
+                let bytes = encode(&entry)
                     .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
                 table
                     .insert(id, bytes.as_slice())
@@ -532,7 +516,7 @@ impl AdblockStore for RedbDatabase {
     fn load_adblock_rules(
         &self,
     ) -> Result<Vec<(i64, String, AdblockRuleAction, bool)>, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_ADBLOCK_RULES) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
@@ -543,7 +527,7 @@ impl AdblockStore for RedbDatabase {
         for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
             let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
             let (domain, action, enabled): (String, AdblockRuleAction, bool) =
-                serde_json::from_slice(val.value())
+                decode(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
             rules.push((id.value(), domain, action, enabled));
         }
@@ -556,10 +540,10 @@ impl AdblockStore for RedbDatabase {
         domain: &str,
         action: AdblockRuleAction,
     ) -> Result<i64, DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         let id = {
             let id = Self::next_id_in_txn(&write_txn, "adblock_rules")?;
-            let bytes = serde_json::to_vec(&(domain, action, true))
+            let bytes = encode(&(domain, action, true))
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
             let mut table = write_txn
@@ -576,7 +560,7 @@ impl AdblockStore for RedbDatabase {
     }
 
     fn remove_adblock_rule(&self, id: i64) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_ADBLOCK_RULES)
@@ -593,7 +577,7 @@ impl AdblockStore for RedbDatabase {
         id: i64,
         enabled: bool,
     ) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_ADBLOCK_RULES)
@@ -602,7 +586,7 @@ impl AdblockStore for RedbDatabase {
             let updated = {
                 if let Some(val) = table.get(id).map_err(|e| DbError::Backend(e.to_string()))? {
                     let (domain, action, _): (String, AdblockRuleAction, bool) =
-                        serde_json::from_slice(val.value())
+                        decode(val.value())
                             .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                     Some((domain, action, enabled))
                 } else {
@@ -611,7 +595,7 @@ impl AdblockStore for RedbDatabase {
             };
 
             if let Some(entry) = updated {
-                let bytes = serde_json::to_vec(&entry)
+                let bytes = encode(&entry)
                     .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
                 table
@@ -624,7 +608,7 @@ impl AdblockStore for RedbDatabase {
     }
 
     fn clear_adblock_rules(&self) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let _ = write_txn.delete_table(TABLE_ADBLOCK_RULES);
         }
@@ -635,7 +619,7 @@ impl AdblockStore for RedbDatabase {
 
 impl DnsUpstreamStore for RedbDatabase {
     fn load_dns_upstreams(&self) -> Result<Vec<DnsUpstreamEntry>, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_DNS_UPSTREAMS) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
@@ -645,7 +629,7 @@ impl DnsUpstreamStore for RedbDatabase {
         let mut upstreams = Vec::new();
         for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
             let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-            let entry: DnsUpstreamEntry = serde_json::from_slice(val.value())
+            let entry: DnsUpstreamEntry = decode(val.value())
                 .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
             upstreams.push(entry);
         }
@@ -659,7 +643,7 @@ impl DnsUpstreamStore for RedbDatabase {
         protocol: UpstreamProtocol,
         domain: Option<&str>,
     ) -> Result<i64, DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         let id = {
             let id = Self::next_id_in_txn(&write_txn, "dns_upstreams")?;
             let entry = DnsUpstreamEntry {
@@ -669,7 +653,7 @@ impl DnsUpstreamStore for RedbDatabase {
                 domain: domain.map(ToString::to_string),
             };
 
-            let bytes = serde_json::to_vec(&entry)
+            let bytes = encode(&entry)
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
             let mut table = write_txn
@@ -691,7 +675,7 @@ impl DnsUpstreamStore for RedbDatabase {
         protocol: UpstreamProtocol,
         domain: Option<&str>,
     ) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = match write_txn.open_table(TABLE_DNS_UPSTREAMS) {
                 Ok(t) => t,
@@ -703,7 +687,7 @@ impl DnsUpstreamStore for RedbDatabase {
                 let mut found = None;
                 for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
                     let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                    let entry: DnsUpstreamEntry = serde_json::from_slice(val.value())
+                    let entry: DnsUpstreamEntry = decode(val.value())
                         .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                     let domain_match = match domain {
                         Some(d) => entry.domain.as_deref() == Some(d),
@@ -726,7 +710,7 @@ impl DnsUpstreamStore for RedbDatabase {
     }
 
     fn clear_dns_upstreams(&self) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let _ = write_txn.delete_table(TABLE_DNS_UPSTREAMS);
         }
@@ -735,7 +719,7 @@ impl DnsUpstreamStore for RedbDatabase {
     }
 
     fn load_dns_upstream_mode(&self) -> Result<Option<UpstreamMode>, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_CONFIG) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
@@ -757,7 +741,7 @@ impl DnsUpstreamStore for RedbDatabase {
 
     fn save_dns_upstream_mode(&self, mode: UpstreamMode) -> Result<(), DbError> {
         let mode_str = mode.to_string();
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_CONFIG)

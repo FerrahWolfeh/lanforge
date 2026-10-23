@@ -1,36 +1,26 @@
 <script lang="ts">
 	import * as Card from "$lib/components/ui/card";
-	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
-	import HardDriveIcon from "@lucide/svelte/icons/hard-drive";
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import FileTextIcon from "@lucide/svelte/icons/file-text";
 	import CheckIcon from "@lucide/svelte/icons/check";
 	import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
 
 	let {
-		vacuuming = false,
 		pruning = false,
 		logCleaning = false,
-		lastVacuumTime = null,
 		lastPruneTime = null,
 		lastLogCleanTime = null,
 		formatTimeAgo = () => "Never",
-		isInMemory = false,
-		onVacuum = () => {},
 		onPrune = () => {},
 		onLogClean = () => {},
 		onOpenWipeDialog = () => {},
 	}: {
-		vacuuming?: boolean;
 		pruning?: boolean;
 		logCleaning?: boolean;
-		lastVacuumTime?: number | null;
 		lastPruneTime?: number | null;
 		lastLogCleanTime?: number | null;
 		formatTimeAgo?: (secs: number | null | undefined) => string;
-		isInMemory?: boolean;
-		onVacuum?: () => void;
 		onPrune?: () => void;
 		onLogClean?: () => void;
 		onOpenWipeDialog?: () => void;
@@ -38,50 +28,7 @@
 </script>
 
 <div class="flex flex-col gap-6">
-	<div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-		<!-- Redb Storage Compaction -->
-		<Card.Root class="flex flex-col justify-between">
-			<Card.Header>
-				<div class="flex items-center justify-between">
-					<Card.Title class="flex items-center gap-2 text-base font-semibold">
-						<HardDriveIcon class="size-4 text-primary" />
-						Storage Compaction
-					</Card.Title>
-					{#if isInMemory}
-						<Badge variant="outline" class="text-[10px] text-muted-foreground font-mono">In-Memory</Badge>
-					{/if}
-				</div>
-				<Card.Description class="text-xs leading-relaxed mt-1">
-					{#if isInMemory}
-						Redb is not used in volatile in-memory mode. Compaction does not apply as state resides purely in RAM.
-					{:else}
-						Redb automatically reuses free pages. Compaction rewrites the database file on disk to reclaim unused space after bulk deletions.
-					{/if}
-				</Card.Description>
-			</Card.Header>
-			<Card.Content class="pt-0 space-y-3">
-				{#if !isInMemory && lastVacuumTime}
-					<p class="text-[11px] text-emerald-500 flex items-center gap-1 font-medium">
-						<CheckIcon class="size-3" />
-						Executed {formatTimeAgo(Math.floor(Date.now() / 1000) - lastVacuumTime)}
-					</p>
-				{/if}
-				<Button
-					variant="outline"
-					size="sm"
-					class="w-full gap-2 text-xs"
-					onclick={onVacuum}
-					disabled={vacuuming || isInMemory}
-				>
-					<HardDriveIcon class={vacuuming ? "animate-spin size-4" : "size-4"} />
-					{#if isInMemory}
-						Not Applicable
-					{:else}
-						{vacuuming ? "Compacting..." : "Compact Database"}
-					{/if}
-				</Button>
-			</Card.Content>
-		</Card.Root>
+	<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
 
 		<!-- Prune -->
 		<Card.Root class="flex flex-col justify-between">

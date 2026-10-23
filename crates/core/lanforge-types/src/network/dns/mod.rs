@@ -288,10 +288,10 @@ pub struct QueryLogEntry {
     /// Transport protocol used.
     pub protocol: TransportProtocol,
     /// Adblock / filter match attribution.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub filter: Option<Box<FilterMatch>>,
     /// In-flight batch correlation ID when query was coalesced or was a coalesce leader.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub coalesce_id: Option<u64>,
 }
 

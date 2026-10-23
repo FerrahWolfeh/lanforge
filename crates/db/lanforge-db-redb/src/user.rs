@@ -1,6 +1,6 @@
 //! UserStore and ApiTokenStore implementations for `RedbDatabase`.
 
-use crate::RedbDatabase;
+use crate::{RedbDatabase, decode, encode};
 use crate::tables::{TABLE_API_TOKENS, TABLE_USERS};
 use lanforge_db_core::{ApiTokenEntry, ApiTokenStore, DbError, UserEntry, UserStore};
 use lanforge_types::auth::{ApiScopes, UserRole};
@@ -14,7 +14,7 @@ impl UserStore for RedbDatabase {
         role: UserRole,
         now: i64,
     ) -> Result<UserEntry, DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         let entry = {
             let table = write_txn
                 .open_table(TABLE_USERS)
@@ -36,7 +36,7 @@ impl UserStore for RedbDatabase {
                 last_login: None,
             };
 
-            let bytes = serde_json::to_vec(&entry)
+            let bytes = encode(&entry)
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
             let mut table = write_txn
@@ -58,7 +58,7 @@ impl UserStore for RedbDatabase {
         &self,
         username: &str,
     ) -> Result<Option<UserEntry>, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_USERS) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
@@ -68,7 +68,7 @@ impl UserStore for RedbDatabase {
         let val = table.get(username).map_err(|e| DbError::Backend(e.to_string()))?;
         match val {
             Some(guard) => {
-                let entry: UserEntry = serde_json::from_slice(guard.value())
+                let entry: UserEntry = decode(guard.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 Ok(Some(entry))
             }
@@ -77,7 +77,7 @@ impl UserStore for RedbDatabase {
     }
 
     fn get_user_by_id(&self, id: i64) -> Result<Option<UserEntry>, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_USERS) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
@@ -86,7 +86,7 @@ impl UserStore for RedbDatabase {
 
         for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
             let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-            let entry: UserEntry = serde_json::from_slice(val.value())
+            let entry: UserEntry = decode(val.value())
                 .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
             if entry.id == id {
                 return Ok(Some(entry));
@@ -96,7 +96,7 @@ impl UserStore for RedbDatabase {
     }
 
     fn list_users(&self) -> Result<Vec<UserEntry>, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_USERS) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
@@ -106,7 +106,7 @@ impl UserStore for RedbDatabase {
         let mut users = Vec::new();
         for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
             let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-            let entry: UserEntry = serde_json::from_slice(val.value())
+            let entry: UserEntry = decode(val.value())
                 .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
             users.push(entry);
         }
@@ -120,7 +120,7 @@ impl UserStore for RedbDatabase {
         new_hash: &str,
         now: i64,
     ) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_USERS)
@@ -132,14 +132,14 @@ impl UserStore for RedbDatabase {
                     .map_err(|e| DbError::Backend(e.to_string()))?
                     .ok_or_else(|| DbError::NotFound(format!("User '{username}' not found")))?;
 
-                let mut entry: UserEntry = serde_json::from_slice(val.value())
+                let mut entry: UserEntry = decode(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 entry.password_hash = new_hash.to_string();
                 entry.updated_at = now;
                 entry
             };
 
-            let bytes = serde_json::to_vec(&entry)
+            let bytes = encode(&entry)
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
             table
@@ -156,7 +156,7 @@ impl UserStore for RedbDatabase {
         new_role: UserRole,
         now: i64,
     ) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_USERS)
@@ -168,14 +168,14 @@ impl UserStore for RedbDatabase {
                     .map_err(|e| DbError::Backend(e.to_string()))?
                     .ok_or_else(|| DbError::NotFound(format!("User '{username}' not found")))?;
 
-                let mut entry: UserEntry = serde_json::from_slice(val.value())
+                let mut entry: UserEntry = decode(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 entry.role = new_role;
                 entry.updated_at = now;
                 entry
             };
 
-            let bytes = serde_json::to_vec(&entry)
+            let bytes = encode(&entry)
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
             table
@@ -191,7 +191,7 @@ impl UserStore for RedbDatabase {
         username: &str,
         now: i64,
     ) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_USERS)
@@ -203,13 +203,13 @@ impl UserStore for RedbDatabase {
                     .map_err(|e| DbError::Backend(e.to_string()))?
                     .ok_or_else(|| DbError::NotFound(format!("User '{username}' not found")))?;
 
-                let mut entry: UserEntry = serde_json::from_slice(val.value())
+                let mut entry: UserEntry = decode(val.value())
                     .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                 entry.last_login = Some(now);
                 entry
             };
 
-            let bytes = serde_json::to_vec(&entry)
+            let bytes = encode(&entry)
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
             table
@@ -221,7 +221,7 @@ impl UserStore for RedbDatabase {
     }
 
     fn delete_user(&self, username: &str) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_USERS)
@@ -236,7 +236,7 @@ impl UserStore for RedbDatabase {
     }
 
     fn count_users(&self) -> Result<i64, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_USERS) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(0),
@@ -256,7 +256,7 @@ impl ApiTokenStore for RedbDatabase {
         expires_at: Option<i64>,
         now: i64,
     ) -> Result<i64, DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         let id = {
             let id = Self::next_id_in_txn(&write_txn, "api_tokens")?;
             let entry = ApiTokenEntry {
@@ -269,7 +269,7 @@ impl ApiTokenStore for RedbDatabase {
                 expires_at,
             };
 
-            let bytes = serde_json::to_vec(&entry)
+            let bytes = encode(&entry)
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
             let mut table = write_txn
@@ -293,7 +293,7 @@ impl ApiTokenStore for RedbDatabase {
     ) -> Result<Option<(String, ApiScopes)>, DbError> {
         // Fast read check first: avoid write lock when token invalid, expired, or recently updated
         let token_info = {
-            let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+            let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
             let table = match read_txn.open_table(TABLE_API_TOKENS) {
                 Ok(t) => t,
                 Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
@@ -302,7 +302,7 @@ impl ApiTokenStore for RedbDatabase {
 
             match table.get(token).map_err(|e| DbError::Backend(e.to_string()))? {
                 Some(guard) => {
-                    let entry: ApiTokenEntry = serde_json::from_slice(guard.value())
+                    let entry: ApiTokenEntry = decode(guard.value())
                         .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                     if entry.expires_at.is_some_and(|exp| exp < now) {
                         return Ok(None);
@@ -318,7 +318,7 @@ impl ApiTokenStore for RedbDatabase {
             return Ok(Some((token_info.name, token_info.scopes)));
         }
 
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         let res = {
             let mut table = match write_txn.open_table(TABLE_API_TOKENS) {
                 Ok(t) => t,
@@ -328,7 +328,7 @@ impl ApiTokenStore for RedbDatabase {
 
             let mut entry = match table.get(token).map_err(|e| DbError::Backend(e.to_string()))? {
                 Some(guard) => {
-                    let entry: ApiTokenEntry = serde_json::from_slice(guard.value())
+                    let entry: ApiTokenEntry = decode(guard.value())
                         .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                     entry
                 }
@@ -340,7 +340,7 @@ impl ApiTokenStore for RedbDatabase {
             }
 
             entry.last_used = Some(now);
-            let bytes = serde_json::to_vec(&entry)
+            let bytes = encode(&entry)
                 .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
 
             table
@@ -355,7 +355,7 @@ impl ApiTokenStore for RedbDatabase {
     }
 
     fn delete_api_token(&self, token: &str) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_API_TOKENS)
@@ -373,7 +373,7 @@ impl ApiTokenStore for RedbDatabase {
         &self,
         id_or_name: &str,
     ) -> Result<(), DbError> {
-        let write_txn = self.db.read().begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
         let removed = {
             let mut table = match write_txn.open_table(TABLE_API_TOKENS) {
                 Ok(t) => t,
@@ -385,7 +385,7 @@ impl ApiTokenStore for RedbDatabase {
                 let mut found = None;
                 for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
                     let (k, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                    let entry: ApiTokenEntry = serde_json::from_slice(val.value())
+                    let entry: ApiTokenEntry = decode(val.value())
                         .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
                     if entry.name == id_or_name || entry.id.to_string() == id_or_name {
                         found = Some(k.value().to_string());
@@ -411,7 +411,7 @@ impl ApiTokenStore for RedbDatabase {
     }
 
     fn load_api_tokens(&self) -> Result<Vec<ApiTokenEntry>, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_API_TOKENS) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
@@ -421,7 +421,7 @@ impl ApiTokenStore for RedbDatabase {
         let mut tokens = Vec::new();
         for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
             let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-            let entry: ApiTokenEntry = serde_json::from_slice(val.value())
+            let entry: ApiTokenEntry = decode(val.value())
                 .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
             tokens.push(entry);
         }
@@ -433,7 +433,7 @@ impl ApiTokenStore for RedbDatabase {
         &self,
         id_or_name: &str,
     ) -> Result<Option<(String, ApiScopes, Option<i64>)>, DbError> {
-        let read_txn = self.db.read().begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_API_TOKENS) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
@@ -442,7 +442,7 @@ impl ApiTokenStore for RedbDatabase {
 
         for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
             let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-            let entry: ApiTokenEntry = serde_json::from_slice(val.value())
+            let entry: ApiTokenEntry = decode(val.value())
                 .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
             if entry.name == id_or_name || entry.id.to_string() == id_or_name {
                 return Ok(Some((entry.name, entry.scopes, entry.expires_at)));

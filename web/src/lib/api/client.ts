@@ -595,7 +595,6 @@ export const dhcpReconcile = async (): Promise<DhcpReconcileResponse> => {
 // ---------------------------------------------------------------------------
 
 export const dbStats = () => get<DbMetrics>('/db/stats');
-export const dbVacuum = () => post<void>('/db/vacuum');
 export const dbPrune = () => post<void>('/db/prune');
 export const dbLogClean = () => post<void>('/db/log-clean');
 export const dbReset = () => del<void>('/db', undefined, { 'x-confirm': 'wipe' });

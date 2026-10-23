@@ -87,8 +87,7 @@ impl TimedEvent {
             ),
             LanforgeEvent::Storage(e) => matches!(
                 e,
-                StorageEvent::DbVacuum
-                    | StorageEvent::DbLogClean
+                StorageEvent::DbLogClean
                     | StorageEvent::DbPrune
                     | StorageEvent::DbReset
                     | StorageEvent::DbResetCompleted

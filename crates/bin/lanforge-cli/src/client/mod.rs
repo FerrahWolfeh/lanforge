@@ -1517,15 +1517,6 @@ impl LanforgeClient {
         rpc.firewall_abort(tx_id).await.map_err(|e| eyre!("{e}"))
     }
 
-    pub async fn db_vacuum(&self) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_post("/db/vacuum", &serde_json::json!({})).await;
-        }
-        let mut rpc = self.connect_rpc().await?;
-        rpc.db_vacuum().await.map_err(|e| eyre!("{e}"))
-    }
-
     pub async fn db_prune(&self) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {

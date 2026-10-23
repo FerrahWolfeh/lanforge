@@ -6,8 +6,7 @@ use anyhow::{Context, Result};
 use lanforge_api::api::SystemConfigExport;
 use lanforge_api::config_file::{ConfigFile, Section, section_hashes, write_toml_atomically};
 use lanforge_db::{
-    AdblockStore, DhcpConfigStore, DnsStore, DnsUpstreamStore, FirewallConfigStore, LanforgeDb,
-    PppoeConfigStore, RaConfigStore, TrafficConfigStore,
+    DhcpConfigStore, FirewallConfigStore, LanforgeDb, PppoeConfigStore, TrafficConfigStore,
 };
 use tracing::info;
 
@@ -55,9 +54,8 @@ pub fn sync_boot_config(
     let has_hashes = db.has_config_section_hashes()?;
     if !has_hashes {
         info!("[config] Initializing configuration hashes in database metadata.");
-        for sec in Section::ALL.iter().filter(|s| s.is_dynamic()) {
-            apply_section_to_db(db, *sec, &file_cfg)?;
-        }
+        let sections: Vec<_> = Section::ALL.iter().copied().filter(Section::is_dynamic).collect();
+        apply_sections_to_db(db, &sections, &file_cfg)?;
         db.set_config_section_hashes(&hash_strings)?;
         return Ok(file_cfg);
     }
@@ -101,9 +99,7 @@ pub fn sync_boot_config(
             info!("[config] Skipping config backup because config write-back is disabled.");
         }
 
-        for sec in offline_edits {
-            apply_section_to_db(db, sec, &file_cfg)?;
-        }
+        apply_sections_to_db(db, &offline_edits, &file_cfg)?;
 
         // Store new hashes only after all edited sections have been applied.
         db.set_config_section_hashes(&hash_strings)?;
@@ -178,100 +174,72 @@ fn sync_section_from_db_to_config_file(db: &LanforgeDb, sec: Section, cfg: &mut 
     }
 }
 
-fn apply_section_to_db(db: &LanforgeDb, sec: Section, cfg: &ConfigFile) -> Result<()> {
+fn apply_sections_to_db(db: &LanforgeDb, sections: &[Section], cfg: &ConfigFile) -> Result<()> {
     let export = SystemConfigExport::from(cfg);
-    match sec {
-        Section::Dhcp => {
-            #[cfg(feature = "dhcp")]
-            if let Some(ref pools) = export.dhcp_v4_pools {
-                db.save_dhcp_v4_pools(pools)?;
-            }
-            #[cfg(feature = "dhcp")]
-            if let Some(ref pools) = export.dhcp_v6_pools {
-                db.save_dhcp_v6_pools(pools)?;
-            }
-            #[cfg(feature = "dhcp")]
-            if let Some(ref opts) = export.dhcp_options {
-                db.save_dhcp_options(opts)?;
-            }
-        }
-        Section::Ra => {
-            #[cfg(feature = "ra")]
-            if let Some(ref prefixes) = export.ra_prefixes {
-                db.save_ra_prefixes(prefixes)?;
-            }
-            #[cfg(feature = "ra")]
-            if let Some(ref rdnss) = export.ra_rdnss {
-                db.save_ra_rdnss(rdnss)?;
-            }
-            #[cfg(feature = "ra")]
-            if let Some(ref dnssl) = export.ra_dnssl {
-                db.save_ra_dnssl(dnssl)?;
-            }
-        }
-        Section::Dns => {
-            #[cfg(feature = "dns")]
-            {
-                db.clear_dns_upstreams()?;
-                for up in &export.dns_upstreams {
-                    db.add_dns_upstream(up.addr, up.protocol, up.domain.as_deref())?;
-                }
-                db.clear_dns_rewrites()?;
-                for rw in &export.dns_rewrites {
-                    db.upsert_dns_rewrite(&rw.domain, rw.rtype, &rw.answer)?;
-                }
-            }
-        }
-        Section::Adblock => {
-            #[cfg(feature = "adblock")]
-            {
-                db.set_adblock_config_value(
-                    "enabled",
-                    &export.dns_adblock_config.enabled.to_string(),
-                )?;
-                db.set_adblock_config_value(
-                    "blocking_mode",
-                    &export.dns_adblock_config.blocking_mode.to_string(),
-                )?;
-                db.clear_adblock_urls()?;
-                for u in &export.dns_adblock_urls {
-                    db.add_adblock_url(&u.url, u.kind, u.format)?;
-                }
-                db.clear_dns_allowlist()?;
-                for a in &export.dns_allowlist {
-                    db.add_dns_allowlist(&a.domain)?;
-                }
-                if let Some(ref rules) = export.dns_adblock_rules {
-                    db.clear_adblock_rules()?;
-                    for r in rules {
-                        db.add_adblock_rule(&r.domain, r.action)?;
+    let has_dns_adblock = sections.iter().any(|sec| matches!(sec, Section::Dns | Section::Adblock));
+
+    db.write(|tx| {
+        for sec in sections {
+            match sec {
+                Section::Dhcp => {
+                    #[cfg(feature = "dhcp")]
+                    {
+                        if let Some(ref pools) = export.dhcp_v4_pools { tx.set_config("dhcp_v4_pools", pools)?; }
+                        if let Some(ref pools) = export.dhcp_v6_pools { tx.set_config("dhcp_v6_pools", pools)?; }
+                        if let Some(ref opts) = export.dhcp_options { tx.set_config("dhcp_options", opts)?; }
                     }
                 }
+                Section::Ra => {
+                    #[cfg(feature = "ra")]
+                    {
+                        if let Some(ref prefixes) = export.ra_prefixes { tx.set_config("ra_prefixes", prefixes)?; }
+                        if let Some(ref rdnss) = export.ra_rdnss { tx.set_config("ra_rdnss", rdnss)?; }
+                        if let Some(ref dnssl) = export.ra_dnssl { tx.set_config("ra_dnssl", dnssl)?; }
+                    }
+                }
+                Section::Firewall => {
+                    #[cfg(feature = "nft")]
+                    if let Some(ref firewall) = export.firewall_config {
+                        tx.set_config("firewall_config", firewall)?;
+                    }
+                }
+                Section::Traffic => {
+                    #[cfg(feature = "traffic")]
+                    if let Some(ref traffic) = export.traffic_config {
+                        tx.set_config("traffic_config", traffic)?;
+                    }
+                }
+                Section::Pppoe => {
+                    #[cfg(feature = "pppoe")]
+                    if let Some(ref pppoe) = export.pppoe_config {
+                        tx.set_config("pppoe_config", pppoe)?;
+                    }
+                }
+                _ => {}
             }
         }
-        Section::Firewall =>
-        {
-            #[cfg(feature = "nft")]
-            if let Some(ref fw) = export.firewall_config {
-                db.save_firewall_config(fw)?;
+        if has_dns_adblock {
+            #[cfg(any(feature = "dns", feature = "adblock"))]
+            {
+                let upstreams: Vec<_> = export.dns_upstreams.iter()
+                    .map(|entry| (entry.addr, entry.protocol, entry.domain.clone()))
+                    .collect();
+                let allowlist: Vec<_> = export.dns_allowlist.iter()
+                    .map(|entry| entry.domain.clone())
+                    .collect();
+                let rules = export.dns_adblock_rules.as_deref().unwrap_or_default();
+                tx.replace_dns_adblock(
+                    &export.dns_adblock_config,
+                    &export.dns_rewrites,
+                    &upstreams,
+                    &allowlist,
+                    &export.dns_adblock_urls,
+                    rules,
+                )?;
             }
         }
-        Section::Traffic =>
-        {
-            #[cfg(feature = "traffic")]
-            if let Some(ref tr) = export.traffic_config {
-                db.save_traffic_config(tr)?;
-            }
-        }
-        Section::Pppoe =>
-        {
-            #[cfg(feature = "pppoe")]
-            if let Some(ref pppoe) = export.pppoe_config {
-                db.save_pppoe_config(pppoe)?;
-            }
-        }
-        _ => {}
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 

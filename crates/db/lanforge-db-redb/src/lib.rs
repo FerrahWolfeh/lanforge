@@ -8,20 +8,151 @@ pub mod log;
 pub mod tables;
 pub mod user;
 
-use lanforge_db_core::DbError;
-use parking_lot::RwLock;
-use redb::{Database, ReadableDatabase, ReadableTable};
+use lanforge_db_core::{DbError, DnsUpstreamEntry};
+use lanforge_types::network::dns::AdblockUrlEntry;
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
+use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use redb::{Database, Durability, ReadableDatabase, ReadableTable, WriteTransaction};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64};
-use tables::{TABLE_CONFIG, TABLE_DEVICES, TABLE_META, TABLE_USERS};
+use tables::*;
 
 pub use log::BlockedQueryEntry;
+pub use self::DbWriteTx as WriteTx;
+
+const VALUE_CODEC_VERSION: u8 = 1;
+
+pub(crate) fn encode<T: serde::Serialize + ?Sized>(value: &T) -> Result<Vec<u8>, DbError> {
+    let mut bytes = Vec::with_capacity(128);
+    encode_into(value, &mut bytes)?;
+    Ok(bytes)
+}
+
+pub(crate) fn encode_into<T: serde::Serialize + ?Sized>(value: &T, bytes: &mut Vec<u8>) -> Result<(), DbError> {
+    let scratch = std::mem::take(bytes);
+    let mut scratch = scratch;
+    scratch.clear();
+    scratch.push(VALUE_CODEC_VERSION);
+    *bytes = postcard::to_extend(value, scratch)
+        .map_err(|e| DbError::Backend(format!("postcard encode failed: {e}")))?;
+    Ok(())
+}
+
+pub(crate) fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, DbError> {
+    let Some((&version, payload)) = bytes.split_first() else {
+        return Err(DbError::Validation("empty encoded database value".into()));
+    };
+    if version != VALUE_CODEC_VERSION {
+        return Err(DbError::Validation(format!(
+            "unsupported database value version {version}"
+        )));
+    }
+    postcard::from_bytes(payload)
+        .map_err(|e| DbError::Backend(format!("postcard decode failed: {e}")))
+}
+
+/// A group of mutations committed as one redb transaction.
+pub struct DbWriteTx<'a> {
+    txn: &'a redb::WriteTransaction,
+}
+
+impl DbWriteTx<'_> {
+    /// Stores one typed configuration value under its stable database key.
+    pub fn set_config<T: serde::Serialize + ?Sized>(
+        &mut self,
+        key: &str,
+        value: &T,
+    ) -> Result<(), DbError> {
+        let bytes = encode(value)?;
+        self.txn.open_table(TABLE_CONFIG)
+            .map_err(|e| DbError::Backend(e.to_string()))?
+            .insert(key, bytes.as_slice())
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Removes one configuration value within this transaction.
+    pub fn remove_config(&mut self, key: &str) -> Result<(), DbError> {
+        if let Ok(mut table) = self.txn.open_table(TABLE_CONFIG) {
+            table.remove(key).map_err(|e| DbError::Backend(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    /// Atomically replaces imported DNS and Adblock configuration across all
+    /// related tables. IDs are reassigned because they are database-local.
+    pub fn replace_dns_adblock(
+        &mut self,
+        adblock: &AdblockDbConfig,
+        rewrites: &[RewriteRule],
+        upstreams: &[(std::net::SocketAddr, UpstreamProtocol, Option<String>)],
+        allowlist: &[String],
+        urls: &[AdblockUrlEntry],
+        rules: &[AdblockRuleEntry],
+    ) -> Result<(), DbError> {
+        self.set_config("adblock_config", adblock)?;
+
+        let _ = self.txn.delete_table(TABLE_DNS_REWRITES);
+        for rule in rewrites {
+            let id = RedbDatabase::next_id_in_txn(self.txn, "dns_rewrites")?;
+            let mut rule = rule.clone();
+            rule.id = Some(id);
+            let bytes = encode(&rule)?;
+            self.txn.open_table(TABLE_DNS_REWRITES)
+                .map_err(|e| DbError::Backend(e.to_string()))?
+                .insert(id, bytes.as_slice())
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+        }
+
+        let _ = self.txn.delete_table(TABLE_DNS_UPSTREAMS);
+        for (addr, protocol, domain) in upstreams {
+            let id = RedbDatabase::next_id_in_txn(self.txn, "dns_upstreams")?;
+            let entry = DnsUpstreamEntry { id, addr: *addr, protocol: *protocol, domain: domain.clone() };
+            let bytes = encode(&entry)?;
+            self.txn.open_table(TABLE_DNS_UPSTREAMS)
+                .map_err(|e| DbError::Backend(e.to_string()))?
+                .insert(id, bytes.as_slice())
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+        }
+
+        let _ = self.txn.delete_table(TABLE_DNS_ALLOWLIST);
+        for domain in allowlist {
+            let id = RedbDatabase::next_id_in_txn(self.txn, "dns_allowlist")?;
+            self.txn.open_table(TABLE_DNS_ALLOWLIST)
+                .map_err(|e| DbError::Backend(e.to_string()))?
+                .insert(domain.as_str(), id)
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+        }
+
+        let _ = self.txn.delete_table(TABLE_ADBLOCK_URLS);
+        for url in urls {
+            let id = RedbDatabase::next_id_in_txn(self.txn, "adblock_urls")?;
+            let bytes = encode(&(url.url.as_str(), url.kind, true, url.format))?;
+            self.txn.open_table(TABLE_ADBLOCK_URLS)
+                .map_err(|e| DbError::Backend(e.to_string()))?
+                .insert(id, bytes.as_slice())
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+        }
+
+        let _ = self.txn.delete_table(TABLE_ADBLOCK_RULES);
+        for rule in rules {
+            let id = RedbDatabase::next_id_in_txn(self.txn, "adblock_rules")?;
+            let bytes = encode(&(rule.domain.as_str(), rule.action, rule.enabled))?;
+            self.txn.open_table(TABLE_ADBLOCK_RULES)
+                .map_err(|e| DbError::Backend(e.to_string()))?
+                .insert(id, bytes.as_slice())
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+        }
+        Ok(())
+    }
+}
 
 #[derive(Clone)]
 pub struct RedbDatabase {
-    pub(crate) db: Arc<RwLock<Database>>,
+    pub(crate) db: Arc<Database>,
+    pub(crate) volatile: bool,
     pub(crate) path: Option<PathBuf>,
     pub(crate) log_seq: Arc<AtomicU64>,
     pub(crate) last_prune: Arc<AtomicI64>,
@@ -37,18 +168,29 @@ impl fmt::Debug for RedbDatabase {
 
 impl RedbDatabase {
     /// Current database schema version.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+    /// Independent schema version for volatile runtime tables.
+    pub const RUNTIME_SCHEMA_VERSION: u32 = 1;
 
     /// Opens or creates the `redb` database at the specified file path.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
-        let p = path.as_ref();
+        Self::open_with_durability(path.as_ref(), false)
+    }
+
+    /// Opens a database whose writes are volatile and do not request a durable flush.
+    pub fn open_volatile(path: impl AsRef<Path>) -> Result<Self, DbError> {
+        Self::open_with_durability(path.as_ref(), true)
+    }
+
+    fn open_with_durability(p: &Path, volatile: bool) -> Result<Self, DbError> {
         if let Some(parent) = p.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
         let db = Database::create(p).map_err(|e| DbError::Backend(e.to_string()))?;
         tracing::debug!("Redb database opened at {}", p.display());
         let this = Self {
-            db: Arc::new(RwLock::new(db)),
+            db: Arc::new(db),
+            volatile,
             path: Some(p.to_path_buf()),
             log_seq: Arc::new(AtomicU64::new(0)),
             last_prune: Arc::new(AtomicI64::new(0)),
@@ -59,11 +201,16 @@ impl RedbDatabase {
 
     /// Opens an isolated in-memory temporary database (ideal for tests and recovery).
     pub fn open_temp() -> Result<Self, DbError> {
+        Self::open_temp_with_durability(false)
+    }
+
+    fn open_temp_with_durability(volatile: bool) -> Result<Self, DbError> {
         let temp = tempfile::NamedTempFile::new()?;
         let path = temp.path().to_path_buf();
         let db = Database::create(&path).map_err(|e| DbError::Backend(e.to_string()))?;
         let this = Self {
-            db: Arc::new(RwLock::new(db)),
+            db: Arc::new(db),
+            volatile,
             path: None, // Marked None so is_in_memory() returns true
             log_seq: Arc::new(AtomicU64::new(0)),
             last_prune: Arc::new(AtomicI64::new(0)),
@@ -75,7 +222,7 @@ impl RedbDatabase {
     /// Opens an in-memory database without file persistence.
     #[must_use]
     pub fn open_in_memory() -> Self {
-        Self::open_temp().expect("failed to open in-memory redb database")
+        Self::open_temp_with_durability(true).expect("failed to open in-memory redb database")
     }
 
     /// Returns the database file path, if any.
@@ -88,6 +235,26 @@ impl RedbDatabase {
     #[must_use]
     pub fn is_in_memory(&self) -> bool {
         self.path.is_none()
+    }
+
+    pub(crate) fn begin_write(&self) -> Result<WriteTransaction, DbError> {
+        let mut txn = self.db.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        if self.volatile {
+            txn.set_durability(Durability::None)
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+        }
+        Ok(txn)
+    }
+
+    /// Runs related configuration writes in one atomic redb transaction.
+    pub fn write<R>(
+        &self,
+        operation: impl FnOnce(&mut DbWriteTx<'_>) -> Result<R, DbError>,
+    ) -> Result<R, DbError> {
+        let txn = self.begin_write()?;
+        let result = operation(&mut DbWriteTx { txn: &txn })?;
+        txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        Ok(result)
     }
 
     /// Generates the next sequential ID for a given sequence name within an active write transaction.
@@ -125,10 +292,7 @@ impl RedbDatabase {
 
     /// Generates the next sequential ID for a given sequence name atomically.
     pub fn next_id(&self, sequence: &str) -> Result<i64, DbError> {
-        let write_txn = self
-            .db
-            .read()
-            .begin_write()
+        let write_txn = self.begin_write()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         let next = Self::next_id_in_txn(&write_txn, sequence)?;
         write_txn
@@ -139,9 +303,7 @@ impl RedbDatabase {
 
     /// Checks whether the system has completed the onboarding provisioning.
     pub fn is_provisioned(&self) -> Result<bool, DbError> {
-        let read_txn = self
-            .db
-            .read()
+        let read_txn = self.db
             .begin_read()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_META) {
@@ -161,10 +323,7 @@ impl RedbDatabase {
 
     /// Sets the onboarding provisioning state flag.
     pub fn set_provisioned(&self, provisioned: bool) -> Result<(), DbError> {
-        let write_txn = self
-            .db
-            .read()
-            .begin_write()
+        let write_txn = self.begin_write()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
@@ -185,9 +344,7 @@ impl RedbDatabase {
     /// Returns the current schema version stored in the database metadata table.
     /// If unversioned, returns 0.
     pub fn schema_version(&self) -> Result<u32, DbError> {
-        let read_txn = self
-            .db
-            .read()
+        let read_txn = self.db
             .begin_read()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_META) {
@@ -216,10 +373,7 @@ impl RedbDatabase {
 
     /// Sets the schema version stored in the metadata table.
     pub fn set_schema_version(&self, version: u32) -> Result<(), DbError> {
-        let write_txn = self
-            .db
-            .read()
-            .begin_write()
+        let write_txn = self.begin_write()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
@@ -237,9 +391,7 @@ impl RedbDatabase {
 
     /// Retrieves a stored configuration section hash from the metadata table.
     pub fn get_config_section_hash(&self, section: &str) -> Result<Option<u64>, DbError> {
-        let read_txn = self
-            .db
-            .read()
+        let read_txn = self.db
             .begin_read()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_META) {
@@ -269,10 +421,7 @@ impl RedbDatabase {
 
     /// Stores a configuration section hash in the metadata table.
     pub fn set_config_section_hash(&self, section: &str, hash: u64) -> Result<(), DbError> {
-        let write_txn = self
-            .db
-            .read()
-            .begin_write()
+        let write_txn = self.begin_write()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
@@ -294,10 +443,7 @@ impl RedbDatabase {
         &self,
         hashes: &std::collections::BTreeMap<String, u64>,
     ) -> Result<(), DbError> {
-        let write_txn = self
-            .db
-            .read()
-            .begin_write()
+        let write_txn = self.begin_write()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
@@ -318,9 +464,7 @@ impl RedbDatabase {
 
     /// Checks if any configuration section hashes have been stored in the metadata table.
     pub fn has_config_section_hashes(&self) -> Result<bool, DbError> {
-        let read_txn = self
-            .db
-            .read()
+        let read_txn = self.db
             .begin_read()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_META) {
@@ -337,23 +481,30 @@ impl RedbDatabase {
 
     /// Checks if the database contains existing data from a legacy pre-versioned database.
     fn is_legacy_unversioned_database(&self) -> bool {
-        let Ok(read_txn) = self.db.read().begin_read() else {
+        let Ok(read_txn) = self.db.begin_read() else {
             return false;
         };
-        read_txn.open_table(TABLE_DEVICES).is_ok()
-            || read_txn.open_table(TABLE_CONFIG).is_ok()
-            || read_txn.open_table(TABLE_USERS).is_ok()
+        read_txn.list_tables()
+            .is_ok_and(|mut tables| tables.next().is_some())
     }
 
-    /// Ensures the database schema is at the current version, creating a backup and running
-    /// any pending migrations if upgrading from an older version.
+    /// Ensures the database schema is at the current version. Older persistent contents are
+    /// discarded because this release intentionally does not support JSON compatibility.
     pub fn ensure_schema_and_migrate(&self) -> Result<(), DbError> {
         self.ensure_schema_and_migrate_to(Self::CURRENT_SCHEMA_VERSION)
     }
 
-    /// Ensures the database schema is migrated up to `target_version`.
+    /// Ensures the database schema reaches `target_version`, clearing contents on version change.
     pub fn ensure_schema_and_migrate_to(&self, target_version: u32) -> Result<(), DbError> {
         let current = self.schema_version()?;
+        if self.volatile {
+            if current != Self::RUNTIME_SCHEMA_VERSION {
+                tracing::info!(current, target = Self::RUNTIME_SCHEMA_VERSION, "Recreating volatile runtime database tables for schema change");
+                self.clear_all_tables()?;
+                self.set_schema_version(Self::RUNTIME_SCHEMA_VERSION)?;
+            }
+            return Ok(());
+        }
         let effective_version = if current == 0 {
             if self.is_legacy_unversioned_database() {
                 1
@@ -372,26 +523,13 @@ impl RedbDatabase {
         }
 
         if effective_version < target_version {
-            if let Some(path) = &self.path
-                && path.exists()
-            {
-                let backup_path =
-                    PathBuf::from(format!("{}.v{effective_version}.bak", path.display()));
-                tracing::info!(
-                    "Creating pre-migration database backup from {} to {}",
-                    path.display(),
-                    backup_path.display()
-                );
-                std::fs::copy(path, &backup_path)?;
-            }
-
-            let mut version = effective_version;
-            while version < target_version {
-                self.migrate_step(version)?;
-                version += 1;
-                self.set_schema_version(version)?;
-                tracing::info!("Migrated database schema to version {version}");
-            }
+            tracing::warn!(
+                old_version = effective_version,
+                new_version = target_version,
+                "Recreating incompatible database contents; old persisted data will be discarded"
+            );
+            self.clear_all_tables()?;
+            self.set_schema_version(target_version)?;
         } else if current == 0 {
             self.set_schema_version(target_version)?;
         }
@@ -399,87 +537,31 @@ impl RedbDatabase {
         Ok(())
     }
 
-    fn migrate_step(&self, from_version: u32) -> Result<(), DbError> {
-        match from_version {
-            1 => self.migrate_v1_to_v2(),
-            #[cfg(test)]
-            999 => Ok(()),
-            _ => Err(DbError::Validation(format!(
-                "No migration path defined from schema version {from_version}"
-            ))),
-        }
-    }
-
-    fn migrate_v1_to_v2(&self) -> Result<(), DbError> {
-        let existing_raw = {
-            let read_txn = self
-                .db
-                .read()
-                .begin_read()
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-            let Ok(table) = read_txn.open_table(TABLE_CONFIG) else {
-                return Ok(());
-            };
-            table
-                .get("adblock_config")
-                .map_err(|e| DbError::Backend(e.to_string()))?
-                .map(|val| val.value().to_vec())
-        };
-
-        if let Some(raw_bytes) = existing_raw {
-            let raw: serde_json::Value = serde_json::from_slice(&raw_bytes)
-                .map_err(|e| DbError::Backend(format!("V1 adblock_config parse failed: {e}")))?;
-
-            let enabled = raw
-                .get("enabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let blocking_mode: lanforge_types::network::dns::adblock::BlockingMode = raw
-                .get("blocking_mode")
-                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                .unwrap_or_default();
-            let blocking_ip_v4 = raw
-                .get("blocking_ip_v4")
-                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                .flatten();
-            let blocking_ip_v6 = raw
-                .get("blocking_ip_v6")
-                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                .flatten();
-
-            let new_cfg = lanforge_types::network::dns::adblock::AdblockDbConfig {
-                enabled,
-                blocking_mode,
-                blocking_ip_v4,
-                blocking_ip_v6,
-                refresh_time: lanforge_types::network::dns::adblock::TimeOfDay::DEFAULT,
-            };
-
-            let new_bytes = serde_json::to_vec(&new_cfg).map_err(|e| {
-                DbError::Backend(format!("V2 adblock_config serialization error: {e}"))
-            })?;
-
-            let write_txn = self
-                .db
-                .read()
-                .begin_write()
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-            {
-                let mut table = write_txn
-                    .open_table(TABLE_CONFIG)
-                    .map_err(|e| DbError::Backend(e.to_string()))?;
-                table
-                    .insert("adblock_config", new_bytes.as_slice())
-                    .map_err(|e| DbError::Backend(e.to_string()))?;
-                tracing::info!("Migrated adblock_config to schema v2 (TimeOfDay)");
-            }
-            write_txn
-                .commit()
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-        }
-
+    fn clear_all_tables(&self) -> Result<(), DbError> {
+        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        macro_rules! remove_table { ($table:expr) => {{ let _ = write_txn.delete_table($table); }}; }
+        remove_table!(TABLE_DEVICES);
+        remove_table!(TABLE_STATIC_HOSTS);
+        remove_table!(TABLE_RUNTIME_DEVICES);
+        remove_table!(TABLE_CONFIG);
+        remove_table!(TABLE_USERS);
+        remove_table!(TABLE_API_TOKENS);
+        remove_table!(TABLE_DNS_REWRITES);
+        remove_table!(TABLE_DNS_ALLOWLIST);
+        remove_table!(TABLE_DNS_UPSTREAMS);
+        remove_table!(TABLE_ADBLOCK_URLS);
+        remove_table!(TABLE_ADBLOCK_RULES);
+        remove_table!(TABLE_LOG_EVENTS);
+        remove_table!(TABLE_DNS_QUERIES);
+        remove_table!(TABLE_DNS_BLOCKED);
+        remove_table!(TABLE_DNS_TELEMETRY);
+        remove_table!(TABLE_DNS_STATS_HOURLY);
+        remove_table!(TABLE_META);
+        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(())
     }
+
+
 }
 
 #[cfg(test)]
@@ -701,6 +783,11 @@ mod tests {
         use std::sync::Arc;
 
         let db = RedbDatabase::open_in_memory();
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let since_secs = now_secs.saturating_sub(600);
 
         // 1. Record system logs
         let event1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::ReloadConfig));
@@ -713,7 +800,7 @@ mod tests {
 
         // 2. Record DNS queries
         let query1 = QueryLogEntry {
-            timestamp: 1700000010,
+            timestamp: now_secs.saturating_sub(50),
             src_ip: "192.168.1.50".parse().unwrap(),
             domain: Arc::from("example.com"),
             upstream_us: 1200,
@@ -727,7 +814,7 @@ mod tests {
             coalesce_id: None,
         };
         let query2 = QueryLogEntry {
-            timestamp: 1700000020,
+            timestamp: now_secs.saturating_sub(20),
             src_ip: "192.168.1.50".parse().unwrap(),
             domain: Arc::from("bad-ads.net"),
             upstream_us: 0,
@@ -776,10 +863,10 @@ mod tests {
         assert_eq!(top_clients.len(), 1);
         assert_eq!(top_clients[0], ("192.168.1.50".to_string(), 2, 1));
 
-        let query_rate = db.get_dns_query_rate(1700000000).unwrap();
+        let query_rate = db.get_dns_query_rate(since_secs).unwrap();
         assert!(!query_rate.is_empty());
 
-        let detailed_rates = db.get_dns_query_rate_detailed(1700000000, 900).unwrap();
+        let detailed_rates = db.get_dns_query_rate_detailed(since_secs, 900).unwrap();
         assert_eq!(detailed_rates.len(), 1);
         assert_eq!(detailed_rates[0].total, 2);
         assert_eq!(detailed_rates[0].forwarded, 1);
@@ -845,77 +932,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_migration_and_backup_creation() {
+    async fn test_v2_database_contents_are_discarded_on_v3_upgrade() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let db_path = temp_dir.path().join("test_migration.redb");
-
-        // 1. Open database and set schema version to 999 (our test migration step)
+        let db_path = temp_dir.path().join("test_v2_v3.redb");
         {
             let db = RedbDatabase::open(&db_path).unwrap();
-            db.set_schema_version(999).unwrap();
-            // Migrate to 1000
-            db.ensure_schema_and_migrate_to(1000).unwrap();
-            assert_eq!(db.schema_version().unwrap(), 1000);
+            db.set_schema_version(2).unwrap();
+            let bytes = serde_json::to_vec(&serde_json::json!({"enabled": true})).unwrap();
+            let txn = db.db.begin_write().unwrap();
+            txn.open_table(TABLE_CONFIG).unwrap()
+                .insert("adblock_config", bytes.as_slice()).unwrap();
+            txn.commit().unwrap();
         }
 
-        // 2. Verify pre-migration backup file was created at <path>.v999.bak
-        let backup_path = temp_dir.path().join("test_migration.redb.v999.bak");
-        assert!(
-            backup_path.exists(),
-            "backup file {backup_path:?} should exist"
-        );
-        assert!(std::fs::metadata(&backup_path).unwrap().len() > 0);
+        let db = RedbDatabase::open(&db_path).unwrap();
+        assert_eq!(db.schema_version().unwrap(), RedbDatabase::CURRENT_SCHEMA_VERSION);
+        assert!(!db.load_adblock_config().unwrap().enabled);
+        assert!(!temp_dir.path().join("test_v2_v3.redb.v2.bak").exists());
     }
 
-    #[tokio::test]
-    async fn test_v1_to_v2_migration() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_path = temp_dir.path().join("test_v1_v2.redb");
-
-        // 1. Initialize DB at v1 with legacy adblock config JSON
-        {
-            let db = RedbDatabase::open(&db_path).unwrap();
-            db.set_schema_version(1).unwrap();
-
-            // Insert legacy V1 JSON into TABLE_CONFIG
-            let legacy_json = serde_json::json!({
-                "enabled": true,
-                "blocking_mode": "null_ip",
-                "blocking_ip_v4": "192.168.1.5",
-                "blocking_ip_v6": null,
-                "refresh_hours": 12,
-                "refresh_at_night": true
-            });
-            let bytes = serde_json::to_vec(&legacy_json).unwrap();
-
-            let write_txn = db.db.read().begin_write().unwrap();
-            {
-                let mut table = write_txn.open_table(TABLE_CONFIG).unwrap();
-                table.insert("adblock_config", bytes.as_slice()).unwrap();
-            }
-            write_txn.commit().unwrap();
-        }
-
-        // 2. Re-open DB, which triggers ensure_schema_and_migrate to v2
-        {
-            let db = RedbDatabase::open(&db_path).unwrap();
-            assert_eq!(db.schema_version().unwrap(), 2);
-
-            let loaded = db.load_adblock_config().unwrap();
-            assert!(loaded.enabled);
-            assert_eq!(
-                loaded.blocking_mode,
-                lanforge_types::network::dns::adblock::BlockingMode::NullIp
-            );
-            assert_eq!(loaded.blocking_ip_v4, Some("192.168.1.5".parse().unwrap()));
-            assert_eq!(
-                loaded.refresh_time,
-                lanforge_types::network::dns::adblock::TimeOfDay::DEFAULT
-            );
-        }
-
-        // 3. Verify backup file was created
-        let backup = temp_dir.path().join("test_v1_v2.redb.v1.bak");
-        assert!(backup.exists());
-    }
 }
