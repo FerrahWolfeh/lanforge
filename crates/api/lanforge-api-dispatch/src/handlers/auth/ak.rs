@@ -41,13 +41,16 @@ impl ClientContext {
             })
             .await
         {
-            Ok(id) => Response::AuthToken(Box::new(AuthTokenResponse {
-                id,
-                token,
-                name,
-                scopes,
-                expires_at,
-            })),
+            Ok(id) => {
+                let _ = self.flush_now().await;
+                Response::AuthToken(Box::new(AuthTokenResponse {
+                    id,
+                    token,
+                    name,
+                    scopes,
+                    expires_at,
+                }))
+            }
             Err(e) => {
                 error!("Failed to store API token: {e}");
                 Response::Error {
@@ -69,9 +72,12 @@ impl ClientContext {
             .call(move |s: &Stores| s.auth().delete_api_token_by_id_or_name(&id_or_name_clone))
             .await
         {
-            Ok(()) => Response::Success(SimpleSuccess {
-                message: format!("API token '{id_or_name}' deleted"),
-            }),
+            Ok(()) => {
+                let _ = self.flush_now().await;
+                Response::Success(SimpleSuccess {
+                    message: format!("API token '{id_or_name}' deleted"),
+                })
+            }
             Err(e) => Response::Error {
                 error: format!("Database error: {e}"),
             },

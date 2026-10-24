@@ -986,6 +986,11 @@ impl ClientContext {
             .unwrap_or_default()
     }
 
+    /// Triggers an immediate write-behind commit of live configurations and buffers to disk.
+    pub async fn flush_now(&self) -> Result<(), String> {
+        self.ctx.flush_now().await
+    }
+
     pub fn map_error(err: String) -> RpcCallError {
         if err.contains("Invalid MAC") {
             RpcCallError::InvalidMac(err)

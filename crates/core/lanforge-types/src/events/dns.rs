@@ -38,4 +38,6 @@ pub enum DnsEvent {
     ConfigUpstreamsChanged,
     /// DNS upstream resolution mode changed.
     ConfigUpstreamModeChanged(crate::network::dns::UpstreamMode),
+    /// DNS reverse resolvers changed.
+    ConfigReverseResolversChanged,
 }

@@ -405,6 +405,9 @@ impl ClientContext {
             error!("Setup: failed to set provisioned flag: {e}");
         }
 
+        // Flush all persisted changes and live config to disk immediately
+        let _ = self.flush_now().await;
+
         // 9. Spawn delayed ReloadConfig event to allow RPC response to flush cleanly
         let bus = self.ctx.bus().clone();
         tokio::spawn(async move {

@@ -150,6 +150,18 @@ impl LanforgeContext {
         self.inner.runtime.storage_handle.read().clone()
     }
 
+    /// Triggers an immediate commit of pending batches and live config to disk, awaiting completion.
+    ///
+    /// # Errors
+    /// Returns an error if the database worker channel is closed or if the worker failed to flush.
+    pub async fn flush_now(&self) -> Result<(), String> {
+        if let Some(storage) = self.storage_handle() {
+            storage.flush_now().await
+        } else {
+            Ok(())
+        }
+    }
+
     /// Sets the dynamic state of a service.
     pub fn set_service_state(&self, id: &str, state: ServiceState) {
         self.inner.runtime.set_service_state(id, state);

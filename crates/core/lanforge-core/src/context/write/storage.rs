@@ -179,15 +179,18 @@ impl LanforgeContext {
     /// Adds or updates a custom reverse DNS resolver for a subnet.
     pub fn add_reverse_resolver(&self, resolver: DnsReverseResolver) {
         self.with_state_mut(|state| state.add_reverse_resolver(resolver));
+        let _ = self.bus().publish(LanforgeEvent::Dns(DnsEvent::ConfigReverseResolversChanged));
     }
 
     /// Removes a custom reverse DNS resolver for a subnet.
     pub fn remove_reverse_resolver(&self, subnet: IpSubnet) {
         self.with_state_mut(|state| state.remove_reverse_resolver(subnet));
+        let _ = self.bus().publish(LanforgeEvent::Dns(DnsEvent::ConfigReverseResolversChanged));
     }
 
     /// Sets or replaces all custom reverse DNS resolvers.
     pub fn set_reverse_resolvers(&self, resolvers: Vec<DnsReverseResolver>) {
         self.with_state_mut(|state| state.set_reverse_resolvers(resolvers));
+        let _ = self.bus().publish(LanforgeEvent::Dns(DnsEvent::ConfigReverseResolversChanged));
     }
 }

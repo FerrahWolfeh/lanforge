@@ -663,13 +663,8 @@ impl ClientContext {
                 .update_ra_config(Vec::new(), Vec::new(), Vec::new());
         }
 
-        // Notify storage worker to flush the updated snapshot and live config file immediately
-        let _ = self
-            .ctx
-            .bus_ref()
-            .publish(lanforge_types::events::LanforgeEvent::Storage(
-                lanforge_types::events::storage::StorageEvent::TableDirty,
-            ));
+        // Flush live config and snapshot to disk immediately before replying
+        let _ = self.flush_now().await;
 
         Response::SystemConfigImport(SystemConfigImportResponse {
             results,

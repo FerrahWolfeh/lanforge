@@ -50,6 +50,7 @@ impl ClientContext {
             .await
         {
             Ok(entry) => {
+                let _ = self.flush_now().await;
                 Response::User(Box::new(UserResponse {
                     user: UserInfo {
                         id: entry.id,
@@ -126,9 +127,12 @@ impl ClientContext {
             .call(move |s: &Stores| s.auth().delete_user(&u_clone))
             .await
         {
-            Ok(()) => Response::Success(SimpleSuccess {
-                message: format!("User '{username}' deleted successfully"),
-            }),
+            Ok(()) => {
+                let _ = self.flush_now().await;
+                Response::Success(SimpleSuccess {
+                    message: format!("User '{username}' deleted successfully"),
+                })
+            }
             Err(e) => Response::Error {
                 error: format!("Database error: {e}"),
             },
@@ -160,9 +164,12 @@ impl ClientContext {
             .call(move |s: &Stores| s.auth().update_user_password(&u_clone, &new_hash, now))
             .await
         {
-            Ok(()) => Response::Success(SimpleSuccess {
-                message: format!("Password for user '{username}' updated successfully"),
-            }),
+            Ok(()) => {
+                let _ = self.flush_now().await;
+                Response::Success(SimpleSuccess {
+                    message: format!("Password for user '{username}' updated successfully"),
+                })
+            }
             Err(e) => Response::Error {
                 error: format!("Database error: {e}"),
             },

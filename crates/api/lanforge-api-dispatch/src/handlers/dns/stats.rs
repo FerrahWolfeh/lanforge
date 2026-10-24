@@ -5,7 +5,7 @@ use lanforge_api::api::{
 };
 use lanforge_types::network::dns::{
     DnsRecordType, DnsRequest, DnsResponse, UpstreamStatus,
-    upstream::{UpstreamMode, UpstreamProtocol},
+    upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget},
 };
 use std::{collections::HashMap, net::IpAddr};
 
@@ -87,31 +87,22 @@ impl ClientContext {
         protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> Response {
-        let Some(storage) = self.ctx.storage_handle() else {
-            return Response::Error {
-                error: "Storage service not available".into(),
-            };
-        };
-
-        let domain_clone = domain.clone();
-        match storage
-            .call(move |s: &lanforge_db_core::Stores| {
-                s.db().add_dns_upstream(addr, protocol, domain_clone.as_deref())
-            })
-            .await
+        let mut upstreams = self.ctx.get_dns_upstreams();
+        if !upstreams
+            .iter()
+            .any(|u| u.addr == addr && u.protocol == protocol && u.domain == domain)
         {
-            Ok(_) => {
-                if let Ok(rows) = storage.call(|s: &lanforge_db_core::Stores| s.db().load_dns_upstreams()).await {
-                    self.ctx.update_dns_upstreams(rows.into_iter().map(|r| r.to_target()).collect());
-                }
-                Response::Success(SimpleSuccess {
-                    message: "Upstream added successfully".into(),
-                })
-            }
-            Err(e) => Response::Error {
-                error: format!("Failed to add upstream: {e}"),
-            },
+            upstreams.push(UpstreamTarget {
+                addr,
+                protocol,
+                hostname: None,
+                domain,
+            });
+            self.ctx.update_dns_upstreams(upstreams);
         }
+        Response::Success(SimpleSuccess {
+            message: "Upstream added successfully".into(),
+        })
     }
 
     pub async fn handle_dns_upstream_remove(
@@ -120,54 +111,25 @@ impl ClientContext {
         protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> Response {
-        let Some(storage) = self.ctx.storage_handle() else {
+        let mut upstreams = self.ctx.get_dns_upstreams();
+        let len_before = upstreams.len();
+        upstreams.retain(|u| !(u.addr == addr && u.protocol == protocol && u.domain == domain));
+        if upstreams.len() == len_before {
             return Response::Error {
-                error: "Storage service not available".into(),
+                error: "Upstream not found".into(),
             };
-        };
-
-        let domain_clone = domain.clone();
-        match storage
-            .call(move |s: &lanforge_db_core::Stores| {
-                s.db().remove_dns_upstream(addr, protocol, domain_clone.as_deref())
-            })
-            .await
-        {
-            Ok(_) => {
-                if let Ok(rows) = storage.call(|s: &lanforge_db_core::Stores| s.db().load_dns_upstreams()).await {
-                    self.ctx.update_dns_upstreams(rows.into_iter().map(|r| r.to_target()).collect());
-                }
-                Response::Success(SimpleSuccess {
-                    message: "Upstream removed successfully".into(),
-                })
-            }
-            Err(e) => Response::Error {
-                error: format!("Failed to remove upstream: {e}"),
-            },
         }
+        self.ctx.update_dns_upstreams(upstreams);
+        Response::Success(SimpleSuccess {
+            message: "Upstream removed successfully".into(),
+        })
     }
 
     pub async fn handle_dns_upstream_clear(&self) -> Response {
-        let Some(storage) = self.ctx.storage_handle() else {
-            return Response::Error {
-                error: "Storage service not available".into(),
-            };
-        };
-
-        match storage
-            .call(|s: &lanforge_db_core::Stores| s.db().clear_dns_upstreams())
-            .await
-        {
-            Ok(_) => {
-                self.ctx.update_dns_upstreams(Vec::new());
-                Response::Success(SimpleSuccess {
-                    message: "All upstreams cleared successfully".into(),
-                })
-            }
-            Err(e) => Response::Error {
-                error: format!("Failed to clear upstreams: {e}"),
-            },
-        }
+        self.ctx.update_dns_upstreams(Vec::new());
+        Response::Success(SimpleSuccess {
+            message: "All upstreams cleared successfully".into(),
+        })
     }
 
     pub async fn handle_dns_upstream_mode_get(&self) -> Response {
@@ -176,11 +138,6 @@ impl ClientContext {
     }
 
     pub async fn handle_dns_upstream_mode_set(&self, mode: UpstreamMode) -> Response {
-        if let Some(storage) = self.ctx.storage_handle() {
-            let _ = storage
-                .call(move |s: &lanforge_db_core::Stores| s.db().save_dns_upstream_mode(mode))
-                .await;
-        }
         self.ctx.update_dns_upstream_mode(mode);
         Response::DnsUpstreamMode(DnsUpstreamModeResponse { mode })
     }

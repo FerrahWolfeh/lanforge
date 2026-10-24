@@ -4,8 +4,6 @@ use lanforge_api::api::AllowlistEntry;
 use lanforge_api::api::{DnsAllowlistResponse, Response};
 #[cfg(feature = "adblock")]
 use lanforge_api::api::{DnsAllowlistResponse, Response, SimpleSuccess};
-#[cfg(feature = "adblock")]
-use lanforge_db_core::Stores;
 
 #[cfg(feature = "adblock")]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
@@ -15,47 +13,27 @@ use lanforge_types::network::dns::adblock::AdblockRuleAction;
 impl ClientContext {
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_block(&self, domain: String) -> Response {
-        let Some(storage) = self.ctx.storage_handle() else {
-            return Response::Error {
-                error: "Storage service not available".into(),
-            };
-        };
-
-        let d_clone = domain.clone();
-        match storage
-            .call(move |s: &Stores| {
-                s.db().add_adblock_rule(&d_clone, AdblockRuleAction::Block)
-            })
-            .await
-        {
-            Ok(_) => {
-                if let Ok(rules) = storage.call(|s: &Stores| s.db().load_adblock_rules()).await {
-                    self.ctx.update_dns_adblock_rules(
-                        rules
-                            .into_iter()
-                            .map(|(id, domain, action, enabled)| {
-                                lanforge_types::network::dns::adblock::AdblockRuleEntry {
-                                    id: Some(id),
-                                    domain,
-                                    action,
-                                    enabled,
-                                }
-                            })
-                            .collect(),
-                    );
-                }
-                let _ = self
-                    .ctx
-                    .bus()
-                    .publish(LanforgeEvent::Dns(DnsEvent::AdblockBlock(domain.clone())));
-                Response::Success(SimpleSuccess {
-                    message: format!("Domain '{domain}' blocked in adblock rules"),
-                })
-            }
-            Err(e) => Response::Error {
-                error: e.to_string(),
-            },
+        let mut rules = self.ctx.get_dns_adblock_rules();
+        if let Some(existing) = rules.iter_mut().find(|r| r.domain.eq_ignore_ascii_case(&domain)) {
+            existing.action = AdblockRuleAction::Block;
+            existing.enabled = true;
+        } else {
+            let next_id = rules.iter().filter_map(|r| r.id).max().unwrap_or(0) + 1;
+            rules.push(lanforge_types::network::dns::adblock::AdblockRuleEntry {
+                id: Some(next_id),
+                domain: domain.clone(),
+                action: AdblockRuleAction::Block,
+                enabled: true,
+            });
         }
+        self.ctx.update_dns_adblock_rules(rules);
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::Dns(DnsEvent::AdblockBlock(domain.clone())));
+        Response::Success(SimpleSuccess {
+            message: format!("Domain '{domain}' blocked in adblock rules"),
+        })
     }
 
     #[cfg(not(feature = "adblock"))]
@@ -68,29 +46,14 @@ impl ClientContext {
 
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_allow(&self, domain: String) -> Response {
-        let Some(storage) = self.ctx.storage_handle() else {
-            return Response::Error {
-                error: "Storage service not available".into(),
-            };
-        };
-
-        let d_clone = domain.clone();
-        match storage
-            .call(move |s: &Stores| s.db().add_dns_allowlist(&d_clone))
-            .await
-        {
-            Ok(()) => {
-                if let Ok(rows) = storage.call(|s: &Stores| s.db().load_dns_allowlist()).await {
-                    self.ctx.update_dns_allowlist(rows.into_iter().map(|(_, d)| d).collect());
-                }
-                Response::Success(SimpleSuccess {
-                    message: format!("Domain '{domain}' added to DNS allowlist"),
-                })
-            }
-            Err(e) => Response::Error {
-                error: e.to_string(),
-            },
+        let mut list = self.ctx.get_dns_allowlist();
+        if !list.iter().any(|d| d.eq_ignore_ascii_case(&domain)) {
+            list.push(domain.clone());
+            self.ctx.update_dns_allowlist(list);
         }
+        Response::Success(SimpleSuccess {
+            message: format!("Domain '{domain}' added to DNS allowlist"),
+        })
     }
 
     #[cfg(not(feature = "adblock"))]
@@ -103,29 +66,18 @@ impl ClientContext {
 
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_unallow(&self, domain: String) -> Response {
-        let Some(storage) = self.ctx.storage_handle() else {
+        let mut list = self.ctx.get_dns_allowlist();
+        let len_before = list.len();
+        list.retain(|d| !d.eq_ignore_ascii_case(&domain));
+        if list.len() == len_before {
             return Response::Error {
-                error: "Storage service not available".into(),
+                error: format!("Domain '{domain}' not found in allowlist"),
             };
-        };
-
-        let d_clone = domain.clone();
-        match storage
-            .call(move |s: &Stores| s.db().remove_dns_allowlist(&d_clone))
-            .await
-        {
-            Ok(()) => {
-                if let Ok(rows) = storage.call(|s: &Stores| s.db().load_dns_allowlist()).await {
-                    self.ctx.update_dns_allowlist(rows.into_iter().map(|(_, d)| d).collect());
-                }
-                Response::Success(SimpleSuccess {
-                    message: format!("Domain '{domain}' removed from DNS allowlist"),
-                })
-            }
-            Err(e) => Response::Error {
-                error: e.to_string(),
-            },
         }
+        self.ctx.update_dns_allowlist(list);
+        Response::Success(SimpleSuccess {
+            message: format!("Domain '{domain}' removed from DNS allowlist"),
+        })
     }
 
     #[cfg(not(feature = "adblock"))]

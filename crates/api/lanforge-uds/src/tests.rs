@@ -96,7 +96,12 @@ async fn test_uds_log_streaming_filter() {
 
     tokio::spawn(async move {
         while let Some(cmd) = storage_rx.recv().await {
-            cmd(&stores);
+            match cmd {
+                lanforge_core::context::StorageCommand::Call(call) => call(&stores),
+                lanforge_core::context::StorageCommand::FlushNow(resp_tx) => {
+                    let _ = resp_tx.send(Ok(()));
+                }
+            }
         }
     });
 

@@ -25,7 +25,7 @@ use lanforge_core::bus::{
     TrafficEvent,
 };
 use lanforge_db_core::{
-    config_keys::*, ApiTokenStore, DeviceStore, LogStore, RaConfigStore,
+    config_keys::*, ApiTokenStore, DeviceStore, DnsUpstreamEntry, LogStore, RaConfigStore,
 };
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::{DnsRequest, DnsResponse};
@@ -171,6 +171,27 @@ impl DbWorker {
                     && let Some(config) = self.ctx.get_pppoe_config()
                 {
                     tx.set(PPPOE, &config)?;
+                }
+                if self.dirty_sections.contains(SectionSet::DNS) {
+                    tx.set(DNS_REWRITES, &self.ctx.get_dns_rewrites())?;
+                    let upstreams: Vec<DnsUpstreamEntry> = self
+                        .ctx
+                        .get_dns_upstreams()
+                        .into_iter()
+                        .map(|target| DnsUpstreamEntry {
+                            id: 0,
+                            addr: target.addr,
+                            protocol: target.protocol,
+                            domain: target.domain,
+                        })
+                        .collect();
+                    tx.set(DNS_UPSTREAMS, &upstreams)?;
+                    tx.set(DNS_UPSTREAM_MODE, &self.ctx.get_dns_upstream_mode())?;
+                    tx.set(DNS_ALLOWLIST, &self.ctx.get_dns_allowlist())?;
+                    tx.set(ADBLOCK_CONFIG, &self.ctx.get_dns_adblock())?;
+                    tx.set(ADBLOCK_URLS, &self.ctx.get_dns_adblock_urls())?;
+                    tx.set(ADBLOCK_RULES, &self.ctx.get_dns_adblock_rules())?;
+                    tx.set(DNS_REVERSE_RESOLVERS, &self.ctx.all_reverse_resolvers())?;
                 }
                 Ok(())
             });
@@ -513,8 +534,16 @@ impl AsyncService for DbWorker {
             tokio::select! {
                 // Storage commands via closure channel
                 cmd = storage_rx.recv() => {
-                    if let Some(cmd) = cmd {
-                        cmd(&stores);
+                    match cmd {
+                        Some(StorageCommand::Call(call)) => {
+                            call(&stores);
+                        }
+                        Some(StorageCommand::FlushNow(resp_tx)) => {
+                            self.flush_batch(&db, &log_db).await;
+                            self.flush_live_config_to_file(&db).await;
+                            let _ = resp_tx.send(Ok(()));
+                        }
+                        None => break,
                     }
                 }
 
@@ -679,7 +708,8 @@ impl AsyncService for DbWorker {
                             | DnsEvent::ConfigAdblockChanged
                             | DnsEvent::ConfigAdblockRulesChanged
                             | DnsEvent::ConfigUpstreamsChanged
-                            | DnsEvent::ConfigUpstreamModeChanged(_),
+                            | DnsEvent::ConfigUpstreamModeChanged(_)
+                            | DnsEvent::ConfigReverseResolversChanged,
                         ) => {
                             self.dirty_sections |= SectionSet::DNS;
                         }

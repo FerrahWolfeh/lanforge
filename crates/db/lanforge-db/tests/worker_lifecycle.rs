@@ -76,6 +76,7 @@ async fn test_db_worker_init_and_clean_shutdown() {
         .await
         .expect("query error");
     assert!(!res);
+    storage.flush_now().await.expect("flush_now error");
 
     // 3. Graceful shutdown
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -716,4 +717,55 @@ async fn failed_live_toml_write_preserves_file_and_does_not_advance_hash() {
         db.get_config_section_hash(Section::Dns.name()).unwrap(),
         Some(7)
     );
+}
+
+#[tokio::test]
+async fn test_db_worker_write_behind_dns_config_and_flush_now() {
+    let (ctx, bus) = create_test_context();
+
+    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
+    let log_db = Arc::new(LogDb::open_in_memory());
+
+    let cfg = DatabaseConfig {
+        flush_interval: 60,
+        ..DatabaseConfig::default()
+    };
+
+    let mut worker = DbWorker::new(cfg, ctx.clone(), db.clone(), log_db);
+    worker.init(&ctx).await.unwrap();
+
+    let ctx_clone = ctx.clone();
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone).await });
+
+    let storage = ctx.storage_handle().expect("storage handle present");
+    let _ = storage
+        .call(|s: &Stores| s.db.is_provisioned())
+        .await
+        .expect("worker ready");
+
+    // 1. Mutate ctx directly (write-behind memory model)
+    ctx.update_dns_rewrites(vec![lanforge_types::network::dns::adblock::RewriteRule {
+        id: Some(1),
+        domain: "gateway.lan".to_string(),
+        rtype: DnsRecordType::A,
+        answer: RewriteAnswer::A(Ipv4Addr::new(192, 168, 1, 1)),
+    }]);
+
+    // Give worker event loop a moment to absorb ConfigRewritesChanged
+    sleep(Duration::from_millis(20)).await;
+
+    // 2. Call flush_now explicitly
+    storage.flush_now().await.expect("flush_now should succeed");
+
+    // 3. Verify that redb TABLE_CONFIG contains the rewrite
+    let persisted_rewrites = storage
+        .call(|s: &Stores| s.db.load_dns_rewrites())
+        .await
+        .unwrap();
+    assert_eq!(persisted_rewrites.len(), 1);
+    assert_eq!(persisted_rewrites[0].domain, "gateway.lan");
+
+    // Clean exit
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = handle.await;
 }
