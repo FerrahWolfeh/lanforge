@@ -64,23 +64,35 @@ impl DbWriteTx<'_> {
         value: &T,
     ) -> Result<(), DbError> {
         let bytes = encode(value)?;
-        self.txn.open_table(TABLE_CONFIG)
-            .map_err(|e| DbError::Backend(e.to_string()))?
-            .insert(key, bytes.as_slice())
-            .map_err(|e| DbError::Backend(e.to_string()))?;
+        self.txn.open_table(TABLE_CONFIG)?
+            .insert(key, bytes.as_slice())?;
         Ok(())
+    }
+
+    /// Stores one typed configuration value under a typed ConfigKey.
+    pub fn set<T: serde::Serialize + ?Sized>(
+        &mut self,
+        key: lanforge_db_core::ConfigKey<T>,
+        value: &T,
+    ) -> Result<(), DbError> {
+        self.set_config(key.name(), value)
     }
 
     /// Removes one configuration value within this transaction.
     pub fn remove_config(&mut self, key: &str) -> Result<(), DbError> {
         if let Ok(mut table) = self.txn.open_table(TABLE_CONFIG) {
-            table.remove(key).map_err(|e| DbError::Backend(e.to_string()))?;
+            table.remove(key)?;
         }
         Ok(())
     }
 
+    /// Removes one configuration value for a typed ConfigKey within this transaction.
+    pub fn remove<T>(&mut self, key: lanforge_db_core::ConfigKey<T>) -> Result<(), DbError> {
+        self.remove_config(key.name())
+    }
+
     /// Atomically replaces imported DNS and Adblock configuration across all
-    /// related tables. IDs are reassigned because they are database-local.
+    /// related keys.
     pub fn replace_dns_adblock(
         &mut self,
         adblock: &AdblockDbConfig,
@@ -90,59 +102,32 @@ impl DbWriteTx<'_> {
         urls: &[AdblockUrlEntry],
         rules: &[AdblockRuleEntry],
     ) -> Result<(), DbError> {
-        self.set_config("adblock_config", adblock)?;
+        use lanforge_db_core::config_keys::*;
+
+        self.set(ADBLOCK_CONFIG, adblock)?;
+        self.set(DNS_REWRITES, &rewrites.to_vec())?;
+
+        let upstreams_entries: Vec<DnsUpstreamEntry> = upstreams
+            .iter()
+            .enumerate()
+            .map(|(i, (addr, protocol, domain))| DnsUpstreamEntry {
+                id: i as i64 + 1,
+                addr: *addr,
+                protocol: *protocol,
+                domain: domain.clone(),
+            })
+            .collect();
+        self.set(DNS_UPSTREAMS, &upstreams_entries)?;
+        self.set(DNS_ALLOWLIST, &allowlist.to_vec())?;
+        self.set(ADBLOCK_URLS, &urls.to_vec())?;
+        self.set(ADBLOCK_RULES, &rules.to_vec())?;
 
         let _ = self.txn.delete_table(TABLE_DNS_REWRITES);
-        for rule in rewrites {
-            let id = RedbDatabase::next_id_in_txn(self.txn, "dns_rewrites")?;
-            let mut rule = rule.clone();
-            rule.id = Some(id);
-            let bytes = encode(&rule)?;
-            self.txn.open_table(TABLE_DNS_REWRITES)
-                .map_err(|e| DbError::Backend(e.to_string()))?
-                .insert(id, bytes.as_slice())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-        }
-
         let _ = self.txn.delete_table(TABLE_DNS_UPSTREAMS);
-        for (addr, protocol, domain) in upstreams {
-            let id = RedbDatabase::next_id_in_txn(self.txn, "dns_upstreams")?;
-            let entry = DnsUpstreamEntry { id, addr: *addr, protocol: *protocol, domain: domain.clone() };
-            let bytes = encode(&entry)?;
-            self.txn.open_table(TABLE_DNS_UPSTREAMS)
-                .map_err(|e| DbError::Backend(e.to_string()))?
-                .insert(id, bytes.as_slice())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-        }
-
         let _ = self.txn.delete_table(TABLE_DNS_ALLOWLIST);
-        for domain in allowlist {
-            let id = RedbDatabase::next_id_in_txn(self.txn, "dns_allowlist")?;
-            self.txn.open_table(TABLE_DNS_ALLOWLIST)
-                .map_err(|e| DbError::Backend(e.to_string()))?
-                .insert(domain.as_str(), id)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-        }
-
         let _ = self.txn.delete_table(TABLE_ADBLOCK_URLS);
-        for url in urls {
-            let id = RedbDatabase::next_id_in_txn(self.txn, "adblock_urls")?;
-            let bytes = encode(&(url.url.as_str(), url.kind, true, url.format))?;
-            self.txn.open_table(TABLE_ADBLOCK_URLS)
-                .map_err(|e| DbError::Backend(e.to_string()))?
-                .insert(id, bytes.as_slice())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-        }
-
         let _ = self.txn.delete_table(TABLE_ADBLOCK_RULES);
-        for rule in rules {
-            let id = RedbDatabase::next_id_in_txn(self.txn, "adblock_rules")?;
-            let bytes = encode(&(rule.domain.as_str(), rule.action, rule.enabled))?;
-            self.txn.open_table(TABLE_ADBLOCK_RULES)
-                .map_err(|e| DbError::Backend(e.to_string()))?
-                .insert(id, bytes.as_slice())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-        }
+
         Ok(())
     }
 }
@@ -166,7 +151,7 @@ impl fmt::Debug for RedbDatabase {
 
 impl RedbDatabase {
     /// Current database schema version.
-    pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+    pub const CURRENT_SCHEMA_VERSION: u32 = 4;
     /// Independent schema version for volatile runtime tables.
     pub const RUNTIME_SCHEMA_VERSION: u32 = 1;
 
@@ -276,6 +261,42 @@ impl RedbDatabase {
         let result = operation(&mut DbWriteTx { txn: &txn })?;
         txn.commit()?;
         Ok(result)
+    }
+
+    /// Retrieves a typed configuration value by its ConfigKey.
+    pub fn get<T: serde::de::DeserializeOwned>(
+        &self,
+        key: lanforge_db_core::ConfigKey<T>,
+    ) -> Result<Option<T>, DbError> {
+        self.read_table(TABLE_CONFIG, |table| {
+            match table.get(key.name())? {
+                Some(val) => Ok(Some(decode(val.value())?)),
+                None => Ok(None),
+            }
+        }).map(|opt| opt.flatten())
+    }
+
+    /// Stores a typed configuration value by its ConfigKey.
+    pub fn put<T: serde::Serialize>(
+        &self,
+        key: lanforge_db_core::ConfigKey<T>,
+        val: &T,
+    ) -> Result<(), DbError> {
+        self.write(|tx| tx.set(key, val))
+    }
+
+    /// Stores a typed configuration value only if it does not already exist.
+    pub fn put_if_absent<T: serde::Serialize + serde::de::DeserializeOwned>(
+        &self,
+        key: lanforge_db_core::ConfigKey<T>,
+        val: &T,
+    ) -> Result<bool, DbError> {
+        if self.get(key)?.is_none() {
+            self.put(key, val)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     /// Generates the next sequential ID for a given sequence name within an active write transaction.
@@ -543,7 +564,11 @@ impl RedbDatabase {
             )));
         }
 
-        if effective_version < target_version {
+        if effective_version == 3 && target_version == 4 {
+            tracing::info!("Migrating database schema v3 to v4 (list tables to config blobs)");
+            self.migrate_v3_to_v4()?;
+            self.set_schema_version(target_version)?;
+        } else if effective_version < target_version {
             tracing::warn!(
                 old_version = effective_version,
                 new_version = target_version,
@@ -555,6 +580,112 @@ impl RedbDatabase {
             self.set_schema_version(target_version)?;
         }
 
+        Ok(())
+    }
+
+    fn migrate_v3_to_v4(&self) -> Result<(), DbError> {
+        use lanforge_db_core::config_keys::*;
+        use lanforge_types::network::dns::adblock::{AdblockRuleAction, AdblockUrlKind};
+        let write_txn = self.begin_write()?;
+
+        // 1. DNS Rewrites
+        if let Ok(table) = write_txn.open_table(TABLE_DNS_REWRITES) {
+            let mut rewrites = Vec::new();
+            for item in table.iter()? {
+                let (_, val) = item?;
+                if let Ok(rule) = decode::<RewriteRule>(val.value()) {
+                    rewrites.push(rule);
+                }
+            }
+            drop(table);
+            if !rewrites.is_empty() {
+                let bytes = encode(&rewrites)?;
+                write_txn.open_table(TABLE_CONFIG)?.insert(DNS_REWRITES.name(), bytes.as_slice())?;
+            }
+            let _ = write_txn.delete_table(TABLE_DNS_REWRITES);
+        }
+
+        // 2. DNS Allowlist
+        if let Ok(table) = write_txn.open_table(TABLE_DNS_ALLOWLIST) {
+            let mut allowlist = Vec::new();
+            for item in table.iter()? {
+                let (domain, _) = item?;
+                allowlist.push(domain.value().to_string());
+            }
+            drop(table);
+            if !allowlist.is_empty() {
+                let bytes = encode(&allowlist)?;
+                write_txn.open_table(TABLE_CONFIG)?.insert(DNS_ALLOWLIST.name(), bytes.as_slice())?;
+            }
+            let _ = write_txn.delete_table(TABLE_DNS_ALLOWLIST);
+        }
+
+        // 3. DNS Upstreams
+        if let Ok(table) = write_txn.open_table(TABLE_DNS_UPSTREAMS) {
+            let mut upstreams = Vec::new();
+            for item in table.iter()? {
+                let (_, val) = item?;
+                if let Ok(entry) = decode::<DnsUpstreamEntry>(val.value()) {
+                    upstreams.push(entry);
+                }
+            }
+            drop(table);
+            if !upstreams.is_empty() {
+                let bytes = encode(&upstreams)?;
+                write_txn.open_table(TABLE_CONFIG)?.insert(DNS_UPSTREAMS.name(), bytes.as_slice())?;
+            }
+            let _ = write_txn.delete_table(TABLE_DNS_UPSTREAMS);
+        }
+
+        // 4. Adblock URLs
+        if let Ok(table) = write_txn.open_table(TABLE_ADBLOCK_URLS) {
+            let mut urls = Vec::new();
+            for item in table.iter()? {
+                let (id, val) = item?;
+                if let Ok((url, kind, _enabled, format)) =
+                    decode::<(String, AdblockUrlKind, bool, lanforge_types::network::dns::adblock::AdblockSourceFormat)>(val.value())
+                {
+                    urls.push(AdblockUrlEntry {
+                        id: Some(id.value()),
+                        url,
+                        kind,
+                        format,
+                    });
+                }
+            }
+            drop(table);
+            if !urls.is_empty() {
+                let bytes = encode(&urls)?;
+                write_txn.open_table(TABLE_CONFIG)?.insert(ADBLOCK_URLS.name(), bytes.as_slice())?;
+            }
+            let _ = write_txn.delete_table(TABLE_ADBLOCK_URLS);
+        }
+
+        // 5. Adblock Rules
+        if let Ok(table) = write_txn.open_table(TABLE_ADBLOCK_RULES) {
+            let mut rules = Vec::new();
+            for item in table.iter()? {
+                let (id, val) = item?;
+                if let Ok((domain, action, enabled)) =
+                    decode::<(String, AdblockRuleAction, bool)>(val.value())
+                {
+                    rules.push(AdblockRuleEntry {
+                        id: Some(id.value()),
+                        domain,
+                        action,
+                        enabled,
+                    });
+                }
+            }
+            drop(table);
+            if !rules.is_empty() {
+                let bytes = encode(&rules)?;
+                write_txn.open_table(TABLE_CONFIG)?.insert(ADBLOCK_RULES.name(), bytes.as_slice())?;
+            }
+            let _ = write_txn.delete_table(TABLE_ADBLOCK_RULES);
+        }
+
+        write_txn.commit()?;
         Ok(())
     }
 
@@ -994,6 +1125,42 @@ mod tests {
         assert_eq!(db.schema_version().unwrap(), RedbDatabase::CURRENT_SCHEMA_VERSION);
         assert!(!db.load_adblock_config().unwrap().enabled);
         assert!(!temp_dir.path().join("test_v2_v3.redb.v2.bak").exists());
+    }
+
+    #[tokio::test]
+    async fn test_v3_to_v4_migration_migrates_list_tables_to_blobs() {
+        use lanforge_db_core::config_keys::*;
+        use lanforge_types::network::dns::DnsRecordType;
+        use lanforge_types::network::dns::adblock::{RewriteAnswer, RewriteRule};
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test_v3_v4.redb");
+
+        // 1. Create a schema v3 database with legacy list tables
+        {
+            let db = RedbDatabase::open(&db_path).unwrap();
+            let write_txn = db.begin_write().unwrap();
+            let rewrite = RewriteRule {
+                id: Some(1),
+                domain: "local.dev".to_string(),
+                rtype: DnsRecordType::A,
+                answer: RewriteAnswer::A("192.168.1.10".parse().unwrap()),
+            };
+            let bytes = encode(&rewrite).unwrap();
+            write_txn.open_table(TABLE_DNS_REWRITES).unwrap()
+                .insert(1i64, bytes.as_slice()).unwrap();
+            write_txn.commit().unwrap();
+
+            db.set_schema_version(3).unwrap();
+        }
+
+        // 2. Reopen: should automatically migrate v3 to v4
+        let db = RedbDatabase::open(&db_path).unwrap();
+        assert_eq!(db.schema_version().unwrap(), 4);
+
+        // 3. Verify rewrites are in TABLE_CONFIG under DNS_REWRITES
+        let rewrites = db.get(DNS_REWRITES).unwrap().unwrap();
+        assert_eq!(rewrites.len(), 1);
+        assert_eq!(rewrites[0].domain, "local.dev");
     }
 
 }

@@ -25,8 +25,8 @@ use lanforge_core::bus::{
     TrafficEvent,
 };
 use lanforge_db_core::{
-    AdblockStore, ApiTokenStore, DeviceStore, DnsStore, DnsUpstreamStore, LogStore, RaConfigStore,
-    UserStore,
+    config_keys::*, AdblockStore, ApiTokenStore, DeviceStore, DnsStore, DnsUpstreamStore, LogStore,
+    RaConfigStore, UserStore,
 };
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::adblock::AdblockRuleEntry;
@@ -156,29 +156,29 @@ impl DbWorker {
         if !self.dirty_sections.is_empty() {
             let result = db.write(|tx| {
                 if self.dirty_sections.contains(SectionSet::DHCP) {
-                    tx.set_config("dhcp_v4_pools", &self.ctx.get_dhcp_v4_pools())?;
-                    tx.set_config("dhcp_v6_pools", &self.ctx.get_dhcp_v6_pools())?;
-                    tx.set_config("dhcp_options", &self.ctx.get_dhcp_options())?;
+                    tx.set(DHCP_V4_POOLS, &self.ctx.get_dhcp_v4_pools())?;
+                    tx.set(DHCP_V6_POOLS, &self.ctx.get_dhcp_v6_pools())?;
+                    tx.set(DHCP_OPTIONS, &self.ctx.get_dhcp_options())?;
                 }
                 if self.dirty_sections.contains(SectionSet::RA) {
-                    tx.set_config("ra_prefixes", &self.ctx.get_ra_prefixes())?;
-                    tx.set_config("ra_rdnss", &self.ctx.get_ra_rdnss())?;
-                    tx.set_config("ra_dnssl", &self.ctx.get_ra_dnssl())?;
+                    tx.set(RA_PREFIXES, &self.ctx.get_ra_prefixes())?;
+                    tx.set(RA_RDNSS, &self.ctx.get_ra_rdnss())?;
+                    tx.set(RA_DNSSL, &self.ctx.get_ra_dnssl())?;
                 }
                 if self.dirty_sections.contains(SectionSet::FIREWALL)
                     && let Some(config) = self.ctx.get_firewall_config()
                 {
-                    tx.set_config("firewall_config", &config)?;
+                    tx.set(FIREWALL, &config)?;
                 }
                 if self.dirty_sections.contains(SectionSet::TRAFFIC)
                     && let Some(config) = self.ctx.get_traffic_config()
                 {
-                    tx.set_config("traffic_config", &config)?;
+                    tx.set(TRAFFIC, &config)?;
                 }
                 if self.dirty_sections.contains(SectionSet::PPPOE)
                     && let Some(config) = self.ctx.get_pppoe_config()
                 {
-                    tx.set_config("pppoe_config", &config)?;
+                    tx.set(PPPOE, &config)?;
                 }
                 Ok(())
             });

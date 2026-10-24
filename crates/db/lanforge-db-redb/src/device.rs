@@ -285,6 +285,22 @@ impl DeviceStore for RedbDatabase {
 }
 
 impl ConfigStore for RedbDatabase {
+    fn get<T: serde::de::DeserializeOwned>(&self, key: lanforge_db_core::ConfigKey<T>) -> Result<Option<T>, DbError> {
+        self.get(key)
+    }
+
+    fn put<T: serde::Serialize>(&self, key: lanforge_db_core::ConfigKey<T>, val: &T) -> Result<(), DbError> {
+        self.put(key, val)
+    }
+
+    fn put_if_absent<T: serde::Serialize + serde::de::DeserializeOwned>(
+        &self,
+        key: lanforge_db_core::ConfigKey<T>,
+        val: &T,
+    ) -> Result<bool, DbError> {
+        self.put_if_absent(key, val)
+    }
+
     fn get_meta(&self, key: &str) -> Result<Option<Vec<u8>>, DbError> {
         self.read_table(TABLE_META, |table| {
             Ok(table.get(key)?.map(|value| value.value().to_vec()))

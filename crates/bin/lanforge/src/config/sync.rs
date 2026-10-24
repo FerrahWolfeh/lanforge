@@ -5,6 +5,10 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use lanforge_api::api::SystemConfigExport;
 use lanforge_api::config_file::{ConfigFile, Section, section_hashes, write_toml_atomically};
+use lanforge_db::config_keys::{
+    DHCP_OPTIONS, DHCP_V4_POOLS, DHCP_V6_POOLS, FIREWALL, PPPOE, RA_DNSSL, RA_PREFIXES, RA_RDNSS,
+    TRAFFIC,
+};
 use lanforge_db::{
     DhcpConfigStore, FirewallConfigStore, LanforgeDb, PppoeConfigStore, TrafficConfigStore,
 };
@@ -184,35 +188,35 @@ fn apply_sections_to_db(db: &LanforgeDb, sections: &[Section], cfg: &ConfigFile)
                 Section::Dhcp => {
                     #[cfg(feature = "dhcp")]
                     {
-                        if let Some(ref pools) = export.dhcp_v4_pools { tx.set_config("dhcp_v4_pools", pools)?; }
-                        if let Some(ref pools) = export.dhcp_v6_pools { tx.set_config("dhcp_v6_pools", pools)?; }
-                        if let Some(ref opts) = export.dhcp_options { tx.set_config("dhcp_options", opts)?; }
+                        if let Some(ref pools) = export.dhcp_v4_pools { tx.set(DHCP_V4_POOLS, pools)?; }
+                        if let Some(ref pools) = export.dhcp_v6_pools { tx.set(DHCP_V6_POOLS, pools)?; }
+                        if let Some(ref opts) = export.dhcp_options { tx.set(DHCP_OPTIONS, opts)?; }
                     }
                 }
                 Section::Ra => {
                     #[cfg(feature = "ra")]
                     {
-                        if let Some(ref prefixes) = export.ra_prefixes { tx.set_config("ra_prefixes", prefixes)?; }
-                        if let Some(ref rdnss) = export.ra_rdnss { tx.set_config("ra_rdnss", rdnss)?; }
-                        if let Some(ref dnssl) = export.ra_dnssl { tx.set_config("ra_dnssl", dnssl)?; }
+                        if let Some(ref prefixes) = export.ra_prefixes { tx.set(RA_PREFIXES, prefixes)?; }
+                        if let Some(ref rdnss) = export.ra_rdnss { tx.set(RA_RDNSS, rdnss)?; }
+                        if let Some(ref dnssl) = export.ra_dnssl { tx.set(RA_DNSSL, dnssl)?; }
                     }
                 }
                 Section::Firewall => {
                     #[cfg(feature = "nft")]
                     if let Some(ref firewall) = export.firewall_config {
-                        tx.set_config("firewall_config", firewall)?;
+                        tx.set(FIREWALL, firewall)?;
                     }
                 }
                 Section::Traffic => {
                     #[cfg(feature = "traffic")]
                     if let Some(ref traffic) = export.traffic_config {
-                        tx.set_config("traffic_config", traffic)?;
+                        tx.set(TRAFFIC, traffic)?;
                     }
                 }
                 Section::Pppoe => {
                     #[cfg(feature = "pppoe")]
                     if let Some(ref pppoe) = export.pppoe_config {
-                        tx.set_config("pppoe_config", pppoe)?;
+                        tx.set(PPPOE, pppoe)?;
                     }
                 }
                 _ => {}

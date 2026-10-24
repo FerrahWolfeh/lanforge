@@ -7,9 +7,9 @@ use lanforge_types::device::{Device, Origin};
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
-use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType};
+use lanforge_types::network::dns::{AdblockUrlEntry, DnsLifetimeStats, DnsRecordType};
 use lanforge_types::network::dns::adblock::{
-    AdblockDbConfig, AdblockRuleAction, AdblockSourceFormat, AdblockUrlKind, RewriteAnswer,
+    AdblockDbConfig, AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, AdblockUrlKind, RewriteAnswer,
     RewriteRule,
 };
 use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget};
@@ -232,11 +232,95 @@ pub struct StaticHostEntry {
     pub ignored_log_domains: Vec<String>,
 }
 
+/// Strongly typed configuration key representing a distinct persistent section or item.
+pub struct ConfigKey<T: ?Sized> {
+    name: &'static str,
+    _marker: std::marker::PhantomData<fn() -> T>,
+}
+
+impl<T: ?Sized> ConfigKey<T> {
+    #[must_use]
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    #[inline]
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+}
+
+impl<T: ?Sized> Clone for ConfigKey<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: ?Sized> Copy for ConfigKey<T> {}
+
+impl<T: ?Sized> std::fmt::Debug for ConfigKey<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ConfigKey({})", self.name)
+    }
+}
+
+pub mod config_keys {
+    use super::*;
+
+    pub const DHCP_V4_POOLS: ConfigKey<Vec<Dhcpv4Pool>> = ConfigKey::new("dhcp_v4_pools");
+    pub const DHCP_V6_POOLS: ConfigKey<Vec<Dhcpv6Pool>> = ConfigKey::new("dhcp_v6_pools");
+    pub const DHCP_OPTIONS: ConfigKey<DhcpOptionsConfig> = ConfigKey::new("dhcp_options");
+    pub const RA_PREFIXES: ConfigKey<Vec<RAPrefix>> = ConfigKey::new("ra_prefixes");
+    pub const RA_RDNSS: ConfigKey<Vec<RdnssConfig>> = ConfigKey::new("ra_rdnss");
+    pub const RA_DNSSL: ConfigKey<Vec<DnsslConfig>> = ConfigKey::new("ra_dnssl");
+    pub const FIREWALL: ConfigKey<FirewallConfig> = ConfigKey::new("firewall_config");
+    pub const TRAFFIC: ConfigKey<TrafficConfig> = ConfigKey::new("traffic_config");
+    pub const PPPOE: ConfigKey<PppoeConfig> = ConfigKey::new("pppoe_config");
+    pub const DNS_REWRITES: ConfigKey<Vec<RewriteRule>> = ConfigKey::new("dns_rewrites");
+    pub const DNS_UPSTREAMS: ConfigKey<Vec<DnsUpstreamEntry>> = ConfigKey::new("dns_upstreams");
+    pub const DNS_ALLOWLIST: ConfigKey<Vec<String>> = ConfigKey::new("dns_allowlist");
+    pub const DNS_UPSTREAM_MODE: ConfigKey<UpstreamMode> = ConfigKey::new("dns_upstream_mode");
+    pub const ADBLOCK_CONFIG: ConfigKey<AdblockDbConfig> = ConfigKey::new("adblock_config");
+    pub const ADBLOCK_URLS: ConfigKey<Vec<AdblockUrlEntry>> = ConfigKey::new("adblock_urls");
+    pub const ADBLOCK_RULES: ConfigKey<Vec<AdblockRuleEntry>> = ConfigKey::new("adblock_rules");
+    pub const DNS_REVERSE_RESOLVERS: ConfigKey<Vec<DnsReverseResolver>> = ConfigKey::new("dns_reverse_resolvers");
+    pub const LAST_GUA_PREFIX: ConfigKey<std::net::Ipv6Addr> = ConfigKey::new("last_gua_prefix");
+}
+
+pub use config_keys::*;
+
 /// Configuration, metadata, and static host persistence contract.
 pub trait ConfigStore:
     DnsStore + AdblockStore + DnsUpstreamStore + DhcpConfigStore + RaConfigStore
     + PppoeConfigStore + FirewallConfigStore + TrafficConfigStore + Send + Sync
 {
+    fn get<T: serde::de::DeserializeOwned>(&self, key: ConfigKey<T>) -> Result<Option<T>, DbError>
+    where
+        Self: Sized;
+    fn put<T: serde::Serialize>(&self, key: ConfigKey<T>, val: &T) -> Result<(), DbError>
+    where
+        Self: Sized;
+
+    fn put_if_absent<T: serde::Serialize + serde::de::DeserializeOwned>(
+        &self,
+        key: ConfigKey<T>,
+        val: &T,
+    ) -> Result<bool, DbError>
+    where
+        Self: Sized,
+    {
+        if self.get(key)?.is_none() {
+            self.put(key, val)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     fn get_meta(&self, key: &str) -> Result<Option<Vec<u8>>, DbError>;
     fn set_meta(&self, key: &str, value: &[u8]) -> Result<(), DbError>;
     fn load_static_hosts(&self) -> Result<Vec<StaticHostEntry>, DbError>;

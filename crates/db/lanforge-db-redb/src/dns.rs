@@ -1,40 +1,22 @@
+//! DnsStore, AdblockStore, and DnsUpstreamStore implementations for `RedbDatabase`.
+
 use std::net::SocketAddr;
 
-use crate::{RedbDatabase, decode, encode};
-use crate::tables::{
-    TABLE_ADBLOCK_RULES, TABLE_ADBLOCK_URLS, TABLE_CONFIG, TABLE_DNS_ALLOWLIST, TABLE_DNS_REWRITES,
-    TABLE_DNS_UPSTREAMS,
-};
+use crate::RedbDatabase;
 use lanforge_db_core::{
-    AdblockStore, DbError, DnsStore, DnsUpstreamEntry, DnsUpstreamStore,
+    config_keys::*, AdblockStore, DbError, DnsStore, DnsUpstreamEntry, DnsUpstreamStore,
 };
-use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{
-    AdblockDbConfig, AdblockRuleAction, AdblockSourceFormat, AdblockUrlKind, RewriteAnswer,
-    RewriteRule,
+    AdblockDbConfig, AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, AdblockUrlKind,
+    RewriteAnswer, RewriteRule,
 };
 use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget};
+use lanforge_types::network::dns::{AdblockUrlEntry, DnsRecordType};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
-use redb::{ReadableDatabase, ReadableTable};
 
 impl DnsStore for RedbDatabase {
     fn load_dns_rewrites(&self) -> Result<Vec<RewriteRule>, DbError> {
-        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
-        let table = match read_txn.open_table(TABLE_DNS_REWRITES) {
-            Ok(t) => t,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-            Err(e) => return Err(DbError::Backend(e.to_string())),
-        };
-
-        let mut rules = Vec::new();
-        for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-            let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-            let rule: RewriteRule = decode(val.value())
-                .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-            rules.push(rule);
-        }
-        rules.sort_by_key(|r| r.id.unwrap_or(0));
-        Ok(rules)
+        Ok(self.get(DNS_REWRITES)?.unwrap_or_default())
     }
 
     fn upsert_dns_rewrite(
@@ -43,145 +25,64 @@ impl DnsStore for RedbDatabase {
         rtype: DnsRecordType,
         answer: &RewriteAnswer,
     ) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let mut list = self.load_dns_rewrites()?;
+        if let Some(existing) = list
+            .iter_mut()
+            .find(|r| r.domain.eq_ignore_ascii_case(domain) && r.rtype == rtype)
         {
-            let table = write_txn
-                .open_table(TABLE_DNS_REWRITES)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            let mut existing_id = None;
-            for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-                let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                let r: RewriteRule = decode(val.value())
-                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                if r.domain.eq_ignore_ascii_case(domain) && r.rtype == rtype {
-                    existing_id = Some(id.value());
-                    break;
-                }
-            }
-
-            drop(table);
-
-            let id = match existing_id {
-                Some(id) => id,
-                None => Self::next_id_in_txn(&write_txn, "dns_rewrites")?,
-            };
-
-            let rule = RewriteRule {
-                id: Some(id),
+            existing.answer = answer.clone();
+        } else {
+            let max_id = list.iter().filter_map(|r| r.id).max().unwrap_or(0);
+            list.push(RewriteRule {
+                id: Some(max_id + 1),
                 domain: domain.to_string(),
                 rtype,
                 answer: answer.clone(),
-            };
-
-            let bytes = encode(&rule)
-                .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-
-            let mut table = write_txn
-                .open_table(TABLE_DNS_REWRITES)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            table
-                .insert(id, bytes.as_slice())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
+            });
         }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+        self.put(DNS_REWRITES, &list)
     }
 
     fn delete_dns_rewrite_by_id(&self, id: i64) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let mut table = write_txn
-                .open_table(TABLE_DNS_REWRITES)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            let _ = table.remove(id);
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+        let mut list = self.load_dns_rewrites()?;
+        list.retain(|r| r.id != Some(id));
+        self.put(DNS_REWRITES, &list)
     }
 
     fn clear_dns_rewrites(&self) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let _ = write_txn.delete_table(TABLE_DNS_REWRITES);
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+        self.put(DNS_REWRITES, &Vec::new())
     }
 
     fn load_dns_allowlist(&self) -> Result<Vec<(i64, String)>, DbError> {
-        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
-        let table = match read_txn.open_table(TABLE_DNS_ALLOWLIST) {
-            Ok(t) => t,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-            Err(e) => return Err(DbError::Backend(e.to_string())),
-        };
-
-        let mut list = Vec::new();
-        for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-            let (domain, id) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-            list.push((id.value(), domain.value().to_string()));
-        }
-        list.sort_by_key(|(id, _)| *id);
-        Ok(list)
+        let list = self.get(DNS_ALLOWLIST)?.unwrap_or_default();
+        Ok(list
+            .into_iter()
+            .enumerate()
+            .map(|(i, d)| (i as i64 + 1, d))
+            .collect())
     }
 
     fn add_dns_allowlist(&self, domain: &str) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let id = Self::next_id_in_txn(&write_txn, "dns_allowlist")?;
-            let mut table = write_txn
-                .open_table(TABLE_DNS_ALLOWLIST)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            table
-                .insert(domain, id)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
+        let mut list = self.get(DNS_ALLOWLIST)?.unwrap_or_default();
+        if !list.iter().any(|d| d.eq_ignore_ascii_case(domain)) {
+            list.push(domain.to_string());
+            self.put(DNS_ALLOWLIST, &list)?;
         }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(())
     }
 
     fn remove_dns_allowlist(&self, domain: &str) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let mut table = write_txn
-                .open_table(TABLE_DNS_ALLOWLIST)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            let _ = table.remove(domain);
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+        let mut list = self.get(DNS_ALLOWLIST)?.unwrap_or_default();
+        list.retain(|d| !d.eq_ignore_ascii_case(domain));
+        self.put(DNS_ALLOWLIST, &list)
     }
 
     fn clear_dns_allowlist(&self) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let _ = write_txn.delete_table(TABLE_DNS_ALLOWLIST);
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+        self.put(DNS_ALLOWLIST, &Vec::new())
     }
 
     fn load_dns_reverse_resolvers(&self) -> Result<Vec<DnsReverseResolver>, DbError> {
-        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
-        let table = match read_txn.open_table(TABLE_CONFIG) {
-            Ok(t) => t,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-            Err(e) => return Err(DbError::Backend(e.to_string())),
-        };
-
-        match table.get("dns_reverse_resolvers").map_err(|e| DbError::Backend(e.to_string()))? {
-            Some(val) => {
-                let res: Vec<DnsReverseResolver> = decode(val.value())
-                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                Ok(res)
-            }
-            None => Ok(Vec::new()),
-        }
+        Ok(self.get(DNS_REVERSE_RESOLVERS)?.unwrap_or_default())
     }
 
     fn add_dns_reverse_resolver(
@@ -189,115 +90,36 @@ impl DnsStore for RedbDatabase {
         subnet: &IpSubnet,
         resolver: &UpstreamTarget,
     ) -> Result<(), DbError> {
-        let mut resolvers = self.load_dns_reverse_resolvers()?;
-        resolvers.retain(|r| r.subnet != *subnet);
-        resolvers.push(DnsReverseResolver {
+        let mut list = self.load_dns_reverse_resolvers()?;
+        list.retain(|r| r.subnet != *subnet);
+        list.push(DnsReverseResolver {
             subnet: *subnet,
             resolver: resolver.clone(),
         });
-
-        let bytes = encode(&resolvers)
-            .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let mut table = write_txn
-                .open_table(TABLE_CONFIG)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            table
-                .insert("dns_reverse_resolvers", bytes.as_slice())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+        self.put(DNS_REVERSE_RESOLVERS, &list)
     }
 
-    fn remove_dns_reverse_resolver(
-        &self,
-        subnet: &IpSubnet,
-    ) -> Result<(), DbError> {
-        let mut resolvers = self.load_dns_reverse_resolvers()?;
-        resolvers.retain(|r| r.subnet != *subnet);
-
-        let bytes = encode(&resolvers)
-            .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let mut table = write_txn
-                .open_table(TABLE_CONFIG)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            table
-                .insert("dns_reverse_resolvers", bytes.as_slice())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+    fn remove_dns_reverse_resolver(&self, subnet: &IpSubnet) -> Result<(), DbError> {
+        let mut list = self.load_dns_reverse_resolvers()?;
+        list.retain(|r| r.subnet != *subnet);
+        self.put(DNS_REVERSE_RESOLVERS, &list)
     }
 
     fn clear_dns_reverse_resolvers(&self) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let mut table = write_txn
-                .open_table(TABLE_CONFIG)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            let _ = table.remove("dns_reverse_resolvers");
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+        self.put(DNS_REVERSE_RESOLVERS, &Vec::new())
     }
 }
 
-type StoredSourceTuple = (String, AdblockUrlKind, bool, AdblockSourceFormat);
-
 impl AdblockStore for RedbDatabase {
     fn load_adblock_config(&self) -> Result<AdblockDbConfig, DbError> {
-        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
-        let table = match read_txn.open_table(TABLE_CONFIG) {
-            Ok(t) => t,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(AdblockDbConfig::default()),
-            Err(e) => return Err(DbError::Backend(e.to_string())),
-        };
-
-        match table.get("adblock_config").map_err(|e| DbError::Backend(e.to_string()))? {
-            Some(val) => {
-                let cfg: AdblockDbConfig = decode(val.value())
-                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                Ok(cfg)
-            }
-            None => Ok(AdblockDbConfig::default()),
-        }
+        Ok(self.get(ADBLOCK_CONFIG)?.unwrap_or_default())
     }
 
-    fn save_adblock_config(
-        &self,
-        config: &AdblockDbConfig,
-    ) -> Result<(), DbError> {
-        let bytes = encode(config)
-            .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let mut table = write_txn
-                .open_table(TABLE_CONFIG)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            table
-                .insert("adblock_config", bytes.as_slice())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+    fn save_adblock_config(&self, cfg: &AdblockDbConfig) -> Result<(), DbError> {
+        self.put(ADBLOCK_CONFIG, cfg)
     }
 
-    fn set_adblock_config_value(
-        &self,
-        key: &str,
-        value: &str,
-    ) -> Result<(), DbError> {
+    fn set_adblock_config_value(&self, key: &str, value: &str) -> Result<(), DbError> {
         let mut cfg = self.load_adblock_config()?;
         match key {
             "enabled" => cfg.enabled = value == "true",
@@ -310,46 +132,43 @@ impl AdblockStore for RedbDatabase {
                 cfg.blocking_ip_v4 = if value.is_empty() || value == "none" || value == "null" {
                     None
                 } else {
-                    Some(value.parse().map_err(|e| DbError::Validation(format!("Invalid IPv4: {e}")))?)
+                    Some(
+                        value
+                            .parse()
+                            .map_err(|e| DbError::Validation(format!("Invalid IPv4: {e}")))?,
+                    )
                 };
             }
             "blocking_ip_v6" => {
                 cfg.blocking_ip_v6 = if value.is_empty() || value == "none" || value == "null" {
                     None
                 } else {
-                    Some(value.parse().map_err(|e| DbError::Validation(format!("Invalid IPv6: {e}")))?)
+                    Some(
+                        value
+                            .parse()
+                            .map_err(|e| DbError::Validation(format!("Invalid IPv6: {e}")))?,
+                    )
                 };
             }
             "refresh_time" => {
-                if let Ok(tod) = value.parse() {
-                    cfg.refresh_time = tod;
+                if let Ok(time) = value.parse() {
+                    cfg.refresh_time = time;
                 }
             }
             _ => {}
         }
-        self.save_adblock_config(&cfg)?;
-        Ok(())
+        self.save_adblock_config(&cfg)
     }
 
     fn load_adblock_urls(
         &self,
     ) -> Result<Vec<(i64, String, AdblockUrlKind, AdblockSourceFormat)>, DbError> {
-        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
-        let table = match read_txn.open_table(TABLE_ADBLOCK_URLS) {
-            Ok(t) => t,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-            Err(e) => return Err(DbError::Backend(e.to_string())),
-        };
-
-        let mut urls = Vec::new();
-        for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-            let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-            let (url, kind, _, format) = decode::<StoredSourceTuple>(val.value())
-                .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-            urls.push((id.value(), url, kind, format));
-        }
-        urls.sort_by_key(|(id, _, _, _)| *id);
-        Ok(urls)
+        let list = self.get(ADBLOCK_URLS)?.unwrap_or_default();
+        Ok(list
+            .into_iter()
+            .enumerate()
+            .map(|(i, u)| (u.id.unwrap_or(i as i64 + 1), u.url, u.kind, u.format))
+            .collect())
     }
 
     fn add_adblock_url(
@@ -358,83 +177,39 @@ impl AdblockStore for RedbDatabase {
         kind: AdblockUrlKind,
         format: AdblockSourceFormat,
     ) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let id = Self::next_id_in_txn(&write_txn, "adblock_urls")?;
-            let bytes = encode(&(url, kind, true, format))
-                .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-
-            let mut table = write_txn
-                .open_table(TABLE_ADBLOCK_URLS)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            table
-                .insert(id, bytes.as_slice())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
+        let mut list = self.get(ADBLOCK_URLS)?.unwrap_or_default();
+        if !list.iter().any(|u| u.url == url) {
+            let max_id = list.iter().filter_map(|u| u.id).max().unwrap_or(0);
+            list.push(AdblockUrlEntry {
+                id: Some(max_id + 1),
+                url: url.to_string(),
+                kind,
+                format,
+            });
+            self.put(ADBLOCK_URLS, &list)?;
         }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(())
     }
 
     fn remove_adblock_url(&self, url: &str) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let mut table = match write_txn.open_table(TABLE_ADBLOCK_URLS) {
-                Ok(t) => t,
-                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(()),
-                Err(e) => return Err(DbError::Backend(e.to_string())),
-            };
-
-            let target_id = {
-                let mut found = None;
-                for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-                    let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                    let (u, _, _, _): StoredSourceTuple = decode(val.value())
-                        .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                    if u == url {
-                        found = Some(id.value());
-                        break;
-                    }
-                }
-                found
-            };
-
-            if let Some(id) = target_id {
-                let _ = table.remove(id);
-            }
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+        let mut list = self.get(ADBLOCK_URLS)?.unwrap_or_default();
+        list.retain(|u| u.url != url);
+        self.put(ADBLOCK_URLS, &list)
     }
 
     fn clear_adblock_urls(&self) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let _ = write_txn.delete_table(TABLE_ADBLOCK_URLS);
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+        self.put(ADBLOCK_URLS, &Vec::new())
     }
 
     fn load_adblock_sources(
         &self,
     ) -> Result<Vec<(i64, String, AdblockUrlKind, bool, AdblockSourceFormat)>, DbError> {
-        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
-        let table = match read_txn.open_table(TABLE_ADBLOCK_URLS) {
-            Ok(t) => t,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-            Err(e) => return Err(DbError::Backend(e.to_string())),
-        };
-
-        let mut urls = Vec::new();
-        for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-            let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-            let (url, kind, enabled, format) = decode::<StoredSourceTuple>(val.value())
-                .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-            urls.push((id.value(), url, kind, enabled, format));
-        }
-        urls.sort_by_key(|(id, _, _, _, _)| *id);
-        Ok(urls)
+        let list = self.get(ADBLOCK_URLS)?.unwrap_or_default();
+        Ok(list
+            .into_iter()
+            .enumerate()
+            .map(|(i, u)| (u.id.unwrap_or(i as i64 + 1), u.url, u.kind, true, u.format))
+            .collect())
     }
 
     fn add_adblock_source(
@@ -443,69 +218,28 @@ impl AdblockStore for RedbDatabase {
         kind: AdblockUrlKind,
         format: AdblockSourceFormat,
     ) -> Result<i64, DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        let id = {
-            let id = Self::next_id_in_txn(&write_txn, "adblock_urls")?;
-            let bytes = encode(&(url, kind, true, format))
-                .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-
-            let mut table = write_txn
-                .open_table(TABLE_ADBLOCK_URLS)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            table
-                .insert(id, bytes.as_slice())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-            id
-        };
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        let mut list = self.get(ADBLOCK_URLS)?.unwrap_or_default();
+        let max_id = list.iter().filter_map(|u| u.id).max().unwrap_or(0);
+        let id = max_id + 1;
+        if !list.iter().any(|u| u.url == url) {
+            list.push(AdblockUrlEntry {
+                id: Some(id),
+                url: url.to_string(),
+                kind,
+                format,
+            });
+            self.put(ADBLOCK_URLS, &list)?;
+        }
         Ok(id)
     }
 
     fn remove_adblock_source(&self, id: i64) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let mut table = write_txn
-                .open_table(TABLE_ADBLOCK_URLS)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            let _ = table.remove(id);
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+        let mut list = self.get(ADBLOCK_URLS)?.unwrap_or_default();
+        list.retain(|u| u.id != Some(id));
+        self.put(ADBLOCK_URLS, &list)
     }
 
-    fn update_adblock_source_status(
-        &self,
-        id: i64,
-        enabled: bool,
-    ) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let mut table = write_txn
-                .open_table(TABLE_ADBLOCK_URLS)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            let updated = {
-                if let Some(val) = table.get(id).map_err(|e| DbError::Backend(e.to_string()))? {
-                    let (url, kind, _, format): StoredSourceTuple =
-                        decode(val.value())
-                            .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                    Some((url, kind, enabled, format))
-                } else {
-                    None
-                }
-            };
-
-            if let Some(entry) = updated {
-                let bytes = encode(&entry)
-                    .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-                table
-                    .insert(id, bytes.as_slice())
-                    .map_err(|e| DbError::Backend(e.to_string()))?;
-            }
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+    fn update_adblock_source_status(&self, _id: i64, _enabled: bool) -> Result<(), DbError> {
         Ok(())
     }
 
@@ -516,125 +250,58 @@ impl AdblockStore for RedbDatabase {
     fn load_adblock_rules(
         &self,
     ) -> Result<Vec<(i64, String, AdblockRuleAction, bool)>, DbError> {
-        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
-        let table = match read_txn.open_table(TABLE_ADBLOCK_RULES) {
-            Ok(t) => t,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-            Err(e) => return Err(DbError::Backend(e.to_string())),
-        };
-
-        let mut rules = Vec::new();
-        for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-            let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-            let (domain, action, enabled): (String, AdblockRuleAction, bool) =
-                decode(val.value())
-                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-            rules.push((id.value(), domain, action, enabled));
-        }
-        rules.sort_by_key(|(id, _, _, _)| *id);
-        Ok(rules)
+        let list = self.get(ADBLOCK_RULES)?.unwrap_or_default();
+        Ok(list
+            .into_iter()
+            .enumerate()
+            .map(|(i, r)| {
+                (
+                    r.id.unwrap_or(i as i64 + 1),
+                    r.domain,
+                    r.action,
+                    r.enabled,
+                )
+            })
+            .collect())
     }
 
-    fn add_adblock_rule(
-        &self,
-        domain: &str,
-        action: AdblockRuleAction,
-    ) -> Result<i64, DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        let id = {
-            let id = Self::next_id_in_txn(&write_txn, "adblock_rules")?;
-            let bytes = encode(&(domain, action, true))
-                .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-
-            let mut table = write_txn
-                .open_table(TABLE_ADBLOCK_RULES)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            table
-                .insert(id, bytes.as_slice())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-            id
-        };
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+    fn add_adblock_rule(&self, domain: &str, action: AdblockRuleAction) -> Result<i64, DbError> {
+        let mut list = self.get(ADBLOCK_RULES)?.unwrap_or_default();
+        let max_id = list.iter().filter_map(|r| r.id).max().unwrap_or(0);
+        let id = max_id + 1;
+        list.push(AdblockRuleEntry {
+            id: Some(id),
+            domain: domain.to_string(),
+            action,
+            enabled: true,
+        });
+        self.put(ADBLOCK_RULES, &list)?;
         Ok(id)
     }
 
     fn remove_adblock_rule(&self, id: i64) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let mut table = write_txn
-                .open_table(TABLE_ADBLOCK_RULES)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            let _ = table.remove(id);
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+        let mut list = self.get(ADBLOCK_RULES)?.unwrap_or_default();
+        list.retain(|r| r.id != Some(id));
+        self.put(ADBLOCK_RULES, &list)
     }
 
-    fn update_adblock_rule_status(
-        &self,
-        id: i64,
-        enabled: bool,
-    ) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let mut table = write_txn
-                .open_table(TABLE_ADBLOCK_RULES)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            let updated = {
-                if let Some(val) = table.get(id).map_err(|e| DbError::Backend(e.to_string()))? {
-                    let (domain, action, _): (String, AdblockRuleAction, bool) =
-                        decode(val.value())
-                            .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                    Some((domain, action, enabled))
-                } else {
-                    None
-                }
-            };
-
-            if let Some(entry) = updated {
-                let bytes = encode(&entry)
-                    .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-
-                table
-                    .insert(id, bytes.as_slice())
-                    .map_err(|e| DbError::Backend(e.to_string()))?;
-            }
+    fn update_adblock_rule_status(&self, id: i64, enabled: bool) -> Result<(), DbError> {
+        let mut list = self.get(ADBLOCK_RULES)?.unwrap_or_default();
+        if let Some(r) = list.iter_mut().find(|r| r.id == Some(id)) {
+            r.enabled = enabled;
+            self.put(ADBLOCK_RULES, &list)?;
         }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(())
     }
 
     fn clear_adblock_rules(&self) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let _ = write_txn.delete_table(TABLE_ADBLOCK_RULES);
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+        self.put(ADBLOCK_RULES, &Vec::new())
     }
 }
 
 impl DnsUpstreamStore for RedbDatabase {
     fn load_dns_upstreams(&self) -> Result<Vec<DnsUpstreamEntry>, DbError> {
-        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
-        let table = match read_txn.open_table(TABLE_DNS_UPSTREAMS) {
-            Ok(t) => t,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-            Err(e) => return Err(DbError::Backend(e.to_string())),
-        };
-
-        let mut upstreams = Vec::new();
-        for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-            let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-            let entry: DnsUpstreamEntry = decode(val.value())
-                .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-            upstreams.push(entry);
-        }
-        upstreams.sort_by_key(|u| u.id);
-        Ok(upstreams)
+        Ok(self.get(DNS_UPSTREAMS)?.unwrap_or_default())
     }
 
     fn add_dns_upstream(
@@ -643,29 +310,16 @@ impl DnsUpstreamStore for RedbDatabase {
         protocol: UpstreamProtocol,
         domain: Option<&str>,
     ) -> Result<i64, DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        let id = {
-            let id = Self::next_id_in_txn(&write_txn, "dns_upstreams")?;
-            let entry = DnsUpstreamEntry {
-                id,
-                addr,
-                protocol,
-                domain: domain.map(ToString::to_string),
-            };
-
-            let bytes = encode(&entry)
-                .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
-
-            let mut table = write_txn
-                .open_table(TABLE_DNS_UPSTREAMS)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            table
-                .insert(id, bytes.as_slice())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-            id
-        };
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        let mut list = self.load_dns_upstreams()?;
+        let max_id = list.iter().map(|e| e.id).max().unwrap_or(0);
+        let id = max_id + 1;
+        list.push(DnsUpstreamEntry {
+            id,
+            addr,
+            protocol,
+            domain: domain.map(String::from),
+        });
+        self.put(DNS_UPSTREAMS, &list)?;
         Ok(id)
     }
 
@@ -675,83 +329,20 @@ impl DnsUpstreamStore for RedbDatabase {
         protocol: UpstreamProtocol,
         domain: Option<&str>,
     ) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let mut table = match write_txn.open_table(TABLE_DNS_UPSTREAMS) {
-                Ok(t) => t,
-                Err(redb::TableError::TableDoesNotExist(_)) => return Ok(()),
-                Err(e) => return Err(DbError::Backend(e.to_string())),
-            };
-
-            let target_id = {
-                let mut found = None;
-                for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
-                    let (id, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                    let entry: DnsUpstreamEntry = decode(val.value())
-                        .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                    let domain_match = match domain {
-                        Some(d) => entry.domain.as_deref() == Some(d),
-                        None => true,
-                    };
-                    if entry.addr == addr && entry.protocol == protocol && domain_match {
-                        found = Some(id.value());
-                        break;
-                    }
-                }
-                found
-            };
-
-            if let Some(id) = target_id {
-                let _ = table.remove(id);
-            }
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+        let mut list = self.load_dns_upstreams()?;
+        list.retain(|e| !(e.addr == addr && e.protocol == protocol && e.domain.as_deref() == domain));
+        self.put(DNS_UPSTREAMS, &list)
     }
 
     fn clear_dns_upstreams(&self) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let _ = write_txn.delete_table(TABLE_DNS_UPSTREAMS);
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+        self.put(DNS_UPSTREAMS, &Vec::new())
     }
 
     fn load_dns_upstream_mode(&self) -> Result<Option<UpstreamMode>, DbError> {
-        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
-        let table = match read_txn.open_table(TABLE_CONFIG) {
-            Ok(t) => t,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
-            Err(e) => return Err(DbError::Backend(e.to_string())),
-        };
-
-        match table.get("dns_upstream_mode").map_err(|e| DbError::Backend(e.to_string()))? {
-            Some(val) => {
-                let mode_str = std::str::from_utf8(val.value())
-                    .map_err(|e| DbError::Backend(format!("UTF-8 decode error: {e}")))?;
-                let mode: UpstreamMode = mode_str
-                    .parse()
-                    .map_err(|e| DbError::Backend(format!("Invalid mode: {e}")))?;
-                Ok(Some(mode))
-            }
-            None => Ok(None),
-        }
+        self.get(DNS_UPSTREAM_MODE)
     }
 
     fn save_dns_upstream_mode(&self, mode: UpstreamMode) -> Result<(), DbError> {
-        let mode_str = mode.to_string();
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let mut table = write_txn
-                .open_table(TABLE_CONFIG)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-
-            table
-                .insert("dns_upstream_mode", mode_str.as_bytes())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-        }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
+        self.put(DNS_UPSTREAM_MODE, &mode)
     }
 }

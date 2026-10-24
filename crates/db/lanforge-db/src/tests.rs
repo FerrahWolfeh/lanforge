@@ -14,7 +14,7 @@ async fn test_log_db_in_memory() {
 #[tokio::test]
 async fn test_lanforge_db_schema_version() {
     let db = crate::LanforgeDb::open_in_memory().unwrap();
-    assert_eq!(db.schema_version().unwrap(), 3);
+    assert_eq!(db.schema_version().unwrap(), 4);
 
     let log_db = LogDb::open(":memory:").unwrap();
     assert_eq!(log_db.schema_version().unwrap(), 1);
