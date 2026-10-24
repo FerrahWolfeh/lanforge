@@ -29,9 +29,17 @@ pub enum DbError {
     #[error("Database backend failure: {0}")]
     Backend(String),
 
+    /// Binary encoding or decoding failure.
+    #[error("Database codec failure: {0}")]
+    Codec(String),
+
     /// Entity not found.
     #[error("Entity not found: {0}")]
     NotFound(String),
+
+    /// Database corruption detected.
+    #[error("Database corruption: {0}")]
+    Corrupt(String),
 
     /// Validation failure or invalid parameters.
     #[error("Validation error: {0}")]
@@ -44,6 +52,75 @@ pub enum DbError {
     /// A generic message error.
     #[error("Database error: {0}")]
     Generic(String),
+}
+
+#[cfg(feature = "postcard")]
+impl From<postcard::Error> for DbError {
+    fn from(err: postcard::Error) -> Self {
+        DbError::Codec(err.to_string())
+    }
+}
+
+#[cfg(feature = "redb")]
+impl From<redb::DatabaseError> for DbError {
+    fn from(err: redb::DatabaseError) -> Self {
+        DbError::Backend(err.to_string())
+    }
+}
+
+#[cfg(feature = "redb")]
+impl From<redb::TransactionError> for DbError {
+    fn from(err: redb::TransactionError) -> Self {
+        DbError::Backend(err.to_string())
+    }
+}
+
+#[cfg(feature = "redb")]
+impl From<redb::TableError> for DbError {
+    fn from(err: redb::TableError) -> Self {
+        DbError::Backend(err.to_string())
+    }
+}
+
+#[cfg(feature = "redb")]
+impl From<redb::StorageError> for DbError {
+    fn from(err: redb::StorageError) -> Self {
+        match err {
+            redb::StorageError::Corrupted(msg) => DbError::Corrupt(msg),
+            other => DbError::Backend(other.to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "redb")]
+impl From<redb::CommitError> for DbError {
+    fn from(err: redb::CommitError) -> Self {
+        DbError::Backend(err.to_string())
+    }
+}
+
+#[cfg(feature = "redb")]
+impl From<redb::CompactionError> for DbError {
+    fn from(err: redb::CompactionError) -> Self {
+        DbError::Backend(err.to_string())
+    }
+}
+
+#[cfg(feature = "redb")]
+impl From<redb::SetDurabilityError> for DbError {
+    fn from(err: redb::SetDurabilityError) -> Self {
+        DbError::Backend(err.to_string())
+    }
+}
+
+#[cfg(feature = "redb")]
+impl From<redb::Error> for DbError {
+    fn from(err: redb::Error) -> Self {
+        match err {
+            redb::Error::Corrupted(msg) => DbError::Corrupt(msg),
+            other => DbError::Backend(other.to_string()),
+        }
+    }
 }
 
 /// A strong newtype wrapper for a logical device identifier.

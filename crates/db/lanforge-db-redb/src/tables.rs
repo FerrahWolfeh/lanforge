@@ -2,9 +2,9 @@
 
 use redb::TableDefinition;
 
-pub const TABLE_DEVICES: TableDefinition<&[u8], &[u8]> = TableDefinition::new("devices");
-pub const TABLE_STATIC_HOSTS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("static_hosts");
-pub const TABLE_RUNTIME_DEVICES: TableDefinition<&[u8], &[u8]> = TableDefinition::new("runtime_devices");
+pub const TABLE_DEVICES: TableDefinition<[u8; 6], &[u8]> = TableDefinition::new("devices");
+pub const TABLE_STATIC_HOSTS: TableDefinition<[u8; 6], &[u8]> = TableDefinition::new("static_hosts");
+pub const TABLE_RUNTIME_DEVICES: TableDefinition<[u8; 6], &[u8]> = TableDefinition::new("runtime_devices");
 pub const TABLE_CONFIG: TableDefinition<&str, &[u8]> = TableDefinition::new("config");
 pub const TABLE_META: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
 pub const TABLE_USERS: TableDefinition<&str, &[u8]> = TableDefinition::new("users");

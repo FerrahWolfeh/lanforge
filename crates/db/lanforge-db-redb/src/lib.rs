@@ -35,8 +35,7 @@ pub(crate) fn encode_into<T: serde::Serialize + ?Sized>(value: &T, bytes: &mut V
     let mut scratch = scratch;
     scratch.clear();
     scratch.push(VALUE_CODEC_VERSION);
-    *bytes = postcard::to_extend(value, scratch)
-        .map_err(|e| DbError::Backend(format!("postcard encode failed: {e}")))?;
+    *bytes = postcard::to_extend(value, scratch)?;
     Ok(())
 }
 
@@ -49,8 +48,7 @@ pub(crate) fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, 
             "unsupported database value version {version}"
         )));
     }
-    postcard::from_bytes(payload)
-        .map_err(|e| DbError::Backend(format!("postcard decode failed: {e}")))
+    Ok(postcard::from_bytes(payload)?)
 }
 
 /// A group of mutations committed as one redb transaction.
@@ -237,11 +235,34 @@ impl RedbDatabase {
         self.path.is_none()
     }
 
+    /// Opens a table in a read-only transaction and passes it to the closure.
+    /// If the table does not exist, returns `Ok(None)` without error.
+    pub(crate) fn read_table<K: redb::Key + 'static, V: redb::Value + 'static, R>(
+        &self,
+        table_def: redb::TableDefinition<K, V>,
+        f: impl FnOnce(&redb::ReadOnlyTable<K, V>) -> Result<R, DbError>,
+    ) -> Result<Option<R>, DbError> {
+        let read_txn = self.db.begin_read()?;
+        match read_txn.open_table(table_def) {
+            Ok(table) => f(&table).map(Some),
+            Err(redb::TableError::TableDoesNotExist(_)) => Ok(None),
+            Err(e) => Err(DbError::from(e)),
+        }
+    }
+
+    /// Convenience wrapper around `read_table` that returns `R::default()` if the table does not exist.
+    pub(crate) fn read_table_or_default<K: redb::Key + 'static, V: redb::Value + 'static, R: Default>(
+        &self,
+        table_def: redb::TableDefinition<K, V>,
+        f: impl FnOnce(&redb::ReadOnlyTable<K, V>) -> Result<R, DbError>,
+    ) -> Result<R, DbError> {
+        Ok(self.read_table(table_def, f)?.unwrap_or_default())
+    }
+
     pub(crate) fn begin_write(&self) -> Result<WriteTransaction, DbError> {
-        let mut txn = self.db.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let mut txn = self.db.begin_write()?;
         if self.volatile {
-            txn.set_durability(Durability::None)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
+            txn.set_durability(Durability::None)?;
         }
         Ok(txn)
     }
@@ -253,7 +274,7 @@ impl RedbDatabase {
     ) -> Result<R, DbError> {
         let txn = self.begin_write()?;
         let result = operation(&mut DbWriteTx { txn: &txn })?;
-        txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        txn.commit()?;
         Ok(result)
     }
 
@@ -787,7 +808,9 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        let since_secs = now_secs.saturating_sub(600);
+        // Anchor to the start of the current 15-minute bucket to avoid flaky boundary crossing
+        let bucket_base = (now_secs / 900) * 900 + 100;
+        let since_secs = bucket_base.saturating_sub(600);
 
         // 1. Record system logs
         let event1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::ReloadConfig));
@@ -798,9 +821,9 @@ mod tests {
         let history = db.get_history(10).unwrap();
         assert_eq!(history.len(), 2);
 
-        // 2. Record DNS queries
+        // 2. Record DNS queries within the same bucket
         let query1 = QueryLogEntry {
-            timestamp: now_secs.saturating_sub(50),
+            timestamp: bucket_base + 10,
             src_ip: "192.168.1.50".parse().unwrap(),
             domain: Arc::from("example.com"),
             upstream_us: 1200,
@@ -814,7 +837,7 @@ mod tests {
             coalesce_id: None,
         };
         let query2 = QueryLogEntry {
-            timestamp: now_secs.saturating_sub(20),
+            timestamp: bucket_base + 20,
             src_ip: "192.168.1.50".parse().unwrap(),
             domain: Arc::from("bad-ads.net"),
             upstream_us: 0,

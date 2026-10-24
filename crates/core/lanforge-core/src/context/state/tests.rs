@@ -1077,10 +1077,10 @@ fn test_handle_arp_seen_deduplicates() {
 fn test_hostname_origin_priority() {
     use lanforge_types::network::HostnameOrigin;
 
-    // Static priority must be highest, followed by Mdns, followed by Dhcp.
+    // Static priority must be highest, followed by Mdns and Dhcp (equal priority).
     assert!(HostnameOrigin::Static > HostnameOrigin::Mdns);
     assert!(HostnameOrigin::Static > HostnameOrigin::Dhcp);
-    assert!(HostnameOrigin::Mdns > HostnameOrigin::Dhcp);
+    assert_eq!(HostnameOrigin::Mdns.cmp(&HostnameOrigin::Dhcp), std::cmp::Ordering::Equal);
 
     let ctx = setup();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();

@@ -107,16 +107,16 @@ fn query_matches(
 
 impl RedbDatabase {
     pub fn load_runtime_devices(&self) -> Result<Vec<Device>, DbError> {
-        let txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
-        let table = match txn.open_table(TABLE_RUNTIME_DEVICES) {
-            Ok(table) => table,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
-            Err(error) => return Err(DbError::Backend(error.to_string())),
-        };
-        table.iter().map_err(|e| DbError::Backend(e.to_string()))?.map(|row| {
-            let (_, value) = row.map_err(|e| DbError::Backend(e.to_string()))?;
-            decode(value.value())
-        }).collect()
+        let devices = self.read_table_or_default(TABLE_RUNTIME_DEVICES, |table| {
+            let count = table.len().unwrap_or(0) as usize;
+            let mut list = Vec::with_capacity(count);
+            for row in table.iter()? {
+                let (_, value) = row?;
+                list.push(decode(value.value())?);
+            }
+            Ok(list)
+        })?;
+        Ok(devices)
     }
 
     pub fn sync_runtime_devices(
@@ -126,43 +126,41 @@ impl RedbDatabase {
     ) -> Result<(), DbError> {
         if upserts.is_empty() && deletes.is_empty() { return Ok(()); }
         let txn = self.begin_write()?;
-        let mut table = txn.open_table(TABLE_RUNTIME_DEVICES)
-            .map_err(|e| DbError::Backend(e.to_string()))?;
+        let mut table = txn.open_table(TABLE_RUNTIME_DEVICES)?;
         for mac in deletes {
-            table.remove(mac.0.as_slice()).map_err(|e| DbError::Backend(e.to_string()))?;
+            table.remove(mac.0)?;
         }
         let mut bytes = Vec::with_capacity(512);
         for device in upserts {
             if device.origin == Origin::Dynamic {
                 encode_into(device.as_ref(), &mut bytes)?;
-                table.insert(device.mac.0.as_slice(), bytes.as_slice())
-                    .map_err(|e| DbError::Backend(e.to_string()))?;
+                table.insert(device.mac.0, bytes.as_slice())?;
             } else {
-                table.remove(device.mac.0.as_slice()).map_err(|e| DbError::Backend(e.to_string()))?;
+                table.remove(device.mac.0)?;
             }
         }
         drop(table);
-        txn.commit().map_err(|e| DbError::Backend(e.to_string()))
+        txn.commit()?;
+        Ok(())
     }
 
     pub fn replace_runtime_devices(&self, upserts: &[std::sync::Arc<Device>]) -> Result<(), DbError> {
         let txn = self.begin_write()?;
-        let mut table = txn.open_table(TABLE_RUNTIME_DEVICES)
-            .map_err(|e| DbError::Backend(e.to_string()))?;
-        let keys: Vec<Vec<u8>> = table.iter().map_err(|e| DbError::Backend(e.to_string()))?
-            .map(|row| row.map(|(key, _)| key.value().to_vec()).map_err(|e| DbError::Backend(e.to_string())))
+        let mut table = txn.open_table(TABLE_RUNTIME_DEVICES)?;
+        let keys: Vec<[u8; 6]> = table.iter()?
+            .map(|row| row.map(|(key, _)| key.value()).map_err(DbError::from))
             .collect::<Result<_, _>>()?;
         for key in keys {
-            table.remove(key.as_slice()).map_err(|e| DbError::Backend(e.to_string()))?;
+            table.remove(key)?;
         }
         let mut bytes = Vec::with_capacity(512);
         for device in upserts.iter().filter(|device| device.origin == Origin::Dynamic) {
             encode_into(device.as_ref(), &mut bytes)?;
-            table.insert(device.mac.0.as_slice(), bytes.as_slice())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
+            table.insert(device.mac.0, bytes.as_slice())?;
         }
         drop(table);
-        txn.commit().map_err(|e| DbError::Backend(e.to_string()))
+        txn.commit()?;
+        Ok(())
     }
 
     /// Auto-prunes older events and caps table sizes to prevent unbounded disk growth.

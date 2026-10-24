@@ -6,8 +6,11 @@ edition.workspace = true
 authors.workspace = true
 
 [features]
+default = ["redb", "postcard"]
 adblock = ["lanforge-types/adblock"]
 hotpath = []
+redb = ["dep:redb"]
+postcard = ["dep:postcard"]
 
 [dependencies]
 # Lanforge
@@ -19,3 +22,5 @@ tokio = { workspace = true, features = ["sync"] }
 serde = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+redb = { workspace = true, optional = true }
+postcard = { workspace = true, optional = true }
