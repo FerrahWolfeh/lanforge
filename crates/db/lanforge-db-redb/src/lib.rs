@@ -880,11 +880,33 @@ mod tests {
             total_requests: 1250,
             blocked_queries: 180,
             resolved_total: 1070,
+            cache_hits: 450,
+            cache_misses: 800,
             ..Default::default()
         };
         db.save_dns_lifetime_stats(&test_stats).unwrap();
         let loaded = db.load_dns_lifetime_stats().unwrap();
         assert_eq!(loaded, test_stats);
+        assert_eq!(loaded.cache_hits, 450);
+        assert_eq!(loaded.cache_misses, 800);
+
+        // Test Traffic History Persistence
+        let initial_traffic = db.load_traffic_history().unwrap();
+        assert!(initial_traffic.is_empty());
+
+        let test_traffic = vec![
+            lanforge_types::network::TrafficHistorySample {
+                timestamp: 1_700_000_000,
+                interfaces: vec![lanforge_types::network::traffic::InterfaceThroughputPoint {
+                    interface: "ppp0".to_string(),
+                    rx_rate_bps: 10_000_000,
+                    tx_rate_bps: 2_000_000,
+                }],
+            },
+        ];
+        db.save_traffic_history(&test_traffic).unwrap();
+        let loaded_traffic = db.load_traffic_history().unwrap();
+        assert_eq!(loaded_traffic, test_traffic);
 
         // 3. Clear logs
         db.clear_logs().unwrap();

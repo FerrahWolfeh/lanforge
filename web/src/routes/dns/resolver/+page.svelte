@@ -275,7 +275,7 @@
 		<NavTabs tabs={dnsTabs} ariaLabel="DNS system navigation" />
 
 		<!-- 1. Top Summary Metric Cards -->
-		<DnsResolverTopCards {loading} {statsData} {upstreams} />
+		<DnsResolverTopCards {loading} {statsData} {analyticsData} {upstreams} />
 
 		<!-- 2. Time-Series Activity Chart & Query Types Breakdown (Pi-hole Style) -->
 		<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">

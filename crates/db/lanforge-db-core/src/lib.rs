@@ -16,7 +16,7 @@ use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamProtocol, Ups
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
-use lanforge_types::network::{DnsReverseResolver, Hostname, IpSubnet, Ipv6AddrOrSuffix, QueryLogEntry, QueryResult, TrafficConfig};
+use lanforge_types::network::{DnsReverseResolver, Hostname, IpSubnet, Ipv6AddrOrSuffix, QueryLogEntry, QueryResult, TrafficConfig, TrafficHistorySample};
 
 /// Database error enum encapsulating all database failures.
 #[derive(Debug, thiserror::Error)]
@@ -761,6 +761,16 @@ pub trait LogStore: Send + Sync {
         &self,
         _stats: &DnsLifetimeStats,
     ) -> Result<(), DbError> {
+        Ok(())
+    }
+
+    /// Loads persisted real-time traffic history samples (10m window) across restarts.
+    fn load_traffic_history(&self) -> Result<Vec<TrafficHistorySample>, DbError> {
+        Ok(Vec::new())
+    }
+
+    /// Saves persisted real-time traffic history samples on shutdown or periodic sync.
+    fn save_traffic_history(&self, _samples: &[TrafficHistorySample]) -> Result<(), DbError> {
         Ok(())
     }
 }

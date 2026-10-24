@@ -7,19 +7,51 @@
 	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
-	import type { DnsStatsResponse, DnsUpstreamEntry } from "$lib/api/types";
+	import type { DnsStatsResponse, DnsAnalyticsResponse, DnsUpstreamEntry } from "$lib/api/types";
 
 	let {
 		loading = true,
 		statsData = null,
+		analyticsData = null,
 		upstreams = [],
 	}: {
 		loading?: boolean;
 		statsData?: DnsStatsResponse | null;
+		analyticsData?: DnsAnalyticsResponse | null;
 		upstreams?: DnsUpstreamEntry[];
 	} = $props();
 
+	const analytics24h = $derived.by(() => {
+		const rates = analyticsData?.query_rate ?? [];
+		if (rates.length === 0) return null;
+		const total = rates.reduce((acc, r) => acc + r.count, 0);
+		const cached = rates.reduce((acc, r) => acc + (r.cached ?? 0), 0);
+		const forwarded = rates.reduce((acc, r) => acc + (r.forwarded ?? 0), 0);
+		const blocked = rates.reduce((acc, r) => acc + (r.blocked ?? 0), 0);
+		const local = rates.reduce((acc, r) => acc + (r.local ?? 0), 0);
+		const rewritten = rates.reduce((acc, r) => acc + (r.rewritten ?? 0), 0);
+		const resolved = Math.max(0, total - blocked);
+		const safeTot = Math.max(1, total);
+		return {
+			total,
+			cached,
+			forwarded,
+			blocked,
+			local,
+			rewritten,
+			resolved,
+			cacheHitPct: Math.round((cached / safeTot) * 100),
+			blockPct: ((blocked / safeTot) * 100).toFixed(1),
+		};
+	});
+
+	const totalQueries = $derived.by(() => {
+		if (analytics24h) return analytics24h.total;
+		return statsData?.total_requests ?? 0;
+	});
+
 	const cacheHitPct = $derived.by(() => {
+		if (analytics24h) return analytics24h.cacheHitPct;
 		if (!statsData) return 0;
 		const cacheTotal = statsData.cache_hits + (statsData.cache_misses ?? 0);
 		if (cacheTotal === 0) return 0;
@@ -27,16 +59,23 @@
 	});
 
 	const cacheHitsCount = $derived.by(() => {
-		if (!statsData) return 0;
-		return statsData.cache_hits ?? 0;
+		if (analytics24h) return analytics24h.cached;
+		return statsData?.cache_hits ?? 0;
+	});
+
+	const blockedCount = $derived.by(() => {
+		if (analytics24h) return analytics24h.blocked;
+		return statsData?.blocked_queries ?? 0;
 	});
 
 	const blockPct = $derived.by(() => {
+		if (analytics24h) return `${analytics24h.blockPct}%`;
 		if (!statsData || statsData.total_requests === 0) return "0.0%";
 		return `${((statsData.blocked_queries / statsData.total_requests) * 100).toFixed(1)}%`;
 	});
 
 	const resolvedCount = $derived.by(() => {
+		if (analytics24h) return analytics24h.resolved;
 		if (!statsData) return 0;
 		if (typeof statsData.resolved_total === "number" && statsData.resolved_total > 0) {
 			return statsData.resolved_total;
@@ -44,7 +83,13 @@
 		return Math.max(0, statsData.total_requests - statsData.blocked_queries);
 	});
 
+	const localRewritesCount = $derived.by(() => {
+		if (analytics24h) return analytics24h.local + analytics24h.rewritten;
+		return statsData?.auth_queries ?? 0;
+	});
+
 	const forwardedCount = $derived.by(() => {
+		if (analytics24h) return analytics24h.forwarded;
 		if (!statsData) return 0;
 		if (typeof statsData.recursions === "number" && statsData.recursions > 0) {
 			return statsData.recursions;
@@ -111,30 +156,32 @@
 <StatCardGrid cols={4}>
 	<!-- Card 1: Total DNS Queries -->
 	<StatCard
-		label="Total DNS Queries"
-		value={statsData ? statsData.total_requests.toLocaleString() : null}
-		subtext="Lifetime queries processed"
+		label="DNS Queries (24h)"
+		value={loading && !analyticsData && !statsData ? null : totalQueries.toLocaleString()}
+		subtext={loading && !analyticsData && !statsData ? "Awaiting telemetry..." : "Queries in last 24h"}
 		icon={ActivityIcon}
 		color="sky"
 		{loading}
 		popover={{
-			title: "DNS Query Engine",
-			description: "Total recursive, authoritative, and cached queries handled across UDP and TCP port 53.",
+			title: "DNS Query Engine (24h Window)",
+			description: statsData
+				? `Processed in last 24h: ${totalQueries.toLocaleString()} queries. Lifetime total since startup: ${statsData.total_requests.toLocaleString()}.`
+				: "Total recursive, authoritative, and cached queries handled in the last 24 hours.",
 		}}
 		badge={{
-			text: "Port 53",
+			text: "24h Window",
 			variant: "sky",
 		}}
 	>
 		{#snippet footer()}
 			<StatCardFooterItem
 				label="Resolved"
-				value={statsData ? resolvedCount.toLocaleString() : "—"}
+				value={loading && !analyticsData && !statsData ? "—" : resolvedCount.toLocaleString()}
 				color="text-emerald-400"
 			/>
 			<StatCardFooterItem
 				label="Local / Rewrites"
-				value={statsData?.auth_queries !== undefined ? statsData.auth_queries.toLocaleString() : "—"}
+				value={loading && !analyticsData && !statsData ? "—" : localRewritesCount.toLocaleString()}
 				color="text-sky-400"
 			/>
 		{/snippet}
@@ -142,7 +189,7 @@
 
 	<!-- Card 2: Cache Hit Ratio -->
 	<StatCard
-		label="Cache Hit Ratio"
+		label="Cache Hit Ratio (24h)"
 		value={`${cacheHitPct}%`}
 		subtext={`${cacheHitsCount.toLocaleString()} queries served from memory`}
 		icon={ZapIcon}
@@ -150,7 +197,9 @@
 		{loading}
 		popover={{
 			title: "Zero-Latency Memory Cache",
-			description: "Queries resolved directly from memory without forwarding to upstream DNS resolvers.",
+			description: statsData
+				? `24h cache hits: ${cacheHitsCount.toLocaleString()} (${cacheHitPct}%). Lifetime memory hits: ${statsData.cache_hits.toLocaleString()}.`
+				: "Queries resolved directly from memory without forwarding to upstream DNS resolvers.",
 		}}
 		badge={{
 			text: cacheHitPct >= 70 ? "Optimal" : (cacheHitPct > 0 ? "Active" : "Standby"),
@@ -179,20 +228,22 @@
 
 	<!-- Card 3: Blocked Queries -->
 	<StatCard
-		label="Blocked Queries"
-		value={statsData ? statsData.blocked_queries.toLocaleString() : null}
+		label="Blocked Queries (24h)"
+		value={loading && !analyticsData && !statsData ? null : blockedCount.toLocaleString()}
 		subtext="Ads, trackers & malicious domains"
 		icon={ShieldIcon}
 		color="rose"
 		{loading}
 		popover={{
-			title: "DNS Domain Filtering",
-			description: "Adware, tracking, telemetry, and custom rewrite domains blocked with NXDOMAIN or 0.0.0.0.",
+			title: "DNS Domain Filtering (24h Window)",
+			description: statsData
+				? `Blocked in last 24h: ${blockedCount.toLocaleString()} (${blockPct}). Lifetime blocked: ${statsData.blocked_queries.toLocaleString()}.`
+				: "Adware, tracking, telemetry, and custom rewrite domains blocked with NXDOMAIN or 0.0.0.0.",
 		}}
 		badge={{
-			text: "Adblock Active",
-			variant: "rose",
-			showDot: true,
+			text: `${blockPct} Blocked`,
+			variant: blockedCount > 0 ? "rose" : "zinc",
+			showDot: blockedCount > 0,
 		}}
 	>
 		{#snippet footer()}

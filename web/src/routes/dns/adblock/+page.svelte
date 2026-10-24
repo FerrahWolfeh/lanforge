@@ -103,6 +103,7 @@
 		{loading}
 		{status}
 		{stats}
+		{analytics}
 		sourceCount={sources.length}
 	/>
 

@@ -167,10 +167,12 @@
 		txBps: number;
 	}
 
+	const TOTAL_SAMPLES = 240; // 10 minutes window @ 2.5s sample interval
+
 	function createInitialSamples(): TelemetrySample[] {
 		const now = Date.now();
-		return Array.from({ length: 30 }, (_, i) => {
-			const past = new Date(now - (29 - i) * 2500);
+		return Array.from({ length: TOTAL_SAMPLES }, (_, i) => {
+			const past = new Date(now - (TOTAL_SAMPLES - 1 - i) * 2500);
 			return {
 				date: past,
 				timestamp: past.getTime(),
@@ -196,9 +198,9 @@
 					};
 				});
 
-				if (mapped.length < 30) {
+				if (mapped.length < TOTAL_SAMPLES) {
 					const t0 = mapped[0].timestamp;
-					const padCount = 30 - mapped.length;
+					const padCount = TOTAL_SAMPLES - mapped.length;
 					const padded: TelemetrySample[] = [];
 					for (let i = 0; i < padCount; i++) {
 						const pastMs = t0 - (padCount - i) * 2500;
@@ -210,7 +212,7 @@
 					}
 					rawSamples = [...padded, ...mapped];
 				} else {
-					rawSamples = mapped;
+					rawSamples = mapped.slice(-TOTAL_SAMPLES);
 				}
 			} else {
 				const now = new Date();
@@ -221,7 +223,7 @@
 				}));
 
 				rawSamples = [
-					...rawSamples.slice(-239),
+					...rawSamples.slice(-(TOTAL_SAMPLES - 1)),
 					{
 						date: now,
 						timestamp: now.getTime(),
@@ -316,43 +318,45 @@
 	const dnsChartPoints = $derived.by(() => {
 		const rates = analyticsData?.query_rate ?? [];
 
-		if (rates.length === 0) {
-			const now = Date.now();
-			return Array.from({ length: 48 }, (_, i) => {
-				const timestamp = new Date(now - (48 - i) * 30 * 60 * 1000);
-				const hour = timestamp.getHours();
-				const diurnalFactor = Math.sin(((hour - 6) / 24) * 2 * Math.PI) * 0.4 + 0.6;
-				const base = Math.floor((30 + Math.random() * 25) * diurnalFactor);
-				const total = Math.max(8, base);
-				const cacheCount = Math.floor(total * (0.35 + Math.random() * 0.2));
-				const label = `${timestamp.getHours().toString().padStart(2, "0")}:${timestamp.getMinutes().toString().padStart(2, "0")}`;
+		const now = Date.now();
+		const BUCKET_MS = 15 * 60 * 1000;
+		const BUCKET_COUNT = 96; // 96 * 15m = 24 hours
+		const currentBucketMs = Math.floor(now / BUCKET_MS) * BUCKET_MS;
 
-				return {
-					date: timestamp,
-					label,
-					timestamp: timestamp.getTime(),
-					total,
-					cached: cacheCount,
-				};
-			});
+		const ratesMap = new Map<number, (typeof rates)[0]>();
+		for (const r of rates) {
+			const ms = r.timestamp < 10_000_000_000 ? r.timestamp * 1000 : r.timestamp;
+			const bucketKey = Math.floor(ms / BUCKET_MS) * BUCKET_MS;
+			ratesMap.set(bucketKey, r);
 		}
 
-		return rates.map((r) => {
+		return Array.from({ length: BUCKET_COUNT }, (_, i) => {
+			const bucketMs = currentBucketMs - (BUCKET_COUNT - 1 - i) * BUCKET_MS;
+			const date = new Date(bucketMs);
+			const label = `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
+
+			const r = ratesMap.get(bucketMs);
+			if (!r) {
+				return {
+					date,
+					label,
+					timestamp: bucketMs,
+					total: 0,
+					cached: 0,
+				};
+			}
+
 			const total = r.count;
 			const cacheCount =
 				r.cached ??
 				(dnsData && dnsData.total_requests > 0
 					? Math.round((dnsData.cache_hits / dnsData.total_requests) * total)
 					: Math.floor(total * 0.4));
-			const date = new Date(
-				r.timestamp < 10000000000 ? r.timestamp * 1000 : r.timestamp,
-			);
-			const label = `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
 
 			return {
 				date,
 				label,
-				timestamp: date.getTime(),
+				timestamp: bucketMs,
 				total,
 				cached: cacheCount,
 			};
@@ -676,9 +680,9 @@
 							xAxis: {
 								format: (d: Date | number) => {
 									const dt = d instanceof Date ? d : new Date(Number(d));
-									return `${dt.getHours().toString().padStart(2, "0")}:${dt.getMinutes().toString().padStart(2, "0")}:${dt.getSeconds().toString().padStart(2, "0")}`;
+									return `${dt.getHours().toString().padStart(2, "0")}:${dt.getMinutes().toString().padStart(2, "0")}`;
 								},
-								tickSpacing: 80,
+								tickSpacing: 90,
 							},
 							yAxis: {
 								format: (v: number) => formatBps(v),
@@ -738,7 +742,7 @@
 							<Chart.Tooltip
 								labelFormatter={(v) => {
 									if (v instanceof Date) {
-										return `${v.toLocaleDateString([], { month: "short", day: "numeric" })} ${v.getHours().toString().padStart(2, "0")}:${v.getMinutes().toString().padStart(2, "0")}`;
+										return `${v.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${v.getHours().toString().padStart(2, "0")}:${v.getMinutes().toString().padStart(2, "0")}`;
 									}
 									return String(v);
 								}}

@@ -231,6 +231,12 @@ impl Daemon {
         #[cfg(feature = "dns")]
         let dns_lifetime = log_db.load_dns_lifetime_stats().unwrap_or_default();
 
+        #[cfg(feature = "traffic")]
+        {
+            let traffic_history = log_db.load_traffic_history().unwrap_or_default();
+            lanforge_traffic::restore_traffic_history(traffic_history);
+        }
+
         crate::spawn_services!(self.registry, &self.ctx, {
             async [ctx, cfg, db, log_db] => DbWorker::new(cfg.database.clone(), ctx, db, log_db),
 
@@ -292,6 +298,7 @@ impl Daemon {
     async fn shutdown(self) -> Result<()> {
         sd_notify_stopping();
         info!("🛑 Starting shutdown sequence...");
+        let log_db = self.bootstrap.log_db.clone();
         self.ctx.terminate();
         let _ = self
             .ctx
@@ -304,6 +311,14 @@ impl Daemon {
             }
             () = tokio::time::sleep(Duration::from_secs(5)) => {
                 info!("Shutdown timeout reached, exiting.");
+            }
+        }
+
+        #[cfg(feature = "traffic")]
+        {
+            let history = lanforge_traffic::get_traffic_history_snapshot().await;
+            if !history.is_empty() {
+                let _ = log_db.save_traffic_history(&history);
             }
         }
 

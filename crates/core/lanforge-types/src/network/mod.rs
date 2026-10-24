@@ -11,7 +11,7 @@ pub mod subnet;
 pub mod traffic;
 
 pub use traffic::{
-    NicTuningConfig, SqmConfig, SqmDiffserv, SqmOverhead, TrafficConfig,
+    NicTuningConfig, SqmConfig, SqmDiffserv, SqmOverhead, TrafficConfig, TrafficHistorySample,
 };
 
 pub use firewall::{

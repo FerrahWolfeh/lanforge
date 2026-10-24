@@ -11,7 +11,10 @@ pub mod service;
 pub mod sqm;
 pub mod tuning;
 
-pub use collector::{collect_traffic_telemetry, record_traffic_telemetry_tick};
+pub use collector::{
+    collect_traffic_telemetry, get_traffic_history_snapshot, record_traffic_telemetry_tick,
+    restore_traffic_history,
+};
 pub use lanforge_types::events::traffic::*;
 pub use lanforge_types::network::traffic::*;
 pub use service::TrafficService;

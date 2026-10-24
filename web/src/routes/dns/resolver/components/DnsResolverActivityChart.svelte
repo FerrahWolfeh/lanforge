@@ -57,37 +57,48 @@
 		const rates = analyticsData?.query_rate ?? [];
 		const blocked = analyticsData?.blocked_query_rate ?? [];
 
-		if (rates.length === 0) {
-			const now = Date.now();
-			return Array.from({ length: 48 }, (_, i) => {
-				const timestamp = new Date(now - (48 - i) * 30 * 60 * 1000);
-				const total = Math.floor(Math.random() * 55) + 20;
-				const blkCount = Math.floor(Math.random() * 6);
-				const rwCount = Math.random() > 0.6 ? Math.floor(Math.random() * 4) : 0;
-				const locCount = Math.floor(Math.random() * 6) + 1;
-				const cacheCount = Math.floor(
-					Math.max(0, total - blkCount - rwCount - locCount) * (0.35 + Math.random() * 0.25),
-				);
-				const fwdCount = Math.max(0, total - blkCount - rwCount - locCount - cacheCount);
-				const label = `${timestamp.getHours().toString().padStart(2, "0")}:${timestamp.getMinutes().toString().padStart(2, "0")}`;
+		const now = Date.now();
+		const BUCKET_MS = 15 * 60 * 1000; // 15-minute intervals matching backend aggregation
+		const BUCKET_COUNT = 96; // 96 * 15m = 24 hours
+		const currentBucketMs = Math.floor(now / BUCKET_MS) * BUCKET_MS;
 
-				return {
-					date: timestamp,
-					label,
-					timestamp: timestamp.getTime(),
-					total,
-					forwarded: fwdCount,
-					cached: cacheCount,
-					local: locCount,
-					rewritten: rwCount,
-					blocked: blkCount,
-				};
-			});
+		// Index incoming query rates by 15-minute rounded timestamp
+		const ratesMap = new Map<number, (typeof rates)[0]>();
+		for (const r of rates) {
+			const ms = r.timestamp < 10_000_000_000 ? r.timestamp * 1000 : r.timestamp;
+			const bucketKey = Math.floor(ms / BUCKET_MS) * BUCKET_MS;
+			ratesMap.set(bucketKey, r);
 		}
 
-		return rates.map((r, idx) => {
+		const blockedMap = new Map<number, number>();
+		for (const b of blocked) {
+			const ms = b.timestamp < 10_000_000_000 ? b.timestamp * 1000 : b.timestamp;
+			const bucketKey = Math.floor(ms / BUCKET_MS) * BUCKET_MS;
+			blockedMap.set(bucketKey, b.count);
+		}
+
+		return Array.from({ length: BUCKET_COUNT }, (_, i) => {
+			const bucketMs = currentBucketMs - (BUCKET_COUNT - 1 - i) * BUCKET_MS;
+			const date = new Date(bucketMs);
+			const label = `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
+
+			const r = ratesMap.get(bucketMs);
+			if (!r) {
+				return {
+					date,
+					label,
+					timestamp: bucketMs,
+					total: 0,
+					forwarded: 0,
+					cached: 0,
+					local: 0,
+					rewritten: 0,
+					blocked: 0,
+				};
+			}
+
 			const total = r.count;
-			const blkCount = r.blocked ?? blocked[idx]?.count ?? 0;
+			const blkCount = r.blocked ?? blockedMap.get(bucketMs) ?? 0;
 			const rwCount = r.rewritten ?? 0;
 			const locCount = r.local ?? 0;
 			const cacheCount =
@@ -100,15 +111,11 @@
 					: Math.floor(Math.max(0, total - blkCount - rwCount - locCount) * 0.4));
 			const fwdCount =
 				r.forwarded ?? Math.max(0, total - cacheCount - blkCount - rwCount - locCount);
-			const date = new Date(
-				r.timestamp < 10000000000 ? r.timestamp * 1000 : r.timestamp,
-			);
-			const label = `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
 
 			return {
 				date,
 				label,
-				timestamp: date.getTime(),
+				timestamp: bucketMs,
 				total,
 				forwarded: fwdCount,
 				cached: cacheCount,
@@ -352,7 +359,7 @@
 							<Chart.Tooltip
 								labelFormatter={(v) => {
 									if (v instanceof Date) {
-										return `${v.toLocaleDateString([], { month: "short", day: "numeric" })} ${v.getHours().toString().padStart(2, "0")}:${v.getMinutes().toString().padStart(2, "0")}`;
+										return `${v.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${v.getHours().toString().padStart(2, "0")}:${v.getMinutes().toString().padStart(2, "0")}`;
 									}
 									return String(v);
 								}}

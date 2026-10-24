@@ -625,6 +625,10 @@ pub struct DnsLifetimeStats {
     pub auth_queries: u64,
     pub recursions: u64,
     #[serde(default)]
+    pub cache_hits: u64,
+    #[serde(default)]
+    pub cache_misses: u64,
+    #[serde(default)]
     pub proto_udp: u64,
     #[serde(default)]
     pub proto_tcp: u64,

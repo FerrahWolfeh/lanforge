@@ -7,17 +7,19 @@
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
 	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
-	import type { DnsAdblockStatusResponse, DnsStatsResponse } from "$lib/api/types";
+	import type { DnsAdblockStatusResponse, DnsStatsResponse, DnsAnalyticsResponse } from "$lib/api/types";
 
 	let {
 		loading = false,
 		status = null,
 		stats = null,
+		analytics = null,
 		sourceCount = 0,
 	}: {
 		loading?: boolean;
 		status?: DnsAdblockStatusResponse | null;
 		stats?: DnsStatsResponse | null;
+		analytics?: DnsAnalyticsResponse | null;
 		sourceCount?: number;
 	} = $props();
 
@@ -26,16 +28,34 @@
 	const exceptionsDomains = $derived(status?.exceptions_size ?? 0);
 	const totalAllowedOrExceptions = $derived(allowlistDomains + exceptionsDomains);
 
-	const totalQueries = $derived(stats?.total_requests ?? 0);
-	const blockedQueries = $derived(stats?.blocked_queries ?? 0);
-	const allowedQueries = $derived(Math.max(0, totalQueries - blockedQueries));
+	const analytics24h = $derived.by(() => {
+		const rates = analytics?.query_rate ?? [];
+		if (rates.length === 0) return null;
+		const total = rates.reduce((acc, r) => acc + r.count, 0);
+		const blocked = rates.reduce((acc, r) => acc + (r.blocked ?? 0), 0);
+		const allowed = Math.max(0, total - blocked);
+		const safeTot = Math.max(1, total);
+		return {
+			total,
+			blocked,
+			allowed,
+			blockPct: ((blocked / safeTot) * 100).toFixed(1),
+			blockPctNum: (blocked / safeTot) * 100,
+		};
+	});
+
+	const totalQueries = $derived(analytics24h ? analytics24h.total : (stats?.total_requests ?? 0));
+	const blockedQueries = $derived(analytics24h ? analytics24h.blocked : (stats?.blocked_queries ?? 0));
+	const allowedQueries = $derived(analytics24h ? analytics24h.allowed : Math.max(0, totalQueries - blockedQueries));
 
 	const blockPercentage = $derived.by(() => {
+		if (analytics24h) return `${analytics24h.blockPct}%`;
 		if (totalQueries === 0) return "0.0%";
 		return `${((blockedQueries / totalQueries) * 100).toFixed(1)}%`;
 	});
 
 	const blockPercentageNum = $derived.by(() => {
+		if (analytics24h) return analytics24h.blockPctNum;
 		if (totalQueries === 0) return 0;
 		return (blockedQueries / totalQueries) * 100;
 	});
@@ -75,17 +95,19 @@
 <StatCardGrid cols={4}>
 	<!-- Card 1: Queries Blocked & Block Rate (Unified) -->
 	<StatCard
-		label="Blocked Queries"
-		value={stats ? blockedQueries.toLocaleString() : null}
-		subtext={stats
-			? `Out of ${totalQueries.toLocaleString()} total network lookups`
-			: "Awaiting DNS telemetry..."}
+		label="Blocked Queries (24h)"
+		value={loading && !analytics && !stats ? null : blockedQueries.toLocaleString()}
+		subtext={loading && !analytics && !stats
+			? "Awaiting DNS telemetry..."
+			: `Out of ${totalQueries.toLocaleString()} lookups in last 24h`}
 		icon={ShieldAlertIcon}
 		color="rose"
 		{loading}
 		popover={{
-			title: "Blocked Ad & Tracker Queries",
-			description: "Real-time DNS queries intercepted by the adblocking engine and sinkholed before reaching WAN upstreams.",
+			title: "Blocked Ad & Tracker Queries (24h Window)",
+			description: stats
+				? `Blocked in last 24h: ${blockedQueries.toLocaleString()} (${blockPercentage}). Lifetime blocked since startup: ${stats.blocked_queries.toLocaleString()}.`
+				: "Real-time DNS queries intercepted by the adblocking engine and sinkholed before reaching WAN upstreams.",
 		}}
 		badge={{
 			text: `${blockPercentage} Blocked`,
@@ -103,7 +125,7 @@
 		{#snippet footer()}
 			<StatCardFooterItem
 				label="Allowed Lookups"
-				value={stats ? `${allowedQueries.toLocaleString()} (${allowedPercentage})` : "—"}
+				value={loading && !analytics && !stats ? "—" : `${allowedQueries.toLocaleString()} (${allowedPercentage})`}
 				color="text-emerald-400"
 			/>
 			<StatCardFooterItem

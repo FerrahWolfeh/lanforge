@@ -325,6 +325,44 @@ pub async fn collect_traffic_telemetry(
     guard.collect(wan_iface, ifb_iface).await
 }
 
+/// Returns an isolated snapshot of historical telemetry samples.
+pub async fn get_traffic_history_snapshot() -> Vec<TrafficHistorySample> {
+    let collector = COLLECTOR.get_or_init(|| Mutex::new(TrafficCollector::new()));
+    collector.lock().await.history.iter().cloned().collect()
+}
+
+/// Restores historical traffic samples on daemon boot, discarding any samples
+/// that have already expired past the 10-minute window (600 seconds).
+pub fn restore_traffic_history(samples: Vec<TrafficHistorySample>) {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let cutoff = now.saturating_sub(600);
+    let valid: VecDeque<TrafficHistorySample> = samples
+        .into_iter()
+        .filter(|s| s.timestamp >= cutoff)
+        .take(MAX_HISTORY_SAMPLES)
+        .collect();
+
+    if valid.is_empty() {
+        return;
+    }
+
+    let collector = COLLECTOR.get_or_init(|| Mutex::new(TrafficCollector::new()));
+    match collector.try_lock() {
+        Ok(mut guard) => guard.history = valid,
+        Err(_) => {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let collector = COLLECTOR.get_or_init(|| Mutex::new(TrafficCollector::new()));
+                    collector.lock().await.history = valid;
+                });
+            }
+        }
+    }
+}
+
 /// Parses raw `/proc/net/dev` content and computes instantaneous rate.
 #[must_use]
 #[allow(
@@ -677,5 +715,38 @@ mod tests {
         let resp = collector.collect(None, None).await;
         assert!(resp.wan_interface.is_none());
         assert!(resp.ingress_device.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_restore_traffic_history_window() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let samples = vec![
+            TrafficHistorySample {
+                timestamp: now.saturating_sub(700),
+                interfaces: vec![InterfaceThroughputPoint {
+                    interface: "ppp0".to_string(),
+                    rx_rate_bps: 1_000,
+                    tx_rate_bps: 500,
+                }],
+            },
+            TrafficHistorySample {
+                timestamp: now.saturating_sub(100),
+                interfaces: vec![InterfaceThroughputPoint {
+                    interface: "ppp0".to_string(),
+                    rx_rate_bps: 5_000,
+                    tx_rate_bps: 2_500,
+                }],
+            },
+        ];
+
+        restore_traffic_history(samples);
+        let restored = get_traffic_history_snapshot().await;
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].timestamp, now.saturating_sub(100));
+        assert_eq!(restored[0].interfaces[0].rx_rate_bps, 5_000);
     }
 }

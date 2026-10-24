@@ -38,8 +38,8 @@ impl DnsStats {
     pub fn with_lifetime(lifetime: &DnsLifetimeStats) -> Self {
         Self {
             requests_total: AtomicU64::new(lifetime.total_requests),
-            cache_hits: AtomicU64::new(0),
-            cache_misses: AtomicU64::new(0),
+            cache_hits: AtomicU64::new(lifetime.cache_hits),
+            cache_misses: AtomicU64::new(lifetime.cache_misses),
             upstream_errors: AtomicU64::new(lifetime.upstream_errors),
             auth_queries: AtomicU64::new(lifetime.auth_queries),
             recursions: AtomicU64::new(lifetime.recursions),
@@ -70,6 +70,8 @@ impl DnsStats {
             upstream_errors: self.upstream_errors.load(Ordering::Relaxed),
             auth_queries: self.auth_queries.load(Ordering::Relaxed),
             recursions: self.recursions.load(Ordering::Relaxed),
+            cache_hits: self.cache_hits.load(Ordering::Relaxed),
+            cache_misses: self.cache_misses.load(Ordering::Relaxed),
             proto_udp: self.proto_udp.load(Ordering::Relaxed),
             proto_tcp: self.proto_tcp.load(Ordering::Relaxed),
             proto_dot: self.proto_dot.load(Ordering::Relaxed),
@@ -215,6 +217,8 @@ mod tests {
             failed_total: 5,
             #[cfg(feature = "adblock")]
             blocked_queries: 12,
+            cache_hits: 40,
+            cache_misses: 20,
             proto_udp: 90,
             proto_tcp: 10,
             proto_dot: 0,
@@ -230,8 +234,12 @@ mod tests {
         let snap = stats.snapshot();
         assert_eq!(snap.requests_total, 100);
         assert_eq!(snap.proto_udp, 91);
-        assert_eq!(snap.cache_hits, 3);
-        assert_eq!(snap.cache_misses, 2);
+        assert_eq!(snap.cache_hits, 43);
+        assert_eq!(snap.cache_misses, 22);
+
+        let snap_lifetime = stats.lifetime_snapshot();
+        assert_eq!(snap_lifetime.cache_hits, 43);
+        assert_eq!(snap_lifetime.cache_misses, 22);
     }
 }
 

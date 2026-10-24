@@ -160,6 +160,10 @@ pub enum StorageQuery {
     },
     RemoveReverseResolver(IpSubnet),
     ClearReverseResolvers,
+
+    // --- Traffic Telemetry History ---
+    SaveTrafficHistory(Vec<crate::network::TrafficHistorySample>),
+    LoadTrafficHistory,
 }
 
 /// Response types produced by the storage persistence actor.
@@ -180,4 +184,5 @@ pub enum StorageQueryResult {
     DnsAnalytics(DnsAnalyticsData),
     LogHistory(Vec<crate::events::TimedEvent>),
     DnsUpstreamMode(Option<crate::network::dns::UpstreamMode>),
+    TrafficHistory(Vec<crate::network::TrafficHistorySample>),
 }

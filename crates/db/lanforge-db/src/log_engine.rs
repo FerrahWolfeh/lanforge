@@ -6,7 +6,7 @@ use lanforge_db_redb::RedbDatabase;
 use lanforge_types::device::Device;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType};
-use lanforge_types::network::{QueryLogEntry, QueryResult};
+use lanforge_types::network::{QueryLogEntry, QueryResult, TrafficHistorySample};
 use std::net::IpAddr;
 use std::ops::Deref;
 use std::path::Path;
@@ -255,5 +255,13 @@ impl LogStore for LogDb {
 
     fn save_dns_lifetime_stats(&self, stats: &DnsLifetimeStats) -> Result<(), DbError> {
         self.inner.save_dns_lifetime_stats(stats)
+    }
+
+    fn load_traffic_history(&self) -> Result<Vec<TrafficHistorySample>, DbError> {
+        self.inner.load_traffic_history()
+    }
+
+    fn save_traffic_history(&self, samples: &[TrafficHistorySample]) -> Result<(), DbError> {
+        self.inner.save_traffic_history(samples)
     }
 }

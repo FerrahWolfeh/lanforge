@@ -811,6 +811,18 @@ impl DbWorker {
                 ctx.set_reverse_resolvers(Vec::new());
                 Ok(StorageQueryResult::Success)
             }
+            StorageQuery::SaveTrafficHistory(samples) => {
+                log_db
+                    .save_traffic_history(&samples)
+                    .map_err(|e| e.to_string())?;
+                Ok(StorageQueryResult::Success)
+            }
+            StorageQuery::LoadTrafficHistory => {
+                let samples = log_db
+                    .load_traffic_history()
+                    .unwrap_or_default();
+                Ok(StorageQueryResult::TrafficHistory(samples))
+            }
         }
     }
 }

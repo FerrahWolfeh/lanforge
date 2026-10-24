@@ -389,6 +389,14 @@ impl TrafficService {
                         Ok(te) => match te.event {
                             LanforgeEvent::System(SystemEvent::Shutdown) => {
                                 debug!("Traffic: Shutdown signal received");
+                                if let Some(storage) = ctx.storage_handle() {
+                                    let history = crate::collector::get_traffic_history_snapshot().await;
+                                    if !history.is_empty() {
+                                        let _ = storage
+                                            .send_query(lanforge_types::storage::StorageQuery::SaveTrafficHistory(history))
+                                            .await;
+                                    }
+                                }
                                 break;
                             }
                             LanforgeEvent::System(SystemEvent::InterfaceReady) => {

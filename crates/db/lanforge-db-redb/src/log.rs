@@ -11,7 +11,7 @@ use lanforge_db_core::{DbError, DnsQueryRateBucket, LogStore};
 use lanforge_types::device::{Device, Origin};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType};
-use lanforge_types::network::{QueryLogEntry, QueryResult};
+use lanforge_types::network::{QueryLogEntry, QueryResult, TrafficHistorySample};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
 use std::net::IpAddr;
 use std::collections::BTreeMap;
@@ -1171,5 +1171,48 @@ impl LogStore for RedbDatabase {
                 .commit()
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             Ok(())
+    }
+
+    fn load_traffic_history(&self) -> Result<Vec<TrafficHistorySample>, DbError> {
+        let read_txn = self.db
+            .begin_read()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        let table = match read_txn.open_table(TABLE_CONFIG) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+            Err(e) => return Err(DbError::Backend(e.to_string())),
+        };
+
+        match table
+            .get("traffic_history_snapshot")
+            .map_err(|e| DbError::Backend(e.to_string()))?
+        {
+            Some(val) => {
+                let samples: Vec<TrafficHistorySample> = decode(val.value())
+                    .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
+                Ok(samples)
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn save_traffic_history(&self, samples: &[TrafficHistorySample]) -> Result<(), DbError> {
+        let bytes = encode(samples)
+            .map_err(|e| DbError::Backend(format!("Serialization error: {e}")))?;
+        let write_txn = self.db
+            .begin_write()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        {
+            let mut table = write_txn
+                .open_table(TABLE_CONFIG)
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+            table
+                .insert("traffic_history_snapshot", bytes.as_slice())
+                .map_err(|e| DbError::Backend(e.to_string()))?;
+        }
+        write_txn
+            .commit()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        Ok(())
     }
 }
