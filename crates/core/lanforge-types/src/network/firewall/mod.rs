@@ -222,6 +222,7 @@ impl Default for FirewallConfig {
 
 /// Operational status and statistics snapshot for RPC and telemetry.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct FirewallStatus {
     pub mode: FirewallMode,
     pub table: String,
@@ -232,6 +233,8 @@ pub struct FirewallStatus {
     pub rules_count: u32,
     pub enabled: bool,
     pub flow_offload_active: bool,
+    #[serde(default)]
+    pub flow_offload_suspended: bool,
     pub default_drop_active: bool,
 }
 

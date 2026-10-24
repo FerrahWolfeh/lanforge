@@ -79,8 +79,8 @@
 		</div>
 	{/if}
 
-	<!-- 4-Card Stats Grid -->
-	<StatCardGrid cols={4}>
+	<!-- 3-Card Stats Grid -->
+	<StatCardGrid cols={3}>
 		<!-- Card 1: Operation Mode -->
 		<StatCard
 			label="Operation Mode"
@@ -96,11 +96,15 @@
 			loading={loading && !status}
 		>
 			{#snippet footer()}
-				<StatCardFooterItem label="Backend" value="nftables" />
 				<StatCardFooterItem
 					label="Engine"
 					value={status?.enabled ? "Active" : "Inactive"}
 					color={status?.enabled ? "text-emerald-500" : "text-muted-foreground"}
+				/>
+				<StatCardFooterItem
+					label="Active WAN"
+					value={status?.active_wan ?? "Auto-detect"}
+					color="text-sky-400"
 				/>
 			{/snippet}
 		</StatCard>
@@ -127,42 +131,34 @@
 		<!-- Card 3: Flowtable Offload -->
 		<StatCard
 			label="Flowtable Offload"
-			value={status ? (status.flow_offload_active ? "Accelerated" : "Disabled") : "—"}
+			value={status ? (status.flow_offload_suspended ? "Suspended" : status.flow_offload_active ? "Accelerated" : "Disabled") : "—"}
 			icon={ZapIcon}
-			color={status?.flow_offload_active ? "amber" : "zinc"}
+			color={status?.flow_offload_suspended ? "amber" : status?.flow_offload_active ? "emerald" : "zinc"}
 			badge={status ? {
-				text: status.flow_offload_active ? "Hardware / Fast-Path" : "Disabled",
-				variant: status.flow_offload_active ? "online" : "dormant",
+				text: status.flow_offload_suspended
+					? "Suspended (SQM Active)"
+					: status.flow_offload_active
+						? "Hardware / Fast-Path"
+						: "Disabled",
+				variant: status.flow_offload_suspended
+					? "warning"
+					: status.flow_offload_active
+						? "online"
+						: "dormant",
 				showDot: true
 			} : undefined}
-			subtext={status ? (status.flow_offload_active ? "Line-rate fast-path bypass" : "Standard routing stack traversal") : "Offload status unavailable"}
+			subtext={status ? (status.flow_offload_suspended ? "Bypassed so CAKE can schedule packets" : status.flow_offload_active ? "Line-rate fast-path bypass" : "Standard routing stack traversal") : "Offload status unavailable"}
 			loading={loading && !status}
 		>
 			{#snippet footer()}
 				<StatCardFooterItem
 					label="Fast-Path"
-					value={status?.flow_offload_active ? "Enabled" : "Disabled"}
-					color={status?.flow_offload_active ? "text-amber-500" : "text-muted-foreground"}
+					value={status?.flow_offload_suspended ? "Suspended (SQM)" : status?.flow_offload_active ? "Enabled" : "Disabled"}
+					color={status?.flow_offload_suspended ? "text-amber-400" : status?.flow_offload_active ? "text-emerald-500" : "text-muted-foreground"}
 				/>
-				<StatCardFooterItem label="Bypass" value="L3 / L4 Netlink" />
-			{/snippet}
-		</StatCard>
-
-		<!-- Card 4: Dataplane & Runtime -->
-		<StatCard
-			label="Dataplane Status"
-			value={status ? (status.enabled ? "Active" : "Inactive") : "—"}
-			icon={CpuIcon}
-			color={status?.enabled ? "emerald" : "zinc"}
-			subtext={status ? `Last applied: ${formatSecsAgo(status.last_applied_secs_ago)}` : "Dataplane unavailable"}
-			loading={loading && !status}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem label="Last Sync" value={status ? formatSecsAgo(status.last_applied_secs_ago) : "—"} />
 				<StatCardFooterItem
-					label="Transaction"
-					value={activeTxId ? "In Flight" : "Committed"}
-					color={activeTxId ? "text-amber-500" : "text-emerald-500"}
+					label="Bypass Mode"
+					value={status?.flow_offload_suspended ? "CAKE Queue" : "L3 / L4 Netlink"}
 				/>
 			{/snippet}
 		</StatCard>

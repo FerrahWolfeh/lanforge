@@ -23,73 +23,39 @@
 	const viewerCount = $derived(safeUsers.filter((u) => u.role === "viewer").length);
 </script>
 
-<StatCardGrid cols={4}>
-	<!-- Total Users -->
+<StatCardGrid cols={2}>
+	<!-- Card 1: Total Users -->
 	<StatCard
-		label="Total Users"
+		label="Configured Accounts"
 		value={totalCount}
 		icon={UsersIcon}
 		color="primary"
-		subtext="Active local accounts"
+		subtext="Local authentication identities"
 		loading={isLoading}
 	>
 		{#snippet footer()}
-			<StatCardFooterItem label="Security Model" value="Argon2id" />
-			<StatCardFooterItem label="Access Policy" value="RBAC" />
+			<StatCardFooterItem label="Password Hash" value="Argon2id" />
+			<StatCardFooterItem label="Access Policy" value="Role-Based (RBAC)" />
 		{/snippet}
 	</StatCard>
 
-	<!-- Admin Users -->
+	<!-- Card 2: Privileged Roles -->
 	<StatCard
-		label="Administrators"
+		label="Administrative Access"
 		value={adminCount}
 		icon={ShieldCheckIcon}
 		color="emerald"
 		badge={{
-			text: "Superuser",
-			variant: "online",
+			text: `${adminCount} Superuser${adminCount === 1 ? '' : 's'}`,
+			variant: adminCount > 0 ? "online" : "warning",
 			showDot: true
 		}}
-		subtext="Full system configuration"
+		subtext="Full system configuration privileges"
 		loading={isLoading}
 	>
 		{#snippet footer()}
-			<StatCardFooterItem
-				label="Privilege"
-				value="Unrestricted"
-				color="text-emerald-500"
-			/>
-			<StatCardFooterItem label="Accounts" value={`${adminCount} admin`} />
-		{/snippet}
-	</StatCard>
-
-	<!-- Operator Users -->
-	<StatCard
-		label="Operators"
-		value={operatorCount}
-		icon={WrenchIcon}
-		color="sky"
-		subtext="Network operations & telemetry"
-		loading={isLoading}
-	>
-		{#snippet footer()}
-			<StatCardFooterItem label="Privilege" value="Maintenance" />
-			<StatCardFooterItem label="Accounts" value={`${operatorCount} op`} />
-		{/snippet}
-	</StatCard>
-
-	<!-- Viewer Users -->
-	<StatCard
-		label="Viewers"
-		value={viewerCount}
-		icon={EyeIcon}
-		color="zinc"
-		subtext="Read-only telemetry access"
-		loading={isLoading}
-	>
-		{#snippet footer()}
-			<StatCardFooterItem label="Privilege" value="Read-Only" />
-			<StatCardFooterItem label="Accounts" value={`${viewerCount} view`} />
+			<StatCardFooterItem label="Operators" value={`${operatorCount} maintenance`} />
+			<StatCardFooterItem label="Viewers" value={`${viewerCount} read-only`} />
 		{/snippet}
 	</StatCard>
 </StatCardGrid>

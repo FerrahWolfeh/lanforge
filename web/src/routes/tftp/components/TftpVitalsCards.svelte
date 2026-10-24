@@ -31,10 +31,10 @@
 	} = $props();
 </script>
 
-<StatCardGrid cols={3}>
+<StatCardGrid cols={2}>
 	<!-- Card 1: Service Lifecycle -->
 	<StatCard
-		label="Service Lifecycle"
+		label="TFTP Daemon Status"
 		value={serviceState ? serviceState.charAt(0).toUpperCase() + serviceState.slice(1) : "Inactive"}
 		icon={HardDriveDownloadIcon}
 		color={isServiceActive ? "emerald" : "zinc"}
@@ -43,7 +43,7 @@
 			variant: enabled ? "online" : "dormant",
 			showDot: true
 		}}
-		subtext={enabled ? "Enabled in system configuration" : "Disabled in configuration"}
+		subtext={enabled ? "Daemon enabled in system configuration" : "Service disabled in configuration"}
 		{loading}
 	>
 		{#snippet actions()}
@@ -97,9 +97,9 @@
 		{/snippet}
 	</StatCard>
 
-	<!-- Card 2: Listen Socket -->
+	<!-- Card 2: Service Binding -->
 	<StatCard
-		label="Listen Socket"
+		label="Service Binding"
 		value={listenAddr || "0.0.0.0:69"}
 		icon={RadioIcon}
 		color="sky"
@@ -107,36 +107,8 @@
 		{loading}
 	>
 		{#snippet footer()}
-			<StatCardFooterItem label="Transport" value="UDP / IPv4+IPv6" />
-			<StatCardFooterItem label="Service Port" value="69 / tftp" />
-		{/snippet}
-	</StatCard>
-
-	<!-- Card 3: Root Directory -->
-	<StatCard
-		label="Root Directory"
-		icon={FolderIcon}
-		color="amber"
-		subtext="Base filesystem storage"
-		{loading}
-	>
-		{#snippet valueExtra()}
-			<div class="flex flex-col gap-0.5 my-0.5 min-w-0">
-				<span
-					class="text-foreground text-sm font-bold font-mono truncate max-w-full"
-					title={rootDir}
-				>
-					{rootDir || "/var/lib/lanforge/tftp"}
-				</span>
-				<span class="text-muted-foreground text-xs font-medium">
-					Bootloader & kernel root
-				</span>
-			</div>
-		{/snippet}
-
-		{#snippet footer()}
-			<StatCardFooterItem label="Permissions" value="0755 Read" />
-			<StatCardFooterItem label="Path" value={rootDir.split("/").pop() || "tftp"} />
+			<StatCardFooterItem label="Root Directory" value={rootDir.split("/").pop() || "tftp"} />
+			<StatCardFooterItem label="Protocol" value="RFC 1350 TFTP" />
 		{/snippet}
 	</StatCard>
 </StatCardGrid>

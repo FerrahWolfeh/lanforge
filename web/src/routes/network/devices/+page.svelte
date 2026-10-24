@@ -196,7 +196,7 @@
 	<NavTabs tabs={lanTabs} ariaLabel="LAN inventory navigation" />
 
 	<!-- Vitals Cards Grid -->
-	<StatCardGrid cols={4}>
+	<StatCardGrid cols={2}>
 		<StatCard
 			label="Connected Endpoints"
 			value={`${onlineCount} / ${totalCount}`}
@@ -217,24 +217,6 @@
 		</StatCard>
 
 		<StatCard
-			label="Dual-Stack Adoption"
-			value={dualStackCount}
-			subtext="Hosts with both IPv4 and IPv6 routes"
-			icon={GlobeIcon}
-			color="sky"
-			{loading}
-			badge={{
-				text: totalCount > 0 ? `${Math.round((dualStackCount / totalCount) * 100)}% Dual-Stack` : "IPv4 / IPv6",
-				variant: "sky",
-			}}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem label="Dual-Stack" value={dualStackCount} color="text-sky-400" />
-				<StatCardFooterItem label="Single-Stack" value={Math.max(0, totalCount - dualStackCount)} />
-			{/snippet}
-		</StatCard>
-
-		<StatCard
 			label="Static Reservations"
 			value={staticCount}
 			subtext="Pinned fixed IP leases and DHCP mappings"
@@ -249,26 +231,6 @@
 			{#snippet footer()}
 				<StatCardFooterItem label="Fixed Leases" value={staticCount} color="text-indigo-400" />
 				<StatCardFooterItem label="Dynamic Scope" value={Math.max(0, totalCount - staticCount)} />
-			{/snippet}
-		</StatCard>
-
-		<StatCard
-			label="Neighbor Monitor"
-			value="Kernel Netlink"
-			subtext="Passive ARP & NDP neighbor tracking"
-			icon={ActivityIcon}
-			color="violet"
-			{loading}
-			badge={{
-				text: scanning ? "Scanning..." : "Passive Active",
-				variant: scanning ? "starting" : "online",
-				showDot: true,
-				pulse: true,
-			}}
-		>
-			{#snippet footer()}
-				<StatCardFooterItem label="Protocol" value="ARP / NDP" />
-				<StatCardFooterItem label="Monitoring" value="Zero Overhead" color="text-emerald-400" />
 			{/snippet}
 		</StatCard>
 	</StatCardGrid>

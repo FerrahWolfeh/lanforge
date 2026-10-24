@@ -174,16 +174,11 @@
 				value={status?.blocking_mode ? status.blocking_mode.toUpperCase() : "NXDOMAIN"}
 				color="text-amber-400"
 			/>
-			<div class="flex flex-col gap-0.5 min-w-0">
-				<span class="text-[11px] text-muted-foreground truncate">Configuration</span>
-				<a
-					href="/dns/adblock/settings"
-					class="text-[11px] text-primary hover:underline font-medium flex items-center gap-0.5 truncate"
-				>
-					<span>Engine Settings</span>
-					<ArrowRightIcon class="size-3 shrink-0" />
-				</a>
-			</div>
+			<StatCardFooterItem
+				label="Enforcement"
+				value={status?.enabled ? "Active" : "Paused"}
+				color={status?.enabled ? "text-emerald-400" : "text-amber-400"}
+			/>
 		{/snippet}
 	</StatCard>
 

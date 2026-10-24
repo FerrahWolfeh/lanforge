@@ -441,6 +441,13 @@ export const dnsUpstreamRemove = (entry: { addr: string; protocol: string; domai
 export const dnsUpstreamClear = () => del<void>('/dns/upstreams/clear');
 export const dnsUpstreamModeGet = () => get<{ mode: string }>('/dns/upstreams/mode');
 export const dnsUpstreamModeSet = (mode: string) => put<{ mode: string }>('/dns/upstreams/mode', { mode });
+export const dnsUpstreamTest = (entry: { addr: string; protocol?: string; domain?: string }) => {
+	const formattedAddr = formatDnsAddr(entry.addr);
+	const proto = (entry.protocol || 'udp').toLowerCase();
+	const params = new URLSearchParams({ addr: formattedAddr, protocol: proto });
+	if (entry.domain) params.set('domain', entry.domain);
+	return get<{ ok: boolean; latency_ms: number; error?: string }>(`/dns/upstreams/test?${params.toString()}`);
+};
 
 export const dnsReverseResolverList = async (): Promise<ReverseResolverEntry[]> =>
 	extractList<ReverseResolverEntry>(await get<any>('/dns/reverse-resolvers'), 'resolvers');

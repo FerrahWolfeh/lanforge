@@ -388,10 +388,10 @@
 	];
 </script>
 
-<Card.Root class="relative overflow-hidden border-border/70 shadow-xs py-0 gap-0">
+<Card.Root class="relative overflow-hidden border-border/70 shadow-xs !py-0 !pt-0 [--card-spacing:0] gap-0">
 	<!-- Glow Header -->
-	<Card.Header class="pt-5 sm:pt-6 pb-3.5 px-4 sm:px-6 border-b border-border/50 bg-gradient-to-r from-sky-500/10 via-transparent to-emerald-500/10">
-		<div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+	<Card.Header class="pt-5 sm:pt-6 !pb-4 sm:!pb-5 px-4 sm:px-6 border-b border-border/50 bg-gradient-to-r from-sky-500/10 via-transparent to-emerald-500/10 rounded-t-3xl flex flex-col gap-3.5 w-full !items-stretch">
+		<div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between w-full">
 			<!-- Title & Mode Switcher -->
 			<div class="flex flex-col sm:flex-row sm:items-center gap-3">
 				<div class="flex items-start gap-3">
@@ -519,7 +519,7 @@
 
 		<!-- Categorized Interface Filter Bar (Bandwidth Mode) -->
 		{#if activeMode === "bandwidth" && availableInterfaces.length > 0}
-			<div class="flex items-center gap-1.5 pt-2 text-xs border-t border-border/40 overflow-x-auto">
+			<div class="flex items-center gap-1.5 pt-3 pb-0.5 text-xs border-t border-border/40 overflow-x-auto">
 				<span class="text-[11px] text-muted-foreground font-sans mr-1 shrink-0 flex items-center gap-1">
 					<NetworkIcon class="size-3" />
 					Interface:
@@ -752,7 +752,7 @@
 	</Card.Content>
 
 	<!-- Status Strip Footer -->
-	<Card.Footer class="border-t border-border/50 bg-muted/10 px-4 sm:px-6 py-2.5">
+	<Card.Footer class="border-t border-border/50 bg-muted/10 px-4 sm:px-6 !py-3.5 sm:!py-4 !pt-3.5 sm:!pt-4 rounded-b-3xl">
 		<div class="flex flex-wrap items-center justify-between gap-3 w-full text-xs text-muted-foreground font-mono">
 			<div class="flex items-center gap-2">
 				<ZapIcon class="size-3.5 text-amber-400" />

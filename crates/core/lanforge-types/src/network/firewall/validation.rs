@@ -132,13 +132,17 @@ fn validate_port_forwards(
         }
 
         for other in &port_forwards[idx + 1..] {
-            if rule.external_port == other.external_port
+            let same_family = (rule.internal_ip.is_ipv4() && other.internal_ip.is_ipv4())
+                || (rule.internal_ip.is_ipv6() && other.internal_ip.is_ipv6());
+            if same_family
+                && rule.external_port == other.external_port
                 && protocols_overlap(rule.protocol, other.protocol)
             {
                 errors.push(format!(
-                    "Port forward collision: external port {} ({}) is mapped multiple times",
+                    "Port forward collision: external port {} ({}) is mapped multiple times for {}",
                     rule.external_port,
-                    rule.protocol.as_str()
+                    rule.protocol.as_str(),
+                    if rule.internal_ip.is_ipv4() { "IPv4" } else { "IPv6" }
                 ));
             }
         }
@@ -418,6 +422,35 @@ mod tests {
                 .iter()
                 .any(|e| e.contains("Port forward collision"))
         );
+    }
+
+    #[test]
+    fn test_validation_allows_dual_stack_port_forward_on_same_port() {
+        let current = FirewallConfig::default();
+        let mut candidate = current.clone();
+
+        candidate.port_forwards.push(PortForwardRule {
+            comment: Some("Web IPv4".into()),
+            src_zone: "external".into(),
+            internal_ip: Ipv4Addr::new(192, 168, 1, 100).into(),
+            external_port: 8080,
+            internal_port: 8080,
+            protocol: L4Protocol::Tcp,
+            enable_hairpin: true,
+        });
+
+        candidate.port_forwards.push(PortForwardRule {
+            comment: Some("Web IPv6 Pinhole".into()),
+            src_zone: "external".into(),
+            internal_ip: "2001:db8::100".parse::<std::net::IpAddr>().unwrap(),
+            external_port: 8080,
+            internal_port: 8080,
+            protocol: L4Protocol::Tcp,
+            enable_hairpin: false,
+        });
+
+        let report = validate_firewall_candidate(&candidate, &current, &[], || "tx-test".into());
+        assert!(report.valid, "Dual-stack rules on same port should not collide: {:?}", report.errors);
     }
 
     #[test]

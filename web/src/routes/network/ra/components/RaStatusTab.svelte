@@ -8,6 +8,7 @@
 	import ServerIcon from "@lucide/svelte/icons/server";
 	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import AlertCircleIcon from "@lucide/svelte/icons/alert-circle";
+	import { formatIpv6Prefix } from "$lib/utils";
 	import type { RaStatusResponse, RaPrefix } from "$lib/api/types";
 
 	let {
@@ -77,31 +78,32 @@
 											<div class="flex items-center gap-1.5">
 												<span class="text-emerald-400">
 													{status?.active_gua_prefix
-														? `${status.active_gua_prefix}/${pref.prefix_len || 64}`
+														? formatIpv6Prefix(status.active_gua_prefix, pref.prefix_len || 64)
 														: "auto_gua"}
 												</span>
 												<Badge variant="secondary" class="text-[9px] px-1 py-0 font-normal">GUA</Badge>
+												<Badge variant="outline" class="text-[9px] px-1 py-0 font-normal text-emerald-400 border-emerald-500/30">Auto</Badge>
 											</div>
-										{:else if pref.source === "ula"}
+										{:else if pref.source === "ula" && !pref.address}
 											<div class="flex items-center gap-1.5">
 												<span class="text-sky-400">
-													{pref.address
-														? `${pref.address}/${pref.prefix_len || 64}`
-														: status?.active_ula_prefix
-															? `${status.active_ula_prefix}/${pref.prefix_len || 64}`
-															: "ula"}
+													{status?.active_ula_prefix
+														? formatIpv6Prefix(status.active_ula_prefix, pref.prefix_len || 64)
+														: "auto_ula"}
 												</span>
 												<Badge variant="secondary" class="text-[9px] px-1 py-0 font-normal">ULA</Badge>
+												<Badge variant="outline" class="text-[9px] px-1 py-0 font-normal text-sky-400 border-sky-500/30">Auto</Badge>
 											</div>
 										{:else}
+											{@const isUla = (pref.address || "").toLowerCase().startsWith("fd") || (pref.address || "").toLowerCase().startsWith("fc")}
 											<div class="flex items-center gap-1.5">
 												<span>
 													{pref.address
 														? `${pref.address}/${pref.prefix_len || 64}`
 														: `${pref.source} (/${pref.prefix_len || 64})`}
 												</span>
-												<Badge variant="outline" class="text-[9px] px-1 py-0 font-normal capitalize">
-													{pref.source}
+												<Badge variant="secondary" class="text-[9px] px-1 py-0 font-normal">
+													{isUla ? "ULA" : "GUA"}
 												</Badge>
 											</div>
 										{/if}

@@ -8,6 +8,7 @@ use lanforge_types::device::{IPv6State, Origin};
 use lanforge_types::network::firewall::{FirewallPolicy, FirewallStatus};
 use lanforge_types::system::ServiceState;
 use std::fs::metadata;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 impl ClientContext {
     /// Generates a full `StatusResponse` by gathering data from the configuration
@@ -99,6 +100,11 @@ impl ClientContext {
                 .ctx
                 .get_pppoe_config()
                 .map(|cfg| cfg.auth);
+        }
+
+        if status.state == lanforge_types::system::PppoeSessionState::Connected {
+            let uptime = self.ctx.get_service_uptime("pppoe");
+            status.uptime_secs = Some(uptime);
         }
 
         Response::PppoeStatus(status)
@@ -219,6 +225,12 @@ impl ClientContext {
         let rules_count = open_ports_count
             + (cfg.port_forwards.len() + cfg.forwardings.len()) as u32;
 
+        let sqm_enabled = self
+            .ctx
+            .get_traffic_config()
+            .map(|c| c.sqm.enabled)
+            .unwrap_or(false);
+
         let status = FirewallStatus {
             mode: cfg.mode,
             table: cfg.table_name,
@@ -228,7 +240,8 @@ impl ClientContext {
             open_ports_count,
             rules_count,
             enabled: cfg.enabled,
-            flow_offload_active: cfg.flow_offload,
+            flow_offload_active: cfg.flow_offload && !sqm_enabled,
+            flow_offload_suspended: cfg.flow_offload && sqm_enabled,
             default_drop_active: cfg.default_input_policy == FirewallPolicy::Drop,
         };
 
@@ -247,7 +260,14 @@ impl ClientContext {
         {
             db.size_bytes = meta.len();
         }
-        if let Some(last_flush) = self.ctx.last_db_flush() {
+        let last_flush_ts = self.ctx.db_metrics().last_flush_ts.load(std::sync::atomic::Ordering::Relaxed);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if last_flush_ts > 0 && now >= last_flush_ts {
+            db.last_flush_secs_ago = now - last_flush_ts;
+        } else if let Some(last_flush) = self.ctx.last_db_flush() {
             db.last_flush_secs_ago = last_flush.elapsed().unwrap_or_default().as_secs();
         }
         db

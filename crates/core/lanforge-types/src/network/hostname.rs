@@ -13,8 +13,7 @@ pub enum HostnameOrigin {
 impl HostnameOrigin {
     const fn priority(self) -> u8 {
         match self {
-            Self::Dhcp => 0,
-            Self::Mdns => 1,
+            Self::Dhcp | Self::Mdns => 1,
             Self::Static => 2,
         }
     }

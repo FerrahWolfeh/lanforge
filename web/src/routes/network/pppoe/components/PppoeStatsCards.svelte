@@ -31,6 +31,9 @@
 	} = $props();
 
 	function formatUptime(seconds?: number | null): string {
+		if (status?.state === "connected" && (!seconds || seconds <= 0)) {
+			return "< 1m";
+		}
 		if (!seconds || seconds <= 0) return "Disconnected";
 		const d = Math.floor(seconds / 86400);
 		const h = Math.floor((seconds % 86400) / 3600);

@@ -46,7 +46,7 @@
 	});
 </script>
 
-<StatCardGrid cols={4}>
+<StatCardGrid cols={3}>
 	<!-- Card 1: Stream Status -->
 	<StatCard
 		label="Stream Status"
@@ -102,32 +102,6 @@
 		{#snippet footer()}
 			<StatCardFooterItem label="Unique Topics" value={Object.keys(topicCounts).length} />
 			<StatCardFooterItem label="Primary Bus" value={topTopic.name} />
-		{/snippet}
-	</StatCard>
-
-	<!-- Card 4: Daemon Health -->
-	<StatCard
-		label="Daemon Health"
-		value={status ? "Healthy" : "Online"}
-		icon={ServerIcon}
-		color="emerald"
-		badge={{
-			text: "Operational",
-			variant: "online",
-			showDot: true
-		}}
-		subtext={status ? `v${status.version}` : "Status details loaded"}
-		loading={loading && !status}
-	>
-		{#snippet footer()}
-			<StatCardFooterItem
-				label="System Uptime"
-				value={status ? formatUptime(status.uptime_secs) : "—"}
-			/>
-			<StatCardFooterItem
-				label="Build"
-				value={status ? `v${status.version}` : "—"}
-			/>
 		{/snippet}
 	</StatCard>
 </StatCardGrid>

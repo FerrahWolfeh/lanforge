@@ -3,7 +3,7 @@
 	import { Badge } from "$lib/components/ui/badge";
 	import { Button } from "$lib/components/ui/button";
 	import { Skeleton } from "$lib/components/ui/skeleton";
-	import { formatBytes, formatBps, createPolling } from "$lib/utils";
+	import { formatBytes, formatBps, formatIpv6Prefix, createPolling } from "$lib/utils";
 	import {
 		status,
 		dnsStats,
@@ -259,20 +259,6 @@
 			href: "/dns/resolver",
 		},
 		{
-			label: "Network Traffic",
-			value: telemetryData
-				? formatBps(totalTrafficBps)
-				: null,
-			subtext: telemetryData
-				? `${formatBps(totalRxBps)} ↓ • ${formatBps(totalTxBps)} ↑`
-				: "Aggregate throughput",
-			icon: ActivityIcon,
-			color: "indigo" as const,
-			sparklineData: trafficSparkline,
-			sparklineColor: "#6366f1",
-			href: "/network/traffic",
-		},
-		{
 			label: "Firewall Conntrack",
 			value: conntrack
 				? `${conntrack.active_connections.toLocaleString()} / ${conntrack.max_connections.toLocaleString()}`
@@ -402,7 +388,7 @@
 	</PageHeader>
 
 	<!-- Top Stat Cards (Core Router Metrics) -->
-	<StatCardGrid cols={5}>
+	<StatCardGrid cols={4}>
 		{#each statCards as card (card.label)}
 			<StatCard
 				label={card.label}
@@ -430,74 +416,66 @@
 
 	<!-- Main Grid: Subsystem Overview (2 Cols) + Network & System Vitals (1 Col) -->
 	<div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
-		<!-- Left Main Panel: Router Core Subsystems -->
+		<!-- Left Main Panel: Router Service Health -->
 		<Card.Root class="flex flex-col lg:col-span-2">
 			<Card.Header class="p-4 py-3 border-b border-border/50">
 				<div class="flex items-center justify-between gap-2 min-w-0">
 					<div class="flex items-center gap-2 min-w-0">
 						<ActivityIcon class="size-4 text-emerald-400 shrink-0" />
 						<Card.Title class="text-sm sm:text-base font-semibold truncate">
-							Core Subsystems<span class="hidden md:inline">&nbsp;& Capabilities</span>
+							Service Status<span class="hidden md:inline">&nbsp;& Runtime Health</span>
 						</Card.Title>
 					</div>
 					<div class="flex items-center gap-2 shrink-0">
-						<span
-							class="size-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)] sm:hidden"
-							title="All engines operational"
-						></span>
-						<Badge variant="outline" class="hidden sm:inline-flex font-mono text-[10px] uppercase">
-							All Engines Operational
-						</Badge>
 						<a
 							href="/system/services"
 							class="text-xs text-muted-foreground hover:text-primary transition-colors flex items-center gap-1 font-medium"
 						>
-							<span>Services</span>
+							<span>All Daemons</span>
 							<ArrowRightIcon class="size-3" />
 						</a>
 					</div>
 				</div>
 			</Card.Header>
-			<Card.Content class="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+			<Card.Content class="p-3 divide-y divide-border/40">
 				{#each subsystemServices as svc (svc.name)}
 					{@const banner = getBanner(svc.id, svc.name)}
-					<a
-						href={svc.href}
-						class="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/20 p-4 transition-all hover:bg-muted/40 hover:border-zinc-700 group"
-					>
-						<div class="flex items-center justify-between">
-							<span class="text-foreground font-semibold text-xs group-hover:text-emerald-400 transition-colors">
-								{svc.name}
-							</span>
-							<div class="flex items-center gap-1.5">
-								{#if banner}
-									<span class="text-muted-foreground text-[10px] capitalize font-mono">{banner.state}</span>
-								{/if}
-								<StatusDot state={banner?.state ?? "online"} size="sm" />
+					<div class="flex items-center justify-between py-2.5 px-2 hover:bg-muted/20 rounded-md transition-colors">
+						<div class="flex items-center gap-3 min-w-0">
+							<StatusDot state={banner?.state ?? "online"} size="sm" />
+							<div class="flex flex-col min-w-0">
+								<div class="flex items-center gap-2">
+									<a href={svc.href} class="text-xs font-semibold text-foreground hover:text-primary transition-colors truncate">
+										{svc.name}
+									</a>
+									<Badge variant="outline" class="text-[9px] font-mono px-1 py-0 hidden sm:inline-flex">
+										{svc.tag}
+									</Badge>
+								</div>
+								<span class="text-[11px] text-muted-foreground truncate">{svc.desc}</span>
 							</div>
 						</div>
 
-						<p class="text-muted-foreground text-[11px] leading-relaxed">
-							{svc.desc}
-						</p>
-
-						<div class="flex items-center justify-between pt-1 font-mono text-[10px]">
-							<Badge variant="secondary" class="text-[9px] font-mono px-1.5 py-0">
-								{svc.tag}
-							</Badge>
-							<span class="text-muted-foreground">
+						<div class="flex items-center gap-3 shrink-0 font-mono text-[11px]">
+							<span class="text-muted-foreground text-[10px] hidden md:inline">
 								{#if banner?.stats?.leases_active}
 									{banner.stats.leases_active} leases
 								{:else if banner?.stats?.cache_hit_rate}
-									Hit Rate: {banner.stats.cache_hit_rate}
+									Hit: {banner.stats.cache_hit_rate}
 								{:else if banner?.stats?.state}
 									{banner.stats.state}
 								{:else}
 									{svc.proto}
 								{/if}
 							</span>
+							<Badge
+								variant={banner?.state === "online" || banner?.state === "active" ? "secondary" : "outline"}
+								class="text-[10px] capitalize font-mono"
+							>
+								{banner?.state ?? "active"}
+							</Badge>
 						</div>
-					</a>
+					</div>
 				{/each}
 			</Card.Content>
 		</Card.Root>
@@ -547,14 +525,14 @@
 						>
 						<div class="flex justify-between font-mono text-[11px]">
 							<span class="text-muted-foreground">GUA</span>
-							<span class="text-sky-400 truncate max-w-[170px]"
-								>{statusData?.network?.gua || "—"}</span
+							<span class="text-sky-400 truncate max-w-[170px]" title={formatIpv6Prefix(statusData?.network?.gua)}
+								>{formatIpv6Prefix(statusData?.network?.gua)}</span
 							>
 						</div>
 						<div class="flex justify-between font-mono text-[11px]">
 							<span class="text-muted-foreground">ULA</span>
-							<span class="text-purple-400 truncate max-w-[170px]"
-								>{statusData?.network?.ula || "—"}</span
+							<span class="text-purple-400 truncate max-w-[170px]" title={formatIpv6Prefix(statusData?.network?.ula)}
+								>{formatIpv6Prefix(statusData?.network?.ula)}</span
 							>
 						</div>
 					</div>
@@ -567,7 +545,7 @@
 							<div class="flex items-center gap-1.5">
 								<DatabaseIcon class="size-3.5 text-amber-400" />
 								<span class="text-muted-foreground font-medium"
-									>Database Engine</span
+									>Database Storage</span
 								>
 							</div>
 							<Badge
@@ -578,8 +556,16 @@
 							</Badge>
 						</div>
 						<div class="flex items-center justify-between font-mono text-[11px]">
-							<span class="text-muted-foreground">Backend Status</span>
-							<span class="text-emerald-400 font-medium">Online</span>
+							<span class="text-muted-foreground">Footprint</span>
+							<span class="text-foreground font-medium">
+								{statusData?.db?.size_bytes ? formatBytes(statusData.db.size_bytes) : "—"}
+							</span>
+						</div>
+						<div class="flex items-center justify-between font-mono text-[11px]">
+							<span class="text-muted-foreground">Last Disk Sync</span>
+							<span class="text-emerald-400 font-medium">
+								{statusData?.db?.last_flush_secs_ago !== undefined ? `${statusData.db.last_flush_secs_ago}s ago` : "—"}
+							</span>
 						</div>
 					</div>
 

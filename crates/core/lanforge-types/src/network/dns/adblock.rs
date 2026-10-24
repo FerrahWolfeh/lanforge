@@ -1,5 +1,5 @@
 use crate::network::DnsRecordType;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     borrow::Cow,
     fmt::Display,
@@ -484,12 +484,85 @@ impl Display for FilterAction {
 }
 
 /// Origin of a filter rule match.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FilterOrigin {
     UserRule,
     UserAllowlist,
     List { source_id: i64 },
+}
+
+impl Serialize for FilterOrigin {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if serializer.is_human_readable() {
+            #[derive(Serialize)]
+            #[serde(tag = "type", rename_all = "snake_case")]
+            enum JsonFilterOrigin {
+                UserRule,
+                UserAllowlist,
+                List { source_id: i64 },
+            }
+            let repr = match self {
+                Self::UserRule => JsonFilterOrigin::UserRule,
+                Self::UserAllowlist => JsonFilterOrigin::UserAllowlist,
+                Self::List { source_id } => JsonFilterOrigin::List {
+                    source_id: *source_id,
+                },
+            };
+            repr.serialize(serializer)
+        } else {
+            #[derive(Serialize)]
+            enum BinaryFilterOrigin {
+                UserRule,
+                UserAllowlist,
+                List { source_id: i64 },
+            }
+            let repr = match self {
+                Self::UserRule => BinaryFilterOrigin::UserRule,
+                Self::UserAllowlist => BinaryFilterOrigin::UserAllowlist,
+                Self::List { source_id } => BinaryFilterOrigin::List {
+                    source_id: *source_id,
+                },
+            };
+            repr.serialize(serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for FilterOrigin {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        if deserializer.is_human_readable() {
+            #[derive(Deserialize)]
+            #[serde(tag = "type", rename_all = "snake_case")]
+            enum JsonFilterOrigin {
+                UserRule,
+                UserAllowlist,
+                List { source_id: i64 },
+            }
+            match JsonFilterOrigin::deserialize(deserializer)? {
+                JsonFilterOrigin::UserRule => Ok(Self::UserRule),
+                JsonFilterOrigin::UserAllowlist => Ok(Self::UserAllowlist),
+                JsonFilterOrigin::List { source_id } => Ok(Self::List { source_id }),
+            }
+        } else {
+            #[derive(Deserialize)]
+            enum BinaryFilterOrigin {
+                UserRule,
+                UserAllowlist,
+                List { source_id: i64 },
+            }
+            match BinaryFilterOrigin::deserialize(deserializer)? {
+                BinaryFilterOrigin::UserRule => Ok(Self::UserRule),
+                BinaryFilterOrigin::UserAllowlist => Ok(Self::UserAllowlist),
+                BinaryFilterOrigin::List { source_id } => Ok(Self::List { source_id }),
+            }
+        }
+    }
 }
 
 /// Detailed filter match attribution for query logging and diagnostic checks.
@@ -710,5 +783,41 @@ mod tests {
         let json = serde_json::to_string(&parsed).unwrap();
         let deserialized: TimeOfDay = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, parsed);
+    }
+
+    #[test]
+    fn test_filter_origin_postcard_and_json_dual_mode() {
+        let origins = vec![
+            FilterOrigin::UserRule,
+            FilterOrigin::UserAllowlist,
+            FilterOrigin::List { source_id: 42 },
+        ];
+
+        for orig in origins {
+            let filter_match = FilterMatch {
+                action: FilterAction::Block,
+                origin: orig.clone(),
+                rule: Some("||bad.com^".into()),
+                important: true,
+            };
+
+            // 1. Postcard binary roundtrip (MUST NOT fail with WontImplement)
+            let bytes = postcard::to_stdvec(&filter_match).expect("postcard serialize");
+            let decoded: FilterMatch = postcard::from_bytes(&bytes).expect("postcard deserialize");
+            assert_eq!(decoded, filter_match);
+
+            // 2. JSON roundtrip (MUST retain internally-tagged type field)
+            let json = serde_json::to_string(&filter_match).expect("json serialize");
+            match orig {
+                FilterOrigin::UserRule => assert!(json.contains(r#""type":"user_rule""#)),
+                FilterOrigin::UserAllowlist => assert!(json.contains(r#""type":"user_allowlist""#)),
+                FilterOrigin::List { source_id } => {
+                    assert!(json.contains(r#""type":"list""#));
+                    assert!(json.contains(&format!(r#""source_id":{source_id}"#)));
+                }
+            }
+            let from_json: FilterMatch = serde_json::from_str(&json).expect("json deserialize");
+            assert_eq!(from_json, filter_match);
+        }
     }
 }

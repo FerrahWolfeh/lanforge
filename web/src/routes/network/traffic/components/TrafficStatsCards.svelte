@@ -95,8 +95,8 @@
 </script>
 
 <div class="flex flex-col gap-4">
-	<!-- Top 5 Core Telemetry Cards -->
-	<StatCardGrid cols={5}>
+	<!-- Top Core Telemetry Cards -->
+	<StatCardGrid cols={4}>
 		<!-- 1. Runtime Subsystem State -->
 		<StatCard
 			label="Runtime"
@@ -193,9 +193,9 @@
 			{/snippet}
 		</StatCard>
 
-		<!-- 4. Real-Time Network Throughput -->
+		<!-- 4. Real-Time Network Throughput & Volume -->
 		<StatCard
-			label="Throughput"
+			label="Throughput & Volume"
 			popover={{
 				title: "Instantaneous Network Rates",
 				description: "Real-time traffic throughput calculated from Linux kernel /proc/net/dev counters.",
@@ -214,39 +214,9 @@
 			{#snippet footer()}
 				<StatCardFooterItem label="Volume (Rx/Tx)" value={`${formatBytes(totalRxBytes)} / ${formatBytes(totalTxBytes)}`} />
 				<StatCardFooterItem
-					label="Errors / Drops"
-					value={totalDrops + totalErrors === 0 ? "0 Clean" : `${totalDrops} drops · ${totalErrors} err`}
+					label="Health"
+					value={totalDrops + totalErrors === 0 ? "0 drops/err" : `${totalDrops} drops · ${totalErrors} err`}
 					color={totalDrops > 0 || totalErrors > 0 ? "text-amber-400 font-medium" : "text-emerald-500"}
-				/>
-			{/snippet}
-		</StatCard>
-
-		<!-- 5. Firewall & Conntrack State -->
-		<StatCard
-			label="Conntrack"
-			popover={{
-				title: "Netfilter Stateful Tracking",
-				description: "Kernel connection tracking table capacity and session state.",
-			}}
-			badge={{
-				text: `${conntrack ? conntrack.utilization_percent.toFixed(1) : "0"}%`,
-				variant: (conntrack?.utilization_percent ?? 0) < 70 ? "online" : (conntrack?.utilization_percent ?? 0) < 90 ? "warning" : "error",
-			}}
-		>
-			{#snippet valueExtra()}
-				<div class="flex items-center gap-2 pt-0.5">
-					<ShieldCheckIcon class="size-5 text-violet-400 shrink-0" />
-					<span class="text-base font-bold text-foreground font-mono">
-						{conntrack ? conntrack.active_connections.toLocaleString() : "—"}
-						<span class="text-xs text-muted-foreground font-normal ml-1">sessions</span>
-					</span>
-				</div>
-			{/snippet}
-			{#snippet footer()}
-				<StatCardFooterItem label="Capacity Max" value={conntrack?.max_connections.toLocaleString() ?? "65,536"} />
-				<StatCardFooterItem
-					label="New / Drops"
-					value={conntrack ? `${conntrack.new.toLocaleString()} / ${conntrack.drop.toLocaleString()}` : "0 / 0"}
 				/>
 			{/snippet}
 		</StatCard>
@@ -255,7 +225,7 @@
 	<!-- Active Interfaces Throughput Panel -->
 	{#if telemetry?.interfaces && telemetry.interfaces.length > 0}
 		<Card.Root>
-			<Card.Header class="pb-3 border-b border-border/50">
+			<Card.Header class="pt-4 sm:pt-5 !pb-3.5 sm:!pb-4 px-4 sm:px-6 border-b border-border/50">
 				<div class="flex items-center justify-between">
 					<div class="flex items-center gap-2">
 						<NetworkIcon class="size-4 text-primary" />

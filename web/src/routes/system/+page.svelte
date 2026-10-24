@@ -8,7 +8,8 @@
 	import { status, scan, reload, controlService } from "$lib/api/client";
 	import { normalizeServices, type StatusResponse } from "$lib/api/types";
 	import { getServiceMeta } from "$lib/services";
-	import { formatBytes, formatUptime } from "$lib/utils";
+	import { formatBytes, formatUptime, formatIpv6Prefix } from "$lib/utils";
+	import InfoPopover from "$lib/components/InfoPopover.svelte";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import ZapIcon from "@lucide/svelte/icons/zap";
@@ -284,21 +285,23 @@
 					{/if}
 					{#if data.network.gua}
 						<div class="flex justify-between py-0.5">
-							<dt class="text-muted-foreground">GUA</dt>
+							<dt class="text-muted-foreground">GUA Prefix</dt>
 							<dd
-								class="max-w-[160px] truncate font-mono text-xs"
+								class="max-w-[170px] truncate font-mono text-xs text-foreground font-medium"
+								title={data.network.gua}
 							>
-								{data.network.gua}
+								{formatIpv6Prefix(data.network.gua, 64)}
 							</dd>
 						</div>
 					{/if}
 					{#if data.network.ula}
 						<div class="flex justify-between py-0.5">
-							<dt class="text-muted-foreground">ULA</dt>
+							<dt class="text-muted-foreground">ULA Prefix</dt>
 							<dd
-								class="max-w-[160px] truncate font-mono text-xs"
+								class="max-w-[170px] truncate font-mono text-xs text-foreground font-medium"
+								title={data.network.ula}
 							>
-								{data.network.ula}
+								{formatIpv6Prefix(data.network.ula, 64)}
 							</dd>
 						</div>
 					{/if}
@@ -322,21 +325,22 @@
 			{:else if data}
 				<dl class="text-sm">
 					<div class="flex justify-between py-0.5">
-						<dt class="text-muted-foreground">Size</dt>
+						<dt class="text-muted-foreground">Disk Footprint</dt>
 						<dd class="font-medium">
 							{formatBytes(data.db.size_bytes)}
 						</dd>
 					</div>
 					<div class="flex justify-between py-0.5">
-						<dt class="text-muted-foreground">Last flush</dt>
-						<dd class="text-xs">
-							{data.db.last_flush_secs_ago}s ago
+						<dt class="text-muted-foreground">Last Disk Sync</dt>
+						<dd class="text-xs font-mono">
+							{data.db.last_flush_secs_ago === 0 ? '< 1s ago' : `${data.db.last_flush_secs_ago}s ago`}
 						</dd>
 					</div>
 					<div class="flex flex-col py-0.5 gap-0.5">
-						<dt class="text-muted-foreground">Path</dt>
+						<dt class="text-muted-foreground">Storage File</dt>
 						<dd
 							class="text-muted-foreground truncate font-mono text-xs"
+							title={data.db.path}
 						>
 							{data.db.path}
 						</dd>
@@ -351,7 +355,7 @@
 		<Card.Header class="pb-2">
 			<Card.Title class="flex items-center gap-2 text-sm font-medium">
 				<CpuIcon class="text-orange-400 size-4" />
-				Resources
+				Memory & Footprint
 			</Card.Title>
 		</Card.Header>
 		<Card.Content>
@@ -360,9 +364,15 @@
 				<Skeleton class="mt-2 h-4 w-1/2" />
 			{:else if data}
 				<dl class="text-sm">
-					<div class="flex justify-between py-0.5">
-						<dt class="text-muted-foreground">RSS</dt>
-						<dd class="font-medium">
+					<div class="flex justify-between items-center py-0.5">
+						<dt class="text-muted-foreground flex items-center gap-1">
+							<span>Physical RAM (RSS)</span>
+							<InfoPopover
+								title="Resident Set Size (RSS)"
+								description="Actual non-swapped physical memory in hardware RAM occupied by daemon processes."
+							/>
+						</dt>
+						<dd class="font-mono text-xs font-medium">
 							{formatBytes(
 								data.resources.memory_rss_bytes ??
 									data.resources.rss_bytes ??
@@ -370,9 +380,15 @@
 							)}
 						</dd>
 					</div>
-					<div class="flex justify-between py-0.5">
-						<dt class="text-muted-foreground">VMS</dt>
-						<dd class="font-medium">
+					<div class="flex justify-between items-center py-0.5">
+						<dt class="text-muted-foreground flex items-center gap-1">
+							<span>Virtual Memory (VMS)</span>
+							<InfoPopover
+								title="Virtual Memory Size (VMS)"
+								description="Total virtual address space mapped by the daemon, including shared libraries and memory mappings."
+							/>
+						</dt>
+						<dd class="font-mono text-xs font-medium">
 							{formatBytes(
 								data.resources.memory_vms_bytes ??
 									data.resources.vms_bytes ??

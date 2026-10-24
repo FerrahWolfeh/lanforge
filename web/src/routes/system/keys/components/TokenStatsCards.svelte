@@ -29,93 +29,48 @@
 	const adminCount = $derived(tokens.filter((t) => t.scopes.includes("admin")).length);
 </script>
 
-<StatCardGrid cols={4}>
-	<!-- Total Tokens -->
+<StatCardGrid cols={2}>
+	<!-- Card 1: Active Tokens -->
 	<StatCard
-		label="Total Keys"
-		value={totalCount}
+		label="Active API Tokens"
+		value={activeCount}
 		icon={KeyIcon}
 		color="primary"
-		subtext="Registered database tokens"
-		loading={isLoading}
-	>
-		{#snippet footer()}
-			<StatCardFooterItem label="Storage" value="Embedded redb" />
-			<StatCardFooterItem label="Scheme" value="Bearer Token" />
-		{/snippet}
-	</StatCard>
-
-	<!-- Active Tokens -->
-	<StatCard
-		label="Active Tokens"
-		value={activeCount}
-		icon={CheckCircle2Icon}
-		color="emerald"
 		badge={{
-			text: "Valid",
-			variant: "online",
+			text: expiredCount > 0 ? `${expiredCount} Expired` : "All Valid",
+			variant: expiredCount > 0 ? "warning" : "online",
 			showDot: true
 		}}
-		subtext="Within validity period"
+		subtext={`${totalCount} total registered key${totalCount === 1 ? '' : 's'}${expiredCount > 0 ? ` (${expiredCount} expired)` : ''}`}
 		loading={isLoading}
 	>
 		{#snippet footer()}
+			<StatCardFooterItem label="Authentication Scheme" value="Bearer Token" />
 			<StatCardFooterItem
-				label="Validation"
-				value="Passing"
-				color="text-emerald-500"
-			/>
-			<StatCardFooterItem
-				label="Active Ratio"
-				value={`${Math.round((activeCount / (totalCount || 1)) * 100)}%`}
-			/>
-		{/snippet}
-	</StatCard>
-
-	<!-- Expired Tokens -->
-	<StatCard
-		label="Expired Tokens"
-		value={expiredCount}
-		icon={ClockIcon}
-		color={expiredCount > 0 ? "amber" : "zinc"}
-		badge={expiredCount > 0 ? {
-			text: "Expired",
-			variant: "warning",
-			showDot: true
-		} : {
-			text: "0 Expired",
-			variant: "online",
-			showDot: true
-		}}
-		subtext={expiredCount > 0 ? "Require renewal or removal" : "All tokens within validity window"}
-		loading={isLoading}
-	>
-		{#snippet footer()}
-			<StatCardFooterItem
-				label="Expired"
-				value={expiredCount}
-				color={expiredCount > 0 ? "text-amber-500" : "text-muted-foreground"}
-			/>
-			<StatCardFooterItem
-				label="Action"
-				value={expiredCount > 0 ? "Needs Review" : "Healthy"}
+				label="Status"
+				value={expiredCount > 0 ? `${expiredCount} need renewal` : "All tokens valid"}
 				color={expiredCount > 0 ? "text-amber-500" : "text-emerald-500"}
 			/>
 		{/snippet}
 	</StatCard>
 
-	<!-- Admin Scope -->
+	<!-- Card 2: Privileged Scope -->
 	<StatCard
-		label="Admin Privilege"
+		label="Administrative Tokens"
 		value={adminCount}
 		icon={ShieldCheckIcon}
 		color="violet"
-		subtext="Full administrative scope"
+		badge={{
+			text: `${adminCount} Admin`,
+			variant: adminCount > 0 ? "indigo" : "zinc",
+			showDot: adminCount > 0
+		}}
+		subtext="Bearer keys with full administrative privileges"
 		loading={isLoading}
 	>
 		{#snippet footer()}
-			<StatCardFooterItem label="Security Level" value="Root / Admin" />
-			<StatCardFooterItem label="Scopes" value={`${adminCount} admin`} />
+			<StatCardFooterItem label="Security Scope" value="Unrestricted" />
+			<StatCardFooterItem label="Persistence" value="Embedded redb" />
 		{/snippet}
 	</StatCard>
 </StatCardGrid>

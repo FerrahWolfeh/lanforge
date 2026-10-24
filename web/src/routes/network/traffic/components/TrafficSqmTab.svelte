@@ -78,18 +78,63 @@
 </script>
 
 <div class="flex flex-col gap-6">
-	<!-- Real-time CAKE Telemetry Card (When active in kernel) -->
-	{#if telemetry?.sqm?.active}
-		<Card.Root class="border-emerald-500/30 bg-card/60 overflow-hidden">
-			<Card.Header class="pb-3 border-b border-border/50 bg-emerald-500/5">
-				<div class="flex items-center justify-between">
+	<!-- Top Container: Discreet SQM Switch Header -->
+	<Card.Root>
+		<Card.Header class="p-4 sm:p-5">
+			<div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+				<div class="flex items-start gap-3">
+					<div class="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl border border-sky-500/30 bg-sky-500/10 text-sky-400">
+						<GaugeIcon class="size-5" />
+					</div>
+					<div>
+						<div class="flex items-center gap-2">
+							<Card.Title class="text-sm sm:text-base font-semibold">Smart Queue Management (CAKE)</Card.Title>
+							<HelpPopover
+								title="Bufferbloat & Active Queue Management"
+								description="CAKE (Common Applications Kept Enhanced) manages network buffer latency in the Linux kernel."
+							>
+								<div class="flex flex-col gap-2 text-xs text-muted-foreground leading-relaxed">
+									<p>
+										<strong class="text-foreground">Why it matters:</strong> Without queue management, ISP modems buffer packets when your connection is maxed out, causing ping in games and video calls to spike from 15ms to 500ms+.
+									</p>
+									<p>
+										<strong class="text-foreground">How CAKE works:</strong> It bounds upload and download rates slightly below your physical link speed and uses active queue management (CoDel) to pace traffic, ensuring interactive packets are delivered with minimal latency.
+									</p>
+								</div>
+							</HelpPopover>
+						</div>
+						<p class="text-xs text-muted-foreground mt-0.5">
+							Maintains low latency and prevents bufferbloat lag spikes during intensive uploads or downloads.
+						</p>
+					</div>
+				</div>
+
+				<div class="flex items-center gap-3 shrink-0 self-end sm:self-center">
+					<Badge variant={enabled ? "default" : "outline"} class="text-xs font-mono">
+						{enabled ? "Active" : "Disabled"}
+					</Badge>
+					<Switch
+						bind:checked={enabled}
+						aria-label="Toggle Smart Queue Management"
+					/>
+				</div>
+			</div>
+		</Card.Header>
+	</Card.Root>
+
+	{#if enabled}
+		<!-- Real-time CAKE Telemetry Card (When active in kernel) -->
+		{#if telemetry?.sqm?.active}
+		<Card.Root class="border-emerald-500/30 bg-card/60 overflow-hidden !py-0 !pt-0 gap-0 [--card-spacing:0]">
+			<Card.Header class="pt-5 sm:pt-6 !pb-4 sm:!pb-5 px-4 sm:px-6 border-b border-border/50 bg-emerald-500/10 rounded-t-3xl flex flex-col gap-2 w-full !items-stretch">
+				<div class="flex items-center justify-between w-full gap-4">
 					<div class="flex items-center gap-2">
 						<GaugeIcon class="size-4 text-emerald-500" />
 						<Card.Title class="text-sm font-semibold text-foreground">
 							Live CAKE Queue & Latency Telemetry
 						</Card.Title>
 					</div>
-					<Badge variant="outline" class="border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-[10px] font-mono">
+					<Badge variant="outline" class="border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-[10px] font-mono shrink-0">
 						<span class="relative flex size-1.5 mr-1.5">
 							<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
 							<span class="relative inline-flex rounded-full size-1.5 bg-emerald-500"></span>
@@ -97,11 +142,11 @@
 						Kernel AQM Active
 					</Badge>
 				</div>
-				<Card.Description class="text-xs">
+				<Card.Description class="text-xs text-muted-foreground/90 mt-0.5 leading-relaxed w-full">
 					Real-time buffer latency, ECN marks, packet pacing, and DiffServ flow isolation measured directly from the Linux kernel.
 				</Card.Description>
 			</Card.Header>
-			<Card.Content class="p-4 flex flex-col gap-4">
+			<Card.Content class="p-5 sm:p-6 flex flex-col gap-5">
 				<!-- Ingress & Egress 2-Column Overview -->
 				<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 					<!-- Ingress (Download) -->
@@ -321,60 +366,15 @@
 		</Card.Root>
 	{/if}
 
-	<!-- Master Enable Switch Card -->
+	<!-- Bandwidth & Interface Configuration -->
 	<Card.Root>
-		<Card.Header class="pb-3 border-b border-border/50">
-			<div class="flex items-center justify-between">
-				<div class="flex items-center gap-2">
-					<Card.Title class="text-base font-semibold">Smart Queue Management (CAKE)</Card.Title>
-					<HelpPopover
-						title="Bufferbloat & Active Queue Management"
-						description="CAKE (Common Applications Kept Enhanced) manages network buffer latency in the Linux kernel."
-					>
-						<div class="flex flex-col gap-2 text-xs text-muted-foreground leading-relaxed">
-							<p>
-								<strong class="text-foreground">Why it matters:</strong> Without queue management, ISP modems buffer packets when your connection is maxed out, causing ping in games and video calls to spike from 15ms to 500ms+.
-							</p>
-							<p>
-								<strong class="text-foreground">How CAKE works:</strong> It bounds upload and download rates slightly below your physical link speed and uses active queue management (CoDel) to pace traffic, ensuring interactive packets are delivered with minimal latency.
-							</p>
-						</div>
-					</HelpPopover>
-				</div>
-				<Badge variant={enabled ? "default" : "secondary"} class="text-xs">
-					{enabled ? "Enabled" : "Disabled"}
-				</Badge>
-			</div>
-			<Card.Description class="text-xs">
-				Maintains low ping and prevents network lag spikes during intensive uploads or downloads.
-			</Card.Description>
-		</Card.Header>
-		<Card.Content class="p-4 flex flex-col gap-5">
-			<div class="flex items-center justify-between rounded-xl border p-3.5 bg-muted/20">
-				<div class="flex flex-col gap-0.5">
-					<Label class="text-xs font-semibold">Enable SQM Shaper</Label>
-					<p class="text-[11px] text-muted-foreground">
-						When enabled, Lanforge attaches CAKE qdiscs to your WAN interface and IFB ingress mirror device.
-					</p>
-				</div>
-				<Switch
-					bind:checked={enabled}
-					aria-label="Enable SQM Shaper"
-				/>
-			</div>
-		</Card.Content>
-	</Card.Root>
-
-	{#if enabled}
-		<!-- Bandwidth & Interface Configuration -->
-		<Card.Root>
-			<Card.Header class="pb-3 border-b border-border/50">
+			<Card.Header class="pt-5 sm:pt-6 !pb-4 sm:!pb-5 px-4 sm:px-6 border-b border-border/50">
 				<Card.Title class="text-base font-semibold">Bandwidth Limits & Target WAN</Card.Title>
-				<Card.Description class="text-xs">
+				<Card.Description class="text-xs text-muted-foreground/90 mt-0.5">
 					Set bandwidth shaping limits to 90–95% of your measured connection speed to maintain queue authority.
 				</Card.Description>
 			</Card.Header>
-			<Card.Content class="p-4 flex flex-col gap-5">
+			<Card.Content class="p-5 sm:p-6 flex flex-col gap-5">
 				<div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
 					<!-- WAN Interface Select -->
 					<div class="flex flex-col gap-1.5">
@@ -623,5 +623,10 @@
 				</Collapsible.Content>
 			</Card.Root>
 		</Collapsible.Root>
+	{:else}
+		<div class="p-8 text-center text-muted-foreground text-xs flex flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-border/70 bg-muted/10">
+			<GaugeIcon class="size-8 text-muted-foreground/40" />
+			<span class="max-w-md">Smart Queue Management is currently disabled. Toggle the switch above to activate CAKE bufferbloat mitigation, configure bandwidth bounds, and view live queue latency telemetry.</span>
+		</div>
 	{/if}
 </div>

@@ -757,8 +757,13 @@ impl LogStore for RedbDatabase {
                 {
                     let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
                     let bytes = val.value();
-                    let entry: QueryLogEntry = decode(bytes)
-                        .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
+                    let entry: QueryLogEntry = match decode(bytes) {
+                        Ok(e) => e,
+                        Err(e) => {
+                            tracing::warn!("Skipping unreadable DNS query log entry during filtering: {e}");
+                            continue;
+                        }
+                    };
                     if query_matches(
                         &entry,
                         cf_lower.as_deref(),
@@ -785,12 +790,17 @@ impl LogStore for RedbDatabase {
                     .map_err(|e| DbError::Backend(e.to_string()))?
                     .rev()
                     .skip(offset)
-                    .take(limit)
                 {
+                    if entries.len() >= limit {
+                        break;
+                    }
                     let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                    let entry: QueryLogEntry = decode(val.value())
-                        .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
-                    entries.push(entry);
+                    match decode(val.value()) {
+                        Ok(entry) => entries.push(entry),
+                        Err(e) => {
+                            tracing::warn!("Skipping unreadable DNS query log entry: {e}");
+                        }
+                    }
                 }
 
                 Ok((entries, total))

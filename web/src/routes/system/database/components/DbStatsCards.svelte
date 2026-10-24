@@ -32,11 +32,11 @@
 	} = $props();
 </script>
 
-<StatCardGrid cols={4}>
-	<!-- Card 1: Storage Engine -->
+<StatCardGrid cols={3}>
+	<!-- Card 1: Storage & Footprint -->
 	<StatCard
-		label="Storage Engine"
-		value={engineLabel}
+		label="Database Footprint"
+		value={formatBytes(systemStatus?.db?.size_bytes ?? 0)}
 		icon={HardDriveIcon}
 		color={isInMemory ? "amber" : "indigo"}
 		badge={{
@@ -49,80 +49,57 @@
 	>
 		{#snippet footer()}
 			<StatCardFooterItem
-				label="Backend Mode"
-				value={isInMemory ? "In-Memory (RAM)" : "redb (Disk)"}
+				label="Backend"
+				value={isInMemory ? "RAM (Volatile)" : "Embedded redb"}
 			/>
 			<StatCardFooterItem
-				label="Persistence"
-				value={isInMemory ? "Volatile" : "Persistent"}
-				color={isInMemory ? "text-amber-500" : "text-emerald-500"}
+				label="Health"
+				value={isHealthy ? "Optimal" : "Write error"}
+				color={isHealthy ? "text-emerald-500" : "text-destructive"}
 			/>
 		{/snippet}
 	</StatCard>
 
 	<!-- Card 2: Persistence Cadence -->
 	<StatCard
-		label="Persistence Cadence"
-		value={(metrics?.flush_count ?? 0).toLocaleString()}
+		label="Last Disk Sync"
+		value={formatTimeAgo(systemStatus?.db?.last_flush_secs_ago)}
 		icon={ActivityIcon}
 		color="emerald"
-		subtext="Completed disk sync flushes"
+		badge={{
+			text: `${(metrics?.flush_count ?? 0).toLocaleString()} flushes`,
+			variant: "zinc"
+		}}
+		subtext="Periodic batch disk synchronization"
 		loading={loading && !metrics}
 	>
 		{#snippet footer()}
 			<StatCardFooterItem
-				label="Last Sync"
-				value={formatTimeAgo(systemStatus?.db?.last_flush_secs_ago)}
+				label="Total Flushes"
+				value={(metrics?.flush_count ?? 0).toLocaleString()}
 			/>
-			<StatCardFooterItem label="Flush Interval" value="60s tick" />
+			<StatCardFooterItem label="Interval" value="60s tick" />
 		{/snippet}
 	</StatCard>
 
 	<!-- Card 3: Stored Records & Inventory -->
 	<StatCard
-		label="Stored Records"
+		label="Managed Records"
 		value={totalStoredEntities.toLocaleString()}
 		icon={ServerIcon}
 		color="sky"
-		subtext="Total managed state entities"
+		subtext="Persisted state entities across tables"
 		loading={loading && !metrics}
 	>
 		{#snippet footer()}
 			<StatCardFooterItem
-				label="Devices Written"
+				label="Devices Stored"
 				value={(metrics?.devices_written ?? 0).toLocaleString()}
 			/>
 			<StatCardFooterItem
-				label="Disk Footprint"
-				value={formatBytes(systemStatus?.db?.size_bytes ?? 0)}
-			/>
-		{/snippet}
-	</StatCard>
-
-	<!-- Card 4: Engine Health -->
-	<StatCard
-		label="Engine Health"
-		value={isHealthy ? "Optimal" : "Attention"}
-		icon={isHealthy ? CheckCircleIcon : AlertTriangleIcon}
-		color={isHealthy ? "emerald" : "amber"}
-		badge={{
-			text: isHealthy ? "0 Errors" : "Degraded",
-			variant: isHealthy ? "online" : "warning",
-			showDot: true
-		}}
-		subtext={isHealthy ? "Clean persistent write lock" : "Write error detected"}
-		loading={loading && !metrics}
-	>
-		{#snippet footer()}
-			<StatCardFooterItem
 				label="Write Errors"
-				value={isHealthy ? "0 errors" : (metrics?.last_error ? "Detected" : "0 errors")}
-				color={isHealthy ? "text-emerald-500" : "text-destructive"}
-			/>
-			<StatCardFooterItem
-				label="Lock Status"
-				value={isHealthy ? "Acquired" : "Check Logs"}
-				color={isHealthy ? "text-emerald-500" : "text-amber-500"}
+				value={metrics?.last_error ? "Detected" : "0 errors"}
+				color={metrics?.last_error ? "text-destructive" : "text-emerald-500"}
 			/>
 		{/snippet}
 	</StatCard>

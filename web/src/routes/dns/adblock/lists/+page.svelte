@@ -128,8 +128,12 @@
 				kind: "blocklist",
 				format: format ?? "auto",
 			});
-			toast.success(`Added preset "${name}"`);
+			toast.success(`Added preset "${name}". Compiling rules in background...`);
 			await loadSources();
+			dnsAdblockReload().then(() => {
+				setTimeout(loadSources, 1500);
+				setTimeout(loadSources, 3500);
+			}).catch(() => {});
 		} catch (err: any) {
 			toast.error(err?.message ?? `Failed to add "${name}"`);
 		}
@@ -339,9 +343,19 @@
 								<!-- Rules Counts -->
 								<Table.Cell>
 									<div class="flex flex-col text-xs">
-										<span class="font-mono font-medium text-foreground">
-											{source.rules_count.toLocaleString()} blocks
-										</span>
+										{#if source.rules_count === 0 && !source.last_success}
+											<span class="font-mono text-[11px] text-muted-foreground animate-pulse">
+												Pending download...
+											</span>
+										{:else if source.kind === "allowlist"}
+											<span class="font-mono font-medium text-emerald-600 dark:text-emerald-400">
+												{source.rules_count.toLocaleString()} allowed
+											</span>
+										{:else}
+											<span class="font-mono font-medium text-foreground">
+												{source.rules_count.toLocaleString()} blocked
+											</span>
+										{/if}
 										{#if source.exceptions_count > 0}
 											<span class="text-[10px] font-mono text-emerald-600 dark:text-emerald-400">
 												+{source.exceptions_count.toLocaleString()} exceptions

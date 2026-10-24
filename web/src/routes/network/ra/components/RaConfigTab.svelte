@@ -99,35 +99,70 @@
 	}
 
 	function addPrefix() {
-		const p = newPrefixStr.trim();
-		if (!p) {
+		const raw = newPrefixStr.trim();
+		if (!raw) {
 			toast.error("Prefix subnet cannot be empty");
 			return;
 		}
 
-		let source: PrefixSource = "static";
-		let address: string | null = p;
-		let prefixLen = 64;
-
-		if (p.toLowerCase() === "auto_gua" || p.toLowerCase() === "dynamic_gua") {
-			source = "auto_gua";
-			address = null;
-		} else if (p.includes("/")) {
-			const parts = p.split("/");
-			address = parts[0];
-			prefixLen = Number(parts[1]) || 64;
-			if (address.toLowerCase().startsWith("fd") || address.toLowerCase().startsWith("fc")) {
-				source = "ula";
+		if (raw.toLowerCase() === "auto_gua" || raw.toLowerCase() === "dynamic_gua") {
+			const isDuplicate = formPrefixes.some((x) => x.source === "auto_gua");
+			if (isDuplicate) {
+				toast.error("auto_gua is already configured");
+				return;
 			}
-		} else if (p.toLowerCase().startsWith("fd") || p.toLowerCase().startsWith("fc")) {
-			source = "ula";
+			formPrefixes = [
+				...formPrefixes,
+				{
+					source: "auto_gua",
+					address: null,
+					prefix_len: 64,
+					autonomous: newPrefixAutonomous,
+					on_link: newPrefixOnLink,
+					router_addr: true,
+					valid_lifetime: 2592000,
+					preferred_lifetime: 604800,
+				},
+			];
+			newPrefixStr = "";
+			return;
 		}
+
+		let formatted = raw;
+		if (!formatted.includes("/")) {
+			if (formatted.endsWith("::")) {
+				formatted = `${formatted}/64`;
+			} else {
+				toast.error("Invalid prefix. Enter a subnet prefix (e.g. 2001:db8:1::/64), not a host IP address.");
+				return;
+			}
+		}
+
+		const [addrPart, lenPart] = formatted.split("/");
+		const prefixLen = Number(lenPart);
+		if (isNaN(prefixLen) || prefixLen < 1 || prefixLen > 64) {
+			toast.error("Prefix length must be between /1 and /64 (/64 is required for standard SLAAC).");
+			return;
+		}
+
+		if (!/^[0-9a-fA-F:]+$/.test(addrPart) || (addrPart.match(/::/g) || []).length > 1) {
+			toast.error("Invalid IPv6 prefix format.");
+			return;
+		}
+
+		if (prefixLen === 64 && !addrPart.endsWith("::")) {
+			toast.error("A /64 subnet prefix must end with '::' (e.g. 2001:db8:1::/64).");
+			return;
+		}
+
+		const isUla = addrPart.toLowerCase().startsWith("fd") || addrPart.toLowerCase().startsWith("fc");
+		const source: PrefixSource = isUla ? "ula" : "static";
+		const address = addrPart;
 
 		const isDuplicate = formPrefixes.some((x) => {
 			if (x.source !== source) return false;
-			if (source === "auto_gua") return true;
 			return (
-				x.address?.toLowerCase() === address?.toLowerCase() &&
+				x.address?.toLowerCase() === address.toLowerCase() &&
 				(x.prefix_len || 64) === prefixLen
 			);
 		});
@@ -328,47 +363,23 @@
 				<Card.Header class="pb-3 border-b border-border/50">
 					<Card.Title class="text-base font-semibold">Prefix Information Options (PIO)</Card.Title>
 					<Card.Description class="text-xs">
-						Announced IPv6 prefixes. Use <span class="font-mono text-foreground font-semibold">auto_gua</span> for dynamic WAN-delegated prefix (DHCPv6-PD), or enter a subnet prefix.
+						Static and custom announced IPv6 prefixes. Dynamic GUA (<span class="font-mono text-foreground font-semibold">auto_gua</span>) and ULA (<span class="font-mono text-foreground font-semibold">auto_ula</span>) are automatically managed when enabled.
 					</Card.Description>
 				</Card.Header>
 				<Card.Content class="p-4 flex flex-col gap-4">
 					<div class="flex flex-col gap-2.5 p-3 rounded-lg border bg-muted/30">
 						<div class="flex flex-col sm:flex-row items-end gap-3">
 							<div class="flex-1 flex flex-col gap-1.5 w-full">
-								<div class="flex items-center justify-between">
-									<Label for="new-prefix" class="text-xs font-medium">Add Prefix Subnet</Label>
-									<div class="flex items-center gap-1.5">
-										<button
-											type="button"
-											class="text-[11px] font-mono font-medium text-primary hover:underline cursor-pointer"
-											onclick={() => { newPrefixStr = "auto_gua"; }}
-										>
-											+ auto_gua
-										</button>
-										{#if status?.active_ula_prefix}
-											<span class="text-muted-foreground text-[10px]">•</span>
-											<button
-												type="button"
-												class="text-[11px] font-mono font-medium text-primary hover:underline cursor-pointer"
-												onclick={() => {
-													const cleanUla = status?.active_ula_prefix?.split("/")[0];
-													newPrefixStr = `${cleanUla}/64`;
-												}}
-											>
-												+ ULA ({status.active_ula_prefix?.split("/")[0]}/64)
-											</button>
-										{/if}
-									</div>
-								</div>
+								<Label for="new-prefix" class="text-xs font-medium">Add Custom Subnet Prefix</Label>
 								<Input
 									id="new-prefix"
 									bind:value={newPrefixStr}
-									placeholder="auto_gua or 2001:db8:1::/64"
+									placeholder="2001:db8:1::/64 or fd00:cafe::/64"
 									class="h-9 font-mono text-xs"
 									onkeydown={(e) => e.key === "Enter" && addPrefix()}
 								/>
 								<p class="text-[11px] text-muted-foreground">
-									IPv6 SLAAC strictly requires a <code class="font-mono text-primary font-semibold">/64</code> prefix length.
+									Enter an IPv6 prefix ending with <code class="font-mono text-primary font-semibold">::/64</code> (e.g. <code class="font-mono text-foreground">2001:db8:1::/64</code>). Host addresses are rejected.
 								</p>
 							</div>
 

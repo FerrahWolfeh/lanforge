@@ -6,6 +6,7 @@
 	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
+	import { formatIpv6Prefix } from "$lib/utils";
 	import type { RaStatusResponse } from "$lib/api/types";
 
 	let {
@@ -87,8 +88,8 @@
 		}}
 	>
 		{#snippet footer()}
-			<StatCardFooterItem label="GUA Delegated" value={status?.active_gua_prefix ?? "None"} color="text-emerald-400" />
-			<StatCardFooterItem label="Active ULA" value={status?.active_ula_prefix ?? "None"} />
+			<StatCardFooterItem label="GUA Delegated" value={formatIpv6Prefix(status?.active_gua_prefix)} color="text-emerald-400" />
+			<StatCardFooterItem label="Active ULA" value={formatIpv6Prefix(status?.active_ula_prefix)} />
 		{/snippet}
 	</StatCard>
 

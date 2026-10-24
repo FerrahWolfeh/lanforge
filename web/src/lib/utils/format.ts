@@ -99,3 +99,35 @@ export function formatBps(bps: number | null | undefined): string {
 	if (bps >= 1_000) return `${(bps / 1_000).toFixed(0)} kbps`;
 	return `${bps} bps`;
 }
+
+/**
+ * Formats an IPv6 address or prefix into CIDR prefix notation (e.g. "2804:14d:5483:8160::/64").
+ */
+export function formatIpv6Prefix(ip?: string | null, prefixLen = 64): string {
+	if (!ip) return "—";
+	const clean = ip.trim().replace(/^\[/, "").replace(/\]$/, "");
+	if (!clean || clean === "—" || clean === "None" || clean === "::") return "—";
+	if (clean.includes("/")) return clean;
+	if (clean.toLowerCase().startsWith("auto_")) return clean;
+
+	if (clean.endsWith("::")) return `${clean}/${prefixLen}`;
+
+	let hextets: string[] = [];
+	if (clean.includes("::")) {
+		const [left, right] = clean.split("::");
+		const leftParts = left ? left.split(":") : [];
+		const rightParts = right ? right.split(":") : [];
+		const missing = 8 - (leftParts.length + rightParts.length);
+		hextets = [...leftParts, ...Array(missing).fill("0"), ...rightParts];
+	} else {
+		hextets = clean.split(":");
+	}
+
+	if (hextets.length >= 4) {
+		const prefixHextets = hextets.slice(0, 4);
+		const normalized = prefixHextets.map((h) => h.replace(/^0+/, "") || "0");
+		return `${normalized.join(":")}::/${prefixLen}`;
+	}
+
+	return `${clean}::/${prefixLen}`;
+}

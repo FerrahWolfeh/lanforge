@@ -1461,6 +1461,7 @@ export interface FirewallStatus {
 	rules_count: number;
 	enabled: boolean;
 	flow_offload_active: boolean;
+	flow_offload_suspended?: boolean;
 	default_drop_active: boolean;
 }
 

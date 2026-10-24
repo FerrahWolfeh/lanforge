@@ -6,6 +6,9 @@
 	import * as Tooltip from "$lib/components/ui/tooltip";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import PlusIcon from "@lucide/svelte/icons/plus";
+	import ZapIcon from "@lucide/svelte/icons/zap";
+	import CheckCircle2Icon from "@lucide/svelte/icons/check-circle-2";
+	import AlertCircleIcon from "@lucide/svelte/icons/alert-circle";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
 	import {
@@ -13,6 +16,7 @@
 		dnsUpstreams,
 		dnsUpstreamAdd,
 		dnsUpstreamRemove,
+		dnsUpstreamTest,
 		dnsReverseResolverList,
 		dnsReverseResolverAdd,
 		dnsReverseResolverRemove,
@@ -62,6 +66,42 @@
 	let formUpstreamAddr = $state("");
 	let formUpstreamProto = $state("Udp");
 	let formUpstreamDomain = $state("");
+	let testingUpstream = $state(false);
+	let upstreamTestResult = $state<{ ok: boolean; latency_ms: number; error?: string } | null>(null);
+
+	$effect(() => {
+		if (upstreamOpen) {
+			upstreamTestResult = null;
+		}
+	});
+
+	async function handleTestUpstream() {
+		const trimmed = formUpstreamAddr.trim();
+		if (!trimmed) {
+			toast.error("Please enter a server address or IP first");
+			return;
+		}
+		testingUpstream = true;
+		upstreamTestResult = null;
+		try {
+			const res = await dnsUpstreamTest({
+				addr: trimmed,
+				protocol: formUpstreamProto,
+				domain: formUpstreamDomain.trim() || undefined,
+			});
+			upstreamTestResult = res;
+			if (res.ok) {
+				toast.success(`Upstream responded in ${res.latency_ms} ms`);
+			} else {
+				toast.error(res.error || "Upstream test failed");
+			}
+		} catch (err: any) {
+			upstreamTestResult = { ok: false, latency_ms: 0, error: err?.message || "Failed to contact upstream" };
+			toast.error(err?.message || "Failed to reach upstream");
+		} finally {
+			testingUpstream = false;
+		}
+	}
 
 	let reverseOpen = $state(false);
 	let reverseSubmitting = $state(false);
@@ -344,27 +384,62 @@
 					</Field.FieldDescription>
 				</Field.Field>
 
-				<div class="flex items-center justify-end gap-2 mt-2">
+				{#if upstreamTestResult}
+					{#if upstreamTestResult.ok}
+						<div class="flex items-center gap-2 p-2 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs">
+							<CheckCircle2Icon class="size-4 shrink-0 text-emerald-500" />
+							<span>Validated reachable: responds in <strong class="font-mono">{upstreamTestResult.latency_ms} ms</strong></span>
+						</div>
+					{:else}
+						<div class="flex items-center gap-2 p-2 rounded-md bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs">
+							<AlertCircleIcon class="size-4 shrink-0 text-rose-500" />
+							<span>{upstreamTestResult.error || "Upstream server unreachable or timed out."}</span>
+						</div>
+					{/if}
+				{/if}
+
+				<div class="flex items-center justify-between gap-2 mt-2">
 					<Button
 						type="button"
 						variant="outline"
 						size="sm"
-						onclick={() => (upstreamOpen = false)}
+						disabled={testingUpstream || !formUpstreamAddr.trim()}
+						onclick={handleTestUpstream}
+						class="text-xs gap-1.5"
 					>
-						Cancel
-					</Button>
-					<Button
-						type="submit"
-						size="sm"
-						disabled={upstreamSubmitting}
-					>
-						{#if upstreamSubmitting}
+						{#if testingUpstream}
 							<span
-								class="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent mr-1"
+								class="size-3 animate-spin rounded-full border-2 border-current border-t-transparent"
 							></span>
+							<span>Testing...</span>
+						{:else}
+							<ZapIcon class="size-3.5 text-amber-500" />
+							<span>Test Upstream</span>
 						{/if}
-						Save Upstream Server
 					</Button>
+
+					<div class="flex items-center gap-2">
+						<Button
+							type="button"
+							variant="ghost"
+							size="sm"
+							onclick={() => (upstreamOpen = false)}
+						>
+							Cancel
+						</Button>
+						<Button
+							type="submit"
+							size="sm"
+							disabled={upstreamSubmitting}
+						>
+							{#if upstreamSubmitting}
+								<span
+									class="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent mr-1"
+								></span>
+							{/if}
+							Save Upstream Server
+						</Button>
+					</div>
 				</div>
 			</Field.FieldGroup>
 		</form>

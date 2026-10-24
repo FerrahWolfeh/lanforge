@@ -196,6 +196,7 @@ impl DbWorker {
             metrics.last_flush_ts.store(now, Ordering::Relaxed);
             metrics.flush_count.fetch_add(1, Ordering::Relaxed);
             metrics.last_error.store(had_error, Ordering::Relaxed);
+            self.ctx.record_db_flush();
             return;
         }
 
@@ -273,6 +274,7 @@ impl DbWorker {
             .devices_written
             .fetch_add(written_devices_count as u64, Ordering::Relaxed);
         metrics.last_error.store(had_error, Ordering::Relaxed);
+        self.ctx.record_db_flush();
     }
 
     fn build_current_export(&self, db: &LanforgeDb) -> SystemConfigExport {

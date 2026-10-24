@@ -429,10 +429,11 @@ impl Dhcpv4Service {
             warn!("DHCPv4: Failed to send reply: {e}");
         }
 
+        let mut updates = SmallVec::<[DeviceUpdate; 3]>::new();
+
         if let Some(assigned_ip) = server.last_assignment_for() {
             let expires = SystemTime::now() + Duration::from_secs(u64::from(self.cfg.lease_time));
 
-            let mut updates = SmallVec::<[DeviceUpdate; 3]>::new();
             updates.push(DeviceUpdate::V4LeaseGranted {
                 mac,
                 ip: assigned_ip,
@@ -445,13 +446,15 @@ impl Dhcpv4Service {
                     iface: self.cfg.iface.clone(),
                 });
             }
+        }
 
-            if let Some(hostname) = req_hostname
-                && !hostname.is_empty()
-            {
-                updates.push(DeviceUpdate::DhcpHostnameHint { mac, hostname });
-            }
+        if let Some(hostname) = req_hostname
+            && !hostname.is_empty()
+        {
+            updates.push(DeviceUpdate::DhcpHostnameHint { mac, hostname });
+        }
 
+        if !updates.is_empty() {
             let _ = self.ctx.apply_batch(updates);
         }
     }

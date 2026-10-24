@@ -6,7 +6,7 @@
 	import { Label } from "$lib/components/ui/label";
 	import LinkIcon from "@lucide/svelte/icons/link";
 	import { toast } from "svelte-sonner";
-	import { dnsAdblockUrlAdd } from "$lib/api/client";
+	import { dnsAdblockUrlAdd, dnsAdblockReload } from "$lib/api/client";
 	import type { AdblockSourceFormat, DnsAdblockUrlEntry } from "$lib/api/types";
 
 	let {
@@ -42,11 +42,15 @@
 				kind,
 				format,
 			});
-			toast.success(`Added ${kind}: ${trimmedUrl}`);
+			toast.success(`Added ${kind}: ${trimmedUrl}. Compiling rules in background...`);
 			url = "";
 			format = "auto";
 			open = false;
 			onAdded();
+			dnsAdblockReload().then(() => {
+				setTimeout(onAdded, 1500);
+				setTimeout(onAdded, 3500);
+			}).catch(() => {});
 		} catch (err: any) {
 			toast.error(err?.message ?? "Failed to add source URL");
 		} finally {
