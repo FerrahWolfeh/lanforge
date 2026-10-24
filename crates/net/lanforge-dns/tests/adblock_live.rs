@@ -105,18 +105,21 @@ async fn test_adblock_live_comprehensive_battery() {
     ctx_instance.update_dns_adblock_urls(vec![
         AdblockUrlEntry {
             id: Some(1),
+            name: Some("stevenblack".to_string()),
             url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts".to_string(),
             kind: AdblockUrlKind::Blocklist,
             format: AdblockSourceFormat::Auto, // Detected as Hosts
         },
         AdblockUrlEntry {
             id: Some(2),
+            name: Some("adblock-txt".to_string()),
             url: format!("http://127.0.0.1:{port}/adblock.txt"),
             kind: AdblockUrlKind::Blocklist,
             format: AdblockSourceFormat::Adblock,
         },
         AdblockUrlEntry {
             id: Some(3),
+            name: Some("badfilter".to_string()),
             url: format!("http://127.0.0.1:{port}/badfilter.txt"),
             kind: AdblockUrlKind::Blocklist,
             format: AdblockSourceFormat::Adblock,
@@ -251,6 +254,7 @@ async fn test_adblock_live_comprehensive_battery() {
     // =========================================================================
     ctx_instance.update_dns_adblock_rules(vec![AdblockRuleEntry {
         id: Some(101),
+        name: Some("custom-ad".to_string()),
         domain: "my-custom-ad.internal".to_string(),
         action: AdblockRuleAction::Block,
         enabled: true,

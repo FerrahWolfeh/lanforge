@@ -112,6 +112,7 @@ impl DbWriteTx<'_> {
             .enumerate()
             .map(|(i, (addr, protocol, domain))| DnsUpstreamEntry {
                 id: i as i64 + 1,
+                name: None,
                 addr: *addr,
                 protocol: *protocol,
                 domain: domain.clone(),
@@ -647,6 +648,7 @@ impl RedbDatabase {
                 {
                     urls.push(AdblockUrlEntry {
                         id: Some(id.value()),
+                        name: None,
                         url,
                         kind,
                         format,
@@ -671,6 +673,7 @@ impl RedbDatabase {
                 {
                     rules.push(AdblockRuleEntry {
                         id: Some(id.value()),
+                        name: None,
                         domain,
                         action,
                         enabled,

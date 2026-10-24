@@ -150,12 +150,35 @@ impl std::fmt::Display for DeviceId {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DnsUpstreamEntry {
     pub id: i64,
+    #[serde(default)]
+    pub name: Option<String>,
     pub addr: SocketAddr,
     pub protocol: UpstreamProtocol,
     pub domain: Option<String>,
 }
 
 impl DnsUpstreamEntry {
+    /// Computes a deterministic positive 64-bit ID from socket address and protocol.
+    #[must_use]
+    #[allow(clippy::cast_possible_wrap)]
+    pub fn deterministic_id(&self) -> i64 {
+        let mut h = 0xcbf2_9ce4_8422_2325_u64;
+        let addr_str = self.addr.to_string();
+        for &b in addr_str.as_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        h ^= u64::from(self.protocol as u8);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+        if let Some(domain) = &self.domain {
+            for &b in domain.to_ascii_lowercase().as_bytes() {
+                h ^= u64::from(b);
+                h = h.wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+        (h & 0x7FFF_FFFF_FFFF_FFFF) as i64
+    }
+
     /// Converts this entry into an `UpstreamTarget`.
     #[must_use]
     pub fn to_target(&self) -> UpstreamTarget {

@@ -52,6 +52,7 @@ async fn boot_and_check(cache_dir: &Path, port: u16, domain: &str, timeout: Dura
     ctx_instance.set_pppoe_ready(true);
     ctx_instance.update_dns_adblock_urls(vec![AdblockUrlEntry {
         id: Some(1),
+        name: None,
         url: format!("http://127.0.0.1:{port}/hosts"),
         kind: AdblockUrlKind::Blocklist,
         format: AdblockSourceFormat::Auto,

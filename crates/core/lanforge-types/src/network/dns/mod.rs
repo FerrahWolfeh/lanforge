@@ -117,6 +117,29 @@ impl std::str::FromStr for DnsRecordType {
 }
 
 impl DnsRecordType {
+    /// Returns the numerical wire value for this DNS record type.
+    #[must_use]
+    pub const fn to_u16(self) -> u16 {
+        match self {
+            Self::A => 1,
+            Self::NS => 2,
+            Self::CNAME => 5,
+            Self::SOA => 6,
+            Self::PTR => 12,
+            Self::HINFO => 13,
+            Self::MX => 15,
+            Self::TXT => 16,
+            Self::AAAA => 28,
+            Self::SRV => 33,
+            Self::OPT => 41,
+            Self::SVCB => 64,
+            Self::HTTPS => 65,
+            Self::ANY => 255,
+            Self::Device => 65534,
+            Self::Unknown(v) => v,
+        }
+    }
+
     #[must_use]
     pub const fn as_static_str(&self) -> Option<&'static str> {
         match self {
@@ -698,6 +721,8 @@ pub struct DnsAdblockStatusResponse {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AdblockUrlEntry {
     pub id: Option<i64>,
+    #[serde(default)]
+    pub name: Option<String>,
     pub url: String,
     pub kind: AdblockUrlKind,
     #[serde(default)]
@@ -736,6 +761,8 @@ impl AdblockUrlEntry {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AdblockSourceStatus {
     pub id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub url: String,
     pub format: AdblockSourceFormat,
     #[serde(default, skip_serializing_if = "Option::is_none")]

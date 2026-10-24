@@ -139,6 +139,31 @@ impl RewriteRule {
     pub fn parse_answer(&self) -> RewriteAnswer {
         self.answer.clone()
     }
+
+    /// Computes a deterministic positive 64-bit content hash ID from domain, rtype, and answer.
+    #[must_use]
+    #[allow(clippy::cast_possible_wrap)]
+    pub fn deterministic_id(&self) -> i64 {
+        let mut h = 0xcbf2_9ce4_8422_2325_u64;
+        for &b in self.domain.to_ascii_lowercase().as_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        h ^= u64::from(self.rtype.to_u16());
+        h = h.wrapping_mul(0x0100_0000_01b3);
+        let ans_str = format!("{:?}", self.answer);
+        for &b in ans_str.as_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        (h & 0x7FFF_FFFF_FFFF_FFFF) as i64
+    }
+
+    /// Returns the explicit ID or derives a deterministic content hash ID if absent.
+    #[must_use]
+    pub fn effective_id(&self) -> i64 {
+        self.id.unwrap_or_else(|| self.deterministic_id())
+    }
 }
 
 /// Parsed DNS rewrite answer.
@@ -626,8 +651,10 @@ impl std::str::FromStr for AdblockRuleAction {
 /// A custom adblock rule (allowlist or manual blocklist).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct AdblockRuleEntry {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub id: Option<i64>,
+    #[serde(default)]
+    pub name: Option<String>,
     pub domain: String,
     pub action: AdblockRuleAction,
     #[serde(default = "default_true")]
@@ -648,12 +675,59 @@ impl AdblockRuleEntry {
     pub const fn is_allow(&self) -> bool {
         self.action.is_allow()
     }
+
+    /// Computes a deterministic positive 64-bit content hash ID from domain and action.
+    #[must_use]
+    #[allow(clippy::cast_possible_wrap)]
+    pub fn deterministic_id(&self) -> i64 {
+        let mut h = 0xcbf2_9ce4_8422_2325_u64;
+        for &b in self.domain.to_ascii_lowercase().as_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        h ^= u64::from(self.action as u8);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+        (h & 0x7FFF_FFFF_FFFF_FFFF) as i64
+    }
+
+    /// Returns the explicit ID or derives a deterministic content hash ID if absent.
+    #[must_use]
+    pub fn effective_id(&self) -> i64 {
+        self.id.unwrap_or_else(|| self.deterministic_id())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    #[test]
+    fn test_deterministic_ids() {
+        let rule1 = RewriteRule {
+            id: None,
+            domain: "nas.lan".to_string(),
+            rtype: DnsRecordType::A,
+            answer: RewriteAnswer::A("192.168.1.10".parse().unwrap()),
+        };
+        let rule2 = RewriteRule {
+            id: None,
+            domain: "nas.lan".to_string(),
+            rtype: DnsRecordType::A,
+            answer: RewriteAnswer::A("192.168.1.10".parse().unwrap()),
+        };
+        assert_eq!(rule1.deterministic_id(), rule2.deterministic_id());
+        assert!(rule1.deterministic_id() > 0);
+
+        let adblock_rule = AdblockRuleEntry {
+            id: None,
+            name: Some("test-rule".to_string()),
+            domain: "analytics.google.com".to_string(),
+            action: AdblockRuleAction::Block,
+            enabled: true,
+        };
+        assert_eq!(adblock_rule.effective_id(), adblock_rule.deterministic_id());
+    }
 
     #[test]
     fn test_device_identifier_parsing() {

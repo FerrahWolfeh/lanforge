@@ -355,6 +355,7 @@ impl Bootstrapper {
                 urls.into_iter()
                     .map(|(id, url, kind, format)| AdblockUrlEntry {
                         id: Some(id),
+                        name: Some(lanforge_crypto::stable_id_or_hash(None, url.as_bytes(), "src")),
                         url,
                         kind,
                         format,
@@ -368,6 +369,7 @@ impl Bootstrapper {
                     .into_iter()
                     .map(|(id, domain, action, enabled)| AdblockRuleEntry {
                         id: Some(id),
+                        name: Some(lanforge_crypto::slugify(&domain)),
                         domain,
                         action,
                         enabled,

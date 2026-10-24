@@ -241,7 +241,7 @@ impl From<&SystemConfigExport> for ConfigFile {
         // 4. DNS Upstreams & Rewrites
         let mut dns = DnsFile::default();
         for up in &export.dns_upstreams {
-            let name = up.domain.clone().unwrap_or_else(|| "default".to_string());
+            let name = up.name.clone().or_else(|| up.domain.clone()).unwrap_or_else(|| "default".to_string());
             let proto_prefix = match up.protocol {
                 UpstreamProtocol::Udp => "udp://",
                 UpstreamProtocol::Tls => "tls://",
@@ -306,8 +306,12 @@ impl From<&SystemConfigExport> for ConfigFile {
             rules: BTreeMap::new(),
         };
 
-        for (idx, url_entry) in export.dns_adblock_urls.iter().enumerate() {
-            let name = format!("source-{}", idx + 1);
+        for url_entry in &export.dns_adblock_urls {
+            let name = lanforge_crypto::stable_id_or_hash(
+                url_entry.name.as_deref(),
+                url_entry.url.as_bytes(),
+                "src",
+            );
             adblock.sources.insert(
                 name,
                 AdblockSourceFile {
@@ -622,10 +626,11 @@ impl From<&ConfigFile> for SystemConfigExport {
 
         // 4. DNS Upstreams & Rewrites
         let mut dns_upstreams = Vec::new();
-        for up in cfg.dns.upstreams.values() {
+        for (name, up) in &cfg.dns.upstreams {
             for address in &up.addresses {
                 let (protocol, socket_addr) = parse_upstream_addr(address);
                 dns_upstreams.push(DnsUpstreamConfig {
+                    name: Some(name.clone()),
                     addr: socket_addr,
                     protocol,
                     domain: up.domain.clone(),
@@ -659,9 +664,10 @@ impl From<&ConfigFile> for SystemConfigExport {
         };
 
         let mut dns_adblock_urls = Vec::new();
-        for s in cfg.adblock.sources.values() {
+        for (name, s) in &cfg.adblock.sources {
             dns_adblock_urls.push(AdblockUrlEntry {
                 id: None,
+                name: Some(name.clone()),
                 url: s.url.clone(),
                 kind: AdblockUrlKind::from_str(&s.kind).unwrap_or_default(),
                 format: AdblockSourceFormat::from_str(&s.format).unwrap_or_default(),
@@ -685,6 +691,7 @@ impl From<&ConfigFile> for SystemConfigExport {
             .iter()
             .map(|(dom, r)| AdblockRuleEntry {
                 id: None,
+                name: Some(dom.clone()),
                 domain: dom.clone(),
                 action: AdblockRuleAction::from_str(&r.action).unwrap_or(AdblockRuleAction::Block),
                 enabled: r.enabled,
@@ -985,6 +992,7 @@ mod tests {
                 answer: RewriteAnswer::A("192.168.1.10".parse().unwrap()),
             }],
             dns_upstreams: vec![DnsUpstreamConfig {
+                name: Some("cloudflare".to_string()),
                 addr: "1.1.1.1:853".parse().unwrap(),
                 protocol: UpstreamProtocol::Tls,
                 domain: Some("cloudflare".to_string()),

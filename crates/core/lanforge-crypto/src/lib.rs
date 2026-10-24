@@ -2,8 +2,13 @@
 //!
 //! Serves as a foundational L1 crate isolating cryptographic algorithms
 //! (e.g. Argon2id password hashing, and future TLS / DoT / DoQ primitives)
-//! from the central daemon orchestration crate (`lanforge-core`).
+//! and deterministic content hashing from higher-level orchestration crates.
 
+pub mod hash;
 pub mod password;
 
+pub use hash::{
+    content_hash64, content_hash128, content_hash_hex, content_hash_short_hex,
+    slugify, stable_id_or_hash,
+};
 pub use password::{hash_password, verify_password};

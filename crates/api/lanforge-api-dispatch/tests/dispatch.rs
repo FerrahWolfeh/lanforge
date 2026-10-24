@@ -156,6 +156,7 @@ async fn test_dispatch_system_config_import_export() {
             answer: RewriteAnswer::A("192.168.10.1".parse().unwrap()),
         }],
         dns_upstreams: vec![DnsUpstreamConfig {
+            name: Some("quad9".to_string()),
             addr: "9.9.9.9:53".parse().unwrap(),
             protocol: UpstreamProtocol::Udp,
             domain: Some("quad9".to_string()),
@@ -170,6 +171,7 @@ async fn test_dispatch_system_config_import_export() {
         dns_adblock_urls: if cfg!(feature = "adblock") {
             vec![AdblockUrlEntry {
                 id: None,
+                name: Some("adblock-hosts".to_string()),
                 url: "https://example.com/adblock.hosts".to_string(),
                 kind: AdblockUrlKind::Blocklist,
                 format: lanforge_types::network::dns::adblock::AdblockSourceFormat::Auto,
@@ -188,6 +190,7 @@ async fn test_dispatch_system_config_import_export() {
         dns_adblock_rules: if cfg!(feature = "adblock") {
             Some(vec![lanforge_types::network::dns::adblock::AdblockRuleEntry {
                 id: None,
+                name: Some("custom-blocked".to_string()),
                 domain: "custom-blocked.com".to_string(),
                 action: AdblockRuleAction::Block,
                 enabled: true,

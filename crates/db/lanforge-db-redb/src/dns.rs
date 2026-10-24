@@ -179,13 +179,15 @@ impl AdblockStore for RedbDatabase {
     ) -> Result<(), DbError> {
         let mut list = self.get(ADBLOCK_URLS)?.unwrap_or_default();
         if !list.iter().any(|u| u.url == url) {
-            let max_id = list.iter().filter_map(|u| u.id).max().unwrap_or(0);
-            list.push(AdblockUrlEntry {
-                id: Some(max_id + 1),
+            let mut entry = AdblockUrlEntry {
+                id: None,
+                name: None,
                 url: url.to_string(),
                 kind,
                 format,
-            });
+            };
+            entry.id = Some(entry.source_id());
+            list.push(entry);
             self.put(ADBLOCK_URLS, &list)?;
         }
         Ok(())
@@ -219,15 +221,17 @@ impl AdblockStore for RedbDatabase {
         format: AdblockSourceFormat,
     ) -> Result<i64, DbError> {
         let mut list = self.get(ADBLOCK_URLS)?.unwrap_or_default();
-        let max_id = list.iter().filter_map(|u| u.id).max().unwrap_or(0);
-        let id = max_id + 1;
+        let mut entry = AdblockUrlEntry {
+            id: None,
+            name: None,
+            url: url.to_string(),
+            kind,
+            format,
+        };
+        let id = entry.source_id();
+        entry.id = Some(id);
         if !list.iter().any(|u| u.url == url) {
-            list.push(AdblockUrlEntry {
-                id: Some(id),
-                url: url.to_string(),
-                kind,
-                format,
-            });
+            list.push(entry);
             self.put(ADBLOCK_URLS, &list)?;
         }
         Ok(id)
@@ -267,14 +271,16 @@ impl AdblockStore for RedbDatabase {
 
     fn add_adblock_rule(&self, domain: &str, action: AdblockRuleAction) -> Result<i64, DbError> {
         let mut list = self.get(ADBLOCK_RULES)?.unwrap_or_default();
-        let max_id = list.iter().filter_map(|r| r.id).max().unwrap_or(0);
-        let id = max_id + 1;
-        list.push(AdblockRuleEntry {
-            id: Some(id),
+        let mut entry = AdblockRuleEntry {
+            id: None,
+            name: None,
             domain: domain.to_string(),
             action,
             enabled: true,
-        });
+        };
+        let id = entry.deterministic_id();
+        entry.id = Some(id);
+        list.push(entry);
         self.put(ADBLOCK_RULES, &list)?;
         Ok(id)
     }
@@ -311,14 +317,16 @@ impl DnsUpstreamStore for RedbDatabase {
         domain: Option<&str>,
     ) -> Result<i64, DbError> {
         let mut list = self.load_dns_upstreams()?;
-        let max_id = list.iter().map(|e| e.id).max().unwrap_or(0);
-        let id = max_id + 1;
-        list.push(DnsUpstreamEntry {
-            id,
+        let mut entry = DnsUpstreamEntry {
+            id: 0,
+            name: None,
             addr,
             protocol,
             domain: domain.map(String::from),
-        });
+        };
+        let id = entry.deterministic_id();
+        entry.id = id;
+        list.push(entry);
         self.put(DNS_UPSTREAMS, &list)?;
         Ok(id)
     }

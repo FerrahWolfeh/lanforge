@@ -34,6 +34,7 @@
 	interface MergedSource {
 		id?: number | null;
 		source_id?: number;
+		name?: string | null;
 		url: string;
 		kind: "blocklist" | "allowlist";
 		format: AdblockSourceFormat;
@@ -92,6 +93,7 @@
 				return {
 					id: u.id,
 					source_id: st?.source_id,
+					name: u.name ?? st?.name ?? null,
 					url: u.url,
 					kind: u.kind,
 					format: u.format ?? st?.format ?? "auto",
@@ -124,6 +126,7 @@
 
 		try {
 			await dnsAdblockUrlAdd({
+				name,
 				url: presetUrl,
 				kind: "blocklist",
 				format: format ?? "auto",
@@ -189,6 +192,7 @@
 		const q = searchQuery.toLowerCase();
 		return sources.filter(
 			(s) =>
+				(s.name && s.name.toLowerCase().includes(q)) ||
 				s.url.toLowerCase().includes(q) ||
 				s.kind.includes(q) ||
 				s.format.toLowerCase().includes(q) ||
@@ -292,24 +296,31 @@
 					{:else}
 						{#each filteredSources as source, idx (source.url + idx)}
 							<Table.Row class="hover:bg-muted/40 transition-colors group">
-								<!-- URL -->
-								<Table.Cell class="font-mono text-xs">
-									<div class="flex items-center gap-2 max-w-[380px]">
-										<span class="truncate text-foreground font-medium" title={source.url}>
-											{source.url}
-										</span>
-										<button
-											type="button"
-											onclick={() => copyUrl(source.url)}
-											class="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:text-primary rounded text-muted-foreground"
-											title="Copy URL"
-										>
-											{#if copiedUrl === source.url}
-												<CheckIcon class="size-3.5 text-emerald-500" />
-											{:else}
-												<CopyIcon class="size-3.5" />
-											{/if}
-										</button>
+								<!-- Name & URL -->
+								<Table.Cell class="text-xs">
+									<div class="flex flex-col gap-0.5 max-w-[380px]">
+										{#if source.name}
+											<span class="text-foreground font-semibold text-xs tracking-tight truncate">
+												{source.name}
+											</span>
+										{/if}
+										<div class="flex items-center gap-2">
+											<span class="truncate font-mono {source.name ? 'text-[11px] text-muted-foreground' : 'text-foreground font-medium'}" title={source.url}>
+												{source.url}
+											</span>
+											<button
+												type="button"
+												onclick={() => copyUrl(source.url)}
+												class="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:text-primary rounded text-muted-foreground"
+												title="Copy URL"
+											>
+												{#if copiedUrl === source.url}
+													<CheckIcon class="size-3.5 text-emerald-500" />
+												{:else}
+													<CopyIcon class="size-3.5" />
+												{/if}
+											</button>
+										</div>
 									</div>
 								</Table.Cell>
 

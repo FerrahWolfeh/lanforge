@@ -2298,6 +2298,7 @@ dependencies = [
  "lanforge-api",
  "lanforge-api-dispatch",
  "lanforge-core",
+ "lanforge-crypto",
  "lanforge-db",
  "lanforge-dhcp",
  "lanforge-discovery",
@@ -2337,6 +2338,7 @@ dependencies = [
  "bitflags 2.13.0",
  "chrono",
  "futures",
+ "lanforge-crypto",
  "lanforge-macros",
  "lanforge-types",
  "postcard",
@@ -2442,6 +2444,7 @@ version = "0.2.0"
 dependencies = [
  "argon2",
  "password-hash",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -6099,6 +6102,12 @@ name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "550a2b930b62486a393c52d5c3b84bff264b28aa437ed64694d31e93b1757af7"
 
 [[package]]
 name = "yoke"

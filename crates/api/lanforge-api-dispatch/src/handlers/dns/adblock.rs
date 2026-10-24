@@ -167,19 +167,22 @@ impl ClientContext {
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_url_add(
         &self,
+        name: Option<String>,
         url: String,
         kind: AdblockUrlKind,
         format: Option<AdblockSourceFormat>,
     ) -> Response {
         let mut urls = self.ctx.get_dns_adblock_urls();
         if !urls.iter().any(|u| u.url == url) {
-            let next_id = urls.iter().filter_map(|u| u.id).max().unwrap_or(0) + 1;
-            urls.push(lanforge_types::network::dns::AdblockUrlEntry {
-                id: Some(next_id),
+            let mut entry = lanforge_types::network::dns::AdblockUrlEntry {
+                id: None,
+                name: Some(lanforge_crypto::stable_id_or_hash(name.as_deref(), url.as_bytes(), "src")),
                 url: url.clone(),
                 kind,
                 format: format.unwrap_or_default(),
-            });
+            };
+            entry.id = Some(entry.source_id());
+            urls.push(entry);
             self.ctx.update_dns_adblock_urls(urls);
         }
         Response::Success(SimpleSuccess {
@@ -190,6 +193,7 @@ impl ClientContext {
     #[cfg(not(feature = "adblock"))]
     pub async fn handle_dns_adblock_url_add(
         &self,
+        _name: Option<String>,
         _url: String,
         _kind: AdblockUrlKind,
         _format: Option<AdblockSourceFormat>,
@@ -306,14 +310,17 @@ impl ClientContext {
             existing.enabled = true;
             existing.id.unwrap_or(1)
         } else {
-            let next_id = rules.iter().filter_map(|r| r.id).max().unwrap_or(0) + 1;
-            rules.push(lanforge_types::network::dns::adblock::AdblockRuleEntry {
-                id: Some(next_id),
+            let mut entry = lanforge_types::network::dns::adblock::AdblockRuleEntry {
+                id: None,
+                name: Some(lanforge_crypto::slugify(&domain)),
                 domain: domain.clone(),
                 action: rule_action,
                 enabled: true,
-            });
-            next_id
+            };
+            let id = entry.deterministic_id();
+            entry.id = Some(id);
+            rules.push(entry);
+            id
         };
         self.ctx.update_dns_adblock_rules(rules);
         Response::Success(SimpleSuccess {

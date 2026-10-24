@@ -919,6 +919,7 @@ export type AdblockSourceFormat =
 
 export interface AdblockSourceStatus {
 	source_id: number;
+	name?: string | null;
 	url: string;
 	format: AdblockSourceFormat;
 	format_detected?: AdblockSourceFormat | null;
@@ -973,6 +974,7 @@ export interface DnsAdblockStatusResponse {
 
 export interface DnsAdblockUrlEntry {
 	id?: number | null;
+	name?: string | null;
 	url: string;
 	kind: 'blocklist' | 'allowlist';
 	format?: AdblockSourceFormat;

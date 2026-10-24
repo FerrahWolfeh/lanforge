@@ -17,6 +17,7 @@
 		onAdded?: () => void;
 	} = $props();
 
+	let name = $state("");
 	let url = $state("");
 	let kind = $state<"blocklist" | "allowlist">("blocklist");
 	let format = $state<AdblockSourceFormat>("auto");
@@ -37,12 +38,15 @@
 
 		submitting = true;
 		try {
+			const trimmedName = name.trim();
 			await dnsAdblockUrlAdd({
+				name: trimmedName || undefined,
 				url: trimmedUrl,
 				kind,
 				format,
 			});
-			toast.success(`Added ${kind}: ${trimmedUrl}. Compiling rules in background...`);
+			toast.success(`Added ${kind}: ${trimmedName || trimmedUrl}. Compiling rules in background...`);
+			name = "";
 			url = "";
 			format = "auto";
 			open = false;
@@ -74,6 +78,20 @@
 		</Dialog.Header>
 
 		<form onsubmit={handleSubmit} class="flex flex-col gap-4 py-2">
+			<!-- Source Name / Label -->
+			<div class="flex flex-col gap-1.5">
+				<Label for="source-name" class="text-xs font-semibold">List Name / Label (Optional)</Label>
+				<Input
+					id="source-name"
+					placeholder="e.g. StevenBlack Unified or custom-adblock"
+					bind:value={name}
+					class="text-xs"
+				/>
+				<p class="text-[11px] text-muted-foreground">
+					Friendly identifier used in TOML configuration and dashboard views.
+				</p>
+			</div>
+
 			<!-- Source URL -->
 			<div class="flex flex-col gap-1.5">
 				<Label for="source-url" class="text-xs font-semibold">List Source URL</Label>

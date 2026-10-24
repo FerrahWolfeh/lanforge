@@ -10,10 +10,12 @@ impl ClientContext {
             .find(|r| r.domain.eq_ignore_ascii_case(&rule.domain) && r.rtype == rule.rtype)
         {
             existing.answer = rule.answer.clone();
+            if existing.id.is_none() {
+                existing.id = Some(existing.effective_id());
+            }
         } else {
-            let next_id = rewrites.iter().filter_map(|r| r.id).max().unwrap_or(0) + 1;
             let mut new_rule = rule.clone();
-            new_rule.id = Some(next_id);
+            new_rule.id = Some(new_rule.effective_id());
             rewrites.push(new_rule);
         }
         self.ctx.update_dns_rewrites(rewrites);
@@ -29,7 +31,7 @@ impl ClientContext {
     pub async fn handle_dns_rewrite_remove(&self, id: i64) -> Response {
         let mut rewrites = self.ctx.get_dns_rewrites();
         let len_before = rewrites.len();
-        rewrites.retain(|r| r.id != Some(id));
+        rewrites.retain(|r| r.effective_id() != id);
         if rewrites.len() != len_before {
             self.ctx.update_dns_rewrites(rewrites);
         }
@@ -39,7 +41,12 @@ impl ClientContext {
     }
 
     pub async fn handle_dns_rewrites(&self) -> Response {
-        let rewrites = self.ctx.get_dns_rewrites();
+        let mut rewrites = self.ctx.get_dns_rewrites();
+        for r in &mut rewrites {
+            if r.id.is_none() {
+                r.id = Some(r.effective_id());
+            }
+        }
         Response::DnsRewrites(DnsRewritesResponse { rewrites })
     }
 
@@ -59,10 +66,12 @@ impl ClientContext {
                 .find(|r| r.domain.eq_ignore_ascii_case(&rule.domain) && r.rtype == rule.rtype)
             {
                 existing.answer = rule.answer;
+                if existing.id.is_none() {
+                    existing.id = Some(existing.effective_id());
+                }
             } else {
-                let next_id = rewrites.iter().filter_map(|r| r.id).max().unwrap_or(0) + 1;
                 let mut new_rule = rule;
-                new_rule.id = Some(next_id);
+                new_rule.id = Some(new_rule.effective_id());
                 rewrites.push(new_rule);
             }
             count += 1;

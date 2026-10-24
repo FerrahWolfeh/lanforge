@@ -572,7 +572,7 @@ impl LanforgeRpc for ClientContext {
         kind: lanforge_types::network::dns::adblock::AdblockUrlKind,
         format: Option<lanforge_types::network::dns::adblock::AdblockSourceFormat>,
     ) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_dns_adblock_url_add(url, kind, format).await {
+        match self.handle_dns_adblock_url_add(None, url, kind, format).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),

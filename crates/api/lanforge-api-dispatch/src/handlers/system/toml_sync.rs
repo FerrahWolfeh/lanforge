@@ -140,6 +140,7 @@ mod tests {
             dns_adblock_urls: vec![
                 AdblockUrlEntry {
                     id: Some(1),
+                    name: Some("stevenblack".to_string()),
                     url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
                         .to_string(),
                     kind: AdblockUrlKind::Blocklist,
@@ -147,6 +148,7 @@ mod tests {
                 },
                 AdblockUrlEntry {
                     id: Some(2),
+                    name: Some("example-allow".to_string()),
                     url: "https://example.com/allowlist.txt".to_string(),
                     kind: AdblockUrlKind::Allowlist,
                     format: AdblockSourceFormat::Auto,
@@ -159,18 +161,21 @@ mod tests {
             dns_adblock_rules: Some(vec![
                 AdblockRuleEntry {
                     id: Some(1),
+                    name: Some("tracking-bad".to_string()),
                     domain: "tracking.bad.com".to_string(),
                     action: AdblockRuleAction::Block,
                     enabled: true,
                 },
                 AdblockRuleEntry {
                     id: Some(2),
+                    name: Some("goodsite".to_string()),
                     domain: "goodsite.org".to_string(),
                     action: AdblockRuleAction::Allow,
                     enabled: false,
                 },
             ]),
             dns_upstreams: vec![lanforge_api::api::DnsUpstreamConfig {
+                name: Some("cloudflare".to_string()),
                 addr: "1.1.1.1:53".parse().unwrap(),
                 protocol: UpstreamProtocol::Udp,
                 domain: Some("cloudflare".to_string()),

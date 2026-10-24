@@ -34,6 +34,7 @@ async fn test_dns_adblock_update_failure_and_fallback() {
     ctx_instance.set_pppoe_ready(true);
     ctx_instance.update_dns_adblock_urls(vec![AdblockUrlEntry {
         id: Some(1),
+        name: None,
         url: "http://127.0.0.1:1/nonexistent.txt".to_string(),
         kind: AdblockUrlKind::Blocklist,
         format: lanforge_types::network::dns::adblock::AdblockSourceFormat::Auto,

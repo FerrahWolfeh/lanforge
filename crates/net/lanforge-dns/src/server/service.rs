@@ -684,6 +684,7 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                         if let Some(sm) = manifest.sources.get(&id) {
                             AdblockSourceStatus {
                                 id,
+                                name: u.name.clone(),
                                 url: u.url,
                                 format: u.format,
                                 format_detected: Some(sm.format_detected),
@@ -699,6 +700,7 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                         } else {
                             AdblockSourceStatus {
                                 id,
+                                name: u.name.clone(),
                                 url: u.url,
                                 format: u.format,
                                 format_detected: None,

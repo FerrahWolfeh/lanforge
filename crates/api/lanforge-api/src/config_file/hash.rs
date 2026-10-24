@@ -2,13 +2,10 @@ use super::ConfigFile;
 use super::section::Section;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
 
 fn hash_section<T: Serialize>(value: &T) -> u64 {
     let bytes = serde_json::to_vec(value).unwrap_or_default();
-    let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    hasher.finish()
+    lanforge_crypto::content_hash64(&bytes)
 }
 
 /// Computes per-section 64-bit deterministic hashes for change detection.

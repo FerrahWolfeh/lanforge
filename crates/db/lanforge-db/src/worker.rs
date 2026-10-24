@@ -210,11 +210,16 @@ impl DbWorker {
                         .ctx
                         .get_dns_upstreams()
                         .into_iter()
-                        .map(|target| DnsUpstreamEntry {
-                            id: 0,
-                            addr: target.addr,
-                            protocol: target.protocol,
-                            domain: target.domain,
+                        .map(|target| {
+                            let mut entry = DnsUpstreamEntry {
+                                id: 0,
+                                name: target.domain.clone(),
+                                addr: target.addr,
+                                protocol: target.protocol,
+                                domain: target.domain,
+                            };
+                            entry.id = entry.deterministic_id();
+                            entry
                         })
                         .collect();
                     tx.set(DNS_UPSTREAMS, &upstreams)?;
@@ -364,6 +369,7 @@ impl DbWorker {
             .get_dns_upstreams()
             .into_iter()
             .map(|row| DnsUpstreamConfig {
+                name: row.domain.clone(),
                 addr: row.addr,
                 protocol: row.protocol,
                 domain: row.domain,

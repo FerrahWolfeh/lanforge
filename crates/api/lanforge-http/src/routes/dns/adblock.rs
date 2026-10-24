@@ -22,6 +22,8 @@ pub struct AdblockSetRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct AdblockUrlRequest {
+    #[serde(default)]
+    pub name: Option<String>,
     pub url: String,
     pub kind: AdblockUrlKind,
     #[serde(default)]
@@ -153,7 +155,7 @@ async fn handle_adblock_url_add(
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(
-        ctx.handle_dns_adblock_url_add(payload.url, payload.kind, payload.format).await,
+        ctx.handle_dns_adblock_url_add(payload.name, payload.url, payload.kind, payload.format).await,
         Success => NoContent
     )
 }

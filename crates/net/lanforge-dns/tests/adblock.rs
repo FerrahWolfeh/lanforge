@@ -80,6 +80,7 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     let url = format!("http://127.0.0.1:{}/blocklist.txt", port);
     ctx.update_dns_adblock_urls(vec![AdblockUrlEntry {
         id: Some(1),
+        name: None,
         url: url.clone(),
         kind: AdblockUrlKind::Blocklist,
         format: lanforge_types::network::dns::adblock::AdblockSourceFormat::Auto,

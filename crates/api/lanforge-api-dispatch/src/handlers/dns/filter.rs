@@ -18,13 +18,15 @@ impl ClientContext {
             existing.action = AdblockRuleAction::Block;
             existing.enabled = true;
         } else {
-            let next_id = rules.iter().filter_map(|r| r.id).max().unwrap_or(0) + 1;
-            rules.push(lanforge_types::network::dns::adblock::AdblockRuleEntry {
-                id: Some(next_id),
+            let mut entry = lanforge_types::network::dns::adblock::AdblockRuleEntry {
+                id: None,
+                name: Some(lanforge_crypto::slugify(&domain)),
                 domain: domain.clone(),
                 action: AdblockRuleAction::Block,
                 enabled: true,
-            });
+            };
+            entry.id = Some(entry.deterministic_id());
+            rules.push(entry);
         }
         self.ctx.update_dns_adblock_rules(rules);
         let _ = self

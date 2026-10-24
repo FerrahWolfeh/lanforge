@@ -8,6 +8,7 @@ authors.workspace = true
 [dependencies]
 # Lanforge
 lanforge-types = { workspace = true }
+lanforge-crypto = { workspace = true }
 lanforge-macros = { workspace = true }
 
 # Workspace

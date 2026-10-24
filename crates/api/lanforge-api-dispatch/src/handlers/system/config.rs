@@ -28,6 +28,7 @@ impl ClientContext {
             .get_dns_upstreams()
             .into_iter()
             .map(|row| DnsUpstreamConfig {
+                name: row.domain.clone(),
                 addr: row.addr,
                 protocol: row.protocol,
                 domain: row.domain,
@@ -392,7 +393,7 @@ impl ClientContext {
         let mut url_err = None;
         for u in dns_adblock_urls {
             match self
-                .handle_dns_adblock_url_add(u.url, u.kind, Some(u.format))
+                .handle_dns_adblock_url_add(u.name.clone(), u.url, u.kind, Some(u.format))
                 .await
             {
                 Response::Success(_) => url_count += 1,
@@ -443,40 +444,17 @@ impl ClientContext {
             let mut rules_success = true;
             let mut rules_err = None;
             for r in rules {
-                let dom = r.domain.clone();
-                let act = r.action;
-                let en = r.enabled;
-                match storage
-                    .call(move |s: &Stores| -> Result<(), lanforge_db_core::DbError> {
-                        let id = s.db().add_adblock_rule(&dom, act)?;
-                        if !en {
-                            s.db().update_adblock_rule_status(id, false)?;
-                        }
-                        Ok(())
-                    })
+                match self
+                    .handle_dns_adblock_rule_add(r.domain, r.action.to_string())
                     .await
                 {
-                    Ok(()) => rules_count += 1,
-                    Err(e) => {
+                    Response::Success(_) => rules_count += 1,
+                    Response::Error { error } => {
                         rules_success = false;
-                        rules_err = Some(e.to_string());
+                        rules_err = Some(error);
                     }
+                    _ => {}
                 }
-            }
-            if let Ok(rules) = storage.call(|s: &Stores| s.db().load_adblock_rules()).await {
-                self.ctx.update_dns_adblock_rules(
-                    rules
-                        .into_iter()
-                        .map(|(id, domain, action, enabled)| {
-                            lanforge_types::network::dns::adblock::AdblockRuleEntry {
-                                id: Some(id),
-                                domain,
-                                action,
-                                enabled,
-                            }
-                        })
-                        .collect(),
-                );
             }
             if !rules_success {
                 total_success = false;

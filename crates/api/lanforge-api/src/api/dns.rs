@@ -166,6 +166,8 @@ pub struct DnsAdblockRulesResponse {
 /// A configured DNS upstream entry.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct DnsUpstreamConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub addr: SocketAddr,
     pub protocol: UpstreamProtocol,
     pub domain: Option<String>,
