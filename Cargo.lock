@@ -2361,6 +2361,7 @@ dependencies = [
  "lanforge-core",
  "lanforge-crypto",
  "lanforge-db",
+ "lanforge-db-core",
  "lanforge-dhcp",
  "lanforge-macros",
  "lanforge-types",

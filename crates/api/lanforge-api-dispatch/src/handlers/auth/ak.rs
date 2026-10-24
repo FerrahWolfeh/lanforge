@@ -2,7 +2,7 @@ use crate::ClientContext;
 use lanforge_api::api::{
     AuthTokenEntry, AuthTokenResponse, AuthTokensResponse, Response, SimpleSuccess,
 };
-use lanforge_types::storage::{StorageQuery, StorageQueryResult};
+use lanforge_db_core::Stores;
 use rand::prelude::*;
 use tracing::error;
 
@@ -31,26 +31,23 @@ impl ClientContext {
             .unwrap_or_default()
             .as_secs() as i64;
 
+        let token_clone = token.clone();
+        let name_clone = name.clone();
+        let scopes_clone = scopes.clone();
+
         match storage
-            .send_query(StorageQuery::StoreApiToken {
-                token: token.clone(),
-                name: name.clone(),
-                scopes: scopes.clone(),
-                expires_at,
-                now,
+            .call(move |s: &Stores| {
+                s.auth().store_api_token(&token_clone, &name_clone, &scopes_clone, expires_at, now)
             })
             .await
         {
-            Ok(StorageQueryResult::Id(id)) => Response::AuthToken(Box::new(AuthTokenResponse {
+            Ok(id) => Response::AuthToken(Box::new(AuthTokenResponse {
                 id,
                 token,
                 name,
                 scopes,
                 expires_at,
             })),
-            Ok(_) => Response::Error {
-                error: "Unexpected response from storage service".to_string(),
-            },
             Err(e) => {
                 error!("Failed to store API token: {e}");
                 Response::Error {
@@ -67,11 +64,12 @@ impl ClientContext {
             };
         };
 
+        let id_or_name_clone = id_or_name.clone();
         match storage
-            .send_query(StorageQuery::DeleteApiTokenByIdOrName(id_or_name.clone()))
+            .call(move |s: &Stores| s.auth().delete_api_token_by_id_or_name(&id_or_name_clone))
             .await
         {
-            Ok(_) => Response::Success(SimpleSuccess {
+            Ok(()) => Response::Success(SimpleSuccess {
                 message: format!("API token '{id_or_name}' deleted"),
             }),
             Err(e) => Response::Error {
@@ -88,11 +86,12 @@ impl ClientContext {
         };
 
         // Find existing info
+        let id_or_name_clone = id_or_name.clone();
         let (name, scopes, expires_at) = match storage
-            .send_query(StorageQuery::GetApiTokenInfo(id_or_name.clone()))
+            .call(move |s: &Stores| s.auth().get_api_token_info(&id_or_name_clone))
             .await
         {
-            Ok(StorageQueryResult::ApiTokenInfo(Some(info))) => info,
+            Ok(Some(info)) => info,
             _ => {
                 return Response::Error {
                     error: format!("Token '{id_or_name}' not found"),
@@ -101,8 +100,9 @@ impl ClientContext {
         };
 
         // Delete old
+        let id_or_name_del = id_or_name.clone();
         let _ = storage
-            .send_query(StorageQuery::DeleteApiTokenByIdOrName(id_or_name))
+            .call(move |s: &Stores| s.auth().delete_api_token_by_id_or_name(&id_or_name_del))
             .await;
 
         // Generate new
@@ -117,8 +117,8 @@ impl ClientContext {
             };
         };
 
-        match storage.send_query(StorageQuery::LoadApiTokens).await {
-            Ok(StorageQueryResult::ApiTokens(tokens)) => {
+        match storage.call(|s: &Stores| s.auth().load_api_tokens()).await {
+            Ok(tokens) => {
                 Response::AuthTokens(AuthTokensResponse {
                     tokens: tokens
                         .into_iter()
@@ -133,9 +133,6 @@ impl ClientContext {
                         .collect(),
                 })
             }
-            Ok(_) => Response::Error {
-                error: "Unexpected response from storage service".to_string(),
-            },
             Err(e) => Response::Error {
                 error: format!("Database error: {e}"),
             },

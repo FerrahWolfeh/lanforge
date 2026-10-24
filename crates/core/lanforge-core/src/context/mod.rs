@@ -84,7 +84,7 @@ pub use self::caps::CompiledCaps;
 pub use self::config::DynamicConfig;
 pub use self::dns_handle::DnsHandle;
 pub use self::runtime::ServiceRuntime;
-pub use self::storage_handle::StorageHandle;
+pub use self::storage_handle::{StorageCommand, StorageHandle};
 
 /// Internal counters for tracking transient network events.
 ///

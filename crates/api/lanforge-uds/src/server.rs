@@ -333,18 +333,7 @@ where
     R: AsyncRead + Unpin,
 {
     let n_lines = n.unwrap_or(100);
-    let history = if let Some(storage) = ctx.ctx.storage_handle() {
-        match storage
-            .send_query(lanforge_types::storage::StorageQuery::GetLogHistory(n_lines))
-            .await
-        {
-            Ok(lanforge_types::storage::StorageQueryResult::LogHistory(h)) => h,
-            Ok(_) => Vec::new(),
-            Err(e) => return Err(UdsError::Storage(e)),
-        }
-    } else {
-        Vec::new()
-    };
+    let history = ctx.get_log_history(n_lines).await;
 
     write_rpc_response(writer, &RpcResponse::Log(()), buf).await?;
     for event in history {

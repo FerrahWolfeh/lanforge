@@ -1,5 +1,6 @@
 use crate::ClientContext;
 use lanforge_api::api::{DnsRewritesResponse, Response, SimpleSuccess};
+use lanforge_db_core::Stores;
 use lanforge_types::network::dns::adblock::RewriteRule;
 
 impl ClientContext {
@@ -23,13 +24,18 @@ impl ClientContext {
         };
 
         match storage
-            .send_query(lanforge_types::storage::StorageQuery::DeleteDnsRewrite(id))
+            .call(move |s: &Stores| s.db().delete_dns_rewrite_by_id(id))
             .await
         {
-            Ok(_) => Response::Success(SimpleSuccess {
-                message: format!("DNS rewrite with ID {id} removed"),
-            }),
-            Err(e) => Response::Error { error: e },
+            Ok(()) => {
+                if let Ok(rows) = storage.call(|s: &Stores| s.db().load_dns_rewrites()).await {
+                    self.ctx.update_dns_rewrites(rows);
+                }
+                Response::Success(SimpleSuccess {
+                    message: format!("DNS rewrite with ID {id} removed"),
+                })
+            }
+            Err(e) => Response::Error { error: e.to_string() },
         }
     }
 
@@ -46,13 +52,16 @@ impl ClientContext {
         };
 
         match storage
-            .send_query(lanforge_types::storage::StorageQuery::ClearDnsRewrites)
+            .call(|s: &Stores| s.db().clear_dns_rewrites())
             .await
         {
-            Ok(_) => Response::Success(SimpleSuccess {
-                message: "All DNS rewrites cleared".to_string(),
-            }),
-            Err(e) => Response::Error { error: e },
+            Ok(()) => {
+                self.ctx.update_dns_rewrites(Vec::new());
+                Response::Success(SimpleSuccess {
+                    message: "All DNS rewrites cleared".to_string(),
+                })
+            }
+            Err(e) => Response::Error { error: e.to_string() },
         }
     }
 
@@ -77,13 +86,17 @@ impl ClientContext {
             .ctx
             .storage_handle()
             .ok_or_else(|| "Storage service not available".to_string())?;
+        let domain = rule.domain.clone();
+        let rtype = rule.rtype;
+        let answer = rule.answer.clone();
         storage
-            .send_query(lanforge_types::storage::StorageQuery::UpsertDnsRewrite {
-                domain: rule.domain.clone(),
-                rtype: rule.rtype,
-                answer: rule.answer.clone(),
-            })
+            .call(move |s: &Stores| s.db().upsert_dns_rewrite(&domain, rtype, &answer))
             .await
-            .map(|_| ())
+            .map_err(|e| e.to_string())?;
+
+        if let Ok(rows) = storage.call(|s: &Stores| s.db().load_dns_rewrites()).await {
+            self.ctx.update_dns_rewrites(rows);
+        }
+        Ok(())
     }
 }

@@ -1,6 +1,7 @@
 use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess};
-use lanforge_types::storage::{StorageQuery, StorageQueryResult};
+use lanforge_db_core::Stores;
+use lanforge_types::events::{LanforgeEvent, StorageEvent};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl ClientContext {
@@ -11,7 +12,7 @@ impl ClientContext {
             };
         };
 
-        if let Err(e) = storage.send_query(StorageQuery::ClearLogs).await {
+        if let Err(e) = storage.call(|s: &Stores| s.log().clear_logs()).await {
             return Response::Error {
                 error: format!("Transient log cleanup failed: {e}"),
             };
@@ -28,9 +29,8 @@ impl ClientContext {
             };
         };
 
-        let pruned_zombies = match storage.send_query(StorageQuery::PruneZombies).await {
-            Ok(StorageQueryResult::Count(n)) => n,
-            Ok(_) => 0,
+        let pruned_zombies = match storage.call(|s: &Stores| s.db().prune_zombies()).await {
+            Ok(n) => n,
             Err(e) => {
                 return Response::Error {
                     error: format!("Failed to prune zombie entries: {e}"),
@@ -45,7 +45,7 @@ impl ClientContext {
             - (24 * 3600);
 
         if let Err(e) = storage
-            .send_query(StorageQuery::PruneLogs { before: cutoff })
+            .call(move |s: &Stores| s.log().prune_logs(cutoff))
             .await
         {
             return Response::Error {
@@ -67,11 +67,15 @@ impl ClientContext {
             };
         };
 
-        if let Err(e) = storage.send_query(StorageQuery::ResetDb).await {
+        if let Err(e) = storage.call(|s: &Stores| s.db().reset()).await {
             return Response::Error {
                 error: format!("Database reset failed: {e}"),
             };
         }
+
+        let _ = self.ctx
+            .bus()
+            .publish(LanforgeEvent::Storage(StorageEvent::DbResetCompleted));
 
         Response::Success(SimpleSuccess {
             message: "Factory reset completed. Database and transient logs have been cleared."

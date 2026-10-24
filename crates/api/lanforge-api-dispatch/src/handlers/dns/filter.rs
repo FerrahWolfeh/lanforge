@@ -4,6 +4,8 @@ use lanforge_api::api::AllowlistEntry;
 use lanforge_api::api::{DnsAllowlistResponse, Response};
 #[cfg(feature = "adblock")]
 use lanforge_api::api::{DnsAllowlistResponse, Response, SimpleSuccess};
+#[cfg(feature = "adblock")]
+use lanforge_db_core::Stores;
 
 #[cfg(feature = "adblock")]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
@@ -19,14 +21,29 @@ impl ClientContext {
             };
         };
 
+        let d_clone = domain.clone();
         match storage
-            .send_query(lanforge_types::storage::StorageQuery::AddAdblockRule {
-                domain: domain.clone(),
-                action: AdblockRuleAction::Block,
+            .call(move |s: &Stores| {
+                s.db().add_adblock_rule(&d_clone, AdblockRuleAction::Block)
             })
             .await
         {
             Ok(_) => {
+                if let Ok(rules) = storage.call(|s: &Stores| s.db().load_adblock_rules()).await {
+                    self.ctx.update_dns_adblock_rules(
+                        rules
+                            .into_iter()
+                            .map(|(id, domain, action, enabled)| {
+                                lanforge_types::network::dns::adblock::AdblockRuleEntry {
+                                    id: Some(id),
+                                    domain,
+                                    action,
+                                    enabled,
+                                }
+                            })
+                            .collect(),
+                    );
+                }
                 let _ = self
                     .ctx
                     .bus()
@@ -36,7 +53,7 @@ impl ClientContext {
                 })
             }
             Err(e) => Response::Error {
-                error: e,
+                error: e.to_string(),
             },
         }
     }
@@ -57,17 +74,21 @@ impl ClientContext {
             };
         };
 
+        let d_clone = domain.clone();
         match storage
-            .send_query(lanforge_types::storage::StorageQuery::AddDnsAllowlist(
-                domain.clone(),
-            ))
+            .call(move |s: &Stores| s.db().add_dns_allowlist(&d_clone))
             .await
         {
-            Ok(_) => Response::Success(SimpleSuccess {
-                message: format!("Domain '{domain}' added to DNS allowlist"),
-            }),
+            Ok(()) => {
+                if let Ok(rows) = storage.call(|s: &Stores| s.db().load_dns_allowlist()).await {
+                    self.ctx.update_dns_allowlist(rows.into_iter().map(|(_, d)| d).collect());
+                }
+                Response::Success(SimpleSuccess {
+                    message: format!("Domain '{domain}' added to DNS allowlist"),
+                })
+            }
             Err(e) => Response::Error {
-                error: e,
+                error: e.to_string(),
             },
         }
     }
@@ -88,17 +109,21 @@ impl ClientContext {
             };
         };
 
+        let d_clone = domain.clone();
         match storage
-            .send_query(lanforge_types::storage::StorageQuery::RemoveDnsAllowlist(
-                domain.clone(),
-            ))
+            .call(move |s: &Stores| s.db().remove_dns_allowlist(&d_clone))
             .await
         {
-            Ok(_) => Response::Success(SimpleSuccess {
-                message: format!("Domain '{domain}' removed from DNS allowlist"),
-            }),
+            Ok(()) => {
+                if let Ok(rows) = storage.call(|s: &Stores| s.db().load_dns_allowlist()).await {
+                    self.ctx.update_dns_allowlist(rows.into_iter().map(|(_, d)| d).collect());
+                }
+                Response::Success(SimpleSuccess {
+                    message: format!("Domain '{domain}' removed from DNS allowlist"),
+                })
+            }
             Err(e) => Response::Error {
-                error: e,
+                error: e.to_string(),
             },
         }
     }

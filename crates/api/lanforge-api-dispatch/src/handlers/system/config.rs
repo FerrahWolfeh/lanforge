@@ -3,6 +3,7 @@ use lanforge_api::api::{
     AllowlistEntry, DnsUpstreamConfig, ImportResult, ImportSection, Response, SystemConfigExport,
     SystemConfigImportResponse,
 };
+use lanforge_db_core::Stores;
 use lanforge_types::network::dns::adblock::AdblockDbConfig;
 
 impl ClientContext {
@@ -56,11 +57,8 @@ impl ClientContext {
 
         // 7. API Tokens
         let api_tokens = if let Some(storage) = self.ctx.storage_handle() {
-            match storage
-                .send_query(lanforge_types::storage::StorageQuery::LoadApiTokens)
-                .await
-            {
-                Ok(lanforge_types::storage::StorageQueryResult::ApiTokens(tokens)) => Some(
+            match storage.call(|s: &Stores| s.auth().load_api_tokens()).await {
+                Ok(tokens) => Some(
                     tokens
                         .into_iter()
                         .map(|t| lanforge_api::api::ExportedApiToken {
@@ -177,7 +175,7 @@ impl ClientContext {
 
             // Clear DNS rewrites, upstreams, adblock URLs, allowlist
             if let Err(e) = storage
-                .send_query(lanforge_types::storage::StorageQuery::ClearDnsRewrites)
+                .call(|s: &Stores| s.db().clear_dns_rewrites())
                 .await
             {
                 total_success = false;
@@ -191,7 +189,7 @@ impl ClientContext {
                 self.ctx.update_dns_rewrites(Vec::new());
             }
             if let Err(e) = storage
-                .send_query(lanforge_types::storage::StorageQuery::ClearDnsUpstreams)
+                .call(|s: &Stores| s.db().clear_dns_upstreams())
                 .await
             {
                 total_success = false;
@@ -205,7 +203,7 @@ impl ClientContext {
                 self.ctx.update_dns_upstreams(Vec::new());
             }
             if let Err(e) = storage
-                .send_query(lanforge_types::storage::StorageQuery::ClearAdblockUrls)
+                .call(|s: &Stores| s.db().clear_adblock_urls())
                 .await
             {
                 total_success = false;
@@ -219,7 +217,7 @@ impl ClientContext {
                 self.ctx.update_dns_adblock_urls(Vec::new());
             }
             if let Err(e) = storage
-                .send_query(lanforge_types::storage::StorageQuery::ClearDnsAllowlist)
+                .call(|s: &Stores| s.db().clear_dns_allowlist())
                 .await
             {
                 total_success = false;
@@ -234,7 +232,7 @@ impl ClientContext {
             }
 
             if let Err(e) = storage
-                .send_query(lanforge_types::storage::StorageQuery::ClearAdblockRules)
+                .call(|s: &Stores| s.db().clear_adblock_rules())
                 .await
             {
                 total_success = false;
@@ -249,16 +247,14 @@ impl ClientContext {
             }
 
             // Clear API Tokens
-            if let Ok(lanforge_types::storage::StorageQueryResult::ApiTokens(existing_tokens)) =
-                storage
-                    .send_query(lanforge_types::storage::StorageQuery::LoadApiTokens)
-                    .await
+            if let Ok(existing_tokens) = storage
+                .call(|s: &Stores| s.auth().load_api_tokens())
+                .await
             {
                 for token in existing_tokens {
+                    let tok = token.token;
                     let _ = storage
-                        .send_query(lanforge_types::storage::StorageQuery::DeleteApiToken(
-                            token.token,
-                        ))
+                        .call(move |s: &Stores| s.auth().delete_api_token(&tok))
                         .await;
                 }
             }
@@ -269,7 +265,7 @@ impl ClientContext {
             self.ctx
                 .update_ra_config(Vec::new(), Vec::new(), Vec::new());
             let _ = storage
-                .send_query(lanforge_types::storage::StorageQuery::ClearReverseResolvers)
+                .call(|s: &Stores| s.db().clear_dns_reverse_resolvers())
                 .await;
         }
 
@@ -357,78 +353,29 @@ impl ClientContext {
             refresh_time,
         } = dns_adblock_config;
 
-        let mut adblock_cfg_success = true;
-        let mut adblock_cfg_err = None;
-        if let Err(e) = storage
-            .send_query(
-                lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
-                    key: "enabled".into(),
-                    value: if enabled {
-                        "true".into()
-                    } else {
-                        "false".into()
-                    },
-                },
-            )
+        let cfg_to_save = AdblockDbConfig {
+            enabled,
+            blocking_mode,
+            blocking_ip_v4,
+            blocking_ip_v6,
+            refresh_time,
+        };
+        let (adblock_cfg_success, adblock_cfg_err) = match storage
+            .call(move |s: &Stores| s.db().save_adblock_config(&cfg_to_save))
             .await
         {
-            adblock_cfg_success = false;
-            adblock_cfg_err = Some(format!("Failed to set enabled: {e}"));
-        }
-        if adblock_cfg_success
-            && let Err(e) = storage
-                .send_query(
-                    lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
-                        key: "blocking_mode".into(),
-                        value: blocking_mode.to_string(),
-                    },
-                )
-                .await
-        {
-            adblock_cfg_success = false;
-            adblock_cfg_err = Some(format!("Failed to set blocking_mode: {e}"));
-        }
-        if adblock_cfg_success
-            && let Some(ip) = blocking_ip_v4
-            && let Err(e) = storage
-                .send_query(
-                    lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
-                        key: "blocking_ip_v4".into(),
-                        value: ip.to_string(),
-                    },
-                )
-                .await
-        {
-            adblock_cfg_success = false;
-            adblock_cfg_err = Some(format!("Failed to set blocking_ip_v4: {e}"));
-        }
-        if adblock_cfg_success
-            && let Some(ip) = blocking_ip_v6
-            && let Err(e) = storage
-                .send_query(
-                    lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
-                        key: "blocking_ip_v6".into(),
-                        value: ip.to_string(),
-                    },
-                )
-                .await
-        {
-            adblock_cfg_success = false;
-            adblock_cfg_err = Some(format!("Failed to set blocking_ip_v6: {e}"));
-        }
-        if adblock_cfg_success
-            && let Err(e) = storage
-                .send_query(
-                    lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
-                        key: "refresh_time".into(),
-                        value: refresh_time.to_string(),
-                    },
-                )
-                .await
-        {
-            adblock_cfg_success = false;
-            adblock_cfg_err = Some(format!("Failed to set refresh_time: {e}"));
-        }
+            Ok(()) => {
+                self.ctx.update_dns_adblock(AdblockDbConfig {
+                    enabled,
+                    blocking_mode,
+                    blocking_ip_v4,
+                    blocking_ip_v6,
+                    refresh_time,
+                });
+                (true, None)
+            }
+            Err(e) => (false, Some(format!("Failed to save adblock config: {e}"))),
+        };
         if !adblock_cfg_success {
             total_success = false;
         }
@@ -496,34 +443,40 @@ impl ClientContext {
             let mut rules_success = true;
             let mut rules_err = None;
             for r in rules {
+                let dom = r.domain.clone();
+                let act = r.action;
+                let en = r.enabled;
                 match storage
-                    .send_query(lanforge_types::storage::StorageQuery::AddAdblockRule {
-                        domain: r.domain,
-                        action: r.action,
+                    .call(move |s: &Stores| -> Result<(), lanforge_db_core::DbError> {
+                        let id = s.db().add_adblock_rule(&dom, act)?;
+                        if !en {
+                            s.db().update_adblock_rule_status(id, false)?;
+                        }
+                        Ok(())
                     })
                     .await
                 {
-                    Ok(lanforge_types::storage::StorageQueryResult::Id(id)) => {
-                        if !r.enabled {
-                            let _ = storage
-                                .send_query(
-                                    lanforge_types::storage::StorageQuery::UpdateAdblockRuleStatus {
-                                        id,
-                                        enabled: false,
-                                    },
-                                )
-                                .await;
-                        }
-                        rules_count += 1;
-                    }
-                    Ok(_) => {
-                        rules_count += 1;
-                    }
+                    Ok(()) => rules_count += 1,
                     Err(e) => {
                         rules_success = false;
-                        rules_err = Some(e);
+                        rules_err = Some(e.to_string());
                     }
                 }
+            }
+            if let Ok(rules) = storage.call(|s: &Stores| s.db().load_adblock_rules()).await {
+                self.ctx.update_dns_adblock_rules(
+                    rules
+                        .into_iter()
+                        .map(|(id, domain, action, enabled)| {
+                            lanforge_types::network::dns::adblock::AdblockRuleEntry {
+                                id: Some(id),
+                                domain,
+                                action,
+                                enabled,
+                            }
+                        })
+                        .collect(),
+                );
             }
             if !rules_success {
                 total_success = false;
@@ -546,18 +499,19 @@ impl ClientContext {
                 .unwrap_or_default()
                 .as_secs() as i64;
             for t in tokens {
+                let tok = t.token.clone();
+                let nm = t.name.clone();
+                let sc = t.scopes.clone();
                 if let Err(e) = storage
-                    .send_query(lanforge_types::storage::StorageQuery::StoreApiToken {
-                        token: t.token,
-                        name: t.name,
-                        scopes: t.scopes,
-                        expires_at: t.expires_at,
-                        now,
+                    .call(move |s: &Stores| -> Result<(), lanforge_db_core::DbError> {
+                        s.auth()
+                            .store_api_token(&tok, &nm, &sc, t.expires_at, now)
+                            .map(|_| ())
                     })
                     .await
                 {
                     tokens_success = false;
-                    tokens_err = Some(e);
+                    tokens_err = Some(e.to_string());
                 } else {
                     imported_tokens += 1;
                 }
@@ -654,16 +608,16 @@ impl ClientContext {
             let mut res_success = true;
             let mut res_err = None;
             for r in resolvers {
+                let sub = r.subnet;
+                let res = r.resolver.clone();
                 if let Err(e) = storage
-                    .send_query(lanforge_types::storage::StorageQuery::AddReverseResolver {
-                        subnet: r.subnet,
-                        resolver: r.resolver,
-                    })
+                    .call(move |s: &Stores| s.db().add_dns_reverse_resolver(&sub, &res))
                     .await
                 {
                     res_success = false;
-                    res_err = Some(e);
+                    res_err = Some(e.to_string());
                 } else {
+                    self.ctx.add_reverse_resolver(r);
                     res_count += 1;
                 }
             }

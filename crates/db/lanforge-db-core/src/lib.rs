@@ -17,6 +17,7 @@ use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::network::{DnsReverseResolver, Hostname, IpSubnet, Ipv6AddrOrSuffix, QueryLogEntry, QueryResult, TrafficConfig, TrafficHistorySample};
+use lanforge_types::storage::DnsAnalyticsData;
 
 /// Database error enum encapsulating all database failures.
 #[derive(Debug, thiserror::Error)]
@@ -52,6 +53,18 @@ pub enum DbError {
     /// A generic message error.
     #[error("Database error: {0}")]
     Generic(String),
+}
+
+impl From<String> for DbError {
+    fn from(s: String) -> Self {
+        DbError::Backend(s)
+    }
+}
+
+impl From<&str> for DbError {
+    fn from(s: &str) -> Self {
+        DbError::Backend(s.to_string())
+    }
 }
 
 #[cfg(feature = "postcard")]
@@ -934,14 +947,117 @@ pub trait LogStore: Send + Sync {
     fn save_traffic_history(&self, _samples: &[TrafficHistorySample]) -> Result<(), DbError> {
         Ok(())
     }
+
+    /// Aggregates and returns consolidated DNS analytics snapshot.
+    fn get_dns_analytics(
+        &self,
+        limit: usize,
+        client: Option<&str>,
+    ) -> Result<DnsAnalyticsData, DbError> {
+        let top_domains = if let Some(c) = client {
+            self.get_dns_top_domains_for_client(c, limit).unwrap_or_default()
+        } else {
+            self.get_dns_top_domains(limit).unwrap_or_default()
+        };
+        let query_types = self.get_dns_query_types().unwrap_or_default();
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let since_secs = now_secs.saturating_sub(86400);
+        let detailed_rates = self
+            .get_dns_query_rate_detailed(since_secs, 900)
+            .unwrap_or_default();
+        let top_clients = self.get_dns_top_clients(limit).unwrap_or_default();
+        let protocol_stats = self.get_dns_protocol_stats().unwrap_or_default();
+        let top_blocked_domains = self
+            .get_dns_top_blocked_domains(limit)
+            .unwrap_or_default();
+        let top_blocked_clients = self
+            .get_dns_top_blocked_clients(limit)
+            .unwrap_or_default();
+        let blocked_query_rate = self
+            .get_dns_blocked_query_rate(since_secs)
+            .unwrap_or_default();
+
+        Ok(DnsAnalyticsData {
+            top_domains,
+            query_types,
+            detailed_rates,
+            top_clients,
+            protocol_stats,
+            top_blocked_domains,
+            top_blocked_clients,
+            blocked_query_rate,
+        })
+    }
 }
 
 /// Composite supertrait combining all persistence store traits into a single backend interface.
-pub trait DatabaseStore: ConfigStore + StateStore + AuthStore {}
+pub trait DatabaseStore:
+    ConfigStore
+    + StateStore
+    + AuthStore
+    + DnsStore
+    + AdblockStore
+    + DnsUpstreamStore
+    + DhcpConfigStore
+    + RaConfigStore
+    + PppoeConfigStore
+    + FirewallConfigStore
+    + TrafficConfigStore
+    + Send
+    + Sync
+{
+}
 
 impl<T> DatabaseStore for T where
-    T: ConfigStore + StateStore + AuthStore
+    T: ConfigStore
+        + StateStore
+        + AuthStore
+        + DnsStore
+        + AdblockStore
+        + DnsUpstreamStore
+        + DhcpConfigStore
+        + RaConfigStore
+        + PppoeConfigStore
+        + FirewallConfigStore
+        + TrafficConfigStore
+        + Send
+        + Sync
 {
+}
+
+/// Unified facade exposing all storage domains for closure execution.
+#[derive(Clone)]
+pub struct Stores {
+    pub db: std::sync::Arc<dyn DatabaseStore>,
+    pub log: std::sync::Arc<dyn LogStore>,
+}
+
+impl Stores {
+    #[must_use]
+    pub fn new(db: std::sync::Arc<dyn DatabaseStore>, log: std::sync::Arc<dyn LogStore>) -> Self {
+        Self { db, log }
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn db(&self) -> &dyn DatabaseStore {
+        self.db.as_ref()
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn log(&self) -> &dyn LogStore {
+        self.log.as_ref()
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn auth(&self) -> &dyn AuthStore {
+        self.db.as_ref()
+    }
 }
 
 /// Masks credentials in a database URL if present.

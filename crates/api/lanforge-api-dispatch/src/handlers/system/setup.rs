@@ -4,6 +4,7 @@ use lanforge_api::api::{
     SetupWanConfig,
 };
 use lanforge_crypto::hash_password;
+use lanforge_db_core::Stores;
 use lanforge_types::auth::UserRole;
 use lanforge_types::events::{LanforgeEvent, SystemEvent};
 use lanforge_types::identifiers::MacAddr;
@@ -36,19 +37,15 @@ impl ClientContext {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub async fn handle_setup_status(&self) -> Response {
         let is_provisioned = if let Some(storage) = self.ctx.storage_handle() {
-            let prov = matches!(
-                storage
-                    .send_query(lanforge_types::storage::StorageQuery::IsProvisioned)
-                    .await,
-                Ok(lanforge_types::storage::StorageQueryResult::Boolean(true))
-            );
-            let has_users = match storage
-                .send_query(lanforge_types::storage::StorageQuery::CountUsers)
+            let prov = storage
+                .call(|s: &Stores| s.db().is_provisioned())
                 .await
-            {
-                Ok(lanforge_types::storage::StorageQueryResult::Count(c)) => c > 0,
-                _ => false,
-            };
+                .unwrap_or(false);
+            let has_users = storage
+                .call(|s: &Stores| s.auth().list_users())
+                .await
+                .map(|u| !u.is_empty())
+                .unwrap_or(false);
             prov || has_users
         } else {
             false
@@ -132,19 +129,15 @@ impl ClientContext {
         };
 
         let is_provisioned = {
-            let prov = matches!(
-                storage
-                    .send_query(lanforge_types::storage::StorageQuery::IsProvisioned)
-                    .await,
-                Ok(lanforge_types::storage::StorageQueryResult::Boolean(true))
-            );
-            let has_users = match storage
-                .send_query(lanforge_types::storage::StorageQuery::CountUsers)
+            let prov = storage
+                .call(|s: &Stores| s.db().is_provisioned())
                 .await
-            {
-                Ok(lanforge_types::storage::StorageQueryResult::Count(c)) => c > 0,
-                _ => false,
-            };
+                .unwrap_or(false);
+            let has_users = storage
+                .call(|s: &Stores| s.auth().list_users())
+                .await
+                .map(|u| !u.is_empty())
+                .unwrap_or(false);
             prov || has_users
         };
         if is_provisioned {
@@ -173,21 +166,20 @@ impl ClientContext {
         let password_hash = hash_password(&payload.admin_password);
 
         // 1. Create or update root admin user in database
+        let u_clone = username.clone();
+        let pass_clone = password_hash.clone();
         if let Err(e) = storage
-            .send_query(lanforge_types::storage::StorageQuery::CreateUser {
-                username: username.clone(),
-                password_hash: password_hash.clone(),
-                role: UserRole::Admin,
-                now,
+            .call(move |s: &Stores| {
+                s.auth().create_user(&u_clone, &pass_clone, UserRole::Admin, now)
             })
             .await
         {
             // If user already exists, update password
+            let u_clone2 = username.clone();
+            let pass_clone2 = password_hash.clone();
             let _ = storage
-                .send_query(lanforge_types::storage::StorageQuery::UpdateUserPassword {
-                    username: username.clone(),
-                    new_hash: password_hash.clone(),
-                    now,
+                .call(move |s: &Stores| {
+                    s.auth().update_user_password(&u_clone2, &pass_clone2, now)
                 })
                 .await;
             info!("Setup: updated existing admin credentials ({e})");
@@ -259,7 +251,7 @@ impl ClientContext {
         // 5. Configure Upstream DNS & Adblock
         if !payload.upstream_dns.is_empty() {
             let _ = storage
-                .send_query(lanforge_types::storage::StorageQuery::ClearDnsUpstreams)
+                .call(|s: &Stores| s.db().clear_dns_upstreams())
                 .await;
             for server in &payload.upstream_dns {
                 let s = server.trim();
@@ -273,27 +265,19 @@ impl ClientContext {
                     };
                     if let Some(addr) = addr {
                         let _ = storage
-                            .send_query(lanforge_types::storage::StorageQuery::AddDnsUpstream {
-                                addr,
-                                protocol: UpstreamProtocol::Udp,
-                                domain: None,
+                            .call(move |s: &Stores| {
+                                s.db().add_dns_upstream(addr, UpstreamProtocol::Udp, None)
                             })
                             .await;
                     }
                 }
             }
         }
+        let adb_val = if payload.adblock_enabled { "true" } else { "false" };
         let _ = storage
-            .send_query(
-                lanforge_types::storage::StorageQuery::SetAdblockConfigValue {
-                    key: "enabled".into(),
-                    value: if payload.adblock_enabled {
-                        "true".into()
-                    } else {
-                        "false".into()
-                    },
-                },
-            )
+            .call(move |s: &Stores| {
+                s.db().set_adblock_config_value("enabled", adb_val)
+            })
             .await;
 
         // 6. Configure WAN / Uplink
@@ -415,7 +399,7 @@ impl ClientContext {
 
         // 8. Permanently mark system as provisioned
         if let Err(e) = storage
-            .send_query(lanforge_types::storage::StorageQuery::SetProvisioned(true))
+            .call(|s: &Stores| s.db().set_provisioned(true))
             .await
         {
             error!("Setup: failed to set provisioned flag: {e}");

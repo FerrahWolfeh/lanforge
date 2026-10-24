@@ -25,36 +25,28 @@ use lanforge_core::bus::{
     TrafficEvent,
 };
 use lanforge_db_core::{
-    config_keys::*, AdblockStore, ApiTokenStore, DeviceStore, DnsStore, DnsUpstreamStore, LogStore,
-    RaConfigStore, UserStore,
+    config_keys::*, ApiTokenStore, DeviceStore, LogStore, RaConfigStore,
 };
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::dns::adblock::AdblockRuleEntry;
-use lanforge_types::network::dns::{AdblockUrlEntry, DnsRequest, DnsResponse};
-use lanforge_types::network::{DnsReverseResolver, QueryLogEntry};
-use lanforge_types::storage::{DnsAnalyticsData, StorageQuery, StorageQueryResult};
+use lanforge_types::network::dns::{DnsRequest, DnsResponse};
+use lanforge_types::network::QueryLogEntry;
 use lanforge_types::system::ServiceAction;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::time::{Interval, interval};
 use tracing::{debug, error, info, warn};
 
-use lanforge_core::context::{LanforgeContext, StorageHandle};
+use lanforge_core::context::{LanforgeContext, StorageCommand, StorageHandle};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::AsyncService;
 
 use crate::config::DatabaseConfig;
 use crate::engine::LanforgeDb;
 use crate::log_engine::LogDb;
-
-type StorageQueryItem = (
-    StorageQuery,
-    oneshot::Sender<Result<StorageQueryResult, String>>,
-);
 
 /// Background worker for database operations.
 #[lanforge_macros::lanforge_service(
@@ -78,7 +70,7 @@ pub struct DbWorker {
     log_buffer: Vec<TimedEvent>,
     dns_log_buffer: Vec<QueryLogEntry>,
     bytes_buf: Vec<u8>,
-    storage_rx: Option<mpsc::Receiver<StorageQueryItem>>,
+    storage_rx: Option<mpsc::Receiver<StorageCommand>>,
     dirty_sections: lanforge_api::config_file::SectionSet,
 }
 
@@ -437,394 +429,6 @@ impl DbWorker {
         self.dirty_sections = SectionSet::empty();
     }
 
-    fn handle_storage_query(
-        db: &LanforgeDb,
-        log_db: &LogDb,
-        ctx: &LanforgeContext,
-        query: StorageQuery,
-    ) -> Result<StorageQueryResult, String> {
-        match query {
-            StorageQuery::StoreApiToken {
-                token,
-                name,
-                scopes,
-                expires_at,
-                now,
-            } => {
-                let id = db
-                    .store_api_token(&token, &name, &scopes, expires_at, now)
-                    .map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::Id(id))
-            }
-            StorageQuery::LoadApiTokens => {
-                let tokens = db.load_api_tokens().map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::ApiTokens(tokens))
-            }
-            StorageQuery::DeleteApiToken(token) => {
-                db.delete_api_token(&token).map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::DeleteApiTokenByIdOrName(id_or_name) => {
-                db.delete_api_token_by_id_or_name(&id_or_name)
-                    .map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::GetApiTokenInfo(id_or_name) => {
-                let info = db
-                    .get_api_token_info(&id_or_name)
-                    .map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::ApiTokenInfo(info))
-            }
-            StorageQuery::CreateUser {
-                username,
-                password_hash,
-                role,
-                now,
-            } => {
-                let user = db
-                    .create_user(&username, &password_hash, role, now)
-                    .map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::User(Some(user)))
-            }
-            StorageQuery::GetUserByUsername(username) => {
-                let user = db
-                    .get_user_by_username(&username)
-                    .map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::User(user))
-            }
-            StorageQuery::ListUsers => {
-                let users = db.list_users().map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::Users(users))
-            }
-            StorageQuery::UpdateUserPassword {
-                username,
-                new_hash,
-                now,
-            } => {
-                db.update_user_password(&username, &new_hash, now)
-                    .map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::UpdateUserRole {
-                username,
-                new_role,
-                now,
-            } => {
-                db.update_user_role(&username, new_role, now)
-                    .map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::DeleteUser(username) => {
-                db.delete_user(&username).map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::CountUsers => {
-                let count = db.count_users().map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::Count(count as usize))
-            }
-            StorageQuery::IsProvisioned => {
-                let p = db.is_provisioned().map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::Boolean(p))
-            }
-            StorageQuery::SetProvisioned(p) => {
-                db.set_provisioned(p).map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::PruneZombies => {
-                let count = db.prune_zombies().map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::Count(count))
-            }
-            StorageQuery::PruneLogs { before } => {
-                log_db.prune_logs(before).map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::ClearLogs => {
-                log_db.clear_logs().map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::ResetDb => {
-                db.reset().map_err(|e| e.to_string())?;
-                log_db.clear_logs().map_err(|e| e.to_string())?;
-                ctx.reset();
-                let _ = ctx
-                    .bus()
-                    .publish(LanforgeEvent::Storage(StorageEvent::DbResetCompleted));
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::GetLogHistory(limit) => {
-                let history = log_db.get_history(limit).map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::LogHistory(history))
-            }
-            StorageQuery::GetDnsQueryHistory {
-                limit,
-                offset,
-                client,
-                domain,
-                qtype,
-                result,
-            } => {
-                let (queries, total) = log_db
-                    .get_dns_query_history(limit, offset, client, domain, qtype, result)
-                    .map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::DnsQueryHistory { queries, total })
-            }
-            StorageQuery::GetDnsAnalytics { limit, client } => {
-                let top_domains = if let Some(ref c) = client {
-                    log_db
-                        .get_dns_top_domains_for_client(c, limit)
-                        .unwrap_or_default()
-                } else {
-                    log_db.get_dns_top_domains(limit).unwrap_or_default()
-                };
-                let query_types = log_db.get_dns_query_types().unwrap_or_default();
-                let now_secs = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                let since_secs = now_secs.saturating_sub(86400);
-                let detailed_rates = log_db
-                    .get_dns_query_rate_detailed(since_secs, 900)
-                    .unwrap_or_default();
-                let top_clients = log_db.get_dns_top_clients(limit).unwrap_or_default();
-                let protocol_stats = log_db.get_dns_protocol_stats().unwrap_or_default();
-                let top_blocked_domains = log_db
-                    .get_dns_top_blocked_domains(limit)
-                    .unwrap_or_default();
-                let top_blocked_clients = log_db
-                    .get_dns_top_blocked_clients(limit)
-                    .unwrap_or_default();
-                let blocked_query_rate = log_db
-                    .get_dns_blocked_query_rate(since_secs)
-                    .unwrap_or_default();
-
-                Ok(StorageQueryResult::DnsAnalytics(DnsAnalyticsData {
-                    top_domains,
-                    query_types,
-                    detailed_rates,
-                    top_clients,
-                    protocol_stats,
-                    top_blocked_domains,
-                    top_blocked_clients,
-                    blocked_query_rate,
-                }))
-            }
-            StorageQuery::UpsertDnsRewrite {
-                domain,
-                rtype,
-                answer,
-            } => {
-                db.upsert_dns_rewrite(&domain, rtype, &answer)
-                    .map_err(|e| e.to_string())?;
-                if let Ok(rewrites) = db.load_dns_rewrites() {
-                    ctx.update_dns_rewrites(rewrites);
-                }
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::DeleteDnsRewrite(id) => {
-                db.delete_dns_rewrite_by_id(id).map_err(|e| e.to_string())?;
-                if let Ok(rewrites) = db.load_dns_rewrites() {
-                    ctx.update_dns_rewrites(rewrites);
-                }
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::ClearDnsRewrites => {
-                db.clear_dns_rewrites().map_err(|e| e.to_string())?;
-                ctx.update_dns_rewrites(Vec::new());
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::AddDnsAllowlist(domain) => {
-                db.add_dns_allowlist(&domain).map_err(|e| e.to_string())?;
-                if let Ok(rows) = db.load_dns_allowlist() {
-                    ctx.update_dns_allowlist(rows.into_iter().map(|(_, d)| d).collect());
-                }
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::RemoveDnsAllowlist(domain) => {
-                db.remove_dns_allowlist(&domain)
-                    .map_err(|e| e.to_string())?;
-                if let Ok(rows) = db.load_dns_allowlist() {
-                    ctx.update_dns_allowlist(rows.into_iter().map(|(_, d)| d).collect());
-                }
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::ClearDnsAllowlist => {
-                db.clear_dns_allowlist().map_err(|e| e.to_string())?;
-                ctx.update_dns_allowlist(Vec::new());
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::SetAdblockConfigValue { key, value } => {
-                db.set_adblock_config_value(&key, &value)
-                    .map_err(|e| e.to_string())?;
-                if let Ok(cfg) = db.load_adblock_config() {
-                    ctx.update_dns_adblock(cfg);
-                }
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::AddAdblockUrl { url, kind, format } => {
-                db.add_adblock_url(&url, kind, format)
-                    .map_err(|e| e.to_string())?;
-                if let Ok(urls) = db.load_adblock_urls() {
-                    ctx.update_dns_adblock_urls(
-                        urls.into_iter()
-                            .map(|(id, url, kind, format)| AdblockUrlEntry {
-                                id: Some(id),
-                                url,
-                                kind,
-                                format,
-                            })
-                            .collect(),
-                    );
-                }
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::RemoveAdblockUrl(url) => {
-                db.remove_adblock_url(&url).map_err(|e| e.to_string())?;
-                if let Ok(urls) = db.load_adblock_urls() {
-                    ctx.update_dns_adblock_urls(
-                        urls.into_iter()
-                            .map(|(id, url, kind, format)| AdblockUrlEntry {
-                                id: Some(id),
-                                url,
-                                kind,
-                                format,
-                            })
-                            .collect(),
-                    );
-                }
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::ClearAdblockUrls => {
-                db.clear_adblock_urls().map_err(|e| e.to_string())?;
-                ctx.update_dns_adblock_urls(Vec::new());
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::AddAdblockRule { domain, action } => {
-                let id = db
-                    .add_adblock_rule(&domain, action)
-                    .map_err(|e| e.to_string())?;
-                if let Ok(rows) = db.load_adblock_rules() {
-                    ctx.update_dns_adblock_rules(
-                        rows.into_iter()
-                            .map(|(id, domain, action, enabled)| AdblockRuleEntry {
-                                id: Some(id),
-                                domain,
-                                action,
-                                enabled,
-                            })
-                            .collect(),
-                    );
-                }
-                Ok(StorageQueryResult::Id(id))
-            }
-            StorageQuery::RemoveAdblockRule(id) => {
-                db.remove_adblock_rule(id).map_err(|e| e.to_string())?;
-                if let Ok(rows) = db.load_adblock_rules() {
-                    ctx.update_dns_adblock_rules(
-                        rows.into_iter()
-                            .map(|(id, domain, action, enabled)| AdblockRuleEntry {
-                                id: Some(id),
-                                domain,
-                                action,
-                                enabled,
-                            })
-                            .collect(),
-                    );
-                }
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::UpdateAdblockRuleStatus { id, enabled } => {
-                db.update_adblock_rule_status(id, enabled)
-                    .map_err(|e| e.to_string())?;
-                if let Ok(rows) = db.load_adblock_rules() {
-                    ctx.update_dns_adblock_rules(
-                        rows.into_iter()
-                            .map(|(id, domain, action, enabled)| AdblockRuleEntry {
-                                id: Some(id),
-                                domain,
-                                action,
-                                enabled,
-                            })
-                            .collect(),
-                    );
-                }
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::ClearAdblockRules => {
-                db.clear_adblock_rules().map_err(|e| e.to_string())?;
-                ctx.update_dns_adblock_rules(Vec::new());
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::AddDnsUpstream {
-                addr,
-                protocol,
-                domain,
-            } => {
-                let id = db
-                    .add_dns_upstream(addr, protocol, domain.as_deref())
-                    .map_err(|e| e.to_string())?;
-                if let Ok(rows) = db.load_dns_upstreams() {
-                    ctx.update_dns_upstreams(rows.into_iter().map(|r| r.to_target()).collect());
-                }
-                Ok(StorageQueryResult::Id(id))
-            }
-            StorageQuery::RemoveDnsUpstream {
-                addr,
-                protocol,
-                domain,
-            } => {
-                db.remove_dns_upstream(addr, protocol, domain.as_deref())
-                    .map_err(|e| e.to_string())?;
-                if let Ok(rows) = db.load_dns_upstreams() {
-                    ctx.update_dns_upstreams(rows.into_iter().map(|r| r.to_target()).collect());
-                }
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::ClearDnsUpstreams => {
-                db.clear_dns_upstreams().map_err(|e| e.to_string())?;
-                ctx.update_dns_upstreams(Vec::new());
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::GetDnsUpstreamMode => {
-                let mode = db.load_dns_upstream_mode().map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::DnsUpstreamMode(mode))
-            }
-            StorageQuery::SetDnsUpstreamMode(mode) => {
-                db.save_dns_upstream_mode(mode).map_err(|e| e.to_string())?;
-                ctx.update_dns_upstream_mode(mode);
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::AddReverseResolver { subnet, resolver } => {
-                db.add_dns_reverse_resolver(&subnet, &resolver)
-                    .map_err(|e| e.to_string())?;
-                ctx.add_reverse_resolver(DnsReverseResolver { subnet, resolver });
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::RemoveReverseResolver(subnet) => {
-                db.remove_dns_reverse_resolver(&subnet)
-                    .map_err(|e| e.to_string())?;
-                ctx.remove_reverse_resolver(subnet);
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::ClearReverseResolvers => {
-                db.clear_dns_reverse_resolvers()
-                    .map_err(|e| e.to_string())?;
-                ctx.set_reverse_resolvers(Vec::new());
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::SaveTrafficHistory(samples) => {
-                log_db
-                    .save_traffic_history(&samples)
-                    .map_err(|e| e.to_string())?;
-                Ok(StorageQueryResult::Success)
-            }
-            StorageQuery::LoadTrafficHistory => {
-                let samples = log_db
-                    .load_traffic_history()
-                    .unwrap_or_default();
-                Ok(StorageQueryResult::TrafficHistory(samples))
-            }
-        }
-    }
 }
 
 impl AsyncService for DbWorker {
@@ -903,47 +507,14 @@ impl AsyncService for DbWorker {
         let mut traffic_rx = ctx.bus().subscribe_traffic();
         let mut flush_interval: Interval = interval(Duration::from_secs(self.cfg.flush_interval));
         let mut last_prune = tokio::time::Instant::now();
+        let stores = db.stores(log_db.clone());
 
         loop {
             tokio::select! {
-                // Storage queries from API dispatch / handles
-                res = storage_rx.recv() => {
-                    if let Some((query, resp_tx)) = res {
-                        match &query {
-                            StorageQuery::UpsertDnsRewrite { .. }
-                            | StorageQuery::DeleteDnsRewrite(_)
-                            | StorageQuery::ClearDnsRewrites
-                            | StorageQuery::AddDnsAllowlist(_)
-                            | StorageQuery::RemoveDnsAllowlist(_)
-                            | StorageQuery::ClearDnsAllowlist
-                            | StorageQuery::AddDnsUpstream { .. }
-                            | StorageQuery::RemoveDnsUpstream { .. }
-                            | StorageQuery::ClearDnsUpstreams
-                            | StorageQuery::SetDnsUpstreamMode(_)
-                            | StorageQuery::AddReverseResolver { .. }
-                            | StorageQuery::RemoveReverseResolver(_)
-                            | StorageQuery::ClearReverseResolvers => {
-                                self.dirty_sections |= SectionSet::DNS;
-                            }
-                            StorageQuery::SetAdblockConfigValue { .. }
-                            | StorageQuery::AddAdblockUrl { .. }
-                            | StorageQuery::RemoveAdblockUrl(_)
-                            | StorageQuery::ClearAdblockUrls
-                            | StorageQuery::AddAdblockRule { .. }
-                            | StorageQuery::RemoveAdblockRule(_)
-                            | StorageQuery::UpdateAdblockRuleStatus { .. }
-                            | StorageQuery::ClearAdblockRules => {
-                                self.dirty_sections |= SectionSet::ADBLOCK;
-                            }
-                            StorageQuery::StoreApiToken { .. }
-                            | StorageQuery::DeleteApiToken(_)
-                            | StorageQuery::DeleteApiTokenByIdOrName(_) => {
-                                self.dirty_sections |= SectionSet::API;
-                            }
-                            _ => {}
-                        }
-                        let result = Self::handle_storage_query(&db, &log_db, ctx, query);
-                        let _ = resp_tx.send(result);
+                // Storage commands via closure channel
+                cmd = storage_rx.recv() => {
+                    if let Some(cmd) = cmd {
+                        cmd(&stores);
                     }
                 }
 
@@ -1057,6 +628,11 @@ impl AsyncService for DbWorker {
                             self.log_buffer.clear();
                             self.dns_log_buffer.clear();
                         }
+                        LanforgeEvent::Storage(StorageEvent::SaveTrafficHistory(samples)) => {
+                            if let Err(e) = log_db.save_traffic_history(samples) {
+                                error!("Failed to save traffic history: {e}");
+                            }
+                        }
                         LanforgeEvent::System(SystemEvent::Shutdown) => {
                             info!("Database worker shutting down...");
                             self.flush_batch(&db, &log_db).await;
@@ -1096,6 +672,16 @@ impl AsyncService for DbWorker {
                                     self.dns_log_buffer.clear();
                                 }
                             }
+                        }
+                        LanforgeEvent::Dns(
+                            DnsEvent::ConfigRewritesChanged
+                            | DnsEvent::ConfigAllowlistChanged
+                            | DnsEvent::ConfigAdblockChanged
+                            | DnsEvent::ConfigAdblockRulesChanged
+                            | DnsEvent::ConfigUpstreamsChanged
+                            | DnsEvent::ConfigUpstreamModeChanged(_),
+                        ) => {
+                            self.dirty_sections |= SectionSet::DNS;
                         }
                         LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed) => {
                             self.dirty_sections |= SectionSet::DHCP;

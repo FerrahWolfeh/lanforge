@@ -288,6 +288,7 @@ const fn event_topic_and_kind(event: &LanforgeEvent) -> (&'static str, &'static 
             StorageEvent::DbResetCompleted => "DbResetCompleted",
             StorageEvent::TableDirty => "TableDirty",
             StorageEvent::DbWrite { .. } => "DbWrite",
+            StorageEvent::SaveTrafficHistory(_) => "SaveTrafficHistory",
         }),
         LanforgeEvent::Pppoe(p) => ("pppoe", match p {
             PppoeEvent::SessionUp(..) => "SessionUp",

@@ -143,6 +143,12 @@ impl LanforgeDb {
         let devices: Vec<std::sync::Arc<Device>> = snapshot.devices.values().cloned().collect();
         self.inner.batch_sync_devices(&devices, &[], &[])
     }
+
+    /// Creates a composite `Stores` instance for closure execution.
+    #[must_use]
+    pub fn stores(&self, log: std::sync::Arc<dyn lanforge_db_core::LogStore>) -> lanforge_db_core::Stores {
+        lanforge_db_core::Stores::new(std::sync::Arc::new(self.inner.clone()), log)
+    }
 }
 
 impl std::ops::Deref for LanforgeDb {

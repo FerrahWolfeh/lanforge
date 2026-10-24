@@ -1,32 +1,49 @@
-use lanforge_types::storage::{StorageQuery, StorageQueryResult};
+use std::any::Any;
 use tokio::sync::{mpsc, oneshot};
+
+/// A boxed closure command executed by the storage worker.
+pub type StorageCommand = Box<dyn FnOnce(&dyn Any) + Send>;
 
 /// A decoupled handle for communicating with the database and log worker over MPSC channels.
 #[derive(Clone)]
 pub struct StorageHandle {
-    tx: mpsc::Sender<(StorageQuery, oneshot::Sender<Result<StorageQueryResult, String>>)>,
+    tx: mpsc::Sender<StorageCommand>,
 }
 
 impl StorageHandle {
     #[must_use]
-    pub const fn new(
-        tx: mpsc::Sender<(StorageQuery, oneshot::Sender<Result<StorageQueryResult, String>>)>,
-    ) -> Self {
+    pub const fn new(tx: mpsc::Sender<StorageCommand>) -> Self {
         Self { tx }
     }
 
-    /// Sends a storage query/command and waits for the response.
+    /// Executes a closure against the storage worker and awaits the result.
     ///
     /// # Errors
-    /// Returns an error if the database worker is unreachable, closed, or fails to respond.
-    pub async fn send_query(&self, req: StorageQuery) -> Result<StorageQueryResult, String> {
+    /// Returns an error if the database worker channel is closed, dropped the response,
+    /// or if the store type downcast fails.
+    pub async fn call<S: 'static, R: Send + 'static, E: From<String> + Send + 'static>(
+        &self,
+        f: impl FnOnce(&S) -> Result<R, E> + Send + 'static,
+    ) -> Result<R, E> {
         let (resp_tx, resp_rx) = oneshot::channel();
+        let cmd: StorageCommand = Box::new(move |any: &dyn Any| {
+            if let Some(stores) = any.downcast_ref::<S>() {
+                let res = f(stores);
+                let _ = resp_tx.send(res);
+            } else {
+                let _ = resp_tx.send(Err(E::from(
+                    "Storage handle downcast failure: store type mismatch".to_string(),
+                )));
+            }
+        });
+
         self.tx
-            .send((req, resp_tx))
+            .send(cmd)
             .await
-            .map_err(|_| "Database worker channel closed".to_string())?;
+            .map_err(|_| E::from("Database worker channel closed".to_string()))?;
+
         resp_rx
             .await
-            .map_err(|_| "Database worker failed to respond".to_string())?
+            .map_err(|_| E::from("Database worker failed to respond".to_string()))?
     }
 }

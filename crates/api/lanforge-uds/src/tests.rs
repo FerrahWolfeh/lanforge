@@ -6,8 +6,8 @@ use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State as CoreState;
 use lanforge_core::context::storage_handle::StorageHandle;
+use lanforge_db::LogStore;
 use lanforge_types::events::{LanforgeEvent, StorageEvent, SystemEvent, TimedEvent};
-use lanforge_types::storage::{StorageQuery, StorageQueryResult};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -85,20 +85,18 @@ async fn test_uds_log_streaming_filter() {
         .ctx
         .set_storage_handle(StorageHandle::new(storage_tx));
 
-    // Populate history logs using TimedEvent::new() to automatically assign timestamps
     let log1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::ReloadConfig)); // matches ConfigReloaded
     let log2 = TimedEvent::new(LanforgeEvent::Storage(StorageEvent::DbLogClean)); // filtered out
-    let log1_clone = log1.clone();
-    let log2_clone = log2.clone();
+
+    let log_db = Arc::new(lanforge_db::LogDb::open_in_memory());
+    let _ = log_db.record_log(&log1);
+    let _ = log_db.record_log(&log2);
+    let db = Arc::new(lanforge_db::LanforgeDb::open_in_memory().unwrap());
+    let stores = db.stores(log_db);
 
     tokio::spawn(async move {
-        while let Some((query, reply)) = storage_rx.recv().await {
-            if let StorageQuery::GetLogHistory(_) = query {
-                let _ = reply.send(Ok(StorageQueryResult::LogHistory(vec![
-                    log1_clone.clone(),
-                    log2_clone.clone(),
-                ])));
-            }
+        while let Some(cmd) = storage_rx.recv().await {
+            cmd(&stores);
         }
     });
 

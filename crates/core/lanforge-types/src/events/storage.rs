@@ -8,4 +8,5 @@ pub enum StorageEvent {
     DbResetCompleted,
     TableDirty,
     DbWrite { devices: usize },
+    SaveTrafficHistory(Vec<crate::network::TrafficHistorySample>),
 }

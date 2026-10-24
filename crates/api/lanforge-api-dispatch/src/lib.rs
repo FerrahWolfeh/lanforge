@@ -976,6 +976,16 @@ impl LanforgeRpc for ClientContext {
 
 // Helper to map errors (migrated from lanforge-uds/src/server.rs)
 impl ClientContext {
+    pub async fn get_log_history(&self, limit: usize) -> Vec<lanforge_types::events::TimedEvent> {
+        let Some(storage) = self.ctx.storage_handle() else {
+            return Vec::new();
+        };
+        storage
+            .call(move |s: &lanforge_db_core::Stores| s.log().get_history(limit))
+            .await
+            .unwrap_or_default()
+    }
+
     pub fn map_error(err: String) -> RpcCallError {
         if err.contains("Invalid MAC") {
             RpcCallError::InvalidMac(err)

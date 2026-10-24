@@ -3,14 +3,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lanforge_api::config_file::{ConfigFile, Section};
-use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent, SystemEvent};
+use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent, StorageEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::AsyncService;
 use lanforge_db::config::DatabaseConfig;
 use lanforge_db::{
     DbWorker, DeviceStore, DhcpConfigStore, FirewallConfigStore, LanforgeDb, LogDb,
-    PppoeConfigStore,
+    PppoeConfigStore, Stores,
 };
 use lanforge_types::auth::{ApiScope, UserRole};
 use lanforge_types::device::{DeviceStatus, Origin};
@@ -21,7 +21,6 @@ use lanforge_types::network::dns::adblock::RewriteAnswer;
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
-use lanforge_types::storage::{StorageQuery, StorageQueryResult};
 use lanforge_types::system::ServiceAction;
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
 use smallvec::smallvec;
@@ -73,10 +72,10 @@ async fn test_db_worker_init_and_clean_shutdown() {
     // Verify storage handle works
     let storage = ctx.storage_handle().expect("storage handle present");
     let res = storage
-        .send_query(StorageQuery::IsProvisioned)
+        .call(|s: &Stores| s.db.is_provisioned())
         .await
         .expect("query error");
-    assert!(matches!(res, StorageQueryResult::Boolean(false)));
+    assert!(!res);
 
     // 3. Graceful shutdown
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -109,7 +108,7 @@ async fn test_db_worker_batches_and_flushes_devices() {
     // Synchronization barrier: ensure worker.serve() has subscribed to the event bus
     let storage = ctx.storage_handle().expect("storage handle present");
     let _ = storage
-        .send_query(StorageQuery::IsProvisioned)
+        .call(|s: &Stores| s.db.is_provisioned())
         .await
         .expect("worker ready");
 
@@ -197,7 +196,7 @@ async fn test_db_worker_purges_device_immediately() {
     // Synchronization barrier
     let storage = ctx.storage_handle().expect("storage handle present");
     let _ = storage
-        .send_query(StorageQuery::IsProvisioned)
+        .call(|s: &Stores| s.db.is_provisioned())
         .await
         .expect("worker ready");
 
@@ -264,7 +263,7 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
         // Synchronization barrier: ensure worker is active and subscribed
         let storage = ctx.storage_handle().expect("storage handle present");
         let _ = storage
-            .send_query(StorageQuery::IsProvisioned)
+            .call(|s: &Stores| s.db.is_provisioned())
             .await
             .expect("worker ready");
 
@@ -401,125 +400,145 @@ async fn test_db_worker_storage_query_dispatch() {
 
     // 1. Provisioning queries
     let is_prov = storage
-        .send_query(StorageQuery::IsProvisioned)
+        .call(|s: &Stores| s.db.is_provisioned())
         .await
         .unwrap();
-    assert!(matches!(is_prov, StorageQueryResult::Boolean(false)));
+    assert!(!is_prov);
 
     storage
-        .send_query(StorageQuery::SetProvisioned(true))
+        .call(|s: &Stores| s.db.set_provisioned(true))
         .await
         .unwrap();
     let is_prov = storage
-        .send_query(StorageQuery::IsProvisioned)
+        .call(|s: &Stores| s.db.is_provisioned())
         .await
         .unwrap();
-    assert!(matches!(is_prov, StorageQueryResult::Boolean(true)));
+    assert!(is_prov);
 
     // 2. User management queries
     storage
-        .send_query(StorageQuery::CreateUser {
-            username: "admin".into(),
-            password_hash: "$argon2id$v=19$mockhash".into(),
-            role: UserRole::Admin,
-            now: 1_700_000_000,
+        .call(|s: &Stores| {
+            s.auth().create_user(
+                "admin",
+                "$argon2id$v=19$mockhash",
+                UserRole::Admin,
+                1_700_000_000,
+            )
         })
         .await
         .unwrap();
 
     let user_res = storage
-        .send_query(StorageQuery::GetUserByUsername("admin".into()))
+        .call(|s: &Stores| s.auth().get_user_by_username("admin"))
         .await
         .unwrap();
-    if let StorageQueryResult::User(Some(user)) = user_res {
+    if let Some(user) = user_res {
         assert_eq!(user.username, "admin");
         assert_eq!(user.role, UserRole::Admin);
     } else {
         panic!("User not found");
     }
 
-    let count_res = storage.send_query(StorageQuery::CountUsers).await.unwrap();
-    assert!(matches!(count_res, StorageQueryResult::Count(1)));
+    let count_res = storage
+        .call(|s: &Stores| s.auth().count_users())
+        .await
+        .unwrap();
+    assert_eq!(count_res, 1);
 
     // 3. API Token queries
     storage
-        .send_query(StorageQuery::StoreApiToken {
-            token: "tok_test_secret_123".into(),
-            name: "test-token".into(),
-            scopes: smallvec![ApiScope::Admin],
-            expires_at: None,
-            now: 1_700_000_000,
+        .call(|s: &Stores| {
+            s.auth().store_api_token(
+                "tok_test_secret_123",
+                "test-token",
+                &smallvec![ApiScope::Admin],
+                None,
+                1_700_000_000,
+            )
         })
         .await
         .unwrap();
 
     let tokens_res = storage
-        .send_query(StorageQuery::LoadApiTokens)
+        .call(|s: &Stores| s.auth().load_api_tokens())
         .await
         .unwrap();
-    if let StorageQueryResult::ApiTokens(tokens) = tokens_res {
-        assert_eq!(tokens.len(), 1);
-        assert_eq!(tokens[0].name, "test-token");
-    } else {
-        panic!("Tokens not found");
-    }
+    assert_eq!(tokens_res.len(), 1);
+    assert_eq!(tokens_res[0].name, "test-token");
 
     storage
-        .send_query(StorageQuery::DeleteApiToken("tok_test_secret_123".into()))
+        .call(|s: &Stores| s.auth().delete_api_token("tok_test_secret_123"))
         .await
         .unwrap();
     let tokens_res2 = storage
-        .send_query(StorageQuery::LoadApiTokens)
+        .call(|s: &Stores| s.auth().load_api_tokens())
         .await
         .unwrap();
-    if let StorageQueryResult::ApiTokens(tokens) = tokens_res2 {
-        assert!(tokens.is_empty());
-    }
+    assert!(tokens_res2.is_empty());
 
     // 4. DNS rewrites queries
     storage
-        .send_query(StorageQuery::UpsertDnsRewrite {
-            domain: "router.lan".into(),
-            rtype: DnsRecordType::A,
-            answer: RewriteAnswer::A(Ipv4Addr::new(192, 168, 1, 1)),
+        .call(|s: &Stores| {
+            s.db.upsert_dns_rewrite(
+                "router.lan",
+                DnsRecordType::A,
+                &RewriteAnswer::A(Ipv4Addr::new(192, 168, 1, 1)),
+            )
         })
         .await
         .unwrap();
 
-    // Verify context updated in-place
+    let rewrites = storage
+        .call(|s: &Stores| s.db.load_dns_rewrites())
+        .await
+        .unwrap();
     assert!(
-        ctx.get_dns_rewrites()
+        rewrites
             .iter()
             .any(|r| r.domain == "router.lan")
     );
 
     storage
-        .send_query(StorageQuery::ClearDnsRewrites)
+        .call(|s: &Stores| s.db.clear_dns_rewrites())
         .await
         .unwrap();
-    assert!(ctx.get_dns_rewrites().is_empty());
+    let rewrites_after = storage
+        .call(|s: &Stores| s.db.load_dns_rewrites())
+        .await
+        .unwrap();
+    assert!(rewrites_after.is_empty());
 
     // 5. Upstream DNS queries
     storage
-        .send_query(StorageQuery::AddDnsUpstream {
-            addr: "9.9.9.9:53".parse().unwrap(),
-            protocol: UpstreamProtocol::Udp,
-            domain: None,
+        .call(|s: &Stores| {
+            s.db.add_dns_upstream(
+                "9.9.9.9:53".parse().unwrap(),
+                UpstreamProtocol::Udp,
+                None,
+            )
         })
         .await
         .unwrap();
 
+    let upstreams = storage
+        .call(|s: &Stores| s.db.load_dns_upstreams())
+        .await
+        .unwrap();
     assert!(
-        ctx.get_dns_upstreams()
+        upstreams
             .iter()
             .any(|u| u.addr == "9.9.9.9:53".parse().unwrap())
     );
 
     storage
-        .send_query(StorageQuery::ClearDnsUpstreams)
+        .call(|s: &Stores| s.db.clear_dns_upstreams())
         .await
         .unwrap();
-    assert!(ctx.get_dns_upstreams().is_empty());
+    let upstreams_after = storage
+        .call(|s: &Stores| s.db.load_dns_upstreams())
+        .await
+        .unwrap();
+    assert!(upstreams_after.is_empty());
 
     // Clean exit
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -552,7 +571,7 @@ async fn test_db_worker_service_control_and_restart_resilience() {
     // Barrier 1: ensure Run 1 is active and subscribed
     let storage = ctx.storage_handle().expect("storage handle present");
     let _ = storage
-        .send_query(StorageQuery::IsProvisioned)
+        .call(|s: &Stores| s.db.is_provisioned())
         .await
         .unwrap();
 
@@ -568,10 +587,10 @@ async fn test_db_worker_service_control_and_restart_resilience() {
         .storage_handle()
         .expect("storage handle present after restart");
     let res = storage2
-        .send_query(StorageQuery::IsProvisioned)
+        .call(|s: &Stores| s.db.is_provisioned())
         .await
         .unwrap();
-    assert!(matches!(res, StorageQueryResult::Boolean(false)));
+    assert!(!res);
 
     // Clean exit
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -606,17 +625,23 @@ async fn api_storage_mutation_is_written_to_valid_toml_on_worker_shutdown() {
     let handle = tokio::spawn(async move { worker.serve(&ctx_clone).await });
     let storage = ctx.storage_handle().expect("storage handle present");
     let _ = storage
-        .send_query(StorageQuery::IsProvisioned)
+        .call(|s: &Stores| s.db.is_provisioned())
         .await
         .unwrap();
     storage
-        .send_query(StorageQuery::UpsertDnsRewrite {
-            domain: "router.lan".to_string(),
-            rtype: DnsRecordType::A,
-            answer: RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 1)),
+        .call(|s: &Stores| {
+            s.db.upsert_dns_rewrite(
+                "router.lan",
+                DnsRecordType::A,
+                &RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 1)),
+            )
         })
         .await
         .unwrap();
+    let rewrites = storage.call(|s: &Stores| s.db.load_dns_rewrites()).await.unwrap();
+    ctx.update_dns_rewrites(rewrites);
+    let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
+    sleep(Duration::from_millis(20)).await;
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     timeout(Duration::from_secs(1), handle)
@@ -658,17 +683,23 @@ async fn failed_live_toml_write_preserves_file_and_does_not_advance_hash() {
     let handle = tokio::spawn(async move { worker.serve(&ctx_clone).await });
     let storage = ctx.storage_handle().expect("storage handle present");
     let _ = storage
-        .send_query(StorageQuery::IsProvisioned)
+        .call(|s: &Stores| s.db.is_provisioned())
         .await
         .unwrap();
     storage
-        .send_query(StorageQuery::UpsertDnsRewrite {
-            domain: "router.lan".to_string(),
-            rtype: DnsRecordType::A,
-            answer: RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 1)),
+        .call(|s: &Stores| {
+            s.db.upsert_dns_rewrite(
+                "router.lan",
+                DnsRecordType::A,
+                &RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 1)),
+            )
         })
         .await
         .unwrap();
+    let rewrites = storage.call(|s: &Stores| s.db.load_dns_rewrites()).await.unwrap();
+    ctx.update_dns_rewrites(rewrites);
+    let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
+    sleep(Duration::from_millis(20)).await;
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     timeout(Duration::from_secs(1), handle)

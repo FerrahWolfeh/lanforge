@@ -93,17 +93,21 @@ impl ClientContext {
             };
         };
 
+        let domain_clone = domain.clone();
         match storage
-            .send_query(lanforge_types::storage::StorageQuery::AddDnsUpstream {
-                addr,
-                protocol,
-                domain,
+            .call(move |s: &lanforge_db_core::Stores| {
+                s.db().add_dns_upstream(addr, protocol, domain_clone.as_deref())
             })
             .await
         {
-            Ok(_) => Response::Success(SimpleSuccess {
-                message: "Upstream added successfully".into(),
-            }),
+            Ok(_) => {
+                if let Ok(rows) = storage.call(|s: &lanforge_db_core::Stores| s.db().load_dns_upstreams()).await {
+                    self.ctx.update_dns_upstreams(rows.into_iter().map(|r| r.to_target()).collect());
+                }
+                Response::Success(SimpleSuccess {
+                    message: "Upstream added successfully".into(),
+                })
+            }
             Err(e) => Response::Error {
                 error: format!("Failed to add upstream: {e}"),
             },
@@ -122,17 +126,21 @@ impl ClientContext {
             };
         };
 
+        let domain_clone = domain.clone();
         match storage
-            .send_query(lanforge_types::storage::StorageQuery::RemoveDnsUpstream {
-                addr,
-                protocol,
-                domain,
+            .call(move |s: &lanforge_db_core::Stores| {
+                s.db().remove_dns_upstream(addr, protocol, domain_clone.as_deref())
             })
             .await
         {
-            Ok(_) => Response::Success(SimpleSuccess {
-                message: "Upstream removed successfully".into(),
-            }),
+            Ok(_) => {
+                if let Ok(rows) = storage.call(|s: &lanforge_db_core::Stores| s.db().load_dns_upstreams()).await {
+                    self.ctx.update_dns_upstreams(rows.into_iter().map(|r| r.to_target()).collect());
+                }
+                Response::Success(SimpleSuccess {
+                    message: "Upstream removed successfully".into(),
+                })
+            }
             Err(e) => Response::Error {
                 error: format!("Failed to remove upstream: {e}"),
             },
@@ -147,12 +155,15 @@ impl ClientContext {
         };
 
         match storage
-            .send_query(lanforge_types::storage::StorageQuery::ClearDnsUpstreams)
+            .call(|s: &lanforge_db_core::Stores| s.db().clear_dns_upstreams())
             .await
         {
-            Ok(_) => Response::Success(SimpleSuccess {
-                message: "All upstreams cleared successfully".into(),
-            }),
+            Ok(_) => {
+                self.ctx.update_dns_upstreams(Vec::new());
+                Response::Success(SimpleSuccess {
+                    message: "All upstreams cleared successfully".into(),
+                })
+            }
             Err(e) => Response::Error {
                 error: format!("Failed to clear upstreams: {e}"),
             },
@@ -167,11 +178,10 @@ impl ClientContext {
     pub async fn handle_dns_upstream_mode_set(&self, mode: UpstreamMode) -> Response {
         if let Some(storage) = self.ctx.storage_handle() {
             let _ = storage
-                .send_query(lanforge_types::storage::StorageQuery::SetDnsUpstreamMode(mode))
+                .call(move |s: &lanforge_db_core::Stores| s.db().save_dns_upstream_mode(mode))
                 .await;
-        } else {
-            self.ctx.update_dns_upstream_mode(mode);
         }
+        self.ctx.update_dns_upstream_mode(mode);
         Response::DnsUpstreamMode(DnsUpstreamModeResponse { mode })
     }
 
@@ -187,16 +197,14 @@ impl ClientContext {
             };
         };
 
+        let client_clone = client.clone();
         let data = match storage
-            .send_query(lanforge_types::storage::StorageQuery::GetDnsAnalytics { limit, client })
+            .call(move |s: &lanforge_db_core::Stores| {
+                s.log().get_dns_analytics(limit, client_clone.as_deref())
+            })
             .await
         {
-            Ok(lanforge_types::storage::StorageQueryResult::DnsAnalytics(data)) => data,
-            Ok(_) => {
-                return Response::Error {
-                    error: "Unexpected storage query result for DNS analytics".into(),
-                };
-            }
+            Ok(data) => data,
             Err(e) => {
                 return Response::Error {
                     error: format!("Failed to retrieve DNS analytics: {e}"),

@@ -60,9 +60,10 @@ pub use lanforge_db_redb::RedbDatabase;
 pub use error::LanforgeDbError;
 pub use lanforge_db_core::{
     config_keys, AdblockStore, ApiTokenEntry, ApiTokenStore, AuthStore, ConfigKey, ConfigStore,
-    DbError, DeviceStore, DhcpConfigStore, DnsStore, DnsUpstreamEntry, DnsUpstreamStore,
-    FirewallConfigStore, LogStore, PppoeConfigStore, RaConfigStore, StateStore, StaticHostEntry,
-    TelemetryStore, TrafficConfigStore, UserEntry, UserStore, sanitize_db_url,
+    DatabaseStore, DbError, DeviceStore, DhcpConfigStore, DnsStore, DnsUpstreamEntry,
+    DnsUpstreamStore, FirewallConfigStore, LogStore, PppoeConfigStore, RaConfigStore, StateStore,
+    StaticHostEntry, Stores, TelemetryStore, TrafficConfigStore, UserEntry, UserStore,
+    sanitize_db_url,
 };
 pub use log_engine::LogDb;
 pub use worker::DbWorker;

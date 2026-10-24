@@ -1,6 +1,7 @@
 use crate::ClientContext;
 use lanforge_api::api::{DnsReverseResolversResponse, Response, SimpleSuccess};
-use lanforge_types::network::{IpSubnet, dns::upstream::UpstreamTarget};
+use lanforge_db_core::Stores;
+use lanforge_types::network::{DnsReverseResolver, IpSubnet, dns::upstream::UpstreamTarget};
 
 impl ClientContext {
     pub async fn handle_dns_reverse_resolver_add(
@@ -31,15 +32,15 @@ impl ClientContext {
             };
         };
 
+        let r_clone = resolver.clone();
         if let Err(e) = storage
-            .send_query(lanforge_types::storage::StorageQuery::AddReverseResolver {
-                subnet,
-                resolver,
-            })
+            .call(move |s: &Stores| s.db().add_dns_reverse_resolver(&subnet, &r_clone))
             .await
         {
-            return Response::Error { error: e };
+            return Response::Error { error: e.to_string() };
         }
+
+        self.ctx.add_reverse_resolver(DnsReverseResolver { subnet, resolver });
 
         Response::Success(SimpleSuccess {
             message: "Reverse resolver added successfully".to_string(),
@@ -63,13 +64,13 @@ impl ClientContext {
         };
 
         if let Err(e) = storage
-            .send_query(lanforge_types::storage::StorageQuery::RemoveReverseResolver(
-                subnet,
-            ))
+            .call(move |s: &Stores| s.db().remove_dns_reverse_resolver(&subnet))
             .await
         {
-            return Response::Error { error: e };
+            return Response::Error { error: e.to_string() };
         }
+
+        self.ctx.remove_reverse_resolver(subnet);
 
         Response::Success(SimpleSuccess {
             message: "Reverse resolver removed successfully".to_string(),
