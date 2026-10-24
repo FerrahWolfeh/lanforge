@@ -167,7 +167,7 @@ impl LogStore for LogDb {
             .record_dns_block(timed_event, src_ip, domain, src_mac)
     }
 
-    fn record_dns_queries_batch(&self, entries: &[QueryLogEntry]) -> Result<(), DbError> {
+    fn record_dns_queries_batch(&self, entries: &[std::sync::Arc<QueryLogEntry>]) -> Result<(), DbError> {
         self.inner.record_dns_queries_batch(entries)
     }
 

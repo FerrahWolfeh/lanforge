@@ -840,7 +840,7 @@ pub trait LogStore: Send + Sync {
     /// Records a batch of resolved DNS queries.
     fn record_dns_queries_batch(
         &self,
-        entries: &[QueryLogEntry],
+        entries: &[std::sync::Arc<QueryLogEntry>],
     ) -> Result<(), DbError>;
 
     /// Records a single resolved DNS query.

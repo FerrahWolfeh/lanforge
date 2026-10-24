@@ -459,6 +459,7 @@ pub struct DbWorkerMetrics {
     pub flush_count: AtomicU64,
     pub devices_written: AtomicU64,
     pub last_error: AtomicBool,
+    pub dropped_logs: AtomicU64,
 }
 
 impl Default for DbWorkerMetrics {
@@ -468,6 +469,7 @@ impl Default for DbWorkerMetrics {
             flush_count: AtomicU64::new(0),
             devices_written: AtomicU64::new(0),
             last_error: AtomicBool::new(false),
+            dropped_logs: AtomicU64::new(0),
         }
     }
 }

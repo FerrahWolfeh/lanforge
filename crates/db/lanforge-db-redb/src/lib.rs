@@ -981,7 +981,7 @@ mod tests {
             filter: None,
             coalesce_id: None,
         };
-        db.record_dns_queries_batch(&[query1, query2]).unwrap();
+        db.record_dns_queries_batch(&[std::sync::Arc::new(query1), std::sync::Arc::new(query2)]).unwrap();
 
         let (queries, total) = db
             .get_dns_query_history(10, None, None, None, None, None)

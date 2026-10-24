@@ -327,7 +327,7 @@ impl LogStore for RedbDatabase {
 
     fn record_dns_queries_batch(
         &self,
-        entries: &[QueryLogEntry],
+        entries: &[std::sync::Arc<QueryLogEntry>],
     ) -> Result<(), DbError> {
             if entries.is_empty() {
                 return Ok(());
@@ -346,7 +346,7 @@ impl LogStore for RedbDatabase {
                     let ts = entry.timestamp;
                     let seq = self.log_seq.fetch_add(1, Ordering::Relaxed);
                     bytes_buf.clear();
-                    encode_into(entry, &mut bytes_buf)?;
+                    encode_into(entry.as_ref(), &mut bytes_buf)?;
                     table
                         .insert((ts, seq), bytes_buf.as_slice())
                         .map_err(|e| DbError::Backend(e.to_string()))?;
@@ -498,7 +498,7 @@ impl LogStore for RedbDatabase {
         &self,
         entry: &QueryLogEntry,
     ) -> Result<(), DbError> {
-        self.record_dns_queries_batch(std::slice::from_ref(entry))
+        self.record_dns_queries_batch(&[std::sync::Arc::new(entry.clone())])
     }
 
     fn clear_logs(&self) -> Result<(), DbError> {

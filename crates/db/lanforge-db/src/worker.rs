@@ -31,7 +31,7 @@ use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::{DnsRequest, DnsResponse};
 use lanforge_types::network::QueryLogEntry;
 use lanforge_types::system::ServiceAction;
-use std::collections::HashSet;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -48,6 +48,20 @@ use crate::config::DatabaseConfig;
 use crate::engine::LanforgeDb;
 use crate::log_engine::LogDb;
 
+const MAX_LOG_BUFFER: usize = 10_000;
+const MAX_DNS_LOG_BUFFER: usize = 50_000;
+
+/// The pending persistence operation for a specific MAC address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingDeviceOp {
+    /// Full sync required (lease changes, new discoveries, expiration).
+    UpsertFull,
+    /// Base attributes only sync (hostname, metadata changes).
+    UpsertBase,
+    /// Deletion from database (purged host).
+    Delete,
+}
+
 /// Background worker for database operations.
 #[lanforge_macros::lanforge_service(
     id = "db",
@@ -63,15 +77,16 @@ pub struct DbWorker {
     ctx: LanforgeContext,
     db: Arc<LanforgeDb>,
     log_db: Arc<LogDb>,
-    dirty: bool,
-    dirty_macs: HashSet<MacAddr>,
-    dirty_lease_macs: HashSet<MacAddr>,
-    purged_macs: HashSet<MacAddr>,
-    log_buffer: Vec<TimedEvent>,
-    dns_log_buffer: Vec<QueryLogEntry>,
+    full_flush_requested: bool,
+    pending_devices: HashMap<MacAddr, PendingDeviceOp>,
+    log_buffer: VecDeque<TimedEvent>,
+    dns_log_buffer: VecDeque<Arc<QueryLogEntry>>,
     bytes_buf: Vec<u8>,
     storage_rx: Option<mpsc::Receiver<StorageCommand>>,
     dirty_sections: lanforge_api::config_file::SectionSet,
+    log_flush_failing: bool,
+    dns_flush_failing: bool,
+    device_flush_failing: bool,
 }
 
 impl DbWorker {
@@ -90,15 +105,16 @@ impl DbWorker {
             ctx,
             db,
             log_db,
-            dirty: false,
-            dirty_macs: HashSet::new(),
-            dirty_lease_macs: HashSet::new(),
-            purged_macs: HashSet::new(),
-            log_buffer: Vec::with_capacity(128),
-            dns_log_buffer: Vec::with_capacity(128),
+            full_flush_requested: false,
+            pending_devices: HashMap::new(),
+            log_buffer: VecDeque::with_capacity(128),
+            dns_log_buffer: VecDeque::with_capacity(128),
             bytes_buf: Vec::with_capacity(4096),
             storage_rx: Some(rx),
             dirty_sections: lanforge_api::config_file::SectionSet::empty(),
+            log_flush_failing: false,
+            dns_flush_failing: false,
+            device_flush_failing: false,
         }
     }
 
@@ -115,20 +131,36 @@ impl DbWorker {
 
         // 1. Flush Logs
         if !self.log_buffer.is_empty() {
-            if let Err(e) = log_db.record_logs_batch(&self.log_buffer, &mut self.bytes_buf) {
-                error!("Failed to flush log batch: {e}");
+            let slice = self.log_buffer.make_contiguous();
+            if let Err(e) = log_db.record_logs_batch(slice, &mut self.bytes_buf) {
+                if !self.log_flush_failing {
+                    error!("Failed to flush log batch: {e}");
+                    self.log_flush_failing = true;
+                }
                 had_error = true;
             } else {
+                if self.log_flush_failing {
+                    info!("Log batch flush recovered");
+                    self.log_flush_failing = false;
+                }
                 self.log_buffer.clear();
             }
         }
 
         let had_dns_queries = !self.dns_log_buffer.is_empty();
         if had_dns_queries {
-            if let Err(e) = log_db.record_dns_queries_batch(&self.dns_log_buffer) {
-                error!("Failed to flush DNS log batch: {e}");
+            let slice = self.dns_log_buffer.make_contiguous();
+            if let Err(e) = log_db.record_dns_queries_batch(slice) {
+                if !self.dns_flush_failing {
+                    error!("Failed to flush DNS log batch: {e}");
+                    self.dns_flush_failing = true;
+                }
                 had_error = true;
             } else {
+                if self.dns_flush_failing {
+                    info!("DNS log batch flush recovered");
+                    self.dns_flush_failing = false;
+                }
                 self.dns_log_buffer.clear();
             }
         }
@@ -205,7 +237,7 @@ impl DbWorker {
         }
 
         // 3. Flush Main DB
-        if !self.dirty && self.dirty_macs.is_empty() && self.purged_macs.is_empty() {
+        if !self.full_flush_requested && self.pending_devices.is_empty() {
             metrics.last_flush_ts.store(now, Ordering::Relaxed);
             metrics.flush_count.fetch_add(1, Ordering::Relaxed);
             metrics.last_error.store(had_error, Ordering::Relaxed);
@@ -213,7 +245,7 @@ impl DbWorker {
             return;
         }
 
-        let res = if self.dirty {
+        let res = if self.full_flush_requested {
             // Full flush requested (rare)
             let snapshot = self.ctx.snapshot_for_persistence();
             let len = snapshot.devices.len();
@@ -223,29 +255,35 @@ impl DbWorker {
                 .map(|()| len)
         } else {
             // Incremental flush (common)
-            let (lease_devices, base_devices, missing_devices) = self.ctx.with_state(|state| {
+            let (lease_devices, base_devices, purges) = self.ctx.with_state(|state| {
                 let mut lease = Vec::new();
                 let mut base = Vec::new();
-                let mut missing = Vec::new();
-                for mac in &self.dirty_macs {
-                    if let Some(device) = state.devices.get(mac).cloned() {
-                        if self.dirty_lease_macs.contains(mac) {
-                            lease.push(device);
-                        } else {
-                            base.push(device);
+                let mut purges = Vec::new();
+                for (&mac, &op) in &self.pending_devices {
+                    match op {
+                        PendingDeviceOp::Delete => purges.push(mac),
+                        PendingDeviceOp::UpsertFull => {
+                            if let Some(device) = state.devices.get(&mac).cloned() {
+                                lease.push(device);
+                            } else {
+                                // Missing from state: move to delete (F8)
+                                purges.push(mac);
+                            }
                         }
-                    } else {
-                        missing.push(*mac);
+                        PendingDeviceOp::UpsertBase => {
+                            if let Some(device) = state.devices.get(&mac).cloned() {
+                                base.push(device);
+                            } else {
+                                // Missing from state: move to delete (F8)
+                                purges.push(mac);
+                            }
+                        }
                     }
                 }
-                (lease, base, missing)
+                (lease, base, purges)
             });
 
-            let mut purge_set = self.purged_macs.clone();
-            purge_set.extend(missing_devices);
-            let purges: Vec<MacAddr> = purge_set.into_iter().collect();
             let count = lease_devices.len() + base_devices.len() + purges.len();
-
             let runtime_upserts: Vec<_> = lease_devices.iter().chain(&base_devices).cloned().collect();
             let result = db.batch_sync_devices(&lease_devices, &base_devices, &purges)
                 .and_then(|()| log_db.sync_runtime_devices(&runtime_upserts, &purges));
@@ -254,16 +292,21 @@ impl DbWorker {
 
         match res {
             Err(e) => {
-                error!("Failed to save device table to database: {e}");
+                if !self.device_flush_failing {
+                    error!("Failed to save device table to database: {e}");
+                    self.device_flush_failing = true;
+                }
                 had_error = true;
             }
             Ok(count) => {
+                if self.device_flush_failing {
+                    info!("Device table flush recovered");
+                    self.device_flush_failing = false;
+                }
                 written_devices_count = count;
-                let was_full_flush = self.dirty;
-                self.dirty = false;
-                self.dirty_macs.clear();
-                self.dirty_lease_macs.clear();
-                self.purged_macs.clear();
+                let was_full_flush = self.full_flush_requested;
+                self.full_flush_requested = false;
+                self.pending_devices.clear();
 
                 if count > 0 {
                     let _ = self
@@ -582,11 +625,23 @@ impl AsyncService for DbWorker {
                     if mirrored { continue; }
                     // 1. Record in log database if loggable
                     if timed_event.is_loggable() {
-                        self.log_buffer.push(timed_event.clone());
+                        if self.log_buffer.len() >= MAX_LOG_BUFFER {
+                            self.log_buffer.pop_front();
+                            self.ctx.db_metrics().dropped_logs.fetch_add(1, Ordering::Relaxed);
+                        }
+                        self.log_buffer.push_back(timed_event.clone());
                         if self.log_buffer.len() >= 100 {
-                            if let Err(e) = log_db.record_logs_batch(&self.log_buffer, &mut self.bytes_buf) {
-                                error!("Immediate log flush error: {e}");
+                            let slice = self.log_buffer.make_contiguous();
+                            if let Err(e) = log_db.record_logs_batch(slice, &mut self.bytes_buf) {
+                                if !self.log_flush_failing {
+                                    error!("Immediate log flush error: {e}");
+                                    self.log_flush_failing = true;
+                                }
                             } else {
+                                if self.log_flush_failing {
+                                    info!("Immediate log flush recovered");
+                                    self.log_flush_failing = false;
+                                }
                                 self.log_buffer.clear();
                             }
                         }
@@ -600,36 +655,45 @@ impl AsyncService for DbWorker {
                         }
                         LanforgeEvent::Device(DeviceEvent::NetworkUpdate { mac, change, .. }) => {
                             if change.is_persistent() {
-                                self.dirty_macs.insert(*mac);
                                 if change.is_lease_change() {
-                                    self.dirty_lease_macs.insert(*mac);
+                                    self.pending_devices.insert(*mac, PendingDeviceOp::UpsertFull);
+                                } else {
+                                    self.pending_devices
+                                        .entry(*mac)
+                                        .and_modify(|op| {
+                                            if *op != PendingDeviceOp::UpsertFull {
+                                                *op = PendingDeviceOp::UpsertBase;
+                                            }
+                                        })
+                                        .or_insert(PendingDeviceOp::UpsertBase);
                                 }
-                                // If it was previously purged, it's now alive again
-                                self.purged_macs.remove(mac);
                             }
                         }
                         LanforgeEvent::Device(DeviceEvent::AdminUpdate { mac, .. }) => {
-                            self.dirty_macs.insert(*mac);
-                            self.purged_macs.remove(mac);
+                            self.pending_devices
+                                .entry(*mac)
+                                .and_modify(|op| {
+                                    if *op != PendingDeviceOp::UpsertFull {
+                                        *op = PendingDeviceOp::UpsertBase;
+                                    }
+                                })
+                                .or_insert(PendingDeviceOp::UpsertBase);
                             self.dirty_sections |= SectionSet::HOSTS;
                         }
                         LanforgeEvent::Device(DeviceEvent::Discovered { mac, .. })
                         | LanforgeEvent::Device(DeviceEvent::Expired { mac, .. }) => {
-                            self.dirty_macs.insert(*mac);
-                            self.dirty_lease_macs.insert(*mac);
-                            self.purged_macs.remove(mac);
+                            self.pending_devices.insert(*mac, PendingDeviceOp::UpsertFull);
                         }
                         LanforgeEvent::Device(DeviceEvent::Purged { mac }) => {
-                            self.purged_macs.insert(*mac);
-                            self.dirty_macs.remove(mac);
-                            self.dirty_lease_macs.remove(mac);
+                            self.pending_devices.insert(*mac, PendingDeviceOp::Delete);
                             self.dirty_sections |= SectionSet::HOSTS;
 
                             // Flush immediately for administrative host removal
                             self.flush_batch(&db, &log_db).await;
                         }
                         LanforgeEvent::Storage(StorageEvent::TableDirty) => {
-                            self.dirty = true;
+                            self.full_flush_requested = true;
+                            self.pending_devices.clear();
                             self.dirty_sections |= lanforge_api::config_file::SectionSet::DYNAMIC
                                 | lanforge_api::config_file::SectionSet::SYSTEM;
                             self.flush_batch(&db, &log_db).await;
@@ -650,10 +714,8 @@ impl AsyncService for DbWorker {
                         }
                         LanforgeEvent::Storage(StorageEvent::DbResetCompleted) => {
                             info!("Database reset completed. Clearing internal buffers.");
-                            self.dirty = false;
-                            self.dirty_macs.clear();
-                            self.dirty_lease_macs.clear();
-                            self.purged_macs.clear();
+                            self.full_flush_requested = false;
+                            self.pending_devices.clear();
                             self.log_buffer.clear();
                             self.dns_log_buffer.clear();
                         }
@@ -693,11 +755,23 @@ impl AsyncService for DbWorker {
                             }
                         }
                         LanforgeEvent::Dns(DnsEvent::QueryResolved(entry)) => {
-                            self.dns_log_buffer.push((**entry).clone());
+                            if self.dns_log_buffer.len() >= MAX_DNS_LOG_BUFFER {
+                                self.dns_log_buffer.pop_front();
+                                self.ctx.db_metrics().dropped_logs.fetch_add(1, Ordering::Relaxed);
+                            }
+                            self.dns_log_buffer.push_back(entry.clone());
                             if self.dns_log_buffer.len() >= 100 {
-                                if let Err(e) = log_db.record_dns_queries_batch(&self.dns_log_buffer) {
-                                    error!("Immediate DNS query log flush error: {e}");
+                                let slice = self.dns_log_buffer.make_contiguous();
+                                if let Err(e) = log_db.record_dns_queries_batch(slice) {
+                                    if !self.dns_flush_failing {
+                                        error!("Immediate DNS query log flush error: {e}");
+                                        self.dns_flush_failing = true;
+                                    }
                                 } else {
+                                    if self.dns_flush_failing {
+                                        info!("Immediate DNS query log flush recovered");
+                                        self.dns_flush_failing = false;
+                                    }
                                     self.dns_log_buffer.clear();
                                 }
                             }
@@ -768,5 +842,115 @@ impl AsyncService for DbWorker {
         self.flush_batch(&db, &log_db).await;
         self.flush_live_config_to_file(&db).await;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lanforge_core::context::state::State;
+    use lanforge_types::network::dns::{DnsRecordType, QueryLogEntry, QueryResult, TransportProtocol};
+    use std::sync::atomic::Ordering;
+
+    fn create_test_context() -> (LanforgeContext, Arc<lanforge_core::bus::EventBus>) {
+        let bus = Arc::new(lanforge_core::bus::EventBus::new());
+        let state = State::new();
+        let ctx = LanforgeContext::new(bus.clone(), state, None);
+        (ctx, bus)
+    }
+
+    #[tokio::test]
+    async fn test_worker_buffer_capping_and_dropped_metrics() {
+        let (ctx, _bus) = create_test_context();
+        let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
+        let log_db = Arc::new(LogDb::open_in_memory());
+        let mut worker = DbWorker::new(DatabaseConfig::default(), ctx.clone(), db, log_db);
+
+        // 1. Test log buffer capping
+        let sample_event = TimedEvent::new(LanforgeEvent::System(SystemEvent::DbReady));
+        for _ in 0..MAX_LOG_BUFFER + 10 {
+            if worker.log_buffer.len() >= MAX_LOG_BUFFER {
+                worker.log_buffer.pop_front();
+                worker.ctx.db_metrics().dropped_logs.fetch_add(1, Ordering::Relaxed);
+            }
+            worker.log_buffer.push_back(sample_event.clone());
+        }
+
+        assert_eq!(worker.log_buffer.len(), MAX_LOG_BUFFER);
+        assert_eq!(worker.ctx.db_metrics().dropped_logs.load(Ordering::Relaxed), 10);
+
+        // 2. Test dns log buffer capping
+        let query_entry = Arc::new(QueryLogEntry {
+            timestamp: 123456,
+            src_ip: "192.168.1.100".parse().unwrap(),
+            domain: Arc::from("test.example"),
+            upstream_us: 100,
+            qtype: DnsRecordType::A,
+            result: QueryResult::Forwarded,
+            cached: false,
+            src_mac: None,
+            answer: None,
+            protocol: TransportProtocol::Udp,
+            filter: None,
+            coalesce_id: None,
+        });
+
+        for _ in 0..MAX_DNS_LOG_BUFFER + 5 {
+            if worker.dns_log_buffer.len() >= MAX_DNS_LOG_BUFFER {
+                worker.dns_log_buffer.pop_front();
+                worker.ctx.db_metrics().dropped_logs.fetch_add(1, Ordering::Relaxed);
+            }
+            worker.dns_log_buffer.push_back(query_entry.clone());
+        }
+
+        assert_eq!(worker.dns_log_buffer.len(), MAX_DNS_LOG_BUFFER);
+        assert_eq!(worker.ctx.db_metrics().dropped_logs.load(Ordering::Relaxed), 15);
+    }
+
+    #[tokio::test]
+    async fn test_worker_vanished_mac_moved_to_purges() {
+        let (ctx, _bus) = create_test_context();
+        let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
+        let log_db = Arc::new(LogDb::open_in_memory());
+        let mut worker = DbWorker::new(DatabaseConfig::default(), ctx.clone(), db.clone(), log_db.clone());
+
+        let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+
+        // Mark MAC as pending UpsertFull, but do not insert into ctx state
+        worker.pending_devices.insert(mac, PendingDeviceOp::UpsertFull);
+        assert_eq!(worker.pending_devices.len(), 1);
+
+        // Flush batch — F8 says vanished MACs must be moved to purges and cleared on success
+        worker.flush_batch(&db, &log_db).await;
+
+        assert!(worker.pending_devices.is_empty());
+        let devices = db.load_all_devices().unwrap();
+        assert!(!devices.iter().any(|d| d.mac == mac));
+    }
+
+    #[test]
+    fn test_worker_pending_device_op_transitions() {
+        let mut pending = HashMap::new();
+        let mac = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+
+        // 1. Initial UpsertBase
+        pending.insert(mac, PendingDeviceOp::UpsertBase);
+        assert_eq!(pending.get(&mac), Some(&PendingDeviceOp::UpsertBase));
+
+        // 2. Upgrade to UpsertFull
+        pending.insert(mac, PendingDeviceOp::UpsertFull);
+        assert_eq!(pending.get(&mac), Some(&PendingDeviceOp::UpsertFull));
+
+        // 3. AdminUpdate (UpsertBase) preserves UpsertFull
+        pending.entry(mac).and_modify(|op| {
+            if *op != PendingDeviceOp::UpsertFull {
+                *op = PendingDeviceOp::UpsertBase;
+            }
+        });
+        assert_eq!(pending.get(&mac), Some(&PendingDeviceOp::UpsertFull));
+
+        // 4. Purge in same tick overrides to Delete
+        pending.insert(mac, PendingDeviceOp::Delete);
+        assert_eq!(pending.get(&mac), Some(&PendingDeviceOp::Delete));
     }
 }

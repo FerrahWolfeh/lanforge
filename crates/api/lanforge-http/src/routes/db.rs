@@ -27,6 +27,7 @@ async fn handle_stats(State(state): State<AppState>) -> impl IntoResponse {
         "flush_count": metrics.flush_count.load(Ordering::Relaxed),
         "devices_written": metrics.devices_written.load(Ordering::Relaxed),
         "last_error": metrics.last_error.load(Ordering::Relaxed),
+        "dropped_logs": metrics.dropped_logs.load(Ordering::Relaxed),
     });
     (StatusCode::OK, Json(metrics_json)).into_response()
 }
