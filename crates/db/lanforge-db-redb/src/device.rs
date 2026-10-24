@@ -41,6 +41,11 @@ impl DeviceStore for RedbDatabase {
     }
 
     fn upsert_device(&self, device: &Device) -> Result<(), DbError> {
+        if device.origin == Origin::System {
+            // Origin::System represents the host's own runtime interfaces;
+            // it is injected dynamically at boot and must never be persisted in static_hosts.
+            return Ok(());
+        }
         if device.origin != Origin::Dynamic {
             let bytes = encode(&static_host_from_device(device))?;
             let txn = self.begin_write()?;
@@ -263,6 +268,9 @@ impl DeviceStore for RedbDatabase {
 
             let mut buf = Vec::with_capacity(512);
             for dev in full_upserts {
+                if dev.origin == Origin::System {
+                    continue;
+                }
                 if dev.origin == Origin::Dynamic {
                     if let Some(persistent) = persistent_device(dev) {
                         encode_into(&persistent, &mut buf)?;
@@ -281,6 +289,9 @@ impl DeviceStore for RedbDatabase {
             }
 
             for dev in base_upserts {
+                if dev.origin == Origin::System {
+                    continue;
+                }
                 if dev.origin != Origin::Dynamic {
                     encode_into(&static_host_from_device(dev), &mut buf)?;
                     static_table.insert(dev.mac.0.as_slice(), buf.as_slice())

@@ -280,7 +280,7 @@ impl DbWorker {
             state
                 .devices
                 .values()
-                .filter(|dev| dev.origin != lanforge_types::device::Origin::Dynamic)
+                .filter(|dev| dev.origin == lanforge_types::device::Origin::Static)
                 .map(|dev| HostConfigEntry {
                     mac: dev.mac,
                     hostname: dev.hostname.name.clone(),
@@ -351,6 +351,7 @@ impl DbWorker {
         let dns_reverse_resolvers = Some(self.ctx.with_state(|s| s.reverse_resolvers.clone()));
         let firewall_config = self.ctx.get_firewall_config().map(Box::new);
         let traffic_config = self.ctx.get_traffic_config().map(Box::new);
+        let system_iface = self.ctx.target_interface_name();
 
         SystemConfigExport {
             hosts,
@@ -371,6 +372,7 @@ impl DbWorker {
             dns_reverse_resolvers,
             firewall_config,
             traffic_config,
+            system_iface,
             overwrite: false,
         }
     }
@@ -1014,6 +1016,10 @@ impl AsyncService for DbWorker {
                         }
                         LanforgeEvent::Storage(StorageEvent::TableDirty) => {
                             self.dirty = true;
+                            self.dirty_sections |= lanforge_api::config_file::SectionSet::DYNAMIC
+                                | lanforge_api::config_file::SectionSet::SYSTEM;
+                            self.flush_batch(&db, &log_db).await;
+                            self.flush_live_config_to_file(&db).await;
                         }
                         LanforgeEvent::Storage(StorageEvent::DbLogClean) => {
                             if let Err(e) = log_db.clear_logs() {

@@ -593,6 +593,51 @@ pub struct FirewallFile {
 
 impl Default for FirewallFile {
     fn default() -> Self {
+        let mut zones = BTreeMap::new();
+        zones.insert(
+            "internal".to_string(),
+            FirewallZoneFile {
+                interfaces: Vec::new(),
+                input: default_policy_accept(),
+                forward: default_policy_accept(),
+                masquerade: false,
+                mtu_fix: false,
+                open_ports: vec![
+                    "22/tcp".to_string(),
+                    "53/udp".to_string(),
+                    "53/tcp".to_string(),
+                    "67/udp".to_string(),
+                    "8088/tcp".to_string(),
+                    "9090/tcp".to_string(),
+                ],
+                allowed_subnets: Vec::new(),
+            },
+        );
+        zones.insert(
+            "external".to_string(),
+            FirewallZoneFile {
+                interfaces: vec!["ppp0".to_string(), "wan0".to_string()],
+                input: default_policy_drop(),
+                forward: default_policy_drop(),
+                masquerade: true,
+                mtu_fix: true,
+                open_ports: Vec::new(),
+                allowed_subnets: Vec::new(),
+            },
+        );
+        zones.insert(
+            "trusted".to_string(),
+            FirewallZoneFile {
+                interfaces: vec!["tailscale0".to_string(), "podman*".to_string()],
+                input: default_policy_accept(),
+                forward: default_policy_accept(),
+                masquerade: false,
+                mtu_fix: false,
+                open_ports: Vec::new(),
+                allowed_subnets: Vec::new(),
+            },
+        );
+
         Self {
             enabled: true,
             flow_offload: true,
@@ -601,7 +646,7 @@ impl Default for FirewallFile {
             default_input_policy: default_policy_drop(),
             default_forward_policy: default_policy_drop(),
             custom_rules_file: None,
-            zones: BTreeMap::new(),
+            zones,
             port_forwards: BTreeMap::new(),
         }
     }

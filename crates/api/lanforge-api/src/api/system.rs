@@ -297,6 +297,8 @@ pub struct SystemConfigExport {
     pub firewall_config: Option<Box<FirewallConfig>>,
     #[serde(default)]
     pub traffic_config: Option<Box<TrafficConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_iface: Option<String>,
     #[serde(default)]
     pub overwrite: bool,
 }

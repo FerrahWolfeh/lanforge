@@ -634,6 +634,8 @@ fn add_default_ra_prefixes(
     }
     if let Some(ula) = ula {
         prefixes.push(RAPrefix::ula(&ula.to_addr().to_string()));
+    } else {
+        prefixes.push(RAPrefix::ula_dynamic());
     }
     prefixes.push(RAPrefix::gua_dynamic());
 }
@@ -665,12 +667,13 @@ mod config_default_tests {
     }
 
     #[test]
-    fn default_ra_uses_only_dynamic_gua_without_valid_ula() {
+    fn default_ra_uses_auto_ula_and_dynamic_gua_without_explicit_ula() {
         for raw in ["", "2001:db8::1/64", "fe80::1/64", "not-an-ip"] {
             let mut prefixes = Vec::new();
             add_default_ra_prefixes(&mut prefixes, parse_ula_prefix(raw));
-            assert_eq!(prefixes.len(), 1, "input {raw:?}");
-            assert_eq!(prefixes[0].source, PrefixSource::AutoGua, "input {raw:?}");
+            assert_eq!(prefixes.len(), 2, "input {raw:?}");
+            assert_eq!(prefixes[0].source, PrefixSource::AutoUla, "input {raw:?}");
+            assert_eq!(prefixes[1].source, PrefixSource::AutoGua, "input {raw:?}");
         }
     }
 

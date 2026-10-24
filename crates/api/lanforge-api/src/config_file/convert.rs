@@ -58,8 +58,15 @@ impl From<&SystemConfigExport> for ConfigFile {
     fn from(export: &SystemConfigExport) -> Self {
         let mut cfg = ConfigFile::default();
 
+        if let Some(ref iface) = export.system_iface {
+            cfg.system.iface = iface.clone();
+        }
+
         // 1. Hosts
         for host in &export.hosts {
+            if host.origin == Origin::System {
+                continue;
+            }
             let name = if host.hostname.is_empty() {
                 format!("host-{}", host.mac.to_string().replace(':', ""))
             } else {
@@ -165,11 +172,13 @@ impl From<&SystemConfigExport> for ConfigFile {
             for (idx, p) in prefixes.iter().enumerate() {
                 let name = match p.source {
                     PrefixSource::Ula => "ula".to_string(),
+                    PrefixSource::AutoUla => "auto_ula".to_string(),
                     PrefixSource::AutoGua => "auto_gua".to_string(),
                     PrefixSource::Static => format!("prefix-{}", idx + 1),
                 };
                 let src_str = match p.source {
                     PrefixSource::Ula => "ula",
+                    PrefixSource::AutoUla => "auto_ula",
                     PrefixSource::AutoGua => "auto_gua",
                     PrefixSource::Static => "static",
                 };
@@ -535,6 +544,7 @@ impl From<&ConfigFile> for SystemConfigExport {
         for p in cfg.ra.prefixes.values() {
             let source = match p.source.as_deref() {
                 Some("ula") => PrefixSource::Ula,
+                Some("auto_ula") => PrefixSource::AutoUla,
                 Some("auto_gua") => PrefixSource::AutoGua,
                 _ => {
                     if let Some(ref addr) = p.prefix {
@@ -818,6 +828,11 @@ impl From<&ConfigFile> for SystemConfigExport {
             dns_reverse_resolvers: None,
             firewall_config,
             traffic_config,
+            system_iface: if cfg.system.iface.is_empty() {
+                None
+            } else {
+                Some(cfg.system.iface.clone())
+            },
             overwrite: false,
         }
     }

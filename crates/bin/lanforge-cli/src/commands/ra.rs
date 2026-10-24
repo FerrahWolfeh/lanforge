@@ -233,9 +233,10 @@ pub fn parse_prefix_source(s: &str) -> Result<PrefixSource> {
     match s.trim().to_ascii_lowercase().as_str() {
         "static" => Ok(PrefixSource::Static),
         "ula" => Ok(PrefixSource::Ula),
+        "autoula" | "auto-ula" => Ok(PrefixSource::AutoUla),
         "autogua" | "auto-gua" | "auto" | "gua" => Ok(PrefixSource::AutoGua),
         other => {
-            bail!("Invalid prefix source '{other}': expected 'static', 'ula', or 'autogua'");
+            bail!("Invalid prefix source '{other}': expected 'static', 'ula', 'auto-ula', or 'autogua'");
         }
     }
 }
@@ -403,6 +404,7 @@ fn render_prefixes_table(prefixes: &[RAPrefix], printer: &Printer) {
         let source_str = match p.source {
             PrefixSource::Static => "Static",
             PrefixSource::Ula => "ULA",
+            PrefixSource::AutoUla => "Auto-ULA",
             PrefixSource::AutoGua => "Auto-GUA",
         };
 
@@ -645,7 +647,7 @@ async fn handle_prefix_add(
 
     let valid_lifetime = if let Some(ref v) = args.valid {
         PrefixLifetime::from_str(v).map_err(|e| eyre!("Invalid valid lifetime: {e}"))?
-    } else if source == PrefixSource::Ula {
+    } else if source == PrefixSource::Ula || source == PrefixSource::AutoUla {
         PrefixLifetime::Secs(86400)
     } else {
         PrefixLifetime::Secs(2_592_000) // 30 days
@@ -653,7 +655,7 @@ async fn handle_prefix_add(
 
     let preferred_lifetime = if let Some(ref p) = args.preferred {
         PrefixLifetime::from_str(p).map_err(|e| eyre!("Invalid preferred lifetime: {e}"))?
-    } else if source == PrefixSource::Ula {
+    } else if source == PrefixSource::Ula || source == PrefixSource::AutoUla {
         PrefixLifetime::Secs(14400)
     } else {
         PrefixLifetime::Secs(604_800) // 7 days

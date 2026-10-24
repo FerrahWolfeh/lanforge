@@ -225,6 +225,8 @@ pub enum PrefixSource {
     /// Unique Local Address (ULA) prefix (RFC 4193).
     /// Typically randomized local prefixes (e.g. `fd00::/8`).
     Ula,
+    /// Automatically discovered Unique Local Address (ULA) from the local interface (RFC 4193).
+    AutoUla,
     /// Automatically generated or discovered Global Unicast Address (GUA) prefix (RFC 4291).
     #[default]
     AutoGua,
@@ -292,6 +294,23 @@ impl RAPrefix {
             source: PrefixSource::Ula,
             address: Some(clean_addr),
             prefix_len,
+            on_link: true,
+            autonomous: true,
+            router_addr: true,
+            valid_lifetime: PrefixLifetime::Secs(86400),
+            preferred_lifetime: PrefixLifetime::Secs(14400),
+        }
+    }
+
+    /// Constructs a dynamically determined Unique Local Address (ULA) prefix configuration.
+    ///
+    /// Automatically derives the prefix from any active `fd00::/8` address assigned to the interface.
+    #[must_use]
+    pub const fn ula_dynamic() -> Self {
+        Self {
+            source: PrefixSource::AutoUla,
+            address: None,
+            prefix_len: 64,
             on_link: true,
             autonomous: true,
             router_addr: true,

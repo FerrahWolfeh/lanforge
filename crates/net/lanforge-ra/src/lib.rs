@@ -771,7 +771,7 @@ fn send_ra_internal(
     let gua_info = gua
         .as_ref()
         .map(|g| (g, if_ips.gua_preferred, if_ips.gua_valid));
-    let mut pkt = build_ra_packet(cfg, mac, gua_info, &deprecated_list);
+    let mut pkt = build_ra_packet(cfg, mac, gua_info, ula.as_ref(), &deprecated_list);
 
     let csum = icmpv6_checksum(&src_ll, &dst_ip, &pkt);
     pkt[2] = (csum >> 8) as u8;
@@ -923,6 +923,7 @@ mod tests {
             &cfg,
             mac,
             Some((&new_gua, 7 * 24 * 3600, 30 * 24 * 3600)),
+            None,
             &deprecated_list,
         );
 

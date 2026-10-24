@@ -90,6 +90,7 @@ impl ClientContext {
         let dns_reverse_resolvers = Some(self.ctx.with_state(|s| s.reverse_resolvers.clone()));
         let firewall_config = self.ctx.get_firewall_config().map(Box::new);
         let traffic_config = self.ctx.get_traffic_config().map(Box::new);
+        let system_iface = self.ctx.target_interface_name();
 
         Response::SystemConfig(Box::new(SystemConfigExport {
             hosts,
@@ -110,6 +111,7 @@ impl ClientContext {
             dns_reverse_resolvers,
             firewall_config,
             traffic_config,
+            system_iface,
             overwrite: false,
         }))
     }
@@ -134,8 +136,15 @@ impl ClientContext {
             dns_reverse_resolvers,
             firewall_config,
             traffic_config,
+            system_iface,
             overwrite,
         } = config;
+
+        if let Some(iface) = system_iface
+            && !iface.is_empty()
+        {
+            self.ctx.set_target_interface_name(iface);
+        }
 
         let Some(storage) = self.ctx.storage_handle() else {
             return Response::Error {
@@ -156,7 +165,7 @@ impl ClientContext {
                 state
                     .devices
                     .values()
-                    .filter(|dev| dev.origin != lanforge_types::device::Origin::Dynamic)
+                    .filter(|dev| dev.origin == lanforge_types::device::Origin::Static)
                     .map(|dev| dev.mac)
                     .collect::<Vec<_>>()
             });
@@ -699,6 +708,14 @@ impl ClientContext {
             self.ctx
                 .update_ra_config(Vec::new(), Vec::new(), Vec::new());
         }
+
+        // Notify storage worker to flush the updated snapshot and live config file immediately
+        let _ = self
+            .ctx
+            .bus_ref()
+            .publish(lanforge_types::events::LanforgeEvent::Storage(
+                lanforge_types::events::storage::StorageEvent::TableDirty,
+            ));
 
         Response::SystemConfigImport(SystemConfigImportResponse {
             results,

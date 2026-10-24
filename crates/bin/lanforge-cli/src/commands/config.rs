@@ -59,6 +59,7 @@ pub enum ConfigSubcommand {
         password: Option<String>,
     },
     /// Import system configuration from a TOML or JSON file
+    #[command(alias = "restore")]
     Import {
         /// Input configuration file path (.toml or .json)
         #[arg(value_name = "FILE")]
@@ -136,6 +137,8 @@ pub struct FileConfigExport {
     pub firewall_config: Option<Box<FirewallConfig>>,
     #[serde(default)]
     pub traffic_config: Option<Box<TrafficConfig>>,
+    #[serde(default)]
+    pub system_iface: Option<String>,
     #[serde(default)]
     pub overwrite: bool,
 }
@@ -374,6 +377,7 @@ async fn export_config(
         dns_reverse_resolvers: config.dns_reverse_resolvers,
         firewall_config: config.firewall_config,
         traffic_config: config.traffic_config,
+        system_iface: config.system_iface,
         overwrite: config.overwrite,
     };
 
@@ -447,6 +451,7 @@ async fn import_config(
             dns_reverse_resolvers: file_export.dns_reverse_resolvers,
             firewall_config: file_export.firewall_config,
             traffic_config: file_export.traffic_config,
+            system_iface: file_export.system_iface,
             overwrite,
         }
     } else {
@@ -963,6 +968,7 @@ mod tests {
             dns_reverse_resolvers: None,
             firewall_config: None,
             traffic_config: None,
+            system_iface: Some("lan0".to_string()),
             overwrite: false,
         };
 

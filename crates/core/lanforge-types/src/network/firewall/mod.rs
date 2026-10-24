@@ -145,6 +145,26 @@ impl Default for FirewallConfig {
                             comment: Some("SSH host management".into()),
                         },
                         HostPortRule {
+                            port: 53,
+                            protocol: L4Protocol::Udp,
+                            comment: Some("DNS server (UDP)".into()),
+                        },
+                        HostPortRule {
+                            port: 53,
+                            protocol: L4Protocol::Tcp,
+                            comment: Some("DNS server (TCP)".into()),
+                        },
+                        HostPortRule {
+                            port: 67,
+                            protocol: L4Protocol::Udp,
+                            comment: Some("DHCPv4 server".into()),
+                        },
+                        HostPortRule {
+                            port: 8088,
+                            protocol: L4Protocol::Tcp,
+                            comment: Some("Web Console & REST API".into()),
+                        },
+                        HostPortRule {
                             port: 9090,
                             protocol: L4Protocol::Tcp,
                             comment: Some("Fedora Cockpit".into()),
