@@ -84,11 +84,12 @@ impl DeviceStore for RedbDatabase {
             let updated_device = match table.get(device.mac.0)? {
                 Some(val) => {
                     let mut existing: Device = decode(val.value())?;
-                    existing.hostname.clone_from(&device.hostname);
-                    existing.origin = device.origin;
-                    existing.managed_at = device.managed_at;
-                    existing.class.clone_from(&device.class);
-                    existing.duid.clone_from(&device.duid);
+                    let id = existing.identity_mut();
+                    id.hostname.clone_from(&device.hostname);
+                    id.origin = device.origin;
+                    id.managed_at = device.managed_at;
+                    id.class.clone_from(&device.class);
+                    id.duid.clone_from(&device.duid);
                     existing
                 }
                 None => device.clone(),
@@ -261,11 +262,12 @@ impl DeviceStore for RedbDatabase {
                 let mut updated = None;
                 if let Some(val) = table.get(dev.mac.0)? {
                     let mut existing: Device = decode(val.value())?;
-                    existing.hostname.clone_from(&dev.hostname);
-                    existing.origin = dev.origin;
-                    existing.managed_at = dev.managed_at;
-                    existing.class.clone_from(&dev.class);
-                    existing.duid.clone_from(&dev.duid);
+                    let id = existing.identity_mut();
+                    id.hostname.clone_from(&dev.hostname);
+                    id.origin = dev.origin;
+                    id.managed_at = dev.managed_at;
+                    id.class.clone_from(&dev.class);
+                    id.duid.clone_from(&dev.duid);
                     updated = persistent_device(&existing);
                 }
                 if updated.is_none() {
@@ -371,14 +373,15 @@ fn static_host_from_device(device: &Device) -> StaticHostEntry {
 
 fn static_host_to_device(host: StaticHostEntry) -> Device {
     let mut device = Device::new(host.mac);
-    device.hostname = host.hostname;
-    device.origin = host.origin;
+    let id = device.identity_mut();
+    id.hostname = host.hostname;
+    id.origin = host.origin;
+    id.ignore_dns_log = host.ignore_dns_log;
+    id.ignored_log_domains = host.ignored_log_domains;
     device.v4 = host.v4_fixed.map_or(IPv4State::None, IPv4State::Static);
     if let Some(suffix) = host.v6_suffix {
         device.v6.push(IPv6State::Static(suffix, std::time::SystemTime::UNIX_EPOCH));
     }
-    device.ignore_dns_log = host.ignore_dns_log;
-    device.ignored_log_domains = host.ignored_log_domains;
     device
 }
 
@@ -392,7 +395,7 @@ fn persistent_device(device: &Device) -> Option<Device> {
         IPv4State::Discovery(_, _) | IPv4State::None => IPv4State::None,
     };
     persistent.v6.retain(|state| matches!(state, IPv6State::Static(..) | IPv6State::Dynamic(_)));
-    persistent.iface = None;
+    persistent.identity_mut().iface = None;
     let has_lease = matches!(persistent.v4, IPv4State::Dynamic(_))
         || persistent.v6.iter().any(|state| matches!(state, IPv6State::Dynamic(_)))
         || !persistent.v6_prefixes.is_empty();

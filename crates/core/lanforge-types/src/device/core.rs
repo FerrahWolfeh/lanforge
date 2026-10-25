@@ -2,7 +2,10 @@ use lanforge_macros::EnumRepr;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+
+use crate::device::identity::DeviceIdentity;
 
 use crate::device::state::{
     IPv4State, IPv6State, V4Lease, V6Lease, V6ObservationOrigin, V6PrefixLease,
@@ -14,9 +17,7 @@ use crate::network::{
     Hostname, HostnameOrigin, IpClassification, Ipv6AddrOrSuffix, classify_ipv6, is_ula,
 };
 use crate::update::{CliHostUpdate, FieldUpdate, LeaseTarget};
-use crate::utils::serde::{
-    deserialize_time, deserialize_time_opt, serialize_time, serialize_time_opt,
-};
+use crate::utils::serde::{deserialize_time, serialize_time};
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default, EnumRepr,
@@ -122,14 +123,7 @@ impl DeviceClass {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Device {
-    pub mac: MacAddr,
-    pub hostname: Hostname,
-    pub origin: Origin,
-    #[serde(
-        serialize_with = "serialize_time_opt",
-        deserialize_with = "deserialize_time_opt"
-    )]
-    pub managed_at: Option<SystemTime>,
+    pub identity: Arc<DeviceIdentity>,
     pub v4: IPv4State,
     pub v6: Vec<IPv6State>,
     pub v6_prefixes: Vec<V6PrefixLease>,
@@ -138,21 +132,15 @@ pub struct Device {
         deserialize_with = "deserialize_time"
     )]
     pub last_seen: SystemTime,
-    pub duid: Option<Duid>,
-    pub dns_fallback: String,
-    pub class: DeviceClass,
     pub status: DeviceStatus,
+}
 
-    pub boot_file: Option<String>,
-    /// Ingress network interface where the device was observed (e.g., "lan0.100").
-    #[serde(default)]
-    pub iface: Option<String>,
-    /// Whether DNS query logging should be suppressed for this device.
-    #[serde(default)]
-    pub ignore_dns_log: bool,
-    /// Specific domains or wildcards (e.g. `*.sonarr.tv`) to suppress from DNS query logs for this device.
-    #[serde(default)]
-    pub ignored_log_domains: Vec<String>,
+impl std::ops::Deref for Device {
+    type Target = DeviceIdentity;
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.identity
+    }
 }
 
 impl Device {
@@ -162,40 +150,42 @@ impl Device {
     #[must_use]
     pub fn new(mac: MacAddr) -> Self {
         Self {
-            mac,
-            hostname: Hostname::default(),
-            origin: Origin::Dynamic,
-            managed_at: None,
+            identity: Arc::new(DeviceIdentity::new(mac)),
             v4: IPv4State::None,
             v6: Vec::new(),
             v6_prefixes: Vec::new(),
             last_seen: SystemTime::UNIX_EPOCH,
-            duid: None,
-            dns_fallback: format!(
-                "host-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-                mac.0[0], mac.0[1], mac.0[2], mac.0[3], mac.0[4], mac.0[5]
-            ),
-            class: DeviceClass::None,
             status: DeviceStatus::Offline,
-            boot_file: None,
-            iface: None,
-            ignore_dns_log: false,
-            ignored_log_domains: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn from_identity(identity: DeviceIdentity) -> Self {
+        Self {
+            identity: Arc::new(identity),
+            v4: IPv4State::None,
+            v6: Vec::new(),
+            v6_prefixes: Vec::new(),
+            last_seen: SystemTime::UNIX_EPOCH,
+            status: DeviceStatus::Offline,
+        }
+    }
+
+    #[inline]
+    pub fn identity_mut(&mut self) -> &mut DeviceIdentity {
+        Arc::make_mut(&mut self.identity)
     }
 
     /// Infers the 802.1Q VLAN ID if the interface name contains a dot (e.g. "lan0.100" -> 100).
     #[must_use]
     pub fn vlan_id(&self) -> Option<u16> {
-        self.iface.as_deref().and_then(|name| {
-            name.split('.').nth(1)?.parse().ok()
-        })
+        self.identity.vlan_id()
     }
 
     pub fn associate_duid(&mut self, duid: Duid, _iaid: u32) -> Option<NetworkChange> {
         if self.duid.as_ref() != Some(&duid) {
             let change = NetworkChange::DuidAssociated { duid: duid.clone() };
-            self.duid = Some(duid);
+            self.identity_mut().duid = Some(duid);
             self.last_seen = SystemTime::now();
             return Some(change);
         }
@@ -209,21 +199,21 @@ impl Device {
         let now = SystemTime::now();
         let mut changed = false;
 
+        let expires_u32 = crate::device::state::system_time_to_epoch_u32(expires);
+        let now_u32 = crate::device::state::system_time_to_epoch_u32(now);
+
         match &mut self.v4 {
-            IPv4State::Dynamic(lease) if lease.ip == ip && lease.expires == expires => {
-                if now.duration_since(lease.last_seen).unwrap_or(Duration::MAX)
+            IPv4State::Dynamic(lease) if lease.ip == ip && lease.expires == expires_u32 => {
+                let last_seen_time = lease.last_seen_system_time();
+                if now.duration_since(last_seen_time).unwrap_or(Duration::MAX)
                     > Self::ACTIVITY_DEBOUNCE
                 {
-                    lease.last_seen = now;
+                    lease.last_seen = now_u32;
                     self.last_seen = self.calculate_last_seen();
                 }
             }
             _ => {
-                self.v4 = IPv4State::Dynamic(Box::new(V4Lease {
-                    ip,
-                    expires,
-                    last_seen: now,
-                }));
+                self.v4 = IPv4State::Dynamic(Box::new(V4Lease::dynamic(ip, expires, now)));
                 self.last_seen = self.calculate_last_seen();
                 changed = true;
             }
@@ -246,17 +236,12 @@ impl Device {
         let mut changed = if duid.as_bytes().is_empty() || self.duid.as_ref() == Some(duid) {
             false
         } else {
-            self.duid = Some(duid.clone());
+            self.identity_mut().duid = Some(duid.clone());
             true
         };
 
         let now = SystemTime::now();
-        let new_lease = V6Lease {
-            ip,
-            iaid,
-            expires,
-            last_seen: now,
-        };
+        let new_lease = V6Lease::dynamic(ip, iaid, expires, now);
         let existing = self
             .v6
             .iter_mut()
@@ -294,16 +279,11 @@ impl Device {
         let mut changed = if duid.as_bytes().is_empty() || self.duid.as_ref() == Some(duid) {
             false
         } else {
-            self.duid = Some(duid.clone());
+            self.identity_mut().duid = Some(duid.clone());
             true
         };
 
-        let new_lease = V6PrefixLease {
-            prefix,
-            len,
-            iaid,
-            expires,
-        };
+        let new_lease = V6PrefixLease::new(prefix, len, iaid, expires);
         let existing = self.v6_prefixes.iter_mut().find(|l| l.iaid == iaid);
 
         if let Some(lease) = existing {
@@ -371,11 +351,11 @@ impl Device {
                     }
                 }
                 IPv6State::Dynamic(lease) => {
-                    let elapsed = now.duration_since(lease.last_seen).unwrap_or(Duration::MAX);
+                    let elapsed = now.duration_since(lease.last_seen_system_time()).unwrap_or(Duration::MAX);
                     let was_active = elapsed < Self::ONLINE_THRESHOLD;
 
                     if !was_active || elapsed > Self::ACTIVITY_DEBOUNCE {
-                        lease.last_seen = now;
+                        lease.last_seen = crate::device::state::system_time_to_epoch_u32(now);
                         changed = true;
                     }
                 }
@@ -440,10 +420,10 @@ impl Device {
             }
             IPv4State::Dynamic(lease) => {
                 if lease.ip == ip {
-                    let elapsed = now.duration_since(lease.last_seen).unwrap_or(Duration::MAX);
+                    let elapsed = now.duration_since(lease.last_seen_system_time()).unwrap_or(Duration::MAX);
                     let was_active = elapsed < Self::ONLINE_THRESHOLD;
                     if !was_active || elapsed > Self::ACTIVITY_DEBOUNCE {
-                        lease.last_seen = now;
+                        lease.last_seen = crate::device::state::system_time_to_epoch_u32(now);
                         self.last_seen = self.calculate_last_seen();
                         changed = true;
                     }
@@ -491,7 +471,7 @@ impl Device {
         if hostname.is_empty() || self.hostname.name == hostname {
             return None;
         }
-        self.hostname = Hostname {
+        self.identity_mut().hostname = Hostname {
             name: hostname.clone(),
             origin,
         };
@@ -503,7 +483,7 @@ impl Device {
         let mut latest = SystemTime::UNIX_EPOCH;
         match &self.v4 {
             IPv4State::Dynamic(l) => {
-                latest = latest.max(l.last_seen);
+                latest = latest.max(l.last_seen_system_time());
             }
             IPv4State::Discovery(_, ts) => {
                 latest = latest.max(*ts);
@@ -516,7 +496,7 @@ impl Device {
         for s in &self.v6 {
             match s {
                 IPv6State::Dynamic(l) => {
-                    latest = latest.max(l.last_seen);
+                    latest = latest.max(l.last_seen_system_time());
                 }
                 IPv6State::Slaac(_, ts)
                 | IPv6State::Static(_, ts)
@@ -530,7 +510,7 @@ impl Device {
     }
 
     #[must_use]
-    pub const fn is_static(&self) -> bool {
+    pub fn is_static(&self) -> bool {
         self.origin.is_static()
     }
 
@@ -584,9 +564,11 @@ impl Device {
         use crate::update::LeaseTarget;
         let mut events = Vec::new();
 
+        let now_epoch = crate::device::state::system_time_to_epoch_u32(now);
+
         // V4
         match &self.v4 {
-            IPv4State::Dynamic(lease) if lease.expires < now => {
+            IPv4State::Dynamic(lease) if lease.is_expired(now_epoch) => {
                 events.push(NetworkChange::LeaseExpired {
                     target: LeaseTarget::V4,
                 });
@@ -603,7 +585,7 @@ impl Device {
         // V6
         let mut v6_expired_iaids = Vec::new();
         self.v6.retain(|state| match state {
-            IPv6State::Dynamic(lease) if lease.expires < now => {
+            IPv6State::Dynamic(lease) if lease.is_expired(now_epoch) => {
                 v6_expired_iaids.push(lease.iaid);
                 false
             }
@@ -621,7 +603,7 @@ impl Device {
         // Prefixes
         let mut prefix_expired_iaids = Vec::new();
         self.v6_prefixes.retain(|p| {
-            if p.expires < now {
+            if p.is_expired(now_epoch) {
                 prefix_expired_iaids.push(p.iaid);
                 false
             } else {
@@ -662,10 +644,10 @@ impl Device {
 
         match &mut self.v4 {
             IPv4State::Dynamic(lease) if lease.ip == ip => {
-                if now.duration_since(lease.last_seen).unwrap_or(Duration::MAX)
+                if now.duration_since(lease.last_seen_system_time()).unwrap_or(Duration::MAX)
                     > Self::ACTIVITY_DEBOUNCE
                 {
-                    lease.last_seen = now;
+                    lease.last_seen = crate::device::state::system_time_to_epoch_u32(now);
                     changed = true;
                 }
             }
@@ -858,8 +840,8 @@ impl Device {
         match ip {
             IpAddr::V4(ip4) => match &mut self.v4 {
                 IPv4State::Dynamic(lease) if lease.ip == ip4 => {
-                    if lease.last_seen != SystemTime::UNIX_EPOCH {
-                        lease.last_seen = SystemTime::UNIX_EPOCH;
+                    if lease.last_seen != 0 {
+                        lease.last_seen = 0;
                         changed = true;
                     }
                 }
@@ -899,8 +881,8 @@ impl Device {
                             break;
                         }
                         IPv6State::Dynamic(lease) if lease.ip == ip6 => {
-                            if lease.last_seen != SystemTime::UNIX_EPOCH {
-                                lease.last_seen = SystemTime::UNIX_EPOCH;
+                            if lease.last_seen != 0 {
+                                lease.last_seen = 0;
                                 changed = true;
                             }
                             break;
@@ -955,7 +937,7 @@ impl Device {
 
         if let FieldUpdate::Set(h) = update.hostname {
             let sanitized = Hostname::sanitize(&h);
-            self.hostname = Hostname {
+            self.identity_mut().hostname = Hostname {
                 name: sanitized.clone(),
                 origin: HostnameOrigin::Static,
             };
@@ -964,7 +946,7 @@ impl Device {
             };
         }
         if let FieldUpdate::Set(d) = update.duid {
-            self.duid = Some(d);
+            self.identity_mut().duid = Some(d);
         }
         if let FieldUpdate::Set(v4) = update.v4_static {
             self.v4 = IPv4State::Static(v4);
@@ -983,23 +965,23 @@ impl Device {
         }
         if let FieldUpdate::Set(bf) = update.boot_file {
             let sanitized = bf.replace('\0', "").trim().to_string();
-            self.boot_file = if sanitized.is_empty() {
+            self.identity_mut().boot_file = if sanitized.is_empty() {
                 None
             } else {
                 Some(sanitized)
             };
         } else if update.boot_file == FieldUpdate::Clear {
-            self.boot_file = None;
+            self.identity_mut().boot_file = None;
         }
         if let FieldUpdate::Set(df) = update.dns_fallback {
-            self.dns_fallback = df;
+            self.identity_mut().dns_fallback = df;
         }
         if let FieldUpdate::Set(c) = update.class {
-            self.class = c;
+            self.identity_mut().class = c;
             result = AdminChange::Classified { class: c };
         }
-        self.origin = update.origin;
-        self.managed_at = Some(SystemTime::now());
+        self.identity_mut().origin = update.origin;
+        self.identity_mut().managed_at = Some(SystemTime::now());
         result
     }
 

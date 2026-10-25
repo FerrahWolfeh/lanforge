@@ -270,7 +270,7 @@ impl State {
 
     pub(crate) fn handle_ignore_dns_log_set(&mut self, mac: MacAddr, ignore: bool) -> EventVec {
         self.mutate_device(mac, |dev| {
-            dev.ignore_dns_log = ignore;
+            dev.identity_mut().ignore_dns_log = ignore;
             None
         });
         EventVec::new()
@@ -282,7 +282,7 @@ impl State {
         domains: Vec<String>,
     ) -> EventVec {
         self.mutate_device(mac, |dev| {
-            dev.ignored_log_domains = domains;
+            dev.identity_mut().ignored_log_domains = domains;
             None
         });
         EventVec::new()
@@ -449,7 +449,7 @@ impl State {
             if dev.class == class {
                 None
             } else {
-                dev.class = class;
+                dev.identity_mut().class = class;
                 Some(AdminChange::Classified { class })
             }
         })
@@ -668,7 +668,7 @@ impl State {
     ) -> EventVec {
         self.mutate_device(mac, |dev| {
             if dev.iface.as_deref() != Some(&iface) {
-                dev.iface = Some(iface);
+                dev.identity_mut().iface = Some(iface);
             }
             None
         })

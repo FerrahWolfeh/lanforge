@@ -449,7 +449,7 @@ fn spawn_sweep_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext, ping_interval
                             }
                         }
                         IPv4State::Dynamic(lease) => {
-                            let elapsed = now.duration_since(lease.last_seen).unwrap_or(Duration::MAX);
+                            let elapsed = now.duration_since(lease.last_seen_system_time()).unwrap_or(Duration::MAX);
                             if elapsed >= sweep_threshold {
                                 all_ips.push(IpAddr::V4(lease.ip));
                             }
@@ -469,7 +469,7 @@ fn spawn_sweep_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext, ping_interval
                                 | IPv6State::Slaac(_, ts)
                                 | IPv6State::Discovery(_, ts)
                                 | IPv6State::LinkLocal(_, ts) => *ts,
-                                IPv6State::Dynamic(lease) => lease.last_seen,
+                                IPv6State::Dynamic(lease) => lease.last_seen_system_time(),
                             };
                             let elapsed = now.duration_since(ts).unwrap_or(Duration::MAX);
                             if elapsed >= sweep_threshold {

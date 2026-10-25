@@ -1,4 +1,5 @@
 use lanforge_types::auth::*;
+use lanforge_types::device::DeviceIdentity;
 use lanforge_types::device::core::*;
 use lanforge_types::device::state::*;
 use lanforge_types::device::transient::*;
@@ -41,6 +42,7 @@ fn test_print_all_struct_sizes() {
     print_size::<LearningMethod>("LearningMethod");
     print_size::<HostnameOrigin>("HostnameOrigin");
     print_size::<Hostname>("Hostname");
+    print_size::<DeviceIdentity>("DeviceIdentity");
     print_size::<V4Lease>("V4Lease");
     print_size::<V6Lease>("V6Lease");
     print_size::<V6PrefixLease>("V6PrefixLease");

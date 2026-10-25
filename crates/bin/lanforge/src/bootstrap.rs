@@ -497,14 +497,7 @@ impl Bootstrapper {
                 for mut runtime in runtime_devices {
                     if let Some(persisted) = table.devices.get(&runtime.mac) {
                         let persistent = persisted.as_ref();
-                        runtime.hostname = persistent.hostname.clone();
-                        runtime.origin = persistent.origin;
-                        runtime.managed_at = persistent.managed_at;
-                        runtime.duid.clone_from(&persistent.duid);
-                        runtime.class = persistent.class;
-                        runtime.boot_file.clone_from(&persistent.boot_file);
-                        runtime.ignore_dns_log = persistent.ignore_dns_log;
-                        runtime.ignored_log_domains.clone_from(&persistent.ignored_log_domains);
+                        runtime.identity = persistent.identity.clone();
                         if matches!(persistent.v4, lanforge_types::device::IPv4State::Dynamic(_)) {
                             runtime.v4 = persistent.v4.clone();
                         }

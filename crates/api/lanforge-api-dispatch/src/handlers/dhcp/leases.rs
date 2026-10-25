@@ -1,4 +1,4 @@
-use crate::{ClientContext, handlers::duration_since_epoch_u64};
+use crate::ClientContext;
 use lanforge_api::api::{
     DhcpPoolEntry, DhcpPoolType, DhcpPoolsResponse, LeaseEntry, LeaseKind, LeasesResponse,
     Response, SimpleSuccess,
@@ -77,6 +77,7 @@ impl ClientContext {
 
     pub async fn handle_leases(&self, _count: bool) -> Response {
         let now = SystemTime::now();
+        let now_epoch = lanforge_types::device::state::system_time_to_epoch_u32(now);
         let leases = self.ctx.with_state(|state| {
             let mut list = Vec::new();
             for dev in state.devices.values() {
@@ -86,11 +87,8 @@ impl ClientContext {
                         hostname: dev.display_hostname().to_string(),
                         address: IpAddr::V4(lease.ip),
                         kind: LeaseKind::V4,
-                        expires: duration_since_epoch_u64(lease.expires),
-                        remaining_secs: lease
-                            .expires
-                            .duration_since(now)
-                            .map_or(0, |d| d.as_secs()),
+                        expires: u64::from(lease.expires),
+                        remaining_secs: u64::from(lease.expires.saturating_sub(now_epoch)),
                     });
                 }
                 for v6_state in &dev.v6 {
@@ -100,11 +98,8 @@ impl ClientContext {
                             hostname: dev.display_hostname().to_string(),
                             address: IpAddr::V6(lease.ip),
                             kind: LeaseKind::V6,
-                            expires: duration_since_epoch_u64(lease.expires),
-                            remaining_secs: lease
-                                .expires
-                                .duration_since(now)
-                                .map_or(0, |d| d.as_secs()),
+                            expires: u64::from(lease.expires),
+                            remaining_secs: u64::from(lease.expires.saturating_sub(now_epoch)),
                         });
                     }
                 }

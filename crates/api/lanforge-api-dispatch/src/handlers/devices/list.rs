@@ -130,7 +130,7 @@ impl ClientContext {
                 })),
                 IPv4State::Dynamic(v) => Some(Box::new(LeaseInfo {
                     ip: IpAddr::V4(v.ip),
-                    expires: duration_since_epoch_u64(v.expires),
+                    expires: u64::from(v.expires),
                     reserved: dev.is_static(),
                 })),
                 IPv4State::Discovery(ip, _) => Some(Box::new(LeaseInfo {
@@ -149,7 +149,7 @@ impl ClientContext {
                         _ => s.ip() == Some(ip),
                     })
                     .map_or(0, |state| match state {
-                        IPv6State::Dynamic(lease) => duration_since_epoch_u64(lease.expires),
+                        IPv6State::Dynamic(lease) => u64::from(lease.expires),
                         _ => 0,
                     });
 

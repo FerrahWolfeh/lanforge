@@ -1,12 +1,11 @@
 use crate::ClientContext;
 use lanforge_api::api::{HostConfigEntry, HostsResponse, Response, SimpleSuccess};
 use lanforge_types::{
-    device::{Device, Hostname, HostnameOrigin, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin},
+    device::{Hostname, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin},
     identifiers::{Duid, MacAddr},
     update::{CliHostUpdate, DeviceUpdate, FieldUpdate},
 };
 use std::net::Ipv4Addr;
-use std::time::SystemTime;
 
 impl ClientContext {
     /// Generates a `HostsResponse` containing all manually configured host entries.
@@ -39,38 +38,9 @@ impl ClientContext {
 
     pub async fn handle_host_add(&self, entry: HostConfigEntry) -> Response {
         let mac = entry.mac;
-
-        // 1. Prepare device representation
-        let mut dev = match self.ctx.get_device(&mac) {
-            Some(d) => (*d).clone(),
-            None => Device::new(mac),
-        };
-
         let sanitized_hostname = Hostname::sanitize(&entry.hostname);
-        if !sanitized_hostname.is_empty() {
-            dev.hostname = Hostname {
-                name: sanitized_hostname.clone(),
-                origin: HostnameOrigin::Static,
-            };
-        }
-        match entry.v4_fixed {
-            Some(ip) => dev.v4 = IPv4State::Static(ip),
-            None => {
-                if matches!(dev.v4, IPv4State::Static(_)) {
-                    dev.v4 = IPv4State::None;
-                }
-            }
-        }
-        dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
-        if let Some(suf) = entry.v6_suffix {
-            dev.v6.push(IPv6State::Static(suf, SystemTime::now()));
-        }
-        dev.origin = Origin::Static;
-        dev.managed_at = Some(SystemTime::now());
-        dev.ignore_dns_log = entry.ignore_dns_log;
-        dev.ignored_log_domains = entry.ignored_log_domains.clone();
 
-        // 2. Apply to memory context
+        // 1. Apply to memory context
         let hostname_update = if sanitized_hostname.is_empty() {
             FieldUpdate::NoChange
         } else {
@@ -110,11 +80,6 @@ impl ClientContext {
     }
 
     pub async fn handle_host_set(&self, mac: MacAddr, field: String, value: String) -> Response {
-        let mut dev = match self.ctx.get_device(&mac) {
-            Some(d) => (*d).clone(),
-            None => Device::new(mac),
-        };
-
         let mut cli_update = CliHostUpdate {
             hostname: FieldUpdate::NoChange,
             duid: FieldUpdate::NoChange,
@@ -128,60 +93,39 @@ impl ClientContext {
 
         if field == "hostname" {
             let sanitized = Hostname::sanitize(&value);
-            dev.hostname = Hostname {
-                name: sanitized.clone(),
-                origin: HostnameOrigin::Static,
-            };
             cli_update.hostname = FieldUpdate::Set(sanitized);
         } else if field == "duid" {
             if value.is_empty() {
-                dev.duid = None;
                 cli_update.duid = FieldUpdate::Clear;
             } else if let Ok(d) = value.parse::<Duid>() {
-                dev.duid = Some(d.clone());
                 cli_update.duid = FieldUpdate::Set(d);
             }
         } else if field == "v4_static" || field == "v4" || field == "v4_fixed" {
             if value.is_empty() {
-                if matches!(dev.v4, IPv4State::Static(_)) {
-                    dev.v4 = IPv4State::None;
-                }
                 cli_update.v4_static = FieldUpdate::Clear;
             } else if let Ok(ip) = value.parse::<Ipv4Addr>() {
-                dev.v4 = IPv4State::Static(ip);
                 cli_update.v4_static = FieldUpdate::Set(ip);
             }
         } else if field == "v6_suffix" || field == "v6" {
             if value.is_empty() {
-                dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
                 cli_update.v6_suffix = FieldUpdate::Clear;
             } else if let Some(suf) = Ipv6AddrOrSuffix::parse(&value) {
-                dev.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
-                dev.v6.push(IPv6State::Static(suf, SystemTime::now()));
                 cli_update.v6_suffix = FieldUpdate::Set(suf);
             }
         } else if field == "boot_file" {
             if value.is_empty() {
-                dev.boot_file = None;
                 cli_update.boot_file = FieldUpdate::Clear;
             } else {
-                dev.boot_file = Some(value.clone());
                 cli_update.boot_file = FieldUpdate::Set(value.clone());
             }
         } else if field == "class" {
             if let Ok(c) = value.parse() {
-                dev.class = c;
                 cli_update.class = FieldUpdate::Set(c);
             }
         } else if field == "dns_fallback" {
-            dev.dns_fallback = value.clone();
             cli_update.dns_fallback = FieldUpdate::Set(value);
         } else if field == "ignore_dns_log" {
             let ign = value.parse::<bool>().unwrap_or(false);
-            dev.ignore_dns_log = ign;
-            dev.origin = Origin::Static;
-            dev.managed_at = Some(SystemTime::now());
-
             let _ = self.ctx.apply(DeviceUpdate::IgnoreDnsLogSet {
                 mac,
                 ignore: ign,
@@ -200,10 +144,6 @@ impl ClientContext {
                     .map(ToString::to_string)
                     .collect()
             };
-            dev.ignored_log_domains.clone_from(&domains);
-            dev.origin = Origin::Static;
-            dev.managed_at = Some(SystemTime::now());
-
             let _ = self.ctx.apply(DeviceUpdate::IgnoredLogDomainsSet {
                 mac,
                 domains,
@@ -213,28 +153,30 @@ impl ClientContext {
             });
         } else if field == "add_ignored_log_domain" {
             let dom = value.trim().to_ascii_lowercase();
-            if !dom.is_empty() && !dev.ignored_log_domains.iter().any(|d| d.eq_ignore_ascii_case(&dom)) {
-                dev.ignored_log_domains.push(dom);
+            let mut domains = self
+                .ctx
+                .get_device(&mac)
+                .map_or_else(Vec::new, |d| d.ignored_log_domains.clone());
+            if !dom.is_empty() && !domains.iter().any(|d| d.eq_ignore_ascii_case(&dom)) {
+                domains.push(dom);
             }
-            dev.origin = Origin::Static;
-            dev.managed_at = Some(SystemTime::now());
-
             let _ = self.ctx.apply(DeviceUpdate::IgnoredLogDomainsSet {
                 mac,
-                domains: dev.ignored_log_domains.clone(),
+                domains,
             });
             return Response::Success(SimpleSuccess {
                 message: "Host configuration updated".to_string(),
             });
         } else if field == "remove_ignored_log_domain" {
             let dom = value.trim().to_ascii_lowercase();
-            dev.ignored_log_domains.retain(|d| !d.eq_ignore_ascii_case(&dom));
-            dev.origin = Origin::Static;
-            dev.managed_at = Some(SystemTime::now());
-
+            let mut domains = self
+                .ctx
+                .get_device(&mac)
+                .map_or_else(Vec::new, |d| d.ignored_log_domains.clone());
+            domains.retain(|d| !d.eq_ignore_ascii_case(&dom));
             let _ = self.ctx.apply(DeviceUpdate::IgnoredLogDomainsSet {
                 mac,
-                domains: dev.ignored_log_domains.clone(),
+                domains,
             });
             return Response::Success(SimpleSuccess {
                 message: "Host configuration updated".to_string(),
@@ -244,9 +186,6 @@ impl ClientContext {
                 error: format!("Unknown field: {field}"),
             };
         }
-
-        dev.origin = Origin::Static;
-        dev.managed_at = Some(SystemTime::now());
 
         // 2. Apply to memory context
         let update = DeviceUpdate::CliHostUpdated {

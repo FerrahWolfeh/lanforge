@@ -757,7 +757,7 @@ mod tests {
 
         let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
         let mut dev = Device::new(mac);
-        dev.hostname = "test-host".to_string().into();
+        dev.identity_mut().hostname = "test-host".to_string().into();
 
         db.upsert_device(&dev).unwrap();
 

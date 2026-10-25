@@ -591,9 +591,9 @@ fn test_is_worthy_logic() {
     assert!(!dev.is_worthy());
 
     // 2. With hostname -> Worthy
-    dev.hostname.name = "host".to_string();
+    dev.identity_mut().hostname.name = "host".to_string();
     assert!(dev.is_worthy());
-    dev.hostname.name.clear();
+    dev.identity_mut().hostname.name.clear();
 
     // 3. With IPv4 (seen or lease) -> Worthy
     dev.v4 = IPv4State::Discovery("1.1.1.1".parse().unwrap(), SystemTime::now());
@@ -734,24 +734,24 @@ fn test_primary_v6_priority() {
     );
 
     // 4. Dynamic GUA > SLAAC ULA
-    dev.v6.push(IPv6State::Dynamic(Box::new(V6Lease {
-        ip: lease_gua,
-        iaid: 1,
-        expires: SystemTime::now(),
-        last_seen: SystemTime::now(),
-    })));
+    dev.v6.push(IPv6State::Dynamic(Box::new(V6Lease::dynamic(
+        lease_gua,
+        1,
+        SystemTime::now(),
+        SystemTime::now(),
+    ))));
     assert_eq!(
         dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
         Some(lease_gua)
     );
 
     // 3. Dynamic ULA > Dynamic GUA
-    dev.v6.push(IPv6State::Dynamic(Box::new(V6Lease {
-        ip: lease_ula,
-        iaid: 2,
-        expires: SystemTime::now(),
-        last_seen: SystemTime::now(),
-    })));
+    dev.v6.push(IPv6State::Dynamic(Box::new(V6Lease::dynamic(
+        lease_ula,
+        2,
+        SystemTime::now(),
+        SystemTime::now(),
+    ))));
     assert_eq!(
         dev.primary_v6(Some(gua_prefix), Some(ula_prefix)),
         Some(lease_ula)
@@ -1025,7 +1025,7 @@ fn test_expire_stale_status_transition() {
         let activity_ts = now - Duration::from_secs(200);
         let managed_ts = now - Duration::from_secs(700);
 
-        dev.managed_at = Some(managed_ts);
+        dev.identity_mut().managed_at = Some(managed_ts);
         dev.last_seen = activity_ts;
         if let IPv4State::Discovery(ip, _) = dev.v4 {
             dev.v4 = IPv4State::Discovery(ip, activity_ts);
@@ -1321,8 +1321,8 @@ fn test_interface_prefix_renumbering_and_system_host() {
     let ctx = setup();
     let sys_mac = MacAddr([0x00, 0x00, 0x5e, 0x00, 0x53, 0x01]);
     let mut sys_dev = Device::new(sys_mac);
-    sys_dev.origin = Origin::System;
-    sys_dev.hostname.name = "lanforge-router".to_string();
+    sys_dev.identity_mut().origin = Origin::System;
+    sys_dev.identity_mut().hostname.name = "lanforge-router".to_string();
     ctx.insert_device(sys_mac, sys_dev);
 
     // Add static client with suffix ::55
@@ -1399,20 +1399,20 @@ fn test_prune_zombies_and_caches() {
 
     // Active device
     let mut active_dev = Device::new(active_mac);
-    active_dev.hostname.name = "active-dev".to_string();
+    active_dev.identity_mut().hostname.name = "active-dev".to_string();
     active_dev.last_seen = SystemTime::now();
     ctx.insert_device(active_mac, active_dev);
 
     // Zombie device (>1h old, dynamic, no active leases)
     let mut zombie_dev = Device::new(zombie_mac);
-    zombie_dev.hostname.name = "zombie-dev".to_string();
+    zombie_dev.identity_mut().hostname.name = "zombie-dev".to_string();
     zombie_dev.last_seen = SystemTime::now() - Duration::from_hours(2);
     ctx.insert_device(zombie_mac, zombie_dev);
 
     // System device (>1h old, but Origin::System)
     let mut sys_dev = Device::new(sys_mac);
-    sys_dev.origin = Origin::System;
-    sys_dev.hostname.name = "router".to_string();
+    sys_dev.identity_mut().origin = Origin::System;
+    sys_dev.identity_mut().hostname.name = "router".to_string();
     sys_dev.last_seen = SystemTime::now() - Duration::from_hours(2);
     ctx.insert_device(sys_mac, sys_dev);
 

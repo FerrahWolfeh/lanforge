@@ -120,6 +120,7 @@ impl IpPool {
     /// are present in `self.available`.
     pub fn reconcile_active(&mut self, ctx: &LanforgeContext) {
         let now = SystemTime::now();
+        let now_epoch = lanforge_types::device::state::system_time_to_epoch_u32(now);
         let mut active_ips = RoaringBitmap::new();
 
         ctx.with_state(|state| {
@@ -129,7 +130,7 @@ impl IpPool {
                         active_ips.insert(u32::from(*ip));
                     }
                     IPv4State::Dynamic(lease) => {
-                        if lease.expires > now {
+                        if !lease.is_expired(now_epoch) {
                             active_ips.insert(u32::from(lease.ip));
                         }
                     }

@@ -55,7 +55,7 @@ fn test_last_seen_heuristic() {
 
     // Insert device directly with an old last_seen
     let mut dev = Device::new(mac);
-    dev.hostname.name = hostname.to_string();
+    dev.identity_mut().hostname.name = hostname.to_string();
     // 10 days ago
     dev.last_seen = SystemTime::now() - Duration::from_hours(240);
 
@@ -84,8 +84,8 @@ fn test_static_devices_always_indexed() {
 
     // Create a device with Static origin
     let mut dev = Device::new(mac);
-    dev.hostname.name = hostname.to_string();
-    dev.origin = Origin::Static;
+    dev.identity_mut().hostname.name = hostname.to_string();
+    dev.identity_mut().origin = Origin::Static;
 
     // insert_device calls index_device
     ctx.insert_device(mac, dev);
@@ -103,7 +103,7 @@ fn test_jit_lookup_case_insensitive() {
     let hostname = "Mixed-Case-Host";
 
     let mut dev = Device::new(mac);
-    dev.hostname.name = hostname.to_string();
+    dev.identity_mut().hostname.name = hostname.to_string();
     ctx.insert_device(mac, dev);
 
     // Lookup with lowercase
