@@ -359,6 +359,25 @@ pub trait ConfigStore:
 
     fn get_meta(&self, key: &str) -> Result<Option<Vec<u8>>, DbError>;
     fn set_meta(&self, key: &str, value: &[u8]) -> Result<(), DbError>;
+
+    fn get_config_section_hash(&self, section: &str) -> Result<Option<u64>, DbError> {
+        let key = format!("config_hash:{section}");
+        Ok(self.get_meta(&key)?.and_then(|bytes| {
+            if bytes.len() == 8 {
+                let mut arr = [0u8; 8];
+                arr.copy_from_slice(&bytes);
+                Some(u64::from_be_bytes(arr))
+            } else {
+                None
+            }
+        }))
+    }
+
+    fn set_config_section_hash(&self, section: &str, hash: u64) -> Result<(), DbError> {
+        let key = format!("config_hash:{section}");
+        self.set_meta(&key, &hash.to_be_bytes())
+    }
+
     fn load_static_hosts(&self) -> Result<Vec<StaticHostEntry>, DbError>;
     fn upsert_static_host(&self, host: &StaticHostEntry) -> Result<(), DbError>;
     fn remove_static_host(&self, mac: MacAddr) -> Result<(), DbError>;

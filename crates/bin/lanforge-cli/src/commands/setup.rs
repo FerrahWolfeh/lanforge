@@ -325,15 +325,37 @@ async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
         .prompt()?;
     let subnet_mask = Ipv4Addr::from_str(mask_str.trim()).map_err(|_| eyre!("Invalid subnet mask"))?;
 
-    let pool_start_str = Text::new("Primary DHCPv4 Pool Start:")
-        .with_default("192.168.1.100")
+    let dhcp_enabled = Confirm::new("Enable DHCPv4 Server on LAN?")
+        .with_default(true)
         .prompt()?;
-    let dhcp_pool_start = Ipv4Addr::from_str(pool_start_str.trim()).map_err(|_| eyre!("Invalid pool start IP"))?;
 
-    let pool_end_str = Text::new("Primary DHCPv4 Pool End:")
-        .with_default("192.168.1.240")
+    let (dhcp_pool_start, dhcp_pool_end) = if dhcp_enabled {
+        let pool_start_str = Text::new("Primary DHCPv4 Pool Start:")
+            .with_default("192.168.1.100")
+            .prompt()?;
+        let start = Ipv4Addr::from_str(pool_start_str.trim()).map_err(|_| eyre!("Invalid pool start IP"))?;
+
+        let pool_end_str = Text::new("Primary DHCPv4 Pool End:")
+            .with_default("192.168.1.240")
+            .prompt()?;
+        let end = Ipv4Addr::from_str(pool_end_str.trim()).map_err(|_| eyre!("Invalid pool end IP"))?;
+        (start, end)
+    } else {
+        (lan_ip, lan_ip)
+    };
+
+    let dhcp_v6_enabled = Confirm::new("Enable DHCPv6 Server (RFC 8415 Stateful Scope)?")
+        .with_default(true)
         .prompt()?;
-    let dhcp_pool_end = Ipv4Addr::from_str(pool_end_str.trim()).map_err(|_| eyre!("Invalid pool end IP"))?;
+
+    let dhcp_v6_pool_range = if dhcp_v6_enabled {
+        let range = Text::new("DHCPv6 Address Range:")
+            .with_default("::100-::1fff")
+            .prompt()?;
+        Some(range.trim().to_string())
+    } else {
+        None
+    };
 
     let domain_name = Text::new("Local Search Domain:")
         .with_default("lan")
@@ -344,6 +366,34 @@ async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
         .with_default(true)
         .prompt()?;
 
+    let adblock_sources = if adblock_enabled {
+        let install_presets = Confirm::new("Install recommended community blocklists (StevenBlack + OISD Basic)?")
+            .with_default(true)
+            .prompt()?;
+        if install_presets {
+            vec![
+                lanforge_types::network::dns::AdblockUrlEntry {
+                    id: None,
+                    name: Some("StevenBlack Unified".to_string()),
+                    url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts".to_string(),
+                    kind: lanforge_types::network::dns::adblock::AdblockUrlKind::Blocklist,
+                    format: lanforge_types::network::dns::adblock::AdblockSourceFormat::Hosts,
+                },
+                lanforge_types::network::dns::AdblockUrlEntry {
+                    id: None,
+                    name: Some("OISD Basic".to_string()),
+                    url: "https://big.oisd.nl/domainswg".to_string(),
+                    kind: lanforge_types::network::dns::adblock::AdblockUrlKind::Blocklist,
+                    format: lanforge_types::network::dns::adblock::AdblockSourceFormat::Domains,
+                },
+            ]
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
     let ra_enabled = Confirm::new("Enable IPv6 Router Advertisements (SLAAC)?")
         .with_default(true)
         .prompt()?;
@@ -352,9 +402,10 @@ async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
         Some(SetupRaConfig {
             enabled: true,
             auto_gua: true,
+            auto_ula: true,
             ula_enabled: true,
-            ula_prefix: Some(status.detected_ula_prefix.clone()),
-            managed: true,
+            ula_prefix: None,
+            managed: dhcp_v6_enabled,
             other_config: true,
         })
     } else {
@@ -367,10 +418,11 @@ async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
     println!("   {:<22} {admin_username}", "Admin User:".bold());
     println!("   {:<22} {lan_iface}", "LAN Interface:".bold());
     println!("   {:<22} {lan_ip} ({subnet_mask})", "LAN IP & Subnet:".bold());
-    println!("   {:<22} {dhcp_pool_start} - {dhcp_pool_end}", "DHCPv4 Pool:".bold());
+    println!("   {:<22} {}", "DHCPv4 Pool:".bold(), if dhcp_enabled { format!("{dhcp_pool_start} - {dhcp_pool_end}") } else { "Disabled".bright_black().to_string() });
+    println!("   {:<22} {}", "DHCPv6 Scope:".bold(), if dhcp_v6_enabled { dhcp_v6_pool_range.as_deref().unwrap_or("::100-::1fff").to_string() } else { "Disabled".bright_black().to_string() });
     println!("   {:<22} {domain_name}", "Domain Name:".bold());
-    println!("   {:<22} {}", "Adblocker:".bold(), if adblock_enabled { "Enabled".green() } else { "Disabled".bright_black() });
-    println!("   {:<22} {}", "IPv6 SLAAC:".bold(), if ra_enabled { "Enabled".green() } else { "Disabled".bright_black() });
+    println!("   {:<22} {}", "Adblocker:".bold(), if adblock_enabled { format!("Enabled ({} blocklists)", adblock_sources.len()).green().to_string() } else { "Disabled".bright_black().to_string() });
+    println!("   {:<22} {}", "IPv6 SLAAC:".bold(), if ra_enabled { "Enabled (Auto-GUA + Auto-ULA)".green().to_string() } else { "Disabled".bright_black().to_string() });
 
     if !printer.yes {
         let confirmed = Confirm::new("Apply configuration and initialize router services?")
@@ -390,11 +442,14 @@ async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
         lan_ip,
         subnet_mask,
         domain_name: domain_name.clone(),
-        dhcp_enabled: true,
+        dhcp_enabled,
         dhcp_pool_start,
         dhcp_pool_end,
         dhcp_router: Some(lan_ip),
+        dhcp_v6_enabled,
+        dhcp_v6_pool_range,
         adblock_enabled,
+        adblock_sources,
         upstream_dns: Vec::new(),
         ra: ra_config,
         wan: wan_config,
@@ -464,7 +519,10 @@ async fn apply_setup(
             dhcp_pool_start: args.dhcp_start,
             dhcp_pool_end: args.dhcp_end,
             dhcp_router: Some(args.lan_ip),
+            dhcp_v6_enabled: true,
+            dhcp_v6_pool_range: Some("::100-::1fff".to_string()),
             adblock_enabled: args.adblock,
+            adblock_sources: Vec::new(),
             upstream_dns: Vec::new(),
             ra: Some(SetupRaConfig::default()),
             wan: wan_config,

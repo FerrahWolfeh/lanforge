@@ -14,15 +14,21 @@
 		lanIface,
 		lanIp,
 		subnetMask,
+		dhcpV4Enabled,
 		dhcpPoolStart,
 		dhcpPoolEnd,
 		dhcpRouter,
+		dhcpV6Enabled,
+		dhcpV6PoolRange,
 		raEnabled,
 		raAutoGua,
-		raUlaEnabled,
+		raAutoUla,
+		raCustomUla,
+		raUlaPrefix,
 		domainName,
 		upstreamDnsList,
 		adblockEnabled,
+		adblockPresetsCount,
 		firewallMode,
 		firewallFlowOffload,
 		submitting,
@@ -37,15 +43,21 @@
 		lanIface: string;
 		lanIp: string;
 		subnetMask: string;
+		dhcpV4Enabled: boolean;
 		dhcpPoolStart: string;
 		dhcpPoolEnd: string;
 		dhcpRouter: string;
+		dhcpV6Enabled: boolean;
+		dhcpV6PoolRange: string;
 		raEnabled: boolean;
 		raAutoGua: boolean;
-		raUlaEnabled: boolean;
+		raAutoUla: boolean;
+		raCustomUla: boolean;
+		raUlaPrefix: string;
 		domainName: string;
 		upstreamDnsList: string[];
 		adblockEnabled: boolean;
+		adblockPresetsCount: number;
 		firewallMode: FirewallMode;
 		firewallFlowOffload: boolean;
 		submitting: boolean;
@@ -86,18 +98,36 @@
 			<span class="font-medium text-foreground">{subnetMask}</span>
 		</div>
 		<div class="flex justify-between text-sm">
-			<span class="text-muted-foreground">DHCPv4 Scope:</span>
-			<span class="font-medium text-foreground">{dhcpPoolStart} – {dhcpPoolEnd}</span>
+			<span class="text-muted-foreground">DHCPv4 Server:</span>
+			<span class="font-medium text-foreground">
+				{#if dhcpV4Enabled}
+					Enabled ({dhcpPoolStart} – {dhcpPoolEnd})
+				{:else}
+					Disabled
+				{/if}
+			</span>
 		</div>
+		{#if dhcpV4Enabled}
+			<div class="flex justify-between text-sm">
+				<span class="text-muted-foreground">DHCPv4 Gateway:</span>
+				<span class="font-medium text-foreground">{dhcpRouter}</span>
+			</div>
+		{/if}
 		<div class="flex justify-between text-sm">
-			<span class="text-muted-foreground">DHCP Default Gateway:</span>
-			<span class="font-medium text-foreground">{dhcpRouter}</span>
+			<span class="text-muted-foreground">DHCPv6 Server:</span>
+			<span class="font-medium text-foreground">
+				{#if dhcpV6Enabled}
+					Enabled ({dhcpV6PoolRange || '::100-::1fff'})
+				{:else}
+					Disabled
+				{/if}
+			</span>
 		</div>
 		<div class="flex justify-between text-sm">
 			<span class="text-muted-foreground">IPv6 RA SLAAC:</span>
 			<span class="font-medium text-foreground">
 				{#if raEnabled}
-					Enabled ({raAutoGua ? 'Auto-GUA' : ''}{raAutoGua && raUlaEnabled ? ' + ' : ''}{raUlaEnabled ? 'ULA' : ''})
+					Enabled ({[raAutoGua ? 'Auto-GUA' : null, raAutoUla ? 'Auto-ULA' : null, raCustomUla && raUlaPrefix ? `Custom ULA (${raUlaPrefix})` : null].filter(Boolean).join(' + ') || 'Manual'})
 				{:else}
 					Disabled
 				{/if}
@@ -113,7 +143,13 @@
 		</div>
 		<div class="flex justify-between text-sm">
 			<span class="text-muted-foreground">DNS Adblocker:</span>
-			<span class="font-medium text-foreground">{adblockEnabled ? 'Enabled' : 'Disabled'}</span>
+			<span class="font-medium text-foreground">
+				{#if adblockEnabled}
+					Enabled ({adblockPresetsCount} filter list{adblockPresetsCount === 1 ? '' : 's'})
+				{:else}
+					Disabled
+				{/if}
+			</span>
 		</div>
 		<div class="flex justify-between text-sm">
 			<span class="text-muted-foreground">Firewall Mode:</span>

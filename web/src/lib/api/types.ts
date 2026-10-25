@@ -1108,6 +1108,7 @@ export interface SetupPppoeNftables {
 export interface SetupRaConfig {
 	enabled: boolean;
 	auto_gua: boolean;
+	auto_ula?: boolean;
 	ula_enabled: boolean;
 	ula_prefix?: string | null;
 	managed: boolean;
@@ -1140,7 +1141,10 @@ export interface SetupPayload {
 	dhcp_pool_start: string;
 	dhcp_pool_end: string;
 	dhcp_router?: string | null;
+	dhcp_v6_enabled?: boolean;
+	dhcp_v6_pool_range?: string | null;
 	adblock_enabled: boolean;
+	adblock_sources?: DnsAdblockUrlEntry[];
 	upstream_dns?: string[];
 	ra?: SetupRaConfig | null;
 	wan?: SetupWanConfig | null;

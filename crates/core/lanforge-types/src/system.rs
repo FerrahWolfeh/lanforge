@@ -345,6 +345,8 @@ pub struct SetupRaConfig {
     #[serde(default = "default_true")]
     pub auto_gua: bool,
     #[serde(default = "default_true")]
+    pub auto_ula: bool,
+    #[serde(default = "default_true")]
     pub ula_enabled: bool,
     #[serde(default)]
     pub ula_prefix: Option<String>,
@@ -359,6 +361,7 @@ impl Default for SetupRaConfig {
         Self {
             enabled: true,
             auto_gua: true,
+            auto_ula: true,
             ula_enabled: true,
             ula_prefix: None,
             managed: true,
@@ -430,7 +433,13 @@ pub struct SetupPayload {
     pub dhcp_pool_end: Ipv4Addr,
     #[serde(default)]
     pub dhcp_router: Option<Ipv4Addr>,
+    #[serde(default = "default_true")]
+    pub dhcp_v6_enabled: bool,
+    #[serde(default)]
+    pub dhcp_v6_pool_range: Option<String>,
     pub adblock_enabled: bool,
+    #[serde(default)]
+    pub adblock_sources: Vec<crate::network::dns::AdblockUrlEntry>,
     #[serde(default)]
     pub upstream_dns: Vec<String>,
     #[serde(default)]

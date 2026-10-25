@@ -181,7 +181,8 @@ impl AsyncService for Dhcpv4Service {
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         loop {
             let options = ctx.get_dhcp_options();
-            if !self.cfg.enabled || !options.v4.enabled {
+            if !options.v4.enabled {
+                self.cfg.enabled = false;
                 info!("DHCPv4: Service disabled in configuration — server idle");
                 ctx.set_service_state("dhcpv4", ServiceState::Inactive);
                 match self.wait_for_config_change_or_shutdown().await? {
@@ -189,6 +190,7 @@ impl AsyncService for Dhcpv4Service {
                     RunResult::ConfigChanged => continue,
                 }
             }
+            self.cfg.enabled = true;
 
             let pools = ctx.get_dhcp_v4_pools();
 

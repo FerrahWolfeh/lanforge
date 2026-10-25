@@ -6,17 +6,19 @@ use lanforge_api::api::{
 use lanforge_crypto::hash_password;
 use lanforge_db_core::Stores;
 use lanforge_types::auth::UserRole;
+use lanforge_types::device::Ipv6AddrOrSuffix;
 use lanforge_types::events::{LanforgeEvent, SystemEvent};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
-use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockSourceFormat, AdblockUrlKind};
+use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::firewall::{FirewallConfig, ZoneForwarding};
 use lanforge_types::network::pppoe::PppoeConfig;
 use pnet::datalink::interfaces;
 use pnet::ipnetwork::IpNetwork;
 use rand::RngExt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{error, info};
 
@@ -197,58 +199,98 @@ impl ClientContext {
             }
         }
 
-        // 3. Configure DHCPv4 Pool and Options
+        // 3. Configure DHCPv4 & DHCPv6 Pools and Options
         let router_ip = payload.dhcp_router.unwrap_or(payload.lan_ip);
         let subnet_mask = payload.subnet_mask;
-        if payload.dhcp_enabled {
-            let pool = Dhcpv4Pool {
-                name: Some("Primary LAN Scope".to_string()),
-                range_start: payload.dhcp_pool_start,
-                range_end: payload.dhcp_pool_end,
-                lease_time: Some(86400),
-                router: Some(router_ip),
-                subnet_mask: Some(subnet_mask),
-                dns_servers: vec![payload.lan_ip],
-                ..Default::default()
-            };
-            self.ctx.update_dhcp_v4_pools(vec![pool]);
+        let mut opts = self.ctx.with_config(|cfg| cfg.dhcp_options.clone());
 
-            let mut opts = self.ctx.with_config(|cfg| cfg.dhcp_options.clone());
-            opts.v4.enabled = true;
-            opts.v4.router = Some(router_ip);
-            opts.v4.subnet_mask = Some(subnet_mask);
-            opts.v4.dns_servers = vec![payload.lan_ip];
-            opts.v4.domain_name = Some(payload.domain_name.clone());
-            self.ctx.update_dhcp_options(opts);
-        }
+        let v4_pool = Dhcpv4Pool {
+            name: Some("Primary LAN Scope".to_string()),
+            range_start: payload.dhcp_pool_start,
+            range_end: payload.dhcp_pool_end,
+            lease_time: Some(86400),
+            router: Some(router_ip),
+            subnet_mask: Some(subnet_mask),
+            dns_servers: vec![payload.lan_ip],
+            ..Default::default()
+        };
+        self.ctx.update_dhcp_v4_pools(vec![v4_pool.clone()]);
+        opts.v4.enabled = payload.dhcp_enabled;
+        opts.v4.router = Some(router_ip);
+        opts.v4.subnet_mask = Some(subnet_mask);
+        opts.v4.dns_servers = vec![payload.lan_ip];
+        opts.v4.domain_name = Some(payload.domain_name.clone());
+
+        let v4_pool_clone = v4_pool.clone();
+        let _ = storage
+            .call(move |s: &Stores| s.db().save_dhcp_v4_pools(&[v4_pool_clone]))
+            .await;
+
+        let v6_range_str = payload
+            .dhcp_v6_pool_range
+            .as_deref()
+            .unwrap_or("::100-::1fff");
+        let (v6_start, v6_end) = parse_v6_pool_from_range(v6_range_str);
+        let v6_pool = lanforge_types::network::dhcp::Dhcpv6Pool {
+            name: Some("Primary LAN IPv6 Scope".to_string()),
+            range_start: v6_start,
+            range_end: v6_end,
+            lease_time: Some(86400),
+            dns_servers: Vec::new(),
+            search_domains: vec![payload.domain_name.clone()],
+            ..Default::default()
+        };
+        self.ctx.update_dhcp_v6_pools(vec![v6_pool.clone()]);
+        opts.v6.enabled = payload.dhcp_v6_enabled;
+        opts.v6.search_domains = vec![payload.domain_name.clone()];
+
+        self.ctx.update_dhcp_options(opts.clone());
+
+        let v6_pool_clone = v6_pool.clone();
+        let _ = storage
+            .call(move |s: &Stores| s.db().save_dhcp_v6_pools(&[v6_pool_clone]))
+            .await;
+        let opts_clone = opts.clone();
+        let _ = storage
+            .call(move |s: &Stores| s.db().save_dhcp_options(&opts_clone))
+            .await;
 
         // 4. Configure IPv6 Router Advertisement (RA)
-        let status = self.ctx.get_status();
-        let target_ula = status
-            .as_ref()
-            .and_then(|s| s.ula_prefix.map(|p| p.to_string()))
-            .filter(|p| !p.starts_with("fd97:f00d:cafe:3731"))
-            .unwrap_or_else(generate_rfc4193_ula_str);
-
-        if let Some(ra) = payload.ra.as_ref().filter(|ra| ra.enabled) {
-            let mut prefixes = Vec::new();
-            if ra.ula_enabled {
-                let raw_ula = ra.ula_prefix.as_deref().unwrap_or(&target_ula);
-                let ula = raw_ula.split('/').next().unwrap_or(raw_ula);
-                prefixes.push(lanforge_types::network::ra::RAPrefix::ula(ula));
+        let mut prefixes = Vec::new();
+        if let Some(ref ra) = payload.ra {
+            if ra.enabled {
+                if ra.auto_ula {
+                    prefixes.push(lanforge_types::network::ra::RAPrefix::ula_dynamic());
+                } else if ra.ula_enabled && let Some(ref ula) = ra.ula_prefix {
+                    let raw_ula = ula.split('/').next().unwrap_or(ula);
+                    prefixes.push(lanforge_types::network::ra::RAPrefix::ula(raw_ula));
+                }
+                if ra.auto_gua {
+                    prefixes.push(lanforge_types::network::ra::RAPrefix::gua_dynamic());
+                }
             }
-            if ra.auto_gua {
-                prefixes.push(lanforge_types::network::ra::RAPrefix::gua_dynamic());
-            }
-
-            let dnssl = vec![lanforge_types::network::ra::DnsslConfig {
-                domains: vec![payload.domain_name.clone()],
-                lifetime: Some(600),
-            }];
-            self.ctx.update_ra_config(prefixes, Vec::new(), dnssl);
+        } else {
+            prefixes.push(lanforge_types::network::ra::RAPrefix::ula_dynamic());
+            prefixes.push(lanforge_types::network::ra::RAPrefix::gua_dynamic());
         }
 
+        let dnssl = vec![lanforge_types::network::ra::DnsslConfig {
+            domains: vec![payload.domain_name.clone()],
+            lifetime: Some(600),
+        }];
+        self.ctx.update_ra_config(prefixes.clone(), Vec::new(), dnssl.clone());
+
+        let p_clone = prefixes.clone();
+        let _ = storage
+            .call(move |s: &Stores| s.db().save_ra_prefixes(&p_clone))
+            .await;
+        let d_clone = dnssl.clone();
+        let _ = storage
+            .call(move |s: &Stores| s.db().save_ra_dnssl(&d_clone))
+            .await;
+
         // 5. Configure Upstream DNS & Adblock
+        let mut upstreams = Vec::new();
         if !payload.upstream_dns.is_empty() {
             let _ = storage
                 .call(|s: &Stores| s.db().clear_dns_upstreams())
@@ -264,6 +306,12 @@ impl ClientContext {
                         None
                     };
                     if let Some(addr) = addr {
+                        upstreams.push(UpstreamTarget {
+                            addr,
+                            protocol: UpstreamProtocol::Udp,
+                            hostname: None,
+                            domain: None,
+                        });
                         let _ = storage
                             .call(move |s: &Stores| {
                                 s.db().add_dns_upstream(addr, UpstreamProtocol::Udp, None)
@@ -273,10 +321,51 @@ impl ClientContext {
                 }
             }
         }
-        let adb_val = if payload.adblock_enabled { "true" } else { "false" };
+        self.ctx.update_dns_upstreams(upstreams);
+
+        let mut adblock_sources = if payload.adblock_sources.is_empty() {
+            vec![
+                lanforge_types::network::dns::AdblockUrlEntry {
+                    id: None,
+                    name: Some("StevenBlack Unified".to_string()),
+                    url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts".to_string(),
+                    kind: AdblockUrlKind::Blocklist,
+                    format: AdblockSourceFormat::Hosts,
+                },
+                lanforge_types::network::dns::AdblockUrlEntry {
+                    id: None,
+                    name: Some("OISD Basic".to_string()),
+                    url: "https://big.oisd.nl/domainswg".to_string(),
+                    kind: AdblockUrlKind::Blocklist,
+                    format: AdblockSourceFormat::Domains,
+                },
+            ]
+        } else {
+            payload.adblock_sources.clone()
+        };
+        for entry in &mut adblock_sources {
+            if entry.id.is_none() {
+                entry.id = Some(entry.source_id());
+            }
+        }
+
+        let adb_cfg = AdblockDbConfig {
+            enabled: payload.adblock_enabled,
+            ..Default::default()
+        };
+        self.ctx.update_dns_adblock(adb_cfg.clone());
+        self.ctx.update_dns_adblock_urls(adblock_sources.clone());
+        let _ = storage
+            .call(move |s: &Stores| s.db().save_adblock_config(&adb_cfg))
+            .await;
+        let sources_clone = adblock_sources.clone();
         let _ = storage
             .call(move |s: &Stores| {
-                s.db().set_adblock_config_value("enabled", adb_val)
+                let _ = s.db().clear_adblock_urls();
+                for src in &sources_clone {
+                    let _ = s.db().add_adblock_url(&src.url, src.kind, src.format);
+                }
+                Ok::<(), lanforge_db_core::DbError>(())
             })
             .await;
 
@@ -312,7 +401,10 @@ impl ClientContext {
                         pppoe_cfg.nftables.bypass_vowifi = nft.bypass_vowifi;
                         pppoe_cfg.nftables.lan_ifaces = vec![payload.lan_iface.clone()];
                     }
-                    self.ctx.update_pppoe_config(pppoe_cfg);
+                    self.ctx.update_pppoe_config(pppoe_cfg.clone());
+                    let _ = storage
+                        .call(move |s: &Stores| s.db().save_pppoe_config(&pppoe_cfg))
+                        .await;
                 }
                 SetupWanConfig::SystemGateway { gateway_ip } => {
                     let mut opts = self.ctx.with_config(|cfg| cfg.dhcp_options.clone());
@@ -378,26 +470,48 @@ impl ClientContext {
                 to: "external".into(),
             });
         }
-        self.ctx.update_firewall_config(initial_firewall);
+        self.ctx.update_firewall_config(initial_firewall.clone());
+        let _ = storage
+            .call(move |s: &Stores| s.db().save_firewall_config(&initial_firewall))
+            .await;
 
-        // 8. Write complete declarative TOML file
-        let toml_content = generate_setup_toml(&payload, router_ip, subnet_mask, &target_ula);
-        let toml_paths = ["/etc/lanforge/lanforge.toml", "lanforge.toml"];
-        for p in toml_paths {
-            let path = Path::new(p);
-            if let Some(parent) = path
-                .parent()
-                .filter(|p| !p.as_os_str().is_empty() && !p.exists())
-            {
-                let _ = std::fs::create_dir_all(parent);
+        // 8. Write complete declarative TOML file atomically to authoritative path
+        let target_path = self.resolve_config_path().unwrap_or_else(|| {
+            let etc = PathBuf::from("/etc/lanforge/lanforge.toml");
+            if etc.parent().is_some_and(|p| p.exists()) || std::fs::create_dir_all("/etc/lanforge").is_ok() {
+                etc
+            } else {
+                PathBuf::from("lanforge.toml")
             }
-            if let Ok(()) = std::fs::write(path, &toml_content) {
-                info!("Setup: Successfully generated and wrote configuration to {p}");
-                break;
+        });
+
+        let (cfg_file, toml_content) = generate_setup_toml(
+            &payload,
+            router_ip,
+            subnet_mask,
+            v6_range_str,
+            &adblock_sources,
+        );
+
+        if let Err(e) = lanforge_api::config_file::write_toml_atomically(&target_path, &toml_content) {
+            error!("Setup: Failed to write configuration to {}: {e}", target_path.display());
+        } else {
+            info!("Setup: Successfully generated and wrote configuration to {}", target_path.display());
+            self.ctx.set_config_path(&target_path);
+            self.ctx.set_config_writable(true);
+        }
+
+        let hashes = lanforge_api::config_file::section_hashes(&cfg_file);
+        for sec in lanforge_api::config_file::Section::ALL {
+            if let Some(&hash) = hashes.get(&sec) {
+                let sec_name = sec.name().to_string();
+                let _ = storage
+                    .call(move |s: &Stores| s.db().set_config_section_hash(&sec_name, hash))
+                    .await;
             }
         }
 
-        // 8. Permanently mark system as provisioned
+        // 9. Permanently mark system as provisioned
         if let Err(e) = storage
             .call(|s: &Stores| s.db().set_provisioned(true))
             .await
@@ -408,7 +522,7 @@ impl ClientContext {
         // Flush all persisted changes and live config to disk immediately
         let _ = self.flush_now().await;
 
-        // 9. Spawn delayed ReloadConfig event to allow RPC response to flush cleanly
+        // 10. Spawn delayed ReloadConfig event to allow RPC response to flush cleanly
         let bus = self.ctx.bus().clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
@@ -424,16 +538,25 @@ impl ClientContext {
     }
 }
 
+fn parse_v6_pool_from_range(range_str: &str) -> (Option<Ipv6AddrOrSuffix>, Option<Ipv6AddrOrSuffix>) {
+    if let Some((start, end)) = range_str.split_once('-') {
+        let s = start.trim().parse().ok();
+        let e = end.trim().parse().ok();
+        (s, e)
+    } else {
+        (None, None)
+    }
+}
+
 fn generate_setup_toml(
     payload: &SetupPayload,
     router_ip: Ipv4Addr,
     subnet_mask: Ipv4Addr,
-    target_ula: &str,
-) -> String {
+    v6_range_str: &str,
+    adblock_sources: &[lanforge_types::network::dns::AdblockUrlEntry],
+) -> (lanforge_api::config_file::ConfigFile, String) {
     let mut cfg = lanforge_api::config_file::ConfigFile::default();
     cfg.system.iface = payload.lan_iface.clone();
-    let cleaned_ula = target_ula.trim_end_matches("/64").trim_end_matches("::");
-    cfg.system.ula_prefix = Some(format!("{cleaned_ula}::/64"));
     cfg.system.search_domains = vec![payload.domain_name.clone()];
     cfg.system.debounce_secs = Some(2);
     cfg.system.auto_provision = true;
@@ -455,36 +578,52 @@ fn generate_setup_toml(
     );
 
     // DHCPv6
-    cfg.dhcp.v6.enabled = true;
+    cfg.dhcp.v6.enabled = payload.dhcp_v6_enabled;
     cfg.dhcp.v6.search_domains = vec![payload.domain_name.clone()];
-    cfg.dhcp.v6.pools.insert(
-        "lan".to_string(),
-        lanforge_api::config_file::Dhcpv6PoolFile {
-            range: "::100-::1fff".to_string(),
-            lease: Some(lanforge_api::config_file::HumanDuration(86400)),
-            dns: Vec::new(),
-        },
-    );
+    if payload.dhcp_v6_enabled {
+        cfg.dhcp.v6.pools.insert(
+            "lan".to_string(),
+            lanforge_api::config_file::Dhcpv6PoolFile {
+                range: v6_range_str.to_string(),
+                lease: Some(lanforge_api::config_file::HumanDuration(86400)),
+                dns: Vec::new(),
+            },
+        );
+    }
 
     // RA
-    if let Some(ref ra) = payload.ra {
-        cfg.ra.enabled = ra.enabled;
-        cfg.ra.managed = ra.managed;
-        cfg.ra.other_config = ra.other_config;
-        cfg.ra.max_interval = Some(lanforge_api::config_file::HumanDuration(100));
-        cfg.ra.lifetime = Some(lanforge_api::config_file::HumanDuration(300));
-        cfg.ra.mtu = Some(1492);
+    let (ra_enabled, managed, other_config) = if let Some(ref ra) = payload.ra {
+        (ra.enabled, ra.managed, ra.other_config)
+    } else {
+        (true, payload.dhcp_v6_enabled, true)
+    };
 
-        if ra.ula_enabled {
-            let ula = ra
-                .ula_prefix
-                .clone()
-                .unwrap_or_else(|| target_ula.to_string());
+    cfg.ra.enabled = ra_enabled;
+    cfg.ra.managed = managed;
+    cfg.ra.other_config = other_config;
+    cfg.ra.max_interval = Some(lanforge_api::config_file::HumanDuration(100));
+    cfg.ra.lifetime = Some(lanforge_api::config_file::HumanDuration(300));
+    cfg.ra.mtu = Some(1492);
+
+    if let Some(ref ra) = payload.ra {
+        if ra.auto_ula {
+            cfg.ra.prefixes.insert(
+                "auto_ula".to_string(),
+                lanforge_api::config_file::RaPrefixFile {
+                    source: Some("auto_ula".to_string()),
+                    prefix: None,
+                    on_link: true,
+                    autonomous: true,
+                    valid_lifetime: None,
+                    preferred_lifetime: None,
+                },
+            );
+        } else if ra.ula_enabled && let Some(ref ula) = ra.ula_prefix {
             cfg.ra.prefixes.insert(
                 "ula".to_string(),
                 lanforge_api::config_file::RaPrefixFile {
                     source: Some("ula".to_string()),
-                    prefix: Some(ula),
+                    prefix: Some(ula.clone()),
                     on_link: true,
                     autonomous: true,
                     valid_lifetime: None,
@@ -506,14 +645,64 @@ fn generate_setup_toml(
                 },
             );
         }
-
-        cfg.ra.dnssl.insert(
-            "lan".to_string(),
-            lanforge_api::config_file::RaDnsslFile {
-                domains: vec![payload.domain_name.clone()],
-                lifetime: Some(lanforge_api::config_file::HumanDuration(600)),
+    } else {
+        cfg.ra.prefixes.insert(
+            "auto_ula".to_string(),
+            lanforge_api::config_file::RaPrefixFile {
+                source: Some("auto_ula".to_string()),
+                prefix: None,
+                on_link: true,
+                autonomous: true,
+                valid_lifetime: None,
+                preferred_lifetime: None,
             },
         );
+        cfg.ra.prefixes.insert(
+            "auto_gua".to_string(),
+            lanforge_api::config_file::RaPrefixFile {
+                source: Some("auto_gua".to_string()),
+                prefix: None,
+                on_link: true,
+                autonomous: true,
+                valid_lifetime: None,
+                preferred_lifetime: None,
+            },
+        );
+    }
+
+    cfg.ra.dnssl.insert(
+        "lan".to_string(),
+        lanforge_api::config_file::RaDnsslFile {
+            domains: vec![payload.domain_name.clone()],
+            lifetime: Some(lanforge_api::config_file::HumanDuration(600)),
+        },
+    );
+
+    // DNS Upstreams
+    if !payload.upstream_dns.is_empty() {
+        cfg.dns.upstreams.insert(
+            "default".to_string(),
+            lanforge_api::config_file::DnsUpstreamFile {
+                addresses: payload.upstream_dns.clone(),
+                domain: None,
+            },
+        );
+    }
+
+    // DNS Adblock
+    cfg.adblock.enabled = payload.adblock_enabled;
+    if payload.adblock_enabled {
+        for (idx, src) in adblock_sources.iter().enumerate() {
+            cfg.adblock.sources.insert(
+                format!("preset_{}", idx + 1),
+                lanforge_api::config_file::AdblockSourceFile {
+                    url: src.url.clone(),
+                    format: src.format.as_str().to_string(),
+                    kind: src.kind.to_string(),
+                    enabled: true,
+                },
+            );
+        }
     }
 
     // PPPoE
@@ -542,7 +731,8 @@ fn generate_setup_toml(
         }
     }
 
-    cfg.render_full().unwrap_or_default()
+    let rendered = cfg.render_full().unwrap_or_default();
+    (cfg, rendered)
 }
 
 fn detect_system_gateway() -> Option<Ipv4Addr> {

@@ -24,7 +24,11 @@ use lanforge_dns::server::transport::doq::DoqService;
 #[cfg(all(feature = "dns", feature = "dns-dot"))]
 use lanforge_dns::server::transport::dot::DotService;
 #[cfg(feature = "dns")]
-use lanforge_db::LogStore;
+use lanforge_db::{AdblockStore, DnsUpstreamStore, LogStore};
+#[cfg(feature = "dhcp")]
+use lanforge_db::DhcpConfigStore;
+#[cfg(feature = "ra")]
+use lanforge_db::RaConfigStore;
 #[cfg(feature = "http")]
 use lanforge_http::HttpService;
 #[cfg(feature = "pppoe")]
@@ -141,6 +145,71 @@ impl Daemon {
             new_cfg.firewall_enabled = firewall_db.enabled;
             new_cfg.firewall_toml = firewall_db.clone();
             self.ctx.update_firewall_config(firewall_db);
+        }
+        #[cfg(feature = "dhcp")]
+        {
+            if let Ok(Some(opts)) = self.bootstrap.db.load_dhcp_options() {
+                new_cfg.dhcpv4_enabled = opts.v4.enabled;
+                new_cfg.dhcpv6_enabled = opts.v6.enabled;
+                self.ctx.update_dhcp_options(opts);
+            }
+            if let Ok(v4_pools) = self.bootstrap.db.load_dhcp_v4_pools()
+                && !v4_pools.is_empty()
+            {
+                new_cfg.dhcpv4_toml.pools.clone_from(&v4_pools);
+                self.ctx.update_dhcp_v4_pools(v4_pools);
+            }
+            if let Ok(v6_pools) = self.bootstrap.db.load_dhcp_v6_pools()
+                && !v6_pools.is_empty()
+            {
+                new_cfg.dhcpv6_toml.pools.clone_from(&v6_pools);
+                self.ctx.update_dhcp_v6_pools(v6_pools);
+            }
+        }
+        #[cfg(feature = "ra")]
+        {
+            let prefixes = self.bootstrap.db.load_ra_prefixes().unwrap_or_default();
+            let dnssl = self.bootstrap.db.load_ra_dnssl().unwrap_or_default();
+            let rdnss = self.bootstrap.db.load_ra_rdnss().unwrap_or_default();
+            if !prefixes.is_empty() || !dnssl.is_empty() {
+                new_cfg.ra_toml.prefixes.clone_from(&prefixes);
+                new_cfg.ra_toml.dnssl.clone_from(&dnssl);
+                new_cfg.ra_toml.rdnss.clone_from(&rdnss);
+                self.ctx.update_ra_config(prefixes, rdnss, dnssl);
+            }
+        }
+        #[cfg(feature = "dns")]
+        {
+            if let Ok(upstreams) = self.bootstrap.db.load_dns_upstreams()
+                && !upstreams.is_empty()
+            {
+                let targets = upstreams
+                    .into_iter()
+                    .map(|row| lanforge_types::network::dns::upstream::UpstreamTarget {
+                        addr: row.addr,
+                        protocol: row.protocol,
+                        hostname: None,
+                        domain: row.domain,
+                    })
+                    .collect();
+                self.ctx.update_dns_upstreams(targets);
+            }
+            if let Ok(adb_cfg) = self.bootstrap.db.load_adblock_config() {
+                self.ctx.update_dns_adblock(adb_cfg);
+            }
+            if let Ok(sources) = self.bootstrap.db.load_adblock_urls() {
+                let urls = sources
+                    .into_iter()
+                    .map(|(id, url, kind, format)| lanforge_types::network::dns::AdblockUrlEntry {
+                        id: Some(id),
+                        name: None,
+                        url,
+                        kind,
+                        format,
+                    })
+                    .collect();
+                self.ctx.update_dns_adblock_urls(urls);
+            }
         }
     }
 

@@ -16,7 +16,7 @@
 
 	import AdminStep from "./components/AdminStep.svelte";
 	import UplinkStep from "./components/UplinkStep.svelte";
-	import LanStep from "./components/LanStep.svelte";
+	import LanStep, { ADBLOCK_PRESET_OPTIONS } from "./components/LanStep.svelte";
 	import FirewallStep from "./components/FirewallStep.svelte";
 	import ReviewStep from "./components/ReviewStep.svelte";
 
@@ -49,13 +49,17 @@
 	let dhcp_pool_start = $state("192.168.1.100");
 	let dhcp_pool_end = $state("192.168.1.240");
 	let dhcp_router = $state("192.168.1.1");
+	let dhcp_v6_enabled = $state(true);
+	let dhcp_v6_pool_range = $state("::100-::1fff");
 	let domain_name = $state("lan");
 	let adblock_enabled = $state(true);
+	let selected_adblock_presets = $state<string[]>(["stevenblack", "oisd"]);
 
 	// IPv6 Router Advertisement (RA)
 	let ra_enabled = $state(true);
 	let ra_auto_gua = $state(true);
-	let ra_ula_enabled = $state(true);
+	let ra_auto_ula = $state(true);
+	let ra_custom_ula = $state(false);
 	let ra_ula_prefix = $state("");
 
 	// DNS Upstream
@@ -240,11 +244,23 @@
 		const raConfig: SetupRaConfig = {
 			enabled: ra_enabled,
 			auto_gua: ra_auto_gua,
-			ula_enabled: ra_ula_enabled,
-			ula_prefix: ra_ula_prefix.trim() || null,
+			auto_ula: ra_auto_ula,
+			ula_enabled: ra_auto_ula || (ra_custom_ula && !!ra_ula_prefix.trim()),
+			ula_prefix: ra_custom_ula && ra_ula_prefix.trim() ? ra_ula_prefix.trim() : null,
 			managed: true,
 			other_config: true
 		};
+
+		const adblockSources = adblock_enabled
+			? ADBLOCK_PRESET_OPTIONS
+				.filter((p) => selected_adblock_presets.includes(p.id))
+				.map((p) => ({
+					name: p.title,
+					url: p.url,
+					kind: "blocklist" as const,
+					format: p.format,
+				}))
+			: [];
 
 		const payload: SetupPayload = {
 			admin_username,
@@ -257,7 +273,10 @@
 			dhcp_pool_start,
 			dhcp_pool_end,
 			dhcp_router: dhcp_router.trim() || lan_ip,
+			dhcp_v6_enabled,
+			dhcp_v6_pool_range: dhcp_v6_enabled ? dhcp_v6_pool_range.trim() || "::100-::1fff" : null,
 			adblock_enabled,
+			adblock_sources: adblockSources,
 			upstream_dns: getUpstreamDnsList(),
 			ra: raConfig,
 			wan: wanConfig,
@@ -392,17 +411,22 @@
 						bind:lanIface={lan_iface}
 						bind:lanIp={lan_ip}
 						bind:subnetMask={subnet_mask}
+						bind:domainName={domain_name}
+						bind:dhcpV4Enabled={dhcp_enabled}
 						bind:dhcpPoolStart={dhcp_pool_start}
 						bind:dhcpPoolEnd={dhcp_pool_end}
 						bind:dhcpRouter={dhcp_router}
-						bind:domainName={domain_name}
+						bind:dhcpV6Enabled={dhcp_v6_enabled}
+						bind:dhcpV6PoolRange={dhcp_v6_pool_range}
 						bind:raEnabled={ra_enabled}
 						bind:raAutoGua={ra_auto_gua}
-						bind:raUlaEnabled={ra_ula_enabled}
+						bind:raAutoUla={ra_auto_ula}
+						bind:raCustomUla={ra_custom_ula}
 						bind:raUlaPrefix={ra_ula_prefix}
 						bind:dnsPreset={dns_preset}
 						bind:customDnsServers={custom_dns_servers}
 						bind:adblockEnabled={adblock_enabled}
+						bind:selectedAdblockPresets={selected_adblock_presets}
 						interfaces={setupStatus?.interfaces ?? []}
 						{onLanIfaceChange}
 						onback={() => (step = 2)}
@@ -425,15 +449,21 @@
 						lanIface={lan_iface}
 						lanIp={lan_ip}
 						subnetMask={subnet_mask}
+						dhcpV4Enabled={dhcp_enabled}
 						dhcpPoolStart={dhcp_pool_start}
 						dhcpPoolEnd={dhcp_pool_end}
 						dhcpRouter={dhcp_router}
+						dhcpV6Enabled={dhcp_v6_enabled}
+						dhcpV6PoolRange={dhcp_v6_pool_range}
 						raEnabled={ra_enabled}
 						raAutoGua={ra_auto_gua}
-						raUlaEnabled={ra_ula_enabled}
+						raAutoUla={ra_auto_ula}
+						raCustomUla={ra_custom_ula}
+						raUlaPrefix={ra_ula_prefix}
 						domainName={domain_name}
 						upstreamDnsList={getUpstreamDnsList()}
 						adblockEnabled={adblock_enabled}
+						adblockPresetsCount={selected_adblock_presets.length}
 						firewallMode={firewall_mode}
 						firewallFlowOffload={firewall_flow_offload}
 						{submitting}
