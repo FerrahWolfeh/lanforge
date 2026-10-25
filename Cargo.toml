@@ -14,6 +14,17 @@ license = "GPL-3.0-or-later"
 edition = "2024"
 authors = ["Ferrah Aiko <ferrahwolfeh@proton.me>"]
 
+[workspace.lints.rust]
+unused_crate_dependencies = "warn"
+
+[workspace.lints.clippy]
+# Google Rust Style Guide alignment
+wildcard_imports = "warn"
+unwrap_used = "warn"
+clone_on_ref_ptr = "warn"
+needless_borrow = "warn"
+doc_markdown = "warn"
+
 [workspace.dependencies]
 # Actual lanforge stuff
 lanforge-core = { path = "crates/core/lanforge-core" }
