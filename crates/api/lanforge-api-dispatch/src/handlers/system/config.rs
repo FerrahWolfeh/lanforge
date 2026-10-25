@@ -260,11 +260,7 @@ impl ClientContext {
                 }
             }
 
-            // Clear Dynamic Configs by overwriting with empty lists
-            self.ctx.update_dhcp_v4_pools(Vec::new());
-            self.ctx.update_dhcp_v6_pools(Vec::new());
-            self.ctx
-                .update_ra_config(Vec::new(), Vec::new(), Vec::new());
+            // Clear Dynamic Configs (will be flushed in final atomic patch)
             let _ = storage
                 .call(|s: &Stores| s.db().clear_dns_reverse_resolvers())
                 .await;
@@ -361,20 +357,18 @@ impl ClientContext {
             blocking_ip_v6,
             refresh_time,
         };
+        let adblock_to_apply = AdblockDbConfig {
+            enabled,
+            blocking_mode,
+            blocking_ip_v4,
+            blocking_ip_v6,
+            refresh_time,
+        };
         let (adblock_cfg_success, adblock_cfg_err) = match storage
             .call(move |s: &Stores| s.db().save_adblock_config(&cfg_to_save))
             .await
         {
-            Ok(()) => {
-                self.ctx.update_dns_adblock(AdblockDbConfig {
-                    enabled,
-                    blocking_mode,
-                    blocking_ip_v4,
-                    blocking_ip_v6,
-                    refresh_time,
-                });
-                (true, None)
-            }
+            Ok(()) => (true, None),
             Err(e) => (false, Some(format!("Failed to save adblock config: {e}"))),
         };
         if !adblock_cfg_success {
@@ -506,8 +500,13 @@ impl ClientContext {
         }
 
         // 8. Import Dynamic Configs
+        let mut patch = lanforge_core::context::ConfigPatch::new();
+        if adblock_cfg_success {
+            patch = patch.with_dns_adblock(adblock_to_apply);
+        }
+
         if let Some(ref pools) = dhcp_v4_pools {
-            self.ctx.update_dhcp_v4_pools(pools.clone());
+            patch = patch.with_dhcp_v4_pools(pools.clone());
             dhcp_v4_dirty = false;
             results.push(ImportResult {
                 section: ImportSection::DhcpV4Pools,
@@ -517,7 +516,7 @@ impl ClientContext {
             });
         }
         if let Some(ref pools) = dhcp_v6_pools {
-            self.ctx.update_dhcp_v6_pools(pools.clone());
+            patch = patch.with_dhcp_v6_pools(pools.clone());
             dhcp_v6_dirty = false;
             results.push(ImportResult {
                 section: ImportSection::DhcpV6Pools,
@@ -532,8 +531,10 @@ impl ClientContext {
                 .unwrap_or_else(|| self.ctx.get_ra_prefixes());
             let rdnss = ra_rdnss.clone().unwrap_or_else(|| self.ctx.get_ra_rdnss());
             let dnssl = ra_dnssl.clone().unwrap_or_else(|| self.ctx.get_ra_dnssl());
-            self.ctx
-                .update_ra_config(prefixes.clone(), rdnss.clone(), dnssl.clone());
+            patch = patch
+                .with_ra_prefixes(prefixes)
+                .with_ra_rdnss(rdnss)
+                .with_ra_dnssl(dnssl);
             ra_dirty = false;
 
             if let Some(ref p) = ra_prefixes {
@@ -562,7 +563,7 @@ impl ClientContext {
             }
         }
         if let Some(pppoe_cfg) = pppoe_config {
-            self.ctx.update_pppoe_config(*pppoe_cfg);
+            patch = patch.with_pppoe(*pppoe_cfg);
             results.push(ImportResult {
                 section: ImportSection::PppoeConfig,
                 success: true,
@@ -572,7 +573,7 @@ impl ClientContext {
         }
 
         if let Some(opts) = dhcp_options {
-            self.ctx.update_dhcp_options(*opts);
+            patch = patch.with_dhcp_options(*opts);
             results.push(ImportResult {
                 section: ImportSection::DhcpOptions,
                 success: true,
@@ -611,7 +612,7 @@ impl ClientContext {
         }
 
         if let Some(fw) = firewall_config {
-            self.ctx.update_firewall_config(*fw);
+            patch = patch.with_firewall(*fw);
             results.push(ImportResult {
                 section: ImportSection::FirewallConfig,
                 success: true,
@@ -621,7 +622,7 @@ impl ClientContext {
         }
 
         if let Some(tr) = traffic_config {
-            self.ctx.update_traffic_config(*tr);
+            patch = patch.with_traffic(*tr);
             results.push(ImportResult {
                 section: ImportSection::TrafficConfig,
                 success: true,
@@ -631,15 +632,19 @@ impl ClientContext {
         }
 
         if dhcp_v4_dirty {
-            self.ctx.update_dhcp_v4_pools(Vec::new());
+            patch = patch.with_dhcp_v4_pools(Vec::new());
         }
         if dhcp_v6_dirty {
-            self.ctx.update_dhcp_v6_pools(Vec::new());
+            patch = patch.with_dhcp_v6_pools(Vec::new());
         }
         if ra_dirty {
-            self.ctx
-                .update_ra_config(Vec::new(), Vec::new(), Vec::new());
+            patch = patch
+                .with_ra_prefixes(Vec::new())
+                .with_ra_rdnss(Vec::new())
+                .with_ra_dnssl(Vec::new());
         }
+
+        let _ = self.ctx.apply_config(patch);
 
         // Flush live config and snapshot to disk immediately before replying
         let _ = self.flush_now().await;

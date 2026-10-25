@@ -816,6 +816,9 @@ impl AsyncService for DbWorker {
                         LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => {
                             self.dirty_sections |= SectionSet::PPPOE;
                         }
+                        LanforgeEvent::System(SystemEvent::ConfigChanged { sections }) => {
+                            self.dirty_sections |= SectionSet::from(*sections);
+                        }
                     });
 
                     if break_loop {

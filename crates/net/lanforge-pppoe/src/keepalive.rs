@@ -1,17 +1,18 @@
+use crate::config::PppoeConfig;
 use crate::error::PppoeError;
 use crate::lcp::{LCP_CONF_REQ, LCP_ECHO_REP, LCP_ECHO_REQ, LCP_TERM_ACK, LCP_TERM_REQ, PPP_LCP};
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
+use lanforge_transport::ArpProber;
+use lanforge_types::config::ChangeImpact;
 use lanforge_types::system::ServiceAction;
 use nix::unistd::{read, write};
+use std::net::Ipv4Addr;
 use std::os::fd::OwnedFd;
 use std::time::Duration;
 use tokio::io::unix::AsyncFd;
 use tokio::time::interval;
 use tracing::{debug, info, warn};
-
-use lanforge_transport::ArpProber;
-use std::net::Ipv4Addr;
 
 pub const PPP_IP: u16 = 0x0021;
 pub const PPP_IPV6: u16 = 0x0057;
@@ -22,8 +23,8 @@ pub async fn run_keepalive(
     ctx: &LanforgeContext,
     local_magic: u32,
     peer_magic: u32,
-    interval_secs: u64,
-    max_failures: u32,
+    mut interval_secs: u64,
+    mut max_failures: u32,
     prober: Option<(&ArpProber, Ipv4Addr, Option<Ipv4Addr>, Duration)>,
 ) -> Result<(), PppoeError> {
     let async_chan_fd = unsafe { AsyncFd::register(chan_fd.try_clone()?)? };
@@ -34,6 +35,7 @@ pub async fn run_keepalive(
     let mut interval_timer = interval(check_interval);
 
     let mut bus_rx = ctx.bus().subscribe_system();
+    let mut config_sub = ctx.config_subscription::<PppoeConfig>();
     let mut read_buf = [0u8; 1500];
 
     loop {
@@ -43,6 +45,26 @@ pub async fn run_keepalive(
         }
 
         tokio::select! {
+            delta_opt = config_sub.next() => {
+                let Some(delta) = delta_opt else { return Ok(()); };
+                if !delta.new.enabled {
+                    info!("PPPoE disabled during keepalive; terminating session");
+                    return Ok(());
+                }
+                match delta.impact {
+                    ChangeImpact::None => {}
+                    ChangeImpact::Hot => {
+                        info!("PPPoE keepalive updated timers in-place");
+                        interval_secs = delta.new.lcp_echo_interval_secs;
+                        max_failures = delta.new.lcp_echo_max_failures;
+                        interval_timer = interval(Duration::from_secs(interval_secs.max(1)));
+                    }
+                    ChangeImpact::Reconnect | ChangeImpact::Rebind => {
+                        info!("PPPoE keepalive received config change requiring reconnect; terminating session to reconnect");
+                        return Ok(());
+                    }
+                }
+            }
             _ = interval_timer.tick() => {
                 if interval_secs > 0 {
                     echo_id = echo_id.wrapping_add(1);
@@ -134,10 +156,6 @@ pub async fn run_keepalive(
                             action = ?action,
                             "PPPoE keepalive received service control action (configuration update or manual command), disconnecting session"
                         );
-                        return Ok(());
-                    }
-                    LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => {
-                        info!("PPPoE keepalive received ConfigPppoeChanged, disconnecting session to re-evaluate configuration");
                         return Ok(());
                     }
                     _ => {}

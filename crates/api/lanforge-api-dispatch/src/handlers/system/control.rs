@@ -27,13 +27,49 @@ impl ClientContext {
     }
 
     pub async fn handle_reload(&self) -> Response {
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
-        Response::Success(SimpleSuccess {
-            message: "Configuration reload triggered".to_string(),
-        })
+        let Some(path) = self.resolve_config_path() else {
+            return Response::Error {
+                error: "Configuration file path could not be resolved".to_string(),
+            };
+        };
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                return Response::Error {
+                    error: format!("Failed to read configuration from {}: {e}", path.display()),
+                };
+            }
+        };
+
+        let cfg_file = match lanforge_api::config_file::ConfigFile::parse(&content) {
+            Ok(f) => f,
+            Err(e) => {
+                return Response::Error {
+                    error: format!("Failed to parse configuration from {}: {e}", path.display()),
+                };
+            }
+        };
+
+        let export = lanforge_api::api::SystemConfigExport::from(cfg_file);
+        let res = self.handle_system_config_import(export).await;
+        match res {
+            Response::SystemConfigImport(import_res) => {
+                if import_res.total_success {
+                    Response::Success(SimpleSuccess {
+                        message: format!("Configuration reloaded from {}", path.display()),
+                    })
+                } else {
+                    Response::Error {
+                        error: format!(
+                            "Configuration reload completed with errors: {:?}",
+                            import_res.results
+                        ),
+                    }
+                }
+            }
+            other => other,
+        }
     }
 
     pub async fn handle_shutdown(&self) -> Response {
@@ -87,18 +123,10 @@ impl ClientContext {
             wan_iface = %cfg.wan_iface,
             username = %cfg.username,
             enabled = cfg.enabled,
-            "PPPoE configuration updated via API; triggering PPPoE service restart to apply new configuration"
+            "PPPoE configuration updated via API"
         );
 
         self.ctx.update_pppoe_config(cfg);
-
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::System(SystemEvent::ServiceControl {
-                id: "pppoe".to_string(),
-                action: ServiceAction::Restart,
-            }));
 
         Response::Success(SimpleSuccess {
             message: "PPPoE configuration updated successfully".to_string(),

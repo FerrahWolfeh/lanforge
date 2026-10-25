@@ -25,3 +25,6 @@ contrib/configs/
 crates/net/lanforge-pppoe/bpf/include/
 crates/net/lanforge-pppoe/bpf/*.o
 *.bpf.o
+
+# Local planning docs
+docs/plans/

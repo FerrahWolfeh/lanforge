@@ -280,6 +280,7 @@ const fn event_topic_and_kind(event: &LanforgeEvent) -> (&'static str, &'static 
             SystemEvent::ConfigTftpChanged => "ConfigTftpChanged",
             SystemEvent::ConfigDhcpOptionsChanged => "ConfigDhcpOptionsChanged",
             SystemEvent::ConfigPppoeChanged => "ConfigPppoeChanged",
+            SystemEvent::ConfigChanged { .. } => "ConfigChanged",
         }),
         LanforgeEvent::Storage(s) => ("storage", match s {
             StorageEvent::DbLogClean => "DbLogClean",

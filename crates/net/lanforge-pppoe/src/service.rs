@@ -10,10 +10,11 @@ use crate::kernel::{configure_interface, deconfigure_interface, handoff_to_kerne
 use crate::lcp::negotiate_lcp;
 use crate::session::PppoeSession;
 use lanforge_core::bus::{LanforgeEvent, PppoeEvent, SystemEvent};
-use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::{ConfigSubscription, LanforgeContext};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceDependency};
 use lanforge_transport::ArpProber;
+use lanforge_types::config::ChangeImpact;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::pppoe::PppoeDataplane;
 use lanforge_types::system::{PppoeSessionState, PppoeStatusResponse, ServiceAction, ServiceState};
@@ -22,6 +23,7 @@ use std::borrow::Cow;
 use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::{Instant, sleep};
 use tracing::{debug, info, warn};
@@ -39,7 +41,6 @@ enum SystemInterrupt {
     Shutdown,
     Stop,
     Restart,
-    ConfigChanged,
 }
 
 fn classify_system_event(event: &LanforgeEvent) -> Option<SystemInterrupt> {
@@ -51,9 +52,6 @@ fn classify_system_event(event: &LanforgeEvent) -> Option<SystemInterrupt> {
                 ServiceAction::Restart => Some(SystemInterrupt::Restart),
                 ServiceAction::Start => None,
             }
-        }
-        LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => {
-            Some(SystemInterrupt::ConfigChanged)
         }
         _ => None,
     }
@@ -123,6 +121,7 @@ pub struct PppoeService {
     inert: bool,
     prober: Option<ArpProber>,
     terminal_status: Option<(bool, Option<MacAddr>, Option<u32>)>,
+    config_sub: ConfigSubscription<PppoeConfig>,
 }
 
 impl PppoeService {
@@ -131,6 +130,8 @@ impl PppoeService {
         if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
             cfg = dynamic_cfg;
         }
+        let mut config_sub = ctx.config_subscription::<PppoeConfig>();
+        config_sub.mark_applied(Arc::new(cfg.clone()));
         Self {
             cfg,
             ctx,
@@ -140,6 +141,7 @@ impl PppoeService {
             inert: false,
             prober: None,
             terminal_status: None,
+            config_sub,
         }
     }
 
@@ -149,6 +151,8 @@ impl PppoeService {
         if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
             cfg = dynamic_cfg;
         }
+        let mut config_sub = ctx.config_subscription::<PppoeConfig>();
+        config_sub.mark_applied(Arc::new(cfg.clone()));
         Self {
             cfg,
             ctx,
@@ -158,7 +162,19 @@ impl PppoeService {
             inert: true,
             prober: None,
             terminal_status: None,
+            config_sub,
         }
+    }
+
+    fn apply_hot_config(&mut self, new_cfg: &PppoeConfig) {
+        self.cfg.lcp_echo_interval_secs = new_cfg.lcp_echo_interval_secs;
+        self.cfg.lcp_echo_max_failures = new_cfg.lcp_echo_max_failures;
+        self.cfg.reconnect_delay_secs = new_cfg.reconnect_delay_secs;
+        self.cfg.send_padt_on_shutdown = new_cfg.send_padt_on_shutdown;
+        self.cfg.discovery_padi_retries = new_cfg.discovery_padi_retries;
+        self.cfg.discovery_padi_timeout_secs = new_cfg.discovery_padi_timeout_secs;
+        self.cfg.terminal_probe.clone_from(&new_cfg.terminal_probe);
+        self.cfg.nftables.clone_from(&new_cfg.nftables);
     }
 
     #[must_use]
@@ -324,6 +340,25 @@ impl PppoeService {
         let mut bus_rx = self.ctx.bus().subscribe_system();
         loop {
             tokio::select! {
+                delta_opt = self.config_sub.next() => {
+                    let Some(delta) = delta_opt else { break; };
+                    if !delta.new.enabled {
+                        self.teardown_active_session("Configuration updated".into()).await;
+                        return Ok(());
+                    }
+                    match delta.impact {
+                        ChangeImpact::None => {}
+                        ChangeImpact::Hot => {
+                            info!("PPPoE inert session hot swap applied in place");
+                            self.apply_hot_config(&delta.new);
+                        }
+                        ChangeImpact::Reconnect | ChangeImpact::Rebind => {
+                            info!("PPPoE inert session reconnecting for config changes");
+                            self.teardown_active_session("Configuration updated".into()).await;
+                            return Ok(());
+                        }
+                    }
+                }
                 event_res = bus_rx.recv() => {
                     match event_res {
                         Ok(timed) => match classify_system_event(&timed.event) {
@@ -340,11 +375,6 @@ impl PppoeService {
                             Some(SystemInterrupt::Restart) => {
                                 info!("PPPoE inert keepalive received restart");
                                 self.teardown_active_session("Service control Restart".into()).await;
-                                return Ok(());
-                            }
-                            Some(SystemInterrupt::ConfigChanged) => {
-                                info!("PPPoE inert keepalive received ConfigPppoeChanged");
-                                self.teardown_active_session("Configuration updated".into()).await;
                                 return Ok(());
                             }
                             None => {}
@@ -701,6 +731,25 @@ impl PppoeService {
             }
 
             tokio::select! {
+                delta_opt = self.config_sub.next() => {
+                    let Some(delta) = delta_opt else {
+                        return Err(PppoeError::NegotiationFailed("Shutdown received".into()));
+                    };
+                    if !delta.new.enabled {
+                        return Err(PppoeError::NegotiationFailed("Configuration disabled".into()));
+                    }
+                    match delta.impact {
+                        ChangeImpact::None => {}
+                        ChangeImpact::Hot => {
+                            self.apply_hot_config(&delta.new);
+                        }
+                        ChangeImpact::Reconnect | ChangeImpact::Rebind => {
+                            info!(wan_iface = %self.cfg.wan_iface, "Carrier wait interrupted by configuration update");
+                            self.cfg = (*delta.new).clone();
+                            return Err(PppoeError::NegotiationFailed("Configuration changed".into()));
+                        }
+                    }
+                }
                 _ = check_timer.tick() => {
                     wait_ticks += 1;
                     if read_carrier(&self.cfg.wan_iface) == Some(true) {
@@ -731,10 +780,6 @@ impl PppoeService {
                         Some(SystemInterrupt::Stop | SystemInterrupt::Restart) => {
                             info!(wan_iface = %self.cfg.wan_iface, "Carrier wait interrupted by service control");
                             return Err(PppoeError::NegotiationFailed("Service stopped or restarted".into()));
-                        }
-                        Some(SystemInterrupt::ConfigChanged) => {
-                            info!(wan_iface = %self.cfg.wan_iface, "Carrier wait interrupted by configuration update");
-                            return Err(PppoeError::NegotiationFailed("Configuration changed".into()));
                         }
                         None => {}
                     }
@@ -860,6 +905,25 @@ impl PppoeService {
             }
 
             tokio::select! {
+                delta_opt = self.config_sub.next() => {
+                    let Some(delta) = delta_opt else {
+                        return Err(PppoeError::NegotiationFailed("Shutdown received".into()));
+                    };
+                    if !delta.new.enabled {
+                        return Err(PppoeError::NegotiationFailed("Configuration disabled".into()));
+                    }
+                    match delta.impact {
+                        ChangeImpact::None => {}
+                        ChangeImpact::Hot => {
+                            self.apply_hot_config(&delta.new);
+                        }
+                        ChangeImpact::Reconnect | ChangeImpact::Rebind => {
+                            info!(wan_iface = %self.cfg.wan_iface, "Terminal wait interrupted by configuration update");
+                            self.cfg = (*delta.new).clone();
+                            return Err(PppoeError::NegotiationFailed("Configuration changed".into()));
+                        }
+                    }
+                }
                 _ = poll_timer.tick() => {
                     if start.elapsed() >= deadline {
                         warn!(
@@ -910,10 +974,6 @@ impl PppoeService {
                         Some(SystemInterrupt::Stop | SystemInterrupt::Restart) => {
                             info!(wan_iface = %self.cfg.wan_iface, "Terminal wait interrupted by service control");
                             return Err(PppoeError::NegotiationFailed("Service stopped or restarted".into()));
-                        }
-                        Some(SystemInterrupt::ConfigChanged) => {
-                            info!(wan_iface = %self.cfg.wan_iface, "Terminal wait interrupted by configuration update");
-                            return Err(PppoeError::NegotiationFailed("Configuration changed".into()));
                         }
                         None => {}
                     }
@@ -1137,19 +1197,6 @@ impl AsyncService for PppoeService {
                                 self.teardown_active_session("Service restarted".into()).await;
                                 self.attempt = 0;
                             }
-                            Some(SystemInterrupt::ConfigChanged) => {
-                                info!("PPPoE service received ConfigPppoeChanged in main loop");
-                                self.teardown_active_session("Configuration updated".into()).await;
-                                if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
-                                    self.cfg = dynamic_cfg;
-                                }
-                                if !self.cfg.enabled {
-                                    info!("PPPoE service disabled via config change");
-                                    ctx.set_service_state("pppoe", ServiceState::Inactive);
-                                    break 'main_loop;
-                                }
-                                self.attempt = 0;
-                            }
                             None => {}
                         }
                     }
@@ -1201,6 +1248,26 @@ impl AsyncService for PppoeService {
                             let delay = Duration::from_secs(self.cfg.reconnect_delay_secs);
                             tokio::select! {
                                 () = sleep(delay) => {}
+                                delta_opt = self.config_sub.next() => {
+                                    if let Some(delta) = delta_opt {
+                                        match delta.impact {
+                                            ChangeImpact::Hot => {
+                                                info!("PPPoE service received hot config update during reconnect delay");
+                                                self.apply_hot_config(&delta.new);
+                                            }
+                                            ChangeImpact::Reconnect | ChangeImpact::Rebind => {
+                                                info!("PPPoE service received reconnect config update during reconnect delay, retrying immediately");
+                                                self.cfg = (*delta.new).clone();
+                                                if !self.cfg.enabled {
+                                                    ctx.set_service_state("pppoe", ServiceState::Inactive);
+                                                    break 'main_loop;
+                                                }
+                                                self.attempt = 0;
+                                            }
+                                            ChangeImpact::None => {}
+                                        }
+                                    }
+                                }
                                 res = bus_rx.recv() => {
                                     if let Ok(timed) = res {
                                         match classify_system_event(&timed.event) {
@@ -1215,17 +1282,6 @@ impl AsyncService for PppoeService {
                                             }
                                             Some(SystemInterrupt::Restart) => {
                                                 info!("PPPoE service received restart during reconnect delay, retrying immediately");
-                                                self.attempt = 0;
-                                            }
-                                            Some(SystemInterrupt::ConfigChanged) => {
-                                                info!("PPPoE service received config change during reconnect delay, retrying immediately");
-                                                if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
-                                                    self.cfg = dynamic_cfg;
-                                                }
-                                                if !self.cfg.enabled {
-                                                    ctx.set_service_state("pppoe", ServiceState::Inactive);
-                                                    break 'main_loop;
-                                                }
                                                 self.attempt = 0;
                                             }
                                             None => {}

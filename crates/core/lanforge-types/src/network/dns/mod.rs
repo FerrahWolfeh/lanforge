@@ -718,7 +718,7 @@ pub struct DnsAdblockStatusResponse {
 }
 
 /// A single adblock source URL entry.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct AdblockUrlEntry {
     pub id: Option<i64>,
     #[serde(default)]

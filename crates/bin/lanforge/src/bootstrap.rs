@@ -3,7 +3,7 @@ use bytesize::ByteSize;
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
-use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::{ConfigPatch, LanforgeContext};
 use lanforge_core::context::state::State;
 use lanforge_db::{
     AdblockStore, DhcpConfigStore, DnsStore, DnsUpstreamStore, FirewallConfigStore, LanforgeDb,
@@ -267,12 +267,16 @@ impl Bootstrapper {
         }
         ctx.set_config_path(&cfg.config_path);
         ctx.set_config_writable(cfg.config_writable);
+
+        let mut patch = ConfigPatch::new();
+
         #[cfg(feature = "dhcp")]
         {
-            ctx.update_dhcp_v4_pools(cfg.dhcpv4_toml.pools.clone());
-            ctx.update_dhcp_v6_pools(cfg.dhcpv6_toml.pools.clone());
+            patch = patch
+                .with_dhcp_v4_pools(cfg.dhcpv4_toml.pools.clone())
+                .with_dhcp_v6_pools(cfg.dhcpv6_toml.pools.clone());
             if let Ok(Some(opts)) = db.load_dhcp_options() {
-                ctx.update_dhcp_options(opts);
+                patch = patch.with_dhcp_options(opts);
             }
         }
         #[cfg(feature = "ra")]
@@ -295,23 +299,31 @@ impl Bootstrapper {
                 rdnss: cfg.ra_toml.rdnss.clone(),
                 dnssl: cfg.ra_toml.dnssl.clone(),
             };
-            ctx.update_ra_server_config(ra_srv);
+            patch = patch.with_ra_server(ra_srv);
         }
+
+        #[cfg(feature = "dns")]
+        Self::load_dns_state_into_patch(db, &mut patch);
+
+        #[cfg(feature = "pppoe")]
+        {
+            patch = patch.with_pppoe(cfg.pppoe_toml.clone());
+        }
+
+        #[cfg(feature = "nft")]
+        {
+            patch = patch.with_firewall(cfg.firewall_toml.clone());
+        }
+
+        #[cfg(feature = "traffic")]
+        {
+            patch = patch.with_traffic(cfg.traffic_toml.clone());
+        }
+
+        ctx.hydrate_config(patch);
 
         ctx.set_status(cfg.to_system_status());
         ctx.set_compiled_caps(Self::build_compiled_caps());
-
-        #[cfg(feature = "dns")]
-        Self::load_dns_state_into_context(db, ctx);
-
-        #[cfg(feature = "pppoe")]
-        ctx.update_pppoe_config(cfg.pppoe_toml.clone());
-
-        #[cfg(feature = "nft")]
-        ctx.update_firewall_config(cfg.firewall_toml.clone());
-
-        #[cfg(feature = "traffic")]
-        ctx.update_traffic_config(cfg.traffic_toml.clone());
     }
 
     fn start_netlink_dispatcher() -> Result<(rtnetlink::Handle, NetlinkMessages)> {
@@ -333,25 +345,25 @@ impl Bootstrapper {
     }
 
     #[cfg(feature = "dns")]
-    fn load_dns_state_into_context(db: &LanforgeDb, ctx: &LanforgeContext) {
+    fn load_dns_state_into_patch(db: &LanforgeDb, patch: &mut ConfigPatch) {
         if let Ok(upstreams) = db.load_dns_upstreams() {
             let list = upstreams.into_iter().map(|row| row.to_target()).collect();
-            ctx.update_dns_upstreams(list);
+            patch.dns_upstreams = Some(list);
         }
         if let Ok(Some(mode)) = db.load_dns_upstream_mode() {
-            ctx.update_dns_upstream_mode(mode);
+            patch.dns_upstream_mode = Some(mode);
         }
         if let Ok(rewrites) = db.load_dns_rewrites() {
-            ctx.update_dns_rewrites(rewrites);
+            patch.dns_rewrites = Some(rewrites);
         }
         if let Ok(allowlist) = db.load_dns_allowlist() {
-            ctx.update_dns_allowlist(allowlist.into_iter().map(|(_, d)| d).collect());
+            patch.dns_allowlist = Some(allowlist.into_iter().map(|(_, d)| d).collect());
         }
         if let Ok(adblock) = db.load_adblock_config() {
-            ctx.update_dns_adblock(adblock);
+            patch.dns_adblock = Some(adblock);
         }
         if let Ok(urls) = db.load_adblock_urls() {
-            ctx.update_dns_adblock_urls(
+            patch.dns_adblock_urls = Some(
                 urls.into_iter()
                     .map(|(id, url, kind, format)| AdblockUrlEntry {
                         id: Some(id),
@@ -364,7 +376,7 @@ impl Bootstrapper {
             );
         }
         if let Ok(rules) = db.load_adblock_rules() {
-            ctx.update_dns_adblock_rules(
+            patch.dns_adblock_rules = Some(
                 rules
                     .into_iter()
                     .map(|(id, domain, action, enabled)| AdblockRuleEntry {

@@ -3,11 +3,11 @@ use lanforge_api::api::{
     NetworkInterfaceInfo, Response, SetupPayload, SetupResponse, SetupStatusResponse,
     SetupWanConfig,
 };
+use lanforge_core::context::ConfigPatch;
 use lanforge_crypto::hash_password;
 use lanforge_db_core::Stores;
 use lanforge_types::auth::UserRole;
 use lanforge_types::device::Ipv6AddrOrSuffix;
-use lanforge_types::events::{LanforgeEvent, SystemEvent};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockSourceFormat, AdblockUrlKind};
@@ -200,6 +200,8 @@ impl ClientContext {
         }
 
         // 3. Configure DHCPv4 & DHCPv6 Pools and Options
+        let mut patch = ConfigPatch::new();
+
         let router_ip = payload.dhcp_router.unwrap_or(payload.lan_ip);
         let subnet_mask = payload.subnet_mask;
         let mut opts = self.ctx.with_config(|cfg| cfg.dhcp_options.clone());
@@ -214,7 +216,7 @@ impl ClientContext {
             dns_servers: vec![payload.lan_ip],
             ..Default::default()
         };
-        self.ctx.update_dhcp_v4_pools(vec![v4_pool.clone()]);
+        patch = patch.with_dhcp_v4_pools(vec![v4_pool.clone()]);
         opts.v4.enabled = payload.dhcp_enabled;
         opts.v4.router = Some(router_ip);
         opts.v4.subnet_mask = Some(subnet_mask);
@@ -240,19 +242,13 @@ impl ClientContext {
             search_domains: vec![payload.domain_name.clone()],
             ..Default::default()
         };
-        self.ctx.update_dhcp_v6_pools(vec![v6_pool.clone()]);
+        patch = patch.with_dhcp_v6_pools(vec![v6_pool.clone()]);
         opts.v6.enabled = payload.dhcp_v6_enabled;
         opts.v6.search_domains = vec![payload.domain_name.clone()];
-
-        self.ctx.update_dhcp_options(opts.clone());
 
         let v6_pool_clone = v6_pool.clone();
         let _ = storage
             .call(move |s: &Stores| s.db().save_dhcp_v6_pools(&[v6_pool_clone]))
-            .await;
-        let opts_clone = opts.clone();
-        let _ = storage
-            .call(move |s: &Stores| s.db().save_dhcp_options(&opts_clone))
             .await;
 
         // 4. Configure IPv6 Router Advertisement (RA)
@@ -278,7 +274,9 @@ impl ClientContext {
             domains: vec![payload.domain_name.clone()],
             lifetime: Some(600),
         }];
-        self.ctx.update_ra_config(prefixes.clone(), Vec::new(), dnssl.clone());
+        patch = patch
+            .with_ra_prefixes(prefixes.clone())
+            .with_ra_dnssl(dnssl.clone());
 
         let p_clone = prefixes.clone();
         let _ = storage
@@ -321,7 +319,7 @@ impl ClientContext {
                 }
             }
         }
-        self.ctx.update_dns_upstreams(upstreams);
+        patch = patch.with_dns_upstreams(upstreams.clone());
 
         let mut adblock_sources = if payload.adblock_sources.is_empty() {
             vec![
@@ -353,8 +351,9 @@ impl ClientContext {
             enabled: payload.adblock_enabled,
             ..Default::default()
         };
-        self.ctx.update_dns_adblock(adb_cfg.clone());
-        self.ctx.update_dns_adblock_urls(adblock_sources.clone());
+        patch = patch
+            .with_dns_adblock(adb_cfg.clone())
+            .with_dns_adblock_urls(adblock_sources.clone());
         let _ = storage
             .call(move |s: &Stores| s.db().save_adblock_config(&adb_cfg))
             .await;
@@ -401,18 +400,22 @@ impl ClientContext {
                         pppoe_cfg.nftables.bypass_vowifi = nft.bypass_vowifi;
                         pppoe_cfg.nftables.lan_ifaces = vec![payload.lan_iface.clone()];
                     }
-                    self.ctx.update_pppoe_config(pppoe_cfg.clone());
+                    patch = patch.with_pppoe(pppoe_cfg.clone());
                     let _ = storage
                         .call(move |s: &Stores| s.db().save_pppoe_config(&pppoe_cfg))
                         .await;
                 }
                 SetupWanConfig::SystemGateway { gateway_ip } => {
-                    let mut opts = self.ctx.with_config(|cfg| cfg.dhcp_options.clone());
                     opts.v4.router = Some(*gateway_ip);
-                    self.ctx.update_dhcp_options(opts);
                 }
             }
         }
+
+        patch = patch.with_dhcp_options(opts.clone());
+        let opts_clone = opts.clone();
+        let _ = storage
+            .call(move |s: &Stores| s.db().save_dhcp_options(&opts_clone))
+            .await;
 
         // 7. Seed initial Firewall configuration
         let wan_interface = if let Some(ref wan) = payload.wan {
@@ -470,7 +473,9 @@ impl ClientContext {
                 to: "external".into(),
             });
         }
-        self.ctx.update_firewall_config(initial_firewall.clone());
+        patch = patch.with_firewall(initial_firewall.clone());
+        let _ = self.ctx.apply_config(patch);
+
         let _ = storage
             .call(move |s: &Stores| s.db().save_firewall_config(&initial_firewall))
             .await;
@@ -521,13 +526,6 @@ impl ClientContext {
 
         // Flush all persisted changes and live config to disk immediately
         let _ = self.flush_now().await;
-
-        // 10. Spawn delayed ReloadConfig event to allow RPC response to flush cleanly
-        let bus = self.ctx.bus().clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
-            let _ = bus.publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
-        });
 
         Response::Setup(Box::new(SetupResponse {
             success: true,

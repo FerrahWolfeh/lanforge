@@ -156,3 +156,46 @@ impl<'de> Deserialize<'de> for SectionSet {
         Ok(Self::from_bits_truncate(bits))
     }
 }
+
+impl From<lanforge_types::config::ConfigDomain> for Section {
+    fn from(domain: lanforge_types::config::ConfigDomain) -> Self {
+        match domain {
+            lanforge_types::config::ConfigDomain::Pppoe => Self::Pppoe,
+            lanforge_types::config::ConfigDomain::Firewall => Self::Firewall,
+            lanforge_types::config::ConfigDomain::Traffic => Self::Traffic,
+            lanforge_types::config::ConfigDomain::DhcpV4Pools
+            | lanforge_types::config::ConfigDomain::DhcpV6Pools
+            | lanforge_types::config::ConfigDomain::DhcpV4Options
+            | lanforge_types::config::ConfigDomain::DhcpV6Options => Self::Dhcp,
+            lanforge_types::config::ConfigDomain::Tftp => Self::Tftp,
+            lanforge_types::config::ConfigDomain::RaServer
+            | lanforge_types::config::ConfigDomain::RaPrefixes
+            | lanforge_types::config::ConfigDomain::RaRdnss
+            | lanforge_types::config::ConfigDomain::RaDnssl => Self::Ra,
+            lanforge_types::config::ConfigDomain::DnsUpstreams
+            | lanforge_types::config::ConfigDomain::DnsUpstreamMode
+            | lanforge_types::config::ConfigDomain::DnsRewrites
+            | lanforge_types::config::ConfigDomain::DnsAllowlist
+            | lanforge_types::config::ConfigDomain::DnsReverse
+            | lanforge_types::config::ConfigDomain::DnsListen => Self::Dns,
+            lanforge_types::config::ConfigDomain::DnsAdblock
+            | lanforge_types::config::ConfigDomain::DnsAdblockUrls
+            | lanforge_types::config::ConfigDomain::DnsAdblockRules => Self::Adblock,
+            lanforge_types::config::ConfigDomain::Discovery => Self::Monitor,
+            lanforge_types::config::ConfigDomain::Interfaces => Self::System,
+            lanforge_types::config::ConfigDomain::Http => Self::Http,
+            lanforge_types::config::ConfigDomain::Auth => Self::System,
+        }
+    }
+}
+
+impl From<lanforge_types::config::DomainSet> for SectionSet {
+    fn from(domains: lanforge_types::config::DomainSet) -> Self {
+        let mut set = Self::empty();
+        for domain in domains.domains() {
+            set |= Section::from(domain).as_bitflag();
+        }
+        set
+    }
+}
+

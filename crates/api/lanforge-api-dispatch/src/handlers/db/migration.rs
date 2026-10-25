@@ -1,11 +1,8 @@
 use crate::ClientContext;
 use lanforge_api::api::{DbEngineSwitchRequest, Response, SimpleSuccess};
-use lanforge_core::bus::{LanforgeEvent, SystemEvent};
-use std::fs;
-use std::time::Duration;
-use tracing::info;
-
 use lanforge_types::system::StorageMode;
+use std::fs;
+use tracing::info;
 
 impl ClientContext {
     /// Switches the database storage mode between persistent and in-memory, performing configuration migration.
@@ -60,20 +57,13 @@ impl ClientContext {
                 }
 
                 info!(
-                    "Database migration: successfully updated {} with persistent storage path ({url}). Triggering soft-reboot...",
+                    "Database migration: successfully updated {} with persistent storage path ({url}).",
                     target_path.display()
                 );
 
-                // 4. Trigger soft-reboot to rebind services and run bootstrap
-                let bus = self.ctx.bus().clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(1000)).await;
-                    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
-                });
-
                 Response::Success(SimpleSuccess {
                     message: format!(
-                        "Database switched to persistent storage ({url}). Configuration saved to {}. Daemon is soft-rebooting.",
+                        "Database switched to persistent storage ({url}). Configuration saved to {}.",
                         target_path.display()
                     ),
                 })
@@ -104,20 +94,13 @@ impl ClientContext {
                 }
 
                 info!(
-                    "Database migration: successfully flushed static configurations to {} and switched to in-memory mode. Triggering soft-reboot...",
+                    "Database migration: successfully flushed static configurations to {} and switched to in-memory mode.",
                     target_path.display()
                 );
 
-                // 4. Trigger soft-reboot to rebind services with in-memory store
-                let bus = self.ctx.bus().clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(1000)).await;
-                    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
-                });
-
                 Response::Success(SimpleSuccess {
                     message: format!(
-                        "Database switched to In-Memory mode. Static configuration flushed to {}. Daemon is soft-rebooting.",
+                        "Database switched to In-Memory mode. Static configuration flushed to {}.",
                         target_path.display()
                     ),
                 })

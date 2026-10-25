@@ -12,6 +12,7 @@ adblock = []
 # Lanforge
 lanforge-macros = { workspace = true }
 
+bitflags = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["rc"] }
 smallvec = { workspace = true }
 

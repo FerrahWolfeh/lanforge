@@ -55,9 +55,10 @@ pub mod packet;
 
 pub use config::*;
 use lanforge_core::context::LanforgeContext;
+use lanforge_types::config::ChangeImpact;
 use lanforge_types::network::ra::{
     ICMPV6_TYPE_RS, MAX_INITIAL_RTR_ADVERT_INTERVAL, MAX_INITIAL_RTR_ADVERTISEMENTS,
-    MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS,
+    MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS, RAPrefix, RaServerConfig,
 };
 use lanforge_types::system::{RaStatusResponse, RunResult, ServiceState};
 
@@ -380,22 +381,43 @@ impl RaService {
 
     async fn wait_for_config_change_or_shutdown(&self) -> Result<RunResult, CoreError> {
         let mut handle = self.ctx.service_handle_network();
+        let mut ra_sub = self.ctx.config_subscription::<RaServerConfig>();
+        let mut prefix_sub = self.ctx.config_subscription::<Vec<RAPrefix>>();
+
         loop {
-            let event = handle.next_event().await;
-            let Some(timed_event) = event else {
-                return Ok(RunResult::Shutdown);
-            };
-            if matches!(
-                timed_event.event,
-                LanforgeEvent::System(SystemEvent::ConfigRaChanged)
-            ) {
-                return Ok(RunResult::ConfigChanged);
+            tokio::select! {
+                delta_opt = ra_sub.next() => {
+                    if let Some(delta) = delta_opt
+                        && delta.new.enabled
+                        && !delta.new.prefixes.is_empty()
+                    {
+                        return Ok(RunResult::ConfigChanged);
+                    }
+                }
+                delta_opt = prefix_sub.next() => {
+                    if let Some(delta) = delta_opt
+                        && !delta.new.is_empty()
+                    {
+                        return Ok(RunResult::ConfigChanged);
+                    }
+                }
+                event = handle.next_event() => {
+                    let Some(timed_event) = event else {
+                        return Ok(RunResult::Shutdown);
+                    };
+                    if matches!(
+                        timed_event.event,
+                        LanforgeEvent::System(SystemEvent::ConfigRaChanged)
+                    ) {
+                        return Ok(RunResult::ConfigChanged);
+                    }
+                }
             }
         }
     }
 
     #[allow(clippy::too_many_lines)]
-    async fn run_server(&self, current_cfg: RaConfig) -> Result<RunResult, CoreError> {
+    async fn run_server(&self, mut current_cfg: RaConfig) -> Result<RunResult, CoreError> {
         current_cfg
             .validate()
             .map_err(|e| CoreError::Generic(e.to_string()))?;
@@ -451,6 +473,8 @@ impl RaService {
 
         let mut buf = [0u8; 1500];
         let mut handle = self.ctx.service_handle_network();
+        let mut ra_sub = self.ctx.config_subscription::<RaServerConfig>();
+        let mut prefix_sub = self.ctx.config_subscription::<Vec<RAPrefix>>();
 
         loop {
             let now = Instant::now();
@@ -489,17 +513,50 @@ impl RaService {
                     }
                 }
 
-                // 3. EventBus signals
+                // 3. Config subscription updates
+                delta_opt = ra_sub.next() => {
+                    if let Some(delta) = delta_opt {
+                        match delta.impact {
+                            ChangeImpact::None => {}
+                            ChangeImpact::Hot => {
+                                info!("RA: Server config updated in place");
+                                current_cfg.update_from_server_config(&delta.new);
+                                if !delta.new.enabled || current_cfg.prefixes.is_empty() {
+                                    return Ok(RunResult::ConfigChanged);
+                                }
+                                state.initial_sent = 0;
+                                next_ra_at = Instant::now();
+                            }
+                            ChangeImpact::Rebind | ChangeImpact::Reconnect => {
+                                info!("RA: Interface rebind requested");
+                                return Ok(RunResult::ConfigChanged);
+                            }
+                        }
+                    }
+                }
+
+                delta_opt = prefix_sub.next() => {
+                    if let Some(delta) = delta_opt {
+                        match delta.impact {
+                            ChangeImpact::None => {}
+                            ChangeImpact::Hot | ChangeImpact::Rebind | ChangeImpact::Reconnect => {
+                                info!("RA: Prefixes updated in place — sending immediate RA burst");
+                                current_cfg.prefixes.clone_from(&(*delta.new));
+                                if current_cfg.prefixes.is_empty() {
+                                    return Ok(RunResult::ConfigChanged);
+                                }
+                                state.initial_sent = 0;
+                                next_ra_at = Instant::now();
+                            }
+                        }
+                    }
+                }
+
+                // 4. EventBus signals
                 res = handle.next_event() => {
                     let Some(timed_event) = res else {
                         return Ok(RunResult::Shutdown);
                     };
-                    if matches!(
-                        timed_event.event,
-                        LanforgeEvent::System(SystemEvent::ConfigRaChanged)
-                    ) {
-                        return Ok(RunResult::ConfigChanged);
-                    }
                     lanforge_core::match_event!(timed_event, {
                         LanforgeEvent::Network(NetworkEvent::PrefixChanged(..)) => {
                             info!("RA: Prefix change detected — sending immediate RA burst");

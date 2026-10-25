@@ -976,6 +976,16 @@ impl LanforgeRpc for ClientContext {
 
 // Helper to map errors (migrated from lanforge-uds/src/server.rs)
 impl ClientContext {
+    #[must_use]
+    pub fn new(ctx: LanforgeContext) -> Self {
+        Self {
+            current_gua: None,
+            uptime_secs: 0,
+            ctx,
+            active_clients: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
     pub async fn get_log_history(&self, limit: usize) -> Vec<lanforge_types::events::TimedEvent> {
         let Some(storage) = self.ctx.storage_handle() else {
             return Vec::new();

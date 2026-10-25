@@ -75,6 +75,7 @@ impl TimedEvent {
                     | SystemEvent::ServiceReady { .. }
                     | SystemEvent::SystemReady
                     | SystemEvent::ReloadConfig
+                    | SystemEvent::ConfigChanged { .. }
                     | SystemEvent::ConfigUpdate { .. }
                     | SystemEvent::ServiceStatusBanner(..)
                     | SystemEvent::ServiceControl { .. }

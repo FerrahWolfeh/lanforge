@@ -81,7 +81,10 @@ pub mod tests;
 pub mod write;
 
 pub use self::caps::CompiledCaps;
-pub use self::config::DynamicConfig;
+pub use self::config::{
+    ApplyReport, ConfigDelta, ConfigPatch, ConfigStore, ConfigSubscription, DynamicConfig,
+    SubscribableSection,
+};
 pub use self::dns_handle::DnsHandle;
 pub use self::runtime::ServiceRuntime;
 pub use self::storage_handle::{StorageCommand, StorageHandle};
@@ -186,6 +189,8 @@ pub(crate) struct LanforgeContextInner {
     pub(crate) target_ifname: RwLock<Option<String>>,
     /// Consolidated dynamic subsystem configurations, protected by an `ArcSwap` for wait-free reads.
     pub(crate) config: ArcSwap<DynamicConfig>,
+    /// Per-section configuration watch store for atomic diffs and isolated notifications.
+    pub(crate) config_store: Arc<config::ConfigStore>,
     /// Serializes dynamic configuration mutations.
     pub(crate) config_mutex: Mutex<()>,
     /// Central service execution runtime and status container.
@@ -226,6 +231,7 @@ impl LanforgeContext {
             target_ifindex,
             target_ifname: RwLock::new(None),
             config: ArcSwap::from_pointee(DynamicConfig::default()),
+            config_store: Arc::new(config::ConfigStore::default()),
             config_mutex: Mutex::new(()),
             runtime: ServiceRuntime::new(bus),
         });

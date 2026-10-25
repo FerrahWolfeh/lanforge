@@ -6,6 +6,8 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceDependency};
 use lanforge_transport::UdpTransport;
+use lanforge_types::config::ChangeImpact;
+use lanforge_types::network::dhcp::TftpOptions;
 use lanforge_types::system::ServiceState;
 use parking_lot::RwLock;
 use std::net::SocketAddr;
@@ -73,97 +75,174 @@ impl AsyncService for TftpService {
         ]
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
-        if !self.cfg.enabled {
-            info!("TFTP service is disabled in configuration.");
-            ctx.set_service_state("tftp", ServiceState::Inactive);
-            return Ok(());
-        }
+        let mut tftp_sub = ctx.config_subscription::<TftpOptions>();
 
-        let addrs = self.cfg.listen.addrs();
-        if addrs.is_empty() {
-            return Err(CoreError::Generic(
-                "No TFTP listen addresses configured".to_string(),
-            ));
-        }
-
-        let mut actual_bound = Vec::new();
-        let mut transports = Vec::new();
-
-        for addr in addrs {
-            let transport = match addr {
-                SocketAddr::V6(v6) if v6.ip().is_unspecified() => {
-                    UdpTransport::dual_stack(v6.port()).map_err(CoreError::Io)?
-                }
-                _ => UdpTransport::bind_single(addr).map_err(CoreError::Io)?,
-            };
-            for local_addr in transport.local_addrs().map_err(CoreError::Io)? {
-                actual_bound.push(local_addr.to_string());
-            }
-            transports.push(transport);
-        }
-
-        let bound_str = actual_bound.join(", ");
-        *self.bound_addr.write() = Some(bound_str.clone());
-        info!(addr = %bound_str, "TFTP: Server listening");
-
-        let (shutdown_tx, _) = tokio::sync::watch::channel(());
-        let shutdown_tx_clone = shutdown_tx.clone();
-        let mut bus_rx = ctx.bus().subscribe_system();
-
-        let cfg_shared = Arc::new(self.cfg.clone());
-        let mut reader_handles = Vec::new();
-        for transport in transports {
-            let cfg = Arc::clone(&cfg_shared);
-            let mut shutdown_rx = shutdown_tx.subscribe();
-            reader_handles.push(tokio::spawn(async move {
-                let mut buf = [0u8; 1024];
+        loop {
+            if !self.cfg.enabled {
+                info!("TFTP service is disabled in configuration.");
+                ctx.set_service_state("tftp", ServiceState::Inactive);
+                let mut bus_rx = ctx.bus().subscribe_system();
                 loop {
                     tokio::select! {
-                        res = transport.recv(&mut buf) => {
-                            match res {
-                                Ok((size, src)) => {
-                                    let data = SmallVec::<[u8; 512]>::from_slice(&buf[..size]);
-                                    let trans_clone = transport.clone();
-                                    let cfg_clone = Arc::clone(&cfg);
-                                    tokio::spawn(async move {
-                                        if let Err(e) = handle_packet(&trans_clone, src, &data, &cfg_clone).await {
-                                            debug!("TFTP error handling request from {src}: {e}");
-                                        }
-                                    });
+                        delta_opt = tftp_sub.next() => {
+                            if let Some(delta) = delta_opt
+                                && delta.new.enabled
+                            {
+                                self.cfg.enabled = true;
+                                if !delta.new.listen_addr.is_empty()
+                                    && let Ok(listen) = delta.new.listen_addr.parse()
+                                {
+                                    self.cfg.listen = listen;
                                 }
-                                Err(e) => {
-                                    error!("TFTP socket recv error: {e}");
+                                if !delta.new.root_dir.is_empty() {
+                                    self.cfg.root_dir = delta.new.root_dir.clone().into();
+                                }
+                                self.cfg.block_size = delta.new.block_size;
+                                self.cfg.timeout = delta.new.timeout;
+                                self.cfg.max_retries = delta.new.max_retries;
+                                break;
+                            }
+                        }
+                        event = bus_rx.recv() => {
+                            if let Ok(timed) = event {
+                                if matches!(timed.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
+                                    return Ok(());
+                                }
+                            } else {
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+
+            ctx.set_service_state("tftp", ServiceState::Online);
+
+            let addrs = self.cfg.listen.addrs();
+            if addrs.is_empty() {
+                return Err(CoreError::Generic(
+                    "No TFTP listen addresses configured".to_string(),
+                ));
+            }
+
+            let mut actual_bound = Vec::new();
+            let mut transports = Vec::new();
+
+            for addr in addrs {
+                let transport = match addr {
+                    SocketAddr::V6(v6) if v6.ip().is_unspecified() => {
+                        UdpTransport::dual_stack(v6.port()).map_err(CoreError::Io)?
+                    }
+                    _ => UdpTransport::bind_single(addr).map_err(CoreError::Io)?,
+                };
+                for local_addr in transport.local_addrs().map_err(CoreError::Io)? {
+                    actual_bound.push(local_addr.to_string());
+                }
+                transports.push(transport);
+            }
+
+            let bound_str = actual_bound.join(", ");
+            *self.bound_addr.write() = Some(bound_str.clone());
+            info!(addr = %bound_str, "TFTP: Server listening");
+
+            let (shutdown_tx, _) = tokio::sync::watch::channel(());
+            let shutdown_tx_clone = shutdown_tx.clone();
+            let mut bus_rx = ctx.bus().subscribe_system();
+
+            let cfg_shared = Arc::new(self.cfg.clone());
+            let mut reader_handles = Vec::new();
+            for transport in transports {
+                let cfg = Arc::clone(&cfg_shared);
+                let mut shutdown_rx = shutdown_tx.subscribe();
+                reader_handles.push(tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    loop {
+                        tokio::select! {
+                            res = transport.recv(&mut buf) => {
+                                match res {
+                                    Ok((size, src)) => {
+                                        let data = SmallVec::<[u8; 512]>::from_slice(&buf[..size]);
+                                        let trans_clone = transport.clone();
+                                        let cfg_clone = Arc::clone(&cfg);
+                                        tokio::spawn(async move {
+                                            if let Err(e) = handle_packet(&trans_clone, src, &data, &cfg_clone).await {
+                                                debug!("TFTP error handling request from {src}: {e}");
+                                            }
+                                        });
+                                    }
+                                    Err(e) => {
+                                        error!("TFTP socket recv error: {e}");
+                                    }
+                                }
+                            }
+                            _ = shutdown_rx.changed() => {
+                                break;
+                            }
+                        }
+                    }
+                }));
+            }
+
+            let mut should_rebind = false;
+            loop {
+                tokio::select! {
+                    delta_opt = tftp_sub.next() => {
+                        if let Some(delta) = delta_opt {
+                            match delta.impact {
+                                ChangeImpact::None => {}
+                                ChangeImpact::Hot => {
+                                    info!("TFTP: options updated in place");
+                                    self.cfg.block_size = delta.new.block_size;
+                                    self.cfg.timeout = delta.new.timeout;
+                                    self.cfg.max_retries = delta.new.max_retries;
+                                }
+                                ChangeImpact::Rebind | ChangeImpact::Reconnect => {
+                                    info!("TFTP: rebind requested via config update");
+                                    self.cfg.enabled = delta.new.enabled;
+                                    if !delta.new.listen_addr.is_empty()
+                                        && let Ok(listen) = delta.new.listen_addr.parse()
+                                    {
+                                        self.cfg.listen = listen;
+                                    }
+                                    if !delta.new.root_dir.is_empty() {
+                                        self.cfg.root_dir = delta.new.root_dir.clone().into();
+                                    }
+                                    self.cfg.block_size = delta.new.block_size;
+                                    self.cfg.timeout = delta.new.timeout;
+                                    self.cfg.max_retries = delta.new.max_retries;
+                                    let _ = shutdown_tx_clone.send(());
+                                    should_rebind = true;
+                                    break;
                                 }
                             }
                         }
-                        _ = shutdown_rx.changed() => {
-                            break;
-                        }
                     }
-                }
-            }));
-        }
-
-        loop {
-            tokio::select! {
-                event = bus_rx.recv() => {
-                    if let Ok(timed) = event {
-                        if matches!(timed.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
-                            info!("TFTP: shutdown signal received");
+                    event = bus_rx.recv() => {
+                        if let Ok(timed) = event {
+                            if matches!(timed.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
+                                info!("TFTP: shutdown signal received");
+                                let _ = shutdown_tx_clone.send(());
+                                break;
+                            }
+                        } else {
                             let _ = shutdown_tx_clone.send(());
-                            break;
+                            break; // Bus closed
                         }
-                    } else {
-                        let _ = shutdown_tx_clone.send(());
-                        break; // Bus closed
                     }
                 }
             }
-        }
 
-        for h in reader_handles {
-            let _ = h.await;
+            for h in reader_handles {
+                let _ = h.await;
+            }
+
+            *self.bound_addr.write() = None;
+
+            if !should_rebind || !ctx.is_running() {
+                break;
+            }
         }
 
         Ok(())

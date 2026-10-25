@@ -57,7 +57,7 @@ fn default_blocking_mode() -> String {
 }
 
 fn default_refresh_time() -> String {
-    "04:00".to_string()
+    "03:00".to_string()
 }
 
 fn default_source_format() -> String {

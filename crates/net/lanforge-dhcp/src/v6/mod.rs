@@ -47,11 +47,12 @@ use lanforge_core::bus::{
 };
 use lanforge_core::context::{LanforgeContext, ServiceHandle};
 use lanforge_core::match_event;
+use lanforge_types::config::ChangeImpact;
 use lanforge_types::device::IPv6State;
 use lanforge_types::utils::mac_from_eui64_link_local;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::{Duid, MacAddr};
-use lanforge_types::network::dhcp::Dhcpv6Pool;
+use lanforge_types::network::dhcp::{Dhcpv6Options, Dhcpv6Pool};
 use lanforge_types::system::{RunResult, ServiceState};
 use lanforge_types::update::{
     DeviceUpdate, DhcpV6PoolUpdate, LeaseTarget, V6LeaseUpdate, V6PrefixUpdate,
@@ -209,27 +210,37 @@ impl AsyncService for Dhcpv6Service {
 impl Dhcpv6Service {
     async fn wait_for_config_change_or_shutdown(&self) -> Result<RunResult, CoreError> {
         let mut handle = self.ctx.service_handle();
+        let mut pools_sub = self.ctx.config_subscription::<Vec<Dhcpv6Pool>>();
+        let mut options_sub = self.ctx.config_subscription::<Dhcpv6Options>();
         loop {
-            let event = handle.next_event().await;
-            let Some(timed_event) = event else {
-                return Ok(RunResult::Shutdown);
-            };
-            if matches!(
-                timed_event.event,
-                LanforgeEvent::System(
-                    SystemEvent::ConfigDhcpV6Changed | SystemEvent::ConfigDhcpOptionsChanged
-                )
-            ) {
-                // Absorb any immediately consecutive config change events
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                while let Ok(Some(ev)) =
-                    tokio::time::timeout(Duration::from_millis(10), handle.next_event()).await
-                {
-                    if matches!(ev.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
-                        return Ok(RunResult::Shutdown);
+            tokio::select! {
+                delta_opt = pools_sub.next() => {
+                    if let Some(delta) = delta_opt
+                        && !delta.new.is_empty()
+                    {
+                        return Ok(RunResult::ConfigChanged);
                     }
                 }
-                return Ok(RunResult::ConfigChanged);
+                delta_opt = options_sub.next() => {
+                    if let Some(delta) = delta_opt
+                        && delta.new.enabled
+                    {
+                        return Ok(RunResult::ConfigChanged);
+                    }
+                }
+                event = handle.next_event() => {
+                    let Some(timed_event) = event else {
+                        return Ok(RunResult::Shutdown);
+                    };
+                    if matches!(
+                        timed_event.event,
+                        LanforgeEvent::System(
+                            SystemEvent::ConfigDhcpV6Changed | SystemEvent::ConfigDhcpOptionsChanged
+                        )
+                    ) {
+                        return Ok(RunResult::ConfigChanged);
+                    }
+                }
             }
         }
     }
@@ -352,6 +363,8 @@ impl Dhcpv6Service {
         let mut buf = [0u8; 2048];
         let mut resp_vec = Vec::with_capacity(1024);
         let mut handle = self.ctx.service_handle();
+        let mut pools_sub = self.ctx.config_subscription::<Vec<Dhcpv6Pool>>();
+        let mut options_sub = self.ctx.config_subscription::<Dhcpv6Options>();
         let mut stats_timer = tokio::time::interval(Duration::from_mins(1));
 
         info!(
@@ -362,6 +375,45 @@ impl Dhcpv6Service {
 
         loop {
             tokio::select! {
+                delta_opt = pools_sub.next() => {
+                    if let Some(delta) = delta_opt {
+                        match delta.impact {
+                            ChangeImpact::None => {}
+                            ChangeImpact::Hot | ChangeImpact::Rebind | ChangeImpact::Reconnect => {
+                                info!("DHCPv6: pools updated in place");
+                                if delta.new.is_empty() {
+                                    return Ok(RunResult::ConfigChanged);
+                                }
+                                current_cfg.pools.clone_from(&(*delta.new));
+                                server.cfg.pools.clone_from(&current_cfg.pools);
+                                self.publish_pool_stats(&server);
+                            }
+                        }
+                    }
+                }
+                delta_opt = options_sub.next() => {
+                    if let Some(delta) = delta_opt {
+                        match delta.impact {
+                            ChangeImpact::None => {}
+                            ChangeImpact::Hot | ChangeImpact::Rebind | ChangeImpact::Reconnect => {
+                                info!("DHCPv6: options updated in place");
+                                if !delta.new.enabled {
+                                    return Ok(RunResult::ConfigChanged);
+                                }
+                                current_cfg.dns_servers.clone_from(&delta.new.dns_servers);
+                                current_cfg.search_domains.clone_from(&delta.new.search_domains);
+                                current_cfg.ntp_servers.clone_from(&delta.new.ntp_servers);
+                                current_cfg.boot_file.clone_from(&delta.new.boot_file);
+                                current_cfg.options.clone_from(&delta.new.raw_options);
+                                if delta.new.lease_time > 0 {
+                                    current_cfg.lease_time = delta.new.lease_time;
+                                }
+                                server.cfg = current_cfg.clone();
+                                self.publish_pool_stats(&server);
+                            }
+                        }
+                    }
+                }
                 res = transport.recv(&mut buf) => {
                     match res {
                         Ok((len, peer)) => {
@@ -375,23 +427,6 @@ impl Dhcpv6Service {
                     let Some(timed_event) = event else {
                         return Ok(RunResult::Shutdown);
                     };
-                    if matches!(
-                        timed_event.event,
-                        LanforgeEvent::System(
-                            SystemEvent::ConfigDhcpV6Changed | SystemEvent::ConfigDhcpOptionsChanged
-                        )
-                    ) {
-                        // Absorb any immediately consecutive config change events
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                        while let Ok(Some(ev)) =
-                            tokio::time::timeout(Duration::from_millis(10), handle.next_event()).await
-                        {
-                            if matches!(ev.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
-                                return Ok(RunResult::Shutdown);
-                            }
-                        }
-                        return Ok(RunResult::ConfigChanged);
-                    }
                     self.handle_bus_event(&timed_event, &mut server, &transport);
                 }
                 _ = stats_timer.tick() => {

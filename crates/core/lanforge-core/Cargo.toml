@@ -22,7 +22,7 @@ arc-swap = { workspace = true }
 dashmap = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "sync", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "sync", "rt-multi-thread", "time"] }
 
 [features]
 adblock = ["lanforge-types/adblock"]

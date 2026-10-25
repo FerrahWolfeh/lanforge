@@ -42,10 +42,11 @@ use lanforge_core::bus::{
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceDependency};
 use lanforge_macros::lanforge_service;
+use lanforge_types::config::ChangeImpact;
 use lanforge_types::device::IPv4State;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::dhcp::Dhcpv4Pool;
+use lanforge_types::network::dhcp::{Dhcpv4Options, Dhcpv4Pool};
 use lanforge_types::system::{RunResult, ServiceState};
 use lanforge_types::update::{DeviceUpdate, DhcpV4PoolUpdate, LeaseTarget};
 use server::{DhcpServer, HandleResult};
@@ -216,18 +217,37 @@ impl AsyncService for Dhcpv4Service {
 impl Dhcpv4Service {
     async fn wait_for_config_change_or_shutdown(&self) -> Result<RunResult, CoreError> {
         let mut handle = self.ctx.service_handle();
+        let mut pools_sub = self.ctx.config_subscription::<Vec<Dhcpv4Pool>>();
+        let mut options_sub = self.ctx.config_subscription::<Dhcpv4Options>();
         loop {
-            let event = handle.next_event().await;
-            let Some(timed_event) = event else {
-                return Ok(RunResult::Shutdown);
-            };
-            if matches!(
-                timed_event.event,
-                LanforgeEvent::System(
-                    SystemEvent::ConfigDhcpV4Changed | SystemEvent::ConfigDhcpOptionsChanged
-                )
-            ) {
-                return Ok(RunResult::ConfigChanged);
+            tokio::select! {
+                delta_opt = pools_sub.next() => {
+                    if let Some(delta) = delta_opt
+                        && !delta.new.is_empty()
+                    {
+                        return Ok(RunResult::ConfigChanged);
+                    }
+                }
+                delta_opt = options_sub.next() => {
+                    if let Some(delta) = delta_opt
+                        && delta.new.enabled
+                    {
+                        return Ok(RunResult::ConfigChanged);
+                    }
+                }
+                event = handle.next_event() => {
+                    let Some(timed_event) = event else {
+                        return Ok(RunResult::Shutdown);
+                    };
+                    if matches!(
+                        timed_event.event,
+                        LanforgeEvent::System(
+                            SystemEvent::ConfigDhcpV4Changed | SystemEvent::ConfigDhcpOptionsChanged
+                        )
+                    ) {
+                        return Ok(RunResult::ConfigChanged);
+                    }
+                }
             }
         }
     }
@@ -311,7 +331,7 @@ impl Dhcpv4Service {
         &self,
         pools: Vec<Dhcpv4Pool>,
     ) -> Result<RunResult, CoreError> {
-        let Some(current_cfg) = self.prepare_config(pools) else {
+        let Some(mut current_cfg) = self.prepare_config(pools) else {
             return self.wait_for_config_change_or_shutdown().await;
         };
 
@@ -332,10 +352,47 @@ impl Dhcpv4Service {
 
         let mut buf = [0u8; 1500];
         let mut handle = self.ctx.service_handle();
+        let mut pools_sub = self.ctx.config_subscription::<Vec<Dhcpv4Pool>>();
+        let mut options_sub = self.ctx.config_subscription::<Dhcpv4Options>();
         let mut cleanup_timer = tokio::time::interval(Duration::from_mins(1));
 
         loop {
             tokio::select! {
+                delta_opt = pools_sub.next() => {
+                    if let Some(delta) = delta_opt {
+                        match delta.impact {
+                            ChangeImpact::None => {}
+                            ChangeImpact::Hot | ChangeImpact::Rebind | ChangeImpact::Reconnect => {
+                                info!("DHCPv4: pools updated in place");
+                                if let Some(new_cfg) = self.prepare_config((*delta.new).clone()) {
+                                    current_cfg = new_cfg;
+                                    server.cfg = current_cfg.clone();
+                                    self.publish_pool_update(&server, &current_cfg);
+                                } else {
+                                    return Ok(RunResult::ConfigChanged);
+                                }
+                            }
+                        }
+                    }
+                }
+                delta_opt = options_sub.next() => {
+                    if let Some(delta) = delta_opt {
+                        match delta.impact {
+                            ChangeImpact::None => {}
+                            ChangeImpact::Hot | ChangeImpact::Rebind | ChangeImpact::Reconnect => {
+                                info!("DHCPv4: options updated in place");
+                                let active_pools = self.ctx.get_dhcp_v4_pools();
+                                if let Some(new_cfg) = self.prepare_config(active_pools) {
+                                    current_cfg = new_cfg;
+                                    server.cfg = current_cfg.clone();
+                                    self.publish_pool_update(&server, &current_cfg);
+                                } else {
+                                    return Ok(RunResult::ConfigChanged);
+                                }
+                            }
+                        }
+                    }
+                }
                 res = transport.recv(&mut buf) => {
                     match res {
                         Ok((len, _)) => {
@@ -353,14 +410,6 @@ impl Dhcpv4Service {
                     let Some(timed_event) = event else {
                         return Ok(RunResult::Shutdown);
                     };
-                    if matches!(
-                        timed_event.event,
-                        LanforgeEvent::System(
-                            SystemEvent::ConfigDhcpV4Changed | SystemEvent::ConfigDhcpOptionsChanged
-                        )
-                    ) {
-                        return Ok(RunResult::ConfigChanged);
-                    }
                     self.handle_bus_event(&timed_event, &mut server, &transport);
                 }
                 _ = cleanup_timer.tick() => {

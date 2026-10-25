@@ -57,8 +57,10 @@ impl ClientContext {
         v4_pools: Vec<Dhcpv4Pool>,
         v6_pools: Vec<Dhcpv6Pool>,
     ) -> Response {
-        self.ctx.update_dhcp_v4_pools(v4_pools);
-        self.ctx.update_dhcp_v6_pools(v6_pools);
+        let patch = lanforge_core::context::ConfigPatch::new()
+            .with_dhcp_v4_pools(v4_pools)
+            .with_dhcp_v6_pools(v6_pools);
+        let _ = self.ctx.apply_config(patch);
         Response::Success(SimpleSuccess {
             message: "DHCP pools configuration updated successfully".to_string(),
         })

@@ -129,41 +129,42 @@ impl Daemon {
     }
 
     fn reload_db_configs(&self, new_cfg: &mut Config) {
+        let mut patch = lanforge_core::context::ConfigPatch::new();
         #[cfg(feature = "pppoe")]
         if let Ok(Some(pppoe_db)) = self.bootstrap.db.load_pppoe_config() {
             new_cfg.pppoe_enabled = pppoe_db.enabled;
             new_cfg.pppoe_toml = pppoe_db.clone();
-            self.ctx.update_pppoe_config(pppoe_db);
+            patch = patch.with_pppoe(pppoe_db);
         }
         #[cfg(feature = "traffic")]
         if let Ok(Some(traffic_db)) = self.bootstrap.db.load_traffic_config() {
             new_cfg.traffic_toml = traffic_db.clone();
-            self.ctx.update_traffic_config(traffic_db);
+            patch = patch.with_traffic(traffic_db);
         }
         #[cfg(feature = "nft")]
         if let Ok(Some(firewall_db)) = self.bootstrap.db.load_firewall_config() {
             new_cfg.firewall_enabled = firewall_db.enabled;
             new_cfg.firewall_toml = firewall_db.clone();
-            self.ctx.update_firewall_config(firewall_db);
+            patch = patch.with_firewall(firewall_db);
         }
         #[cfg(feature = "dhcp")]
         {
             if let Ok(Some(opts)) = self.bootstrap.db.load_dhcp_options() {
                 new_cfg.dhcpv4_enabled = opts.v4.enabled;
                 new_cfg.dhcpv6_enabled = opts.v6.enabled;
-                self.ctx.update_dhcp_options(opts);
+                patch = patch.with_dhcp_options(opts);
             }
             if let Ok(v4_pools) = self.bootstrap.db.load_dhcp_v4_pools()
                 && !v4_pools.is_empty()
             {
                 new_cfg.dhcpv4_toml.pools.clone_from(&v4_pools);
-                self.ctx.update_dhcp_v4_pools(v4_pools);
+                patch = patch.with_dhcp_v4_pools(v4_pools);
             }
             if let Ok(v6_pools) = self.bootstrap.db.load_dhcp_v6_pools()
                 && !v6_pools.is_empty()
             {
                 new_cfg.dhcpv6_toml.pools.clone_from(&v6_pools);
-                self.ctx.update_dhcp_v6_pools(v6_pools);
+                patch = patch.with_dhcp_v6_pools(v6_pools);
             }
         }
         #[cfg(feature = "ra")]
@@ -175,7 +176,10 @@ impl Daemon {
                 new_cfg.ra_toml.prefixes.clone_from(&prefixes);
                 new_cfg.ra_toml.dnssl.clone_from(&dnssl);
                 new_cfg.ra_toml.rdnss.clone_from(&rdnss);
-                self.ctx.update_ra_config(prefixes, rdnss, dnssl);
+                patch = patch
+                    .with_ra_prefixes(prefixes)
+                    .with_ra_rdnss(rdnss)
+                    .with_ra_dnssl(dnssl);
             }
         }
         #[cfg(feature = "dns")]
@@ -192,10 +196,10 @@ impl Daemon {
                         domain: row.domain,
                     })
                     .collect();
-                self.ctx.update_dns_upstreams(targets);
+                patch = patch.with_dns_upstreams(targets);
             }
             if let Ok(adb_cfg) = self.bootstrap.db.load_adblock_config() {
-                self.ctx.update_dns_adblock(adb_cfg);
+                patch = patch.with_dns_adblock(adb_cfg);
             }
             if let Ok(sources) = self.bootstrap.db.load_adblock_urls() {
                 let urls = sources
@@ -208,9 +212,10 @@ impl Daemon {
                         format,
                     })
                     .collect();
-                self.ctx.update_dns_adblock_urls(urls);
+                patch = patch.with_dns_adblock_urls(urls);
             }
         }
+        let _ = self.ctx.apply_config(patch);
     }
 
     #[allow(clippy::missing_const_for_fn)]
