@@ -4,11 +4,11 @@ use crate::config::TftpConfig;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceDependency};
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
 use lanforge_transport::UdpTransport;
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::network::dhcp::TftpOptions;
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::DormantReason;
 use parking_lot::RwLock;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -76,16 +76,26 @@ impl AsyncService for TftpService {
     }
 
     #[allow(clippy::too_many_lines)]
-    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+    async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         let mut tftp_sub = ctx.config_subscription::<TftpOptions>();
 
         loop {
             if !self.cfg.enabled {
                 info!("TFTP service is disabled in configuration.");
-                ctx.set_service_state("tftp", ServiceState::Inactive);
+                h.dormant(DormantReason::disabled("tftp.enabled"));
                 let mut bus_rx = ctx.bus().subscribe_system();
                 loop {
                     tokio::select! {
+                        cmd = h.next_command() => {
+                            match cmd {
+                                ServiceCommand::Stop | ServiceCommand::Shutdown => return Ok(()),
+                                ServiceCommand::Restart => {
+                                    h.request_restart();
+                                    return Ok(());
+                                }
+                                _ => {}
+                            }
+                        }
                         delta_opt = tftp_sub.next() => {
                             if let Some(delta) = delta_opt
                                 && delta.new.enabled
@@ -118,8 +128,6 @@ impl AsyncService for TftpService {
                 }
             }
 
-            ctx.set_service_state("tftp", ServiceState::Online);
-
             let addrs = self.cfg.listen.addrs();
             if addrs.is_empty() {
                 return Err(CoreError::Generic(
@@ -146,6 +154,7 @@ impl AsyncService for TftpService {
             let bound_str = actual_bound.join(", ");
             *self.bound_addr.write() = Some(bound_str.clone());
             info!(addr = %bound_str, "TFTP: Server listening");
+            h.ready();
 
             let (shutdown_tx, _) = tokio::sync::watch::channel(());
             let shutdown_tx_clone = shutdown_tx.clone();
@@ -167,7 +176,7 @@ impl AsyncService for TftpService {
                                         let trans_clone = transport.clone();
                                         let cfg_clone = Arc::clone(&cfg);
                                         tokio::spawn(async move {
-                                            if let Err(e) = handle_packet(&trans_clone, src, &data, &cfg_clone).await {
+                                             if let Err(e) = handle_packet(&trans_clone, src, &data, &cfg_clone).await {
                                                 debug!("TFTP error handling request from {src}: {e}");
                                             }
                                         });
@@ -188,6 +197,20 @@ impl AsyncService for TftpService {
             let mut should_rebind = false;
             loop {
                 tokio::select! {
+                    cmd = h.next_command() => {
+                        match cmd {
+                            ServiceCommand::Stop | ServiceCommand::Shutdown => {
+                                let _ = shutdown_tx_clone.send(());
+                                break;
+                            }
+                            ServiceCommand::Restart => {
+                                h.request_restart();
+                                let _ = shutdown_tx_clone.send(());
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
                     delta_opt = tftp_sub.next() => {
                         if let Some(delta) = delta_opt {
                             match delta.impact {
@@ -234,8 +257,8 @@ impl AsyncService for TftpService {
                 }
             }
 
-            for h in reader_handles {
-                let _ = h.await;
+            for rh in reader_handles {
+                let _ = rh.await;
             }
 
             *self.bound_addr.write() = None;

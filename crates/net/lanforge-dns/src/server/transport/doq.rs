@@ -1,5 +1,5 @@
 use lanforge_types::network::dns::TransportProtocol;
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::{DormantReason, ServiceState};
 use quinn::{Endpoint, ServerConfig, TransportConfig};
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,7 +8,7 @@ use tracing::{debug, info};
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceDependency};
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
 
 use crate::config::DnsConfig;
 use crate::pipeline::DnsPipelineRequest;
@@ -52,11 +52,10 @@ impl AsyncService for DoqService {
         ]
     }
 
-    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+    async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         let Some(addr) = self.cfg.doq_listen else {
             info!("DoQ is disabled in configuration.");
-            ctx.set_service_state("doq", ServiceState::Inactive);
-            std::future::pending::<()>().await;
+            h.dormant(DormantReason::disabled("dns.doq_listen"));
             return Ok(());
         };
 
@@ -86,10 +85,21 @@ impl AsyncService for DoqService {
             .map_err(|e| CoreError::Generic(format!("DoQ bind error: {e}")))?;
 
         info!("DoQ listening on quic://{}", addr);
+        h.ready();
 
         let mut rx = ctx.bus().subscribe();
         loop {
             tokio::select! {
+                cmd = h.next_command() => {
+                    match cmd {
+                        ServiceCommand::Stop | ServiceCommand::Shutdown => break,
+                        ServiceCommand::Restart => {
+                            h.request_restart();
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
                 incoming = endpoint.accept() => {
                     if let Some(incoming) = incoming {
                         let ctx_conn = ctx.clone();

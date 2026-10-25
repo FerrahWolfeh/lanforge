@@ -45,7 +45,7 @@ pub mod server;
 use lanforge_core::bus::{
     AdminChange, DeviceEvent, DhcpV6MessageType, LanforgeEvent, NetworkEvent, SystemEvent,
 };
-use lanforge_core::context::{LanforgeContext, ServiceHandle};
+use lanforge_core::context::LanforgeContext;
 use lanforge_core::match_event;
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::device::IPv6State;
@@ -53,7 +53,7 @@ use lanforge_types::utils::mac_from_eui64_link_local;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::dhcp::{Dhcpv6Options, Dhcpv6Pool};
-use lanforge_types::system::{RunResult, ServiceState};
+use lanforge_types::system::RunResult;
 use lanforge_types::update::{
     DeviceUpdate, DhcpV6PoolUpdate, LeaseTarget, V6LeaseUpdate, V6PrefixUpdate,
 };
@@ -76,7 +76,8 @@ use dhcproto::v6::{DhcpOption, Message, MessageType, OptionCode};
 use dhcproto::{Decodable, Decoder};
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceDependency};
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
+use lanforge_types::system::DormantReason;
 
 /// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
 ///
@@ -172,13 +173,13 @@ impl AsyncService for Dhcpv6Service {
         ]
     }
 
-    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+    async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         loop {
             let options = ctx.get_dhcp_options();
             if !options.v6.enabled {
                 self.config.enabled = false;
                 info!("DHCPv6: Service disabled in configuration — server idle");
-                ctx.set_service_state("dhcpv6", ServiceState::Inactive);
+                h.dormant(DormantReason::disabled("dhcp.v6.enabled"));
                 match self.wait_for_config_change_or_shutdown().await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,
@@ -196,8 +197,8 @@ impl AsyncService for Dhcpv6Service {
                 }
             }
 
-            ctx.set_service_state("dhcpv6", ServiceState::Online);
-            match self.run_server(pools).await? {
+            h.ready();
+            match self.run_server(pools, h).await? {
                 RunResult::Shutdown => break,
                 RunResult::ConfigChanged => {}
             }
@@ -328,9 +329,11 @@ impl Dhcpv6Service {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn run_server(
         &self,
         pools: Vec<Dhcpv6Pool>,
+        h: &ServiceHandle,
     ) -> Result<RunResult, CoreError> {
         let mut current_cfg = self.config.clone();
         current_cfg.pools = pools;
@@ -375,6 +378,16 @@ impl Dhcpv6Service {
 
         loop {
             tokio::select! {
+                cmd = h.next_command() => {
+                    match cmd {
+                        ServiceCommand::Stop | ServiceCommand::Shutdown => return Ok(RunResult::Shutdown),
+                        ServiceCommand::Restart => {
+                            h.request_restart();
+                            return Ok(RunResult::Shutdown);
+                        }
+                        _ => {}
+                    }
+                }
                 delta_opt = pools_sub.next() => {
                     if let Some(delta) = delta_opt {
                         match delta.impact {
@@ -418,7 +431,7 @@ impl Dhcpv6Service {
                     match res {
                         Ok((len, peer)) => {
                             let len = len.min(buf.len());
-                            self.handle_incoming_packet(&buf[..len], peer, &mut server, &transport, &handle, &mut resp_vec);
+                            self.handle_incoming_packet(&buf[..len], peer, &mut server, &transport, &mut resp_vec);
                         }
                         Err(e) => warn!("DHCPv6 socket error: {e}"),
                     }
@@ -462,7 +475,6 @@ impl Dhcpv6Service {
         peer: SocketAddr,
         server: &mut Dhcpv6Server,
         transport: &io::Dhcpv6Transport,
-        handle: &ServiceHandle,
         resp_vec: &mut Vec<u8>,
     ) {
         let (peer_ip, scope_id) = match peer {
@@ -490,7 +502,7 @@ impl Dhcpv6Service {
 
             // Diagnostic: Publish DHCPv6 Transaction
             if let Some(mac) = resolved_mac {
-                let _ = handle.publish(LanforgeEvent::Device(DeviceEvent::DhcpV6Transaction {
+                let _ = self.ctx.bus().publish(LanforgeEvent::Device(DeviceEvent::DhcpV6Transaction {
                     mac,
                     msg_type: DhcpV6MessageType::from(u8::from(msg.msg_type())),
                     details: None,

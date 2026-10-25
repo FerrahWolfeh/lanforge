@@ -7,7 +7,7 @@ use dhcproto::{Encodable, Encoder};
 use lanforge_core::bus::{EventBus, FirewallEvent, LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_dhcp::{Dhcpv4Config, Dhcpv4Service};
 use lanforge_nft::NftService;
 use lanforge_ra::{RaConfig, RaService};
@@ -173,16 +173,28 @@ async fn test_rootless_pipeline_e2e() {
     // 3. Spawn All Services as Background Async Tasks
     // -----------------------------------------------------------------------
     let ctx_nft = ctx.clone();
-    let nft_task = tokio::spawn(async move { nft_service.serve(&ctx_nft).await });
+    let nft_task = tokio::spawn(async move {
+        let h = ServiceHandle::new("firewall", ctx_nft.clone());
+        nft_service.serve(&ctx_nft, &h).await
+    });
 
     let ctx_traffic = ctx.clone();
-    let traffic_task = tokio::spawn(async move { traffic_service.serve(&ctx_traffic).await });
+    let traffic_task = tokio::spawn(async move {
+        let h = ServiceHandle::new("traffic", ctx_traffic.clone());
+        traffic_service.serve(&ctx_traffic, &h).await
+    });
 
     let ctx_ra = ctx.clone();
-    let ra_task = tokio::spawn(async move { ra_service.serve(&ctx_ra).await });
+    let ra_task = tokio::spawn(async move {
+        let h = ServiceHandle::new("ra", ctx_ra.clone());
+        ra_service.serve(&ctx_ra, &h).await
+    });
 
     let ctx_dhcp = ctx.clone();
-    let dhcp_task = tokio::spawn(async move { dhcp_service.serve(&ctx_dhcp).await });
+    let dhcp_task = tokio::spawn(async move {
+        let h = ServiceHandle::new("dhcpv4", ctx_dhcp.clone());
+        dhcp_service.serve(&ctx_dhcp, &h).await
+    });
 
     // Allow services to initialize and subscribe to domain events
     tokio::time::sleep(Duration::from_millis(60)).await;

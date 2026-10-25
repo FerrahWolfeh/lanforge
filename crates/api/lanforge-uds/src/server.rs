@@ -18,8 +18,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, s
 use tokio::net::{TcpListener, UnixListener};
 use tracing::{debug, error, info, warn};
 
-use lanforge_core::service::{AsyncService, ServiceDependency};
-use lanforge_types::system::ServiceState;
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
+use lanforge_types::system::DormantReason;
 
 #[lanforge_macros::lanforge_service(
     id = "control",
@@ -127,11 +127,11 @@ impl AsyncService for ControlService {
         stats
     }
 
-    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+    async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
         if !cfg.enabled {
             info!("Control API: Service disabled in configuration.");
-            ctx.set_service_state("control", ServiceState::Inactive);
+            h.dormant(DormantReason::disabled("control.enabled"));
             return Ok(());
         }
         let listener = Self::setup_unix_listener(&cfg.socket_path)?;
@@ -143,11 +143,23 @@ impl AsyncService for ControlService {
 
         let tcp_listener = self.setup_tcp_listener(cfg.tcp_port).await;
 
+        h.ready();
+
         loop {
             if !ctx.is_running() {
                 break;
             }
             tokio::select! {
+                cmd = h.next_command() => {
+                    match cmd {
+                        ServiceCommand::Stop | ServiceCommand::Shutdown => break,
+                        ServiceCommand::Restart => {
+                            h.request_restart();
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
                 msg = net_rx.recv() => {
                     match msg {
                         Ok(timed_event) => {

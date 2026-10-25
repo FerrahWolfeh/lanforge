@@ -119,12 +119,12 @@ pub struct EventCounters {
 ///     // handle event...
 /// }
 /// ```
-pub struct ServiceHandle {
+pub struct BusHandle {
     rx: Receiver<TimedEvent>,
     ctx: LanforgeContext,
 }
 
-impl ServiceHandle {
+impl BusHandle {
     /// Returns the next event, or `None` if the system is shutting down.
     ///
     /// Automatically handles:
@@ -376,61 +376,61 @@ impl LanforgeContext {
     /// `bus().subscribe()` for the outer shutdown select. This handle is
     /// for use INSIDE `service.run()`.
     #[must_use]
-    pub fn service_handle(&self) -> ServiceHandle {
-        ServiceHandle {
+    pub fn service_handle(&self) -> BusHandle {
+        BusHandle {
             rx: self.inner.bus.subscribe(),
             ctx: self.clone(),
         }
     }
 
-    /// Creates a dedicated `ServiceHandle` subscribing to an explicit domain topic.
+    /// Creates a dedicated `BusHandle` subscribing to an explicit domain topic.
     #[must_use]
-    pub fn service_handle_topic(&self, topic: EventTopic) -> ServiceHandle {
-        ServiceHandle {
+    pub fn service_handle_topic(&self, topic: EventTopic) -> BusHandle {
+        BusHandle {
             rx: self.inner.bus.subscribe_topic(topic),
             ctx: self.clone(),
         }
     }
 
-    /// Creates a dedicated `ServiceHandle` subscribing only to network events.
+    /// Creates a dedicated `BusHandle` subscribing only to network events.
     #[must_use]
-    pub fn service_handle_network(&self) -> ServiceHandle {
+    pub fn service_handle_network(&self) -> BusHandle {
         self.service_handle_topic(EventTopic::Network)
     }
 
-    /// Creates a dedicated `ServiceHandle` subscribing only to DNS events.
+    /// Creates a dedicated `BusHandle` subscribing only to DNS events.
     #[must_use]
-    pub fn service_handle_dns(&self) -> ServiceHandle {
+    pub fn service_handle_dns(&self) -> BusHandle {
         self.service_handle_topic(EventTopic::Dns)
     }
 
-    /// Creates a dedicated `ServiceHandle` subscribing only to device events.
+    /// Creates a dedicated `BusHandle` subscribing only to device events.
     #[must_use]
-    pub fn service_handle_device(&self) -> ServiceHandle {
+    pub fn service_handle_device(&self) -> BusHandle {
         self.service_handle_topic(EventTopic::Device)
     }
 
-    /// Creates a dedicated `ServiceHandle` subscribing only to storage events.
+    /// Creates a dedicated `BusHandle` subscribing only to storage events.
     #[must_use]
-    pub fn service_handle_storage(&self) -> ServiceHandle {
+    pub fn service_handle_storage(&self) -> BusHandle {
         self.service_handle_topic(EventTopic::Storage)
     }
 
-    /// Creates a dedicated `ServiceHandle` subscribing only to `PPPoE` events.
+    /// Creates a dedicated `BusHandle` subscribing only to `PPPoE` events.
     #[must_use]
-    pub fn service_handle_pppoe(&self) -> ServiceHandle {
+    pub fn service_handle_pppoe(&self) -> BusHandle {
         self.service_handle_topic(EventTopic::Pppoe)
     }
 
-    /// Creates a dedicated `ServiceHandle` subscribing only to firewall events.
+    /// Creates a dedicated `BusHandle` subscribing only to firewall events.
     #[must_use]
-    pub fn service_handle_firewall(&self) -> ServiceHandle {
+    pub fn service_handle_firewall(&self) -> BusHandle {
         self.service_handle_topic(EventTopic::Firewall)
     }
 
-    /// Creates a dedicated `ServiceHandle` subscribing only to traffic events.
+    /// Creates a dedicated `BusHandle` subscribing only to traffic events.
     #[must_use]
-    pub fn service_handle_traffic(&self) -> ServiceHandle {
+    pub fn service_handle_traffic(&self) -> BusHandle {
         self.service_handle_topic(EventTopic::Traffic)
     }
 

@@ -41,12 +41,12 @@ use crate::ping::IcmpPinger;
 use lanforge_core::bus::{DeviceEvent, LanforgeEvent, NetworkChange, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceDependency};
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
 use lanforge_transport::ArpProber;
 use lanforge_types::device::{IPv4State, IPv6State, Origin};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::NeighborEvent;
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::DormantReason;
 use lanforge_types::update::DeviceUpdate;
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use netlink_sys::SocketAddr;
@@ -310,10 +310,10 @@ impl AsyncService for DiscoveryService {
         Ok(())
     }
 
-    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+    async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         if !self.cfg.enabled {
             info!("Discovery service is disabled in configuration.");
-            ctx.set_service_state("monitor", ServiceState::Inactive);
+            h.dormant(DormantReason::disabled("discovery.enabled"));
             return Ok(());
         }
 
@@ -331,12 +331,23 @@ impl AsyncService for DiscoveryService {
 
         let mut pending_batch = Vec::with_capacity(50);
         let mut flush_timer = interval(Duration::from_millis(self.cfg.batch_interval_ms));
+        h.ready();
 
         loop {
             if !ctx.is_running() {
                 break;
             }
             tokio::select! {
+                cmd = h.next_command() => {
+                    match cmd {
+                        ServiceCommand::Stop | ServiceCommand::Shutdown => break,
+                        ServiceCommand::Restart => {
+                            h.request_restart();
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
                 res = self.messages.recv() => {
                     let Ok((msg, _addr)) = res else {
                         if let Err(broadcast::error::RecvError::Lagged(n)) = res {

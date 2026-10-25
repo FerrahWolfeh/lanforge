@@ -60,14 +60,14 @@ use lanforge_types::network::ra::{
     ICMPV6_TYPE_RS, MAX_INITIAL_RTR_ADVERT_INTERVAL, MAX_INITIAL_RTR_ADVERTISEMENTS,
     MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS, RAPrefix, RaServerConfig,
 };
-use lanforge_types::system::{RaStatusResponse, RunResult, ServiceState};
+use lanforge_types::system::{DormantReason, RaStatusResponse, RunResult};
 
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
 use crate::error::NetworkError;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceDependency};
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
 use lanforge_transport::Icmp6Transport;
 use rand::RngExt;
 use std::collections::HashMap;
@@ -379,13 +379,26 @@ impl RaService {
         Ok((mac, transport))
     }
 
-    async fn wait_for_config_change_or_shutdown(&self) -> Result<RunResult, CoreError> {
+    async fn wait_for_config_change_or_shutdown(
+        &self,
+        h: &ServiceHandle,
+    ) -> Result<RunResult, CoreError> {
         let mut handle = self.ctx.service_handle_network();
         let mut ra_sub = self.ctx.config_subscription::<RaServerConfig>();
         let mut prefix_sub = self.ctx.config_subscription::<Vec<RAPrefix>>();
 
         loop {
             tokio::select! {
+                cmd = h.next_command() => {
+                    match cmd {
+                        ServiceCommand::Stop | ServiceCommand::Shutdown => return Ok(RunResult::Shutdown),
+                        ServiceCommand::Restart => {
+                            h.request_restart();
+                            return Ok(RunResult::Shutdown);
+                        }
+                        _ => {}
+                    }
+                }
                 delta_opt = ra_sub.next() => {
                     if let Some(delta) = delta_opt
                         && delta.new.enabled
@@ -417,7 +430,11 @@ impl RaService {
     }
 
     #[allow(clippy::too_many_lines)]
-    async fn run_server(&self, mut current_cfg: RaConfig) -> Result<RunResult, CoreError> {
+    async fn run_server(
+        &self,
+        mut current_cfg: RaConfig,
+        h: &ServiceHandle,
+    ) -> Result<RunResult, CoreError> {
         current_cfg
             .validate()
             .map_err(|e| CoreError::Generic(e.to_string()))?;
@@ -470,6 +487,7 @@ impl RaService {
         // Update live status in context
         let initial_status = state.build_status(&current_cfg, &self.ctx, Some(next_ra_at));
         self.ctx.set_ra_status(Some(initial_status));
+        h.ready();
 
         let mut buf = [0u8; 1500];
         let mut handle = self.ctx.service_handle_network();
@@ -492,6 +510,17 @@ impl RaService {
             };
 
             tokio::select! {
+                cmd = h.next_command() => {
+                    match cmd {
+                        ServiceCommand::Stop | ServiceCommand::Shutdown => return Ok(RunResult::Shutdown),
+                        ServiceCommand::Restart => {
+                            h.request_restart();
+                            return Ok(RunResult::Shutdown);
+                        }
+                        _ => {}
+                    }
+                }
+
                 // 1. Periodic Advertisement & Timers
                 () = tokio::time::sleep(sleep_duration) => {
                     Self::perform_periodic_ra(ctx, &current_cfg, &mut state, &mut next_ra_at);
@@ -635,14 +664,14 @@ impl AsyncService for RaService {
         list
     }
 
-    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+    async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         loop {
             let ra_server_cfg = ctx.get_ra_server_config();
             if !ra_server_cfg.enabled {
                 info!("RA: Service disabled via runtime config — server idle");
-                ctx.set_service_state("ra", ServiceState::Inactive);
+                h.dormant(DormantReason::disabled("ra.enabled"));
                 ctx.set_ra_status(None);
-                match self.wait_for_config_change_or_shutdown().await? {
+                match self.wait_for_config_change_or_shutdown(h).await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,
                 }
@@ -653,15 +682,15 @@ impl AsyncService for RaService {
 
             if current_cfg.prefixes.is_empty() {
                 warn!("RA: Service enabled but no prefixes configured — server idle");
+                h.dormant(DormantReason::not_applicable("no prefixes configured"));
                 ctx.set_ra_status(None);
-                match self.wait_for_config_change_or_shutdown().await? {
+                match self.wait_for_config_change_or_shutdown(h).await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,
                 }
             }
 
-            ctx.set_service_state("ra", ServiceState::Online);
-            match self.run_server(current_cfg).await? {
+            match self.run_server(current_cfg, h).await? {
                 RunResult::Shutdown => break,
                 RunResult::ConfigChanged => {}
             }

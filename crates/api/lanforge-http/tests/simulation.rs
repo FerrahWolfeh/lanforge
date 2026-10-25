@@ -47,8 +47,7 @@ async fn test_http_simulation_basic() {
     let mut rx = ctx.bus().subscribe();
 
     tokio::spawn(async move {
-        ctrl.signal_ready();
-        service.serve(&ctx_service).await.expect("Service failed");
+        service.serve(&ctx_service, &ctrl).await.expect("Service failed");
     });
 
     // Wait for ServiceReady event

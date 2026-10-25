@@ -5,7 +5,7 @@ use std::time::Duration;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_pppoe::{PppoeConfig, PppoeService};
 use lanforge_types::events::TimedEvent;
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
@@ -74,7 +74,8 @@ async fn test_pppoe_inert_session_up_and_shutdown() {
     assert!(service.is_inert());
 
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { service.serve(&ctx_clone).await });
+    let h = ServiceHandle::new("pppoe", ctx_clone.clone());
+    let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     // 1. Verify SessionUp is emitted with complete parameters
     let session = wait_for_session_up(&mut pppoe_sub).await;
@@ -125,7 +126,8 @@ async fn test_pppoe_reacts_to_config_change_in_place() {
 
     let mut service = PppoeService::inert(cfg, ctx.clone());
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { service.serve(&ctx_clone).await });
+    let h = ServiceHandle::new("pppoe", ctx_clone.clone());
+    let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     // 1. Initial connect
     let _ = wait_for_session_up(&mut pppoe_sub).await;
@@ -186,7 +188,8 @@ async fn test_pppoe_reacts_to_service_control_restart() {
 
     let mut service = PppoeService::inert(cfg, ctx.clone());
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { service.serve(&ctx_clone).await });
+    let h = ServiceHandle::new("pppoe", ctx_clone.clone());
+    let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     // 1. Initial connect
     let _ = wait_for_session_up(&mut pppoe_sub).await;
@@ -226,7 +229,8 @@ async fn test_pppoe_reacts_to_service_control_stop() {
 
     let mut service = PppoeService::inert(cfg, ctx.clone());
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { service.serve(&ctx_clone).await });
+    let h = ServiceHandle::new("pppoe", ctx_clone.clone());
+    let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     // 1. Connect
     let _ = wait_for_session_up(&mut pppoe_sub).await;
@@ -265,7 +269,8 @@ async fn test_pppoe_emits_auth_failed_and_reconnecting() {
 
     let mut service = PppoeService::inert(cfg, ctx.clone());
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { service.serve(&ctx_clone).await });
+    let h = ServiceHandle::new("pppoe", ctx_clone.clone());
+    let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     // 1. Expect AuthFailed event
     let reason = wait_for_pppoe_event(&mut pppoe_sub, |evt| match evt {
@@ -312,7 +317,8 @@ async fn test_pppoe_carrier_drop_and_recovery() {
 
     let mut service = PppoeService::inert(cfg, ctx.clone());
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { service.serve(&ctx_clone).await });
+    let h = ServiceHandle::new("pppoe", ctx_clone.clone());
+    let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     // 1. Initial connect
     let _ = wait_for_session_up(&mut pppoe_sub).await;
@@ -344,7 +350,8 @@ async fn test_pppoe_disabled_at_startup_transitions_to_inactive() {
     };
 
     let mut service = PppoeService::inert(cfg, ctx.clone());
-    let res = service.serve(&ctx).await;
+    let h = ServiceHandle::new("pppoe", ctx.clone());
+    let res = service.serve(&ctx, &h).await;
     assert!(res.is_ok());
 
     assert_eq!(ctx.get_service_state("pppoe"), ServiceState::Inactive);
@@ -421,7 +428,8 @@ async fn test_pppoe_with_terminal_probe_enabled_reports_terminal_status() {
 
     let mut service = PppoeService::inert(cfg, ctx.clone());
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { service.serve(&ctx_clone).await });
+    let h = ServiceHandle::new("pppoe", ctx_clone.clone());
+    let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     let _ = wait_for_session_up(&mut pppoe_sub).await;
 
@@ -487,7 +495,8 @@ async fn test_pppoe_with_injected_prober_reports_probe_response() {
         }
     });
 
-    let service_handle = tokio::spawn(async move { service.serve(&ctx_clone).await });
+    let h = ServiceHandle::new("pppoe", ctx_clone.clone());
+    let service_handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     let _ = wait_for_session_up(&mut pppoe_sub).await;
     let _ = responder.await;

@@ -5,7 +5,7 @@ use std::time::Duration;
 use lanforge_core::bus::{EventBus, LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_ra::{RaConfig, RaService};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::ra::{PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RouterPriority};
@@ -67,7 +67,10 @@ async fn test_ra_inert_full_lifecycle() {
     // 3. Spawn service task
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
-    let serve_handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new("ra", ctx_clone.clone());
+        service_clone.serve(&ctx_clone, &h).await
+    });
 
     // 4. Verify initial startup multicast RA is emitted to inert handle
     let startup_ra = timeout(Duration::from_millis(500), handle.recv_payload())

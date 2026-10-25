@@ -1,12 +1,12 @@
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceDependency};
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
 use lanforge_types::events::pppoe::PppoeEvent;
 use lanforge_types::events::system::SystemEvent;
 use lanforge_types::events::traffic::TrafficEvent;
 use lanforge_types::events::LanforgeEvent;
 use lanforge_types::network::TrafficConfig;
-use lanforge_types::system::{ServiceState, TrafficStatusResponse};
+use lanforge_types::system::{DormantReason, ServiceState, TrafficStatusResponse};
 use tracing::{debug, info};
 
 use crate::sqm::{apply_sqm, clear_sqm};
@@ -193,7 +193,7 @@ impl TrafficService {
     }
 
     /// Initializes tuning, SQM, and telemetry. Returns false if both features are disabled.
-    async fn initialize(&mut self, ctx: &LanforgeContext) -> bool {
+    async fn initialize(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> bool {
         if let Some(dynamic_cfg) = ctx.get_traffic_config() {
             self.cfg = dynamic_cfg;
         }
@@ -204,7 +204,7 @@ impl TrafficService {
         if !is_tuning_enabled && !is_sqm_enabled {
             info!("Traffic: Both NIC tuning and SQM are disabled, service entering inactive state");
             self.publish_status(ctx, ServiceState::Inactive);
-            ctx.set_service_state("traffic", ServiceState::Inactive);
+            h.dormant(DormantReason::disabled("traffic.enabled"));
             return false;
         }
 
@@ -235,6 +235,7 @@ impl TrafficService {
         }
 
         self.update_service_state(ctx);
+        h.ready();
 
         let wan = self.active_wan.as_deref();
         let ifb = self.active_ifb.as_deref();
@@ -341,7 +342,7 @@ impl TrafficService {
         }
     }
 
-    async fn run_event_loop(&mut self, ctx: &LanforgeContext) {
+    async fn run_event_loop(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) {
         let mut sys_rx = ctx.bus().subscribe_system();
         let mut pppoe_rx = ctx.bus().subscribe_pppoe();
         let mut traffic_rx = ctx.bus().subscribe_traffic();
@@ -351,6 +352,32 @@ impl TrafficService {
 
         loop {
             tokio::select! {
+                cmd = h.next_command() => {
+                    match cmd {
+                        ServiceCommand::Stop | ServiceCommand::Shutdown => {
+                            debug!("Traffic: Stop/shutdown command received");
+                            let history = crate::collector::get_traffic_history_snapshot().await;
+                            if !history.is_empty() {
+                                let _ = ctx.bus().publish(LanforgeEvent::Storage(
+                                    lanforge_types::events::StorageEvent::SaveTrafficHistory(history),
+                                ));
+                            }
+                            break;
+                        }
+                        ServiceCommand::Restart => {
+                            debug!("Traffic: Restart command received");
+                            h.request_restart();
+                            let history = crate::collector::get_traffic_history_snapshot().await;
+                            if !history.is_empty() {
+                                let _ = ctx.bus().publish(LanforgeEvent::Storage(
+                                    lanforge_types::events::StorageEvent::SaveTrafficHistory(history),
+                                ));
+                            }
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
                 _ = telemetry_tick.tick() => {
                     if !self.inert {
                         let wan = self.active_wan.as_deref();
@@ -416,12 +443,12 @@ impl AsyncService for TrafficService {
         &[ServiceDependency::Interfaces]
     }
 
-    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
-        if !self.initialize(ctx).await {
+    async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        if !self.initialize(ctx, h).await {
             return Ok(());
         }
 
-        self.run_event_loop(ctx).await;
+        self.run_event_loop(ctx, h).await;
 
         if self.cfg.sqm.enabled {
             self.clear_sqm_internal(ctx).await;

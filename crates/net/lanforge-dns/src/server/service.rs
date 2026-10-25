@@ -12,7 +12,7 @@ use crate::server::{CompiledIgnoreClients, DnsContext};
 use crate::telemetry::{DnsStats, DnsStatsSnapshot, QueryRing};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceDependency};
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_types::network::dns::{
     AdblockCheckResponse, AdblockSourceMatch, AdblockSourceStatus, DnsAdblockSourcesResponse,
@@ -21,7 +21,7 @@ use lanforge_types::network::dns::{
     DnsStatsResponse, FilterMatch, FilterOrigin, TransportProtocol,
     upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget},
 };
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::{DormantReason, ServiceState};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -264,10 +264,10 @@ impl AsyncService for DnsService {
         ]
     }
 
-    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+    async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         if !self.cfg.enabled {
             info!("DNS Service disabled in config");
-            ctx.set_service_state("dns", ServiceState::Inactive);
+            h.dormant(DormantReason::disabled("dns.enabled"));
             return Ok(());
         }
 
@@ -352,13 +352,27 @@ impl AsyncService for DnsService {
             })
         };
 
-        ctx.set_service_state("dns", ServiceState::Online);
+        h.ready();
 
         loop {
             if !ctx.is_running() {
                 break;
             }
             tokio::select! {
+                cmd = h.next_command() => {
+                    match cmd {
+                        ServiceCommand::Stop | ServiceCommand::Shutdown => {
+                            info!("DNS service received stop/shutdown command, terminating event loop");
+                            break;
+                        }
+                        ServiceCommand::Restart => {
+                            info!("DNS service received restart command, restarting");
+                            h.request_restart();
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
                 Ok(event) = sys_rx.recv() => {
                     if let lanforge_core::bus::LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown) = event.event {
                         info!("DNS service received shutdown signal, terminating event loop");

@@ -4,7 +4,7 @@ use std::time::Duration;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_nft::NftService;
 use lanforge_types::events::firewall::{FirewallAppliedSummary, FirewallEvent};
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
@@ -75,7 +75,8 @@ async fn test_nft_service_inert_full_lifecycle() {
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
         let mut s = service_clone;
-        s.serve(&ctx_clone).await
+        let h = ServiceHandle::new("firewall", ctx_clone.clone());
+        s.serve(&ctx_clone, &h).await
     });
 
     // Yield to let the spawned task initialize its subscriptions
@@ -166,7 +167,8 @@ async fn test_firewall_reacts_to_ruleset_changed_in_place() {
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
         let mut s = service_clone;
-        s.serve(&ctx_clone).await
+        let h = ServiceHandle::new("firewall", ctx_clone.clone());
+        s.serve(&ctx_clone, &h).await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -236,7 +238,8 @@ async fn test_firewall_disabled_state_lifecycle_transitions() {
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
         let mut s = service_clone;
-        s.serve(&ctx_clone).await
+        let h = ServiceHandle::new("firewall", ctx_clone.clone());
+        s.serve(&ctx_clone, &h).await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -295,7 +298,8 @@ async fn test_firewall_reacts_to_pppoe_wan_reconnect_and_interface_swap() {
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
         let mut s = service_clone;
-        s.serve(&ctx_clone).await
+        let h = ServiceHandle::new("firewall", ctx_clone.clone());
+        s.serve(&ctx_clone, &h).await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -369,7 +373,8 @@ async fn test_firewall_reacts_to_system_reload_config() {
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
         let mut s = service_clone;
-        s.serve(&ctx_clone).await
+        let h = ServiceHandle::new("firewall", ctx_clone.clone());
+        s.serve(&ctx_clone, &h).await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -398,7 +403,8 @@ async fn test_firewall_concurrent_dynamic_port_burst() {
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
         let mut s = service_clone;
-        s.serve(&ctx_clone).await
+        let h = ServiceHandle::new("firewall", ctx_clone.clone());
+        s.serve(&ctx_clone, &h).await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -485,7 +491,8 @@ async fn test_firewall_service_control_stop_and_restart() {
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
         let mut s = service_clone;
-        s.serve(&ctx_clone).await
+        let h = ServiceHandle::new("firewall", ctx_clone.clone());
+        s.serve(&ctx_clone, &h).await
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;

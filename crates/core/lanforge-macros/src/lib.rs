@@ -23,12 +23,13 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let mut id = None;
     let mut name = None;
-    let mut critical = quote! { false };
+    let mut critical_passed = false;
     let mut retries = quote! { 0 };
     let mut base_backoff = quote! { 1 };
     let mut max_backoff = quote! { 60 };
     let mut shutdown_timeout = quote! { 3 };
     let mut multi_threaded = quote! { false };
+    let mut runtime_class = None;
     let mut describe = None;
 
     for meta in args_list {
@@ -39,7 +40,7 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
             } else if nv.path.is_ident("name") {
                 name = Some(quote! { #val });
             } else if nv.path.is_ident("critical") {
-                critical = quote! { #val };
+                critical_passed = true;
             } else if nv.path.is_ident("retries") {
                 retries = quote! { #val };
             } else if nv.path.is_ident("base_backoff") {
@@ -52,11 +53,39 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
                 shutdown_timeout = quote! { #val };
             } else if nv.path.is_ident("multi_threaded") {
                 multi_threaded = quote! { #val };
+            } else if nv.path.is_ident("runtime") {
+                runtime_class = Some(quote! { #val });
             } else if nv.path.is_ident("describe") {
                 describe = Some(quote! { #val });
             }
         }
     }
+
+    let _ = critical_passed; // 'critical' is deprecated no-op
+
+    let runtime_expr = if let Some(rc) = runtime_class {
+        quote! {
+            if #rc == "dedicated" {
+                lanforge_core::service::RuntimeClass::Dedicated {
+                    multi_thread: #multi_threaded,
+                    worker_threads: None,
+                }
+            } else {
+                lanforge_core::service::RuntimeClass::Shared
+            }
+        }
+    } else {
+        quote! {
+            if #multi_threaded {
+                lanforge_core::service::RuntimeClass::Dedicated {
+                    multi_thread: true,
+                    worker_threads: None,
+                }
+            } else {
+                lanforge_core::service::RuntimeClass::Shared
+            }
+        }
+    };
 
     let id = id.expect(
         "lanforge_service requires an 'id' argument (e.g., #[lanforge_service(id = \"my-id\")])",
@@ -82,11 +111,32 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         impl lanforge_core::service::LanforgeService for #struct_name {
+            fn spec(&self) -> lanforge_core::service::ServiceSpec {
+                lanforge_core::service::ServiceSpec {
+                    id: #id,
+                    display_name: #display_name,
+                    runtime: #runtime_expr,
+                    restart: lanforge_core::service::RestartPolicy {
+                        base_backoff: std::time::Duration::from_secs(#base_backoff as u64),
+                        max_backoff: std::time::Duration::from_secs(#max_backoff as u64),
+                        max_retries: #retries as u32,
+                        healthy_uptime: if #id == "pppoe" {
+                            std::time::Duration::from_secs(60)
+                        } else {
+                            std::time::Duration::from_secs(30)
+                        },
+                    },
+                    shutdown_timeout: std::time::Duration::from_secs(#shutdown_timeout as u64),
+                    deps: &[],
+                    condition: lanforge_core::service::Condition::ALWAYS,
+                }
+            }
+
             fn meta(&self) -> lanforge_core::service::ServiceMeta {
                 lanforge_core::service::ServiceMeta {
                     id: #id,
                     display_name: #display_name,
-                    critical: #critical,
+                    critical: false,
                     max_retries: #retries as u32,
                     base_backoff: std::time::Duration::from_secs(#base_backoff as u64),
                     max_backoff: std::time::Duration::from_secs(#max_backoff as u64),

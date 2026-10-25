@@ -8,13 +8,13 @@ use std::io::ErrorKind;
 
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceDependency};
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
 use lanforge_types::events::LanforgeEvent;
 use lanforge_types::events::firewall::{FirewallAppliedSummary, FirewallEvent};
 use lanforge_types::events::pppoe::PppoeEvent;
 use lanforge_types::events::system::SystemEvent;
 use lanforge_types::network::firewall::{DynamicPortRequest, FirewallConfig, FirewallMode};
-use lanforge_types::system::ServiceAction;
+use lanforge_types::system::{DormantReason, ServiceAction};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::ruleset::RulesetBuilder;
@@ -282,40 +282,61 @@ impl AsyncService for NftService {
         &mut self,
         ctx: &LanforgeContext,
     ) -> impl Future<Output = Result<(), CoreError>> + Send {
-        let ctx_clone = ctx.clone();
+        let ctx = ctx.clone();
         async move {
-            self.reapply(&ctx_clone, "startup").await;
-            let fw_cfg = ctx_clone.get_firewall_config().unwrap_or_default();
+            let fw_cfg = ctx.get_firewall_config().unwrap_or_default();
             if fw_cfg.enabled && fw_cfg.mode != FirewallMode::Disabled {
-                ctx_clone
-                    .set_service_state("firewall", lanforge_types::system::ServiceState::Online);
-            } else {
-                ctx_clone
-                    .set_service_state("firewall", lanforge_types::system::ServiceState::Inactive);
+                self.reapply(&ctx, "startup").await;
             }
             Ok(())
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn serve(
         &mut self,
         ctx: &LanforgeContext,
+        h: &ServiceHandle,
     ) -> impl Future<Output = Result<(), CoreError>> + Send {
         let mut pppoe_rx = ctx.bus().subscribe_pppoe();
         let mut fw_rx = ctx.bus().subscribe_firewall();
         let mut sys_rx = ctx.bus().subscribe_system();
         let ctx = ctx.clone();
+        let h = h.clone();
 
         async move {
             let fw_cfg = ctx.get_firewall_config().unwrap_or_default();
-            if fw_cfg.enabled && fw_cfg.mode != FirewallMode::Disabled {
-                ctx.set_service_state("firewall", lanforge_types::system::ServiceState::Online);
-            } else {
-                ctx.set_service_state("firewall", lanforge_types::system::ServiceState::Inactive);
+            if !fw_cfg.enabled || fw_cfg.mode == FirewallMode::Disabled {
+                h.dormant(DormantReason::disabled("firewall.enabled"));
+                return Ok(());
             }
+
+            if self.last_applied_payload().is_none() {
+                self.reapply(&ctx, "startup").await;
+            }
+            h.ready();
 
             loop {
                 tokio::select! {
+                    cmd = h.next_command() => {
+                        match cmd {
+                            ServiceCommand::Stop => {
+                                info!("Firewall service received Stop command, flushing table and marking Inactive");
+                                let table = ctx
+                                    .get_firewall_config()
+                                    .map_or_else(|| "lanforge".into(), |c| c.table_name);
+                                Self::cleanup_table_internal(&table, self.inert).await;
+                                ctx.set_service_state("firewall", lanforge_types::system::ServiceState::Inactive);
+                            }
+                            ServiceCommand::Start | ServiceCommand::Restart => {
+                                info!("Firewall service received Start/Restart command");
+                                self.reapply(&ctx, "service_control").await;
+                                h.ready();
+                            }
+                            ServiceCommand::Shutdown => break,
+                            _ => {}
+                        }
+                    }
                     // PPPoE WAN state updates
                     Ok(event) = pppoe_rx.recv() => {
                         match event.event {

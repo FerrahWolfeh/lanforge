@@ -146,6 +146,10 @@ pub enum ServiceState {
     Degraded,
     #[serde(rename = "error")]
     Error,
+    #[serde(rename = "waiting")]
+    Waiting,
+    #[serde(rename = "paused")]
+    Paused,
 }
 
 impl ServiceState {
@@ -159,6 +163,8 @@ impl ServiceState {
             Self::Inactive => "inactive",
             Self::Degraded => "degraded",
             Self::Error => "failed",
+            Self::Waiting => "waiting",
+            Self::Paused => "paused",
         }
     }
 }
@@ -173,6 +179,8 @@ impl AsRef<str> for ServiceState {
             Self::Inactive => "inactive",
             Self::Degraded => "degraded",
             Self::Error => "failed",
+            Self::Waiting => "waiting",
+            Self::Paused => "paused",
         }
     }
 }
@@ -221,6 +229,94 @@ pub mod vec_as_map {
     }
 }
 
+/// Reason why a service is dormant (condition evaluated to false).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DormantReason {
+    Disabled(Cow<'static, str>),
+    NotApplicable(Cow<'static, str>),
+}
+
+impl DormantReason {
+    #[must_use]
+    pub const fn disabled(key: &'static str) -> Self {
+        Self::Disabled(Cow::Borrowed(key))
+    }
+
+    #[must_use]
+    pub const fn not_applicable(reason: &'static str) -> Self {
+        Self::NotApplicable(Cow::Borrowed(reason))
+    }
+}
+
+impl std::fmt::Display for DormantReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Disabled(k) => write!(f, "disabled ({k})"),
+            Self::NotApplicable(r) => write!(f, "not applicable ({r})"),
+        }
+    }
+}
+
+/// Reason why a service is degraded.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DegradedReason {
+    UpstreamUnreachable,
+    InterfaceFlapping,
+    TransportErrors,
+    Custom(Cow<'static, str>),
+}
+
+impl DegradedReason {
+    #[must_use]
+    pub const fn custom(reason: &'static str) -> Self {
+        Self::Custom(Cow::Borrowed(reason))
+    }
+}
+
+impl std::fmt::Display for DegradedReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UpstreamUnreachable => write!(f, "upstream unreachable"),
+            Self::InterfaceFlapping => write!(f, "interface flapping"),
+            Self::TransportErrors => write!(f, "transport errors"),
+            Self::Custom(c) => write!(f, "{c}"),
+        }
+    }
+}
+
+/// Optional human- and machine-readable reason attached to a service state.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StateDetail {
+    WaitingFor(Cow<'static, str>),
+    Dormant(DormantReason),
+    DependencyDormant(Cow<'static, str>),
+    Degraded(DegradedReason),
+    Paused(Cow<'static, str>),
+    Failed { attempts: u32, last_error: String },
+    Exited,
+    AdminStopped,
+}
+
+impl std::fmt::Display for StateDetail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WaitingFor(id) => write!(f, "waiting for {id}"),
+            Self::Dormant(reason) => write!(f, "dormant: {reason}"),
+            Self::DependencyDormant(id) => write!(f, "dependency dormant: {id}"),
+            Self::Degraded(reason) => write!(f, "degraded: {reason}"),
+            Self::Paused(id) => write!(f, "paused ({id})"),
+            Self::Failed { attempts, last_error } => {
+                write!(f, "failed (attempts: {attempts}, last error: {last_error})")
+            }
+            Self::Exited => write!(f, "exited"),
+            Self::AdminStopped => write!(f, "stopped by admin"),
+        }
+    }
+}
+
 /// Banner representing the status and metrics of a decoupled service.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ServiceBanner {
@@ -230,6 +326,8 @@ pub struct ServiceBanner {
     pub uptime_secs: u64,
     #[serde(with = "vec_as_map")]
     pub stats: Vec<(Cow<'static, str>, String)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<StateDetail>,
 }
 
 /// Actions that can be performed on a service.

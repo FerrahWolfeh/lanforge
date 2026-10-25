@@ -1,5 +1,5 @@
 use lanforge_types::network::dns::TransportProtocol;
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::DormantReason;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,7 +11,7 @@ use tracing::{debug, error, info};
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceDependency};
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
 
 use crate::config::DnsConfig;
 use crate::pipeline::DnsPipelineRequest;
@@ -55,11 +55,10 @@ impl AsyncService for DotService {
         ]
     }
 
-    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+    async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         let Some(addr_str) = &self.cfg.dot_listen else {
             info!("DoT is disabled in configuration.");
-            ctx.set_service_state("dot", ServiceState::Inactive);
-            std::future::pending::<()>().await;
+            h.dormant(DormantReason::disabled("dns.dot_listen"));
             return Ok(());
         };
 
@@ -79,10 +78,21 @@ impl AsyncService for DotService {
             .map_err(|e| CoreError::Generic(format!("DoT bind error: {e}")))?;
 
         info!("DoT listening on tls://{}", addr_str);
+        h.ready();
 
         let mut rx = ctx.bus().subscribe();
         loop {
             tokio::select! {
+                cmd = h.next_command() => {
+                    match cmd {
+                        ServiceCommand::Stop | ServiceCommand::Shutdown => break,
+                        ServiceCommand::Restart => {
+                            h.request_restart();
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
                 res = listener.accept() => {
                     match res {
                         Ok((stream, peer)) => {

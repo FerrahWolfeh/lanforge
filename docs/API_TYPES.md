@@ -322,18 +322,35 @@ Represents the compiled feature flags and runtime enabled capabilities of the da
 
 - **Cap Enum:** `dns`, `upstream_udp_tcp`, `upstream_dot`, `upstream_doq`, `upstream_doh`, `doh_downstream`, `dhcp_v4`, `dhcp_v6`, `ra`, `ndp_discovery`, `mdns_probe`, `lldp_probe`, `uds`, `http`, `zstd`, `redb`, `pppoe`.
 
+### ServiceState
+Represents the operating state of a managed background service:
+`offline`, `starting`, `online`, `active`, `inactive`, `degraded`, `error` (wire `"failed"`), `waiting`, `paused`.
+
+### StateDetail
+Optional human- and machine-readable details attached to a `ServiceBanner`:
+- `waiting_for`: ID of blocking dependency.
+- `dormant`: Reason condition was false (`disabled` or `not_applicable`).
+- `dependency_dormant`: ID of dormant dependency.
+- `degraded`: `upstream_unreachable`, `interface_flapping`, `transport_errors`, or custom string.
+- `paused`: ID of paused dependency.
+- `failed`: Object with `attempts` and `last_error`.
+- `exited`: Clean intentional exit.
+- `admin_stopped`: Stopped explicitly by administrator.
+
 ### ServiceBanner & StatusProvider
 Model for decoupled system monitoring. Each service implements `StatusProvider` to export its current health and metrics.
 
 ```json
 {
-  "name": "dhcp_v4",
-  "state": "active",
+  "id": "dhcpv4",
+  "name": "DHCPv4 Server",
+  "state": "online",
   "uptime_secs": 3600,
   "stats": {
     "leases_active": "15",
     "pool_free": "185"
-  }
+  },
+  "detail": null
 }
 ```
 

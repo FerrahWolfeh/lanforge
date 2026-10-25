@@ -86,10 +86,10 @@ where
         system_ready_sent: false,
     };
 
-    // Pre-seed any services that already settled in context before subscription (Online or Inactive/dormant)
+    // Pre-seed any services that already settled in context before subscription
     for s in &loop_ctx.expected_services {
         let st = ctx.get_service_state(s);
-        if (st == ServiceState::Online || st == ServiceState::Inactive) && loop_ctx.ready_services.insert(s.clone()) {
+        if is_settled_state(st) && loop_ctx.ready_services.insert(s.clone()) {
             debug!(
                 "Service '{}' pre-seeded settled ({:?}) ({}/{})",
                 s,
@@ -123,6 +123,7 @@ where
                 break LoopResult::Shutdown;
             }
             _ = status_timer.tick() => {
+                loop_ctx.try_emit_system_ready();
                 if !loop_ctx.system_ready_sent {
                     let mut missing: Vec<_> = loop_ctx
                         .expected_services
@@ -132,7 +133,7 @@ where
                         .collect();
                     if !missing.is_empty() {
                         missing.sort_unstable();
-                        warn!("⌛ Still waiting for {} services to be ready: {:?}", missing.len(), missing);
+                        warn!("⌛ Still waiting for {} services to settle: {:?}", missing.len(), missing);
                     }
                 }
             }
@@ -142,6 +143,16 @@ where
     };
 
     Ok(result)
+}
+
+const fn is_settled_state(st: ServiceState) -> bool {
+    matches!(
+        st,
+        ServiceState::Online
+            | ServiceState::Degraded
+            | ServiceState::Inactive
+            | ServiceState::Error
+    )
 }
 
 struct LoopContext<'a, S> {
@@ -156,24 +167,60 @@ struct LoopContext<'a, S> {
 
 impl<S: BuildHasher> LoopContext<'_, S> {
     fn try_emit_system_ready(&mut self) {
-        if self.system_ready_sent || self.ready_services.len() < self.expected_services.len() {
+        if self.system_ready_sent {
+            return;
+        }
+
+        // Reconcile any services that settled in state
+        for s in &self.expected_services {
+            let st = self.ctx.get_service_state(s);
+            if is_settled_state(st) {
+                self.ready_services.insert(s.clone());
+            }
+        }
+
+        if self.ready_services.len() < self.expected_services.len() {
             return;
         }
 
         let mut services: Vec<_> = self.expected_services.iter().map(String::as_str).collect();
         services.sort_unstable();
-        info!(
-            "All {} internal services online ({}). System fully operational.",
-            services.len(),
-            services.join(", ")
-        );
+
+        let mut non_online = Vec::new();
+        for s in &services {
+            let st = self.ctx.get_service_state(s);
+            if st != ServiceState::Online {
+                let detail_str = self
+                    .ctx
+                    .get_service_detail(s)
+                    .map(|d| format!(": {d}"))
+                    .unwrap_or_default();
+                non_online.push(format!("{s} ({st}{detail_str})"));
+            }
+        }
+
+        if non_online.is_empty() {
+            info!(
+                "All {} internal services online ({}). System fully operational.",
+                services.len(),
+                services.join(", ")
+            );
+        } else {
+            warn!(
+                "System ready with {}/{} services online. Non-online: {}",
+                services.len() - non_online.len(),
+                services.len(),
+                non_online.join(", ")
+            );
+        }
+
         crate::bootstrap::Bootstrapper::print_startup_banner(self.cfg, self.target_ifindex, self.db);
         let _ = self
             .ctx
             .bus()
             .publish(LanforgeEvent::System(SystemEvent::SystemReady));
         let status = format!(
-            "Operational ({} services online on {})",
+            "Operational ({} services settled on {})",
             self.expected_services.len(),
             self.cfg.system.iface
         );
@@ -191,6 +238,9 @@ fn handle_bus_event<S: BuildHasher>(
             if l_ctx.expected_services.contains(&name)
                 && l_ctx.ready_services.insert(name.clone()) =>
         {
+            if l_ctx.ctx.get_service_state(&name) == ServiceState::Starting {
+                l_ctx.ctx.set_service_state(&name, ServiceState::Online);
+            }
             debug!(
                 "Service '{}' reported ready ({}/{})",
                 name,

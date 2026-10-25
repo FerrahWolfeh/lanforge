@@ -10,7 +10,7 @@ use lanforge_core::bus::{
 };
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_dhcp::{Dhcpv4Config, Dhcpv4Service};
 use lanforge_nft::NftService;
 use lanforge_ra::{RaConfig, RaService};
@@ -85,10 +85,14 @@ async fn test_firewall_eventbus_reactivity() {
 
     let mut service = NftService::inert();
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { service.serve(&ctx_clone).await });
+    let handle = tokio::spawn(async move {
+        let h = ServiceHandle::new("firewall", ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
 
     // Allow service to initialize
     tokio::time::sleep(Duration::from_millis(50)).await;
+    while fw_sub.try_recv().is_ok() {}
 
     // 1. PortOpenRequested: Register dynamic port requirement (e.g. WebUI port 8080)
     ctx.register_service_port(DynamicPortRequest {
@@ -190,7 +194,10 @@ async fn test_traffic_eventbus_reactivity() {
 
     let mut service = TrafficService::inert(cfg);
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { service.serve(&ctx_clone).await });
+    let handle = tokio::spawn(async move {
+        let h = ServiceHandle::new("traffic", ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
 
     // Allow service to initialize and emit startup events
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -327,7 +334,10 @@ async fn test_ra_eventbus_reactivity() {
     let service = RaService::with_transport(RaConfig::default(), ctx.clone(), ra_trans);
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
+    let handle = tokio::spawn(async move {
+        let h = ServiceHandle::new("ra", ctx_clone.clone());
+        service_clone.serve(&ctx_clone, &h).await
+    });
 
     // Initial startup multicast RA
     let initial_ra = timeout(Duration::from_millis(500), ra_handle.recv_payload())
@@ -406,7 +416,10 @@ async fn test_dhcp_eventbus_reactivity() {
     let service = Dhcpv4Service::with_transport(dhcp_cfg.clone(), ctx.clone(), dhcp_trans);
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
+    let handle = tokio::spawn(async move {
+        let h = ServiceHandle::new("dhcpv4", ctx_clone.clone());
+        service_clone.serve(&ctx_clone, &h).await
+    });
 
     // Allow service to initialize
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -561,13 +574,25 @@ async fn test_cross_domain_wan_transition_cascade() {
     let mut dhcp_service = Dhcpv4Service::with_transport(dhcp_cfg, ctx.clone(), dhcp_trans);
 
     let c1 = ctx.clone();
-    let t_nft = tokio::spawn(async move { nft_service.serve(&c1).await });
+    let t_nft = tokio::spawn(async move {
+        let h = ServiceHandle::new("firewall", c1.clone());
+        nft_service.serve(&c1, &h).await
+    });
     let c2 = ctx.clone();
-    let t_traffic = tokio::spawn(async move { traffic_service.serve(&c2).await });
+    let t_traffic = tokio::spawn(async move {
+        let h = ServiceHandle::new("traffic", c2.clone());
+        traffic_service.serve(&c2, &h).await
+    });
     let c3 = ctx.clone();
-    let t_ra = tokio::spawn(async move { ra_service.serve(&c3).await });
+    let t_ra = tokio::spawn(async move {
+        let h = ServiceHandle::new("ra", c3.clone());
+        ra_service.serve(&c3, &h).await
+    });
     let c4 = ctx.clone();
-    let t_dhcp = tokio::spawn(async move { dhcp_service.serve(&c4).await });
+    let t_dhcp = tokio::spawn(async move {
+        let h = ServiceHandle::new("dhcpv4", c4.clone());
+        dhcp_service.serve(&c4, &h).await
+    });
 
     // Allow services to initialize
     tokio::time::sleep(Duration::from_millis(60)).await;

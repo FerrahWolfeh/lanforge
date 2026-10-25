@@ -355,6 +355,7 @@ mod tests {
                         (Cow::Borrowed("ppp_interface"), "ppp0".to_string()),
                         (Cow::Borrowed("wan_iface"), "wan0".to_string()),
                     ],
+                    detail: None,
                 },
                 ServiceBanner {
                     id: "dhcp_v4".to_string(),
@@ -365,6 +366,7 @@ mod tests {
                         (Cow::Borrowed("leases_active"), "15".to_string()),
                         (Cow::Borrowed("pool_available"), "126".to_string()),
                     ],
+                    detail: None,
                 },
                 ServiceBanner {
                     id: "dhcp_v6".to_string(),
@@ -372,6 +374,7 @@ mod tests {
                     state: ServiceState::Online,
                     uptime_secs: 2733,
                     stats: vec![(Cow::Borrowed("leases_active"), "0".to_string())],
+                    detail: None,
                 },
                 ServiceBanner {
                     id: "dns".to_string(),
@@ -383,6 +386,7 @@ mod tests {
                         (Cow::Borrowed("cache_entries"), "0".to_string()),
                         (Cow::Borrowed("cache_hit_rate"), "0.0%".to_string()),
                     ],
+                    detail: None,
                 },
                 ServiceBanner {
                     id: "firewall".to_string(),
@@ -390,6 +394,7 @@ mod tests {
                     state: ServiceState::Online,
                     uptime_secs: 2733,
                     stats: vec![],
+                    detail: None,
                 },
                 ServiceBanner {
                     id: "tftp".to_string(),
@@ -397,6 +402,7 @@ mod tests {
                     state: ServiceState::Inactive,
                     uptime_secs: 0,
                     stats: vec![],
+                    detail: None,
                 },
             ],
         };

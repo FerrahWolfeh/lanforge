@@ -40,14 +40,14 @@ use lanforge_core::bus::{
     SystemEvent,
 };
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceDependency};
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
 use lanforge_macros::lanforge_service;
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::device::IPv4State;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{Dhcpv4Options, Dhcpv4Pool};
-use lanforge_types::system::{RunResult, ServiceState};
+use lanforge_types::system::{DormantReason, RunResult};
 use lanforge_types::update::{DeviceUpdate, DhcpV4PoolUpdate, LeaseTarget};
 use server::{DhcpServer, HandleResult};
 use smallvec::SmallVec;
@@ -59,7 +59,7 @@ use tracing::{debug, info, warn};
 pub use config::Dhcpv4Config;
 pub use io::{Dhcpv4InertChannels, Dhcpv4InertHandle, Dhcpv4InertReply, Dhcpv4Transport};
 use crate::traits::DhcpPool;
-use lanforge_core::context::{LanforgeContext, ServiceHandle};
+use lanforge_core::context::LanforgeContext;
 
 /// `DHCPv4` Server Service.
 #[lanforge_service(
@@ -179,13 +179,13 @@ impl AsyncService for Dhcpv4Service {
         ]
     }
 
-    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+    async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         loop {
             let options = ctx.get_dhcp_options();
             if !options.v4.enabled {
                 self.cfg.enabled = false;
                 info!("DHCPv4: Service disabled in configuration — server idle");
-                ctx.set_service_state("dhcpv4", ServiceState::Inactive);
+                h.dormant(DormantReason::disabled("dhcp.v4.enabled"));
                 match self.wait_for_config_change_or_shutdown().await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,
@@ -203,8 +203,8 @@ impl AsyncService for Dhcpv4Service {
                 }
             }
 
-            ctx.set_service_state("dhcpv4", ServiceState::Online);
-            match self.run_server(pools).await? {
+            h.ready();
+            match self.run_server(pools, h).await? {
                 RunResult::Shutdown => break,
                 RunResult::ConfigChanged => {}
             }
@@ -330,6 +330,7 @@ impl Dhcpv4Service {
     async fn run_server(
         &self,
         pools: Vec<Dhcpv4Pool>,
+        h: &ServiceHandle,
     ) -> Result<RunResult, CoreError> {
         let Some(mut current_cfg) = self.prepare_config(pools) else {
             return self.wait_for_config_change_or_shutdown().await;
@@ -358,6 +359,16 @@ impl Dhcpv4Service {
 
         loop {
             tokio::select! {
+                cmd = h.next_command() => {
+                    match cmd {
+                        ServiceCommand::Stop | ServiceCommand::Shutdown => return Ok(RunResult::Shutdown),
+                        ServiceCommand::Restart => {
+                            h.request_restart();
+                            return Ok(RunResult::Shutdown);
+                        }
+                        _ => {}
+                    }
+                }
                 delta_opt = pools_sub.next() => {
                     if let Some(delta) = delta_opt {
                         match delta.impact {
@@ -400,7 +411,6 @@ impl Dhcpv4Service {
                                 &buf[..len],
                                 &mut server,
                                 &transport,
-                                &handle,
                             );
                         }
                         Err(e) => warn!("DHCPv4: recv_from error: {e}"),
@@ -421,7 +431,7 @@ impl Dhcpv4Service {
 }
 
 impl Dhcpv4Service {
-    fn record_incoming_transaction(&self, msg: &Message, mac: MacAddr, handle: &ServiceHandle) {
+    fn record_incoming_transaction(&self, msg: &Message, mac: MacAddr) {
         if let Some(DhcpOption::MessageType(t)) = msg.opts().get(OptionCode::MessageType) {
             let msg_type = u8::from(*t);
             let stats = self.ctx.dhcpv4_stats();
@@ -433,7 +443,7 @@ impl Dhcpv4Service {
                 8 => stats.informs.fetch_add(1, Ordering::Relaxed),
                 _ => 0,
             };
-            let _ = handle.publish(LanforgeEvent::Device(DeviceEvent::DhcpV4Transaction {
+            let _ = self.ctx.bus().publish(LanforgeEvent::Device(DeviceEvent::DhcpV4Transaction {
                 mac,
                 msg_type: DhcpV4MessageType::from(msg_type),
                 details: None,
@@ -515,7 +525,6 @@ impl Dhcpv4Service {
         data: &[u8],
         server: &mut DhcpServer,
         transport: &Dhcpv4Transport,
-        handle: &ServiceHandle,
     ) {
         if let Ok(msg) = Message::decode(&mut Decoder::new(data))
             && msg.opcode() == Opcode::BootRequest
@@ -526,7 +535,7 @@ impl Dhcpv4Service {
                     chaddr[0], chaddr[1], chaddr[2], chaddr[3], chaddr[4], chaddr[5],
                 ]);
 
-                self.record_incoming_transaction(&msg, mac, handle);
+                self.record_incoming_transaction(&msg, mac);
 
                 let handle_res = self.ctx.with_state(|state| {
                     let device = state.devices.get(&mac).map(std::sync::Arc::as_ref);

@@ -7,7 +7,7 @@ use dhcproto::{Encodable, Encoder};
 use lanforge_core::bus::{EventBus, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_dhcp::{Dhcpv4Config, Dhcpv4Service, Dhcpv4Transport};
 use lanforge_types::device::{IPv4State, Origin};
 use lanforge_types::identifiers::MacAddr;
@@ -115,7 +115,10 @@ async fn test_dynamic_to_static_lease_transition_consistency() {
     let service = Dhcpv4Service::with_transport(cfg.clone(), ctx.clone(), transport);
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
+    let handle = tokio::spawn(async move {
+        let h = ServiceHandle::new("dhcpv4", ctx_clone.clone());
+        service_clone.serve(&ctx_clone, &h).await
+    });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -240,7 +243,10 @@ async fn test_static_lease_outside_pool_bounds() {
     let service = Dhcpv4Service::with_transport(cfg.clone(), ctx.clone(), transport);
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
+    let handle = tokio::spawn(async move {
+        let h = ServiceHandle::new("dhcpv4", ctx_clone.clone());
+        service_clone.serve(&ctx_clone, &h).await
+    });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -298,7 +304,10 @@ async fn test_ip_stealing_prevention() {
     let service = Dhcpv4Service::with_transport(cfg.clone(), ctx.clone(), transport);
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
+    let handle = tokio::spawn(async move {
+        let h = ServiceHandle::new("dhcpv4", ctx_clone.clone());
+        service_clone.serve(&ctx_clone, &h).await
+    });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -361,7 +370,10 @@ async fn test_dhcp_decline_quarantine_consistency() {
     let service = Dhcpv4Service::with_transport(cfg.clone(), ctx.clone(), transport);
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
+    let handle = tokio::spawn(async move {
+        let h = ServiceHandle::new("dhcpv4", ctx_clone.clone());
+        service_clone.serve(&ctx_clone, &h).await
+    });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -423,7 +435,10 @@ async fn test_eventbus_ip_deleted_recovers_pool() {
     let service = Dhcpv4Service::with_transport(cfg.clone(), ctx.clone(), transport);
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
+    let handle = tokio::spawn(async move {
+        let h = ServiceHandle::new("dhcpv4", ctx_clone.clone());
+        service_clone.serve(&ctx_clone, &h).await
+    });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 

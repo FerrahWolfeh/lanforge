@@ -5,7 +5,7 @@ use lanforge_api_dispatch::ClientContext;
 use lanforge_core::bus::{EventBus, LanforgeEvent, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_db::config::DatabaseConfig;
 use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
@@ -40,7 +40,8 @@ async fn init_test_context() -> ClientContext {
         lanforge_db::worker::DbWorker::new(DatabaseConfig::default(), ctx.clone(), db, log_db);
     let ctx_worker = ctx.clone();
     tokio::spawn(async move {
-        let _ = worker.serve(&ctx_worker).await;
+        let h = ServiceHandle::new("db", ctx_worker.clone());
+        let _ = worker.serve(&ctx_worker, &h).await;
     });
 
     ClientContext {

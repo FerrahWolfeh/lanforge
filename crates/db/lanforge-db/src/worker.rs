@@ -42,7 +42,7 @@ use tracing::{debug, error, info, warn};
 
 use lanforge_core::context::{LanforgeContext, StorageCommand, StorageHandle};
 use lanforge_core::error::CoreError;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 
 use crate::config::DatabaseConfig;
 use crate::engine::LanforgeDb;
@@ -558,9 +558,17 @@ impl AsyncService for DbWorker {
         Ok(())
     }
 
-    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+    async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         let db = self.db.clone();
         let log_db = self.log_db.clone();
+
+        if ctx.is_recovery_mode() {
+            h.degraded(lanforge_types::system::DegradedReason::custom(
+                "no persistence",
+            ));
+        } else {
+            h.ready();
+        }
 
         let mut storage_rx = self.storage_rx.take().unwrap_or_else(|| {
             let (tx, rx) = mpsc::channel(64);
@@ -581,6 +589,23 @@ impl AsyncService for DbWorker {
 
         loop {
             tokio::select! {
+                cmd = h.next_command() => {
+                    match cmd {
+                        ServiceCommand::Stop | ServiceCommand::Shutdown => {
+                            self.flush_batch(&db, &log_db).await;
+                            self.flush_live_config_to_file(&db).await;
+                            break;
+                        }
+                        ServiceCommand::Restart => {
+                            h.request_restart();
+                            self.flush_batch(&db, &log_db).await;
+                            self.flush_live_config_to_file(&db).await;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+
                 // Storage commands via closure channel
                 cmd = storage_rx.recv() => {
                     match cmd {

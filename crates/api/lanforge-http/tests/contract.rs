@@ -70,7 +70,8 @@ async fn make_state(with_auth: bool) -> AppState {
     );
     let ctx_worker = ctx.clone();
     tokio::spawn(async move {
-        let _ = worker.serve(&ctx_worker).await;
+        let h_worker = lanforge_core::service::ServiceHandle::new("db", ctx_worker.clone());
+        let _ = worker.serve(&ctx_worker, &h_worker).await;
     });
 
     AppState {

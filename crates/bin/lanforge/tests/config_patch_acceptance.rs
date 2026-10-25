@@ -191,7 +191,7 @@ async fn test_acceptance_reload_noop() {
         use lanforge_core::service::AsyncService;
         let _ = db_worker.init(&ctx_db).await;
         ctrl.signal_ready();
-        let _ = db_worker.serve(&ctx_db).await;
+        let _ = db_worker.serve(&ctx_db, &ctrl).await;
     });
     ctx.wait_for_db().await.expect("DB failed to become ready");
 

@@ -124,6 +124,7 @@ export interface ServiceBanner {
 	state: ServiceState;
 	uptime_secs: number;
 	stats: Record<string, string>;
+	detail?: any;
 }
 
 export interface CapabilitiesInfo {

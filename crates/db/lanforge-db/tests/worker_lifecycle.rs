@@ -6,7 +6,7 @@ use lanforge_api::config_file::{ConfigFile, Section};
 use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent, StorageEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_db::config::DatabaseConfig;
 use lanforge_db::{
     DbWorker, DeviceStore, DhcpConfigStore, FirewallConfigStore, LanforgeDb, LogDb,
@@ -67,7 +67,8 @@ async fn test_db_worker_init_and_clean_shutdown() {
 
     // 2. Spawn serve loop
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { worker.serve(&ctx_clone).await });
+    let h = ServiceHandle::new("db", ctx_clone.clone());
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
 
     // Verify storage handle works
     let storage = ctx.storage_handle().expect("storage handle present");
@@ -104,7 +105,8 @@ async fn test_db_worker_batches_and_flushes_devices() {
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { worker.serve(&ctx_clone).await });
+    let h = ServiceHandle::new("db", ctx_clone.clone());
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
 
     // Synchronization barrier: ensure worker.serve() has subscribed to the event bus
     let storage = ctx.storage_handle().expect("storage handle present");
@@ -192,7 +194,8 @@ async fn test_db_worker_purges_device_immediately() {
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { worker.serve(&ctx_clone).await });
+    let h = ServiceHandle::new("db", ctx_clone.clone());
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
 
     // Synchronization barrier
     let storage = ctx.storage_handle().expect("storage handle present");
@@ -259,7 +262,8 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
         worker.init(&ctx).await.unwrap();
 
         let ctx_clone = ctx.clone();
-        let handle = tokio::spawn(async move { worker.serve(&ctx_clone).await });
+        let h = ServiceHandle::new("db", ctx_clone.clone());
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
 
         // Synchronization barrier: ensure worker is active and subscribed
         let storage = ctx.storage_handle().expect("storage handle present");
@@ -396,7 +400,8 @@ async fn test_db_worker_storage_query_dispatch() {
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { worker.serve(&ctx_clone).await });
+    let h = ServiceHandle::new("db", ctx_clone.clone());
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
     let storage = ctx.storage_handle().expect("storage handle present");
 
     // 1. Provisioning queries
@@ -563,10 +568,12 @@ async fn test_db_worker_service_control_and_restart_resilience() {
 
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move {
+        let h1 = ServiceHandle::new("db", ctx_clone.clone());
         // Run 1
-        worker.serve(&ctx_clone).await.unwrap();
+        worker.serve(&ctx_clone, &h1).await.unwrap();
+        let h2 = ServiceHandle::new("db", ctx_clone.clone());
         // Run 2 (Supervisor re-invokes serve on same worker instance)
-        worker.serve(&ctx_clone).await
+        worker.serve(&ctx_clone, &h2).await
     });
 
     // Barrier 1: ensure Run 1 is active and subscribed
@@ -623,7 +630,8 @@ async fn api_storage_mutation_is_written_to_valid_toml_on_worker_shutdown() {
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { worker.serve(&ctx_clone).await });
+    let h = ServiceHandle::new("db", ctx_clone.clone());
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
     let storage = ctx.storage_handle().expect("storage handle present");
     let _ = storage
         .call(|s: &Stores| s.db.is_provisioned())
@@ -681,7 +689,8 @@ async fn failed_live_toml_write_preserves_file_and_does_not_advance_hash() {
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { worker.serve(&ctx_clone).await });
+    let h = ServiceHandle::new("db", ctx_clone.clone());
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
     let storage = ctx.storage_handle().expect("storage handle present");
     let _ = storage
         .call(|s: &Stores| s.db.is_provisioned())
@@ -735,7 +744,8 @@ async fn test_db_worker_write_behind_dns_config_and_flush_now() {
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move { worker.serve(&ctx_clone).await });
+    let h = ServiceHandle::new("db", ctx_clone.clone());
+    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
 
     let storage = ctx.storage_handle().expect("storage handle present");
     let _ = storage

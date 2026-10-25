@@ -21,12 +21,12 @@ use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},
     context::LanforgeContext,
     error::CoreError,
-    service::{AsyncService, ServiceDependency},
+    service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle},
 };
 use lanforge_db_core::{DatabaseStore, LogStore};
 use lanforge_dns::server::transport::tls as tls_utils;
 use lanforge_macros::lanforge_service;
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::DormantReason;
 #[cfg(feature = "webui")]
 use lanforge_webui::WebUiAssets;
 use tokio::net::TcpListener;
@@ -299,11 +299,11 @@ impl AsyncService for HttpService {
         ]
     }
 
-    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+    async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
         if !cfg.enabled {
             info!("HTTP: Service disabled in configuration.");
-            ctx.set_service_state("http", ServiceState::Inactive);
+            h.dormant(DormantReason::disabled("http.enabled"));
             return Ok(());
         }
 
@@ -328,6 +328,27 @@ impl AsyncService for HttpService {
 
         let (shutdown_tx, _) = tokio::sync::watch::channel(());
         Self::spawn_shutdown_listener(ctx, shutdown_tx.clone());
+
+        let h_clone = h.clone();
+        let shutdown_tx_clone = shutdown_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                match h_clone.next_command().await {
+                    ServiceCommand::Stop | ServiceCommand::Shutdown => {
+                        let _ = shutdown_tx_clone.send(());
+                        break;
+                    }
+                    ServiceCommand::Restart => {
+                        h_clone.request_restart();
+                        let _ = shutdown_tx_clone.send(());
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        h.ready();
 
         if let Some(tls_config) = maybe_tls_config {
             Self::serve_https(app, &addrs, Arc::new(tls_config), &shutdown_tx).await?;

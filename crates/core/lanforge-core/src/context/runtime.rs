@@ -22,9 +22,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime};
 use tokio::sync::watch;
 
+use lanforge_types::system::StateDetail;
+
 /// Registered service runtime slot tracking state and status provider.
 pub struct ServiceSlot {
     pub state_tx: watch::Sender<ServiceState>,
+    pub detail: Option<StateDetail>,
     pub started_at: Option<Instant>,
     pub provider: Option<Arc<dyn StatusProvider>>,
 }
@@ -244,6 +247,7 @@ impl ServiceRuntime {
                 let (tx, _) = watch::channel(ServiceState::Offline);
                 ServiceSlot {
                     state_tx: tx,
+                    detail: None,
                     started_at: None,
                     provider: None,
                 }
@@ -311,12 +315,37 @@ impl ServiceRuntime {
                 let (tx, _) = watch::channel(ServiceState::Offline);
                 ServiceSlot {
                     state_tx: tx,
+                    detail: None,
                     started_at: None,
                     provider: None,
                 }
             })
             .state_tx
             .send_replace(state);
+    }
+
+    pub fn set_service_detail(&self, id: &str, detail: Option<StateDetail>) {
+        self.services
+            .write()
+            .entry(id.to_string())
+            .or_insert_with(|| {
+                let (tx, _) = watch::channel(ServiceState::Offline);
+                ServiceSlot {
+                    state_tx: tx,
+                    detail: None,
+                    started_at: None,
+                    provider: None,
+                }
+            })
+            .detail = detail;
+    }
+
+    #[must_use]
+    pub fn get_service_detail(&self, id: &str) -> Option<StateDetail> {
+        self.services
+            .read()
+            .get(id)
+            .and_then(|slot| slot.detail.clone())
     }
 
     #[must_use]
@@ -335,6 +364,7 @@ impl ServiceRuntime {
                 let (tx, _) = watch::channel(ServiceState::Offline);
                 ServiceSlot {
                     state_tx: tx,
+                    detail: None,
                     started_at: None,
                     provider: None,
                 }
@@ -376,6 +406,7 @@ impl ServiceRuntime {
                 let (tx, _) = watch::channel(ServiceState::Offline);
                 ServiceSlot {
                     state_tx: tx,
+                    detail: None,
                     started_at: None,
                     provider: None,
                 }

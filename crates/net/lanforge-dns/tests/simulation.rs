@@ -56,7 +56,8 @@ async fn dns_simulation_udp() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        service.serve(&ctx_service).await.expect("Service failed");
+        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        service.serve(&ctx_service, &h).await.expect("Service failed");
     });
 
     wait_for_service_online(&ctx, "dns").await;
@@ -120,7 +121,8 @@ async fn dns_simulation_forwarding_fallback() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        service.serve(&ctx_service).await.expect("Service failed");
+        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        service.serve(&ctx_service, &h).await.expect("Service failed");
     });
 
     wait_for_service_online(&ctx, "dns").await;
@@ -167,7 +169,8 @@ async fn dns_simulation_cache_case_insensitive() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        service.serve(&ctx_service).await.expect("Service failed");
+        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        service.serve(&ctx_service, &h).await.expect("Service failed");
     });
 
     wait_for_service_online(&ctx, "dns").await;
@@ -230,7 +233,8 @@ async fn dns_simulation_malformed_and_special_prefixes() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let _ = service.serve(&ctx_service).await;
+        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        let _ = service.serve(&ctx_service, &h).await;
     });
 
     wait_for_service_online(&ctx, "dns").await;
@@ -297,7 +301,8 @@ async fn dns_simulation_transient_ip_reverse_dns() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        service.serve(&ctx_service).await.expect("Service failed");
+        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        service.serve(&ctx_service, &h).await.expect("Service failed");
     });
 
     wait_for_service_online(&ctx, "dns").await;

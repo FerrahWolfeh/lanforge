@@ -167,6 +167,17 @@ impl LanforgeContext {
         self.inner.runtime.set_service_state(id, state);
     }
 
+    /// Sets the state detail explanation of a service.
+    pub fn set_service_detail(&self, id: &str, detail: Option<lanforge_types::system::StateDetail>) {
+        self.inner.runtime.set_service_detail(id, detail);
+    }
+
+    /// Returns the state detail of a service if any.
+    #[must_use]
+    pub fn get_service_detail(&self, id: &str) -> Option<lanforge_types::system::StateDetail> {
+        self.inner.runtime.get_service_detail(id)
+    }
+
     /// Sets the start time of a service.
     pub fn set_service_start(&self, id: &str, start: Instant) {
         self.inner.runtime.set_service_start(id, start);

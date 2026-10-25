@@ -82,7 +82,7 @@ async fn test_full_db_reset_chain() {
         use lanforge_core::service::AsyncService;
         let _ = db_worker.init(&ctx_db).await;
         ctrl.signal_ready();
-        let _ = db_worker.serve(&ctx_db).await;
+        let _ = db_worker.serve(&ctx_db, &ctrl).await;
     });
 
     // Wait for DB ready

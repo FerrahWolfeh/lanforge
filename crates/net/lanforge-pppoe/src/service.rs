@@ -12,12 +12,15 @@ use crate::session::PppoeSession;
 use lanforge_core::bus::{LanforgeEvent, PppoeEvent, SystemEvent};
 use lanforge_core::context::{ConfigSubscription, LanforgeContext};
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceDependency};
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
 use lanforge_transport::ArpProber;
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::pppoe::PppoeDataplane;
-use lanforge_types::system::{PppoeSessionState, PppoeStatusResponse, ServiceAction, ServiceState};
+use lanforge_types::system::{
+    DegradedReason, DormantReason, PppoeSessionState, PppoeStatusResponse, ServiceAction,
+    ServiceState,
+};
 use smallvec::smallvec;
 use std::borrow::Cow;
 use std::io::Read;
@@ -660,6 +663,14 @@ impl PppoeService {
             ))));
 
         self.ctx.set_pppoe_ready(true);
+        self.ctx.set_service_state("pppoe", ServiceState::Online);
+        self.ctx.set_service_detail("pppoe", None);
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::ServiceReady {
+                name: "pppoe".to_string(),
+            }));
         self.attempt = 0;
     }
 
@@ -1123,14 +1134,14 @@ impl AsyncService for PppoeService {
     }
 
     #[allow(clippy::too_many_lines)]
-    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+    async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
             self.cfg = dynamic_cfg;
         }
 
         if !self.cfg.enabled {
             info!("PPPoE service is disabled in configuration.");
-            ctx.set_service_state("pppoe", ServiceState::Inactive);
+            h.dormant(DormantReason::disabled("pppoe.enabled"));
             ctx.set_pppoe_ready(true);
             return Ok(());
         }
@@ -1169,8 +1180,6 @@ impl AsyncService for PppoeService {
             return Ok(());
         }
 
-        let mut bus_rx = ctx.bus().subscribe_system();
-
         'main_loop: loop {
             if !ctx.is_running() {
                 break 'main_loop;
@@ -1178,27 +1187,21 @@ impl AsyncService for PppoeService {
 
             tokio::select! {
                 biased;
-                event_res = bus_rx.recv() => {
-                    if let Ok(timed) = event_res {
-                        match classify_system_event(&timed.event) {
-                            Some(SystemInterrupt::Shutdown) => {
-                                info!("PPPoE service received shutdown event, exiting serve loop");
-                                self.teardown_active_session("Graceful shutdown".into()).await;
-                                break 'main_loop;
-                            }
-                            Some(SystemInterrupt::Stop) => {
-                                info!("PPPoE service received stop command, transitioning to Inactive");
-                                self.teardown_active_session("Service stopped".into()).await;
-                                ctx.set_service_state("pppoe", ServiceState::Inactive);
-                                break 'main_loop;
-                            }
-                            Some(SystemInterrupt::Restart) => {
-                                info!("PPPoE service received restart command, restarting session");
-                                self.teardown_active_session("Service restarted".into()).await;
-                                self.attempt = 0;
-                            }
-                            None => {}
+                cmd = h.next_command() => {
+                    match cmd {
+                        ServiceCommand::Stop | ServiceCommand::Shutdown => {
+                            info!("PPPoE service received stop/shutdown command, exiting serve loop");
+                            self.teardown_active_session("Graceful shutdown".into()).await;
+                            ctx.set_service_state("pppoe", ServiceState::Inactive);
+                            break 'main_loop;
                         }
+                        ServiceCommand::Restart => {
+                            info!("PPPoE service received restart command, restarting session");
+                            h.request_restart();
+                            self.teardown_active_session("Service restarted".into()).await;
+                            self.attempt = 0;
+                        }
+                        _ => {}
                     }
                 }
                 flow_res = self.run_session_flow() => {
@@ -1213,7 +1216,7 @@ impl AsyncService for PppoeService {
                             }
                             if !self.cfg.enabled {
                                 info!("PPPoE service disabled in config, transitioning to Inactive");
-                                ctx.set_service_state("pppoe", ServiceState::Inactive);
+                                h.dormant(DormantReason::disabled("pppoe.enabled"));
                                 break 'main_loop;
                             }
                             info!("PPPoE session completed, reconnecting with active configuration");
@@ -1231,6 +1234,10 @@ impl AsyncService for PppoeService {
                                 delay_secs = self.cfg.reconnect_delay_secs,
                                 "PPPoE session failed; scheduling reconnection"
                             );
+
+                            if self.attempt >= 3 {
+                                h.degraded(DegradedReason::custom("no session"));
+                            }
 
                             self.publish_session_state(
                                 PppoeSessionState::Reconnecting,
@@ -1268,24 +1275,18 @@ impl AsyncService for PppoeService {
                                         }
                                     }
                                 }
-                                res = bus_rx.recv() => {
-                                    if let Ok(timed) = res {
-                                        match classify_system_event(&timed.event) {
-                                            Some(SystemInterrupt::Shutdown) => {
-                                                info!("PPPoE service received shutdown during reconnect delay");
-                                                break 'main_loop;
-                                            }
-                                            Some(SystemInterrupt::Stop) => {
-                                                info!("PPPoE service received stop during reconnect delay");
-                                                ctx.set_service_state("pppoe", ServiceState::Inactive);
-                                                break 'main_loop;
-                                            }
-                                            Some(SystemInterrupt::Restart) => {
-                                                info!("PPPoE service received restart during reconnect delay, retrying immediately");
-                                                self.attempt = 0;
-                                            }
-                                            None => {}
+                                cmd = h.next_command() => {
+                                    match cmd {
+                                        ServiceCommand::Stop | ServiceCommand::Shutdown => {
+                                            info!("PPPoE service received stop/shutdown during reconnect delay");
+                                            ctx.set_service_state("pppoe", ServiceState::Inactive);
+                                            break 'main_loop;
                                         }
+                                        ServiceCommand::Restart => {
+                                            info!("PPPoE service received restart during reconnect delay, retrying immediately");
+                                            self.attempt = 0;
+                                        }
+                                        _ => {}
                                     }
                                 }
                             }

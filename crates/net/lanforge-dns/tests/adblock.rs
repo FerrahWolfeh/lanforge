@@ -55,7 +55,8 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     ctx.set_pppoe_ready(true);
 
     tokio::spawn(async move {
-        service.serve(&ctx_service).await.expect("Service failed");
+        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        service.serve(&ctx_service, &h).await.expect("Service failed");
     });
 
     wait_for_service_online(&ctx, "dns").await;

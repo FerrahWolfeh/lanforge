@@ -47,7 +47,8 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        service.serve(&ctx_service).await.expect("Service failed");
+        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        service.serve(&ctx_service, &h).await.expect("Service failed");
     });
 
     wait_for_service_online(&ctx, "dns").await;
@@ -140,7 +141,8 @@ async fn dns_reload_rewrites_on_the_fly() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        service.serve(&ctx_service).await.expect("Service failed");
+        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        service.serve(&ctx_service, &h).await.expect("Service failed");
     });
 
     wait_for_service_online(&ctx, "dns").await;
@@ -263,7 +265,8 @@ async fn dns_conditional_split_upstream_routing() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        service.serve(&ctx_service).await.expect("DNS Service failed");
+        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        service.serve(&ctx_service, &h).await.expect("DNS Service failed");
     });
 
     wait_for_service_online(&ctx, "dns").await;

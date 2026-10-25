@@ -1,7 +1,7 @@
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_tftp::TftpService;
 use lanforge_tftp::config::TftpConfig;
 use std::net::SocketAddr;
@@ -46,8 +46,9 @@ async fn test_tftp_path_traversal_prevention() {
     let ctx_service = ctx.clone();
 
     tokio::spawn(async move {
+        let h = ServiceHandle::new("tftp", ctx_service.clone());
         service
-            .serve(&ctx_service)
+            .serve(&ctx_service, &h)
             .await
             .expect("TFTP service failed to run");
     });

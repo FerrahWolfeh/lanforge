@@ -9,7 +9,7 @@ use dhcproto::v6::{DhcpOption as Dhcpv6Option, Message as MessageV6, MessageType
 use dhcproto::{Decodable, Decoder};
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_dhcp::{
     Dhcpv4Service, Dhcpv4Transport, Dhcpv6Service, Dhcpv6Transport,
 };
@@ -55,7 +55,10 @@ async fn test_dhcpv4_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
     // 3. Spawn service task
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
-    let serve_handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new("dhcpv4", ctx_clone.clone());
+        service_clone.serve(&ctx_clone, &h).await
+    });
 
     // Await Online state cooperatively without fixed sleep
     wait_for_service_online(&ctx, "dhcpv4").await?;
@@ -179,7 +182,10 @@ async fn test_dhcpv6_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
     // 3. Spawn service task
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
-    let serve_handle = tokio::spawn(async move { service_clone.serve(&ctx_clone).await });
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new("dhcpv6", ctx_clone.clone());
+        service_clone.serve(&ctx_clone, &h).await
+    });
 
     // Await Online state cooperatively without fixed sleep
     wait_for_service_online(&ctx, "dhcpv6").await?;

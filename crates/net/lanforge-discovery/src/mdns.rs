@@ -25,14 +25,14 @@ use lanforge_types::device::{DeviceClass, TransientOrigin};
 use lanforge_types::network::{
     DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, Hostname, HostnameOrigin,
 };
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::DormantReason;
 use lanforge_types::update::{DeviceUpdate, TransientHostUpdate};
 use serde::{Deserialize, Serialize};
 
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::AsyncService;
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use pnet::datalink::interfaces;
 use smallvec::SmallVec;
 use std::io::{ErrorKind, Write};
@@ -110,17 +110,17 @@ impl AsyncService for MdnsProber {
         ]
     }
 
-    async fn serve(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
+    async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         if !self.cfg.enabled {
             info!("mDNS prober is disabled in configuration.");
-            ctx.set_service_state("mdns", ServiceState::Inactive);
+            h.dormant(DormantReason::disabled("mdns.enabled"));
             return Ok(());
         }
 
         let (tx, rx) = mpsc::channel(32);
         self.tx = tx.clone();
 
-        if let Err(e) = run_mdns_worker(self.cfg.clone(), ctx.clone(), rx, tx).await {
+        if let Err(e) = run_mdns_worker(self.cfg.clone(), ctx.clone(), rx, tx, h).await {
             error!("mDNS worker fatal error: {e}");
             return Err(CoreError::Generic(e.to_string()));
         }
@@ -147,11 +147,13 @@ impl MdnsProber {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_mdns_worker(
     cfg: MdnsConfig,
     ctx: LanforgeContext,
     mut rx: Receiver<MdnsCommand>,
     tx: Sender<MdnsCommand>,
+    h: &ServiceHandle,
 ) -> Result<(), NetworkError> {
     let bus = ctx.bus();
     // We bind to a random port to SEND queries, and a fixed port to LISTEN if we want passive,
@@ -222,6 +224,7 @@ async fn run_mdns_worker(
     if cfg.enabled {
         let _ = tx.try_send(MdnsCommand::ProbeAll);
     }
+    h.ready();
 
     loop {
         if !ctx.is_running() {
@@ -229,6 +232,16 @@ async fn run_mdns_worker(
         }
 
         tokio::select! {
+            cmd = h.next_command() => {
+                match cmd {
+                    ServiceCommand::Stop | ServiceCommand::Shutdown => break,
+                    ServiceCommand::Restart => {
+                        h.request_restart();
+                        break;
+                    }
+                    _ => {}
+                }
+            }
             res = bus_rx.recv() => {
                 match res {
                     Ok(timed_event) => {
