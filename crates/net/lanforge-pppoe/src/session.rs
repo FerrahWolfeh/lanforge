@@ -46,8 +46,20 @@ impl PppoeSession {
             .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))
     }
 
+    pub fn attach_kernel_channel(&self, chan_fd: OwnedFd) -> Result<(), PppoeError> {
+        self.transport
+            .attach_kernel_channel(chan_fd)
+            .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))
+    }
+
     #[must_use]
     pub fn session_raw_fd(&self) -> Option<RawFd> {
         self.transport.session_raw_fd()
+    }
+}
+
+impl Drop for PppoeSession {
+    fn drop(&mut self) {
+        self.transport.close_session();
     }
 }

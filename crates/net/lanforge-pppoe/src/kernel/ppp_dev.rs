@@ -13,13 +13,14 @@ nix::ioctl_write_ptr!(pppiocsmru, 't', 82, libc::c_int);
 nix::ioctl_write_ptr!(pppiocsflags, 't', 89, libc::c_int);
 
 pub struct KernelSession {
+    pub session_fd: OwnedFd,
     pub ppp_unit_fd: OwnedFd,
     pub ppp_chan_fd: OwnedFd,
     pub interface_name: String,
     pub unit_id: i32,
 }
 
-pub fn handoff_to_kernel(session_fd: &OwnedFd, mru: u16) -> Result<KernelSession, PppoeError> {
+pub fn handoff_to_kernel(session_fd: OwnedFd, mru: u16) -> Result<KernelSession, PppoeError> {
     if !Path::new("/dev/ppp").exists() {
         return Err(PppoeError::DevPppUnavailable);
     }
@@ -49,7 +50,7 @@ pub fn handoff_to_kernel(session_fd: &OwnedFd, mru: u16) -> Result<KernelSession
     );
     let ppp_chan_fd = open(
         Path::new("/dev/ppp"),
-        OFlag::O_RDWR | OFlag::O_CLOEXEC,
+        OFlag::O_RDWR | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK,
         Mode::empty(),
     )?;
 
@@ -83,6 +84,7 @@ pub fn handoff_to_kernel(session_fd: &OwnedFd, mru: u16) -> Result<KernelSession
     );
 
     Ok(KernelSession {
+        session_fd,
         ppp_unit_fd,
         ppp_chan_fd,
         interface_name,

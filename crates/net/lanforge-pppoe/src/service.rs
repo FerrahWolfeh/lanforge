@@ -465,7 +465,8 @@ impl PppoeService {
             let session_fd = session.try_clone_session_fd()?.ok_or_else(|| {
                 PppoeError::NegotiationFailed("No session fd available for kernel handoff".into())
             })?;
-            let kernel_session = handoff_to_kernel(&session_fd, lcp_res.mru)?;
+            let kernel_session = handoff_to_kernel(session_fd, lcp_res.mru)?;
+            session.attach_kernel_channel(kernel_session.ppp_chan_fd.try_clone()?)?;
             configure_interface(
                 &kernel_session.interface_name,
                 ipcp_res.local_ip,
@@ -870,21 +871,22 @@ impl PppoeService {
     }
 
     async fn run_session_flow(&mut self) -> Result<Option<SystemInterrupt>, PppoeError> {
+        self.wait_for_carrier().await?;
+
+        let prober = self.wait_for_terminal().await?;
+
+        let (ifindex, mac) = self.get_interface_details()?;
         let transport = if let Some(t) = &self.transport {
+            t.bind_discovery(ifindex)
+                .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))?;
             t.clone()
         } else {
-            let (ifindex, _) = self.get_interface_details()?;
             let t = PppoeTransport::bind(ifindex)
                 .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))?;
             self.transport = Some(t.clone());
             t
         };
 
-        self.wait_for_carrier().await?;
-
-        let prober = self.wait_for_terminal().await?;
-
-        let (ifindex, mac) = self.get_interface_details()?;
         info!(
             wan_iface = %self.cfg.wan_iface,
             ifindex,
