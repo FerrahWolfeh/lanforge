@@ -9,7 +9,7 @@ A high-performance, resource-efficient Rust-based router and LAN orchestration p
 - `crates/core/lanforge-crypto` (L1) - Foundational security crate. Encapsulates password hashing (Argon2id), key derivation, and cryptographic utilities.
 - `crates/core/lanforge-macros` (L0) - Internal procedural macros for service registration and boilerplate.
 - `crates/net/lanforge-transport` (L1) - Foundational transport crate. Implements dual-stack Y-architecture (`UdpTransport`, `DualTcpListener`, `Icmp6Transport`), lock-free rate limiting, atomic metrics, and pure dependency injection (`InertHandle`) for rootless simulation.
-- `crates/net/lanforge-dhcp`, `crates/net/lanforge-ra`, `crates/net/lanforge-dns`, `crates/net/lanforge-dns-wire`, `crates/net/lanforge-pppoe`, `crates/net/lanforge-nft`, `crates/net/lanforge-discovery`, `crates/net/lanforge-traffic`, `crates/net/lanforge-wol`, `crates/net/lanforge-tftp` (L2) - Specialized network service crates.
+- `crates/net/lanforge-dhcp`, `crates/net/lanforge-ra`, `crates/net/lanforge-dns`, `crates/net/lanforge-dns-wire`, `crates/net/lanforge-pppoe`, `crates/net/lanforge-nft`, `crates/net/lanforge-discovery`, `crates/net/lanforge-traffic`, `crates/net/lanforge-tftp` (L2) - Specialized network service crates (Wake-on-LAN lives in `lanforge-transport`).
 - `crates/api/lanforge-api` (L1) - Shared API protocol definitions, DTOs, and RPC trait contracts. Used by both CLI and Daemon.
 - `crates/api/lanforge-api-dispatch` (L2) - Server-side RPC protocol handlers. Depends on `core`, `api`, and `crypto`. Operates decoupled from database persistence via event-driven CQRS.
 - `crates/api/lanforge-uds`, `crates/api/lanforge-http` (L2) - Communication endpoints exposing the API via Unix Domain Sockets or HTTP/WebSockets.
@@ -35,15 +35,39 @@ Background daemons (DHCP, RA, DNS, PPPoE, Firewall, etc.) are implemented using 
   - **Dormant / Disabled Services (TFTP, Discovery, mDNS)**: Return clean `Ok(())` setting `ServiceState::Inactive`. **Never use `std::future::pending::<()>()`.**
 
 ### Supervisor Architecture
+- **Dependency graph** (`crates/bin/lanforge/src/supervisor/`): typed edges `Requires` / `Wants` / `After`. Losing a
+  `Requires` dependency **never stops or restarts** the dependent; it applies the edge's `LossPolicy`
+  (`Continue` / `Degrade` / `Pause`) and sends `ServiceCommand::DependencyLost` / `DependencyRestored`.
+- **Conditions** (`ServiceSpec.condition`) are re-evaluated on every `SystemEvent::ConfigChanged`: a service whose
+  condition turns dormant is stopped (`Inactive(Dormant)`), and started again when it becomes active. Never poll config.
+- **Admin control**: `SystemEvent::ServiceControl` is routed by the supervisor to the target runner, which sends
+  `ServiceCommand::{Stop, Restart}` through the `ServiceHandle`. Services must handle commands only via
+  `h.next_command()` and must **not** react to `ServiceControl` on the bus. `Restart` may be handled in place
+  (PPPoE, firewall) or by returning after `h.request_restart()`. A service that ignores `Stop` is cancelled after
+  `shutdown_timeout`.
+- **Live config**: services consume config only through `ctx.config_subscription::<T>()`; the legacy
+  `Config*Changed` bus events are notifications for UI/CLI observers.
 - Uses **topic-isolated** subscriptions: the supervisor listens exclusively to `ctx.bus().subscribe_system()`.
 - Recognizes `ServiceState::Inactive` as an intentional settled state without triggering error backoffs or false alerts.
 - **Clean Shutdown**: `ctx.terminate()` is called *prior* to broadcasting `SystemEvent::Shutdown`, ensuring terminating services are recognized and preventing the supervisor from re-spawning exiting tasks.
 - **System Readiness**: Recognizes both `Online` and settled `Inactive` states so disabled services never block `SystemReady`.
 
+### Async hygiene (bugs found in phase 6)
+- Never end a `select!` arm with a polling future (`yield_now`, `has_changed` loops): await a real change.
+- Tasks that own sockets must not spawn detached child tasks holding them: use a `JoinSet` owned by the task, and
+  `abort()` **and await** the handle before rebinding.
+- A closed broadcast channel (`RecvError::Closed`) must end the loop, never `continue`; only `Lagged` is skipped.
+- `Notify::notify_waiters` stores no permit: use a `watch` epoch when a wake-up must not be lost.
+
 ## 2. Global State & Context
 `LanforgeContext` is the central Arc-wrapped handle passed to all services.
 - Access state via scoped closures: `ctx.with_state(|state| ...)` and `ctx.with_config(|cfg| ...)`.
 - State updates **MUST** be performed via `ctx.apply(DeviceUpdate::...)`. Never mutate state directly.
+- `DeviceUpdate::InterfaceIpsChanged` carries a **full snapshot** of the interface addresses: a missing address was
+  removed. Never send a partial state through it.
+- `NetworkEvent::PrefixChanged` is emitted by **every** interface (LAN, `ppp0`, ...) and carries `ifindex`: always
+  filter on the interface you serve. The advertised/leased LAN prefix is the LAN interface's GUA (delegated by the
+  OS), never the WAN link prefix.
 - The `State` uses `Arc::make_mut` (Copy-on-Write) for efficient, lock-minimized updates.
 
 ## 3. The Event Bus & Topic Isolation

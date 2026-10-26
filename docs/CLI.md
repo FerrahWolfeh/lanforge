@@ -51,6 +51,10 @@ lanforge service restart <service-id>  # Restart a background service
 lanforge service start <service-id>    # Start an inactive service
 lanforge service stop <service-id>     # Stop an active service
 ```
+`stop` is sticky: the service stays `Inactive (AdminStopped)` until `start` or `restart`, across config changes.
+`restart` is handled by the service itself where a bounce would disrupt the network (PPPoE reconnects in place, the
+firewall reapplies its ruleset without tearing the table down). Stopping a service others depend on never restarts
+them: dependents apply their loss policy (continue, degrade or pause).
 
 ### `watch` *(alias: `events`)*
 Streams real-time daemon events (device discoveries, DHCP leases, DNS queries, firewall updates, PPPoE status) directly from the event bus.
@@ -93,7 +97,9 @@ lanforge wol desktop-pc                # Send magic packet resolved from device 
 ```
 
 ### `reload`
-Requests an in-place configuration reload across all running services without dropping active sockets or rebooting the daemon.
+Re-reads `lanforge.toml`, diffs it against the live configuration, and applies only the sections that changed. Each
+affected service absorbs its change in place (no socket is closed unless its listen address/interface changed);
+unaffected services are not touched. A full restart is `systemctl restart lanforge`.
 ```bash
 lanforge reload
 ```
