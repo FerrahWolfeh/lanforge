@@ -184,12 +184,17 @@ pub enum EdgeKind {
 }
 
 /// Behaviour when a required dependency is lost at runtime.
+///
+/// Dependency loss never stops or restarts a dependent (D-1): on a gateway, a service tearing
+/// itself down can take the whole network down. There is deliberately no `Restart` variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LossPolicy {
+    /// Keep running unchanged; the service is only notified.
     Continue,
+    /// Keep running, published as `Degraded`.
     Degrade,
+    /// Keep the service alive but tell it to suspend work until the dependency returns.
     Pause,
-    Restart,
 }
 
 /// Activation condition state.

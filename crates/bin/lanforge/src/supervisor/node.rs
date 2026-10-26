@@ -59,9 +59,8 @@ impl NodeHandle {
 
         let _ = self.tx.send(new_status);
         ctx.set_service_state(self.id, state);
-        if let Some(d) = detail {
-            ctx.set_service_detail(self.id, Some(d));
-        }
+        // Always overwrite: `None` must clear a stale reason (e.g. Dormant -> Online).
+        ctx.set_service_detail(self.id, detail);
     }
 }
 

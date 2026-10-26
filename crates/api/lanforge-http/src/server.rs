@@ -72,10 +72,10 @@ impl FromRef<AppState> for Arc<dyn DatabaseStore> {
 
 use lanforge_types::system::ServiceId;
 
-const HTTP_DEPS: &[lanforge_core::service::Edge] = &[lanforge_core::service::Edge::requires(
-    ServiceId::Db,
-    lanforge_core::service::LossPolicy::Restart,
-)];
+// `After` only: the DB is never a hard dependency (D-4). With the DB down, auth fails
+// closed with 503 while in-memory sessions stay valid (D-11).
+const HTTP_DEPS: &[lanforge_core::service::Edge] =
+    &[lanforge_core::service::Edge::after(ServiceId::Db)];
 
 #[derive(Clone)]
 pub struct HttpService {

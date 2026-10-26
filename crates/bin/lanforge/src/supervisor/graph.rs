@@ -168,7 +168,7 @@ impl DependencyGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lanforge_core::service::{Condition, LossPolicy, RestartPolicy, RuntimeClass};
+    use lanforge_core::service::{Condition, RestartPolicy, RuntimeClass};
     use std::time::Duration;
 
     fn make_spec(id: ServiceId, deps: &'static [Edge]) -> ServiceSpec {
@@ -186,7 +186,7 @@ mod tests {
     #[test]
     fn test_valid_dag_topological_sort() {
         static DB_DEPS: &[Edge] = &[];
-        static HTTP_DEPS: &[Edge] = &[Edge::requires(ServiceId::Db, LossPolicy::Restart)];
+        static HTTP_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
         static DNS_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
 
         let specs = vec![
@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn test_rejects_unknown_dependency() {
-        static HTTP_DEPS: &[Edge] = &[Edge::requires(ServiceId::Db, LossPolicy::Restart)];
+        static HTTP_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
 
         // Only register HTTP, not Db
         let specs = vec![make_spec(ServiceId::Http, HTTP_DEPS)];

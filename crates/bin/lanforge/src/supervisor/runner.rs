@@ -2,12 +2,13 @@
 
 use crate::supervisor::backoff::{BackoffDecision, calculate_backoff, is_healthy};
 use crate::supervisor::node::{NodeHandle, is_settled};
+use futures::future::select_all;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, DegradedReason, Edge, LanforgeService, LossPolicy, NodeStatus,
-    ServiceCommand, ServiceHandle, ServiceSpec,
+    Activation, AsyncService, DegradedReason, Edge, EdgeKind, LanforgeService, LossPolicy,
+    NodeStatus, ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_types::system::{ServiceId, ServiceState, StateDetail};
 use std::borrow::Cow;
@@ -118,7 +119,9 @@ where
             debug!(service = %self.spec.id, "Serving service");
             let mut serve_fut = Box::pin(service.serve(&self.ctx, &handle));
 
-            let (serve_res, loss_restart) = loop {
+            let mut lost_deps: Vec<(ServiceId, LossPolicy)> = Vec::new();
+            let mut loss_overridden = false;
+            let serve_res = loop {
                 tokio::select! {
                     biased;
 
@@ -126,7 +129,7 @@ where
                     _ = self.shutdown_rx.changed() => {
                         if *self.shutdown_rx.borrow() {
                             let _ = cmd_tx.send(ServiceCommand::Shutdown).await;
-                            break (None, false);
+                            break None;
                         }
                     }
 
@@ -141,58 +144,31 @@ where
                         }
                     }
 
-                    // Monitor Required dependencies for loss
-                    loss = Self::check_required_dependency_loss(self.spec.deps, &mut self.dep_rxs) => {
-                        if let Some((target, policy)) = loss {
-                            debug!(
-                                service = %self.spec.id,
-                                %target,
-                                policy = ?policy,
-                                "Required dependency lost"
-                            );
-                            match policy {
-                                LossPolicy::Continue => {
-                                    let _ = cmd_tx.send(ServiceCommand::DependencyLost { id: target, policy }).await;
-                                }
-                                LossPolicy::Degrade => {
-                                    let _ = cmd_tx.send(ServiceCommand::DependencyLost { id: target, policy }).await;
-                                    self.node.set_status(
-                                        &self.ctx,
-                                        ServiceState::Degraded,
-                                        Some(StateDetail::Degraded(DegradedReason::Custom(Cow::Owned(target.to_string())))),
-                                    );
-                                }
-                                LossPolicy::Pause => {
-                                    let _ = cmd_tx.send(ServiceCommand::DependencyLost { id: target, policy }).await;
-                                    self.node.set_status(
-                                        &self.ctx,
-                                        ServiceState::Degraded,
-                                        Some(StateDetail::Paused(target)),
-                                    );
-                                    // Wait for recovery
-                                    if let Some(rx) = self.dep_rxs.get_mut(&target) {
-                                        while rx.changed().await.is_ok() {
-                                            let st = rx.borrow().state;
-                                            if st == ServiceState::Online || st == ServiceState::Degraded {
-                                                let _ = cmd_tx.send(ServiceCommand::DependencyRestored { id: target }).await;
-                                                self.node.set_status(&self.ctx, ServiceState::Online, None);
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                                LossPolicy::Restart => {
-                                    warn!(service = %self.spec.id, %target, "Dependency lost with Restart policy; bouncing service");
-                                    let _ = cmd_tx.send(ServiceCommand::Shutdown).await;
-                                    break (None, true);
-                                }
-                            }
-                        }
+                    // Monitor Required dependencies for loss/recovery. Loss never stops or
+                    // restarts the service (D-1); it only applies the edge's LossPolicy.
+                    Some((target, policy, lost)) = Self::next_dependency_transition(
+                        self.spec.deps,
+                        &mut self.dep_rxs,
+                        &lost_deps,
+                    ) => {
+                        // Publish the status before notifying the service, so observers never see
+                        // a command the status does not reflect yet.
+                        let cmd = if lost {
+                            warn!(service = %self.spec.id, %target, ?policy, "Required dependency lost");
+                            lost_deps.push((target, policy));
+                            ServiceCommand::DependencyLost { id: target, policy }
+                        } else {
+                            info!(service = %self.spec.id, %target, "Required dependency restored");
+                            lost_deps.retain(|&(id, _)| id != target);
+                            ServiceCommand::DependencyRestored { id: target }
+                        };
+                        self.apply_loss_status(&lost_deps, &mut loss_overridden);
+                        let _ = cmd_tx.send(cmd).await;
                     }
 
                     // Main service execution outcome
                     res = &mut serve_fut => {
-                        break (Some(res), false);
+                        break Some(res);
                     }
                 }
             };
@@ -215,7 +191,7 @@ where
             if let Some(res) = serve_res {
                 match res {
                     Ok(()) => {
-                        if handle.is_restart_requested() || loss_restart {
+                        if handle.is_restart_requested() {
                             debug!(service = %self.spec.id, "Restart requested, recycling");
                             continue;
                         }
@@ -236,7 +212,7 @@ where
                         self.handle_failure(err, consecutive_failures).await;
                     }
                 }
-            } else if !loss_restart {
+            } else {
                 break;
             }
         }
@@ -313,24 +289,74 @@ where
         Ok(true)
     }
 
-    async fn check_required_dependency_loss(
+    /// Waits for the next loss or recovery transition of a `Requires` dependency.
+    ///
+    /// Returns `(target, policy, lost)`. Never resolves while no required dependency changes
+    /// (no polling), and never resolves at all if the service has no required dependencies.
+    async fn next_dependency_transition(
         deps: &'static [Edge],
         rxs: &mut HashMap<ServiceId, watch::Receiver<NodeStatus>>,
-    ) -> Option<(ServiceId, LossPolicy)> {
-        for &edge in deps {
-            if edge.kind == lanforge_core::service::EdgeKind::Requires
-                && let Some(rx) = rxs.get_mut(&edge.target)
-                && rx.has_changed().unwrap_or(false)
-            {
-                let _ = rx.borrow_and_update();
-                let st = rx.borrow().state;
-                if st != ServiceState::Online && st != ServiceState::Degraded {
-                    return Some((edge.target, edge.on_loss));
+        lost_deps: &[(ServiceId, LossPolicy)],
+    ) -> Option<(ServiceId, LossPolicy, bool)> {
+        loop {
+            for edge in deps.iter().filter(|e| e.kind == EdgeKind::Requires) {
+                let Some(rx) = rxs.get_mut(&edge.target) else {
+                    continue;
+                };
+                let up = matches!(
+                    rx.borrow_and_update().state,
+                    ServiceState::Online | ServiceState::Degraded
+                );
+                let was_lost = lost_deps.iter().any(|&(id, _)| id == edge.target);
+                if up == was_lost {
+                    return Some((edge.target, edge.on_loss, !up));
                 }
             }
+
+            let waiters: Vec<_> = deps
+                .iter()
+                .filter(|e| e.kind == EdgeKind::Requires)
+                .filter_map(|e| rxs.get(&e.target).cloned())
+                .map(|mut rx| Box::pin(async move { rx.changed().await }))
+                .collect();
+            if waiters.is_empty() {
+                return std::future::pending().await;
+            }
+            // A closed sender means the dependency's node is gone; nothing more to observe.
+            if select_all(waiters).await.0.is_err() {
+                return std::future::pending().await;
+            }
         }
-        tokio::task::yield_now().await;
-        None
+    }
+
+    /// Recomputes this node's published status from the set of currently lost dependencies.
+    ///
+    /// `overridden` tracks whether the supervisor (not the service) set the current status, so
+    /// clearing the last loss only restores `Online` when the supervisor caused the downgrade.
+    fn apply_loss_status(&self, lost_deps: &[(ServiceId, LossPolicy)], overridden: &mut bool) {
+        let detail = lost_deps.iter().find_map(|&(target, policy)| match policy {
+            LossPolicy::Pause => Some(StateDetail::Paused(target)),
+            LossPolicy::Degrade | LossPolicy::Continue => None,
+        });
+        let detail = detail.or_else(|| {
+            lost_deps.iter().find_map(|&(target, policy)| {
+                (policy == LossPolicy::Degrade).then(|| {
+                    StateDetail::Degraded(DegradedReason::Custom(Cow::Owned(target.to_string())))
+                })
+            })
+        });
+        match detail {
+            Some(detail) => {
+                self.node
+                    .set_status(&self.ctx, ServiceState::Degraded, Some(detail));
+                *overridden = true;
+            }
+            None if *overridden => {
+                self.node.set_status(&self.ctx, ServiceState::Online, None);
+                *overridden = false;
+            }
+            None => {}
+        }
     }
 
     async fn handle_failure(&mut self, err: CoreError, failures: u32) {
