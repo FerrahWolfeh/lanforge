@@ -864,6 +864,42 @@ impl LanforgeContext {
             .as_ref()
             .clone()
     }
+
+    /// Determines the effective WAN interface name from the current configuration snapshot.
+    #[must_use]
+    pub fn effective_wan_iface(&self) -> Option<String> {
+        self.with_config(|c| effective_wan_iface(c.pppoe.as_ref(), c.firewall.as_ref()))
+    }
+}
+
+/// Determines the effective WAN interface name based on declarative configuration:
+/// 1. `pppoe.wan_iface` when `PPPoE` is enabled.
+/// 2. Otherwise, the first interface found in the firewall's `external` zone.
+/// 3. `None` if no WAN interface is configured.
+#[must_use]
+pub fn effective_wan_iface(
+    pppoe: Option<&PppoeConfig>,
+    firewall: Option<&FirewallConfig>,
+) -> Option<String> {
+    if let Some(p) = pppoe
+        && p.enabled
+        && !p.wan_iface.is_empty()
+    {
+        return Some(p.wan_iface.clone());
+    }
+
+    if let Some(fw) = firewall {
+        for zone in &fw.zones {
+            if zone.name == "external"
+                && let Some(iface) = zone.interfaces.first()
+                && !iface.is_empty()
+            {
+                return Some(iface.clone());
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -975,5 +1011,55 @@ mod tests {
             _ = sub.next() => panic!("Sub must not wake after hydration"),
             () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
         }
+    }
+
+    #[test]
+    fn test_effective_wan_iface_derivation() {
+        use lanforge_types::network::firewall::FirewallZone;
+
+        // 1. PPPoE enabled takes precedence
+        let pppoe = PppoeConfig {
+            enabled: true,
+            wan_iface: "ppp-wan0".into(),
+            ..Default::default()
+        };
+        let fw = FirewallConfig {
+            zones: vec![FirewallZone {
+                name: "external".into(),
+                interfaces: vec!["eth_ext0".into()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_wan_iface(Some(&pppoe), Some(&fw)),
+            Some("ppp-wan0".into())
+        );
+
+        // 2. PPPoE disabled falls back to firewall external zone
+        let pppoe_disabled = PppoeConfig {
+            enabled: false,
+            wan_iface: "ppp-wan0".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_wan_iface(Some(&pppoe_disabled), Some(&fw)),
+            Some("eth_ext0".into())
+        );
+
+        // 3. No WAN configured
+        let fw_no_ext = FirewallConfig {
+            zones: vec![FirewallZone {
+                name: "internal".into(),
+                interfaces: vec!["lan0".into()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_wan_iface(Some(&pppoe_disabled), Some(&fw_no_ext)),
+            None
+        );
+        assert_eq!(effective_wan_iface(None, None), None);
     }
 }

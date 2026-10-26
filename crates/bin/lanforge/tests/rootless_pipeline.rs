@@ -139,6 +139,7 @@ async fn test_rootless_pipeline_e2e() {
         prefixes: vec![ra_prefix],
         rdnss: vec![],
         dnssl: vec![],
+        deprecate_on_renumber: true,
     });
 
     let traffic_cfg = TrafficConfig {

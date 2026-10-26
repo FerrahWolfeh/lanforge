@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use lanforge_types::network::snapshot::{InterfaceSnapshot, WanSnapshot};
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
 use lanforge_types::system::{
     Cap, PppoeStatusResponse, RaStatusResponse, ServerCapabilities, ServiceBanner, ServiceId,
@@ -404,5 +405,39 @@ impl LanforgeContext {
     /// Sets the `PPPoE` session readiness state.
     pub fn set_pppoe_ready(&self, ready: bool) {
         self.inner.runtime.set_pppoe_ready(ready);
+    }
+
+    /// Returns a point-in-time snapshot of the effective WAN L3 connectivity.
+    #[must_use]
+    pub fn wan_snapshot(&self) -> WanSnapshot {
+        self.inner.runtime.wan_snapshot()
+    }
+
+    /// Subscribes to changes in effective WAN L3 connectivity.
+    #[must_use]
+    pub fn watch_wan(&self) -> tokio::sync::watch::Receiver<WanSnapshot> {
+        self.inner.runtime.watch_wan()
+    }
+
+    /// Sets the current WAN snapshot.
+    pub fn set_wan_snapshot(&self, snapshot: WanSnapshot) {
+        self.inner.runtime.set_wan_snapshot(snapshot);
+    }
+
+    /// Returns a point-in-time snapshot of discovered network interfaces.
+    #[must_use]
+    pub fn interfaces_snapshot(&self) -> InterfaceSnapshot {
+        self.inner.runtime.interfaces_snapshot()
+    }
+
+    /// Subscribes to changes in discovered network interfaces.
+    #[must_use]
+    pub fn watch_interfaces(&self) -> tokio::sync::watch::Receiver<InterfaceSnapshot> {
+        self.inner.runtime.watch_interfaces()
+    }
+
+    /// Sets the current network interface snapshot.
+    pub fn set_interfaces_snapshot(&self, snapshot: InterfaceSnapshot) {
+        self.inner.runtime.set_interfaces_snapshot(snapshot);
     }
 }

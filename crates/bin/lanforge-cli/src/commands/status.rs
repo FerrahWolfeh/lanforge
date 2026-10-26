@@ -279,6 +279,15 @@ fn format_service_summary(banner: &ServiceBanner) -> String {
                 format!("Serving {dir}")
             }
         }
+        ServiceId::Interfaces => {
+            let links = stat("links_count").unwrap_or("0");
+            format!("{links} managed interface links")
+        }
+        ServiceId::Wan => {
+            let iface = stat("interface").unwrap_or("-");
+            let state = stat("wan_state").unwrap_or("Down");
+            format!("{state} ({iface})")
+        }
     }
 }
 

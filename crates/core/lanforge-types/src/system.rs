@@ -146,6 +146,10 @@ pub enum ServiceId {
     Mdns,
     Http,
     Uds,
+
+    // --- Synthetic Graph Nodes (Supervisor/Observer Managed) ---
+    Interfaces,
+    Wan,
 }
 
 impl ServiceId {
@@ -165,7 +169,16 @@ impl ServiceId {
             Self::Mdns => "mdns",
             Self::Http => "http",
             Self::Uds => "uds",
+            Self::Interfaces => "interfaces",
+            Self::Wan => "wan",
         }
+    }
+
+    /// Returns `true` if this identifier represents a synthetic supervisor/observer node
+    /// rather than an independently managed user-facing daemon.
+    #[must_use]
+    pub const fn is_synthetic(&self) -> bool {
+        matches!(self, Self::Interfaces | Self::Wan)
     }
 
     pub const ALL: &'static [Self] = &[
@@ -182,6 +195,8 @@ impl ServiceId {
         Self::Mdns,
         Self::Http,
         Self::Uds,
+        Self::Interfaces,
+        Self::Wan,
     ];
 }
 
@@ -215,6 +230,8 @@ impl std::str::FromStr for ServiceId {
             "mdns" => Ok(Self::Mdns),
             "http" | "web" => Ok(Self::Http),
             "uds" | "control" => Ok(Self::Uds),
+            "interfaces" | "ifaces" => Ok(Self::Interfaces),
+            "wan" => Ok(Self::Wan),
             other => Err(format!("Unknown service '{other}'")),
         }
     }

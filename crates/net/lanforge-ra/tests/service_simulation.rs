@@ -57,6 +57,7 @@ async fn test_ra_inert_full_lifecycle() {
         prefixes: vec![prefix],
         rdnss: vec![],
         dnssl: vec![],
+        deprecate_on_renumber: true,
     });
 
     let cfg = RaConfig::default();

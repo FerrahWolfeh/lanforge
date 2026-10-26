@@ -7,6 +7,7 @@ mod listen;
 mod neighbor;
 pub mod pppoe;
 pub mod ra;
+pub mod snapshot;
 pub mod subnet;
 pub mod traffic;
 
@@ -30,4 +31,5 @@ pub use ip::{
 };
 pub use listen::ListenConfig;
 pub use neighbor::NeighborEvent;
+pub use snapshot::{InterfaceSnapshot, Ipv6Net, LinkInfo, WanSnapshot, WanState};
 pub use subnet::{DnsReverseResolver, IpSubnet};

@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime};
 use tokio::sync::watch;
 
+use lanforge_types::network::snapshot::{InterfaceSnapshot, WanSnapshot};
 use lanforge_types::system::StateDetail;
 
 /// Registered service runtime slot tracking state and status provider.
@@ -39,6 +40,8 @@ pub struct ServiceRuntime {
     db_ready_tx: watch::Sender<bool>,
     if_ready_tx: watch::Sender<bool>,
     pppoe_ready_tx: watch::Sender<bool>,
+    wan_tx: watch::Sender<WanSnapshot>,
+    interfaces_tx: watch::Sender<InterfaceSnapshot>,
     recovery_mode: AtomicBool,
     services: RwLock<BTreeMap<ServiceId, ServiceSlot>>,
     shared_by_type: RwLock<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
@@ -74,6 +77,8 @@ impl ServiceRuntime {
         let (db_ready_tx, _) = watch::channel(false);
         let (if_ready_tx, _) = watch::channel(false);
         let (pppoe_ready_tx, _) = watch::channel(false);
+        let (wan_tx, _) = watch::channel(WanSnapshot::default());
+        let (interfaces_tx, _) = watch::channel(InterfaceSnapshot::default());
 
         Self {
             bus,
@@ -81,6 +86,8 @@ impl ServiceRuntime {
             db_ready_tx,
             if_ready_tx,
             pppoe_ready_tx,
+            wan_tx,
+            interfaces_tx,
             recovery_mode: AtomicBool::new(false),
             services: RwLock::new(BTreeMap::new()),
             shared_by_type: RwLock::new(HashMap::new()),
@@ -122,6 +129,9 @@ impl ServiceRuntime {
         self.db_ready_tx.send_replace(false);
         self.if_ready_tx.send_replace(true);
         self.pppoe_ready_tx.send_replace(false);
+        self.wan_tx.send_replace(WanSnapshot::default());
+        self.interfaces_tx
+            .send_replace(InterfaceSnapshot::default());
         let mut services = self.services.write();
         for slot in services.values_mut() {
             slot.state_tx.send_replace(ServiceState::Offline);
@@ -154,6 +164,34 @@ impl ServiceRuntime {
 
     pub fn set_pppoe_ready(&self, ready: bool) {
         self.pppoe_ready_tx.send_replace(ready);
+    }
+
+    #[must_use]
+    pub fn wan_snapshot(&self) -> WanSnapshot {
+        self.wan_tx.borrow().clone()
+    }
+
+    #[must_use]
+    pub fn watch_wan(&self) -> watch::Receiver<WanSnapshot> {
+        self.wan_tx.subscribe()
+    }
+
+    pub fn set_wan_snapshot(&self, snapshot: WanSnapshot) {
+        self.wan_tx.send_replace(snapshot);
+    }
+
+    #[must_use]
+    pub fn interfaces_snapshot(&self) -> InterfaceSnapshot {
+        self.interfaces_tx.borrow().clone()
+    }
+
+    #[must_use]
+    pub fn watch_interfaces(&self) -> watch::Receiver<InterfaceSnapshot> {
+        self.interfaces_tx.subscribe()
+    }
+
+    pub fn set_interfaces_snapshot(&self, snapshot: InterfaceSnapshot) {
+        self.interfaces_tx.send_replace(snapshot);
     }
 
     #[must_use]

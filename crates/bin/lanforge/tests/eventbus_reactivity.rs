@@ -353,6 +353,7 @@ async fn test_ra_eventbus_reactivity() {
         prefixes: vec![prefix],
         rdnss: vec![],
         dnssl: vec![],
+        deprecate_on_renumber: true,
     });
 
     let (ra_handle, ra_trans) = lanforge_transport::Icmp6Transport::inert();

@@ -424,6 +424,7 @@ impl RouterPriority {
 
 /// Full runtime configuration for the Router Advertisement service.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 #[serde(default)]
 pub struct RaServerConfig {
     /// Whether the RA service is enabled.
@@ -457,6 +458,13 @@ pub struct RaServerConfig {
     pub rdnss: Vec<RdnssConfig>,
     /// DNS search list suffixes (RFC 8106).
     pub dnssl: Vec<DnsslConfig>,
+    /// Whether to explicitly deprecate obsolete IPv6 prefixes on renumbering (RFC 4862 §5.5.3e).
+    #[serde(default = "default_true")]
+    pub deprecate_on_renumber: bool,
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 impl Default for RaServerConfig {
@@ -477,6 +485,7 @@ impl Default for RaServerConfig {
             prefixes: Vec::new(),
             rdnss: Vec::new(),
             dnssl: Vec::new(),
+            deprecate_on_renumber: true,
         }
     }
 }

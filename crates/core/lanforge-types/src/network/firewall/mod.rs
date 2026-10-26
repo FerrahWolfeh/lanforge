@@ -58,7 +58,7 @@ pub struct DynamicPortRequest {
 }
 
 /// A logical firewall network zone (e.g., "internal", "external", "trusted", "guest").
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct FirewallZone {
     pub name: String,
     pub interfaces: Vec<String>,

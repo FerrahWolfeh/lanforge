@@ -15,6 +15,7 @@ pub mod utils;
 pub use config::{
     ChangeImpact, ConfigDomain, ConfigSection, DnsAllowlist, DnsListenConfig, DomainSet,
 };
+pub use network::{InterfaceSnapshot, Ipv6Net, LinkInfo, WanSnapshot, WanState};
 pub use system::{
     DegradedReason, DormantReason, ServiceBanner, ServiceId, ServiceState, StateDetail,
 };

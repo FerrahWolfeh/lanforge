@@ -310,6 +310,7 @@ impl Bootstrapper {
                 prefixes: cfg.ra_toml.prefixes.clone(),
                 rdnss: cfg.ra_toml.rdnss.clone(),
                 dnssl: cfg.ra_toml.dnssl.clone(),
+                deprecate_on_renumber: ra_cfg.deprecate_on_renumber,
             };
             patch = patch.with_ra_server(ra_srv);
         }

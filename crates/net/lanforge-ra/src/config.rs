@@ -79,6 +79,12 @@ pub struct RaConfig {
     pub rdnss: Vec<RdnssConfig>,
     /// DNS search lists via DNSSL (Option type 31).
     pub dnssl: Vec<DnsslConfig>,
+    /// Whether to explicitly deprecate obsolete IPv6 prefixes on renumbering (RFC 4862 §5.5.3e).
+    pub deprecate_on_renumber: bool,
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 /// Simplified RA configuration used in the TOML file.
@@ -101,6 +107,8 @@ pub struct RaServiceConfig {
     pub rdnss: Vec<RdnssConfig>,
     #[serde(rename = "dnssl")]
     pub dnssl: Vec<DnsslConfig>,
+    #[serde(default = "default_true")]
+    pub deprecate_on_renumber: bool,
 }
 
 impl RaServiceConfig {
@@ -120,6 +128,7 @@ impl RaServiceConfig {
             prefixes: self.prefixes.clone(),
             rdnss: self.rdnss.clone(),
             dnssl: self.dnssl.clone(),
+            deprecate_on_renumber: self.deprecate_on_renumber,
         }
     }
 }
@@ -141,6 +150,7 @@ impl Default for RaConfig {
             prefixes: Vec::new(),
             rdnss: Vec::new(),
             dnssl: Vec::new(),
+            deprecate_on_renumber: true,
         }
     }
 }
@@ -162,6 +172,7 @@ impl From<RaServerConfig> for RaConfig {
             prefixes: cfg.prefixes,
             rdnss: cfg.rdnss,
             dnssl: cfg.dnssl,
+            deprecate_on_renumber: cfg.deprecate_on_renumber,
         }
     }
 }
@@ -186,6 +197,7 @@ impl RaConfig {
         self.prefixes.clone_from(&cfg.prefixes);
         self.rdnss.clone_from(&cfg.rdnss);
         self.dnssl.clone_from(&cfg.dnssl);
+        self.deprecate_on_renumber = cfg.deprecate_on_renumber;
     }
 }
 
