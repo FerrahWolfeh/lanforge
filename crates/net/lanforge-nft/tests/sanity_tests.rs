@@ -659,3 +659,48 @@ fn test_sanity_dns_and_vowifi_bypass_toggles() {
     assert!(!json_disabled.contains("\"dport\": 500"));
     assert!(!json_disabled.contains("\"dport\": 4500"));
 }
+
+/// AGENTS.md §4: the WAN is a closed wall. In `input` and `forward`, an `accept` that does not
+/// match the ingress interface also matches the WAN, so it is only allowed for conntrack state,
+/// ICMP/ICMPv6 control messages and DHCPv6 client replies (PD renewal). Everything else must name
+/// the (internal) interface it comes from.
+#[test]
+fn test_sanity_no_interface_less_accept_reaches_wan() {
+    let cfg = FirewallConfig::default();
+    assert!(
+        cfg.bypass_dns && cfg.bypass_vowifi,
+        "defaults exercise both bypasses"
+    );
+    let ruleset = RulesetBuilder::new(&cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+    let v = serde_json::to_value(&ruleset).unwrap();
+
+    let mut offenders = Vec::new();
+    for cmd in v["nftables"].as_array().unwrap() {
+        let Some(rule) = cmd.get("add").and_then(|a| a.get("rule")) else {
+            continue;
+        };
+        let chain = rule["chain"].as_str().unwrap();
+        if chain != "input" && chain != "forward" {
+            continue;
+        }
+        let expr = rule["expr"].to_string();
+        if !expr.contains("\"accept\"") || expr.contains("\"iifname\"") {
+            continue;
+        }
+        let allowed = expr.contains("\"established\"")
+            || expr.contains("\"icmp\"")
+            || expr.contains("\"icmpv6\"")
+            || expr.contains("\"right\":546}");
+        if !allowed {
+            offenders.push(format!("{chain}: {expr}"));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "accept rules open to the WAN:\n{}",
+        offenders.join("\n")
+    );
+}

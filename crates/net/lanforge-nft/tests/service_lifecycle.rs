@@ -513,6 +513,10 @@ async fn test_firewall_service_control_stop_and_restart() {
         !serve_handle.is_finished(),
         "restart must not end the serve loop"
     );
+    assert!(
+        service.last_applied_payload().is_some(),
+        "restart must reapply over the live table, never delete it"
+    );
 
     // Stop ends serve; cleanup locks the WAN down and marks the service Inactive.
     cmd_tx
@@ -747,5 +751,8 @@ async fn test_firewall_start_with_wan_already_up_binds_wan() {
     let summary = wait_for_ruleset_applied(&mut fw_sub).await;
     assert_eq!(summary.wan_iface.as_deref(), Some("ppp0"));
     let payload = service.last_applied_payload().unwrap();
-    assert!(payload.contains("\"ppp0\""), "startup ruleset must bind the live WAN");
+    assert!(
+        payload.contains("\"ppp0\""),
+        "startup ruleset must bind the live WAN"
+    );
 }

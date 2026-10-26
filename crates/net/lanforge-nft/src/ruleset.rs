@@ -142,6 +142,29 @@ impl<'a> RulesetBuilder<'a> {
         })
     }
 
+    fn iifname_is(iface: &str) -> Statement<'static> {
+        Statement::Match(Match {
+            left: Expression::Named(NamedExpression::Meta(Meta {
+                key: MetaKey::Iifname,
+            })),
+            right: Expression::String(iface.to_string().into()),
+            op: Operator::EQ,
+        })
+    }
+
+    fn udp_dport_is(port: u32) -> Statement<'static> {
+        Statement::Match(Match {
+            left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
+                PayloadField {
+                    protocol: "udp".into(),
+                    field: "dport".into(),
+                },
+            ))),
+            right: Expression::Number(port),
+            op: Operator::EQ,
+        })
+    }
+
     #[must_use]
     fn has_mtu_fix(&self) -> bool {
         self.cfg.zones.iter().any(|z| z.mtu_fix) || self.active_wan.is_some()
@@ -347,50 +370,52 @@ impl<'a> RulesetBuilder<'a> {
     }
 
     #[allow(clippy::ptr_arg)]
-    fn build_input_bypasses(&self, batch: &mut Batch<'static>, table: &Cow<'static, str>) {
-        // Rule: Bypass DNS (UDP/TCP 53) directly to router host
-        if self.cfg.bypass_dns {
-            for proto in ["udp", "tcp"] {
-                batch.add(Self::make_rule(
-                    table,
-                    "input",
-                    vec![
-                        Statement::Match(Match {
-                            left: Expression::Named(NamedExpression::Payload(
-                                Payload::PayloadField(PayloadField {
-                                    protocol: proto.into(),
-                                    field: "dport".into(),
-                                }),
-                            )),
-                            right: Expression::Number(53),
-                            op: Operator::EQ,
-                        }),
-                        Statement::Accept(None),
-                    ],
-                ));
+    fn build_input_bypasses(
+        &self,
+        batch: &mut Batch<'static>,
+        table: &Cow<'static, str>,
+        internal_ifaces: &[String],
+    ) {
+        // Bypasses are for LAN/trusted clients only: an interface-less match would also open
+        // these ports on the WAN (open resolver, IKE exposed).
+        for iface in internal_ifaces {
+            // Rule: Bypass DNS (UDP/TCP 53) directly to router host
+            if self.cfg.bypass_dns {
+                for proto in ["udp", "tcp"] {
+                    batch.add(Self::make_rule(
+                        table,
+                        "input",
+                        vec![
+                            Self::iifname_is(iface),
+                            Statement::Match(Match {
+                                left: Expression::Named(NamedExpression::Payload(
+                                    Payload::PayloadField(PayloadField {
+                                        protocol: proto.into(),
+                                        field: "dport".into(),
+                                    }),
+                                )),
+                                right: Expression::Number(53),
+                                op: Operator::EQ,
+                            }),
+                            Statement::Accept(None),
+                        ],
+                    ));
+                }
             }
-        }
 
-        // Rule: Bypass VoWiFi (IKEv2 / IPsec ports 500, 4500)
-        if self.cfg.bypass_vowifi {
-            for port in [500, 4500] {
-                batch.add(Self::make_rule(
-                    table,
-                    "input",
-                    vec![
-                        Statement::Match(Match {
-                            left: Expression::Named(NamedExpression::Payload(
-                                Payload::PayloadField(PayloadField {
-                                    protocol: "udp".into(),
-                                    field: "dport".into(),
-                                }),
-                            )),
-                            right: Expression::Number(port),
-                            op: Operator::EQ,
-                        }),
-                        Statement::Accept(None),
-                    ],
-                ));
+            // Rule: Bypass VoWiFi (IKEv2 / IPsec ports 500, 4500)
+            if self.cfg.bypass_vowifi {
+                for port in [500, 4500] {
+                    batch.add(Self::make_rule(
+                        table,
+                        "input",
+                        vec![
+                            Self::iifname_is(iface),
+                            Self::udp_dport_is(port),
+                            Statement::Accept(None),
+                        ],
+                    ));
+                }
             }
         }
 
@@ -579,7 +604,7 @@ impl<'a> RulesetBuilder<'a> {
         ));
 
         Self::build_input_icmp(batch, table);
-        self.build_input_bypasses(batch, table);
+        self.build_input_bypasses(batch, table, internal_ifaces);
         self.build_input_host_rules(batch, table);
     }
 
@@ -919,26 +944,21 @@ impl<'a> RulesetBuilder<'a> {
             }
         }
 
-        // VoWiFi Forward bypass
+        // VoWiFi Forward bypass: LAN phones reaching the carrier ePDG. Replies are `established`;
+        // nothing from the WAN may open IKE towards the LAN.
         if self.cfg.bypass_vowifi {
-            for port in [500, 4500] {
-                batch.add(Self::make_rule(
-                    table,
-                    "forward",
-                    vec![
-                        Statement::Match(Match {
-                            left: Expression::Named(NamedExpression::Payload(
-                                Payload::PayloadField(PayloadField {
-                                    protocol: "udp".into(),
-                                    field: "dport".into(),
-                                }),
-                            )),
-                            right: Expression::Number(port),
-                            op: Operator::EQ,
-                        }),
-                        Statement::Accept(None),
-                    ],
-                ));
+            for iface in internal_ifaces {
+                for port in [500, 4500] {
+                    batch.add(Self::make_rule(
+                        table,
+                        "forward",
+                        vec![
+                            Self::iifname_is(iface),
+                            Self::udp_dport_is(port),
+                            Statement::Accept(None),
+                        ],
+                    ));
+                }
             }
         }
 
