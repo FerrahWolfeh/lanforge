@@ -1145,3 +1145,85 @@ async fn unresponsive_service_is_cancelled_on_stop() {
 
     supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
 }
+
+/// Fails on every start, with a backoff long enough to observe.
+struct AlwaysFails {
+    runs: Arc<AtomicU32>,
+}
+impl LanforgeService for AlwaysFails {
+    fn spec(&self) -> ServiceSpec {
+        static FW_ONLY: Condition = Condition {
+            sections: &[ConfigDomain::Firewall],
+            eval: |_| Activation::Active,
+        };
+        ServiceSpec {
+            restart: RestartPolicy {
+                base_backoff: Duration::from_secs(1),
+                max_backoff: Duration::from_secs(1),
+                max_retries: 0,
+                healthy_uptime: Duration::from_secs(60),
+            },
+            ..dummy_spec(ServiceId::Tftp, &[], FW_ONLY.clone())
+        }
+    }
+}
+impl AsyncService for AlwaysFails {
+    async fn serve(&mut self, _ctx: &LanforgeContext, _h: &ServiceHandle) -> Result<(), CoreError> {
+        self.runs.fetch_add(1, Ordering::SeqCst);
+        Err(CoreError::ServiceError("boom".into()))
+    }
+}
+
+/// A failing service waits out its backoff: config changes to sections its `Condition` does not
+/// declare must not wake it. Every `ConfigChanged` bumped one global epoch, so editing an unrelated
+/// setting (e.g. adblock in the WebUI) made every failing service retry immediately.
+#[tokio::test]
+async fn unrelated_config_changes_do_not_cut_a_backoff_short() {
+    let ctx = init_test_ctx();
+    let runs = Arc::new(AtomicU32::new(0));
+    let mut registry = ServiceRegistry::new();
+    let r = Arc::clone(&runs);
+    registry.register(&ctx, move || AlwaysFails {
+        runs: Arc::clone(&r),
+    });
+    let supervisor = registry.start(&ctx).expect("start supervisor");
+
+    timeout(Duration::from_millis(500), async {
+        while runs.load(Ordering::SeqCst) < 1 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("first start");
+
+    // Well inside the 1 s backoff: a burst of unrelated config changes.
+    for _ in 0..10 {
+        let _ = ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::ConfigChanged {
+                sections: ConfigDomain::DnsAdblock.into(),
+            }));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "unrelated config changes restarted a service in backoff"
+    );
+
+    // A change to a declared section still re-evaluates (and retries) right away.
+    let _ = ctx
+        .bus()
+        .publish(LanforgeEvent::System(SystemEvent::ConfigChanged {
+            sections: ConfigDomain::Firewall.into(),
+        }));
+    timeout(Duration::from_millis(300), async {
+        while runs.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("a relevant config change must wake the service");
+
+    supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
+}

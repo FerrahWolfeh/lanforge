@@ -14,6 +14,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{
     AsyncService, LanforgeService, NodeStatus, RuntimeClass, ServiceSpec,
 };
+use lanforge_types::config::DomainSet;
 use lanforge_types::system::{ServiceAction, ServiceId, ServiceState};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,7 +28,8 @@ use tracing::{debug, info, warn};
 pub struct RunnerLinks {
     pub node: Arc<NodeHandle>,
     pub dep_rxs: HashMap<ServiceId, watch::Receiver<NodeStatus>>,
-    /// Condition epoch: bumped on every config change so dormant nodes re-evaluate.
+    /// Condition epoch of this node: bumped when a config section its `Condition` declares changes
+    /// (or on a lagged bus / explicit re-evaluation), so it re-evaluates and leaves its backoff.
     /// A `watch` (not `Notify`) so a bump between evaluation and waiting is never lost.
     pub condition_rx: watch::Receiver<u64>,
     /// Admin `start|stop|restart` requests routed from `SystemEvent::ServiceControl`.
@@ -134,11 +136,32 @@ where
     }
 }
 
+/// Wakes one node's condition re-evaluation.
+struct ConditionWake {
+    /// Config sections the node's `Condition` declares.
+    sections: DomainSet,
+    tx: watch::Sender<u64>,
+}
+
+impl ConditionWake {
+    fn bump(&self) {
+        self.tx.send_modify(|epoch| *epoch += 1);
+    }
+}
+
+/// Bumps the nodes whose `Condition` declares one of `changed`. Waking every node on any change
+/// cut every failing service's backoff short whenever an unrelated setting was edited.
+fn wake_conditions(wakes: &[ConditionWake], changed: DomainSet) {
+    for wake in wakes.iter().filter(|w| w.sections.intersects(changed)) {
+        wake.bump();
+    }
+}
+
 /// Central orchestrator supervising all Lanforge services in a DAG.
 pub struct GraphSupervisor {
     graph: Arc<DependencyGraph>,
     nodes: HashMap<ServiceId, Arc<NodeHandle>>,
-    condition_tx: Arc<watch::Sender<u64>>,
+    condition_wakes: Arc<Vec<ConditionWake>>,
     shared_tasks: Vec<tokio::task::JoinHandle<()>>,
     dedicated_threads: Vec<std::thread::JoinHandle<()>>,
 }
@@ -158,12 +181,22 @@ impl GraphSupervisor {
         let mut nodes = HashMap::new();
         let mut control_txs = HashMap::new();
         let mut pending_controls = HashMap::new();
-        let (condition_tx, _) = watch::channel(0_u64);
-        let condition_tx = Arc::new(condition_tx);
+        let mut condition_wakes = Vec::new();
+        let mut condition_rxs = HashMap::new();
 
         for spec in graph.nodes() {
             let handle = Arc::new(NodeHandle::new(spec.id));
             nodes.insert(spec.id, handle);
+            let (tx, rx) = watch::channel(0_u64);
+            condition_rxs.insert(spec.id, rx);
+            condition_wakes.push(ConditionWake {
+                sections: spec
+                    .condition
+                    .sections
+                    .iter()
+                    .fold(DomainSet::empty(), |set, &d| set | DomainSet::from(d)),
+                tx,
+            });
             let (tx, rx) = mpsc::channel(8);
             control_txs.insert(spec.id, tx);
             pending_controls.insert(spec.id, rx);
@@ -171,7 +204,8 @@ impl GraphSupervisor {
 
         // Routes config changes (D-3) and admin service control (D-20) into the graph.
         let mut sys_bus = ctx.bus().subscribe_system();
-        let condition_clone = Arc::clone(&condition_tx);
+        let condition_wakes = Arc::new(condition_wakes);
+        let wakes = Arc::clone(&condition_wakes);
         tokio::spawn(async move {
             loop {
                 let event = match sys_bus.recv().await {
@@ -179,7 +213,7 @@ impl GraphSupervisor {
                     Err(RecvError::Lagged(n)) => {
                         // A missed ConfigChanged must not leave a node dormant: re-evaluate all.
                         warn!("Supervisor: system bus lagged by {n}; re-evaluating conditions");
-                        condition_clone.send_modify(|epoch| *epoch += 1);
+                        wakes.iter().for_each(ConditionWake::bump);
                         continue;
                     }
                     Err(RecvError::Closed) => break,
@@ -187,7 +221,7 @@ impl GraphSupervisor {
                 match event.event {
                     LanforgeEvent::System(SystemEvent::ConfigChanged { sections }) => {
                         debug!(?sections, "Config changed; re-evaluating conditions");
-                        condition_clone.send_modify(|epoch| *epoch += 1);
+                        wake_conditions(&wakes, sections);
                     }
                     LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) => {
                         match control_txs.get(&id) {
@@ -229,7 +263,9 @@ impl GraphSupervisor {
             let links = RunnerLinks {
                 node,
                 dep_rxs,
-                condition_rx: condition_tx.subscribe(),
+                condition_rx: condition_rxs
+                    .remove(&id)
+                    .expect("condition channel created for every graph node"),
                 control_rx: pending_controls
                     .remove(&id)
                     .expect("control channel created for every graph node"),
@@ -243,7 +279,7 @@ impl GraphSupervisor {
         Ok(Self {
             graph,
             nodes,
-            condition_tx,
+            condition_wakes,
             shared_tasks,
             dedicated_threads,
         })
@@ -257,7 +293,7 @@ impl GraphSupervisor {
 
     /// Triggers re-evaluation of all service conditions (e.g. after config change).
     pub fn reevaluate_conditions(&self) {
-        self.condition_tx.send_modify(|epoch| *epoch += 1);
+        self.condition_wakes.iter().for_each(ConditionWake::bump);
     }
 
     /// Queries the live status of a service.
