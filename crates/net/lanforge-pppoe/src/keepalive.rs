@@ -9,6 +9,7 @@ use lanforge_transport::ArpProber;
 use lanforge_types::config::ChangeImpact;
 use std::net::Ipv4Addr;
 use std::time::Duration;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::time::interval;
 use tracing::{debug, info, warn};
 
@@ -43,7 +44,8 @@ pub(crate) async fn run_keepalive(
 
         tokio::select! {
             delta_opt = config_sub.next() => {
-                let Some(delta) = delta_opt else { return Ok(None); };
+                // The subscription only closes with the context: the daemon is going away.
+                let Some(delta) = delta_opt else { return Ok(Some(SystemInterrupt::Shutdown)); };
                 if !delta.new.enabled {
                     info!("PPPoE disabled during keepalive; terminating session");
                     return Ok(Some(SystemInterrupt::ConfigDisabled));
@@ -131,17 +133,17 @@ pub(crate) async fn run_keepalive(
                 }
             }
 
-            event_res = bus_rx.recv() => {
-                let Ok(timed) = event_res else { break; };
-                if matches!(timed.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
+            event_res = bus_rx.recv() => match event_res {
+                Ok(timed) if matches!(timed.event, LanforgeEvent::System(SystemEvent::Shutdown)) => {
                     info!("PPPoE keepalive received system shutdown");
                     return Ok(Some(SystemInterrupt::Shutdown));
                 }
-            }
+                Err(RecvError::Closed) => return Ok(Some(SystemInterrupt::Shutdown)),
+                // A lagged receiver only missed notifications; the session is fine.
+                Ok(_) | Err(RecvError::Lagged(_)) => {}
+            },
         }
     }
-
-    Ok(None)
 }
 
 async fn send_echo_request(session: &PppoeSession, id: u8, magic: u32) -> Result<(), PppoeError> {

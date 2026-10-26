@@ -673,3 +673,54 @@ async fn test_pppoe_flapping_session_backs_off() {
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_secs(2), handle).await;
 }
+
+/// AGENTS.md async hygiene: a lagged broadcast receiver skips, only a closed one ends the loop.
+/// The keepalive treated any system-bus `recv` error as the end of the session, so a burst of
+/// system events (boot, many services reporting) tore down a healthy PPPoE session and the
+/// household got a reconnect and a new delegated prefix for nothing.
+#[tokio::test]
+async fn test_pppoe_session_survives_a_lagged_system_bus() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        ..Default::default()
+    };
+    ctx.update_pppoe_config(cfg.clone());
+
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
+
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
+    let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
+    wait_for_session_up(&mut pppoe_sub).await;
+
+    // Far beyond the system topic capacity, without yielding: the keepalive receiver lags.
+    for _ in 0..1000 {
+        let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceReady {
+            id: ServiceId::Dns,
+        }));
+    }
+
+    let down = timeout(
+        Duration::from_millis(500),
+        wait_for_pppoe_event(&mut pppoe_sub, |evt| match evt {
+            PppoeEvent::SessionDown { reason } => Some(reason.clone()),
+            _ => None,
+        }),
+    )
+    .await;
+    assert!(down.is_err(), "session torn down by a lagged bus: {down:?}");
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Pppoe),
+        ServiceState::Online
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}
