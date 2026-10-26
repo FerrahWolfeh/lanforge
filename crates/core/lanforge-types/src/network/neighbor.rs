@@ -1,9 +1,9 @@
 //! Neighbor Discovery Protocol (NDP) and ARP event mapping.
 
 use crate::identifiers::MacAddr;
+use crate::network::Ipv6Prefix;
 use crate::update::DeviceUpdate;
-use crate::utils::ip_matches_prefix;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
 
 /// A neighbor event (IPv4 or IPv6) observed via the kernel `RTM_NEWNEIGH` netlink signal.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,18 +51,16 @@ impl NeighborEvent {
     #[must_use]
     pub fn to_device_update(
         &self,
-        gua_prefix: Option<&Ipv6Addr>,
-        ula_prefix: Option<&Ipv6Addr>,
+        gua_prefix: Option<&Ipv6Prefix>,
+        ula_prefix: Option<&Ipv6Prefix>,
     ) -> Option<DeviceUpdate> {
         match self {
             Self::Added {
                 ip, mac, is_active, ..
             } => match ip {
                 IpAddr::V6(ip6) => {
-                    let matches_gua =
-                        gua_prefix.is_some_and(|prefix| ip_matches_prefix(ip6, prefix));
-                    let matches_ula =
-                        ula_prefix.is_some_and(|prefix| ip_matches_prefix(ip6, prefix));
+                    let matches_gua = gua_prefix.is_some_and(|prefix| prefix.matches(ip6));
+                    let matches_ula = ula_prefix.is_some_and(|prefix| prefix.matches(ip6));
 
                     if matches_gua || matches_ula {
                         Some(DeviceUpdate::SlaacObserved {
@@ -99,7 +97,7 @@ mod tests {
     #[test]
     fn test_to_device_update_strict_slaac() {
         let mac = MacAddr::parse("00:11:22:33:44:55").unwrap();
-        let prefix: Ipv6Addr = "fd00::".parse().unwrap();
+        let prefix = Ipv6Prefix::from_addr("fd00::".parse().unwrap());
 
         // Correct EUI-64: (00^02):11:22:ff:fe:33:44:55 -> 0211:22ff:fe33:4455
         let slaac_ip: Ipv6Addr = "fd00::0211:22ff:fe33:4455".parse().unwrap();

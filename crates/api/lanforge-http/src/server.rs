@@ -115,19 +115,19 @@ impl HttpService {
             .route("/metrics", get(handle_metrics));
 
         if let Some(boot_dir) = &cfg.boot_dir {
-            info!(boot_dir = %boot_dir, "HTTP: Serving boot files");
+            info!(boot_dir = %boot_dir, "Serving boot files");
             app = app.nest_service("/boot", ServeDir::new(boot_dir));
         }
 
         if let Some(webui_dir) = &cfg.webui_dir {
-            info!(webui_dir = %webui_dir, "HTTP: Serving WebUI from filesystem");
+            info!(webui_dir = %webui_dir, "Serving WebUI from filesystem");
             let index_file = Path::new(webui_dir).join("index.html");
             let serve_dir = ServeDir::new(webui_dir).fallback(ServeFile::new(index_file));
             app = app.fallback_service(serve_dir);
         } else {
             #[cfg(feature = "webui")]
             {
-                info!("HTTP: Serving WebUI from embedded assets");
+                info!("Serving WebUI from embedded assets");
                 app = app.fallback(handle_embedded_webui.layer(CompressionLayer::new()));
             }
         }
@@ -143,7 +143,7 @@ impl HttpService {
         }
 
         if cfg.auth_password_hash.is_some() {
-            info!("HTTP: API authentication enabled");
+            info!("API authentication enabled");
         }
 
         app.with_state(state)
@@ -179,7 +179,7 @@ impl HttpService {
                 if !ctx_shutdown.is_running()
                     || matches!(event.event, LanforgeEvent::System(SystemEvent::Shutdown))
                 {
-                    info!("HTTP: shutdown signal received");
+                    info!("shutdown signal received");
                     let _ = shutdown_tx.send(());
                     break;
                 }
@@ -242,7 +242,7 @@ impl HttpService {
         for &addr in addrs {
             for std_listener in bind_tcp_dual_stack(addr)? {
                 let actual_addr = std_listener.local_addr().map_err(CoreError::Io)?;
-                info!(addr = %actual_addr, "HTTP: API listening");
+                info!(addr = %actual_addr, "API listening");
                 let tcp_listener = TcpListener::from_std(std_listener).map_err(|e| {
                     CoreError::Generic(format!("Failed to bind to {actual_addr}: {e}"))
                 })?;
@@ -322,7 +322,7 @@ impl AsyncService for HttpService {
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
         if !cfg.enabled {
-            info!("HTTP: Service disabled in configuration.");
+            info!("Service disabled in configuration.");
             h.dormant(DormantReason::disabled("http.enabled"));
             return Ok(());
         }
@@ -341,7 +341,7 @@ impl AsyncService for HttpService {
 
         let addrs = cfg.listen.addrs();
         if addrs.is_empty() {
-            let msg = "HTTP: No listen addresses configured.";
+            let msg = "No listen addresses configured.";
             error!("{msg}");
             return Err(CoreError::Generic(msg.to_string()));
         }
@@ -375,7 +375,7 @@ impl AsyncService for HttpService {
         } else if cfg.allow_plaintext_http {
             Self::serve_plaintext(app, &addrs, &shutdown_tx).await?;
         } else {
-            let msg = "HTTP: TLS configuration missing and allow_plaintext_http is false. Refusing to start unencrypted server.";
+            let msg = "TLS configuration missing and allow_plaintext_http is false. Refusing to start unencrypted server.";
             error!("{msg}");
             return Err(CoreError::Generic(msg.to_string()));
         }
@@ -428,7 +428,7 @@ fn bind_tcp_dual_stack(addr: SocketAddr) -> Result<Vec<std::net::TcpListener>, C
                 Ok(s) => listeners.push(s.into()),
                 Err(e) => {
                     warn!(
-                        "HTTP: IPv6 TCP bind to {} failed ({}), continuing with IPv4 only",
+                        "IPv6 TCP bind to {} failed ({}), continuing with IPv4 only",
                         addr, e
                     );
                 }

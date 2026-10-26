@@ -154,7 +154,7 @@ impl AsyncService for ControlService {
                     match msg {
                         Ok(timed_event) => {
                             if let LanforgeEvent::Network(NetworkEvent::PrefixChanged(details)) = timed_event.event {
-                                current_gua = details.gua;
+                                current_gua = details.gua.map(|p| p.to_addr());
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {

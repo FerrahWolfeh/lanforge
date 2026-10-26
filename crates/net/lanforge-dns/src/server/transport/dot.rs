@@ -29,7 +29,7 @@ pub async fn run_dot_worker(
         .await
         .map_err(|e| CoreError::Generic(format!("DoT bind error on {addr}: {e}")))?;
 
-    info!("DNS: DoT listening on tls://{addr}");
+    info!("DoT listening on tls://{addr}");
 
     while ctx.is_running() {
         match listener.accept().await {

@@ -228,7 +228,7 @@ impl AsyncService for Dhcpv4Service {
             let options = ctx.get_dhcp_options();
             if !options.v4.enabled {
                 self.cfg.enabled = false;
-                info!("DHCPv4: Service disabled in configuration — server idle");
+                info!("Service disabled in configuration — server idle");
                 h.dormant(DormantReason::disabled("dhcp.v4.enabled"));
                 match self.wait_for_config_change_or_shutdown().await? {
                     RunResult::Shutdown => break,
@@ -240,7 +240,7 @@ impl AsyncService for Dhcpv4Service {
             let pools = ctx.get_dhcp_v4_pools();
 
             if pools.is_empty() {
-                warn!("DHCPv4: Service enabled but no pools configured — server idle");
+                warn!("Service enabled but no pools configured — server idle");
                 match self.wait_for_config_change_or_shutdown().await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,
@@ -300,7 +300,7 @@ impl Dhcpv4Service {
         let mut current_cfg = self.cfg.clone();
         let options = self.ctx.get_dhcp_options();
         if !options.v4.enabled {
-            warn!("DHCPv4: Service disabled via options configuration — server idle");
+            warn!("Service disabled via options configuration — server idle");
             return None;
         }
 
@@ -421,7 +421,7 @@ impl Dhcpv4Service {
                         match delta.impact {
                             ChangeImpact::None => {}
                             ChangeImpact::Hot | ChangeImpact::Rebind | ChangeImpact::Reconnect => {
-                                info!("DHCPv4: pools updated in place");
+                                info!("pools updated in place");
                                 if let Some(new_cfg) = self.prepare_config((*delta.new).clone()) {
                                     current_cfg = new_cfg;
                                     server.cfg = current_cfg.clone();
@@ -438,7 +438,7 @@ impl Dhcpv4Service {
                         match delta.impact {
                             ChangeImpact::None => {}
                             ChangeImpact::Hot | ChangeImpact::Rebind | ChangeImpact::Reconnect => {
-                                info!("DHCPv4: options updated in place");
+                                info!("options updated in place");
                                 let active_pools = self.ctx.get_dhcp_v4_pools();
                                 if let Some(new_cfg) = self.prepare_config(active_pools) {
                                     current_cfg = new_cfg;
@@ -460,7 +460,7 @@ impl Dhcpv4Service {
                                 &transport,
                             );
                         }
-                        Err(e) => warn!("DHCPv4: recv_from error: {e}"),
+                        Err(e) => warn!("recv_from error: {e}"),
                     }
                 }
                 event = handle.next_event() => {
@@ -537,7 +537,7 @@ impl Dhcpv4Service {
             mac,
             self.cfg.port,
         ) {
-            warn!("DHCPv4: Failed to send reply: {e}");
+            warn!("Failed to send reply: {e}");
         }
 
         let mut updates = SmallVec::<[DeviceUpdate; 3]>::new();
@@ -634,7 +634,7 @@ impl Dhcpv4Service {
         lanforge_core::match_event!(event, {
             LanforgeEvent::Network(NetworkEvent::LeaseReleaseRequested { mac, target }) => {
                 if target.is_none() || target == &Some(LeaseTarget::V4) {
-                    info!("DHCPv4: Forcing release of {mac} via API/CLI");
+                    info!("Forcing release of {mac} via API/CLI");
                     let ip = self.ctx.get_device(mac).and_then(|d| d.v4.ip());
                     if let Some(i) = ip {
                         server.pool.release(&i);
@@ -659,7 +659,7 @@ impl Dhcpv4Service {
                             *mac,
                             self.cfg.port,
                         ) {
-                            warn!("DHCPv4: Failed to send FORCERENEW to {ip} ({mac}): {e}");
+                            warn!("Failed to send FORCERENEW to {ip} ({mac}): {e}");
                         }
                     }
                 }
@@ -668,7 +668,7 @@ impl Dhcpv4Service {
                 mac,
                 target: LeaseTarget::V4,
             }) => {
-                info!("DHCPv4: Forcing release of {} via CLI", mac);
+                info!("Forcing release of {} via CLI", mac);
                 let ip = self.ctx.get_device(mac).and_then(|d| d.v4.ip());
                 if let Some(i) = ip {
                     server.pool.release(&i);
@@ -690,7 +690,7 @@ impl Dhcpv4Service {
                         *mac,
                         self.cfg.port,
                     ) {
-                        warn!("DHCPv4: Failed to send FORCERENEW to {ip} ({mac}): {e}");
+                        warn!("Failed to send FORCERENEW to {ip} ({mac}): {e}");
                     }
                 }
             }
@@ -709,12 +709,12 @@ impl Dhcpv4Service {
                 if let AdminChange::V4StaticChanged { ip } = change.as_ref() {
                     match ip {
                         Some(v) => {
-                            info!("DHCPv4: New static reservation via CLI: {mac} -> {v}");
+                            info!("New static reservation via CLI: {mac} -> {v}");
                             server.pool.remove_from_available(*v);
-                            info!("DHCPv4: Handled statically.");
+                            info!("Handled statically.");
                         }
                         None => {
-                            info!("DHCPv4: Static reservation cleared for {mac}");
+                            info!("Static reservation cleared for {mac}");
                         }
                     }
                 }
@@ -794,7 +794,7 @@ impl Dhcpv4Service {
                     mac,
                     cfg.port,
                 ) {
-                    debug!("DHCPv4: Could not send FORCERENEW to {ip} ({mac}): {e}");
+                    debug!("Could not send FORCERENEW to {ip} ({mac}): {e}");
                 }
 
                 // 2. Invalidate lease in State and DB so it no longer lingers in limbo

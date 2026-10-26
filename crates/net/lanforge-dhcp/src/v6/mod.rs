@@ -51,6 +51,7 @@ use lanforge_types::config::ChangeImpact;
 use lanforge_types::device::IPv6State;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::{Duid, MacAddr};
+use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::network::dhcp::{Dhcpv6Options, Dhcpv6Pool};
 use lanforge_types::system::RunResult;
 use lanforge_types::update::{
@@ -226,7 +227,7 @@ impl AsyncService for Dhcpv6Service {
             let options = ctx.get_dhcp_options();
             if !options.v6.enabled {
                 self.config.enabled = false;
-                info!("DHCPv6: Service disabled in configuration — server idle");
+                info!("Service disabled in configuration — server idle");
                 h.dormant(DormantReason::disabled("dhcp.v6.enabled"));
                 match self.wait_for_config_change_or_shutdown().await? {
                     RunResult::Shutdown => break,
@@ -238,7 +239,7 @@ impl AsyncService for Dhcpv6Service {
             let pools = ctx.get_dhcp_v6_pools();
 
             if pools.is_empty() {
-                warn!("DHCPv6: Service enabled but no pools configured — server idle");
+                warn!("Service enabled but no pools configured — server idle");
                 match self.wait_for_config_change_or_shutdown().await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,
@@ -359,19 +360,20 @@ impl Dhcpv6Service {
             .iter()
             .find(|i| i.name == current_cfg.iface)
             .map(|i| i.index)
-            && let Some((gua, pref, val)) = self.ctx.get_interface_gua_at(ifindex)
+            && let Some((gua_prefix, pref, val)) = self.ctx.get_interface_gua_prefix_at(ifindex)
         {
             info!(
-                "DHCPv6: Resyncing GUA from global state: {} (pref={}, valid={})",
-                gua, pref, val
+                "Resyncing GUA prefix from global state: {} (pref={}, valid={})",
+                gua_prefix, pref, val
             );
-            server.pool.set_gua_prefix(gua);
+            server.pool.set_gua_prefix(gua_prefix);
             server.prefix_lifetimes = Some((pref, val));
 
             // Also pre-allocate static reservations for the newly discovered GUA prefix
+            let registry = self.ctx.get_static_registry();
             let gua_ips: Vec<_> = registry
                 .v6_reservations()
-                .map(|s| server.pool.construct_addr(gua, &s))
+                .map(|s| server.pool.construct_addr_prefix(gua_prefix, &s))
                 .collect();
             server.pool.reserve_statics(gua_ips);
         }
@@ -425,7 +427,7 @@ impl Dhcpv6Service {
         info!(
             iface = %current_cfg.iface,
             port = current_cfg.port,
-            "DHCPv6: Server listening"
+            "Server listening"
         );
 
         loop {
@@ -445,7 +447,7 @@ impl Dhcpv6Service {
                         match delta.impact {
                             ChangeImpact::None => {}
                             ChangeImpact::Hot | ChangeImpact::Rebind | ChangeImpact::Reconnect => {
-                                info!("DHCPv6: pools updated in place");
+                                info!("pools updated in place");
                                 if delta.new.is_empty() {
                                     return Ok(RunResult::ConfigChanged);
                                 }
@@ -461,7 +463,7 @@ impl Dhcpv6Service {
                         match delta.impact {
                             ChangeImpact::None => {}
                             ChangeImpact::Hot | ChangeImpact::Rebind | ChangeImpact::Reconnect => {
-                                info!("DHCPv6: options updated in place");
+                                info!("options updated in place");
                                 if !delta.new.enabled {
                                     return Ok(RunResult::ConfigChanged);
                                 }
@@ -497,7 +499,7 @@ impl Dhcpv6Service {
                 Ok(()) = wan_rx.changed() => {
                     let snap = wan_rx.borrow().clone();
                     if snap.is_up() && !snap.v6_prefixes.is_empty() {
-                        let new_gua = snap.v6_prefixes[0].addr;
+                        let new_gua = Ipv6Prefix::from(snap.v6_prefixes[0]);
                         self.handle_prefix_change(&mut server, &transport, Some(new_gua), 3600, 7200);
                     }
                 }
@@ -648,23 +650,23 @@ impl Dhcpv6Service {
                 mac,
                 target: LeaseTarget::V6 { iaid },
             }) => {
-                info!("DHCPv6: Forcing release of {} (IAID {}) via CLI", mac, iaid);
+                info!("Forcing release of {} (IAID {}) via CLI", mac, iaid);
             }
             LanforgeEvent::Device(DeviceEvent::LeaseRelease {
                 mac,
                 target: LeaseTarget::V6Prefix { iaid },
             }) => {
                 info!(
-                    "DHCPv6: Forcing release of prefix for {} (IAID {}) via CLI",
+                    "Forcing release of prefix for {} (IAID {}) via CLI",
                     mac, iaid
                 );
             }
             LanforgeEvent::Device(DeviceEvent::AdminUpdate { mac, change, .. }) => {
                 if let AdminChange::V6SuffixChanged { suffix } = change.as_ref() {
                     if let Some(s) = suffix {
-                        info!("DHCPv6: New static reservation handled globally for {mac} -> {s}");
+                        info!("New static reservation handled globally for {mac} -> {s}");
                     } else {
-                        info!("DHCPv6: Static reservation cleared globally for {mac}");
+                        info!("Static reservation cleared globally for {mac}");
                     }
                 }
             }
@@ -686,7 +688,7 @@ impl Dhcpv6Service {
                 };
 
                 if let (Some(duid), Some(ip)) = (duid, target_ip) {
-                    info!("DHCPv6: Sending manual RECONFIGURE to {} ({})", ip, mac);
+                    info!("Sending manual RECONFIGURE to {} ({})", ip, mac);
                     let packet = server.build_reconfigure(&duid, MessageType::Renew);
                     let client_port = if self.config.port == 547 {
                         546
@@ -704,7 +706,7 @@ impl Dhcpv6Service {
         &self,
         server: &mut Dhcpv6Server,
         transport: &io::Dhcpv6Transport,
-        gua: Option<Ipv6Addr>,
+        gua: Option<Ipv6Prefix>,
         preferred: u32,
         valid: u32,
     ) {
@@ -714,16 +716,16 @@ impl Dhcpv6Service {
             server.pool.set_gua_prefix(g);
 
             if old_gua != Some(g) {
+                let old_str = old_gua.map_or_else(|| "None".to_string(), |p| p.to_string());
                 info!(
-                    "DHCPv6: GUA prefix changed ({:?} -> {}), notifying clients",
-                    old_gua, g
+                    "GUA prefix changed ({old_str} -> {g}), notifying clients"
                 );
 
                 // Update static reservations for the new GUA prefix
                 let registry = self.ctx.get_static_registry();
                 let gua_ips: Vec<_> = registry
                     .v6_reservations()
-                    .map(|s| server.pool.construct_addr(g, &s))
+                    .map(|s| server.pool.construct_addr_prefix(g, &s))
                     .collect();
                 server.pool.reserve_statics(gua_ips);
 

@@ -150,6 +150,15 @@ impl LanforgeContext {
         self.read().get_interface_gua_at(ifindex)
     }
 
+    /// Helper path to find typed GUA prefix for an interface.
+    #[must_use]
+    pub fn get_interface_gua_prefix_at(
+        &self,
+        ifindex: u32,
+    ) -> Option<(lanforge_types::network::Ipv6Prefix, u32, u32)> {
+        self.read().get_interface_gua_prefix_at(ifindex)
+    }
+
     /// Returns all devices.
     #[must_use]
     #[cfg_attr(feature = "hotpath", hotpath::measure)]

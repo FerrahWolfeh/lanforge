@@ -56,7 +56,7 @@ where
 {
     options.iter().filter_map(move |(&code, val)| {
         if protected.contains(&code) {
-            warn!("DHCP: Custom option code {} is protected, ignoring", code);
+            warn!("Custom option code {} is protected, ignoring", code);
             return None;
         }
         let parsed = parse_typed_option(val)?;

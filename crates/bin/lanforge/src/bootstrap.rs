@@ -196,8 +196,8 @@ impl Bootstrapper {
         Self::log_welcome_banner(&cfg, &if_state);
 
         if let Ok(Some(stored_gua)) = db.load_last_gua_prefix() {
-            info!("Bootstrapper: Restored stored GUA prefix from DB: {stored_gua}");
-            let _ = ctx.signal_gua_change(target_ifindex, stored_gua, 7200, 7200);
+            info!("Restored stored GUA prefix from DB: {stored_gua}");
+            let _ = ctx.signal_gua_prefix_change(target_ifindex, stored_gua, 7200, 7200);
         }
 
         // --- PHASE 4/5: Handover to Daemon ---

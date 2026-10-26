@@ -100,7 +100,7 @@ impl IpPool {
         let available = &mut self.available;
         self.declined.retain(|&ip, time| {
             if now.duration_since(*time) >= quarantine_timeout {
-                tracing::info!("DHCPv4: Recovering IP {ip} from DECLINE quarantine");
+                tracing::info!("Recovering IP {ip} from DECLINE quarantine");
                 if all_pool_ips.contains(u32::from(ip)) {
                     available.insert(u32::from(ip));
                     recovered_any = true;
@@ -111,7 +111,7 @@ impl IpPool {
             }
         });
         if recovered_any {
-            tracing::debug!("DHCPv4: Completed quarantine cleanup");
+            tracing::debug!("Completed quarantine cleanup");
         }
     }
 
@@ -214,7 +214,7 @@ impl IpPool {
                         return Some(lease.ip);
                     }
                     tracing::warn!(
-                        "DHCPv4: Sticky dynamic lease {} for {mac} is outside active pools; will reallocate.",
+                        "Sticky dynamic lease {} for {mac} is outside active pools; will reallocate.",
                         lease.ip
                     );
                 }

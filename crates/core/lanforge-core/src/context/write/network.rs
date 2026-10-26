@@ -1,11 +1,12 @@
 //! Network-specific mutation wrappers.
 
 use crate::context::LanforgeContext;
+use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::update::{DeviceUpdate, InterfaceState};
 use std::net::Ipv6Addr;
 
 impl LanforgeContext {
-    /// Signals a global IPv6 GUA change for an interface.
+    /// Signals a global IPv6 GUA change for an interface using a specific host address.
     #[must_use]
     pub fn signal_gua_change(
         &self,
@@ -24,5 +25,17 @@ impl LanforgeContext {
             ifindex,
             state: Box::new(state),
         })
+    }
+
+    /// Signals a global IPv6 GUA change for an interface using a network prefix.
+    #[must_use]
+    pub fn signal_gua_prefix_change(
+        &self,
+        ifindex: u32,
+        prefix: Ipv6Prefix,
+        preferred: u32,
+        valid: u32,
+    ) -> bool {
+        self.signal_gua_change(ifindex, prefix.to_addr(), preferred, valid)
     }
 }

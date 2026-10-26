@@ -147,7 +147,7 @@ impl Daemon {
                     let iface = host_ifaces.iter().find(|i| &i.name == ifname);
                     if iface.is_none() {
                         tracing::warn!(
-                            "Discovery: Configured monitor interface '{ifname}' not found on host"
+                            "Configured monitor interface '{ifname}' not found on host"
                         );
                     }
                     iface.map(|i| i.index)
@@ -162,7 +162,7 @@ impl Daemon {
         #[cfg(feature = "discovery")]
         if !cfg.monitor_toml.enabled {
             tracing::warn!(
-                "Discovery: Neighbor Monitor is disabled. Passive device discovery will be unavailable."
+                "Neighbor Monitor is disabled. Passive device discovery will be unavailable."
             );
         }
 

@@ -1,11 +1,11 @@
-use crate::{identifiers::MacAddr, update::LeaseTarget};
+use crate::{identifiers::MacAddr, network::Ipv6Prefix, update::LeaseTarget};
 use serde::{Deserialize, Serialize};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::Ipv4Addr;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrefixChangeDetails {
-    pub gua: Option<Ipv6Addr>,
-    pub ula: Option<Ipv6Addr>,
+    pub gua: Option<Ipv6Prefix>,
+    pub ula: Option<Ipv6Prefix>,
     pub preferred: u32,
     pub valid: u32,
 }

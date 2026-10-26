@@ -307,7 +307,7 @@ async fn resolve_reverse_ptr_background(
         }
         Err(e) => {
             tracing::warn!(
-                "DNS: Reverse resolution failed for {} via resolver {}: {:?}",
+                "Reverse resolution failed for {} via resolver {}: {:?}",
                 ip,
                 resolver.addr,
                 e

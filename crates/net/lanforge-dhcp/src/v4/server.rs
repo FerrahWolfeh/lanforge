@@ -260,7 +260,7 @@ impl DhcpServer {
             && *sid != self.cfg.server_id
         {
             // Client selected a different server — release our offer
-            debug!("DHCPv4: {identity} selected different server {sid}");
+            debug!("{identity} selected different server {sid}");
             return HandleResult::Ignore;
         }
 
@@ -275,7 +275,7 @@ impl DhcpServer {
         });
 
         let Some(wanted) = wanted_ip else {
-            warn!("DHCPv4: {identity} did not specify an IP in REQUEST");
+            warn!("{identity} did not specify an IP in REQUEST");
             return self.send_nak(msg, "No IP address specified");
         };
 
@@ -297,7 +297,7 @@ impl DhcpServer {
                 .is_valid_dynamic_ip(wanted, self.cfg.subnet_mask, Some(self.cfg.router))
         {
             warn!(
-                "DHCPv4: {identity} requested {wanted} which is outside configured pools or on a mismatched subnet; sending DHCPNAK"
+                "{identity} requested {wanted} which is outside configured pools or on a mismatched subnet; sending DHCPNAK"
             );
             return self.send_nak(
                 msg,
@@ -310,12 +310,12 @@ impl DhcpServer {
             self.pool
                 .allocate_with_device(&self.ctx, mac, Some(wanted), device)
         else {
-            warn!("DHCPv4: {identity} requested {wanted} but it is not available");
+            warn!("{identity} requested {wanted} but it is not available");
             return self.send_nak(msg, "Requested IP not available");
         };
 
         if assigned_ip != wanted {
-            warn!("DHCPv4: {identity} requested {wanted} but was assigned {assigned_ip} instead");
+            warn!("{identity} requested {wanted} but was assigned {assigned_ip} instead");
             self.pool.release(&assigned_ip);
             return self.send_nak(msg, "Requested IP not available");
         }

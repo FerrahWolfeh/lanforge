@@ -2,9 +2,10 @@
 
 use crate::RedbDatabase;
 use lanforge_db_core::{
-    DbError, DhcpConfigStore, PppoeConfigStore, RaConfigStore, TrafficConfigStore, config_keys::*,
+    ConfigKey, DbError, DhcpConfigStore, PppoeConfigStore, RaConfigStore, TrafficConfigStore,
+    config_keys::*,
 };
-use lanforge_types::network::TrafficConfig;
+use lanforge_types::network::{Ipv6Prefix, TrafficConfig};
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
@@ -61,11 +62,21 @@ impl RaConfigStore for RedbDatabase {
         self.put(RA_DNSSL, &dnssl.to_vec())
     }
 
-    fn load_last_gua_prefix(&self) -> Result<Option<Ipv6Addr>, DbError> {
-        self.get(LAST_GUA_PREFIX)
+    fn load_last_gua_prefix(&self) -> Result<Option<Ipv6Prefix>, DbError> {
+        if let Ok(Some(prefix)) = self.get(LAST_GUA_PREFIX) {
+            return Ok(Some(prefix));
+        }
+        // Fallback migration from legacy Ipv6Addr storage
+        let legacy: ConfigKey<Ipv6Addr> = ConfigKey::new(LAST_GUA_PREFIX.name());
+        if let Ok(Some(addr)) = self.get(legacy) {
+            let prefix = Ipv6Prefix::from_addr(addr);
+            let _ = self.save_last_gua_prefix(Some(prefix));
+            return Ok(Some(prefix));
+        }
+        Ok(None)
     }
 
-    fn save_last_gua_prefix(&self, prefix: Option<Ipv6Addr>) -> Result<(), DbError> {
+    fn save_last_gua_prefix(&self, prefix: Option<Ipv6Prefix>) -> Result<(), DbError> {
         if let Some(p) = prefix {
             self.put(LAST_GUA_PREFIX, &p)
         } else {

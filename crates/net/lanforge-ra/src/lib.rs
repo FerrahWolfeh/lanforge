@@ -103,9 +103,9 @@ pub struct RaState {
     /// Unicast rate limiting: tracks the last RA sent per destination IP.
     unicast_rl: HashMap<Ipv6Addr, Instant>,
     /// Last detected GUA — used to publish `PrefixChanged` only when a change occurs.
-    last_gua: Option<Ipv6Addr>,
+    last_gua: Option<lanforge_types::network::Ipv6Prefix>,
     /// Last detected ULA
-    last_ula: Option<Ipv6Addr>,
+    last_ula: Option<lanforge_types::network::Ipv6Prefix>,
     /// Deprecated prefixes: (Prefix, `deprecation_end`, `valid_end`)
     pub(crate) deprecated_prefixes: Vec<(Ipv6Addr, Instant, Instant)>,
     /// Total multicast RAs sent to `ff02::1`
@@ -261,7 +261,7 @@ impl RaState {
 
     pub(crate) fn update_prefix_and_deprecate(
         &mut self,
-        current: Option<Ipv6Addr>,
+        current: Option<lanforge_types::network::Ipv6Prefix>,
         is_gua: bool,
         deprecate_on_renumber: bool,
     ) -> bool {
@@ -278,13 +278,14 @@ impl RaState {
                 let valid_duration = Duration::from_secs(7200);
                 let valid_end = now + valid_duration;
                 let deprecation_end = valid_end;
-                if !self.deprecated_prefixes.iter().any(|(ip, _, _)| *ip == old) {
+                let old_addr = old.to_addr();
+                if !self.deprecated_prefixes.iter().any(|(ip, _, _)| *ip == old_addr) {
                     self.deprecated_prefixes
-                        .push((old, deprecation_end, valid_end));
+                        .push((old_addr, deprecation_end, valid_end));
                 }
             }
             let prefix_type = if is_gua { "GUA" } else { "ULA" };
-            debug!("RA: Internal {prefix_type} prefix state updated: {current:?}");
+            debug!("Internal {prefix_type} prefix state updated: {current:?}");
             if is_gua {
                 self.last_gua = current;
             } else {
@@ -350,7 +351,7 @@ impl RaService {
             .is_none()
         {
             info!(
-                "RA: Waiting for interface discovery on '{}'...",
+                "Waiting for interface discovery on '{}'...",
                 self.cfg.iface
             );
             self.ctx.wait_for_interfaces().await?;
@@ -455,7 +456,7 @@ impl RaService {
             other_config = u8::from(current_cfg.other_config),
             max_interval_secs = current_cfg.max_interval.as_secs(),
             router_lifetime_secs = current_cfg.effective_router_lifetime().as_secs(),
-            "RA: Server active"
+            "Server active"
         );
 
         let iface_index = self.ctx.target_ifindex().unwrap_or(1);
@@ -560,7 +561,7 @@ impl RaService {
                         match delta.impact {
                             ChangeImpact::None => {}
                             ChangeImpact::Hot => {
-                                info!("RA: Server config updated in place");
+                                info!("Server config updated in place");
                                 current_cfg.update_from_server_config(&delta.new);
                                 if !delta.new.enabled || current_cfg.prefixes.is_empty() {
                                     return Ok(RunResult::ConfigChanged);
@@ -569,7 +570,7 @@ impl RaService {
                                 next_ra_at = Instant::now();
                             }
                             ChangeImpact::Rebind | ChangeImpact::Reconnect => {
-                                info!("RA: Interface rebind requested");
+                                info!("Interface rebind requested");
                                 return Ok(RunResult::ConfigChanged);
                             }
                         }
@@ -581,7 +582,7 @@ impl RaService {
                         match delta.impact {
                             ChangeImpact::None => {}
                             ChangeImpact::Hot | ChangeImpact::Rebind | ChangeImpact::Reconnect => {
-                                info!("RA: Prefixes updated in place — sending immediate RA burst");
+                                info!("Prefixes updated in place — sending immediate RA burst");
                                 current_cfg.prefixes.clone_from(&(*delta.new));
                                 if current_cfg.prefixes.is_empty() {
                                     return Ok(RunResult::ConfigChanged);
@@ -597,13 +598,15 @@ impl RaService {
                 Ok(()) = wan_rx.changed() => {
                     let snap = wan_rx.borrow().clone();
                     if snap.is_up() && !snap.v6_prefixes.is_empty() {
-                        let new_gua = snap.v6_prefixes[0].addr;
-                        if state.last_gua != Some(new_gua) {
+                        let new_gua_prefix = lanforge_types::network::Ipv6Prefix::from(snap.v6_prefixes[0]);
+                        if state.last_gua != Some(new_gua_prefix) {
+                            let old_str = state.last_gua.map_or_else(|| "None".to_string(), |p| p.to_string());
                             info!(
-                                old_prefix = ?state.last_gua,
-                                new_prefix = %new_gua,
-                                "RA: WAN IPv6 prefix renumbered via WanSnapshot — triggering immediate RA burst"
+                                old_prefix = %old_str,
+                                new_prefix = %new_gua_prefix,
+                                "WAN IPv6 prefix renumbered via WanSnapshot — triggering immediate RA burst"
                             );
+                            state.update_prefix_and_deprecate(Some(new_gua_prefix), true, current_cfg.deprecate_on_renumber);
                             state.initial_sent = 0;
                             next_ra_at = Instant::now();
                         }
@@ -616,13 +619,23 @@ impl RaService {
                         return Ok(RunResult::Shutdown);
                     };
                     lanforge_core::match_event!(timed_event, {
-                        LanforgeEvent::Network(NetworkEvent::PrefixChanged(..)) => {
-                            info!("RA: Prefix change detected — sending immediate RA burst");
-                            state.initial_sent = 0;
-                            next_ra_at = Instant::now();
+                        LanforgeEvent::Network(NetworkEvent::PrefixChanged(details)) => {
+                            if let Some(prefix) = details.gua
+                                && state.last_gua != Some(prefix)
+                            {
+                                let old_str = state.last_gua.map_or_else(|| "None".to_string(), |p| p.to_string());
+                                info!(
+                                    old_prefix = %old_str,
+                                    new_prefix = %prefix,
+                                    "Prefix change detected — sending immediate RA burst"
+                                );
+                                state.update_prefix_and_deprecate(Some(prefix), true, current_cfg.deprecate_on_renumber);
+                                state.initial_sent = 0;
+                                next_ra_at = Instant::now();
+                            }
                         }
                         LanforgeEvent::Network(NetworkEvent::RaTriggerRequested) => {
-                            info!("RA: Immediate advertisement burst requested via API");
+                            info!("Immediate advertisement burst requested via API");
                             state.initial_sent = 0;
                             next_ra_at = Instant::now();
                         }
@@ -741,7 +754,7 @@ impl AsyncService for RaService {
         loop {
             let ra_server_cfg = ctx.get_ra_server_config();
             if !ra_server_cfg.enabled {
-                info!("RA: Service disabled via runtime config — server idle");
+                info!("Service disabled via runtime config — server idle");
                 h.dormant(DormantReason::disabled("ra.enabled"));
                 ctx.set_ra_status(None);
                 match self.wait_for_config_change_or_shutdown(h).await? {
@@ -754,7 +767,7 @@ impl AsyncService for RaService {
             current_cfg.update_from_server_config(&ra_server_cfg);
 
             if current_cfg.prefixes.is_empty() {
-                warn!("RA: Service enabled but no prefixes configured — server idle");
+                warn!("Service enabled but no prefixes configured — server idle");
                 h.dormant(DormantReason::not_applicable("no prefixes configured"));
                 ctx.set_ra_status(None);
                 match self.wait_for_config_change_or_shutdown(h).await? {
@@ -915,8 +928,10 @@ fn send_ra_internal(
 
     let now = Instant::now();
 
-    state.update_prefix_and_deprecate(gua, true, cfg.deprecate_on_renumber);
-    state.update_prefix_and_deprecate(ula, false, cfg.deprecate_on_renumber);
+    let gua_prefix = gua.map(lanforge_types::network::Ipv6Prefix::from_addr);
+    let ula_prefix = ula.map(lanforge_types::network::Ipv6Prefix::from_addr);
+    state.update_prefix_and_deprecate(gua_prefix, true, cfg.deprecate_on_renumber);
+    state.update_prefix_and_deprecate(ula_prefix, false, cfg.deprecate_on_renumber);
 
     // Clean up expired deprecated prefixes
     state
@@ -1051,7 +1066,7 @@ mod tests {
         assert_eq!(if_ips.gua, Some(old_gua));
 
         // First transition: last_gua becomes Some(old_gua)
-        state.last_gua = if_ips.gua;
+        state.last_gua = if_ips.gua.map(lanforge_types::network::Ipv6Prefix::from_addr);
 
         // 4. Trigger rotation: change GUA in interface state
         let new_gua: Ipv6Addr = "2001:db8:abc::1".parse().unwrap();
@@ -1074,14 +1089,15 @@ mod tests {
         assert_eq!(if_ips.gua, Some(new_gua));
 
         // 5. Simulate send_ra_internal transition for rotation:
-        state.update_prefix_and_deprecate(if_ips.gua, true, true);
+        state.update_prefix_and_deprecate(if_ips.gua.map(lanforge_types::network::Ipv6Prefix::from_addr), true, true);
 
         // Verify that old_gua is now deprecated in state with RFC 4862 §5.5.3e valid lifetime (2 hours = 7200s)
         assert_eq!(state.deprecated_prefixes.len(), 1);
-        assert_eq!(state.deprecated_prefixes[0].0, old_gua);
+        let expected_prefix = lanforge_types::network::Ipv6Prefix::from_addr(old_gua).to_addr();
+        assert_eq!(state.deprecated_prefixes[0].0, expected_prefix);
         let deprecated_list = state.deprecated_list(std::time::Instant::now());
         assert_eq!(deprecated_list.len(), 1);
-        assert_eq!(deprecated_list[0].0, old_gua);
+        assert_eq!(deprecated_list[0].0, expected_prefix);
         assert!(deprecated_list[0].1 >= 7199 && deprecated_list[0].1 <= 7200);
 
         // 6. Test build_ra_packet with the deprecated prefix list

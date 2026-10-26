@@ -58,7 +58,7 @@ use rtnetlink::Handle;
 use rtnetlink::packet_route::RouteNetlinkMessage;
 use smallvec::SmallVec;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv6Addr};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::broadcast;
@@ -231,8 +231,8 @@ impl DiscoveryService {
         ifname_cache: &mut IfNameCache,
         ctx: &LanforgeContext,
         pending_batch: &mut Vec<(MacAddr, IpAddr, bool)>,
-        current_gua: Option<&Ipv6Addr>,
-        current_ula: Option<&Ipv6Addr>,
+        current_gua: Option<&lanforge_types::network::Ipv6Prefix>,
+        current_ula: Option<&lanforge_types::network::Ipv6Prefix>,
     ) {
         if let NeighborEvent::Added {
             mac,
@@ -343,24 +343,24 @@ impl AsyncService for DiscoveryService {
         }
         let primary_ifindex = self.target_ifindexes.first().copied().unwrap_or(0);
         let if_state = ctx.get_interface_state(primary_ifindex);
-        let current_gua = if_state.gua;
-        let current_ula = if_state.ula;
+        let current_gua = if_state.gua.map(lanforge_types::network::Ipv6Prefix::from_addr);
+        let current_ula = if_state.ula.map(lanforge_types::network::Ipv6Prefix::from_addr);
 
-        debug!("DiscoveryService: Performing initial neighbor bootstrap...");
+        debug!("Performing initial neighbor bootstrap...");
         let mut bootstrap_events = Vec::new();
 
         for &ifindex in &self.target_ifindexes {
             match get_ipv4_neighbors(&self.handle, Some(ifindex)).await {
                 Ok(evs) => bootstrap_events.extend(evs),
                 Err(e) => error!(
-                    "DiscoveryService: Failed to dump IPv4 neighbors on ifindex {ifindex}: {e}"
+                    "Failed to dump IPv4 neighbors on ifindex {ifindex}: {e}"
                 ),
             }
 
             match get_ipv6_neighbors(&self.handle, "", Some(ifindex)).await {
                 Ok(evs) => bootstrap_events.extend(evs),
                 Err(e) => error!(
-                    "DiscoveryService: Failed to dump IPv6 neighbors on ifindex {ifindex}: {e}"
+                    "Failed to dump IPv6 neighbors on ifindex {ifindex}: {e}"
                 ),
             }
         }
@@ -395,11 +395,11 @@ impl AsyncService for DiscoveryService {
 
         if self.cfg.ping_enabled {
             if let Some(ref pinger) = self.pinger {
-                info!("Discovery: Active ICMP ping probe initialized");
+                info!("Active ICMP ping probe initialized");
                 spawn_sweep_task(pinger.clone(), ctx.clone(), self.cfg.ping_interval_secs);
                 spawn_jit_offline_task(pinger.clone(), self.prober_cache.clone(), ctx.clone());
             } else {
-                warn!("Discovery: Failed to initialize ICMP ping probe");
+                warn!("Failed to initialize ICMP ping probe");
             }
         }
 
@@ -408,8 +408,8 @@ impl AsyncService for DiscoveryService {
 
         let primary_ifindex = self.target_ifindexes.first().copied().unwrap_or(0);
         let if_state = ctx.get_interface_state(primary_ifindex);
-        let mut current_gua: Option<Ipv6Addr> = if_state.gua;
-        let mut current_ula: Option<Ipv6Addr> = if_state.ula;
+        let mut current_gua: Option<lanforge_types::network::Ipv6Prefix> = if_state.gua.map(lanforge_types::network::Ipv6Prefix::from_addr);
+        let mut current_ula: Option<lanforge_types::network::Ipv6Prefix> = if_state.ula.map(lanforge_types::network::Ipv6Prefix::from_addr);
 
         let mut pending_batch = Vec::with_capacity(50);
         let mut flush_timer = interval(Duration::from_millis(self.cfg.batch_interval_ms));
@@ -445,7 +445,7 @@ impl AsyncService for DiscoveryService {
                     {
                         let event_ifindex = addr.header.index;
                         debug!(
-                            "DiscoveryService: Address event on ifindex {event_ifindex}, refreshing interface..."
+                            "Address event on ifindex {event_ifindex}, refreshing interface..."
                         );
                         if let Err(e) = crate::interface::refresh_interface(
                             &self.handle,
@@ -455,7 +455,7 @@ impl AsyncService for DiscoveryService {
                         .await
                         {
                             warn!(
-                                "DiscoveryService: Failed to refresh interface {event_ifindex}: {e}"
+                                "Failed to refresh interface {event_ifindex}: {e}"
                             );
                         }
                     }
@@ -495,7 +495,7 @@ impl AsyncService for DiscoveryService {
             }
         }
 
-        info!("DiscoveryService: Service stopped");
+        info!("Service stopped");
         Ok(())
     }
 }
@@ -639,7 +639,7 @@ fn spawn_jit_offline_task(
                         let target_ip = *ip;
                         tokio::spawn(async move {
                             debug!(
-                                "DiscoveryService: JIT verification ping triggered for offline transition of {target_ip}"
+                                "JIT verification ping triggered for offline transition of {target_ip}"
                             );
                             let ping_ok =
                                 matches!(pinger_c.ping(target_ip, seq_counter).await, Ok(true));

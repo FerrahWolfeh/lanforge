@@ -32,6 +32,7 @@ use crate::traits::DhcpPool;
 use lanforge_core::context::LanforgeContext;
 use lanforge_types::device::{IPv6State, Ipv6AddrOrSuffix};
 use lanforge_types::identifiers::{Duid, MacAddr};
+use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::network::dhcp::Dhcpv6Pool;
 use rand::random;
 
@@ -213,7 +214,7 @@ pub struct Ipv6Pool {
     /// Static ULA prefix from configuration (`fd00::/8`).
     pub ula_prefix: Option<Ipv6Addr>,
     /// Dynamic GUA prefix detected from Router Advertisements.
-    pub gua_prefix: Option<Ipv6Addr>,
+    pub gua_prefix: Option<Ipv6Prefix>,
     /// Prefix length for the ULA (typically 64).
     pub ula_prefix_len: u8,
     /// Blacklisted IPs from DECLINE with quarantine timestamp.
@@ -234,7 +235,7 @@ impl Ipv6Pool {
         }
     }
     /// Updates the dynamic GUA prefix.
-    pub const fn set_gua_prefix(&mut self, prefix: Ipv6Addr) {
+    pub const fn set_gua_prefix(&mut self, prefix: Ipv6Prefix) {
         self.gua_prefix = Some(prefix);
     }
 
@@ -251,7 +252,7 @@ impl Ipv6Pool {
             prefixes.push((ula, self.ula_prefix_len));
         }
         if let Some(gua) = self.gua_prefix {
-            prefixes.push((gua, 64));
+            prefixes.push((gua.to_addr(), 64));
         }
 
         let used_counts: Vec<u32> = ctx.with_state(|state| {
@@ -349,6 +350,12 @@ impl Ipv6Pool {
         }
     }
 
+    /// Constructs an IPv6 address given a device's configured suffix and an `Ipv6Prefix`.
+    #[must_use]
+    pub fn construct_addr_prefix(&self, prefix: Ipv6Prefix, suffix: &Ipv6AddrOrSuffix) -> Ipv6Addr {
+        self.construct_addr(prefix.to_addr(), suffix)
+    }
+
     /// Helper for `construct_static_ula` for legacy calls.
     #[must_use]
     pub fn construct_static_ula(&self, suffix: &Ipv6AddrOrSuffix) -> Option<Ipv6Addr> {
@@ -436,7 +443,7 @@ impl Ipv6Pool {
             prefixes.push(ula);
         }
         if let Some(gua) = self.gua_prefix {
-            prefixes.push(gua);
+            prefixes.push(gua.to_addr());
         }
 
         // Include any Fixed pool prefixes that aren't already covered
@@ -935,7 +942,7 @@ mod tests {
         }];
 
         let mut pool = Ipv6Pool::new(&pools, ula, 64);
-        pool.set_gua_prefix(gua);
+        pool.set_gua_prefix(Ipv6Prefix::from_addr(gua));
 
         let ips = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
 
@@ -1262,7 +1269,7 @@ mod tests {
         let ula = "fd00::".parse().unwrap();
         let gua = "2001:db8::".parse().unwrap();
         let mut pool = Ipv6Pool::new(&Vec::new(), Some(ula), 64);
-        pool.set_gua_prefix(gua);
+        pool.set_gua_prefix(Ipv6Prefix::from_addr(gua));
 
         // Setup static device
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
@@ -1297,7 +1304,7 @@ mod tests {
             ..Default::default()
         }];
         let mut pool = Ipv6Pool::new(&pools, Some(ula), 64);
-        pool.set_gua_prefix(gua);
+        pool.set_gua_prefix(Ipv6Prefix::from_addr(gua));
 
         // Initially no leases
         let stats = pool.stats_per_prefix(&ctx);

@@ -133,7 +133,7 @@ impl AsyncService for WanService {
         info!(
             state = ?current_snapshot.state,
             generation = current_snapshot.generation,
-            "WAN observer: Initial state evaluated"
+            "Initial state evaluated"
         );
         h.ready();
 
@@ -177,7 +177,7 @@ impl AsyncService for WanService {
                                     iface = %up.interface,
                                     v4 = ?up.ipv4,
                                     generation,
-                                    "WAN observer: PPPoE session connected"
+                                    "PPPoE session connected"
                                 );
                             }
                             LanforgeEvent::Pppoe(PppoeEvent::SessionDown { .. }) => {
@@ -191,7 +191,7 @@ impl AsyncService for WanService {
                                     generation,
                                 };
                                 ctx.set_wan_snapshot(current_snapshot.clone());
-                                info!(generation, "WAN observer: PPPoE session dropped");
+                                info!(generation, "PPPoE session dropped");
                             }
                             _ => {}
                         }
@@ -201,20 +201,23 @@ impl AsyncService for WanService {
                 net_res = net_rx.recv() => {
                     if let Ok(timed_event) = net_res
                         && let LanforgeEvent::Network(NetworkEvent::PrefixChanged(ref details)) = timed_event.event
-                        && let Some(gua) = details.gua
+                        && let Some(gua_prefix) = details.gua
                     {
-                        generation += 1;
-                        let mut new_prefixes = current_snapshot.v6_prefixes.clone();
-                        new_prefixes.clear();
-                        new_prefixes.push(Ipv6Net::new(gua, 64));
-                        current_snapshot.v6_prefixes = new_prefixes;
-                        current_snapshot.generation = generation;
-                        ctx.set_wan_snapshot(current_snapshot.clone());
-                        info!(
-                            gua = %gua,
-                            generation,
-                            "WAN observer: IPv6 GUA prefix updated"
-                        );
+                        let new_net = Ipv6Net::from(gua_prefix);
+                        if current_snapshot.v6_prefixes.first() != Some(&new_net) {
+                            generation += 1;
+                            let mut new_prefixes = current_snapshot.v6_prefixes.clone();
+                            new_prefixes.clear();
+                            new_prefixes.push(new_net);
+                            current_snapshot.v6_prefixes = new_prefixes;
+                            current_snapshot.generation = generation;
+                            ctx.set_wan_snapshot(current_snapshot.clone());
+                            info!(
+                                prefix = %gua_prefix,
+                                generation,
+                                "IPv6 GUA prefix updated"
+                            );
+                        }
                     }
                 }
 
@@ -237,7 +240,7 @@ impl AsyncService for WanService {
                             info!(
                                 state = ?current_snapshot.state,
                                 generation,
-                                "WAN observer: OS-managed WAN state changed"
+                                "OS-managed WAN state changed"
                             );
                         }
                     }

@@ -110,13 +110,13 @@ impl AsyncService for InterfacesService {
         if missing.is_empty() {
             info!(
                 links = snapshot.links.len(),
-                "Interfaces observer: All configured links present"
+                "All configured links present"
             );
             h.ready();
         } else {
             warn!(
                 missing = ?missing,
-                "Interfaces observer: Configured links missing from OS, entering degraded wait"
+                "Configured links missing from OS, entering degraded wait"
             );
             h.degraded(DegradedReason::custom("waiting for configured links"));
         }

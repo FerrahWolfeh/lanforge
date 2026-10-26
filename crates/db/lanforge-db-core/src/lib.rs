@@ -328,7 +328,8 @@ pub mod config_keys {
     pub const ADBLOCK_RULES: ConfigKey<Vec<AdblockRuleEntry>> = ConfigKey::new("adblock_rules");
     pub const DNS_REVERSE_RESOLVERS: ConfigKey<Vec<DnsReverseResolver>> =
         ConfigKey::new("dns_reverse_resolvers");
-    pub const LAST_GUA_PREFIX: ConfigKey<std::net::Ipv6Addr> = ConfigKey::new("last_gua_prefix");
+    pub const LAST_GUA_PREFIX: ConfigKey<lanforge_types::network::Ipv6Prefix> =
+        ConfigKey::new("last_gua_prefix");
 }
 
 pub use config_keys::*;
@@ -669,10 +670,10 @@ pub trait RaConfigStore: Send + Sync {
     fn save_ra_dnssl(&self, dnssl: &[DnsslConfig]) -> Result<(), DbError>;
 
     /// Loads the last active GUA prefix from state.
-    fn load_last_gua_prefix(&self) -> Result<Option<std::net::Ipv6Addr>, DbError>;
+    fn load_last_gua_prefix(&self) -> Result<Option<lanforge_types::network::Ipv6Prefix>, DbError>;
 
     /// Saves the last active GUA prefix to state.
-    fn save_last_gua_prefix(&self, prefix: Option<std::net::Ipv6Addr>) -> Result<(), DbError>;
+    fn save_last_gua_prefix(&self, prefix: Option<lanforge_types::network::Ipv6Prefix>) -> Result<(), DbError>;
 
     /// Seeds RA prefixes if empty in database. Returns `Ok(true)` if seeded.
     fn seed_ra_prefixes_if_empty(&self, seed: &[RAPrefix]) -> Result<bool, DbError> {

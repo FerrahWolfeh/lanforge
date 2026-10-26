@@ -12,6 +12,20 @@ pub enum WanState {
     Up,
 }
 
+/// Zeros out the host bits of an IPv6 address based on the prefix length using a bitwise mask.
+#[must_use]
+pub const fn mask_ipv6(addr: Ipv6Addr, prefix_len: u8) -> Ipv6Addr {
+    if prefix_len >= 128 {
+        return addr;
+    }
+    if prefix_len == 0 {
+        return Ipv6Addr::UNSPECIFIED;
+    }
+    let mask = !0u128 << (128 - prefix_len);
+    let ip_u128 = u128::from_be_bytes(addr.octets());
+    Ipv6Addr::from_bits(ip_u128 & mask)
+}
+
 /// IPv6 network prefix with prefix length.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Ipv6Net {
@@ -22,7 +36,25 @@ pub struct Ipv6Net {
 impl Ipv6Net {
     #[must_use]
     pub const fn new(addr: Ipv6Addr, prefix_len: u8) -> Self {
-        Self { addr, prefix_len }
+        Self {
+            addr: mask_ipv6(addr, prefix_len),
+            prefix_len,
+        }
+    }
+}
+
+impl std::fmt::Display for Ipv6Net {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.addr, self.prefix_len)
+    }
+}
+
+impl From<crate::network::Ipv6Prefix> for Ipv6Net {
+    fn from(prefix: crate::network::Ipv6Prefix) -> Self {
+        Self {
+            addr: prefix.to_addr(),
+            prefix_len: 64,
+        }
     }
 }
 

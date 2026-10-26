@@ -21,7 +21,7 @@ pub fn spawn_tcp_worker(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     continue;
                 }
             };
-            tracing::info!(%addr, "DNS: TCP listening");
+            tracing::info!(%addr, "TCP listening");
 
             let task_ctx = Arc::clone(&ctx);
             handles.push(tokio::spawn(async move {

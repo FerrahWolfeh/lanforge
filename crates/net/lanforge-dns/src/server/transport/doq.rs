@@ -37,7 +37,7 @@ pub async fn run_doq_worker(
     let endpoint = Endpoint::server(server_config, addr)
         .map_err(|e| CoreError::Generic(format!("DoQ bind error on {addr}: {e}")))?;
 
-    info!("DNS: DoQ listening on quic://{addr}");
+    info!("DoQ listening on quic://{addr}");
 
     while ctx.is_running() {
         if let Some(incoming) = endpoint.accept().await {

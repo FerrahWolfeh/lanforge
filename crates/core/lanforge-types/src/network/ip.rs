@@ -286,6 +286,35 @@ impl Ipv6Prefix {
             0,
         )
     }
+
+    #[must_use]
+    pub const fn prefix_len(&self) -> u8 {
+        64
+    }
+
+    #[must_use]
+    pub fn matches(&self, addr: &Ipv6Addr) -> bool {
+        let segs = addr.segments();
+        self.segments == [segs[0], segs[1], segs[2], segs[3]]
+    }
+
+    #[must_use]
+    pub fn combine_suffix(&self, suffix: [u8; 8]) -> Ipv6Addr {
+        let mut octets = [0u8; 16];
+        for i in 0..4 {
+            let be = self.segments[i].to_be_bytes();
+            octets[i * 2] = be[0];
+            octets[i * 2 + 1] = be[1];
+        }
+        octets[8..16].copy_from_slice(&suffix);
+        Ipv6Addr::from(octets)
+    }
+}
+
+impl From<super::snapshot::Ipv6Net> for Ipv6Prefix {
+    fn from(net: super::snapshot::Ipv6Net) -> Self {
+        Self::from_addr(net.addr)
+    }
 }
 
 impl fmt::Display for Ipv6Prefix {

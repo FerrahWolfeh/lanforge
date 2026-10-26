@@ -252,7 +252,7 @@ impl Dhcpv6Server {
                             });
                             if has_other_ll {
                                 debug!(
-                                    "DHCPv6: Rejecting DUID-to-MAC fallback to {m} because peer IP {peer} does not match device's recorded link-local address."
+                                    "Rejecting DUID-to-MAC fallback to {m} because peer IP {peer} does not match device's recorded link-local address."
                                 );
                                 return None;
                             }
@@ -421,12 +421,12 @@ impl Dhcpv6Server {
 
         if let Some(id) = identity {
             info!(
-                "DHCPv6: {id} is soliciting -> {action} [{}]",
+                "{id} is soliciting -> {action} [{}]",
                 ip_list.join(", ")
             );
         } else {
             info!(
-                "DHCPv6: Anonymous soliciting -> {action} [{}]",
+                "Anonymous soliciting -> {action} [{}]",
                 ip_list.join(", ")
             );
         }
@@ -465,7 +465,7 @@ impl Dhcpv6Server {
                 .allocate_prefix(&self.ctx, client_duid, iapd.id, None)
         {
             let (pref, valid) = self.get_effective_lifetimes(client_duid, identity);
-            info!("DHCPv6: Delegating prefix {prefix}/{len} to {identity:?}");
+            info!("Delegating prefix {prefix}/{len} to {identity:?}");
 
             let mut ia_opts = DhcpOptions::new();
             ia_opts.insert(DhcpOption::IAPrefix(IAPrefix {
@@ -524,10 +524,10 @@ impl Dhcpv6Server {
             let ip_list: Vec<String> = ips.iter().map(ToString::to_string).collect();
 
             if let Some(id) = identity {
-                info!("DHCPv6: Assigning [{}] to {id}", ip_list.join(", "));
+                info!("Assigning [{}] to {id}", ip_list.join(", "));
             } else {
                 info!(
-                    "DHCPv6: Assigning [{}] to anonymous device",
+                    "Assigning [{}] to anonymous device",
                     ip_list.join(", ")
                 );
             }
@@ -773,10 +773,10 @@ impl Dhcpv6Server {
                 let bindings = self.pool.lookup(&self.ctx, client_duid, iana.id);
                 if bindings.contains(&ia_addr.addr) {
                     if let Some(id) = identity {
-                        info!("DHCPv6: {id} released its address {}", ia_addr.addr);
+                        info!("{id} released its address {}", ia_addr.addr);
                     } else {
                         info!(
-                            "DHCPv6: Anonymous device released its address {}",
+                            "Anonymous device released its address {}",
                             ia_addr.addr
                         );
                     }
@@ -784,14 +784,14 @@ impl Dhcpv6Server {
                     released_ias.na.push(iana.id);
                 } else {
                     tracing::warn!(
-                        "DHCPv6: RELEASE from {} for {} ignored: client does not own this lease.",
+                        "RELEASE from {} for {} ignored: client does not own this lease.",
                         client_duid,
                         ia_addr.addr
                     );
                 }
             } else {
                 tracing::warn!(
-                    "DHCPv6: RELEASE from {} for {} ignored: no binding found for IAID {}.",
+                    "RELEASE from {} for {} ignored: no binding found for IAID {}.",
                     client_duid,
                     ia_addr.addr,
                     iana.id
@@ -807,19 +807,19 @@ impl Dhcpv6Server {
             {
                 if let Some(id) = identity {
                     info!(
-                        "DHCPv6: {id} released prefix delegation for IAID {}",
+                        "{id} released prefix delegation for IAID {}",
                         iapd.id
                     );
                 } else {
                     info!(
-                        "DHCPv6: Anonymous device released prefix delegation for IAID {}",
+                        "Anonymous device released prefix delegation for IAID {}",
                         iapd.id
                     );
                 }
                 released_ias.pd.push(iapd.id);
             } else {
                 tracing::warn!(
-                    "DHCPv6: RELEASE prefix delegation from {} for IAID {} ignored: no binding found.",
+                    "RELEASE prefix delegation from {} for IAID {} ignored: no binding found.",
                     client_duid,
                     iapd.id
                 );
@@ -865,12 +865,12 @@ impl Dhcpv6Server {
                         if bindings.contains(&ia_addr.addr) {
                             if let Some(id) = identity {
                                 info!(
-                                    "DHCPv6: {id} declined address {} (DAD Failure)",
+                                    "{id} declined address {} (DAD Failure)",
                                     ia_addr.addr
                                 );
                             } else {
                                 info!(
-                                    "DHCPv6: Anonymous device declined address {} (DAD Failure)",
+                                    "Anonymous device declined address {} (DAD Failure)",
                                     ia_addr.addr
                                 );
                             }
@@ -880,14 +880,14 @@ impl Dhcpv6Server {
                             }
                         } else {
                             tracing::warn!(
-                                "DHCPv6: DECLINE from {} for {} ignored: client does not own this lease.",
+                                "DECLINE from {} for {} ignored: client does not own this lease.",
                                 client_duid,
                                 ia_addr.addr
                             );
                         }
                     } else {
                         tracing::warn!(
-                            "DHCPv6: DECLINE from {} for {} ignored: no binding found for IAID {}.",
+                            "DECLINE from {} for {} ignored: no binding found for IAID {}.",
                             client_duid,
                             ia_addr.addr,
                             iana.id

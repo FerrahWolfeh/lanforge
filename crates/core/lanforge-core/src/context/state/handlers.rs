@@ -359,10 +359,21 @@ impl State {
         }
 
         let old_state = self.interfaces.interface_ips.get(&ifindex);
-        let prefix_changed = old_state.map_or_else(
-            || merged.gua.is_some() || merged.ula.is_some(),
-            |old| old.gua != merged.gua || old.ula != merged.ula,
-        );
+        let old_gua_prefix = old_state
+            .and_then(|s| s.gua)
+            .map(lanforge_types::network::Ipv6Prefix::from_addr);
+        let old_ula_prefix = old_state
+            .and_then(|s| s.ula)
+            .map(lanforge_types::network::Ipv6Prefix::from_addr);
+        let new_gua_prefix = merged
+            .gua
+            .map(lanforge_types::network::Ipv6Prefix::from_addr);
+        let new_ula_prefix = merged
+            .ula
+            .map(lanforge_types::network::Ipv6Prefix::from_addr);
+
+        let prefix_changed =
+            old_gua_prefix != new_gua_prefix || old_ula_prefix != new_ula_prefix;
 
         self.interfaces
             .interface_ips
@@ -376,8 +387,8 @@ impl State {
             self.rebuild_indices();
             events.push(LanforgeEvent::Network(NetworkEvent::PrefixChanged(
                 Box::new(PrefixChangeDetails {
-                    gua: merged.gua,
-                    ula: merged.ula,
+                    gua: new_gua_prefix,
+                    ula: new_ula_prefix,
                     preferred: merged.gua_preferred,
                     valid: merged.gua_valid,
                 }),

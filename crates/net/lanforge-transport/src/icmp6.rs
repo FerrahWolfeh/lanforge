@@ -55,7 +55,7 @@ impl Icmp6Transport {
         sock.set_nonblocking(true)?;
         let async_fd = unsafe { AsyncFd::register(sock)? };
 
-        info!("ICMPv6: Raw socket bound on {iface} (index {iface_index}), listening for RS");
+        info!("Raw socket bound on {iface} (index {iface_index}), listening for RS");
         Ok(Self {
             inner: Arc::new(Icmp6Inner {
                 backend: Icmp6Backend::Kernel(async_fd),

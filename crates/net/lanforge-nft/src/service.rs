@@ -222,9 +222,8 @@ impl NftService {
 
                 match res {
                     Ok(Ok(payload)) => {
-                        if !payload.is_empty() {
-                            *last_ruleset.write() = Some(payload);
-                        }
+                        let recorded = if payload.is_empty() { "applied".to_string() } else { payload };
+                        *last_ruleset.write() = Some(recorded);
                         Ok(())
                     }
                     Ok(Err((e, payload))) => Err((e, payload)),
@@ -378,24 +377,30 @@ impl AsyncService for NftService {
                     }
                     Ok(()) = wan_rx.changed() => {
                         let snap = wan_rx.borrow().clone();
-                        debug!(
-                            generation = snap.generation,
-                            state = ?snap.state,
-                            "Firewall: WAN snapshot updated; recompiling ruleset in-place"
-                        );
-                        self.active_wan = snap.ifname;
-                        self.reapply(&ctx, "wan_generation").await;
+                        if self.active_wan != snap.ifname {
+                            debug!(
+                                generation = snap.generation,
+                                state = ?snap.state,
+                                "WAN interface changed; recompiling firewall ruleset in-place"
+                            );
+                            self.active_wan = snap.ifname;
+                            self.reapply(&ctx, "wan_generation").await;
+                        }
                     }
 
                     // PPPoE WAN state updates
                     Ok(event) = pppoe_rx.recv() => {
                         match event.event {
                             LanforgeEvent::Pppoe(PppoeEvent::SessionUp(session)) => {
-                                debug!(wan = %session.interface, "WAN session is up; applying firewall ruleset");
-                                self.active_wan = Some(session.interface.clone());
-                                self.reapply(&ctx, "wan_up").await;
+                                if self.active_wan.as_deref() != Some(session.interface.as_str()) {
+                                    debug!(wan = %session.interface, "WAN session is up; applying firewall ruleset");
+                                    self.active_wan = Some(session.interface.clone());
+                                    self.reapply(&ctx, "wan_up").await;
+                                }
                             }
-                            LanforgeEvent::Pppoe(PppoeEvent::SessionDown { reason }) => {
+                            LanforgeEvent::Pppoe(PppoeEvent::SessionDown { reason })
+                                if self.active_wan.is_some() =>
+                            {
                                 debug!(%reason, "WAN session is down; applying firewall ruleset");
                                 self.active_wan = None;
                                 self.reapply(&ctx, "wan_down").await;

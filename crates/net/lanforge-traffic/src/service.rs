@@ -209,7 +209,7 @@ impl TrafficService {
         let is_sqm_enabled = self.cfg.sqm.enabled;
 
         if !is_tuning_enabled && !is_sqm_enabled {
-            info!("Traffic: Both NIC tuning and SQM are disabled, service entering inactive state");
+            info!("Both NIC tuning and SQM are disabled, service entering inactive state");
             self.publish_status(ctx, ServiceState::Inactive);
             h.dormant(DormantReason::disabled("traffic.enabled"));
             return false;
@@ -240,7 +240,7 @@ impl TrafficService {
                 self.apply_sqm_internal(ctx, &wan_iface, is_pppoe).await;
             } else {
                 debug!(
-                    "Traffic: Waiting for active WAN interface / PPPoE session before attaching SQM"
+                    "Waiting for active WAN interface / PPPoE session before attaching SQM"
                 );
             }
         }
@@ -266,7 +266,7 @@ impl TrafficService {
 
         info!(
             tuning_changed,
-            sqm_changed, "Traffic: Configuration changed, applying updates in-place"
+            sqm_changed, "Configuration changed, applying updates in-place"
         );
 
         if tuning_changed {
@@ -289,11 +289,11 @@ impl TrafficService {
             self.cfg.sqm = new_cfg.sqm.clone();
             if new_cfg.sqm.enabled {
                 if let Some((wan_iface, is_pppoe)) = self.resolve_wan_interface(ctx) {
-                    info!(wan = %wan_iface, "Traffic: Reapplying SQM parameters in-place");
+                    info!(wan = %wan_iface, "Reapplying SQM parameters in-place");
                     self.apply_sqm_internal(ctx, &wan_iface, is_pppoe).await;
                 }
             } else if self.active_wan.is_some() {
-                info!("Traffic: SQM disabled, clearing queues");
+                info!("SQM disabled, clearing queues");
                 self.clear_sqm_internal(ctx).await;
             }
         }
@@ -309,25 +309,28 @@ impl TrafficService {
     ) {
         if snap.is_up() {
             if let Some(ref ifname) = snap.ifname {
-                info!(
-                    interface = %ifname,
-                    generation = snap.generation,
-                    "Traffic: WAN Up/changed, applying SQM"
-                );
                 let is_pppoe = ifname.starts_with("ppp");
                 self.is_pppoe_active = is_pppoe;
-                self.active_wan = Some(ifname.clone());
-                if self.cfg.sqm.enabled {
-                    self.apply_sqm_internal(ctx, ifname, is_pppoe).await;
+                if self.active_wan.as_deref() != Some(ifname.as_str()) {
+                    info!(
+                        interface = %ifname,
+                        generation = snap.generation,
+                        "WAN Up/changed, applying SQM"
+                    );
+                    self.active_wan = Some(ifname.clone());
+                    if self.cfg.sqm.enabled {
+                        self.apply_sqm_internal(ctx, ifname, is_pppoe).await;
+                    }
+                    ctx.set_service_state(Self::SERVICE_ID, ServiceState::Online);
+                    self.publish_status(ctx, ServiceState::Online);
                 }
-                ctx.set_service_state(Self::SERVICE_ID, ServiceState::Online);
-                self.publish_status(ctx, ServiceState::Online);
             }
-        } else {
+        } else if self.active_wan.is_some() {
             info!(
                 generation = snap.generation,
-                "Traffic: WAN Down, pausing SQM queues"
+                "WAN Down, pausing SQM queues"
             );
+            self.active_wan = None;
             self.is_pppoe_active = false;
             self.clear_sqm_internal(ctx).await;
             self.update_service_state(ctx);
@@ -339,7 +342,7 @@ impl TrafficService {
             PppoeEvent::SessionUp(session) => {
                 info!(
                     interface = %session.interface,
-                    "Traffic: Detected PPPoE SessionUp, updating SQM binding"
+                    "Detected PPPoE SessionUp, updating SQM binding"
                 );
                 self.is_pppoe_active = true;
                 self.active_wan = Some(session.interface.clone());
@@ -350,7 +353,7 @@ impl TrafficService {
                 self.publish_status(ctx, ServiceState::Online);
             }
             PppoeEvent::SessionDown { reason } => {
-                info!(reason = %reason, "Traffic: PPPoE SessionDown, removing session SQM queues");
+                info!(reason = %reason, "PPPoE SessionDown, removing session SQM queues");
                 self.is_pppoe_active = false;
                 self.clear_sqm_internal(ctx).await;
                 self.update_service_state(ctx);
@@ -363,14 +366,16 @@ impl TrafficService {
         let mut changed = false;
         if self.cfg.tuning.enabled {
             let default_ifaces = Self::resolve_default_interfaces(ctx);
-            let tuned = if self.inert {
-                default_ifaces
-            } else {
-                apply_tuning(&self.cfg.tuning, &default_ifaces).await
-            };
-            if tuned != self.tuned_interfaces {
-                self.tuned_interfaces = tuned;
-                changed = true;
+            if default_ifaces != self.tuned_interfaces {
+                let tuned = if self.inert {
+                    default_ifaces
+                } else {
+                    apply_tuning(&self.cfg.tuning, &default_ifaces).await
+                };
+                if tuned != self.tuned_interfaces {
+                    self.tuned_interfaces = tuned;
+                    changed = true;
+                }
             }
         }
         if self.cfg.sqm.enabled
@@ -400,7 +405,7 @@ impl TrafficService {
                 cmd = h.next_command() => {
                     match cmd {
                         ServiceCommand::Stop | ServiceCommand::Shutdown => {
-                            debug!("Traffic: Stop/shutdown command received");
+                            debug!("Stop/shutdown command received");
                             let history = crate::collector::get_traffic_history_snapshot().await;
                             if !history.is_empty() {
                                 let _ = ctx.bus().publish(LanforgeEvent::Storage(
@@ -410,7 +415,7 @@ impl TrafficService {
                             break;
                         }
                         ServiceCommand::Restart => {
-                            debug!("Traffic: Restart command received");
+                            debug!("Restart command received");
                             h.request_restart();
                             let history = crate::collector::get_traffic_history_snapshot().await;
                             if !history.is_empty() {
@@ -469,7 +474,7 @@ impl TrafficService {
                     match sys_event {
                         Ok(te) => {
                             if matches!(te.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
-                                debug!("Traffic: Shutdown signal received");
+                                debug!("Shutdown signal received");
                                 let history = crate::collector::get_traffic_history_snapshot().await;
                                 if !history.is_empty() {
                                     let _ = ctx.bus().publish(LanforgeEvent::Storage(
