@@ -10,16 +10,23 @@ use crate::resolver::{
 };
 use crate::server::{CompiledIgnoreClients, DnsContext};
 use crate::telemetry::{DnsStats, DnsStatsSnapshot, QueryRing};
+#[cfg(feature = "adblock")]
+use lanforge_core::context::ConfigSubscription;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_transport::{TransportSnapshot, TransportStats};
+#[cfg(feature = "adblock")]
+use lanforge_types::config::DnsAllowlist;
+#[cfg(feature = "adblock")]
+use lanforge_types::network::dns::adblock::AdblockRuleEntry;
 use lanforge_types::network::dns::{
     AdblockCheckResponse, AdblockSourceMatch, AdblockSourceStatus, DnsAdblockSourcesResponse,
     DnsCacheEntry, DnsCacheResponse, DnsCacheStatsExtResponse, DnsClass, DnsLifetimeStats,
     DnsMessage, DnsQuestion, DnsRecordEntry, DnsRecordType, DnsRequest, DnsResponse,
     DnsStatsResponse, FilterMatch, FilterOrigin, TransportProtocol,
+    adblock::{AdblockDbConfig, RewriteRule},
     upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget},
 };
 use lanforge_types::system::{DormantReason, ServiceId, ServiceState};
@@ -466,6 +473,10 @@ impl AsyncService for DnsService {
         let mut sys_rx = ctx.bus().subscribe_system();
         let mut pppoe_rx = ctx.bus().subscribe_pppoe();
         let mut wan_rx = ctx.watch_wan();
+        let mut upstreams_sub = ctx.config_subscription::<Vec<UpstreamTarget>>();
+        let mut mode_sub = ctx.config_subscription::<UpstreamMode>();
+        let mut rewrites_sub = ctx.config_subscription::<Vec<RewriteRule>>();
+        let mut filter_subs = FilterSubscriptions::new(ctx);
 
         let mpsc_worker = {
             let dns_ctx = Arc::clone(&dns_ctx);
@@ -548,52 +559,42 @@ impl AsyncService for DnsService {
                         _ => {}
                     }
                 }
+                // Live config sections: applied in place, sockets untouched (D-9).
+                Some(delta) = upstreams_sub.next() => {
+                    info!("Reloading upstreams");
+                    let mut upstreams = Vec::new();
+                    for target in delta.new.iter() {
+                        match UpstreamManager::new(target, Arc::clone(&dns_ctx.cache)).await {
+                            Ok(mgr) => upstreams.push(mgr),
+                            Err(e) => error!(addr = %target.addr, error = %e, "Failed to initialize upstream"),
+                        }
+                    }
+                    dns_ctx.recursive.replace_upstreams(upstreams);
+                    info!("Upstreams reloaded");
+                    if !dns_ctx.recursive.is_empty() {
+                        dns_ctx.cache.invalidate_all();
+                        info!("Cache invalidated after upstream reload");
+                    }
+                }
+                Some(delta) = mode_sub.next() => {
+                    info!(mode = ?*delta.new, "Upstream resolution mode changed");
+                    dns_ctx.recursive.set_mode(*delta.new);
+                }
+                Some(delta) = rewrites_sub.next() => {
+                    info!("Reloading rewrites");
+                    dns_ctx.rewrites.replace_rules((*delta.new).clone());
+                    info!("Rewrites reloaded");
+                }
+                change = filter_subs.next() => {
+                    apply_filter_change(&dns_ctx, &self.ctx, change);
+                }
                 msg = bus_rx.recv() => {
                     match msg {
                         Ok(timed_event) => match timed_event.event {
-                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigUpstreamsChanged) => {
-                                info!("Reloading upstreams");
-                                let mut upstreams = Vec::new();
-                                let ctx_upstreams = ctx.get_dns_upstreams();
-                                for target in ctx_upstreams {
-                                    match UpstreamManager::new(&target, Arc::clone(&dns_ctx.cache)).await {
-                                        Ok(mgr) => upstreams.push(mgr),
-                                        Err(e) => error!(addr = %target.addr, error = %e, "Failed to initialize upstream"),
-                                    }
-                                }
-                                dns_ctx.recursive.replace_upstreams(upstreams);
-                                info!("Upstreams reloaded");
-                                if !dns_ctx.recursive.is_empty() {
-                                    dns_ctx.cache.invalidate_all();
-                                    info!("Cache invalidated after upstream reload");
-                                }
-                            }
-                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigUpstreamModeChanged(mode)) => {
-                                info!(?mode, "Upstream resolution mode changed");
-                                dns_ctx.recursive.set_mode(mode);
-                            }
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::CacheFlush) => {
                                 info!("Flushing cache");
                                 dns_ctx.cache.invalidate_all();
                                 info!("Cache flushed");
-                            }
-                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigRewritesChanged) => {
-                                info!("Reloading rewrites");
-                                let rewrites = self.ctx.get_dns_rewrites();
-                                dns_ctx.rewrites.replace_rules(rewrites);
-                                info!("Rewrites reloaded");
-                            }
-                            #[cfg(feature = "adblock")]
-                            lanforge_core::bus::LanforgeEvent::Dns(
-                                lanforge_core::bus::DnsEvent::ConfigAllowlistChanged
-                                | lanforge_core::bus::DnsEvent::ConfigAdblockRulesChanged,
-                            ) => {
-                                info!("Reloading allowlist and custom adblock rules");
-                                if let Some(filter) = &dns_ctx.filter {
-                                    filter.sync_from_context(&self.ctx);
-                                    dns_ctx.cache.invalidate_all();
-                                    info!("Allowlist and custom rules reloaded");
-                                }
                             }
                             #[cfg(feature = "adblock")]
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::AdblockBlock(domain)) => {
@@ -607,17 +608,6 @@ impl AsyncService for DnsService {
                                 if let Some(filter) = &dns_ctx.filter {
                                     filter.add_allow(&domain);
                                     dns_ctx.cache.invalidate_all();
-                                }
-                            }
-                            #[cfg(feature = "adblock")]
-                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::ConfigAdblockChanged) => {
-                                info!("Reloading adblock config");
-                                if let Some(filter) = &dns_ctx.filter {
-                                    let cfg = self.ctx.get_dns_adblock();
-                                    filter.replace_config(cfg.blocking_mode, cfg.blocking_ip_v4, cfg.blocking_ip_v6);
-                                    filter.set_enabled(cfg.enabled);
-                                    dns_ctx.cache.invalidate_all();
-                                    info!("Adblock config reloaded");
                                 }
                             }
                             #[cfg(feature = "adblock")]
@@ -1091,3 +1081,78 @@ async fn resolve_diagnostic_internal(
 
     Ok((records, auth, result_str))
 }
+
+/// Change of a filter-related config section observed by the DNS service loop.
+enum FilterChange {
+    /// Allowlist or custom block rules changed: resync the in-memory filter.
+    #[cfg_attr(not(feature = "adblock"), allow(dead_code))]
+    Rules,
+    /// Adblock settings changed (mode, blocking IPs, enabled).
+    #[cfg_attr(not(feature = "adblock"), allow(dead_code))]
+    Adblock(Arc<AdblockDbConfig>),
+}
+
+/// Filter config subscriptions. `tokio::select!` arms cannot be `#[cfg]`-gated, so without the
+/// `adblock` feature this type exists but never yields.
+#[cfg(feature = "adblock")]
+struct FilterSubscriptions {
+    allowlist: ConfigSubscription<DnsAllowlist>,
+    rules: ConfigSubscription<Vec<AdblockRuleEntry>>,
+    adblock: ConfigSubscription<AdblockDbConfig>,
+}
+
+#[cfg(feature = "adblock")]
+impl FilterSubscriptions {
+    fn new(ctx: &LanforgeContext) -> Self {
+        Self {
+            allowlist: ctx.config_subscription(),
+            rules: ctx.config_subscription(),
+            adblock: ctx.config_subscription(),
+        }
+    }
+
+    async fn next(&mut self) -> FilterChange {
+        tokio::select! {
+            Some(_) = self.allowlist.next() => FilterChange::Rules,
+            Some(_) = self.rules.next() => FilterChange::Rules,
+            Some(delta) = self.adblock.next() => FilterChange::Adblock(delta.new),
+            else => std::future::pending().await,
+        }
+    }
+}
+
+#[cfg(not(feature = "adblock"))]
+struct FilterSubscriptions;
+
+#[cfg(not(feature = "adblock"))]
+impl FilterSubscriptions {
+    const fn new(_ctx: &LanforgeContext) -> Self {
+        Self
+    }
+
+    async fn next(&mut self) -> FilterChange {
+        std::future::pending().await
+    }
+}
+
+#[cfg(feature = "adblock")]
+fn apply_filter_change(dns_ctx: &DnsContext, ctx: &LanforgeContext, change: FilterChange) {
+    let Some(filter) = &dns_ctx.filter else {
+        return;
+    };
+    match change {
+        FilterChange::Rules => {
+            info!("Reloading allowlist and custom adblock rules");
+            filter.sync_from_context(ctx);
+        }
+        FilterChange::Adblock(cfg) => {
+            info!("Reloading adblock config");
+            filter.replace_config(cfg.blocking_mode, cfg.blocking_ip_v4, cfg.blocking_ip_v6);
+            filter.set_enabled(cfg.enabled);
+        }
+    }
+    dns_ctx.cache.invalidate_all();
+}
+
+#[cfg(not(feature = "adblock"))]
+fn apply_filter_change(_dns_ctx: &DnsContext, _ctx: &LanforgeContext, _change: FilterChange) {}

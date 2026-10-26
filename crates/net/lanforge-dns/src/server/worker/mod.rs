@@ -25,8 +25,11 @@ use crate::server::DnsContext;
 use chrono::Datelike;
 #[cfg(feature = "adblock")]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
+use lanforge_types::network::dns::AdblockUrlEntry;
+use lanforge_types::network::dns::adblock::AdblockDbConfig;
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::{AdblockSourceFormat, TimeOfDay};
+use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 #[cfg(feature = "adblock")]
 use tracing::{debug, error, info, warn};
@@ -53,6 +56,10 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
 
             let mut manifest = AdblockManifest::load_or_default(&manifest_path);
             let mut rx = ctx.bus.subscribe_dns();
+            // Allowlist/custom rules are resynced by the DNS service loop; this worker only
+            // owns list downloads, so it watches the adblock settings and source URLs.
+            let mut adblock_sub = ctx.ctx.config_subscription::<AdblockDbConfig>();
+            let mut urls_sub = ctx.ctx.config_subscription::<Vec<AdblockUrlEntry>>();
             let mut cache_loaded = false;
             let mut force_refresh = false;
 
@@ -63,17 +70,28 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                 if !filter.is_enabled() {
                     debug!("Adblock: currently disabled, waiting for toggle or reload");
                     loop {
-                        if let Ok(evt) = rx.recv().await {
-                            match evt.event {
-                                LanforgeEvent::Dns(DnsEvent::AdblockReload) => {
-                                    force_refresh = true;
+                        tokio::select! {
+                            evt = rx.recv() => match evt {
+                                Ok(evt) => match evt.event {
+                                    LanforgeEvent::Dns(DnsEvent::AdblockReload) => {
+                                        force_refresh = true;
+                                        break;
+                                    }
+                                    LanforgeEvent::Dns(DnsEvent::AdblockToggle {
+                                        enabled: true,
+                                        ..
+                                    }) => break,
+                                    _ => {}
+                                },
+                                Err(RecvError::Lagged(_)) => {}
+                                Err(RecvError::Closed) => return,
+                            },
+                            // Enabling adblock in the config must start the list download too.
+                            Some(delta) = adblock_sub.next() => {
+                                if delta.new.enabled {
+                                    filter.set_enabled(true);
                                     break;
                                 }
-                                LanforgeEvent::Dns(DnsEvent::AdblockToggle {
-                                    enabled: true,
-                                    ..
-                                }) => break,
-                                _ => continue,
                             }
                         }
                     }
@@ -489,6 +507,14 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                 break;
                             }
                         }
+                        Some(_) = adblock_sub.next() => {
+                            info!("Adblock: config changed, reloading");
+                            break;
+                        }
+                        Some(_) = urls_sub.next() => {
+                            info!("Adblock: source list changed, reloading");
+                            break;
+                        }
                         Ok(evt) = rx.recv() => {
                             match evt.event {
                                 LanforgeEvent::Dns(DnsEvent::AdblockReload) => {
@@ -500,15 +526,6 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                 LanforgeEvent::Dns(DnsEvent::AdblockToggle { .. }) => {
                                     info!("Adblock: toggle event received, checking status");
                                     break;
-                                }
-                                LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged) => {
-                                    info!("Adblock: config changed, reloading");
-                                    break;
-                                }
-                                LanforgeEvent::Dns(DnsEvent::ConfigAllowlistChanged | DnsEvent::ConfigAdblockRulesChanged) => {
-                                    info!("Adblock: custom rules/allowlist changed, updating in-memory filter");
-                                    filter.sync_from_context(&ctx.ctx);
-                                    ctx.cache.invalidate_all();
                                 }
                                 LanforgeEvent::Dns(DnsEvent::AdblockBlock(domain)) => {
                                     filter.add_block(&domain);

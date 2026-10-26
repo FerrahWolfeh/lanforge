@@ -37,7 +37,6 @@ use dhcproto::v4::{DhcpOption, Message, MessageType, Opcode, OptionCode};
 use dhcproto::{Decodable, Decoder};
 use lanforge_core::bus::{
     AdminChange, DeviceEvent, DhcpV4MessageType, LanforgeEvent, NetworkChange, NetworkEvent,
-    SystemEvent,
 };
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
@@ -230,7 +229,7 @@ impl AsyncService for Dhcpv4Service {
                 self.cfg.enabled = false;
                 info!("Service disabled in configuration — server idle");
                 h.dormant(DormantReason::disabled("dhcp.v4.enabled"));
-                match self.wait_for_config_change_or_shutdown().await? {
+                match self.wait_for_config_change_or_shutdown(h).await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,
                 }
@@ -241,7 +240,7 @@ impl AsyncService for Dhcpv4Service {
 
             if pools.is_empty() {
                 warn!("Service enabled but no pools configured — server idle");
-                match self.wait_for_config_change_or_shutdown().await? {
+                match self.wait_for_config_change_or_shutdown(h).await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,
                 }
@@ -259,12 +258,25 @@ impl AsyncService for Dhcpv4Service {
 }
 
 impl Dhcpv4Service {
-    async fn wait_for_config_change_or_shutdown(&self) -> Result<RunResult, CoreError> {
-        let mut handle = self.ctx.service_handle();
+    /// Idles until the pools/options become serviceable or the supervisor stops the service.
+    async fn wait_for_config_change_or_shutdown(
+        &self,
+        h: &ServiceHandle,
+    ) -> Result<RunResult, CoreError> {
         let mut pools_sub = self.ctx.config_subscription::<Vec<Dhcpv4Pool>>();
         let mut options_sub = self.ctx.config_subscription::<Dhcpv4Options>();
         loop {
             tokio::select! {
+                cmd = h.next_command() => {
+                    match cmd {
+                        ServiceCommand::Stop | ServiceCommand::Shutdown => return Ok(RunResult::Shutdown),
+                        ServiceCommand::Restart => {
+                            h.request_restart();
+                            return Ok(RunResult::Shutdown);
+                        }
+                        _ => {}
+                    }
+                }
                 delta_opt = pools_sub.next() => {
                     if let Some(delta) = delta_opt
                         && !delta.new.is_empty()
@@ -276,19 +288,6 @@ impl Dhcpv4Service {
                     if let Some(delta) = delta_opt
                         && delta.new.enabled
                     {
-                        return Ok(RunResult::ConfigChanged);
-                    }
-                }
-                event = handle.next_event() => {
-                    let Some(timed_event) = event else {
-                        return Ok(RunResult::Shutdown);
-                    };
-                    if matches!(
-                        timed_event.event,
-                        LanforgeEvent::System(
-                            SystemEvent::ConfigDhcpV4Changed | SystemEvent::ConfigDhcpOptionsChanged
-                        )
-                    ) {
                         return Ok(RunResult::ConfigChanged);
                     }
                 }
@@ -377,7 +376,7 @@ impl Dhcpv4Service {
         h: &ServiceHandle,
     ) -> Result<RunResult, CoreError> {
         let Some(mut current_cfg) = self.prepare_config(pools) else {
-            return self.wait_for_config_change_or_shutdown().await;
+            return self.wait_for_config_change_or_shutdown(h).await;
         };
 
         let mut server = DhcpServer::new(current_cfg.clone(), self.ctx.clone());
@@ -399,7 +398,8 @@ impl Dhcpv4Service {
         self.reconcile_and_report(&mut server, &transport, &current_cfg);
 
         let mut buf = [0u8; 1500];
-        let mut handle = self.ctx.service_handle();
+        // Lease renew/release requests are the only bus events this loop consumes.
+        let mut handle = self.ctx.service_handle_network();
         let mut pools_sub = self.ctx.config_subscription::<Vec<Dhcpv4Pool>>();
         let mut options_sub = self.ctx.config_subscription::<Dhcpv4Options>();
         let mut cleanup_timer = tokio::time::interval(Duration::from_mins(1));

@@ -65,7 +65,7 @@ use lanforge_types::system::{DormantReason, RaStatusResponse, RunResult};
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
 use crate::error::NetworkError;
-use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
+use lanforge_core::bus::{LanforgeEvent, NetworkEvent};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
@@ -395,7 +395,6 @@ impl RaService {
         &self,
         h: &ServiceHandle,
     ) -> Result<RunResult, CoreError> {
-        let mut handle = self.ctx.service_handle_network();
         let mut ra_sub = self.ctx.config_subscription::<RaServerConfig>();
         let mut prefix_sub = self.ctx.config_subscription::<Vec<RAPrefix>>();
 
@@ -423,17 +422,6 @@ impl RaService {
                     if let Some(delta) = delta_opt
                         && !delta.new.is_empty()
                     {
-                        return Ok(RunResult::ConfigChanged);
-                    }
-                }
-                event = handle.next_event() => {
-                    let Some(timed_event) = event else {
-                        return Ok(RunResult::Shutdown);
-                    };
-                    if matches!(
-                        timed_event.event,
-                        LanforgeEvent::System(SystemEvent::ConfigRaChanged)
-                    ) {
                         return Ok(RunResult::ConfigChanged);
                     }
                 }

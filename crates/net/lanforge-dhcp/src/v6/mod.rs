@@ -43,7 +43,7 @@ pub mod pool;
 pub mod server;
 
 use lanforge_core::bus::{
-    AdminChange, DeviceEvent, DhcpV6MessageType, LanforgeEvent, NetworkEvent, SystemEvent,
+    AdminChange, DeviceEvent, DhcpV6MessageType, LanforgeEvent, NetworkEvent,
 };
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::match_event;
@@ -229,7 +229,7 @@ impl AsyncService for Dhcpv6Service {
                 self.config.enabled = false;
                 info!("Service disabled in configuration — server idle");
                 h.dormant(DormantReason::disabled("dhcp.v6.enabled"));
-                match self.wait_for_config_change_or_shutdown().await? {
+                match self.wait_for_config_change_or_shutdown(h).await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,
                 }
@@ -240,7 +240,7 @@ impl AsyncService for Dhcpv6Service {
 
             if pools.is_empty() {
                 warn!("Service enabled but no pools configured — server idle");
-                match self.wait_for_config_change_or_shutdown().await? {
+                match self.wait_for_config_change_or_shutdown(h).await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,
                 }
@@ -258,12 +258,25 @@ impl AsyncService for Dhcpv6Service {
 }
 
 impl Dhcpv6Service {
-    async fn wait_for_config_change_or_shutdown(&self) -> Result<RunResult, CoreError> {
-        let mut handle = self.ctx.service_handle();
+    /// Idles until the pools/options become serviceable or the supervisor stops the service.
+    async fn wait_for_config_change_or_shutdown(
+        &self,
+        h: &ServiceHandle,
+    ) -> Result<RunResult, CoreError> {
         let mut pools_sub = self.ctx.config_subscription::<Vec<Dhcpv6Pool>>();
         let mut options_sub = self.ctx.config_subscription::<Dhcpv6Options>();
         loop {
             tokio::select! {
+                cmd = h.next_command() => {
+                    match cmd {
+                        ServiceCommand::Stop | ServiceCommand::Shutdown => return Ok(RunResult::Shutdown),
+                        ServiceCommand::Restart => {
+                            h.request_restart();
+                            return Ok(RunResult::Shutdown);
+                        }
+                        _ => {}
+                    }
+                }
                 delta_opt = pools_sub.next() => {
                     if let Some(delta) = delta_opt
                         && !delta.new.is_empty()
@@ -275,19 +288,6 @@ impl Dhcpv6Service {
                     if let Some(delta) = delta_opt
                         && delta.new.enabled
                     {
-                        return Ok(RunResult::ConfigChanged);
-                    }
-                }
-                event = handle.next_event() => {
-                    let Some(timed_event) = event else {
-                        return Ok(RunResult::Shutdown);
-                    };
-                    if matches!(
-                        timed_event.event,
-                        LanforgeEvent::System(
-                            SystemEvent::ConfigDhcpV6Changed | SystemEvent::ConfigDhcpOptionsChanged
-                        )
-                    ) {
                         return Ok(RunResult::ConfigChanged);
                     }
                 }
@@ -418,7 +418,9 @@ impl Dhcpv6Service {
 
         let mut buf = [0u8; 2048];
         let mut resp_vec = Vec::with_capacity(1024);
-        let mut handle = self.ctx.service_handle();
+        // Topic-isolated: prefix changes (network) and lease/admin updates (device) only.
+        let mut net_events = self.ctx.service_handle_network();
+        let mut device_events = self.ctx.service_handle_device();
         let mut pools_sub = self.ctx.config_subscription::<Vec<Dhcpv6Pool>>();
         let mut options_sub = self.ctx.config_subscription::<Dhcpv6Options>();
         let mut stats_timer = tokio::time::interval(Duration::from_mins(1));
@@ -490,7 +492,14 @@ impl Dhcpv6Service {
                         Err(e) => warn!("DHCPv6 socket error: {e}"),
                     }
                 }
-                event = handle.next_event() => {
+                // `None` means shutdown (fanned out to every topic).
+                event = net_events.next_event() => {
+                    let Some(timed_event) = event else {
+                        return Ok(RunResult::Shutdown);
+                    };
+                    self.handle_bus_event(&timed_event, &mut server, &transport);
+                }
+                event = device_events.next_event() => {
                     let Some(timed_event) = event else {
                         return Ok(RunResult::Shutdown);
                     };
