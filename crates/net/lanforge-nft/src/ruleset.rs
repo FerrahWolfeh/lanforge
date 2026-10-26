@@ -11,6 +11,10 @@ use nftables::types::{NfChainPolicy, NfChainType, NfFamily, NfHook};
 use std::borrow::Cow;
 use std::net::IpAddr;
 
+fn is_external_zone(name: &str) -> bool {
+    name == "external" || name == "wan"
+}
+
 const fn protocol_l4_names(proto: L4Protocol) -> &'static [&'static str] {
     match proto {
         L4Protocol::Tcp => &["tcp"],
@@ -1242,6 +1246,44 @@ impl<'a> RulesetBuilder<'a> {
         self.build_nat_chains(&mut batch, &table, &internal_ifaces);
 
         batch.to_nftables()
+    }
+
+    /// Compiles the ruleset left in the kernel when the firewall stops (`FirewallStopAction::Lockdown`).
+    ///
+    /// Same zones and LAN rules as the live ruleset, but the WAN is a closed wall: no port
+    /// forwards or pinholes, no external host rules or forwardings, and none of the
+    /// interface-less DNS/VoWiFi bypasses. Default policies are forced to drop so the WAN stays
+    /// closed even when its interface is unknown. Flow offload is left out: the lockdown must not
+    /// fail to apply on a device the flowtable rejects.
+    #[must_use]
+    pub fn build_lockdown(&self) -> Nftables<'static> {
+        let mut cfg = self.cfg.clone();
+        cfg.enabled = true;
+        cfg.mode = FirewallMode::Full;
+        cfg.flow_offload = false;
+        cfg.bypass_dns = false;
+        cfg.bypass_vowifi = false;
+        cfg.default_input_policy = FirewallPolicy::Drop;
+        cfg.default_forward_policy = FirewallPolicy::Drop;
+        cfg.port_forwards.clear();
+        cfg.forwardings.retain(|f| !is_external_zone(&f.from));
+        for zone in cfg.zones.iter_mut().filter(|z| is_external_zone(&z.name)) {
+            zone.open_ports.clear();
+            zone.input_policy = FirewallPolicy::Drop;
+            zone.forward_policy = FirewallPolicy::Drop;
+        }
+        let dynamic_ports: Vec<DynamicPortRequest> = self
+            .dynamic_ports
+            .iter()
+            .filter(|p| !is_external_zone(&p.zone))
+            .cloned()
+            .collect();
+
+        RulesetBuilder::new(&cfg)
+            .with_active_wan(self.active_wan)
+            .with_primary_lan(self.primary_lan)
+            .with_dynamic_ports(&dynamic_ports)
+            .build()
     }
 
     #[allow(clippy::ptr_arg)]

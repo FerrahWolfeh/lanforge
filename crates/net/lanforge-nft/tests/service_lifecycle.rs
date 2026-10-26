@@ -10,8 +10,8 @@ use lanforge_types::events::TimedEvent;
 use lanforge_types::events::firewall::{FirewallAppliedSummary, FirewallEvent};
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
 use lanforge_types::network::firewall::{
-    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallZone, L4Protocol,
-    PortForwardRule,
+    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallStopAction,
+    FirewallZone, HostPortRule, L4Protocol, PortForwardRule,
 };
 use lanforge_types::system::{ServiceId, ServiceState};
 use std::net::IpAddr;
@@ -513,7 +513,7 @@ async fn test_firewall_service_control_stop_and_restart() {
         "restart must not end the serve loop"
     );
 
-    // Stop ends serve; cleanup removes the table and marks the service Inactive.
+    // Stop ends serve; cleanup locks the WAN down and marks the service Inactive.
     cmd_tx
         .send(ServiceCommand::Stop)
         .await
@@ -524,6 +524,203 @@ async fn test_firewall_service_control_stop_and_restart() {
         .expect("join error");
     assert!(res.is_ok());
     service.cleanup(&ctx).await.expect("Cleanup must succeed");
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Nft),
+        ServiceState::Inactive
+    );
+}
+
+/// Compact JSON of every rule in a captured payload, plus each chain's `(name, policy)`.
+fn rules_and_chains(payload: &str) -> (Vec<String>, Vec<(String, String)>) {
+    let v: serde_json::Value = serde_json::from_str(payload).expect("payload is JSON");
+    let mut rules = Vec::new();
+    let mut chains = Vec::new();
+    for cmd in v["nftables"].as_array().expect("nftables array") {
+        let Some(obj) = cmd.get("add") else { continue };
+        if let Some(rule) = obj.get("rule") {
+            rules.push(rule["expr"].to_string());
+        }
+        if let Some(chain) = obj.get("chain") {
+            chains.push((
+                chain["name"].as_str().unwrap_or_default().to_string(),
+                chain["policy"].as_str().unwrap_or_default().to_string(),
+            ));
+        }
+    }
+    (rules, chains)
+}
+
+const IIF_PPP0: &str = r#""key":"iifname"}},"op":"==","right":"ppp0""#;
+
+/// An admin `stop` (or daemon shutdown) must leave the WAN closed: forwarding stays enabled in the
+/// kernel, so removing the table would expose every LAN GUA and every host service on `ppp0`.
+#[tokio::test]
+async fn test_firewall_stop_locks_down_wan_instead_of_removing_table() {
+    let (ctx, bus) = create_test_context();
+    let mut cfg = ctx.get_firewall_config().unwrap();
+    cfg.port_forwards = vec![
+        PortForwardRule {
+            comment: Some("v4 dnat".into()),
+            src_zone: "external".into(),
+            internal_ip: "192.168.1.10".parse().unwrap(),
+            external_port: 8443,
+            internal_port: 443,
+            protocol: L4Protocol::Tcp,
+            enable_hairpin: true,
+        },
+        PortForwardRule {
+            comment: Some("v6 pinhole".into()),
+            src_zone: "external".into(),
+            internal_ip: "2001:db8::cafe".parse().unwrap(),
+            external_port: 2200,
+            internal_port: 2200,
+            protocol: L4Protocol::Tcp,
+            enable_hairpin: false,
+        },
+    ];
+    let ext = cfg.zones.iter_mut().find(|z| z.name == "external").unwrap();
+    ext.open_ports.push(HostPortRule {
+        comment: Some("host ssh on wan".into()),
+        port: 2222,
+        protocol: L4Protocol::Tcp,
+    });
+    ctx.update_firewall_config(cfg);
+
+    let mut fw_sub = bus.subscribe_firewall();
+    let mut service = NftService::inert();
+    service.init(&ctx).await.expect("Init must succeed");
+    let probe = service.clone();
+    let _ = wait_for_ruleset_applied(&mut fw_sub).await;
+
+    let (cmd_tx, cmd_rx) = mpsc::channel(8);
+    // Like the supervisor runner, `cleanup` runs on the instance that served.
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::with_command_channel(ServiceId::Nft, ctx_clone.clone(), cmd_rx);
+        let res = service.serve(&ctx_clone, &h).await;
+        (service, res)
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let _ = bus.publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(
+        PppoeSessionUp {
+            interface: "ppp0".into(),
+            ac_mac: None,
+            ac_name: None,
+            session_id: 1,
+            mru: 1492,
+            ipv4: Some("100.64.0.10".parse().unwrap()),
+            ipv4_peer: Some("100.64.0.1".parse().unwrap()),
+            dns: vec!["1.1.1.1".parse().unwrap()],
+            ipv6_link_local: true,
+        },
+    ))));
+    let summary = wait_for_ruleset_applied(&mut fw_sub).await;
+    assert_eq!(summary.wan_iface.as_deref(), Some("ppp0"));
+    let full = probe.last_applied_payload().unwrap();
+    assert!(
+        full.contains("2001:db8::cafe") && full.contains("2222"),
+        "fixture sanity"
+    );
+
+    cmd_tx
+        .send(ServiceCommand::Stop)
+        .await
+        .expect("service alive");
+    let (mut service, res) = timeout(Duration::from_secs(1), serve_handle)
+        .await
+        .expect("serve must return on Stop")
+        .expect("join error");
+    res.expect("serve ok");
+    service.cleanup(&ctx).await.expect("Cleanup must succeed");
+
+    let lockdown = probe
+        .last_applied_payload()
+        .expect("stop must leave a ruleset in the kernel, not delete the table");
+    assert!(
+        lockdown != full,
+        "stop must replace the live ruleset with the lockdown one"
+    );
+    let (rules, chains) = rules_and_chains(&lockdown);
+
+    for hook in ["input", "forward"] {
+        assert!(
+            chains.iter().any(|(n, p)| n == hook && p == "drop"),
+            "{hook} chain must exist with policy drop: {chains:?}"
+        );
+    }
+    for rule in &rules {
+        for leaked in [
+            "192.168.1.10",
+            "2001:db8::cafe",
+            "2222",
+            "8443",
+            "\"dnat\":{",
+        ] {
+            assert!(
+                !rule.contains(leaked),
+                "lockdown keeps a WAN opening ({leaked}): {rule}"
+            );
+        }
+        if rule.contains(IIF_PPP0) {
+            assert!(
+                !rule.contains("accept"),
+                "lockdown accepts WAN ingress: {rule}"
+            );
+        }
+        // DNS / VoWiFi bypasses match every interface, WAN included.
+        if !rule.contains("iifname") {
+            for port in ["\"right\":53}", "\"right\":500}", "\"right\":4500}"] {
+                assert!(
+                    !rule.contains(port),
+                    "interface-less bypass survives lockdown: {rule}"
+                );
+            }
+        }
+    }
+    assert!(
+        rules
+            .iter()
+            .any(|r| r.contains(IIF_PPP0) && r.contains("drop")),
+        "the WAN zone must be dropped explicitly, not only by chain policy"
+    );
+    assert!(
+        rules
+            .iter()
+            .any(|r| r.contains("\"ppp0\"") && r.contains("masquerade")),
+        "LAN must keep reaching the internet through the WAN"
+    );
+    assert!(
+        rules.iter().any(|r| r.contains("\"right\":546}")),
+        "DHCPv6 client replies must still reach the router (PD renewal)"
+    );
+    assert!(
+        rules
+            .iter()
+            .any(|r| r.contains("\"lan0\"") && r.contains("accept")),
+        "LAN must keep reaching the router (recovery path)"
+    );
+}
+
+/// `on_stop = "remove"` is the explicit opt-out: the table is deleted and nothing of ours remains.
+#[tokio::test]
+async fn test_firewall_stop_removes_table_when_configured() {
+    let (ctx, bus) = create_test_context();
+    let mut cfg = ctx.get_firewall_config().unwrap();
+    cfg.on_stop = FirewallStopAction::Remove;
+    ctx.update_firewall_config(cfg);
+
+    let mut fw_sub = bus.subscribe_firewall();
+    let mut service = NftService::inert();
+    service.init(&ctx).await.expect("Init must succeed");
+    let _ = wait_for_ruleset_applied(&mut fw_sub).await;
+    assert!(service.last_applied_payload().is_some());
+
+    service.cleanup(&ctx).await.expect("Cleanup must succeed");
+    assert!(
+        service.last_applied_payload().is_none(),
+        "remove must leave no ruleset behind"
+    );
     assert_eq!(
         ctx.get_service_state(ServiceId::Nft),
         ServiceState::Inactive

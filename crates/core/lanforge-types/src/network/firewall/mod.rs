@@ -103,6 +103,31 @@ pub enum FirewallMode {
     Disabled,
 }
 
+/// What stopping the firewall (admin `stop`, daemon shutdown) leaves in the kernel.
+///
+/// The OS keeps IP forwarding enabled when lanforge stops, so removing the table would forward
+/// WAN traffic to the LAN unfiltered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FirewallStopAction {
+    /// Replace the ruleset with a closed-WAN baseline: no port forwards, pinholes or WAN host
+    /// rules; LAN keeps reaching the router and the internet.
+    #[default]
+    Lockdown,
+    /// Delete the table, leaving the host to whatever other ruleset is loaded.
+    Remove,
+}
+
+impl FirewallStopAction {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Lockdown => "lockdown",
+            Self::Remove => "remove",
+        }
+    }
+}
+
 /// Complete declarative firewall configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
@@ -120,6 +145,7 @@ pub struct FirewallConfig {
     pub bypass_vowifi: bool,
     pub default_input_policy: FirewallPolicy,
     pub default_forward_policy: FirewallPolicy,
+    pub on_stop: FirewallStopAction,
 }
 
 impl Default for FirewallConfig {
@@ -133,6 +159,7 @@ impl Default for FirewallConfig {
             bypass_vowifi: true,
             default_input_policy: FirewallPolicy::Drop,
             default_forward_policy: FirewallPolicy::Drop,
+            on_stop: FirewallStopAction::Lockdown,
             custom_rules_file: None,
             zones: vec![
                 FirewallZone {

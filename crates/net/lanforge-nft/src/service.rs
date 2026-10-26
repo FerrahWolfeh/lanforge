@@ -16,7 +16,9 @@ use lanforge_types::events::LanforgeEvent;
 use lanforge_types::events::firewall::{FirewallAppliedSummary, FirewallEvent};
 use lanforge_types::events::pppoe::PppoeEvent;
 use lanforge_types::events::system::SystemEvent;
-use lanforge_types::network::firewall::{DynamicPortRequest, FirewallConfig, FirewallMode};
+use lanforge_types::network::firewall::{
+    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallStopAction,
+};
 use lanforge_types::system::{DormantReason, ServiceId};
 use tracing::{debug, error, info, trace, warn};
 
@@ -126,6 +128,70 @@ impl NftService {
         }
     }
 
+    /// Deletes the table and forgets the recorded payload: nothing of ours is left in the kernel.
+    async fn remove_table(&self, table_name: &str) {
+        Self::cleanup_table_internal(table_name, self.inert).await;
+        *self.last_ruleset.write() = None;
+    }
+
+    /// Leaves the kernel in the state `cfg.on_stop` asks for once the service stops.
+    ///
+    /// Only a full firewall locks down: `Minimal` is a policy-accept helper next to another
+    /// firewall, and a disabled config is the admin explicitly handing the host over.
+    async fn stop_firewall(&self, ctx: &LanforgeContext) {
+        let cfg = ctx.get_firewall_config().unwrap_or_default();
+        let lockdown = cfg.enabled
+            && cfg.mode == FirewallMode::Full
+            && cfg.on_stop == FirewallStopAction::Lockdown;
+        if lockdown {
+            self.apply_lockdown(ctx, &cfg).await;
+        } else {
+            info!(table = %cfg.table_name, on_stop = cfg.on_stop.as_str(), mode = ?cfg.mode, "Firewall stopping, removing nftables table from kernel");
+            self.remove_table(&cfg.table_name).await;
+        }
+    }
+
+    /// Replaces the live ruleset with the closed-WAN lockdown in one atomic batch. On failure the
+    /// previous ruleset stays in place: never fall back to deleting the table.
+    async fn apply_lockdown(&self, ctx: &LanforgeContext, cfg: &FirewallConfig) {
+        let primary_lan = ctx.target_interface_name();
+        let dynamic_ports = ctx.registered_service_ports();
+        let ruleset = RulesetBuilder::new(cfg)
+            .with_active_wan(self.active_wan.as_deref())
+            .with_primary_lan(primary_lan.as_deref())
+            .with_dynamic_ports(&dynamic_ports)
+            .build_lockdown();
+
+        let payload = if self.inert || tracing::enabled!(tracing::Level::TRACE) {
+            serde_json::to_string_pretty(&ruleset).unwrap_or_default()
+        } else {
+            "lockdown".to_string()
+        };
+        if !self.inert {
+            let res =
+                tokio::task::spawn_blocking(move || nftables::helper::apply_ruleset(&ruleset))
+                    .await;
+            match res {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    error!(table = %cfg.table_name, error = %e, "Failed to apply firewall lockdown; keeping the previous ruleset");
+                    return;
+                }
+                Err(e) => {
+                    error!(table = %cfg.table_name, error = %e, "Firewall lockdown task panicked; keeping the previous ruleset");
+                    return;
+                }
+            }
+        }
+        *self.last_ruleset.write() = Some(payload);
+        info!(
+            table = %cfg.table_name,
+            wan = ?self.active_wan,
+            inert = self.inert,
+            "Firewall stopped; WAN locked down (on_stop = \"remove\" deletes the table instead)"
+        );
+    }
+
     async fn reapply(&self, ctx: &LanforgeContext, reason: &'static str) {
         let cfg = ctx.get_firewall_config().unwrap_or_default();
         let dynamic_ports = ctx.registered_service_ports();
@@ -170,7 +236,7 @@ impl NftService {
                 Self::SERVICE_ID,
                 lanforge_types::system::ServiceState::Inactive,
             );
-            Self::cleanup_table_internal(&cfg.table_name, self.inert).await;
+            self.remove_table(&cfg.table_name).await;
             return;
         }
 
@@ -362,7 +428,7 @@ impl AsyncService for NftService {
                 tokio::select! {
                     cmd = h.next_command() => {
                         match cmd {
-                            // `cleanup()` removes the table once serve returns.
+                            // `cleanup()` locks the WAN down once serve returns.
                             ServiceCommand::Stop | ServiceCommand::Shutdown => break,
                             // Reapplied in place: tearing the table down first would leave the
                             // gateway without a firewall for the duration of the restart.
@@ -463,18 +529,13 @@ impl AsyncService for NftService {
         &mut self,
         ctx: &LanforgeContext,
     ) -> impl Future<Output = Result<(), CoreError>> + Send {
-        let table = ctx
-            .get_firewall_config()
-            .map_or_else(|| "lanforge".into(), |c| c.table_name);
-        let inert = self.inert;
-        let ctx_clone = ctx.clone();
+        let ctx = ctx.clone();
         async move {
-            info!(table = %table, "Firewall service shutting down, removing nftables table from kernel");
-            ctx_clone.set_service_state(
+            ctx.set_service_state(
                 Self::SERVICE_ID,
                 lanforge_types::system::ServiceState::Inactive,
             );
-            Self::cleanup_table_internal(&table, inert).await;
+            self.stop_firewall(&ctx).await;
             Ok(())
         }
     }

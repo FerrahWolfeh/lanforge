@@ -14,8 +14,8 @@ use lanforge_types::network::dns::adblock::{
 };
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::firewall::{
-    FirewallConfig, FirewallMode, FirewallPolicy, FirewallZone, HostPortRule, L4Protocol,
-    PortForwardRule,
+    FirewallConfig, FirewallMode, FirewallPolicy, FirewallStopAction, FirewallZone, HostPortRule,
+    L4Protocol, PortForwardRule,
 };
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{
@@ -51,6 +51,15 @@ fn str_to_policy(s: &str) -> FirewallPolicy {
         "accept" => FirewallPolicy::Accept,
         "reject" => FirewallPolicy::Reject,
         _ => FirewallPolicy::Drop,
+    }
+}
+
+/// Anything but an explicit `remove` keeps the WAN closed.
+fn str_to_stop_action(s: &str) -> FirewallStopAction {
+    if s.trim().eq_ignore_ascii_case("remove") {
+        FirewallStopAction::Remove
+    } else {
+        FirewallStopAction::Lockdown
     }
 }
 
@@ -349,6 +358,7 @@ impl From<&SystemConfigExport> for ConfigFile {
                 bypass_vowifi: fw.bypass_vowifi,
                 default_input_policy: policy_to_str(fw.default_input_policy).to_string(),
                 default_forward_policy: policy_to_str(fw.default_forward_policy).to_string(),
+                on_stop: fw.on_stop.as_str().to_string(),
                 custom_rules_file: fw.custom_rules_file.clone(),
                 zones: BTreeMap::new(),
                 port_forwards: BTreeMap::new(),
@@ -777,6 +787,7 @@ impl From<&ConfigFile> for SystemConfigExport {
             bypass_vowifi: cfg.firewall.bypass_vowifi,
             default_input_policy: str_to_policy(&cfg.firewall.default_input_policy),
             default_forward_policy: str_to_policy(&cfg.firewall.default_forward_policy),
+            on_stop: str_to_stop_action(&cfg.firewall.on_stop),
         }));
 
         // 7. PPPoE

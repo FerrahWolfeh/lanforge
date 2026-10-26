@@ -1456,6 +1456,8 @@ export interface PortForwardRule {
 
 export type FirewallMode = "full" | "minimal" | "disabled";
 
+export type FirewallStopAction = "lockdown" | "remove";
+
 export interface FirewallConfig {
 	mode: FirewallMode;
 	table_name: string;
@@ -1469,6 +1471,8 @@ export interface FirewallConfig {
 	bypass_vowifi: boolean;
 	default_input_policy: FirewallPolicy;
 	default_forward_policy: FirewallPolicy;
+	/** What stopping the firewall leaves in the kernel: a closed-WAN lockdown or nothing. */
+	on_stop?: FirewallStopAction;
 }
 
 export interface FirewallStatus {

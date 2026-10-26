@@ -72,6 +72,10 @@ fn default_policy_drop() -> String {
     "drop".to_string()
 }
 
+fn default_on_stop() -> String {
+    "lockdown".to_string()
+}
+
 fn default_policy_accept() -> String {
     "accept".to_string()
 }
@@ -583,6 +587,9 @@ pub struct FirewallFile {
     pub default_input_policy: String,
     #[serde(default = "default_policy_drop")]
     pub default_forward_policy: String,
+    /// `lockdown` (default) keeps the WAN closed when the firewall stops; `remove` deletes the table.
+    #[serde(default = "default_on_stop")]
+    pub on_stop: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_rules_file: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -645,6 +652,7 @@ impl Default for FirewallFile {
             bypass_vowifi: true,
             default_input_policy: default_policy_drop(),
             default_forward_policy: default_policy_drop(),
+            on_stop: default_on_stop(),
             custom_rules_file: None,
             zones,
             port_forwards: BTreeMap::new(),
