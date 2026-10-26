@@ -15,7 +15,7 @@ use smallvec::SmallVec;
 use crate::context::state::network::DhcpPoolStats;
 use crate::context::{DnsHandle, LanforgeContext, StorageHandle};
 use crate::error::CoreError;
-use crate::service::{ServiceDependency, StatusProvider};
+use crate::service::StatusProvider;
 
 impl LanforgeContext {
     /// Sets the global system status.
@@ -321,14 +321,6 @@ impl LanforgeContext {
         self.inner.runtime.wait_for_pppoe().await
     }
 
-    /// Blocks until the specified dependency is satisfied.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CoreError::Shutdown` if the system shuts down before the dependency is ready.
-    pub async fn wait_for_dependency(&self, dep: ServiceDependency) -> Result<(), CoreError> {
-        self.inner.runtime.wait_for_dependency(dep).await
-    }
 
     /// Blocks until the specified service is `Online`.
     ///

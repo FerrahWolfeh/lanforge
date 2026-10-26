@@ -41,7 +41,10 @@ use crate::ping::IcmpPinger;
 use lanforge_core::bus::{DeviceEvent, LanforgeEvent, NetworkChange, NetworkEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
+use lanforge_core::service::{
+    AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass, ServiceCommand,
+    ServiceHandle, ServiceSpec,
+};
 use lanforge_transport::ArpProber;
 use lanforge_types::device::{IPv4State, IPv6State, Origin};
 use lanforge_types::identifiers::MacAddr;
@@ -104,18 +107,12 @@ impl IfNameCache {
     }
 }
 
+const MONITOR_DEPS: &[Edge] = &[Edge::after("db")];
+
 /// Unified neighbor discovery (NDP/ARP) and active ICMP ping engine.
 ///
 /// Maintains synchronization with the `LanforgeContext` by applying
 /// `DeviceUpdate` events for every neighbor state change.
-#[lanforge_macros::lanforge_service(
-    id = "monitor",
-    name = "Discovery Service",
-    critical = true,
-    retries = 0,
-    base_backoff = 2,
-    max_backoff = 30
-)]
 pub struct DiscoveryService {
     cfg: MonitorConfig,
     handle: Handle,
@@ -125,6 +122,9 @@ pub struct DiscoveryService {
 }
 
 impl DiscoveryService {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: &'static str = "monitor";
+
     /// Creates a new `DiscoveryService` for the given interfaces.
     #[must_use]
     pub const fn new(
@@ -226,11 +226,21 @@ impl DiscoveryService {
     }
 }
 
-impl AsyncService for DiscoveryService {
-    fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[ServiceDependency::Database, ServiceDependency::Interfaces]
+impl LanforgeService for DiscoveryService {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
+            id: Self::SERVICE_ID,
+            display_name: "Discovery Service",
+            runtime: RuntimeClass::Shared,
+            restart: RestartPolicy::default(),
+            shutdown_timeout: std::time::Duration::from_secs(5),
+            deps: MONITOR_DEPS,
+            condition: Condition::ALWAYS,
+        }
     }
+}
 
+impl AsyncService for DiscoveryService {
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
         let (total_devices, active_devices) = ctx.with_state(|state| {
             let total = state.devices.len();

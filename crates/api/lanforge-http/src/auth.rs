@@ -242,7 +242,7 @@ pub fn authenticate_token(
         }
         Err(e) => {
             error!("Database error during token validation: {e}");
-            Err(HttpError::Internal("Auth database error".into()))
+            Err(HttpError::ServiceUnavailable("persistence unavailable".into()))
         }
     }
 }

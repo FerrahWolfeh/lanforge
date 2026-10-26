@@ -69,10 +69,43 @@ impl ClientContext {
             }
         };
 
-        // Get the device's main IPv4 for use as a hint (directed broadcast/unicast)
-        let ip_hint = self.ctx.get_device(&mac).and_then(|d| d.v4.ip());
+        let (iface, ip_hint) = self.ctx.get_device(&mac).map_or_else(
+            || {
+                let iface = self.ctx.get_status().map(|s| s.lan_iface).unwrap_or_default();
+                (iface, None)
+            },
+            |d| {
+                let iface = d.identity.iface.clone().unwrap_or_else(|| {
+                    self.ctx.get_status().map(|s| s.lan_iface).unwrap_or_default()
+                });
+                let ip_hint = d.v4.ip();
+                (iface, ip_hint)
+            },
+        );
 
-        // Emit WoL event
+        let directed_broadcast = self.ctx.with_config(|cfg| {
+            cfg.dhcp_v4_pools.first().and_then(|pool| {
+                pool.subnet_mask.map(|mask| {
+                    let ip_u32 = u32::from(pool.range_start);
+                    let mask_u32 = u32::from(mask);
+                    let broadcast = ip_u32 | !mask_u32;
+                    std::net::Ipv4Addr::from(broadcast)
+                })
+            })
+        });
+
+        if let Err(e) = lanforge_transport::send_wol_magic_packet(
+            mac,
+            &iface,
+            directed_broadcast,
+            ip_hint,
+        ) {
+            return Response::Error {
+                error: format!("Failed to send Wake-on-LAN packet: {e}"),
+            };
+        }
+
+        // Emit WoL event for subscribers / audit
         let _ = self
             .ctx
             .bus()
@@ -82,7 +115,7 @@ impl ClientContext {
             }));
 
         Response::Success(SimpleSuccess {
-            message: format!("Wake-on-LAN magic packet queued for {mac}"),
+            message: format!("Wake-on-LAN magic packet sent to {mac}"),
         })
     }
 

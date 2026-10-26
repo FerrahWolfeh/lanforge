@@ -18,7 +18,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, s
 use tokio::net::{TcpListener, UnixListener};
 use tracing::{debug, error, info, warn};
 
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use lanforge_types::system::DormantReason;
 
 #[lanforge_macros::lanforge_service(
@@ -104,10 +104,6 @@ impl ControlService {
 }
 
 impl AsyncService for ControlService {
-    fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[ServiceDependency::Database]
-    }
-
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
         let mut stats = vec![
             (
@@ -175,11 +171,14 @@ impl AsyncService for ControlService {
                 }
                 msg = sys_rx.recv() => {
                     match msg {
-                        Ok(timed_event) => {
-                            if let LanforgeEvent::System(SystemEvent::Shutdown) = timed_event.event {
-                                break;
+                        Ok(timed_event) => match timed_event.event {
+                            LanforgeEvent::System(SystemEvent::Shutdown) => break,
+                            LanforgeEvent::System(SystemEvent::ConfigUpdate { password_hash }) => {
+                                let path = std::path::Path::new("/var/lib/lanforge/.password_hash");
+                                let _ = std::fs::write(path, password_hash);
                             }
-                        }
+                            _ => {}
+                        },
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             warn!(service = "ControlAPI", lost = n, "System event bus lagged");
                         }

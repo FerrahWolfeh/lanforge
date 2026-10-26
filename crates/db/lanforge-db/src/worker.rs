@@ -70,6 +70,7 @@ pub enum PendingDeviceOp {
     retries = 5,
     base_backoff = 1,
     max_backoff = 30,
+    runtime = "dedicated",
     describe = format!("Database Worker ({})", self.cfg.config_path)
 )]
 pub struct DbWorker {

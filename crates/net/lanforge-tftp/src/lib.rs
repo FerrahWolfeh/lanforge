@@ -4,7 +4,10 @@ use crate::config::TftpConfig;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
+use lanforge_core::service::{
+    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
+};
 use lanforge_transport::UdpTransport;
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::network::dhcp::TftpOptions;
@@ -28,12 +31,8 @@ pub enum TftpError {
     Protocol(String),
 }
 
-#[lanforge_macros::lanforge_service(
-    id = "tftp",
-    name = "TFTP Server",
-    critical = false,
-    describe = format!("TFTP Server on {}", self.cfg.listen)
-)]
+const TFTP_DEPS: &[Edge] = &[Edge::requires("interfaces", LossPolicy::Degrade)];
+
 #[derive(Clone)]
 pub struct TftpService {
     _ctx: LanforgeContext,
@@ -42,6 +41,9 @@ pub struct TftpService {
 }
 
 impl TftpService {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: &'static str = "tftp";
+
     #[must_use]
     pub fn new(ctx: LanforgeContext, cfg: TftpConfig) -> Self {
         Self {
@@ -52,10 +54,39 @@ impl TftpService {
     }
 }
 
-impl AsyncService for TftpService {
-    fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[ServiceDependency::Interfaces]
+impl LanforgeService for TftpService {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
+            id: Self::SERVICE_ID,
+            display_name: "TFTP Server",
+            runtime: RuntimeClass::Shared,
+            restart: RestartPolicy {
+                base_backoff: Duration::from_secs(2),
+                max_backoff: Duration::from_secs(30),
+                max_retries: 0,
+                healthy_uptime: Duration::from_secs(30),
+            },
+            shutdown_timeout: Duration::from_secs(3),
+            deps: TFTP_DEPS,
+            condition: Condition {
+                sections: &[lanforge_types::config::ConfigDomain::Tftp],
+                eval: |ctx| {
+                    if ctx.get_dhcp_options().tftp.enabled {
+                        Activation::Active
+                    } else {
+                        Activation::Dormant(DormantReason::disabled("tftp.enabled"))
+                    }
+                },
+            },
+        }
     }
+
+    fn describe(&self) -> String {
+        format!("TFTP Server on {}", self.cfg.listen)
+    }
+}
+
+impl AsyncService for TftpService {
     fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
         let listen = self
             .bound_addr

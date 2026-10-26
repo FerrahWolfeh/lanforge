@@ -1,5 +1,7 @@
+use lanforge_core::context::LanforgeContext;
+use lanforge_core::error::CoreError;
+use lanforge_dns_wire::{WireHeader, WireQuestion};
 use lanforge_types::network::dns::TransportProtocol;
-use lanforge_types::system::DormantReason;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,118 +10,47 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info};
 
-use lanforge_core::bus::{LanforgeEvent, SystemEvent};
-use lanforge_core::context::LanforgeContext;
-use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
-
-use crate::config::DnsConfig;
 use crate::pipeline::DnsPipelineRequest;
 use crate::server::DnsContext;
 use crate::server::transport::tls::load_tls_config;
-use lanforge_dns_wire::{WireHeader, WireQuestion};
 
-#[lanforge_macros::lanforge_service(
-    id = "dot",
-    name = "DNS over TLS",
-    critical = false,
-    describe = format!("DoT on {}", self.cfg.dot_listen.map_or_else(|| "853".to_string(), |a| a.to_string()))
-)]
-#[derive(Clone)]
-pub struct DotService {
-    cfg: Arc<DnsConfig>,
-    _ctx: LanforgeContext,
-}
+/// Runs the internal DoT worker listener on the given socket address.
+pub async fn run_dot_worker(
+    addr: SocketAddr,
+    cert: &str,
+    key: &str,
+    ctx: LanforgeContext,
+) -> Result<(), CoreError> {
+    let tls_config = load_tls_config(cert, key)
+        .map_err(|e| CoreError::Generic(format!("Failed to load TLS config for DoT: {e}")))?;
 
-impl DotService {
-    #[must_use]
-    pub const fn new(cfg: Arc<DnsConfig>, ctx: LanforgeContext) -> Self {
-        Self { cfg, _ctx: ctx }
-    }
-}
+    let acceptor = TlsAcceptor::from(Arc::new(tls_config));
+    let listener = TcpListener::bind(addr)
+        .await
+        .map_err(|e| CoreError::Generic(format!("DoT bind error on {addr}: {e}")))?;
 
-impl AsyncService for DotService {
-    fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[
-            ServiceDependency::Database,
-            ServiceDependency::Service("dns"),
-        ]
-    }
+    info!("DNS: DoT listening on tls://{addr}");
 
-    fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let port = self.cfg.dot_listen.map_or(853, |a| a.port());
-        let listen = self.cfg.dot_listen.map_or("disabled".to_string(), |a| a.to_string());
-        vec![
-            (std::borrow::Cow::Borrowed("port"), port.to_string()),
-            (std::borrow::Cow::Borrowed("listen"), listen),
-        ]
-    }
-
-    async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
-        let Some(addr_str) = &self.cfg.dot_listen else {
-            info!("DoT is disabled in configuration.");
-            h.dormant(DormantReason::disabled("dns.dot_listen"));
-            return Ok(());
-        };
-
-        let cert = self.cfg.tls_cert.as_deref().ok_or_else(|| {
-            CoreError::Generic("DoT requires tls_cert to be configured".to_string())
-        })?;
-        let key = self.cfg.tls_key.as_deref().ok_or_else(|| {
-            CoreError::Generic("DoT requires tls_key to be configured".to_string())
-        })?;
-
-        let tls_config = load_tls_config(cert, key)
-            .map_err(|e| CoreError::Generic(format!("Failed to load TLS config: {e}")))?;
-
-        let acceptor = TlsAcceptor::from(Arc::new(tls_config));
-        let listener = TcpListener::bind(addr_str)
-            .await
-            .map_err(|e| CoreError::Generic(format!("DoT bind error: {e}")))?;
-
-        info!("DoT listening on tls://{}", addr_str);
-        h.ready();
-
-        let mut rx = ctx.bus().subscribe();
-        loop {
-            tokio::select! {
-                cmd = h.next_command() => {
-                    match cmd {
-                        ServiceCommand::Stop | ServiceCommand::Shutdown => break,
-                        ServiceCommand::Restart => {
-                            h.request_restart();
-                            break;
-                        }
-                        _ => {}
+    while ctx.is_running() {
+        match listener.accept().await {
+            Ok((stream, peer)) => {
+                let acceptor = acceptor.clone();
+                let ctx_conn = ctx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = handle_dot_connection(stream, acceptor, ctx_conn, peer).await {
+                        debug!("DoT connection from {peer} closed with error: {e}");
                     }
+                });
+            }
+            Err(e) => {
+                if !ctx.is_running() {
+                    break;
                 }
-                res = listener.accept() => {
-                    match res {
-                        Ok((stream, peer)) => {
-                            let acceptor = acceptor.clone();
-                            let ctx_conn = ctx.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = handle_dot_connection(stream, acceptor, ctx_conn, peer).await {
-                                    debug!("DoT connection from {} closed with error: {}", peer, e);
-                                }
-                            });
-                        }
-                        Err(e) => { error!("DoT accept error: {}", e); }
-                    }
-                }
-                res = rx.recv() => {
-                    if let Ok(timed) = res {
-                        if matches!(timed.event, LanforgeEvent::System(SystemEvent::Shutdown)) || !ctx.is_running() {
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                }
+                error!("DoT accept error: {e}");
             }
         }
-        Ok(())
     }
+    Ok(())
 }
 
 async fn handle_dot_connection(
@@ -181,5 +112,6 @@ async fn handle_dot_connection(
             tls_stream.write_all(&resp_buf).await?;
         }
     }
+
     Ok(())
 }

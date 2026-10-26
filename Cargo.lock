@@ -2315,7 +2315,6 @@ dependencies = [
  "lanforge-transport",
  "lanforge-types",
  "lanforge-uds",
- "lanforge-wol",
  "libc",
  "netlink-sys",
  "pnet",
@@ -2369,6 +2368,7 @@ dependencies = [
  "lanforge-db-core",
  "lanforge-dhcp",
  "lanforge-macros",
+ "lanforge-transport",
  "lanforge-types",
  "pnet",
  "rand 0.10.3",
@@ -2788,6 +2788,7 @@ dependencies = [
 name = "lanforge-transport"
 version = "0.2.0"
 dependencies = [
+ "lanforge-types",
  "libc",
  "parking_lot",
  "socket2",
@@ -2834,17 +2835,6 @@ version = "0.4.0"
 dependencies = [
  "mime_guess",
  "rust-embed",
-]
-
-[[package]]
-name = "lanforge-wol"
-version = "1.0.3"
-dependencies = [
- "lanforge-types",
- "socket2",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
 ]
 
 [[package]]

@@ -287,7 +287,7 @@ fn authenticate_via_api_token(
             Ok(None) => return Err(HttpError::Auth("Invalid API token".to_string())),
             Err(e) => {
                 error!("Database error during login token validation: {e}");
-                return Err(HttpError::Internal("Auth DB error".into()));
+                return Err(HttpError::ServiceUnavailable("persistence unavailable".into()));
             }
         }
     }
@@ -310,22 +310,35 @@ fn authenticate_via_password(
         .as_secs()
         .cast_signed();
 
-    if let Ok(Some(db_user)) = state.db.get_user_by_username(username) {
-        if verify_password(&db_user.password_hash, password) {
-            let _ = state
-                .db
-                .update_user_last_login(&db_user.username, now);
-            let session_token =
-                state
-                    .auth
-                    .generate_token_with_ttl(&db_user.username, db_user.role.as_str(), ttl_secs)?;
-            return Ok((session_token, db_user.username, "password"));
+    match state.db.get_user_by_username(username) {
+        Ok(Some(db_user)) => {
+            if verify_password(&db_user.password_hash, password) {
+                let _ = state
+                    .db
+                    .update_user_last_login(&db_user.username, now);
+                let session_token =
+                    state
+                        .auth
+                        .generate_token_with_ttl(&db_user.username, db_user.role.as_str(), ttl_secs)?;
+                return Ok((session_token, db_user.username, "password"));
+            }
+            return Err(HttpError::Auth("Invalid credentials".to_string()));
         }
-        return Err(HttpError::Auth("Invalid credentials".to_string()));
+        Ok(None) => {}
+        Err(e) => {
+            error!("Database error looking up user {username}: {e}");
+            return Err(HttpError::ServiceUnavailable("persistence unavailable".into()));
+        }
     }
 
     // Bootstrapping / Fallback Admin seeding if no DB users exist
-    let user_count = state.db.count_users().unwrap_or(0);
+    let user_count = match state.db.count_users() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Database error counting users: {e}");
+            return Err(HttpError::ServiceUnavailable("persistence unavailable".into()));
+        }
+    };
     if user_count == 0
         && let Some(hash) = &state.cfg.auth_password_hash
         && verify_password(hash, password)

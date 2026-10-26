@@ -12,7 +12,10 @@ use crate::session::PppoeSession;
 use lanforge_core::bus::{LanforgeEvent, PppoeEvent, SystemEvent};
 use lanforge_core::context::{ConfigSubscription, LanforgeContext};
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
+use lanforge_core::service::{
+    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
+};
 use lanforge_transport::ArpProber;
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::identifiers::MacAddr;
@@ -40,13 +43,13 @@ struct ActiveSessionMeta {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SystemInterrupt {
+pub(crate) enum SystemInterrupt {
     Shutdown,
     Stop,
     Restart,
 }
 
-fn classify_system_event(event: &LanforgeEvent) -> Option<SystemInterrupt> {
+pub(crate) fn classify_system_event(event: &LanforgeEvent) -> Option<SystemInterrupt> {
     match event {
         LanforgeEvent::System(SystemEvent::Shutdown) => Some(SystemInterrupt::Shutdown),
         LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) if id == "pppoe" => {
@@ -105,16 +108,8 @@ type EbpfSessionHandle = Option<crate::ebpf::EbpfSession>;
 #[cfg(not(feature = "ebpf"))]
 type EbpfSessionHandle = Option<()>;
 
-#[lanforge_macros::lanforge_service(
-    id = "pppoe",
-    name = "PPPoE Client",
-    critical = false,
-    retries = 0,
-    base_backoff = 5,
-    max_backoff = 10,
-    shutdown_timeout = 10,
-    describe = format!("PPPoE on {} (user: {})", self.cfg.wan_iface, self.cfg.username)
-)]
+const PPPOE_DEPS: &[Edge] = &[Edge::requires("interfaces", LossPolicy::Continue)];
+
 pub struct PppoeService {
     cfg: PppoeConfig,
     ctx: LanforgeContext,
@@ -128,6 +123,8 @@ pub struct PppoeService {
 }
 
 impl PppoeService {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: &'static str = "pppoe";
     #[must_use]
     pub fn new(mut cfg: PppoeConfig, ctx: LanforgeContext) -> Self {
         if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
@@ -245,7 +242,7 @@ impl PppoeService {
     }
 
     #[allow(clippy::too_many_lines)]
-    async fn run_inert_session_flow(&mut self) -> Result<(), PppoeError> {
+    async fn run_inert_session_flow(&mut self) -> Result<Option<SystemInterrupt>, PppoeError> {
         if self.cfg.username == "fail_auth" {
             sleep(Duration::from_millis(10)).await;
             let reason = "PAP/CHAP authentication failed: invalid credentials".to_string();
@@ -347,7 +344,7 @@ impl PppoeService {
                     let Some(delta) = delta_opt else { break; };
                     if !delta.new.enabled {
                         self.teardown_active_session("Configuration updated".into()).await;
-                        return Ok(());
+                        return Ok(Some(SystemInterrupt::Stop));
                     }
                     match delta.impact {
                         ChangeImpact::None => {}
@@ -358,7 +355,7 @@ impl PppoeService {
                         ChangeImpact::Reconnect | ChangeImpact::Rebind => {
                             info!("PPPoE inert session reconnecting for config changes");
                             self.teardown_active_session("Configuration updated".into()).await;
-                            return Ok(());
+                            return Ok(Some(SystemInterrupt::Restart));
                         }
                     }
                 }
@@ -368,17 +365,17 @@ impl PppoeService {
                             Some(SystemInterrupt::Shutdown) => {
                                 info!("PPPoE inert keepalive received shutdown");
                                 self.teardown_active_session("Graceful shutdown".into()).await;
-                                return Ok(());
+                                return Ok(Some(SystemInterrupt::Shutdown));
                             }
                             Some(SystemInterrupt::Stop) => {
                                 info!("PPPoE inert keepalive received stop");
                                 self.teardown_active_session("Service control Stop".into()).await;
-                                return Ok(());
+                                return Ok(Some(SystemInterrupt::Stop));
                             }
                             Some(SystemInterrupt::Restart) => {
                                 info!("PPPoE inert keepalive received restart");
                                 self.teardown_active_session("Service control Restart".into()).await;
-                                return Ok(());
+                                return Ok(Some(SystemInterrupt::Restart));
                             }
                             None => {}
                         },
@@ -389,7 +386,7 @@ impl PppoeService {
         }
 
         self.teardown_active_session("Channel closed".into()).await;
-        Ok(())
+        Ok(None)
     }
 
     #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
@@ -993,7 +990,7 @@ impl PppoeService {
         }
     }
 
-    async fn run_session_flow(&mut self) -> Result<(), PppoeError> {
+    async fn run_session_flow(&mut self) -> Result<Option<SystemInterrupt>, PppoeError> {
         if self.inert {
             return self.run_inert_session_flow().await;
         }
@@ -1070,7 +1067,9 @@ impl PppoeService {
         }
 
         let reason = match &flow_res {
-            Ok(()) => "Graceful shutdown".to_string(),
+            Ok(Some(SystemInterrupt::Shutdown) | None) => "Graceful shutdown".to_string(),
+            Ok(Some(SystemInterrupt::Stop)) => "Service control Stop".to_string(),
+            Ok(Some(SystemInterrupt::Restart)) => "Service control Restart".to_string(),
             Err(e) => e.to_string(),
         };
 
@@ -1080,11 +1079,39 @@ impl PppoeService {
     }
 }
 
-impl AsyncService for PppoeService {
-    fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[ServiceDependency::Interfaces]
+impl LanforgeService for PppoeService {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
+            id: Self::SERVICE_ID,
+            display_name: "PPPoE Client",
+            runtime: RuntimeClass::Shared,
+            restart: RestartPolicy {
+                base_backoff: Duration::from_secs(5),
+                max_backoff: Duration::from_secs(10),
+                max_retries: 0,
+                healthy_uptime: Duration::from_secs(60),
+            },
+            shutdown_timeout: Duration::from_secs(10),
+            deps: PPPOE_DEPS,
+            condition: Condition {
+                sections: &[lanforge_types::config::ConfigDomain::Pppoe],
+                eval: |ctx| {
+                    if ctx.get_pppoe_config().is_some_and(|c| c.enabled) {
+                        Activation::Active
+                    } else {
+                        Activation::Dormant(DormantReason::disabled("pppoe.enabled"))
+                    }
+                },
+            },
+        }
     }
 
+    fn describe(&self) -> String {
+        format!("PPPoE on {} (user: {})", self.cfg.wan_iface, self.cfg.username)
+    }
+}
+
+impl AsyncService for PppoeService {
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
         let (state_str, local_ip, ppp_iface, term_str) = ctx.pppoe_status().map_or_else(
             || {
@@ -1206,7 +1233,21 @@ impl AsyncService for PppoeService {
                 }
                 flow_res = self.run_session_flow() => {
                     match flow_res {
-                        Ok(()) => {
+                        Ok(Some(SystemInterrupt::Shutdown)) => {
+                            info!("PPPoE service session finished cleanly (daemon shutting down)");
+                            ctx.set_service_state("pppoe", ServiceState::Inactive);
+                            break 'main_loop;
+                        }
+                        Ok(Some(SystemInterrupt::Stop)) => {
+                            info!("PPPoE service stopped");
+                            ctx.set_service_state("pppoe", ServiceState::Inactive);
+                            break 'main_loop;
+                        }
+                        Ok(Some(SystemInterrupt::Restart)) => {
+                            info!("PPPoE session restart requested, reconnecting");
+                            self.attempt = 0;
+                        }
+                        Ok(None) => {
                             if !ctx.is_running() {
                                 info!("PPPoE service session finished cleanly (daemon shutting down)");
                                 break 'main_loop;
@@ -1252,9 +1293,31 @@ impl AsyncService for PppoeService {
                                         next_retry_secs: self.cfg.reconnect_delay_secs,
                                     }));
 
+                            let mut sys_rx = ctx.bus().subscribe_system();
                             let delay = Duration::from_secs(self.cfg.reconnect_delay_secs);
                             tokio::select! {
                                 () = sleep(delay) => {}
+                                event_res = sys_rx.recv() => {
+                                    if let Ok(timed) = event_res {
+                                        match classify_system_event(&timed.event) {
+                                            Some(SystemInterrupt::Shutdown) => {
+                                                info!("PPPoE service received shutdown during reconnect delay");
+                                                ctx.set_service_state("pppoe", ServiceState::Inactive);
+                                                break 'main_loop;
+                                            }
+                                            Some(SystemInterrupt::Stop) => {
+                                                info!("PPPoE service received stop during reconnect delay");
+                                                ctx.set_service_state("pppoe", ServiceState::Inactive);
+                                                break 'main_loop;
+                                            }
+                                            Some(SystemInterrupt::Restart) => {
+                                                info!("PPPoE service received restart during reconnect delay, retrying immediately");
+                                                self.attempt = 0;
+                                            }
+                                            None => {}
+                                        }
+                                    }
+                                }
                                 delta_opt = self.config_sub.next() => {
                                     if let Some(delta) = delta_opt {
                                         match delta.impact {

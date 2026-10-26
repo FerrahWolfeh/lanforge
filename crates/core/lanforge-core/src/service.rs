@@ -21,7 +21,7 @@
 //! # Example
 //!
 //! ```rust
-//! use lanforge_core::service::{AsyncService, LanforgeService, ServiceMeta, ServiceDependency};
+//! use lanforge_core::service::{AsyncService, LanforgeService, ServiceSpec, RuntimeClass, RestartPolicy, Condition};
 //! use lanforge_core::context::LanforgeContext;
 //! use lanforge_core::error::CoreError;
 //! use std::time::Duration;
@@ -29,25 +29,20 @@
 //! struct MyService;
 //!
 //! impl LanforgeService for MyService {
-//!     fn meta(&self) -> ServiceMeta {
-//!         ServiceMeta {
+//!     fn spec(&self) -> ServiceSpec {
+//!         ServiceSpec {
 //!             id: "my-service",
 //!             display_name: "My Service",
-//!             critical: true,
-//!             max_retries: 3,
-//!             base_backoff: Duration::from_secs(1),
-//!             max_backoff: Duration::from_secs(30),
+//!             runtime: RuntimeClass::Shared,
+//!             restart: RestartPolicy::default(),
 //!             shutdown_timeout: Duration::from_secs(3),
-//!             multi_threaded: false,
+//!             deps: &[],
+//!             condition: Condition::ALWAYS,
 //!         }
 //!     }
 //! }
 //!
 //! impl AsyncService for MyService {
-//!     fn dependencies(&self) -> &'static [ServiceDependency] {
-//!         &[ServiceDependency::Database]
-//!     }
-//!
 //!     async fn serve(&mut self, _ctx: &LanforgeContext, h: &lanforge_core::service::ServiceHandle) -> Result<(), CoreError> {
 //!         h.ready();
 //!         // Service main loop
@@ -60,14 +55,14 @@ use crate::bus::{LanforgeEvent, SystemEvent};
 use crate::context::LanforgeContext;
 use crate::error::CoreError;
 use lanforge_types::config::ConfigDomain;
-use lanforge_types::system::{
+pub use lanforge_types::system::{
     DegradedReason, DormantReason, ServiceBanner, ServiceState, StateDetail,
 };
 use std::borrow::Cow;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Execution runtime environment class for a service.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,11 +97,82 @@ impl Default for RestartPolicy {
 }
 
 /// Inter-service dependency edge.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Edge {
     pub target: &'static str,
     pub kind: EdgeKind,
     pub on_loss: LossPolicy,
+}
+
+impl Edge {
+    /// Returns the target service identifier of this edge.
+    #[must_use]
+    pub const fn target(&self) -> &'static str {
+        self.target
+    }
+
+    /// Edge indicating that this node must start after the target has settled.
+    #[must_use]
+    pub const fn after(target: &'static str) -> Self {
+        Self {
+            target,
+            kind: EdgeKind::After,
+            on_loss: LossPolicy::Continue,
+        }
+    }
+
+    /// Edge indicating that this node watches the target without blocking boot.
+    #[must_use]
+    pub const fn wants(target: &'static str) -> Self {
+        Self {
+            target,
+            kind: EdgeKind::Wants,
+            on_loss: LossPolicy::Continue,
+        }
+    }
+
+    /// Edge indicating that this node requires the target to be Online before starting.
+    #[must_use]
+    pub const fn requires(target: &'static str, on_loss: LossPolicy) -> Self {
+        Self {
+            target,
+            kind: EdgeKind::Requires,
+            on_loss,
+        }
+    }
+}
+
+/// Snapshot value representing the runtime state of a graph node.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NodeStatus {
+    pub state: ServiceState,
+    pub detail: Option<StateDetail>,
+    pub since: Instant,
+    pub generation: u64,
+}
+
+impl NodeStatus {
+    /// Creates a new initial node status.
+    #[must_use]
+    pub fn new(state: ServiceState) -> Self {
+        Self {
+            state,
+            detail: None,
+            since: Instant::now(),
+            generation: 1,
+        }
+    }
+
+    /// Creates a node status with explicit state, detail, and generation.
+    #[must_use]
+    pub fn with_detail(state: ServiceState, detail: Option<StateDetail>, generation: u64) -> Self {
+        Self {
+            state,
+            detail,
+            since: Instant::now(),
+            generation,
+        }
+    }
 }
 
 /// Kind of edge between services in the dependency graph.
@@ -123,6 +189,7 @@ pub enum LossPolicy {
     Continue,
     Degrade,
     Pause,
+    Restart,
 }
 
 /// Activation condition state.
@@ -144,10 +211,32 @@ impl Condition {
         sections: &[],
         eval: |_| Activation::Active,
     };
+
+    /// Evaluates the activation condition against the provided context.
+    #[must_use]
+    pub fn evaluate(&self, ctx: &LanforgeContext) -> Activation {
+        (self.eval)(ctx)
+    }
 }
 
+impl std::fmt::Debug for Condition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Condition")
+            .field("sections", &self.sections)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for Condition {
+    fn eq(&self, other: &Self) -> bool {
+        self.sections == other.sections && (self.eval as usize == other.eval as usize)
+    }
+}
+
+impl std::cmp::Eq for Condition {}
+
 /// Declarative service specification.
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceSpec {
     pub id: &'static str,
     pub display_name: &'static str,
@@ -158,7 +247,7 @@ pub struct ServiceSpec {
     pub condition: Condition,
 }
 
-/// Lifecycle commands delivered directly to a service handle.
+/// Supervision specification and lifecycle commands delivered directly to a service handle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServiceCommand {
     Stop,
@@ -169,80 +258,10 @@ pub enum ServiceCommand {
     DependencyRestored { id: &'static str },
 }
 
-/// Supervision metadata for a service (legacy compatibility struct).
-#[derive(Clone)]
-pub struct ServiceMeta {
-    pub id: &'static str,
-    pub display_name: &'static str,
-    pub critical: bool,
-    pub max_retries: u32,
-    pub base_backoff: Duration,
-    pub max_backoff: Duration,
-    pub shutdown_timeout: Duration,
-    pub multi_threaded: bool,
-}
-
-/// Prerequisites that must be satisfied before a service starts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ServiceDependency {
-    /// Wait for database worker to be ready (`LanforgeContext::is_db_ready()`).
-    Database,
-    /// Wait for network interface discovery to complete (`LanforgeContext::is_if_ready()`).
-    Interfaces,
-    /// Wait for `PPPoE` WAN connection to be up (`LanforgeContext::is_pppoe_ready()`).
-    PppoeWan,
-    /// Wait for a specific service by ID to be online (`LanforgeContext::get_service_state(id) == ServiceState::Online`).
-    Service(&'static str),
-}
-
 /// Core trait defining a service within the Lanforge system.
 pub trait LanforgeService: Send + Sync {
     /// Returns the declarative specification for this service.
-    fn spec(&self) -> ServiceSpec {
-        let meta = self.meta();
-        ServiceSpec {
-            id: meta.id,
-            display_name: meta.display_name,
-            runtime: if meta.multi_threaded {
-                RuntimeClass::Dedicated {
-                    multi_thread: true,
-                    worker_threads: None,
-                }
-            } else {
-                RuntimeClass::Shared
-            },
-            restart: RestartPolicy {
-                base_backoff: meta.base_backoff,
-                max_backoff: meta.max_backoff,
-                max_retries: meta.max_retries,
-                healthy_uptime: Duration::from_secs(if meta.id == "pppoe" { 60 } else { 30 }),
-            },
-            shutdown_timeout: meta.shutdown_timeout,
-            deps: &[],
-            condition: Condition::ALWAYS,
-        }
-    }
-
-    /// Returns the service's supervision metadata.
-    fn meta(&self) -> ServiceMeta {
-        let s = self.spec();
-        ServiceMeta {
-            id: s.id,
-            display_name: s.display_name,
-            critical: false,
-            max_retries: s.restart.max_retries,
-            base_backoff: s.restart.base_backoff,
-            max_backoff: s.restart.max_backoff,
-            shutdown_timeout: s.shutdown_timeout,
-            multi_threaded: matches!(
-                s.runtime,
-                RuntimeClass::Dedicated {
-                    multi_thread: true,
-                    ..
-                }
-            ),
-        }
-    }
+    fn spec(&self) -> ServiceSpec;
 
     /// Returns a one-line description of this service instance for logging.
     fn describe(&self) -> String {
@@ -261,11 +280,6 @@ pub trait LanforgeService: Send + Sync {
 
 /// A service that executes within a Tokio asynchronous task.
 pub trait AsyncService: LanforgeService {
-    /// Declares service prerequisites (legacy).
-    fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[]
-    }
-
     /// Returns service-specific key-value statistics and metrics for the status banner.
     fn stats(&self, _ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
         Vec::new()
@@ -320,38 +334,10 @@ pub struct ServiceHandle {
 }
 
 impl ServiceHandle {
-    /// Creates a new service handle with an event bus command bridge (for tests/compat).
+    /// Creates a new service handle.
     #[must_use]
     pub fn new(id: &'static str, ctx: LanforgeContext) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel(16);
-        let mut bus_sub = ctx.bus().subscribe_system();
-        let target_id = id.to_string();
-        let cmd_tx = tx.clone();
-        tokio::spawn(async move {
-            while let Ok(timed) = bus_sub.recv().await {
-                match &timed.event {
-                    lanforge_types::events::LanforgeEvent::System(
-                        lanforge_types::events::SystemEvent::Shutdown,
-                    ) => {
-                        let _ = cmd_tx.send(ServiceCommand::Shutdown).await;
-                        break;
-                    }
-                    lanforge_types::events::LanforgeEvent::System(
-                        lanforge_types::events::SystemEvent::ServiceControl { id, action },
-                    ) if id == &target_id => {
-                        let cmd = match action {
-                            lanforge_types::system::ServiceAction::Start => ServiceCommand::Start,
-                            lanforge_types::system::ServiceAction::Stop => ServiceCommand::Stop,
-                            lanforge_types::system::ServiceAction::Restart => {
-                                ServiceCommand::Restart
-                            }
-                        };
-                        let _ = cmd_tx.send(cmd).await;
-                    }
-                    _ => {}
-                }
-            }
-        });
         Self {
             id,
             ctx,

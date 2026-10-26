@@ -67,7 +67,10 @@ pub use packet::{build_ra_packet, icmpv6_checksum};
 use crate::error::NetworkError;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
+use lanforge_core::service::{
+    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
+};
 use lanforge_transport::Icmp6Transport;
 use rand::RngExt;
 use std::collections::HashMap;
@@ -293,14 +296,10 @@ impl RaState {
     }
 }
 
-#[lanforge_macros::lanforge_service(
-    id = "ra",
-    name = "RA Server",
-    critical = true,
-    retries = 0,
-    base_backoff = 2,
-    max_backoff = 30
-)]
+const RA_DEPS: &[Edge] = &[
+    Edge::requires("interfaces", LossPolicy::Continue),
+    Edge::wants("wan"),
+];
 #[derive(Clone)]
 pub struct RaService {
     cfg: RaConfig,
@@ -309,6 +308,9 @@ pub struct RaService {
 }
 
 impl RaService {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: &'static str = "ra";
+
     #[must_use]
     pub const fn new(cfg: RaConfig, ctx: LanforgeContext) -> Self {
         Self {
@@ -604,11 +606,39 @@ impl RaService {
     }
 }
 
-impl AsyncService for RaService {
-    fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[ServiceDependency::Database, ServiceDependency::Interfaces]
+impl LanforgeService for RaService {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
+            id: Self::SERVICE_ID,
+            display_name: "RA Server",
+            runtime: RuntimeClass::Shared,
+            restart: RestartPolicy {
+                base_backoff: Duration::from_secs(2),
+                max_backoff: Duration::from_secs(30),
+                max_retries: 0,
+                healthy_uptime: Duration::from_secs(30),
+            },
+            shutdown_timeout: Duration::from_secs(3),
+            deps: RA_DEPS,
+            condition: Condition {
+                sections: &[lanforge_types::config::ConfigDomain::RaServer],
+                eval: |ctx| {
+                    if ctx.get_ra_server_config().enabled {
+                        Activation::Active
+                    } else {
+                        Activation::Dormant(lanforge_types::system::DormantReason::disabled("ra.enabled"))
+                    }
+                },
+            },
+        }
     }
 
+    fn describe(&self) -> String {
+        format!("RA Server on {}", self.cfg.iface)
+    }
+}
+
+impl AsyncService for RaService {
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
         let ra_status = ctx.ra_status();
         let if_state = ctx.get_interface_state(ctx.target_ifindex().unwrap_or(0));

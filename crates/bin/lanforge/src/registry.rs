@@ -1,18 +1,21 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::thread::JoinHandle;
 
-use crate::supervisor::supervise_async;
-use lanforge_core::{context::LanforgeContext, service::AsyncService};
-use tokio::runtime::Builder;
-use tracing::debug;
+use crate::supervisor::{
+    graph::GraphError, GraphSupervisor, SpawnableRunner, TypedRunner,
+};
+use lanforge_core::{
+    context::LanforgeContext,
+    service::{AsyncService, LanforgeService, ServiceSpec},
+};
 
 /// Centralized registry for Lanforge services.
 ///
-/// Handles the lifecycle of both asynchronous (Tokio) and synchronous (OS thread)
-/// services, providing a unified interface for spawning and supervision.
+/// Collects service specifications and factories, validates the DAG,
+/// and delegates execution to `GraphSupervisor`.
 pub struct ServiceRegistry {
-    handles: Vec<JoinHandle<()>>,
+    specs: Vec<ServiceSpec>,
+    runners: HashMap<&'static str, Box<dyn SpawnableRunner>>,
     ids: HashSet<String>,
 }
 
@@ -21,58 +24,48 @@ impl ServiceRegistry {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            handles: Vec::new(),
+            specs: Vec::new(),
+            runners: HashMap::new(),
             ids: HashSet::new(),
         }
     }
 
-    /// Spawns an asynchronous service as a supervised task in a dedicated OS thread.
-    ///
-    /// Each async service gets its own `current_thread` Tokio runtime and a named OS thread,
-    /// making it visible in system monitoring tools like `htop`.
-    pub fn spawn_async<S, F>(&mut self, ctx: &LanforgeContext, factory: F)
+    /// Registers an asynchronous service with the registry.
+    pub fn register<S, F>(&mut self, ctx: &LanforgeContext, factory: F)
     where
-        S: AsyncService + 'static,
+        S: AsyncService + LanforgeService + 'static,
         F: Fn() -> S + Send + Sync + 'static,
     {
-        let service = factory();
-        let meta = service.meta();
-        let id = meta.id.to_string();
-        let name = meta.display_name.to_string();
-        self.ids.insert(id);
+        let sample = factory();
+        let spec = sample.spec();
+        let id = spec.id;
+        self.ids.insert(id.to_string());
 
-        ctx.register_status_provider(Arc::new(service));
+        ctx.register_status_provider(Arc::new(sample));
 
-        debug!("Spawning async service thread: {}", name);
-
-        let ctx_spawn = ctx.clone();
-        let builder = std::thread::Builder::new().name(name.clone());
-
-        let name_thread = name.clone();
-        let handle = builder
-            .spawn(move || {
-                let mut rt_builder = if meta.multi_threaded {
-                    Builder::new_multi_thread()
-                } else {
-                    Builder::new_current_thread()
-                };
-                let rt = rt_builder
-                    .enable_all()
-                    .thread_name(format!("{name_thread} worker"))
-                    .build()
-                    .expect("Failed to build per-service runtime");
-                rt.block_on(supervise_async(&ctx_spawn, factory));
-            })
-            .unwrap_or_else(|e| panic!("Failed to spawn async thread for {name}: {e}"));
-
-        self.handles.push(handle);
+        self.specs.push(spec.clone());
+        self.runners.insert(
+            id,
+            Box::new(TypedRunner::new(spec, factory)) as Box<dyn SpawnableRunner>,
+        );
     }
 
-    /// Waits for all registered services to complete.
-    pub fn wait_all(self) {
-        for handle in self.handles {
-            let _ = handle.join();
-        }
+    /// Backwards compatibility alias for `register`.
+    pub fn spawn_async<S, F>(&mut self, ctx: &LanforgeContext, factory: F)
+    where
+        S: AsyncService + LanforgeService + 'static,
+        F: Fn() -> S + Send + Sync + 'static,
+    {
+        self.register(ctx, factory);
+    }
+
+    /// Builds the DAG and starts all registered services via `GraphSupervisor`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `GraphError` if DAG validation fails.
+    pub fn start(self, ctx: &LanforgeContext) -> Result<GraphSupervisor, GraphError> {
+        GraphSupervisor::start(ctx, self.specs, self.runners)
     }
 
     /// Returns the IDs of all services registered in this registry.
@@ -113,10 +106,9 @@ macro_rules! spawn_services {
 #[macro_export]
 macro_rules! spawn_one {
     ($registry:expr, $ctx_ref:expr, async, $ctor:expr, $($clone:ident),*) => {
-        $registry.spawn_async($ctx_ref, move || {
+        $registry.register($ctx_ref, move || {
             $( let $clone = $clone.clone(); )*
             $ctor
         })
     };
 }
-

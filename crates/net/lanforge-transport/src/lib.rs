@@ -15,6 +15,7 @@ pub mod limiter;
 pub mod metrics;
 pub mod tcp;
 pub mod udp;
+pub mod wol;
 
 pub use arp::{ArpProber, ArpReply};
 pub use icmp::{parse_icmpv4_echo_reply, parse_icmpv6_echo_reply, IcmpPinger};
@@ -24,3 +25,4 @@ pub use limiter::{RateLimitConfig, RateLimiter};
 pub use metrics::TransportMetrics;
 pub use tcp::DualTcpListener;
 pub use udp::UdpTransport;
+pub use wol::{build_magic_packet, send_wol_magic_packet};

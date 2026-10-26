@@ -93,10 +93,6 @@ pub struct MdnsProber {
 }
 
 impl AsyncService for MdnsProber {
-    fn dependencies(&self) -> &'static [lanforge_core::service::ServiceDependency] {
-        &[lanforge_core::service::ServiceDependency::Interfaces]
-    }
-
     fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
         vec![
             (

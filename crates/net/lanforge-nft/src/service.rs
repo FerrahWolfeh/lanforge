@@ -8,7 +8,10 @@ use std::io::ErrorKind;
 
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
+use lanforge_core::service::{
+    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
+};
 use lanforge_types::events::LanforgeEvent;
 use lanforge_types::events::firewall::{FirewallAppliedSummary, FirewallEvent};
 use lanforge_types::events::pppoe::PppoeEvent;
@@ -19,16 +22,11 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::ruleset::RulesetBuilder;
 
-#[lanforge_macros::lanforge_service(
-    id = "firewall",
-    name = "Firewall & NAT Orchestrator",
-    critical = false,
-    retries = 0,
-    base_backoff = 5,
-    max_backoff = 10,
-    shutdown_timeout = 5,
-    describe = "nftables Host & Gateway Firewall".to_string()
-)]
+const FIREWALL_DEPS: &[Edge] = &[
+    Edge::requires("interfaces", LossPolicy::Continue),
+    Edge::wants("wan"),
+];
+
 #[derive(Clone)]
 pub struct NftService {
     active_wan: Option<String>,
@@ -37,6 +35,8 @@ pub struct NftService {
 }
 
 impl NftService {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: &'static str = "firewall";
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -273,11 +273,39 @@ impl Default for NftService {
     }
 }
 
-impl AsyncService for NftService {
-    fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[ServiceDependency::Interfaces]
+impl LanforgeService for NftService {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
+            id: Self::SERVICE_ID,
+            display_name: "Firewall & NAT Orchestrator",
+            runtime: RuntimeClass::Shared,
+            restart: RestartPolicy {
+                base_backoff: std::time::Duration::from_secs(5),
+                max_backoff: std::time::Duration::from_secs(10),
+                max_retries: 0,
+                healthy_uptime: std::time::Duration::from_secs(30),
+            },
+            shutdown_timeout: std::time::Duration::from_secs(5),
+            deps: FIREWALL_DEPS,
+            condition: Condition {
+                sections: &[lanforge_types::config::ConfigDomain::Firewall],
+                eval: |ctx| {
+                    if ctx.get_firewall_config().is_none_or(|c| c.enabled) {
+                        Activation::Active
+                    } else {
+                        Activation::Dormant(DormantReason::disabled("firewall.enabled"))
+                    }
+                },
+            },
+        }
     }
 
+    fn describe(&self) -> String {
+        "nftables Host & Gateway Firewall".to_string()
+    }
+}
+
+impl AsyncService for NftService {
     fn init(
         &mut self,
         ctx: &LanforgeContext,

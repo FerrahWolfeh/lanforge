@@ -6,6 +6,7 @@ edition.workspace = true
 authors.workspace = true
 
 [dependencies]
+lanforge-types = { workspace = true }
 tokio = { workspace = true, features = [
     "time",
     "net",

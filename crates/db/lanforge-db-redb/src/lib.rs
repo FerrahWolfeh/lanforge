@@ -12,6 +12,7 @@ use lanforge_db_core::{DbError, DnsUpstreamEntry};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
+pub use redb;
 use redb::{Database, Durability, ReadableDatabase, ReadableTable, WriteTransaction};
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -245,7 +246,7 @@ impl RedbDatabase {
         Ok(self.read_table(table_def, f)?.unwrap_or_default())
     }
 
-    pub(crate) fn begin_write(&self) -> Result<WriteTransaction, DbError> {
+    pub fn begin_write(&self) -> Result<WriteTransaction, DbError> {
         let mut txn = self.db.begin_write()?;
         if self.volatile {
             txn.set_durability(Durability::None)?;

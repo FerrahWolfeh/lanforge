@@ -56,7 +56,7 @@ pub mod worker;
 
 pub use engine::LanforgeDb;
 pub use engine::WriteTx;
-pub use lanforge_db_redb::RedbDatabase;
+pub use lanforge_db_redb::{redb, RedbDatabase};
 pub use error::LanforgeDbError;
 pub use lanforge_db_core::{
     config_keys, AdblockStore, ApiTokenEntry, ApiTokenStore, AuthStore, ConfigKey, ConfigStore,

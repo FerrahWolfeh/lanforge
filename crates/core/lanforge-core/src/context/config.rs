@@ -779,6 +779,11 @@ impl LanforgeContext {
     pub fn get_dns_adblock_rules(&self) -> Vec<AdblockRuleEntry> {
         self.with_config(|c| c.dns_adblock_rules.clone())
     }
+
+    #[must_use]
+    pub fn get_dns_listen(&self) -> DnsListenConfig {
+        self.inner.config_store.dns_listen.1.borrow().as_ref().clone()
+    }
 }
 
 #[cfg(test)]
@@ -819,8 +824,10 @@ mod tests {
         let mut ra_sub = ctx.config_subscription::<RaServerConfig>();
 
         // Change RA config only
-        let mut ra_cfg = RaServerConfig::default();
-        ra_cfg.hop_limit = 128;
+        let ra_cfg = RaServerConfig {
+            hop_limit: 128,
+            ..Default::default()
+        };
 
         let report = ctx.apply_config(ConfigPatch::new().with_ra_server(ra_cfg.clone()));
         assert_eq!(report.changed, DomainSet::RA_SERVER);
@@ -847,12 +854,16 @@ mod tests {
         let mut sub = ctx.config_subscription::<PppoeConfig>();
 
         // Apply two rapid changes
-        let mut cfg1 = PppoeConfig::default();
-        cfg1.lcp_echo_interval_secs = 25; // Hot
+        let cfg1 = PppoeConfig {
+            lcp_echo_interval_secs: 25, // Hot
+            ..Default::default()
+        };
         let _ = ctx.apply_config(ConfigPatch::new().with_pppoe(cfg1));
 
-        let mut cfg2 = PppoeConfig::default();
-        cfg2.password = "new_secret".into(); // Reconnect
+        let cfg2 = PppoeConfig {
+            password: "new_secret".into(), // Reconnect
+            ..Default::default()
+        };
         let _ = ctx.apply_config(ConfigPatch::new().with_pppoe(cfg2));
 
         // Sub should receive the latest state with Reconnect impact
@@ -868,8 +879,10 @@ mod tests {
     async fn test_hydrate_config_silence() {
         let ctx = create_test_context();
 
-        let mut pppoe_cfg = PppoeConfig::default();
-        pppoe_cfg.username = "hydrated_user".into();
+        let pppoe_cfg = PppoeConfig {
+            username: "hydrated_user".into(),
+            ..Default::default()
+        };
 
         ctx.hydrate_config(ConfigPatch::new().with_pppoe(pppoe_cfg));
 

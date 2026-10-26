@@ -7,7 +7,7 @@ use lanforge_core::context::{ConfigPatch, LanforgeContext};
 use lanforge_core::context::state::State;
 use lanforge_db::{
     AdblockStore, DhcpConfigStore, DnsStore, DnsUpstreamStore, FirewallConfigStore, LanforgeDb,
-    LogDb, PppoeConfigStore, RaConfigStore, TrafficConfigStore, UserStore,
+    LogDb, LogStore, PppoeConfigStore, RaConfigStore, TrafficConfigStore, UserStore,
 };
 #[cfg(feature = "dhcp")]
 use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
@@ -172,6 +172,18 @@ impl Bootstrapper {
 
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
         Self::populate_context(&ctx, &cfg, &db);
+
+        #[cfg(feature = "dns")]
+        {
+            let dns_lifetime = log_db.load_dns_lifetime_stats().unwrap_or_default();
+            ctx.provide_shared(Arc::new(dns_lifetime));
+        }
+
+        #[cfg(feature = "traffic")]
+        {
+            let traffic_history = log_db.load_traffic_history().unwrap_or_default();
+            lanforge_traffic::restore_traffic_history(traffic_history);
+        }
 
         let _ = bus.publish(LanforgeEvent::System(SystemEvent::StateReady));
 

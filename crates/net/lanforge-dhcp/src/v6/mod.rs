@@ -76,7 +76,10 @@ use dhcproto::v6::{DhcpOption, Message, MessageType, OptionCode};
 use dhcproto::{Decodable, Decoder};
 
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
+use lanforge_core::service::{
+    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
+};
 use lanforge_types::system::DormantReason;
 
 /// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
@@ -86,18 +89,12 @@ use lanforge_types::system::DormantReason;
 /// - `DeviceUpdated` (`V6` suffix changes)
 /// - `PrefixChanged` (`GUA` updates → client `RECONFIGURE`)
 /// - `LeaseRenew` (manual RECONFIGURE send)
-#[lanforge_macros::lanforge_service(
-    id = "dhcpv6",
-    name = "DHCPv6 Server",
-    critical = true,
-    retries = 0,
-    base_backoff = 2,
-    max_backoff = 30,
-    describe = format!(
-        "DHCPv6 on [{}]:{} (iface: {})",
-        ALL_DHCP_RELAY_AGENTS_AND_SERVERS, self.config.port, self.config.iface
-    )
-)]
+const DHCPV6_DEPS: &[Edge] = &[
+    Edge::requires("interfaces", LossPolicy::Continue),
+    Edge::wants("wan"),
+];
+
+/// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
 #[derive(Clone)]
 pub struct Dhcpv6Service {
     config: Dhcpv6Config,
@@ -106,6 +103,9 @@ pub struct Dhcpv6Service {
 }
 
 impl Dhcpv6Service {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: &'static str = "dhcpv6";
+
     #[must_use]
     pub const fn new(config: Dhcpv6Config, ctx: LanforgeContext) -> Self {
         Self {
@@ -129,11 +129,42 @@ impl Dhcpv6Service {
     }
 }
 
-impl AsyncService for Dhcpv6Service {
-    fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[ServiceDependency::Database, ServiceDependency::Interfaces]
+impl LanforgeService for Dhcpv6Service {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
+            id: Self::SERVICE_ID,
+            display_name: "DHCPv6 Server",
+            runtime: RuntimeClass::Shared,
+            restart: RestartPolicy {
+                base_backoff: Duration::from_secs(2),
+                max_backoff: Duration::from_secs(30),
+                max_retries: 0,
+                healthy_uptime: Duration::from_secs(30),
+            },
+            shutdown_timeout: Duration::from_secs(3),
+            deps: DHCPV6_DEPS,
+            condition: Condition {
+                sections: &[lanforge_types::config::ConfigDomain::DhcpV6Options],
+                eval: |ctx| {
+                    if ctx.get_dhcp_options().v6.enabled {
+                        Activation::Active
+                    } else {
+                        Activation::Dormant(DormantReason::disabled("dhcp.v6.enabled"))
+                    }
+                },
+            },
+        }
     }
 
+    fn describe(&self) -> String {
+        format!(
+            "DHCPv6 on [{}]:{} (iface: {})",
+            ALL_DHCP_RELAY_AGENTS_AND_SERVERS, self.config.port, self.config.iface
+        )
+    }
+}
+
+impl AsyncService for Dhcpv6Service {
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
         let active_leases = ctx.with_state(|state| {
             u32::try_from(

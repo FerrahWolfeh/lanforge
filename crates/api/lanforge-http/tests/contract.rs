@@ -16,7 +16,7 @@ use lanforge_core::{
     context::{LanforgeContext, state::State as CoreState},
     service::AsyncService,
 };
-use lanforge_db::{config::DatabaseConfig, engine::LanforgeDb, log_engine::LogDb};
+use lanforge_db::{config::DatabaseConfig, engine::LanforgeDb, log_engine::LogDb, redb};
 use lanforge_http::{auth::AuthManager, config::HttpConfig, routes, server::AppState};
 use lanforge_types::network::firewall::FirewallConfig;
 use serde::Serialize;
@@ -384,6 +384,151 @@ async fn test_auth_middleware_contract() {
         StatusCode::OK,
         "Valid JWT token should allow access"
     );
+}
+
+#[tokio::test]
+async fn test_auth_persistence_unavailable_contract() {
+    let bus = Arc::new(EventBus::new());
+    let table = CoreState::new();
+    let db = Arc::new(
+        LanforgeDb::open(&DatabaseConfig {
+            config_path: "memory".to_string(),
+            ..Default::default()
+        })
+        .unwrap(),
+    );
+    let api_db = Arc::new(db.redb().clone());
+    let log_db = Arc::new(LogDb::open_in_memory());
+    let ctx = LanforgeContext::new(bus, table, None);
+
+    let state = AppState {
+        cfg: Arc::new(HttpConfig {
+            auth_password_hash: Some(lanforge_crypto::hash_password("testpass")),
+            allow_plaintext_http: true,
+            ..Default::default()
+        }),
+        ctx,
+        db: api_db,
+        log_db,
+        auth: Arc::new(AuthManager::new()),
+        start_time: Instant::now(),
+    };
+
+    let router = build_router(state);
+
+    // 1. Initial valid login to obtain a JWT session token
+    let login_req = Request::builder()
+        .method("POST")
+        .uri("/api/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({"password": "testpass"})).unwrap(),
+        ))
+        .unwrap();
+    let res = router.clone().oneshot(login_req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    let valid_jwt = body["data"]["token"].as_str().unwrap().to_string();
+
+    // 2. Corrupt TABLE_USERS with non-postcard garbage bytes
+    const TABLE_USERS: redb::TableDefinition<&str, &[u8]> = redb::TableDefinition::new("users");
+    {
+        let write_txn = db.redb().begin_write().unwrap();
+        let mut table = write_txn.open_table(TABLE_USERS).unwrap();
+        table.insert("corrupt_admin", &[0xff, 0xff][..]).unwrap();
+        drop(table);
+        write_txn.commit().unwrap();
+    }
+
+    // 3. Password login for corrupted user must return 503 Service Unavailable ("persistence unavailable")
+    let corrupt_login_req = Request::builder()
+        .method("POST")
+        .uri("/api/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "username": "corrupt_admin",
+                "password": "anypassword"
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let res = router.clone().oneshot(corrupt_login_req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("persistence unavailable"),
+        "Expected 'persistence unavailable' error message, got: {body:?}"
+    );
+
+    // 4. Corrupt TABLE_API_TOKENS with non-postcard garbage bytes
+    const TABLE_API_TOKENS: redb::TableDefinition<&str, &[u8]> =
+        redb::TableDefinition::new("api_tokens");
+    {
+        let write_txn = db.redb().begin_write().unwrap();
+        let mut table = write_txn.open_table(TABLE_API_TOKENS).unwrap();
+        table.insert("corrupt_token_key", &[0xff, 0xff][..]).unwrap();
+        drop(table);
+        write_txn.commit().unwrap();
+    }
+
+    // 5. API token login with corrupted token must return 503 Service Unavailable ("persistence unavailable")
+    let corrupt_token_login_req = Request::builder()
+        .method("POST")
+        .uri("/api/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "token": "corrupt_token_key"
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let res = router.clone().oneshot(corrupt_token_login_req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("persistence unavailable"),
+        "Expected 'persistence unavailable' error message, got: {body:?}"
+    );
+
+    // 6. Accessing protected endpoint with corrupted token via Authorization header returns 503
+    let middleware_req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/status")
+        .header(header::AUTHORIZATION, "Bearer corrupt_token_key")
+        .body(Body::empty())
+        .unwrap();
+    let res = router.clone().oneshot(middleware_req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("persistence unavailable"),
+        "Expected 'persistence unavailable' error message, got: {body:?}"
+    );
+
+    // 7. Request with valid pre-existing JWT session token succeeds without querying DB (200 OK)
+    let jwt_req = Request::builder()
+        .method("GET")
+        .uri("/api/v1/status")
+        .header(header::AUTHORIZATION, format!("Bearer {valid_jwt}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = router.clone().oneshot(jwt_req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
 }
 
 // ---------------------------------------------------------------------------

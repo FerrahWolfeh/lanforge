@@ -10,6 +10,7 @@ lanforge-core = { workspace = true }
 lanforge-api = { workspace = true }
 lanforge-macros = { workspace = true }
 lanforge-crypto = { workspace = true }
+lanforge-transport = { workspace = true }
 lanforge-db-core = { workspace = true, default-features = false }
 toml = { workspace = true }
 

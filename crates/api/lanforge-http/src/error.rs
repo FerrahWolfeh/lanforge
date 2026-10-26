@@ -58,6 +58,10 @@ pub enum HttpError {
     #[error("Internal error: {0}")]
     Internal(String),
 
+    /// Service unavailable (e.g. database down).
+    #[error("Service unavailable: {0}")]
+    ServiceUnavailable(String),
+
     /// Client-provided value could not be parsed or is invalid.
     #[error("Bad request: {0}")]
     BadRequest(String),
@@ -91,6 +95,7 @@ impl IntoResponse for HttpError {
             Self::Jwt(e) => (StatusCode::UNAUTHORIZED, e.to_string()),
             Self::Core(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            Self::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
             Self::BadRequest(msg) | Self::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
             Self::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),

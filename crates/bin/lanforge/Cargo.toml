@@ -166,7 +166,6 @@ lanforge-api = { workspace = true }
 # === L2 (Specialized Services - Required) ===
 lanforge-db = { workspace = true }
 lanforge-discovery = { workspace = true }
-lanforge-wol = { workspace = true }
 
 # === L2 (Specialized Services - Optional / Feature Gated) ===
 lanforge-dns = { workspace = true, optional = true }

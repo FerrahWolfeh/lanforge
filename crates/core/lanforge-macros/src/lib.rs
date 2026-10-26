@@ -132,19 +132,6 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
                 }
             }
 
-            fn meta(&self) -> lanforge_core::service::ServiceMeta {
-                lanforge_core::service::ServiceMeta {
-                    id: #id,
-                    display_name: #display_name,
-                    critical: false,
-                    max_retries: #retries as u32,
-                    base_backoff: std::time::Duration::from_secs(#base_backoff as u64),
-                    max_backoff: std::time::Duration::from_secs(#max_backoff as u64),
-                    shutdown_timeout: std::time::Duration::from_secs(#shutdown_timeout as u64),
-                    multi_threaded: #multi_threaded,
-                }
-            }
-
             #describe_method
         }
     };

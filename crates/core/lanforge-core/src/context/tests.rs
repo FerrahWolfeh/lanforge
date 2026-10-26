@@ -2,7 +2,7 @@ use crate::bus::{EventBus, FirewallEvent, LanforgeEvent, SystemEvent};
 use crate::context::LanforgeContext;
 use crate::context::state::State;
 use crate::error::CoreError;
-use crate::service::{ServiceControl, ServiceDependency};
+use crate::service::ServiceControl;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::firewall::{
     DynamicPortRequest, FirewallConfig, L4Protocol,
@@ -67,10 +67,10 @@ async fn test_wait_for_service_dependency() {
     let state = State::new();
     let ctx = LanforgeContext::new(bus.clone(), state, None);
 
-    // 1. When already online, wait_for_dependency returns Ok(()) immediately
+    // 1. When already online, wait_for_service returns Ok(()) immediately
     ctx.set_service_state("dns", ServiceState::Online);
     let res = ctx
-        .wait_for_dependency(ServiceDependency::Service("dns"))
+        .wait_for_service("dns")
         .await;
     assert!(res.is_ok());
 
@@ -78,7 +78,7 @@ async fn test_wait_for_service_dependency() {
     let ctx_clone = ctx.clone();
     let wait_handle = tokio::spawn(async move {
         ctx_clone
-            .wait_for_dependency(ServiceDependency::Service("db"))
+            .wait_for_service("db")
             .await
     });
 

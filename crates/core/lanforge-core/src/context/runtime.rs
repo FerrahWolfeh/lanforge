@@ -3,7 +3,7 @@ use crate::context::caps::CompiledCaps;
 use crate::context::state::network::DhcpPoolStats;
 use crate::context::{DbWorkerMetrics, DnsHandle, EventCounters, LanforgeContext, StorageHandle};
 use crate::error::CoreError;
-use crate::service::{ServiceDependency, StatusProvider};
+use crate::service::StatusProvider;
 use arc_swap::ArcSwapOption;
 use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
 use lanforge_types::network::firewall::{DynamicPortRequest, FirewallTransactionState};
@@ -293,19 +293,6 @@ impl ServiceRuntime {
         }
     }
 
-    /// Waits for a system or service dependency to be satisfied.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CoreError::Shutdown` if the system shuts down while waiting.
-    pub async fn wait_for_dependency(&self, dep: ServiceDependency) -> Result<(), CoreError> {
-        match dep {
-            ServiceDependency::Database => self.wait_for_db().await,
-            ServiceDependency::Interfaces => self.wait_for_interfaces().await,
-            ServiceDependency::PppoeWan => self.wait_for_pppoe().await,
-            ServiceDependency::Service(id) => self.wait_for_service(id).await,
-        }
-    }
 
     pub fn set_service_state(&self, id: &str, state: ServiceState) {
         self.services

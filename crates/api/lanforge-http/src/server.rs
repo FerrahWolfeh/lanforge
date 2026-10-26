@@ -21,11 +21,10 @@ use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},
     context::LanforgeContext,
     error::CoreError,
-    service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle},
+    service::{AsyncService, LanforgeService, ServiceCommand, ServiceHandle},
 };
 use lanforge_db_core::{DatabaseStore, LogStore};
 use lanforge_dns::server::transport::tls as tls_utils;
-use lanforge_macros::lanforge_service;
 use lanforge_types::system::DormantReason;
 #[cfg(feature = "webui")]
 use lanforge_webui::WebUiAssets;
@@ -71,20 +70,8 @@ impl FromRef<AppState> for Arc<dyn DatabaseStore> {
     }
 }
 
-#[lanforge_service(
-    id = "http",
-    name = "HTTP API",
-    critical = false,
-    retries = 3,
-    base_backoff = 5,
-    max_backoff = 60,
-    stack = 4096,
-    multi_threaded = true,
-    describe = format!(
-        "HTTP API on {}",
-        self.cfg.listen
-    )
-)]
+const HTTP_DEPS: &[lanforge_core::service::Edge] = &[lanforge_core::service::Edge::after("db")];
+
 #[derive(Clone)]
 pub struct HttpService {
     cfg: Arc<HttpConfig>,
@@ -94,6 +81,8 @@ pub struct HttpService {
 }
 
 impl HttpService {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: &'static str = "http";
     #[must_use]
     pub const fn new(
         cfg: Arc<HttpConfig>,
@@ -276,11 +265,36 @@ impl HttpService {
     }
 }
 
-impl AsyncService for HttpService {
-    fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[ServiceDependency::Database]
+impl LanforgeService for HttpService {
+    fn spec(&self) -> lanforge_core::service::ServiceSpec {
+        lanforge_core::service::ServiceSpec {
+            id: Self::SERVICE_ID,
+            display_name: "HTTP API",
+            runtime: lanforge_core::service::RuntimeClass::Dedicated {
+                multi_thread: true,
+                worker_threads: None,
+            },
+            restart: lanforge_core::service::RestartPolicy {
+                base_backoff: std::time::Duration::from_secs(5),
+                max_backoff: std::time::Duration::from_secs(60),
+                max_retries: 3,
+                healthy_uptime: std::time::Duration::from_secs(30),
+            },
+            shutdown_timeout: std::time::Duration::from_secs(3),
+            deps: HTTP_DEPS,
+            condition: lanforge_core::service::Condition {
+                sections: &[lanforge_types::config::ConfigDomain::Http],
+                eval: |_| lanforge_core::service::Activation::Active,
+            },
+        }
     }
 
+    fn describe(&self) -> String {
+        format!("HTTP API on {}", self.cfg.listen)
+    }
+}
+
+impl AsyncService for HttpService {
     fn stats(&self, _ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
         vec![
             (Cow::Borrowed("listen"), self.cfg.listen.to_string()),

@@ -1,6 +1,7 @@
 use crate::config::PppoeConfig;
 use crate::error::PppoeError;
 use crate::lcp::{LCP_CONF_REQ, LCP_ECHO_REP, LCP_ECHO_REQ, LCP_TERM_ACK, LCP_TERM_REQ, PPP_LCP};
+use crate::service::SystemInterrupt;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_transport::ArpProber;
@@ -18,7 +19,7 @@ pub const PPP_IP: u16 = 0x0021;
 pub const PPP_IPV6: u16 = 0x0057;
 
 #[allow(clippy::too_many_lines)]
-pub async fn run_keepalive(
+pub(crate) async fn run_keepalive(
     chan_fd: &OwnedFd,
     ctx: &LanforgeContext,
     local_magic: u32,
@@ -26,7 +27,7 @@ pub async fn run_keepalive(
     mut interval_secs: u64,
     mut max_failures: u32,
     prober: Option<(&ArpProber, Ipv4Addr, Option<Ipv4Addr>, Duration)>,
-) -> Result<(), PppoeError> {
+) -> Result<Option<SystemInterrupt>, PppoeError> {
     let async_chan_fd = unsafe { AsyncFd::register(chan_fd.try_clone()?)? };
     let mut echo_id: u8 = 0;
     let mut failed_echoes: u32 = 0;
@@ -41,15 +42,15 @@ pub async fn run_keepalive(
     loop {
         if !ctx.is_running() {
             debug!("Lanforge context stopped, exiting keepalive loop");
-            return Ok(());
+            return Ok(Some(SystemInterrupt::Shutdown));
         }
 
         tokio::select! {
             delta_opt = config_sub.next() => {
-                let Some(delta) = delta_opt else { return Ok(()); };
+                let Some(delta) = delta_opt else { return Ok(None); };
                 if !delta.new.enabled {
                     info!("PPPoE disabled during keepalive; terminating session");
-                    return Ok(());
+                    return Ok(Some(SystemInterrupt::Stop));
                 }
                 match delta.impact {
                     ChangeImpact::None => {}
@@ -61,7 +62,7 @@ pub async fn run_keepalive(
                     }
                     ChangeImpact::Reconnect | ChangeImpact::Rebind => {
                         info!("PPPoE keepalive received config change requiring reconnect; terminating session to reconnect");
-                        return Ok(());
+                        return Ok(Some(SystemInterrupt::Restart));
                     }
                 }
             }
@@ -143,20 +144,22 @@ pub async fn run_keepalive(
                 match event.event {
                     LanforgeEvent::System(SystemEvent::Shutdown) => {
                         info!("PPPoE keepalive received daemon shutdown, disconnecting session");
-                        return Ok(());
+                        return Ok(Some(SystemInterrupt::Shutdown));
                     }
                     LanforgeEvent::System(SystemEvent::ServiceControl { ref id, ref action })
-                        if id == "pppoe"
-                            && matches!(
-                                action,
-                                ServiceAction::Stop | ServiceAction::Restart
-                            ) =>
+                        if id == "pppoe" =>
                     {
-                        info!(
-                            action = ?action,
-                            "PPPoE keepalive received service control action (configuration update or manual command), disconnecting session"
-                        );
-                        return Ok(());
+                        match action {
+                            ServiceAction::Stop => {
+                                info!("PPPoE keepalive received service stop");
+                                return Ok(Some(SystemInterrupt::Stop));
+                            }
+                            ServiceAction::Restart => {
+                                info!("PPPoE keepalive received service restart");
+                                return Ok(Some(SystemInterrupt::Restart));
+                            }
+                            ServiceAction::Start => {}
+                        }
                     }
                     _ => {}
                 }

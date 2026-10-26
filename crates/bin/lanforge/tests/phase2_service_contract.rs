@@ -3,54 +3,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use lanforge::bootstrap::BootstrapResult;
-use lanforge::config::Config;
-use lanforge::event_loop::{LoopResult, run_event_loop};
-use lanforge::supervisor::supervise_async;
+use lanforge::event_loop::ReadinessTracker;
+use lanforge::registry::ServiceRegistry;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
-use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
+use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, LanforgeService, ServiceHandle, ServiceMeta};
-use lanforge_db::config::DatabaseConfig;
-use lanforge_db::engine::LanforgeDb;
-use lanforge_db::log_engine::LogDb;
+use lanforge_core::service::{
+    AsyncService, Condition, LanforgeService, RestartPolicy, RuntimeClass, ServiceHandle,
+    ServiceSpec,
+};
 use lanforge_types::system::{DegradedReason, ServiceState, StateDetail};
-use tempfile::tempdir;
-use tokio::sync::broadcast;
 use tokio::time::timeout;
-
-async fn setup_test_bootstrap() -> BootstrapResult {
-    let dir = tempdir().expect("tempdir");
-    let db_path = dir.path().join("test.redb");
-    let log_db_path = dir.path().join("test_log.jsonl");
-
-    let cfg = Arc::new(Config {
-        database: DatabaseConfig {
-            config_path: db_path.display().to_string(),
-            runtime_path: log_db_path.display().to_string(),
-            ..Default::default()
-        },
-        ..Config::default()
-    });
-
-    let db = Arc::new(LanforgeDb::open(&cfg.database).expect("open db"));
-    let log_db = Arc::new(LogDb::open(&cfg.database.runtime_path).expect("open log_db"));
-
-    let (conn, rt_handle, _) = rtnetlink::new_connection().unwrap();
-    tokio::spawn(conn);
-
-    let (messages, _) = broadcast::channel(16);
-
-    BootstrapResult {
-        cfg,
-        rt_handle,
-        messages,
-        target_ifindex: 1,
-        db,
-        log_db,
-    }
-}
 
 // ---------------------------------------------------------------------------
 // 1. Acceptance Test: ready_is_truthful
@@ -60,7 +24,6 @@ async fn setup_test_bootstrap() -> BootstrapResult {
 async fn test_acceptance_ready_is_truthful() {
     let bus = Arc::new(EventBus::new());
     let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
-    let bootstrap = setup_test_bootstrap().await;
 
     let services = ["dns", "dhcpv4", "pppoe"];
     let mut expected_services = HashSet::new();
@@ -68,40 +31,27 @@ async fn test_acceptance_ready_is_truthful() {
         expected_services.insert(s.to_string());
     }
 
-    let sys_rx = bus.subscribe_system();
-    let net_rx = bus.subscribe_network();
     let mut sys_listener = bus.subscribe_system();
-
-    let ctx_loop = ctx.clone();
-    let bootstrap_loop = bootstrap.clone();
-    let expected_clone = expected_services.clone();
-
-    let loop_handle = tokio::spawn(async move {
-        run_event_loop(
-            bootstrap_loop,
-            ctx_loop,
-            sys_rx,
-            net_rx,
-            expected_clone,
-        )
-        .await
-    });
+    let mut tracker = ReadinessTracker::new(&ctx, expected_services);
 
     // Simulate DNS & DHCP becoming Online
     let h_dns = ServiceHandle::new("dns", ctx.clone());
     h_dns.ready();
+    tracker.on_service_ready("dns");
 
     let h_dhcp = ServiceHandle::new("dhcpv4", ctx.clone());
     h_dhcp.ready();
+    tracker.on_service_ready("dhcpv4");
 
     // Simulate PPPoE failing connection attempts and marking itself Degraded (truthful)
     let h_pppoe = ServiceHandle::new("pppoe", ctx.clone());
     assert_ne!(ctx.get_service_state("pppoe"), ServiceState::Online);
     h_pppoe.degraded(DegradedReason::custom("no pppoe session"));
+    tracker.on_service_ready("pppoe");
 
     assert_eq!(ctx.get_service_state("pppoe"), ServiceState::Degraded);
 
-    // Verify SystemReady is STILL emitted because all services settled (Online + Degraded)
+    // Verify SystemReady is emitted because all services settled (Online + Degraded)
     let ready_event = timeout(Duration::from_millis(500), async {
         loop {
             if let Ok(evt) = sys_listener.recv().await
@@ -115,15 +65,6 @@ async fn test_acceptance_ready_is_truthful() {
     .expect("SystemReady should be emitted even with PPPoE Degraded");
 
     assert!(ready_event);
-
-    // Clean shutdown of event loop
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
-    let res = timeout(Duration::from_millis(500), loop_handle)
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert_eq!(res, LoopResult::Reload);
 }
 
 // ---------------------------------------------------------------------------
@@ -148,84 +89,77 @@ async fn test_acceptance_ready_idempotent_and_reset() {
     assert!(h.is_ready());
 
     // Expect exactly ONE ServiceReady event
-    let mut ready_count = 0;
-    while let Ok(evt) = timeout(Duration::from_millis(50), sub.recv()).await {
-        if let Ok(timed) = evt
-            && let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = timed.event
-            && name == "test-svc"
-        {
-            ready_count += 1;
-        }
-    }
-    assert_eq!(ready_count, 1, "ready() must be idempotent per start generation");
+    let event1 = sub.recv().await.unwrap();
+    assert!(matches!(
+        event1.event,
+        LanforgeEvent::System(SystemEvent::ServiceReady { ref name }) if name == "test-svc"
+    ));
 
-    // New generation (simulating supervisor restarting service)
+    // Ensure no spurious duplicate events were queued
+    assert!(sub.try_recv().is_err());
+
+    // Second generation (simulating restart via a new handle)
     let h2 = ServiceHandle::new("test-svc", ctx.clone());
-    assert!(!h2.is_ready(), "New handle generation must reset signaled state");
+    assert!(!h2.is_ready());
+
+    h2.ready();
     h2.ready();
 
-    // Expect exactly ONE new ServiceReady event
-    let mut ready_count_2 = 0;
-    while let Ok(evt) = timeout(Duration::from_millis(50), sub.recv()).await {
-        if let Ok(timed) = evt
-            && let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = timed.event
-            && name == "test-svc"
-        {
-            ready_count_2 += 1;
-        }
-    }
-    assert_eq!(ready_count_2, 1, "New generation emits exactly 1 event on ready");
+    let event2 = sub.recv().await.unwrap();
+    assert!(matches!(
+        event2.event,
+        LanforgeEvent::System(SystemEvent::ServiceReady { ref name }) if name == "test-svc"
+    ));
+    assert!(sub.try_recv().is_err());
 }
 
 // ---------------------------------------------------------------------------
-// 3. Acceptance Test: exit_ok_is_inactive
-// serve returns Ok => Inactive(Exited), no restart loop.
+// 3. Acceptance Test: clean_exit_resettable
+// Clean exit (Ok(())) settles service to Inactive, does not enter backoff loop.
 // ---------------------------------------------------------------------------
 #[tokio::test]
-async fn test_acceptance_exit_ok_is_inactive() {
+async fn test_acceptance_clean_exit_resettable() {
     let bus = Arc::new(EventBus::new());
     let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
     let attempts = Arc::new(AtomicU32::new(0));
     let attempts_clone = attempts.clone();
 
-    let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move {
-        supervise_async(&ctx_clone, move || {
-            let a = attempts_clone.clone();
-            CleanExitService { attempts: a }
-        })
-        .await;
+    let mut registry = ServiceRegistry::new();
+    registry.register(&ctx, move || {
+        let a = attempts_clone.clone();
+        CleanExitService { attempts: a }
     });
 
-    tokio::time::sleep(Duration::from_millis(60)).await;
-    assert_eq!(
-        attempts.load(Ordering::Relaxed),
-        1,
-        "Clean Ok(()) exit must NOT trigger a restart loop"
-    );
-    assert_eq!(ctx.get_service_state("clean-exit"), ServiceState::Inactive);
-    let detail = ctx.get_service_detail("clean-exit");
-    assert_eq!(detail, Some(StateDetail::Exited));
+    let supervisor = registry.start(&ctx).expect("start supervisor");
 
-    ctx.terminate();
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
-    let _ = handle.await;
+    // Give time for clean exit
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Must execute once and settle in Inactive
+    assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    assert_eq!(ctx.get_service_state("clean-exit"), ServiceState::Inactive);
+
+    supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
 }
 
 struct CleanExitService {
     attempts: Arc<AtomicU32>,
 }
 impl LanforgeService for CleanExitService {
-    fn meta(&self) -> ServiceMeta {
-        ServiceMeta {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
             id: "clean-exit",
             display_name: "Clean Exit Service",
-            critical: false,
-            max_retries: 3,
-            base_backoff: Duration::from_millis(1),
-            max_backoff: Duration::from_millis(10),
+            runtime: RuntimeClass::Shared,
+            restart: RestartPolicy {
+                base_backoff: Duration::from_millis(1),
+                max_backoff: Duration::from_millis(10),
+                max_retries: 3,
+                healthy_uptime: Duration::from_millis(100),
+            },
             shutdown_timeout: Duration::from_millis(100),
-            multi_threaded: false,
+            deps: &[],
+            condition: Condition::ALWAYS,
         }
     }
 }
@@ -247,41 +181,53 @@ async fn test_acceptance_retry_exhausted_keeps_daemon() {
     let attempts = Arc::new(AtomicU32::new(0));
     let attempts_clone = attempts.clone();
 
-    let ctx_clone = ctx.clone();
-    let handle = tokio::spawn(async move {
-        supervise_async(&ctx_clone, move || {
-            let a = attempts_clone.clone();
-            FailingService { attempts: a }
-        })
-        .await;
+    let mut registry = ServiceRegistry::new();
+    registry.register(&ctx, move || {
+        let a = attempts_clone.clone();
+        FailingService { attempts: a }
     });
 
-    timeout(Duration::from_secs(2), handle)
-        .await
-        .expect("Supervisor must finish on retry exhaustion")
-        .expect("Task join error");
+    let supervisor = registry.start(&ctx).expect("start supervisor");
+
+    // Wait until retries are exhausted
+    timeout(Duration::from_secs(2), async {
+        loop {
+            if ctx.get_service_state("failing-svc") == ServiceState::Error {
+                let detail = ctx.get_service_detail("failing-svc");
+                if matches!(detail, Some(StateDetail::Failed { attempts: 3, .. })) {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Service must exhaust retries and settle in Error");
 
     assert_eq!(ctx.get_service_state("failing-svc"), ServiceState::Error);
     assert!(ctx.is_running(), "Daemon must NOT be terminated on retry exhaustion!");
 
-    let detail = ctx.get_service_detail("failing-svc");
-    assert!(matches!(detail, Some(StateDetail::Failed { attempts: 3, .. })));
+    supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
 }
 
 struct FailingService {
     attempts: Arc<AtomicU32>,
 }
 impl LanforgeService for FailingService {
-    fn meta(&self) -> ServiceMeta {
-        ServiceMeta {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
             id: "failing-svc",
             display_name: "Failing Service",
-            critical: true, // Legacy flag, must be a no-op now
-            max_retries: 3,
-            base_backoff: Duration::from_millis(1),
-            max_backoff: Duration::from_millis(5),
+            runtime: RuntimeClass::Shared,
+            restart: RestartPolicy {
+                base_backoff: Duration::from_millis(1),
+                max_backoff: Duration::from_millis(5),
+                max_retries: 3,
+                healthy_uptime: Duration::from_millis(50),
+            },
             shutdown_timeout: Duration::from_millis(50),
-            multi_threaded: false,
+            deps: &[],
+            condition: Condition::ALWAYS,
         }
     }
 }

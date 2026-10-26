@@ -40,8 +40,10 @@ use lanforge_core::bus::{
     SystemEvent,
 };
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
-use lanforge_macros::lanforge_service;
+use lanforge_core::service::{
+    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
+};
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::device::IPv4State;
 use lanforge_types::events::TimedEvent;
@@ -61,15 +63,9 @@ pub use io::{Dhcpv4InertChannels, Dhcpv4InertHandle, Dhcpv4InertReply, Dhcpv4Tra
 use crate::traits::DhcpPool;
 use lanforge_core::context::LanforgeContext;
 
+const DHCPV4_DEPS: &[Edge] = &[Edge::requires("interfaces", LossPolicy::Degrade)];
+
 /// `DHCPv4` Server Service.
-#[lanforge_service(
-    id = "dhcpv4",
-    name = "DHCPv4 Server",
-    critical = true,
-    retries = 0,
-    base_backoff = 2,
-    max_backoff = 30
-)]
 #[derive(Clone)]
 pub struct Dhcpv4Service {
     cfg: Dhcpv4Config,
@@ -78,6 +74,9 @@ pub struct Dhcpv4Service {
 }
 
 impl Dhcpv4Service {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: &'static str = "dhcpv4";
+
     #[must_use]
     pub const fn new(cfg: Dhcpv4Config, ctx: LanforgeContext) -> Self {
         Self {
@@ -101,11 +100,39 @@ impl Dhcpv4Service {
     }
 }
 
-impl AsyncService for Dhcpv4Service {
-    fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[ServiceDependency::Database, ServiceDependency::Interfaces]
+impl LanforgeService for Dhcpv4Service {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
+            id: Self::SERVICE_ID,
+            display_name: "DHCPv4 Server",
+            runtime: RuntimeClass::Shared,
+            restart: RestartPolicy {
+                base_backoff: Duration::from_secs(2),
+                max_backoff: Duration::from_secs(30),
+                max_retries: 0,
+                healthy_uptime: Duration::from_secs(30),
+            },
+            shutdown_timeout: Duration::from_secs(3),
+            deps: DHCPV4_DEPS,
+            condition: Condition {
+                sections: &[lanforge_types::config::ConfigDomain::DhcpV4Options],
+                eval: |ctx| {
+                    if ctx.get_dhcp_options().v4.enabled {
+                        Activation::Active
+                    } else {
+                        Activation::Dormant(DormantReason::disabled("dhcp.v4.enabled"))
+                    }
+                },
+            },
+        }
     }
 
+    fn describe(&self) -> String {
+        format!("DHCPv4 on {}", self.cfg.iface)
+    }
+}
+
+impl AsyncService for Dhcpv4Service {
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
         let active_leases = ctx.with_state(|state| {
             u32::try_from(

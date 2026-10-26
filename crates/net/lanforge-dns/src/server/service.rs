@@ -12,7 +12,7 @@ use crate::server::{CompiledIgnoreClients, DnsContext};
 use crate::telemetry::{DnsStats, DnsStatsSnapshot, QueryRing};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_types::network::dns::{
     AdblockCheckResponse, AdblockSourceMatch, AdblockSourceStatus, DnsAdblockSourcesResponse,
@@ -28,19 +28,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tracing::{debug, error, info};
 
-#[lanforge_macros::lanforge_service(
-    id = "dns",
-    name = "DNS Server",
-    critical = true,
-    retries = 0,
-    base_backoff = 2,
-    max_backoff = 30,
-    multi_threaded = true,
-    describe = format!(
-        "DNS on {}",
-        self.cfg.listen
-    )
-)]
 #[derive(Clone)]
 pub struct DnsService {
     cfg: Arc<DnsConfig>,
@@ -50,9 +37,15 @@ pub struct DnsService {
 }
 
 impl DnsService {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: &'static str = "dns";
     #[must_use]
     pub fn new(cfg: DnsConfig, ctx: LanforgeContext) -> Self {
-        Self::with_lifetime(cfg, ctx, DnsLifetimeStats::default())
+        let lifetime = ctx
+            .get_shared::<DnsLifetimeStats>()
+            .map(|arc| (*arc).clone())
+            .unwrap_or_default();
+        Self::with_lifetime(cfg, ctx, lifetime)
     }
 
     #[must_use]
@@ -201,11 +194,50 @@ impl DnsService {
     }
 }
 
-impl AsyncService for DnsService {
-    fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[ServiceDependency::Database]
+const DNS_DEPS: &[lanforge_core::service::Edge] = &[
+    lanforge_core::service::Edge::wants("wan"),
+    lanforge_core::service::Edge::wants("interfaces"),
+    lanforge_core::service::Edge::after("db"),
+];
+
+impl lanforge_core::service::LanforgeService for DnsService {
+    fn spec(&self) -> lanforge_core::service::ServiceSpec {
+        lanforge_core::service::ServiceSpec {
+            id: Self::SERVICE_ID,
+            display_name: "DNS Server",
+            runtime: lanforge_core::service::RuntimeClass::Dedicated {
+                multi_thread: true,
+                worker_threads: None,
+            },
+            restart: lanforge_core::service::RestartPolicy {
+                base_backoff: std::time::Duration::from_secs(2),
+                max_backoff: std::time::Duration::from_secs(30),
+                max_retries: 0,
+                healthy_uptime: std::time::Duration::from_secs(30),
+            },
+            shutdown_timeout: std::time::Duration::from_secs(3),
+            deps: DNS_DEPS,
+            condition: lanforge_core::service::Condition {
+                sections: &[lanforge_types::config::ConfigDomain::DnsListen],
+                eval: |ctx| {
+                    if !ctx.get_dns_listen().listen.as_slice().is_empty() {
+                        lanforge_core::service::Activation::Active
+                    } else {
+                        lanforge_core::service::Activation::Dormant(
+                            lanforge_types::system::DormantReason::disabled("dns.listen"),
+                        )
+                    }
+                },
+            },
+        }
     }
 
+    fn describe(&self) -> String {
+        format!("DNS on {}", self.cfg.listen)
+    }
+}
+
+impl AsyncService for DnsService {
     fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
         let snap = self.stats.snapshot();
         let total = snap.requests_total;
@@ -220,7 +252,7 @@ impl AsyncService for DnsService {
         #[cfg(not(feature = "adblock"))]
         let blocked = 0u64;
 
-        vec![
+        let mut stats = vec![
             (
                 std::borrow::Cow::Borrowed("listen"),
                 self.cfg.listen.to_string(),
@@ -261,7 +293,37 @@ impl AsyncService for DnsService {
                 std::borrow::Cow::Borrowed("cache_hit_rate"),
                 format!("{hit_rate:.1}%"),
             ),
-        ]
+        ];
+
+        #[cfg(feature = "dot")]
+        {
+            let status = if let Some(addr) = self.cfg.dot_listen {
+                if self.cfg.tls_cert.is_some() && self.cfg.tls_key.is_some() {
+                    format!("tls://{addr}")
+                } else {
+                    "dormant (tls cert missing)".to_string()
+                }
+            } else {
+                "disabled".to_string()
+            };
+            stats.push((std::borrow::Cow::Borrowed("dot"), status));
+        }
+
+        #[cfg(feature = "doq")]
+        {
+            let status = if let Some(addr) = self.cfg.doq_listen {
+                if self.cfg.tls_cert.is_some() && self.cfg.tls_key.is_some() {
+                    format!("quic://{addr}")
+                } else {
+                    "dormant (tls cert missing)".to_string()
+                }
+            } else {
+                "disabled".to_string()
+            };
+            stats.push((std::borrow::Cow::Borrowed("doq"), status));
+        }
+
+        stats
     }
 
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
@@ -337,6 +399,44 @@ impl AsyncService for DnsService {
         };
 
         let cache_worker = crate::server::worker::spawn_cache_handler(Arc::clone(&dns_ctx));
+
+        #[cfg(feature = "dot")]
+        let dot_worker = if let Some(addr) = self.cfg.dot_listen {
+            if let (Some(cert), Some(key)) = (&self.cfg.tls_cert, &self.cfg.tls_key) {
+                let cert = cert.clone();
+                let key = key.clone();
+                let ctx_dot = ctx.clone();
+                Some(tokio::spawn(async move {
+                    if let Err(e) = crate::server::transport::dot::run_dot_worker(addr, &cert, &key, ctx_dot).await {
+                        tracing::error!("DoT worker error: {e}");
+                    }
+                }))
+            } else {
+                tracing::warn!("DoT is enabled on {addr} but tls_cert/tls_key is missing; DoT listener dormant");
+                None
+            }
+        } else {
+            None
+        };
+
+        #[cfg(feature = "doq")]
+        let doq_worker = if let Some(addr) = self.cfg.doq_listen {
+            if let (Some(cert), Some(key)) = (&self.cfg.tls_cert, &self.cfg.tls_key) {
+                let cert = cert.clone();
+                let key = key.clone();
+                let ctx_doq = ctx.clone();
+                Some(tokio::spawn(async move {
+                    if let Err(e) = crate::server::transport::doq::run_doq_worker(addr, &cert, &key, ctx_doq).await {
+                        tracing::error!("DoQ worker error: {e}");
+                    }
+                }))
+            } else {
+                tracing::warn!("DoQ is enabled on {addr} but tls_cert/tls_key is missing; DoQ listener dormant");
+                None
+            }
+        } else {
+            None
+        };
 
         let mut bus_rx = ctx.bus().subscribe_dns();
         let mut sys_rx = ctx.bus().subscribe_system();
@@ -520,6 +620,14 @@ impl AsyncService for DnsService {
         }
         cache_worker.abort();
         mpsc_worker.abort();
+        #[cfg(feature = "dot")]
+        if let Some(w) = dot_worker {
+            w.abort();
+        }
+        #[cfg(feature = "doq")]
+        if let Some(w) = doq_worker {
+            w.abort();
+        }
         #[cfg(feature = "adblock")]
         if let Some(w) = adblock_worker {
             w.abort();

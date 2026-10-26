@@ -3,9 +3,11 @@
 //! Sends a `WoL` "magic packet" to wake up sleeping devices on the LAN.
 //! For redundancy, the packet is sent to three targets:
 //!
-//! 1. **Directed broadcast** (e.g., `192.168.1.255:9`) — if provided
-//! 2. **Unicast fallback** (device's last known IP) — if provided
-//! 3. Both use a UDP socket bound to the target interface with `SO_BROADCAST`
+//! 1. **Limited broadcast** (`255.255.255.255:9`)
+//! 2. **Directed broadcast** (e.g., `192.168.1.255:9`) — if provided
+//! 3. **Unicast fallback** (device's last known IP) — if provided
+//!
+//! Both use a UDP socket bound to the target interface with `SO_BROADCAST`.
 //!
 //! The magic packet format: 6 bytes of `0xFF` followed by 16 repetitions
 //! of the target MAC address (total 102 bytes).
@@ -36,21 +38,6 @@ pub fn build_magic_packet(mac: MacAddr) -> [u8; 102] {
 /// * `interface` — network interface name (e.g., `"eth0"`) for socket binding
 /// * `directed_broadcast` — optional directed broadcast address (e.g., `192.168.1.255`)
 /// * `unicast_ip` — optional fallback unicast IP (device's last known address)
-///
-/// # Example
-///
-/// ```ignore
-/// use lanforge_types::identifiers::MacAddr;
-/// use lanforge_wol::wol::send_wol_magic_packet;
-///
-/// let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
-/// send_wol_magic_packet(
-///     mac,
-///     "eth0",
-///     Some("192.168.1.255".parse().unwrap()),
-///     Some("192.168.1.100".parse().unwrap()),
-/// ).unwrap();
-/// ```
 pub fn send_wol_magic_packet(
     mac: MacAddr,
     interface: &str,
@@ -61,7 +48,6 @@ pub fn send_wol_magic_packet(
 
     // Create a UDP socket using socket2 for better control
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
-
     socket.set_broadcast(true)?;
 
     // Bind to the specific interface if possible (Linux specific)

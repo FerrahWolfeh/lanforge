@@ -1,6 +1,9 @@
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceDependency, ServiceHandle};
+use lanforge_core::service::{
+    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
+};
 use lanforge_types::events::pppoe::PppoeEvent;
 use lanforge_types::events::system::SystemEvent;
 use lanforge_types::events::traffic::TrafficEvent;
@@ -12,16 +15,11 @@ use tracing::{debug, info};
 use crate::sqm::{apply_sqm, clear_sqm};
 use crate::tuning::apply_tuning;
 
-#[lanforge_macros::lanforge_service(
-    id = "traffic",
-    name = "Traffic & SQM Manager",
-    critical = false,
-    retries = 3,
-    base_backoff = 2,
-    max_backoff = 10,
-    shutdown_timeout = 3,
-    describe = "NIC Hardware Tuning & CAKE Bufferbloat SQM".to_string()
-)]
+const TRAFFIC_DEPS: &[Edge] = &[
+    Edge::requires("interfaces", LossPolicy::Continue),
+    Edge::wants("wan"),
+];
+
 #[derive(Clone)]
 pub struct TrafficService {
     cfg: TrafficConfig,
@@ -34,6 +32,8 @@ pub struct TrafficService {
 }
 
 impl TrafficService {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: &'static str = "traffic";
     #[must_use]
     pub fn new(cfg: TrafficConfig) -> Self {
         let cpu_mask = crate::tuning::cpu::resolve_effective_cpu_mask(&cfg.tuning.cpu_mask);
@@ -438,11 +438,39 @@ impl TrafficService {
     }
 }
 
-impl AsyncService for TrafficService {
-    fn dependencies(&self) -> &'static [ServiceDependency] {
-        &[ServiceDependency::Interfaces]
+impl LanforgeService for TrafficService {
+    fn spec(&self) -> ServiceSpec {
+        ServiceSpec {
+            id: Self::SERVICE_ID,
+            display_name: "Traffic & SQM Manager",
+            runtime: RuntimeClass::Shared,
+            restart: RestartPolicy {
+                base_backoff: std::time::Duration::from_secs(2),
+                max_backoff: std::time::Duration::from_secs(10),
+                max_retries: 3,
+                healthy_uptime: std::time::Duration::from_secs(30),
+            },
+            shutdown_timeout: std::time::Duration::from_secs(3),
+            deps: TRAFFIC_DEPS,
+            condition: Condition {
+                sections: &[lanforge_types::config::ConfigDomain::Traffic],
+                eval: |ctx| {
+                    if ctx.get_traffic_config().is_none_or(|c| c.tuning.enabled || c.sqm.enabled) {
+                        Activation::Active
+                    } else {
+                        Activation::Dormant(DormantReason::disabled("traffic.enabled"))
+                    }
+                },
+            },
+        }
     }
 
+    fn describe(&self) -> String {
+        "NIC Hardware Tuning & CAKE Bufferbloat SQM".to_string()
+    }
+}
+
+impl AsyncService for TrafficService {
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         if !self.initialize(ctx, h).await {
             return Ok(());
