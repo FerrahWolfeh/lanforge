@@ -1284,6 +1284,7 @@ export interface RaServerConfig {
 	prefixes: RaPrefix[];
 	rdnss: RdnssConfig[];
 	dnssl: DnsslConfig[];
+	deprecate_on_renumber: boolean;
 }
 
 export interface RaStatusResponse {

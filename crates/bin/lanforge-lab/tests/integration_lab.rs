@@ -37,6 +37,7 @@ fn test_root_flag_methods() {
     assert!(!ModeArg::Interface.requires_root());
 
     assert!(ScenarioArg::Ra.requires_root());
+    assert!(ScenarioArg::PppoeFlap.requires_root());
     assert!(!ScenarioArg::Dhcp.requires_root());
     assert!(!ScenarioArg::Dns.requires_root());
     assert!(!ScenarioArg::Discovery.requires_root());

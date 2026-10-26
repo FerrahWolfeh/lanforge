@@ -97,12 +97,13 @@ pub enum ScenarioArg {
     Ra,
     Discovery,
     Vlan,
+    PppoeFlap,
 }
 
 impl ScenarioArg {
     #[must_use]
     pub const fn requires_root(self) -> bool {
-        matches!(self, Self::Ra)
+        matches!(self, Self::Ra | Self::PppoeFlap)
     }
 }
 

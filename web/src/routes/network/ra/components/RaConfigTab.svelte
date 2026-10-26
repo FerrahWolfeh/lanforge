@@ -32,6 +32,7 @@
 		formIface = $bindable("end0"),
 		formManaged = $bindable(false),
 		formOtherConfig = $bindable(false),
+		formDeprecateOnRenumber = $bindable(true),
 		formHopLimit = $bindable(64),
 		formPriority = $bindable<RouterPriority>("medium"),
 		formMaxInterval = $bindable(200),
@@ -54,6 +55,7 @@
 		formIface?: string;
 		formManaged?: boolean;
 		formOtherConfig?: boolean;
+		formDeprecateOnRenumber?: boolean;
 		formHopLimit?: number;
 		formPriority?: RouterPriority;
 		formMaxInterval?: number;
@@ -332,7 +334,7 @@
 
 					<Separator />
 
-					<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+					<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
 						<div class="flex items-center justify-between gap-3 p-3 rounded-lg border bg-muted/20">
 							<div class="flex items-center gap-1.5 min-w-0">
 								<Label class="text-xs font-semibold">Managed (M-Flag)</Label>
@@ -353,6 +355,17 @@
 								/>
 							</div>
 							<Switch bind:checked={formOtherConfig} />
+						</div>
+
+						<div class="flex items-center justify-between gap-3 p-3 rounded-lg border bg-muted/20">
+							<div class="flex items-center gap-1.5 min-w-0">
+								<Label class="text-xs font-semibold">Deprecate on Renumber</Label>
+								<InfoPopover
+									title="Deprecate Obsolete Prefixes (RFC 4862 §5.5.3e)"
+									text="When WAN IPv6 prefix changes, announces old prefix with preferred lifetime 0 and capped valid lifetime to trigger fast client renumbering."
+								/>
+							</div>
+							<Switch bind:checked={formDeprecateOnRenumber} />
 						</div>
 					</div>
 				</Card.Content>

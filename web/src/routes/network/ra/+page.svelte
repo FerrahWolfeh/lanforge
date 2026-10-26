@@ -49,6 +49,7 @@
 	let formIface = $state("end0");
 	let formManaged = $state(false);
 	let formOtherConfig = $state(false);
+	let formDeprecateOnRenumber = $state(true);
 	let formHopLimit = $state(64);
 	let formPriority = $state<RouterPriority>("medium");
 	let formMaxInterval = $state(200);
@@ -85,6 +86,7 @@
 		if (formIface !== (config.iface || "end0")) return true;
 		if (formManaged !== config.managed) return true;
 		if (formOtherConfig !== config.other_config) return true;
+		if (formDeprecateOnRenumber !== (config.deprecate_on_renumber ?? true)) return true;
 		if (formHopLimit !== config.hop_limit) return true;
 		if (formPriority !== config.priority) return true;
 		if (formMaxInterval !== config.max_interval_secs) return true;
@@ -116,6 +118,7 @@
 		formIface = c.iface ?? (availableInterfaces[0]?.name || "end0");
 		formManaged = c.managed;
 		formOtherConfig = c.other_config;
+		formDeprecateOnRenumber = c.deprecate_on_renumber ?? true;
 		formHopLimit = c.hop_limit;
 		formPriority = c.priority;
 		formMaxInterval = c.max_interval_secs;
@@ -186,6 +189,7 @@
 				iface: formIface.trim() || null,
 				managed: formManaged,
 				other_config: formOtherConfig,
+				deprecate_on_renumber: formDeprecateOnRenumber,
 				hop_limit: Number(formHopLimit) || 64,
 				priority: formPriority,
 				max_interval_secs: Number(formMaxInterval) || 200,
@@ -341,6 +345,7 @@
 					bind:formIface
 					bind:formManaged
 					bind:formOtherConfig
+					bind:formDeprecateOnRenumber
 					bind:formHopLimit
 					bind:formPriority
 					bind:formMaxInterval

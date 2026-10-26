@@ -233,6 +233,23 @@ impl CliRunner {
                     return Err(LabError::Assertion(format!("VLAN {vid} simulation failed")));
                 }
             }
+            ScenarioArg::PppoeFlap => {
+                println!(
+                    "\n{}",
+                    "=== PPPoE Flap & IPv6 Renumbering Test ===".bold().cyan()
+                );
+                // 1. Initial RA discovery
+                let initial = harness.ra().send_rs_and_await_ra().await?;
+                println!("Baseline RA Prefix Count: {}", initial.prefixes.len());
+
+                // 2. Await second RA (following simulated PPPoE flap or prefix transition)
+                let second = harness.ra().send_rs_and_await_ra().await?;
+                println!("Updated RA Prefix Count:  {}", second.prefixes.len());
+
+                if args.json {
+                    println!("{}", serde_json::to_string_pretty(&second)?);
+                }
+            }
         }
 
         Ok(())

@@ -95,6 +95,10 @@ pub struct RaConfigSetArgs {
     /// Link MTU option (RFC 4861)
     #[arg(long)]
     pub mtu: Option<u32>,
+
+    /// Deprecate obsolete prefixes on renumbering (RFC 4862 §5.5.3e)
+    #[arg(long)]
+    pub deprecate_on_renumber: Option<bool>,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq, Default)]
@@ -274,6 +278,7 @@ async fn handle_status(client: &LanforgeClient, printer: &Printer) -> Result<()>
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn render_status_dashboard(status: &RaStatusResponse, printer: &Printer) {
     println!();
     let badge = if status.enabled {
@@ -586,6 +591,9 @@ async fn handle_config(
             if let Some(mtu) = set_args.mtu {
                 config.mtu = Some(mtu);
             }
+            if let Some(deprecate) = set_args.deprecate_on_renumber {
+                config.deprecate_on_renumber = deprecate;
+            }
 
             let resp = client.update_ra_config(*config).await?;
             if printer.json {
@@ -639,6 +647,11 @@ fn render_config_details(config: &RaServerConfig, printer: &Printer) {
         lt_str
     );
     println!("    {:<22} {}", "Link MTU:".dimmed(), mtu_str);
+    println!(
+        "    {:<22} {}",
+        "Deprecate Renumber:".dimmed(),
+        config.deprecate_on_renumber
+    );
     println!();
 
     if !config.prefixes.is_empty() {
