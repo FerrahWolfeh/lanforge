@@ -7,7 +7,7 @@
 
 use crate::error::NetworkError;
 pub use lanforge_types::network::ra::RouterPriority;
-use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig, RaServerConfig};
+use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RaServerConfig, RdnssConfig};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -33,7 +33,6 @@ pub const LIFETIME_INFINITY: u32 = u32::MAX;
 // ---------------------------------------------------------------------------
 // Configuration Types
 // ---------------------------------------------------------------------------
-
 
 /// Full RA service configuration for an interface.
 ///
@@ -188,11 +187,9 @@ impl RaConfig {
         self.rdnss.clone_from(&cfg.rdnss);
         self.dnssl.clone_from(&cfg.dnssl);
     }
-
 }
 
 impl RaConfig {
-
     /// Calculates effective `MinRtrAdvInterval` respecting the limits of RFC 4861 §6.2.1.
     #[must_use]
     pub fn effective_min_interval(&self) -> Duration {

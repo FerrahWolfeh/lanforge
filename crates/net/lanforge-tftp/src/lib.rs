@@ -5,21 +5,21 @@ use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy,
-    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
+    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
+    ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_transport::UdpTransport;
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::network::dhcp::TftpOptions;
 use lanforge_types::system::{DormantReason, ServiceId};
 use parking_lot::RwLock;
+use smallvec::SmallVec;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::net::UdpSocket;
-use smallvec::SmallVec;
 use tokio::time::{Duration, timeout};
 use tracing::{debug, error, info};
 
@@ -339,12 +339,17 @@ pub struct RrqOptions {
 }
 
 #[must_use]
-pub fn parse_rrq_options<'a>(mut parts: impl Iterator<Item = &'a [u8]>, cfg: &TftpConfig) -> RrqOptions {
+pub fn parse_rrq_options<'a>(
+    mut parts: impl Iterator<Item = &'a [u8]>,
+    cfg: &TftpConfig,
+) -> RrqOptions {
     let mut blksize = None;
     let mut tsize = false;
 
     while let Some(opt_name_bytes) = parts.next() {
-        let Some(opt_val_bytes) = parts.next() else { break; };
+        let Some(opt_val_bytes) = parts.next() else {
+            break;
+        };
         if let (Ok(name), Ok(val)) = (
             std::str::from_utf8(opt_name_bytes),
             std::str::from_utf8(opt_val_bytes),

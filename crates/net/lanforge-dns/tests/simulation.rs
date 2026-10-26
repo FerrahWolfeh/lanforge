@@ -2,8 +2,8 @@
 mod common;
 
 use common::{
-    DnsPacketBuilder, MockUpstreamServer, extract_a, extract_ptr, init_test_context,
-    mock_config, parse_response, wait_for_service_online,
+    DnsPacketBuilder, MockUpstreamServer, extract_a, extract_ptr, init_test_context, mock_config,
+    parse_response, wait_for_service_online,
 };
 use lanforge_core::service::AsyncService;
 use lanforge_dns::config::DnsConfig;
@@ -56,8 +56,14 @@ async fn dns_simulation_udp() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
-        service.serve(&ctx_service, &h).await.expect("Service failed");
+        let h = lanforge_core::service::ServiceHandle::new(
+            lanforge_types::system::ServiceId::Dns,
+            ctx_service.clone(),
+        );
+        service
+            .serve(&ctx_service, &h)
+            .await
+            .expect("Service failed");
     });
 
     wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
@@ -92,7 +98,10 @@ async fn dns_simulation_udp() {
 
     assert_eq!(ptr_response.header.id, 4321);
     assert_eq!(ptr_response.header.rcode, DnsResponseCode::NoError);
-    assert_eq!(extract_ptr(&ptr_response), vec!["my-device.lan".to_string()]);
+    assert_eq!(
+        extract_ptr(&ptr_response),
+        vec!["my-device.lan".to_string()]
+    );
 
     ctx.terminate();
 }
@@ -121,8 +130,14 @@ async fn dns_simulation_forwarding_fallback() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
-        service.serve(&ctx_service, &h).await.expect("Service failed");
+        let h = lanforge_core::service::ServiceHandle::new(
+            lanforge_types::system::ServiceId::Dns,
+            ctx_service.clone(),
+        );
+        service
+            .serve(&ctx_service, &h)
+            .await
+            .expect("Service failed");
     });
 
     wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
@@ -135,7 +150,10 @@ async fn dns_simulation_forwarding_fallback() {
 
     handle.inject(query_bytes, client_addr).await;
 
-    let (reply_bytes, dest) = handle.recv_reply().await.expect("Expected reply from upstream");
+    let (reply_bytes, dest) = handle
+        .recv_reply()
+        .await
+        .expect("Expected reply from upstream");
     assert_eq!(dest, client_addr);
 
     let response = parse_response(&reply_bytes).expect("Valid DNS response");
@@ -169,8 +187,14 @@ async fn dns_simulation_cache_case_insensitive() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
-        service.serve(&ctx_service, &h).await.expect("Service failed");
+        let h = lanforge_core::service::ServiceHandle::new(
+            lanforge_types::system::ServiceId::Dns,
+            ctx_service.clone(),
+        );
+        service
+            .serve(&ctx_service, &h)
+            .await
+            .expect("Service failed");
     });
 
     wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
@@ -184,7 +208,10 @@ async fn dns_simulation_cache_case_insensitive() {
 
     handle.inject(query1_bytes, client_addr).await;
 
-    let (reply1, _) = handle.recv_reply().await.expect("Expected reply for query1");
+    let (reply1, _) = handle
+        .recv_reply()
+        .await
+        .expect("Expected reply for query1");
     let resp1 = parse_response(&reply1).expect("Valid response 1");
     assert_eq!(resp1.header.id, 1111);
     assert_eq!(extract_a(&resp1), vec![Ipv4Addr::new(142, 250, 190, 46)]);
@@ -201,7 +228,10 @@ async fn dns_simulation_cache_case_insensitive() {
 
     handle.inject(query2_bytes, client_addr).await;
 
-    let (reply2, _) = handle.recv_reply().await.expect("Expected reply for query2");
+    let (reply2, _) = handle
+        .recv_reply()
+        .await
+        .expect("Expected reply for query2");
     let resp2 = parse_response(&reply2).expect("Valid response 2");
     assert_eq!(resp2.header.id, 2222);
     assert_eq!(extract_a(&resp2), vec![Ipv4Addr::new(142, 250, 190, 46)]);
@@ -233,7 +263,10 @@ async fn dns_simulation_malformed_and_special_prefixes() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
+        let h = lanforge_core::service::ServiceHandle::new(
+            lanforge_types::system::ServiceId::Dns,
+            ctx_service.clone(),
+        );
         let _ = service.serve(&ctx_service, &h).await;
     });
 
@@ -246,7 +279,10 @@ async fn dns_simulation_malformed_and_special_prefixes() {
     handle.inject(garbage, client_addr).await;
 
     // The service returns FormErr with ID 0
-    let (garbage_reply, _) = handle.recv_reply().await.expect("Expected reply for garbage");
+    let (garbage_reply, _) = handle
+        .recv_reply()
+        .await
+        .expect("Expected reply for garbage");
     let resp = parse_response(&garbage_reply).expect("Valid DNS response");
     assert_eq!(resp.header.id, 0);
     assert_eq!(resp.header.rcode, DnsResponseCode::FormErr);
@@ -258,7 +294,10 @@ async fn dns_simulation_malformed_and_special_prefixes() {
 
     handle.inject(query_bytes, client_addr).await;
 
-    let (reply_bytes, _) = handle.recv_reply().await.expect("Service must respond after garbage");
+    let (reply_bytes, _) = handle
+        .recv_reply()
+        .await
+        .expect("Service must respond after garbage");
     let response = parse_response(&reply_bytes).expect("Valid response");
     assert_eq!(response.header.id, 9999);
     assert_eq!(response.header.rcode, DnsResponseCode::NXDomain);
@@ -301,8 +340,14 @@ async fn dns_simulation_transient_ip_reverse_dns() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
-        service.serve(&ctx_service, &h).await.expect("Service failed");
+        let h = lanforge_core::service::ServiceHandle::new(
+            lanforge_types::system::ServiceId::Dns,
+            ctx_service.clone(),
+        );
+        service
+            .serve(&ctx_service, &h)
+            .await
+            .expect("Service failed");
     });
 
     wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;

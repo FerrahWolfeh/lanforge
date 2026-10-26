@@ -2,17 +2,17 @@
 
 use lanforge_types::events::EventVec;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
 use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamTarget};
-use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RaServerConfig, RdnssConfig};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet, TrafficConfig};
 
+use crate::context::LanforgeContext;
 use crate::context::config::ConfigPatch;
 use crate::context::state::State;
-use crate::context::LanforgeContext;
 
 impl LanforgeContext {
     /// Updates the configured `DHCPv4` pools and publishes the change event.

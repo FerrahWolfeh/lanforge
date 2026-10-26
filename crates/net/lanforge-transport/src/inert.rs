@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 type InertReceiver<A> = Arc<Mutex<mpsc::Receiver<(Vec<u8>, A)>>>;
 
@@ -12,10 +12,7 @@ pub struct InertHandle<A> {
 
 impl<A: Clone + Send + 'static> InertHandle<A> {
     #[must_use]
-    pub fn new(
-        in_tx: mpsc::Sender<(Vec<u8>, A)>,
-        out_rx: mpsc::Receiver<(Vec<u8>, A)>,
-    ) -> Self {
+    pub fn new(in_tx: mpsc::Sender<(Vec<u8>, A)>, out_rx: mpsc::Receiver<(Vec<u8>, A)>) -> Self {
         Self {
             in_tx,
             out_rx: Arc::new(Mutex::new(out_rx)),

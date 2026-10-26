@@ -71,12 +71,19 @@ impl ClientContext {
 
         let (iface, ip_hint) = self.ctx.get_device(&mac).map_or_else(
             || {
-                let iface = self.ctx.get_status().map(|s| s.lan_iface).unwrap_or_default();
+                let iface = self
+                    .ctx
+                    .get_status()
+                    .map(|s| s.lan_iface)
+                    .unwrap_or_default();
                 (iface, None)
             },
             |d| {
                 let iface = d.identity.iface.clone().unwrap_or_else(|| {
-                    self.ctx.get_status().map(|s| s.lan_iface).unwrap_or_default()
+                    self.ctx
+                        .get_status()
+                        .map(|s| s.lan_iface)
+                        .unwrap_or_default()
                 });
                 let ip_hint = d.v4.ip();
                 (iface, ip_hint)
@@ -94,12 +101,9 @@ impl ClientContext {
             })
         });
 
-        if let Err(e) = lanforge_transport::send_wol_magic_packet(
-            mac,
-            &iface,
-            directed_broadcast,
-            ip_hint,
-        ) {
+        if let Err(e) =
+            lanforge_transport::send_wol_magic_packet(mac, &iface, directed_broadcast, ip_hint)
+        {
             return Response::Error {
                 error: format!("Failed to send Wake-on-LAN packet: {e}"),
             };

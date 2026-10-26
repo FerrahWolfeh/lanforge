@@ -414,12 +414,16 @@ mod tests {
         let resolver = LocalResolver::new(Arc::new(mock_config()), ctx);
 
         // Resolve by hostname
-        let ips = resolver.resolve_ip("printer", DnsRecordType::A).expect("Must resolve printer");
+        let ips = resolver
+            .resolve_ip("printer", DnsRecordType::A)
+            .expect("Must resolve printer");
         assert_eq!(ips.as_slice(), &[IpAddr::V4(ip)]);
 
         // Resolve by MAC string
         let mac_str = mac.to_string();
-        let ips_mac = resolver.resolve_ip(&mac_str, DnsRecordType::A).expect("Must resolve MAC");
+        let ips_mac = resolver
+            .resolve_ip(&mac_str, DnsRecordType::A)
+            .expect("Must resolve MAC");
         assert_eq!(ips_mac.as_slice(), &[IpAddr::V4(ip)]);
 
         // Unknown device
@@ -445,9 +449,11 @@ mod tests {
         let resolver = LocalResolver::new(Arc::new(mock_config()), ctx);
 
         let ptr_query = "99.0.0.10.in-addr.arpa";
-        let (host, domain) = resolver.resolve_ptr(ptr_query).unwrap().expect("Must resolve PTR");
+        let (host, domain) = resolver
+            .resolve_ptr(ptr_query)
+            .unwrap()
+            .expect("Must resolve PTR");
         assert_eq!(host, "nas-box");
         assert_eq!(domain, "lan");
     }
 }
-

@@ -39,7 +39,6 @@ pub fn router() -> Router<AppState> {
         .nest("/ra", ra::router())
         .nest("/traffic", traffic::router());
 
-
     Router::new()
         .nest("/v1", v1)
         .route("/auth/login", axum::routing::post(auth::handle_login))

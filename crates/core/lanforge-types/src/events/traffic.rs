@@ -16,9 +16,7 @@ pub enum TrafficEvent {
         upload_mbps: u32,
     },
     /// SQM queues removed/cleaned up from interface.
-    SqmCleared {
-        interface: String,
-    },
+    SqmCleared { interface: String },
     /// Traffic management or SQM configuration updated in-place.
     RulesetChanged,
 }

@@ -89,7 +89,10 @@ pub fn enable_interface_procfs(ifname: &str) {
 }
 
 pub fn restore_interface_offloads(ifname: &str) {
-    debug!(ifname, "Restoring network interface offloads via kernel ioctl");
+    debug!(
+        ifname,
+        "Restoring network interface offloads via kernel ioctl"
+    );
     let _ = set_ethtool_flag(ifname, ETHTOOL_STSO, 1);
     let _ = set_ethtool_flag(ifname, ETHTOOL_SGSO, 1);
     let _ = set_ethtool_flag(ifname, ETHTOOL_STXCSUM, 1);

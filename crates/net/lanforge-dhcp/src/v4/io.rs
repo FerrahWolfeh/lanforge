@@ -175,13 +175,17 @@ impl Dhcpv4Transport {
                     raw_tx
                         .lock()
                         .send_dhcp(packet, server_id, final_dst_ip, dst_mac_arr)
-                        .map_err(|e| CoreError::Generic(format!("Failed to inject L2 reply packet: {e}")))
+                        .map_err(|e| {
+                            CoreError::Generic(format!("Failed to inject L2 reply packet: {e}"))
+                        })
                 } else {
                     let relay_addr = SocketAddrV4::new(giaddr, port);
                     socket
                         .try_send_to(packet, relay_addr.into())
                         .map(|_| ())
-                        .map_err(|e| CoreError::Generic(format!("Failed to send to relay agent: {e}")))
+                        .map_err(|e| {
+                            CoreError::Generic(format!("Failed to send to relay agent: {e}"))
+                        })
                 }
             }
             TransportBackend::Inert { channels } => {
@@ -234,7 +238,10 @@ mod tests {
     #[test]
     fn should_initialize_inert_transport_and_report_is_inert() {
         let (_handle, transport) = Dhcpv4Transport::inert();
-        assert!(transport.is_inert(), "Inert transport must return true for is_inert()");
+        assert!(
+            transport.is_inert(),
+            "Inert transport must return true for is_inert()"
+        );
     }
 
     #[tokio::test]
@@ -317,7 +324,10 @@ mod tests {
         drop(handle);
 
         let mut buf = [0u8; 64];
-        let err = transport.recv(&mut buf).await.expect_err("Expected EOF error");
+        let err = transport
+            .recv(&mut buf)
+            .await
+            .expect_err("Expected EOF error");
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 }

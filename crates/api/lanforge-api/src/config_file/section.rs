@@ -198,4 +198,3 @@ impl From<lanforge_types::config::DomainSet> for SectionSet {
         set
     }
 }
-

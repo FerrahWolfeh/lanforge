@@ -9,8 +9,8 @@ use std::io::ErrorKind;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy,
-    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
+    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
+    ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_types::events::LanforgeEvent;
 use lanforge_types::events::firewall::{FirewallAppliedSummary, FirewallEvent};
@@ -22,10 +22,7 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::ruleset::RulesetBuilder;
 
-const FIREWALL_DEPS: &[Edge] = &[
-    Edge::after(ServiceId::Db),
-    Edge::wants(ServiceId::Pppoe),
-];
+const FIREWALL_DEPS: &[Edge] = &[Edge::after(ServiceId::Db), Edge::wants(ServiceId::Pppoe)];
 
 #[derive(Clone)]
 pub struct NftService {
@@ -162,7 +159,10 @@ impl NftService {
     ) {
         if !cfg.enabled || cfg.mode == FirewallMode::Disabled {
             info!(reason, table = %cfg.table_name, "Firewall disabled; removing nftables table");
-            ctx.set_service_state(Self::SERVICE_ID, lanforge_types::system::ServiceState::Inactive);
+            ctx.set_service_state(
+                Self::SERVICE_ID,
+                lanforge_types::system::ServiceState::Inactive,
+            );
             Self::cleanup_table_internal(&cfg.table_name, self.inert).await;
             return;
         }
@@ -234,7 +234,10 @@ impl NftService {
 
         match result {
             Ok(()) => {
-                ctx.set_service_state(Self::SERVICE_ID, lanforge_types::system::ServiceState::Online);
+                ctx.set_service_state(
+                    Self::SERVICE_ID,
+                    lanforge_types::system::ServiceState::Online,
+                );
                 Self::publish_ruleset_applied(
                     ctx,
                     reason,
@@ -460,7 +463,10 @@ impl AsyncService for NftService {
         let ctx_clone = ctx.clone();
         async move {
             info!(table = %table, "Firewall service shutting down, removing nftables table from kernel");
-            ctx_clone.set_service_state(Self::SERVICE_ID, lanforge_types::system::ServiceState::Inactive);
+            ctx_clone.set_service_state(
+                Self::SERVICE_ID,
+                lanforge_types::system::ServiceState::Inactive,
+            );
             Self::cleanup_table_internal(&table, inert).await;
             Ok(())
         }

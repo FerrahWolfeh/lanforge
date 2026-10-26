@@ -242,4 +242,3 @@ mod tests {
         assert_eq!(snap_lifetime.cache_misses, 22);
     }
 }
-

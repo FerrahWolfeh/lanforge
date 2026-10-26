@@ -204,7 +204,11 @@ async fn dns_suppresses_logging_for_ignored_client() {
         filter: None,
         coalesce_id: None,
     });
-    assert_eq!(query_log.len(), 1, "Expected device1 queries to be suppressed");
+    assert_eq!(
+        query_log.len(),
+        1,
+        "Expected device1 queries to be suppressed"
+    );
 
     // 4. Query from device2 should still be logged
     dns_ctx.record_log(DnsLogEvent {
@@ -262,7 +266,11 @@ async fn dns_suppresses_logging_for_ignored_client() {
         filter: None,
         coalesce_id: None,
     });
-    assert_eq!(query_log.len(), 2, "Expected *.sonarr.tv to be suppressed for Sonarr");
+    assert_eq!(
+        query_log.len(),
+        2,
+        "Expected *.sonarr.tv to be suppressed for Sonarr"
+    );
 
     // 6b. Sonarr calling github.com -> Logged!
     dns_ctx.record_log(DnsLogEvent {
@@ -278,7 +286,11 @@ async fn dns_suppresses_logging_for_ignored_client() {
         filter: None,
         coalesce_id: None,
     });
-    assert_eq!(query_log.len(), 3, "Expected github.com to be logged for Sonarr");
+    assert_eq!(
+        query_log.len(),
+        3,
+        "Expected github.com to be logged for Sonarr"
+    );
 
     // 6c. Another device (device2) calling skyhook.sonarr.tv -> Logged!
     dns_ctx.record_log(DnsLogEvent {
@@ -294,5 +306,9 @@ async fn dns_suppresses_logging_for_ignored_client() {
         filter: None,
         coalesce_id: None,
     });
-    assert_eq!(query_log.len(), 4, "Expected skyhook.sonarr.tv to be logged for device2");
+    assert_eq!(
+        query_log.len(),
+        4,
+        "Expected skyhook.sonarr.tv to be logged for device2"
+    );
 }

@@ -104,10 +104,7 @@ impl DnsService {
         for target in ctx_upstreams {
             match UpstreamManager::new(&target, Arc::clone(&cache)).await {
                 Ok(mgr) => upstreams.push(mgr),
-                Err(e) => error!(
-                    "DNS: Failed to initialize upstream {}: {}",
-                    target.addr, e
-                ),
+                Err(e) => error!("DNS: Failed to initialize upstream {}: {}", target.addr, e),
             }
         }
 
@@ -186,7 +183,9 @@ impl DnsService {
             soa_mailbox,
             reverse_managers: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             resolving_ips: Arc::new(parking_lot::Mutex::new(HashSet::new())),
-            compiled_ignore_clients: CompiledIgnoreClients::compile(&self.cfg.query_log.ignore_clients),
+            compiled_ignore_clients: CompiledIgnoreClients::compile(
+                &self.cfg.query_log.ignore_clients,
+            ),
         };
 
         let dns_ctx = Arc::new(dns_ctx);
@@ -266,10 +265,7 @@ impl AsyncService for DnsService {
                 std::borrow::Cow::Borrowed("requests_total"),
                 total.to_string(),
             ),
-            (
-                std::borrow::Cow::Borrowed("cache_hits"),
-                hits.to_string(),
-            ),
+            (std::borrow::Cow::Borrowed("cache_hits"), hits.to_string()),
             (
                 std::borrow::Cow::Borrowed("cache_misses"),
                 snap.cache_misses.to_string(),
@@ -380,7 +376,9 @@ impl AsyncService for DnsService {
         }
 
         let tcp_worker = if !is_inert {
-            Some(crate::server::worker::tcp::spawn_tcp_worker(Arc::clone(&dns_ctx)))
+            Some(crate::server::worker::tcp::spawn_tcp_worker(Arc::clone(
+                &dns_ctx,
+            )))
         } else {
             None
         };
@@ -408,12 +406,17 @@ impl AsyncService for DnsService {
                 let key = key.clone();
                 let ctx_dot = ctx.clone();
                 Some(tokio::spawn(async move {
-                    if let Err(e) = crate::server::transport::dot::run_dot_worker(addr, &cert, &key, ctx_dot).await {
+                    if let Err(e) =
+                        crate::server::transport::dot::run_dot_worker(addr, &cert, &key, ctx_dot)
+                            .await
+                    {
                         tracing::error!("DoT worker error: {e}");
                     }
                 }))
             } else {
-                tracing::warn!("DoT is enabled on {addr} but tls_cert/tls_key is missing; DoT listener dormant");
+                tracing::warn!(
+                    "DoT is enabled on {addr} but tls_cert/tls_key is missing; DoT listener dormant"
+                );
                 None
             }
         } else {
@@ -427,12 +430,17 @@ impl AsyncService for DnsService {
                 let key = key.clone();
                 let ctx_doq = ctx.clone();
                 Some(tokio::spawn(async move {
-                    if let Err(e) = crate::server::transport::doq::run_doq_worker(addr, &cert, &key, ctx_doq).await {
+                    if let Err(e) =
+                        crate::server::transport::doq::run_doq_worker(addr, &cert, &key, ctx_doq)
+                            .await
+                    {
                         tracing::error!("DoQ worker error: {e}");
                     }
                 }))
             } else {
-                tracing::warn!("DoQ is enabled on {addr} but tls_cert/tls_key is missing; DoQ listener dormant");
+                tracing::warn!(
+                    "DoQ is enabled on {addr} but tls_cert/tls_key is missing; DoQ listener dormant"
+                );
                 None
             }
         } else {
@@ -661,9 +669,7 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                 cache_evictions: stats.cache_evictions.load(Ordering::Relaxed),
             })
         }
-        DnsRequest::LifetimeStats => {
-            DnsResponse::LifetimeStats(dns_ctx.stats.lifetime_snapshot())
-        }
+        DnsRequest::LifetimeStats => DnsResponse::LifetimeStats(dns_ctx.stats.lifetime_snapshot()),
         DnsRequest::Upstreams => DnsResponse::Upstreams(dns_ctx.recursive.snapshots()),
         DnsRequest::UpstreamAdd { .. } => {
             DnsResponse::UpstreamAdd(Err("Mutations handled via context/api dispatcher".into()))
@@ -731,9 +737,18 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                         .adblock_cache_dir
                         .as_deref()
                         .unwrap_or("/var/lib/lanforge");
-                    let manifest_path = std::path::Path::new(cache_dir).join("adblock").join("manifest.json");
-                    let manifest = crate::resolver::filter::manifest::AdblockManifest::load_or_default(&manifest_path);
-                    let last_update = if manifest.last_merge == 0 { None } else { Some(manifest.last_merge) };
+                    let manifest_path = std::path::Path::new(cache_dir)
+                        .join("adblock")
+                        .join("manifest.json");
+                    let manifest =
+                        crate::resolver::filter::manifest::AdblockManifest::load_or_default(
+                            &manifest_path,
+                        );
+                    let last_update = if manifest.last_merge == 0 {
+                        None
+                    } else {
+                        Some(manifest.last_merge)
+                    };
                     let mut sources_ok = 0;
                     let mut sources_failing = 0;
                     for s in manifest.sources.values() {
@@ -797,8 +812,12 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                     .adblock_cache_dir
                     .as_deref()
                     .unwrap_or("/var/lib/lanforge");
-                let manifest_path = std::path::Path::new(cache_dir).join("adblock").join("manifest.json");
-                let manifest = crate::resolver::filter::manifest::AdblockManifest::load_or_default(&manifest_path);
+                let manifest_path = std::path::Path::new(cache_dir)
+                    .join("adblock")
+                    .join("manifest.json");
+                let manifest = crate::resolver::filter::manifest::AdblockManifest::load_or_default(
+                    &manifest_path,
+                );
 
                 let sources = urls
                     .into_iter()
@@ -815,7 +834,11 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                                 exceptions: sm.stats.exceptions as usize,
                                 unsupported: sm.stats.unsupported as usize,
                                 last_attempt: sm.last_attempt,
-                                last_success: if sm.last_success == 0 { None } else { Some(sm.last_success) },
+                                last_success: if sm.last_success == 0 {
+                                    None
+                                } else {
+                                    Some(sm.last_success)
+                                },
                                 consecutive_failures: sm.consecutive_failures,
                                 last_error: sm.last_error.clone(),
                                 sample_unsupported: sm.unsupported_samples.clone(),
@@ -844,7 +867,9 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
             }
             #[cfg(not(feature = "adblock"))]
             {
-                DnsResponse::AdblockSources(DnsAdblockSourcesResponse { sources: Vec::new() })
+                DnsResponse::AdblockSources(DnsAdblockSourcesResponse {
+                    sources: Vec::new(),
+                })
             }
         }
         DnsRequest::AdblockCheck { domain } => {

@@ -58,7 +58,11 @@ pub fn sync_boot_config(
     let has_hashes = db.has_config_section_hashes()?;
     if !has_hashes {
         info!("[config] Initializing configuration hashes in database metadata.");
-        let sections: Vec<_> = Section::ALL.iter().copied().filter(Section::is_dynamic).collect();
+        let sections: Vec<_> = Section::ALL
+            .iter()
+            .copied()
+            .filter(Section::is_dynamic)
+            .collect();
         apply_sections_to_db(db, &sections, &file_cfg)?;
         db.set_config_section_hashes(&hash_strings)?;
         return Ok(file_cfg);
@@ -180,7 +184,9 @@ fn sync_section_from_db_to_config_file(db: &LanforgeDb, sec: Section, cfg: &mut 
 
 fn apply_sections_to_db(db: &LanforgeDb, sections: &[Section], cfg: &ConfigFile) -> Result<()> {
     let export = SystemConfigExport::from(cfg);
-    let has_dns_adblock = sections.iter().any(|sec| matches!(sec, Section::Dns | Section::Adblock));
+    let has_dns_adblock = sections
+        .iter()
+        .any(|sec| matches!(sec, Section::Dns | Section::Adblock));
 
     db.write(|tx| {
         for sec in sections {
@@ -188,32 +194,47 @@ fn apply_sections_to_db(db: &LanforgeDb, sections: &[Section], cfg: &ConfigFile)
                 Section::Dhcp => {
                     #[cfg(feature = "dhcp")]
                     {
-                        if let Some(ref pools) = export.dhcp_v4_pools { tx.set(DHCP_V4_POOLS, pools)?; }
-                        if let Some(ref pools) = export.dhcp_v6_pools { tx.set(DHCP_V6_POOLS, pools)?; }
-                        if let Some(ref opts) = export.dhcp_options { tx.set(DHCP_OPTIONS, opts)?; }
+                        if let Some(ref pools) = export.dhcp_v4_pools {
+                            tx.set(DHCP_V4_POOLS, pools)?;
+                        }
+                        if let Some(ref pools) = export.dhcp_v6_pools {
+                            tx.set(DHCP_V6_POOLS, pools)?;
+                        }
+                        if let Some(ref opts) = export.dhcp_options {
+                            tx.set(DHCP_OPTIONS, opts)?;
+                        }
                     }
                 }
                 Section::Ra => {
                     #[cfg(feature = "ra")]
                     {
-                        if let Some(ref prefixes) = export.ra_prefixes { tx.set(RA_PREFIXES, prefixes)?; }
-                        if let Some(ref rdnss) = export.ra_rdnss { tx.set(RA_RDNSS, rdnss)?; }
-                        if let Some(ref dnssl) = export.ra_dnssl { tx.set(RA_DNSSL, dnssl)?; }
+                        if let Some(ref prefixes) = export.ra_prefixes {
+                            tx.set(RA_PREFIXES, prefixes)?;
+                        }
+                        if let Some(ref rdnss) = export.ra_rdnss {
+                            tx.set(RA_RDNSS, rdnss)?;
+                        }
+                        if let Some(ref dnssl) = export.ra_dnssl {
+                            tx.set(RA_DNSSL, dnssl)?;
+                        }
                     }
                 }
-                Section::Firewall => {
+                Section::Firewall =>
+                {
                     #[cfg(feature = "nft")]
                     if let Some(ref firewall) = export.firewall_config {
                         tx.set(FIREWALL, firewall)?;
                     }
                 }
-                Section::Traffic => {
+                Section::Traffic =>
+                {
                     #[cfg(feature = "traffic")]
                     if let Some(ref traffic) = export.traffic_config {
                         tx.set(TRAFFIC, traffic)?;
                     }
                 }
-                Section::Pppoe => {
+                Section::Pppoe =>
+                {
                     #[cfg(feature = "pppoe")]
                     if let Some(ref pppoe) = export.pppoe_config {
                         tx.set(PPPOE, pppoe)?;
@@ -225,10 +246,14 @@ fn apply_sections_to_db(db: &LanforgeDb, sections: &[Section], cfg: &ConfigFile)
         if has_dns_adblock {
             #[cfg(any(feature = "dns", feature = "adblock"))]
             {
-                let upstreams: Vec<_> = export.dns_upstreams.iter()
+                let upstreams: Vec<_> = export
+                    .dns_upstreams
+                    .iter()
                     .map(|entry| (entry.addr, entry.protocol, entry.domain.clone()))
                     .collect();
-                let allowlist: Vec<_> = export.dns_allowlist.iter()
+                let allowlist: Vec<_> = export
+                    .dns_allowlist
+                    .iter()
                     .map(|entry| entry.domain.clone())
                     .collect();
                 let rules = export.dns_adblock_rules.as_deref().unwrap_or_default();

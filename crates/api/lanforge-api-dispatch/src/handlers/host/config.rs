@@ -126,10 +126,9 @@ impl ClientContext {
             cli_update.dns_fallback = FieldUpdate::Set(value);
         } else if field == "ignore_dns_log" {
             let ign = value.parse::<bool>().unwrap_or(false);
-            let _ = self.ctx.apply(DeviceUpdate::IgnoreDnsLogSet {
-                mac,
-                ignore: ign,
-            });
+            let _ = self
+                .ctx
+                .apply(DeviceUpdate::IgnoreDnsLogSet { mac, ignore: ign });
             return Response::Success(SimpleSuccess {
                 message: "Host configuration updated".to_string(),
             });
@@ -144,10 +143,9 @@ impl ClientContext {
                     .map(ToString::to_string)
                     .collect()
             };
-            let _ = self.ctx.apply(DeviceUpdate::IgnoredLogDomainsSet {
-                mac,
-                domains,
-            });
+            let _ = self
+                .ctx
+                .apply(DeviceUpdate::IgnoredLogDomainsSet { mac, domains });
             return Response::Success(SimpleSuccess {
                 message: "Host configuration updated".to_string(),
             });
@@ -160,10 +158,9 @@ impl ClientContext {
             if !dom.is_empty() && !domains.iter().any(|d| d.eq_ignore_ascii_case(&dom)) {
                 domains.push(dom);
             }
-            let _ = self.ctx.apply(DeviceUpdate::IgnoredLogDomainsSet {
-                mac,
-                domains,
-            });
+            let _ = self
+                .ctx
+                .apply(DeviceUpdate::IgnoredLogDomainsSet { mac, domains });
             return Response::Success(SimpleSuccess {
                 message: "Host configuration updated".to_string(),
             });
@@ -174,10 +171,9 @@ impl ClientContext {
                 .get_device(&mac)
                 .map_or_else(Vec::new, |d| d.ignored_log_domains.clone());
             domains.retain(|d| !d.eq_ignore_ascii_case(&dom));
-            let _ = self.ctx.apply(DeviceUpdate::IgnoredLogDomainsSet {
-                mac,
-                domains,
-            });
+            let _ = self
+                .ctx
+                .apply(DeviceUpdate::IgnoredLogDomainsSet { mac, domains });
             return Response::Success(SimpleSuccess {
                 message: "Host configuration updated".to_string(),
             });

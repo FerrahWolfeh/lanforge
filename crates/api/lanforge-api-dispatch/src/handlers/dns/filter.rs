@@ -14,7 +14,10 @@ impl ClientContext {
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_block(&self, domain: String) -> Response {
         let mut rules = self.ctx.get_dns_adblock_rules();
-        if let Some(existing) = rules.iter_mut().find(|r| r.domain.eq_ignore_ascii_case(&domain)) {
+        if let Some(existing) = rules
+            .iter_mut()
+            .find(|r| r.domain.eq_ignore_ascii_case(&domain))
+        {
             existing.action = AdblockRuleAction::Block;
             existing.enabled = true;
         } else {

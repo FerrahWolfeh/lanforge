@@ -1,19 +1,18 @@
 use lanforge_types::{
     events::TimedEvent,
     network::{
+        TrafficConfig,
         firewall::{
             FirewallCommitResponse, FirewallConfig, FirewallStatus, FirewallValidationReport,
         },
         pppoe::PppoeConfig,
         ra::RaServerConfig,
         traffic::TrafficTelemetryResponse,
-        TrafficConfig,
     },
     system::{PppoeStatusResponse, RaStatusResponse, TrafficStatusResponse},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
 
 pub mod auth;
 pub mod common;
@@ -109,7 +108,6 @@ pub enum Response {
     /// Router Advertisement runtime configuration response.
     RaConfig(Box<RaServerConfig>),
     /// User account details response.
-
     User(Box<UserResponse>),
     /// List of user accounts response.
     UserList(UserListResponse),

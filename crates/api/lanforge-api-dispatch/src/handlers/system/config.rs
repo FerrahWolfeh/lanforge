@@ -175,10 +175,7 @@ impl ClientContext {
             }
 
             // Clear DNS rewrites, upstreams, adblock URLs, allowlist
-            if let Err(e) = storage
-                .call(|s: &Stores| s.db().clear_dns_rewrites())
-                .await
-            {
+            if let Err(e) = storage.call(|s: &Stores| s.db().clear_dns_rewrites()).await {
                 total_success = false;
                 results.push(ImportResult {
                     section: ImportSection::DnsRewrites,
@@ -203,10 +200,7 @@ impl ClientContext {
             } else {
                 self.ctx.update_dns_upstreams(Vec::new());
             }
-            if let Err(e) = storage
-                .call(|s: &Stores| s.db().clear_adblock_urls())
-                .await
-            {
+            if let Err(e) = storage.call(|s: &Stores| s.db().clear_adblock_urls()).await {
                 total_success = false;
                 results.push(ImportResult {
                     section: ImportSection::DnsAdblockUrls,
@@ -248,9 +242,7 @@ impl ClientContext {
             }
 
             // Clear API Tokens
-            if let Ok(existing_tokens) = storage
-                .call(|s: &Stores| s.auth().load_api_tokens())
-                .await
+            if let Ok(existing_tokens) = storage.call(|s: &Stores| s.auth().load_api_tokens()).await
             {
                 for token in existing_tokens {
                     let tok = token.token;

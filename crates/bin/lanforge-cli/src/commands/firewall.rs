@@ -392,9 +392,10 @@ pub struct FirewallAbortArgs {
 
 impl FirewallArgs {
     pub async fn execute(self, client: &LanforgeClient, printer: &Printer) -> Result<()> {
-        match self.subcommand.unwrap_or_else(|| {
-            FirewallSubcommand::Status(FirewallStatusArgs::default())
-        }) {
+        match self
+            .subcommand
+            .unwrap_or_else(|| FirewallSubcommand::Status(FirewallStatusArgs::default()))
+        {
             FirewallSubcommand::Status(args) => handle_status(client, printer, args).await,
             FirewallSubcommand::Allow(args) => handle_allow(client, printer, args).await,
             FirewallSubcommand::Deny(args) => handle_deny(client, printer, args).await,
@@ -467,9 +468,7 @@ fn parse_port_numbers_or_range(s: &str) -> Result<Vec<u16>> {
         }
         Ok((start..=end).collect())
     } else {
-        let p: u16 = s
-            .parse()
-            .map_err(|_| eyre!("Invalid port number: '{s}'"))?;
+        let p: u16 = s.parse().map_err(|_| eyre!("Invalid port number: '{s}'"))?;
         if p == 0 {
             bail!("Port number 0 is reserved and invalid");
         }
@@ -566,7 +565,9 @@ pub fn parse_forward_spec(spec: &str) -> Result<(u16, String, Option<u16>)> {
             Ok((ext_port, target.to_string(), Some(int_port)))
         }
         _ => {
-            bail!("Invalid forward specification format '{spec}'. Expected: 'EXT_PORT:TARGET_IP[:INT_PORT]'");
+            bail!(
+                "Invalid forward specification format '{spec}'. Expected: 'EXT_PORT:TARGET_IP[:INT_PORT]'"
+            );
         }
     }
 }
@@ -628,7 +629,9 @@ fn render_status_dashboard(
 
     let mode_str = match status.mode {
         FirewallMode::Full => "Full (Router Gateway Firewall)".green().bold(),
-        FirewallMode::Minimal => "Minimal (PPPoE MSS Clamping & Offload Helper)".yellow().bold(),
+        FirewallMode::Minimal => "Minimal (PPPoE MSS Clamping & Offload Helper)"
+            .yellow()
+            .bold(),
         FirewallMode::Disabled => "Disabled (nftables rules deactivated)".dimmed(),
     };
     println!("    {:<22} {}", "Firewall Mode:".dimmed(), mode_str);
@@ -669,9 +672,10 @@ fn render_status_dashboard(
     };
     println!("    {:<22} {}", "Default WAN Ingress:".dimmed(), drop_str);
 
-    let applied_str = status
-        .last_applied_secs_ago
-        .map_or_else(|| "never".to_string(), |s| format!("{} ago", format_duration_secs(s)));
+    let applied_str = status.last_applied_secs_ago.map_or_else(
+        || "never".to_string(),
+        |s| format!("{} ago", format_duration_secs(s)),
+    );
     println!("    {:<22} {}", "Last Applied:".dimmed(), applied_str);
 
     println!();
@@ -775,7 +779,10 @@ fn render_host_rules_table(config: &FirewallConfig, filter: Option<&str>, printe
     }
 
     if has_open_ports {
-        println!(" {}", "Host Service Rules (Inbound Port Openings)".bold().white());
+        println!(
+            " {}",
+            "Host Service Rules (Inbound Port Openings)".bold().white()
+        );
         println!("{ports_table}");
         println!();
     }
@@ -817,7 +824,10 @@ fn render_port_forwards_table(config: &FirewallConfig, printer: &Printer) {
         ]);
     }
 
-    println!(" {}", "Port Forwarding (IPv4 DNAT & IPv6 Pinholes)".bold().white());
+    println!(
+        " {}",
+        "Port Forwarding (IPv4 DNAT & IPv6 Pinholes)".bold().white()
+    );
     println!("{fwd_table}");
     println!();
 }
@@ -968,7 +978,9 @@ async fn handle_deny(
         s
     } else {
         if !std::io::stdin().is_terminal() {
-            bail!("Missing required port specification to close. Example: 'lanforge firewall deny 22/tcp'");
+            bail!(
+                "Missing required port specification to close. Example: 'lanforge firewall deny 22/tcp'"
+            );
         }
         let Some(target_zone) = config.zones.iter().find(|z| z.name == args.zone) else {
             bail!("Firewall zone '{}' does not exist", args.zone);
@@ -1032,9 +1044,9 @@ async fn handle_deny(
 
     let mut removed_count = 0;
     target_zone.open_ports.retain(|r| {
-        let matches = ports_to_close.iter().any(|(p, proto)| {
-            r.port == *p && (*proto == L4Protocol::Both || r.protocol == *proto)
-        });
+        let matches = ports_to_close
+            .iter()
+            .any(|(p, proto)| r.port == *p && (*proto == L4Protocol::Both || r.protocol == *proto));
         if matches {
             removed_count += 1;
             false
@@ -1146,7 +1158,12 @@ async fn handle_forward_list(client: &LanforgeClient, printer: &Printer) -> Resu
     }
 
     println!();
-    println!(" {}", "Port Forwarding Rules (DNAT & IPv6 Pinholes)".bold().white());
+    println!(
+        " {}",
+        "Port Forwarding Rules (DNAT & IPv6 Pinholes)"
+            .bold()
+            .white()
+    );
     println!("{table}");
     println!();
     Ok(())
@@ -1231,7 +1248,9 @@ async fn handle_forward_add(
     if let Some(existing) = config.port_forwards.iter().find(|pf| {
         pf.src_zone == args.src_zone
             && pf.external_port == ext_port
-            && (pf.protocol == proto || pf.protocol == L4Protocol::Both || proto == L4Protocol::Both)
+            && (pf.protocol == proto
+                || pf.protocol == L4Protocol::Both
+                || proto == L4Protocol::Both)
     }) {
         bail!(
             "Port forward collision: external port {}/{} in zone '{}' is already forwarded to {}:{}",
@@ -1419,11 +1438,16 @@ async fn select_or_enter_device_ip(client: &LanforgeClient) -> Result<IpAddr> {
         let input = Text::new("Enter target IP address:")
             .with_placeholder("192.168.1.50")
             .prompt()?;
-        let ip: IpAddr = input.trim().parse().map_err(|_| eyre!("Invalid IP address"))?;
+        let ip: IpAddr = input
+            .trim()
+            .parse()
+            .map_err(|_| eyre!("Invalid IP address"))?;
         Ok(ip)
     } else {
         let ip_str = selected.split_whitespace().next().unwrap_or("");
-        let ip: IpAddr = ip_str.parse().map_err(|_| eyre!("Invalid parsed IP address"))?;
+        let ip: IpAddr = ip_str
+            .parse()
+            .map_err(|_| eyre!("Invalid parsed IP address"))?;
         Ok(ip)
     }
 }
@@ -1448,7 +1472,11 @@ async fn handle_zone(
         }
         FirewallZoneSubcommand::Show { name } => {
             let config = client.firewall_config().await?;
-            let Some(z) = config.zones.iter().find(|z| z.name.eq_ignore_ascii_case(&name)) else {
+            let Some(z) = config
+                .zones
+                .iter()
+                .find(|z| z.name.eq_ignore_ascii_case(&name))
+            else {
                 bail!("Firewall zone '{name}' does not exist");
             };
 
@@ -1463,16 +1491,8 @@ async fn handle_zone(
             } else {
                 z.interfaces.join(", ")
             };
-            println!(
-                "    {:<20} {}",
-                "Interfaces:".dimmed(),
-                iface_display
-            );
-            println!(
-                "    {:<20} {:?}",
-                "Input Policy:".dimmed(),
-                z.input_policy
-            );
+            println!("    {:<20} {}", "Interfaces:".dimmed(), iface_display);
+            println!("    {:<20} {:?}", "Input Policy:".dimmed(), z.input_policy);
             println!(
                 "    {:<20} {:?}",
                 "Forward Policy:".dimmed(),
@@ -1512,7 +1532,11 @@ async fn handle_zone(
         }
         FirewallZoneSubcommand::Add(add_args) => {
             let mut config = client.firewall_config().await?;
-            if config.zones.iter().any(|z| z.name.eq_ignore_ascii_case(&add_args.name)) {
+            if config
+                .zones
+                .iter()
+                .any(|z| z.name.eq_ignore_ascii_case(&add_args.name))
+            {
                 bail!("Zone '{}' already exists", add_args.name);
             }
 
@@ -1537,14 +1561,18 @@ async fn handle_zone(
         }
         FirewallZoneSubcommand::Remove { name, yes } => {
             let mut config = client.firewall_config().await?;
-            if matches!(name.to_ascii_lowercase().as_str(), "internal" | "external" | "trusted") {
+            if matches!(
+                name.to_ascii_lowercase().as_str(),
+                "internal" | "external" | "trusted"
+            ) {
                 bail!("Cannot delete built-in system zone '{name}'");
             }
 
             if !yes && !printer.yes && std::io::stdin().is_terminal() {
-                let confirmed = Confirm::new(&format!("Are you sure you want to delete zone '{name}'?"))
-                    .with_default(false)
-                    .prompt()?;
+                let confirmed =
+                    Confirm::new(&format!("Are you sure you want to delete zone '{name}'?"))
+                        .with_default(false)
+                        .prompt()?;
                 if !confirmed {
                     printer.warning("Operation aborted.");
                     return Ok(());
@@ -1553,8 +1581,12 @@ async fn handle_zone(
 
             let initial_len = config.zones.len();
             config.zones.retain(|z| !z.name.eq_ignore_ascii_case(&name));
-            config.forwardings.retain(|f| !f.from.eq_ignore_ascii_case(&name) && !f.to.eq_ignore_ascii_case(&name));
-            config.port_forwards.retain(|pf| !pf.src_zone.eq_ignore_ascii_case(&name));
+            config.forwardings.retain(|f| {
+                !f.from.eq_ignore_ascii_case(&name) && !f.to.eq_ignore_ascii_case(&name)
+            });
+            config
+                .port_forwards
+                .retain(|pf| !pf.src_zone.eq_ignore_ascii_case(&name));
 
             if config.zones.len() == initial_len {
                 bail!("Zone '{name}' does not exist");
@@ -1567,12 +1599,18 @@ async fn handle_zone(
         FirewallZoneSubcommand::SetPolicy(pol_args) => {
             let mut config = client.firewall_config().await?;
             let (new_in, new_fwd) = {
-                let Some(zone) = config.zones.iter_mut().find(|z| z.name.eq_ignore_ascii_case(&pol_args.zone)) else {
+                let Some(zone) = config
+                    .zones
+                    .iter_mut()
+                    .find(|z| z.name.eq_ignore_ascii_case(&pol_args.zone))
+                else {
                     bail!("Zone '{}' does not exist", pol_args.zone);
                 };
 
                 if pol_args.input.is_none() && pol_args.forward.is_none() {
-                    bail!("Specify at least one policy to update: '--input <policy>' or '--forward <policy>'");
+                    bail!(
+                        "Specify at least one policy to update: '--input <policy>' or '--forward <policy>'"
+                    );
                 }
 
                 if let Some(ref in_str) = pol_args.input {
@@ -1605,7 +1643,11 @@ async fn handle_zone(
                 }
             }
 
-            let Some(target) = config.zones.iter_mut().find(|z| z.name.eq_ignore_ascii_case(&zone)) else {
+            let Some(target) = config
+                .zones
+                .iter_mut()
+                .find(|z| z.name.eq_ignore_ascii_case(&zone))
+            else {
                 bail!("Zone '{zone}' does not exist");
             };
 
@@ -1616,7 +1658,11 @@ async fn handle_zone(
         }
         FirewallZoneSubcommand::RemoveIface { zone, iface } => {
             let mut config = client.firewall_config().await?;
-            let Some(target) = config.zones.iter_mut().find(|z| z.name.eq_ignore_ascii_case(&zone)) else {
+            let Some(target) = config
+                .zones
+                .iter_mut()
+                .find(|z| z.name.eq_ignore_ascii_case(&zone))
+            else {
                 bail!("Zone '{zone}' does not exist");
             };
 
@@ -1632,7 +1678,11 @@ async fn handle_zone(
         }
         FirewallZoneSubcommand::ToggleMasquerade { zone } => {
             let mut config = client.firewall_config().await?;
-            let Some(target) = config.zones.iter_mut().find(|z| z.name.eq_ignore_ascii_case(&zone)) else {
+            let Some(target) = config
+                .zones
+                .iter_mut()
+                .find(|z| z.name.eq_ignore_ascii_case(&zone))
+            else {
                 bail!("Zone '{zone}' does not exist");
             };
 
@@ -1647,7 +1697,11 @@ async fn handle_zone(
         }
         FirewallZoneSubcommand::ToggleMtuFix { zone } => {
             let mut config = client.firewall_config().await?;
-            let Some(target) = config.zones.iter_mut().find(|z| z.name.eq_ignore_ascii_case(&zone)) else {
+            let Some(target) = config
+                .zones
+                .iter_mut()
+                .find(|z| z.name.eq_ignore_ascii_case(&zone))
+            else {
                 bail!("Zone '{zone}' does not exist");
             };
 
@@ -1695,7 +1749,10 @@ async fn handle_policy(
             }
 
             println!();
-            println!(" {}", "Permitted Inter-Zone Forwarding Paths".bold().white());
+            println!(
+                " {}",
+                "Permitted Inter-Zone Forwarding Paths".bold().white()
+            );
             println!("{table}");
             println!();
             Ok(())
@@ -1711,8 +1768,14 @@ async fn handle_policy(
                 bail!("Destination zone '{to}' does not exist");
             }
 
-            if config.forwardings.iter().any(|f| f.from == from && f.to == to) {
-                printer.info(&format!("Forwarding from '{from}' to '{to}' is already allowed."));
+            if config
+                .forwardings
+                .iter()
+                .any(|f| f.from == from && f.to == to)
+            {
+                printer.info(&format!(
+                    "Forwarding from '{from}' to '{to}' is already allowed."
+                ));
                 return Ok(());
             }
 
@@ -1722,22 +1785,30 @@ async fn handle_policy(
             });
 
             apply_firewall_candidate(client, printer, *config, false).await?;
-            printer.success(&format!("Allowed traffic forwarding from '{from}' to '{to}'"));
+            printer.success(&format!(
+                "Allowed traffic forwarding from '{from}' to '{to}'"
+            ));
             Ok(())
         }
         FirewallPolicySubcommand::Deny { from, to } => {
             let mut config = client.firewall_config().await?;
             let initial_len = config.forwardings.len();
 
-            config.forwardings.retain(|f| !(f.from == from && f.to == to));
+            config
+                .forwardings
+                .retain(|f| !(f.from == from && f.to == to));
 
             if config.forwardings.len() == initial_len {
-                printer.info(&format!("No forwarding rule found from '{from}' to '{to}'."));
+                printer.info(&format!(
+                    "No forwarding rule found from '{from}' to '{to}'."
+                ));
                 return Ok(());
             }
 
             apply_firewall_candidate(client, printer, *config, false).await?;
-            printer.success(&format!("Revoked traffic forwarding from '{from}' to '{to}'"));
+            printer.success(&format!(
+                "Revoked traffic forwarding from '{from}' to '{to}'"
+            ));
             Ok(())
         }
     }
@@ -1759,13 +1830,14 @@ async fn handle_mode(
             return printer.print_json(&serde_json::json!({ "mode": config.mode }));
         }
         println!();
-        println!(
-            " Current Firewall Mode: {:?}",
-            config.mode
-        );
+        println!(" Current Firewall Mode: {:?}", config.mode);
         println!(" Modes:");
-        println!("   - 'full':     Stateful router firewall with host protection, zone isolation, and NAT.");
-        println!("   - 'minimal':  PPPoE MSS clamping & flowtable offload helper (coexists with system ufw/firewalld).");
+        println!(
+            "   - 'full':     Stateful router firewall with host protection, zone isolation, and NAT."
+        );
+        println!(
+            "   - 'minimal':  PPPoE MSS clamping & flowtable offload helper (coexists with system ufw/firewalld)."
+        );
         println!("   - 'disabled': Completely flushed and deactivated.");
         println!();
         return Ok(());
@@ -1783,7 +1855,9 @@ async fn handle_mode(
     config.mode = new_mode;
     apply_firewall_candidate(client, printer, *config, false).await?;
 
-    printer.success(&format!("Firewall operational mode updated to {new_mode:?}"));
+    printer.success(&format!(
+        "Firewall operational mode updated to {new_mode:?}"
+    ));
     Ok(())
 }
 
@@ -1937,7 +2011,9 @@ async fn handle_confirm(
     } else {
         let current = client.firewall_config().await?;
         let report = client.firewall_propose(*current).await?;
-        report.tx_id.ok_or_else(|| eyre!("No active staged transaction found to confirm"))?
+        report
+            .tx_id
+            .ok_or_else(|| eyre!("No active staged transaction found to confirm"))?
     };
 
     let resp = client.firewall_confirm(tx_id).await?;
@@ -1958,7 +2034,9 @@ async fn handle_abort(
     } else {
         let current = client.firewall_config().await?;
         let report = client.firewall_propose(*current).await?;
-        report.tx_id.ok_or_else(|| eyre!("No active staged transaction found to abort"))?
+        report
+            .tx_id
+            .ok_or_else(|| eyre!("No active staged transaction found to abort"))?
     };
 
     let resp = client.firewall_abort(tx_id).await?;
@@ -2035,9 +2113,7 @@ async fn apply_firewall_candidate(
                 printer.success("Firewall configuration confirmed and saved permanently.");
             } else {
                 client.firewall_abort(tx_id).await?;
-                printer.warning(
-                    "Changes aborted. Rolled back to previous firewall configuration.",
-                );
+                printer.warning("Changes aborted. Rolled back to previous firewall configuration.");
             }
         } else {
             printer.info(&resp.message);

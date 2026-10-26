@@ -16,7 +16,6 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use parking_lot::RwLock;
 use tracing::{debug, error, info, trace};
 
-
 use lanforge_dns_wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::{
@@ -127,7 +126,11 @@ impl AdBlocker {
         {
             let allow = self.allowlist.read();
             if let Some(rule) = Self::find_matching_rule(&allow, qname) {
-                let rule_str = if rule != qname { Some(rule.into()) } else { None };
+                let rule_str = if rule != qname {
+                    Some(rule.into())
+                } else {
+                    None
+                };
                 return Some(FilterMatch {
                     action: FilterAction::Allow,
                     origin: FilterOrigin::UserAllowlist,
@@ -139,7 +142,11 @@ impl AdBlocker {
         {
             let custom_blocks = self.custom_blocks.read();
             if let Some(rule) = Self::find_matching_rule(&custom_blocks, qname) {
-                let rule_str = if rule != qname { Some(rule.into()) } else { None };
+                let rule_str = if rule != qname {
+                    Some(rule.into())
+                } else {
+                    None
+                };
                 return Some(FilterMatch {
                     action: FilterAction::Block,
                     origin: FilterOrigin::UserRule,
@@ -407,11 +414,19 @@ impl AdBlocker {
         self.blocklist
             .read()
             .as_ref()
-            .and_then(|bl| bl.allow_map.as_ref().map(crate::resolver::filter::engine::DiskFilterMap::len))
+            .and_then(|bl| {
+                bl.allow_map
+                    .as_ref()
+                    .map(crate::resolver::filter::engine::DiskFilterMap::len)
+            })
             .unwrap_or(0)
     }
 
-    pub async fn load_from_urls(&self, name: &str, urls: &[String]) -> Result<HashSet<String>, DnsError> {
+    pub async fn load_from_urls(
+        &self,
+        name: &str,
+        urls: &[String],
+    ) -> Result<HashSet<String>, DnsError> {
         let mut new_list = HashSet::new();
         let client = source::build_adblock_http_client();
 
@@ -479,9 +494,12 @@ async fn fetch_url(
     client: &Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>,
     target_url: String,
 ) -> Result<Bytes, DnsError> {
-    tokio::time::timeout(Duration::from_secs(120), fetch_url_inner(client, target_url))
-        .await
-        .map_err(|_| DnsError::Generic("Request timed out (120s limit)".to_string()))?
+    tokio::time::timeout(
+        Duration::from_secs(120),
+        fetch_url_inner(client, target_url),
+    )
+    .await
+    .map_err(|_| DnsError::Generic("Request timed out (120s limit)".to_string()))?
 }
 
 async fn fetch_url_inner(
@@ -502,10 +520,12 @@ async fn fetch_url_inner(
             .body(Full::default())
             .map_err(|e| DnsError::Generic(e.to_string()))?;
 
-        let resp = client
-            .request(req)
-            .await
-            .map_err(|e| DnsError::Generic(format!("HTTP request error: {}", source::format_error_chain(&e))))?;
+        let resp = client.request(req).await.map_err(|e| {
+            DnsError::Generic(format!(
+                "HTTP request error: {}",
+                source::format_error_chain(&e)
+            ))
+        })?;
 
         let status = resp.status();
 
@@ -525,7 +545,9 @@ async fn fetch_url_inner(
                 }
                 continue;
             }
-            return Err(DnsError::Generic("Redirect without Location header".to_string()));
+            return Err(DnsError::Generic(
+                "Redirect without Location header".to_string(),
+            ));
         }
 
         if !status.is_success() {
@@ -536,7 +558,8 @@ async fn fetch_url_inner(
         let mut body_bytes = Vec::new();
 
         while let Some(frame_res) = body.frame().await {
-            let frame = frame_res.map_err(|e| DnsError::Generic(format!("Body frame error: {e}")))?;
+            let frame =
+                frame_res.map_err(|e| DnsError::Generic(format!("Body frame error: {e}")))?;
             if let Ok(data) = frame.into_data() {
                 if body_bytes.len() + data.len() > MAX_BODY_SIZE {
                     return Err(DnsError::Generic(format!(
@@ -554,7 +577,6 @@ async fn fetch_url_inner(
 }
 
 impl AdBlocker {
-
     pub fn apply_adblock_wire(
         &self,
         data: &[u8],

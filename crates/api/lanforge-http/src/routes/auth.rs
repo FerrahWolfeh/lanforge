@@ -3,10 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::{
     Extension, Json, Router,
     extract::{Path, Request, State},
-    http::{
-        HeaderMap, HeaderValue, StatusCode,
-        header::SET_COOKIE,
-    },
+    http::{HeaderMap, HeaderValue, StatusCode, header::SET_COOKIE},
     response::IntoResponse,
     routing::{delete, get, post},
 };
@@ -84,7 +81,9 @@ pub(crate) async fn handle_logout() -> impl IntoResponse {
     if let Ok(v) = HeaderValue::from_str("session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0") {
         headers.append(SET_COOKIE, v);
     }
-    if let Ok(v) = HeaderValue::from_str("lanforge_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0") {
+    if let Ok(v) =
+        HeaderValue::from_str("lanforge_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+    {
         headers.append(SET_COOKIE, v);
     }
     (
@@ -200,34 +199,33 @@ async fn handle_validate(
     State(state): State<AppState>,
     Json(payload): Json<ValidateRequest>,
 ) -> impl IntoResponse {
-    let valid = if looks_like_jwt(&payload.token) && state.auth.validate_token(&payload.token).is_ok() {
-        true
-    } else {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs()
-            .cast_signed();
-        match state.db.validate_api_token(&payload.token, now) {
-            Ok(Some(_)) => true,
-            _ => state.auth.validate_token(&payload.token).is_ok(),
-        }
-    };
+    let valid =
+        if looks_like_jwt(&payload.token) && state.auth.validate_token(&payload.token).is_ok() {
+            true
+        } else {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .cast_signed();
+            match state.db.validate_api_token(&payload.token, now) {
+                Ok(Some(_)) => true,
+                _ => state.auth.validate_token(&payload.token).is_ok(),
+            }
+        };
     Json(serde_json::json!({ "data": { "valid": valid } }))
 }
 
 fn check_auth_required(state: &AppState) -> bool {
-    state.cfg.auth_password_hash.is_some()
-        || state.auth.has_users_cached()
-        || {
-            let count = state.db.count_users().unwrap_or(0);
-            if count > 0 {
-                state.auth.set_has_users(true);
-                true
-            } else {
-                false
-            }
+    state.cfg.auth_password_hash.is_some() || state.auth.has_users_cached() || {
+        let count = state.db.count_users().unwrap_or(0);
+        if count > 0 {
+            state.auth.set_has_users(true);
+            true
+        } else {
+            false
         }
+    }
 }
 
 fn build_login_response(
@@ -281,13 +279,17 @@ fn authenticate_via_api_token(
             .cast_signed();
         match state.db.validate_api_token(&token_str, now) {
             Ok(Some((name, _scopes))) => {
-                let session_token = state.auth.generate_token_with_ttl(&name, "admin", ttl_secs)?;
+                let session_token = state
+                    .auth
+                    .generate_token_with_ttl(&name, "admin", ttl_secs)?;
                 return Ok(Some((session_token, name, "api_token")));
             }
             Ok(None) => return Err(HttpError::Auth("Invalid API token".to_string())),
             Err(e) => {
                 error!("Database error during login token validation: {e}");
-                return Err(HttpError::ServiceUnavailable("persistence unavailable".into()));
+                return Err(HttpError::ServiceUnavailable(
+                    "persistence unavailable".into(),
+                ));
             }
         }
     }
@@ -313,13 +315,12 @@ fn authenticate_via_password(
     match state.db.get_user_by_username(username) {
         Ok(Some(db_user)) => {
             if verify_password(&db_user.password_hash, password) {
-                let _ = state
-                    .db
-                    .update_user_last_login(&db_user.username, now);
-                let session_token =
-                    state
-                        .auth
-                        .generate_token_with_ttl(&db_user.username, db_user.role.as_str(), ttl_secs)?;
+                let _ = state.db.update_user_last_login(&db_user.username, now);
+                let session_token = state.auth.generate_token_with_ttl(
+                    &db_user.username,
+                    db_user.role.as_str(),
+                    ttl_secs,
+                )?;
                 return Ok((session_token, db_user.username, "password"));
             }
             return Err(HttpError::Auth("Invalid credentials".to_string()));
@@ -327,7 +328,9 @@ fn authenticate_via_password(
         Ok(None) => {}
         Err(e) => {
             error!("Database error looking up user {username}: {e}");
-            return Err(HttpError::ServiceUnavailable("persistence unavailable".into()));
+            return Err(HttpError::ServiceUnavailable(
+                "persistence unavailable".into(),
+            ));
         }
     }
 
@@ -336,7 +339,9 @@ fn authenticate_via_password(
         Ok(c) => c,
         Err(e) => {
             error!("Database error counting users: {e}");
-            return Err(HttpError::ServiceUnavailable("persistence unavailable".into()));
+            return Err(HttpError::ServiceUnavailable(
+                "persistence unavailable".into(),
+            ));
         }
     };
     if user_count == 0

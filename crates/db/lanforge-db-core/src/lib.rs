@@ -7,16 +7,19 @@ use lanforge_types::device::{Device, Origin};
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
-use lanforge_types::network::dns::{AdblockUrlEntry, DnsLifetimeStats, DnsRecordType};
 use lanforge_types::network::dns::adblock::{
-    AdblockDbConfig, AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, AdblockUrlKind, RewriteAnswer,
-    RewriteRule,
+    AdblockDbConfig, AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, AdblockUrlKind,
+    RewriteAnswer, RewriteRule,
 };
 use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget};
+use lanforge_types::network::dns::{AdblockUrlEntry, DnsLifetimeStats, DnsRecordType};
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
-use lanforge_types::network::{DnsReverseResolver, Hostname, IpSubnet, Ipv6AddrOrSuffix, QueryLogEntry, QueryResult, TrafficConfig, TrafficHistorySample};
+use lanforge_types::network::{
+    DnsReverseResolver, Hostname, IpSubnet, Ipv6AddrOrSuffix, QueryLogEntry, QueryResult,
+    TrafficConfig, TrafficHistorySample,
+};
 use lanforge_types::storage::DnsAnalyticsData;
 
 /// Database error enum encapsulating all database failures.
@@ -323,7 +326,8 @@ pub mod config_keys {
     pub const ADBLOCK_CONFIG: ConfigKey<AdblockDbConfig> = ConfigKey::new("adblock_config");
     pub const ADBLOCK_URLS: ConfigKey<Vec<AdblockUrlEntry>> = ConfigKey::new("adblock_urls");
     pub const ADBLOCK_RULES: ConfigKey<Vec<AdblockRuleEntry>> = ConfigKey::new("adblock_rules");
-    pub const DNS_REVERSE_RESOLVERS: ConfigKey<Vec<DnsReverseResolver>> = ConfigKey::new("dns_reverse_resolvers");
+    pub const DNS_REVERSE_RESOLVERS: ConfigKey<Vec<DnsReverseResolver>> =
+        ConfigKey::new("dns_reverse_resolvers");
     pub const LAST_GUA_PREFIX: ConfigKey<std::net::Ipv6Addr> = ConfigKey::new("last_gua_prefix");
 }
 
@@ -331,8 +335,16 @@ pub use config_keys::*;
 
 /// Configuration, metadata, and static host persistence contract.
 pub trait ConfigStore:
-    DnsStore + AdblockStore + DnsUpstreamStore + DhcpConfigStore + RaConfigStore
-    + PppoeConfigStore + FirewallConfigStore + TrafficConfigStore + Send + Sync
+    DnsStore
+    + AdblockStore
+    + DnsUpstreamStore
+    + DhcpConfigStore
+    + RaConfigStore
+    + PppoeConfigStore
+    + FirewallConfigStore
+    + TrafficConfigStore
+    + Send
+    + Sync
 {
     fn get<T: serde::de::DeserializeOwned>(&self, key: ConfigKey<T>) -> Result<Option<T>, DbError>
     where
@@ -497,9 +509,7 @@ pub trait AdblockStore: Send + Sync {
     fn clear_adblock_sources(&self) -> Result<(), DbError>;
 
     /// Loads custom adblock user rules.
-    fn load_adblock_rules(
-        &self,
-    ) -> Result<Vec<(i64, String, AdblockRuleAction, bool)>, DbError>;
+    fn load_adblock_rules(&self) -> Result<Vec<(i64, String, AdblockRuleAction, bool)>, DbError>;
 
     /// Adds a custom adblock user rule (domain and action like block/allow).
     fn add_adblock_rule(&self, domain: &str, action: AdblockRuleAction) -> Result<i64, DbError>;
@@ -605,10 +615,7 @@ pub trait DhcpConfigStore: Send + Sync {
     fn save_dhcp_options(&self, options: &DhcpOptionsConfig) -> Result<(), DbError>;
 
     /// Seeds DHCP & TFTP options if not set in database.
-    fn seed_dhcp_options_if_empty(
-        &self,
-        seed: &DhcpOptionsConfig,
-    ) -> Result<bool, DbError> {
+    fn seed_dhcp_options_if_empty(&self, seed: &DhcpOptionsConfig) -> Result<bool, DbError> {
         let existing = self.load_dhcp_options()?;
         if existing.is_none() {
             self.save_dhcp_options(seed)?;
@@ -619,10 +626,7 @@ pub trait DhcpConfigStore: Send + Sync {
     }
 
     /// Seeds DHCPv4 pools if empty in database. Returns `Ok(true)` if seeded.
-    fn seed_dhcp_v4_if_empty(
-        &self,
-        seed: &[Dhcpv4Pool],
-    ) -> Result<bool, DbError> {
+    fn seed_dhcp_v4_if_empty(&self, seed: &[Dhcpv4Pool]) -> Result<bool, DbError> {
         let existing = self.load_dhcp_v4_pools()?;
         if existing.is_empty() && !seed.is_empty() {
             self.save_dhcp_v4_pools(seed)?;
@@ -633,10 +637,7 @@ pub trait DhcpConfigStore: Send + Sync {
     }
 
     /// Seeds DHCPv6 pools if empty in database. Returns `Ok(true)` if seeded.
-    fn seed_dhcp_v6_if_empty(
-        &self,
-        seed: &[Dhcpv6Pool],
-    ) -> Result<bool, DbError> {
+    fn seed_dhcp_v6_if_empty(&self, seed: &[Dhcpv6Pool]) -> Result<bool, DbError> {
         let existing = self.load_dhcp_v6_pools()?;
         if existing.is_empty() && !seed.is_empty() {
             self.save_dhcp_v6_pools(seed)?;
@@ -671,16 +672,10 @@ pub trait RaConfigStore: Send + Sync {
     fn load_last_gua_prefix(&self) -> Result<Option<std::net::Ipv6Addr>, DbError>;
 
     /// Saves the last active GUA prefix to state.
-    fn save_last_gua_prefix(
-        &self,
-        prefix: Option<std::net::Ipv6Addr>,
-    ) -> Result<(), DbError>;
+    fn save_last_gua_prefix(&self, prefix: Option<std::net::Ipv6Addr>) -> Result<(), DbError>;
 
     /// Seeds RA prefixes if empty in database. Returns `Ok(true)` if seeded.
-    fn seed_ra_prefixes_if_empty(
-        &self,
-        seed: &[RAPrefix],
-    ) -> Result<bool, DbError> {
+    fn seed_ra_prefixes_if_empty(&self, seed: &[RAPrefix]) -> Result<bool, DbError> {
         let existing = self.load_ra_prefixes()?;
         if existing.is_empty() && !seed.is_empty() {
             self.save_ra_prefixes(seed)?;
@@ -691,10 +686,7 @@ pub trait RaConfigStore: Send + Sync {
     }
 
     /// Seeds RA RDNSS if empty in database. Returns `Ok(true)` if seeded.
-    fn seed_ra_rdnss_if_empty(
-        &self,
-        seed: &[RdnssConfig],
-    ) -> Result<bool, DbError> {
+    fn seed_ra_rdnss_if_empty(&self, seed: &[RdnssConfig]) -> Result<bool, DbError> {
         let existing = self.load_ra_rdnss()?;
         if existing.is_empty() && !seed.is_empty() {
             self.save_ra_rdnss(seed)?;
@@ -705,10 +697,7 @@ pub trait RaConfigStore: Send + Sync {
     }
 
     /// Seeds RA DNSSL if empty in database. Returns `Ok(true)` if seeded.
-    fn seed_ra_dnssl_if_empty(
-        &self,
-        seed: &[DnsslConfig],
-    ) -> Result<bool, DbError> {
+    fn seed_ra_dnssl_if_empty(&self, seed: &[DnsslConfig]) -> Result<bool, DbError> {
         let existing = self.load_ra_dnssl()?;
         if existing.is_empty() && !seed.is_empty() {
             self.save_ra_dnssl(seed)?;
@@ -728,10 +717,7 @@ pub trait PppoeConfigStore: Send + Sync {
     fn save_pppoe_config(&self, cfg: &PppoeConfig) -> Result<(), DbError>;
 
     /// Seeds PPPoE configuration if not present in database. Returns `Ok(true)` if seeded.
-    fn seed_pppoe_if_empty(
-        &self,
-        seed: &PppoeConfig,
-    ) -> Result<bool, DbError> {
+    fn seed_pppoe_if_empty(&self, seed: &PppoeConfig) -> Result<bool, DbError> {
         let existing = self.load_pppoe_config()?;
         if existing.is_none() {
             self.save_pppoe_config(seed)?;
@@ -751,10 +737,7 @@ pub trait FirewallConfigStore: Send + Sync {
     fn save_firewall_config(&self, cfg: &FirewallConfig) -> Result<(), DbError>;
 
     /// Seeds Firewall configuration if not present in database. Returns `Ok(true)` if seeded.
-    fn seed_firewall_if_empty(
-        &self,
-        seed: &FirewallConfig,
-    ) -> Result<bool, DbError> {
+    fn seed_firewall_if_empty(&self, seed: &FirewallConfig) -> Result<bool, DbError> {
         let existing = self.load_firewall_config()?;
         if existing.is_none() {
             self.save_firewall_config(seed)?;
@@ -774,10 +757,7 @@ pub trait TrafficConfigStore: Send + Sync {
     fn save_traffic_config(&self, cfg: &TrafficConfig) -> Result<(), DbError>;
 
     /// Seeds Traffic configuration if not present in database. Returns `Ok(true)` if seeded.
-    fn seed_traffic_if_empty(
-        &self,
-        seed: &TrafficConfig,
-    ) -> Result<bool, DbError> {
+    fn seed_traffic_if_empty(&self, seed: &TrafficConfig) -> Result<bool, DbError> {
         let existing = self.load_traffic_config()?;
         if existing.is_none() {
             self.save_traffic_config(seed)?;
@@ -800,10 +780,7 @@ pub trait UserStore: Send + Sync {
     ) -> Result<UserEntry, DbError>;
 
     /// Retrieves a user by username.
-    fn get_user_by_username(
-        &self,
-        username: &str,
-    ) -> Result<Option<UserEntry>, DbError>;
+    fn get_user_by_username(&self, username: &str) -> Result<Option<UserEntry>, DbError>;
 
     /// Retrieves a user by ID.
     fn get_user_by_id(&self, id: i64) -> Result<Option<UserEntry>, DbError>;
@@ -812,27 +789,15 @@ pub trait UserStore: Send + Sync {
     fn list_users(&self) -> Result<Vec<UserEntry>, DbError>;
 
     /// Updates password hash for a user account.
-    fn update_user_password(
-        &self,
-        username: &str,
-        new_hash: &str,
-        now: i64,
-    ) -> Result<(), DbError>;
+    fn update_user_password(&self, username: &str, new_hash: &str, now: i64)
+    -> Result<(), DbError>;
 
     /// Updates role for a user account.
-    fn update_user_role(
-        &self,
-        username: &str,
-        new_role: UserRole,
-        now: i64,
-    ) -> Result<(), DbError>;
+    fn update_user_role(&self, username: &str, new_role: UserRole, now: i64)
+    -> Result<(), DbError>;
 
     /// Updates last login timestamp for a user.
-    fn update_user_last_login(
-        &self,
-        username: &str,
-        now: i64,
-    ) -> Result<(), DbError>;
+    fn update_user_last_login(&self, username: &str, now: i64) -> Result<(), DbError>;
 
     /// Deletes a user by username.
     fn delete_user(&self, username: &str) -> Result<(), DbError>;
@@ -846,14 +811,19 @@ pub use lanforge_types::storage::DnsQueryRateBucket;
 /// Handles transient log operations.
 pub trait LogStore: Send + Sync {
     /// Loads volatile device observations retained in the runtime database.
-    fn load_runtime_devices(&self) -> Result<Vec<Device>, DbError> { Ok(Vec::new()) }
+    fn load_runtime_devices(&self) -> Result<Vec<Device>, DbError> {
+        Ok(Vec::new())
+    }
 
     /// Atomically writes a runtime device batch and removes deleted MACs.
     fn sync_runtime_devices(
         &self,
         upserts: &[std::sync::Arc<Device>],
         deletes: &[MacAddr],
-    ) -> Result<(), DbError> { let _ = (upserts, deletes); Ok(()) }
+    ) -> Result<(), DbError> {
+        let _ = (upserts, deletes);
+        Ok(())
+    }
 
     /// Replaces the volatile device snapshot atomically.
     fn replace_runtime_devices(&self, upserts: &[std::sync::Arc<Device>]) -> Result<(), DbError> {
@@ -886,10 +856,7 @@ pub trait LogStore: Send + Sync {
     ) -> Result<(), DbError>;
 
     /// Records a single resolved DNS query.
-    fn record_dns_query(
-        &self,
-        entry: &QueryLogEntry,
-    ) -> Result<(), DbError>;
+    fn record_dns_query(&self, entry: &QueryLogEntry) -> Result<(), DbError>;
 
     /// Wipes all logged system events.
     fn clear_logs(&self) -> Result<(), DbError>;
@@ -912,10 +879,7 @@ pub trait LogStore: Send + Sync {
     ) -> Result<(Vec<QueryLogEntry>, usize), DbError>;
 
     /// Retrieves top domains by query count.
-    fn get_dns_top_domains(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<(String, u64)>, DbError>;
+    fn get_dns_top_domains(&self, limit: usize) -> Result<Vec<(String, u64)>, DbError>;
 
     /// Retrieves top DNS domains filtered for a client.
     fn get_dns_top_domains_for_client(
@@ -928,10 +892,7 @@ pub trait LogStore: Send + Sync {
     fn get_dns_query_types(&self) -> Result<Vec<(u16, u64)>, DbError>;
 
     /// Retrieves query rate timeline.
-    fn get_dns_query_rate(
-        &self,
-        since_secs: u64,
-    ) -> Result<Vec<(u64, u64)>, DbError>;
+    fn get_dns_query_rate(&self, since_secs: u64) -> Result<Vec<(u64, u64)>, DbError>;
 
     /// Retrieves detailed query rate timeline with disposition breakdown.
     fn get_dns_query_rate_detailed(
@@ -941,31 +902,19 @@ pub trait LogStore: Send + Sync {
     ) -> Result<Vec<DnsQueryRateBucket>, DbError>;
 
     /// Retrieves top clients by query count (ip, total_count, blocked_count).
-    fn get_dns_top_clients(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<(String, u64, u64)>, DbError>;
+    fn get_dns_top_clients(&self, limit: usize) -> Result<Vec<(String, u64, u64)>, DbError>;
 
     /// Retrieves query counts by protocol.
     fn get_dns_protocol_stats(&self) -> Result<Vec<(String, u64)>, DbError>;
 
     /// Retrieves top blocked domains by query count.
-    fn get_dns_top_blocked_domains(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<(String, u64)>, DbError>;
+    fn get_dns_top_blocked_domains(&self, limit: usize) -> Result<Vec<(String, u64)>, DbError>;
 
     /// Retrieves top blocked clients by query count.
-    fn get_dns_top_blocked_clients(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<(String, u64)>, DbError>;
+    fn get_dns_top_blocked_clients(&self, limit: usize) -> Result<Vec<(String, u64)>, DbError>;
 
     /// Retrieves blocked query rate timeline.
-    fn get_dns_blocked_query_rate(
-        &self,
-        since_secs: u64,
-    ) -> Result<Vec<(u64, u64)>, DbError>;
+    fn get_dns_blocked_query_rate(&self, since_secs: u64) -> Result<Vec<(u64, u64)>, DbError>;
 
     /// Loads persistent cumulative DNS lifetime statistics.
     fn load_dns_lifetime_stats(&self) -> Result<DnsLifetimeStats, DbError> {
@@ -973,10 +922,7 @@ pub trait LogStore: Send + Sync {
     }
 
     /// Saves persistent cumulative DNS lifetime statistics.
-    fn save_dns_lifetime_stats(
-        &self,
-        _stats: &DnsLifetimeStats,
-    ) -> Result<(), DbError> {
+    fn save_dns_lifetime_stats(&self, _stats: &DnsLifetimeStats) -> Result<(), DbError> {
         Ok(())
     }
 
@@ -997,7 +943,8 @@ pub trait LogStore: Send + Sync {
         client: Option<&str>,
     ) -> Result<DnsAnalyticsData, DbError> {
         let top_domains = if let Some(c) = client {
-            self.get_dns_top_domains_for_client(c, limit).unwrap_or_default()
+            self.get_dns_top_domains_for_client(c, limit)
+                .unwrap_or_default()
         } else {
             self.get_dns_top_domains(limit).unwrap_or_default()
         };
@@ -1012,12 +959,8 @@ pub trait LogStore: Send + Sync {
             .unwrap_or_default();
         let top_clients = self.get_dns_top_clients(limit).unwrap_or_default();
         let protocol_stats = self.get_dns_protocol_stats().unwrap_or_default();
-        let top_blocked_domains = self
-            .get_dns_top_blocked_domains(limit)
-            .unwrap_or_default();
-        let top_blocked_clients = self
-            .get_dns_top_blocked_clients(limit)
-            .unwrap_or_default();
+        let top_blocked_domains = self.get_dns_top_blocked_domains(limit).unwrap_or_default();
+        let top_blocked_clients = self.get_dns_top_blocked_clients(limit).unwrap_or_default();
         let blocked_query_rate = self
             .get_dns_blocked_query_rate(since_secs)
             .unwrap_or_default();

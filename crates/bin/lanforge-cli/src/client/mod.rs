@@ -1,6 +1,6 @@
+use color_eyre::eyre::{Context, Result, eyre};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
-use color_eyre::eyre::{Context, Result, eyre};
 use tokio::net::UnixStream;
 
 use lanforge_api::api::{
@@ -10,8 +10,8 @@ use lanforge_api::api::{
     DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse,
     DnsUpstreamsResponse, HostConfigEntry, HostsResponse, HttpErrorResponse, HttpWrappedResponse,
     LeasesResponse, ServiceBannersResponse, SetupPayload, SetupResponse, SetupStatusResponse,
-    SimpleSuccess, StatusResponse, SystemConfigExport, SystemConfigImportResponse, UserListResponse,
-    UserResponse, WhoisResponse,
+    SimpleSuccess, StatusResponse, SystemConfigExport, SystemConfigImportResponse,
+    UserListResponse, UserResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_types::auth::ApiScopes;
@@ -246,9 +246,7 @@ impl LanforgeClient {
             .as_ref()
             .ok_or_else(|| eyre!("No remote URL configured"))?;
         let url = format!("{base}/api/v1{path}");
-        let uri: Uri = url
-            .parse()
-            .map_err(|e| eyre!("Invalid URL '{url}': {e}"))?;
+        let uri: Uri = url.parse().map_err(|e| eyre!("Invalid URL '{url}': {e}"))?;
 
         let mut builder = Request::builder().method(method).uri(uri);
 
@@ -393,7 +391,10 @@ impl LanforgeClient {
     }
 
     #[cfg(feature = "remote")]
-    pub async fn http_delete_with_body<B: serde::Serialize + Send + Sync, T: HttpWrappedResponse>(
+    pub async fn http_delete_with_body<
+        B: serde::Serialize + Send + Sync,
+        T: HttpWrappedResponse,
+    >(
         &self,
         path: &str,
         body: &B,
@@ -419,7 +420,8 @@ impl LanforgeClient {
     pub async fn http_stream_url(
         &self,
         full_url: &str,
-    ) -> Result<futures::stream::BoxStream<'static, std::result::Result<Bytes, color_eyre::Report>>> {
+    ) -> Result<futures::stream::BoxStream<'static, std::result::Result<Bytes, color_eyre::Report>>>
+    {
         use futures::StreamExt;
         let uri: Uri = full_url
             .parse()
@@ -455,7 +457,6 @@ impl LanforgeClient {
         Ok(stream.boxed())
     }
 
-
     // High-level API calls
     pub async fn status(&self) -> Result<Box<StatusResponse>> {
         #[cfg(feature = "remote")]
@@ -466,7 +467,11 @@ impl LanforgeClient {
         rpc.status().await.map_err(|e| eyre!("{e}"))
     }
 
-    pub async fn service_control(&self, id: String, action: ServiceAction) -> Result<SimpleSuccess> {
+    pub async fn service_control(
+        &self,
+        id: String,
+        action: ServiceAction,
+    ) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
             let act_str = match action {
@@ -482,7 +487,9 @@ impl LanforgeClient {
                 .await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.service_control(id, action).await.map_err(|e| eyre!("{e}"))
+        rpc.service_control(id, action)
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn service_banners(&self) -> Result<ServiceBannersResponse> {
@@ -515,7 +522,12 @@ impl LanforgeClient {
     pub async fn wol(&self, target: String) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return self.http_post(&format!("/devices/{}/wol", urlencoding(&target)), &serde_json::json!({})).await;
+            return self
+                .http_post(
+                    &format!("/devices/{}/wol", urlencoding(&target)),
+                    &serde_json::json!({}),
+                )
+                .await;
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.wol(target).await.map_err(|e| eyre!("{e}"))
@@ -545,14 +557,17 @@ impl LanforgeClient {
             return self.http_get(&format!("/devices{q_str}")).await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.list_devices(Box::new(query)).await.map_err(|e| eyre!("{e}"))
+        rpc.list_devices(Box::new(query))
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn whois(&self, target: String) -> Result<Box<WhoisResponse>> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
             return Ok(Box::new(
-                self.http_get(&format!("/devices/{}", urlencoding(&target))).await?,
+                self.http_get(&format!("/devices/{}", urlencoding(&target)))
+                    .await?,
             ));
         }
         let mut rpc = self.connect_rpc().await?;
@@ -580,7 +595,9 @@ impl LanforgeClient {
     pub async fn pppoe_reconnect(&self) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return self.http_post("/pppoe/reconnect", &serde_json::json!({})).await;
+            return self
+                .http_post("/pppoe/reconnect", &serde_json::json!({}))
+                .await;
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.pppoe_reconnect().await.map_err(|e| eyre!("{e}"))
@@ -589,7 +606,9 @@ impl LanforgeClient {
     pub async fn pppoe_disconnect(&self) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return self.http_post("/pppoe/disconnect", &serde_json::json!({})).await;
+            return self
+                .http_post("/pppoe/disconnect", &serde_json::json!({}))
+                .await;
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.pppoe_disconnect().await.map_err(|e| eyre!("{e}"))
@@ -610,7 +629,9 @@ impl LanforgeClient {
             return self.http_post("/pppoe/config", &cfg).await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.update_pppoe_config(Box::new(cfg)).await.map_err(|e| eyre!("{e}"))
+        rpc.update_pppoe_config(Box::new(cfg))
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn ra_trigger(&self) -> Result<SimpleSuccess> {
@@ -646,7 +667,9 @@ impl LanforgeClient {
             return self.http_post("/ra/config", &cfg).await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.update_ra_config(Box::new(cfg)).await.map_err(|e| eyre!("{e}"))
+        rpc.update_ra_config(Box::new(cfg))
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn system_config_export(&self) -> Result<Box<SystemConfigExport>> {
@@ -667,7 +690,9 @@ impl LanforgeClient {
             return self.http_post("/config", &config).await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.system_config_import(Box::new(config)).await.map_err(|e| eyre!("{e}"))
+        rpc.system_config_import(Box::new(config))
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     // --- User Accounts ---
@@ -785,7 +810,9 @@ impl LanforgeClient {
     pub async fn ak_delete(&self, id_or_name: String) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return self.http_delete(&format!("/auth/tokens/{id_or_name}")).await;
+            return self
+                .http_delete(&format!("/auth/tokens/{id_or_name}"))
+                .await;
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.ak_delete(id_or_name).await.map_err(|e| eyre!("{e}"))
@@ -861,7 +888,9 @@ impl LanforgeClient {
             ));
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_analytics(limit, client).await.map_err(|e| eyre!("{e}"))
+        rpc.dns_analytics(limit, client)
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dns_upstreams(&self) -> Result<DnsUpstreamsResponse> {
@@ -954,11 +983,14 @@ impl LanforgeClient {
                 qs.push(format!("type={}", urlencoding(&rt.to_string())));
             }
             return Ok(Box::new(
-                self.http_get(&format!("/dns/query?{}", qs.join("&"))).await?,
+                self.http_get(&format!("/dns/query?{}", qs.join("&")))
+                    .await?,
             ));
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_query(name, record_type).await.map_err(|e| eyre!("{e}"))
+        rpc.dns_query(name, record_type)
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dns_cache_dump(
@@ -1148,7 +1180,9 @@ impl LanforgeClient {
             ));
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_adblock_check(domain).await.map_err(|e| eyre!("{e}"))
+        rpc.dns_adblock_check(domain)
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dns_adblock_sources(&self) -> Result<DnsAdblockSourcesResponse> {
@@ -1185,14 +1219,13 @@ impl LanforgeClient {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
             return self
-                .http_delete_with_body(
-                    "/dns/adblock/sources",
-                    &serde_json::json!({ "url": url }),
-                )
+                .http_delete_with_body("/dns/adblock/sources", &serde_json::json!({ "url": url }))
                 .await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_adblock_url_remove(url).await.map_err(|e| eyre!("{e}"))
+        rpc.dns_adblock_url_remove(url)
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dns_adblock_config_set(
@@ -1286,7 +1319,9 @@ impl LanforgeClient {
             return self.http_post("/dns/rewrites/import", &rules).await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.dns_rewrite_import(rules).await.map_err(|e| eyre!("{e}"))
+        rpc.dns_rewrite_import(rules)
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dns_rewrite_export(&self) -> Result<DnsRewritesResponse> {
@@ -1382,7 +1417,9 @@ impl LanforgeClient {
             return self.http_put("/dhcp/options", &options).await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.update_dhcp_options(Box::new(options)).await.map_err(|e| eyre!("{e}"))
+        rpc.update_dhcp_options(Box::new(options))
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dhcp_pools_config(&self) -> Result<Box<DhcpPoolsConfigResponse>> {
@@ -1409,34 +1446,58 @@ impl LanforgeClient {
                 .await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.update_dhcp_pools_config(v4_pools, v6_pools).await.map_err(|e| eyre!("{e}"))
+        rpc.update_dhcp_pools_config(v4_pools, v6_pools)
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn dhcp_reconcile(&self) -> Result<DhcpReconcileResponse> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return self.http_post("/dhcp/reconcile", &serde_json::json!({})).await;
+            return self
+                .http_post("/dhcp/reconcile", &serde_json::json!({}))
+                .await;
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.dhcp_reconcile().await.map_err(|e| eyre!("{e}"))
     }
 
-    pub async fn lease_renew(&self, mac: MacAddr, target: Option<LeaseTarget>) -> Result<SimpleSuccess> {
+    pub async fn lease_renew(
+        &self,
+        mac: MacAddr,
+        target: Option<LeaseTarget>,
+    ) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return self.http_post(&format!("/dhcp/leases/{mac}/renew"), &serde_json::json!({ "target": target })).await;
+            return self
+                .http_post(
+                    &format!("/dhcp/leases/{mac}/renew"),
+                    &serde_json::json!({ "target": target }),
+                )
+                .await;
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.lease_renew(mac, target).await.map_err(|e| eyre!("{e}"))
     }
 
-    pub async fn lease_release(&self, mac: MacAddr, target: Option<LeaseTarget>) -> Result<SimpleSuccess> {
+    pub async fn lease_release(
+        &self,
+        mac: MacAddr,
+        target: Option<LeaseTarget>,
+    ) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return self.http_post(&format!("/dhcp/leases/{mac}/release"), &serde_json::json!({ "target": target })).await;
+            return self
+                .http_post(
+                    &format!("/dhcp/leases/{mac}/release"),
+                    &serde_json::json!({ "target": target }),
+                )
+                .await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.lease_release(mac, target).await.map_err(|e| eyre!("{e}"))
+        rpc.lease_release(mac, target)
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn firewall_status(&self) -> Result<Box<FirewallStatus>> {
@@ -1451,7 +1512,9 @@ impl LanforgeClient {
     pub async fn firewall_reload(&self) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return self.http_post("/firewall/reload", &serde_json::json!({})).await;
+            return self
+                .http_post("/firewall/reload", &serde_json::json!({}))
+                .await;
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.firewall_reload().await.map_err(|e| eyre!("{e}"))
@@ -1472,7 +1535,9 @@ impl LanforgeClient {
             return self.http_post("/firewall/config", &cfg).await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.update_firewall_config(Box::new(cfg)).await.map_err(|e| eyre!("{e}"))
+        rpc.update_firewall_config(Box::new(cfg))
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn firewall_propose(
@@ -1481,10 +1546,14 @@ impl LanforgeClient {
     ) -> Result<Box<FirewallValidationReport>> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return Ok(Box::new(self.http_post("/firewall/propose", &candidate).await?));
+            return Ok(Box::new(
+                self.http_post("/firewall/propose", &candidate).await?,
+            ));
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.firewall_propose(Box::new(candidate)).await.map_err(|e| eyre!("{e}"))
+        rpc.firewall_propose(Box::new(candidate))
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn firewall_commit(
@@ -1496,13 +1565,17 @@ impl LanforgeClient {
             return Ok(Box::new(self.http_post("/firewall/commit", &req).await?));
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.firewall_commit(Box::new(req)).await.map_err(|e| eyre!("{e}"))
+        rpc.firewall_commit(Box::new(req))
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn firewall_confirm(&self, tx_id: String) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return self.http_post("/firewall/confirm", &serde_json::json!({ "tx_id": tx_id })).await;
+            return self
+                .http_post("/firewall/confirm", &serde_json::json!({ "tx_id": tx_id }))
+                .await;
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.firewall_confirm(tx_id).await.map_err(|e| eyre!("{e}"))
@@ -1511,7 +1584,9 @@ impl LanforgeClient {
     pub async fn firewall_abort(&self, tx_id: String) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return self.http_post("/firewall/abort", &serde_json::json!({ "tx_id": tx_id })).await;
+            return self
+                .http_post("/firewall/abort", &serde_json::json!({ "tx_id": tx_id }))
+                .await;
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.firewall_abort(tx_id).await.map_err(|e| eyre!("{e}"))
@@ -1529,7 +1604,9 @@ impl LanforgeClient {
     pub async fn db_log_clean(&self) -> Result<SimpleSuccess> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            return self.http_post("/db/log-clean", &serde_json::json!({})).await;
+            return self
+                .http_post("/db/log-clean", &serde_json::json!({}))
+                .await;
         }
         let mut rpc = self.connect_rpc().await?;
         rpc.db_log_clean().await.map_err(|e| eyre!("{e}"))
@@ -1550,7 +1627,9 @@ impl LanforgeClient {
             return self.http_post("/hosts", &entry).await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.host_add(Box::new(entry)).await.map_err(|e| eyre!("{e}"))
+        rpc.host_add(Box::new(entry))
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn host_set(
@@ -1569,7 +1648,9 @@ impl LanforgeClient {
                 .await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.host_set(mac, field, value).await.map_err(|e| eyre!("{e}"))
+        rpc.host_set(mac, field, value)
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 
     pub async fn host_remove(&self, mac: MacAddr) -> Result<SimpleSuccess> {
@@ -1623,7 +1704,9 @@ impl LanforgeClient {
             return self.http_post("/traffic/config", &cfg).await;
         }
         let mut rpc = self.connect_rpc().await?;
-        rpc.update_traffic_config(Box::new(cfg)).await.map_err(|e| eyre!("{e}"))
+        rpc.update_traffic_config(Box::new(cfg))
+            .await
+            .map_err(|e| eyre!("{e}"))
     }
 }
 

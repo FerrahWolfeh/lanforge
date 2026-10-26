@@ -1,5 +1,7 @@
 use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpListener as StdTcpListener};
+use std::net::{
+    Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpListener as StdTcpListener,
+};
 use std::sync::Arc;
 use tokio::net::{TcpListener as TokioTcpListener, TcpStream};
 use tracing::{debug, warn};
@@ -115,9 +117,7 @@ impl DualTcpListener {
     /// Returns the local addresses of the bound listeners.
     pub fn local_addrs(&self) -> io::Result<Vec<SocketAddr>> {
         match &*self.inner {
-            TcpBackend::KernelDual { v4, v6 } => {
-                Ok(vec![v4.local_addr()?, v6.local_addr()?])
-            }
+            TcpBackend::KernelDual { v4, v6 } => Ok(vec![v4.local_addr()?, v6.local_addr()?]),
             TcpBackend::KernelSingle(listener) => Ok(vec![listener.local_addr()?]),
         }
     }
@@ -151,10 +151,16 @@ mod tests {
             let mut client = TcpStream::connect(server_addr)
                 .await
                 .expect("Client failed to connect");
-            client.write_all(b"ping tcp").await.expect("Client write failed");
+            client
+                .write_all(b"ping tcp")
+                .await
+                .expect("Client write failed");
 
             let mut reply = [0u8; 8];
-            client.read_exact(&mut reply).await.expect("Client read failed");
+            client
+                .read_exact(&mut reply)
+                .await
+                .expect("Client read failed");
             assert_eq!(&reply, b"pong tcp");
         });
 
@@ -166,10 +172,16 @@ mod tests {
         assert_eq!(client_addr.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
 
         let mut buf = [0u8; 8];
-        stream.read_exact(&mut buf).await.expect("Server read failed");
+        stream
+            .read_exact(&mut buf)
+            .await
+            .expect("Server read failed");
         assert_eq!(&buf, b"ping tcp");
 
-        stream.write_all(b"pong tcp").await.expect("Server write failed");
+        stream
+            .write_all(b"pong tcp")
+            .await
+            .expect("Server write failed");
         client_task.await.expect("Client task panicked");
     }
 

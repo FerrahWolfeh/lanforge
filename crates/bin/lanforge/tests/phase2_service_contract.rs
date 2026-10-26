@@ -6,8 +6,8 @@ use std::time::Duration;
 use lanforge::event_loop::ReadinessTracker;
 use lanforge::registry::ServiceRegistry;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
-use lanforge_core::context::state::State;
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::state::State;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
     AsyncService, Condition, LanforgeService, RestartPolicy, RuntimeClass, ServiceHandle,
@@ -45,11 +45,17 @@ async fn test_acceptance_ready_is_truthful() {
 
     // Simulate PPPoE failing connection attempts and marking itself Degraded (truthful)
     let h_pppoe = ServiceHandle::new(ServiceId::Pppoe, ctx.clone());
-    assert_ne!(ctx.get_service_state(ServiceId::Pppoe), ServiceState::Online);
+    assert_ne!(
+        ctx.get_service_state(ServiceId::Pppoe),
+        ServiceState::Online
+    );
     h_pppoe.degraded(DegradedReason::custom("no pppoe session"));
     tracker.on_service_ready(ServiceId::Pppoe);
 
-    assert_eq!(ctx.get_service_state(ServiceId::Pppoe), ServiceState::Degraded);
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Pppoe),
+        ServiceState::Degraded
+    );
 
     // Verify SystemReady is emitted because all services settled (Online + Degraded)
     let ready_event = timeout(Duration::from_millis(500), async {
@@ -137,7 +143,10 @@ async fn test_acceptance_clean_exit_resettable() {
 
     // Must execute once and settle in Inactive
     assert_eq!(attempts.load(Ordering::Relaxed), 1);
-    assert_eq!(ctx.get_service_state(ServiceId::Tftp), ServiceState::Inactive);
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Tftp),
+        ServiceState::Inactive
+    );
 
     supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
 }
@@ -204,8 +213,14 @@ async fn test_acceptance_retry_exhausted_keeps_daemon() {
     .await
     .expect("Service must exhaust retries and settle in Error");
 
-    assert_eq!(ctx.get_service_state(ServiceId::Traffic), ServiceState::Error);
-    assert!(ctx.is_running(), "Daemon must NOT be terminated on retry exhaustion!");
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Traffic),
+        ServiceState::Error
+    );
+    assert!(
+        ctx.is_running(),
+        "Daemon must NOT be terminated on retry exhaustion!"
+    );
 
     supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
 }

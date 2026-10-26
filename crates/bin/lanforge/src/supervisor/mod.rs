@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Builder;
-use tokio::sync::{watch, Notify};
+use tokio::sync::{Notify, watch};
 use tracing::{debug, info, warn};
 
 /// Result of spawning a supervised service.
@@ -206,12 +206,7 @@ impl GraphSupervisor {
                 }
             }
 
-            match runner.spawn(
-                ctx.clone(),
-                node,
-                dep_rxs,
-                Arc::clone(&notify_condition),
-            ) {
+            match runner.spawn(ctx.clone(), node, dep_rxs, Arc::clone(&notify_condition)) {
                 SpawnedService::Shared(task) => shared_tasks.push(task),
                 SpawnedService::Dedicated(thread) => dedicated_threads.push(thread),
             }

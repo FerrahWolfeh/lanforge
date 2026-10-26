@@ -83,7 +83,10 @@ mod tests {
     #[test]
     fn should_initialize_inert_transport_and_report_is_inert() {
         let (_handle, transport) = Dhcpv6Transport::inert();
-        assert!(transport.is_inert(), "Inert transport must return true for is_inert()");
+        assert!(
+            transport.is_inert(),
+            "Inert transport must return true for is_inert()"
+        );
     }
 
     #[tokio::test]
@@ -128,7 +131,10 @@ mod tests {
         drop(handle);
 
         let mut buf = [0u8; 64];
-        let err = transport.recv(&mut buf).await.expect_err("Expected EOF error");
+        let err = transport
+            .recv(&mut buf)
+            .await
+            .expect_err("Expected EOF error");
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 }

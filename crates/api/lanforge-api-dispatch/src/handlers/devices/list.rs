@@ -58,11 +58,7 @@ impl ClientContext {
         })
     }
 
-    fn device_matches_filter(
-        dev: &Device,
-        filter: Option<&str>,
-        method: Option<&str>,
-    ) -> bool {
+    fn device_matches_filter(dev: &Device, filter: Option<&str>, method: Option<&str>) -> bool {
         if let Some(m) = method
             && !dev.origin.as_str().eq_ignore_ascii_case(m)
         {

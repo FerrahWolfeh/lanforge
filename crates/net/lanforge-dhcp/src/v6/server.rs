@@ -46,9 +46,9 @@ use dhcproto::v6::{
 };
 use dhcproto::{Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
-use lanforge_types::utils::mac_from_eui64_link_local;
 use lanforge_types::device::Device;
 use lanforge_types::identifiers::{Duid, MacAddr};
+use lanforge_types::utils::mac_from_eui64_link_local;
 use std::net::Ipv6Addr;
 use std::str::FromStr;
 use std::string::ToString;
@@ -119,12 +119,7 @@ pub struct Dhcpv6Server {
 
 impl Dhcpv6Server {
     #[must_use]
-    pub fn new(
-        cfg: Dhcpv6Config,
-        pool: Ipv6Pool,
-        server_duid: Duid,
-        ctx: LanforgeContext,
-    ) -> Self {
+    pub fn new(cfg: Dhcpv6Config, pool: Ipv6Pool, server_duid: Duid, ctx: LanforgeContext) -> Self {
         let precompiled_custom_options =
             iter_custom_options(&cfg.options, PROTECTED_OPTIONS).collect();
         Self {
@@ -278,14 +273,8 @@ impl Dhcpv6Server {
         }
 
         // 2. Resolve identity
-        let identity = mac.map(|m| {
-            DeviceIdentity::resolve(
-                m,
-                None,
-                Self::get_vendor_class(msg),
-                dev.as_deref(),
-            )
-        });
+        let identity = mac
+            .map(|m| DeviceIdentity::resolve(m, None, Self::get_vendor_class(msg), dev.as_deref()));
 
         if mac.is_none() && msg.msg_type() != MessageType::InformationRequest {
             info!(
@@ -1101,7 +1090,10 @@ impl Dhcpv6Server {
             for (code, data) in &self.precompiled_custom_options {
                 reply
                     .opts_mut()
-                    .insert(DhcpOption::Unknown(UnknownOption::new((*code).into(), data.clone())));
+                    .insert(DhcpOption::Unknown(UnknownOption::new(
+                        (*code).into(),
+                        data.clone(),
+                    )));
             }
         } else if !self.cfg.options.is_empty() {
             for (code, data) in iter_custom_options(&self.cfg.options, PROTECTED_OPTIONS) {
@@ -1221,7 +1213,10 @@ mod tests {
         };
 
         // Use instance apply instead of global singleton
-        let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged { ifindex: 0, state: Box::new(state) });
+        let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+            ifindex: 0,
+            state: Box::new(state),
+        });
 
         let cfg = Dhcpv6Config {
             enabled: true,

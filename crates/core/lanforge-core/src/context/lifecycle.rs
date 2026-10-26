@@ -53,9 +53,9 @@ impl LanforgeContext {
                 Cap::UpstreamUdpTcp | Cap::UpstreamDoT | Cap::UpstreamDoQ | Cap::UpstreamDoH => {
                     status.as_ref().is_none_or(|s| s.dns_enabled)
                 }
-                Cap::DohDownstream => {
-                    status.as_ref().is_none_or(|s| s.dns_enabled && s.http_enabled)
-                }
+                Cap::DohDownstream => status
+                    .as_ref()
+                    .is_none_or(|s| s.dns_enabled && s.http_enabled),
                 Cap::DhcpV4 => status.as_ref().is_none_or(|s| s.dhcp_v4_enabled),
                 Cap::DhcpV6 => status.as_ref().is_none_or(|s| s.dhcp_v6_enabled),
                 Cap::Ra => {
@@ -73,19 +73,23 @@ impl LanforgeContext {
                 Cap::Webui => status.as_ref().is_none_or(|s| s.http_enabled),
                 Cap::Pppoe => {
                     let from_status = status.as_ref().is_none_or(|s| s.pppoe_enabled);
-                    let from_config = self.with_config(|c| c.pppoe.as_ref().is_none_or(|p| p.enabled));
+                    let from_config =
+                        self.with_config(|c| c.pppoe.as_ref().is_none_or(|p| p.enabled));
                     from_status && from_config
                 }
                 Cap::Tftp => status.as_ref().and_then(|s| s.boot_dir.as_ref()).is_some(),
                 Cap::Firewall => {
                     let from_status = status.as_ref().is_none_or(|s| s.firewall_enabled);
-                    let from_config = self.with_config(|c| c.firewall.as_ref().is_none_or(|f| f.enabled));
+                    let from_config =
+                        self.with_config(|c| c.firewall.as_ref().is_none_or(|f| f.enabled));
                     from_status && from_config
                 }
                 Cap::Traffic => {
                     let from_status = status.as_ref().is_none_or(|s| s.traffic_enabled);
                     let from_config = self.with_config(|c| {
-                        c.traffic.as_ref().is_none_or(|t| t.tuning.enabled || t.sqm.enabled)
+                        c.traffic
+                            .as_ref()
+                            .is_none_or(|t| t.tuning.enabled || t.sqm.enabled)
                     });
                     from_status && from_config
                 }
@@ -178,10 +182,7 @@ impl LanforgeContext {
 
     /// Returns the state detail of a service if any.
     #[must_use]
-    pub fn get_service_detail(
-        &self,
-        id: ServiceId,
-    ) -> Option<lanforge_types::system::StateDetail> {
+    pub fn get_service_detail(&self, id: ServiceId) -> Option<lanforge_types::system::StateDetail> {
         self.inner.runtime.get_service_detail(id)
     }
 
@@ -231,9 +232,9 @@ impl LanforgeContext {
 
     /// Stores the active RA status response and synchronizes fallback prefixes with State.
     pub fn set_ra_status(&self, status: Option<RaStatusResponse>) {
-        let (new_ula, new_gua) = status.as_ref().map_or((None, None), |s| {
-            (s.active_ula_prefix, s.active_gua_prefix)
-        });
+        let (new_ula, new_gua) = status
+            .as_ref()
+            .map_or((None, None), |s| (s.active_ula_prefix, s.active_gua_prefix));
         let prefixes_changed = self.with_state_mut(|state| {
             let changed = state.interfaces.ra_ula_fallback != new_ula
                 || state.interfaces.ra_gua_fallback != new_gua;
@@ -327,7 +328,6 @@ impl LanforgeContext {
     pub async fn wait_for_pppoe(&self) -> Result<(), CoreError> {
         self.inner.runtime.wait_for_pppoe().await
     }
-
 
     /// Blocks until the specified service is `Online`.
     ///

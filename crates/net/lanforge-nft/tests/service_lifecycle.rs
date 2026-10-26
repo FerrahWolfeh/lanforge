@@ -6,9 +6,9 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_nft::NftService;
+use lanforge_types::events::TimedEvent;
 use lanforge_types::events::firewall::{FirewallAppliedSummary, FirewallEvent};
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
-use lanforge_types::events::TimedEvent;
 use lanforge_types::network::firewall::{
     DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallZone, L4Protocol,
     PortForwardRule,
@@ -58,7 +58,10 @@ async fn test_nft_service_inert_full_lifecycle() {
     assert!(service.is_inert(), "Service must report inert mode");
 
     // 2. Initialize service
-    service.init(&ctx).await.expect("Init must succeed in inert mode");
+    service
+        .init(&ctx)
+        .await
+        .expect("Init must succeed in inert mode");
 
     // Expect initial RulesetApplied event
     let summary = wait_for_ruleset_applied(&mut fw_sub).await;
@@ -243,10 +246,7 @@ async fn test_firewall_disabled_state_lifecycle_transitions() {
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    assert_eq!(
-        ctx.get_service_state(ServiceId::Nft),
-        ServiceState::Online
-    );
+    assert_eq!(ctx.get_service_state(ServiceId::Nft), ServiceState::Online);
 
     // 1. Disable firewall in context and notify
     let mut cfg = ctx.get_firewall_config().unwrap();
@@ -270,10 +270,7 @@ async fn test_firewall_disabled_state_lifecycle_transitions() {
     let _summary = wait_for_ruleset_applied(&mut fw_sub).await;
 
     // Service state must transition back to Online
-    assert_eq!(
-        ctx.get_service_state(ServiceId::Nft),
-        ServiceState::Online
-    );
+    assert_eq!(ctx.get_service_state(ServiceId::Nft), ServiceState::Online);
 
     // Cleanup
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -446,7 +443,10 @@ async fn test_firewall_concurrent_dynamic_port_burst() {
     let payload = service.last_applied_payload().unwrap();
     for i in 0..8 {
         let port = 9000 + i;
-        assert!(payload.contains(&port.to_string()), "Payload must contain port {port}");
+        assert!(
+            payload.contains(&port.to_string()),
+            "Payload must contain port {port}"
+        );
     }
 
     // Now release all worker ports concurrently
@@ -468,7 +468,10 @@ async fn test_firewall_concurrent_dynamic_port_burst() {
     let released_payload = service.last_applied_payload().unwrap();
     for i in 0..8 {
         let port = 9000 + i;
-        assert!(!released_payload.contains(&format!("\"dport\": {port}")), "Port {port} should be released");
+        assert!(
+            !released_payload.contains(&format!("\"dport\": {port}")),
+            "Port {port} should be released"
+        );
     }
 
     // Cleanup
@@ -504,7 +507,10 @@ async fn test_firewall_service_control_stop_and_restart() {
     }));
 
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(ctx.get_service_state(ServiceId::Nft), ServiceState::Inactive);
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Nft),
+        ServiceState::Inactive
+    );
 
     // Send Restart command
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {

@@ -1,11 +1,11 @@
 use lanforge::event_loop::ReadinessTracker;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
-use lanforge_core::context::state::State;
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::state::State;
 use lanforge_types::system::{ServiceId, ServiceState};
 use std::collections::HashSet;
 use std::sync::Arc;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 #[tokio::test]
 async fn test_event_loop_pre_seeded_readiness_reconciliation() {

@@ -3,7 +3,7 @@ pub mod routes;
 pub mod sysctl;
 
 use crate::error::PppoeError;
-pub use ppp_dev::{handoff_to_kernel, KernelSession};
+pub use ppp_dev::{KernelSession, handoff_to_kernel};
 use routes::{
     add_ipv4_default_route, add_ipv4_peer_route, add_ipv6_link_local, add_static_neighbour,
     assign_ipv4_address, deconfigure_routes_and_addrs, setup_interface_ifreq,
@@ -77,11 +77,7 @@ pub async fn configure_interface(
     Ok(())
 }
 
-pub async fn deconfigure_interface(
-    ifname: &str,
-    is_ebpf: bool,
-    peer_ip: Option<Ipv4Addr>,
-) {
+pub async fn deconfigure_interface(ifname: &str, is_ebpf: bool, peer_ip: Option<Ipv4Addr>) {
     deconfigure_routes_and_addrs(ifname, is_ebpf, peer_ip).await;
     if is_ebpf && !ifname.starts_with("ppp") {
         sysctl::restore_interface_offloads(ifname);

@@ -517,18 +517,20 @@ mod tests {
     fn test_prefix_lifetime_postcard_roundtrip() {
         let original_secs = PrefixLifetime::Secs(86400);
         let bytes = postcard::to_stdvec(&original_secs).expect("postcard serialize Secs");
-        let decoded: PrefixLifetime = postcard::from_bytes(&bytes).expect("postcard deserialize Secs");
+        let decoded: PrefixLifetime =
+            postcard::from_bytes(&bytes).expect("postcard deserialize Secs");
         assert_eq!(decoded, original_secs);
 
         let original_inf = PrefixLifetime::Infinity;
         let bytes_inf = postcard::to_stdvec(&original_inf).expect("postcard serialize Infinity");
-        let decoded_inf: PrefixLifetime = postcard::from_bytes(&bytes_inf).expect("postcard deserialize Infinity");
+        let decoded_inf: PrefixLifetime =
+            postcard::from_bytes(&bytes_inf).expect("postcard deserialize Infinity");
         assert_eq!(decoded_inf, original_inf);
 
         let ra_prefix = RAPrefix::ula("fd97:f00d:cafe:3731::/64");
         let bytes_ra = postcard::to_stdvec(&ra_prefix).expect("postcard serialize RAPrefix");
-        let decoded_ra: RAPrefix = postcard::from_bytes(&bytes_ra).expect("postcard deserialize RAPrefix");
+        let decoded_ra: RAPrefix =
+            postcard::from_bytes(&bytes_ra).expect("postcard deserialize RAPrefix");
         assert_eq!(decoded_ra, ra_prefix);
     }
 }
-

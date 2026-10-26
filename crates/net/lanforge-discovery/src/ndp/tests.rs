@@ -319,9 +319,21 @@ async fn test_discovery_flush_neighbor_batch() {
     let service = create_test_discovery_service(ctx.clone(), vec![2]);
 
     let batch = vec![
-        (MacAddr([1, 2, 3, 4, 5, 1]), "192.168.1.101".parse().unwrap(), true),
-        (MacAddr([1, 2, 3, 4, 5, 2]), "192.168.1.102".parse().unwrap(), true),
-        (MacAddr([1, 2, 3, 4, 5, 3]), "192.168.1.103".parse().unwrap(), true),
+        (
+            MacAddr([1, 2, 3, 4, 5, 1]),
+            "192.168.1.101".parse().unwrap(),
+            true,
+        ),
+        (
+            MacAddr([1, 2, 3, 4, 5, 2]),
+            "192.168.1.102".parse().unwrap(),
+            true,
+        ),
+        (
+            MacAddr([1, 2, 3, 4, 5, 3]),
+            "192.168.1.103".parse().unwrap(),
+            true,
+        ),
     ];
 
     service.flush_neighbor_batch(batch);
@@ -332,14 +344,19 @@ async fn test_discovery_flush_neighbor_batch() {
     // Verify summary event published
     let mut found_summary = false;
     while let Ok(timed_event) = dev_rx.try_recv() {
-        if let LanforgeEvent::Device(DeviceEvent::NeighborBatchSummary { total, new, .. }) = timed_event.event {
+        if let LanforgeEvent::Device(DeviceEvent::NeighborBatchSummary { total, new, .. }) =
+            timed_event.event
+        {
             assert_eq!(total, 3);
             assert_eq!(new, 3);
             found_summary = true;
             break;
         }
     }
-    assert!(found_summary, "NeighborBatchSummary must be published on bus");
+    assert!(
+        found_summary,
+        "NeighborBatchSummary must be published on bus"
+    );
 }
 
 #[tokio::test]
@@ -369,8 +386,16 @@ async fn test_discovery_process_neighbor_event_batch_accumulation() {
         );
     }
 
-    assert_eq!(pending_batch.len(), 49, "Batch should buffer 49 events without flushing");
-    assert_eq!(ctx.with_state(|s| s.devices.len()), 0, "No devices should be committed yet");
+    assert_eq!(
+        pending_batch.len(),
+        49,
+        "Batch should buffer 49 events without flushing"
+    );
+    assert_eq!(
+        ctx.with_state(|s| s.devices.len()),
+        0,
+        "No devices should be committed yet"
+    );
 
     // 2. Add the 50th event: must trigger automatic flush
     let event50 = NeighborEvent::Added {
@@ -388,8 +413,16 @@ async fn test_discovery_process_neighbor_event_batch_accumulation() {
         None,
     );
 
-    assert_eq!(pending_batch.len(), 0, "Batch must be emptied upon hitting threshold of 50");
-    assert_eq!(ctx.with_state(|s| s.devices.len()), 50, "All 50 devices must now be committed to state");
+    assert_eq!(
+        pending_batch.len(),
+        0,
+        "Batch must be emptied upon hitting threshold of 50"
+    );
+    assert_eq!(
+        ctx.with_state(|s| s.devices.len()),
+        50,
+        "All 50 devices must now be committed to state"
+    );
 }
 
 #[tokio::test]
@@ -435,8 +468,16 @@ async fn test_discovery_process_neighbor_event_flushes_pending_on_non_added() {
         None,
     );
 
-    assert_eq!(pending_batch.len(), 0, "Pending batch must be flushed on non-Added event");
-    assert_eq!(ctx.with_state(|s| s.devices.len()), 5, "The 5 buffered devices must be committed");
+    assert_eq!(
+        pending_batch.len(),
+        0,
+        "Pending batch must be flushed on non-Added event"
+    );
+    assert_eq!(
+        ctx.with_state(|s| s.devices.len()),
+        5,
+        "The 5 buffered devices must be committed"
+    );
 }
 
 #[test]

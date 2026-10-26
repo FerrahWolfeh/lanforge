@@ -191,7 +191,12 @@ fn render_nic_tuning_status(status: &TrafficStatusResponse) {
     let ifaces = if status.tuned_interfaces.is_empty() {
         "none".dimmed().to_string()
     } else {
-        status.tuned_interfaces.join(", ").white().bold().to_string()
+        status
+            .tuned_interfaces
+            .join(", ")
+            .white()
+            .bold()
+            .to_string()
     };
     println!("    {:<28} {ifaces}", "Tuned Interfaces:".dimmed());
     println!(
@@ -210,21 +215,35 @@ fn render_sqm_status(status: &TrafficStatusResponse) {
     println!("  Smart Queue Management (SQM / CAKE): {sqm_state}");
 
     let wan = status.wan_interface.as_deref().unwrap_or("auto");
-    println!("    {:<28} {}", "WAN Interface:".dimmed(), wan.cyan().bold());
+    println!(
+        "    {:<28} {}",
+        "WAN Interface:".dimmed(),
+        wan.cyan().bold()
+    );
 
     if let Some(ing) = &status.ingress_device {
-        println!("    {:<28} {}", "Ingress Device (IFB):".dimmed(), ing.cyan());
+        println!(
+            "    {:<28} {}",
+            "Ingress Device (IFB):".dimmed(),
+            ing.cyan()
+        );
     }
 
     let dl_str = if status.download_mbps == 0 {
         "unshaped".dimmed().to_string()
     } else {
-        format!("{} Mbps", status.download_mbps).green().bold().to_string()
+        format!("{} Mbps", status.download_mbps)
+            .green()
+            .bold()
+            .to_string()
     };
     let ul_str = if status.upload_mbps == 0 {
         "unshaped".dimmed().to_string()
     } else {
-        format!("{} Mbps", status.upload_mbps).green().bold().to_string()
+        format!("{} Mbps", status.upload_mbps)
+            .green()
+            .bold()
+            .to_string()
     };
     println!(
         "    {:<28} Down: {dl_str}  ·  Up: {ul_str}",
@@ -302,7 +321,10 @@ fn render_rates_snapshot(tel: &TrafficTelemetryResponse, printer: &Printer) {
         " {} {}  ·  {}",
         "●".bright_cyan(),
         "REAL-TIME NETWORK TELEMETRY".bold().white(),
-        chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string().dimmed()
+        chrono::Local::now()
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string()
+            .dimmed()
     );
     println!();
 
@@ -326,13 +348,18 @@ fn render_rates_snapshot(tel: &TrafficTelemetryResponse, printer: &Printer) {
             let tx_rate = format_rate_bps(iface.tx_rate_bps);
 
             let drops_str = if iface.rx_dropped > 0 || iface.tx_dropped > 0 {
-                format!("{}/{}", iface.rx_dropped, iface.tx_dropped).yellow().to_string()
+                format!("{}/{}", iface.rx_dropped, iface.tx_dropped)
+                    .yellow()
+                    .to_string()
             } else {
                 "0/0".dimmed().to_string()
             };
 
             let errors_str = if iface.rx_errors > 0 || iface.tx_errors > 0 {
-                format!("{}/{}", iface.rx_errors, iface.tx_errors).red().bold().to_string()
+                format!("{}/{}", iface.rx_errors, iface.tx_errors)
+                    .red()
+                    .bold()
+                    .to_string()
             } else {
                 "0/0".dimmed().to_string()
             };
@@ -373,11 +400,7 @@ fn render_rates_snapshot(tel: &TrafficTelemetryResponse, printer: &Printer) {
 // Subcommand: sqm
 // ---------------------------------------------------------------------------
 
-async fn show_sqm(
-    client: &LanforgeClient,
-    printer: &Printer,
-    args: TrafficSqmArgs,
-) -> Result<()> {
+async fn show_sqm(client: &LanforgeClient, printer: &Printer, args: TrafficSqmArgs) -> Result<()> {
     let telemetry = client.traffic_telemetry().await?;
 
     if printer.json {
@@ -390,12 +413,18 @@ async fn show_sqm(
     };
 
     if !sqm.active {
-        printer.info("SQM (CAKE) is currently INACTIVE. Enable it via 'lanforge traffic config sqm-enable'.");
+        printer.info(
+            "SQM (CAKE) is currently INACTIVE. Enable it via 'lanforge traffic config sqm-enable'.",
+        );
         return Ok(());
     }
 
     println!();
-    println!(" {} {}", "●".bright_cyan(), "CAKE QUEUING DISCIPLINE DIAGNOSTICS".bold().white());
+    println!(
+        " {} {}",
+        "●".bright_cyan(),
+        "CAKE QUEUING DISCIPLINE DIAGNOSTICS".bold().white()
+    );
     println!();
 
     if let Some(egress) = &sqm.egress {
@@ -421,7 +450,11 @@ fn render_cake_qdisc(label: &str, qdisc: &CakeQdiscStats, printer: &Printer, sho
     println!("  {label} — Device: {}", qdisc.dev.cyan().bold());
     println!(
         "    Target Bandwidth: {bw_str}  ·  Capacity Estimate: {}",
-        if qdisc.capacity_estimate == 0 { "—".to_string() } else { format_rate_bps(qdisc.capacity_estimate) }
+        if qdisc.capacity_estimate == 0 {
+            "—".to_string()
+        } else {
+            format_rate_bps(qdisc.capacity_estimate)
+        }
     );
     println!(
         "    Sent: {} ({} pkts)  ·  Backlog: {} ({} pkts)",
@@ -434,7 +467,11 @@ fn render_cake_qdisc(label: &str, qdisc: &CakeQdiscStats, printer: &Printer, sho
         "    Memory: {} / {}  ·  Drops: {}  ·  Overlimits: {}",
         format_bytes(qdisc.memory_used),
         format_bytes(qdisc.memory_limit),
-        if qdisc.drops > 0 { qdisc.drops.to_string().yellow().bold().to_string() } else { "0".to_string() },
+        if qdisc.drops > 0 {
+            qdisc.drops.to_string().yellow().bold().to_string()
+        } else {
+            "0".to_string()
+        },
         qdisc.overlimits
     );
 
@@ -455,7 +492,10 @@ fn render_cake_qdisc(label: &str, qdisc: &CakeQdiscStats, printer: &Printer, sho
         ]);
 
         for tin in &qdisc.tins {
-            let flows_str = format!("{}/{}/{}", tin.sparse_flows, tin.bulk_flows, tin.unresponsive_flows);
+            let flows_str = format!(
+                "{}/{}/{}",
+                tin.sparse_flows, tin.bulk_flows, tin.unresponsive_flows
+            );
             let drops_str = if tin.drops > 0 {
                 tin.drops.to_string().yellow().bold().to_string()
             } else {
@@ -540,25 +580,86 @@ async fn show_config(client: &LanforgeClient, printer: &Printer) -> Result<()> {
     }
 
     println!();
-    println!(" {} {}", "●".bright_cyan(), "TRAFFIC CONFIGURATION".bold().white());
+    println!(
+        " {} {}",
+        "●".bright_cyan(),
+        "TRAFFIC CONFIGURATION".bold().white()
+    );
     println!();
 
-    println!("  Hardware NIC Tuning: {}", if cfg.tuning.enabled { "ENABLED".green().bold() } else { "DISABLED".dimmed() });
-    let ifaces = if cfg.tuning.interfaces.is_empty() { "auto (all physical)".dimmed().to_string() } else { cfg.tuning.interfaces.join(", ") };
+    println!(
+        "  Hardware NIC Tuning: {}",
+        if cfg.tuning.enabled {
+            "ENABLED".green().bold()
+        } else {
+            "DISABLED".dimmed()
+        }
+    );
+    let ifaces = if cfg.tuning.interfaces.is_empty() {
+        "auto (all physical)".dimmed().to_string()
+    } else {
+        cfg.tuning.interfaces.join(", ")
+    };
     println!("    {:<28} {ifaces}", "Interfaces:".dimmed());
     println!("    {:<28} {}", "CPU Mask:".dimmed(), cfg.tuning.cpu_mask);
-    println!("    {:<28} {} / {}", "RPS Flow Entries / Cnt:".dimmed(), cfg.tuning.rps_flow_entries, cfg.tuning.rps_flow_cnt);
-    println!("    {:<28} RX: {}  ·  TX: {}", "Ring Buffer Sizes:".dimmed(), cfg.tuning.rx_ring, cfg.tuning.tx_ring);
-    println!("    {:<28} {}", "Disable EEE:".dimmed(), cfg.tuning.disable_eee);
-    println!("    {:<28} {}", "UDP GRO Forwarding:".dimmed(), cfg.tuning.udp_gro_forwarding);
+    println!(
+        "    {:<28} {} / {}",
+        "RPS Flow Entries / Cnt:".dimmed(),
+        cfg.tuning.rps_flow_entries,
+        cfg.tuning.rps_flow_cnt
+    );
+    println!(
+        "    {:<28} RX: {}  ·  TX: {}",
+        "Ring Buffer Sizes:".dimmed(),
+        cfg.tuning.rx_ring,
+        cfg.tuning.tx_ring
+    );
+    println!(
+        "    {:<28} {}",
+        "Disable EEE:".dimmed(),
+        cfg.tuning.disable_eee
+    );
+    println!(
+        "    {:<28} {}",
+        "UDP GRO Forwarding:".dimmed(),
+        cfg.tuning.udp_gro_forwarding
+    );
 
     println!();
-    println!("  Smart Queue Management (SQM): {}", if cfg.sqm.enabled { "ENABLED".green().bold() } else { "DISABLED".dimmed() });
-    println!("    {:<28} {}", "Target Interface:".dimmed(), cfg.sqm.interface.cyan());
-    println!("    {:<28} Down: {} Mbps  ·  Up: {} Mbps", "Bandwidth Limits:".dimmed(), cfg.sqm.download_mbps, cfg.sqm.upload_mbps);
-    println!("    {:<28} {:?}", "Classification (DiffServ):".dimmed(), cfg.sqm.diffserv);
-    println!("    {:<28} {:?}", "Framing Overhead:".dimmed(), cfg.sqm.overhead);
-    println!("    {:<28} {}", "Per-Host Isolation:".dimmed(), cfg.sqm.per_host_isolation);
+    println!(
+        "  Smart Queue Management (SQM): {}",
+        if cfg.sqm.enabled {
+            "ENABLED".green().bold()
+        } else {
+            "DISABLED".dimmed()
+        }
+    );
+    println!(
+        "    {:<28} {}",
+        "Target Interface:".dimmed(),
+        cfg.sqm.interface.cyan()
+    );
+    println!(
+        "    {:<28} Down: {} Mbps  ·  Up: {} Mbps",
+        "Bandwidth Limits:".dimmed(),
+        cfg.sqm.download_mbps,
+        cfg.sqm.upload_mbps
+    );
+    println!(
+        "    {:<28} {:?}",
+        "Classification (DiffServ):".dimmed(),
+        cfg.sqm.diffserv
+    );
+    println!(
+        "    {:<28} {:?}",
+        "Framing Overhead:".dimmed(),
+        cfg.sqm.overhead
+    );
+    println!(
+        "    {:<28} {}",
+        "Per-Host Isolation:".dimmed(),
+        cfg.sqm.per_host_isolation
+    );
     if let Some(rtt) = cfg.sqm.rtt_ms {
         println!("    {:<28} {rtt} ms", "Target RTT Override:".dimmed());
     }
@@ -567,11 +668,7 @@ async fn show_config(client: &LanforgeClient, printer: &Printer) -> Result<()> {
     Ok(())
 }
 
-async fn apply_sqm_set(
-    client: &LanforgeClient,
-    printer: &Printer,
-    args: SqmSetArgs,
-) -> Result<()> {
+async fn apply_sqm_set(client: &LanforgeClient, printer: &Printer, args: SqmSetArgs) -> Result<()> {
     let changed = args.download.is_some()
         || args.upload.is_some()
         || args.interface.is_some()
@@ -581,7 +678,8 @@ async fn apply_sqm_set(
         || args.rtt.is_some();
 
     if !changed {
-        printer.info("No SQM settings changed. Use flags like --download, --upload, or --diffserv.");
+        printer
+            .info("No SQM settings changed. Use flags like --download, --upload, or --diffserv.");
         return Ok(());
     }
 
@@ -625,7 +723,8 @@ async fn apply_tuning_set(
         || args.disable_eee.is_some();
 
     if !changed {
-        printer.info("No tuning settings changed. Use flags like --interfaces, --cpu-mask, or --gro.");
+        printer
+            .info("No tuning settings changed. Use flags like --interfaces, --cpu-mask, or --gro.");
         return Ok(());
     }
 
@@ -659,7 +758,9 @@ pub fn parse_sqm_diffserv(s: &str) -> Result<SqmDiffserv> {
         "diffserv3" | "3" => Ok(SqmDiffserv::Diffserv3),
         "besteffort" | "be" => Ok(SqmDiffserv::Besteffort),
         other => {
-            bail!("Invalid DiffServ profile '{other}'. Valid options: diffserv4, diffserv3, besteffort");
+            bail!(
+                "Invalid DiffServ profile '{other}'. Valid options: diffserv4, diffserv3, besteffort"
+            );
         }
     }
 }
@@ -672,7 +773,9 @@ pub fn parse_sqm_overhead(s: &str) -> Result<SqmOverhead> {
         "docsis" => Ok(SqmOverhead::Docsis),
         "none" => Ok(SqmOverhead::None),
         other => {
-            bail!("Invalid framing overhead '{other}'. Valid options: auto, pppoe, ethernet, docsis, none");
+            bail!(
+                "Invalid framing overhead '{other}'. Valid options: auto, pppoe, ethernet, docsis, none"
+            );
         }
     }
 }
@@ -731,7 +834,11 @@ pub fn format_delay_us(us: u32) -> String {
 #[must_use]
 pub fn render_progress_bar(percent: f32, width: usize, ascii: bool) -> String {
     let p = percent.clamp(0.0, 100.0) / 100.0;
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
     let filled = (p * width as f32).round() as usize;
     let empty = width.saturating_sub(filled);
 
@@ -774,9 +881,15 @@ mod tests {
 
     #[test]
     fn test_parse_diffserv_and_overhead() {
-        assert_eq!(parse_sqm_diffserv("diffserv4").unwrap(), SqmDiffserv::Diffserv4);
+        assert_eq!(
+            parse_sqm_diffserv("diffserv4").unwrap(),
+            SqmDiffserv::Diffserv4
+        );
         assert_eq!(parse_sqm_diffserv("4").unwrap(), SqmDiffserv::Diffserv4);
-        assert_eq!(parse_sqm_diffserv("besteffort").unwrap(), SqmDiffserv::Besteffort);
+        assert_eq!(
+            parse_sqm_diffserv("besteffort").unwrap(),
+            SqmDiffserv::Besteffort
+        );
         assert!(parse_sqm_diffserv("invalid").is_err());
 
         assert_eq!(parse_sqm_overhead("auto").unwrap(), SqmOverhead::Auto);

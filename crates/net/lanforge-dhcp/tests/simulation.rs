@@ -7,8 +7,14 @@ use common::{
     Dhcpv4PacketBuilder, Dhcpv6PacketBuilder, create_test_v4_server, create_test_v6_server,
     init_test_context, init_test_context_with_interface,
 };
-use dhcproto::v4::{DhcpOption as Dhcpv4Option, Message as MessageV4, MessageType as MessageTypeV4, OptionCode as OptionCodeV4};
-use dhcproto::v6::{DhcpOption as Dhcpv6Option, Message as MessageV6, MessageType as MessageTypeV6, OptionCode as OptionCodeV6};
+use dhcproto::v4::{
+    DhcpOption as Dhcpv4Option, Message as MessageV4, MessageType as MessageTypeV4,
+    OptionCode as OptionCodeV4,
+};
+use dhcproto::v6::{
+    DhcpOption as Dhcpv6Option, Message as MessageV6, MessageType as MessageTypeV6,
+    OptionCode as OptionCodeV6,
+};
 use dhcproto::{Decodable, Decoder};
 use lanforge_dhcp::v4::server::HandleResult as HandleResultV4;
 use lanforge_dhcp::v6::server::HandleResult as HandleResultV6;
@@ -29,9 +35,12 @@ fn test_dhcpv4_dora_lifecycle_simulation() {
     let res = server.handle_packet(&discover_bytes, None);
 
     let (offered_ip, offer_msg) = match res {
-        HandleResultV4::Reply { packet, msg_type, .. } => {
+        HandleResultV4::Reply {
+            packet, msg_type, ..
+        } => {
             assert_eq!(msg_type, MessageTypeV4::Offer);
-            let msg = MessageV4::decode(&mut Decoder::new(&packet)).expect("Failed to decode offer packet");
+            let msg = MessageV4::decode(&mut Decoder::new(&packet))
+                .expect("Failed to decode offer packet");
             let offered = msg.yiaddr();
             assert!(offered >= Ipv4Addr::new(192, 168, 1, 100));
             assert!(offered <= Ipv4Addr::new(192, 168, 1, 200));
@@ -57,9 +66,12 @@ fn test_dhcpv4_dora_lifecycle_simulation() {
     let res = server.handle_packet(&request_bytes, None);
 
     match res {
-        HandleResultV4::Reply { packet, msg_type, .. } => {
+        HandleResultV4::Reply {
+            packet, msg_type, ..
+        } => {
             assert_eq!(msg_type, MessageTypeV4::Ack);
-            let msg = MessageV4::decode(&mut Decoder::new(&packet)).expect("Failed to decode ack packet");
+            let msg =
+                MessageV4::decode(&mut Decoder::new(&packet)).expect("Failed to decode ack packet");
             assert_eq!(msg.yiaddr(), offered_ip);
         }
         _ => panic!("Expected Reply with Ack"),
@@ -74,7 +86,8 @@ fn test_dhcpv4_dora_lifecycle_simulation() {
     });
 
     // --- 3. RELEASE ---
-    let release_bytes = Dhcpv4PacketBuilder::release(client_mac, offered_ip, server.cfg.server_id).build();
+    let release_bytes =
+        Dhcpv4PacketBuilder::release(client_mac, offered_ip, server.cfg.server_id).build();
     let res = server.handle_packet(&release_bytes, None);
     match res {
         HandleResultV4::Release { ip } => {
@@ -115,9 +128,12 @@ fn test_dhcpv4_static_reservation_simulation() {
     let res = server.handle_packet(&discover_bytes, device.as_deref());
 
     match res {
-        HandleResultV4::Reply { packet, msg_type, .. } => {
+        HandleResultV4::Reply {
+            packet, msg_type, ..
+        } => {
             assert_eq!(msg_type, MessageTypeV4::Offer);
-            let msg = MessageV4::decode(&mut Decoder::new(&packet)).expect("Failed to decode offer packet");
+            let msg = MessageV4::decode(&mut Decoder::new(&packet))
+                .expect("Failed to decode offer packet");
             assert_eq!(msg.yiaddr(), reserved_ip);
         }
         _ => panic!("Expected Reply with static reserved IP"),
@@ -156,7 +172,10 @@ fn test_dhcpv4_decline_quarantine_simulation() {
         _ => panic!("Expected new offer"),
     };
 
-    assert_ne!(offered_ip, new_offered_ip, "Declined IP must not be offered immediately");
+    assert_ne!(
+        offered_ip, new_offered_ip,
+        "Declined IP must not be offered immediately"
+    );
 }
 
 #[test]
@@ -185,7 +204,8 @@ fn test_dhcpv6_sarr_lifecycle_simulation() {
             assert_eq!(mac, Some(client_mac));
             assert!(assigned.na.contains(&1), "Assigned IAIDs must contain 1");
 
-            let reply_msg = MessageV6::decode(&mut Decoder::new(bytes)).expect("Failed to decode advertise");
+            let reply_msg =
+                MessageV6::decode(&mut Decoder::new(bytes)).expect("Failed to decode advertise");
             let mut addr = None;
             for opt in reply_msg.opts().iter() {
                 if let Dhcpv6Option::IANA(iana) = opt {
@@ -217,7 +237,8 @@ fn test_dhcpv6_sarr_lifecycle_simulation() {
             assert_eq!(dest, client_ll);
             assert!(assigned.na.contains(&1));
 
-            let reply_msg = MessageV6::decode(&mut Decoder::new(bytes)).expect("Failed to decode reply");
+            let reply_msg =
+                MessageV6::decode(&mut Decoder::new(bytes)).expect("Failed to decode reply");
             let mut confirmed_addr = None;
             for opt in reply_msg.opts().iter() {
                 if let Dhcpv6Option::IANA(iana) = opt {
@@ -288,10 +309,15 @@ fn test_dhcpv6_rapid_commit_simulation() {
     // In Rapid Commit, the server responds immediately with a Reply (skipping Advertise)
     match res {
         HandleResultV6::Reply(bytes, _, _, _, assigned, _, msg_type) => {
-            assert_eq!(msg_type, MessageTypeV6::Reply, "Rapid Commit must yield immediate Reply");
+            assert_eq!(
+                msg_type,
+                MessageTypeV6::Reply,
+                "Rapid Commit must yield immediate Reply"
+            );
             assert!(assigned.na.contains(&1));
 
-            let reply_msg = MessageV6::decode(&mut Decoder::new(bytes)).expect("Failed to decode reply");
+            let reply_msg =
+                MessageV6::decode(&mut Decoder::new(bytes)).expect("Failed to decode reply");
             assert!(
                 reply_msg.opts().get(OptionCodeV6::RapidCommit).is_some(),
                 "Rapid Commit option must be echoed in Reply"

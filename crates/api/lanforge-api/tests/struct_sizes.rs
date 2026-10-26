@@ -3,7 +3,12 @@ use lanforge_api::rpc::*;
 use std::mem::{align_of, size_of};
 
 fn print_size<T>(name: &str) {
-    println!("{:<35} {:>5} B  (align: {:>2})", name, size_of::<T>(), align_of::<T>());
+    println!(
+        "{:<35} {:>5} B  (align: {:>2})",
+        name,
+        size_of::<T>(),
+        align_of::<T>()
+    );
 }
 
 #[test]

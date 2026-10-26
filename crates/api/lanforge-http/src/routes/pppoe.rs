@@ -12,10 +12,7 @@ use crate::server::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/status", get(handle_status))
-        .route(
-            "/config",
-            get(handle_get_config).post(handle_update_config),
-        )
+        .route("/config", get(handle_get_config).post(handle_update_config))
         .route("/reconnect", post(handle_reconnect))
         .route("/disconnect", post(handle_disconnect))
 }

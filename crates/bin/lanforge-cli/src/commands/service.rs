@@ -43,9 +43,15 @@ impl ServiceArgs {
     pub async fn execute(self, client: &LanforgeClient, printer: &Printer) -> Result<()> {
         match self.subcommand.unwrap_or(ServiceSubcommand::List) {
             ServiceSubcommand::List => list_services(client, printer).await,
-            ServiceSubcommand::Restart { id } => control_service(client, printer, &id, ServiceAction::Restart).await,
-            ServiceSubcommand::Start { id } => control_service(client, printer, &id, ServiceAction::Start).await,
-            ServiceSubcommand::Stop { id } => control_service(client, printer, &id, ServiceAction::Stop).await,
+            ServiceSubcommand::Restart { id } => {
+                control_service(client, printer, &id, ServiceAction::Restart).await
+            }
+            ServiceSubcommand::Start { id } => {
+                control_service(client, printer, &id, ServiceAction::Start).await
+            }
+            ServiceSubcommand::Stop { id } => {
+                control_service(client, printer, &id, ServiceAction::Stop).await
+            }
             ServiceSubcommand::Show { id } => show_service(client, printer, &id).await,
         }
     }
@@ -69,7 +75,13 @@ fn render_services_table(resp: &ServiceBannersResponse, printer: &Printer) {
     }
 
     let mut table = printer.new_table();
-    table.set_header(vec!["Service", "ID", "State", "Uptime", "Metrics & Details"]);
+    table.set_header(vec![
+        "Service",
+        "ID",
+        "State",
+        "Uptime",
+        "Metrics & Details",
+    ]);
 
     for banner in &resp.banners {
         let metrics_summary = if banner.stats.is_empty() {
@@ -151,7 +163,11 @@ async fn show_service(client: &LanforgeClient, printer: &Printer, id: &str) -> R
     );
 
     if banner.uptime_secs > 0 {
-        println!("    {:<18} {}", "Uptime:".dimmed(), format_duration_secs(banner.uptime_secs));
+        println!(
+            "    {:<18} {}",
+            "Uptime:".dimmed(),
+            format_duration_secs(banner.uptime_secs)
+        );
     }
 
     if banner.stats.is_empty() {

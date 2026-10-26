@@ -5,9 +5,7 @@ use std::time::Duration;
 
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::dns::{
-    DnsClass, DnsMessage, DnsRData, DnsRecord, DnsRecordType,
-};
+use lanforge_types::network::dns::{DnsClass, DnsMessage, DnsRData, DnsRecord, DnsRecordType};
 use tracing::{debug, info};
 
 use crate::error::LabError;

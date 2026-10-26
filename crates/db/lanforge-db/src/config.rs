@@ -1,7 +1,7 @@
 //! Configuration for the Lanforge database engine.
 
-use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Configuration for the database persistence layer.
 #[derive(Debug, Clone, Serialize, Deserialize)]

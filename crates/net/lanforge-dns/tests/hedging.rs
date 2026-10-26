@@ -1,7 +1,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use lanforge_dns::resolver::recursive::{DnsCache, UpstreamManager, UpstreamMode, UpstreamStrategy};
+use lanforge_dns::resolver::recursive::{
+    DnsCache, UpstreamManager, UpstreamMode, UpstreamStrategy,
+};
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::dns::{DnsClass, DnsMessage, DnsQuestion, DnsRecordType};
@@ -36,12 +38,20 @@ async fn test_sequential_hedging_recovers_from_unresponsive_upstream_in_under_12
         }
     });
 
-    let target_silent = format!("udp://{silent_addr}").parse::<UpstreamTarget>().unwrap();
-    let target_fast = format!("udp://{fast_addr}").parse::<UpstreamTarget>().unwrap();
+    let target_silent = format!("udp://{silent_addr}")
+        .parse::<UpstreamTarget>()
+        .unwrap();
+    let target_fast = format!("udp://{fast_addr}")
+        .parse::<UpstreamTarget>()
+        .unwrap();
 
     let cache = Arc::new(DnsCache::new(100, 30, None));
-    let mgr_silent = UpstreamManager::new(&target_silent, Arc::clone(&cache)).await.unwrap();
-    let mgr_fast = UpstreamManager::new(&target_fast, Arc::clone(&cache)).await.unwrap();
+    let mgr_silent = UpstreamManager::new(&target_silent, Arc::clone(&cache))
+        .await
+        .unwrap();
+    let mgr_fast = UpstreamManager::new(&target_fast, Arc::clone(&cache))
+        .await
+        .unwrap();
 
     // In Sequential mode: silent upstream is tried first, then fast upstream
     let strategy = UpstreamStrategy::new(UpstreamMode::Sequential, vec![mgr_silent, mgr_fast]);
@@ -62,7 +72,10 @@ async fn test_sequential_hedging_recovers_from_unresponsive_upstream_in_under_12
     let res = strategy.resolve(&query_bytes).await;
     let elapsed = start.elapsed();
 
-    assert!(res.is_ok(), "Expected resolution to succeed via hedged upstream");
+    assert!(
+        res.is_ok(),
+        "Expected resolution to succeed via hedged upstream"
+    );
     let resolved = res.unwrap();
     assert_eq!(&resolved.data[..2], &4321u16.to_be_bytes());
 

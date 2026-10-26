@@ -58,7 +58,9 @@ impl AuthArgs {
                 scopes,
                 expires,
             } => generate_token(client, printer, name, scopes, expires).await,
-            AuthSubcommand::Delete { id_or_name } => delete_token(client, printer, id_or_name).await,
+            AuthSubcommand::Delete { id_or_name } => {
+                delete_token(client, printer, id_or_name).await
+            }
             AuthSubcommand::Renew { id_or_name } => renew_token(client, printer, id_or_name).await,
         }
     }
@@ -186,9 +188,7 @@ async fn renew_token(
         return printer.print_json(&*resp);
     }
 
-    printer.success(&format!(
-        "API token '{target}' renewed successfully.",
-    ));
+    printer.success(&format!("API token '{target}' renewed successfully.",));
     render_secret_token_banner(&resp.name, &resp.token);
     Ok(())
 }
@@ -332,11 +332,19 @@ fn render_tokens_table(tokens: &[AuthTokenEntry], printer: &Printer) {
 
 fn render_secret_token_banner(name: &str, token: &str) {
     println!();
-    println!("  {}", format!("SECRET KEY FOR '{name}' (shown only once):").bold().yellow());
+    println!(
+        "  {}",
+        format!("SECRET KEY FOR '{name}' (shown only once):")
+            .bold()
+            .yellow()
+    );
     println!("  ┌────────────────────────────────────────────────────────────────────────┐");
     println!("  │  {:<70}│", token.bold().green());
     println!("  └────────────────────────────────────────────────────────────────────────┘");
-    println!("  {}", "Store this key securely. It cannot be retrieved or recovered later.".dimmed());
+    println!(
+        "  {}",
+        "Store this key securely. It cannot be retrieved or recovered later.".dimmed()
+    );
     println!();
 }
 

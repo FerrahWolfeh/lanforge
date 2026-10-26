@@ -41,8 +41,8 @@ use lanforge_core::bus::{
 };
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy,
-    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
+    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
+    ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::device::IPv4State;
@@ -58,9 +58,9 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime};
 use tracing::{debug, info, warn};
 
+use crate::traits::DhcpPool;
 pub use config::Dhcpv4Config;
 pub use io::{Dhcpv4InertChannels, Dhcpv4InertHandle, Dhcpv4InertReply, Dhcpv4Transport};
-use crate::traits::DhcpPool;
 use lanforge_core::context::LanforgeContext;
 
 const DHCPV4_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
@@ -470,11 +470,14 @@ impl Dhcpv4Service {
                 8 => stats.informs.fetch_add(1, Ordering::Relaxed),
                 _ => 0,
             };
-            let _ = self.ctx.bus().publish(LanforgeEvent::Device(DeviceEvent::DhcpV4Transaction {
-                mac,
-                msg_type: DhcpV4MessageType::from(msg_type),
-                details: None,
-            }));
+            let _ = self
+                .ctx
+                .bus()
+                .publish(LanforgeEvent::Device(DeviceEvent::DhcpV4Transaction {
+                    mac,
+                    msg_type: DhcpV4MessageType::from(msg_type),
+                    details: None,
+                }));
         }
     }
 
@@ -729,7 +732,10 @@ impl Dhcpv4Service {
         let mut valid_dynamic_ips = Vec::with_capacity(dynamic_leases.len());
 
         for (mac, ip) in dynamic_leases {
-            if server.pool.is_valid_dynamic_ip(ip, cfg.subnet_mask, Some(cfg.router)) {
+            if server
+                .pool
+                .is_valid_dynamic_ip(ip, cfg.subnet_mask, Some(cfg.router))
+            {
                 valid_dynamic_ips.push(ip);
             } else {
                 let hostname = self.ctx.with_state(|state| {
@@ -739,7 +745,11 @@ impl Dhcpv4Service {
                         .map(|d| d.hostname.name.clone())
                         .unwrap_or_default()
                 });
-                let name = if hostname.is_empty() { "unknown" } else { &hostname };
+                let name = if hostname.is_empty() {
+                    "unknown"
+                } else {
+                    &hostname
+                };
                 let reason = if server.pool.is_in_range(ip) {
                     format!(
                         "IP {ip} does not match subnet mask {} or gateway {}",

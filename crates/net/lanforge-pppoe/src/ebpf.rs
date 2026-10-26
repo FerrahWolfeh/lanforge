@@ -1,6 +1,6 @@
 use crate::error::PppoeError;
 use aya::maps::HashMap;
-use aya::programs::tc::{qdisc_add_clsact, SchedClassifierLinkId, TcAttachType};
+use aya::programs::tc::{SchedClassifierLinkId, TcAttachType, qdisc_add_clsact};
 use aya::programs::xdp::XdpLinkId;
 use aya::programs::{SchedClassifier, Xdp, XdpFlags};
 use aya::{Ebpf, Pod};
@@ -33,10 +33,14 @@ pub struct EbpfSession {
 }
 
 #[repr(C, align(8))]
-struct AlignedBytecode([u8; include_bytes!(concat!(env!("OUT_DIR"), "/pppoe_fastpath.bpf.o")).len()]);
+struct AlignedBytecode(
+    [u8; include_bytes!(concat!(env!("OUT_DIR"), "/pppoe_fastpath.bpf.o")).len()],
+);
 
-static BYTECODE: AlignedBytecode =
-    AlignedBytecode(*include_bytes!(concat!(env!("OUT_DIR"), "/pppoe_fastpath.bpf.o")));
+static BYTECODE: AlignedBytecode = AlignedBytecode(*include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/pppoe_fastpath.bpf.o"
+)));
 
 impl EbpfSession {
     #[allow(clippy::too_many_arguments)]
@@ -60,9 +64,9 @@ impl EbpfSession {
 
         debug!(ifname, "Attaching XDP PPPoE ingress decapsulator");
         let xdp_link = if let Some(prog) = bpf.program_mut("pppoe_ingress_decap") {
-            let xdp: &mut Xdp = prog
-                .try_into()
-                .map_err(|e| PppoeError::NegotiationFailed(format!("Invalid XDP ingress program: {e}")))?;
+            let xdp: &mut Xdp = prog.try_into().map_err(|e| {
+                PppoeError::NegotiationFailed(format!("Invalid XDP ingress program: {e}"))
+            })?;
             xdp.load().map_err(|e| {
                 PppoeError::NegotiationFailed(format!("Failed to load XDP ingress program: {e}"))
             })?;
@@ -71,7 +75,10 @@ impl EbpfSession {
                     "Failed to attach XDP ingress decapsulator to {ifname}: {e}"
                 ))
             })?;
-            info!(ifname, "XDP PPPoE ingress decapsulator successfully attached");
+            info!(
+                ifname,
+                "XDP PPPoE ingress decapsulator successfully attached"
+            );
             Some(link_id)
         } else {
             return Err(PppoeError::NegotiationFailed(
@@ -82,11 +89,14 @@ impl EbpfSession {
         // Add clsact qdisc if not already present
         let _ = qdisc_add_clsact(ifname);
 
-        debug!(ifname, "Attaching TC PPPoE egress encapsulator and MSS clamper");
+        debug!(
+            ifname,
+            "Attaching TC PPPoE egress encapsulator and MSS clamper"
+        );
         let tc_link = if let Some(prog) = bpf.program_mut("pppoe_egress_encap") {
-            let tc_out: &mut SchedClassifier = prog
-                .try_into()
-                .map_err(|e| PppoeError::NegotiationFailed(format!("Invalid TC egress program: {e}")))?;
+            let tc_out: &mut SchedClassifier = prog.try_into().map_err(|e| {
+                PppoeError::NegotiationFailed(format!("Invalid TC egress program: {e}"))
+            })?;
             tc_out.load().map_err(|e| {
                 PppoeError::NegotiationFailed(format!("Failed to load TC egress program: {e}"))
             })?;
@@ -117,14 +127,12 @@ impl EbpfSession {
         };
 
         if let Some(map_obj) = bpf.map_mut("pppoe_sessions") {
-            let mut map: HashMap<_, u32, PppoeSessionMapValue> =
-                HashMap::try_from(map_obj).map_err(|e| {
+            let mut map: HashMap<_, u32, PppoeSessionMapValue> = HashMap::try_from(map_obj)
+                .map_err(|e| {
                     PppoeError::NegotiationFailed(format!("Invalid map pppoe_sessions: {e}"))
                 })?;
             map.insert(ifindex, val, 0).map_err(|e| {
-                PppoeError::NegotiationFailed(format!(
-                    "Failed to insert session into BPF map: {e}"
-                ))
+                PppoeError::NegotiationFailed(format!("Failed to insert session into BPF map: {e}"))
             })?;
             // Also populate key 0 as fallback for TC egress packets where skb->ifindex may be 0
             let _ = map.insert(0u32, val, 0);

@@ -87,13 +87,15 @@ fn build_dhcp_packet(
     msg.opts_mut().insert(DhcpOption::MessageType(msg_type));
 
     if let Some(req_ip) = requested_ip {
-        msg.opts_mut().insert(DhcpOption::RequestedIpAddress(req_ip));
+        msg.opts_mut()
+            .insert(DhcpOption::RequestedIpAddress(req_ip));
     }
     if let Some(srv) = server_id {
         msg.opts_mut().insert(DhcpOption::ServerIdentifier(srv));
     }
     if let Some(host) = hostname {
-        msg.opts_mut().insert(DhcpOption::Hostname(host.to_string()));
+        msg.opts_mut()
+            .insert(DhcpOption::Hostname(host.to_string()));
     }
 
     let mut buf = Vec::new();
@@ -101,7 +103,6 @@ fn build_dhcp_packet(
     msg.encode(&mut enc).expect("Failed to encode test message");
     buf
 }
-
 
 // ===========================================================================
 // Test 1: Dynamic to Static Lease Transition & Obsolete Lease NAK Consistency
@@ -127,7 +128,13 @@ async fn test_dynamic_to_static_lease_transition_consistency() {
     let client_src = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68);
 
     // 1. Client obtains initial dynamic lease
-    let discover = build_dhcp_packet(client_mac, MessageType::Discover, None, None, Some("workstation-pc"));
+    let discover = build_dhcp_packet(
+        client_mac,
+        MessageType::Discover,
+        None,
+        None,
+        Some("workstation-pc"),
+    );
     dhcp_handle.send_packet(discover, client_src).await;
 
     let offer = timeout(Duration::from_millis(500), dhcp_handle.recv_reply())
@@ -154,7 +161,9 @@ async fn test_dynamic_to_static_lease_transition_consistency() {
 
     // Verify Core state and reverse index consistency
     tokio::time::sleep(Duration::from_millis(30)).await;
-    let dev = ctx.get_device(&client_mac).expect("Device must be registered in Core");
+    let dev = ctx
+        .get_device(&client_mac)
+        .expect("Device must be registered in Core");
     assert!(matches!(dev.v4, IPv4State::Dynamic(ref l) if l.ip == initial_ip));
     assert_eq!(ctx.get_mac_by_ip(IpAddr::V4(initial_ip)), Some(client_mac));
     assert_eq!(dev.display_hostname(), "workstation-pc");
@@ -191,7 +200,13 @@ async fn test_dynamic_to_static_lease_transition_consistency() {
     );
 
     // 5. Client falls back to DISCOVER
-    let discover2 = build_dhcp_packet(client_mac, MessageType::Discover, None, None, Some("workstation-pc"));
+    let discover2 = build_dhcp_packet(
+        client_mac,
+        MessageType::Discover,
+        None,
+        None,
+        Some("workstation-pc"),
+    );
     dhcp_handle.send_packet(discover2, client_src).await;
 
     // 6. Server MUST offer the static IP 192.168.1.50
@@ -227,7 +242,9 @@ async fn test_dynamic_to_static_lease_transition_consistency() {
     assert_eq!(ctx.get_mac_by_ip(IpAddr::V4(static_ip)), Some(client_mac));
 
     // Clean shutdown
-    let _ = bus.publish(LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown));
+    let _ = bus.publish(LanforgeEvent::System(
+        lanforge_core::bus::SystemEvent::Shutdown,
+    ));
     let _ = timeout(Duration::from_millis(500), handle).await;
 }
 
@@ -260,7 +277,13 @@ async fn test_static_lease_outside_pool_bounds() {
     let client_src = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68);
 
     // Discover from nas-server
-    let discover = build_dhcp_packet(server_mac, MessageType::Discover, None, None, Some("nas-server"));
+    let discover = build_dhcp_packet(
+        server_mac,
+        MessageType::Discover,
+        None,
+        None,
+        Some("nas-server"),
+    );
     dhcp_handle.send_packet(discover, client_src).await;
 
     let offer = timeout(Duration::from_millis(500), dhcp_handle.recv_reply())
@@ -286,9 +309,14 @@ async fn test_static_lease_outside_pool_bounds() {
     assert_eq!(ack.message().unwrap().yiaddr(), static_outside_ip);
 
     // Core verification
-    assert_eq!(ctx.get_mac_by_ip(IpAddr::V4(static_outside_ip)), Some(server_mac));
+    assert_eq!(
+        ctx.get_mac_by_ip(IpAddr::V4(static_outside_ip)),
+        Some(server_mac)
+    );
 
-    let _ = bus.publish(LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown));
+    let _ = bus.publish(LanforgeEvent::System(
+        lanforge_core::bus::SystemEvent::Shutdown,
+    ));
     let _ = timeout(Duration::from_millis(500), handle).await;
 }
 
@@ -317,12 +345,24 @@ async fn test_ip_stealing_prevention() {
     let client_src = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68);
 
     // 1. Legit client leases an IP
-    let discover = build_dhcp_packet(legit_mac, MessageType::Discover, None, None, Some("legit-pc"));
+    let discover = build_dhcp_packet(
+        legit_mac,
+        MessageType::Discover,
+        None,
+        None,
+        Some("legit-pc"),
+    );
     dhcp_handle.send_packet(discover, client_src).await;
     let offer = dhcp_handle.recv_reply().await.unwrap();
     let legit_ip = offer.message().unwrap().yiaddr();
 
-    let request = build_dhcp_packet(legit_mac, MessageType::Request, Some(legit_ip), Some(cfg.server_id), None);
+    let request = build_dhcp_packet(
+        legit_mac,
+        MessageType::Request,
+        Some(legit_ip),
+        Some(cfg.server_id),
+        None,
+    );
     dhcp_handle.send_packet(request, client_src).await;
     let ack = dhcp_handle.recv_reply().await.unwrap();
     assert_eq!(ack.message().unwrap().yiaddr(), legit_ip);
@@ -354,7 +394,9 @@ async fn test_ip_stealing_prevention() {
     // 4. Verify legit client ownership is uncompromised
     assert_eq!(ctx.get_mac_by_ip(IpAddr::V4(legit_ip)), Some(legit_mac));
 
-    let _ = bus.publish(LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown));
+    let _ = bus.publish(LanforgeEvent::System(
+        lanforge_core::bus::SystemEvent::Shutdown,
+    ));
     let _ = timeout(Duration::from_millis(500), handle).await;
 }
 
@@ -388,7 +430,13 @@ async fn test_dhcp_decline_quarantine_consistency() {
     let declined_ip = offer.message().unwrap().yiaddr();
 
     // Client declines the IP (simulating ARP collision detected by client host)
-    let decline = build_dhcp_packet(mac, MessageType::Decline, Some(declined_ip), Some(cfg.server_id), None);
+    let decline = build_dhcp_packet(
+        mac,
+        MessageType::Decline,
+        Some(declined_ip),
+        Some(cfg.server_id),
+        None,
+    );
     dhcp_handle.send_packet(decline, client_src).await;
 
     // Small yield
@@ -407,7 +455,9 @@ async fn test_dhcp_decline_quarantine_consistency() {
         "Server must not offer quarantined IP immediately after Decline"
     );
 
-    let _ = bus.publish(LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown));
+    let _ = bus.publish(LanforgeEvent::System(
+        lanforge_core::bus::SystemEvent::Shutdown,
+    ));
     let _ = timeout(Duration::from_millis(500), handle).await;
 }
 
@@ -451,9 +501,18 @@ async fn test_eventbus_ip_deleted_recovers_pool() {
     let d1 = build_dhcp_packet(mac1, MessageType::Discover, None, None, None);
     dhcp_handle.send_packet(d1, client_src).await;
     let o1 = dhcp_handle.recv_reply().await.unwrap();
-    assert_eq!(o1.message().unwrap().yiaddr(), Ipv4Addr::new(192, 168, 1, 100));
+    assert_eq!(
+        o1.message().unwrap().yiaddr(),
+        Ipv4Addr::new(192, 168, 1, 100)
+    );
 
-    let r1 = build_dhcp_packet(mac1, MessageType::Request, Some(Ipv4Addr::new(192, 168, 1, 100)), Some(cfg.server_id), None);
+    let r1 = build_dhcp_packet(
+        mac1,
+        MessageType::Request,
+        Some(Ipv4Addr::new(192, 168, 1, 100)),
+        Some(cfg.server_id),
+        None,
+    );
     dhcp_handle.send_packet(r1, client_src).await;
     let _ = dhcp_handle.recv_reply().await.unwrap();
 
@@ -461,7 +520,10 @@ async fn test_eventbus_ip_deleted_recovers_pool() {
     let d2 = build_dhcp_packet(mac2, MessageType::Discover, None, None, None);
     dhcp_handle.send_packet(d2.clone(), client_src).await;
     let exhausted = timeout(Duration::from_millis(150), dhcp_handle.recv_reply()).await;
-    assert!(exhausted.is_err(), "Pool must be exhausted, no reply expected");
+    assert!(
+        exhausted.is_err(),
+        "Pool must be exhausted, no reply expected"
+    );
 
     // 3. Lease is released in Core
     let _ = ctx.apply(DeviceUpdate::LeaseReleased {
@@ -476,8 +538,13 @@ async fn test_eventbus_ip_deleted_recovers_pool() {
         .await
         .expect("Timeout waiting for Client 2 offer after IP release")
         .expect("Channel closed");
-    assert_eq!(o2.message().unwrap().yiaddr(), Ipv4Addr::new(192, 168, 1, 100));
+    assert_eq!(
+        o2.message().unwrap().yiaddr(),
+        Ipv4Addr::new(192, 168, 1, 100)
+    );
 
-    let _ = bus.publish(LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown));
+    let _ = bus.publish(LanforgeEvent::System(
+        lanforge_core::bus::SystemEvent::Shutdown,
+    ));
     let _ = timeout(Duration::from_millis(500), handle).await;
 }

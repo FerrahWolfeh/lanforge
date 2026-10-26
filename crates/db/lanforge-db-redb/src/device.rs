@@ -1,9 +1,9 @@
 //! DeviceStore implementation for `RedbDatabase`.
 
+use crate::tables::{TABLE_DEVICES, TABLE_META, TABLE_STATIC_HOSTS};
 use crate::{RedbDatabase, decode, encode, encode_into};
-use crate::tables::{TABLE_DEVICES, TABLE_STATIC_HOSTS, TABLE_META};
 use lanforge_db_core::{ConfigStore, DbError, DeviceStore, StaticHostEntry};
-use lanforge_types::device::{Device, DeviceStatus, Origin, IPv4State, IPv6State};
+use lanforge_types::device::{Device, DeviceStatus, IPv4State, IPv6State, Origin};
 use lanforge_types::identifiers::MacAddr;
 use redb::{ReadableTable, ReadableTableMetadata};
 
@@ -31,7 +31,11 @@ impl DeviceStore for RedbDatabase {
             Ok(list)
         })?;
 
-        devices.extend(self.load_static_hosts()?.into_iter().map(static_host_to_device));
+        devices.extend(
+            self.load_static_hosts()?
+                .into_iter()
+                .map(static_host_to_device),
+        );
         Ok(devices)
     }
 
@@ -98,8 +102,9 @@ impl DeviceStore for RedbDatabase {
             let persistent = persistent_device(&updated_device);
             if let Some(persistent) = persistent {
                 let bytes = encode(&persistent)?;
-                let unchanged = table.get(device.mac.0)?
-                    .is_some_and(|value| decode::<Device>(value.value()).is_ok_and(|stored| stored == persistent));
+                let unchanged = table.get(device.mac.0)?.is_some_and(|value| {
+                    decode::<Device>(value.value()).is_ok_and(|stored| stored == persistent)
+                });
                 if !unchanged {
                     table.insert(device.mac.0, bytes.as_slice())?;
                 }
@@ -138,22 +143,26 @@ impl DeviceStore for RedbDatabase {
     }
 
     fn find_mac_by_hostname(&self, hostname: &str) -> Result<Option<MacAddr>, DbError> {
-        let found = self.read_table(TABLE_DEVICES, |table| {
-            for item in table.iter()? {
-                let (k, val) = item?;
-                let dev: Device = decode(val.value())?;
-                if dev.hostname.name.eq_ignore_ascii_case(hostname) {
-                    return Ok(Some(MacAddr(k.value())));
+        let found = self
+            .read_table(TABLE_DEVICES, |table| {
+                for item in table.iter()? {
+                    let (k, val) = item?;
+                    let dev: Device = decode(val.value())?;
+                    if dev.hostname.name.eq_ignore_ascii_case(hostname) {
+                        return Ok(Some(MacAddr(k.value())));
+                    }
                 }
-            }
-            Ok(None)
-        })?.flatten();
+                Ok(None)
+            })?
+            .flatten();
 
         if let Some(mac) = found {
             return Ok(Some(mac));
         }
 
-        if let Some(host) = self.load_static_hosts()?.into_iter()
+        if let Some(host) = self
+            .load_static_hosts()?
+            .into_iter()
             .find(|host| host.hostname.name.eq_ignore_ascii_case(hostname))
         {
             return Ok(Some(host.mac));
@@ -287,11 +296,18 @@ impl DeviceStore for RedbDatabase {
 }
 
 impl ConfigStore for RedbDatabase {
-    fn get<T: serde::de::DeserializeOwned>(&self, key: lanforge_db_core::ConfigKey<T>) -> Result<Option<T>, DbError> {
+    fn get<T: serde::de::DeserializeOwned>(
+        &self,
+        key: lanforge_db_core::ConfigKey<T>,
+    ) -> Result<Option<T>, DbError> {
         self.get(key)
     }
 
-    fn put<T: serde::Serialize>(&self, key: lanforge_db_core::ConfigKey<T>, val: &T) -> Result<(), DbError> {
+    fn put<T: serde::Serialize>(
+        &self,
+        key: lanforge_db_core::ConfigKey<T>,
+        val: &T,
+    ) -> Result<(), DbError> {
         self.put(key, val)
     }
 
@@ -306,13 +322,13 @@ impl ConfigStore for RedbDatabase {
     fn get_meta(&self, key: &str) -> Result<Option<Vec<u8>>, DbError> {
         self.read_table(TABLE_META, |table| {
             Ok(table.get(key)?.map(|value| value.value().to_vec()))
-        }).map(|opt| opt.flatten())
+        })
+        .map(|opt| opt.flatten())
     }
 
     fn set_meta(&self, key: &str, value: &[u8]) -> Result<(), DbError> {
         let txn = self.begin_write()?;
-        txn.open_table(TABLE_META)?
-            .insert(key, value)?;
+        txn.open_table(TABLE_META)?.insert(key, value)?;
         txn.commit()?;
         Ok(())
     }
@@ -361,7 +377,10 @@ fn static_host_from_device(device: &Device) -> StaticHostEntry {
         mac: device.mac,
         hostname: device.hostname.clone(),
         origin: device.origin,
-        v4_fixed: match device.v4 { IPv4State::Static(ip) => Some(ip), _ => None },
+        v4_fixed: match device.v4 {
+            IPv4State::Static(ip) => Some(ip),
+            _ => None,
+        },
         v6_suffix: device.v6.iter().find_map(|state| match state {
             IPv6State::Static(value, _) => Some(*value),
             _ => None,
@@ -380,7 +399,9 @@ fn static_host_to_device(host: StaticHostEntry) -> Device {
     id.ignored_log_domains = host.ignored_log_domains;
     device.v4 = host.v4_fixed.map_or(IPv4State::None, IPv4State::Static);
     if let Some(suffix) = host.v6_suffix {
-        device.v6.push(IPv6State::Static(suffix, std::time::SystemTime::UNIX_EPOCH));
+        device
+            .v6
+            .push(IPv6State::Static(suffix, std::time::SystemTime::UNIX_EPOCH));
     }
     device
 }
@@ -394,10 +415,15 @@ fn persistent_device(device: &Device) -> Option<Device> {
         IPv4State::Static(ip) => IPv4State::Static(*ip),
         IPv4State::Discovery(_, _) | IPv4State::None => IPv4State::None,
     };
-    persistent.v6.retain(|state| matches!(state, IPv6State::Static(..) | IPv6State::Dynamic(_)));
+    persistent
+        .v6
+        .retain(|state| matches!(state, IPv6State::Static(..) | IPv6State::Dynamic(_)));
     persistent.identity_mut().iface = None;
     let has_lease = matches!(persistent.v4, IPv4State::Dynamic(_))
-        || persistent.v6.iter().any(|state| matches!(state, IPv6State::Dynamic(_)))
+        || persistent
+            .v6
+            .iter()
+            .any(|state| matches!(state, IPv6State::Dynamic(_)))
         || !persistent.v6_prefixes.is_empty();
     let has_identity = !persistent.hostname.name.is_empty()
         || persistent.duid.is_some()

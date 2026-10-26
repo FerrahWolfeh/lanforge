@@ -68,4 +68,3 @@ impl Middleware for CacheMiddleware {
         CacheMiddleware::run_sync(self, ctx, req, resp)
     }
 }
-

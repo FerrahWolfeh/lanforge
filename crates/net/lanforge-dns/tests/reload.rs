@@ -47,8 +47,14 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
-        service.serve(&ctx_service, &h).await.expect("Service failed");
+        let h = lanforge_core::service::ServiceHandle::new(
+            lanforge_types::system::ServiceId::Dns,
+            ctx_service.clone(),
+        );
+        service
+            .serve(&ctx_service, &h)
+            .await
+            .expect("Service failed");
     });
 
     wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
@@ -141,8 +147,14 @@ async fn dns_reload_rewrites_on_the_fly() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
-        service.serve(&ctx_service, &h).await.expect("Service failed");
+        let h = lanforge_core::service::ServiceHandle::new(
+            lanforge_types::system::ServiceId::Dns,
+            ctx_service.clone(),
+        );
+        service
+            .serve(&ctx_service, &h)
+            .await
+            .expect("Service failed");
     });
 
     wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
@@ -176,7 +188,10 @@ async fn dns_reload_rewrites_on_the_fly() {
     // 3. Query again (should now return 1.2.3.4 via rewrite)
     handle.inject(query_bytes, client_addr).await;
 
-    let (reply2, _) = handle.recv_reply().await.expect("Expected DNS reply after rewrite reload");
+    let (reply2, _) = handle
+        .recv_reply()
+        .await
+        .expect("Expected DNS reply after rewrite reload");
     let resp2 = parse_response(&reply2).expect("Valid DNS message");
     assert_eq!(resp2.header.rcode, DnsResponseCode::NoError);
     assert_eq!(extract_a(&resp2), vec![Ipv4Addr::new(1, 2, 3, 4)]);
@@ -265,8 +280,14 @@ async fn dns_conditional_split_upstream_routing() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
-        service.serve(&ctx_service, &h).await.expect("DNS Service failed");
+        let h = lanforge_core::service::ServiceHandle::new(
+            lanforge_types::system::ServiceId::Dns,
+            ctx_service.clone(),
+        );
+        service
+            .serve(&ctx_service, &h)
+            .await
+            .expect("DNS Service failed");
     });
 
     wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
@@ -282,7 +303,10 @@ async fn dns_conditional_split_upstream_routing() {
                 .build_bytes();
             handle_ref.inject(query_bytes, client_addr).await;
 
-            let (reply, _) = handle_ref.recv_reply().await.expect("Expected reply for split query");
+            let (reply, _) = handle_ref
+                .recv_reply()
+                .await
+                .expect("Expected reply for split query");
             let resp = parse_response(&reply).expect("Valid DNS response");
             assert_eq!(resp.header.rcode, DnsResponseCode::NoError);
             extract_a(&resp)[0]

@@ -51,11 +51,7 @@ impl LabHarness {
 
     /// Sets up the harness targeting specific server socket endpoints.
     #[must_use]
-    pub const fn with_endpoints(
-        mut self,
-        dhcp_target: SocketAddr,
-        dns_target: SocketAddr,
-    ) -> Self {
+    pub const fn with_endpoints(mut self, dhcp_target: SocketAddr, dns_target: SocketAddr) -> Self {
         self.dhcp_target = dhcp_target;
         self.dns_target = dns_target;
         self
@@ -67,14 +63,9 @@ impl LabHarness {
         mgr.setup()?;
 
         let host_iface = mgr.config().host_iface.clone();
-        let dhcp_target = SocketAddr::new(
-            std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1)),
-            67,
-        );
-        let dns_target = SocketAddr::new(
-            std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1)),
-            53,
-        );
+        let dhcp_target =
+            SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1)), 67);
+        let dns_target = SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1)), 53);
 
         Ok(Self {
             mode: LabMode::Netns,
@@ -138,32 +129,49 @@ impl LabHarness {
         let mac = MacAddr([0x02, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]);
 
         // 1. Test DHCP DORA
-        let dora_res = self.dhcp().simulate_dora(mac, Some("lab-suite-device")).await.ok();
+        let dora_res = self
+            .dhcp()
+            .simulate_dora(mac, Some("lab-suite-device"))
+            .await
+            .ok();
         let dhcp_dora_passed = dora_res.as_ref().is_some_and(|r| r.success);
 
         // 2. Test Local DNS resolution
         let mut dns_results = Vec::new();
-        let q_local = self.dns().query("lanforge.lan", DnsRecordType::A).await.ok();
+        let q_local = self
+            .dns()
+            .query("lanforge.lan", DnsRecordType::A)
+            .await
+            .ok();
         let dns_local_passed = q_local.as_ref().is_some_and(|r| r.rcode == "NoError");
         if let Some(r) = q_local {
             dns_results.push(r);
         }
 
         // 3. Test Adblock DNS query
-        let q_adblock = self.dns().query("doubleclick.net", DnsRecordType::A).await.ok();
-        let dns_adblock_passed = q_adblock.as_ref().is_some_and(|r| r.is_blocked || r.answers.contains(&"0.0.0.0".to_string()));
+        let q_adblock = self
+            .dns()
+            .query("doubleclick.net", DnsRecordType::A)
+            .await
+            .ok();
+        let dns_adblock_passed = q_adblock
+            .as_ref()
+            .is_some_and(|r| r.is_blocked || r.answers.contains(&"0.0.0.0".to_string()));
         if let Some(r) = q_adblock {
             dns_results.push(r);
         }
 
         // 4. Test Upstream / Public DNS query
         let q_upstream = self.dns().query("google.com", DnsRecordType::A).await.ok();
-        let dns_upstream_passed = q_upstream.as_ref().is_some_and(|r| r.rcode == "NoError" && !r.answers.is_empty());
+        let dns_upstream_passed = q_upstream
+            .as_ref()
+            .is_some_and(|r| r.rcode == "NoError" && !r.answers.is_empty());
         if let Some(r) = q_upstream {
             dns_results.push(r);
         }
 
-        let all_passed = dhcp_dora_passed && dns_local_passed && dns_adblock_passed && dns_upstream_passed;
+        let all_passed =
+            dhcp_dora_passed && dns_local_passed && dns_adblock_passed && dns_upstream_passed;
 
         Ok(SuiteReport {
             dhcp_dora_passed,

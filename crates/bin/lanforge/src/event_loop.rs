@@ -9,9 +9,9 @@ use lanforge_types::system::{ServiceId, ServiceState};
 
 use std::collections::HashSet;
 use std::hash::BuildHasher;
-use tokio::signal::unix::{signal, SignalKind};
-use tokio::sync::broadcast::{error::RecvError, Receiver};
-use tokio::time::{interval, Duration};
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::broadcast::{Receiver, error::RecvError};
+use tokio::time::{Duration, interval};
 use tracing::{debug, error, info, warn};
 
 /// Tracks service settled states and emits `SystemReady` when all expected services are settled.

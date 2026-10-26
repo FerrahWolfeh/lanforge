@@ -5,10 +5,10 @@ use lanforge_api::api::{
     DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockSourcesResponse,
     DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse,
     DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse,
-    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry,
-    HostsResponse, LeasesResponse, Response, RpcCallError, SetupPayload, SetupResponse,
-    SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
-    SystemConfigImportResponse, TransientHostsResponse, WhoisResponse,
+    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse,
+    EventKind, HostConfigEntry, HostsResponse, LeasesResponse, Response, RpcCallError,
+    SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess, StatusResponse,
+    SystemConfigExport, SystemConfigImportResponse, TransientHostsResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpc;
 use lanforge_core::context::LanforgeContext;
@@ -240,7 +240,10 @@ impl LanforgeRpc for ClientContext {
         v4_pools: Vec<Dhcpv4Pool>,
         v6_pools: Vec<Dhcpv6Pool>,
     ) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_update_dhcp_pools_config(v4_pools, v6_pools).await {
+        match self
+            .handle_update_dhcp_pools_config(v4_pools, v6_pools)
+            .await
+        {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
@@ -342,7 +345,10 @@ impl LanforgeRpc for ClientContext {
         protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_dns_upstream_remove(addr, protocol, domain).await {
+        match self
+            .handle_dns_upstream_remove(addr, protocol, domain)
+            .await
+        {
             Response::Success(r) => Ok(r),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
@@ -572,7 +578,10 @@ impl LanforgeRpc for ClientContext {
         kind: lanforge_types::network::dns::adblock::AdblockUrlKind,
         format: Option<lanforge_types::network::dns::adblock::AdblockSourceFormat>,
     ) -> Result<SimpleSuccess, RpcCallError> {
-        match self.handle_dns_adblock_url_add(None, url, kind, format).await {
+        match self
+            .handle_dns_adblock_url_add(None, url, kind, format)
+            .await
+        {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
             _ => Err(RpcCallError::InvalidResponseType),
@@ -772,7 +781,10 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn update_pppoe_config(&self, cfg: Box<PppoeConfig>) -> Result<SimpleSuccess, RpcCallError> {
+    async fn update_pppoe_config(
+        &self,
+        cfg: Box<PppoeConfig>,
+    ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_update_pppoe_config(*cfg).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -796,7 +808,10 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn update_ra_config(&self, cfg: Box<RaServerConfig>) -> Result<SimpleSuccess, RpcCallError> {
+    async fn update_ra_config(
+        &self,
+        cfg: Box<RaServerConfig>,
+    ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_update_ra_config(*cfg).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -811,7 +826,6 @@ impl LanforgeRpc for ClientContext {
             _ => Err(RpcCallError::InvalidResponseType),
         }
     }
-
 
     async fn user_create(
         &self,
@@ -863,7 +877,10 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn system_setup(&self, payload: Box<SetupPayload>) -> Result<Box<SetupResponse>, RpcCallError> {
+    async fn system_setup(
+        &self,
+        payload: Box<SetupPayload>,
+    ) -> Result<Box<SetupResponse>, RpcCallError> {
         match self.handle_setup(*payload).await {
             Response::Setup(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -887,7 +904,10 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn update_firewall_config(&self, cfg: Box<FirewallConfig>) -> Result<SimpleSuccess, RpcCallError> {
+    async fn update_firewall_config(
+        &self,
+        cfg: Box<FirewallConfig>,
+    ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_update_firewall_config(*cfg).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),
@@ -957,7 +977,10 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn update_traffic_config(&self, cfg: Box<TrafficConfig>) -> Result<SimpleSuccess, RpcCallError> {
+    async fn update_traffic_config(
+        &self,
+        cfg: Box<TrafficConfig>,
+    ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_update_traffic_config(*cfg).await {
             Response::Success(s) => Ok(s),
             Response::Error { error } => Err(Self::map_error(error)),

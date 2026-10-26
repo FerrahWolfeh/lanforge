@@ -32,7 +32,10 @@ pub fn parse_typed_option(val: &str) -> Option<Vec<u8>> {
 
     // Default to hex
     let hex_val = val.strip_prefix("hex:").unwrap_or(val);
-    let hex_clean = hex_val.strip_prefix("0x").or_else(|| hex_val.strip_prefix("0X")).unwrap_or(hex_val);
+    let hex_clean = hex_val
+        .strip_prefix("0x")
+        .or_else(|| hex_val.strip_prefix("0X"))
+        .unwrap_or(hex_val);
     match hex::decode(hex_clean) {
         Ok(data) => Some(data),
         Err(e) => {

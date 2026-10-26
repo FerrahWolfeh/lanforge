@@ -54,8 +54,8 @@ use lanforge_types::update::DeviceUpdate;
 use netlink_packet_core::{NetlinkMessage, NetlinkPayload};
 use netlink_sys::SocketAddr;
 use parking_lot::Mutex;
-use rtnetlink::packet_route::RouteNetlinkMessage;
 use rtnetlink::Handle;
+use rtnetlink::packet_route::RouteNetlinkMessage;
 use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr};
@@ -163,14 +163,14 @@ impl DiscoveryService {
             .count();
 
         if new_count > 0 {
-            let _ = self
-                .ctx
-                .bus()
-                .publish(LanforgeEvent::Device(DeviceEvent::NeighborBatchSummary {
-                    total,
-                    new: new_count,
-                    duration_ms: u64::try_from(duration.as_millis()).unwrap_or_default(),
-                }));
+            let _ =
+                self.ctx
+                    .bus()
+                    .publish(LanforgeEvent::Device(DeviceEvent::NeighborBatchSummary {
+                        total,
+                        new: new_count,
+                        duration_ms: u64::try_from(duration.as_millis()).unwrap_or_default(),
+                    }));
         } else {
             debug!(
                 service = "DiscoveryService",
@@ -292,12 +292,16 @@ impl AsyncService for DiscoveryService {
         for &ifindex in &self.target_ifindexes {
             match get_ipv4_neighbors(&self.handle, Some(ifindex)).await {
                 Ok(evs) => bootstrap_events.extend(evs),
-                Err(e) => error!("DiscoveryService: Failed to dump IPv4 neighbors on ifindex {ifindex}: {e}"),
+                Err(e) => error!(
+                    "DiscoveryService: Failed to dump IPv4 neighbors on ifindex {ifindex}: {e}"
+                ),
             }
 
             match get_ipv6_neighbors(&self.handle, "", Some(ifindex)).await {
                 Ok(evs) => bootstrap_events.extend(evs),
-                Err(e) => error!("DiscoveryService: Failed to dump IPv6 neighbors on ifindex {ifindex}: {e}"),
+                Err(e) => error!(
+                    "DiscoveryService: Failed to dump IPv6 neighbors on ifindex {ifindex}: {e}"
+                ),
             }
         }
 
@@ -312,8 +316,7 @@ impl AsyncService for DiscoveryService {
                     iface: ifname.to_string(),
                 });
             }
-            if let Some(update) =
-                event.to_device_update(current_gua.as_ref(), current_ula.as_ref())
+            if let Some(update) = event.to_device_update(current_gua.as_ref(), current_ula.as_ref())
             {
                 let _ = ctx.apply(update);
             }
@@ -466,13 +469,16 @@ fn spawn_sweep_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext, ping_interval
                     }
                     match &dev.v4 {
                         IPv4State::Static(ip) => {
-                            let elapsed = now.duration_since(dev.last_seen).unwrap_or(Duration::MAX);
+                            let elapsed =
+                                now.duration_since(dev.last_seen).unwrap_or(Duration::MAX);
                             if elapsed >= sweep_threshold {
                                 all_ips.push(IpAddr::V4(*ip));
                             }
                         }
                         IPv4State::Dynamic(lease) => {
-                            let elapsed = now.duration_since(lease.last_seen_system_time()).unwrap_or(Duration::MAX);
+                            let elapsed = now
+                                .duration_since(lease.last_seen_system_time())
+                                .unwrap_or(Duration::MAX);
                             if elapsed >= sweep_threshold {
                                 all_ips.push(IpAddr::V4(lease.ip));
                             }
@@ -558,8 +564,7 @@ fn get_or_create_arp_prober(
 }
 
 fn spawn_jit_offline_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext) {
-    let prober_cache: Arc<Mutex<HashMap<String, ArpProber>>> =
-        Arc::new(Mutex::new(HashMap::new()));
+    let prober_cache: Arc<Mutex<HashMap<String, ArpProber>>> = Arc::new(Mutex::new(HashMap::new()));
 
     tokio::spawn(async move {
         let mut bus_rx = ctx.bus().subscribe_device();
@@ -570,10 +575,8 @@ fn spawn_jit_offline_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext) {
             }
             match bus_rx.recv().await {
                 Ok(timed_event) => {
-                    if let LanforgeEvent::Device(DeviceEvent::NetworkActivity {
-                        change,
-                        ..
-                    }) = &timed_event.event
+                    if let LanforgeEvent::Device(DeviceEvent::NetworkActivity { change, .. }) =
+                        &timed_event.event
                         && let NetworkChange::IpOffline { ip } = &**change
                     {
                         seq_counter = seq_counter.wrapping_add(1);
@@ -585,10 +588,8 @@ fn spawn_jit_offline_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext) {
                             debug!(
                                 "DiscoveryService: JIT verification ping triggered for offline transition of {target_ip}"
                             );
-                            let ping_ok = matches!(
-                                pinger_c.ping(target_ip, seq_counter).await,
-                                Ok(true)
-                            );
+                            let ping_ok =
+                                matches!(pinger_c.ping(target_ip, seq_counter).await, Ok(true));
                             if ping_ok && let Some(mac) = ctx_c.get_mac_by_ip(target_ip) {
                                 let update = match target_ip {
                                     IpAddr::V4(v4) => DeviceUpdate::ArpSeen {
@@ -610,7 +611,8 @@ fn spawn_jit_offline_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext) {
                                     })
                                 });
                                 if let Some((mac, Some(ref iface_name))) = dev_opt
-                                    && let Some(prober) = get_or_create_arp_prober(&probers_c, iface_name)
+                                    && let Some(prober) =
+                                        get_or_create_arp_prober(&probers_c, iface_name)
                                 {
                                     debug!(
                                         target_ip = %v4,

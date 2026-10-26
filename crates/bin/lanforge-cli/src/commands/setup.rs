@@ -176,13 +176,14 @@ fn render_interfaces_table(interfaces: &[NetworkInterfaceInfo], printer: &Printe
     ]);
 
     for iface in interfaces {
-        let mac_str = iface.mac.map_or_else(
-            || "-".to_string(),
-            |m| m.to_string(),
-        );
+        let mac_str = iface.mac.map_or_else(|| "-".to_string(), |m| m.to_string());
 
         let carrier_badge = if iface.carrier_up {
-            if printer.no_color { "[CARRIER UP]".to_string() } else { "[UP]".green().bold().to_string() }
+            if printer.no_color {
+                "[CARRIER UP]".to_string()
+            } else {
+                "[UP]".green().bold().to_string()
+            }
         } else if printer.no_color {
             "[CARRIER DOWN]".to_string()
         } else {
@@ -190,7 +191,11 @@ fn render_interfaces_table(interfaces: &[NetworkInterfaceInfo], printer: &Printe
         };
 
         let link_badge = if iface.is_up {
-            if printer.no_color { "[UP]".to_string() } else { "[UP]".green().to_string() }
+            if printer.no_color {
+                "[UP]".to_string()
+            } else {
+                "[UP]".green().to_string()
+            }
         } else if printer.no_color {
             "[DOWN]".to_string()
         } else {
@@ -222,20 +227,32 @@ fn render_interfaces_table(interfaces: &[NetworkInterfaceInfo], printer: &Printe
 
 #[allow(clippy::too_many_lines)]
 async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
-    println!("{}", "\n  ⚡ Lanforge — Router & Network First-Run Setup Wizard".bold().cyan());
-    println!("  {}\n", "─────────────────────────────────────────────────────────────".dimmed());
+    println!(
+        "{}",
+        "\n  ⚡ Lanforge — Router & Network First-Run Setup Wizard"
+            .bold()
+            .cyan()
+    );
+    println!(
+        "  {}\n",
+        "─────────────────────────────────────────────────────────────".dimmed()
+    );
 
     let status = client.system_setup_status().await?;
 
     if status.is_provisioned {
-        printer.warning("This Lanforge router is already provisioned and locked against initial onboarding.");
+        printer.warning(
+            "This Lanforge router is already provisioned and locked against initial onboarding.",
+        );
         render_setup_status(&status, printer);
         printer.info("To modify network configuration on a running system, use:");
         println!("  · 'lanforge host'     - Static DHCP reservations and DNS overrides");
         println!("  · 'lanforge dhcp'     - Dynamic lease pools and client lease tables");
         println!("  · 'lanforge pppoe'    - PPPoE WAN dialing and credentials");
         println!("  · 'lanforge firewall' - Firewall zones, port forwards, and traffic rules");
-        println!("  · 'lanforge ra'       - IPv6 SLAAC Router Advertisement prefixes and DNS options\n");
+        println!(
+            "  · 'lanforge ra'       - IPv6 SLAAC Router Advertisement prefixes and DNS options\n"
+        );
         return Ok(());
     }
 
@@ -277,7 +294,12 @@ async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
         let vlan_id = if vlan_str.trim().is_empty() {
             None
         } else {
-            Some(vlan_str.trim().parse::<u16>().map_err(|_| eyre!("Invalid VLAN ID"))?)
+            Some(
+                vlan_str
+                    .trim()
+                    .parse::<u16>()
+                    .map_err(|_| eyre!("Invalid VLAN ID"))?,
+            )
         };
 
         Some(SetupWanConfig::Pppoe {
@@ -289,22 +311,25 @@ async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
             nftables: None,
         })
     } else {
-        let default_gw = status.detected_gateway.map_or_else(
-            || "192.168.1.1".to_string(),
-            |g| g.to_string(),
-        );
+        let default_gw = status
+            .detected_gateway
+            .map_or_else(|| "192.168.1.1".to_string(), |g| g.to_string());
         let gw_input = Text::new("Upstream Default Gateway IP:")
             .with_default(&default_gw)
             .prompt()?;
-        let gateway_ip = Ipv4Addr::from_str(gw_input.trim())
-            .map_err(|_| eyre!("Invalid gateway IP address"))?;
+        let gateway_ip =
+            Ipv4Addr::from_str(gw_input.trim()).map_err(|_| eyre!("Invalid gateway IP address"))?;
 
         Some(SetupWanConfig::SystemGateway { gateway_ip })
     };
 
     // 3. LAN Network Interface
     let lan_choices = format_interface_choices(&status.interfaces);
-    let lan_selection = Select::new("Select LAN interface (connects to local network):", lan_choices).prompt()?;
+    let lan_selection = Select::new(
+        "Select LAN interface (connects to local network):",
+        lan_choices,
+    )
+    .prompt()?;
     let lan_iface = lan_selection
         .split_whitespace()
         .next()
@@ -314,16 +339,17 @@ async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
     let lan_ip_str = Text::new("Router / LAN IP:")
         .with_default("192.168.1.1")
         .prompt()?;
-    let lan_ip = Ipv4Addr::from_str(lan_ip_str.trim()).map_err(|_| eyre!("Invalid LAN IP address"))?;
+    let lan_ip =
+        Ipv4Addr::from_str(lan_ip_str.trim()).map_err(|_| eyre!("Invalid LAN IP address"))?;
 
-    let mask_default = status.detected_subnet_mask.map_or_else(
-        || "255.255.255.0".to_string(),
-        |m| m.to_string(),
-    );
+    let mask_default = status
+        .detected_subnet_mask
+        .map_or_else(|| "255.255.255.0".to_string(), |m| m.to_string());
     let mask_str = Text::new("Subnet Mask:")
         .with_default(&mask_default)
         .prompt()?;
-    let subnet_mask = Ipv4Addr::from_str(mask_str.trim()).map_err(|_| eyre!("Invalid subnet mask"))?;
+    let subnet_mask =
+        Ipv4Addr::from_str(mask_str.trim()).map_err(|_| eyre!("Invalid subnet mask"))?;
 
     let dhcp_enabled = Confirm::new("Enable DHCPv4 Server on LAN?")
         .with_default(true)
@@ -333,12 +359,14 @@ async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
         let pool_start_str = Text::new("Primary DHCPv4 Pool Start:")
             .with_default("192.168.1.100")
             .prompt()?;
-        let start = Ipv4Addr::from_str(pool_start_str.trim()).map_err(|_| eyre!("Invalid pool start IP"))?;
+        let start = Ipv4Addr::from_str(pool_start_str.trim())
+            .map_err(|_| eyre!("Invalid pool start IP"))?;
 
         let pool_end_str = Text::new("Primary DHCPv4 Pool End:")
             .with_default("192.168.1.240")
             .prompt()?;
-        let end = Ipv4Addr::from_str(pool_end_str.trim()).map_err(|_| eyre!("Invalid pool end IP"))?;
+        let end =
+            Ipv4Addr::from_str(pool_end_str.trim()).map_err(|_| eyre!("Invalid pool end IP"))?;
         (start, end)
     } else {
         (lan_ip, lan_ip)
@@ -367,15 +395,17 @@ async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
         .prompt()?;
 
     let adblock_sources = if adblock_enabled {
-        let install_presets = Confirm::new("Install recommended community blocklists (StevenBlack + OISD Basic)?")
-            .with_default(true)
-            .prompt()?;
+        let install_presets =
+            Confirm::new("Install recommended community blocklists (StevenBlack + OISD Basic)?")
+                .with_default(true)
+                .prompt()?;
         if install_presets {
             vec![
                 lanforge_types::network::dns::AdblockUrlEntry {
                     id: None,
                     name: Some("StevenBlack Unified".to_string()),
-                    url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts".to_string(),
+                    url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+                        .to_string(),
                     kind: lanforge_types::network::dns::adblock::AdblockUrlKind::Blocklist,
                     format: lanforge_types::network::dns::adblock::AdblockSourceFormat::Hosts,
                 },
@@ -417,12 +447,52 @@ async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
     println!("  ─────────────────────────────────────────────────────────────");
     println!("   {:<22} {admin_username}", "Admin User:".bold());
     println!("   {:<22} {lan_iface}", "LAN Interface:".bold());
-    println!("   {:<22} {lan_ip} ({subnet_mask})", "LAN IP & Subnet:".bold());
-    println!("   {:<22} {}", "DHCPv4 Pool:".bold(), if dhcp_enabled { format!("{dhcp_pool_start} - {dhcp_pool_end}") } else { "Disabled".bright_black().to_string() });
-    println!("   {:<22} {}", "DHCPv6 Scope:".bold(), if dhcp_v6_enabled { dhcp_v6_pool_range.as_deref().unwrap_or("::100-::1fff").to_string() } else { "Disabled".bright_black().to_string() });
+    println!(
+        "   {:<22} {lan_ip} ({subnet_mask})",
+        "LAN IP & Subnet:".bold()
+    );
+    println!(
+        "   {:<22} {}",
+        "DHCPv4 Pool:".bold(),
+        if dhcp_enabled {
+            format!("{dhcp_pool_start} - {dhcp_pool_end}")
+        } else {
+            "Disabled".bright_black().to_string()
+        }
+    );
+    println!(
+        "   {:<22} {}",
+        "DHCPv6 Scope:".bold(),
+        if dhcp_v6_enabled {
+            dhcp_v6_pool_range
+                .as_deref()
+                .unwrap_or("::100-::1fff")
+                .to_string()
+        } else {
+            "Disabled".bright_black().to_string()
+        }
+    );
     println!("   {:<22} {domain_name}", "Domain Name:".bold());
-    println!("   {:<22} {}", "Adblocker:".bold(), if adblock_enabled { format!("Enabled ({} blocklists)", adblock_sources.len()).green().to_string() } else { "Disabled".bright_black().to_string() });
-    println!("   {:<22} {}", "IPv6 SLAAC:".bold(), if ra_enabled { "Enabled (Auto-GUA + Auto-ULA)".green().to_string() } else { "Disabled".bright_black().to_string() });
+    println!(
+        "   {:<22} {}",
+        "Adblocker:".bold(),
+        if adblock_enabled {
+            format!("Enabled ({} blocklists)", adblock_sources.len())
+                .green()
+                .to_string()
+        } else {
+            "Disabled".bright_black().to_string()
+        }
+    );
+    println!(
+        "   {:<22} {}",
+        "IPv6 SLAAC:".bold(),
+        if ra_enabled {
+            "Enabled (Auto-GUA + Auto-ULA)".green().to_string()
+        } else {
+            "Disabled".bright_black().to_string()
+        }
+    );
 
     if !printer.yes {
         let confirmed = Confirm::new("Apply configuration and initialize router services?")
@@ -434,7 +504,12 @@ async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
         }
     }
 
-    println!("\n  {}", "Applying Configuration and Seeding Database...".bold().yellow());
+    println!(
+        "\n  {}",
+        "Applying Configuration and Seeding Database..."
+            .bold()
+            .yellow()
+    );
     let payload = SetupPayload {
         admin_username,
         admin_password,
@@ -459,8 +534,14 @@ async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
     let res = client.system_setup(payload).await?;
 
     println!("\n  {} {}", "✓".green().bold(), res.message.bold().green());
-    println!("  {} Lanforge network stack is active and operational.\n", "✓".green().bold());
-    println!("  {} http://{lan_ip}:8088  or  http://lanforge.{domain_name}:8088\n", "Web Console:".bold().cyan());
+    println!(
+        "  {} Lanforge network stack is active and operational.\n",
+        "✓".green().bold()
+    );
+    println!(
+        "  {} http://{lan_ip}:8088  or  http://lanforge.{domain_name}:8088\n",
+        "Web Console:".bold().cyan()
+    );
 
     Ok(())
 }
@@ -492,9 +573,15 @@ async fn apply_setup(
         })?;
 
         let wan_config = if args.wan_mode.trim().eq_ignore_ascii_case("pppoe") {
-            let pppoe_if = args.pppoe_iface.ok_or_else(|| eyre!("Missing --pppoe-iface"))?;
-            let pppoe_usr = args.pppoe_user.ok_or_else(|| eyre!("Missing --pppoe-user"))?;
-            let pppoe_pwd = args.pppoe_password.ok_or_else(|| eyre!("Missing --pppoe-password"))?;
+            let pppoe_if = args
+                .pppoe_iface
+                .ok_or_else(|| eyre!("Missing --pppoe-iface"))?;
+            let pppoe_usr = args
+                .pppoe_user
+                .ok_or_else(|| eyre!("Missing --pppoe-user"))?;
+            let pppoe_pwd = args
+                .pppoe_password
+                .ok_or_else(|| eyre!("Missing --pppoe-password"))?;
             Some(SetupWanConfig::Pppoe {
                 interface: pppoe_if,
                 username: pppoe_usr,
@@ -575,7 +662,10 @@ pub fn format_interface_choices(interfaces: &[NetworkInterfaceInfo]) -> Vec<Stri
         .map(|i| {
             let status_badge = if i.carrier_up { "● UP" } else { "○ DOWN" };
             let first_ip = i.ips.first().map_or("no IP", String::as_str);
-            format!("{} [{} | {} | {}]", i.name, i.bus_type, status_badge, first_ip)
+            format!(
+                "{} [{} | {} | {}]",
+                i.name, i.bus_type, status_badge, first_ip
+            )
         })
         .collect()
 }

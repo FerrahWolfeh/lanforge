@@ -68,8 +68,8 @@ use crate::error::NetworkError;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy,
-    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
+    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
+    ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_transport::Icmp6Transport;
 use rand::RngExt;
@@ -202,7 +202,6 @@ impl RaState {
         self.ignored_solicitations = self.ignored_solicitations.saturating_add(1);
     }
 
-
     pub(crate) fn deprecated_list(&self, now: Instant) -> Vec<(Ipv6Addr, u32)> {
         if self.deprecated_prefixes.is_empty() {
             return Vec::new();
@@ -260,7 +259,6 @@ impl RaState {
         }
     }
 
-
     pub(crate) fn update_prefix_and_deprecate(
         &mut self,
         current: Option<Ipv6Addr>,
@@ -298,10 +296,7 @@ impl RaState {
 
 use lanforge_types::system::ServiceId;
 
-const RA_DEPS: &[Edge] = &[
-    Edge::after(ServiceId::Db),
-    Edge::wants(ServiceId::Pppoe),
-];
+const RA_DEPS: &[Edge] = &[Edge::after(ServiceId::Db), Edge::wants(ServiceId::Pppoe)];
 #[derive(Clone)]
 pub struct RaService {
     cfg: RaConfig,
@@ -324,7 +319,11 @@ impl RaService {
 
     /// Creates an instance of `RaService` with an injected transport.
     #[must_use]
-    pub const fn with_transport(cfg: RaConfig, ctx: LanforgeContext, transport: Icmp6Transport) -> Self {
+    pub const fn with_transport(
+        cfg: RaConfig,
+        ctx: LanforgeContext,
+        transport: Icmp6Transport,
+    ) -> Self {
         Self {
             cfg,
             ctx,
@@ -628,7 +627,9 @@ impl LanforgeService for RaService {
                     if ctx.get_ra_server_config().enabled {
                         Activation::Active
                     } else {
-                        Activation::Dormant(lanforge_types::system::DormantReason::disabled("ra.enabled"))
+                        Activation::Dormant(lanforge_types::system::DormantReason::disabled(
+                            "ra.enabled",
+                        ))
                     }
                 },
             },
@@ -646,10 +647,7 @@ impl AsyncService for RaService {
         let if_state = ctx.get_interface_state(ctx.target_ifindex().unwrap_or(0));
         let prefixes = ctx.get_ra_prefixes();
         let mut list = vec![
-            (
-                std::borrow::Cow::Borrowed("iface"),
-                self.cfg.iface.clone(),
-            ),
+            (std::borrow::Cow::Borrowed("iface"), self.cfg.iface.clone()),
             (
                 std::borrow::Cow::Borrowed("max_interval_secs"),
                 self.cfg.max_interval.as_secs().to_string(),
@@ -668,11 +666,15 @@ impl AsyncService for RaService {
             ),
             (
                 std::borrow::Cow::Borrowed("gua_prefix"),
-                if_state.gua.map_or_else(|| "none".to_string(), |g| g.to_string()),
+                if_state
+                    .gua
+                    .map_or_else(|| "none".to_string(), |g| g.to_string()),
             ),
             (
                 std::borrow::Cow::Borrowed("ula_prefix"),
-                if_state.ula.map_or_else(|| "none".to_string(), |u| u.to_string()),
+                if_state
+                    .ula
+                    .map_or_else(|| "none".to_string(), |u| u.to_string()),
             ),
         ];
         if let Some(ref st) = ra_status {
@@ -732,8 +734,6 @@ impl AsyncService for RaService {
         Ok(())
     }
 }
-
-
 
 /// Thread-safe context for Router Advertisement operations.
 #[derive(Clone, Copy)]

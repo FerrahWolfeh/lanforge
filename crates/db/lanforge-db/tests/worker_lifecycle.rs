@@ -263,7 +263,7 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
 
         let ctx_clone = ctx.clone();
         let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
-    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
+        let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
 
         // Synchronization barrier: ensure worker is active and subscribed
         let storage = ctx.storage_handle().expect("storage handle present");
@@ -498,11 +498,7 @@ async fn test_db_worker_storage_query_dispatch() {
         .call(|s: &Stores| s.db.load_dns_rewrites())
         .await
         .unwrap();
-    assert!(
-        rewrites
-            .iter()
-            .any(|r| r.domain == "router.lan")
-    );
+    assert!(rewrites.iter().any(|r| r.domain == "router.lan"));
 
     storage
         .call(|s: &Stores| s.db.clear_dns_rewrites())
@@ -517,11 +513,7 @@ async fn test_db_worker_storage_query_dispatch() {
     // 5. Upstream DNS queries
     storage
         .call(|s: &Stores| {
-            s.db.add_dns_upstream(
-                "9.9.9.9:53".parse().unwrap(),
-                UpstreamProtocol::Udp,
-                None,
-            )
+            s.db.add_dns_upstream("9.9.9.9:53".parse().unwrap(), UpstreamProtocol::Udp, None)
         })
         .await
         .unwrap();
@@ -647,7 +639,10 @@ async fn api_storage_mutation_is_written_to_valid_toml_on_worker_shutdown() {
         })
         .await
         .unwrap();
-    let rewrites = storage.call(|s: &Stores| s.db.load_dns_rewrites()).await.unwrap();
+    let rewrites = storage
+        .call(|s: &Stores| s.db.load_dns_rewrites())
+        .await
+        .unwrap();
     ctx.update_dns_rewrites(rewrites);
     let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
     sleep(Duration::from_millis(20)).await;
@@ -706,7 +701,10 @@ async fn failed_live_toml_write_preserves_file_and_does_not_advance_hash() {
         })
         .await
         .unwrap();
-    let rewrites = storage.call(|s: &Stores| s.db.load_dns_rewrites()).await.unwrap();
+    let rewrites = storage
+        .call(|s: &Stores| s.db.load_dns_rewrites())
+        .await
+        .unwrap();
     ctx.update_dns_rewrites(rewrites);
     let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
     sleep(Duration::from_millis(20)).await;

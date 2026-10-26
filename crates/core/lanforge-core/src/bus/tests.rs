@@ -1,8 +1,8 @@
 #![cfg(test)]
 
 use crate::bus::{
-    AdminChange, DeviceEvent, DnsEvent, EventBus, FirewallEvent, LanforgeEvent,
-    NetworkEvent, PppoeEvent, StorageEvent, SystemEvent, TimedEvent, TrafficEvent,
+    AdminChange, DeviceEvent, DnsEvent, EventBus, FirewallEvent, LanforgeEvent, NetworkEvent,
+    PppoeEvent, StorageEvent, SystemEvent, TimedEvent, TrafficEvent,
 };
 use crate::context::LanforgeContext;
 use crate::context::state::State;
@@ -203,7 +203,9 @@ async fn topic_partitioning_isolates_unrelated_events() {
     assert!(net_rx.try_recv().is_err());
 
     // 2. Publish a Network event
-    let _ = bus.publish(LanforgeEvent::Network(NetworkEvent::InterfaceUpdated { ifindex: 2 }));
+    let _ = bus.publish(LanforgeEvent::Network(NetworkEvent::InterfaceUpdated {
+        ifindex: 2,
+    }));
 
     // Network and Global receive it
     assert!(matches!(
@@ -249,15 +251,27 @@ async fn topic_routing_matrix() {
 
     // 1. ConfigRaChanged -> system and network
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigRaChanged));
-    assert!(matches!(sys_rx.try_recv().unwrap().event, LanforgeEvent::System(SystemEvent::ConfigRaChanged)));
-    assert!(matches!(net_rx.try_recv().unwrap().event, LanforgeEvent::System(SystemEvent::ConfigRaChanged)));
+    assert!(matches!(
+        sys_rx.try_recv().unwrap().event,
+        LanforgeEvent::System(SystemEvent::ConfigRaChanged)
+    ));
+    assert!(matches!(
+        net_rx.try_recv().unwrap().event,
+        LanforgeEvent::System(SystemEvent::ConfigRaChanged)
+    ));
     assert!(dev_rx.try_recv().is_err());
     assert!(dns_rx.try_recv().is_err());
 
     // 2. ConfigDhcpV4Changed -> system and device
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed));
-    assert!(matches!(sys_rx.try_recv().unwrap().event, LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed)));
-    assert!(matches!(dev_rx.try_recv().unwrap().event, LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed)));
+    assert!(matches!(
+        sys_rx.try_recv().unwrap().event,
+        LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed)
+    ));
+    assert!(matches!(
+        dev_rx.try_recv().unwrap().event,
+        LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed)
+    ));
     assert!(net_rx.try_recv().is_err());
     assert!(dns_rx.try_recv().is_err());
 
@@ -273,31 +287,51 @@ async fn topic_routing_matrix() {
         dns: vec!["1.1.1.1".parse().unwrap()],
         ipv6_link_local: true,
     };
-    let _ = bus.publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(pppoe_details))));
-    assert!(matches!(pppoe_rx.try_recv().unwrap().event, LanforgeEvent::Pppoe(PppoeEvent::SessionUp(_))));
-    assert!(matches!(dns_rx.try_recv().unwrap().event, LanforgeEvent::Pppoe(PppoeEvent::SessionUp(_))));
+    let _ = bus.publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(
+        pppoe_details,
+    ))));
+    assert!(matches!(
+        pppoe_rx.try_recv().unwrap().event,
+        LanforgeEvent::Pppoe(PppoeEvent::SessionUp(_))
+    ));
+    assert!(matches!(
+        dns_rx.try_recv().unwrap().event,
+        LanforgeEvent::Pppoe(PppoeEvent::SessionUp(_))
+    ));
     assert!(net_rx.try_recv().is_err());
     assert!(fw_rx.try_recv().is_err());
 
     // 4. FirewallEvent -> firewall only
-    let _ = bus.publish(LanforgeEvent::Firewall(FirewallEvent::PortReleaseRequested {
-        service: "test".to_string(),
-        port: 8080,
-        protocol: L4Protocol::Tcp,
-    }));
-    assert!(matches!(fw_rx.try_recv().unwrap().event, LanforgeEvent::Firewall(FirewallEvent::PortReleaseRequested { .. })));
+    let _ = bus.publish(LanforgeEvent::Firewall(
+        FirewallEvent::PortReleaseRequested {
+            service: "test".to_string(),
+            port: 8080,
+            protocol: L4Protocol::Tcp,
+        },
+    ));
+    assert!(matches!(
+        fw_rx.try_recv().unwrap().event,
+        LanforgeEvent::Firewall(FirewallEvent::PortReleaseRequested { .. })
+    ));
     assert!(sys_rx.try_recv().is_err());
     assert!(net_rx.try_recv().is_err());
 
     // 5. TrafficEvent -> traffic only
-    let _ = bus.publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::RulesetChanged)));
-    assert!(matches!(trf_rx.try_recv().unwrap().event, LanforgeEvent::Traffic(t) if matches!(*t, TrafficEvent::RulesetChanged)));
+    let _ = bus.publish(LanforgeEvent::Traffic(Box::new(
+        TrafficEvent::RulesetChanged,
+    )));
+    assert!(
+        matches!(trf_rx.try_recv().unwrap().event, LanforgeEvent::Traffic(t) if matches!(*t, TrafficEvent::RulesetChanged))
+    );
     assert!(fw_rx.try_recv().is_err());
     assert!(sys_rx.try_recv().is_err());
 
     // 6. StorageEvent -> storage only
     let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::DbLogClean));
-    assert!(matches!(stg_rx.try_recv().unwrap().event, LanforgeEvent::Storage(StorageEvent::DbLogClean)));
+    assert!(matches!(
+        stg_rx.try_recv().unwrap().event,
+        LanforgeEvent::Storage(StorageEvent::DbLogClean)
+    ));
     assert!(sys_rx.try_recv().is_err());
     assert!(dev_rx.try_recv().is_err());
 }
@@ -316,7 +350,10 @@ async fn subscriber_lifecycle_and_zero_receiver_efficiency() {
     assert_eq!(sent, 1);
 
     let event = rx.recv().await.unwrap();
-    assert!(matches!(event.event, LanforgeEvent::Dns(DnsEvent::CacheFlush)));
+    assert!(matches!(
+        event.event,
+        LanforgeEvent::Dns(DnsEvent::CacheFlush)
+    ));
 
     drop(rx);
     // After dropping, count returns to 0

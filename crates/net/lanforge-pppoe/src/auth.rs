@@ -4,7 +4,7 @@ use crate::lcp::{PPP_CHAP, PPP_PAP};
 use crate::session::PppoeSession;
 use md5::{Digest, Md5};
 use std::time::Duration;
-use tokio::time::{timeout, Instant};
+use tokio::time::{Instant, timeout};
 use tracing::debug;
 
 pub async fn authenticate(

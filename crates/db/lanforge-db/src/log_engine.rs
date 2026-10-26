@@ -43,7 +43,10 @@ impl LogDb {
         let path_str = path_str.split('?').next().unwrap_or(path_str);
 
         let requested = PathBuf::from(path_str);
-        let mut candidates = vec![requested.clone(), PathBuf::from("/run/lanforge/runtime.redb")];
+        let mut candidates = vec![
+            requested.clone(),
+            PathBuf::from("/run/lanforge/runtime.redb"),
+        ];
         if let Some(xdg) = std::env::var_os("XDG_RUNTIME_DIR") {
             candidates.push(PathBuf::from(xdg).join("lanforge/runtime.redb"));
         }
@@ -54,7 +57,9 @@ impl LogDb {
         for candidate in candidates {
             match RedbDatabase::open_volatile(&candidate) {
                 Ok(db) => {
-                    warn_if_runtime_filesystem_is_persistent(candidate.parent().unwrap_or(Path::new("/")));
+                    warn_if_runtime_filesystem_is_persistent(
+                        candidate.parent().unwrap_or(Path::new("/")),
+                    );
                     return Ok(Self { inner: db });
                 }
                 Err(error) => {
@@ -101,7 +106,9 @@ impl LogDb {
 
 fn warn_if_runtime_filesystem_is_persistent(directory: &Path) {
     use std::os::unix::ffi::OsStrExt;
-    let Ok(path) = std::ffi::CString::new(directory.as_os_str().as_bytes()) else { return; };
+    let Ok(path) = std::ffi::CString::new(directory.as_os_str().as_bytes()) else {
+        return;
+    };
     // Linux TMPFS_MAGIC and RAMFS_MAGIC values from linux/magic.h.
     const TMPFS_MAGIC: libc::c_long = 0x0102_1994;
     const RAMFS_MAGIC: libc::c_long = 0x8584_58f6u32 as libc::c_long;
@@ -167,7 +174,10 @@ impl LogStore for LogDb {
             .record_dns_block(timed_event, src_ip, domain, src_mac)
     }
 
-    fn record_dns_queries_batch(&self, entries: &[std::sync::Arc<QueryLogEntry>]) -> Result<(), DbError> {
+    fn record_dns_queries_batch(
+        &self,
+        entries: &[std::sync::Arc<QueryLogEntry>],
+    ) -> Result<(), DbError> {
         self.inner.record_dns_queries_batch(entries)
     }
 

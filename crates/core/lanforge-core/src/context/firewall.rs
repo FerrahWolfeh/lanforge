@@ -4,8 +4,8 @@ use std::time::{Instant, SystemTime};
 
 use lanforge_types::events::FirewallEvent;
 use lanforge_types::network::firewall::{
-    validate_firewall_candidate, DynamicPortRequest, FirewallConfig, FirewallTransactionState,
-    FirewallValidationReport, L4Protocol,
+    DynamicPortRequest, FirewallConfig, FirewallTransactionState, FirewallValidationReport,
+    L4Protocol, validate_firewall_candidate,
 };
 
 use crate::bus::LanforgeEvent;
@@ -19,7 +19,9 @@ impl LanforgeContext {
         let added = {
             let mut ports = self.inner.runtime.firewall_ports.write();
             if ports.iter().any(|p| {
-                p.service == request.service && p.port == request.port && p.protocol == request.protocol
+                p.service == request.service
+                    && p.port == request.port
+                    && p.protocol == request.protocol
             }) {
                 false
             } else {
@@ -28,12 +30,12 @@ impl LanforgeContext {
             }
         };
         if added {
-            let _ = self
-                .inner
-                .bus
-                .publish(LanforgeEvent::Firewall(FirewallEvent::PortOpenRequested(
-                    Box::new(request),
-                )));
+            let _ =
+                self.inner
+                    .bus
+                    .publish(LanforgeEvent::Firewall(FirewallEvent::PortOpenRequested(
+                        Box::new(request),
+                    )));
         }
     }
 
@@ -46,14 +48,13 @@ impl LanforgeContext {
             ports.len() != initial
         };
         if removed {
-            let _ = self
-                .inner
-                .bus
-                .publish(LanforgeEvent::Firewall(FirewallEvent::PortReleaseRequested {
+            let _ = self.inner.bus.publish(LanforgeEvent::Firewall(
+                FirewallEvent::PortReleaseRequested {
                     service: service.to_string(),
                     port,
                     protocol,
-                }));
+                },
+            ));
         }
     }
 
@@ -66,22 +67,20 @@ impl LanforgeContext {
     /// Evaluates a candidate firewall configuration, runs pre-flight sanity checks,
     /// and stages it as an active pending transaction if valid.
     #[must_use]
-    pub fn stage_firewall_transaction(&self, candidate: FirewallConfig) -> FirewallValidationReport {
+    pub fn stage_firewall_transaction(
+        &self,
+        candidate: FirewallConfig,
+    ) -> FirewallValidationReport {
         let current = self.get_firewall_config().unwrap_or_default();
         let dynamic_ports = self.registered_service_ports();
 
-        let report = validate_firewall_candidate(
-            &candidate,
-            &current,
-            &dynamic_ports,
-            || {
-                let id = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis();
-                format!("tx-{id:x}")
-            },
-        );
+        let report = validate_firewall_candidate(&candidate, &current, &dynamic_ports, || {
+            let id = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            format!("tx-{id:x}")
+        });
 
         if let Some(ref tx_id) = report.tx_id {
             let now = Instant::now();
@@ -128,7 +127,10 @@ impl LanforgeContext {
 
     /// Clears the staged firewall transaction.
     #[must_use]
-    pub fn clear_staged_firewall_transaction(&self, tx_id: Option<&str>) -> Option<FirewallTransactionState> {
+    pub fn clear_staged_firewall_transaction(
+        &self,
+        tx_id: Option<&str>,
+    ) -> Option<FirewallTransactionState> {
         let mut tx_lock = self.inner.runtime.firewall_tx.write();
         if let Some(ref tx) = *tx_lock
             && (tx_id.is_none() || tx_id == Some(tx.tx_id.as_str()))

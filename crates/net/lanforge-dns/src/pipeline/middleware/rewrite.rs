@@ -65,4 +65,3 @@ impl Middleware for RewriteMiddleware {
         RewriteMiddleware::run_sync(self, ctx, req, resp)
     }
 }
-

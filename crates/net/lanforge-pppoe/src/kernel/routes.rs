@@ -180,11 +180,7 @@ pub async fn add_static_neighbour(
     }
 }
 
-pub async fn add_ipv4_default_route(
-    handle: &rtnetlink::Handle,
-    ifindex: u32,
-    peer: Ipv4Addr,
-) {
+pub async fn add_ipv4_default_route(handle: &rtnetlink::Handle, ifindex: u32, peer: Ipv4Addr) {
     let route = RouteMessageBuilder::<Ipv4Addr>::new()
         .destination_prefix(Ipv4Addr::UNSPECIFIED, 0)
         .gateway(peer)

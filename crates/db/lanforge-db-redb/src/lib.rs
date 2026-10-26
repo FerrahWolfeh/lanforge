@@ -20,8 +20,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, AtomicU64};
 use tables::*;
 
-pub use log::BlockedQueryEntry;
 pub use self::DbWriteTx as WriteTx;
+pub use log::BlockedQueryEntry;
 
 const VALUE_CODEC_VERSION: u8 = 1;
 
@@ -31,7 +31,10 @@ pub(crate) fn encode<T: serde::Serialize + ?Sized>(value: &T) -> Result<Vec<u8>,
     Ok(bytes)
 }
 
-pub(crate) fn encode_into<T: serde::Serialize + ?Sized>(value: &T, bytes: &mut Vec<u8>) -> Result<(), DbError> {
+pub(crate) fn encode_into<T: serde::Serialize + ?Sized>(
+    value: &T,
+    bytes: &mut Vec<u8>,
+) -> Result<(), DbError> {
     let scratch = std::mem::take(bytes);
     let mut scratch = scratch;
     scratch.clear();
@@ -65,7 +68,8 @@ impl DbWriteTx<'_> {
         value: &T,
     ) -> Result<(), DbError> {
         let bytes = encode(value)?;
-        self.txn.open_table(TABLE_CONFIG)?
+        self.txn
+            .open_table(TABLE_CONFIG)?
             .insert(key, bytes.as_slice())?;
         Ok(())
     }
@@ -238,7 +242,11 @@ impl RedbDatabase {
     }
 
     /// Convenience wrapper around `read_table` that returns `R::default()` if the table does not exist.
-    pub(crate) fn read_table_or_default<K: redb::Key + 'static, V: redb::Value + 'static, R: Default>(
+    pub(crate) fn read_table_or_default<
+        K: redb::Key + 'static,
+        V: redb::Value + 'static,
+        R: Default,
+    >(
         &self,
         table_def: redb::TableDefinition<K, V>,
         f: impl FnOnce(&redb::ReadOnlyTable<K, V>) -> Result<R, DbError>,
@@ -270,12 +278,11 @@ impl RedbDatabase {
         &self,
         key: lanforge_db_core::ConfigKey<T>,
     ) -> Result<Option<T>, DbError> {
-        self.read_table(TABLE_CONFIG, |table| {
-            match table.get(key.name())? {
-                Some(val) => Ok(Some(decode(val.value())?)),
-                None => Ok(None),
-            }
-        }).map(|opt| opt.flatten())
+        self.read_table(TABLE_CONFIG, |table| match table.get(key.name())? {
+            Some(val) => Ok(Some(decode(val.value())?)),
+            None => Ok(None),
+        })
+        .map(|opt| opt.flatten())
     }
 
     /// Stores a typed configuration value by its ConfigKey.
@@ -336,7 +343,8 @@ impl RedbDatabase {
 
     /// Generates the next sequential ID for a given sequence name atomically.
     pub fn next_id(&self, sequence: &str) -> Result<i64, DbError> {
-        let write_txn = self.begin_write()
+        let write_txn = self
+            .begin_write()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         let next = Self::next_id_in_txn(&write_txn, sequence)?;
         write_txn
@@ -347,7 +355,8 @@ impl RedbDatabase {
 
     /// Checks whether the system has completed the onboarding provisioning.
     pub fn is_provisioned(&self) -> Result<bool, DbError> {
-        let read_txn = self.db
+        let read_txn = self
+            .db
             .begin_read()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_META) {
@@ -367,7 +376,8 @@ impl RedbDatabase {
 
     /// Sets the onboarding provisioning state flag.
     pub fn set_provisioned(&self, provisioned: bool) -> Result<(), DbError> {
-        let write_txn = self.begin_write()
+        let write_txn = self
+            .begin_write()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
@@ -388,7 +398,8 @@ impl RedbDatabase {
     /// Returns the current schema version stored in the database metadata table.
     /// If unversioned, returns 0.
     pub fn schema_version(&self) -> Result<u32, DbError> {
-        let read_txn = self.db
+        let read_txn = self
+            .db
             .begin_read()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_META) {
@@ -417,7 +428,8 @@ impl RedbDatabase {
 
     /// Sets the schema version stored in the metadata table.
     pub fn set_schema_version(&self, version: u32) -> Result<(), DbError> {
-        let write_txn = self.begin_write()
+        let write_txn = self
+            .begin_write()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
@@ -435,7 +447,8 @@ impl RedbDatabase {
 
     /// Retrieves a stored configuration section hash from the metadata table.
     pub fn get_config_section_hash(&self, section: &str) -> Result<Option<u64>, DbError> {
-        let read_txn = self.db
+        let read_txn = self
+            .db
             .begin_read()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_META) {
@@ -465,7 +478,8 @@ impl RedbDatabase {
 
     /// Stores a configuration section hash in the metadata table.
     pub fn set_config_section_hash(&self, section: &str, hash: u64) -> Result<(), DbError> {
-        let write_txn = self.begin_write()
+        let write_txn = self
+            .begin_write()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
@@ -487,7 +501,8 @@ impl RedbDatabase {
         &self,
         hashes: &std::collections::BTreeMap<String, u64>,
     ) -> Result<(), DbError> {
-        let write_txn = self.begin_write()
+        let write_txn = self
+            .begin_write()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
@@ -508,7 +523,8 @@ impl RedbDatabase {
 
     /// Checks if any configuration section hashes have been stored in the metadata table.
     pub fn has_config_section_hashes(&self) -> Result<bool, DbError> {
-        let read_txn = self.db
+        let read_txn = self
+            .db
             .begin_read()
             .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_META) {
@@ -528,7 +544,8 @@ impl RedbDatabase {
         let Ok(read_txn) = self.db.begin_read() else {
             return false;
         };
-        read_txn.list_tables()
+        read_txn
+            .list_tables()
             .is_ok_and(|mut tables| tables.next().is_some())
     }
 
@@ -543,7 +560,11 @@ impl RedbDatabase {
         let current = self.schema_version()?;
         if self.volatile {
             if current != Self::RUNTIME_SCHEMA_VERSION {
-                tracing::info!(current, target = Self::RUNTIME_SCHEMA_VERSION, "Recreating volatile runtime database tables for schema change");
+                tracing::info!(
+                    current,
+                    target = Self::RUNTIME_SCHEMA_VERSION,
+                    "Recreating volatile runtime database tables for schema change"
+                );
                 self.clear_all_tables()?;
                 self.set_schema_version(Self::RUNTIME_SCHEMA_VERSION)?;
             }
@@ -602,7 +623,9 @@ impl RedbDatabase {
             drop(table);
             if !rewrites.is_empty() {
                 let bytes = encode(&rewrites)?;
-                write_txn.open_table(TABLE_CONFIG)?.insert(DNS_REWRITES.name(), bytes.as_slice())?;
+                write_txn
+                    .open_table(TABLE_CONFIG)?
+                    .insert(DNS_REWRITES.name(), bytes.as_slice())?;
             }
             let _ = write_txn.delete_table(TABLE_DNS_REWRITES);
         }
@@ -617,7 +640,9 @@ impl RedbDatabase {
             drop(table);
             if !allowlist.is_empty() {
                 let bytes = encode(&allowlist)?;
-                write_txn.open_table(TABLE_CONFIG)?.insert(DNS_ALLOWLIST.name(), bytes.as_slice())?;
+                write_txn
+                    .open_table(TABLE_CONFIG)?
+                    .insert(DNS_ALLOWLIST.name(), bytes.as_slice())?;
             }
             let _ = write_txn.delete_table(TABLE_DNS_ALLOWLIST);
         }
@@ -634,7 +659,9 @@ impl RedbDatabase {
             drop(table);
             if !upstreams.is_empty() {
                 let bytes = encode(&upstreams)?;
-                write_txn.open_table(TABLE_CONFIG)?.insert(DNS_UPSTREAMS.name(), bytes.as_slice())?;
+                write_txn
+                    .open_table(TABLE_CONFIG)?
+                    .insert(DNS_UPSTREAMS.name(), bytes.as_slice())?;
             }
             let _ = write_txn.delete_table(TABLE_DNS_UPSTREAMS);
         }
@@ -644,8 +671,12 @@ impl RedbDatabase {
             let mut urls = Vec::new();
             for item in table.iter()? {
                 let (id, val) = item?;
-                if let Ok((url, kind, _enabled, format)) =
-                    decode::<(String, AdblockUrlKind, bool, lanforge_types::network::dns::adblock::AdblockSourceFormat)>(val.value())
+                if let Ok((url, kind, _enabled, format)) = decode::<(
+                    String,
+                    AdblockUrlKind,
+                    bool,
+                    lanforge_types::network::dns::adblock::AdblockSourceFormat,
+                )>(val.value())
                 {
                     urls.push(AdblockUrlEntry {
                         id: Some(id.value()),
@@ -659,7 +690,9 @@ impl RedbDatabase {
             drop(table);
             if !urls.is_empty() {
                 let bytes = encode(&urls)?;
-                write_txn.open_table(TABLE_CONFIG)?.insert(ADBLOCK_URLS.name(), bytes.as_slice())?;
+                write_txn
+                    .open_table(TABLE_CONFIG)?
+                    .insert(ADBLOCK_URLS.name(), bytes.as_slice())?;
             }
             let _ = write_txn.delete_table(TABLE_ADBLOCK_URLS);
         }
@@ -684,7 +717,9 @@ impl RedbDatabase {
             drop(table);
             if !rules.is_empty() {
                 let bytes = encode(&rules)?;
-                write_txn.open_table(TABLE_CONFIG)?.insert(ADBLOCK_RULES.name(), bytes.as_slice())?;
+                write_txn
+                    .open_table(TABLE_CONFIG)?
+                    .insert(ADBLOCK_RULES.name(), bytes.as_slice())?;
             }
             let _ = write_txn.delete_table(TABLE_ADBLOCK_RULES);
         }
@@ -694,8 +729,14 @@ impl RedbDatabase {
     }
 
     fn clear_all_tables(&self) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
-        macro_rules! remove_table { ($table:expr) => {{ let _ = write_txn.delete_table($table); }}; }
+        let write_txn = self
+            .begin_write()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
+        macro_rules! remove_table {
+            ($table:expr) => {{
+                let _ = write_txn.delete_table($table);
+            }};
+        }
         remove_table!(TABLE_DEVICES);
         remove_table!(TABLE_STATIC_HOSTS);
         remove_table!(TABLE_RUNTIME_DEVICES);
@@ -713,11 +754,11 @@ impl RedbDatabase {
         remove_table!(TABLE_DNS_TELEMETRY);
         remove_table!(TABLE_DNS_STATS_HOURLY);
         remove_table!(TABLE_META);
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        write_txn
+            .commit()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(())
     }
-
-
 }
 
 #[cfg(test)]
@@ -985,7 +1026,8 @@ mod tests {
             filter: None,
             coalesce_id: None,
         };
-        db.record_dns_queries_batch(&[std::sync::Arc::new(query1), std::sync::Arc::new(query2)]).unwrap();
+        db.record_dns_queries_batch(&[std::sync::Arc::new(query1), std::sync::Arc::new(query2)])
+            .unwrap();
 
         let (queries, total) = db
             .get_dns_query_history(10, None, None, None, None, None)
@@ -1052,16 +1094,14 @@ mod tests {
         let initial_traffic = db.load_traffic_history().unwrap();
         assert!(initial_traffic.is_empty());
 
-        let test_traffic = vec![
-            lanforge_types::network::TrafficHistorySample {
-                timestamp: 1_700_000_000,
-                interfaces: vec![lanforge_types::network::traffic::InterfaceThroughputPoint {
-                    interface: "ppp0".to_string(),
-                    rx_rate_bps: 10_000_000,
-                    tx_rate_bps: 2_000_000,
-                }],
-            },
-        ];
+        let test_traffic = vec![lanforge_types::network::TrafficHistorySample {
+            timestamp: 1_700_000_000,
+            interfaces: vec![lanforge_types::network::traffic::InterfaceThroughputPoint {
+                interface: "ppp0".to_string(),
+                rx_rate_bps: 10_000_000,
+                tx_rate_bps: 2_000_000,
+            }],
+        }];
         db.save_traffic_history(&test_traffic).unwrap();
         let loaded_traffic = db.load_traffic_history().unwrap();
         assert_eq!(loaded_traffic, test_traffic);
@@ -1120,13 +1160,18 @@ mod tests {
             db.set_schema_version(2).unwrap();
             let bytes = serde_json::to_vec(&serde_json::json!({"enabled": true})).unwrap();
             let txn = db.db.begin_write().unwrap();
-            txn.open_table(TABLE_CONFIG).unwrap()
-                .insert("adblock_config", bytes.as_slice()).unwrap();
+            txn.open_table(TABLE_CONFIG)
+                .unwrap()
+                .insert("adblock_config", bytes.as_slice())
+                .unwrap();
             txn.commit().unwrap();
         }
 
         let db = RedbDatabase::open(&db_path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), RedbDatabase::CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            db.schema_version().unwrap(),
+            RedbDatabase::CURRENT_SCHEMA_VERSION
+        );
         assert!(!db.load_adblock_config().unwrap().enabled);
         assert!(!temp_dir.path().join("test_v2_v3.redb.v2.bak").exists());
     }
@@ -1150,8 +1195,11 @@ mod tests {
                 answer: RewriteAnswer::A("192.168.1.10".parse().unwrap()),
             };
             let bytes = encode(&rewrite).unwrap();
-            write_txn.open_table(TABLE_DNS_REWRITES).unwrap()
-                .insert(1i64, bytes.as_slice()).unwrap();
+            write_txn
+                .open_table(TABLE_DNS_REWRITES)
+                .unwrap()
+                .insert(1i64, bytes.as_slice())
+                .unwrap();
             write_txn.commit().unwrap();
 
             db.set_schema_version(3).unwrap();
@@ -1166,5 +1214,4 @@ mod tests {
         assert_eq!(rewrites.len(), 1);
         assert_eq!(rewrites[0].domain, "local.dev");
     }
-
 }

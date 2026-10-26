@@ -6,7 +6,7 @@ use nftables::expr::{
     CT, Expression, Meta, MetaKey, NamedExpression, Payload, PayloadField, TcpOption,
 };
 use nftables::schema::{Chain, FlowTable, FlushObject, NfCmd, NfListObject, Nftables, Rule, Table};
-use nftables::stmt::{Flow, Limit, Mangle, Match, NATFamily, Operator, SetOp, Statement, NAT};
+use nftables::stmt::{Flow, Limit, Mangle, Match, NAT, NATFamily, Operator, SetOp, Statement};
 use nftables::types::{NfChainPolicy, NfChainType, NfFamily, NfHook};
 use std::borrow::Cow;
 use std::net::IpAddr;
@@ -60,11 +60,7 @@ impl<'a> RulesetBuilder<'a> {
     #[must_use]
     pub fn table_name(&self) -> &str {
         let t = self.cfg.table_name.trim();
-        if t.is_empty() {
-            "lanforge"
-        } else {
-            t
-        }
+        if t.is_empty() { "lanforge" } else { t }
     }
 
     /// Resolves all active interfaces associated with a zone name.
@@ -356,12 +352,12 @@ impl<'a> RulesetBuilder<'a> {
                     "input",
                     vec![
                         Statement::Match(Match {
-                            left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                                PayloadField {
+                            left: Expression::Named(NamedExpression::Payload(
+                                Payload::PayloadField(PayloadField {
                                     protocol: proto.into(),
                                     field: "dport".into(),
-                                },
-                            ))),
+                                }),
+                            )),
                             right: Expression::Number(53),
                             op: Operator::EQ,
                         }),
@@ -379,12 +375,12 @@ impl<'a> RulesetBuilder<'a> {
                     "input",
                     vec![
                         Statement::Match(Match {
-                            left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                                PayloadField {
+                            left: Expression::Named(NamedExpression::Payload(
+                                Payload::PayloadField(PayloadField {
                                     protocol: "udp".into(),
                                     field: "dport".into(),
-                                },
-                            ))),
+                                }),
+                            )),
                             right: Expression::Number(port),
                             op: Operator::EQ,
                         }),
@@ -644,24 +640,24 @@ impl<'a> RulesetBuilder<'a> {
                                 op: Operator::IN,
                             }));
                             stmts.push(Statement::Match(Match {
-                                left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                                    PayloadField {
+                                left: Expression::Named(NamedExpression::Payload(
+                                    Payload::PayloadField(PayloadField {
                                         protocol: "ip".into(),
                                         field: "daddr".into(),
-                                    },
-                                ))),
+                                    }),
+                                )),
                                 right: Expression::String(v4.to_string().into()),
                                 op: Operator::EQ,
                             }));
                         }
                         IpAddr::V6(v6) => {
                             stmts.push(Statement::Match(Match {
-                                left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                                    PayloadField {
+                                left: Expression::Named(NamedExpression::Payload(
+                                    Payload::PayloadField(PayloadField {
                                         protocol: "ip6".into(),
                                         field: "daddr".into(),
-                                    },
-                                ))),
+                                    }),
+                                )),
                                 right: Expression::String(v6.to_string().into()),
                                 op: Operator::EQ,
                             }));
@@ -689,7 +685,12 @@ impl<'a> RulesetBuilder<'a> {
     #[allow(clippy::ptr_arg)]
     fn build_forward_icmp(batch: &mut Batch<'static>, table: &Cow<'static, str>) {
         // Forward: Essential ICMPv4 (Destination Unreachable, Time Exceeded, Echo Request/Reply)
-        for icmp_type in ["destination-unreachable", "time-exceeded", "echo-request", "echo-reply"] {
+        for icmp_type in [
+            "destination-unreachable",
+            "time-exceeded",
+            "echo-request",
+            "echo-reply",
+        ] {
             batch.add(Self::make_rule(
                 table,
                 "forward",
@@ -922,12 +923,12 @@ impl<'a> RulesetBuilder<'a> {
                     "forward",
                     vec![
                         Statement::Match(Match {
-                            left: Expression::Named(NamedExpression::Payload(Payload::PayloadField(
-                                PayloadField {
+                            left: Expression::Named(NamedExpression::Payload(
+                                Payload::PayloadField(PayloadField {
                                     protocol: "udp".into(),
                                     field: "dport".into(),
-                                },
-                            ))),
+                                }),
+                            )),
                             right: Expression::Number(port),
                             op: Operator::EQ,
                         }),
@@ -1027,8 +1028,8 @@ impl<'a> RulesetBuilder<'a> {
     ) {
         let external_ifaces = self.resolve_zone_interfaces("external");
         let has_hairpin = self.cfg.port_forwards.iter().any(|p| p.enable_hairpin);
-        let has_masquerade = !external_ifaces.is_empty()
-            || self.cfg.zones.iter().any(|z| z.masquerade);
+        let has_masquerade =
+            !external_ifaces.is_empty() || self.cfg.zones.iter().any(|z| z.masquerade);
 
         if !has_masquerade && !has_hairpin {
             return;
@@ -1206,8 +1207,7 @@ impl<'a> RulesetBuilder<'a> {
         let flowtable_name = "f";
         let has_flowtable = self.cfg.flow_offload && !flow_devices.is_empty();
         if has_flowtable {
-            let dev: Vec<Cow<'static, str>> =
-                flow_devices.into_iter().map(Into::into).collect();
+            let dev: Vec<Cow<'static, str>> = flow_devices.into_iter().map(Into::into).collect();
 
             batch.add(NfListObject::FlowTable(FlowTable {
                 family: NfFamily::INet,
@@ -1445,7 +1445,11 @@ impl<'a> RulesetBuilder<'a> {
     }
 
     #[allow(clippy::ptr_arg)]
-    fn build_minimal(&self, table: &Cow<'static, str>, flow_devices: &[String]) -> Nftables<'static> {
+    fn build_minimal(
+        &self,
+        table: &Cow<'static, str>,
+        flow_devices: &[String],
+    ) -> Nftables<'static> {
         let mut batch = Batch::new();
 
         batch.add(NfListObject::Table(Table {

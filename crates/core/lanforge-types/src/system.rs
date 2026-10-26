@@ -9,7 +9,6 @@ use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-
 /// Global system status and runtime configuration snapshot.
 ///
 /// This struct contains information about the system that is not
@@ -128,7 +127,9 @@ impl ServerCapabilities {
 }
 
 /// Canonical strongly-typed identifier for all Lanforge background services.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ServiceId {
     #[default]
@@ -400,7 +401,10 @@ impl std::fmt::Display for StateDetail {
             Self::DependencyDormant(id) => write!(f, "dependency dormant: {id}"),
             Self::Degraded(reason) => write!(f, "degraded: {reason}"),
             Self::Paused(id) => write!(f, "paused ({id})"),
-            Self::Failed { attempts, last_error } => {
+            Self::Failed {
+                attempts,
+                last_error,
+            } => {
                 write!(f, "failed (attempts: {attempts}, last error: {last_error})")
             }
             Self::Exited => write!(f, "exited"),
@@ -491,7 +495,6 @@ pub struct TrafficStatusResponse {
     pub diffserv: crate::network::traffic::SqmDiffserv,
     pub flow_offload_suppressed: bool,
 }
-
 
 /// Discovered network interface information for setup and topology display.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -709,4 +712,3 @@ pub struct RaStatusResponse {
     /// Service uptime in seconds.
     pub uptime_secs: Option<u64>,
 }
-

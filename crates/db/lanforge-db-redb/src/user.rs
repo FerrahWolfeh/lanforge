@@ -1,7 +1,7 @@
 //! UserStore and ApiTokenStore implementations for `RedbDatabase`.
 
-use crate::{RedbDatabase, decode, encode};
 use crate::tables::{TABLE_API_TOKENS, TABLE_USERS};
+use crate::{RedbDatabase, decode, encode};
 use lanforge_db_core::{ApiTokenEntry, ApiTokenStore, DbError, UserEntry, UserStore};
 use lanforge_types::auth::{ApiScopes, UserRole};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
@@ -14,14 +14,22 @@ impl UserStore for RedbDatabase {
         role: UserRole,
         now: i64,
     ) -> Result<UserEntry, DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self
+            .begin_write()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         let entry = {
             let table = write_txn
                 .open_table(TABLE_USERS)
                 .map_err(|e| DbError::Backend(e.to_string()))?;
 
-            if table.get(username).map_err(|e| DbError::Backend(e.to_string()))?.is_some() {
-                return Err(DbError::Validation(format!("User '{username}' already exists")));
+            if table
+                .get(username)
+                .map_err(|e| DbError::Backend(e.to_string()))?
+                .is_some()
+            {
+                return Err(DbError::Validation(format!(
+                    "User '{username}' already exists"
+                )));
             }
 
             drop(table);
@@ -49,23 +57,27 @@ impl UserStore for RedbDatabase {
 
             entry
         };
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        write_txn
+            .commit()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
 
         Ok(entry)
     }
 
-    fn get_user_by_username(
-        &self,
-        username: &str,
-    ) -> Result<Option<UserEntry>, DbError> {
-        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+    fn get_user_by_username(&self, username: &str) -> Result<Option<UserEntry>, DbError> {
+        let read_txn = self
+            .db
+            .begin_read()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_USERS) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
             Err(e) => return Err(DbError::Backend(e.to_string())),
         };
 
-        let val = table.get(username).map_err(|e| DbError::Backend(e.to_string()))?;
+        let val = table
+            .get(username)
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         match val {
             Some(guard) => {
                 let entry: UserEntry = decode(guard.value())
@@ -77,7 +89,10 @@ impl UserStore for RedbDatabase {
     }
 
     fn get_user_by_id(&self, id: i64) -> Result<Option<UserEntry>, DbError> {
-        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self
+            .db
+            .begin_read()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_USERS) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
@@ -96,7 +111,10 @@ impl UserStore for RedbDatabase {
     }
 
     fn list_users(&self) -> Result<Vec<UserEntry>, DbError> {
-        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self
+            .db
+            .begin_read()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_USERS) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
@@ -120,7 +138,9 @@ impl UserStore for RedbDatabase {
         new_hash: &str,
         now: i64,
     ) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self
+            .begin_write()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_USERS)
@@ -146,7 +166,9 @@ impl UserStore for RedbDatabase {
                 .insert(username, bytes.as_slice())
                 .map_err(|e| DbError::Backend(e.to_string()))?;
         }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        write_txn
+            .commit()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(())
     }
 
@@ -156,7 +178,9 @@ impl UserStore for RedbDatabase {
         new_role: UserRole,
         now: i64,
     ) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self
+            .begin_write()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_USERS)
@@ -182,16 +206,16 @@ impl UserStore for RedbDatabase {
                 .insert(username, bytes.as_slice())
                 .map_err(|e| DbError::Backend(e.to_string()))?;
         }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        write_txn
+            .commit()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(())
     }
 
-    fn update_user_last_login(
-        &self,
-        username: &str,
-        now: i64,
-    ) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+    fn update_user_last_login(&self, username: &str, now: i64) -> Result<(), DbError> {
+        let write_txn = self
+            .begin_write()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_USERS)
@@ -216,12 +240,16 @@ impl UserStore for RedbDatabase {
                 .insert(username, bytes.as_slice())
                 .map_err(|e| DbError::Backend(e.to_string()))?;
         }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        write_txn
+            .commit()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(())
     }
 
     fn delete_user(&self, username: &str) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self
+            .begin_write()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_USERS)
@@ -231,12 +259,17 @@ impl UserStore for RedbDatabase {
                 .remove(username)
                 .map_err(|e| DbError::Backend(e.to_string()))?;
         }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        write_txn
+            .commit()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(())
     }
 
     fn count_users(&self) -> Result<i64, DbError> {
-        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self
+            .db
+            .begin_read()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_USERS) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(0),
@@ -256,7 +289,9 @@ impl ApiTokenStore for RedbDatabase {
         expires_at: Option<i64>,
         now: i64,
     ) -> Result<i64, DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self
+            .begin_write()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         let id = {
             let id = Self::next_id_in_txn(&write_txn, "api_tokens")?;
             let entry = ApiTokenEntry {
@@ -281,7 +316,9 @@ impl ApiTokenStore for RedbDatabase {
                 .map_err(|e| DbError::Backend(e.to_string()))?;
             id
         };
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        write_txn
+            .commit()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
 
         Ok(id)
     }
@@ -293,14 +330,20 @@ impl ApiTokenStore for RedbDatabase {
     ) -> Result<Option<(String, ApiScopes)>, DbError> {
         // Fast read check first: avoid write lock when token invalid, expired, or recently updated
         let token_info = {
-            let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+            let read_txn = self
+                .db
+                .begin_read()
+                .map_err(|e| DbError::Backend(e.to_string()))?;
             let table = match read_txn.open_table(TABLE_API_TOKENS) {
                 Ok(t) => t,
                 Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
                 Err(e) => return Err(DbError::Backend(e.to_string())),
             };
 
-            match table.get(token).map_err(|e| DbError::Backend(e.to_string()))? {
+            match table
+                .get(token)
+                .map_err(|e| DbError::Backend(e.to_string()))?
+            {
                 Some(guard) => {
                     let entry: ApiTokenEntry = decode(guard.value())
                         .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
@@ -314,11 +357,16 @@ impl ApiTokenStore for RedbDatabase {
         };
 
         // Throttle disk writes: if last_used was updated less than 60s ago, return without writing
-        if token_info.last_used.is_some_and(|last| now >= last && now - last < 60) {
+        if token_info
+            .last_used
+            .is_some_and(|last| now >= last && now - last < 60)
+        {
             return Ok(Some((token_info.name, token_info.scopes)));
         }
 
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self
+            .begin_write()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         let res = {
             let mut table = match write_txn.open_table(TABLE_API_TOKENS) {
                 Ok(t) => t,
@@ -326,7 +374,10 @@ impl ApiTokenStore for RedbDatabase {
                 Err(e) => return Err(DbError::Backend(e.to_string())),
             };
 
-            let mut entry = match table.get(token).map_err(|e| DbError::Backend(e.to_string()))? {
+            let mut entry = match table
+                .get(token)
+                .map_err(|e| DbError::Backend(e.to_string()))?
+            {
                 Some(guard) => {
                     let entry: ApiTokenEntry = decode(guard.value())
                         .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
@@ -350,12 +401,16 @@ impl ApiTokenStore for RedbDatabase {
             Some((entry.name, entry.scopes))
         };
 
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        write_txn
+            .commit()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(res)
     }
 
     fn delete_api_token(&self, token: &str) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+        let write_txn = self
+            .begin_write()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         {
             let mut table = write_txn
                 .open_table(TABLE_API_TOKENS)
@@ -365,15 +420,16 @@ impl ApiTokenStore for RedbDatabase {
                 .remove(token)
                 .map_err(|e| DbError::Backend(e.to_string()))?;
         }
-        write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+        write_txn
+            .commit()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         Ok(())
     }
 
-    fn delete_api_token_by_id_or_name(
-        &self,
-        id_or_name: &str,
-    ) -> Result<(), DbError> {
-        let write_txn = self.begin_write().map_err(|e| DbError::Backend(e.to_string()))?;
+    fn delete_api_token_by_id_or_name(&self, id_or_name: &str) -> Result<(), DbError> {
+        let write_txn = self
+            .begin_write()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         let removed = {
             let mut table = match write_txn.open_table(TABLE_API_TOKENS) {
                 Ok(t) => t,
@@ -405,13 +461,18 @@ impl ApiTokenStore for RedbDatabase {
             }
         };
         if removed {
-            write_txn.commit().map_err(|e| DbError::Backend(e.to_string()))?;
+            write_txn
+                .commit()
+                .map_err(|e| DbError::Backend(e.to_string()))?;
         }
         Ok(())
     }
 
     fn load_api_tokens(&self) -> Result<Vec<ApiTokenEntry>, DbError> {
-        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self
+            .db
+            .begin_read()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_API_TOKENS) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
@@ -433,7 +494,10 @@ impl ApiTokenStore for RedbDatabase {
         &self,
         id_or_name: &str,
     ) -> Result<Option<(String, ApiScopes, Option<i64>)>, DbError> {
-        let read_txn = self.db.begin_read().map_err(|e| DbError::Backend(e.to_string()))?;
+        let read_txn = self
+            .db
+            .begin_read()
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         let table = match read_txn.open_table(TABLE_API_TOKENS) {
             Ok(t) => t,
             Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),

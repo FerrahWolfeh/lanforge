@@ -22,26 +22,56 @@ pub fn render(f: &mut Frame, app: &App) {
 }
 
 fn render_header(f: &mut Frame, area: Rect, app: &App) {
-    let status_color = if app.is_busy { Color::Yellow } else { Color::Green };
+    let status_color = if app.is_busy {
+        Color::Yellow
+    } else {
+        Color::Green
+    };
     let status_text = if app.is_busy { "BUSY" } else { "READY" };
 
     let (priv_badge_text, priv_badge_style) = if app.is_root {
-        (" [ROOT: YES]", Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD))
+        (
+            " [ROOT: YES]",
+            Style::default()
+                .fg(Color::LightRed)
+                .add_modifier(Modifier::BOLD),
+        )
     } else {
         (" [ROOTLESS]", Style::default().fg(Color::DarkGray))
     };
 
     let header_text = vec![Line::from(vec![
-        Span::styled("⚡ Lanforge Virtual Lab Workbench ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "⚡ Lanforge Virtual Lab Workbench ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("| Mode: "),
-        Span::styled(&app.mode_str, Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            &app.mode_str,
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(priv_badge_text, priv_badge_style),
         Span::raw(" | DHCP: "),
-        Span::styled(app.dhcp_server.to_string(), Style::default().fg(Color::Yellow)),
+        Span::styled(
+            app.dhcp_server.to_string(),
+            Style::default().fg(Color::Yellow),
+        ),
         Span::raw(" | DNS: "),
-        Span::styled(app.dns_server.to_string(), Style::default().fg(Color::Yellow)),
+        Span::styled(
+            app.dns_server.to_string(),
+            Style::default().fg(Color::Yellow),
+        ),
         Span::raw(" | Status: "),
-        Span::styled(format!("● {status_text}"), Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("● {status_text}"),
+            Style::default()
+                .fg(status_color)
+                .add_modifier(Modifier::BOLD),
+        ),
     ])];
 
     let header_block = Block::default()
@@ -123,9 +153,16 @@ fn render_menu(f: &mut Frame, area: Rect, app: &App) {
             Line::from(vec![
                 Span::styled(
                     current_action.title(),
-                    Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::LightRed)
+                        .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled("  🔒 [ROOT REQUIRED]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "  🔒 [ROOT REQUIRED]",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ]),
             Line::from(Span::styled(
                 "⛔ Root privileges (CAP_NET_RAW) required. Disabled in unprivileged mode.",
@@ -140,7 +177,9 @@ fn render_menu(f: &mut Frame, area: Rect, app: &App) {
         vec![
             Line::from(vec![Span::styled(
                 current_action.title(),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             )]),
             Line::from(Span::raw(current_action.description())),
         ]
@@ -181,7 +220,8 @@ fn render_logs(f: &mut Frame, area: Rect, app: &App) {
 
     // Auto-scroll to bottom if log lines exceed height
     let available_height = area.height.saturating_sub(2) as usize;
-    let scroll_offset = u16::try_from(log_lines.len().saturating_sub(available_height)).unwrap_or(u16::MAX);
+    let scroll_offset =
+        u16::try_from(log_lines.len().saturating_sub(available_height)).unwrap_or(u16::MAX);
 
     let logs_widget = Paragraph::new(log_lines)
         .block(
@@ -201,21 +241,45 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let is_locked = current_action.requires_root() && !app.is_root;
 
     let exec_span = if is_locked {
-        Span::styled(" [Enter] 🔒 Disabled ", Style::default().fg(Color::Black).bg(Color::DarkGray))
+        Span::styled(
+            " [Enter] 🔒 Disabled ",
+            Style::default().fg(Color::Black).bg(Color::DarkGray),
+        )
     } else {
-        Span::styled(" [Enter] ", Style::default().fg(Color::Black).bg(Color::Green).add_modifier(Modifier::BOLD))
+        Span::styled(
+            " [Enter] ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )
     };
 
     let keybindings = Line::from(vec![
-        Span::styled(" [1..7] ", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " [1..7] ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" Quick Run  "),
-        Span::styled(" [↑/↓] ", Style::default().fg(Color::Black).bg(Color::White)),
+        Span::styled(
+            " [↑/↓] ",
+            Style::default().fg(Color::Black).bg(Color::White),
+        ),
         Span::raw(" Select  "),
         exec_span,
         Span::raw(" Execute  "),
         Span::styled(" [c] ", Style::default().fg(Color::Black).bg(Color::White)),
         Span::raw(" Clear Logs  "),
-        Span::styled(" [q/Esc] ", Style::default().fg(Color::Black).bg(Color::Red).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " [q/Esc] ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" Quit"),
     ]);
 

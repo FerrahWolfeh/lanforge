@@ -68,16 +68,15 @@ async fn test_full_db_reset_chain() {
 
     // 3. Spawn DbWorker
     let ctx_db = ctx.clone();
-    let db = Arc::new(
-        LanforgeDb::open(&cfg.database)
-            .expect("Failed to open DB"),
-    );
-    let log_db = Arc::new(
-        LogDb::open(&cfg.database.runtime_path)
-            .expect("Failed to open LogDB"),
-    );
+    let db = Arc::new(LanforgeDb::open(&cfg.database).expect("Failed to open DB"));
+    let log_db = Arc::new(LogDb::open(&cfg.database.runtime_path).expect("Failed to open LogDB"));
 
-    let mut db_worker = DbWorker::new(cfg.database.clone(), ctx_db.clone(), db.clone(), log_db.clone());
+    let mut db_worker = DbWorker::new(
+        cfg.database.clone(),
+        ctx_db.clone(),
+        db.clone(),
+        log_db.clone(),
+    );
     let ctrl = ServiceControl::new(ServiceId::Db, ctx.clone());
     tokio::spawn(async move {
         use lanforge_core::service::AsyncService;

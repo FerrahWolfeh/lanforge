@@ -203,7 +203,9 @@ async fn change_password(
         None => prompt_password_with_confirm("New password (min 8 chars):")?,
     };
 
-    let resp = client.user_passwd(target_username.clone(), new_password).await?;
+    let resp = client
+        .user_passwd(target_username.clone(), new_password)
+        .await?;
 
     if printer.json {
         return printer.print_json(&resp);
@@ -274,13 +276,7 @@ fn render_users_table(users: &[UserInfo], printer: &Printer) {
     }
 
     let mut table = printer.new_table();
-    table.set_header(vec![
-        "ID",
-        "Username",
-        "Role",
-        "Created At",
-        "Last Login",
-    ]);
+    table.set_header(vec!["ID", "Username", "Role", "Created At", "Last Login"]);
 
     for u in users {
         let created_str = DateTime::<Utc>::from_timestamp(u.created_at, 0).map_or_else(

@@ -36,7 +36,10 @@ async fn dns_uds_simulation_basic() {
     let mut rx = ctx.bus().subscribe();
 
     tokio::spawn(async move {
-        service.serve(&ctx_service, &ctrl).await.expect("Control API service failed");
+        service
+            .serve(&ctx_service, &ctrl)
+            .await
+            .expect("Control API service failed");
     });
 
     // Wait for ServiceReady

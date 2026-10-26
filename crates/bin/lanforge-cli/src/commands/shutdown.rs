@@ -14,9 +14,10 @@ pub struct ShutdownArgs {
 impl ShutdownArgs {
     pub async fn execute(self, client: &LanforgeClient, printer: &Printer) -> Result<()> {
         if !printer.yes && !self.yes {
-            let confirmed = Confirm::new("Are you sure you want to gracefully shut down the Lanforge daemon?")
-                .with_default(false)
-                .prompt()?;
+            let confirmed =
+                Confirm::new("Are you sure you want to gracefully shut down the Lanforge daemon?")
+                    .with_default(false)
+                    .prompt()?;
             if !confirmed {
                 printer.info("Shutdown aborted.");
                 return Ok(());

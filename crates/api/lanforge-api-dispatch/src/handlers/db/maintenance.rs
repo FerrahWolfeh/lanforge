@@ -73,7 +73,8 @@ impl ClientContext {
             };
         }
 
-        let _ = self.ctx
+        let _ = self
+            .ctx
             .bus()
             .publish(LanforgeEvent::Storage(StorageEvent::DbResetCompleted));
 

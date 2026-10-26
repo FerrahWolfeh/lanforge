@@ -1,13 +1,13 @@
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy,
-    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
+    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
+    ServiceCommand, ServiceHandle, ServiceSpec,
 };
+use lanforge_types::events::LanforgeEvent;
 use lanforge_types::events::pppoe::PppoeEvent;
 use lanforge_types::events::system::SystemEvent;
 use lanforge_types::events::traffic::TrafficEvent;
-use lanforge_types::events::LanforgeEvent;
 use lanforge_types::network::TrafficConfig;
 use lanforge_types::system::{DormantReason, ServiceId, ServiceState, TrafficStatusResponse};
 use tracing::{debug, info};
@@ -15,10 +15,7 @@ use tracing::{debug, info};
 use crate::sqm::{apply_sqm, clear_sqm};
 use crate::tuning::apply_tuning;
 
-const TRAFFIC_DEPS: &[Edge] = &[
-    Edge::after(ServiceId::Db),
-    Edge::wants(ServiceId::Pppoe),
-];
+const TRAFFIC_DEPS: &[Edge] = &[Edge::after(ServiceId::Db), Edge::wants(ServiceId::Pppoe)];
 
 #[derive(Clone)]
 pub struct TrafficService {
@@ -160,12 +157,14 @@ impl TrafficService {
         self.active_wan = Some(iface.to_string());
         self.active_ifb.clone_from(&ifb);
 
-        let _ = ctx.bus().publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::SqmApplied {
-            interface: iface.to_string(),
-            ingress_device: ifb,
-            download_mbps: self.cfg.sqm.download_mbps,
-            upload_mbps: self.cfg.sqm.upload_mbps,
-        })));
+        let _ = ctx
+            .bus()
+            .publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::SqmApplied {
+                interface: iface.to_string(),
+                ingress_device: ifb,
+                download_mbps: self.cfg.sqm.download_mbps,
+                upload_mbps: self.cfg.sqm.upload_mbps,
+            })));
     }
 
     /// Clears any active SQM configuration.
@@ -175,9 +174,11 @@ impl TrafficService {
                 clear_sqm(&wan, &self.cfg.sqm.ingress_device).await;
             }
             self.active_ifb = None;
-            let _ = ctx.bus().publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::SqmCleared {
-                interface: wan,
-            })));
+            let _ = ctx
+                .bus()
+                .publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::SqmCleared {
+                    interface: wan,
+                })));
         }
     }
 
@@ -220,17 +221,21 @@ impl TrafficService {
             self.effective_cpu_mask =
                 crate::tuning::cpu::resolve_effective_cpu_mask(&self.cfg.tuning.cpu_mask);
             self.tuned_interfaces.clone_from(&tuned);
-            let _ = ctx.bus().publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::TuningApplied {
-                interfaces: tuned,
-                cpu_mask: self.effective_cpu_mask.clone(),
-            })));
+            let _ = ctx.bus().publish(LanforgeEvent::Traffic(Box::new(
+                TrafficEvent::TuningApplied {
+                    interfaces: tuned,
+                    cpu_mask: self.effective_cpu_mask.clone(),
+                },
+            )));
         }
 
         if is_sqm_enabled {
             if let Some((wan_iface, is_pppoe)) = self.resolve_wan_interface(ctx) {
                 self.apply_sqm_internal(ctx, &wan_iface, is_pppoe).await;
             } else {
-                debug!("Traffic: Waiting for active WAN interface / PPPoE session before attaching SQM");
+                debug!(
+                    "Traffic: Waiting for active WAN interface / PPPoE session before attaching SQM"
+                );
             }
         }
 
@@ -455,7 +460,10 @@ impl LanforgeService for TrafficService {
             condition: Condition {
                 sections: &[lanforge_types::config::ConfigDomain::Traffic],
                 eval: |ctx| {
-                    if ctx.get_traffic_config().is_none_or(|c| c.tuning.enabled || c.sqm.enabled) {
+                    if ctx
+                        .get_traffic_config()
+                        .is_none_or(|c| c.tuning.enabled || c.sqm.enabled)
+                    {
                         Activation::Active
                     } else {
                         Activation::Dormant(DormantReason::disabled("traffic.enabled"))

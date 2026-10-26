@@ -64,7 +64,6 @@ impl TimedEvent {
                 | NetworkEvent::LeaseRenewRequested { .. }
                 | NetworkEvent::LeaseReleaseRequested { .. }
                 | NetworkEvent::RaTriggerRequested => true,
-
             },
             LanforgeEvent::System(e) => matches!(
                 e,
@@ -99,7 +98,9 @@ impl TimedEvent {
                 DnsEvent::QueryResolved(_) => false,
                 _ => true,
             },
-            LanforgeEvent::Pppoe(_) | LanforgeEvent::Firewall(_) | LanforgeEvent::Traffic(_) => true,
+            LanforgeEvent::Pppoe(_) | LanforgeEvent::Firewall(_) | LanforgeEvent::Traffic(_) => {
+                true
+            }
         }
     }
 }

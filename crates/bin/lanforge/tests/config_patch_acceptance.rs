@@ -44,7 +44,10 @@ async fn test_acceptance_config_noop() {
 
     // Assert subscription receiver does not fire
     let sub_res = timeout(Duration::from_millis(50), sub.next()).await;
-    assert!(sub_res.is_err(), "Expected subscription not to wake on no-op apply");
+    assert!(
+        sub_res.is_err(),
+        "Expected subscription not to wake on no-op apply"
+    );
 }
 
 #[tokio::test]
@@ -79,7 +82,10 @@ async fn test_acceptance_config_isolation() {
     assert!(dhcp_wake.is_err(), "DHCP pools must not wake on RA change");
 
     let dhcp_opts_wake = timeout(Duration::from_millis(50), dhcp_opts_sub.next()).await;
-    assert!(dhcp_opts_wake.is_err(), "DHCP options must not wake on RA change");
+    assert!(
+        dhcp_opts_wake.is_err(),
+        "DHCP options must not wake on RA change"
+    );
 }
 
 #[tokio::test]
@@ -128,7 +134,10 @@ async fn test_acceptance_config_batch_import() {
         }
     }
 
-    assert_eq!(config_changed_count, 1, "Exactly one ConfigChanged event must be published");
+    assert_eq!(
+        config_changed_count, 1,
+        "Exactly one ConfigChanged event must be published"
+    );
 }
 
 #[test]
@@ -148,27 +157,42 @@ fn test_acceptance_pppoe_impact() {
     // Password change => Reconnect
     let mut cred_changed = base.clone();
     cred_changed.password = "new_secret_pass".to_string();
-    assert_eq!(PppoeConfig::classify(&base, &cred_changed), ChangeImpact::Reconnect);
+    assert_eq!(
+        PppoeConfig::classify(&base, &cred_changed),
+        ChangeImpact::Reconnect
+    );
 
     // Username change => Reconnect
     let mut user_changed = base.clone();
     user_changed.username = "user2@isp.com".to_string();
-    assert_eq!(PppoeConfig::classify(&base, &user_changed), ChangeImpact::Reconnect);
+    assert_eq!(
+        PppoeConfig::classify(&base, &user_changed),
+        ChangeImpact::Reconnect
+    );
 
     // LCP echo interval change => Hot (no disconnect!)
     let mut timer_changed = base.clone();
     timer_changed.lcp_echo_interval_secs = 10;
-    assert_eq!(PppoeConfig::classify(&base, &timer_changed), ChangeImpact::Hot);
+    assert_eq!(
+        PppoeConfig::classify(&base, &timer_changed),
+        ChangeImpact::Hot
+    );
 
     // Reconnect delay change => Hot
     let mut delay_changed = base.clone();
     delay_changed.reconnect_delay_secs = 20;
-    assert_eq!(PppoeConfig::classify(&base, &delay_changed), ChangeImpact::Hot);
+    assert_eq!(
+        PppoeConfig::classify(&base, &delay_changed),
+        ChangeImpact::Hot
+    );
 
     // WAN interface change => Rebind
     let mut iface_changed = base.clone();
     iface_changed.wan_iface = "eth2".to_string();
-    assert_eq!(PppoeConfig::classify(&base, &iface_changed), ChangeImpact::Rebind);
+    assert_eq!(
+        PppoeConfig::classify(&base, &iface_changed),
+        ChangeImpact::Rebind
+    );
 }
 
 #[tokio::test]
@@ -186,7 +210,10 @@ async fn test_acceptance_reload_noop() {
     let log_db = Arc::new(lanforge_db::log_engine::LogDb::open(&db_cfg.runtime_path).unwrap());
     let mut db_worker = lanforge_db::worker::DbWorker::new(db_cfg, ctx.clone(), db, log_db);
     let ctx_db = ctx.clone();
-    let ctrl = lanforge_core::service::ServiceControl::new(lanforge_types::system::ServiceId::Db, ctx.clone());
+    let ctrl = lanforge_core::service::ServiceControl::new(
+        lanforge_types::system::ServiceId::Db,
+        ctx.clone(),
+    );
     tokio::spawn(async move {
         use lanforge_core::service::AsyncService;
         let _ = db_worker.init(&ctx_db).await;
@@ -239,7 +266,11 @@ username = ""
     let res = client.handle_reload().await;
     match res {
         Response::Success(s) => {
-            assert!(s.message.contains("reloaded"), "Reload must succeed: {}", s.message);
+            assert!(
+                s.message.contains("reloaded"),
+                "Reload must succeed: {}",
+                s.message
+            );
         }
         other => panic!("Unexpected reload response: {other:?}"),
     }

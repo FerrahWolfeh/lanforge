@@ -177,16 +177,16 @@ impl LanforgeContext {
     fn debounce_update(&self, update: DeviceUpdate) -> Option<DeviceUpdate> {
         let state = self.inner.state.load();
         match update {
-            DeviceUpdate::ArpSeen {
-                mac,
-                ip,
-                is_active,
-            } if should_debounce_arp(&state, mac, ip, is_active) => None,
-            DeviceUpdate::NdpSeen {
-                mac,
-                ip,
-                is_active,
-            } if should_debounce_ndp(&state, mac, ip, is_active) => None,
+            DeviceUpdate::ArpSeen { mac, ip, is_active }
+                if should_debounce_arp(&state, mac, ip, is_active) =>
+            {
+                None
+            }
+            DeviceUpdate::NdpSeen { mac, ip, is_active }
+                if should_debounce_ndp(&state, mac, ip, is_active) =>
+            {
+                None
+            }
             DeviceUpdate::SlaacObserved {
                 mac,
                 addr,

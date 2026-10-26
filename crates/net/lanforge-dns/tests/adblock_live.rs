@@ -144,7 +144,10 @@ async fn test_adblock_live_comprehensive_battery() {
     let dns_ctx = Arc::new(mock_dns_context(ctx_instance.clone(), cfg).await);
     let manager_handle = spawn_adblock_manager(dns_ctx.clone());
 
-    let filter = dns_ctx.filter.as_ref().expect("AdBlocker should be initialized");
+    let filter = dns_ctx
+        .filter
+        .as_ref()
+        .expect("AdBlocker should be initialized");
 
     // Wait for the manager to download, compile, merge, and arm the in-memory blocker
     println!("Waiting for adblock lists to download, compile, and merge...");
@@ -171,24 +174,33 @@ async fn test_adblock_live_comprehensive_battery() {
     // =========================================================================
     // Case 1: Exact matches from StevenBlack hosts (Source ID 1)
     // =========================================================================
-    let m = filter.check_domain("adservice.google.com").expect("adservice.google.com should match");
+    let m = filter
+        .check_domain("adservice.google.com")
+        .expect("adservice.google.com should match");
     assert_eq!(m.action, FilterAction::Block);
     assert_eq!(m.origin, FilterOrigin::List { source_id: 1 });
 
     let query_data = make_query("adservice.google.com", DnsRecordType::A);
     let mut resp_buf = Vec::new();
-    let handled = process_query_test(&query_data, &dns_ctx, client_ip, &mut resp_buf).await.unwrap();
+    let handled = process_query_test(&query_data, &dns_ctx, client_ip, &mut resp_buf)
+        .await
+        .unwrap();
     assert!(handled);
     let resp = WireDecoder::new(&resp_buf).decode_message().unwrap();
     assert_eq!(resp.header.rcode, DnsResponseCode::NoError);
-    assert!(!resp.answers.is_empty(), "NullIp mode should answer with 0.0.0.0");
+    assert!(
+        !resp.answers.is_empty(),
+        "NullIp mode should answer with 0.0.0.0"
+    );
 
     // =========================================================================
     // Case 2: Exact-only restriction for hosts syntax
     // =========================================================================
     // Hosts format rules (0.0.0.0 domain) MUST NOT wildcard subdomains.
     assert!(
-        filter.check_domain("unlisted-sub.adservice.google.com").is_none(),
+        filter
+            .check_domain("unlisted-sub.adservice.google.com")
+            .is_none(),
         "Hosts syntax should not wildcard unlisted subdomains"
     );
 
@@ -196,15 +208,21 @@ async fn test_adblock_live_comprehensive_battery() {
     // Case 3: Adblock-format wildcard blocking (Source ID 2)
     // =========================================================================
     // ||analytics-engine.io^ is unique to Source 2: apex and subdomains attribute to Source 2
-    let m_apex = filter.check_domain("analytics-engine.io").expect("analytics-engine.io should match");
+    let m_apex = filter
+        .check_domain("analytics-engine.io")
+        .expect("analytics-engine.io should match");
     assert_eq!(m_apex.action, FilterAction::Block);
     assert_eq!(m_apex.origin, FilterOrigin::List { source_id: 2 });
 
-    let m_sub = filter.check_domain("tracker.analytics-engine.io").expect("tracker.analytics-engine.io should match");
+    let m_sub = filter
+        .check_domain("tracker.analytics-engine.io")
+        .expect("tracker.analytics-engine.io should match");
     assert_eq!(m_sub.action, FilterAction::Block);
     assert_eq!(m_sub.origin, FilterOrigin::List { source_id: 2 });
 
-    let m_deep = filter.check_domain("deep.sub.ad.analytics-engine.io").expect("deep subdomain should match");
+    let m_deep = filter
+        .check_domain("deep.sub.ad.analytics-engine.io")
+        .expect("deep subdomain should match");
     assert_eq!(m_deep.action, FilterAction::Block);
     assert_eq!(m_deep.origin, FilterOrigin::List { source_id: 2 });
 
@@ -216,12 +234,16 @@ async fn test_adblock_live_comprehensive_battery() {
     // Case 4: Exception rules (@@||...) unblocking domains
     // =========================================================================
     // @@||good.adservice.google.com^ unblocks a subdomain of StevenBlack
-    let m_exc1 = filter.check_domain("good.adservice.google.com").expect("should match exception");
+    let m_exc1 = filter
+        .check_domain("good.adservice.google.com")
+        .expect("should match exception");
     assert_eq!(m_exc1.action, FilterAction::Allow);
     assert_eq!(m_exc1.origin, FilterOrigin::List { source_id: 2 });
 
     // @@||whitelisted-sub.doubleclick.net^ unblocks a subdomain of Source 2
-    let m_exc2 = filter.check_domain("whitelisted-sub.doubleclick.net").expect("should match exception");
+    let m_exc2 = filter
+        .check_domain("whitelisted-sub.doubleclick.net")
+        .expect("should match exception");
     assert_eq!(m_exc2.action, FilterAction::Allow);
 
     // =========================================================================
@@ -236,7 +258,9 @@ async fn test_adblock_live_comprehensive_battery() {
     // =========================================================================
     // Case 6: Priority $important modifier
     // =========================================================================
-    let m_imp = filter.check_domain("important.tracker.com").expect("important.tracker.com should match");
+    let m_imp = filter
+        .check_domain("important.tracker.com")
+        .expect("important.tracker.com should match");
     assert_eq!(m_imp.action, FilterAction::Block);
     assert!(m_imp.important, "Match must preserve important flag");
 
@@ -259,10 +283,14 @@ async fn test_adblock_live_comprehensive_battery() {
         action: AdblockRuleAction::Block,
         enabled: true,
     }]);
-    let _ = dns_ctx.bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockRulesChanged));
+    let _ = dns_ctx
+        .bus
+        .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockRulesChanged));
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let m_custom = filter.check_domain("my-custom-ad.internal").expect("custom rule must block");
+    let m_custom = filter
+        .check_domain("my-custom-ad.internal")
+        .expect("custom rule must block");
     assert_eq!(m_custom.action, FilterAction::Block);
     assert_eq!(m_custom.origin, FilterOrigin::UserRule);
 
@@ -271,35 +299,55 @@ async fn test_adblock_live_comprehensive_battery() {
     // =========================================================================
     // Add doubleclick.net to user allowlist -> should override FST block
     ctx_instance.update_dns_allowlist(vec!["doubleclick.net".to_string()]);
-    let _ = dns_ctx.bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigAllowlistChanged));
+    let _ = dns_ctx
+        .bus
+        .publish(LanforgeEvent::Dns(DnsEvent::ConfigAllowlistChanged));
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let m_allowed = filter.check_domain("doubleclick.net").expect("should match allowlist");
+    let m_allowed = filter
+        .check_domain("doubleclick.net")
+        .expect("should match allowlist");
     assert_eq!(m_allowed.action, FilterAction::Allow);
     assert_eq!(m_allowed.origin, FilterOrigin::UserAllowlist);
 
     // Remove from allowlist -> should block again
     ctx_instance.update_dns_allowlist(vec![]);
-    let _ = dns_ctx.bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigAllowlistChanged));
+    let _ = dns_ctx
+        .bus
+        .publish(LanforgeEvent::Dns(DnsEvent::ConfigAllowlistChanged));
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let m_reblocked = filter.check_domain("doubleclick.net").expect("should block again");
+    let m_reblocked = filter
+        .check_domain("doubleclick.net")
+        .expect("should block again");
     assert_eq!(m_reblocked.action, FilterAction::Block);
 
     // =========================================================================
     // Case 10: Blocking mode switching (Refused, NXDomain, NullIp)
     // =========================================================================
     // Refused
-    filter.replace_config(BlockingMode::Refused, Some(Ipv4Addr::UNSPECIFIED), Some(std::net::Ipv6Addr::UNSPECIFIED));
+    filter.replace_config(
+        BlockingMode::Refused,
+        Some(Ipv4Addr::UNSPECIFIED),
+        Some(std::net::Ipv6Addr::UNSPECIFIED),
+    );
     resp_buf.clear();
-    process_query_test(&query_data, &dns_ctx, client_ip, &mut resp_buf).await.unwrap();
+    process_query_test(&query_data, &dns_ctx, client_ip, &mut resp_buf)
+        .await
+        .unwrap();
     let resp_refused = WireDecoder::new(&resp_buf).decode_message().unwrap();
     assert_eq!(resp_refused.header.rcode, DnsResponseCode::Refused);
 
     // NXDomain
-    filter.replace_config(BlockingMode::NxDomain, Some(Ipv4Addr::UNSPECIFIED), Some(std::net::Ipv6Addr::UNSPECIFIED));
+    filter.replace_config(
+        BlockingMode::NxDomain,
+        Some(Ipv4Addr::UNSPECIFIED),
+        Some(std::net::Ipv6Addr::UNSPECIFIED),
+    );
     resp_buf.clear();
-    process_query_test(&query_data, &dns_ctx, client_ip, &mut resp_buf).await.unwrap();
+    process_query_test(&query_data, &dns_ctx, client_ip, &mut resp_buf)
+        .await
+        .unwrap();
     let resp_nx = WireDecoder::new(&resp_buf).decode_message().unwrap();
     assert_eq!(resp_nx.header.rcode, DnsResponseCode::NXDomain);
 

@@ -65,11 +65,11 @@ impl UpstreamHealth {
     pub fn record_failure(&self) {
         self.total_queries.fetch_add(1, Ordering::Relaxed);
         self.total_failures.fetch_add(1, Ordering::Relaxed);
-        let _ = self.consecutive_failures.try_update(
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-            |v| Some(v.saturating_add(1)),
-        );
+        let _ = self
+            .consecutive_failures
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                Some(v.saturating_add(1))
+            });
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)

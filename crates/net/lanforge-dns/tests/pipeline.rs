@@ -5,8 +5,7 @@ use lanforge_dns_wire::{WireEncoder, WireResponseScanner};
 use lanforge_types::device::TransientOrigin;
 use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::dns::{
-    DnsClass, DnsMessage, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode,
-    adblock::RewriteRule,
+    DnsClass, DnsMessage, DnsRData, DnsRecord, DnsRecordType, DnsResponseCode, adblock::RewriteRule,
 };
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
 use std::net::IpAddr;
@@ -65,14 +64,9 @@ async fn pipeline_adblocking() {
         .build_bytes();
     let mut resp_buf = Vec::new();
 
-    let has_resp = process_query_test(
-        &data,
-        &dns_ctx,
-        "127.0.0.1".parse().unwrap(),
-        &mut resp_buf,
-    )
-    .await
-    .unwrap();
+    let has_resp = process_query_test(&data, &dns_ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
+        .await
+        .unwrap();
 
     assert!(has_resp);
     let resp = parse_response(&resp_buf).expect("Valid response");
@@ -141,14 +135,9 @@ async fn pipeline_cached_block() {
     let mut resp_buf = Vec::new();
 
     // 1. First query -> Should be Blocked
-    let has_resp = process_query_test(
-        &data,
-        &dns_ctx,
-        "127.0.0.1".parse().unwrap(),
-        &mut resp_buf,
-    )
-    .await
-    .unwrap();
+    let has_resp = process_query_test(&data, &dns_ctx, "127.0.0.1".parse().unwrap(), &mut resp_buf)
+        .await
+        .unwrap();
     assert!(has_resp);
     assert_eq!(dns_ctx.stats.snapshot().blocked_queries, 1);
 

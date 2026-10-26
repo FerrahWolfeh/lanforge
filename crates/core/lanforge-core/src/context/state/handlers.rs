@@ -7,9 +7,7 @@ use crate::bus::{
     PrefixChangeDetails,
 };
 use crate::context::state::cache::DiscoveryStore;
-use crate::context::state::{
-    CliHostUpdate, DeviceClass, InterfaceState, LeaseTarget, State,
-};
+use crate::context::state::{CliHostUpdate, DeviceClass, InterfaceState, LeaseTarget, State};
 use lanforge_types::device::{
     DeviceStatus, Hostname, HostnameOrigin, IPv4State, IPv6State, IpClassification, Origin,
     TransientHost, TransientOrigin, V6ObservationOrigin, classify_ipv6,
@@ -661,11 +659,7 @@ impl State {
         events
     }
 
-    pub(crate) fn handle_device_interface_seen(
-        &mut self,
-        mac: MacAddr,
-        iface: String,
-    ) -> EventVec {
+    pub(crate) fn handle_device_interface_seen(&mut self, mac: MacAddr, iface: String) -> EventVec {
         self.mutate_device(mac, |dev| {
             if dev.iface.as_deref() != Some(&iface) {
                 dev.identity_mut().iface = Some(iface);

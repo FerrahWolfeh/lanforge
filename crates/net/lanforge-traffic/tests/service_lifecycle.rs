@@ -6,9 +6,9 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_traffic::TrafficService;
+use lanforge_types::events::TimedEvent;
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
 use lanforge_types::events::traffic::TrafficEvent;
-use lanforge_types::events::TimedEvent;
 use lanforge_types::network::traffic::{NicTuningConfig, SqmConfig, SqmDiffserv, TrafficConfig};
 use lanforge_types::system::{ServiceId, ServiceState};
 use tokio::sync::broadcast;
@@ -30,7 +30,11 @@ async fn wait_for_sqm_applied(sub: &mut broadcast::Receiver<TimedEvent>) -> (u32
             .expect("Timeout waiting for SqmApplied")
             .expect("Recv error");
         if let LanforgeEvent::Traffic(ref e) = evt.event
-            && let TrafficEvent::SqmApplied { download_mbps, upload_mbps, .. } = **e
+            && let TrafficEvent::SqmApplied {
+                download_mbps,
+                upload_mbps,
+                ..
+            } = **e
         {
             return (download_mbps, upload_mbps);
         }
@@ -264,11 +268,15 @@ async fn test_traffic_inactive_when_all_disabled() {
     let mut service = TrafficService::inert(cfg);
     // When both are disabled, serve() must complete immediately with Ok(())
     let h = ServiceHandle::new(ServiceId::Traffic, ctx.clone());
-    timeout(Duration::from_millis(500), service.serve(&ctx, &h)).await
+    timeout(Duration::from_millis(500), service.serve(&ctx, &h))
+        .await
         .expect("serve() must not hang when features are disabled")
         .expect("serve() must return Ok(())");
 
-    assert_eq!(ctx.get_service_state(ServiceId::Traffic), ServiceState::Inactive);
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Traffic),
+        ServiceState::Inactive
+    );
 }
 
 #[tokio::test]
@@ -296,7 +304,10 @@ async fn test_traffic_reacts_to_interface_ready() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Drain initial startup event
-    let _ = timeout(Duration::from_millis(500), traffic_sub.recv()).await.unwrap().unwrap();
+    let _ = timeout(Duration::from_millis(500), traffic_sub.recv())
+        .await
+        .unwrap()
+        .unwrap();
 
     // Change target interface to lan1 and notify
     ctx.set_target_interface_name("lan1".to_string());

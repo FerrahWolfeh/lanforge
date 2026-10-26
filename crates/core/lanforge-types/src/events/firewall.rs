@@ -22,9 +22,7 @@ pub enum FirewallEvent {
     /// Dispatched after an atomic ruleset batch commit to the kernel
     RulesetApplied(Box<FirewallAppliedSummary>),
     /// Dispatched when nftables execution fails
-    ApplyFailed {
-        error: String,
-    },
+    ApplyFailed { error: String },
     /// Dispatched when firewall rules are flushed
     RulesetFlushed,
     /// Dispatched when firewall configuration has changed and kernel ruleset should be recompiled and applied

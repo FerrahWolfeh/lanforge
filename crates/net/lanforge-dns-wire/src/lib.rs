@@ -717,12 +717,22 @@ impl WireResponseWriter {
                 IpAddr::V4(addr) => {
                     let octets = addr.octets();
                     let record: [u8; 16] = [
-                        0xC0, 0x0C,
-                        qtype_bytes[0], qtype_bytes[1],
-                        0x00, 0x01,
-                        ttl_bytes[0], ttl_bytes[1], ttl_bytes[2], ttl_bytes[3],
-                        0x00, 0x04,
-                        octets[0], octets[1], octets[2], octets[3],
+                        0xC0,
+                        0x0C,
+                        qtype_bytes[0],
+                        qtype_bytes[1],
+                        0x00,
+                        0x01,
+                        ttl_bytes[0],
+                        ttl_bytes[1],
+                        ttl_bytes[2],
+                        ttl_bytes[3],
+                        0x00,
+                        0x04,
+                        octets[0],
+                        octets[1],
+                        octets[2],
+                        octets[3],
                     ];
                     resp.extend_from_slice(&record);
                 }
@@ -777,10 +787,16 @@ impl WireResponseWriter {
         // 3. Answer (PTR)
         let ttl_bytes = args.ttl.to_be_bytes();
         let ans_hdr: [u8; 10] = [
-            0xC0, 0x0C,
-            0x00, 12, // Type PTR (12)
-            0x00, 0x01, // Class IN (1)
-            ttl_bytes[0], ttl_bytes[1], ttl_bytes[2], ttl_bytes[3],
+            0xC0,
+            0x0C,
+            0x00,
+            12, // Type PTR (12)
+            0x00,
+            0x01, // Class IN (1)
+            ttl_bytes[0],
+            ttl_bytes[1],
+            ttl_bytes[2],
+            ttl_bytes[3],
         ];
         resp.extend_from_slice(&ans_hdr);
 
@@ -837,10 +853,16 @@ impl WireResponseWriter {
         // 3. Answer (CNAME)
         let ttl_bytes = ttl.to_be_bytes();
         let ans_hdr: [u8; 10] = [
-            0xC0, 0x0C,
-            0x00, 5, // Type CNAME (5)
-            0x00, 0x01, // Class IN (1)
-            ttl_bytes[0], ttl_bytes[1], ttl_bytes[2], ttl_bytes[3],
+            0xC0,
+            0x0C,
+            0x00,
+            5, // Type CNAME (5)
+            0x00,
+            0x01, // Class IN (1)
+            ttl_bytes[0],
+            ttl_bytes[1],
+            ttl_bytes[2],
+            ttl_bytes[3],
         ];
         resp.extend_from_slice(&ans_hdr);
 
@@ -900,10 +922,16 @@ impl WireResponseWriter {
         // 3. Answer (SRV)
         let ttl_bytes = ttl.to_be_bytes();
         let ans_hdr: [u8; 10] = [
-            0xC0, 0x0C,
-            0x00, 33, // Type SRV (33)
-            0x00, 0x01, // Class IN (1)
-            ttl_bytes[0], ttl_bytes[1], ttl_bytes[2], ttl_bytes[3],
+            0xC0,
+            0x0C,
+            0x00,
+            33, // Type SRV (33)
+            0x00,
+            0x01, // Class IN (1)
+            ttl_bytes[0],
+            ttl_bytes[1],
+            ttl_bytes[2],
+            ttl_bytes[3],
         ];
         resp.extend_from_slice(&ans_hdr);
 
@@ -914,9 +942,12 @@ impl WireResponseWriter {
         // RDATA: Priority (2 bytes), Weight (2 bytes), Port (2 bytes), Target (variable)
         let port_bytes = port.to_be_bytes();
         let srv_fixed: [u8; 6] = [
-            0, 0, // Priority = 0
-            0, 0, // Weight = 0
-            port_bytes[0], port_bytes[1],
+            0,
+            0, // Priority = 0
+            0,
+            0, // Weight = 0
+            port_bytes[0],
+            port_bytes[1],
         ];
         resp.extend_from_slice(&srv_fixed);
 
@@ -938,10 +969,16 @@ impl WireResponseWriter {
         let max_payload_bytes = opt.max_payload.to_be_bytes();
         let opt_rr: [u8; 11] = [
             0, // Root Name
-            0x00, 41, // Type 41 (OPT)
-            max_payload_bytes[0], max_payload_bytes[1], // Class (Max Payload)
-            0, 0, 0, 0, // TTL
-            0, 0, // RDLEN = 0
+            0x00,
+            41, // Type 41 (OPT)
+            max_payload_bytes[0],
+            max_payload_bytes[1], // Class (Max Payload)
+            0,
+            0,
+            0,
+            0, // TTL
+            0,
+            0, // RDLEN = 0
         ];
         resp.extend_from_slice(&opt_rr);
     }
@@ -1549,7 +1586,9 @@ mod tests {
         assert_eq!(min_ttl, 300);
 
         let mut decoder = WireDecoder::new(&resp);
-        let msg = decoder.decode_message().expect("Should decode response message");
+        let msg = decoder
+            .decode_message()
+            .expect("Should decode response message");
         assert_eq!(msg.header.id, 0x5678);
         assert_eq!(msg.answers.len(), 2);
         assert_eq!(msg.answers[0].ttl, 300);

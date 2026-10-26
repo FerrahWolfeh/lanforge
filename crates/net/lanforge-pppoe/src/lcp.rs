@@ -266,12 +266,8 @@ async fn handle_conf_req(
         match opt.opt_type {
             LCP_OPT_MAGIC => {
                 if opt.data.len() == 4 {
-                    *peer_magic = u32::from_be_bytes([
-                        opt.data[0],
-                        opt.data[1],
-                        opt.data[2],
-                        opt.data[3],
-                    ]);
+                    *peer_magic =
+                        u32::from_be_bytes([opt.data[0], opt.data[1], opt.data[2], opt.data[3]]);
                     ack_options.push(*opt);
                 } else {
                     rej_options.push(*opt);

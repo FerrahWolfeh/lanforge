@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 
 use crate::RedbDatabase;
 use lanforge_db_core::{
-    config_keys::*, AdblockStore, DbError, DnsStore, DnsUpstreamEntry, DnsUpstreamStore,
+    AdblockStore, DbError, DnsStore, DnsUpstreamEntry, DnsUpstreamStore, config_keys::*,
 };
 use lanforge_types::network::dns::adblock::{
     AdblockDbConfig, AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, AdblockUrlKind,
@@ -251,21 +251,12 @@ impl AdblockStore for RedbDatabase {
         self.clear_adblock_urls()
     }
 
-    fn load_adblock_rules(
-        &self,
-    ) -> Result<Vec<(i64, String, AdblockRuleAction, bool)>, DbError> {
+    fn load_adblock_rules(&self) -> Result<Vec<(i64, String, AdblockRuleAction, bool)>, DbError> {
         let list = self.get(ADBLOCK_RULES)?.unwrap_or_default();
         Ok(list
             .into_iter()
             .enumerate()
-            .map(|(i, r)| {
-                (
-                    r.id.unwrap_or(i as i64 + 1),
-                    r.domain,
-                    r.action,
-                    r.enabled,
-                )
-            })
+            .map(|(i, r)| (r.id.unwrap_or(i as i64 + 1), r.domain, r.action, r.enabled))
             .collect())
     }
 
@@ -338,7 +329,9 @@ impl DnsUpstreamStore for RedbDatabase {
         domain: Option<&str>,
     ) -> Result<(), DbError> {
         let mut list = self.load_dns_upstreams()?;
-        list.retain(|e| !(e.addr == addr && e.protocol == protocol && e.domain.as_deref() == domain));
+        list.retain(|e| {
+            !(e.addr == addr && e.protocol == protocol && e.domain.as_deref() == domain)
+        });
         self.put(DNS_UPSTREAMS, &list)
     }
 

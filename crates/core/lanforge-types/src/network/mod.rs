@@ -15,8 +15,8 @@ pub use traffic::{
 };
 
 pub use firewall::{
-    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallStatus, FirewallZone, HostPortRule,
-    L4Protocol, PortForwardRule, ZoneForwarding,
+    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallStatus, FirewallZone,
+    HostPortRule, L4Protocol, PortForwardRule, ZoneForwarding,
 };
 
 pub use dns::{

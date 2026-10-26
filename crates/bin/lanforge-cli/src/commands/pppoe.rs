@@ -176,8 +176,14 @@ fn render_pppoe_status(status: &PppoeStatusResponse, printer: &Printer) {
     println!();
 
     if !status.enabled {
-        println!("  {}", "PPPoE WAN client is currently disabled in configuration.".yellow());
-        println!("  To configure and activate: {}", "lanforge pppoe config wizard".cyan().bold());
+        println!(
+            "  {}",
+            "PPPoE WAN client is currently disabled in configuration.".yellow()
+        );
+        println!(
+            "  To configure and activate: {}",
+            "lanforge pppoe config wizard".cyan().bold()
+        );
         println!();
         return;
     }
@@ -192,7 +198,9 @@ fn format_session_badge(state: PppoeSessionState) -> String {
         PppoeSessionState::Authenticating => "[AUTHENTICATING]".yellow().bold().to_string(),
         PppoeSessionState::Discovering => "[DISCOVERING]".cyan().bold().to_string(),
         PppoeSessionState::WaitingForCarrier => "[WAITING FOR CARRIER]".yellow().bold().to_string(),
-        PppoeSessionState::WaitingForTerminal => "[WAITING FOR TERMINAL]".yellow().bold().to_string(),
+        PppoeSessionState::WaitingForTerminal => {
+            "[WAITING FOR TERMINAL]".yellow().bold().to_string()
+        }
         PppoeSessionState::Reconnecting => "[RECONNECTING]".yellow().bold().to_string(),
         PppoeSessionState::Disconnected => "[DISCONNECTED]".red().bold().to_string(),
     }
@@ -208,49 +216,89 @@ fn render_pppoe_session_details(status: &PppoeStatusResponse) {
     );
 
     let dp_str = match status.dataplane {
-        Some(PppoeDataplane::Ebpf) => {
-            "eBPF Fast-Path (Generic XDP + TC) [EXPERIMENTAL]".yellow().bold().to_string()
-        }
+        Some(PppoeDataplane::Ebpf) => "eBPF Fast-Path (Generic XDP + TC) [EXPERIMENTAL]"
+            .yellow()
+            .bold()
+            .to_string(),
         _ => "Linux Kernel (ppp_generic)".cyan().to_string(),
     };
     println!("    {:<24} {dp_str}", "Data Plane:".dimmed());
 
-    let ip_str = status.local_ip.map_or_else(|| "none".yellow().to_string(), |ip| ip.to_string().cyan().bold().to_string());
+    let ip_str = status.local_ip.map_or_else(
+        || "none".yellow().to_string(),
+        |ip| ip.to_string().cyan().bold().to_string(),
+    );
     println!("    {:<24} {ip_str}", "Assigned IPv4:".dimmed());
 
-    let peer_str = status.peer_ip.map_or_else(|| "none".to_string(), |ip| ip.to_string());
+    let peer_str = status
+        .peer_ip
+        .map_or_else(|| "none".to_string(), |ip| ip.to_string());
     println!("    {:<24} {}", "Peer Gateway:".dimmed(), peer_str);
 
     let ac_name = status.ac_name.as_deref().unwrap_or("unknown");
-    let ac_mac_str = status.ac_mac.map_or_else(String::new, |m| format!(" ({m})"));
-    println!("    {:<24} {ac_name}{ac_mac_str}", "Access Conc. (AC):".dimmed());
+    let ac_mac_str = status
+        .ac_mac
+        .map_or_else(String::new, |m| format!(" ({m})"));
+    println!(
+        "    {:<24} {ac_name}{ac_mac_str}",
+        "Access Conc. (AC):".dimmed()
+    );
 
-    let session_str = status.session_id.map_or_else(|| "—".to_string(), |id| id.to_string());
-    let mru_str = status.mru.map_or_else(|| "1492".to_string(), |m| m.to_string());
-    println!("    {:<24} Session: {session_str}  ·  MRU: {mru_str}", "Framing:".dimmed());
+    let session_str = status
+        .session_id
+        .map_or_else(|| "—".to_string(), |id| id.to_string());
+    let mru_str = status
+        .mru
+        .map_or_else(|| "1492".to_string(), |m| m.to_string());
+    println!(
+        "    {:<24} Session: {session_str}  ·  MRU: {mru_str}",
+        "Framing:".dimmed()
+    );
 
     if let Some(auth) = status.auth {
-        println!("    {:<24} {}", "Auth Protocol:".dimmed(), auth.to_string().to_uppercase());
+        println!(
+            "    {:<24} {}",
+            "Auth Protocol:".dimmed(),
+            auth.to_string().to_uppercase()
+        );
     }
 
     if let Some(uptime) = status.uptime_secs {
-        println!("    {:<24} {}", "Session Uptime:".dimmed(), format_duration_secs(uptime).white());
+        println!(
+            "    {:<24} {}",
+            "Session Uptime:".dimmed(),
+            format_duration_secs(uptime).white()
+        );
     }
 
     if !status.dns_servers.is_empty() {
-        let dns_str = status.dns_servers.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
+        let dns_str = status
+            .dns_servers
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
         println!("    {:<24} {dns_str}", "ISP DNS (Fallback):".dimmed());
     }
 
     if status.reconnect_attempts > 0 {
-        println!("    {:<24} {}", "Retry Attempts:".dimmed(), status.reconnect_attempts.to_string().yellow());
+        println!(
+            "    {:<24} {}",
+            "Retry Attempts:".dimmed(),
+            status.reconnect_attempts.to_string().yellow()
+        );
     }
 
     if let Some(reachable) = status.terminal_reachable {
         let terminal_str = if reachable {
             status.terminal_rtt_us.map_or_else(
                 || "Reachable".green().bold().to_string(),
-                |rtt| format!("Reachable ({:.2} ms)", f64::from(rtt) / 1000.0).green().bold().to_string(),
+                |rtt| {
+                    format!("Reachable ({:.2} ms)", f64::from(rtt) / 1000.0)
+                        .green()
+                        .bold()
+                        .to_string()
+                },
             )
         } else {
             "Unreachable (check cable/power)".red().bold().to_string()
@@ -272,7 +320,9 @@ async fn execute_config(
     printer: &Printer,
     args: PppoeConfigArgs,
 ) -> Result<()> {
-    match args.subcommand.unwrap_or(PppoeConfigSubcommand::Show { show_password: false }) {
+    match args.subcommand.unwrap_or(PppoeConfigSubcommand::Show {
+        show_password: false,
+    }) {
         PppoeConfigSubcommand::Show { show_password } => {
             let cfg = client.pppoe_config().await?;
             if printer.json {
@@ -295,19 +345,25 @@ async fn execute_config(
             printer.success("PPPoE WAN client disabled.");
             Ok(())
         }
-        PppoeConfigSubcommand::Set(set_args) => {
-            apply_config_set(client, printer, *set_args).await
-        }
+        PppoeConfigSubcommand::Set(set_args) => apply_config_set(client, printer, *set_args).await,
         PppoeConfigSubcommand::Wizard => run_wizard(client, printer).await,
     }
 }
 
 fn render_pppoe_config(cfg: &PppoeConfig, show_password: bool) {
     println!();
-    println!(" {} {}", "●".bright_cyan(), "PPPoE CONFIGURATION".bold().white());
+    println!(
+        " {} {}",
+        "●".bright_cyan(),
+        "PPPoE CONFIGURATION".bold().white()
+    );
     println!();
 
-    let enabled_str = if cfg.enabled { "ENABLED".green().bold() } else { "DISABLED".dimmed() };
+    let enabled_str = if cfg.enabled {
+        "ENABLED".green().bold()
+    } else {
+        "DISABLED".dimmed()
+    };
     println!("  Service Status:        {enabled_str}");
 
     let dp_str = match cfg.dataplane {
@@ -318,7 +374,11 @@ fn render_pppoe_config(cfg: &PppoeConfig, show_password: bool) {
     println!("  Physical WAN Iface:    {}", cfg.wan_iface.white().bold());
     println!(
         "  Username:              {}",
-        if cfg.username.is_empty() { "<not set>".dimmed().to_string() } else { cfg.username.clone() }
+        if cfg.username.is_empty() {
+            "<not set>".dimmed().to_string()
+        } else {
+            cfg.username.clone()
+        }
     );
 
     let pass_display = if cfg.password.is_empty() {
@@ -329,7 +389,10 @@ fn render_pppoe_config(cfg: &PppoeConfig, show_password: bool) {
         mask_password(&cfg.password)
     };
     println!("  Password:              {pass_display}");
-    println!("  Authentication:        {}", cfg.auth.to_string().to_uppercase());
+    println!(
+        "  Authentication:        {}",
+        cfg.auth.to_string().to_uppercase()
+    );
     println!("  MRU:                   {}", cfg.mru);
 
     if let Some(srv) = &cfg.service_name {
@@ -344,7 +407,11 @@ fn render_pppoe_config(cfg: &PppoeConfig, show_password: bool) {
     println!("  Reconnect Delay:       {}s", cfg.reconnect_delay_secs);
     println!(
         "  Send PADT on Shutdown: {}",
-        if cfg.send_padt_on_shutdown { "Yes".green() } else { "No (Debug/Fast-Reconnect)".yellow() }
+        if cfg.send_padt_on_shutdown {
+            "Yes".green()
+        } else {
+            "No (Debug/Fast-Reconnect)".yellow()
+        }
     );
     println!(
         "  PADI Discovery:        {} retries (timeout {}s)",
@@ -400,7 +467,12 @@ async fn apply_config_set(
     if let Some(dp_str) = &args.dataplane {
         let new_dp = parse_dataplane(dp_str)?;
         if new_dp == PppoeDataplane::Ebpf && cfg.dataplane != PppoeDataplane::Ebpf && !printer.yes {
-            println!("{}", "WARNING: eBPF mode for PPPoE is EXPERIMENTAL and may have driver quirks.".yellow().bold());
+            println!(
+                "{}",
+                "WARNING: eBPF mode for PPPoE is EXPERIMENTAL and may have driver quirks."
+                    .yellow()
+                    .bold()
+            );
             let ok = Confirm::new("Enable experimental eBPF mode?")
                 .with_default(false)
                 .prompt()
@@ -447,7 +519,11 @@ async fn apply_config_set(
 
 async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
     println!();
-    println!(" {} {}", "●".bright_cyan(), "PPPoE SETUP WIZARD".bold().white());
+    println!(
+        " {} {}",
+        "●".bright_cyan(),
+        "PPPoE SETUP WIZARD".bold().white()
+    );
     println!("  Configure ISP broadband credentials and WAN interface.");
     println!();
 
@@ -521,11 +597,7 @@ async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
 // Subcommand: padt
 // ---------------------------------------------------------------------------
 
-async fn execute_padt(
-    client: &LanforgeClient,
-    printer: &Printer,
-    args: PadtArgs,
-) -> Result<()> {
+async fn execute_padt(client: &LanforgeClient, printer: &Printer, args: PadtArgs) -> Result<()> {
     let mut cfg = *client.pppoe_config().await?;
 
     let new_state = match args.action.as_deref() {
@@ -543,7 +615,9 @@ async fn execute_padt(
     if new_state {
         printer.success("PADT transmission on shutdown is now ENABLED (cooperative disconnect).");
     } else {
-        printer.success("PADT transmission on shutdown is now DISABLED (debug / fast-reconnect mode).");
+        printer.success(
+            "PADT transmission on shutdown is now DISABLED (debug / fast-reconnect mode).",
+        );
     }
     Ok(())
 }
@@ -607,15 +681,24 @@ mod tests {
     fn test_mask_password() {
         assert_eq!(mask_password(""), "<none>");
         assert_eq!(mask_password("secret"), "******");
-        assert_eq!(mask_password("verylongpasswordthatisover16chars"), "****************");
+        assert_eq!(
+            mask_password("verylongpasswordthatisover16chars"),
+            "****************"
+        );
     }
 
     #[test]
     fn test_format_session_badge() {
         assert!(format_session_badge(PppoeSessionState::Connected).contains("CONNECTED"));
         assert!(format_session_badge(PppoeSessionState::Disconnected).contains("DISCONNECTED"));
-        assert!(format_session_badge(PppoeSessionState::WaitingForCarrier).contains("WAITING FOR CARRIER"));
-        assert!(format_session_badge(PppoeSessionState::WaitingForTerminal).contains("WAITING FOR TERMINAL"));
+        assert!(
+            format_session_badge(PppoeSessionState::WaitingForCarrier)
+                .contains("WAITING FOR CARRIER")
+        );
+        assert!(
+            format_session_badge(PppoeSessionState::WaitingForTerminal)
+                .contains("WAITING FOR TERMINAL")
+        );
         assert!(format_session_badge(PppoeSessionState::Discovering).contains("DISCOVERING"));
     }
 }

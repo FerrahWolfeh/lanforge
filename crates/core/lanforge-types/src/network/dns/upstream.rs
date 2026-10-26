@@ -112,7 +112,9 @@ pub struct UpstreamEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 enum UpstreamEntryDe {
-    Target { target: UpstreamTarget },
+    Target {
+        target: UpstreamTarget,
+    },
     Detailed {
         addr: SocketAddr,
         protocol: UpstreamProtocol,
@@ -152,7 +154,6 @@ impl From<UpstreamEntry> for UpstreamEntryDe {
         }
     }
 }
-
 
 fn parse_secure_target(stripped: &str) -> (Option<String>, &str) {
     stripped.find('@').map_or_else(

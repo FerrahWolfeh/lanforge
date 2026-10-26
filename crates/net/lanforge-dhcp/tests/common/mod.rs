@@ -3,7 +3,9 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
-use dhcproto::v4::{DhcpOption as Dhcpv4Option, Message as MessageV4, MessageType as MessageTypeV4};
+use dhcproto::v4::{
+    DhcpOption as Dhcpv4Option, Message as MessageV4, MessageType as MessageTypeV4,
+};
 use dhcproto::v6::{
     DhcpOption as Dhcpv6Option, DhcpOptions as Dhcpv6Options, IANA, Message as MessageV6,
     MessageType as MessageTypeV6,
@@ -125,7 +127,8 @@ pub fn create_test_v6_server(
     ctx: LanforgeContext,
 ) -> (lanforge_dhcp::v6::server::Dhcpv6Server, Duid) {
     let cfg = create_test_v6_config();
-    let pool = lanforge_dhcp::v6::pool::Ipv6Pool::new(&cfg.pools, cfg.ula_prefix, cfg.ula_prefix_len);
+    let pool =
+        lanforge_dhcp::v6::pool::Ipv6Pool::new(&cfg.pools, cfg.ula_prefix, cfg.ula_prefix_len);
     let server_duid = Duid::new(vec![
         0x00, 0x03, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
     ]);
@@ -253,8 +256,7 @@ impl Dhcpv4PacketBuilder {
             msg.opts_mut().insert(Dhcpv4Option::ServerIdentifier(srv));
         }
         if let Some(ref host) = self.hostname {
-            msg.opts_mut()
-                .insert(Dhcpv4Option::Hostname(host.clone()));
+            msg.opts_mut().insert(Dhcpv4Option::Hostname(host.clone()));
         }
 
         msg
@@ -330,9 +332,8 @@ impl Dhcpv6PacketBuilder {
     #[must_use]
     pub fn build_message(&self) -> MessageV6 {
         let mut msg = MessageV6::new(self.msg_type);
-        msg.opts_mut().insert(Dhcpv6Option::ClientId(
-            self.client_duid.as_bytes().to_vec(),
-        ));
+        msg.opts_mut()
+            .insert(Dhcpv6Option::ClientId(self.client_duid.as_bytes().to_vec()));
 
         if let Some(ref srv) = self.server_duid {
             msg.opts_mut()

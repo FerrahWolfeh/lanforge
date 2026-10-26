@@ -84,7 +84,8 @@ impl<K: Eq + Hash + Clone> RateLimiter<K> {
             let allowed = bucket.try_consume(self.config.pps, self.config.burst);
             // Move to back (most recently used)
             if pos + 1 < state.len()
-                && let Some(entry) = state.remove(pos) {
+                && let Some(entry) = state.remove(pos)
+            {
                 state.push_back(entry);
             }
             return allowed;
@@ -95,7 +96,9 @@ impl<K: Eq + Hash + Clone> RateLimiter<K> {
             // Evict if older than 5s, or just pop front
             let now = Instant::now();
             if let Some((_, b)) = state.front()
-                && (now.duration_since(b.last_update) > Duration::from_secs(5) || state.len() >= self.config.max_sources) {
+                && (now.duration_since(b.last_update) > Duration::from_secs(5)
+                    || state.len() >= self.config.max_sources)
+            {
                 state.pop_front();
             }
         }
@@ -132,7 +135,10 @@ mod tests {
         assert!(limiter.check(&key), "1st packet within burst must pass");
         assert!(limiter.check(&key), "2nd packet within burst must pass");
         assert!(limiter.check(&key), "3rd packet within burst must pass");
-        assert!(!limiter.check(&key), "4th packet must be dropped when burst is depleted");
+        assert!(
+            !limiter.check(&key),
+            "4th packet must be dropped when burst is depleted"
+        );
     }
 
     #[test]
@@ -172,7 +178,10 @@ mod tests {
         assert!(limiter.check(&"k3"));
 
         // Since k1 was evicted from the LRU cache, accessing it anew gives it a fresh bucket
-        assert!(limiter.check(&"k1"), "Evicted key should receive a fresh token bucket upon re-entry");
+        assert!(
+            limiter.check(&"k1"),
+            "Evicted key should receive a fresh token bucket upon re-entry"
+        );
     }
 
     #[test]
@@ -195,10 +204,16 @@ mod tests {
         assert!(limiter.check(&"k3"));
 
         // k1 was retained in cache and has depleted its burst (2 used out of 2)
-        assert!(!limiter.check(&"k1"), "k1 was refreshed and should still be tracked with depleted burst");
+        assert!(
+            !limiter.check(&"k1"),
+            "k1 was refreshed and should still be tracked with depleted burst"
+        );
 
         // k2 was evicted; re-adding it allocates a fresh bucket
-        assert!(limiter.check(&"k2"), "k2 was evicted and should get a fresh bucket");
+        assert!(
+            limiter.check(&"k2"),
+            "k2 was evicted and should get a fresh bucket"
+        );
     }
 
     #[test]

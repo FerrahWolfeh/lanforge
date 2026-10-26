@@ -56,7 +56,10 @@ async fn test_tftp_path_traversal_prevention() {
     // Wait for service to bind and register port
     tokio::time::sleep(Duration::from_millis(100)).await;
     let banners = ctx.service_banners();
-    let banner = banners.iter().find(|b| b.id == lanforge_types::system::ServiceId::Tftp).unwrap();
+    let banner = banners
+        .iter()
+        .find(|b| b.id == lanforge_types::system::ServiceId::Tftp)
+        .unwrap();
     let listen = banner
         .stats
         .iter()

@@ -251,7 +251,10 @@ pub fn extract_first_answer_summary(resp: &[u8], question_len: usize) -> Option<
     if ancount == 0 {
         let rcode = resp[3] & 0x0F;
         if rcode != 0 {
-            return Some(format!("{:?}", lanforge_types::network::dns::DnsResponseCode::from(rcode)));
+            return Some(format!(
+                "{:?}",
+                lanforge_types::network::dns::DnsResponseCode::from(rcode)
+            ));
         }
         return None;
     }

@@ -160,13 +160,14 @@ impl DhcpEngine {
 
         let disc_to_offer_ms = t0.elapsed().as_secs_f64() * 1000.0;
         let offered_ip = offer_msg.yiaddr();
-        let server_id = offer_msg
-            .opts()
-            .get(OptionCode::ServerIdentifier)
-            .and_then(|opt| match opt {
-                DhcpOption::ServerIdentifier(ip) => Some(*ip),
-                _ => None,
-            });
+        let server_id =
+            offer_msg
+                .opts()
+                .get(OptionCode::ServerIdentifier)
+                .and_then(|opt| match opt {
+                    DhcpOption::ServerIdentifier(ip) => Some(*ip),
+                    _ => None,
+                });
 
         // --- 2. REQUEST ---
         let mut req_msg = Message::new(
@@ -185,9 +186,7 @@ impl DhcpEngine {
             .opts_mut()
             .insert(DhcpOption::RequestedIpAddress(offered_ip));
         if let Some(srv) = server_id {
-            req_msg
-                .opts_mut()
-                .insert(DhcpOption::ServerIdentifier(srv));
+            req_msg.opts_mut().insert(DhcpOption::ServerIdentifier(srv));
         }
         if let Some(host) = hostname {
             req_msg
@@ -241,18 +240,20 @@ impl DhcpEngine {
         let req_to_ack_ms = t1.elapsed().as_secs_f64() * 1000.0;
         let total_ms = start_total.elapsed().as_secs_f64() * 1000.0;
 
-        let subnet_mask =
-            ack_msg
-                .opts()
-                .get(OptionCode::SubnetMask)
-                .and_then(|opt| match opt {
-                    DhcpOption::SubnetMask(ip) => Some(*ip),
-                    _ => None,
-                });
-        let router = ack_msg.opts().get(OptionCode::Router).and_then(|opt| match opt {
-            DhcpOption::Router(ips) => ips.first().copied(),
-            _ => None,
-        });
+        let subnet_mask = ack_msg
+            .opts()
+            .get(OptionCode::SubnetMask)
+            .and_then(|opt| match opt {
+                DhcpOption::SubnetMask(ip) => Some(*ip),
+                _ => None,
+            });
+        let router = ack_msg
+            .opts()
+            .get(OptionCode::Router)
+            .and_then(|opt| match opt {
+                DhcpOption::Router(ips) => ips.first().copied(),
+                _ => None,
+            });
         let dns_servers = ack_msg
             .opts()
             .get(OptionCode::DomainNameServer)
@@ -260,14 +261,13 @@ impl DhcpEngine {
                 DhcpOption::DomainNameServer(ips) => ips.clone(),
                 _ => Vec::new(),
             });
-        let lease_time_secs =
-            ack_msg
-                .opts()
-                .get(OptionCode::AddressLeaseTime)
-                .and_then(|opt| match opt {
-                    DhcpOption::AddressLeaseTime(secs) => Some(*secs),
-                    _ => None,
-                });
+        let lease_time_secs = ack_msg
+            .opts()
+            .get(OptionCode::AddressLeaseTime)
+            .and_then(|opt| match opt {
+                DhcpOption::AddressLeaseTime(secs) => Some(*secs),
+                _ => None,
+            });
 
         Ok(DoraResult {
             client_mac: mac.to_string(),
@@ -338,15 +338,8 @@ impl DhcpEngine {
 
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
-                simulate_dora_shared(
-                    &sock,
-                    &pending,
-                    server_addr,
-                    mac,
-                    None,
-                    timeout_duration,
-                )
-                .await
+                simulate_dora_shared(&sock, &pending, server_addr, mac, None, timeout_duration)
+                    .await
             }));
         }
 
@@ -632,9 +625,7 @@ async fn simulate_dora_shared(
         .opts_mut()
         .insert(DhcpOption::RequestedIpAddress(offered_ip));
     if let Some(srv) = server_id {
-        req_msg
-            .opts_mut()
-            .insert(DhcpOption::ServerIdentifier(srv));
+        req_msg.opts_mut().insert(DhcpOption::ServerIdentifier(srv));
     }
     if let Some(host) = hostname {
         req_msg
@@ -714,18 +705,20 @@ async fn simulate_dora_shared(
     let req_to_ack_ms = t1.elapsed().as_secs_f64() * 1000.0;
     let total_ms = start_total.elapsed().as_secs_f64() * 1000.0;
 
-    let subnet_mask =
-        ack_msg
-            .opts()
-            .get(OptionCode::SubnetMask)
-            .and_then(|opt| match opt {
-                DhcpOption::SubnetMask(ip) => Some(*ip),
-                _ => None,
-            });
-    let router = ack_msg.opts().get(OptionCode::Router).and_then(|opt| match opt {
-        DhcpOption::Router(ips) => ips.first().copied(),
-        _ => None,
-    });
+    let subnet_mask = ack_msg
+        .opts()
+        .get(OptionCode::SubnetMask)
+        .and_then(|opt| match opt {
+            DhcpOption::SubnetMask(ip) => Some(*ip),
+            _ => None,
+        });
+    let router = ack_msg
+        .opts()
+        .get(OptionCode::Router)
+        .and_then(|opt| match opt {
+            DhcpOption::Router(ips) => ips.first().copied(),
+            _ => None,
+        });
     let dns_servers = ack_msg
         .opts()
         .get(OptionCode::DomainNameServer)

@@ -81,10 +81,7 @@ pub struct MatchCandidate {
 
 /// Walks an FST Map checking for ancestor wildcards and exact match.
 /// Zero allocations, zero heap locks.
-pub fn match_reversed_key<D: AsRef<[u8]>>(
-    fst: &Fst<D>,
-    key: &[u8],
-) -> Option<MatchCandidate> {
+pub fn match_reversed_key<D: AsRef<[u8]>>(fst: &Fst<D>, key: &[u8]) -> Option<MatchCandidate> {
     if fst.is_empty() {
         return None;
     }
@@ -121,7 +118,11 @@ pub fn match_reversed_key<D: AsRef<[u8]>>(
         let (flags, source_idx) = decode_val(val);
         if flags.is_self() {
             let candidate = MatchCandidate { flags, source_idx };
-            if flags.is_important() || best_candidate.as_ref().is_none_or(|c| !c.flags.is_important()) {
+            if flags.is_important()
+                || best_candidate
+                    .as_ref()
+                    .is_none_or(|c| !c.flags.is_important())
+            {
                 best_candidate = Some(candidate);
             }
         }
@@ -139,7 +140,8 @@ impl DiskFilterMap {
     pub fn open(path: &Path) -> Result<Self, DnsError> {
         let file = File::open(path)?;
         let mmap = unsafe { Mmap::map(&file)? };
-        let map = Map::new(mmap).map_err(|e| DnsError::Generic(format!("FST map load failed: {e}")))?;
+        let map =
+            Map::new(mmap).map_err(|e| DnsError::Generic(format!("FST map load failed: {e}")))?;
         Ok(Self { map })
     }
 

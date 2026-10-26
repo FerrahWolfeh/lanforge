@@ -30,116 +30,116 @@ pub fn spawn_tcp_worker(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                         Ok((mut stream, src)) => {
                             let task_ctx = Arc::clone(&task_ctx);
                             tokio::spawn(async move {
-                        let mut len_buf = [0u8; 2];
-                        while stream.read_exact(&mut len_buf).await.is_ok() {
-                            let len = u16::from_be_bytes(len_buf) as usize;
-                            if len > 4096 {
-                                break;
-                            }
-
-                            let mut data = vec![0u8; len];
-                            if stream.read_exact(&mut data).await.is_err() {
-                                break;
-                            }
-
-                            let header = match WireHeader::parse(&data) {
-                                Some(h) => h,
-                                None => break,
-                            };
-                            let question = match WireQuestion::parse(&data) {
-                                Some(q) => q,
-                                None => break,
-                            };
-
-                            // Noise filtering (e.g. malformed IoT queries like empty qname or ":0")
-                            let mut labels = question.labels();
-                            let is_noise = match labels.next() {
-                                None => true,                                             // Empty qname (.)
-                                Some(l) if l == b":0" && labels.next().is_none() => true, // Literally ":0"
-                                _ => false,
-                            };
-
-                            let edns = WireOptScanner::scan(&data, &header, &question);
-
-                            if is_noise {
-                                let mut resp_buf = Vec::with_capacity(64);
-                                WireResponseWriter::write_error_response(
-                                    &data,
-                                    &question,
-                                    1, // FORMERR
-                                    edns,
-                                    false,
-                                    &mut resp_buf,
-                                );
-
-                                if !resp_buf.is_empty() {
-                                    let resp_len = u16::try_from(resp_buf.len())
-                                        .unwrap_or(u16::MAX)
-                                        .to_be_bytes();
-                                    if stream.write_all(&resp_len).await.is_err() {
+                                let mut len_buf = [0u8; 2];
+                                while stream.read_exact(&mut len_buf).await.is_ok() {
+                                    let len = u16::from_be_bytes(len_buf) as usize;
+                                    if len > 4096 {
                                         break;
                                     }
-                                    if stream.write_all(&resp_buf).await.is_err() {
+
+                                    let mut data = vec![0u8; len];
+                                    if stream.read_exact(&mut data).await.is_err() {
                                         break;
                                     }
-                                }
-                                continue;
-                            }
 
-                            let mut resp_buf = Vec::with_capacity(len + 128);
-                            let run_res = task_ctx
-                                .pipeline
-                                .run(
-                                    &task_ctx,
-                                    DnsPipelineRequest::new(
-                                        &data,
-                                        &header,
-                                        &question,
-                                        src.ip(),
-                                        TransportProtocol::Tcp,
-                                    ),
-                                    &mut resp_buf,
-                                )
-                                .await;
+                                    let header = match WireHeader::parse(&data) {
+                                        Some(h) => h,
+                                        None => break,
+                                    };
+                                    let question = match WireQuestion::parse(&data) {
+                                        Some(q) => q,
+                                        None => break,
+                                    };
 
-                            if let Err(e) = run_res {
-                                trace!("Pipeline error (sending SERVFAIL): {:?}", e);
-                                resp_buf.clear();
-                                WireResponseWriter::write_error_response(
-                                    &data,
-                                    &question,
-                                    2, // SERVFAIL
-                                    edns,
-                                    !task_ctx.recursive.is_empty(),
-                                    &mut resp_buf,
-                                );
-                            }
+                                    // Noise filtering (e.g. malformed IoT queries like empty qname or ":0")
+                                    let mut labels = question.labels();
+                                    let is_noise = match labels.next() {
+                                        None => true,                                             // Empty qname (.)
+                                        Some(l) if l == b":0" && labels.next().is_none() => true, // Literally ":0"
+                                        _ => false,
+                                    };
 
-                            if !resp_buf.is_empty() {
-                                let resp_len = u16::try_from(resp_buf.len())
-                                    .unwrap_or(u16::MAX)
-                                    .to_be_bytes();
-                                if stream.write_all(&resp_len).await.is_err() {
-                                    break;
+                                    let edns = WireOptScanner::scan(&data, &header, &question);
+
+                                    if is_noise {
+                                        let mut resp_buf = Vec::with_capacity(64);
+                                        WireResponseWriter::write_error_response(
+                                            &data,
+                                            &question,
+                                            1, // FORMERR
+                                            edns,
+                                            false,
+                                            &mut resp_buf,
+                                        );
+
+                                        if !resp_buf.is_empty() {
+                                            let resp_len = u16::try_from(resp_buf.len())
+                                                .unwrap_or(u16::MAX)
+                                                .to_be_bytes();
+                                            if stream.write_all(&resp_len).await.is_err() {
+                                                break;
+                                            }
+                                            if stream.write_all(&resp_buf).await.is_err() {
+                                                break;
+                                            }
+                                        }
+                                        continue;
+                                    }
+
+                                    let mut resp_buf = Vec::with_capacity(len + 128);
+                                    let run_res = task_ctx
+                                        .pipeline
+                                        .run(
+                                            &task_ctx,
+                                            DnsPipelineRequest::new(
+                                                &data,
+                                                &header,
+                                                &question,
+                                                src.ip(),
+                                                TransportProtocol::Tcp,
+                                            ),
+                                            &mut resp_buf,
+                                        )
+                                        .await;
+
+                                    if let Err(e) = run_res {
+                                        trace!("Pipeline error (sending SERVFAIL): {:?}", e);
+                                        resp_buf.clear();
+                                        WireResponseWriter::write_error_response(
+                                            &data,
+                                            &question,
+                                            2, // SERVFAIL
+                                            edns,
+                                            !task_ctx.recursive.is_empty(),
+                                            &mut resp_buf,
+                                        );
+                                    }
+
+                                    if !resp_buf.is_empty() {
+                                        let resp_len = u16::try_from(resp_buf.len())
+                                            .unwrap_or(u16::MAX)
+                                            .to_be_bytes();
+                                        if stream.write_all(&resp_len).await.is_err() {
+                                            break;
+                                        }
+                                        if stream.write_all(&resp_buf).await.is_err() {
+                                            break;
+                                        }
+                                    }
                                 }
-                                if stream.write_all(&resp_buf).await.is_err() {
-                                    break;
-                                }
-                            }
+                            });
                         }
-                    });
+                        Err(e) => {
+                            error!("TCP worker accept error on {}: {}", addr, e);
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                        }
+                    }
                 }
-                Err(e) => {
-                    error!("TCP worker accept error on {}: {}", addr, e);
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-            }
+            }));
         }
-    }));
-}
 
-for h in handles {
-    let _ = h.await;
-}
-})
+        for h in handles {
+            let _ = h.await;
+        }
+    })
 }

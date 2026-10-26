@@ -66,7 +66,11 @@ async fn test_unprivileged_execution_guards() {
 #[tokio::test]
 async fn test_tui_root_action_guard() {
     let harness = Arc::new(LabHarness::setup_direct().unwrap());
-    let mut app = App::new(harness.dhcp_target, harness.dns_target, "Direct".to_string());
+    let mut app = App::new(
+        harness.dhcp_target,
+        harness.dns_target,
+        "Direct".to_string(),
+    );
     app.is_root = false;
 
     // Triggering root-only action when unprivileged should be blocked
@@ -74,5 +78,8 @@ async fn test_tui_root_action_guard() {
 
     assert!(app.status_message.contains("requires root"));
     let logs = app.logs.lock();
-    assert!(logs.iter().any(|l| l.contains("[GUARD]") && l.contains("requires root privileges")));
+    assert!(
+        logs.iter()
+            .any(|l| l.contains("[GUARD]") && l.contains("requires root privileges"))
+    );
 }

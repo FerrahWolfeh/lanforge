@@ -142,7 +142,11 @@ fn validate_port_forwards(
                     "Port forward collision: external port {} ({}) is mapped multiple times for {}",
                     rule.external_port,
                     rule.protocol.as_str(),
-                    if rule.internal_ip.is_ipv4() { "IPv4" } else { "IPv6" }
+                    if rule.internal_ip.is_ipv4() {
+                        "IPv4"
+                    } else {
+                        "IPv6"
+                    }
                 ));
             }
         }
@@ -450,7 +454,11 @@ mod tests {
         });
 
         let report = validate_firewall_candidate(&candidate, &current, &[], || "tx-test".into());
-        assert!(report.valid, "Dual-stack rules on same port should not collide: {:?}", report.errors);
+        assert!(
+            report.valid,
+            "Dual-stack rules on same port should not collide: {:?}",
+            report.errors
+        );
     }
 
     #[test]

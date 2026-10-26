@@ -8,7 +8,9 @@ use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_ra::{RaConfig, RaService};
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::ra::{PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RouterPriority};
+use lanforge_types::network::ra::{
+    PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RouterPriority,
+};
 use lanforge_types::system::ServiceState;
 use lanforge_types::update::DeviceUpdate;
 use tokio::time::timeout;
@@ -80,10 +82,16 @@ async fn test_ra_inert_full_lifecycle() {
 
     // Router Advertisement has ICMPv6 type = 134 (0x86)
     assert!(!startup_ra.is_empty());
-    assert_eq!(startup_ra[0], 134, "Expected ICMPv6 Type 134 (Router Advertisement)");
+    assert_eq!(
+        startup_ra[0], 134,
+        "Expected ICMPv6 Type 134 (Router Advertisement)"
+    );
 
     // Verify service state is Online
-    assert_eq!(ctx.get_service_state(lanforge_types::system::ServiceId::Ra), ServiceState::Online);
+    assert_eq!(
+        ctx.get_service_state(lanforge_types::system::ServiceId::Ra),
+        ServiceState::Online
+    );
 
     // Verify status was updated in context
     let initial_status = ctx.ra_status();
@@ -104,7 +112,7 @@ async fn test_ra_inert_full_lifecycle() {
     // 6. Simulate incoming Router Solicitation (RS) from client
     let rs_packet = vec![
         133, 0, 0, 0, // Type=133 (RS), Code=0, Checksum placeholder
-        0, 0, 0, 0,   // Reserved
+        0, 0, 0, 0, // Reserved
     ];
     let client_src = SocketAddrV6::new(client_ip, 0, 0, 0);
     handle.inject(rs_packet, client_src).await;

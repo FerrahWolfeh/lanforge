@@ -1,7 +1,7 @@
 use crate::ClientContext;
 use lanforge_api::api::{DnsQueryLogEntry, DnsQueryLogResponse, DnsQueryResponse, Response};
-use lanforge_types::network::dns::{DnsRecordEntry, DnsRecordType};
 use lanforge_types::network::QueryResult;
+use lanforge_types::network::dns::{DnsRecordEntry, DnsRecordType};
 use std::{collections::HashMap, net::IpAddr, time::Instant};
 
 impl ClientContext {
@@ -67,14 +67,17 @@ impl ClientContext {
 
         match storage
             .call(move |s: &lanforge_db_core::Stores| {
-                s.log().get_dns_query_history(limit, offset, client, domain, qtype, result)
+                s.log()
+                    .get_dns_query_history(limit, offset, client, domain, qtype, result)
             })
             .await
         {
             Ok((queries, total)) => {
                 let entries = self.ctx.with_state(|state| {
-                    let mut ip_cache: HashMap<IpAddr, (Option<lanforge_types::identifiers::MacAddr>, Option<String>)> =
-                        HashMap::new();
+                    let mut ip_cache: HashMap<
+                        IpAddr,
+                        (Option<lanforge_types::identifiers::MacAddr>, Option<String>),
+                    > = HashMap::new();
                     queries
                         .into_iter()
                         .map(|q| {
@@ -83,12 +86,10 @@ impl ClientContext {
                                     let hostname = super::resolve_mac_hostname(state, mac);
                                     (Some(mac), hostname)
                                 }
-                                None => {
-                                    ip_cache
-                                        .entry(q.src_ip)
-                                        .or_insert_with(|| super::resolve_ip_identity(state, q.src_ip))
-                                        .clone()
-                                }
+                                None => ip_cache
+                                    .entry(q.src_ip)
+                                    .or_insert_with(|| super::resolve_ip_identity(state, q.src_ip))
+                                    .clone(),
                             };
                             DnsQueryLogEntry {
                                 timestamp: q.timestamp,

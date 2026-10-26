@@ -18,10 +18,7 @@ pub struct TxPayload {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/status", get(handle_status))
-        .route(
-            "/config",
-            get(handle_get_config).post(handle_update_config),
-        )
+        .route("/config", get(handle_get_config).post(handle_update_config))
         .route("/reload", post(handle_reload))
         .route("/propose", post(handle_propose))
         .route("/commit", post(handle_commit))
@@ -57,7 +54,10 @@ async fn handle_propose(
     Json(candidate): Json<FirewallConfig>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_firewall_propose(candidate).await, FirewallValidation)
+    crate::http_response!(
+        ctx.handle_firewall_propose(candidate).await,
+        FirewallValidation
+    )
 }
 
 async fn handle_commit(

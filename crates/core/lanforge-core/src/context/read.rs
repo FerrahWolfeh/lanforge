@@ -45,6 +45,7 @@ use std::{
     sync::Arc,
 };
 
+use arc_swap::Guard;
 use lanforge_types::{
     device::{Device, TransientHost},
     dhcp::{Dhcpv4Stats, Dhcpv6Stats},
@@ -53,7 +54,6 @@ use lanforge_types::{
     network::dns::upstream::UpstreamTarget,
     update::InterfaceState,
 };
-use arc_swap::Guard;
 
 use crate::{
     context::state::State,

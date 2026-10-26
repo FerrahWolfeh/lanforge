@@ -20,10 +20,7 @@ fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     (ctx, bus)
 }
 
-async fn wait_for_pppoe_event<F, T>(
-    sub: &mut broadcast::Receiver<TimedEvent>,
-    filter: F,
-) -> T
+async fn wait_for_pppoe_event<F, T>(sub: &mut broadcast::Receiver<TimedEvent>, filter: F) -> T
 where
     F: Fn(&PppoeEvent) -> Option<T>,
 {
@@ -87,7 +84,10 @@ async fn test_pppoe_inert_session_up_and_shutdown() {
 
     // 2. Verify state and readiness
     assert!(ctx.is_pppoe_ready());
-    assert_eq!(ctx.get_service_state(ServiceId::Pppoe), ServiceState::Online);
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Pppoe),
+        ServiceState::Online
+    );
     {
         let status = ctx.pppoe_status().expect("status set");
         assert_eq!(status.state, PppoeSessionState::Connected);
@@ -168,7 +168,10 @@ async fn test_pppoe_reacts_to_config_change_in_place() {
         .expect("join timeout")
         .expect("join handle error");
     assert!(res.is_ok());
-    assert_eq!(ctx.get_service_state(ServiceId::Pppoe), ServiceState::Inactive);
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Pppoe),
+        ServiceState::Inactive
+    );
     assert!(!ctx.is_pppoe_ready());
 }
 
@@ -250,7 +253,10 @@ async fn test_pppoe_reacts_to_service_control_stop() {
         .expect("join timeout")
         .expect("join handle error");
     assert!(res.is_ok());
-    assert_eq!(ctx.get_service_state(ServiceId::Pppoe), ServiceState::Inactive);
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Pppoe),
+        ServiceState::Inactive
+    );
 }
 
 #[tokio::test]
@@ -354,8 +360,14 @@ async fn test_pppoe_disabled_at_startup_transitions_to_inactive() {
     let res = service.serve(&ctx, &h).await;
     assert!(res.is_ok());
 
-    assert_eq!(ctx.get_service_state(ServiceId::Pppoe), ServiceState::Inactive);
-    assert!(ctx.is_pppoe_ready(), "Disabled service must not block readiness");
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Pppoe),
+        ServiceState::Inactive
+    );
+    assert!(
+        ctx.is_pppoe_ready(),
+        "Disabled service must not block readiness"
+    );
 }
 
 #[tokio::test]
@@ -439,7 +451,9 @@ async fn test_pppoe_with_terminal_probe_enabled_reports_terminal_status() {
         assert_eq!(status.terminal_reachable, Some(true));
         assert_eq!(
             status.terminal_mac,
-            Some(lanforge_types::identifiers::MacAddr([0x3c, 0x84, 0x6a, 0xbc, 0x8c, 0xe5]))
+            Some(lanforge_types::identifiers::MacAddr([
+                0x3c, 0x84, 0x6a, 0xbc, 0x8c, 0xe5
+            ]))
         );
         assert_eq!(status.terminal_rtt_us, Some(800));
     }
@@ -507,7 +521,9 @@ async fn test_pppoe_with_injected_prober_reports_probe_response() {
         assert_eq!(status.terminal_reachable, Some(true));
         assert_eq!(
             status.terminal_mac,
-            Some(lanforge_types::identifiers::MacAddr([0xde, 0xad, 0xbe, 0xef, 0x00, 0x01]))
+            Some(lanforge_types::identifiers::MacAddr([
+                0xde, 0xad, 0xbe, 0xef, 0x00, 0x01
+            ]))
         );
         assert!(status.terminal_rtt_us.is_some());
     }
@@ -515,4 +531,3 @@ async fn test_pppoe_with_injected_prober_reports_probe_response() {
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = service_handle.await;
 }
-

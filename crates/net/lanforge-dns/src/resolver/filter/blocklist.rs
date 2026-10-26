@@ -3,8 +3,8 @@ use std::path::Path;
 
 use crate::error::DnsError;
 use crate::resolver::filter::engine::{
-    build_fst_map, encode_reversed_domain, encode_val, reverse_domain_key, DiskFilterMap,
-    MatchCandidate,
+    DiskFilterMap, MatchCandidate, build_fst_map, encode_reversed_domain, encode_val,
+    reverse_domain_key,
 };
 use crate::resolver::filter::parse::MatchFlags;
 
@@ -44,7 +44,8 @@ impl DiskBlocklist {
 
         let manifest_path = path.with_file_name("manifest.json");
         let source_index = if manifest_path.exists() {
-            let manifest = crate::resolver::filter::manifest::AdblockManifest::load_or_default(&manifest_path);
+            let manifest =
+                crate::resolver::filter::manifest::AdblockManifest::load_or_default(&manifest_path);
             Arc::from(manifest.source_index.into_boxed_slice())
         } else {
             Arc::from([])

@@ -3,16 +3,18 @@ pub mod middleware;
 use lanforge_dns_wire::{StackDomain, WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_types::device::TransientOrigin;
 use lanforge_types::network::dns::TransportProtocol;
-use lanforge_types::network::dns::{DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, FilterMatch};
+use lanforge_types::network::dns::{
+    DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, FilterMatch,
+};
 use lanforge_types::network::{Hostname, HostnameOrigin};
 use lanforge_types::update::{DeviceUpdate, TransientHostUpdate};
 
 use crate::error::DnsError;
+#[cfg(feature = "adblock")]
+use crate::pipeline::middleware::AdblockMiddleware;
 use crate::pipeline::middleware::{
     CacheMiddleware, LocalResolverMiddleware, RewriteMiddleware, UpstreamMiddleware,
 };
-#[cfg(feature = "adblock")]
-use crate::pipeline::middleware::AdblockMiddleware;
 use crate::resolver::recursive::UpstreamManager;
 use crate::server::DnsContext;
 use std::net::IpAddr;
@@ -286,13 +288,12 @@ async fn resolve_reverse_ptr_background(
                             name,
                             origin: HostnameOrigin::Static,
                         };
-                        let update = DeviceUpdate::TransientHostResolved(Box::new(
-                            TransientHostUpdate {
+                        let update =
+                            DeviceUpdate::TransientHostResolved(Box::new(TransientHostUpdate {
                                 ip,
                                 hostname: hostname.clone(),
                                 origin,
-                            },
-                        ));
+                            }));
                         if ctx_core.apply(update) {
                             tracing::info!(
                                 "✅ DNS: Resolved transient host {} -> {}",

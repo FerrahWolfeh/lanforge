@@ -169,7 +169,11 @@ where
     fn from_request_parts(parts: &mut Parts, state: &S) -> impl Future<Output = HttpResult<Self>> {
         let auth_manager = AuthManager::from_ref(state);
         let result = extract_token(&parts.headers, parts.uri.query())
-            .ok_or_else(|| HttpError::Auth("Missing Authorization header, session cookie, or token parameter".into()))
+            .ok_or_else(|| {
+                HttpError::Auth(
+                    "Missing Authorization header, session cookie, or token parameter".into(),
+                )
+            })
             .and_then(|token| {
                 auth_manager
                     .validate_token(&token)
@@ -242,7 +246,9 @@ pub fn authenticate_token(
         }
         Err(e) => {
             error!("Database error during token validation: {e}");
-            Err(HttpError::ServiceUnavailable("persistence unavailable".into()))
+            Err(HttpError::ServiceUnavailable(
+                "persistence unavailable".into(),
+            ))
         }
     }
 }
@@ -260,7 +266,9 @@ where
         let auth_manager = AuthManager::from_ref(state);
         let db = Arc::<dyn DatabaseStore>::from_ref(state);
         let token = extract_token(&parts.headers, parts.uri.query()).ok_or_else(|| {
-            HttpError::Auth("Missing Authorization header, session cookie, or token parameter".into())
+            HttpError::Auth(
+                "Missing Authorization header, session cookie, or token parameter".into(),
+            )
         })?;
 
         authenticate_token(&token, &auth_manager, db.as_ref())
@@ -320,9 +328,7 @@ pub async fn middleware(
     }
 
     // If no password hash is set AND no DB users exist, authentication is globally disabled.
-    if cfg.auth_password_hash.is_none()
-        && !auth_manager.has_users_cached()
-    {
+    if cfg.auth_password_hash.is_none() && !auth_manager.has_users_cached() {
         let count = db.count_users().unwrap_or(0);
         if count == 0 {
             return Ok(next.run(req).await);
@@ -330,8 +336,9 @@ pub async fn middleware(
         auth_manager.set_has_users(true);
     }
 
-    let token = extract_token(req.headers(), req.uri().query())
-        .ok_or_else(|| HttpError::Auth("Missing Authorization header, session cookie, or token parameter".into()))?;
+    let token = extract_token(req.headers(), req.uri().query()).ok_or_else(|| {
+        HttpError::Auth("Missing Authorization header, session cookie, or token parameter".into())
+    })?;
 
     let user = authenticate_token(&token, &auth_manager, db.as_ref())?;
 

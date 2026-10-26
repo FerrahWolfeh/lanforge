@@ -401,7 +401,8 @@ impl ServiceHandle {
     /// Marks the service as degraded with a specific reason.
     pub fn degraded(&self, why: DegradedReason) {
         self.ctx.set_service_state(self.id, ServiceState::Degraded);
-        self.ctx.set_service_detail(self.id, Some(StateDetail::Degraded(why)));
+        self.ctx
+            .set_service_detail(self.id, Some(StateDetail::Degraded(why)));
         if !self.signaled.swap(true, Ordering::SeqCst) {
             let _ = self
                 .ctx
@@ -422,7 +423,8 @@ impl ServiceHandle {
     /// The service should return Ok(()) immediately after calling this.
     pub fn dormant(&self, why: DormantReason) {
         self.ctx.set_service_state(self.id, ServiceState::Inactive);
-        self.ctx.set_service_detail(self.id, Some(StateDetail::Dormant(why)));
+        self.ctx
+            .set_service_detail(self.id, Some(StateDetail::Dormant(why)));
         if !self.signaled.swap(true, Ordering::SeqCst) {
             let _ = self
                 .ctx

@@ -241,7 +241,11 @@ impl From<&SystemConfigExport> for ConfigFile {
         // 4. DNS Upstreams & Rewrites
         let mut dns = DnsFile::default();
         for up in &export.dns_upstreams {
-            let name = up.name.clone().or_else(|| up.domain.clone()).unwrap_or_else(|| "default".to_string());
+            let name = up
+                .name
+                .clone()
+                .or_else(|| up.domain.clone())
+                .unwrap_or_else(|| "default".to_string());
             let proto_prefix = match up.protocol {
                 UpstreamProtocol::Udp => "udp://",
                 UpstreamProtocol::Tls => "tls://",

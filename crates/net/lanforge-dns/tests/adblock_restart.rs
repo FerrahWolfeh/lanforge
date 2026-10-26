@@ -7,8 +7,8 @@ use lanforge_core::context::state::State;
 use lanforge_dns::config::DnsConfig;
 use lanforge_dns::resolver::filter::manifest::AdblockManifest;
 use lanforge_dns::server::worker::spawn_adblock_manager;
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockSourceFormat, AdblockUrlKind};
 use lanforge_types::network::dns::AdblockUrlEntry;
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockSourceFormat, AdblockUrlKind};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,7 +30,8 @@ async fn spawn_conditional_server() -> u16 {
                 let n = socket.read(&mut buf).await.unwrap_or(0);
                 let req = String::from_utf8_lossy(&buf[..n]).to_ascii_lowercase();
                 let resp = if req.contains("if-none-match") {
-                    "HTTP/1.1 304 Not Modified\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n".to_string()
+                    "HTTP/1.1 304 Not Modified\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n"
+                        .to_string()
                 } else {
                     format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nETag: \"v1\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -97,7 +98,13 @@ async fn test_restart_with_stale_cache_and_304_still_blocks() {
 
     // Run 1: cold start. Download, compile, merge, load.
     assert!(
-        boot_and_check(temp_dir.path(), port, "ads.example.com", Duration::from_secs(10)).await,
+        boot_and_check(
+            temp_dir.path(),
+            port,
+            "ads.example.com",
+            Duration::from_secs(10)
+        )
+        .await,
         "cold start should block ads.example.com"
     );
     assert!(temp_dir.path().join("adblock/block.fst").exists());
@@ -105,19 +112,33 @@ async fn test_restart_with_stale_cache_and_304_still_blocks() {
     // Age the merged cache beyond freshness threshold (simulates a daemon restarted later).
     let manifest_path = temp_dir.path().join("adblock/manifest.json");
     let mut manifest = AdblockManifest::load_or_default(&manifest_path);
-    assert!(manifest.merged_blocks >= 3, "manifest should record merged blocks");
+    assert!(
+        manifest.merged_blocks >= 3,
+        "manifest should record merged blocks"
+    );
     manifest.last_merge = 1;
     manifest.save_atomic(&manifest_path).unwrap();
 
     // Run 2: restart. Upstream returns 304, fingerprint unchanged.
     assert!(
-        boot_and_check(temp_dir.path(), port, "ads.example.com", Duration::from_secs(5)).await,
+        boot_and_check(
+            temp_dir.path(),
+            port,
+            "ads.example.com",
+            Duration::from_secs(5)
+        )
+        .await,
         "restart with stale cache + 304 must still load the compiled blocklist into memory"
     );
     // Subdomains of hosts entries are exact-only, unrelated domains must stay clean.
     assert!(
-        !boot_and_check(temp_dir.path(), port, "example.com", Duration::from_millis(500)).await,
+        !boot_and_check(
+            temp_dir.path(),
+            port,
+            "example.com",
+            Duration::from_millis(500)
+        )
+        .await,
         "unlisted domain must not be blocked"
     );
 }
-

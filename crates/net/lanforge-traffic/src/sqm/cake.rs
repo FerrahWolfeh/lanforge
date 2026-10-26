@@ -104,10 +104,13 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "bandwidth", "250mbit",
+                "bandwidth",
+                "250mbit",
                 "diffserv4",
                 "nat",
-                "overhead", "34", "ethernet"
+                "overhead",
+                "34",
+                "ethernet"
             ]
         );
     }

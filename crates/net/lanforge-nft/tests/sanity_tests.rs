@@ -34,9 +34,15 @@ fn test_sanity_primary_lan_auto_bind() {
     let json = serde_json::to_string_pretty(&ruleset).unwrap();
 
     // 1. Must accept input on lan0
-    assert!(json.contains("\"lan0\""), "lan0 should be auto-bound to internal zone");
+    assert!(
+        json.contains("\"lan0\""),
+        "lan0 should be auto-bound to internal zone"
+    );
     // 2. Must forward from lan0 to ppp0
-    assert!(json.contains("\"ppp0\""), "ppp0 should be auto-bound to external zone");
+    assert!(
+        json.contains("\"ppp0\""),
+        "ppp0 should be auto-bound to external zone"
+    );
 }
 
 #[test]
@@ -137,8 +143,14 @@ fn test_sanity_port_forwarding_and_hairpin_nat() {
     assert!(json.contains("192.168.1.100"), "Internal target IP missing");
 
     // Verify hairpin NAT in postrouting
-    assert!(json.contains("\"postrouting\""), "POSTROUTING chain missing");
-    assert!(json.contains("\"masquerade\""), "Masquerade statement missing");
+    assert!(
+        json.contains("\"postrouting\""),
+        "POSTROUTING chain missing"
+    );
+    assert!(
+        json.contains("\"masquerade\""),
+        "Masquerade statement missing"
+    );
 }
 
 #[test]
@@ -516,8 +528,14 @@ fn test_sanity_strict_external_wan_drop_policy() {
         }
     }
 
-    assert!(found_input_policy_drop, "Input chain with policy Drop must exist");
-    assert!(found_forward_policy_drop, "Forward chain with policy Drop must exist");
+    assert!(
+        found_input_policy_drop,
+        "Input chain with policy Drop must exist"
+    );
+    assert!(
+        found_forward_policy_drop,
+        "Forward chain with policy Drop must exist"
+    );
 }
 
 #[test]
@@ -641,4 +659,3 @@ fn test_sanity_dns_and_vowifi_bypass_toggles() {
     assert!(!json_disabled.contains("\"dport\": 500"));
     assert!(!json_disabled.contains("\"dport\": 4500"));
 }
-

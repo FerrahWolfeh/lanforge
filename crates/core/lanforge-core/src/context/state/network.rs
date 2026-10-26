@@ -63,7 +63,6 @@ impl NetworkState {
     }
 }
 
-
 /// Serializes a map with integer keys.
 ///
 /// # Errors

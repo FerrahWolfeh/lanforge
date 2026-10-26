@@ -65,7 +65,11 @@ pub fn slugify(input: &str) -> String {
 /// If `explicit_slug` is provided and non-empty after slugifying, it is returned.
 /// Otherwise, returns `{prefix}-{hash_short}` (or just `{hash_short}` if `prefix` is empty).
 #[must_use]
-pub fn stable_id_or_hash(explicit_slug: Option<&str>, content_bytes: &[u8], prefix: &str) -> String {
+pub fn stable_id_or_hash(
+    explicit_slug: Option<&str>,
+    content_bytes: &[u8],
+    prefix: &str,
+) -> String {
     if let Some(slug) = explicit_slug {
         let normalized = slugify(slug);
         if !normalized.is_empty() {
@@ -106,10 +110,16 @@ mod tests {
 
     #[test]
     fn test_slugify() {
-        assert_eq!(slugify("Steven Black's Ad-block!"), "steven-black-s-ad-block");
+        assert_eq!(
+            slugify("Steven Black's Ad-block!"),
+            "steven-black-s-ad-block"
+        );
         assert_eq!(slugify("  AdGuard Home Mobile  "), "adguard-home-mobile");
         assert_eq!(slugify("---multiple---hyphens---"), "multiple-hyphens");
-        assert_eq!(slugify("1.1.1.1 (Cloudflare DNS)"), "1-1-1-1-cloudflare-dns");
+        assert_eq!(
+            slugify("1.1.1.1 (Cloudflare DNS)"),
+            "1-1-1-1-cloudflare-dns"
+        );
         assert_eq!(slugify(""), "");
     }
 

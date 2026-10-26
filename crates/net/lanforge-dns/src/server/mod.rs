@@ -149,9 +149,7 @@ impl DnsContext {
 
         // Check if device is configured to suppress DNS logging or matches ignore_clients (zero Device clones)
         let (mac, should_ignore) = self.ctx.with_state(|state| {
-            let mac = event
-                .src_mac
-                .or_else(|| state.get_mac_by_ip(event.src_ip));
+            let mac = event.src_mac.or_else(|| state.get_mac_by_ip(event.src_ip));
             let dev = mac.as_ref().and_then(|m| state.devices.get(m));
 
             if let Some(dev) = dev {
@@ -203,9 +201,9 @@ impl DnsContext {
             };
             log.push(entry.clone());
 
-            let _ = self
-                .bus
-                .publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(std::sync::Arc::new(entry))));
+            let _ = self.bus.publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(
+                std::sync::Arc::new(entry),
+            )));
         }
     }
 }

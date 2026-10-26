@@ -154,7 +154,8 @@ async fn list_hosts(client: &LanforgeClient, printer: &Printer, args: HostListAr
         resp.hosts.retain(|h| {
             h.hostname.to_lowercase().contains(&needle)
                 || h.mac.to_string().to_lowercase().contains(&needle)
-                || h.v4_fixed.is_some_and(|ip| ip.to_string().contains(&needle))
+                || h.v4_fixed
+                    .is_some_and(|ip| ip.to_string().contains(&needle))
                 || h.v6_suffix
                     .as_ref()
                     .is_some_and(|s| s.to_string().to_lowercase().contains(&needle))
@@ -181,8 +182,7 @@ fn render_hosts_table(resp: &HostsResponse, printer: &Printer) {
         printer.info("No static hosts configured.");
         println!(
             "   {}",
-            "Use 'lanforge host add' to create a static host reservation."
-                .dimmed()
+            "Use 'lanforge host add' to create a static host reservation.".dimmed()
         );
         println!();
         return;
@@ -192,9 +192,12 @@ fn render_hosts_table(resp: &HostsResponse, printer: &Printer) {
     println!(
         " {} {}",
         "●".bright_cyan(),
-        format!("STATIC HOSTS & RESERVATIONS ({} configured)", resp.hosts.len())
-            .bold()
-            .white()
+        format!(
+            "STATIC HOSTS & RESERVATIONS ({} configured)",
+            resp.hosts.len()
+        )
+        .bold()
+        .white()
     );
     println!();
 
@@ -274,19 +277,43 @@ async fn show_host(client: &LanforgeClient, printer: &Printer, target: String) -
     );
     println!();
 
-    println!("    {:<22} {}", "Hostname:".dimmed(), entry.hostname.bold().white());
-    println!("    {:<22} {}", "MAC Address:".dimmed(), entry.mac.to_string().cyan());
+    println!(
+        "    {:<22} {}",
+        "Hostname:".dimmed(),
+        entry.hostname.bold().white()
+    );
+    println!(
+        "    {:<22} {}",
+        "MAC Address:".dimmed(),
+        entry.mac.to_string().cyan()
+    );
 
     if let Some(ip) = entry.v4_fixed {
-        println!("    {:<22} {}", "Fixed IPv4:".dimmed(), ip.to_string().green());
+        println!(
+            "    {:<22} {}",
+            "Fixed IPv4:".dimmed(),
+            ip.to_string().green()
+        );
     } else {
-        println!("    {:<22} {}", "Fixed IPv4:".dimmed(), "None (dynamic via pool)".dimmed());
+        println!(
+            "    {:<22} {}",
+            "Fixed IPv4:".dimmed(),
+            "None (dynamic via pool)".dimmed()
+        );
     }
 
     if let Some(suf) = &entry.v6_suffix {
-        println!("    {:<22} {}", "IPv6 Suffix / Address:".dimmed(), suf.to_string().yellow());
+        println!(
+            "    {:<22} {}",
+            "IPv6 Suffix / Address:".dimmed(),
+            suf.to_string().yellow()
+        );
     } else {
-        println!("    {:<22} {}", "IPv6 Suffix / Address:".dimmed(), "None".dimmed());
+        println!(
+            "    {:<22} {}",
+            "IPv6 Suffix / Address:".dimmed(),
+            "None".dimmed()
+        );
     }
 
     println!(
@@ -296,11 +323,17 @@ async fn show_host(client: &LanforgeClient, printer: &Printer, target: String) -
     );
 
     let dns_log_status = if entry.ignore_dns_log {
-        "Suppressed (queries will NOT appear in audit logs)".magenta().to_string()
+        "Suppressed (queries will NOT appear in audit logs)"
+            .magenta()
+            .to_string()
     } else {
         "Active (queries logged)".dimmed().to_string()
     };
-    println!("    {:<22} {}", "DNS Query Logging:".dimmed(), dns_log_status);
+    println!(
+        "    {:<22} {}",
+        "DNS Query Logging:".dimmed(),
+        dns_log_status
+    );
 
     if !entry.ignored_log_domains.is_empty() {
         println!(
@@ -371,7 +404,13 @@ async fn add_host(client: &LanforgeClient, printer: &Printer, args: HostAddArgs)
 async fn run_add_wizard(
     client: &LanforgeClient,
     args: HostAddArgs,
-) -> Result<(MacAddr, String, Option<Ipv4Addr>, Option<Ipv6AddrOrSuffix>, bool)> {
+) -> Result<(
+    MacAddr,
+    String,
+    Option<Ipv4Addr>,
+    Option<Ipv6AddrOrSuffix>,
+    bool,
+)> {
     println!();
     println!(" {}", "● Static Host Configuration Wizard".bold().white());
     println!();
@@ -410,7 +449,9 @@ async fn run_add_wizard(
                         } else {
                             &d.hostname
                         };
-                        let ip_str = d.primary_v4.map_or_else(|| "-".to_string(), |ip| ip.to_string());
+                        let ip_str = d
+                            .primary_v4
+                            .map_or_else(|| "-".to_string(), |ip| ip.to_string());
                         format!("{:<18}  {:<16}  ({})", d.mac, ip_str, h)
                     })
                     .collect();
@@ -427,7 +468,9 @@ async fn run_add_wizard(
                     if !dev.hostname.is_empty() && default_hostname.is_none() {
                         default_hostname = Some(dev.hostname.clone());
                     }
-                    if let Some(ip) = dev.primary_v4 && default_v4.is_none() {
+                    if let Some(ip) = dev.primary_v4
+                        && default_v4.is_none()
+                    {
                         default_v4 = Some(ip.to_string());
                     }
                 }
@@ -499,22 +542,40 @@ async fn run_add_wizard(
 
     println!();
     println!(" {}", "Review Configuration:".bold().white());
-    println!("    {:<20} {}", "MAC Address:".dimmed(), mac_str.to_string().cyan());
-    println!("    {:<20} {}", "Hostname:".dimmed(), hostname.bold().white());
+    println!(
+        "    {:<20} {}",
+        "MAC Address:".dimmed(),
+        mac_str.to_string().cyan()
+    );
+    println!(
+        "    {:<20} {}",
+        "Hostname:".dimmed(),
+        hostname.bold().white()
+    );
     println!(
         "    {:<20} {}",
         "Fixed IPv4:".dimmed(),
-        v4.map_or_else(|| "Dynamic".dimmed().to_string(), |ip| ip.to_string().green().to_string())
+        v4.map_or_else(
+            || "Dynamic".dimmed().to_string(),
+            |ip| ip.to_string().green().to_string()
+        )
     );
     println!(
         "    {:<20} {}",
         "IPv6 Suffix:".dimmed(),
-        v6.as_ref().map_or_else(|| "None".dimmed().to_string(), |s| s.to_string().yellow().to_string())
+        v6.as_ref().map_or_else(
+            || "None".dimmed().to_string(),
+            |s| s.to_string().yellow().to_string()
+        )
     );
     println!(
         "    {:<20} {}",
         "DNS Logging:".dimmed(),
-        if ignore_dns_log { "Suppressed".magenta().to_string() } else { "Logged".dimmed().to_string() }
+        if ignore_dns_log {
+            "Suppressed".magenta().to_string()
+        } else {
+            "Logged".dimmed().to_string()
+        }
     );
     println!();
 
@@ -538,7 +599,11 @@ async fn set_host(client: &LanforgeClient, printer: &Printer, args: HostSetArgs)
         } else {
             let resp = client.host_list().await?;
             let needle = m.to_lowercase();
-            if let Some(host) = resp.hosts.into_iter().find(|h| h.hostname.to_lowercase() == needle) {
+            if let Some(host) = resp
+                .hosts
+                .into_iter()
+                .find(|h| h.hostname.to_lowercase() == needle)
+            {
                 host.mac
             } else {
                 bail!("Could not resolve host '{m}' to a configured static reservation.");
@@ -563,7 +628,9 @@ async fn set_host(client: &LanforgeClient, printer: &Printer, args: HostSetArgs)
         let mac_part = selected.split_whitespace().next().unwrap_or_default();
         MacAddr::from_str(mac_part).map_err(|e| eyre!("Failed to parse selected MAC: {e}"))?
     } else {
-        bail!("Missing target MAC or hostname. Example: lanforge host set 00:11:22:33:44:55 hostname my-new-name");
+        bail!(
+            "Missing target MAC or hostname. Example: lanforge host set 00:11:22:33:44:55 hostname my-new-name"
+        );
     };
 
     let field = if let Some(f) = args.field {
@@ -580,9 +647,15 @@ async fn set_host(client: &LanforgeClient, printer: &Printer, args: HostSetArgs)
             "class (Device class)",
         ];
         let chosen = Select::new("Select field to modify:", fields).prompt()?;
-        chosen.split_whitespace().next().unwrap_or_default().to_string()
+        chosen
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_string()
     } else {
-        bail!("Missing field to modify. Available fields: hostname, v4, v6, ignore_dns_log, boot_file, class");
+        bail!(
+            "Missing field to modify. Available fields: hostname, v4, v6, ignore_dns_log, boot_file, class"
+        );
     };
 
     let normalized_field = match field.as_str() {
@@ -594,12 +667,17 @@ async fn set_host(client: &LanforgeClient, printer: &Printer, args: HostSetArgs)
     let value = if let Some(v) = args.value {
         v
     } else if is_interactive {
-        Text::new(&format!("New value for {normalized_field} (press Enter to clear where applicable):")).prompt()?
+        Text::new(&format!(
+            "New value for {normalized_field} (press Enter to clear where applicable):"
+        ))
+        .prompt()?
     } else {
         bail!("Missing new value for field '{normalized_field}'.");
     };
 
-    let resp = client.host_set(target_mac, normalized_field.clone(), value.clone()).await?;
+    let resp = client
+        .host_set(target_mac, normalized_field.clone(), value.clone())
+        .await?;
 
     if printer.json {
         return printer.print_json(&resp);
@@ -612,7 +690,11 @@ async fn set_host(client: &LanforgeClient, printer: &Printer, args: HostSetArgs)
     Ok(())
 }
 
-async fn remove_host(client: &LanforgeClient, printer: &Printer, args: HostRemoveArgs) -> Result<()> {
+async fn remove_host(
+    client: &LanforgeClient,
+    printer: &Printer,
+    args: HostRemoveArgs,
+) -> Result<()> {
     let is_interactive = std::io::stdout().is_terminal() && !printer.yes;
 
     let (target_mac, target_name) = if let Some(t) = &args.target {
@@ -652,7 +734,9 @@ async fn remove_host(client: &LanforgeClient, printer: &Printer, args: HostRemov
             .map_or_else(|| mac.to_string(), |h| h.hostname);
         (mac, name)
     } else {
-        bail!("Missing target MAC or hostname to remove. Example: lanforge host remove 00:11:22:33:44:55");
+        bail!(
+            "Missing target MAC or hostname to remove. Example: lanforge host remove 00:11:22:33:44:55"
+        );
     };
 
     if is_interactive {

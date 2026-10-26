@@ -35,7 +35,10 @@ fn main() {
     }
 
     if !web_dir.exists() {
-        println!("cargo:warning=Web directory not found at {}", web_dir.display());
+        println!(
+            "cargo:warning=Web directory not found at {}",
+            web_dir.display()
+        );
     }
 
     let is_cross = is_cross_compiling();

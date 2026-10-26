@@ -126,7 +126,9 @@ impl ClientContext {
         {
             return Response::DnsAdblockSources(res);
         }
-        Response::DnsAdblockSources(lanforge_types::network::dns::DnsAdblockSourcesResponse::default())
+        Response::DnsAdblockSources(
+            lanforge_types::network::dns::DnsAdblockSourcesResponse::default(),
+        )
     }
 
     #[cfg(not(feature = "adblock"))]
@@ -148,12 +150,14 @@ impl ClientContext {
         {
             return Response::AdblockCheck(Box::new(res));
         }
-        Response::AdblockCheck(Box::new(lanforge_types::network::dns::AdblockCheckResponse {
-            domain,
-            matched: false,
-            filter: None,
-            source_matches: Vec::new(),
-        }))
+        Response::AdblockCheck(Box::new(
+            lanforge_types::network::dns::AdblockCheckResponse {
+                domain,
+                matched: false,
+                filter: None,
+                source_matches: Vec::new(),
+            },
+        ))
     }
 
     #[cfg(not(feature = "adblock"))]
@@ -176,7 +180,11 @@ impl ClientContext {
         if !urls.iter().any(|u| u.url == url) {
             let mut entry = lanforge_types::network::dns::AdblockUrlEntry {
                 id: None,
-                name: Some(lanforge_crypto::stable_id_or_hash(name.as_deref(), url.as_bytes(), "src")),
+                name: Some(lanforge_crypto::stable_id_or_hash(
+                    name.as_deref(),
+                    url.as_bytes(),
+                    "src",
+                )),
                 url: url.clone(),
                 kind,
                 format: format.unwrap_or_default(),
@@ -305,7 +313,10 @@ impl ClientContext {
             Err(e) => return Response::Error { error: e },
         };
         let mut rules = self.ctx.get_dns_adblock_rules();
-        let id = if let Some(existing) = rules.iter_mut().find(|r| r.domain.eq_ignore_ascii_case(&domain)) {
+        let id = if let Some(existing) = rules
+            .iter_mut()
+            .find(|r| r.domain.eq_ignore_ascii_case(&domain))
+        {
             existing.action = rule_action;
             existing.enabled = true;
             existing.id.unwrap_or(1)

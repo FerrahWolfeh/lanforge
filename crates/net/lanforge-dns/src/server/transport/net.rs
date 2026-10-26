@@ -23,7 +23,9 @@ pub fn bind_udp(addr: SocketAddr) -> io::Result<UdpTransport> {
 /// back to IPv4 single-listener.
 pub fn bind_tcp(addr: SocketAddr) -> io::Result<DualTcpListener> {
     match addr {
-        SocketAddr::V6(v6) if v6.ip().is_unspecified() => DualTcpListener::bind_dual_stack(v6.port()),
+        SocketAddr::V6(v6) if v6.ip().is_unspecified() => {
+            DualTcpListener::bind_dual_stack(v6.port())
+        }
         _ => DualTcpListener::bind_single(addr),
     }
 }
@@ -67,4 +69,3 @@ mod tests {
         assert!(!local_addrs.is_empty());
     }
 }
-

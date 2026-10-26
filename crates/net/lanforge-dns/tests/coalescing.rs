@@ -2,7 +2,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use lanforge_dns::resolver::recursive::{DnsCache, UpstreamManager, UpstreamMode, UpstreamStrategy};
+use lanforge_dns::resolver::recursive::{
+    DnsCache, UpstreamManager, UpstreamMode, UpstreamStrategy,
+};
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::dns::{DnsClass, DnsMessage, DnsQuestion, DnsRecordType};
@@ -43,7 +45,9 @@ async fn test_coalesced_queries_patch_transaction_id_and_deduplicate() {
         }
     });
 
-    let target = format!("udp://{upstream_addr}").parse::<UpstreamTarget>().unwrap();
+    let target = format!("udp://{upstream_addr}")
+        .parse::<UpstreamTarget>()
+        .unwrap();
     let cache = Arc::new(DnsCache::new(100, 30, None));
     let mgr = UpstreamManager::new(&target, cache).await.unwrap();
     let strategy = UpstreamStrategy::new(UpstreamMode::Sequential, vec![mgr]);
@@ -92,12 +96,19 @@ async fn test_coalesced_queries_patch_transaction_id_and_deduplicate() {
 
     // Verify all 3 queries share the exact same coalesce_id
     let batch_id = res1.coalesce_id;
-    assert!(batch_id.is_some(), "Expected leader and followers to have coalesce_id");
+    assert!(
+        batch_id.is_some(),
+        "Expected leader and followers to have coalesce_id"
+    );
     assert_eq!(res2.coalesce_id, batch_id);
     assert_eq!(res3.coalesce_id, batch_id);
 
     // Verify mock upstream received exactly 1 query packet
-    assert_eq!(packet_count.load(Ordering::SeqCst), 1, "Expected exactly 1 packet to hit upstream");
+    assert_eq!(
+        packet_count.load(Ordering::SeqCst),
+        1,
+        "Expected exactly 1 packet to hit upstream"
+    );
 }
 
 #[tokio::test]
@@ -127,12 +138,16 @@ async fn test_coalesced_queries_pipeline_metrics() {
         }
     });
 
-    let target = format!("udp://{upstream_addr}").parse::<UpstreamTarget>().unwrap();
+    let target = format!("udp://{upstream_addr}")
+        .parse::<UpstreamTarget>()
+        .unwrap();
     let lanforge_ctx = common::init_test_context();
     let dns_cfg = common::mock_config();
     let dns_ctx = common::mock_dns_context(lanforge_ctx, dns_cfg).await;
 
-    let mgr = UpstreamManager::new(&target, Arc::clone(&dns_ctx.cache)).await.unwrap();
+    let mgr = UpstreamManager::new(&target, Arc::clone(&dns_ctx.cache))
+        .await
+        .unwrap();
     dns_ctx.recursive.replace_upstreams(vec![mgr]);
 
     let make_query = |id: u16| {
@@ -164,11 +179,7 @@ async fn test_coalesced_queries_pipeline_metrics() {
         }
     };
 
-    let (r1, r2, r3) = tokio::join!(
-        run_one(q1),
-        run_one(q2),
-        run_one(q3),
-    );
+    let (r1, r2, r3) = tokio::join!(run_one(q1), run_one(q2), run_one(q3),);
 
     let (ok1, resp1) = r1;
     let (ok2, resp2) = r2;
@@ -199,9 +210,15 @@ async fn test_coalesced_queries_pipeline_metrics() {
             .iter()
             .filter(|e| e.result == lanforge_types::network::dns::QueryResult::Coalesced)
             .count();
-        assert_eq!(coalesced_count, 2, "Expected 2 log entries with QueryResult::Coalesced");
+        assert_eq!(
+            coalesced_count, 2,
+            "Expected 2 log entries with QueryResult::Coalesced"
+        );
         let batch_id = entries[0].coalesce_id;
-        assert!(batch_id.is_some(), "Expected batch coalesce_id to be populated in log");
+        assert!(
+            batch_id.is_some(),
+            "Expected batch coalesce_id to be populated in log"
+        );
         assert_eq!(entries[1].coalesce_id, batch_id);
         assert_eq!(entries[2].coalesce_id, batch_id);
     }

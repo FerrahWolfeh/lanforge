@@ -62,10 +62,7 @@ impl RawSender {
             }
         };
 
-        Ok(Self {
-            tx,
-            src_mac,
-        })
+        Ok(Self { tx, src_mac })
     }
 
     /// Wraps the `DHCPv4` (BOOTP) payload in UDP, IPv4, and Ethernet headers,

@@ -24,7 +24,9 @@ use lanforge_types::network::dhcp::Dhcpv4Pool;
 use lanforge_types::network::firewall::{
     DynamicPortRequest, FirewallConfig, FirewallMode, L4Protocol,
 };
-use lanforge_types::network::ra::{PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RouterPriority};
+use lanforge_types::network::ra::{
+    PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RouterPriority,
+};
 use lanforge_types::network::traffic::{NicTuningConfig, SqmConfig, SqmDiffserv, TrafficConfig};
 use lanforge_types::system::ServiceId;
 use lanforge_types::update::LeaseTarget;
@@ -61,13 +63,15 @@ fn build_dhcp_packet(
     msg.opts_mut().insert(DhcpOption::MessageType(msg_type));
 
     if let Some(req_ip) = requested_ip {
-        msg.opts_mut().insert(DhcpOption::RequestedIpAddress(req_ip));
+        msg.opts_mut()
+            .insert(DhcpOption::RequestedIpAddress(req_ip));
     }
     if let Some(srv) = server_id {
         msg.opts_mut().insert(DhcpOption::ServerIdentifier(srv));
     }
     if let Some(host) = hostname {
-        msg.opts_mut().insert(DhcpOption::Hostname(host.to_string()));
+        msg.opts_mut()
+            .insert(DhcpOption::Hostname(host.to_string()));
     }
 
     let mut buf = Vec::new();
@@ -138,7 +142,10 @@ async fn test_firewall_eventbus_reactivity() {
     let recompile_applied = timeout(Duration::from_millis(500), async {
         loop {
             if let Ok(evt) = fw_sub.recv().await
-                && matches!(evt.event, LanforgeEvent::Firewall(FirewallEvent::RulesetApplied(_)))
+                && matches!(
+                    evt.event,
+                    LanforgeEvent::Firewall(FirewallEvent::RulesetApplied(_))
+                )
             {
                 return true;
             }
@@ -153,7 +160,10 @@ async fn test_firewall_eventbus_reactivity() {
     let reload_applied = timeout(Duration::from_millis(500), async {
         loop {
             if let Ok(evt) = fw_sub.recv().await
-                && matches!(evt.event, LanforgeEvent::Firewall(FirewallEvent::RulesetApplied(_)))
+                && matches!(
+                    evt.event,
+                    LanforgeEvent::Firewall(FirewallEvent::RulesetApplied(_))
+                )
             {
                 return true;
             }
@@ -215,13 +225,20 @@ async fn test_traffic_eventbus_reactivity() {
         dns: vec![IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))],
         ipv6_link_local: false,
     };
-    let _ = bus.publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(session_up))));
+    let _ = bus.publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(
+        session_up,
+    ))));
 
     let bound_to_ppp0 = timeout(Duration::from_millis(500), async {
         loop {
             if let Ok(evt) = traffic_sub.recv().await
                 && let LanforgeEvent::Traffic(ref te) = evt.event
-                && let TrafficEvent::SqmApplied { ref interface, download_mbps, upload_mbps, .. } = **te
+                && let TrafficEvent::SqmApplied {
+                    ref interface,
+                    download_mbps,
+                    upload_mbps,
+                    ..
+                } = **te
                 && interface == "ppp0"
             {
                 return (download_mbps, upload_mbps);
@@ -249,13 +266,20 @@ async fn test_traffic_eventbus_reactivity() {
             ..Default::default()
         },
     });
-    let _ = bus.publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::RulesetChanged)));
+    let _ = bus.publish(LanforgeEvent::Traffic(Box::new(
+        TrafficEvent::RulesetChanged,
+    )));
 
     let updated_sqm = timeout(Duration::from_millis(500), async {
         loop {
             if let Ok(evt) = traffic_sub.recv().await
                 && let LanforgeEvent::Traffic(ref te) = evt.event
-                && let TrafficEvent::SqmApplied { ref interface, download_mbps, upload_mbps, .. } = **te
+                && let TrafficEvent::SqmApplied {
+                    ref interface,
+                    download_mbps,
+                    upload_mbps,
+                    ..
+                } = **te
                 && interface == "ppp0"
                 && download_mbps == 300
             {
@@ -349,14 +373,14 @@ async fn test_ra_eventbus_reactivity() {
 
     // 1. NetworkEvent::PrefixChanged -> Emits immediate RA burst
     let new_gua: Ipv6Addr = "2001:db8:20::".parse().unwrap();
-    let _ = bus.publish(LanforgeEvent::Network(NetworkEvent::PrefixChanged(Box::new(
-        PrefixChangeDetails {
+    let _ = bus.publish(LanforgeEvent::Network(NetworkEvent::PrefixChanged(
+        Box::new(PrefixChangeDetails {
             gua: Some(new_gua),
             ula: None,
             preferred: 14400,
             valid: 86400,
-        },
-    ))));
+        }),
+    )));
 
     let prefix_burst_ra = timeout(Duration::from_millis(500), ra_handle.recv_payload())
         .await
@@ -429,7 +453,13 @@ async fn test_dhcp_eventbus_reactivity() {
     let client_src = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68);
 
     // Initial DORA to obtain lease
-    let discover = build_dhcp_packet(client_mac, MessageType::Discover, None, None, Some("test-device"));
+    let discover = build_dhcp_packet(
+        client_mac,
+        MessageType::Discover,
+        None,
+        None,
+        Some("test-device"),
+    );
     dhcp_handle.send_packet(discover, client_src).await;
 
     let offer = timeout(Duration::from_millis(500), dhcp_handle.recv_reply())
@@ -454,7 +484,9 @@ async fn test_dhcp_eventbus_reactivity() {
     assert_eq!(ack.message().unwrap().yiaddr(), assigned_ip);
 
     // Verify lease is registered
-    let dev = ctx.get_device(&client_mac).expect("Device should be registered");
+    let dev = ctx
+        .get_device(&client_mac)
+        .expect("Device should be registered");
     assert!(matches!(dev.v4, IPv4State::Dynamic(_)));
 
     // 1. NetworkEvent::LeaseRenewRequested -> Triggers FORCERENEW packet from server
@@ -469,19 +501,25 @@ async fn test_dhcp_eventbus_reactivity() {
         .expect("Channel closed");
     let forcerenew_msg = forcerenew_reply.message().expect("Decode FORCERENEW");
     assert_eq!(
-        forcerenew_msg.opts().get(dhcproto::v4::OptionCode::MessageType),
+        forcerenew_msg
+            .opts()
+            .get(dhcproto::v4::OptionCode::MessageType),
         Some(&DhcpOption::MessageType(MessageType::ForceRenew))
     );
 
     // 2. NetworkEvent::LeaseReleaseRequested -> Frees lease in pool and context
-    let _ = bus.publish(LanforgeEvent::Network(NetworkEvent::LeaseReleaseRequested {
-        mac: client_mac,
-        target: Some(LeaseTarget::V4),
-    }));
+    let _ = bus.publish(LanforgeEvent::Network(
+        NetworkEvent::LeaseReleaseRequested {
+            mac: client_mac,
+            target: Some(LeaseTarget::V4),
+        },
+    ));
 
     // Allow event processing
     tokio::time::sleep(Duration::from_millis(50)).await;
-    let dev_after_release = ctx.get_device(&client_mac).expect("Device still in registry");
+    let dev_after_release = ctx
+        .get_device(&client_mac)
+        .expect("Device still in registry");
     assert!(matches!(dev_after_release.v4, IPv4State::None));
 
     // 3. DeviceEvent::AdminUpdate (AdminChange::V4StaticChanged) -> Reserves static IP in pool
@@ -489,7 +527,9 @@ async fn test_dhcp_eventbus_reactivity() {
     let _ = bus.publish(LanforgeEvent::Device(DeviceEvent::AdminUpdate {
         mac: client_mac,
         hostname: Some("static-dev".into()),
-        change: Box::new(AdminChange::V4StaticChanged { ip: Some(static_ip) }),
+        change: Box::new(AdminChange::V4StaticChanged {
+            ip: Some(static_ip),
+        }),
     }));
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -497,7 +537,9 @@ async fn test_dhcp_eventbus_reactivity() {
     let _ = bus.publish(LanforgeEvent::Device(DeviceEvent::NetworkUpdate {
         mac: client_mac,
         hostname: Some("static-dev".into()),
-        change: Box::new(NetworkChange::IpDeleted { ip: IpAddr::V4(static_ip) }),
+        change: Box::new(NetworkChange::IpDeleted {
+            ip: IpAddr::V4(static_ip),
+        }),
     }));
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -610,7 +652,9 @@ async fn test_cross_domain_wan_transition_cascade() {
         dns: vec![IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))],
         ipv6_link_local: true,
     };
-    let _ = bus.publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(session_up))));
+    let _ = bus.publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(
+        session_up,
+    ))));
 
     // 1. Verify TrafficService binds SQM to ppp0
     let traffic_bound = timeout(Duration::from_millis(500), async {
@@ -644,17 +688,23 @@ async fn test_cross_domain_wan_transition_cascade() {
     assert!(fw_bound);
 
     // 3. Verify Golden Rule of Isolation: RA and DHCP remain Online and unaffected
-    assert_eq!(ctx.get_service_state(ServiceId::Ra), lanforge_types::system::ServiceState::Online);
-    assert_eq!(ctx.get_service_state(ServiceId::Dhcp4), lanforge_types::system::ServiceState::Online);
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Ra),
+        lanforge_types::system::ServiceState::Online
+    );
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Dhcp4),
+        lanforge_types::system::ServiceState::Online
+    );
 
     // 4. Clean Shutdown across all 4 services
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
-    let shutdown = timeout(
-        Duration::from_millis(800),
-        async {
-            let _ = tokio::join!(t_nft, t_traffic, t_ra, t_dhcp);
-        },
-    )
+    let shutdown = timeout(Duration::from_millis(800), async {
+        let _ = tokio::join!(t_nft, t_traffic, t_ra, t_dhcp);
+    })
     .await;
-    assert!(shutdown.is_ok(), "All services must shut down cleanly within timeout");
+    assert!(
+        shutdown.is_ok(),
+        "All services must shut down cleanly within timeout"
+    );
 }

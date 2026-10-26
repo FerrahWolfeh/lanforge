@@ -208,7 +208,10 @@ mod tests {
 
         let rev_order = graph.reverse_topological_order();
         let rev_pos_db = rev_order.iter().position(|&x| x == ServiceId::Db).unwrap();
-        let rev_pos_http = rev_order.iter().position(|&x| x == ServiceId::Http).unwrap();
+        let rev_pos_http = rev_order
+            .iter()
+            .position(|&x| x == ServiceId::Http)
+            .unwrap();
         assert!(rev_pos_db > rev_pos_http);
     }
 

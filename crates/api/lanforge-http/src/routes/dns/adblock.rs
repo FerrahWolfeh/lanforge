@@ -90,7 +90,10 @@ pub fn router() -> Router<AppState> {
             get(handle_adblock_rules).post(handle_adblock_rule_add),
         )
         .route("/adblock/rules/{id}", delete(handle_adblock_rule_remove))
-        .route("/adblock/rules/{id}/status", put(handle_adblock_rule_status))
+        .route(
+            "/adblock/rules/{id}/status",
+            put(handle_adblock_rule_status),
+        )
 }
 
 async fn handle_adblock_status(State(state): State<AppState>) -> impl IntoResponse {
@@ -141,7 +144,10 @@ async fn handle_adblock_check(
     axum::extract::Query(query): axum::extract::Query<AdblockCheckQuery>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dns_adblock_check(query.domain).await, AdblockCheck)
+    crate::http_response!(
+        ctx.handle_dns_adblock_check(query.domain).await,
+        AdblockCheck
+    )
 }
 
 async fn handle_adblock_urls(State(state): State<AppState>) -> impl IntoResponse {

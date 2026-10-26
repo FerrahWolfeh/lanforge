@@ -1,9 +1,13 @@
-use std::net::SocketAddr;
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use std::net::SocketAddr;
 
 /// Command-line arguments for Lanforge Lab Workbench.
 #[derive(Parser, Debug)]
-#[command(name = "lanforge-lab", version, about = "Interactive Lab Workbench & Automated Testbed for Lanforge")]
+#[command(
+    name = "lanforge-lab",
+    version,
+    about = "Interactive Lab Workbench & Automated Testbed for Lanforge"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,

@@ -53,7 +53,11 @@ impl Printer {
     #[must_use]
     pub fn status_badge(&self, online: bool) -> String {
         if self.no_color {
-            if online { "[ONLINE]".to_string() } else { "[OFFLINE]".to_string() }
+            if online {
+                "[ONLINE]".to_string()
+            } else {
+                "[OFFLINE]".to_string()
+            }
         } else if online {
             "[ONLINE]".green().bold().to_string()
         } else {
@@ -70,21 +74,25 @@ impl Printer {
         }
 
         match normalized.as_str() {
-            "online" | "running" | "active" => {
-                format!("[{}]", state.to_uppercase()).green().bold().to_string()
-            }
-            "inactive" | "disabled" | "stopped" => {
-                format!("[{}]", state.to_uppercase()).bright_black().to_string()
-            }
-            "starting" | "initializing" => {
-                format!("[{}]", state.to_uppercase()).cyan().bold().to_string()
-            }
-            "failing" | "failed" | "error" => {
-                format!("[{}]", state.to_uppercase()).red().bold().to_string()
-            }
-            "backoff" | "reconnecting" => {
-                format!("[{}]", state.to_uppercase()).yellow().bold().to_string()
-            }
+            "online" | "running" | "active" => format!("[{}]", state.to_uppercase())
+                .green()
+                .bold()
+                .to_string(),
+            "inactive" | "disabled" | "stopped" => format!("[{}]", state.to_uppercase())
+                .bright_black()
+                .to_string(),
+            "starting" | "initializing" => format!("[{}]", state.to_uppercase())
+                .cyan()
+                .bold()
+                .to_string(),
+            "failing" | "failed" | "error" => format!("[{}]", state.to_uppercase())
+                .red()
+                .bold()
+                .to_string(),
+            "backoff" | "reconnecting" => format!("[{}]", state.to_uppercase())
+                .yellow()
+                .bold()
+                .to_string(),
             _ => format!("[{}]", state.to_uppercase()).white().to_string(),
         }
     }
@@ -96,8 +104,12 @@ impl Printer {
         if self.no_color {
             return match normalized.as_str() {
                 "online" | "running" | "active" => if self.ascii { "*" } else { "●" }.to_string(),
-                "inactive" | "disabled" | "stopped" | "offline" => if self.ascii { "o" } else { "○" }.to_string(),
-                "starting" | "initializing" | "degraded" | "backoff" => if self.ascii { "^" } else { "▲" }.to_string(),
+                "inactive" | "disabled" | "stopped" | "offline" => {
+                    if self.ascii { "o" } else { "○" }.to_string()
+                }
+                "starting" | "initializing" | "degraded" | "backoff" => {
+                    if self.ascii { "^" } else { "▲" }.to_string()
+                }
                 _ => if self.ascii { "x" } else { "✖" }.to_string(),
             };
         }

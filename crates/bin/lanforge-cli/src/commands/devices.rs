@@ -1,7 +1,7 @@
-use std::collections::HashSet;
-use std::str::FromStr;
 use color_eyre::Result;
 use colored::Colorize;
+use std::collections::HashSet;
+use std::str::FromStr;
 
 use lanforge_api::api::{DeviceEntry, DeviceListQuery, DevicesResponse, WhoisResponse};
 use lanforge_types::identifiers::MacAddr;
@@ -213,12 +213,7 @@ pub fn render_devices_table(resp: &DevicesResponse, printer: &Printer) {
         if show_iface {
             let iface_str = dev.vlan_id.map_or_else(
                 || dev.iface.as_deref().unwrap_or("-").to_string(),
-                |vid| {
-                    format!(
-                        "{} (vlan {vid})",
-                        dev.iface.as_deref().unwrap_or("unknown")
-                    )
-                },
+                |vid| format!("{} (vlan {vid})", dev.iface.as_deref().unwrap_or("unknown")),
             );
             row.push(iface_str);
         }
@@ -266,7 +261,11 @@ fn render_device_details(whois: &WhoisResponse, printer: &Printer) {
     let host_str = if dev.hostname.is_empty() || dev.hostname == "?" {
         "unknown".dimmed().to_string()
     } else {
-        format!("{} (via {:?})", dev.hostname.bold().cyan(), dev.learning_method)
+        format!(
+            "{} (via {:?})",
+            dev.hostname.bold().cyan(),
+            dev.learning_method
+        )
     };
     println!("    {:<20} {}", "Hostname:".dimmed(), host_str);
 
@@ -293,11 +292,19 @@ fn render_device_details(whois: &WhoisResponse, printer: &Printer) {
     println!("    {:<20} {}", "IPv4 Address:".dimmed(), v4_str);
 
     if let Some(v6) = dev.primary_v6 {
-        println!("    {:<20} {}", "Primary IPv6:".dimmed(), v6.to_string().magenta());
+        println!(
+            "    {:<20} {}",
+            "Primary IPv6:".dimmed(),
+            v6.to_string().magenta()
+        );
     }
 
     if let Some(duid) = &dev.duid {
-        println!("    {:<20} {}", "DHCPv6 DUID:".dimmed(), duid.to_string().cyan());
+        println!(
+            "    {:<20} {}",
+            "DHCPv6 DUID:".dimmed(),
+            duid.to_string().cyan()
+        );
     }
 
     // Only show Interface/VLAN if VLANs or multiple interfaces exist for this device
@@ -403,23 +410,21 @@ mod tests {
     #[test]
     fn test_render_devices_table_vlan_includes_column() {
         let resp = DevicesResponse {
-            devices: vec![
-                DeviceEntry {
-                    mac: MacAddr::from_str("00:11:22:33:44:55").unwrap(),
-                    hostname: "iot-cam".to_string(),
-                    primary_v4: Some("192.168.100.5".parse().unwrap()),
-                    primary_v6: None,
-                    online: true,
-                    status: DeviceStatus::Online,
-                    learning_method: LearningMethod::NdpArp,
-                    class: DeviceClass::IoT,
-                    iface: Some("lan0.100".to_string()),
-                    vlan_id: Some(100),
-                    last_seen: 1_700_000_000,
-                    origin: Origin::Dynamic,
-                    ..Default::default()
-                },
-            ],
+            devices: vec![DeviceEntry {
+                mac: MacAddr::from_str("00:11:22:33:44:55").unwrap(),
+                hostname: "iot-cam".to_string(),
+                primary_v4: Some("192.168.100.5".parse().unwrap()),
+                primary_v6: None,
+                online: true,
+                status: DeviceStatus::Online,
+                learning_method: LearningMethod::NdpArp,
+                class: DeviceClass::IoT,
+                iface: Some("lan0.100".to_string()),
+                vlan_id: Some(100),
+                last_seen: 1_700_000_000,
+                origin: Origin::Dynamic,
+                ..Default::default()
+            }],
             meta: DevicesMeta {
                 total: 1,
                 online: 1,

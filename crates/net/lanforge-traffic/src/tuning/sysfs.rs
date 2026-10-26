@@ -37,11 +37,7 @@ pub async fn apply_global_sysctls(rps_sock_flow_entries: u32) {
 }
 
 /// Applies RPS, RFS, and XPS settings on a network interface via sysfs in a single directory pass.
-pub async fn apply_interface_steering(
-    iface: &str,
-    cpu_mask: &str,
-    rps_flow_cnt: u32,
-) -> bool {
+pub async fn apply_interface_steering(iface: &str, cpu_mask: &str, rps_flow_cnt: u32) -> bool {
     let queues_dir = PathBuf::from(format!("/sys/class/net/{iface}/queues"));
     let Ok(mut dir) = fs::read_dir(&queues_dir).await else {
         debug!(iface = %iface, "Interface queues directory does not exist, skipping steering tuning");

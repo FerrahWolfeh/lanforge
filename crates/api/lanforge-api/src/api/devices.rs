@@ -4,8 +4,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use super::common::{HttpDataResponse, HttpPaginatedResponse, HttpWrappedResponse};
 use lanforge_types::{
     device::{
-        DeviceClass, DeviceStatus, IpClassification, Ipv6AddrOrSuffix, LearningMethod,
-        Origin, TransientOrigin,
+        DeviceClass, DeviceStatus, IpClassification, Ipv6AddrOrSuffix, LearningMethod, Origin,
+        TransientOrigin,
     },
     identifiers::{Duid, MacAddr},
     network::dhcp::empty_string_as_none,
@@ -467,7 +467,10 @@ mod tests {
         // JSON with nulls and empty strings
         let json_nulls = r#"{"mac":"aa:bb:cc:dd:ee:ff","hostname":null,"v4":"","v6_suffix":null}"#;
         let entry_nulls: HostConfigEntry = serde_json::from_str(json_nulls).unwrap();
-        assert_eq!(entry_nulls.mac, MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap());
+        assert_eq!(
+            entry_nulls.mac,
+            MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap()
+        );
         assert_eq!(entry_nulls.hostname, "");
         assert_eq!(entry_nulls.origin, Origin::Static);
         assert_eq!(entry_nulls.v4_fixed, None);

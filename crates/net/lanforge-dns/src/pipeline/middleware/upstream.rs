@@ -74,7 +74,10 @@ impl UpstreamMiddleware {
                 });
 
                 // Update cache size counter in real-time
-                if !r.cached && !r.coalesced && let Some(mgr) = ctx.recursive.all_upstreams().next() {
+                if !r.cached
+                    && !r.coalesced
+                    && let Some(mgr) = ctx.recursive.all_upstreams().next()
+                {
                     ctx.stats
                         .cache_entries
                         .store(mgr.cache.cache.len() as u64, Ordering::Relaxed);
@@ -106,4 +109,3 @@ impl UpstreamMiddleware {
         }
     }
 }
-

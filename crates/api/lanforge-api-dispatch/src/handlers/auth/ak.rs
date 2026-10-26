@@ -37,7 +37,8 @@ impl ClientContext {
 
         match storage
             .call(move |s: &Stores| {
-                s.auth().store_api_token(&token_clone, &name_clone, &scopes_clone, expires_at, now)
+                s.auth()
+                    .store_api_token(&token_clone, &name_clone, &scopes_clone, expires_at, now)
             })
             .await
         {
@@ -124,21 +125,19 @@ impl ClientContext {
         };
 
         match storage.call(|s: &Stores| s.auth().load_api_tokens()).await {
-            Ok(tokens) => {
-                Response::AuthTokens(AuthTokensResponse {
-                    tokens: tokens
-                        .into_iter()
-                        .map(|t| AuthTokenEntry {
-                            id: t.id,
-                            name: t.name,
-                            created_at: t.created_at,
-                            last_used: t.last_used,
-                            scopes: t.scopes,
-                            expires_at: t.expires_at,
-                        })
-                        .collect(),
-                })
-            }
+            Ok(tokens) => Response::AuthTokens(AuthTokensResponse {
+                tokens: tokens
+                    .into_iter()
+                    .map(|t| AuthTokenEntry {
+                        id: t.id,
+                        name: t.name,
+                        created_at: t.created_at,
+                        last_used: t.last_used,
+                        scopes: t.scopes,
+                        expires_at: t.expires_at,
+                    })
+                    .collect(),
+            }),
             Err(e) => Response::Error {
                 error: format!("Database error: {e}"),
             },

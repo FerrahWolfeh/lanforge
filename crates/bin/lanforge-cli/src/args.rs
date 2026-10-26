@@ -1,9 +1,9 @@
-use clap::{Parser, Subcommand};
 use crate::commands::{
     AuthArgs, ConfigArgs, DbArgs, DevicesArgs, DhcpArgs, DnsArgs, FirewallArgs, HostArgs,
     LoginArgs, PppoeArgs, RaArgs, ReloadArgs, ServiceArgs, SetupArgs, ShutdownArgs, StatusArgs,
     TrafficArgs, UserArgs, WatchArgs, WolArgs,
 };
+use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug, Clone)]
 #[command(

@@ -172,7 +172,8 @@ impl ClientContext {
         let pass_clone = password_hash.clone();
         if let Err(e) = storage
             .call(move |s: &Stores| {
-                s.auth().create_user(&u_clone, &pass_clone, UserRole::Admin, now)
+                s.auth()
+                    .create_user(&u_clone, &pass_clone, UserRole::Admin, now)
             })
             .await
         {
@@ -180,9 +181,7 @@ impl ClientContext {
             let u_clone2 = username.clone();
             let pass_clone2 = password_hash.clone();
             let _ = storage
-                .call(move |s: &Stores| {
-                    s.auth().update_user_password(&u_clone2, &pass_clone2, now)
-                })
+                .call(move |s: &Stores| s.auth().update_user_password(&u_clone2, &pass_clone2, now))
                 .await;
             info!("Setup: updated existing admin credentials ({e})");
         }
@@ -257,7 +256,9 @@ impl ClientContext {
             if ra.enabled {
                 if ra.auto_ula {
                     prefixes.push(lanforge_types::network::ra::RAPrefix::ula_dynamic());
-                } else if ra.ula_enabled && let Some(ref ula) = ra.ula_prefix {
+                } else if ra.ula_enabled
+                    && let Some(ref ula) = ra.ula_prefix
+                {
                     let raw_ula = ula.split('/').next().unwrap_or(ula);
                     prefixes.push(lanforge_types::network::ra::RAPrefix::ula(raw_ula));
                 }
@@ -326,7 +327,8 @@ impl ClientContext {
                 lanforge_types::network::dns::AdblockUrlEntry {
                     id: None,
                     name: Some("StevenBlack Unified".to_string()),
-                    url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts".to_string(),
+                    url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
+                        .to_string(),
                     kind: AdblockUrlKind::Blocklist,
                     format: AdblockSourceFormat::Hosts,
                 },
@@ -483,7 +485,9 @@ impl ClientContext {
         // 8. Write complete declarative TOML file atomically to authoritative path
         let target_path = self.resolve_config_path().unwrap_or_else(|| {
             let etc = PathBuf::from("/etc/lanforge/lanforge.toml");
-            if etc.parent().is_some_and(|p| p.exists()) || std::fs::create_dir_all("/etc/lanforge").is_ok() {
+            if etc.parent().is_some_and(|p| p.exists())
+                || std::fs::create_dir_all("/etc/lanforge").is_ok()
+            {
                 etc
             } else {
                 PathBuf::from("lanforge.toml")
@@ -498,10 +502,18 @@ impl ClientContext {
             &adblock_sources,
         );
 
-        if let Err(e) = lanforge_api::config_file::write_toml_atomically(&target_path, &toml_content) {
-            error!("Setup: Failed to write configuration to {}: {e}", target_path.display());
+        if let Err(e) =
+            lanforge_api::config_file::write_toml_atomically(&target_path, &toml_content)
+        {
+            error!(
+                "Setup: Failed to write configuration to {}: {e}",
+                target_path.display()
+            );
         } else {
-            info!("Setup: Successfully generated and wrote configuration to {}", target_path.display());
+            info!(
+                "Setup: Successfully generated and wrote configuration to {}",
+                target_path.display()
+            );
             self.ctx.set_config_path(&target_path);
             self.ctx.set_config_writable(true);
         }
@@ -536,7 +548,9 @@ impl ClientContext {
     }
 }
 
-fn parse_v6_pool_from_range(range_str: &str) -> (Option<Ipv6AddrOrSuffix>, Option<Ipv6AddrOrSuffix>) {
+fn parse_v6_pool_from_range(
+    range_str: &str,
+) -> (Option<Ipv6AddrOrSuffix>, Option<Ipv6AddrOrSuffix>) {
     if let Some((start, end)) = range_str.split_once('-') {
         let s = start.trim().parse().ok();
         let e = end.trim().parse().ok();
@@ -616,7 +630,9 @@ fn generate_setup_toml(
                     preferred_lifetime: None,
                 },
             );
-        } else if ra.ula_enabled && let Some(ref ula) = ra.ula_prefix {
+        } else if ra.ula_enabled
+            && let Some(ref ula) = ra.ula_prefix
+        {
             cfg.ra.prefixes.insert(
                 "ula".to_string(),
                 lanforge_api::config_file::RaPrefixFile {

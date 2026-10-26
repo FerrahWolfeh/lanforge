@@ -25,7 +25,12 @@ use lanforge_types::update::*;
 use std::mem::{align_of, size_of};
 
 fn print_size<T>(name: &str) {
-    println!("{:<35} {:>5} B  (align: {:>2})", name, size_of::<T>(), align_of::<T>());
+    println!(
+        "{:<35} {:>5} B  (align: {:>2})",
+        name,
+        size_of::<T>(),
+        align_of::<T>()
+    );
 }
 
 #[test]
@@ -165,9 +170,13 @@ fn test_print_all_struct_sizes() {
     print_size::<lanforge_types::network::traffic::CakeQdiscStats>("CakeQdiscStats");
     print_size::<lanforge_types::network::traffic::SqmTelemetryStats>("SqmTelemetryStats");
     print_size::<lanforge_types::network::traffic::ConntrackStats>("ConntrackStats");
-    print_size::<lanforge_types::network::traffic::InterfaceThroughputPoint>("InterfaceThroughputPoint");
+    print_size::<lanforge_types::network::traffic::InterfaceThroughputPoint>(
+        "InterfaceThroughputPoint",
+    );
     print_size::<lanforge_types::network::traffic::TrafficHistorySample>("TrafficHistorySample");
-    print_size::<lanforge_types::network::traffic::TrafficTelemetryResponse>("TrafficTelemetryResponse");
+    print_size::<lanforge_types::network::traffic::TrafficTelemetryResponse>(
+        "TrafficTelemetryResponse",
+    );
     print_size::<lanforge_types::system::TrafficStatusResponse>("TrafficStatusResponse");
 
     println!("\n=== SYSTEM & AUTH ===");

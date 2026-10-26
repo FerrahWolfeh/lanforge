@@ -63,4 +63,3 @@ impl Middleware for LocalResolverMiddleware {
         LocalResolverMiddleware::run_sync(self, ctx, req, resp)
     }
 }
-

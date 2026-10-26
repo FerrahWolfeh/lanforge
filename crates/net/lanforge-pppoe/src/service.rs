@@ -13,8 +13,8 @@ use lanforge_core::bus::{LanforgeEvent, PppoeEvent, SystemEvent};
 use lanforge_core::context::{ConfigSubscription, LanforgeContext};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy,
-    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
+    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
+    ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_transport::ArpProber;
 use lanforge_types::config::ChangeImpact;
@@ -330,7 +330,8 @@ impl PppoeService {
         };
 
         self.publish_connected_status(&interface_name, &disc_res, &lcp_res, &ipcp_res);
-        self.ctx.set_service_state(Self::SERVICE_ID, ServiceState::Online);
+        self.ctx
+            .set_service_state(Self::SERVICE_ID, ServiceState::Online);
 
         if self.cfg.username == "carrier_drop" {
             sleep(Duration::from_millis(30)).await;
@@ -662,7 +663,8 @@ impl PppoeService {
             ))));
 
         self.ctx.set_pppoe_ready(true);
-        self.ctx.set_service_state(Self::SERVICE_ID, ServiceState::Online);
+        self.ctx
+            .set_service_state(Self::SERVICE_ID, ServiceState::Online);
         self.ctx.set_service_detail(Self::SERVICE_ID, None);
         let _ = self
             .ctx
@@ -1109,7 +1111,10 @@ impl LanforgeService for PppoeService {
     }
 
     fn describe(&self) -> String {
-        format!("PPPoE on {} (user: {})", self.cfg.wan_iface, self.cfg.username)
+        format!(
+            "PPPoE on {} (user: {})",
+            self.cfg.wan_iface, self.cfg.username
+        )
     }
 }
 

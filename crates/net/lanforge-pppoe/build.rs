@@ -84,9 +84,7 @@ fn main() {
         }
         Err(err) => {
             if bundled_bpf_o.exists() {
-                println!(
-                    "cargo:warning=Using pre-compiled PPPoE eBPF bytecode ({err})."
-                );
+                println!("cargo:warning=Using pre-compiled PPPoE eBPF bytecode ({err}).");
                 std::fs::copy(&bundled_bpf_o, &bpf_o)
                     .expect("failed to copy pre-compiled bpf.o to OUT_DIR");
             } else {

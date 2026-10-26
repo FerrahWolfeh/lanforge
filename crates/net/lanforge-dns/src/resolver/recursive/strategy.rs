@@ -3,13 +3,13 @@ use crate::resolver::recursive::UpstreamManager;
 use crate::resolver::recursive::cache::CacheKey;
 use crate::utils::health::UpstreamStatus;
 use dashmap::DashMap;
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRecordType, UpstreamHealthSnapshot,
 };
-use futures::StreamExt;
-use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -23,8 +23,12 @@ pub use lanforge_types::network::dns::UpstreamMode;
 static COALESCE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 type InFlightTx = Sender<Result<(Vec<u8>, bool, bool, u64), String>>;
-type QueryResult = (std::net::SocketAddr, Result<(Vec<u8>, bool, bool), DnsError>);
-type QueryFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = QueryResult> + Send + 'a>>;
+type QueryResult = (
+    std::net::SocketAddr,
+    Result<(Vec<u8>, bool, bool), DnsError>,
+);
+type QueryFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = QueryResult> + Send + 'a>>;
 
 #[derive(Debug, Clone)]
 pub struct Resolved {
@@ -97,8 +101,12 @@ impl UpstreamStrategy {
         let strategy = Self {
             mode: parking_lot::RwLock::new(mode),
             tiers: parking_lot::RwLock::new(Arc::from(Vec::<Vec<Arc<UpstreamManager>>>::new())),
-            conditional_routes: parking_lot::RwLock::new(Arc::from(Vec::<Arc<ConditionalRoute>>::new())),
-            fallback_upstreams: parking_lot::RwLock::new(Arc::from(Vec::<Arc<UpstreamManager>>::new())),
+            conditional_routes: parking_lot::RwLock::new(Arc::from(
+                Vec::<Arc<ConditionalRoute>>::new(),
+            )),
+            fallback_upstreams: parking_lot::RwLock::new(Arc::from(
+                Vec::<Arc<UpstreamManager>>::new(),
+            )),
             rr_index: AtomicUsize::new(0),
             in_flight: DashMap::new(),
         };
@@ -120,7 +128,9 @@ impl UpstreamStrategy {
 
         for mgr in upstreams {
             let domain_opt = mgr.target.domain.as_deref().map(normalize_domain);
-            if let Some(domain) = domain_opt && !domain.is_empty() {
+            if let Some(domain) = domain_opt
+                && !domain.is_empty()
+            {
                 by_domain.entry(domain).or_default().push(mgr);
             } else {
                 global.push(mgr);
@@ -168,8 +178,7 @@ impl UpstreamStrategy {
     /// Returns true if no upstreams are configured anywhere.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.tiers.read().iter().all(|t| t.is_empty())
-            && self.conditional_routes.read().is_empty()
+        self.tiers.read().iter().all(|t| t.is_empty()) && self.conditional_routes.read().is_empty()
     }
 
     /// Returns true if default global upstreams are configured.
@@ -183,7 +192,9 @@ impl UpstreamStrategy {
             .all_upstreams()
             .map(|m| {
                 #[allow(unused_mut)]
-                let mut snap = m.health.snapshot(m.target.addr, m.target.protocol, m.target.domain.clone());
+                let mut snap =
+                    m.health
+                        .snapshot(m.target.addr, m.target.protocol, m.target.domain.clone());
 
                 #[cfg(not(feature = "dot"))]
                 if m.target.protocol == UpstreamProtocol::Tls {
@@ -326,7 +337,9 @@ impl UpstreamStrategy {
         guard.key = None;
         if let Some((_, (tx, batch_id))) = self.in_flight.remove(&key) {
             let followers = tx.receiver_count();
-            if followers > 0 && let Ok(ref mut r) = res {
+            if followers > 0
+                && let Ok(ref mut r) = res
+            {
                 r.coalesce_id = Some(batch_id);
             }
             let _ = tx.send(
@@ -365,7 +378,9 @@ impl UpstreamStrategy {
         if !self.has_global_upstreams() {
             let fallbacks = Arc::clone(&*self.fallback_upstreams.read());
             if !fallbacks.is_empty() {
-                return self.resolve_sequential(&fallbacks, data, header, question).await;
+                return self
+                    .resolve_sequential(&fallbacks, data, header, question)
+                    .await;
             }
         }
         let tiers = Arc::clone(&*self.tiers.read());
@@ -393,7 +408,9 @@ impl UpstreamStrategy {
             UpstreamMode::Sequential => self.resolve_sequential(tier, data, header, question).await,
             UpstreamMode::Parallel => self.resolve_parallel(tier, data, header, question).await,
             UpstreamMode::Fastest => self.resolve_fastest(tier, data, header, question).await,
-            UpstreamMode::RoundRobin => self.resolve_round_robin(tier, data, header, question).await,
+            UpstreamMode::RoundRobin => {
+                self.resolve_round_robin(tier, data, header, question).await
+            }
         }
     }
 
@@ -435,12 +452,7 @@ impl UpstreamStrategy {
         let run_query = |mgr: &Arc<UpstreamManager>| -> QueryFuture<'_> {
             let addr = mgr.target.addr;
             let mgr = Arc::clone(mgr);
-            Box::pin(async move {
-                (
-                    addr,
-                    mgr.forward_with_parsed(data, header, question).await,
-                )
-            })
+            Box::pin(async move { (addr, mgr.forward_with_parsed(data, header, question).await) })
         };
 
         let mut futs = FuturesUnordered::new();

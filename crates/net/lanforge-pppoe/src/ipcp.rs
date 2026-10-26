@@ -102,7 +102,13 @@ pub struct IpcpNegotiated {
     pub peer_v6_ll: Option<Ipv6Addr>,
 }
 
-fn build_ipcp_req(id: u8, ip: Ipv4Addr, dns1: Ipv4Addr, dns2: Ipv4Addr, req_dns: bool) -> PacketBuf<32> {
+fn build_ipcp_req(
+    id: u8,
+    ip: Ipv4Addr,
+    dns1: Ipv4Addr,
+    dns2: Ipv4Addr,
+    req_dns: bool,
+) -> PacketBuf<32> {
     let mut buf = [0u8; 32];
     buf[0..2].copy_from_slice(&PPP_IPCP.to_be_bytes());
     buf[2] = 0x01; // Configure-Request
@@ -129,7 +135,10 @@ fn build_ipcp_req(id: u8, ip: Ipv4Addr, dns1: Ipv4Addr, dns2: Ipv4Addr, req_dns:
         12
     };
 
-    PacketBuf { buf, len: total_len }
+    PacketBuf {
+        buf,
+        len: total_len,
+    }
 }
 
 fn build_control_ack(proto: u16, id: u8, data: &[u8], len: usize) -> PacketBuf<128> {
@@ -217,7 +226,11 @@ pub const fn parse_peer_ip(data: &[u8], len: usize) -> Option<Ipv4Addr> {
         return None;
     }
     let mut offset = 6;
-    let end = if 2 + len < data.len() { 2 + len } else { data.len() };
+    let end = if 2 + len < data.len() {
+        2 + len
+    } else {
+        data.len()
+    };
     while offset + 2 <= end {
         let opt_type = data[offset];
         let opt_len = data[offset + 1] as usize;
@@ -243,7 +256,11 @@ pub fn parse_peer_v6_ifid(data: &[u8], len: usize) -> Option<Ipv6Addr> {
         return None;
     }
     let mut offset = 6;
-    let end = if 2 + len < data.len() { 2 + len } else { data.len() };
+    let end = if 2 + len < data.len() {
+        2 + len
+    } else {
+        data.len()
+    };
     while offset + 2 <= end {
         let opt_type = data[offset];
         let opt_len = data[offset + 1] as usize;
@@ -475,10 +492,7 @@ async fn handle_lcp_echo(
     Ok(())
 }
 
-fn finalize_negotiation(
-    v4: &IpcpV4State,
-    v6: &IpcpV6State,
-) -> Result<IpcpNegotiated, PppoeError> {
+fn finalize_negotiation(v4: &IpcpV4State, v6: &IpcpV6State) -> Result<IpcpNegotiated, PppoeError> {
     let mut dns: SmallVec<[IpAddr; 2]> = SmallVec::new();
     if v4.assigned_dns1 != Ipv4Addr::UNSPECIFIED {
         dns.push(IpAddr::V4(v4.assigned_dns1));

@@ -358,11 +358,7 @@ impl State {
 
     pub fn rebuild_static_registry(&mut self) {
         let mut registry = StaticRegistry::default();
-        let mut static_devs: Vec<_> = self
-            .devices
-            .values()
-            .filter(|d| d.is_static())
-            .collect();
+        let mut static_devs: Vec<_> = self.devices.values().filter(|d| d.is_static()).collect();
         static_devs.sort_by_key(|d| d.mac);
 
         for dev in static_devs {

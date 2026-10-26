@@ -1,7 +1,8 @@
 use crate::ClientContext;
 use lanforge_api::api::{
-    DnsAnalyticsResponse, DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse, ProtocolStatEntry,
-    QueryRateEntry, QueryTypeEntry, Response, SimpleSuccess, TopClientEntry, TopDomainEntry,
+    DnsAnalyticsResponse, DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse,
+    ProtocolStatEntry, QueryRateEntry, QueryTypeEntry, Response, SimpleSuccess, TopClientEntry,
+    TopDomainEntry,
 };
 use lanforge_types::network::dns::{
     DnsRecordType, DnsRequest, DnsResponse, UpstreamStatus,

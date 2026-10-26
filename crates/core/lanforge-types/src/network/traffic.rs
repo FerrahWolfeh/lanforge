@@ -239,4 +239,3 @@ pub struct TrafficTelemetryResponse {
     #[serde(default)]
     pub ingress_device: Option<String>,
 }
-

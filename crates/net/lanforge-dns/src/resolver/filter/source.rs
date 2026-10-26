@@ -20,10 +20,10 @@ use lanforge_types::network::dns::adblock::AdblockSourceFormat;
 
 use crate::error::DnsError;
 use crate::resolver::filter::engine::{
-    build_fst_map, decode_val, encode_val, reverse_domain_key, LABEL_SEPARATOR,
+    LABEL_SEPARATOR, build_fst_map, decode_val, encode_val, reverse_domain_key,
 };
 use crate::resolver::filter::manifest::SourceManifestEntry;
-use crate::resolver::filter::parse::{parse_source, MatchFlags, RuleAction};
+use crate::resolver::filter::parse::{MatchFlags, RuleAction, parse_source};
 
 const MAX_BODY_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
 
@@ -72,7 +72,6 @@ pub enum SourceFetchResult {
     },
 }
 
-
 /// Performs a conditional HTTP GET request using ETag and If-Modified-Since headers.
 pub async fn fetch_source_conditional(
     client: &Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>,
@@ -104,8 +103,9 @@ pub async fn fetch_source_conditional(
         let resp = tokio::time::timeout(Duration::from_secs(120), client.request(req))
             .await
             .map_err(|_| DnsError::Generic("Request timed out (120s limit)".to_string()))?
-            .map_err(|e| DnsError::Generic(format!("HTTP request error: {}", format_error_chain(&e))))?;
-
+            .map_err(|e| {
+                DnsError::Generic(format!("HTTP request error: {}", format_error_chain(&e)))
+            })?;
 
         let status = resp.status();
 
@@ -129,7 +129,9 @@ pub async fn fetch_source_conditional(
                 }
                 continue;
             }
-            return Err(DnsError::Generic("Redirect without Location header".to_string()));
+            return Err(DnsError::Generic(
+                "Redirect without Location header".to_string(),
+            ));
         }
 
         if !status.is_success() {
@@ -151,7 +153,8 @@ pub async fn fetch_source_conditional(
         let mut body_bytes = Vec::new();
 
         while let Some(frame_res) = body.frame().await {
-            let frame = frame_res.map_err(|e| DnsError::Generic(format!("Body frame error: {e}")))?;
+            let frame =
+                frame_res.map_err(|e| DnsError::Generic(format!("Body frame error: {e}")))?;
             if let Ok(data) = frame.into_data() {
                 if body_bytes.len() + data.len() > MAX_BODY_SIZE {
                     return Err(DnsError::Generic(format!(
@@ -269,7 +272,6 @@ pub fn compile_source_artifacts(
     })
 }
 
-
 /// Merges all source block and allow FSTs into the final `block.fst` and `allow.fst`.
 /// Applies $badfilter removals, union of flags, and single-pass descendant pruning.
 pub fn merge_all_sources(
@@ -364,8 +366,12 @@ fn merge_fst_stream(
         builder
             .finish()
             .map_err(|e| DnsError::Generic(format!("MapBuilder finish failed: {e}")))?;
-        let tmp_file = writer.into_inner().map_err(|e| DnsError::Generic(e.to_string()))?;
-        tmp_file.persist(target_path).map_err(|e| DnsError::Generic(e.to_string()))?;
+        let tmp_file = writer
+            .into_inner()
+            .map_err(|e| DnsError::Generic(e.to_string()))?;
+        tmp_file
+            .persist(target_path)
+            .map_err(|e| DnsError::Generic(e.to_string()))?;
         return Ok((0, 0));
     }
 
@@ -510,8 +516,12 @@ mod tests {
         assert_eq!(blocks, 3); // ads.example.com, tracking.com, extra.com
         assert_eq!(allows, 1); // good.tracking.com
 
-        let block_map = Map::new(unsafe { Mmap::map(&File::open(&merged_block_path).unwrap()).unwrap() }).unwrap();
-        let allow_map = Map::new(unsafe { Mmap::map(&File::open(&merged_allow_path).unwrap()).unwrap() }).unwrap();
+        let block_map =
+            Map::new(unsafe { Mmap::map(&File::open(&merged_block_path).unwrap()).unwrap() })
+                .unwrap();
+        let allow_map =
+            Map::new(unsafe { Mmap::map(&File::open(&merged_allow_path).unwrap()).unwrap() })
+                .unwrap();
 
         assert_eq!(block_map.len(), 3);
         assert_eq!(allow_map.len(), 1);

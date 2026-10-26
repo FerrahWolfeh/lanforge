@@ -45,8 +45,7 @@ async fn async_main() -> Result<()> {
     tracing_subscriber::fmt()
         .without_time()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
@@ -65,8 +64,7 @@ async fn async_main() -> Result<()> {
         let interval_ms = (usec / 1000) / 2;
         if interval_ms > 0 {
             tokio::spawn(async move {
-                let mut interval =
-                    tokio::time::interval(Duration::from_millis(interval_ms));
+                let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
                 loop {
                     interval.tick().await;
                     let _ = notify(&[NotifyState::Watchdog]);

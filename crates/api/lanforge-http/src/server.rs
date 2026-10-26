@@ -4,6 +4,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "webui")]
+use axum::handler::Handler;
+#[cfg(feature = "webui")]
+use axum::http::StatusCode;
 use axum::{
     Router,
     body::Body,
@@ -12,10 +16,6 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-#[cfg(feature = "webui")]
-use axum::handler::Handler;
-#[cfg(feature = "webui")]
-use axum::http::StatusCode;
 use axum_server::{Handle, tls_rustls::RustlsConfig};
 use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},
@@ -243,8 +243,9 @@ impl HttpService {
             for std_listener in bind_tcp_dual_stack(addr)? {
                 let actual_addr = std_listener.local_addr().map_err(CoreError::Io)?;
                 info!(addr = %actual_addr, "HTTP: API listening");
-                let tcp_listener = TcpListener::from_std(std_listener)
-                    .map_err(|e| CoreError::Generic(format!("Failed to bind to {actual_addr}: {e}")))?;
+                let tcp_listener = TcpListener::from_std(std_listener).map_err(|e| {
+                    CoreError::Generic(format!("Failed to bind to {actual_addr}: {e}"))
+                })?;
                 let mut shutdown_rx = shutdown_tx.subscribe();
                 let app_clone = app.clone();
 
@@ -451,7 +452,8 @@ fn bind_tcp_dual_stack(addr: SocketAddr) -> Result<Vec<std::net::TcpListener>, C
             s.set_only_v6(true).map_err(CoreError::Io)?;
             s.set_reuse_address(true).map_err(CoreError::Io)?;
             s.set_nonblocking(true).map_err(CoreError::Io)?;
-            s.bind(&socket2::SockAddr::from(addr)).map_err(CoreError::Io)?;
+            s.bind(&socket2::SockAddr::from(addr))
+                .map_err(CoreError::Io)?;
             s.listen(1024).map_err(CoreError::Io)?;
             Ok(vec![s.into()])
         }
@@ -464,7 +466,8 @@ fn bind_tcp_dual_stack(addr: SocketAddr) -> Result<Vec<std::net::TcpListener>, C
             .map_err(CoreError::Io)?;
             s.set_reuse_address(true).map_err(CoreError::Io)?;
             s.set_nonblocking(true).map_err(CoreError::Io)?;
-            s.bind(&socket2::SockAddr::from(addr)).map_err(CoreError::Io)?;
+            s.bind(&socket2::SockAddr::from(addr))
+                .map_err(CoreError::Io)?;
             s.listen(1024).map_err(CoreError::Io)?;
             Ok(vec![s.into()])
         }
@@ -484,7 +487,6 @@ async fn handle_metrics(State(state): State<AppState>) -> HttpResult<impl IntoRe
         .body(Body::from(body))
         .map_err(|e| HttpError::Internal(format!("Failed to build metrics response: {e}")))
 }
-
 
 #[cfg(feature = "webui")]
 const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
@@ -515,11 +517,12 @@ async fn handle_embedded_webui(
                 return StatusCode::NOT_MODIFIED.into_response();
             }
 
-            let cache_control = if path.starts_with("/_app/immutable/") || path.starts_with("/assets/") {
-                "public, max-age=31536000, immutable"
-            } else {
-                "public, max-age=0, must-revalidate"
-            };
+            let cache_control =
+                if path.starts_with("/_app/immutable/") || path.starts_with("/assets/") {
+                    "public, max-age=31536000, immutable"
+                } else {
+                    "public, max-age=0, must-revalidate"
+                };
 
             (
                 [

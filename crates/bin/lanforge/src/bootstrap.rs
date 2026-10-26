@@ -3,8 +3,8 @@ use bytesize::ByteSize;
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
-use lanforge_core::context::{ConfigPatch, LanforgeContext};
 use lanforge_core::context::state::State;
+use lanforge_core::context::{ConfigPatch, LanforgeContext};
 use lanforge_db::{
     AdblockStore, DhcpConfigStore, DnsStore, DnsUpstreamStore, FirewallConfigStore, LanforgeDb,
     LogDb, LogStore, PppoeConfigStore, RaConfigStore, TrafficConfigStore, UserStore,
@@ -379,7 +379,11 @@ impl Bootstrapper {
                 urls.into_iter()
                     .map(|(id, url, kind, format)| AdblockUrlEntry {
                         id: Some(id),
-                        name: Some(lanforge_crypto::stable_id_or_hash(None, url.as_bytes(), "src")),
+                        name: Some(lanforge_crypto::stable_id_or_hash(
+                            None,
+                            url.as_bytes(),
+                            "src",
+                        )),
                         url,
                         kind,
                         format,
@@ -525,10 +529,18 @@ impl Bootstrapper {
                         if matches!(persistent.v4, lanforge_types::device::IPv4State::Dynamic(_)) {
                             runtime.v4 = persistent.v4.clone();
                         }
-                        runtime.v6.retain(|state| !matches!(state, lanforge_types::device::IPv6State::Dynamic(_)));
-                        runtime.v6.extend(persistent.v6.iter().filter(|state|
-                            matches!(state, lanforge_types::device::IPv6State::Dynamic(_))
-                        ).cloned());
+                        runtime.v6.retain(|state| {
+                            !matches!(state, lanforge_types::device::IPv6State::Dynamic(_))
+                        });
+                        runtime.v6.extend(
+                            persistent
+                                .v6
+                                .iter()
+                                .filter(|state| {
+                                    matches!(state, lanforge_types::device::IPv6State::Dynamic(_))
+                                })
+                                .cloned(),
+                        );
                         runtime.v6_prefixes.clone_from(&persistent.v6_prefixes);
                     }
                     runtime.status = lanforge_types::device::DeviceStatus::Offline;

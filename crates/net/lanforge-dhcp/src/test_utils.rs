@@ -1,7 +1,9 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
-use dhcproto::v4::{DhcpOption as Dhcpv4Option, Message as MessageV4, MessageType as MessageTypeV4};
+use dhcproto::v4::{
+    DhcpOption as Dhcpv4Option, Message as MessageV4, MessageType as MessageTypeV4,
+};
 use dhcproto::v6::{
     DhcpOption as Dhcpv6Option, DhcpOptions as Dhcpv6Options, IANA, Message as MessageV6,
     MessageType as MessageTypeV6,
@@ -216,8 +218,7 @@ impl Dhcpv4PacketBuilder {
             msg.opts_mut().insert(Dhcpv4Option::ServerIdentifier(srv));
         }
         if let Some(ref host) = self.hostname {
-            msg.opts_mut()
-                .insert(Dhcpv4Option::Hostname(host.clone()));
+            msg.opts_mut().insert(Dhcpv4Option::Hostname(host.clone()));
         }
 
         msg
@@ -293,9 +294,8 @@ impl Dhcpv6PacketBuilder {
     #[must_use]
     pub fn build_message(&self) -> MessageV6 {
         let mut msg = MessageV6::new(self.msg_type);
-        msg.opts_mut().insert(Dhcpv6Option::ClientId(
-            self.client_duid.as_bytes().to_vec(),
-        ));
+        msg.opts_mut()
+            .insert(Dhcpv6Option::ClientId(self.client_duid.as_bytes().to_vec()));
 
         if let Some(ref srv) = self.server_duid {
             msg.opts_mut()

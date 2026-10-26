@@ -347,7 +347,9 @@ mod tests {
         ]);
 
         // Exact match
-        let ans = store.resolve_rewrite("api.local").expect("Should match api.local");
+        let ans = store
+            .resolve_rewrite("api.local")
+            .expect("Should match api.local");
         assert_eq!(ans, RewriteAnswer::A(Ipv4Addr::new(10, 0, 0, 1)));
 
         // Wildcard subdomain
@@ -366,5 +368,3 @@ mod tests {
         assert!(store.resolve_rewrite("other.local").is_none());
     }
 }
-
-

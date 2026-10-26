@@ -167,7 +167,10 @@ async fn test_dispatch_system_config_import_export() {
             blocking_mode: BlockingMode::NullIp,
             blocking_ip_v4: Some("0.0.0.0".parse().unwrap()),
             blocking_ip_v6: Some("::".parse().unwrap()),
-            refresh_time: lanforge_types::network::dns::adblock::TimeOfDay { hour: 4, minute: 30 },
+            refresh_time: lanforge_types::network::dns::adblock::TimeOfDay {
+                hour: 4,
+                minute: 30,
+            },
         },
         dns_adblock_urls: if cfg!(feature = "adblock") {
             vec![AdblockUrlEntry {
@@ -189,13 +192,15 @@ async fn test_dispatch_system_config_import_export() {
             vec![]
         },
         dns_adblock_rules: if cfg!(feature = "adblock") {
-            Some(vec![lanforge_types::network::dns::adblock::AdblockRuleEntry {
-                id: None,
-                name: Some("custom-blocked".to_string()),
-                domain: "custom-blocked.com".to_string(),
-                action: AdblockRuleAction::Block,
-                enabled: true,
-            }])
+            Some(vec![
+                lanforge_types::network::dns::adblock::AdblockRuleEntry {
+                    id: None,
+                    name: Some("custom-blocked".to_string()),
+                    domain: "custom-blocked.com".to_string(),
+                    action: AdblockRuleAction::Block,
+                    enabled: true,
+                },
+            ])
         } else {
             None
         },
@@ -236,7 +241,10 @@ async fn test_dispatch_system_config_import_export() {
         assert_eq!(cfg.dns_adblock_config.blocking_mode, BlockingMode::NullIp);
         assert_eq!(
             cfg.dns_adblock_config.refresh_time,
-            lanforge_types::network::dns::adblock::TimeOfDay { hour: 4, minute: 30 }
+            lanforge_types::network::dns::adblock::TimeOfDay {
+                hour: 4,
+                minute: 30
+            }
         );
 
         if cfg!(feature = "adblock") {

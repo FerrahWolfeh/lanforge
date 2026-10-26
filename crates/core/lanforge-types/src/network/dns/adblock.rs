@@ -643,7 +643,9 @@ impl std::str::FromStr for AdblockRuleAction {
         match s.trim().to_lowercase().as_str() {
             "block" => Ok(Self::Block),
             "allow" => Ok(Self::Allow),
-            other => Err(format!("Unknown rule action: '{other}'. Expected 'block' or 'allow'")),
+            other => Err(format!(
+                "Unknown rule action: '{other}'. Expected 'block' or 'allow'"
+            )),
         }
     }
 }
@@ -842,17 +844,20 @@ mod tests {
         assert_eq!(TimeOfDay::DEFAULT.minute_of_day(), 180);
 
         let parsed: TimeOfDay = "04:15".parse().unwrap();
-        assert_eq!(parsed, TimeOfDay { hour: 4, minute: 15 });
+        assert_eq!(
+            parsed,
+            TimeOfDay {
+                hour: 4,
+                minute: 15
+            }
+        );
         assert_eq!(parsed.minute_of_day(), 255);
 
         assert!("24:00".parse::<TimeOfDay>().is_err());
         assert!("23:60".parse::<TimeOfDay>().is_err());
         assert!("invalid".parse::<TimeOfDay>().is_err());
 
-        assert_eq!(
-            TimeOfDay::new_or_default(25, 0),
-            TimeOfDay::DEFAULT
-        );
+        assert_eq!(TimeOfDay::new_or_default(25, 0), TimeOfDay::DEFAULT);
 
         let json = serde_json::to_string(&parsed).unwrap();
         let deserialized: TimeOfDay = serde_json::from_str(&json).unwrap();

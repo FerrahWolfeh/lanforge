@@ -1,8 +1,8 @@
-use std::path::Path;
-use std::sync::OnceLock;
 use super::cake::build_cake_args;
 use super::ifb::{resolve_ifb_name, setup_ifb, teardown_ifb};
 use lanforge_types::network::SqmConfig;
+use std::path::Path;
+use std::sync::OnceLock;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
@@ -22,10 +22,7 @@ pub fn resolve_tc_binary() -> &'static str {
 /// Helper to execute a `tc` command and check the result.
 async fn run_tc(args: &[&str]) -> bool {
     let tc_bin = resolve_tc_binary();
-    let res = Command::new(tc_bin)
-        .args(args)
-        .output()
-        .await;
+    let res = Command::new(tc_bin).args(args).output().await;
 
     match res {
         Ok(out) => {
@@ -86,19 +83,24 @@ pub async fn apply_sqm(wan_iface: &str, cfg: &SqmConfig, is_pppoe: bool) -> Opti
         let _ = run_tc(&["qdisc", "del", "dev", wan_iface, "ingress"]).await;
 
         // Add ingress qdisc handle ffff:
-        if run_tc(&["qdisc", "add", "dev", wan_iface, "handle", "ffff:", "ingress"]).await {
+        if run_tc(&[
+            "qdisc", "add", "dev", wan_iface, "handle", "ffff:", "ingress",
+        ])
+        .await
+        {
             // Add redirect filter to IFB
             let filter_args = [
-                "filter", "replace", "dev", wan_iface, "parent", "ffff:",
-                "protocol", "all", "prio", "10", "u32", "match", "u32", "0", "0",
-                "flowid", "1:1", "action", "mirred", "egress", "redirect", "dev", &ifb_name,
+                "filter", "replace", "dev", wan_iface, "parent", "ffff:", "protocol", "all",
+                "prio", "10", "u32", "match", "u32", "0", "0", "flowid", "1:1", "action", "mirred",
+                "egress", "redirect", "dev", &ifb_name,
             ];
 
             if run_tc(&filter_args).await {
                 // Attach CAKE to IFB root
                 let ingress_cake_args = build_cake_args(cfg, cfg.download_mbps, true, is_pppoe);
                 let mut ingress_cmd = Vec::with_capacity(6 + ingress_cake_args.len());
-                ingress_cmd.extend_from_slice(&["qdisc", "replace", "dev", &ifb_name, "root", "cake"]);
+                ingress_cmd
+                    .extend_from_slice(&["qdisc", "replace", "dev", &ifb_name, "root", "cake"]);
                 for arg in &ingress_cake_args {
                     ingress_cmd.push(arg.as_str());
                 }

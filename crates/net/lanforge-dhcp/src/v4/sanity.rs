@@ -138,7 +138,11 @@ pub fn audit_and_auto_heal_dhcpv4_with_network(
     if !v4.contains(cfg.router) {
         warn!(
             "DHCPv4 SANITY CHECK: Configured gateway {} is outside interface '{}' subnet ({}/{}). Auto-healing gateway to local interface IP {}",
-            cfg.router, cfg.iface, v4.network(), v4.prefix(), iface_ip
+            cfg.router,
+            cfg.iface,
+            v4.network(),
+            v4.prefix(),
+            iface_ip
         );
         cfg.router = iface_ip;
         modified = true;
@@ -156,9 +160,10 @@ pub fn audit_and_auto_heal_dhcpv4_with_network(
 
     // 4. Dynamic Pools Containment
     if !cfg.pools.is_empty() {
-        let any_pool_in_subnet = cfg.pools.iter().any(|p| {
-            v4.contains(p.range_start) && v4.contains(p.range_end)
-        });
+        let any_pool_in_subnet = cfg
+            .pools
+            .iter()
+            .any(|p| v4.contains(p.range_start) && v4.contains(p.range_end));
 
         if !any_pool_in_subnet {
             warn!(

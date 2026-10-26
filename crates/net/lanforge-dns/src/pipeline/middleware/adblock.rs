@@ -67,4 +67,3 @@ impl Middleware for AdblockMiddleware {
         AdblockMiddleware::run_sync(self, ctx, req, resp)
     }
 }
-

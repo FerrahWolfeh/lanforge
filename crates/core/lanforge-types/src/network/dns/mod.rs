@@ -754,9 +754,6 @@ impl AdblockUrlEntry {
     }
 }
 
-
-
-
 /// Status and metrics for an adblock filter list source.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AdblockSourceStatus {
@@ -921,9 +918,18 @@ mod tests {
 
         assert_eq!(DnsRecordType::from(65534), DnsRecordType::Device);
         assert_eq!(u16::from(DnsRecordType::Device), 65534);
-        assert_eq!("DEVICE".parse::<DnsRecordType>().unwrap(), DnsRecordType::Device);
-        assert_eq!("dev".parse::<DnsRecordType>().unwrap(), DnsRecordType::Device);
-        assert_eq!("A/AAAA".parse::<DnsRecordType>().unwrap(), DnsRecordType::Device);
+        assert_eq!(
+            "DEVICE".parse::<DnsRecordType>().unwrap(),
+            DnsRecordType::Device
+        );
+        assert_eq!(
+            "dev".parse::<DnsRecordType>().unwrap(),
+            DnsRecordType::Device
+        );
+        assert_eq!(
+            "A/AAAA".parse::<DnsRecordType>().unwrap(),
+            DnsRecordType::Device
+        );
         assert_eq!(DnsRecordType::Device.to_string(), "DEVICE");
 
         let json = serde_json::to_string(&DnsRecordType::Device).unwrap();

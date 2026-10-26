@@ -101,7 +101,13 @@ impl NetnsManager {
         // 4. Configure host interface
         Self::run_cmd(
             "ip",
-            &["addr", "add", &self.cfg.host_ipv4, "dev", &self.cfg.host_iface],
+            &[
+                "addr",
+                "add",
+                &self.cfg.host_ipv4,
+                "dev",
+                &self.cfg.host_iface,
+            ],
         )?;
         Self::run_cmd("ip", &["link", "set", &self.cfg.host_iface, "up"])?;
 
@@ -119,7 +125,9 @@ impl NetnsManager {
             let cli_vlan = format!("{}.{vid}", self.cfg.client_iface);
             let vid_str = vid.to_string();
 
-            debug!("Netns: Creating 802.1Q VLAN {vid} subinterfaces ({host_vlan} <-> {cli_vlan})...");
+            debug!(
+                "Netns: Creating 802.1Q VLAN {vid} subinterfaces ({host_vlan} <-> {cli_vlan})..."
+            );
             Self::run_cmd(
                 "ip",
                 &[
@@ -153,7 +161,11 @@ impl NetnsManager {
                     &vid_str,
                 ],
             )?;
-            Self::run_cmd_in_netns(&self.cfg.netns_name, "ip", &["link", "set", &cli_vlan, "up"])?;
+            Self::run_cmd_in_netns(
+                &self.cfg.netns_name,
+                "ip",
+                &["link", "set", &cli_vlan, "up"],
+            )?;
         }
 
         self.active = true;
@@ -233,7 +245,10 @@ impl NetnsManager {
 
 impl Drop for NetnsManager {
     fn drop(&mut self) {
-        if self.active && self.auto_cleanup && let Err(e) = self.teardown() {
+        if self.active
+            && self.auto_cleanup
+            && let Err(e) = self.teardown()
+        {
             warn!("Netns drop cleanup error: {e}");
         }
     }

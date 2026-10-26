@@ -598,7 +598,10 @@ mod tests {
 
         // Allocate should ignore the stale dynamic lease and allocate a valid IP inside pool!
         let allocated = p.allocate(&ctx, mac(1), None).unwrap();
-        assert_ne!(allocated, stale_ip, "Must not honor stale dynamic lease outside pool");
+        assert_ne!(
+            allocated, stale_ip,
+            "Must not honor stale dynamic lease outside pool"
+        );
         assert!(p.is_in_range(allocated), "Must allocate within active pool");
     }
 
@@ -624,7 +627,10 @@ mod tests {
 
         // Allocate MUST honor static lease even outside pool
         let allocated = p.allocate(&ctx, mac(2), None).unwrap();
-        assert_eq!(allocated, static_outside_ip, "Static lease outside pool must always be honored");
+        assert_eq!(
+            allocated, static_outside_ip,
+            "Static lease outside pool must always be honored"
+        );
     }
 
     #[test]
@@ -709,6 +715,9 @@ mod tests {
             !p.available.contains(u32::from(static_ip)),
             "Static reservation must not be available"
         );
-        assert!(p.available.contains(u32::from(Ipv4Addr::new(192, 168, 0, 100))));
+        assert!(
+            p.available
+                .contains(u32::from(Ipv4Addr::new(192, 168, 0, 100)))
+        );
     }
 }

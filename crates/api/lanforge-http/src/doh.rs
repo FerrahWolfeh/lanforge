@@ -4,10 +4,7 @@ use std::net::IpAddr;
 use axum::{
     body::Bytes,
     extract::{Query, State},
-    http::{
-        HeaderMap, Method, StatusCode,
-        header::CONTENT_TYPE,
-    },
+    http::{HeaderMap, Method, StatusCode, header::CONTENT_TYPE},
     response::IntoResponse,
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -48,10 +45,7 @@ pub async fn handle_dns_query(
         return (StatusCode::BAD_REQUEST, "Empty query").into_response();
     }
 
-    let Some(dns_ctx) = state
-        .ctx
-        .get_shared::<DnsContext>()
-    else {
+    let Some(dns_ctx) = state.ctx.get_shared::<DnsContext>() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "DNS engine not ready").into_response();
     };
 

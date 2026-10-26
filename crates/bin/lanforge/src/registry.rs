@@ -1,9 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::supervisor::{
-    graph::GraphError, GraphSupervisor, SpawnableRunner, TypedRunner,
-};
+use crate::supervisor::{GraphSupervisor, SpawnableRunner, TypedRunner, graph::GraphError};
 use lanforge_core::{
     context::LanforgeContext,
     service::{AsyncService, LanforgeService, ServiceSpec},

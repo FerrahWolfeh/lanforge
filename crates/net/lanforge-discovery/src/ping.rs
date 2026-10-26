@@ -4,7 +4,7 @@
 //! from `lanforge-transport`.
 
 pub use lanforge_transport::icmp::{
-    checksum, parse_icmpv4_echo_reply, parse_icmpv6_echo_reply, IcmpPinger,
+    IcmpPinger, checksum, parse_icmpv4_echo_reply, parse_icmpv6_echo_reply,
 };
 
 #[cfg(test)]

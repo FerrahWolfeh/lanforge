@@ -2,7 +2,9 @@ use crate::inert::{InertHandle, InertPort};
 use crate::limiter::RateLimiter;
 use crate::metrics::TransportMetrics;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket as StdUdpSocket};
+use std::net::{
+    IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket as StdUdpSocket,
+};
 use std::sync::Arc;
 use tokio::net::UdpSocket as TokioUdpSocket;
 use tracing::{debug, warn};
@@ -103,8 +105,8 @@ impl UdpTransport {
 
     /// Binds a UDP socket bound to a specific network interface via SO_BINDTODEVICE.
     pub fn bind_device(iface: &str, port: u16) -> io::Result<Self> {
-        let std_socket = StdUdpSocket::bind(("0.0.0.0", port))
-            .or_else(|_| StdUdpSocket::bind(("::", port)))?;
+        let std_socket =
+            StdUdpSocket::bind(("0.0.0.0", port)).or_else(|_| StdUdpSocket::bind(("::", port)))?;
 
         let sock = socket2::Socket::from(std_socket);
         if let Err(e) = sock.bind_device(Some(iface.as_bytes())) {
@@ -164,9 +166,7 @@ impl UdpTransport {
     /// Returns the local addresses of the bound sockets.
     pub fn local_addrs(&self) -> io::Result<Vec<SocketAddr>> {
         match &self.inner.backend {
-            UdpBackend::KernelDual { v4, v6 } => {
-                Ok(vec![v4.local_addr()?, v6.local_addr()?])
-            }
+            UdpBackend::KernelDual { v4, v6 } => Ok(vec![v4.local_addr()?, v6.local_addr()?]),
             UdpBackend::KernelSingle(sock) => Ok(vec![sock.local_addr()?]),
             #[cfg(any(test, feature = "inert"))]
             UdpBackend::Inert(_) => Ok(vec![SocketAddr::from(([127, 0, 0, 1], 0))]),
@@ -232,7 +232,8 @@ impl UdpTransport {
 
             // Rate-limiting check
             if let Some(ref limiter) = *self.inner.limiter.read()
-                && !limiter.check(&src.ip()) {
+                && !limiter.check(&src.ip())
+            {
                 self.inner.metrics.record_drop();
                 continue; // Drop packet early without returning to caller
             }
@@ -300,7 +301,10 @@ mod tests {
     #[test]
     fn should_report_inert_status_and_synthetic_addresses() {
         let (_handle, transport) = UdpTransport::inert();
-        assert!(transport.is_inert(), "Inert transport must return true for is_inert()");
+        assert!(
+            transport.is_inert(),
+            "Inert transport must return true for is_inert()"
+        );
 
         let addrs = transport.local_addrs().expect("local_addrs must succeed");
         assert_eq!(
@@ -363,11 +367,15 @@ mod tests {
         let (handle, transport) = UdpTransport::inert();
         let dst: SocketAddr = "10.0.0.2:8000".parse().unwrap();
 
-        let n = transport.try_send(b"immediate", &dst).expect("try_send failed");
+        let n = transport
+            .try_send(b"immediate", &dst)
+            .expect("try_send failed");
         assert_eq!(n, 9);
         assert_eq!(transport.metrics().tx_packets(), 1);
 
-        let (reply, out_dst) = handle.try_recv_reply().expect("Reply must be immediately available");
+        let (reply, out_dst) = handle
+            .try_recv_reply()
+            .expect("Reply must be immediately available");
         assert_eq!(reply, b"immediate");
         assert_eq!(out_dst, dst);
     }
@@ -378,7 +386,10 @@ mod tests {
         drop(handle);
 
         let mut buf = [0u8; 64];
-        let err = transport.recv(&mut buf).await.expect_err("Expected EOF error");
+        let err = transport
+            .recv(&mut buf)
+            .await
+            .expect_err("Expected EOF error");
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 
@@ -401,7 +412,9 @@ mod tests {
         // Also inject a 3rd packet from a different source so recv() doesn't hang
         // (the 2nd packet from client_addr will be dropped by the rate limiter)
         let other_client: SocketAddr = "192.168.1.20:12345".parse().unwrap();
-        handle.inject(b"pkt 3 from other".to_vec(), other_client).await;
+        handle
+            .inject(b"pkt 3 from other".to_vec(), other_client)
+            .await;
 
         let mut buf = [0u8; 64];
 
@@ -425,6 +438,9 @@ mod tests {
         let (_handle, transport) = UdpTransport::inert();
         let multiaddr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1);
         let res = transport.join_multicast_v6(&multiaddr, 0);
-        assert!(res.is_ok(), "Multicast join in inert mode must succeed as no-op");
+        assert!(
+            res.is_ok(),
+            "Multicast join in inert mode must succeed as no-op"
+        );
     }
 }

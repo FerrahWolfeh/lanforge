@@ -8,7 +8,7 @@ pub mod hash;
 pub mod password;
 
 pub use hash::{
-    content_hash64, content_hash128, content_hash_hex, content_hash_short_hex,
-    slugify, stable_id_or_hash,
+    content_hash_hex, content_hash_short_hex, content_hash64, content_hash128, slugify,
+    stable_id_or_hash,
 };
 pub use password::{hash_password, verify_password};

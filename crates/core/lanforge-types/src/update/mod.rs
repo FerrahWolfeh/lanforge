@@ -201,4 +201,3 @@ pub enum DeviceUpdate {
     },
     TransientHostResolved(Box<TransientHostUpdate>),
 }
-

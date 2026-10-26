@@ -204,8 +204,14 @@ async fn resolve_local_aaaa_ignores_link_local_and_loopback() {
         .resolve_ip("pixie", DnsRecordType::AAAA)
         .expect("should resolve AAAA");
 
-    assert!(results.contains(&IpAddr::V6(gua_addr)), "should contain GUA");
-    assert!(results.contains(&IpAddr::V6(ula_addr)), "should contain ULA");
+    assert!(
+        results.contains(&IpAddr::V6(gua_addr)),
+        "should contain GUA"
+    );
+    assert!(
+        results.contains(&IpAddr::V6(ula_addr)),
+        "should contain ULA"
+    );
     assert!(
         !results.contains(&IpAddr::V6(link_local)),
         "MUST NOT contain link-local fe80 address in DNS AAAA"

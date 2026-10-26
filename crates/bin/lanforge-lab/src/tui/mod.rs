@@ -12,9 +12,9 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-pub use app::App;
 use crate::error::LabError;
 use crate::harness::LabHarness;
+pub use app::App;
 
 /// Runs the interactive TUI application.
 pub async fn run_tui(harness: LabHarness) -> Result<(), LabError> {

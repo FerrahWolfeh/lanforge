@@ -7,8 +7,8 @@ use std::time::Duration;
 use lanforge::registry::ServiceRegistry;
 use lanforge::supervisor::graph::{DependencyGraph, GraphError};
 use lanforge_core::bus::EventBus;
-use lanforge_core::context::state::State;
 use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::state::State;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
     Activation, AsyncService, Condition, DormantReason, Edge, LanforgeService, LossPolicy,
@@ -27,11 +27,7 @@ fn init_test_ctx() -> LanforgeContext {
     LanforgeContext::new(bus, State::new(), None)
 }
 
-fn dummy_spec(
-    id: ServiceId,
-    deps: &'static [Edge],
-    condition: Condition,
-) -> ServiceSpec {
+fn dummy_spec(id: ServiceId, deps: &'static [Edge], condition: Condition) -> ServiceSpec {
     ServiceSpec {
         id,
         display_name: id.as_str(),
@@ -160,7 +156,11 @@ async fn test_requires_blocks_until_online() {
         }
     }
     impl AsyncService for SvcA {
-        async fn serve(&mut self, _ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        async fn serve(
+            &mut self,
+            _ctx: &LanforgeContext,
+            h: &ServiceHandle,
+        ) -> Result<(), CoreError> {
             self.gate.notified().await;
             h.ready();
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -177,7 +177,11 @@ async fn test_requires_blocks_until_online() {
         }
     }
     impl AsyncService for SvcB {
-        async fn serve(&mut self, _ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        async fn serve(
+            &mut self,
+            _ctx: &LanforgeContext,
+            h: &ServiceHandle,
+        ) -> Result<(), CoreError> {
             self.started.store(true, Ordering::SeqCst);
             h.ready();
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -187,15 +191,22 @@ async fn test_requires_blocks_until_online() {
 
     let mut registry = ServiceRegistry::new();
     let gate_clone = Arc::clone(&gate);
-    registry.register(&ctx, move || SvcA { gate: Arc::clone(&gate_clone) });
+    registry.register(&ctx, move || SvcA {
+        gate: Arc::clone(&gate_clone),
+    });
     let started_clone = Arc::clone(&b_started);
-    registry.register(&ctx, move || SvcB { started: Arc::clone(&started_clone) });
+    registry.register(&ctx, move || SvcB {
+        started: Arc::clone(&started_clone),
+    });
 
     let supervisor = registry.start(&ctx).expect("start supervisor");
 
     // SvcB must NOT have started because SvcA has not signaled ready yet
     tokio::time::sleep(Duration::from_millis(30)).await;
-    assert!(!b_started.load(Ordering::SeqCst), "SvcB must be blocked waiting for SvcA to be Online");
+    assert!(
+        !b_started.load(Ordering::SeqCst),
+        "SvcB must be blocked waiting for SvcA to be Online"
+    );
 
     // Unblock SvcA
     gate.notify_one();
@@ -227,7 +238,11 @@ async fn test_wants_does_not_block() {
         }
     }
     impl AsyncService for SvcA {
-        async fn serve(&mut self, _ctx: &LanforgeContext, _h: &ServiceHandle) -> Result<(), CoreError> {
+        async fn serve(
+            &mut self,
+            _ctx: &LanforgeContext,
+            _h: &ServiceHandle,
+        ) -> Result<(), CoreError> {
             // SvcA stays starting / never calls ready()
             tokio::time::sleep(Duration::from_millis(200)).await;
             Ok(())
@@ -243,7 +258,11 @@ async fn test_wants_does_not_block() {
         }
     }
     impl AsyncService for SvcB {
-        async fn serve(&mut self, _ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        async fn serve(
+            &mut self,
+            _ctx: &LanforgeContext,
+            h: &ServiceHandle,
+        ) -> Result<(), CoreError> {
             self.started.store(true, Ordering::SeqCst);
             h.ready();
             Ok(())
@@ -253,7 +272,9 @@ async fn test_wants_does_not_block() {
     let mut registry = ServiceRegistry::new();
     registry.register(&ctx, || SvcA);
     let started_clone = Arc::clone(&b_started);
-    registry.register(&ctx, move || SvcB { started: Arc::clone(&started_clone) });
+    registry.register(&ctx, move || SvcB {
+        started: Arc::clone(&started_clone),
+    });
 
     let supervisor = registry.start(&ctx).expect("start supervisor");
 
@@ -290,7 +311,11 @@ async fn test_loss_policy_restart_bounces_service() {
         }
     }
     impl AsyncService for SvcA {
-        async fn serve(&mut self, _ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        async fn serve(
+            &mut self,
+            _ctx: &LanforgeContext,
+            h: &ServiceHandle,
+        ) -> Result<(), CoreError> {
             if !self.dropped {
                 h.ready();
                 tokio::time::sleep(Duration::from_millis(30)).await;
@@ -313,7 +338,11 @@ async fn test_loss_policy_restart_bounces_service() {
         }
     }
     impl AsyncService for SvcB {
-        async fn serve(&mut self, _ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        async fn serve(
+            &mut self,
+            _ctx: &LanforgeContext,
+            h: &ServiceHandle,
+        ) -> Result<(), CoreError> {
             self.runs.fetch_add(1, Ordering::SeqCst);
             h.ready();
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -324,7 +353,9 @@ async fn test_loss_policy_restart_bounces_service() {
     let mut registry = ServiceRegistry::new();
     registry.register(&ctx, || SvcA { dropped: false });
     let runs_clone = Arc::clone(&b_runs);
-    registry.register(&ctx, move || SvcB { runs: Arc::clone(&runs_clone) });
+    registry.register(&ctx, move || SvcB {
+        runs: Arc::clone(&runs_clone),
+    });
 
     let supervisor = registry.start(&ctx).expect("start supervisor");
 
@@ -365,7 +396,11 @@ async fn test_dormant_requires_propagates() {
         }
     }
     impl AsyncService for SvcA {
-        async fn serve(&mut self, _ctx: &LanforgeContext, _h: &ServiceHandle) -> Result<(), CoreError> {
+        async fn serve(
+            &mut self,
+            _ctx: &LanforgeContext,
+            _h: &ServiceHandle,
+        ) -> Result<(), CoreError> {
             Ok(())
         }
     }
@@ -377,7 +412,11 @@ async fn test_dormant_requires_propagates() {
         }
     }
     impl AsyncService for SvcB {
-        async fn serve(&mut self, _ctx: &LanforgeContext, _h: &ServiceHandle) -> Result<(), CoreError> {
+        async fn serve(
+            &mut self,
+            _ctx: &LanforgeContext,
+            _h: &ServiceHandle,
+        ) -> Result<(), CoreError> {
             panic!("SvcB should never serve because required SvcA is dormant!");
         }
     }
@@ -430,7 +469,11 @@ async fn test_shutdown_reverse_order() {
         }
     }
     impl AsyncService for SvcDb {
-        async fn serve(&mut self, _ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        async fn serve(
+            &mut self,
+            _ctx: &LanforgeContext,
+            h: &ServiceHandle,
+        ) -> Result<(), CoreError> {
             h.ready();
             tokio::time::sleep(Duration::from_secs(10)).await;
             Ok(())
@@ -450,7 +493,11 @@ async fn test_shutdown_reverse_order() {
         }
     }
     impl AsyncService for SvcHttp {
-        async fn serve(&mut self, _ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        async fn serve(
+            &mut self,
+            _ctx: &LanforgeContext,
+            h: &ServiceHandle,
+        ) -> Result<(), CoreError> {
             h.ready();
             tokio::time::sleep(Duration::from_secs(10)).await;
             Ok(())
@@ -459,9 +506,13 @@ async fn test_shutdown_reverse_order() {
 
     let mut registry = ServiceRegistry::new();
     let log1 = Arc::clone(&stop_log);
-    registry.register(&ctx, move || SvcDb { log: Arc::clone(&log1) });
+    registry.register(&ctx, move || SvcDb {
+        log: Arc::clone(&log1),
+    });
     let log2 = Arc::clone(&stop_log);
-    registry.register(&ctx, move || SvcHttp { log: Arc::clone(&log2) });
+    registry.register(&ctx, move || SvcHttp {
+        log: Arc::clone(&log2),
+    });
 
     let supervisor = registry.start(&ctx).expect("start supervisor");
 
@@ -479,7 +530,11 @@ async fn test_shutdown_reverse_order() {
     supervisor.shutdown(&ctx, Duration::from_millis(500)).await;
 
     let order = stop_log.lock().unwrap().clone();
-    assert_eq!(order, vec![ServiceId::Http, ServiceId::Db], "Reverse-topological shutdown must stop http before db");
+    assert_eq!(
+        order,
+        vec![ServiceId::Http, ServiceId::Db],
+        "Reverse-topological shutdown must stop http before db"
+    );
 }
 
 #[tokio::test]
@@ -500,7 +555,11 @@ async fn test_after_waits_for_settled() {
         }
     }
     impl AsyncService for SvcA {
-        async fn serve(&mut self, _ctx: &LanforgeContext, _h: &ServiceHandle) -> Result<(), CoreError> {
+        async fn serve(
+            &mut self,
+            _ctx: &LanforgeContext,
+            _h: &ServiceHandle,
+        ) -> Result<(), CoreError> {
             self.gate.notified().await;
             // Exit with error to settle in Error state
             Err(CoreError::Generic("settled as error".into()))
@@ -516,7 +575,11 @@ async fn test_after_waits_for_settled() {
         }
     }
     impl AsyncService for SvcB {
-        async fn serve(&mut self, _ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        async fn serve(
+            &mut self,
+            _ctx: &LanforgeContext,
+            h: &ServiceHandle,
+        ) -> Result<(), CoreError> {
             self.started.store(true, Ordering::SeqCst);
             h.ready();
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -526,15 +589,22 @@ async fn test_after_waits_for_settled() {
 
     let mut registry = ServiceRegistry::new();
     let g = Arc::clone(&gate);
-    registry.register(&ctx, move || SvcA { gate: Arc::clone(&g) });
+    registry.register(&ctx, move || SvcA {
+        gate: Arc::clone(&g),
+    });
     let b = Arc::clone(&b_started);
-    registry.register(&ctx, move || SvcB { started: Arc::clone(&b) });
+    registry.register(&ctx, move || SvcB {
+        started: Arc::clone(&b),
+    });
 
     let supervisor = registry.start(&ctx).expect("start supervisor");
 
     // SvcB does not start while SvcA is in Starting
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert!(!b_started.load(Ordering::SeqCst), "SvcB must wait until SvcA settles");
+    assert!(
+        !b_started.load(Ordering::SeqCst),
+        "SvcB must wait until SvcA settles"
+    );
 
     // Unblock SvcA to let it settle in Error
     gate.notify_one();
@@ -578,7 +648,11 @@ async fn test_condition_toggle_isolated() {
         }
     }
     impl AsyncService for ToggleSvc {
-        async fn serve(&mut self, _ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        async fn serve(
+            &mut self,
+            _ctx: &LanforgeContext,
+            h: &ServiceHandle,
+        ) -> Result<(), CoreError> {
             h.ready();
             tokio::time::sleep(Duration::from_secs(10)).await;
             Ok(())
@@ -604,7 +678,10 @@ async fn test_condition_toggle_isolated() {
     supervisor.reevaluate_conditions();
 
     // Context is still running
-    assert!(ctx.is_running(), "Daemon must not restart or crash when toggling condition");
+    assert!(
+        ctx.is_running(),
+        "Daemon must not restart or crash when toggling condition"
+    );
 
     supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
 }

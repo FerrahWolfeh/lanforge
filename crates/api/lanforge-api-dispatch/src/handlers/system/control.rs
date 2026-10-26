@@ -3,14 +3,13 @@ use lanforge_api::api::{Response, SimpleSuccess};
 use lanforge_core::bus::{FirewallEvent, LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_types::{
     network::{
+        TrafficConfig,
         firewall::{FirewallCommitRequest, FirewallCommitResponse, FirewallConfig},
         pppoe::PppoeConfig,
         ra::RaServerConfig,
-        TrafficConfig,
     },
     system::{ServiceAction, ServiceId},
 };
-
 
 impl ClientContext {
     pub async fn handle_service_control(&self, id: String, action: ServiceAction) -> Response {
@@ -182,12 +181,17 @@ impl ClientContext {
         let mut cfg = self.ctx.get_firewall_config().unwrap_or_default();
 
         // If external zone exists but has no interfaces assigned, auto-populate with active or configured WAN
-        if let Some(ext) = cfg.zones.iter_mut().find(|z| z.name == "external" || z.name == "wan")
+        if let Some(ext) = cfg
+            .zones
+            .iter_mut()
+            .find(|z| z.name == "external" || z.name == "wan")
             && ext.interfaces.is_empty()
         {
-            let pppoe_wan = self.ctx.pppoe_status().as_ref().and_then(|p| {
-                p.interface.clone().or_else(|| p.wan_iface.clone())
-            });
+            let pppoe_wan = self
+                .ctx
+                .pppoe_status()
+                .as_ref()
+                .and_then(|p| p.interface.clone().or_else(|| p.wan_iface.clone()));
             let wan = pppoe_wan.or_else(|| self.ctx.get_pppoe_config().map(|p| p.wan_iface));
             if let Some(w) = wan {
                 ext.interfaces.push(w);
@@ -224,7 +228,8 @@ impl ClientContext {
     pub async fn handle_firewall_commit(&self, req: FirewallCommitRequest) -> Response {
         let Some(staged) = self.ctx.get_staged_firewall_transaction() else {
             return Response::Error {
-                error: "No active staged firewall transaction found or transaction expired".to_string(),
+                error: "No active staged firewall transaction found or transaction expired"
+                    .to_string(),
             };
         };
 
@@ -286,9 +291,7 @@ impl ClientContext {
         } else {
             // Permanent commit without rollback
             self.ctx.update_firewall_config(candidate);
-            let _ = self
-                .ctx
-                .clear_staged_firewall_transaction(Some(&req.tx_id));
+            let _ = self.ctx.clear_staged_firewall_transaction(Some(&req.tx_id));
 
             Response::FirewallCommit(Box::new(FirewallCommitResponse {
                 success: true,
@@ -336,4 +339,3 @@ impl ClientContext {
         })
     }
 }
-

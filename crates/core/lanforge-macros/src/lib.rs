@@ -1,8 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{
-    Data, DeriveInput, Ident, ItemStruct, ItemTrait, LitStr, Meta, parse_macro_input,
-};
+use syn::{Data, DeriveInput, Ident, ItemStruct, ItemTrait, LitStr, Meta, parse_macro_input};
 
 /// Attribute macro that automatically implements `LanforgeService` for a struct.
 ///
@@ -106,9 +104,10 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let (service_id_variant, default_name) = match id_str.trim().to_ascii_lowercase().as_str() {
         "db" | "database" => (quote! { lanforge_types::system::ServiceId::Db }, "Database"),
-        "nft" | "firewall" | "nftables" => {
-            (quote! { lanforge_types::system::ServiceId::Nft }, "Firewall")
-        }
+        "nft" | "firewall" | "nftables" => (
+            quote! { lanforge_types::system::ServiceId::Nft },
+            "Firewall",
+        ),
         "pppoe" => (quote! { lanforge_types::system::ServiceId::Pppoe }, "PPPoE"),
         "dns" => (quote! { lanforge_types::system::ServiceId::Dns }, "DNS"),
         "dhcp4" | "dhcp_v4" | "dhcpv4" => (
@@ -133,7 +132,10 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
             "Network Discovery",
         ),
         "mdns" => (quote! { lanforge_types::system::ServiceId::Mdns }, "mDNS"),
-        "http" | "web" => (quote! { lanforge_types::system::ServiceId::Http }, "HTTP API"),
+        "http" | "web" => (
+            quote! { lanforge_types::system::ServiceId::Http },
+            "HTTP API",
+        ),
         "uds" | "control" => (
             quote! { lanforge_types::system::ServiceId::Uds },
             "Control Socket",
@@ -311,7 +313,6 @@ pub fn identifier_derive(input: TokenStream) -> TokenStream {
     }
     .into()
 }
-
 
 #[proc_macro_attribute]
 pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {

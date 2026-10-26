@@ -146,7 +146,10 @@ impl LanforgeDb {
 
     /// Creates a composite `Stores` instance for closure execution.
     #[must_use]
-    pub fn stores(&self, log: std::sync::Arc<dyn lanforge_db_core::LogStore>) -> lanforge_db_core::Stores {
+    pub fn stores(
+        &self,
+        log: std::sync::Arc<dyn lanforge_db_core::LogStore>,
+    ) -> lanforge_db_core::Stores {
         lanforge_db_core::Stores::new(std::sync::Arc::new(self.inner.clone()), log)
     }
 }

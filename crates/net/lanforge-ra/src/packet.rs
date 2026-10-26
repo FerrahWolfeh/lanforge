@@ -129,16 +129,7 @@ pub fn build_ra_packet(
 
     // ── Deprecated Prefixes (RFC 4861 §6.2.4 / §6.2.6) ───────────────────
     for &(addr, remaining_valid) in deprecated_prefixes {
-        push_prefix_option_raw(
-            &mut p,
-            &addr,
-            64,
-            true,
-            true,
-            true,
-            remaining_valid,
-            0,
-        );
+        push_prefix_option_raw(&mut p, &addr, 64, true, true, true, remaining_valid, 0);
     }
 
     // ── Option 25: RDNSS (RFC 8106 §3.1) ─────────────────────────────────
@@ -164,7 +155,7 @@ pub fn build_ra_packet(
         }
         let start_opt = p.len();
         p.push(31u8); // type
-        p.push(0u8);  // length placeholder
+        p.push(0u8); // length placeholder
         p.extend([0u8; 2]); // reserved
         p.extend(get_dns_lifetime(dnssl.lifetime, cfg.max_interval).to_be_bytes());
 

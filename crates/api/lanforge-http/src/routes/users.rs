@@ -59,5 +59,8 @@ async fn handle_reset_password(
     Json(payload): Json<ResetPasswordRequest>,
 ) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_user_passwd(username, payload.password).await, Success)
+    crate::http_response!(
+        ctx.handle_user_passwd(username, payload.password).await,
+        Success
+    )
 }

@@ -2,12 +2,12 @@
 
 use crate::RedbDatabase;
 use lanforge_db_core::{
-    config_keys::*, DbError, DhcpConfigStore, PppoeConfigStore, RaConfigStore, TrafficConfigStore,
+    DbError, DhcpConfigStore, PppoeConfigStore, RaConfigStore, TrafficConfigStore, config_keys::*,
 };
+use lanforge_types::network::TrafficConfig;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
-use lanforge_types::network::TrafficConfig;
 use std::net::Ipv6Addr;
 
 impl DhcpConfigStore for RedbDatabase {

@@ -1,13 +1,15 @@
 //! Configuration domain classification and section lifecycle abstractions.
 
-use std::net::SocketAddr;
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 
-use crate::network::dhcp::{DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, Dhcpv6Pool, TftpOptions};
+use crate::network::dhcp::{
+    DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, Dhcpv6Pool, TftpOptions,
+};
+use crate::network::dns::AdblockUrlEntry;
 use crate::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
 use crate::network::dns::upstream::{UpstreamMode, UpstreamTarget};
-use crate::network::dns::AdblockUrlEntry;
 use crate::network::firewall::FirewallConfig;
 use crate::network::pppoe::PppoeConfig;
 use crate::network::ra::{DnsslConfig, RAPrefix, RaServerConfig, RdnssConfig};
@@ -569,7 +571,10 @@ mod tests {
         assert!(ChangeImpact::None < ChangeImpact::Hot);
         assert!(ChangeImpact::Hot < ChangeImpact::Rebind);
         assert!(ChangeImpact::Rebind < ChangeImpact::Reconnect);
-        assert_eq!(ChangeImpact::Hot.max(ChangeImpact::Reconnect), ChangeImpact::Reconnect);
+        assert_eq!(
+            ChangeImpact::Hot.max(ChangeImpact::Reconnect),
+            ChangeImpact::Reconnect
+        );
         assert_eq!(ChangeImpact::None.max(ChangeImpact::Hot), ChangeImpact::Hot);
     }
 
@@ -613,16 +618,25 @@ mod tests {
         // Rebind: wan_iface
         let mut rec_iface = base.clone();
         rec_iface.wan_iface = "eth2".into();
-        assert_eq!(PppoeConfig::classify(&base, &rec_iface), ChangeImpact::Rebind);
+        assert_eq!(
+            PppoeConfig::classify(&base, &rec_iface),
+            ChangeImpact::Rebind
+        );
 
         // Reconnect: username, password, dataplane, auth, mru
         let mut rec_user = base.clone();
         rec_user.username = "user2".into();
-        assert_eq!(PppoeConfig::classify(&base, &rec_user), ChangeImpact::Reconnect);
+        assert_eq!(
+            PppoeConfig::classify(&base, &rec_user),
+            ChangeImpact::Reconnect
+        );
 
         let mut rec_mru = base.clone();
         rec_mru.mru = 1480;
-        assert_eq!(PppoeConfig::classify(&base, &rec_mru), ChangeImpact::Reconnect);
+        assert_eq!(
+            PppoeConfig::classify(&base, &rec_mru),
+            ChangeImpact::Reconnect
+        );
     }
 
     #[test]
@@ -645,7 +659,10 @@ mod tests {
         // Rebind on iface change
         let mut rebind = base.clone();
         rebind.iface = Some("eth1".into());
-        assert_eq!(RaServerConfig::classify(&base, &rebind), ChangeImpact::Rebind);
+        assert_eq!(
+            RaServerConfig::classify(&base, &rebind),
+            ChangeImpact::Rebind
+        );
     }
 
     #[test]
@@ -675,7 +692,10 @@ mod tests {
             ..Default::default()
         }];
 
-        assert_eq!(<Vec<Dhcpv4Pool>>::classify(&base, &base), ChangeImpact::None);
+        assert_eq!(
+            <Vec<Dhcpv4Pool>>::classify(&base, &base),
+            ChangeImpact::None
+        );
 
         let mut hot = base.clone();
         hot[0].range_end = Ipv4Addr::new(192, 168, 1, 250);
@@ -689,6 +709,9 @@ mod tests {
 
         let mut rebind = base.clone();
         rebind.dot_enabled = true;
-        assert_eq!(DnsListenConfig::classify(&base, &rebind), ChangeImpact::Rebind);
+        assert_eq!(
+            DnsListenConfig::classify(&base, &rebind),
+            ChangeImpact::Rebind
+        );
     }
 }

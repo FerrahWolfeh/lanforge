@@ -4,9 +4,7 @@ use crate::context::state::State;
 use crate::error::CoreError;
 use crate::service::ServiceControl;
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::firewall::{
-    DynamicPortRequest, FirewallConfig, L4Protocol,
-};
+use lanforge_types::network::firewall::{DynamicPortRequest, FirewallConfig, L4Protocol};
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::system::{Cap, ServiceId, ServiceState, SystemStatus};
 use lanforge_types::update::DeviceUpdate;
@@ -107,9 +105,7 @@ async fn test_wait_for_condition_shutdown_aborts() {
     // 2. If waiting and shutdown is signaled on the bus, wait terminates with Shutdown
     ctx.reset_lifecycle();
     let ctx_clone = ctx.clone();
-    let wait_handle = tokio::spawn(async move {
-        ctx_clone.wait_for_db().await
-    });
+    let wait_handle = tokio::spawn(async move { ctx_clone.wait_for_db().await });
 
     tokio::task::yield_now().await;
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -129,7 +125,10 @@ async fn test_service_handle_stream() {
     // 1. Publish regular event
     let _ = handle.publish(LanforgeEvent::System(SystemEvent::DbReady));
     let next = handle.next_event().await;
-    assert!(matches!(next.unwrap().event, LanforgeEvent::System(SystemEvent::DbReady)));
+    assert!(matches!(
+        next.unwrap().event,
+        LanforgeEvent::System(SystemEvent::DbReady)
+    ));
 
     // 2. Shutdown terminates the stream
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -153,7 +152,8 @@ async fn test_service_control_idempotency() {
 
     let mut ready_count = 0;
     while let Ok(ev) = rx.try_recv() {
-        if matches!(ev.event, LanforgeEvent::System(SystemEvent::ServiceReady { id }) if id == ServiceId::Dns) {
+        if matches!(ev.event, LanforgeEvent::System(SystemEvent::ServiceReady { id }) if id == ServiceId::Dns)
+        {
             ready_count += 1;
         }
     }
@@ -162,11 +162,15 @@ async fn test_service_control_idempotency() {
     // Signal ready a second time (should be a no-op due to atomic swap)
     ctrl.signal_ready();
     while let Ok(ev) = rx.try_recv() {
-        if matches!(ev.event, LanforgeEvent::System(SystemEvent::ServiceReady { id }) if id == ServiceId::Dns) {
+        if matches!(ev.event, LanforgeEvent::System(SystemEvent::ServiceReady { id }) if id == ServiceId::Dns)
+        {
             ready_count += 1;
         }
     }
-    assert_eq!(ready_count, 1, "ServiceControl::signal_ready must be idempotent");
+    assert_eq!(
+        ready_count, 1,
+        "ServiceControl::signal_ready must be idempotent"
+    );
 }
 
 #[tokio::test]
@@ -276,7 +280,9 @@ async fn test_firewall_transaction_lifecycle() {
     // Stage transaction
     let report = ctx.stage_firewall_transaction(candidate);
     assert!(report.valid);
-    let tx_id = report.tx_id.expect("Expected transaction ID for valid candidate");
+    let tx_id = report
+        .tx_id
+        .expect("Expected transaction ID for valid candidate");
 
     // Retrieve staged transaction
     let staged = ctx.get_staged_firewall_transaction();

@@ -70,7 +70,10 @@ async fn make_state(with_auth: bool) -> AppState {
     );
     let ctx_worker = ctx.clone();
     tokio::spawn(async move {
-        let h_worker = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Db, ctx_worker.clone());
+        let h_worker = lanforge_core::service::ServiceHandle::new(
+            lanforge_types::system::ServiceId::Db,
+            ctx_worker.clone(),
+        );
         let _ = worker.serve(&ctx_worker, &h_worker).await;
     });
 
@@ -472,7 +475,9 @@ async fn test_auth_persistence_unavailable_contract() {
     {
         let write_txn = db.redb().begin_write().unwrap();
         let mut table = write_txn.open_table(TABLE_API_TOKENS).unwrap();
-        table.insert("corrupt_token_key", &[0xff, 0xff][..]).unwrap();
+        table
+            .insert("corrupt_token_key", &[0xff, 0xff][..])
+            .unwrap();
         drop(table);
         write_txn.commit().unwrap();
     }
@@ -489,7 +494,11 @@ async fn test_auth_persistence_unavailable_contract() {
             .unwrap(),
         ))
         .unwrap();
-    let res = router.clone().oneshot(corrupt_token_login_req).await.unwrap();
+    let res = router
+        .clone()
+        .oneshot(corrupt_token_login_req)
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
     let bytes = res.into_body().collect().await.unwrap().to_bytes();
     let body: Value = serde_json::from_slice(&bytes).unwrap();

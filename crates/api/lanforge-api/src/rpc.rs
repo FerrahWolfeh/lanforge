@@ -1,19 +1,20 @@
 use crate::api::{
-    AdblockCheckResponse, AuthTokenResponse, AuthTokensResponse, CreateUserPayload, DeviceListQuery,
-    DevicesResponse, DhcpOptionsResponse, DhcpPoolsConfigResponse, DhcpPoolsResponse,
-    DhcpReconcileResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse, DnsAdblockUrlsResponse,
-    DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse, DnsCacheStatsExtResponse,
-    DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse, DnsRewritesResponse,
-    DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse, EventKind, HostConfigEntry, HostsResponse,
-    LeasesResponse, RpcCallError, ServiceBannersResponse, SetupPayload, SetupResponse,
-    SetupStatusResponse, SimpleSuccess, StatusResponse, SystemConfigExport,
-    SystemConfigImportResponse, TransientHostsResponse, UserListResponse, UserResponse,
-    WhoisResponse,
+    AdblockCheckResponse, AuthTokenResponse, AuthTokensResponse, CreateUserPayload,
+    DeviceListQuery, DevicesResponse, DhcpOptionsResponse, DhcpPoolsConfigResponse,
+    DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse,
+    DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse,
+    DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse,
+    DnsRewritesResponse, DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse,
+    EventKind, HostConfigEntry, HostsResponse, LeasesResponse, RpcCallError,
+    ServiceBannersResponse, SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess,
+    StatusResponse, SystemConfigExport, SystemConfigImportResponse, TransientHostsResponse,
+    UserListResponse, UserResponse, WhoisResponse,
 };
 use lanforge_macros::lanforge_rpc;
 use lanforge_types::{
     identifiers::MacAddr,
     network::{
+        QueryResult, TrafficConfig,
         dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool},
         dns::{
             DnsRecordType,
@@ -27,12 +28,10 @@ use lanforge_types::{
         pppoe::PppoeConfig,
         ra::RaServerConfig,
         traffic::TrafficTelemetryResponse,
-        QueryResult, TrafficConfig,
     },
     system::{PppoeStatusResponse, RaStatusResponse, ServiceAction, TrafficStatusResponse},
     update::LeaseTarget,
 };
-
 
 use std::{
     future::Future,
@@ -94,7 +93,9 @@ pub trait LanforgeRpc {
         target: Option<LeaseTarget>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
     fn dhcp_pools(&self) -> impl Future<Output = Result<DhcpPoolsResponse, RpcCallError>> + Send;
-    fn dhcp_options(&self) -> impl Future<Output = Result<Box<DhcpOptionsResponse>, RpcCallError>> + Send;
+    fn dhcp_options(
+        &self,
+    ) -> impl Future<Output = Result<Box<DhcpOptionsResponse>, RpcCallError>> + Send;
     fn update_dhcp_options(
         &self,
         options: Box<DhcpOptionsConfig>,
@@ -124,7 +125,8 @@ pub trait LanforgeRpc {
         &self,
         target: String,
     ) -> impl Future<Output = Result<Box<WhoisResponse>, RpcCallError>> + Send;
-    fn dns_stats(&self) -> impl Future<Output = Result<Box<DnsStatsResponse>, RpcCallError>> + Send;
+    fn dns_stats(&self)
+    -> impl Future<Output = Result<Box<DnsStatsResponse>, RpcCallError>> + Send;
     fn dns_analytics(
         &self,
         limit: Option<usize>,
@@ -309,12 +311,9 @@ pub trait LanforgeRpc {
         &self,
         cfg: Box<PppoeConfig>,
     ) -> impl Future<Output = Result<SimpleSuccess, RpcCallError>> + Send;
-    fn ra_status(
-        &self,
-    ) -> impl Future<Output = Result<Box<RaStatusResponse>, RpcCallError>> + Send;
-    fn ra_config(
-        &self,
-    ) -> impl Future<Output = Result<Box<RaServerConfig>, RpcCallError>> + Send;
+    fn ra_status(&self)
+    -> impl Future<Output = Result<Box<RaStatusResponse>, RpcCallError>> + Send;
+    fn ra_config(&self) -> impl Future<Output = Result<Box<RaServerConfig>, RpcCallError>> + Send;
 
     fn update_ra_config(
         &self,

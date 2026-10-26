@@ -9,8 +9,8 @@ use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
 use lanforge_types::network::firewall::{DynamicPortRequest, FirewallTransactionState};
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
 use lanforge_types::system::{
-    Cap, PppoeStatusResponse, RaStatusResponse, ServiceBanner, ServiceId, ServiceState, SystemStatus,
-    TrafficStatusResponse,
+    Cap, PppoeStatusResponse, RaStatusResponse, ServiceBanner, ServiceId, ServiceState,
+    SystemStatus, TrafficStatusResponse,
 };
 use parking_lot::RwLock;
 use smallvec::SmallVec;
@@ -292,7 +292,6 @@ impl ServiceRuntime {
             }
         }
     }
-
 
     pub fn set_service_state(&self, id: ServiceId, state: ServiceState) {
         self.services

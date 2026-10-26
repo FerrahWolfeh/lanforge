@@ -80,7 +80,10 @@ impl App {
     pub fn new(dhcp_server: SocketAddr, dns_server: SocketAddr, mode_str: String) -> Self {
         let is_root = crate::is_root();
         let logs = Arc::new(Mutex::new(VecDeque::with_capacity(200)));
-        logs.lock().push_back("● Lanforge Lab Workbench initialized. Press [1..7] or Enter to run an action.".to_string());
+        logs.lock().push_back(
+            "● Lanforge Lab Workbench initialized. Press [1..7] or Enter to run an action."
+                .to_string(),
+        );
         if !is_root {
             logs.lock().push_back("ℹ Running in unprivileged (rootless) mode. Root-only features (IPv6 RA) are disabled.".to_string());
         }
@@ -146,19 +149,33 @@ impl App {
             match action {
                 LabAction::DhcpDora => {
                     let b = rand::rng().random_range(10..=250);
-                    let mac = lanforge_types::identifiers::MacAddr([0x02, 0x11, 0x22, 0x33, 0x44, b]);
-                    logs.lock().push_back(format!("-> [DHCP] Simulating client {mac} (hostname: 'lab-device-{b}')..."));
+                    let mac =
+                        lanforge_types::identifiers::MacAddr([0x02, 0x11, 0x22, 0x33, 0x44, b]);
+                    logs.lock().push_back(format!(
+                        "-> [DHCP] Simulating client {mac} (hostname: 'lab-device-{b}')..."
+                    ));
 
-                    match harness.dhcp().simulate_dora(mac, Some(&format!("lab-device-{b}"))).await {
+                    match harness
+                        .dhcp()
+                        .simulate_dora(mac, Some(&format!("lab-device-{b}")))
+                        .await
+                    {
                         Ok(res) if res.success => {
-                            let ip = res.assigned_ip.map_or_else(|| "none".to_string(), |i| i.to_string());
-                            let mask = res.subnet_mask.map_or_else(|| "none".to_string(), |i| i.to_string());
-                            let rtr = res.router.map_or_else(|| "none".to_string(), |i| i.to_string());
+                            let ip = res
+                                .assigned_ip
+                                .map_or_else(|| "none".to_string(), |i| i.to_string());
+                            let mask = res
+                                .subnet_mask
+                                .map_or_else(|| "none".to_string(), |i| i.to_string());
+                            let rtr = res
+                                .router
+                                .map_or_else(|| "none".to_string(), |i| i.to_string());
                             let lease = res.lease_time_secs.unwrap_or(0);
                             logs.lock().push_back(format!("<- [DHCP] ACK Received: IP={ip}, Mask={mask}, Gateway={rtr}, Lease={lease}s in {:.2}ms", res.total_time_ms));
                         }
                         Ok(res) => {
-                            logs.lock().push_back(format!("✖ [DHCP] DORA failed: {:?}", res.error));
+                            logs.lock()
+                                .push_back(format!("✖ [DHCP] DORA failed: {:?}", res.error));
                         }
                         Err(e) => {
                             logs.lock().push_back(format!("✖ [DHCP] Error: {e}"));
@@ -166,12 +183,23 @@ impl App {
                     }
                 }
                 LabAction::Ipv6Ra => {
-                    logs.lock().push_back("-> [RA] Sending Router Solicitation (RS) to ff02::2...".to_string());
+                    logs.lock().push_back(
+                        "-> [RA] Sending Router Solicitation (RS) to ff02::2...".to_string(),
+                    );
                     match harness.ra().send_rs_and_await_ra().await {
                         Ok(ra) => {
-                            logs.lock().push_back(format!("<- [RA] Received from {}: {} prefix(es), RDNSS: {:?} in {:.2}ms", ra.router_ip, ra.prefixes.len(), ra.rdnss_servers, ra.latency_ms));
+                            logs.lock().push_back(format!(
+                                "<- [RA] Received from {}: {} prefix(es), RDNSS: {:?} in {:.2}ms",
+                                ra.router_ip,
+                                ra.prefixes.len(),
+                                ra.rdnss_servers,
+                                ra.latency_ms
+                            ));
                             for p in &ra.prefixes {
-                                logs.lock().push_back(format!("   • Prefix: {}/{} (On-Link: {}, Auto: {})", p.prefix, p.prefix_len, p.on_link, p.auto_config));
+                                logs.lock().push_back(format!(
+                                    "   • Prefix: {}/{} (On-Link: {}, Auto: {})",
+                                    p.prefix, p.prefix_len, p.on_link, p.auto_config
+                                ));
                             }
                         }
                         Err(e) => {
@@ -182,23 +210,41 @@ impl App {
                 LabAction::DnsQuery => {
                     let domains = ["lanforge.lan", "doubleclick.net", "google.com"];
                     for d in domains {
-                        logs.lock().push_back(format!("-> [DNS] Querying '{d}' (A record)..."));
-                        match harness.dns().query(d, lanforge_types::network::dns::DnsRecordType::A).await {
+                        logs.lock()
+                            .push_back(format!("-> [DNS] Querying '{d}' (A record)..."));
+                        match harness
+                            .dns()
+                            .query(d, lanforge_types::network::dns::DnsRecordType::A)
+                            .await
+                        {
                             Ok(res) => {
-                                let blk = if res.is_blocked { " [ADBLOCK BLOCKED]" } else { "" };
-                                logs.lock().push_back(format!("<- [DNS] '{d}' -> RCODE: {}, Answers: {:?}{} in {} µs", res.rcode, res.answers, blk, res.latency_us));
+                                let blk = if res.is_blocked {
+                                    " [ADBLOCK BLOCKED]"
+                                } else {
+                                    ""
+                                };
+                                logs.lock().push_back(format!(
+                                    "<- [DNS] '{d}' -> RCODE: {}, Answers: {:?}{} in {} µs",
+                                    res.rcode, res.answers, blk, res.latency_us
+                                ));
                             }
                             Err(e) => {
-                                logs.lock().push_back(format!("✖ [DNS] Error querying '{d}': {e}"));
+                                logs.lock()
+                                    .push_back(format!("✖ [DNS] Error querying '{d}': {e}"));
                             }
                         }
                     }
                 }
                 LabAction::DiscoveryPing => {
-                    logs.lock().push_back("-> [PROBE] Sending connectivity probe...".to_string());
+                    logs.lock()
+                        .push_back("-> [PROBE] Sending connectivity probe...".to_string());
                     match crate::engine::DiscoveryEngine::probe_rtt(harness.dhcp_target).await {
                         Ok(dur) => {
-                            logs.lock().push_back(format!("<- [PROBE] RTT against {}: {:.2} ms", harness.dhcp_target, dur.as_secs_f64() * 1000.0));
+                            logs.lock().push_back(format!(
+                                "<- [PROBE] RTT against {}: {:.2} ms",
+                                harness.dhcp_target,
+                                dur.as_secs_f64() * 1000.0
+                            ));
                         }
                         Err(e) => {
                             logs.lock().push_back(format!("✖ [PROBE] Error: {e}"));
@@ -206,7 +252,9 @@ impl App {
                     }
                 }
                 LabAction::DhcpStorm => {
-                    logs.lock().push_back("-> [STORM] Running DHCP Storm (30 clients, concurrency 5)...".to_string());
+                    logs.lock().push_back(
+                        "-> [STORM] Running DHCP Storm (30 clients, concurrency 5)...".to_string(),
+                    );
                     match harness.dhcp().storm_benchmark(30, 5).await {
                         Ok(rep) => {
                             logs.lock().push_back(format!("<- [STORM] Complete: {}/{} success, Throughput: {:.1} DORA/s, p50: {:.2}ms, p99: {:.2}ms", rep.successful_leases, rep.total_clients, rep.throughput_dora_per_sec, rep.p50_latency_ms, rep.p99_latency_ms));
@@ -217,8 +265,13 @@ impl App {
                     }
                 }
                 LabAction::DnsFlood => {
-                    logs.lock().push_back("-> [FLOOD] Running DNS Flood (1,000 queries)...".to_string());
-                    match harness.dns().flood_benchmark(1000, std::time::Duration::from_secs(1), &[]).await {
+                    logs.lock()
+                        .push_back("-> [FLOOD] Running DNS Flood (1,000 queries)...".to_string());
+                    match harness
+                        .dns()
+                        .flood_benchmark(1000, std::time::Duration::from_secs(1), &[])
+                        .await
+                    {
                         Ok(rep) => {
                             logs.lock().push_back(format!("<- [FLOOD] Complete: {}/{} success, Actual QPS: {:.1}, p50: {} µs, p99: {} µs, Blocked: {}", rep.successful_queries, rep.total_queries, rep.actual_qps, rep.p50_latency_us, rep.p99_latency_us, rep.blocked_count));
                         }
@@ -228,10 +281,15 @@ impl App {
                     }
                 }
                 LabAction::RunSuite => {
-                    logs.lock().push_back("-> [SUITE] Running full regression test suite...".to_string());
+                    logs.lock()
+                        .push_back("-> [SUITE] Running full regression test suite...".to_string());
                     match harness.run_full_suite().await {
                         Ok(rep) => {
-                            let status = if rep.all_passed { "ALL TESTS PASSED ✓" } else { "SOME TESTS FAILED ✖" };
+                            let status = if rep.all_passed {
+                                "ALL TESTS PASSED ✓"
+                            } else {
+                                "SOME TESTS FAILED ✖"
+                            };
                             logs.lock().push_back(format!("<- [SUITE] {status} (DHCP: {}, DNS Local: {}, DNS Adblock: {}, DNS Upstream: {})", rep.dhcp_dora_passed, rep.dns_local_passed, rep.dns_adblock_passed, rep.dns_upstream_passed));
                         }
                         Err(e) => {

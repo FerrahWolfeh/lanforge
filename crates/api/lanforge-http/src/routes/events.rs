@@ -72,17 +72,11 @@ async fn handle_events_history(
     handle_events_history_inner(&state, &params)
 }
 
-fn handle_events_history_inner(
-    state: &AppState,
-    params: &EventsQuery,
-) -> Response {
+fn handle_events_history_inner(state: &AppState, params: &EventsQuery) -> Response {
     let limit = params.limit.or(params.initial).unwrap_or(50).clamp(1, 500);
     let offset = params.offset.unwrap_or(0);
 
-    let raw_events = state
-        .log_db
-        .get_history(limit + offset)
-        .unwrap_or_default();
+    let raw_events = state.log_db.get_history(limit + offset).unwrap_or_default();
 
     let filtered: Vec<serde_json::Value> = raw_events
         .into_iter()
@@ -180,15 +174,24 @@ const fn extract_mac(event: &LanforgeEvent) -> Option<MacAddr> {
 
 fn enrich_device_info(ctx: &LanforgeContext, mac: MacAddr) -> serde_json::Value {
     let mut map = serde_json::Map::new();
-    map.insert("mac".to_string(), serde_json::Value::String(mac.to_string()));
+    map.insert(
+        "mac".to_string(),
+        serde_json::Value::String(mac.to_string()),
+    );
 
     ctx.with_state(|s| {
         if let Some(d) = s.devices.get(&mac) {
             let h = d.display_hostname();
             if h != "?" && !h.is_empty() {
-                map.insert("hostname".to_string(), serde_json::Value::String(h.to_string()));
+                map.insert(
+                    "hostname".to_string(),
+                    serde_json::Value::String(h.to_string()),
+                );
             } else if !d.dns_fallback.is_empty() {
-                map.insert("hostname".to_string(), serde_json::Value::String(d.dns_fallback.clone()));
+                map.insert(
+                    "hostname".to_string(),
+                    serde_json::Value::String(d.dns_fallback.clone()),
+                );
             }
 
             let ip = d.v4.ip().map(|ip| ip.to_string());
@@ -196,11 +199,23 @@ fn enrich_device_info(ctx: &LanforgeContext, mac: MacAddr) -> serde_json::Value 
                 map.insert("ip".to_string(), serde_json::Value::String(ip_str));
             }
 
-            map.insert("class".to_string(), serde_json::Value::String(format!("{:?}", d.class)));
-            map.insert("status".to_string(), serde_json::Value::String(format!("{:?}", d.status)));
-            map.insert("is_static".to_string(), serde_json::Value::Bool(d.is_static()));
+            map.insert(
+                "class".to_string(),
+                serde_json::Value::String(format!("{:?}", d.class)),
+            );
+            map.insert(
+                "status".to_string(),
+                serde_json::Value::String(format!("{:?}", d.status)),
+            );
+            map.insert(
+                "is_static".to_string(),
+                serde_json::Value::Bool(d.is_static()),
+            );
             if let Some(ref iface) = d.iface {
-                map.insert("iface".to_string(), serde_json::Value::String(iface.clone()));
+                map.insert(
+                    "iface".to_string(),
+                    serde_json::Value::String(iface.clone()),
+                );
             }
         }
     });
@@ -210,7 +225,10 @@ fn enrich_device_info(ctx: &LanforgeContext, mac: MacAddr) -> serde_json::Value 
 
 fn enrich_interface_info(ctx: &LanforgeContext, ifindex: u32) -> serde_json::Value {
     let mut map = serde_json::Map::new();
-    map.insert("ifindex".to_string(), serde_json::Value::Number(ifindex.into()));
+    map.insert(
+        "ifindex".to_string(),
+        serde_json::Value::Number(ifindex.into()),
+    );
 
     let mut if_name = [0u8; libc::IF_NAMESIZE];
     let name_opt = unsafe {
@@ -218,7 +236,10 @@ fn enrich_interface_info(ctx: &LanforgeContext, ifindex: u32) -> serde_json::Val
         if ptr.is_null() {
             None
         } else {
-            std::ffi::CStr::from_ptr(ptr).to_str().ok().map(String::from)
+            std::ffi::CStr::from_ptr(ptr)
+                .to_str()
+                .ok()
+                .map(String::from)
         }
     };
     if let Some(name) = name_opt {
@@ -227,13 +248,22 @@ fn enrich_interface_info(ctx: &LanforgeContext, ifindex: u32) -> serde_json::Val
 
     let if_state = ctx.get_interface_state(ifindex);
     if let Some((v4, prefix_len)) = if_state.v4 {
-        map.insert("ipv4".to_string(), serde_json::Value::String(format!("{v4}/{prefix_len}")));
+        map.insert(
+            "ipv4".to_string(),
+            serde_json::Value::String(format!("{v4}/{prefix_len}")),
+        );
     }
     if let Some(gua) = if_state.gua {
-        map.insert("gua".to_string(), serde_json::Value::String(gua.to_string()));
+        map.insert(
+            "gua".to_string(),
+            serde_json::Value::String(gua.to_string()),
+        );
     }
     if let Some(ula) = if_state.ula {
-        map.insert("ula".to_string(), serde_json::Value::String(ula.to_string()));
+        map.insert(
+            "ula".to_string(),
+            serde_json::Value::String(ula.to_string()),
+        );
     }
 
     serde_json::Value::Object(map)
@@ -241,94 +271,118 @@ fn enrich_interface_info(ctx: &LanforgeContext, ifindex: u32) -> serde_json::Val
 
 const fn event_topic_and_kind(event: &LanforgeEvent) -> (&'static str, &'static str) {
     match event {
-        LanforgeEvent::Device(d) => ("device", match d {
-            DeviceEvent::Discovered { .. } => "Discovered",
-            DeviceEvent::NetworkUpdate { .. } => "NetworkUpdate",
-            DeviceEvent::NetworkActivity { .. } => "NetworkActivity",
-            DeviceEvent::AdminUpdate { .. } => "AdminUpdate",
-            DeviceEvent::Expired { .. } => "Expired",
-            DeviceEvent::Purged { .. } => "Purged",
-            DeviceEvent::LeaseRelease { .. } => "LeaseRelease",
-            DeviceEvent::LeaseRenew { .. } => "LeaseRenew",
-            DeviceEvent::DhcpV4Transaction { .. } => "DhcpV4Transaction",
-            DeviceEvent::DhcpV6Transaction { .. } => "DhcpV6Transaction",
-            DeviceEvent::NeighborBatchSummary { .. } => "NeighborBatchSummary",
-        }),
-        LanforgeEvent::Network(n) => ("network", match n {
-            NetworkEvent::PrefixChanged(..) => "PrefixChanged",
-            NetworkEvent::InterfaceUpdated { .. } => "InterfaceUpdated",
-            NetworkEvent::WolTriggered { .. } => "WolTriggered",
-            NetworkEvent::RsReceived { .. } => "RsReceived",
-            NetworkEvent::LeaseRenewRequested { .. } => "LeaseRenewRequested",
-            NetworkEvent::LeaseReleaseRequested { .. } => "LeaseReleaseRequested",
-            NetworkEvent::RaTriggerRequested => "RaTriggerRequested",
-        }),
-        LanforgeEvent::System(s) => ("system", match s {
-            SystemEvent::Shutdown => "Shutdown",
-            SystemEvent::StateReady => "StateReady",
-            SystemEvent::DbReady => "DbReady",
-            SystemEvent::InterfaceReady => "InterfaceReady",
-            SystemEvent::ServiceReady { .. } => "ServiceReady",
-            SystemEvent::SystemReady => "SystemReady",
-            SystemEvent::ReloadConfig => "ReloadConfig",
-            SystemEvent::ConfigUpdate { .. } => "ConfigUpdate",
-            SystemEvent::ServiceStatusBanner(..) => "ServiceStatusBanner",
-            SystemEvent::ServiceControl { .. } => "ServiceControl",
-            SystemEvent::ConfigDhcpV4Changed => "ConfigDhcpV4Changed",
-            SystemEvent::ConfigDhcpV6Changed => "ConfigDhcpV6Changed",
-            SystemEvent::ConfigRaChanged => "ConfigRaChanged",
-            SystemEvent::ConfigTftpChanged => "ConfigTftpChanged",
-            SystemEvent::ConfigDhcpOptionsChanged => "ConfigDhcpOptionsChanged",
-            SystemEvent::ConfigPppoeChanged => "ConfigPppoeChanged",
-            SystemEvent::ConfigChanged { .. } => "ConfigChanged",
-        }),
-        LanforgeEvent::Storage(s) => ("storage", match s {
-            StorageEvent::DbLogClean => "DbLogClean",
-            StorageEvent::DbPrune => "DbPrune",
-            StorageEvent::DbReset => "DbReset",
-            StorageEvent::DbResetCompleted => "DbResetCompleted",
-            StorageEvent::TableDirty => "TableDirty",
-            StorageEvent::DbWrite { .. } => "DbWrite",
-            StorageEvent::SaveTrafficHistory(_) => "SaveTrafficHistory",
-        }),
-        LanforgeEvent::Pppoe(p) => ("pppoe", match p {
-            PppoeEvent::SessionUp(..) => "SessionUp",
-            PppoeEvent::SessionDown { .. } => "SessionDown",
-            PppoeEvent::Reconnecting { .. } => "Reconnecting",
-            PppoeEvent::AuthFailed { .. } => "AuthFailed",
-            PppoeEvent::KeepaliveWarning { .. } => "KeepaliveWarning",
-            PppoeEvent::KeepaliveRestored => "KeepaliveRestored",
-        }),
-        LanforgeEvent::Firewall(f) => ("firewall", match f {
-            FirewallEvent::PortOpenRequested(..) => "PortOpenRequested",
-            FirewallEvent::PortReleaseRequested { .. } => "PortReleaseRequested",
-            FirewallEvent::RulesetApplied(..) => "RulesetApplied",
-            FirewallEvent::ApplyFailed { .. } => "ApplyFailed",
-            FirewallEvent::RulesetFlushed => "RulesetFlushed",
-            FirewallEvent::RulesetChanged => "RulesetChanged",
-        }),
-        LanforgeEvent::Traffic(t) => ("traffic", match &**t {
-            TrafficEvent::TuningApplied { .. } => "TuningApplied",
-            TrafficEvent::SqmApplied { .. } => "SqmApplied",
-            TrafficEvent::SqmCleared { .. } => "SqmCleared",
-            TrafficEvent::RulesetChanged => "RulesetChanged",
-        }),
-        LanforgeEvent::Dns(d) => ("dns", match d {
-            DnsEvent::AdblockToggle { .. } => "AdblockToggle",
-            DnsEvent::AdblockReload => "AdblockReload",
-            DnsEvent::AdblockBlock(..) => "AdblockBlock",
-            DnsEvent::AdblockAllow(..) => "AdblockAllow",
-            DnsEvent::QueryBlocked { .. } => "QueryBlocked",
-            DnsEvent::QueryResolved(..) => "QueryResolved",
-            DnsEvent::CacheFlush => "CacheFlush",
-            DnsEvent::ConfigRewritesChanged => "ConfigRewritesChanged",
-            DnsEvent::ConfigAllowlistChanged => "ConfigAllowlistChanged",
-            DnsEvent::ConfigAdblockChanged => "ConfigAdblockChanged",
-            DnsEvent::ConfigAdblockRulesChanged => "ConfigAdblockRulesChanged",
-            DnsEvent::ConfigUpstreamsChanged => "ConfigUpstreamsChanged",
-            DnsEvent::ConfigUpstreamModeChanged(_) => "ConfigUpstreamModeChanged",
-            DnsEvent::ConfigReverseResolversChanged => "ConfigReverseResolversChanged",
-        }),
+        LanforgeEvent::Device(d) => (
+            "device",
+            match d {
+                DeviceEvent::Discovered { .. } => "Discovered",
+                DeviceEvent::NetworkUpdate { .. } => "NetworkUpdate",
+                DeviceEvent::NetworkActivity { .. } => "NetworkActivity",
+                DeviceEvent::AdminUpdate { .. } => "AdminUpdate",
+                DeviceEvent::Expired { .. } => "Expired",
+                DeviceEvent::Purged { .. } => "Purged",
+                DeviceEvent::LeaseRelease { .. } => "LeaseRelease",
+                DeviceEvent::LeaseRenew { .. } => "LeaseRenew",
+                DeviceEvent::DhcpV4Transaction { .. } => "DhcpV4Transaction",
+                DeviceEvent::DhcpV6Transaction { .. } => "DhcpV6Transaction",
+                DeviceEvent::NeighborBatchSummary { .. } => "NeighborBatchSummary",
+            },
+        ),
+        LanforgeEvent::Network(n) => (
+            "network",
+            match n {
+                NetworkEvent::PrefixChanged(..) => "PrefixChanged",
+                NetworkEvent::InterfaceUpdated { .. } => "InterfaceUpdated",
+                NetworkEvent::WolTriggered { .. } => "WolTriggered",
+                NetworkEvent::RsReceived { .. } => "RsReceived",
+                NetworkEvent::LeaseRenewRequested { .. } => "LeaseRenewRequested",
+                NetworkEvent::LeaseReleaseRequested { .. } => "LeaseReleaseRequested",
+                NetworkEvent::RaTriggerRequested => "RaTriggerRequested",
+            },
+        ),
+        LanforgeEvent::System(s) => (
+            "system",
+            match s {
+                SystemEvent::Shutdown => "Shutdown",
+                SystemEvent::StateReady => "StateReady",
+                SystemEvent::DbReady => "DbReady",
+                SystemEvent::InterfaceReady => "InterfaceReady",
+                SystemEvent::ServiceReady { .. } => "ServiceReady",
+                SystemEvent::SystemReady => "SystemReady",
+                SystemEvent::ReloadConfig => "ReloadConfig",
+                SystemEvent::ConfigUpdate { .. } => "ConfigUpdate",
+                SystemEvent::ServiceStatusBanner(..) => "ServiceStatusBanner",
+                SystemEvent::ServiceControl { .. } => "ServiceControl",
+                SystemEvent::ConfigDhcpV4Changed => "ConfigDhcpV4Changed",
+                SystemEvent::ConfigDhcpV6Changed => "ConfigDhcpV6Changed",
+                SystemEvent::ConfigRaChanged => "ConfigRaChanged",
+                SystemEvent::ConfigTftpChanged => "ConfigTftpChanged",
+                SystemEvent::ConfigDhcpOptionsChanged => "ConfigDhcpOptionsChanged",
+                SystemEvent::ConfigPppoeChanged => "ConfigPppoeChanged",
+                SystemEvent::ConfigChanged { .. } => "ConfigChanged",
+            },
+        ),
+        LanforgeEvent::Storage(s) => (
+            "storage",
+            match s {
+                StorageEvent::DbLogClean => "DbLogClean",
+                StorageEvent::DbPrune => "DbPrune",
+                StorageEvent::DbReset => "DbReset",
+                StorageEvent::DbResetCompleted => "DbResetCompleted",
+                StorageEvent::TableDirty => "TableDirty",
+                StorageEvent::DbWrite { .. } => "DbWrite",
+                StorageEvent::SaveTrafficHistory(_) => "SaveTrafficHistory",
+            },
+        ),
+        LanforgeEvent::Pppoe(p) => (
+            "pppoe",
+            match p {
+                PppoeEvent::SessionUp(..) => "SessionUp",
+                PppoeEvent::SessionDown { .. } => "SessionDown",
+                PppoeEvent::Reconnecting { .. } => "Reconnecting",
+                PppoeEvent::AuthFailed { .. } => "AuthFailed",
+                PppoeEvent::KeepaliveWarning { .. } => "KeepaliveWarning",
+                PppoeEvent::KeepaliveRestored => "KeepaliveRestored",
+            },
+        ),
+        LanforgeEvent::Firewall(f) => (
+            "firewall",
+            match f {
+                FirewallEvent::PortOpenRequested(..) => "PortOpenRequested",
+                FirewallEvent::PortReleaseRequested { .. } => "PortReleaseRequested",
+                FirewallEvent::RulesetApplied(..) => "RulesetApplied",
+                FirewallEvent::ApplyFailed { .. } => "ApplyFailed",
+                FirewallEvent::RulesetFlushed => "RulesetFlushed",
+                FirewallEvent::RulesetChanged => "RulesetChanged",
+            },
+        ),
+        LanforgeEvent::Traffic(t) => (
+            "traffic",
+            match &**t {
+                TrafficEvent::TuningApplied { .. } => "TuningApplied",
+                TrafficEvent::SqmApplied { .. } => "SqmApplied",
+                TrafficEvent::SqmCleared { .. } => "SqmCleared",
+                TrafficEvent::RulesetChanged => "RulesetChanged",
+            },
+        ),
+        LanforgeEvent::Dns(d) => (
+            "dns",
+            match d {
+                DnsEvent::AdblockToggle { .. } => "AdblockToggle",
+                DnsEvent::AdblockReload => "AdblockReload",
+                DnsEvent::AdblockBlock(..) => "AdblockBlock",
+                DnsEvent::AdblockAllow(..) => "AdblockAllow",
+                DnsEvent::QueryBlocked { .. } => "QueryBlocked",
+                DnsEvent::QueryResolved(..) => "QueryResolved",
+                DnsEvent::CacheFlush => "CacheFlush",
+                DnsEvent::ConfigRewritesChanged => "ConfigRewritesChanged",
+                DnsEvent::ConfigAllowlistChanged => "ConfigAllowlistChanged",
+                DnsEvent::ConfigAdblockChanged => "ConfigAdblockChanged",
+                DnsEvent::ConfigAdblockRulesChanged => "ConfigAdblockRulesChanged",
+                DnsEvent::ConfigUpstreamsChanged => "ConfigUpstreamsChanged",
+                DnsEvent::ConfigUpstreamModeChanged(_) => "ConfigUpstreamModeChanged",
+                DnsEvent::ConfigReverseResolversChanged => "ConfigReverseResolversChanged",
+            },
+        ),
     }
 }
 
@@ -344,7 +398,10 @@ fn enrich_event_details(
 
     // Enrich with interface info if InterfaceUpdated
     if let LanforgeEvent::Network(NetworkEvent::InterfaceUpdated { ifindex }) = event {
-        map.insert("interface_info".to_string(), enrich_interface_info(ctx, *ifindex));
+        map.insert(
+            "interface_info".to_string(),
+            enrich_interface_info(ctx, *ifindex),
+        );
     }
 
     // Enrich with service info if ServiceControl
@@ -352,10 +409,19 @@ fn enrich_event_details(
         let mut svc_map = serde_json::Map::new();
         svc_map.insert("id".to_string(), serde_json::Value::String(id.to_string()));
         let state = ctx.get_service_state(*id);
-        svc_map.insert("state".to_string(), serde_json::Value::String(format!("{state:?}")));
+        svc_map.insert(
+            "state".to_string(),
+            serde_json::Value::String(format!("{state:?}")),
+        );
         let uptime = ctx.get_service_uptime(*id);
-        svc_map.insert("uptime_secs".to_string(), serde_json::Value::Number(uptime.into()));
-        map.insert("service_info".to_string(), serde_json::Value::Object(svc_map));
+        svc_map.insert(
+            "uptime_secs".to_string(),
+            serde_json::Value::Number(uptime.into()),
+        );
+        map.insert(
+            "service_info".to_string(),
+            serde_json::Value::Object(svc_map),
+        );
     }
 }
 
@@ -377,7 +443,10 @@ fn event_to_json_value(ctx: &LanforgeContext, event: &TimedEvent) -> Option<serd
             "topic".to_string(),
             serde_json::Value::String(topic.to_string()),
         );
-        map.insert("kind".to_string(), serde_json::Value::String(kind.to_string()));
+        map.insert(
+            "kind".to_string(),
+            serde_json::Value::String(kind.to_string()),
+        );
         map.insert(
             "timestamp_ms".to_string(),
             serde_json::Value::Number(ts_millis.into()),

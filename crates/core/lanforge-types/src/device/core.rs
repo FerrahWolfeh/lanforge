@@ -315,8 +315,10 @@ impl Device {
     ) -> Option<NetworkChange> {
         let now = SystemTime::now();
         let classification = classify_ipv6(&addr);
-        let is_slaac = matches!(classification, IpClassification::Gua | IpClassification::Ula)
-            && origin == V6ObservationOrigin::SlaacTracker;
+        let is_slaac = matches!(
+            classification,
+            IpClassification::Gua | IpClassification::Ula
+        ) && origin == V6ObservationOrigin::SlaacTracker;
 
         let existing_index = self.v6.iter().position(|s| match s {
             IPv6State::Static(s, _) => s.matches(addr),
@@ -351,7 +353,9 @@ impl Device {
                     }
                 }
                 IPv6State::Dynamic(lease) => {
-                    let elapsed = now.duration_since(lease.last_seen_system_time()).unwrap_or(Duration::MAX);
+                    let elapsed = now
+                        .duration_since(lease.last_seen_system_time())
+                        .unwrap_or(Duration::MAX);
                     let was_active = elapsed < Self::ONLINE_THRESHOLD;
 
                     if !was_active || elapsed > Self::ACTIVITY_DEBOUNCE {
@@ -420,7 +424,9 @@ impl Device {
             }
             IPv4State::Dynamic(lease) => {
                 if lease.ip == ip {
-                    let elapsed = now.duration_since(lease.last_seen_system_time()).unwrap_or(Duration::MAX);
+                    let elapsed = now
+                        .duration_since(lease.last_seen_system_time())
+                        .unwrap_or(Duration::MAX);
                     let was_active = elapsed < Self::ONLINE_THRESHOLD;
                     if !was_active || elapsed > Self::ACTIVITY_DEBOUNCE {
                         lease.last_seen = crate::device::state::system_time_to_epoch_u32(now);
@@ -644,7 +650,9 @@ impl Device {
 
         match &mut self.v4 {
             IPv4State::Dynamic(lease) if lease.ip == ip => {
-                if now.duration_since(lease.last_seen_system_time()).unwrap_or(Duration::MAX)
+                if now
+                    .duration_since(lease.last_seen_system_time())
+                    .unwrap_or(Duration::MAX)
                     > Self::ACTIVITY_DEBOUNCE
                 {
                     lease.last_seen = crate::device::state::system_time_to_epoch_u32(now);
@@ -851,9 +859,7 @@ impl Device {
                         changed = true;
                     }
                 }
-                IPv4State::Static(s)
-                    if *s == ip4 && self.last_seen != SystemTime::UNIX_EPOCH =>
-                {
+                IPv4State::Static(s) if *s == ip4 && self.last_seen != SystemTime::UNIX_EPOCH => {
                     self.last_seen = SystemTime::UNIX_EPOCH;
                     changed = true;
                 }

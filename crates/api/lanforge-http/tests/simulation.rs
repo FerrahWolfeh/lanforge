@@ -13,10 +13,10 @@ async fn init_test_context() -> (LanforgeContext, Arc<lanforge_db::RedbDatabase>
     let bus = Arc::new(EventBus::new());
     let table = State::new();
     let db = LanforgeDb::open(&DatabaseConfig {
-            config_path: "memory".to_string(),
-            ..Default::default()
-        })
-        .unwrap();
+        config_path: "memory".to_string(),
+        ..Default::default()
+    })
+    .unwrap();
     let db = Arc::new(db.redb().clone());
     let log_db = Arc::new(LogDb::open_in_memory());
     (LanforgeContext::new(bus, table, None), db, log_db)
@@ -47,7 +47,10 @@ async fn test_http_simulation_basic() {
     let mut rx = ctx.bus().subscribe();
 
     tokio::spawn(async move {
-        service.serve(&ctx_service, &ctrl).await.expect("Service failed");
+        service
+            .serve(&ctx_service, &ctrl)
+            .await
+            .expect("Service failed");
     });
 
     // Wait for ServiceReady event
@@ -61,7 +64,9 @@ async fn test_http_simulation_basic() {
     }
 
     let client = lanforge_http::remote::default_http_client();
-    let uri: hyper::Uri = format!("http://127.0.0.1:{port}/api/v1/status").parse().unwrap();
+    let uri: hyper::Uri = format!("http://127.0.0.1:{port}/api/v1/status")
+        .parse()
+        .unwrap();
     let req = hyper::Request::builder()
         .uri(uri)
         .body(http_body_util::Full::default())

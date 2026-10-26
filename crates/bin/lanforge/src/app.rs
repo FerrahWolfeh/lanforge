@@ -21,15 +21,15 @@ use lanforge_discovery::{mdns::MdnsProber, ndp::DiscoveryService};
 use lanforge_dns::server::service::DnsService;
 #[cfg(feature = "http")]
 use lanforge_http::HttpService;
-use lanforge_pppoe::PppoeService;
 #[cfg(feature = "nft")]
 use lanforge_nft::NftService;
-#[cfg(feature = "traffic")]
-use lanforge_traffic::TrafficService;
+use lanforge_pppoe::PppoeService;
 #[cfg(feature = "ra")]
 use lanforge_ra::RaService;
 #[cfg(feature = "tftp")]
 use lanforge_tftp::TftpService;
+#[cfg(feature = "traffic")]
+use lanforge_traffic::TrafficService;
 #[cfg(feature = "uds")]
 use lanforge_uds::server::ControlService;
 
@@ -72,7 +72,9 @@ impl Daemon {
         )
         .await?;
 
-        supervisor.shutdown(&self.ctx, Duration::from_secs(10)).await;
+        supervisor
+            .shutdown(&self.ctx, Duration::from_secs(10))
+            .await;
         self.shutdown().await
     }
 
@@ -113,7 +115,10 @@ impl Daemon {
         }
 
         // Database checks
-        if cfg.database.config_path.starts_with("sqlite") || cfg.database.config_path.starts_with("postgres") || cfg.database.config_path.starts_with("postgresql") {
+        if cfg.database.config_path.starts_with("sqlite")
+            || cfg.database.config_path.starts_with("postgres")
+            || cfg.database.config_path.starts_with("postgresql")
+        {
             tracing::warn!(
                 "External SQL databases are no longer supported. Lanforge uses embedded redb storage."
             );

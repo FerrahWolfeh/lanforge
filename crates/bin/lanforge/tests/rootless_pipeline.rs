@@ -17,7 +17,9 @@ use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
 use lanforge_types::events::traffic::TrafficEvent;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
-use lanforge_types::network::ra::{PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RouterPriority};
+use lanforge_types::network::ra::{
+    PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RouterPriority,
+};
 use lanforge_types::network::traffic::{NicTuningConfig, SqmConfig, SqmDiffserv, TrafficConfig};
 use lanforge_types::system::{ServiceId, ServiceState};
 use lanforge_types::update::DeviceUpdate;
@@ -54,13 +56,15 @@ fn build_dhcp_packet(
     msg.opts_mut().insert(DhcpOption::MessageType(msg_type));
 
     if let Some(req_ip) = requested_ip {
-        msg.opts_mut().insert(DhcpOption::RequestedIpAddress(req_ip));
+        msg.opts_mut()
+            .insert(DhcpOption::RequestedIpAddress(req_ip));
     }
     if let Some(srv) = server_id {
         msg.opts_mut().insert(DhcpOption::ServerIdentifier(srv));
     }
     if let Some(host) = hostname {
-        msg.opts_mut().insert(DhcpOption::Hostname(host.to_string()));
+        msg.opts_mut()
+            .insert(DhcpOption::Hostname(host.to_string()));
     }
 
     let mut buf = Vec::new();
@@ -201,9 +205,15 @@ async fn test_rootless_pipeline_e2e() {
 
     // Verify all active services transitioned to Online
     assert_eq!(ctx.get_service_state(ServiceId::Nft), ServiceState::Online);
-    assert_eq!(ctx.get_service_state(ServiceId::Traffic), ServiceState::Online);
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Traffic),
+        ServiceState::Online
+    );
     assert_eq!(ctx.get_service_state(ServiceId::Ra), ServiceState::Online);
-    assert_eq!(ctx.get_service_state(ServiceId::Dhcp4), ServiceState::Online);
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Dhcp4),
+        ServiceState::Online
+    );
 
     // -----------------------------------------------------------------------
     // 4. Verify Initial Service Outputs & Events
@@ -228,7 +238,13 @@ async fn test_rootless_pipeline_e2e() {
     let client_src = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68);
 
     // DISCOVER -> OFFER
-    let discover = build_dhcp_packet(client_mac, MessageType::Discover, None, None, Some("homelab-node"));
+    let discover = build_dhcp_packet(
+        client_mac,
+        MessageType::Discover,
+        None,
+        None,
+        Some("homelab-node"),
+    );
     dhcp_handle.send_packet(discover, client_src).await;
 
     let offer_reply = timeout(Duration::from_millis(500), dhcp_handle.recv_reply())
@@ -257,7 +273,9 @@ async fn test_rootless_pipeline_e2e() {
     assert_eq!(ack_msg.yiaddr(), assigned_ip);
 
     // Verify context updated with newly leased client
-    let client_device = ctx.get_device(&client_mac).expect("Client device must exist in context");
+    let client_device = ctx
+        .get_device(&client_mac)
+        .expect("Client device must exist in context");
     assert_eq!(client_device.display_hostname(), "homelab-node");
     assert!(matches!(client_device.v4, IPv4State::Dynamic(_)));
 
@@ -313,7 +331,9 @@ async fn test_rootless_pipeline_e2e() {
         dns: vec![IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))],
         ipv6_link_local: false,
     };
-    let _ = bus.publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(session_up))));
+    let _ = bus.publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(
+        session_up,
+    ))));
 
     // Verify Traffic Service absorbed the transition and rebound SQM to ppp0
     let sqm_rebound = timeout(Duration::from_millis(500), async {
@@ -338,7 +358,10 @@ async fn test_rootless_pipeline_e2e() {
     let fw_recompiled = timeout(Duration::from_millis(500), async {
         loop {
             if let Ok(event) = fw_sub.recv().await
-                && matches!(event.event, LanforgeEvent::Firewall(FirewallEvent::RulesetApplied(_)))
+                && matches!(
+                    event.event,
+                    LanforgeEvent::Firewall(FirewallEvent::RulesetApplied(_))
+                )
             {
                 return true;
             }
@@ -361,12 +384,12 @@ async fn test_rootless_pipeline_e2e() {
     // -----------------------------------------------------------------------
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
 
-    let shutdown = timeout(
-        Duration::from_millis(800),
-        async {
-            let _ = tokio::join!(nft_task, traffic_task, ra_task, dhcp_task);
-        },
-    )
+    let shutdown = timeout(Duration::from_millis(800), async {
+        let _ = tokio::join!(nft_task, traffic_task, ra_task, dhcp_task);
+    })
     .await;
-    assert!(shutdown.is_ok(), "All services should shut down cleanly within timeout");
+    assert!(
+        shutdown.is_ok(),
+        "All services should shut down cleanly within timeout"
+    );
 }

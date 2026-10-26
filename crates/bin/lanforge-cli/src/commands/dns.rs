@@ -9,16 +9,16 @@ use inquire::{Confirm, Select, Text};
 
 use lanforge_api::api::{DeviceListQuery, DnsQueryLogEntry};
 use lanforge_api::rpc::RpcResponse;
-use lanforge_types::events::{DnsEvent, LanforgeEvent};
 #[cfg(feature = "remote")]
 use lanforge_types::events::TimedEvent;
+use lanforge_types::events::{DnsEvent, LanforgeEvent};
+use lanforge_types::network::DnsRecordType;
+use lanforge_types::network::dns::QueryResult;
 use lanforge_types::network::dns::adblock::{
     AdblockSourceFormat, AdblockUrlKind, BlockingMode, FilterAction, FilterOrigin, RewriteAnswer,
     RewriteRule, TimeOfDay,
 };
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
-use lanforge_types::network::dns::QueryResult;
-use lanforge_types::network::DnsRecordType;
 
 use crate::client::LanforgeClient;
 use crate::output::{Printer, format_duration_secs};
@@ -435,7 +435,11 @@ async fn show_status(client: &LanforgeClient, printer: &Printer) -> Result<()> {
             "0.0%".to_string()
         };
 
-        println!("    {:<22} {}", "Total Queries:".dimmed(), total.to_string().bold());
+        println!(
+            "    {:<22} {}",
+            "Total Queries:".dimmed(),
+            total.to_string().bold()
+        );
         println!(
             "    {:<22} {} ({resolved_pct})",
             "Resolved:".dimmed(),
@@ -518,7 +522,13 @@ async fn show_status(client: &LanforgeClient, printer: &Printer) -> Result<()> {
         println!();
         println!("  {}", "Configured Forwarding Upstreams:".bold());
         let mut table = printer.new_table();
-        table.set_header(vec!["Target", "Protocol", "Domain Scope", "Health", "Latency"]);
+        table.set_header(vec![
+            "Target",
+            "Protocol",
+            "Domain Scope",
+            "Health",
+            "Latency",
+        ]);
         for u in &upstreams.upstreams {
             let health_str = if u.status.is_healthy() {
                 "Healthy".green().to_string()
@@ -551,8 +561,14 @@ async fn show_status(client: &LanforgeClient, printer: &Printer) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
-async fn show_analytics(args: DnsAnalyticsArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
-    let analytics = client.dns_analytics(Some(args.limit), args.client.clone()).await?;
+async fn show_analytics(
+    args: DnsAnalyticsArgs,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
+    let analytics = client
+        .dns_analytics(Some(args.limit), args.client.clone())
+        .await?;
 
     if printer.json {
         return printer.print_json(&analytics);
@@ -563,7 +579,11 @@ async fn show_analytics(args: DnsAnalyticsArgs, client: &LanforgeClient, printer
         " {} {} {}",
         printer.status_badge(true),
         "DNS Resolver Analytics".bold().white(),
-        args.client.as_deref().map_or_else(String::new, |c| format!("(Filter: {c})").dimmed().to_string())
+        args.client
+            .as_deref()
+            .map_or_else(String::new, |c| format!("(Filter: {c})")
+                .dimmed()
+                .to_string())
     );
 
     // Top Domains Table
@@ -575,7 +595,10 @@ async fn show_analytics(args: DnsAnalyticsArgs, client: &LanforgeClient, printer
         table.set_header(vec!["Domain", "Queries", "Share"]);
         for d in analytics.top_domains.iter().take(args.limit) {
             let share = if total_top_queries > 0 {
-                format!("{:.1}%", (d.count as f64 / total_top_queries as f64) * 100.0)
+                format!(
+                    "{:.1}%",
+                    (d.count as f64 / total_top_queries as f64) * 100.0
+                )
             } else {
                 "—".to_string()
             };
@@ -593,7 +616,10 @@ async fn show_analytics(args: DnsAnalyticsArgs, client: &LanforgeClient, printer
         table.set_header(vec!["Domain", "Blocked Count", "Share"]);
         for d in analytics.top_blocked_domains.iter().take(args.limit) {
             let share = if total_blocked_queries > 0 {
-                format!("{:.1}%", (d.count as f64 / total_blocked_queries as f64) * 100.0)
+                format!(
+                    "{:.1}%",
+                    (d.count as f64 / total_blocked_queries as f64) * 100.0
+                )
             } else {
                 "—".to_string()
             };
@@ -687,14 +713,21 @@ fn ip_to_arpa(ip: IpAddr) -> String {
     }
 }
 
-async fn execute_query(mut args: DnsQueryArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn execute_query(
+    mut args: DnsQueryArgs,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     let name = match args.name.take() {
         Some(n) => n,
         None => Text::new("Domain name to query:").prompt()?,
     };
 
     let (final_name, record_type) = if let Ok(ip) = name.parse::<IpAddr>() {
-        (ip_to_arpa(ip), args.record_type.or(Some(DnsRecordType::PTR)))
+        (
+            ip_to_arpa(ip),
+            args.record_type.or(Some(DnsRecordType::PTR)),
+        )
     } else {
         (name, args.record_type.or(Some(DnsRecordType::A)))
     };
@@ -707,9 +740,14 @@ async fn execute_query(mut args: DnsQueryArgs, client: &LanforgeClient, printer:
 
     println!();
     let auth_str = if resp.authoritative {
-        format!("Authoritative ({})", resp.result).green().bold().to_string()
+        format!("Authoritative ({})", resp.result)
+            .green()
+            .bold()
+            .to_string()
     } else {
-        format!("Non-Authoritative ({})", resp.result).yellow().to_string()
+        format!("Non-Authoritative ({})", resp.result)
+            .yellow()
+            .to_string()
     };
 
     println!(
@@ -726,7 +764,10 @@ async fn execute_query(mut args: DnsQueryArgs, client: &LanforgeClient, printer:
     );
 
     if resp.result == "Blocked" || resp.result == "CachedBlock" {
-        println!("    {}", "Domain was blocked by adblock content filter.".red().bold());
+        println!(
+            "    {}",
+            "Domain was blocked by adblock content filter.".red().bold()
+        );
     } else if resp.records.is_empty() {
         println!("    {}", "No DNS records returned.".yellow());
     } else {
@@ -775,7 +816,11 @@ async fn fetch_device_map(client: &LanforgeClient) -> HashMap<String, String> {
 }
 
 #[allow(clippy::cast_precision_loss)]
-fn format_log_entry(entry: &DnsQueryLogEntry, ip_to_host: &HashMap<String, String>, printer: &Printer) -> Vec<String> {
+fn format_log_entry(
+    entry: &DnsQueryLogEntry,
+    ip_to_host: &HashMap<String, String>,
+    printer: &Printer,
+) -> Vec<String> {
     use chrono::{DateTime, Local, Utc};
     let time_str = DateTime::<Utc>::from_timestamp(entry.timestamp.cast_signed(), 0)
         .map(|utc| DateTime::<Local>::from(utc).format("%H:%M:%S").to_string())
@@ -873,11 +918,20 @@ async fn execute_logs(args: DnsLogsArgs, client: &LanforgeClient, printer: &Prin
         let ip_to_host = fetch_device_map(client).await;
         let mut table = printer.new_table();
         table.set_header(vec![
-            "Time", "Client", "Type", "Domain", "Outcome", "Answer / Target", "Latency",
+            "Time",
+            "Client",
+            "Type",
+            "Domain",
+            "Outcome",
+            "Answer / Target",
+            "Latency",
         ]);
 
         for entry in &resp.entries {
-            if args.blocked && entry.result != QueryResult::Blocked && entry.result != QueryResult::CachedBlock {
+            if args.blocked
+                && entry.result != QueryResult::Blocked
+                && entry.result != QueryResult::CachedBlock
+            {
                 continue;
             }
             if let Some(ref d_filter) = args.domain
@@ -897,7 +951,11 @@ async fn execute_logs(args: DnsLogsArgs, client: &LanforgeClient, printer: &Prin
 }
 
 #[allow(clippy::too_many_lines)]
-async fn follow_dns_logs(args: DnsLogsArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn follow_dns_logs(
+    args: DnsLogsArgs,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     let ip_to_host = fetch_device_map(client).await;
 
     #[cfg(feature = "remote")]
@@ -925,7 +983,10 @@ async fn follow_dns_logs(args: DnsLogsArgs, client: &LanforgeClient, printer: &P
                         && let Ok(timed_event) = serde_json::from_str::<TimedEvent>(json_str)
                         && let LanforgeEvent::Dns(DnsEvent::QueryResolved(q)) = timed_event.event
                     {
-                        if args.blocked && q.result != QueryResult::Blocked && q.result != QueryResult::CachedBlock {
+                        if args.blocked
+                            && q.result != QueryResult::Blocked
+                            && q.result != QueryResult::CachedBlock
+                        {
                             continue;
                         }
                         if let Some(ref d_filter) = args.domain
@@ -980,7 +1041,10 @@ async fn follow_dns_logs(args: DnsLogsArgs, client: &LanforgeClient, printer: &P
         match rpc.next_response().await {
             Ok(RpcResponse::Event(event)) => {
                 if let LanforgeEvent::Dns(DnsEvent::QueryResolved(q)) = event.event {
-                    if args.blocked && q.result != QueryResult::Blocked && q.result != QueryResult::CachedBlock {
+                    if args.blocked
+                        && q.result != QueryResult::Blocked
+                        && q.result != QueryResult::CachedBlock
+                    {
                         continue;
                     }
                     if let Some(ref d_filter) = args.domain
@@ -1023,7 +1087,11 @@ async fn follow_dns_logs(args: DnsLogsArgs, client: &LanforgeClient, printer: &P
 // 5. In-Memory Cache Management
 // ---------------------------------------------------------------------------
 
-async fn execute_cache(args: DnsCacheArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn execute_cache(
+    args: DnsCacheArgs,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     match args.action.unwrap_or(DnsCacheAction::Status) {
         DnsCacheAction::Status => show_cache_status(client, printer).await,
         DnsCacheAction::Dump(dump_args) => dump_cache(dump_args, client, printer).await,
@@ -1044,9 +1112,21 @@ async fn show_cache_status(client: &LanforgeClient, printer: &Printer) -> Result
         printer.status_badge(true),
         "DNS In-Memory Cache Telemetry".bold().white()
     );
-    println!("    {:<22} {}", "Total Entries:".dimmed(), ext.total_entries.to_string().bold());
-    println!("    {:<22} {} bytes", "Memory Usage:".dimmed(), ext.memory_usage_bytes.to_string().cyan());
-    println!("    {:<22} {}s", "Average TTL:".dimmed(), ext.average_ttl_secs.to_string().yellow());
+    println!(
+        "    {:<22} {}",
+        "Total Entries:".dimmed(),
+        ext.total_entries.to_string().bold()
+    );
+    println!(
+        "    {:<22} {} bytes",
+        "Memory Usage:".dimmed(),
+        ext.memory_usage_bytes.to_string().cyan()
+    );
+    println!(
+        "    {:<22} {}s",
+        "Average TTL:".dimmed(),
+        ext.average_ttl_secs.to_string().yellow()
+    );
 
     if !ext.entries_by_type.is_empty() {
         println!();
@@ -1063,7 +1143,11 @@ async fn show_cache_status(client: &LanforgeClient, printer: &Printer) -> Result
     Ok(())
 }
 
-async fn dump_cache(args: DnsCacheDumpArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn dump_cache(
+    args: DnsCacheDumpArgs,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     let cache = client
         .dns_cache_dump(Some(args.limit), args.offset, args.search, args.kind)
         .await?;
@@ -1137,7 +1221,11 @@ pub fn infer_upstream_protocol(addr: &str, proto: Option<UpstreamProtocol>) -> U
     UpstreamProtocol::Udp
 }
 
-async fn execute_upstreams(args: DnsUpstreamsArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn execute_upstreams(
+    args: DnsUpstreamsArgs,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     match args.action.unwrap_or(DnsUpstreamsAction::List) {
         DnsUpstreamsAction::List => list_upstreams(client, printer).await,
         DnsUpstreamsAction::Add(add_args) => add_upstream(add_args, client, printer).await,
@@ -1166,7 +1254,13 @@ async fn list_upstreams(client: &LanforgeClient, printer: &Printer) -> Result<()
     );
 
     let mut table = printer.new_table();
-    table.set_header(vec!["Target", "Protocol", "Domain Scope", "Health", "Avg Latency"]);
+    table.set_header(vec![
+        "Target",
+        "Protocol",
+        "Domain Scope",
+        "Health",
+        "Avg Latency",
+    ]);
     for u in &resp.upstreams {
         let health_str = if u.status.is_healthy() {
             "Healthy".green().to_string()
@@ -1192,7 +1286,11 @@ async fn list_upstreams(client: &LanforgeClient, printer: &Printer) -> Result<()
     Ok(())
 }
 
-async fn add_upstream(mut args: DnsUpstreamAddArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn add_upstream(
+    mut args: DnsUpstreamAddArgs,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     let addr_str = match args.addr.take() {
         Some(a) => a,
         None => Text::new("Upstream socket address (IP:Port):").prompt()?,
@@ -1208,22 +1306,31 @@ async fn add_upstream(mut args: DnsUpstreamAddArgs, client: &LanforgeClient, pri
 
     let proto = infer_upstream_protocol(&addr_str, args.protocol);
 
-    let resp = client.dns_upstream_add(addr, proto, args.domain.clone()).await?;
+    let resp = client
+        .dns_upstream_add(addr, proto, args.domain.clone())
+        .await?;
 
     if printer.json {
         return printer.print_json(&resp);
     }
 
-    let domain_info = args.domain.as_deref().map_or_else(
-        || "globally".to_string(),
-        |d| format!("for domain '{d}'"),
-    );
-    printer.success(&format!("Added DNS upstream {addr} ({proto}) {domain_info}."));
+    let domain_info = args
+        .domain
+        .as_deref()
+        .map_or_else(|| "globally".to_string(), |d| format!("for domain '{d}'"));
+    printer.success(&format!(
+        "Added DNS upstream {addr} ({proto}) {domain_info}."
+    ));
     Ok(())
 }
 
-async fn remove_upstream(mut args: DnsUpstreamRemoveArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
-    let (addr, proto, domain) = if let (Some(a), Some(p)) = (args.addr.take(), args.protocol.take()) {
+async fn remove_upstream(
+    mut args: DnsUpstreamRemoveArgs,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
+    let (addr, proto, domain) = if let (Some(a), Some(p)) = (args.addr.take(), args.protocol.take())
+    {
         let parsed_addr: SocketAddr = a.parse().map_err(|e| eyre!("Invalid address: {e}"))?;
         (parsed_addr, p, args.domain.take())
     } else {
@@ -1251,7 +1358,9 @@ async fn remove_upstream(mut args: DnsUpstreamRemoveArgs, client: &LanforgeClien
         (chosen.target, chosen.protocol, chosen.domain)
     };
 
-    let resp = client.dns_upstream_remove(addr, proto, domain.clone()).await?;
+    let resp = client
+        .dns_upstream_remove(addr, proto, domain.clone())
+        .await?;
 
     if printer.json {
         return printer.print_json(&resp);
@@ -1263,9 +1372,10 @@ async fn remove_upstream(mut args: DnsUpstreamRemoveArgs, client: &LanforgeClien
 
 async fn clear_upstreams(yes: bool, client: &LanforgeClient, printer: &Printer) -> Result<()> {
     if !yes && !printer.yes {
-        let confirmed = Confirm::new("Are you sure you want to remove ALL configured DNS upstreams?")
-            .with_default(false)
-            .prompt()?;
+        let confirmed =
+            Confirm::new("Are you sure you want to remove ALL configured DNS upstreams?")
+                .with_default(false)
+                .prompt()?;
         if !confirmed {
             printer.info("Operation cancelled.");
             return Ok(());
@@ -1306,7 +1416,11 @@ pub fn infer_rewrite_type_and_answer(
     Ok((final_rtype, parsed_answer))
 }
 
-async fn execute_rewrites(args: DnsRewritesArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn execute_rewrites(
+    args: DnsRewritesArgs,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     match args.action.unwrap_or(DnsRewritesAction::List) {
         DnsRewritesAction::List => list_rewrites(client, printer).await,
         DnsRewritesAction::Add(add_args) => add_rewrite(add_args, client, printer).await,
@@ -1352,7 +1466,11 @@ async fn list_rewrites(client: &LanforgeClient, printer: &Printer) -> Result<()>
     Ok(())
 }
 
-async fn add_rewrite(mut args: DnsRewriteAddArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn add_rewrite(
+    mut args: DnsRewriteAddArgs,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     let domain = match args.domain.take() {
         Some(d) => d,
         None => Text::new("Domain name to rewrite (e.g. nas.lan):").prompt()?,
@@ -1360,7 +1478,9 @@ async fn add_rewrite(mut args: DnsRewriteAddArgs, client: &LanforgeClient, print
 
     let answer_str = match args.answer.take() {
         Some(a) => a,
-        None => Text::new("Answer target (IP, CNAME, dev:MAC, srv:SVC:PROTO:DEV:PORT):").prompt()?,
+        None => {
+            Text::new("Answer target (IP, CNAME, dev:MAC, srv:SVC:PROTO:DEV:PORT):").prompt()?
+        }
     };
 
     let (rtype, answer) = infer_rewrite_type_and_answer(&domain, &answer_str, args.record_type)?;
@@ -1378,11 +1498,17 @@ async fn add_rewrite(mut args: DnsRewriteAddArgs, client: &LanforgeClient, print
         return printer.print_json(&resp);
     }
 
-    printer.success(&format!("Added rewrite rule: {domain} -> {answer_str} ({rtype})"));
+    printer.success(&format!(
+        "Added rewrite rule: {domain} -> {answer_str} ({rtype})"
+    ));
     Ok(())
 }
 
-async fn remove_rewrite(target: Option<String>, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn remove_rewrite(
+    target: Option<String>,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     let resp = client.dns_rewrites().await?;
     if resp.rewrites.is_empty() {
         bail!("No rewrite rules to remove.");
@@ -1485,10 +1611,16 @@ pub fn parse_pause_duration(s: &str) -> Result<u64> {
     if let Ok(d) = duration_str::parse_std(trimmed) {
         return Ok(d.as_secs());
     }
-    bail!("Invalid duration format '{s}'. Expected seconds (e.g. 300) or duration string (e.g. 5m, 1h).");
+    bail!(
+        "Invalid duration format '{s}'. Expected seconds (e.g. 300) or duration string (e.g. 5m, 1h)."
+    );
 }
 
-async fn execute_adblock(args: DnsAdblockArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn execute_adblock(
+    args: DnsAdblockArgs,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     match args.action.unwrap_or(DnsAdblockAction::Status) {
         DnsAdblockAction::Status => show_adblock_status(client, printer).await,
         DnsAdblockAction::Block { domain } => add_adblock_block(domain, client, printer).await,
@@ -1496,8 +1628,12 @@ async fn execute_adblock(args: DnsAdblockArgs, client: &LanforgeClient, printer:
         DnsAdblockAction::Unallow { domain } => remove_adblock_allow(domain, client, printer).await,
         DnsAdblockAction::Allowlist => show_adblock_allowlist(client, printer).await,
         DnsAdblockAction::Check { domain } => check_adblock_domain(domain, client, printer).await,
-        DnsAdblockAction::Sources(src_args) => execute_adblock_sources(src_args, client, printer).await,
-        DnsAdblockAction::Config(cfg_args) => execute_adblock_config(cfg_args, client, printer).await,
+        DnsAdblockAction::Sources(src_args) => {
+            execute_adblock_sources(src_args, client, printer).await
+        }
+        DnsAdblockAction::Config(cfg_args) => {
+            execute_adblock_config(cfg_args, client, printer).await
+        }
         DnsAdblockAction::Pause { duration } => pause_adblock(duration, client, printer).await,
         DnsAdblockAction::Resume => resume_adblock(client, printer).await,
     }
@@ -1540,7 +1676,11 @@ async fn show_adblock_status(client: &LanforgeClient, printer: &Printer) -> Resu
         status.blocklist_size.to_string().red(),
         status.allowlist_size.to_string().green()
     );
-    println!("    {:<22} {:?}", "Blocking Mode:".dimmed(), status.blocking_mode);
+    println!(
+        "    {:<22} {:?}",
+        "Blocking Mode:".dimmed(),
+        status.blocking_mode
+    );
     if let Some(v4) = status.blocking_ip_v4 {
         println!("    {:<22} {v4}", "Sinkhole IPv4:".dimmed());
     }
@@ -1552,7 +1692,11 @@ async fn show_adblock_status(client: &LanforgeClient, printer: &Printer) -> Resu
     Ok(())
 }
 
-async fn add_adblock_block(domain_opt: Option<String>, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn add_adblock_block(
+    domain_opt: Option<String>,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     let domain = match domain_opt {
         Some(d) => d,
         None => Text::new("Domain name to block:").prompt()?,
@@ -1562,11 +1706,18 @@ async fn add_adblock_block(domain_opt: Option<String>, client: &LanforgeClient, 
     if printer.json {
         return printer.print_json(&resp);
     }
-    printer.success(&format!("Domain '{domain}' added to blocklist: {}", resp.message));
+    printer.success(&format!(
+        "Domain '{domain}' added to blocklist: {}",
+        resp.message
+    ));
     Ok(())
 }
 
-async fn add_adblock_allow(domain_opt: Option<String>, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn add_adblock_allow(
+    domain_opt: Option<String>,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     let domain = match domain_opt {
         Some(d) => d,
         None => Text::new("Domain name to allow:").prompt()?,
@@ -1576,11 +1727,18 @@ async fn add_adblock_allow(domain_opt: Option<String>, client: &LanforgeClient, 
     if printer.json {
         return printer.print_json(&resp);
     }
-    printer.success(&format!("Domain '{domain}' added to allowlist: {}", resp.message));
+    printer.success(&format!(
+        "Domain '{domain}' added to allowlist: {}",
+        resp.message
+    ));
     Ok(())
 }
 
-async fn remove_adblock_allow(domain_opt: Option<String>, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn remove_adblock_allow(
+    domain_opt: Option<String>,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     let domain = if let Some(d) = domain_opt {
         d
     } else {
@@ -1635,7 +1793,11 @@ async fn show_adblock_allowlist(client: &LanforgeClient, printer: &Printer) -> R
     Ok(())
 }
 
-async fn check_adblock_domain(domain_opt: Option<String>, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn check_adblock_domain(
+    domain_opt: Option<String>,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     let domain = match domain_opt {
         Some(d) => d,
         None => Text::new("Domain name to check:").prompt()?,
@@ -1648,7 +1810,11 @@ async fn check_adblock_domain(domain_opt: Option<String>, client: &LanforgeClien
     }
 
     println!();
-    println!(" {} Filter Check for {}", printer.status_badge(true), domain.bold().white());
+    println!(
+        " {} Filter Check for {}",
+        printer.status_badge(true),
+        domain.bold().white()
+    );
 
     if let Some(ref m) = resp.filter {
         let action_str = match m.action {
@@ -1665,32 +1831,56 @@ async fn check_adblock_domain(domain_opt: Option<String>, client: &LanforgeClien
         println!("    {:<18} {}", "Origin:".dimmed(), origin_str.cyan());
 
         if let Some(ref rule) = m.rule {
-            println!("    {:<18} {} (matched pattern)", "Rule:".dimmed(), rule.yellow());
+            println!(
+                "    {:<18} {} (matched pattern)",
+                "Rule:".dimmed(),
+                rule.yellow()
+            );
         }
         if m.important {
-            println!("    {:<18} {}", "Important:".dimmed(), "yes ($important flag)".yellow());
+            println!(
+                "    {:<18} {}",
+                "Important:".dimmed(),
+                "yes ($important flag)".yellow()
+            );
         }
 
         if !resp.source_matches.is_empty() {
             println!();
             println!("  {}", "Matching Filter Sources:".bold());
             for sm in &resp.source_matches {
-                println!("    - [{}] {}", sm.action.as_str().to_uppercase().cyan(), sm.url);
+                println!(
+                    "    - [{}] {}",
+                    sm.action.as_str().to_uppercase().cyan(),
+                    sm.url
+                );
             }
         }
     } else {
-        println!("    {:<18} {}", "Verdict:".dimmed(), "NOT BLOCKED (default pass)".green().bold());
+        println!(
+            "    {:<18} {}",
+            "Verdict:".dimmed(),
+            "NOT BLOCKED (default pass)".green().bold()
+        );
     }
 
     println!();
     Ok(())
 }
 
-async fn execute_adblock_sources(args: DnsAdblockSourcesArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn execute_adblock_sources(
+    args: DnsAdblockSourcesArgs,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     match args.action.unwrap_or(DnsAdblockSourcesAction::List) {
         DnsAdblockSourcesAction::List => list_adblock_sources(client, printer).await,
-        DnsAdblockSourcesAction::Add { url, format, kind } => add_adblock_source(url, format, kind, client, printer).await,
-        DnsAdblockSourcesAction::Remove { url } => remove_adblock_source(url, client, printer).await,
+        DnsAdblockSourcesAction::Add { url, format, kind } => {
+            add_adblock_source(url, format, kind, client, printer).await
+        }
+        DnsAdblockSourcesAction::Remove { url } => {
+            remove_adblock_source(url, client, printer).await
+        }
         DnsAdblockSourcesAction::Reload => reload_adblock_sources(client, printer).await,
     }
 }
@@ -1715,7 +1905,14 @@ async fn list_adblock_sources(client: &LanforgeClient, printer: &Printer) -> Res
     );
 
     let mut table = printer.new_table();
-    table.set_header(vec!["ID", "Format", "Blocks", "Exceptions", "Status", "URL"]);
+    table.set_header(vec![
+        "ID",
+        "Format",
+        "Blocks",
+        "Exceptions",
+        "Status",
+        "URL",
+    ]);
     for s in &resp.sources {
         let fmt_str = match s.format_detected {
             Some(d) if d != s.format => format!("{} ({})", s.format.as_str(), d.as_str()),
@@ -1723,7 +1920,9 @@ async fn list_adblock_sources(client: &LanforgeClient, printer: &Printer) -> Res
         };
 
         let status_str = if s.consecutive_failures > 0 {
-            format!("FAIL ({})", s.consecutive_failures).red().to_string()
+            format!("FAIL ({})", s.consecutive_failures)
+                .red()
+                .to_string()
         } else if s.last_success.is_some() {
             "OK".green().to_string()
         } else {
@@ -1756,7 +1955,9 @@ async fn add_adblock_source(
         None => Text::new("Filter source URL:").prompt()?,
     };
 
-    let resp = client.dns_adblock_url_add(url.clone(), kind, format).await?;
+    let resp = client
+        .dns_adblock_url_add(url.clone(), kind, format)
+        .await?;
     if printer.json {
         return printer.print_json(&resp);
     }
@@ -1764,7 +1965,11 @@ async fn add_adblock_source(
     Ok(())
 }
 
-async fn remove_adblock_source(url_opt: Option<String>, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn remove_adblock_source(
+    url_opt: Option<String>,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     let url = if let Some(u) = url_opt {
         u
     } else {
@@ -1793,8 +1998,16 @@ async fn reload_adblock_sources(client: &LanforgeClient, printer: &Printer) -> R
     Ok(())
 }
 
-async fn execute_adblock_config(args: DnsAdblockConfigArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
-    if args.mode.is_none() && args.ip_v4.is_none() && args.ip_v6.is_none() && args.refresh_time.is_none() {
+async fn execute_adblock_config(
+    args: DnsAdblockConfigArgs,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
+    if args.mode.is_none()
+        && args.ip_v4.is_none()
+        && args.ip_v6.is_none()
+        && args.refresh_time.is_none()
+    {
         let status = client.dns_adblock_status().await?;
         if printer.json {
             return printer.print_json(&serde_json::json!({
@@ -1828,7 +2041,11 @@ async fn execute_adblock_config(args: DnsAdblockConfigArgs, client: &LanforgeCli
     Ok(())
 }
 
-async fn pause_adblock(duration_opt: Option<String>, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn pause_adblock(
+    duration_opt: Option<String>,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     let duration = match duration_opt {
         Some(ref d) => Some(parse_pause_duration(d)?),
         None => None,
@@ -1860,11 +2077,19 @@ async fn resume_adblock(client: &LanforgeClient, printer: &Printer) -> Result<()
 // 9. Reverse Resolvers
 // ---------------------------------------------------------------------------
 
-async fn execute_reverse(args: DnsReverseArgs, client: &LanforgeClient, printer: &Printer) -> Result<()> {
+async fn execute_reverse(
+    args: DnsReverseArgs,
+    client: &LanforgeClient,
+    printer: &Printer,
+) -> Result<()> {
     match args.action.unwrap_or(DnsReverseAction::List) {
         DnsReverseAction::List => list_reverse_resolvers(client, printer).await,
-        DnsReverseAction::Add { subnet, resolver } => add_reverse_resolver(subnet, resolver, client, printer).await,
-        DnsReverseAction::Remove { subnet } => remove_reverse_resolver(subnet, client, printer).await,
+        DnsReverseAction::Add { subnet, resolver } => {
+            add_reverse_resolver(subnet, resolver, client, printer).await
+        }
+        DnsReverseAction::Remove { subnet } => {
+            remove_reverse_resolver(subnet, client, printer).await
+        }
     }
 }
 
@@ -1881,10 +2106,7 @@ async fn list_reverse_resolvers(client: &LanforgeClient, printer: &Printer) -> R
     }
 
     println!();
-    println!(
-        " {} Reverse Resolver Mappings",
-        printer.status_badge(true)
-    );
+    println!(" {} Reverse Resolver Mappings", printer.status_badge(true));
 
     let mut table = printer.new_table();
     table.set_header(vec!["Subnet CIDR", "Resolver URI"]);
@@ -1912,7 +2134,9 @@ async fn add_reverse_resolver(
         None => Text::new("Resolver URI (e.g. udp://100.100.100.100:53):").prompt()?,
     };
 
-    let resp = client.dns_reverse_resolver_add(subnet.clone(), resolver.clone()).await?;
+    let resp = client
+        .dns_reverse_resolver_add(subnet.clone(), resolver.clone())
+        .await?;
 
     if printer.json {
         return printer.print_json(&resp);
@@ -2000,7 +2224,8 @@ mod tests {
         assert_eq!(ans.to_string(), "target.lan");
 
         // Device -> dev:...
-        let (rtype, ans) = infer_rewrite_type_and_answer("my-pc.lan", "dev:00:11:22:33:44:55", None).unwrap();
+        let (rtype, ans) =
+            infer_rewrite_type_and_answer("my-pc.lan", "dev:00:11:22:33:44:55", None).unwrap();
         assert_eq!(rtype, DnsRecordType::Device);
         assert_eq!(ans.to_string(), "dev:00:11:22:33:44:55");
 

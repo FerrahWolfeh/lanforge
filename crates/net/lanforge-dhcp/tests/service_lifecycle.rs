@@ -5,14 +5,15 @@ use common::{
     init_test_context, init_test_context_with_interface,
 };
 use dhcproto::v4::MessageType as MessageTypeV4;
-use dhcproto::v6::{DhcpOption as Dhcpv6Option, Message as MessageV6, MessageType as MessageTypeV6, OptionCode as OptionCodeV6};
+use dhcproto::v6::{
+    DhcpOption as Dhcpv6Option, Message as MessageV6, MessageType as MessageTypeV6,
+    OptionCode as OptionCodeV6,
+};
 use dhcproto::{Decodable, Decoder};
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{AsyncService, ServiceHandle};
-use lanforge_dhcp::{
-    Dhcpv4Service, Dhcpv4Transport, Dhcpv6Service, Dhcpv6Transport,
-};
+use lanforge_dhcp::{Dhcpv4Service, Dhcpv4Transport, Dhcpv6Service, Dhcpv6Transport};
 use lanforge_types::device::{IPv4State, Origin};
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::system::{ServiceId, ServiceState};
@@ -190,7 +191,9 @@ async fn test_dhcpv6_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
     // Await Online state cooperatively without fixed sleep
     wait_for_service_online(&ctx, ServiceId::Dhcp6).await?;
 
-    let client_duid = Duid::new(vec![0x00, 0x03, 0x00, 0x01, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+    let client_duid = Duid::new(vec![
+        0x00, 0x03, 0x00, 0x01, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+    ]);
     let client_src: SocketAddr = "[fe80::cafe:100]:546".parse()?;
 
     // --- Step 1: SOLICIT -> ADVERTISE ---
@@ -253,7 +256,10 @@ async fn test_dhcpv6_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
         lanforge_types::device::IPv6State::Dynamic(lease) => lease.ip == offered_v6,
         _ => false,
     });
-    assert!(has_dynamic_lease, "Device state must contain granted dynamic IPv6 lease");
+    assert!(
+        has_dynamic_lease,
+        "Device state must contain granted dynamic IPv6 lease"
+    );
 
     let stats = ctx.dhcpv6_stats();
     assert_eq!(stats.solicits.load(Ordering::Relaxed), 1);
@@ -262,7 +268,9 @@ async fn test_dhcpv6_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
     assert_eq!(stats.replies.load(Ordering::Relaxed), 1);
 
     // --- Step 4: Static Suffix Pinning ---
-    let static_duid = Duid::new(vec![0x00, 0x03, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
+    let static_duid = Duid::new(vec![
+        0x00, 0x03, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+    ]);
     let pinned_suffix: lanforge_types::network::Ipv6Suffix = "::50".parse()?;
     let dummy_static_mac = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
 
@@ -272,7 +280,10 @@ async fn test_dhcpv6_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
             hostname: Some("static-v6-server".to_string()).into(),
             duid: Some(static_duid.clone()).into(),
             v4_static: None.into(),
-            v6_suffix: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix(pinned_suffix)).into(),
+            v6_suffix: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix(
+                pinned_suffix,
+            ))
+            .into(),
             boot_file: None.into(),
             dns_fallback: None.into(),
             class: None.into(),

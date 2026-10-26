@@ -43,7 +43,10 @@ pub fn init_test_context() -> LanforgeContext {
 /// Cooperatively polls a service until its registered state is `ServiceState::Online`.
 ///
 /// Times out after 2 seconds to avoid test hangs.
-pub async fn wait_for_service_online(ctx: &LanforgeContext, service: lanforge_types::system::ServiceId) {
+pub async fn wait_for_service_online(
+    ctx: &LanforgeContext,
+    service: lanforge_types::system::ServiceId,
+) {
     let start = std::time::Instant::now();
     while start.elapsed() < Duration::from_secs(2) {
         if ctx.get_service_state(service) == ServiceState::Online {
@@ -148,13 +151,7 @@ pub async fn process_query_test(
     ctx.pipeline
         .run(
             ctx,
-            DnsPipelineRequest::new(
-                data,
-                &header,
-                &question,
-                src_ip,
-                TransportProtocol::Udp,
-            ),
+            DnsPipelineRequest::new(data, &header, &question, src_ip, TransportProtocol::Udp),
             resp,
         )
         .await?;

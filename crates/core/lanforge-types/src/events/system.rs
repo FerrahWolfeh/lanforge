@@ -9,13 +9,22 @@ pub enum SystemEvent {
     StateReady,
     DbReady,
     InterfaceReady,
-    ServiceReady { id: ServiceId },
+    ServiceReady {
+        id: ServiceId,
+    },
     SystemReady,
     ReloadConfig,
-    ConfigChanged { sections: DomainSet },
-    ConfigUpdate { password_hash: String },
+    ConfigChanged {
+        sections: DomainSet,
+    },
+    ConfigUpdate {
+        password_hash: String,
+    },
     ServiceStatusBanner(Box<ServiceBanner>),
-    ServiceControl { id: ServiceId, action: ServiceAction },
+    ServiceControl {
+        id: ServiceId,
+        action: ServiceAction,
+    },
     ConfigDhcpV4Changed,
     ConfigDhcpV6Changed,
     ConfigRaChanged,

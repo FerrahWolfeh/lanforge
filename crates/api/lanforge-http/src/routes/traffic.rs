@@ -1,9 +1,4 @@
-use axum::{
-    Json, Router,
-    extract::State,
-    response::IntoResponse,
-    routing::get,
-};
+use axum::{Json, Router, extract::State, response::IntoResponse, routing::get};
 use lanforge_types::network::TrafficConfig;
 
 use crate::routes::create_client_ctx;
@@ -13,10 +8,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/status", get(handle_status))
         .route("/telemetry", get(handle_telemetry))
-        .route(
-            "/config",
-            get(handle_get_config).post(handle_update_config),
-        )
+        .route("/config", get(handle_get_config).post(handle_update_config))
 }
 
 async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {

@@ -11,7 +11,6 @@ pub enum AuthMethod {
     ChapMd5,
 }
 
-
 impl std::fmt::Display for AuthMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -181,4 +180,3 @@ impl Default for PppoeConfig {
         }
     }
 }
-

@@ -32,12 +32,23 @@ impl WatchArgs {
     }
 }
 
-async fn stream_uds_events(client: &LanforgeClient, printer: &Printer, verbose: bool) -> Result<()> {
+async fn stream_uds_events(
+    client: &LanforgeClient,
+    printer: &Printer,
+    verbose: bool,
+) -> Result<()> {
     let mut rpc = client.connect_rpc().await?;
-    rpc.log(true, None, None).await.map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
+    rpc.log(true, None, None)
+        .await
+        .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
 
     if !printer.json {
-        println!("{}", "● Watching live daemon events... (Ctrl+C to stop)\n".cyan().bold());
+        println!(
+            "{}",
+            "● Watching live daemon events... (Ctrl+C to stop)\n"
+                .cyan()
+                .bold()
+        );
     }
 
     loop {
@@ -76,7 +87,11 @@ async fn stream_uds_events(client: &LanforgeClient, printer: &Printer, verbose: 
 }
 
 #[cfg(feature = "remote")]
-async fn stream_remote_events(client: &LanforgeClient, printer: &Printer, verbose: bool) -> Result<()> {
+async fn stream_remote_events(
+    client: &LanforgeClient,
+    printer: &Printer,
+    verbose: bool,
+) -> Result<()> {
     use bytes::Bytes;
     use http_body_util::BodyExt;
     use hyper::{Method, Request, Uri};
@@ -94,7 +109,12 @@ async fn stream_remote_events(client: &LanforgeClient, printer: &Printer, verbos
     let resp = client.http_client.request(req).await?;
 
     if !printer.json {
-        println!("{}", "● Watching remote daemon events... (Ctrl+C to stop)\n".cyan().bold());
+        println!(
+            "{}",
+            "● Watching remote daemon events... (Ctrl+C to stop)\n"
+                .cyan()
+                .bold()
+        );
     }
 
     let mut body = resp.into_body();
@@ -150,7 +170,9 @@ pub fn render_event(e: &TimedEvent, printer: &Printer, verbose: bool) {
         LanforgeEvent::Dns(dns_evt) => render_dns_event(&time_str, dns_evt, printer),
         LanforgeEvent::System(sys_evt) => render_system_event(&time_str, sys_evt, printer),
         LanforgeEvent::Network(net_evt) => render_network_event(&time_str, net_evt, printer),
-        LanforgeEvent::Storage(storage_evt) => render_storage_event(&time_str, storage_evt, printer),
+        LanforgeEvent::Storage(storage_evt) => {
+            render_storage_event(&time_str, storage_evt, printer)
+        }
         LanforgeEvent::Traffic(_) => {}
     }
 }
@@ -164,10 +186,24 @@ fn render_device_event(time_str: &str, evt: &DeviceEvent, printer: &Printer, ver
     match evt {
         DeviceEvent::Discovered { mac, hostname } => {
             let host = hostname.as_deref().unwrap_or("<unknown>");
-            print_log(time_str, "DEVICE", "NEW".green().bold(), format!("{host} ({mac})"), printer);
+            print_log(
+                time_str,
+                "DEVICE",
+                "NEW".green().bold(),
+                format!("{host} ({mac})"),
+                printer,
+            );
         }
-        DeviceEvent::NetworkUpdate { mac, hostname, change }
-        | DeviceEvent::NetworkActivity { mac, hostname, change } => {
+        DeviceEvent::NetworkUpdate {
+            mac,
+            hostname,
+            change,
+        }
+        | DeviceEvent::NetworkActivity {
+            mac,
+            hostname,
+            change,
+        } => {
             let is_activity = matches!(evt, DeviceEvent::NetworkActivity { .. });
             if is_activity && !verbose {
                 return;
@@ -175,12 +211,18 @@ fn render_device_event(time_str: &str, evt: &DeviceEvent, printer: &Printer, ver
 
             let host = hostname.as_deref().unwrap_or("<unknown>");
             let change_desc = match &**change {
-                NetworkChange::V4Assigned { ip } => format!("IPv4 assigned: {}", ip.to_string().yellow()),
-                NetworkChange::V6Assigned { ip, .. } => format!("IPv6 assigned: {}", ip.to_string().yellow()),
+                NetworkChange::V4Assigned { ip } => {
+                    format!("IPv4 assigned: {}", ip.to_string().yellow())
+                }
+                NetworkChange::V6Assigned { ip, .. } => {
+                    format!("IPv6 assigned: {}", ip.to_string().yellow())
+                }
                 NetworkChange::V6PrefixAssigned { prefix, len, .. } => {
                     format!("IPv6 prefix delegated: {prefix}/{len}")
                 }
-                NetworkChange::LeaseExpired { target } => format!("Lease expired ({target:?})").red().to_string(),
+                NetworkChange::LeaseExpired { target } => {
+                    format!("Lease expired ({target:?})").red().to_string()
+                }
                 NetworkChange::SlaacObserved { addr } => format!("Observed SLAAC: {addr}"),
                 NetworkChange::StatusChanged { status, .. } => match status {
                     DeviceStatus::Online => "Device online".green().to_string(),
@@ -190,52 +232,122 @@ fn render_device_event(time_str: &str, evt: &DeviceEvent, printer: &Printer, ver
                 NetworkChange::HostnameHint { hostname } => format!("Hostname updated: {hostname}"),
                 NetworkChange::DuidAssociated { duid } => format!("DUID associated: {duid}"),
                 NetworkChange::NdpActivity { ip } => {
-                    if !verbose { return; }
+                    if !verbose {
+                        return;
+                    }
                     format!("NDP activity: {ip}")
                 }
                 NetworkChange::ArpActivity { ip } => {
-                    if !verbose { return; }
+                    if !verbose {
+                        return;
+                    }
                     format!("ARP activity: {ip}")
                 }
                 NetworkChange::IpDeleted { ip } => format!("IP removed: {ip}").red().to_string(),
                 NetworkChange::IpOffline { ip } => format!("IP offline: {ip}").dimmed().to_string(),
             };
 
-            print_log(time_str, "DEVICE", "UPDATE".cyan(), format!("{host} ({mac}) -> {change_desc}"), printer);
+            print_log(
+                time_str,
+                "DEVICE",
+                "UPDATE".cyan(),
+                format!("{host} ({mac}) -> {change_desc}"),
+                printer,
+            );
         }
-        DeviceEvent::AdminUpdate { mac, hostname, change } => {
+        DeviceEvent::AdminUpdate {
+            mac,
+            hostname,
+            change,
+        } => {
             let host = hostname.as_deref().unwrap_or("<unknown>");
             let desc = match &**change {
                 AdminChange::CliHostUpdated => "CLI config updated".to_string(),
                 AdminChange::HostnameChanged { hostname } => format!("Hostname set to: {hostname}"),
                 AdminChange::V4StaticChanged { ip } => format!("Static IPv4 set to: {ip:?}"),
-                AdminChange::V6SuffixChanged { suffix } => format!("Static IPv6 suffix set to: {suffix:?}"),
+                AdminChange::V6SuffixChanged { suffix } => {
+                    format!("Static IPv6 suffix set to: {suffix:?}")
+                }
                 AdminChange::Classified { class } => format!("Classified as: {class:?}"),
                 AdminChange::HostRemoved => "Static host removed".red().to_string(),
             };
-            print_log(time_str, "DEVICE", "CONFIG".blue().bold(), format!("{host} ({mac}) -> {desc}"), printer);
+            print_log(
+                time_str,
+                "DEVICE",
+                "CONFIG".blue().bold(),
+                format!("{host} ({mac}) -> {desc}"),
+                printer,
+            );
         }
         DeviceEvent::Expired { mac } => {
-            print_log(time_str, "DEVICE", "EXPIRED".red(), mac.to_string(), printer);
+            print_log(
+                time_str,
+                "DEVICE",
+                "EXPIRED".red(),
+                mac.to_string(),
+                printer,
+            );
         }
         DeviceEvent::Purged { mac } => {
-            print_log(time_str, "DEVICE", "PURGED".red().bold(), mac.to_string(), printer);
+            print_log(
+                time_str,
+                "DEVICE",
+                "PURGED".red().bold(),
+                mac.to_string(),
+                printer,
+            );
         }
-        DeviceEvent::DhcpV4Transaction { mac, msg_type, details } => {
+        DeviceEvent::DhcpV4Transaction {
+            mac,
+            msg_type,
+            details,
+        } => {
             let det = details.as_deref().unwrap_or("");
-            print_log(time_str, "DHCPv4", format!("{msg_type:?}").magenta().bold(), format!("{mac} {det}"), printer);
+            print_log(
+                time_str,
+                "DHCPv4",
+                format!("{msg_type:?}").magenta().bold(),
+                format!("{mac} {det}"),
+                printer,
+            );
         }
-        DeviceEvent::DhcpV6Transaction { mac, msg_type, details } => {
+        DeviceEvent::DhcpV6Transaction {
+            mac,
+            msg_type,
+            details,
+        } => {
             let det = details.as_deref().unwrap_or("");
-            print_log(time_str, "DHCPv6", format!("{msg_type:?}").magenta().bold(), format!("{mac} {det}"), printer);
+            print_log(
+                time_str,
+                "DHCPv6",
+                format!("{msg_type:?}").magenta().bold(),
+                format!("{mac} {det}"),
+                printer,
+            );
         }
         DeviceEvent::LeaseRelease { mac, target } => {
-            print_log(time_str, "DHCP", "RELEASE".yellow(), format!("{mac} target={target:?}"), printer);
+            print_log(
+                time_str,
+                "DHCP",
+                "RELEASE".yellow(),
+                format!("{mac} target={target:?}"),
+                printer,
+            );
         }
         DeviceEvent::LeaseRenew { mac, target } => {
-            print_log(time_str, "DHCP", "RENEW".green(), format!("{mac} target={target:?}"), printer);
+            print_log(
+                time_str,
+                "DHCP",
+                "RENEW".green(),
+                format!("{mac} target={target:?}"),
+                printer,
+            );
         }
-        DeviceEvent::NeighborBatchSummary { total, new, duration_ms } => {
+        DeviceEvent::NeighborBatchSummary {
+            total,
+            new,
+            duration_ms,
+        } => {
             if verbose || *new > 0 {
                 print_log(
                     time_str,
@@ -252,20 +364,37 @@ fn render_device_event(time_str: &str, evt: &DeviceEvent, printer: &Printer, ver
 fn render_pppoe_event(time_str: &str, evt: &PppoeEvent, printer: &Printer) {
     match evt {
         PppoeEvent::SessionUp(session) => {
-            let ip_str = session.ipv4.map_or_else(|| "none".to_string(), |ip| ip.to_string());
+            let ip_str = session
+                .ipv4
+                .map_or_else(|| "none".to_string(), |ip| ip.to_string());
             let ac_str = session.ac_name.as_deref().unwrap_or("unknown AC");
             print_log(
                 time_str,
                 "PPPOE",
                 "UP".green().bold(),
-                format!("Connected on {} via {} (IP: {}, DNS: {})", session.interface, ac_str, ip_str.yellow(), session.dns.len()),
+                format!(
+                    "Connected on {} via {} (IP: {}, DNS: {})",
+                    session.interface,
+                    ac_str,
+                    ip_str.yellow(),
+                    session.dns.len()
+                ),
                 printer,
             );
         }
         PppoeEvent::SessionDown { reason } => {
-            print_log(time_str, "PPPOE", "DOWN".red().bold(), reason.clone(), printer);
+            print_log(
+                time_str,
+                "PPPOE",
+                "DOWN".red().bold(),
+                reason.clone(),
+                printer,
+            );
         }
-        PppoeEvent::Reconnecting { attempt, next_retry_secs } => {
+        PppoeEvent::Reconnecting {
+            attempt,
+            next_retry_secs,
+        } => {
             print_log(
                 time_str,
                 "PPPOE",
@@ -275,9 +404,18 @@ fn render_pppoe_event(time_str: &str, evt: &PppoeEvent, printer: &Printer) {
             );
         }
         PppoeEvent::AuthFailed { reason } => {
-            print_log(time_str, "PPPOE", "AUTH FAIL".red().bold(), reason.clone(), printer);
+            print_log(
+                time_str,
+                "PPPOE",
+                "AUTH FAIL".red().bold(),
+                reason.clone(),
+                printer,
+            );
         }
-        PppoeEvent::KeepaliveWarning { consecutive_failures, max_failures } => {
+        PppoeEvent::KeepaliveWarning {
+            consecutive_failures,
+            max_failures,
+        } => {
             print_log(
                 time_str,
                 "PPPOE",
@@ -287,7 +425,13 @@ fn render_pppoe_event(time_str: &str, evt: &PppoeEvent, printer: &Printer) {
             );
         }
         PppoeEvent::KeepaliveRestored => {
-            print_log(time_str, "PPPOE", "LCP OK".green(), "Echo keepalive restored".to_string(), printer);
+            print_log(
+                time_str,
+                "PPPOE",
+                "LCP OK".green(),
+                "Echo keepalive restored".to_string(),
+                printer,
+            );
         }
     }
 }
@@ -300,55 +444,143 @@ fn render_firewall_event(time_str: &str, evt: &FirewallEvent, printer: &Printer)
                 time_str,
                 "FIREWALL",
                 "APPLIED".green().bold(),
-                format!("Ruleset applied: {} rules on table '{}' (WAN: {wan_desc})", summary.rules_count, summary.table),
+                format!(
+                    "Ruleset applied: {} rules on table '{}' (WAN: {wan_desc})",
+                    summary.rules_count, summary.table
+                ),
                 printer,
             );
         }
         FirewallEvent::ApplyFailed { error } => {
-            print_log(time_str, "FIREWALL", "ERROR".red().bold(), format!("Apply failed: {error}"), printer);
+            print_log(
+                time_str,
+                "FIREWALL",
+                "ERROR".red().bold(),
+                format!("Apply failed: {error}"),
+                printer,
+            );
         }
         FirewallEvent::RulesetFlushed => {
-            print_log(time_str, "FIREWALL", "FLUSHED".yellow(), "Ruleset flushed".to_string(), printer);
+            print_log(
+                time_str,
+                "FIREWALL",
+                "FLUSHED".yellow(),
+                "Ruleset flushed".to_string(),
+                printer,
+            );
         }
         FirewallEvent::RulesetChanged => {
-            print_log(time_str, "FIREWALL", "CHANGED".cyan(), "Ruleset modification queued".to_string(), printer);
+            print_log(
+                time_str,
+                "FIREWALL",
+                "CHANGED".cyan(),
+                "Ruleset modification queued".to_string(),
+                printer,
+            );
         }
         FirewallEvent::PortOpenRequested(req) => {
-            print_log(time_str, "FIREWALL", "PORT OPEN".cyan(), format!("{req:?}"), printer);
+            print_log(
+                time_str,
+                "FIREWALL",
+                "PORT OPEN".cyan(),
+                format!("{req:?}"),
+                printer,
+            );
         }
-        FirewallEvent::PortReleaseRequested { service, port, protocol } => {
-            print_log(time_str, "FIREWALL", "PORT REL".dimmed(), format!("{service} {protocol:?}/{port}"), printer);
+        FirewallEvent::PortReleaseRequested {
+            service,
+            port,
+            protocol,
+        } => {
+            print_log(
+                time_str,
+                "FIREWALL",
+                "PORT REL".dimmed(),
+                format!("{service} {protocol:?}/{port}"),
+                printer,
+            );
         }
     }
 }
 
 fn render_dns_event(time_str: &str, evt: &DnsEvent, printer: &Printer) {
     match evt {
-        DnsEvent::AdblockToggle { enabled, duration_secs } => {
+        DnsEvent::AdblockToggle {
+            enabled,
+            duration_secs,
+        } => {
             let state = if *enabled { "Enabled" } else { "Paused" };
             let dur = duration_secs.map_or(String::new(), |d| format!(" for {d}s"));
-            print_log(time_str, "DNS", "ADBLOCK".magenta(), format!("{state}{dur}"), printer);
+            print_log(
+                time_str,
+                "DNS",
+                "ADBLOCK".magenta(),
+                format!("{state}{dur}"),
+                printer,
+            );
         }
         DnsEvent::AdblockReload => {
-            print_log(time_str, "DNS", "ADBLOCK".magenta(), "Adblock rules reloaded".to_string(), printer);
+            print_log(
+                time_str,
+                "DNS",
+                "ADBLOCK".magenta(),
+                "Adblock rules reloaded".to_string(),
+                printer,
+            );
         }
         DnsEvent::AdblockBlock(domain) => {
-            print_log(time_str, "DNS", "BLOCK".red(), format!("Domain blocked: {domain}"), printer);
+            print_log(
+                time_str,
+                "DNS",
+                "BLOCK".red(),
+                format!("Domain blocked: {domain}"),
+                printer,
+            );
         }
         DnsEvent::AdblockAllow(domain) => {
-            print_log(time_str, "DNS", "ALLOW".green(), format!("Domain allowed: {domain}"), printer);
+            print_log(
+                time_str,
+                "DNS",
+                "ALLOW".green(),
+                format!("Domain allowed: {domain}"),
+                printer,
+            );
         }
         DnsEvent::QueryBlocked { src_addr, domain } => {
-            print_log(time_str, "DNS", "BLOCKED".red(), format!("{domain} from {src_addr}"), printer);
+            print_log(
+                time_str,
+                "DNS",
+                "BLOCKED".red(),
+                format!("{domain} from {src_addr}"),
+                printer,
+            );
         }
         DnsEvent::CacheFlush => {
-            print_log(time_str, "DNS", "CACHE".yellow(), "DNS cache flushed".to_string(), printer);
+            print_log(
+                time_str,
+                "DNS",
+                "CACHE".yellow(),
+                "DNS cache flushed".to_string(),
+                printer,
+            );
         }
         DnsEvent::ConfigRewritesChanged => {
-            print_log(time_str, "DNS", "REWRITE".cyan(), "DNS rewrite rules updated".to_string(), printer);
+            print_log(
+                time_str,
+                "DNS",
+                "REWRITE".cyan(),
+                "DNS rewrite rules updated".to_string(),
+                printer,
+            );
         }
         DnsEvent::ConfigUpstreamsChanged => {
-            print_log(time_str, "DNS", "UPSTREAM".cyan(), "DNS upstream resolvers updated".to_string(), printer);
+            print_log(
+                time_str,
+                "DNS",
+                "UPSTREAM".cyan(),
+                "DNS upstream resolvers updated".to_string(),
+                printer,
+            );
         }
         _ => {}
     }
@@ -357,19 +589,49 @@ fn render_dns_event(time_str: &str, evt: &DnsEvent, printer: &Printer) {
 fn render_system_event(time_str: &str, evt: &SystemEvent, printer: &Printer) {
     match evt {
         SystemEvent::SystemReady => {
-            print_log(time_str, "SYSTEM", "READY".green().bold(), "All daemon services online and initialized".to_string(), printer);
+            print_log(
+                time_str,
+                "SYSTEM",
+                "READY".green().bold(),
+                "All daemon services online and initialized".to_string(),
+                printer,
+            );
         }
         SystemEvent::ReloadConfig => {
-            print_log(time_str, "SYSTEM", "RELOAD".yellow().bold(), "Configuration reload signal absorbed".to_string(), printer);
+            print_log(
+                time_str,
+                "SYSTEM",
+                "RELOAD".yellow().bold(),
+                "Configuration reload signal absorbed".to_string(),
+                printer,
+            );
         }
         SystemEvent::Shutdown => {
-            print_log(time_str, "SYSTEM", "SHUTDOWN".red().bold(), "Daemon shutdown initiated".to_string(), printer);
+            print_log(
+                time_str,
+                "SYSTEM",
+                "SHUTDOWN".red().bold(),
+                "Daemon shutdown initiated".to_string(),
+                printer,
+            );
         }
         SystemEvent::ServiceStatusBanner(banner) => {
-            print_log(time_str, "SERVICE", printer.service_badge(banner.state.as_str()), format!("{} ({})", banner.name, banner.id), printer);
+            print_log(
+                time_str,
+                "SERVICE",
+                printer.service_badge(banner.state.as_str()),
+                format!("{} ({})", banner.name, banner.id),
+                printer,
+            );
         }
         SystemEvent::ServiceControl { id, action } => {
-            print_log(time_str, "SERVICE", "ACTION".cyan(), format!("{id}: {action:?}"), printer);
+            print_log(
+                time_str,
+                "SERVICE",
+                "ACTION".cyan(),
+                format!("{id}: {action:?}"),
+                printer,
+            );
         }
         _ => {}
     }
@@ -378,13 +640,34 @@ fn render_system_event(time_str: &str, evt: &SystemEvent, printer: &Printer) {
 fn render_network_event(time_str: &str, evt: &NetworkEvent, printer: &Printer) {
     match evt {
         NetworkEvent::PrefixChanged(prefix) => {
-            print_log(time_str, "NETWORK", "PREFIX".magenta(), format!("IPv6 prefix changed (GUA: {:?}, ULA: {:?})", prefix.gua, prefix.ula), printer);
+            print_log(
+                time_str,
+                "NETWORK",
+                "PREFIX".magenta(),
+                format!(
+                    "IPv6 prefix changed (GUA: {:?}, ULA: {:?})",
+                    prefix.gua, prefix.ula
+                ),
+                printer,
+            );
         }
         NetworkEvent::InterfaceUpdated { ifindex } => {
-            print_log(time_str, "NETWORK", "IFACE".blue(), format!("Interface ifindex {ifindex} status updated"), printer);
+            print_log(
+                time_str,
+                "NETWORK",
+                "IFACE".blue(),
+                format!("Interface ifindex {ifindex} status updated"),
+                printer,
+            );
         }
         NetworkEvent::WolTriggered { mac, .. } => {
-            print_log(time_str, "NETWORK", "WOL".green().bold(), format!("Wake-on-LAN magic packet sent to {mac}"), printer);
+            print_log(
+                time_str,
+                "NETWORK",
+                "WOL".green().bold(),
+                format!("Wake-on-LAN magic packet sent to {mac}"),
+                printer,
+            );
         }
         _ => {}
     }
@@ -393,19 +676,43 @@ fn render_network_event(time_str: &str, evt: &NetworkEvent, printer: &Printer) {
 fn render_storage_event(time_str: &str, evt: &StorageEvent, printer: &Printer) {
     match evt {
         StorageEvent::DbLogClean => {
-            print_log(time_str, "DATABASE", "CLEAN".cyan(), "Old audit logs pruned".to_string(), printer);
+            print_log(
+                time_str,
+                "DATABASE",
+                "CLEAN".cyan(),
+                "Old audit logs pruned".to_string(),
+                printer,
+            );
         }
         StorageEvent::DbReset => {
-            print_log(time_str, "DATABASE", "RESET".red().bold(), "Database reset initiated".to_string(), printer);
+            print_log(
+                time_str,
+                "DATABASE",
+                "RESET".red().bold(),
+                "Database reset initiated".to_string(),
+                printer,
+            );
         }
         StorageEvent::DbResetCompleted => {
-            print_log(time_str, "DATABASE", "RESET OK".green().bold(), "Database reset completed".to_string(), printer);
+            print_log(
+                time_str,
+                "DATABASE",
+                "RESET OK".green().bold(),
+                "Database reset completed".to_string(),
+                printer,
+            );
         }
         _ => {}
     }
 }
 
-fn print_log(time_str: &str, domain: &str, tag: impl std::fmt::Display, msg: impl std::fmt::Display, printer: &Printer) {
+fn print_log(
+    time_str: &str,
+    domain: &str,
+    tag: impl std::fmt::Display,
+    msg: impl std::fmt::Display,
+    printer: &Printer,
+) {
     if printer.no_color {
         println!("[{time_str}] [{domain:<8}] [{tag:<8}] {msg}");
     } else {
@@ -435,8 +742,8 @@ mod tests {
         }));
         render_event(&dev_event, &printer, false);
 
-        let pppoe_event = TimedEvent::new(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(
-            Box::new(PppoeSessionUp {
+        let pppoe_event = TimedEvent::new(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(
+            PppoeSessionUp {
                 interface: "ppp0".to_string(),
                 ac_mac: None,
                 ac_name: Some("BRAS-01".to_string()),
@@ -446,8 +753,8 @@ mod tests {
                 ipv4_peer: None,
                 dns: vec![],
                 ipv6_link_local: true,
-            }),
-        )));
+            },
+        ))));
         render_event(&pppoe_event, &printer, false);
 
         let fw_event = TimedEvent::new(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));

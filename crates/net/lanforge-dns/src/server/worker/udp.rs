@@ -127,13 +127,7 @@ async fn handle_udp_upstream_query(
     let question = WireQuestion::parse(&data).ok_or(DnsError::WireParseError)?;
     let mut resp_buf = Vec::with_capacity(512);
 
-    let req = DnsPipelineRequest::new(
-        &data,
-        &header,
-        &question,
-        src.ip(),
-        TransportProtocol::Udp,
-    );
+    let req = DnsPipelineRequest::new(&data, &header, &question, src.ip(), TransportProtocol::Udp);
 
     match ctx.pipeline.run_upstream(&ctx, &req, &mut resp_buf).await {
         Ok(true) => {
@@ -211,7 +205,10 @@ mod tests {
 
         handle.inject(query_bytes, client_addr).await;
 
-        let (reply_bytes, dest) = handle.recv_reply().await.expect("Expected reply from worker");
+        let (reply_bytes, dest) = handle
+            .recv_reply()
+            .await
+            .expect("Expected reply from worker");
         assert_eq!(dest, client_addr);
 
         let msg = parse_response(&reply_bytes).expect("Valid DNS response");
@@ -237,7 +234,10 @@ mod tests {
 
         handle.inject(query_bytes, client_addr).await;
 
-        let (reply_bytes, dest) = handle.recv_reply().await.expect("Expected reply from worker");
+        let (reply_bytes, dest) = handle
+            .recv_reply()
+            .await
+            .expect("Expected reply from worker");
         assert_eq!(dest, client_addr);
 
         let msg = parse_response(&reply_bytes).expect("Valid DNS response");
@@ -247,4 +247,3 @@ mod tests {
         worker_handle.abort();
     }
 }
-

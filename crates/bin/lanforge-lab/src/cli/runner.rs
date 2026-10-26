@@ -28,8 +28,16 @@ impl CliRunner {
                 });
                 println!("{}", serde_json::to_string_pretty(&err_obj)?);
             } else {
-                println!("\n{}", "=== Router Advertisement (RA) Result ===".bold().red());
-                println!("{}", "✖ Error: Root privileges (CAP_NET_RAW) required. Run with sudo.".red().bold());
+                println!(
+                    "\n{}",
+                    "=== Router Advertisement (RA) Result ===".bold().red()
+                );
+                println!(
+                    "{}",
+                    "✖ Error: Root privileges (CAP_NET_RAW) required. Run with sudo."
+                        .red()
+                        .bold()
+                );
             }
             return Err(LabError::RootRequired(
                 "IPv6 Router Advertisement (RA) requires root privileges (CAP_NET_RAW). Run with sudo.".to_string(),
@@ -57,7 +65,14 @@ impl CliRunner {
                     println!("\n{}", "=== DHCP DORA Result ===".bold().cyan());
                     println!("Client MAC:        {}", res.client_mac);
                     println!("Hostname:          {:?}", res.hostname);
-                    println!("Success:           {}", if res.success { "YES".green() } else { "NO".red() });
+                    println!(
+                        "Success:           {}",
+                        if res.success {
+                            "YES".green()
+                        } else {
+                            "NO".red()
+                        }
+                    );
                     println!("Assigned IP:       {:?}", res.assigned_ip);
                     println!("Subnet Mask:       {:?}", res.subnet_mask);
                     println!("Router:            {:?}", res.router);
@@ -85,13 +100,27 @@ impl CliRunner {
                     println!("Domain:     {}", res.query_domain);
                     println!("Type:       {}", res.query_type);
                     println!("RCODE:      {}", res.rcode.yellow());
-                    println!("Latency:    {} µs ({:.2} ms)", res.latency_us, res.latency_us as f64 / 1000.0);
-                    println!("Blocked:    {}", if res.is_blocked { "YES (Adblock Hit)".red() } else { "NO".green() });
+                    println!(
+                        "Latency:    {} µs ({:.2} ms)",
+                        res.latency_us,
+                        res.latency_us as f64 / 1000.0
+                    );
+                    println!(
+                        "Blocked:    {}",
+                        if res.is_blocked {
+                            "YES (Adblock Hit)".red()
+                        } else {
+                            "NO".green()
+                        }
+                    );
                     println!("Answers:    {:?}", res.answers);
                 }
 
                 if args.assert_success && res.rcode != "NoError" {
-                    return Err(LabError::Assertion(format!("DNS query failed with RCODE {}", res.rcode)));
+                    return Err(LabError::Assertion(format!(
+                        "DNS query failed with RCODE {}",
+                        res.rcode
+                    )));
                 }
             }
             ScenarioArg::Ra => {
@@ -100,7 +129,10 @@ impl CliRunner {
                 if args.json {
                     println!("{}", serde_json::to_string_pretty(&res)?);
                 } else {
-                    println!("\n{}", "=== Router Advertisement (RA) Result ===".bold().cyan());
+                    println!(
+                        "\n{}",
+                        "=== Router Advertisement (RA) Result ===".bold().cyan()
+                    );
                     println!("Router IP:         {}", res.router_ip);
                     println!("Hop Limit:         {}", res.cur_hop_limit);
                     println!("Managed (M):       {}", res.managed_flag);
@@ -109,7 +141,10 @@ impl CliRunner {
                     println!("Latency:           {:.2} ms", res.latency_ms);
                     println!("Prefixes:          {} found", res.prefixes.len());
                     for p in &res.prefixes {
-                        println!("  • {}/{} (On-Link: {}, Auto: {}, Valid: {}s)", p.prefix, p.prefix_len, p.on_link, p.auto_config, p.valid_lifetime_secs);
+                        println!(
+                            "  • {}/{} (On-Link: {}, Auto: {}, Valid: {}s)",
+                            p.prefix, p.prefix_len, p.on_link, p.auto_config, p.valid_lifetime_secs
+                        );
                     }
                     println!("RDNSS Servers:     {:?}", res.rdnss_servers);
                     println!("DNSSL Domains:     {:?}", res.dnssl_domains);
@@ -117,7 +152,10 @@ impl CliRunner {
             }
             ScenarioArg::Discovery => {
                 let dur = crate::engine::DiscoveryEngine::probe_rtt(dhcp_server).await?;
-                println!("Discovery RTT against {dhcp_server}: {:.2} ms", dur.as_secs_f64() * 1000.0);
+                println!(
+                    "Discovery RTT against {dhcp_server}: {:.2} ms",
+                    dur.as_secs_f64() * 1000.0
+                );
             }
             ScenarioArg::Vlan => {
                 let vid = args.vlan_id;
@@ -158,16 +196,33 @@ impl CliRunner {
                 if args.json {
                     println!("{}", serde_json::to_string_pretty(&vlan_report)?);
                 } else {
-                    println!("\n{}", "=== 802.1Q VLAN Sandbox Simulation ===".bold().cyan());
+                    println!(
+                        "\n{}",
+                        "=== 802.1Q VLAN Sandbox Simulation ===".bold().cyan()
+                    );
                     println!("VLAN ID:           {}", vid.to_string().yellow().bold());
                     println!("Simulated Iface:   {}", vlan_iface.cyan());
                     println!("Client MAC:        {}", res.client_mac);
-                    println!("Success:           {}", if res.success { "YES".green() } else { "NO".red() });
+                    println!(
+                        "Success:           {}",
+                        if res.success {
+                            "YES".green()
+                        } else {
+                            "NO".red()
+                        }
+                    );
                     println!("Assigned IP:       {:?}", res.assigned_ip);
                     println!("Subnet Mask:       {:?}", res.subnet_mask);
                     println!("Router (Gateway):  {:?}", res.router);
                     println!("DNS Servers:       {:?}", res.dns_servers);
-                    println!("Segment Match:     {}", if segment_matches { "YES (Matches VLAN subprefix)".green() } else { "NO (Cross-VLAN or flat /16)".yellow() });
+                    println!(
+                        "Segment Match:     {}",
+                        if segment_matches {
+                            "YES (Matches VLAN subprefix)".green()
+                        } else {
+                            "NO (Cross-VLAN or flat /16)".yellow()
+                        }
+                    );
                     println!("Duration:          {:.2} ms", res.total_time_ms);
                     if let Some(err) = &res.error {
                         println!("Error Detail:      {}", err.red());
@@ -194,18 +249,34 @@ impl CliRunner {
 
         match args.benchmark {
             BenchTypeArg::DhcpStorm => {
-                println!("{}", format!("Starting DHCP Storm with {} clients (concurrency {})...", args.clients, args.concurrency).cyan());
-                let rep = harness.dhcp().storm_benchmark(args.clients, args.concurrency).await?;
+                println!(
+                    "{}",
+                    format!(
+                        "Starting DHCP Storm with {} clients (concurrency {})...",
+                        args.clients, args.concurrency
+                    )
+                    .cyan()
+                );
+                let rep = harness
+                    .dhcp()
+                    .storm_benchmark(args.clients, args.concurrency)
+                    .await?;
 
                 if args.json {
                     println!("{}", serde_json::to_string_pretty(&rep)?);
                 } else {
                     println!("\n{}", "=== DHCP Storm Report ===".bold().green());
                     println!("Total Clients:     {}", rep.total_clients);
-                    println!("Successful Leases: {}", rep.successful_leases.to_string().green());
+                    println!(
+                        "Successful Leases: {}",
+                        rep.successful_leases.to_string().green()
+                    );
                     println!("Failed Leases:     {}", rep.failed_leases.to_string().red());
                     println!("Duration:          {:.2} s", rep.duration_secs);
-                    println!("Throughput:        {:.1} DORA/s", rep.throughput_dora_per_sec.to_string().bold());
+                    println!(
+                        "Throughput:        {:.1} DORA/s",
+                        rep.throughput_dora_per_sec.to_string().bold()
+                    );
                     println!("Min Latency:       {:.2} ms", rep.min_latency_ms);
                     println!("p50 Latency:       {:.2} ms", rep.p50_latency_ms);
                     println!("p95 Latency:       {:.2} ms", rep.p95_latency_ms);
@@ -215,7 +286,14 @@ impl CliRunner {
             }
             BenchTypeArg::DnsFlood => {
                 let dur = Duration::from_secs(args.duration);
-                println!("{}", format!("Starting DNS Flood target QPS {} for {}s...", args.qps, args.duration).cyan());
+                println!(
+                    "{}",
+                    format!(
+                        "Starting DNS Flood target QPS {} for {}s...",
+                        args.qps, args.duration
+                    )
+                    .cyan()
+                );
                 let rep = harness.dns().flood_benchmark(args.qps, dur, &[]).await?;
 
                 if args.json {
@@ -223,22 +301,58 @@ impl CliRunner {
                 } else {
                     println!("\n{}", "=== DNS Flood Report ===".bold().green());
                     println!("Total Queries:      {}", rep.total_queries);
-                    println!("Successful Queries: {}", rep.successful_queries.to_string().green());
-                    println!("Failed Queries:     {}", rep.failed_queries.to_string().red());
+                    println!(
+                        "Successful Queries: {}",
+                        rep.successful_queries.to_string().green()
+                    );
+                    println!(
+                        "Failed Queries:     {}",
+                        rep.failed_queries.to_string().red()
+                    );
                     println!("Blocked Queries:    {}", rep.blocked_count);
                     println!("Duration:           {:.2} s", rep.duration_secs);
-                    println!("Actual QPS:         {:.1} QPS", rep.actual_qps.to_string().bold());
-                    println!("Min Latency:        {} µs ({:.2} ms)", rep.min_latency_us, rep.min_latency_us as f64 / 1000.0);
-                    println!("p50 Latency:        {} µs ({:.2} ms)", rep.p50_latency_us, rep.p50_latency_us as f64 / 1000.0);
-                    println!("p95 Latency:        {} µs ({:.2} ms)", rep.p95_latency_us, rep.p95_latency_us as f64 / 1000.0);
-                    println!("p99 Latency:        {} µs ({:.2} ms)", rep.p99_latency_us, rep.p99_latency_us as f64 / 1000.0);
-                    println!("Max Latency:        {} µs ({:.2} ms)", rep.max_latency_us, rep.max_latency_us as f64 / 1000.0);
+                    println!(
+                        "Actual QPS:         {:.1} QPS",
+                        rep.actual_qps.to_string().bold()
+                    );
+                    println!(
+                        "Min Latency:        {} µs ({:.2} ms)",
+                        rep.min_latency_us,
+                        rep.min_latency_us as f64 / 1000.0
+                    );
+                    println!(
+                        "p50 Latency:        {} µs ({:.2} ms)",
+                        rep.p50_latency_us,
+                        rep.p50_latency_us as f64 / 1000.0
+                    );
+                    println!(
+                        "p95 Latency:        {} µs ({:.2} ms)",
+                        rep.p95_latency_us,
+                        rep.p95_latency_us as f64 / 1000.0
+                    );
+                    println!(
+                        "p99 Latency:        {} µs ({:.2} ms)",
+                        rep.p99_latency_us,
+                        rep.p99_latency_us as f64 / 1000.0
+                    );
+                    println!(
+                        "Max Latency:        {} µs ({:.2} ms)",
+                        rep.max_latency_us,
+                        rep.max_latency_us as f64 / 1000.0
+                    );
                 }
             }
             BenchTypeArg::DhcpFlood => {
                 let dur = Duration::from_secs(args.duration);
                 let target_pps = if args.qps > 0 { args.qps } else { 5000 };
-                println!("{}", format!("Starting DHCP Flood target {} PPS for {}s...", target_pps, args.duration).cyan());
+                println!(
+                    "{}",
+                    format!(
+                        "Starting DHCP Flood target {} PPS for {}s...",
+                        target_pps, args.duration
+                    )
+                    .cyan()
+                );
                 let rep = harness.dhcp().flood_benchmark(target_pps, dur).await?;
 
                 if args.json {
@@ -247,7 +361,10 @@ impl CliRunner {
                     println!("\n{}", "=== DHCP Flood Report ===".bold().green());
                     println!("Total Packets Sent: {}", rep.total_sent.to_string().green());
                     println!("Duration:           {:.2} s", rep.duration_secs);
-                    println!("Throughput:         {:.1} PPS", rep.actual_pps.to_string().bold());
+                    println!(
+                        "Throughput:         {:.1} PPS",
+                        rep.actual_pps.to_string().bold()
+                    );
                 }
             }
         }
@@ -268,17 +385,57 @@ impl CliRunner {
         if args.json {
             println!("{}", serde_json::to_string_pretty(&rep)?);
         } else {
-            println!("\n{}", "=== Lanforge Lab Full Regression Suite ===".bold().cyan());
-            println!("DHCP DORA:      {}", if rep.dhcp_dora_passed { "PASSED".green() } else { "FAILED".red() });
-            println!("DNS Local:      {}", if rep.dns_local_passed { "PASSED".green() } else { "FAILED".red() });
-            println!("DNS Adblock:    {}", if rep.dns_adblock_passed { "PASSED".green() } else { "FAILED".red() });
-            println!("DNS Upstream:   {}", if rep.dns_upstream_passed { "PASSED".green() } else { "FAILED".red() });
+            println!(
+                "\n{}",
+                "=== Lanforge Lab Full Regression Suite ===".bold().cyan()
+            );
+            println!(
+                "DHCP DORA:      {}",
+                if rep.dhcp_dora_passed {
+                    "PASSED".green()
+                } else {
+                    "FAILED".red()
+                }
+            );
+            println!(
+                "DNS Local:      {}",
+                if rep.dns_local_passed {
+                    "PASSED".green()
+                } else {
+                    "FAILED".red()
+                }
+            );
+            println!(
+                "DNS Adblock:    {}",
+                if rep.dns_adblock_passed {
+                    "PASSED".green()
+                } else {
+                    "FAILED".red()
+                }
+            );
+            println!(
+                "DNS Upstream:   {}",
+                if rep.dns_upstream_passed {
+                    "PASSED".green()
+                } else {
+                    "FAILED".red()
+                }
+            );
             println!("----------------------------------------------");
-            println!("Overall Status: {}", if rep.all_passed { "ALL TESTS PASSED".bold().green() } else { "TESTS FAILED".bold().red() });
+            println!(
+                "Overall Status: {}",
+                if rep.all_passed {
+                    "ALL TESTS PASSED".bold().green()
+                } else {
+                    "TESTS FAILED".bold().red()
+                }
+            );
         }
 
         if !rep.all_passed {
-            return Err(LabError::Assertion("Full regression suite failed".to_string()));
+            return Err(LabError::Assertion(
+                "Full regression suite failed".to_string(),
+            ));
         }
         Ok(())
     }

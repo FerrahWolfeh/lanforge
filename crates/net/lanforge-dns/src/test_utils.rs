@@ -27,7 +27,10 @@ pub fn init_test_context() -> LanforgeContext {
 /// Cooperatively polls a service until its registered state is `ServiceState::Online`.
 ///
 /// Times out after 2 seconds to avoid infinite test hangs.
-pub async fn wait_for_service_online(ctx: &LanforgeContext, service: lanforge_types::system::ServiceId) {
+pub async fn wait_for_service_online(
+    ctx: &LanforgeContext,
+    service: lanforge_types::system::ServiceId,
+) {
     let start = std::time::Instant::now();
     while start.elapsed() < Duration::from_secs(2) {
         if ctx.get_service_state(service) == ServiceState::Online {
@@ -64,7 +67,11 @@ pub fn create_test_dns_context(
     let soa_mailbox: Arc<str> = Arc::from(format!("hostmaster.{domain_base}"));
 
     let cfg_arc = Arc::new(cfg);
-    let cache = Arc::new(crate::resolver::recursive::DnsCache::new(cfg_arc.cache_size, 30, None));
+    let cache = Arc::new(crate::resolver::recursive::DnsCache::new(
+        cfg_arc.cache_size,
+        30,
+        None,
+    ));
     let recursive = Arc::new(crate::resolver::recursive::UpstreamStrategy::new(
         cfg_arc.upstream_mode,
         Vec::new(),
@@ -268,7 +275,9 @@ pub struct MockUpstreamServer {
 impl MockUpstreamServer {
     /// Spawns a mock upstream server responding to queries according to a record mapping.
     pub async fn spawn(records: HashMap<String, Vec<IpAddr>>) -> Self {
-        let sock = UdpSocket::bind("127.0.0.1:0").await.expect("Failed to bind mock upstream socket");
+        let sock = UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("Failed to bind mock upstream socket");
         let addr = sock.local_addr().expect("Failed to query local address");
         let records = Arc::new(records);
 
@@ -337,7 +346,9 @@ impl MockUpstreamServer {
     /// Generates an `UpstreamTarget` URI referencing this mock server.
     #[must_use]
     pub fn target(&self) -> UpstreamTarget {
-        format!("udp://{}", self.addr).parse().expect("Failed to parse mock upstream target")
+        format!("udp://{}", self.addr)
+            .parse()
+            .expect("Failed to parse mock upstream target")
     }
 }
 

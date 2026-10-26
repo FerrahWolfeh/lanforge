@@ -236,7 +236,9 @@ pub fn parse_prefix_source(s: &str) -> Result<PrefixSource> {
         "autoula" | "auto-ula" => Ok(PrefixSource::AutoUla),
         "autogua" | "auto-gua" | "auto" | "gua" => Ok(PrefixSource::AutoGua),
         other => {
-            bail!("Invalid prefix source '{other}': expected 'static', 'ula', 'auto-ula', or 'autogua'");
+            bail!(
+                "Invalid prefix source '{other}': expected 'static', 'ula', 'auto-ula', or 'autogua'"
+            );
         }
     }
 }
@@ -291,15 +293,27 @@ fn render_status_dashboard(status: &RaStatusResponse, printer: &Printer) {
     println!("    {:<20} {}", "Interface:".dimmed(), iface.bold().white());
 
     if let Some(ll) = status.link_local {
-        println!("    {:<20} {}", "Link-Local IPv6:".dimmed(), ll.to_string().cyan());
+        println!(
+            "    {:<20} {}",
+            "Link-Local IPv6:".dimmed(),
+            ll.to_string().cyan()
+        );
     }
 
     if let Some(gua) = status.active_gua_prefix {
-        println!("    {:<20} {}", "Active GUA Prefix:".dimmed(), format!("{gua}/64").yellow());
+        println!(
+            "    {:<20} {}",
+            "Active GUA Prefix:".dimmed(),
+            format!("{gua}/64").yellow()
+        );
     }
 
     if let Some(ula) = status.active_ula_prefix {
-        println!("    {:<20} {}", "Active ULA Prefix:".dimmed(), format!("{ula}/64").magenta());
+        println!(
+            "    {:<20} {}",
+            "Active ULA Prefix:".dimmed(),
+            format!("{ula}/64").magenta()
+        );
     }
 
     if !status.deprecated_prefixes.is_empty() {
@@ -309,17 +323,31 @@ fn render_status_dashboard(status: &RaStatusResponse, printer: &Printer) {
             .map(|(p, rem)| format!("{p}/64 (valid: {rem}s)"))
             .collect::<Vec<_>>()
             .join(", ");
-        println!("    {:<20} {}", "Deprecated Prefixes:".dimmed(), dep_str.red());
+        println!(
+            "    {:<20} {}",
+            "Deprecated Prefixes:".dimmed(),
+            dep_str.red()
+        );
     }
 
     let flags = format!(
         "Managed (M): {} · Other (O): {}",
-        if status.managed { "true".yellow() } else { "false".dimmed() },
-        if status.other_config { "true".yellow() } else { "false".dimmed() }
+        if status.managed {
+            "true".yellow()
+        } else {
+            "false".dimmed()
+        },
+        if status.other_config {
+            "true".yellow()
+        } else {
+            "false".dimmed()
+        }
     );
     println!("    {:<20} {}", "Operating Flags:".dimmed(), flags);
 
-    let mtu_str = status.mtu.map_or_else(|| "default".to_string(), |m| m.to_string());
+    let mtu_str = status
+        .mtu
+        .map_or_else(|| "default".to_string(), |m| m.to_string());
     println!(
         "    {:<20} Hop Limit: {} · Priority: {:?} · Link MTU: {}",
         "Parameters:".dimmed(),
@@ -367,7 +395,11 @@ fn render_status_dashboard(status: &RaStatusResponse, printer: &Printer) {
     }
 
     if let Some(uptime) = status.uptime_secs {
-        println!("    {:<20} {}", "Service Uptime:".dimmed(), format_duration_secs(uptime));
+        println!(
+            "    {:<20} {}",
+            "Service Uptime:".dimmed(),
+            format_duration_secs(uptime)
+        );
     }
 
     println!();
@@ -396,10 +428,10 @@ fn render_prefixes_table(prefixes: &[RAPrefix], printer: &Printer) {
     ]);
 
     for p in prefixes {
-        let addr_display = p
-            .address
-            .as_deref()
-            .map_or_else(|| "<dynamic>".dimmed().to_string(), |a| format!("{a}/{}", p.prefix_len));
+        let addr_display = p.address.as_deref().map_or_else(
+            || "<dynamic>".dimmed().to_string(),
+            |a| format!("{a}/{}", p.prefix_len),
+        );
 
         let source_str = match p.source {
             PrefixSource::Static => "Static",
@@ -411,9 +443,21 @@ fn render_prefixes_table(prefixes: &[RAPrefix], printer: &Printer) {
         table.add_row(vec![
             addr_display.bold().to_string(),
             source_str.to_string(),
-            if p.on_link { "yes".green().to_string() } else { "no".dimmed().to_string() },
-            if p.autonomous { "yes".green().to_string() } else { "no".dimmed().to_string() },
-            if p.router_addr { "yes".green().to_string() } else { "no".dimmed().to_string() },
+            if p.on_link {
+                "yes".green().to_string()
+            } else {
+                "no".dimmed().to_string()
+            },
+            if p.autonomous {
+                "yes".green().to_string()
+            } else {
+                "no".dimmed().to_string()
+            },
+            if p.router_addr {
+                "yes".green().to_string()
+            } else {
+                "no".dimmed().to_string()
+            },
             format_lifetime(p.valid_lifetime),
             format_lifetime(p.preferred_lifetime),
         ]);
@@ -429,8 +473,15 @@ fn render_dns_options_summary(rdnss: &[RdnssConfig], dnssl: &[DnsslConfig], prin
         let mut table = printer.new_table();
         table.set_header(vec!["Recursive DNS Servers (RDNSS)", "Lifetime"]);
         for r in rdnss {
-            let addrs = r.servers.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
-            let lt = r.lifetime.map_or_else(|| "default".to_string(), |s| format!("{s}s"));
+            let addrs = r
+                .servers
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let lt = r
+                .lifetime
+                .map_or_else(|| "default".to_string(), |s| format!("{s}s"));
             table.add_row(vec![addrs.cyan().bold().to_string(), lt]);
         }
         println!(" {}", "Advertised DNS Resolvers (RFC 8106)".bold().white());
@@ -443,7 +494,9 @@ fn render_dns_options_summary(rdnss: &[RdnssConfig], dnssl: &[DnsslConfig], prin
         table.set_header(vec!["DNS Search Suffixes (DNSSL)", "Lifetime"]);
         for d in dnssl {
             let doms = d.domains.join(", ");
-            let lt = d.lifetime.map_or_else(|| "default".to_string(), |s| format!("{s}s"));
+            let lt = d
+                .lifetime
+                .map_or_else(|| "default".to_string(), |s| format!("{s}s"));
             table.add_row(vec![doms.yellow().bold().to_string(), lt]);
         }
         println!(" {}", "Advertised Search Domains (RFC 8106)".bold().white());
@@ -461,11 +514,18 @@ async fn handle_trigger(client: &LanforgeClient, printer: &Printer) -> Result<()
     if printer.json {
         return printer.print_json(&resp);
     }
-    printer.success(&format!("Router Advertisement dispatched: {}", resp.message));
+    printer.success(&format!(
+        "Router Advertisement dispatched: {}",
+        resp.message
+    ));
     Ok(())
 }
 
-async fn handle_toggle_service(client: &LanforgeClient, printer: &Printer, enable: bool) -> Result<()> {
+async fn handle_toggle_service(
+    client: &LanforgeClient,
+    printer: &Printer,
+    enable: bool,
+) -> Result<()> {
     let mut config = client.ra_config().await?;
     config.enabled = enable;
     let resp = client.update_ra_config(*config).await?;
@@ -561,9 +621,15 @@ fn render_config_details(config: &RaServerConfig, printer: &Printer) {
         config.priority
     );
 
-    let min_str = config.min_interval_secs.map_or_else(|| "<default>".to_string(), |s| format!("{s}s"));
-    let lt_str = config.lifetime_secs.map_or_else(|| "<default>".to_string(), |s| format!("{s}s"));
-    let mtu_str = config.mtu.map_or_else(|| "<unspecified>".to_string(), |m| m.to_string());
+    let min_str = config
+        .min_interval_secs
+        .map_or_else(|| "<default>".to_string(), |s| format!("{s}s"));
+    let lt_str = config
+        .lifetime_secs
+        .map_or_else(|| "<default>".to_string(), |s| format!("{s}s"));
+    let mtu_str = config
+        .mtu
+        .map_or_else(|| "<unspecified>".to_string(), |m| m.to_string());
 
     println!(
         "    {:<22} Min: {} · Max: {}s · Lifetime: {}",
@@ -599,7 +665,9 @@ async fn handle_prefix(
                 return printer.print_json(&config.prefixes);
             }
             if config.prefixes.is_empty() {
-                printer.info("No explicit IPv6 prefixes configured. (Dynamic GUA auto-discovery is active)");
+                printer.info(
+                    "No explicit IPv6 prefixes configured. (Dynamic GUA auto-discovery is active)",
+                );
                 return Ok(());
             }
             println!();
@@ -607,7 +675,9 @@ async fn handle_prefix(
             Ok(())
         }
         RaPrefixSubcommand::Add(add_args) => handle_prefix_add(client, printer, add_args).await,
-        RaPrefixSubcommand::Remove { prefix } => handle_prefix_remove(client, printer, &prefix).await,
+        RaPrefixSubcommand::Remove { prefix } => {
+            handle_prefix_remove(client, printer, &prefix).await
+        }
     }
 }
 
@@ -630,8 +700,11 @@ async fn handle_prefix_add(
         input
     };
 
-    let (clean_addr, prefix_len) = if let Some((addr, len_str)) = prefix_str.trim().split_once('/') {
-        let len: u8 = len_str.parse().map_err(|_| eyre!("Invalid prefix length: '{len_str}'"))?;
+    let (clean_addr, prefix_len) = if let Some((addr, len_str)) = prefix_str.trim().split_once('/')
+    {
+        let len: u8 = len_str
+            .parse()
+            .map_err(|_| eyre!("Invalid prefix length: '{len_str}'"))?;
         (addr.to_string(), len)
     } else {
         (prefix_str.trim().to_string(), 64)
@@ -669,7 +742,9 @@ async fn handle_prefix_add(
 
     // Check if prefix already exists
     if let Some(existing) = config.prefixes.iter_mut().find(|p| {
-        p.address.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(&clean_addr))
+        p.address
+            .as_deref()
+            .is_some_and(|a| a.eq_ignore_ascii_case(&clean_addr))
             && p.prefix_len == prefix_len
     }) {
         existing.source = source;
@@ -695,7 +770,9 @@ async fn handle_prefix_add(
     if printer.json {
         return printer.print_json(&resp);
     }
-    printer.success(&format!("Added advertised IPv6 prefix {clean_addr}/{prefix_len}"));
+    printer.success(&format!(
+        "Added advertised IPv6 prefix {clean_addr}/{prefix_len}"
+    ));
     Ok(())
 }
 
@@ -710,7 +787,9 @@ async fn handle_prefix_remove(
     let initial_len = config.prefixes.len();
 
     config.prefixes.retain(|p| {
-        !p.address.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(clean))
+        !p.address
+            .as_deref()
+            .is_some_and(|a| a.eq_ignore_ascii_case(clean))
     });
 
     if config.prefixes.len() == initial_len {
@@ -729,11 +808,7 @@ async fn handle_prefix_remove(
 // Recursive DNS Server (RDNSS) Management (RFC 8106)
 // ============================================================================
 
-async fn handle_rdnss(
-    client: &LanforgeClient,
-    printer: &Printer,
-    args: RaRdnssArgs,
-) -> Result<()> {
+async fn handle_rdnss(client: &LanforgeClient, printer: &Printer, args: RaRdnssArgs) -> Result<()> {
     match args.subcommand.unwrap_or(RaRdnssSubcommand::List) {
         RaRdnssSubcommand::List => {
             let config = client.ra_config().await?;
@@ -773,7 +848,9 @@ async fn handle_rdnss(
             if printer.json {
                 return printer.print_json(&resp);
             }
-            printer.success(&format!("Added RDNSS server {server} to Router Advertisements"));
+            printer.success(&format!(
+                "Added RDNSS server {server} to Router Advertisements"
+            ));
         }
         RaRdnssSubcommand::Remove { server } => {
             let mut config = client.ra_config().await?;
@@ -797,7 +874,9 @@ async fn handle_rdnss(
             if printer.json {
                 return printer.print_json(&resp);
             }
-            printer.success(&format!("Removed RDNSS server {server} from Router Advertisements"));
+            printer.success(&format!(
+                "Removed RDNSS server {server} from Router Advertisements"
+            ));
         }
     }
     Ok(())
@@ -807,11 +886,7 @@ async fn handle_rdnss(
 // DNS Search List (DNSSL) Management (RFC 8106)
 // ============================================================================
 
-async fn handle_dnssl(
-    client: &LanforgeClient,
-    printer: &Printer,
-    args: RaDnsslArgs,
-) -> Result<()> {
+async fn handle_dnssl(client: &LanforgeClient, printer: &Printer, args: RaDnsslArgs) -> Result<()> {
     match args.subcommand.unwrap_or(RaDnsslSubcommand::List) {
         RaDnsslSubcommand::List => {
             let config = client.ra_config().await?;
@@ -831,7 +906,11 @@ async fn handle_dnssl(
 
             let mut found = false;
             for d in &mut config.dnssl {
-                if !d.domains.iter().any(|existing| existing.eq_ignore_ascii_case(&domain_clean)) {
+                if !d
+                    .domains
+                    .iter()
+                    .any(|existing| existing.eq_ignore_ascii_case(&domain_clean))
+                {
                     d.domains.push(domain_clean.clone());
                     if lifetime.is_some() {
                         d.lifetime = lifetime;
@@ -852,7 +931,9 @@ async fn handle_dnssl(
             if printer.json {
                 return printer.print_json(&resp);
             }
-            printer.success(&format!("Added DNSSL domain suffix '{domain_clean}' to Router Advertisements"));
+            printer.success(&format!(
+                "Added DNSSL domain suffix '{domain_clean}' to Router Advertisements"
+            ));
         }
         RaDnsslSubcommand::Remove { domain } => {
             let mut config = client.ra_config().await?;
@@ -861,7 +942,8 @@ async fn handle_dnssl(
 
             for d in &mut config.dnssl {
                 let init = d.domains.len();
-                d.domains.retain(|existing| !existing.eq_ignore_ascii_case(&domain_clean));
+                d.domains
+                    .retain(|existing| !existing.eq_ignore_ascii_case(&domain_clean));
                 if d.domains.len() < init {
                     removed = true;
                 }
@@ -877,7 +959,9 @@ async fn handle_dnssl(
             if printer.json {
                 return printer.print_json(&resp);
             }
-            printer.success(&format!("Removed DNSSL domain suffix '{domain}' from Router Advertisements"));
+            printer.success(&format!(
+                "Removed DNSSL domain suffix '{domain}' from Router Advertisements"
+            ));
         }
     }
     Ok(())
@@ -894,8 +978,14 @@ mod tests {
     #[test]
     fn test_parse_router_priority() {
         assert_eq!(parse_router_priority("low").unwrap(), RouterPriority::Low);
-        assert_eq!(parse_router_priority("medium").unwrap(), RouterPriority::Medium);
-        assert_eq!(parse_router_priority("med").unwrap(), RouterPriority::Medium);
+        assert_eq!(
+            parse_router_priority("medium").unwrap(),
+            RouterPriority::Medium
+        );
+        assert_eq!(
+            parse_router_priority("med").unwrap(),
+            RouterPriority::Medium
+        );
         assert_eq!(parse_router_priority("high").unwrap(), RouterPriority::High);
         assert!(parse_router_priority("invalid").is_err());
     }
@@ -904,7 +994,10 @@ mod tests {
     fn test_parse_prefix_source() {
         assert_eq!(parse_prefix_source("static").unwrap(), PrefixSource::Static);
         assert_eq!(parse_prefix_source("ula").unwrap(), PrefixSource::Ula);
-        assert_eq!(parse_prefix_source("autogua").unwrap(), PrefixSource::AutoGua);
+        assert_eq!(
+            parse_prefix_source("autogua").unwrap(),
+            PrefixSource::AutoGua
+        );
         assert_eq!(parse_prefix_source("auto").unwrap(), PrefixSource::AutoGua);
         assert!(parse_prefix_source("unknown").is_err());
     }
@@ -929,7 +1022,8 @@ mod tests {
         assert_eq!(cfg.prefixes[0].address.as_deref(), Some("fd00:1234::"));
         assert_eq!(cfg.prefixes[0].source, PrefixSource::Ula);
 
-        cfg.prefixes.retain(|p| !p.address.as_deref().is_some_and(|a| a == "fd00:1234::"));
+        cfg.prefixes
+            .retain(|p| !p.address.as_deref().is_some_and(|a| a == "fd00:1234::"));
         assert!(cfg.prefixes.is_empty());
     }
 

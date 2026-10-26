@@ -1,7 +1,7 @@
 //! Storage data types for persistence, analytics, and telemetry.
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Detailed bucket metrics for DNS query activity.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

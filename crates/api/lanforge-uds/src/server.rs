@@ -38,14 +38,8 @@ pub struct ControlService {
 
 impl ControlService {
     #[must_use]
-    pub const fn new(
-        cfg: Arc<ApiConfig>,
-        ctx: LanforgeContext,
-    ) -> Self {
-        Self {
-            cfg,
-            ctx,
-        }
+    pub const fn new(cfg: Arc<ApiConfig>, ctx: LanforgeContext) -> Self {
+        Self { cfg, ctx }
     }
 
     fn setup_unix_listener(path: &str) -> Result<UnixListener, CoreError> {
@@ -304,14 +298,8 @@ where
                     .await;
                 write_rpc_response(&mut writer, &resp, &mut buf).await?;
                 if follow {
-                    handle_dns_query_log_stream(
-                        &mut writer,
-                        reader,
-                        ctx.clone(),
-                        client,
-                        &mut buf,
-                    )
-                    .await?;
+                    handle_dns_query_log_stream(&mut writer, reader, ctx.clone(), client, &mut buf)
+                        .await?;
                 }
                 return Ok(());
             }

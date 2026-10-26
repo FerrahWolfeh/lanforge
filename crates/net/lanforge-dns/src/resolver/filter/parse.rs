@@ -210,7 +210,11 @@ pub fn parse_line(
     }
 
     // Filter cosmetic / element-hiding rules (not DNS)
-    if trimmed.contains("##") || trimmed.contains("#?#") || trimmed.contains("#$#") || trimmed.contains("$$") {
+    if trimmed.contains("##")
+        || trimmed.contains("#?#")
+        || trimmed.contains("#$#")
+        || trimmed.contains("$$")
+    {
         return;
     }
 
@@ -222,10 +226,22 @@ pub fn parse_line(
             parse_hosts_line(trimmed, out, stats);
         }
         AdblockSourceFormat::Domains => {
-            parse_domains_line(trimmed, MatchFlags::exact(), out, stats, unsupported_samples);
+            parse_domains_line(
+                trimmed,
+                MatchFlags::exact(),
+                out,
+                stats,
+                unsupported_samples,
+            );
         }
         AdblockSourceFormat::WildcardDomains => {
-            parse_domains_line(trimmed, MatchFlags::wildcard(), out, stats, unsupported_samples);
+            parse_domains_line(
+                trimmed,
+                MatchFlags::wildcard(),
+                out,
+                stats,
+                unsupported_samples,
+            );
         }
         AdblockSourceFormat::Auto => {
             // Auto was resolved before calling, but fallback to adblock if called directly
@@ -293,9 +309,9 @@ fn parse_adblock_line(
         let clean = domain_part.strip_suffix('^').unwrap_or(domain_part);
         (clean, MatchFlags::wildcard())
     } else if let Some(domain_part) = s.strip_prefix('|') {
-        let clean = domain_part.strip_suffix('|').unwrap_or_else(|| {
-            domain_part.strip_suffix('^').unwrap_or(domain_part)
-        });
+        let clean = domain_part
+            .strip_suffix('|')
+            .unwrap_or_else(|| domain_part.strip_suffix('^').unwrap_or(domain_part));
         (clean, MatchFlags::exact())
     } else if let Some(domain_part) = s.strip_prefix("*.") {
         let clean = domain_part.strip_suffix('^').unwrap_or(domain_part);
@@ -348,11 +364,7 @@ fn parse_adblock_line(
 }
 
 /// Parses an /etc/hosts format line: `0.0.0.0 domain1 domain2 # comment`.
-fn parse_hosts_line(
-    raw: &str,
-    out: &mut Vec<ParsedRule>,
-    stats: &mut ParseStats,
-) {
+fn parse_hosts_line(raw: &str, out: &mut Vec<ParsedRule>, stats: &mut ParseStats) {
     // Strip trailing inline comment
     let line = if let Some((before_comment, _)) = raw.split_once('#') {
         before_comment.trim()
@@ -550,9 +562,21 @@ mod tests {
         assert_eq!(res.stats.blocks, 3); // ads.example.com, tracking.example.com, sinkhole.com
         assert_eq!(res.stats.hosts_rewrite_as_block, 1); // sinkhole.com
 
-        assert!(res.rules.iter().any(|r| r.domain == "ads.example.com" && r.flags == MatchFlags::exact()));
-        assert!(res.rules.iter().any(|r| r.domain == "tracking.example.com" && r.flags == MatchFlags::exact()));
-        assert!(res.rules.iter().any(|r| r.domain == "sinkhole.com" && r.flags == MatchFlags::exact()));
+        assert!(
+            res.rules
+                .iter()
+                .any(|r| r.domain == "ads.example.com" && r.flags == MatchFlags::exact())
+        );
+        assert!(
+            res.rules
+                .iter()
+                .any(|r| r.domain == "tracking.example.com" && r.flags == MatchFlags::exact())
+        );
+        assert!(
+            res.rules
+                .iter()
+                .any(|r| r.domain == "sinkhole.com" && r.flags == MatchFlags::exact())
+        );
         // localhost and 127.0.0.1 should not be present
         assert!(!res.rules.iter().any(|r| r.domain == "localhost"));
         assert!(!res.rules.iter().any(|r| r.domain == "127.0.0.1"));
@@ -569,17 +593,32 @@ domain2.com # with comment
 "#;
         let res_dom = parse_source(input, AdblockSourceFormat::Domains);
         assert_eq!(
-            res_dom.rules.iter().find(|r| r.domain == "domain1.com").unwrap().flags,
+            res_dom
+                .rules
+                .iter()
+                .find(|r| r.domain == "domain1.com")
+                .unwrap()
+                .flags,
             MatchFlags::exact()
         );
         assert_eq!(
-            res_dom.rules.iter().find(|r| r.domain == "sub.domain3.com").unwrap().flags,
+            res_dom
+                .rules
+                .iter()
+                .find(|r| r.domain == "sub.domain3.com")
+                .unwrap()
+                .flags,
             MatchFlags::subdomains_only()
         );
 
         let res_wild = parse_source(input, AdblockSourceFormat::WildcardDomains);
         assert_eq!(
-            res_wild.rules.iter().find(|r| r.domain == "domain1.com").unwrap().flags,
+            res_wild
+                .rules
+                .iter()
+                .find(|r| r.domain == "domain1.com")
+                .unwrap()
+                .flags,
             MatchFlags::wildcard()
         );
     }
@@ -598,9 +637,18 @@ domain2.com # with comment
 
     #[test]
     fn test_sanitize_domain() {
-        assert_eq!(sanitize_domain("example.com"), Some("example.com".to_string()));
-        assert_eq!(sanitize_domain("EXAMPLE.COM."), Some("example.com".to_string()));
-        assert_eq!(sanitize_domain("sub_domain-1.example.com"), Some("sub_domain-1.example.com".to_string()));
+        assert_eq!(
+            sanitize_domain("example.com"),
+            Some("example.com".to_string())
+        );
+        assert_eq!(
+            sanitize_domain("EXAMPLE.COM."),
+            Some("example.com".to_string())
+        );
+        assert_eq!(
+            sanitize_domain("sub_domain-1.example.com"),
+            Some("sub_domain-1.example.com".to_string())
+        );
         assert_eq!(sanitize_domain("localhost"), None);
         assert_eq!(sanitize_domain("127.0.0.1"), None);
         assert_eq!(sanitize_domain("::1"), None);

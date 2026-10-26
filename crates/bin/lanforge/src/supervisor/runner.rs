@@ -1,7 +1,7 @@
 //! Per-service lifecycle runner task.
 
-use crate::supervisor::backoff::{calculate_backoff, is_healthy, BackoffDecision};
-use crate::supervisor::node::{is_settled, NodeHandle};
+use crate::supervisor::backoff::{BackoffDecision, calculate_backoff, is_healthy};
+use crate::supervisor::node::{NodeHandle, is_settled};
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
@@ -14,7 +14,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{mpsc, watch, Notify};
+use tokio::sync::{Notify, mpsc, watch};
 use tracing::{debug, error, info, warn};
 
 /// Runner responsible for the complete lifecycle of one service.
@@ -44,7 +44,8 @@ where
 
         loop {
             if !self.ctx.is_running() || *self.shutdown_rx.borrow() {
-                self.node.set_status(&self.ctx, ServiceState::Inactive, None);
+                self.node
+                    .set_status(&self.ctx, ServiceState::Inactive, None);
                 break;
             }
 
@@ -86,13 +87,15 @@ where
                 }
                 Err(()) => {
                     // Shutdown requested
-                    self.node.set_status(&self.ctx, ServiceState::Inactive, None);
+                    self.node
+                        .set_status(&self.ctx, ServiceState::Inactive, None);
                     break;
                 }
             }
 
             // 3. Execution Phase
-            self.node.set_status(&self.ctx, ServiceState::Starting, None);
+            self.node
+                .set_status(&self.ctx, ServiceState::Starting, None);
             let start_time = Instant::now();
 
             let (cmd_tx, cmd_rx) = mpsc::channel(32);
@@ -200,7 +203,8 @@ where
             let _ = service.cleanup(&self.ctx).await;
 
             if *self.shutdown_rx.borrow() || !self.ctx.is_running() {
-                self.node.set_status(&self.ctx, ServiceState::Inactive, None);
+                self.node
+                    .set_status(&self.ctx, ServiceState::Inactive, None);
                 break;
             }
 
@@ -216,7 +220,8 @@ where
                             continue;
                         }
                         info!(service = %self.spec.id, "Service exited cleanly");
-                        self.node.set_status(&self.ctx, ServiceState::Inactive, None);
+                        self.node
+                            .set_status(&self.ctx, ServiceState::Inactive, None);
                         // Wait for condition reactivation or shutdown
                         tokio::select! {
                             () = self.notify_condition.notified() => {}

@@ -46,7 +46,10 @@ impl ClientContext {
 
         let u_clone = username.clone();
         match storage
-            .call(move |s: &Stores| s.auth().create_user(&u_clone, &password_hash, parsed_role, now))
+            .call(move |s: &Stores| {
+                s.auth()
+                    .create_user(&u_clone, &password_hash, parsed_role, now)
+            })
             .await
         {
             Ok(entry) => {

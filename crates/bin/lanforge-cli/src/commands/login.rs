@@ -61,7 +61,9 @@ impl LoginArgs {
                     printer.success("Connection and authentication verified.");
                 }
                 Err(e) => {
-                    printer.warning(&format!("Warning: Validation failed ({e}). Saving credentials anyway."));
+                    printer.warning(&format!(
+                        "Warning: Validation failed ({e}). Saving credentials anyway."
+                    ));
                 }
             }
 

@@ -571,7 +571,9 @@ fn apply_update_duid_associated_resolves_orphan() {
         "Orphaned v6 should have been resolved"
     );
 
-    let dev = ctx.get_device(&mac).expect("Device should have been created");
+    let dev = ctx
+        .get_device(&mac)
+        .expect("Device should have been created");
     assert_eq!(dev.duid.as_ref(), Some(&duid));
     assert!(
         dev.v6
@@ -1080,7 +1082,10 @@ fn test_hostname_origin_priority() {
     // Static priority must be highest, followed by Mdns and Dhcp (equal priority).
     assert!(HostnameOrigin::Static > HostnameOrigin::Mdns);
     assert!(HostnameOrigin::Static > HostnameOrigin::Dhcp);
-    assert_eq!(HostnameOrigin::Mdns.cmp(&HostnameOrigin::Dhcp), std::cmp::Ordering::Equal);
+    assert_eq!(
+        HostnameOrigin::Mdns.cmp(&HostnameOrigin::Dhcp),
+        std::cmp::Ordering::Equal
+    );
 
     let ctx = setup();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
@@ -1177,7 +1182,6 @@ fn test_apply_v4_lease_ignores_static() {
     assert!(matches!(dev.v4, IPv4State::Static(ip) if ip == static_ip));
 }
 
-
 #[test]
 fn test_get_mac_by_ip_ula_and_suffix_resolution() {
     let ctx = setup();
@@ -1270,8 +1274,14 @@ fn test_neighbor_batch_multi_mac() {
     let dev1 = ctx.get_device(&mac1).expect("Device 1 should exist");
     let dev2 = ctx.get_device(&mac2).expect("Device 2 should exist");
 
-    assert_eq!(dev1.v4.ip(), Some("192.168.1.101".parse::<Ipv4Addr>().unwrap()));
-    assert_eq!(dev2.v4.ip(), Some("192.168.1.102".parse::<Ipv4Addr>().unwrap()));
+    assert_eq!(
+        dev1.v4.ip(),
+        Some("192.168.1.101".parse::<Ipv4Addr>().unwrap())
+    );
+    assert_eq!(
+        dev2.v4.ip(),
+        Some("192.168.1.102".parse::<Ipv4Addr>().unwrap())
+    );
 }
 
 #[test]
@@ -1360,18 +1370,26 @@ fn test_interface_prefix_renumbering_and_system_host() {
     // Check PrefixChanged event emitted
     let mut prefix_changed = false;
     while let Ok(ev) = net_rx.try_recv() {
-        if matches!(ev.event, LanforgeEvent::Network(crate::bus::NetworkEvent::PrefixChanged(_))) {
+        if matches!(
+            ev.event,
+            LanforgeEvent::Network(crate::bus::NetworkEvent::PrefixChanged(_))
+        ) {
             prefix_changed = true;
         }
     }
     assert!(prefix_changed);
 
     // Verify static suffix resolved IP is in index
-    assert_eq!(ctx.get_mac_by_ip("fd00:1::55".parse().unwrap()), Some(client_mac));
+    assert_eq!(
+        ctx.get_mac_by_ip("fd00:1::55".parse().unwrap()),
+        Some(client_mac)
+    );
 
     // Verify system host device updated
     let sys_dev = ctx.get_device(&sys_mac).unwrap();
-    assert!(matches!(sys_dev.v4, IPv4State::Static(ip) if ip == "192.168.1.1".parse::<Ipv4Addr>().unwrap()));
+    assert!(
+        matches!(sys_dev.v4, IPv4State::Static(ip) if ip == "192.168.1.1".parse::<Ipv4Addr>().unwrap())
+    );
 
     // 2. Renumber interface prefix
     let ula2: Ipv6Addr = "fd00:2::".parse().unwrap();
@@ -1387,7 +1405,10 @@ fn test_interface_prefix_renumbering_and_system_host() {
     });
 
     // New ULA is resolvable
-    assert_eq!(ctx.get_mac_by_ip("fd00:2::55".parse().unwrap()), Some(client_mac));
+    assert_eq!(
+        ctx.get_mac_by_ip("fd00:2::55".parse().unwrap()),
+        Some(client_mac)
+    );
 }
 
 #[test]
@@ -1426,7 +1447,8 @@ fn test_prune_zombies_and_caches() {
 
     let mut purged = false;
     while let Ok(ev) = dev_rx.try_recv() {
-        if matches!(ev.event, LanforgeEvent::Device(DeviceEvent::Purged { mac }) if mac == zombie_mac) {
+        if matches!(ev.event, LanforgeEvent::Device(DeviceEvent::Purged { mac }) if mac == zombie_mac)
+        {
             purged = true;
         }
     }
@@ -1461,7 +1483,10 @@ fn test_reverse_resolvers_management() {
     };
     ctx.add_reverse_resolver(res1_replacement.clone());
     assert_eq!(ctx.read().reverse_resolvers.len(), 1);
-    assert_eq!(ctx.read().reverse_resolvers[0].resolver, res1_replacement.resolver);
+    assert_eq!(
+        ctx.read().reverse_resolvers[0].resolver,
+        res1_replacement.resolver
+    );
 
     // Set list
     ctx.set_reverse_resolvers(vec![res1, res2]);
@@ -1559,4 +1584,3 @@ fn test_class_hint_and_interface_seen() {
     });
     assert!(!changed);
 }
-

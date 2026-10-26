@@ -32,7 +32,12 @@ impl ClientContext {
             let now = std::time::SystemTime::now();
             let mut counts = (0, 0, 0, 0, 0, 0, 0); // online, static, dynamic, v4_dyn, v6_dyn, slaac, managed_cli
             for dev in state.devices.values() {
-                if now.duration_since(dev.last_seen).unwrap_or_default().as_secs() < 300 {
+                if now
+                    .duration_since(dev.last_seen)
+                    .unwrap_or_default()
+                    .as_secs()
+                    < 300
+                {
                     counts.0 += 1;
                 }
                 if dev.is_static() {
@@ -52,7 +57,9 @@ impl ClientContext {
                     .filter(|s| {
                         matches!(
                             s,
-                            IPv6State::Slaac(..) | IPv6State::Discovery(..) | IPv6State::LinkLocal(..)
+                            IPv6State::Slaac(..)
+                                | IPv6State::Discovery(..)
+                                | IPv6State::LinkLocal(..)
                         )
                     })
                     .count();
@@ -96,10 +103,7 @@ impl ClientContext {
             |p| Box::new((*p).clone()),
         );
         if status.auth.is_none() {
-            status.auth = self
-                .ctx
-                .get_pppoe_config()
-                .map(|cfg| cfg.auth);
+            status.auth = self.ctx.get_pppoe_config().map(|cfg| cfg.auth);
         }
 
         if status.state == lanforge_types::system::PppoeSessionState::Connected {
@@ -110,7 +114,6 @@ impl ClientContext {
         Response::PppoeStatus(status)
     }
 
-
     pub async fn handle_ra_status(&self) -> Response {
         let ra_status = self.ctx.ra_status();
         let status = ra_status.map_or_else(
@@ -119,11 +122,7 @@ impl ClientContext {
                 let if_ips = self.ctx.get_interface_state(target_ifindex);
                 let cfg = self.ctx.get_ra_server_config();
                 Box::new(lanforge_types::system::RaStatusResponse {
-                    enabled: self
-                        .ctx
-                        .get_status()
-                        .map(|s| s.ra_enabled)
-                        .unwrap_or(false),
+                    enabled: self.ctx.get_status().map(|s| s.ra_enabled).unwrap_or(false),
                     interface: cfg.iface.clone(),
                     link_local: if_ips.link_local,
                     active_gua_prefix: if_ips.gua,
@@ -136,7 +135,9 @@ impl ClientContext {
                     hop_limit: cfg.hop_limit,
                     priority: cfg.priority,
                     max_interval_secs: cfg.max_interval_secs,
-                    min_interval_secs: cfg.min_interval_secs.unwrap_or_else(|| (cfg.max_interval_secs / 3).max(3)),
+                    min_interval_secs: cfg
+                        .min_interval_secs
+                        .unwrap_or_else(|| (cfg.max_interval_secs / 3).max(3)),
                     router_lifetime_secs: cfg.lifetime_secs.unwrap_or(cfg.max_interval_secs * 3),
                     mtu: cfg.mtu,
                     uptime_secs: Some(self.uptime_secs),
@@ -182,9 +183,13 @@ impl ClientContext {
                     (status.wan_interface.clone(), status.ingress_device.clone())
                 });
                 let fallback_wan = w.or_else(|| {
-                    self.ctx.pppoe_status().as_ref().and_then(|p| p.interface.clone())
+                    self.ctx
+                        .pppoe_status()
+                        .as_ref()
+                        .and_then(|p| p.interface.clone())
                 });
-                let wan_iface = fallback_wan.or_else(|| self.ctx.get_pppoe_config().map(|p| p.wan_iface));
+                let wan_iface =
+                    fallback_wan.or_else(|| self.ctx.get_pppoe_config().map(|p| p.wan_iface));
 
                 lanforge_types::network::traffic::TrafficTelemetryResponse {
                     timestamp: std::time::SystemTime::now()
@@ -210,10 +215,15 @@ impl ClientContext {
         let dynamic_ports = self.ctx.registered_service_ports();
         let internal_zone = cfg.zones.iter().find(|z| z.name == "internal");
         let lan_ifaces = internal_zone.map_or_else(Vec::new, |z| z.interfaces.clone());
-        let external_zone = cfg.zones.iter().find(|z| z.name == "external" || z.name == "wan");
-        let pppoe_wan = self.ctx.pppoe_status().as_ref().and_then(|p| {
-            p.interface.clone().or_else(|| p.wan_iface.clone())
-        });
+        let external_zone = cfg
+            .zones
+            .iter()
+            .find(|z| z.name == "external" || z.name == "wan");
+        let pppoe_wan = self
+            .ctx
+            .pppoe_status()
+            .as_ref()
+            .and_then(|p| p.interface.clone().or_else(|| p.wan_iface.clone()));
         let active_wan = external_zone
             .and_then(|z| z.interfaces.first().cloned())
             .or(pppoe_wan)
@@ -222,8 +232,8 @@ impl ClientContext {
         let open_ports_count = (cfg.zones.iter().map(|z| z.open_ports.len()).sum::<usize>()
             + dynamic_ports.len()) as u32;
         #[allow(clippy::cast_possible_truncation)]
-        let rules_count = open_ports_count
-            + (cfg.port_forwards.len() + cfg.forwardings.len()) as u32;
+        let rules_count =
+            open_ports_count + (cfg.port_forwards.len() + cfg.forwardings.len()) as u32;
 
         let sqm_enabled = self
             .ctx
@@ -260,7 +270,11 @@ impl ClientContext {
         {
             db.size_bytes = meta.len();
         }
-        let last_flush_ts = self.ctx.db_metrics().last_flush_ts.load(std::sync::atomic::Ordering::Relaxed);
+        let last_flush_ts = self
+            .ctx
+            .db_metrics()
+            .last_flush_ts
+            .load(std::sync::atomic::Ordering::Relaxed);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()

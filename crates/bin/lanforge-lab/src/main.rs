@@ -50,7 +50,11 @@ async fn main() -> Result<()> {
                 ModeArg::Netns => LabHarness::setup_netns(NetnsConfig::default())?,
                 ModeArg::Interface => {
                     let if_name = cli.iface.as_deref().unwrap_or("veth-lf-host");
-                    LabHarness::targeting_interface(if_name, cli.dhcp_server.port(), cli.dns_server.port())
+                    LabHarness::targeting_interface(
+                        if_name,
+                        cli.dhcp_server.port(),
+                        cli.dns_server.port(),
+                    )
                 }
             };
 

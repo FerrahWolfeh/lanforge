@@ -30,7 +30,9 @@ where
             return Ok(SocketAddr::new(ip, 53));
         }
     }
-    trimmed.parse::<SocketAddr>().map_err(serde::de::Error::custom)
+    trimmed
+        .parse::<SocketAddr>()
+        .map_err(serde::de::Error::custom)
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,7 +92,10 @@ pub fn router() -> Router<AppState> {
                 .post(handle_dns_upstream_add)
                 .delete(handle_dns_upstream_remove),
         )
-        .route("/upstreams/test", get(handle_dns_upstream_test).post(handle_dns_upstream_test))
+        .route(
+            "/upstreams/test",
+            get(handle_dns_upstream_test).post(handle_dns_upstream_test),
+        )
         .route("/upstreams/clear", delete(handle_dns_upstream_clear))
         .route(
             "/upstreams/mode",
@@ -187,15 +192,16 @@ async fn handle_reverse_resolver_remove(
     )
 }
 
-async fn handle_dns_upstream_test(
-    Query(params): Query<UpstreamTestParams>,
-) -> impl IntoResponse {
+async fn handle_dns_upstream_test(Query(params): Query<UpstreamTestParams>) -> impl IntoResponse {
     let proto = params.protocol.unwrap_or(UpstreamProtocol::Udp);
     let res = test_upstream_reachability(params.addr, proto).await;
     axum::Json(res)
 }
 
-async fn test_upstream_reachability(addr: SocketAddr, proto: UpstreamProtocol) -> UpstreamTestResponse {
+async fn test_upstream_reachability(
+    addr: SocketAddr,
+    proto: UpstreamProtocol,
+) -> UpstreamTestResponse {
     let start = std::time::Instant::now();
     let query_bytes: &[u8] = &[
         0x12, 0x34, // ID
@@ -204,14 +210,19 @@ async fn test_upstream_reachability(addr: SocketAddr, proto: UpstreamProtocol) -
         0x00, 0x00, // ANCOUNT: 0
         0x00, 0x00, // NSCOUNT: 0
         0x00, 0x00, // ARCOUNT: 0
-        0x0a, b'c', b'l', b'o', b'u', b'd', b'f', b'a', b'r', b'e', 0x03, b'c', b'o', b'm', 0x00, // QNAME
+        0x0a, b'c', b'l', b'o', b'u', b'd', b'f', b'a', b'r', b'e', 0x03, b'c', b'o', b'm',
+        0x00, // QNAME
         0x00, 0x01, // QTYPE: A
         0x00, 0x01, // QCLASS: IN
     ];
 
     match proto {
         UpstreamProtocol::Udp => {
-            let bind_addr = if addr.is_ipv6() { "[::]:0" } else { "0.0.0.0:0" };
+            let bind_addr = if addr.is_ipv6() {
+                "[::]:0"
+            } else {
+                "0.0.0.0:0"
+            };
             let sock = match tokio::net::UdpSocket::bind(bind_addr).await {
                 Ok(s) => s,
                 Err(e) => {
@@ -230,7 +241,12 @@ async fn test_upstream_reachability(addr: SocketAddr, proto: UpstreamProtocol) -
                 };
             }
             let mut buf = [0u8; 512];
-            match tokio::time::timeout(std::time::Duration::from_millis(2500), sock.recv_from(&mut buf)).await {
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(2500),
+                sock.recv_from(&mut buf),
+            )
+            .await
+            {
                 Ok(Ok((len, _))) if len >= 12 => {
                     let rcode = buf[3] & 0x0F;
                     UpstreamTestResponse {

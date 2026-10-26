@@ -648,9 +648,7 @@ mod tests {
             is_active: true,
         });
 
-        let dev = ctx
-            .get_device(&mac)
-            .expect("device should exist after ARP");
+        let dev = ctx.get_device(&mac).expect("device should exist after ARP");
         assert_eq!(
             dev.hostname.name, "smart-tv",
             "device must adopt transient hostname upon ARP arrival"

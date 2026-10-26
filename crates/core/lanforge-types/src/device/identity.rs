@@ -58,9 +58,9 @@ impl DeviceIdentity {
     /// Infers the 802.1Q VLAN ID if the interface name contains a dot (e.g. "lan0.100" -> 100).
     #[must_use]
     pub fn vlan_id(&self) -> Option<u16> {
-        self.iface.as_deref().and_then(|name| {
-            name.split('.').nth(1)?.parse().ok()
-        })
+        self.iface
+            .as_deref()
+            .and_then(|name| name.split('.').nth(1)?.parse().ok())
     }
 
     #[must_use]

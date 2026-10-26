@@ -25,11 +25,11 @@ use lanforge_core::bus::{
     TrafficEvent,
 };
 use lanforge_db_core::{
-    config_keys::*, ApiTokenStore, DeviceStore, DnsUpstreamEntry, LogStore, RaConfigStore,
+    ApiTokenStore, DeviceStore, DnsUpstreamEntry, LogStore, RaConfigStore, config_keys::*,
 };
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::dns::{DnsRequest, DnsResponse};
 use lanforge_types::network::QueryLogEntry;
+use lanforge_types::network::dns::{DnsRequest, DnsResponse};
 use lanforge_types::system::ServiceAction;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -290,8 +290,10 @@ impl DbWorker {
             });
 
             let count = lease_devices.len() + base_devices.len() + purges.len();
-            let runtime_upserts: Vec<_> = lease_devices.iter().chain(&base_devices).cloned().collect();
-            let result = db.batch_sync_devices(&lease_devices, &base_devices, &purges)
+            let runtime_upserts: Vec<_> =
+                lease_devices.iter().chain(&base_devices).cloned().collect();
+            let result = db
+                .batch_sync_devices(&lease_devices, &base_devices, &purges)
                 .and_then(|()| log_db.sync_runtime_devices(&runtime_upserts, &purges));
             result.map(|()| count)
         };
@@ -499,7 +501,6 @@ impl DbWorker {
         );
         self.dirty_sections = SectionSet::empty();
     }
-
 }
 
 impl AsyncService for DbWorker {
@@ -884,7 +885,9 @@ impl AsyncService for DbWorker {
 mod tests {
     use super::*;
     use lanforge_core::context::state::State;
-    use lanforge_types::network::dns::{DnsRecordType, QueryLogEntry, QueryResult, TransportProtocol};
+    use lanforge_types::network::dns::{
+        DnsRecordType, QueryLogEntry, QueryResult, TransportProtocol,
+    };
     use std::sync::atomic::Ordering;
 
     fn create_test_context() -> (LanforgeContext, Arc<lanforge_core::bus::EventBus>) {
@@ -906,13 +909,20 @@ mod tests {
         for _ in 0..MAX_LOG_BUFFER + 10 {
             if worker.log_buffer.len() >= MAX_LOG_BUFFER {
                 worker.log_buffer.pop_front();
-                worker.ctx.db_metrics().dropped_logs.fetch_add(1, Ordering::Relaxed);
+                worker
+                    .ctx
+                    .db_metrics()
+                    .dropped_logs
+                    .fetch_add(1, Ordering::Relaxed);
             }
             worker.log_buffer.push_back(sample_event.clone());
         }
 
         assert_eq!(worker.log_buffer.len(), MAX_LOG_BUFFER);
-        assert_eq!(worker.ctx.db_metrics().dropped_logs.load(Ordering::Relaxed), 10);
+        assert_eq!(
+            worker.ctx.db_metrics().dropped_logs.load(Ordering::Relaxed),
+            10
+        );
 
         // 2. Test dns log buffer capping
         let query_entry = Arc::new(QueryLogEntry {
@@ -933,13 +943,20 @@ mod tests {
         for _ in 0..MAX_DNS_LOG_BUFFER + 5 {
             if worker.dns_log_buffer.len() >= MAX_DNS_LOG_BUFFER {
                 worker.dns_log_buffer.pop_front();
-                worker.ctx.db_metrics().dropped_logs.fetch_add(1, Ordering::Relaxed);
+                worker
+                    .ctx
+                    .db_metrics()
+                    .dropped_logs
+                    .fetch_add(1, Ordering::Relaxed);
             }
             worker.dns_log_buffer.push_back(query_entry.clone());
         }
 
         assert_eq!(worker.dns_log_buffer.len(), MAX_DNS_LOG_BUFFER);
-        assert_eq!(worker.ctx.db_metrics().dropped_logs.load(Ordering::Relaxed), 15);
+        assert_eq!(
+            worker.ctx.db_metrics().dropped_logs.load(Ordering::Relaxed),
+            15
+        );
     }
 
     #[tokio::test]
@@ -947,12 +964,19 @@ mod tests {
         let (ctx, _bus) = create_test_context();
         let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
         let log_db = Arc::new(LogDb::open_in_memory());
-        let mut worker = DbWorker::new(DatabaseConfig::default(), ctx.clone(), db.clone(), log_db.clone());
+        let mut worker = DbWorker::new(
+            DatabaseConfig::default(),
+            ctx.clone(),
+            db.clone(),
+            log_db.clone(),
+        );
 
         let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
 
         // Mark MAC as pending UpsertFull, but do not insert into ctx state
-        worker.pending_devices.insert(mac, PendingDeviceOp::UpsertFull);
+        worker
+            .pending_devices
+            .insert(mac, PendingDeviceOp::UpsertFull);
         assert_eq!(worker.pending_devices.len(), 1);
 
         // Flush batch — F8 says vanished MACs must be moved to purges and cleared on success

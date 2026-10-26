@@ -1,5 +1,5 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// Result of a single DHCP DORA cycle.
 #[derive(Debug, Clone, Serialize, Deserialize)]

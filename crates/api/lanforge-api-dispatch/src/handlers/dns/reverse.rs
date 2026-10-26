@@ -25,7 +25,8 @@ impl ClientContext {
             }
         };
 
-        self.ctx.add_reverse_resolver(DnsReverseResolver { subnet, resolver });
+        self.ctx
+            .add_reverse_resolver(DnsReverseResolver { subnet, resolver });
 
         Response::Success(SimpleSuccess {
             message: "Reverse resolver added successfully".to_string(),

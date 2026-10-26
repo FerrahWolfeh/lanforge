@@ -9,9 +9,9 @@ use lanforge_types::config::{
 use lanforge_types::network::dhcp::{
     DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, Dhcpv6Pool, TftpOptions,
 };
+use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
 use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamTarget};
-use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RaServerConfig, RdnssConfig};
@@ -526,18 +526,50 @@ impl LanforgeContext {
         check_and_apply_opt!(pppoe, self.inner.config_store.pppoe, PPPOE);
         check_and_apply_opt!(firewall, self.inner.config_store.firewall, FIREWALL);
         check_and_apply_opt!(traffic, self.inner.config_store.traffic, TRAFFIC);
-        check_and_apply!(dhcp_v4_pools, self.inner.config_store.dhcp_v4_pools, DHCP_V4_POOLS);
-        check_and_apply!(dhcp_v6_pools, self.inner.config_store.dhcp_v6_pools, DHCP_V6_POOLS);
-        check_and_apply!(dhcp_v4_options, self.inner.config_store.dhcp_v4_options, DHCP_V4_OPTIONS);
-        check_and_apply!(dhcp_v6_options, self.inner.config_store.dhcp_v6_options, DHCP_V6_OPTIONS);
+        check_and_apply!(
+            dhcp_v4_pools,
+            self.inner.config_store.dhcp_v4_pools,
+            DHCP_V4_POOLS
+        );
+        check_and_apply!(
+            dhcp_v6_pools,
+            self.inner.config_store.dhcp_v6_pools,
+            DHCP_V6_POOLS
+        );
+        check_and_apply!(
+            dhcp_v4_options,
+            self.inner.config_store.dhcp_v4_options,
+            DHCP_V4_OPTIONS
+        );
+        check_and_apply!(
+            dhcp_v6_options,
+            self.inner.config_store.dhcp_v6_options,
+            DHCP_V6_OPTIONS
+        );
         check_and_apply!(tftp, self.inner.config_store.tftp, TFTP);
         check_and_apply!(ra_server, self.inner.config_store.ra_server, RA_SERVER);
-        check_and_apply!(ra_prefixes, self.inner.config_store.ra_prefixes, RA_PREFIXES);
+        check_and_apply!(
+            ra_prefixes,
+            self.inner.config_store.ra_prefixes,
+            RA_PREFIXES
+        );
         check_and_apply!(ra_rdnss, self.inner.config_store.ra_rdnss, RA_RDNSS);
         check_and_apply!(ra_dnssl, self.inner.config_store.ra_dnssl, RA_DNSSL);
-        check_and_apply!(dns_upstreams, self.inner.config_store.dns_upstreams, DNS_UPSTREAMS);
-        check_and_apply!(dns_upstream_mode, self.inner.config_store.dns_upstream_mode, DNS_UPSTREAM_MODE);
-        check_and_apply!(dns_rewrites, self.inner.config_store.dns_rewrites, DNS_REWRITES);
+        check_and_apply!(
+            dns_upstreams,
+            self.inner.config_store.dns_upstreams,
+            DNS_UPSTREAMS
+        );
+        check_and_apply!(
+            dns_upstream_mode,
+            self.inner.config_store.dns_upstream_mode,
+            DNS_UPSTREAM_MODE
+        );
+        check_and_apply!(
+            dns_rewrites,
+            self.inner.config_store.dns_rewrites,
+            DNS_REWRITES
+        );
 
         if let Some(ref new_val) = patch.dns_allowlist {
             let allowlist = DnsAllowlist(new_val.clone());
@@ -546,14 +578,35 @@ impl LanforgeContext {
             if impact != ChangeImpact::None {
                 changed |= DomainSet::DNS_ALLOWLIST;
                 max_impact = max_impact.max(impact);
-                let _ = self.inner.config_store.dns_allowlist.0.send(Arc::new(allowlist));
+                let _ = self
+                    .inner
+                    .config_store
+                    .dns_allowlist
+                    .0
+                    .send(Arc::new(allowlist));
             }
         }
 
-        check_and_apply!(dns_adblock, self.inner.config_store.dns_adblock, DNS_ADBLOCK);
-        check_and_apply!(dns_adblock_urls, self.inner.config_store.dns_adblock_urls, DNS_ADBLOCK_URLS);
-        check_and_apply!(dns_adblock_rules, self.inner.config_store.dns_adblock_rules, DNS_ADBLOCK_RULES);
-        check_and_apply!(dns_reverse, self.inner.config_store.dns_reverse, DNS_REVERSE);
+        check_and_apply!(
+            dns_adblock,
+            self.inner.config_store.dns_adblock,
+            DNS_ADBLOCK
+        );
+        check_and_apply!(
+            dns_adblock_urls,
+            self.inner.config_store.dns_adblock_urls,
+            DNS_ADBLOCK_URLS
+        );
+        check_and_apply!(
+            dns_adblock_rules,
+            self.inner.config_store.dns_adblock_rules,
+            DNS_ADBLOCK_RULES
+        );
+        check_and_apply!(
+            dns_reverse,
+            self.inner.config_store.dns_reverse,
+            DNS_REVERSE
+        );
         check_and_apply!(dns_listen, self.inner.config_store.dns_listen, DNS_LISTEN);
 
         if !changed.is_empty() {
@@ -572,7 +625,9 @@ impl LanforgeContext {
                 let _ = bus.publish(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));
             }
             if changed.contains(DomainSet::TRAFFIC) {
-                let _ = bus.publish(LanforgeEvent::Traffic(Box::new(TrafficEvent::RulesetChanged)));
+                let _ = bus.publish(LanforgeEvent::Traffic(Box::new(
+                    TrafficEvent::RulesetChanged,
+                )));
             }
             if changed.contains(DomainSet::DHCP_V4_POOLS) {
                 let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed));
@@ -580,13 +635,20 @@ impl LanforgeContext {
             if changed.contains(DomainSet::DHCP_V6_POOLS) {
                 let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV6Changed));
             }
-            if changed.contains(DomainSet::DHCP_V4_OPTIONS) || changed.contains(DomainSet::DHCP_V6_OPTIONS) {
+            if changed.contains(DomainSet::DHCP_V4_OPTIONS)
+                || changed.contains(DomainSet::DHCP_V6_OPTIONS)
+            {
                 let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigDhcpOptionsChanged));
             }
             if changed.contains(DomainSet::TFTP) {
                 let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigTftpChanged));
             }
-            if changed.intersects(DomainSet::RA_SERVER | DomainSet::RA_PREFIXES | DomainSet::RA_RDNSS | DomainSet::RA_DNSSL) {
+            if changed.intersects(
+                DomainSet::RA_SERVER
+                    | DomainSet::RA_PREFIXES
+                    | DomainSet::RA_RDNSS
+                    | DomainSet::RA_DNSSL,
+            ) {
                 let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigRaChanged));
             }
             if changed.contains(DomainSet::DNS_UPSTREAMS) {
@@ -594,7 +656,9 @@ impl LanforgeContext {
             }
             if changed.contains(DomainSet::DNS_UPSTREAM_MODE) {
                 let mode = **self.inner.config_store.dns_upstream_mode.1.borrow();
-                let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamModeChanged(mode)));
+                let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamModeChanged(
+                    mode,
+                )));
             }
             if changed.contains(DomainSet::DNS_REWRITES) {
                 let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
@@ -613,10 +677,15 @@ impl LanforgeContext {
             }
 
             // Exactly ONE ConfigChanged event for UI/CLI observers
-            let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigChanged { sections: changed }));
+            let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigChanged {
+                sections: changed,
+            }));
         }
 
-        ApplyReport { changed, max_impact }
+        ApplyReport {
+            changed,
+            max_impact,
+        }
     }
 
     /// Hydrates the context configuration silently without publishing events or waking subscribers.
@@ -650,7 +719,12 @@ impl LanforgeContext {
         hydrate_val!(dns_upstream_mode, self.inner.config_store.dns_upstream_mode);
         hydrate_val!(dns_rewrites, self.inner.config_store.dns_rewrites);
         if let Some(ref new_val) = patch.dns_allowlist {
-            let _ = self.inner.config_store.dns_allowlist.0.send(Arc::new(DnsAllowlist(new_val.clone())));
+            let _ = self
+                .inner
+                .config_store
+                .dns_allowlist
+                .0
+                .send(Arc::new(DnsAllowlist(new_val.clone())));
         }
         hydrate_val!(dns_adblock, self.inner.config_store.dns_adblock);
         hydrate_val!(dns_adblock_urls, self.inner.config_store.dns_adblock_urls);
@@ -782,7 +856,13 @@ impl LanforgeContext {
 
     #[must_use]
     pub fn get_dns_listen(&self) -> DnsListenConfig {
-        self.inner.config_store.dns_listen.1.borrow().as_ref().clone()
+        self.inner
+            .config_store
+            .dns_listen
+            .1
+            .borrow()
+            .as_ref()
+            .clone()
     }
 }
 

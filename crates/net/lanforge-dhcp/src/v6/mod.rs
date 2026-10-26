@@ -49,7 +49,6 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::match_event;
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::device::IPv6State;
-use lanforge_types::utils::mac_from_eui64_link_local;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::dhcp::{Dhcpv6Options, Dhcpv6Pool};
@@ -57,6 +56,7 @@ use lanforge_types::system::RunResult;
 use lanforge_types::update::{
     DeviceUpdate, DhcpV6PoolUpdate, LeaseTarget, V6LeaseUpdate, V6PrefixUpdate,
 };
+use lanforge_types::utils::mac_from_eui64_link_local;
 use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
@@ -77,8 +77,8 @@ use dhcproto::{Decodable, Decoder};
 
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy,
-    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
+    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
+    ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_types::system::{DormantReason, ServiceId};
 
@@ -89,10 +89,7 @@ use lanforge_types::system::{DormantReason, ServiceId};
 /// - `DeviceUpdated` (`V6` suffix changes)
 /// - `PrefixChanged` (`GUA` updates → client `RECONFIGURE`)
 /// - `LeaseRenew` (manual RECONFIGURE send)
-const DHCPV6_DEPS: &[Edge] = &[
-    Edge::after(ServiceId::Db),
-    Edge::wants(ServiceId::Pppoe),
-];
+const DHCPV6_DEPS: &[Edge] = &[Edge::after(ServiceId::Db), Edge::wants(ServiceId::Pppoe)];
 
 /// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
 #[derive(Clone)]
@@ -533,11 +530,14 @@ impl Dhcpv6Service {
 
             // Diagnostic: Publish DHCPv6 Transaction
             if let Some(mac) = resolved_mac {
-                let _ = self.ctx.bus().publish(LanforgeEvent::Device(DeviceEvent::DhcpV6Transaction {
-                    mac,
-                    msg_type: DhcpV6MessageType::from(u8::from(msg.msg_type())),
-                    details: None,
-                }));
+                let _ =
+                    self.ctx
+                        .bus()
+                        .publish(LanforgeEvent::Device(DeviceEvent::DhcpV6Transaction {
+                            mac,
+                            msg_type: DhcpV6MessageType::from(u8::from(msg.msg_type())),
+                            details: None,
+                        }));
             }
 
             let stats = self.ctx.dhcpv6_stats();
@@ -780,19 +780,16 @@ fn apply_learned_state(
                     })));
                 } else if let Some(mac) = opt_mac {
                     // Search for DUID in our table if not provided in packet
-                    let found_duid = ctx.with_state(|state| {
-                        state.devices.get(&mac).and_then(|d| d.duid.clone())
-                    });
+                    let found_duid = ctx
+                        .with_state(|state| state.devices.get(&mac).and_then(|d| d.duid.clone()));
                     if let Some(duid) = found_duid {
-                        updates.push(DeviceUpdate::V6LeaseGranted(Box::new(
-                            V6LeaseUpdate {
-                                mac: Some(mac),
-                                duid,
-                                iaid,
-                                ip,
-                                expires,
-                            },
-                        )));
+                        updates.push(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
+                            mac: Some(mac),
+                            duid,
+                            iaid,
+                            ip,
+                            expires,
+                        })));
                     }
                 }
             }
