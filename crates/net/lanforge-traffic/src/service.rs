@@ -239,9 +239,7 @@ impl TrafficService {
             if let Some((wan_iface, is_pppoe)) = self.resolve_wan_interface(ctx) {
                 self.apply_sqm_internal(ctx, &wan_iface, is_pppoe).await;
             } else {
-                debug!(
-                    "Waiting for active WAN interface / PPPoE session before attaching SQM"
-                );
+                debug!("Waiting for active WAN interface / PPPoE session before attaching SQM");
             }
         }
 
@@ -326,10 +324,7 @@ impl TrafficService {
                 }
             }
         } else if self.active_wan.is_some() {
-            info!(
-                generation = snap.generation,
-                "WAN Down, pausing SQM queues"
-            );
+            info!(generation = snap.generation, "WAN Down, pausing SQM queues");
             self.active_wan = None;
             self.is_pppoe_active = false;
             self.clear_sqm_internal(ctx).await;

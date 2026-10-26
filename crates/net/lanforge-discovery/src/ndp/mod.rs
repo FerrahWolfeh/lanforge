@@ -343,8 +343,12 @@ impl AsyncService for DiscoveryService {
         }
         let primary_ifindex = self.target_ifindexes.first().copied().unwrap_or(0);
         let if_state = ctx.get_interface_state(primary_ifindex);
-        let current_gua = if_state.gua.map(lanforge_types::network::Ipv6Prefix::from_addr);
-        let current_ula = if_state.ula.map(lanforge_types::network::Ipv6Prefix::from_addr);
+        let current_gua = if_state
+            .gua
+            .map(lanforge_types::network::Ipv6Prefix::from_addr);
+        let current_ula = if_state
+            .ula
+            .map(lanforge_types::network::Ipv6Prefix::from_addr);
 
         debug!("Performing initial neighbor bootstrap...");
         let mut bootstrap_events = Vec::new();
@@ -352,16 +356,12 @@ impl AsyncService for DiscoveryService {
         for &ifindex in &self.target_ifindexes {
             match get_ipv4_neighbors(&self.handle, Some(ifindex)).await {
                 Ok(evs) => bootstrap_events.extend(evs),
-                Err(e) => error!(
-                    "Failed to dump IPv4 neighbors on ifindex {ifindex}: {e}"
-                ),
+                Err(e) => error!("Failed to dump IPv4 neighbors on ifindex {ifindex}: {e}"),
             }
 
             match get_ipv6_neighbors(&self.handle, "", Some(ifindex)).await {
                 Ok(evs) => bootstrap_events.extend(evs),
-                Err(e) => error!(
-                    "Failed to dump IPv6 neighbors on ifindex {ifindex}: {e}"
-                ),
+                Err(e) => error!("Failed to dump IPv6 neighbors on ifindex {ifindex}: {e}"),
             }
         }
 
@@ -408,8 +408,12 @@ impl AsyncService for DiscoveryService {
 
         let primary_ifindex = self.target_ifindexes.first().copied().unwrap_or(0);
         let if_state = ctx.get_interface_state(primary_ifindex);
-        let mut current_gua: Option<lanforge_types::network::Ipv6Prefix> = if_state.gua.map(lanforge_types::network::Ipv6Prefix::from_addr);
-        let mut current_ula: Option<lanforge_types::network::Ipv6Prefix> = if_state.ula.map(lanforge_types::network::Ipv6Prefix::from_addr);
+        let mut current_gua: Option<lanforge_types::network::Ipv6Prefix> = if_state
+            .gua
+            .map(lanforge_types::network::Ipv6Prefix::from_addr);
+        let mut current_ula: Option<lanforge_types::network::Ipv6Prefix> = if_state
+            .ula
+            .map(lanforge_types::network::Ipv6Prefix::from_addr);
 
         let mut pending_batch = Vec::with_capacity(50);
         let mut flush_timer = interval(Duration::from_millis(self.cfg.batch_interval_ms));

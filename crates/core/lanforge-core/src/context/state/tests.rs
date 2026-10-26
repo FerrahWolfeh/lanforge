@@ -1459,9 +1459,7 @@ fn test_system_host_ipv6_precedence_ula_over_gua_no_link_local() {
     });
     let dev = ctx.get_device(&sys_mac).unwrap();
     assert_eq!(dev.v6.len(), 1);
-    assert!(
-        matches!(&dev.v6[0], IPv6State::Static(Ipv6AddrOrSuffix::Full(ip), _) if *ip == gua)
-    );
+    assert!(matches!(&dev.v6[0], IPv6State::Static(Ipv6AddrOrSuffix::Full(ip), _) if *ip == gua));
 
     // 3. Add ULA: System host must prefer ULA over GUA
     let ula: Ipv6Addr = "fd00:dead:beef::1".parse().unwrap();
@@ -1474,10 +1472,12 @@ fn test_system_host_ipv6_precedence_ula_over_gua_no_link_local() {
         state: Box::new(if_ula),
     });
     let dev = ctx.get_device(&sys_mac).unwrap();
-    assert_eq!(dev.v6.len(), 1, "Must only announce the single primary IPv6 (ULA)");
-    assert!(
-        matches!(&dev.v6[0], IPv6State::Static(Ipv6AddrOrSuffix::Full(ip), _) if *ip == ula)
+    assert_eq!(
+        dev.v6.len(),
+        1,
+        "Must only announce the single primary IPv6 (ULA)"
     );
+    assert!(matches!(&dev.v6[0], IPv6State::Static(Ipv6AddrOrSuffix::Full(ip), _) if *ip == ula));
 
     // 4. Clear ULA: Falls back to GUA
     let if_no_ula = lanforge_types::update::InterfaceState {
@@ -1496,9 +1496,7 @@ fn test_system_host_ipv6_precedence_ula_over_gua_no_link_local() {
     });
     let dev = ctx.get_device(&sys_mac).unwrap();
     assert_eq!(dev.v6.len(), 1);
-    assert!(
-        matches!(&dev.v6[0], IPv6State::Static(Ipv6AddrOrSuffix::Full(ip), _) if *ip == gua)
-    );
+    assert!(matches!(&dev.v6[0], IPv6State::Static(Ipv6AddrOrSuffix::Full(ip), _) if *ip == gua));
 }
 
 #[test]

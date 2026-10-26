@@ -372,8 +372,7 @@ impl State {
             .ula
             .map(lanforge_types::network::Ipv6Prefix::from_addr);
 
-        let prefix_changed =
-            old_gua_prefix != new_gua_prefix || old_ula_prefix != new_ula_prefix;
+        let prefix_changed = old_gua_prefix != new_gua_prefix || old_ula_prefix != new_ula_prefix;
 
         self.interfaces
             .interface_ips

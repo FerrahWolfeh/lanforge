@@ -717,9 +717,7 @@ impl Dhcpv6Service {
 
             if old_gua != Some(g) {
                 let old_str = old_gua.map_or_else(|| "None".to_string(), |p| p.to_string());
-                info!(
-                    "GUA prefix changed ({old_str} -> {g}), notifying clients"
-                );
+                info!("GUA prefix changed ({old_str} -> {g}), notifying clients");
 
                 // Update static reservations for the new GUA prefix
                 let registry = self.ctx.get_static_registry();

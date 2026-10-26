@@ -673,7 +673,10 @@ pub trait RaConfigStore: Send + Sync {
     fn load_last_gua_prefix(&self) -> Result<Option<lanforge_types::network::Ipv6Prefix>, DbError>;
 
     /// Saves the last active GUA prefix to state.
-    fn save_last_gua_prefix(&self, prefix: Option<lanforge_types::network::Ipv6Prefix>) -> Result<(), DbError>;
+    fn save_last_gua_prefix(
+        &self,
+        prefix: Option<lanforge_types::network::Ipv6Prefix>,
+    ) -> Result<(), DbError>;
 
     /// Seeds RA prefixes if empty in database. Returns `Ok(true)` if seeded.
     fn seed_ra_prefixes_if_empty(&self, seed: &[RAPrefix]) -> Result<bool, DbError> {

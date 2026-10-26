@@ -279,7 +279,11 @@ impl RaState {
                 let valid_end = now + valid_duration;
                 let deprecation_end = valid_end;
                 let old_addr = old.to_addr();
-                if !self.deprecated_prefixes.iter().any(|(ip, _, _)| *ip == old_addr) {
+                if !self
+                    .deprecated_prefixes
+                    .iter()
+                    .any(|(ip, _, _)| *ip == old_addr)
+                {
                     self.deprecated_prefixes
                         .push((old_addr, deprecation_end, valid_end));
                 }
@@ -350,10 +354,7 @@ impl RaService {
             .link_local
             .is_none()
         {
-            info!(
-                "Waiting for interface discovery on '{}'...",
-                self.cfg.iface
-            );
+            info!("Waiting for interface discovery on '{}'...", self.cfg.iface);
             self.ctx.wait_for_interfaces().await?;
         }
 
@@ -1066,7 +1067,9 @@ mod tests {
         assert_eq!(if_ips.gua, Some(old_gua));
 
         // First transition: last_gua becomes Some(old_gua)
-        state.last_gua = if_ips.gua.map(lanforge_types::network::Ipv6Prefix::from_addr);
+        state.last_gua = if_ips
+            .gua
+            .map(lanforge_types::network::Ipv6Prefix::from_addr);
 
         // 4. Trigger rotation: change GUA in interface state
         let new_gua: Ipv6Addr = "2001:db8:abc::1".parse().unwrap();
@@ -1089,7 +1092,13 @@ mod tests {
         assert_eq!(if_ips.gua, Some(new_gua));
 
         // 5. Simulate send_ra_internal transition for rotation:
-        state.update_prefix_and_deprecate(if_ips.gua.map(lanforge_types::network::Ipv6Prefix::from_addr), true, true);
+        state.update_prefix_and_deprecate(
+            if_ips
+                .gua
+                .map(lanforge_types::network::Ipv6Prefix::from_addr),
+            true,
+            true,
+        );
 
         // Verify that old_gua is now deprecated in state with RFC 4862 §5.5.3e valid lifetime (2 hours = 7200s)
         assert_eq!(state.deprecated_prefixes.len(), 1);

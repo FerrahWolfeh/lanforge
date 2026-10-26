@@ -222,7 +222,11 @@ impl NftService {
 
                 match res {
                     Ok(Ok(payload)) => {
-                        let recorded = if payload.is_empty() { "applied".to_string() } else { payload };
+                        let recorded = if payload.is_empty() {
+                            "applied".to_string()
+                        } else {
+                            payload
+                        };
                         *last_ruleset.write() = Some(recorded);
                         Ok(())
                     }

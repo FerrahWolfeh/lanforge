@@ -108,10 +108,7 @@ impl AsyncService for InterfacesService {
             .collect();
 
         if missing.is_empty() {
-            info!(
-                links = snapshot.links.len(),
-                "All configured links present"
-            );
+            info!(links = snapshot.links.len(), "All configured links present");
             h.ready();
         } else {
             warn!(

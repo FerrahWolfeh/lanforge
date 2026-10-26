@@ -420,15 +420,9 @@ impl Dhcpv6Server {
         let ip_list: Vec<String> = ips.iter().map(ToString::to_string).collect();
 
         if let Some(id) = identity {
-            info!(
-                "{id} is soliciting -> {action} [{}]",
-                ip_list.join(", ")
-            );
+            info!("{id} is soliciting -> {action} [{}]", ip_list.join(", "));
         } else {
-            info!(
-                "Anonymous soliciting -> {action} [{}]",
-                ip_list.join(", ")
-            );
+            info!("Anonymous soliciting -> {action} [{}]", ip_list.join(", "));
         }
 
         for ip in &ips {
@@ -526,10 +520,7 @@ impl Dhcpv6Server {
             if let Some(id) = identity {
                 info!("Assigning [{}] to {id}", ip_list.join(", "));
             } else {
-                info!(
-                    "Assigning [{}] to anonymous device",
-                    ip_list.join(", ")
-                );
+                info!("Assigning [{}] to anonymous device", ip_list.join(", "));
             }
 
             for ip in &ips {
@@ -775,10 +766,7 @@ impl Dhcpv6Server {
                     if let Some(id) = identity {
                         info!("{id} released its address {}", ia_addr.addr);
                     } else {
-                        info!(
-                            "Anonymous device released its address {}",
-                            ia_addr.addr
-                        );
+                        info!("Anonymous device released its address {}", ia_addr.addr);
                     }
                     self.pool.release(&ia_addr.addr);
                     released_ias.na.push(iana.id);
@@ -806,10 +794,7 @@ impl Dhcpv6Server {
                 .has_prefix_binding(&self.ctx, client_duid, iapd.id)
             {
                 if let Some(id) = identity {
-                    info!(
-                        "{id} released prefix delegation for IAID {}",
-                        iapd.id
-                    );
+                    info!("{id} released prefix delegation for IAID {}", iapd.id);
                 } else {
                     info!(
                         "Anonymous device released prefix delegation for IAID {}",
@@ -864,10 +849,7 @@ impl Dhcpv6Server {
                         let bindings = self.pool.lookup(&self.ctx, client_duid, iana.id);
                         if bindings.contains(&ia_addr.addr) {
                             if let Some(id) = identity {
-                                info!(
-                                    "{id} declined address {} (DAD Failure)",
-                                    ia_addr.addr
-                                );
+                                info!("{id} declined address {} (DAD Failure)", ia_addr.addr);
                             } else {
                                 info!(
                                     "Anonymous device declined address {} (DAD Failure)",

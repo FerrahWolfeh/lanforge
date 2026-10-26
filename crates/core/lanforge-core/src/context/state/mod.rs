@@ -427,9 +427,10 @@ impl State {
         ifindex: u32,
     ) -> Option<(lanforge_types::network::Ipv6Prefix, u32, u32)> {
         let state = self.interfaces.interface_ips.get(&ifindex)?;
-        state.gua.map(lanforge_types::network::Ipv6Prefix::from_addr).map(|prefix| {
-            (prefix, state.gua_preferred, state.gua_valid)
-        })
+        state
+            .gua
+            .map(lanforge_types::network::Ipv6Prefix::from_addr)
+            .map(|prefix| (prefix, state.gua_preferred, state.gua_valid))
     }
 
     #[must_use]

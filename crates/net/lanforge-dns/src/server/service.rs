@@ -121,10 +121,7 @@ impl DnsService {
         #[cfg(feature = "adblock")]
         let filter = {
             let adblock_enabled = db_adblock.enabled;
-            debug!(
-                "Adblock filter initializing (enabled: {})",
-                adblock_enabled,
-            );
+            debug!("Adblock filter initializing (enabled: {})", adblock_enabled,);
             let blocker = AdBlocker::new(adblock_enabled);
             blocker.sync_from_context(&self.ctx);
             blocker.replace_config(

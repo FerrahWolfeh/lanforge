@@ -14,9 +14,6 @@ use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
 use lanforge_discovery::refresh_interface;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::{
-    IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, classify_ipv6, is_ula,
-};
 #[cfg(feature = "dhcp")]
 use lanforge_types::network::dhcp::{
     DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, TftpOptions,
@@ -25,6 +22,9 @@ use lanforge_types::network::dhcp::{
 use lanforge_types::network::dns::AdblockUrlEntry;
 #[cfg(feature = "dns")]
 use lanforge_types::network::dns::adblock::{AdblockRuleEntry, AdblockUrlKind};
+use lanforge_types::network::{
+    IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, classify_ipv6, is_ula,
+};
 use lanforge_types::update::InterfaceState;
 use netlink_sys::SocketAddr;
 use pnet::datalink::interfaces;

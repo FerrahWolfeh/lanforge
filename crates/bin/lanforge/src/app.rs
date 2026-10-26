@@ -146,9 +146,7 @@ impl Daemon {
                 .filter_map(|ifname| {
                     let iface = host_ifaces.iter().find(|i| &i.name == ifname);
                     if iface.is_none() {
-                        tracing::warn!(
-                            "Configured monitor interface '{ifname}' not found on host"
-                        );
+                        tracing::warn!("Configured monitor interface '{ifname}' not found on host");
                     }
                     iface.map(|i| i.index)
                 })

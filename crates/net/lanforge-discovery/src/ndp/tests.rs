@@ -168,7 +168,8 @@ fn extract_neigh_info_requires_both_ip_and_mac() {
 
 #[test]
 fn to_device_update_gua_becomes_slaac_observed() {
-    let gua_prefix = lanforge_types::network::Ipv6Prefix::from_addr("fd97:f00d:cafe:3731::".parse().unwrap());
+    let gua_prefix =
+        lanforge_types::network::Ipv6Prefix::from_addr("fd97:f00d:cafe:3731::".parse().unwrap());
     let slaac_ip: Ipv6Addr = "fd97:f00d:cafe:3731::abcd".parse().unwrap();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
@@ -188,7 +189,8 @@ fn to_device_update_gua_becomes_slaac_observed() {
 
 #[test]
 fn to_device_update_link_local_becomes_ndp_seen() {
-    let gua_prefix = lanforge_types::network::Ipv6Prefix::from_addr("fd97:f00d:cafe:3731::".parse().unwrap());
+    let gua_prefix =
+        lanforge_types::network::Ipv6Prefix::from_addr("fd97:f00d:cafe:3731::".parse().unwrap());
     let link_local: Ipv6Addr = "fe80::1".parse().unwrap();
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
 
