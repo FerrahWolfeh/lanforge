@@ -14,13 +14,25 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{
     AsyncService, LanforgeService, NodeStatus, RuntimeClass, ServiceSpec,
 };
-use lanforge_types::system::{ServiceId, ServiceState};
+use lanforge_types::system::{ServiceAction, ServiceId, ServiceState};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Builder;
-use tokio::sync::{Notify, watch};
+use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, info, warn};
+
+/// Channels wiring one runner to the rest of the graph.
+pub struct RunnerLinks {
+    pub node: Arc<NodeHandle>,
+    pub dep_rxs: HashMap<ServiceId, watch::Receiver<NodeStatus>>,
+    /// Condition epoch: bumped on every config change so dormant nodes re-evaluate.
+    /// A `watch` (not `Notify`) so a bump between evaluation and waiting is never lost.
+    pub condition_rx: watch::Receiver<u64>,
+    /// Admin `start|stop|restart` requests routed from `SystemEvent::ServiceControl`.
+    pub control_rx: mpsc::Receiver<ServiceAction>,
+}
 
 /// Result of spawning a supervised service.
 pub enum SpawnedService {
@@ -32,13 +44,7 @@ pub enum SpawnedService {
 pub trait SpawnableRunner: Send {
     fn id(&self) -> ServiceId;
     fn spec(&self) -> ServiceSpec;
-    fn spawn(
-        self: Box<Self>,
-        ctx: LanforgeContext,
-        node: Arc<NodeHandle>,
-        dep_rxs: HashMap<ServiceId, watch::Receiver<NodeStatus>>,
-        notify_condition: Arc<Notify>,
-    ) -> SpawnedService;
+    fn spawn(self: Box<Self>, ctx: LanforgeContext, links: RunnerLinks) -> SpawnedService;
 }
 
 /// Typed runner implementation for a concrete `(S, F)` pair.
@@ -80,24 +86,9 @@ where
         self.spec.clone()
     }
 
-    fn spawn(
-        self: Box<Self>,
-        ctx: LanforgeContext,
-        node: Arc<NodeHandle>,
-        dep_rxs: HashMap<ServiceId, watch::Receiver<NodeStatus>>,
-        notify_condition: Arc<Notify>,
-    ) -> SpawnedService {
+    fn spawn(self: Box<Self>, ctx: LanforgeContext, links: RunnerLinks) -> SpawnedService {
         let spec = self.spec.clone();
-        let shutdown_rx = node.shutdown_rx.clone();
-        let runner = ServiceRunner {
-            spec: self.spec,
-            factory: self.factory,
-            ctx,
-            node,
-            dep_rxs,
-            notify_condition,
-            shutdown_rx,
-        };
+        let runner = ServiceRunner::new(self.spec, self.factory, ctx, links);
 
         match spec.runtime {
             RuntimeClass::Shared => {
@@ -147,7 +138,7 @@ where
 pub struct GraphSupervisor {
     graph: Arc<DependencyGraph>,
     nodes: HashMap<ServiceId, Arc<NodeHandle>>,
-    notify_condition: Arc<Notify>,
+    condition_tx: Arc<watch::Sender<u64>>,
     shared_tasks: Vec<tokio::task::JoinHandle<()>>,
     dedicated_threads: Vec<std::thread::JoinHandle<()>>,
 }
@@ -165,24 +156,53 @@ impl GraphSupervisor {
     ) -> Result<Self, graph::GraphError> {
         let graph = Arc::new(DependencyGraph::build(specs)?);
         let mut nodes = HashMap::new();
-        let notify_condition = Arc::new(Notify::new());
+        let mut control_txs = HashMap::new();
+        let mut pending_controls = HashMap::new();
+        let (condition_tx, _) = watch::channel(0_u64);
+        let condition_tx = Arc::new(condition_tx);
 
         for spec in graph.nodes() {
             let handle = Arc::new(NodeHandle::new(spec.id));
             nodes.insert(spec.id, handle);
+            let (tx, rx) = mpsc::channel(8);
+            control_txs.insert(spec.id, tx);
+            pending_controls.insert(spec.id, rx);
         }
 
-        // Background task listening for system config updates to re-evaluate conditions
+        // Routes config changes (D-3) and admin service control (D-20) into the graph.
         let mut sys_bus = ctx.bus().subscribe_system();
-        let notify_clone = Arc::clone(&notify_condition);
+        let condition_clone = Arc::clone(&condition_tx);
         tokio::spawn(async move {
-            while let Ok(event) = sys_bus.recv().await {
-                if matches!(
-                    event.event,
-                    LanforgeEvent::System(SystemEvent::ConfigUpdate { .. })
-                ) {
-                    debug!("Config updated; notifying condition re-evaluation");
-                    notify_clone.notify_waiters();
+            loop {
+                let event = match sys_bus.recv().await {
+                    Ok(event) => event,
+                    Err(RecvError::Lagged(n)) => {
+                        // A missed ConfigChanged must not leave a node dormant: re-evaluate all.
+                        warn!("Supervisor: system bus lagged by {n}; re-evaluating conditions");
+                        condition_clone.send_modify(|epoch| *epoch += 1);
+                        continue;
+                    }
+                    Err(RecvError::Closed) => break,
+                };
+                match event.event {
+                    LanforgeEvent::System(SystemEvent::ConfigChanged { sections }) => {
+                        debug!(?sections, "Config changed; re-evaluating conditions");
+                        condition_clone.send_modify(|epoch| *epoch += 1);
+                    }
+                    LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) => {
+                        match control_txs.get(&id) {
+                            Some(tx) => {
+                                if tx.try_send(action).is_err() {
+                                    warn!(service = %id, ?action, "Service control queue full; request dropped");
+                                }
+                            }
+                            None => {
+                                warn!(service = %id, ?action, "Service control for unknown node ignored");
+                            }
+                        }
+                    }
+                    LanforgeEvent::System(SystemEvent::Shutdown) => break,
+                    _ => {}
                 }
             }
         });
@@ -206,7 +226,15 @@ impl GraphSupervisor {
                 }
             }
 
-            match runner.spawn(ctx.clone(), node, dep_rxs, Arc::clone(&notify_condition)) {
+            let links = RunnerLinks {
+                node,
+                dep_rxs,
+                condition_rx: condition_tx.subscribe(),
+                control_rx: pending_controls
+                    .remove(&id)
+                    .expect("control channel created for every graph node"),
+            };
+            match runner.spawn(ctx.clone(), links) {
                 SpawnedService::Shared(task) => shared_tasks.push(task),
                 SpawnedService::Dedicated(thread) => dedicated_threads.push(thread),
             }
@@ -215,7 +243,7 @@ impl GraphSupervisor {
         Ok(Self {
             graph,
             nodes,
-            notify_condition,
+            condition_tx,
             shared_tasks,
             dedicated_threads,
         })
@@ -229,7 +257,7 @@ impl GraphSupervisor {
 
     /// Triggers re-evaluation of all service conditions (e.g. after config change).
     pub fn reevaluate_conditions(&self) {
-        self.notify_condition.notify_waiters();
+        self.condition_tx.send_modify(|epoch| *epoch += 1);
     }
 
     /// Queries the live status of a service.

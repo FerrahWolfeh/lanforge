@@ -7,15 +7,24 @@ use std::time::Duration;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::{AsyncService, ServiceHandle};
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use lanforge_pppoe::{PppoeConfig, PppoeService};
 use lanforge_transport::PppoeTransport;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
-use lanforge_types::system::{PppoeSessionState, ServiceAction, ServiceId, ServiceState};
+use lanforge_types::system::{PppoeSessionState, ServiceId, ServiceState};
 use mock_bras::{MockBrasConfig, spawn_mock_bras};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio::time::timeout;
+
+/// Handle wired to a command channel, as the supervisor provides (admin stop/restart).
+fn controlled_handle(ctx: &LanforgeContext) -> (ServiceHandle, mpsc::Sender<ServiceCommand>) {
+    let (tx, rx) = mpsc::channel(8);
+    (
+        ServiceHandle::with_command_channel(ServiceId::Pppoe, ctx.clone(), rx),
+        tx,
+    )
+}
 
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
@@ -207,21 +216,24 @@ async fn test_pppoe_reacts_to_service_control_restart() {
 
     let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
+    let (h, cmd_tx) = controlled_handle(&ctx_clone);
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     // 1. Initial connect
     let _ = wait_for_session_up(&mut pppoe_sub).await;
 
     // 2. Issue Restart service control
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {
-        id: ServiceId::Pppoe,
-        action: ServiceAction::Restart,
-    }));
+    cmd_tx
+        .send(ServiceCommand::Restart)
+        .await
+        .expect("service alive");
 
     // 3. Verify session bounce: SessionDown followed by SessionUp
     let down_reason = wait_for_session_down(&mut pppoe_sub).await;
-    assert!(down_reason.contains("Service control") || down_reason.contains("restarted"));
+    assert!(
+        down_reason.contains("restarted"),
+        "unexpected reason: {down_reason}"
+    );
 
     let _ = wait_for_session_up(&mut pppoe_sub).await;
     assert_eq!(
@@ -254,21 +266,24 @@ async fn test_pppoe_reacts_to_service_control_stop() {
 
     let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
+    let (h, cmd_tx) = controlled_handle(&ctx_clone);
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     // 1. Connect
     let _ = wait_for_session_up(&mut pppoe_sub).await;
 
     // 2. Issue Stop service control
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {
-        id: ServiceId::Pppoe,
-        action: ServiceAction::Stop,
-    }));
+    cmd_tx
+        .send(ServiceCommand::Stop)
+        .await
+        .expect("service alive");
 
     // 3. Expect SessionDown and transition to Inactive
     let down_reason = wait_for_session_down(&mut pppoe_sub).await;
-    assert!(down_reason.contains("Service control") || down_reason.contains("stopped"));
+    assert!(
+        down_reason.contains("stopped"),
+        "unexpected reason: {down_reason}"
+    );
 
     let res = timeout(Duration::from_secs(2), handle)
         .await

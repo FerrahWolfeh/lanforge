@@ -7,7 +7,6 @@ use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_transport::ArpProber;
 use lanforge_types::config::ChangeImpact;
-use lanforge_types::system::ServiceAction;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 use tokio::time::interval;
@@ -134,28 +133,9 @@ pub(crate) async fn run_keepalive(
 
             event_res = bus_rx.recv() => {
                 let Ok(timed) = event_res else { break; };
-                match timed.event {
-                    LanforgeEvent::System(SystemEvent::Shutdown) => {
-                        info!("PPPoE keepalive received system shutdown");
-                        return Ok(Some(SystemInterrupt::Shutdown));
-                    }
-                    LanforgeEvent::System(SystemEvent::ServiceControl {
-                        id: lanforge_types::system::ServiceId::Pppoe,
-                        action,
-                    }) => {
-                        match action {
-                            ServiceAction::Stop => {
-                                info!("PPPoE keepalive received service stop");
-                                return Ok(Some(SystemInterrupt::Stop));
-                            }
-                            ServiceAction::Restart => {
-                                info!("PPPoE keepalive received service restart");
-                                return Ok(Some(SystemInterrupt::Restart));
-                            }
-                            ServiceAction::Start => {}
-                        }
-                    }
-                    _ => {}
+                if matches!(timed.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
+                    info!("PPPoE keepalive received system shutdown");
+                    return Ok(Some(SystemInterrupt::Shutdown));
                 }
             }
         }

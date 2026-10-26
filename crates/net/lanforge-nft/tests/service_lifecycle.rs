@@ -4,7 +4,7 @@ use std::time::Duration;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::{AsyncService, ServiceHandle};
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use lanforge_nft::NftService;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::events::firewall::{FirewallAppliedSummary, FirewallEvent};
@@ -13,9 +13,9 @@ use lanforge_types::network::firewall::{
     DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallZone, L4Protocol,
     PortForwardRule,
 };
-use lanforge_types::system::{ServiceAction, ServiceId, ServiceState};
+use lanforge_types::system::{ServiceId, ServiceState};
 use std::net::IpAddr;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio::time::timeout;
 
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
@@ -490,39 +490,42 @@ async fn test_firewall_service_control_stop_and_restart() {
     let _ = wait_for_ruleset_applied(&mut fw_sub).await;
     assert_eq!(ctx.get_service_state(ServiceId::Nft), ServiceState::Online);
 
+    // Commands arrive from the supervisor, as they do for an admin `lanforge service ...`.
+    let (cmd_tx, cmd_rx) = mpsc::channel(8);
     let service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
         let mut s = service_clone;
-        let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
+        let h = ServiceHandle::with_command_channel(ServiceId::Nft, ctx_clone.clone(), cmd_rx);
         s.serve(&ctx_clone, &h).await
     });
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Restart reapplies the ruleset in place: the service keeps running, no unprotected window.
+    cmd_tx
+        .send(ServiceCommand::Restart)
+        .await
+        .expect("service alive");
+    let summary = wait_for_ruleset_applied(&mut fw_sub).await;
+    assert_eq!(summary.table, "lanforge");
+    assert_eq!(ctx.get_service_state(ServiceId::Nft), ServiceState::Online);
+    assert!(
+        !serve_handle.is_finished(),
+        "restart must not end the serve loop"
+    );
 
-    // Send Stop command
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {
-        id: ServiceId::Nft,
-        action: ServiceAction::Stop,
-    }));
-
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Stop ends serve; cleanup removes the table and marks the service Inactive.
+    cmd_tx
+        .send(ServiceCommand::Stop)
+        .await
+        .expect("service alive");
+    let res = tokio::time::timeout(Duration::from_secs(1), serve_handle)
+        .await
+        .expect("serve must return on Stop")
+        .expect("join error");
+    assert!(res.is_ok());
+    service.cleanup(&ctx).await.expect("Cleanup must succeed");
     assert_eq!(
         ctx.get_service_state(ServiceId::Nft),
         ServiceState::Inactive
     );
-
-    // Send Restart command
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {
-        id: ServiceId::Nft,
-        action: ServiceAction::Restart,
-    }));
-
-    let summary = wait_for_ruleset_applied(&mut fw_sub).await;
-    assert_eq!(summary.table, "lanforge");
-    assert_eq!(ctx.get_service_state(ServiceId::Nft), ServiceState::Online);
-
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
-    let _ = serve_handle.await;
-    service.cleanup(&ctx).await.expect("Cleanup must succeed");
 }

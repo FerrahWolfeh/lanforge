@@ -6,15 +6,17 @@ use std::time::Duration;
 
 use lanforge::registry::ServiceRegistry;
 use lanforge::supervisor::graph::{DependencyGraph, GraphError};
-use lanforge_core::bus::EventBus;
-use lanforge_core::context::LanforgeContext;
+use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::state::State;
+use lanforge_core::context::{ConfigPatch, LanforgeContext};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
     Activation, AsyncService, Condition, DegradedReason, DormantReason, Edge, LanforgeService,
     LossPolicy, RestartPolicy, RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_types::system::{ServiceId, ServiceState, StateDetail};
+use lanforge_types::config::ConfigDomain;
+use lanforge_types::network::firewall::FirewallConfig;
+use lanforge_types::system::{ServiceAction, ServiceId, ServiceState, StateDetail};
 use tokio::sync::Notify;
 use tokio::time::timeout;
 
@@ -842,6 +844,304 @@ async fn test_condition_toggle_isolated() {
         ctx.is_running(),
         "Daemon must not restart or crash when toggling condition"
     );
+
+    supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
+}
+
+// ---------------------------------------------------------------------------
+// 5. Admin control (D-20), live conditions (D-3) and status details
+// ---------------------------------------------------------------------------
+
+/// Service that counts its starts and serves until stopped (restart => `request_restart`).
+struct Counted {
+    id: ServiceId,
+    deps: &'static [Edge],
+    condition: Condition,
+    runs: Arc<AtomicU32>,
+}
+impl LanforgeService for Counted {
+    fn spec(&self) -> ServiceSpec {
+        dummy_spec(self.id, self.deps, self.condition.clone())
+    }
+}
+impl AsyncService for Counted {
+    async fn serve(&mut self, _ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        self.runs.fetch_add(1, Ordering::SeqCst);
+        h.ready();
+        h.run_until_stopped(std::future::pending::<Result<(), CoreError>>())
+            .await
+            .map(|_| ())
+    }
+}
+
+fn counted(
+    id: ServiceId,
+    deps: &'static [Edge],
+    condition: Condition,
+    runs: &Arc<AtomicU32>,
+) -> impl Fn() -> Counted + Send + Sync + 'static {
+    let runs = Arc::clone(runs);
+    move || Counted {
+        id,
+        deps,
+        condition: condition.clone(),
+        runs: Arc::clone(&runs),
+    }
+}
+
+async fn wait_status(
+    ctx: &LanforgeContext,
+    id: ServiceId,
+    state: ServiceState,
+    detail: Option<StateDetail>,
+) {
+    timeout(Duration::from_secs(1), async {
+        while ctx.get_service_state(id) != state || ctx.get_service_detail(id) != detail {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "{id}: expected {state:?}/{detail:?}, got {:?}/{:?}",
+            ctx.get_service_state(id),
+            ctx.get_service_detail(id)
+        )
+    });
+}
+
+fn control(ctx: &LanforgeContext, id: ServiceId, action: ServiceAction) {
+    let _ = ctx
+        .bus()
+        .publish(LanforgeEvent::System(SystemEvent::ServiceControl {
+            id,
+            action,
+        }));
+}
+
+/// `lanforge service stop|start|restart` reaches the service through the supervisor.
+#[tokio::test]
+async fn admin_stop_start_restart_via_service_control() {
+    let ctx = init_test_ctx();
+    let runs = Arc::new(AtomicU32::new(0));
+    let mut registry = ServiceRegistry::new();
+    registry.register(&ctx, counted(ServiceId::Dns, &[], Condition::ALWAYS, &runs));
+    let supervisor = registry.start(&ctx).expect("start supervisor");
+    wait_status(&ctx, ServiceId::Dns, ServiceState::Online, None).await;
+
+    control(&ctx, ServiceId::Dns, ServiceAction::Stop);
+    wait_status(
+        &ctx,
+        ServiceId::Dns,
+        ServiceState::Inactive,
+        Some(StateDetail::AdminStopped),
+    )
+    .await;
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+
+    // Stays stopped across config changes until an explicit start.
+    supervisor.reevaluate_conditions();
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert_eq!(
+        ctx.get_service_detail(ServiceId::Dns),
+        Some(StateDetail::AdminStopped)
+    );
+
+    control(&ctx, ServiceId::Dns, ServiceAction::Start);
+    wait_status(&ctx, ServiceId::Dns, ServiceState::Online, None).await;
+    assert_eq!(runs.load(Ordering::SeqCst), 2);
+
+    control(&ctx, ServiceId::Dns, ServiceAction::Restart);
+    timeout(Duration::from_secs(1), async {
+        while runs.load(Ordering::SeqCst) < 3 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("restart must start the service again");
+    wait_status(&ctx, ServiceId::Dns, ServiceState::Online, None).await;
+
+    supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
+}
+
+/// A config change toggling a `Condition` stops/starts only that node, with no manual reload (D-3).
+#[tokio::test]
+async fn condition_follows_config_changes() {
+    static FW_CONDITION: Condition = Condition {
+        sections: &[ConfigDomain::Firewall],
+        eval: |ctx| {
+            if ctx.get_firewall_config().is_none_or(|c| c.enabled) {
+                Activation::Active
+            } else {
+                Activation::Dormant(DormantReason::disabled("firewall.enabled"))
+            }
+        },
+    };
+    let ctx = init_test_ctx();
+    let fw_runs = Arc::new(AtomicU32::new(0));
+    let other_runs = Arc::new(AtomicU32::new(0));
+    let mut registry = ServiceRegistry::new();
+    registry.register(
+        &ctx,
+        counted(ServiceId::Nft, &[], FW_CONDITION.clone(), &fw_runs),
+    );
+    registry.register(
+        &ctx,
+        counted(ServiceId::Dns, &[], Condition::ALWAYS, &other_runs),
+    );
+    let supervisor = registry.start(&ctx).expect("start supervisor");
+    wait_status(&ctx, ServiceId::Nft, ServiceState::Online, None).await;
+
+    let disabled = FirewallConfig {
+        enabled: false,
+        ..FirewallConfig::default()
+    };
+    let _ = ctx.apply_config(ConfigPatch::new().with_firewall(disabled.clone()));
+    wait_status(
+        &ctx,
+        ServiceId::Nft,
+        ServiceState::Inactive,
+        Some(StateDetail::Dormant(DormantReason::disabled(
+            "firewall.enabled",
+        ))),
+    )
+    .await;
+
+    let _ = ctx.apply_config(ConfigPatch::new().with_firewall(FirewallConfig {
+        enabled: true,
+        ..disabled
+    }));
+    wait_status(&ctx, ServiceId::Nft, ServiceState::Online, None).await;
+    assert_eq!(fw_runs.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        other_runs.load(Ordering::SeqCst),
+        1,
+        "unrelated services are never touched"
+    );
+
+    supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
+}
+
+/// Dormancy propagates through a chain of `Requires` edges: C -> B -> A(dormant).
+#[tokio::test]
+async fn dormancy_propagates_transitively() {
+    static NEVER: Condition = Condition {
+        sections: &[],
+        eval: |_| Activation::Dormant(DormantReason::disabled("test")),
+    };
+    static B_DEPS: &[Edge] = &[Edge::requires(ServiceId::Db, LossPolicy::Continue)];
+    static C_DEPS: &[Edge] = &[Edge::requires(ServiceId::Dns, LossPolicy::Continue)];
+    let ctx = init_test_ctx();
+    let runs = Arc::new(AtomicU32::new(0));
+    let mut registry = ServiceRegistry::new();
+    registry.register(&ctx, counted(ServiceId::Db, &[], NEVER.clone(), &runs));
+    registry.register(
+        &ctx,
+        counted(ServiceId::Dns, B_DEPS, Condition::ALWAYS, &runs),
+    );
+    registry.register(
+        &ctx,
+        counted(ServiceId::Http, C_DEPS, Condition::ALWAYS, &runs),
+    );
+    let supervisor = registry.start(&ctx).expect("start supervisor");
+
+    wait_status(
+        &ctx,
+        ServiceId::Dns,
+        ServiceState::Inactive,
+        Some(StateDetail::DependencyDormant(ServiceId::Db)),
+    )
+    .await;
+    wait_status(
+        &ctx,
+        ServiceId::Http,
+        ServiceState::Inactive,
+        Some(StateDetail::DependencyDormant(ServiceId::Dns)),
+    )
+    .await;
+    assert_eq!(runs.load(Ordering::SeqCst), 0);
+
+    supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
+}
+
+/// While blocked on a dependency, a node reports what it is waiting for.
+#[tokio::test]
+async fn waiting_node_reports_its_blocker() {
+    struct SlowDb;
+    impl LanforgeService for SlowDb {
+        fn spec(&self) -> ServiceSpec {
+            dummy_spec(ServiceId::Db, &[], Condition::ALWAYS)
+        }
+    }
+    impl AsyncService for SlowDb {
+        async fn serve(
+            &mut self,
+            _ctx: &LanforgeContext,
+            h: &ServiceHandle,
+        ) -> Result<(), CoreError> {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            h.ready();
+            h.run_until_stopped(std::future::pending::<Result<(), CoreError>>())
+                .await
+                .map(|_| ())
+        }
+    }
+    static DEPS: &[Edge] = &[Edge::requires(ServiceId::Db, LossPolicy::Continue)];
+    let ctx = init_test_ctx();
+    let runs = Arc::new(AtomicU32::new(0));
+    let mut registry = ServiceRegistry::new();
+    registry.register(&ctx, || SlowDb);
+    registry.register(
+        &ctx,
+        counted(ServiceId::Http, DEPS, Condition::ALWAYS, &runs),
+    );
+    let supervisor = registry.start(&ctx).expect("start supervisor");
+
+    wait_status(
+        &ctx,
+        ServiceId::Http,
+        ServiceState::Starting,
+        Some(StateDetail::WaitingFor(ServiceId::Db)),
+    )
+    .await;
+    wait_status(&ctx, ServiceId::Http, ServiceState::Online, None).await;
+
+    supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
+}
+
+/// A service that ignores `Stop` is cancelled after its shutdown timeout instead of hanging.
+#[tokio::test]
+async fn unresponsive_service_is_cancelled_on_stop() {
+    struct Deaf;
+    impl LanforgeService for Deaf {
+        fn spec(&self) -> ServiceSpec {
+            dummy_spec(ServiceId::Dns, &[], Condition::ALWAYS)
+        }
+    }
+    impl AsyncService for Deaf {
+        async fn serve(
+            &mut self,
+            _ctx: &LanforgeContext,
+            h: &ServiceHandle,
+        ) -> Result<(), CoreError> {
+            h.ready();
+            std::future::pending().await
+        }
+    }
+    let ctx = init_test_ctx();
+    let mut registry = ServiceRegistry::new();
+    registry.register(&ctx, || Deaf);
+    let supervisor = registry.start(&ctx).expect("start supervisor");
+    wait_status(&ctx, ServiceId::Dns, ServiceState::Online, None).await;
+
+    control(&ctx, ServiceId::Dns, ServiceAction::Stop);
+    wait_status(
+        &ctx,
+        ServiceId::Dns,
+        ServiceState::Inactive,
+        Some(StateDetail::AdminStopped),
+    )
+    .await;
 
     supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
 }

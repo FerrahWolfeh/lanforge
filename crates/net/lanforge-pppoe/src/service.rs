@@ -21,8 +21,7 @@ use lanforge_types::config::ChangeImpact;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::pppoe::PppoeDataplane;
 use lanforge_types::system::{
-    DegradedReason, DormantReason, PppoeSessionState, PppoeStatusResponse, ServiceAction,
-    ServiceId, ServiceState,
+    DegradedReason, DormantReason, PppoeSessionState, PppoeStatusResponse, ServiceId, ServiceState,
 };
 use std::borrow::Cow;
 use std::io::Read;
@@ -30,6 +29,7 @@ use std::net::Ipv4Addr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::time::{Instant, sleep};
 use tracing::{debug, info, warn};
 
@@ -44,24 +44,15 @@ struct ActiveSessionMeta {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SystemInterrupt {
     Shutdown,
-    Stop,
-    Restart,
     ConfigUpdated,
     ConfigDisabled,
 }
 
-pub(crate) fn classify_system_event(event: &LanforgeEvent) -> Option<SystemInterrupt> {
+/// Admin stop/restart arrive as `ServiceCommand`s from the supervisor (`h.next_command()`),
+/// never from the bus; only the daemon-wide shutdown is observed here.
+pub(crate) const fn classify_system_event(event: &LanforgeEvent) -> Option<SystemInterrupt> {
     match event {
         LanforgeEvent::System(SystemEvent::Shutdown) => Some(SystemInterrupt::Shutdown),
-        LanforgeEvent::System(SystemEvent::ServiceControl { id, action })
-            if *id == ServiceId::Pppoe =>
-        {
-            match action {
-                ServiceAction::Stop => Some(SystemInterrupt::Stop),
-                ServiceAction::Restart => Some(SystemInterrupt::Restart),
-                ServiceAction::Start => None,
-            }
-        }
         _ => None,
     }
 }
@@ -659,17 +650,15 @@ impl PppoeService {
                     }
                 }
                 res = bus_rx.recv() => {
-                    let Ok(event) = res else { continue; };
-                    match classify_system_event(&event.event) {
-                        Some(SystemInterrupt::Shutdown) => {
-                            debug!(wan_iface = %self.cfg.wan_iface, "Carrier wait interrupted by daemon shutdown");
-                            return Err(PppoeError::NegotiationFailed("Shutdown received".into()));
-                        }
-                        Some(SystemInterrupt::Stop | SystemInterrupt::Restart) => {
-                            info!(wan_iface = %self.cfg.wan_iface, "Carrier wait interrupted by service control");
-                            return Err(PppoeError::NegotiationFailed("Service stopped or restarted".into()));
-                        }
-                        _ => {}
+                    // A closed bus means the daemon is going away; a lagged one only missed events.
+                    let shutdown = match res {
+                        Ok(event) => classify_system_event(&event.event) == Some(SystemInterrupt::Shutdown),
+                        Err(RecvError::Closed) => true,
+                        Err(RecvError::Lagged(_)) => false,
+                    };
+                    if shutdown {
+                        debug!(wan_iface = %self.cfg.wan_iface, "Carrier wait interrupted by daemon shutdown");
+                        return Err(PppoeError::NegotiationFailed("Shutdown received".into()));
                     }
                 }
             }
@@ -853,17 +842,15 @@ impl PppoeService {
                     }
                 }
                 res = bus_rx.recv() => {
-                    let Ok(event) = res else { continue; };
-                    match classify_system_event(&event.event) {
-                        Some(SystemInterrupt::Shutdown) => {
-                            debug!(wan_iface = %self.cfg.wan_iface, "Terminal wait interrupted by daemon shutdown");
-                            return Err(PppoeError::NegotiationFailed("Shutdown received".into()));
-                        }
-                        Some(SystemInterrupt::Stop | SystemInterrupt::Restart) => {
-                            info!(wan_iface = %self.cfg.wan_iface, "Terminal wait interrupted by service control");
-                            return Err(PppoeError::NegotiationFailed("Service stopped or restarted".into()));
-                        }
-                        _ => {}
+                    // A closed bus means the daemon is going away; a lagged one only missed events.
+                    let shutdown = match res {
+                        Ok(event) => classify_system_event(&event.event) == Some(SystemInterrupt::Shutdown),
+                        Err(RecvError::Closed) => true,
+                        Err(RecvError::Lagged(_)) => false,
+                    };
+                    if shutdown {
+                        debug!(wan_iface = %self.cfg.wan_iface, "Terminal wait interrupted by daemon shutdown");
+                        return Err(PppoeError::NegotiationFailed("Shutdown received".into()));
                     }
                 }
             }
@@ -955,8 +942,6 @@ impl PppoeService {
 
         let reason = match &flow_res {
             Ok(Some(SystemInterrupt::Shutdown) | None) => "Graceful shutdown".to_string(),
-            Ok(Some(SystemInterrupt::Stop)) => "Service control Stop".to_string(),
-            Ok(Some(SystemInterrupt::Restart)) => "Service control Restart".to_string(),
             Ok(Some(SystemInterrupt::ConfigUpdated)) => {
                 "Configuration updated (reconnect required)".to_string()
             }
@@ -1128,15 +1113,16 @@ impl AsyncService for PppoeService {
                 biased;
                 cmd = h.next_command() => {
                     match cmd {
-                        ServiceCommand::Stop | ServiceCommand::Shutdown => {
+                        cmd @ (ServiceCommand::Stop | ServiceCommand::Shutdown) => {
                             info!("PPPoE service received stop/shutdown command, exiting serve loop");
-                            self.teardown_active_session("Graceful shutdown".into()).await;
+                            let reason = if cmd == ServiceCommand::Stop { "Service stopped" } else { "Graceful shutdown" };
+                            self.teardown_active_session(reason.into()).await;
                             ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
                             break 'main_loop;
                         }
                         ServiceCommand::Restart => {
+                            // Bounced in place (PADT + new discovery); the task keeps running.
                             info!("PPPoE service received restart command, restarting session");
-                            h.request_restart();
                             self.teardown_active_session("Service restarted".into()).await;
                             self.attempt = 0;
                         }
@@ -1150,12 +1136,12 @@ impl AsyncService for PppoeService {
                             ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
                             break 'main_loop;
                         }
-                        Ok(Some(SystemInterrupt::Stop | SystemInterrupt::ConfigDisabled)) => {
+                        Ok(Some(SystemInterrupt::ConfigDisabled)) => {
                             info!("PPPoE service stopped");
                             ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
                             break 'main_loop;
                         }
-                        Ok(Some(SystemInterrupt::Restart | SystemInterrupt::ConfigUpdated)) => {
+                        Ok(Some(SystemInterrupt::ConfigUpdated)) => {
                             info!("PPPoE session restart requested, reconnecting");
                             self.attempt = 0;
                         }
@@ -1210,24 +1196,12 @@ impl AsyncService for PppoeService {
                             tokio::select! {
                                 () = sleep(delay) => {}
                                 event_res = sys_rx.recv() => {
-                                    if let Ok(timed) = event_res {
-                                        match classify_system_event(&timed.event) {
-                                            Some(SystemInterrupt::Shutdown) => {
-                                                info!("PPPoE service received shutdown during reconnect delay");
-                                                ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
-                                                break 'main_loop;
-                                            }
-                                            Some(SystemInterrupt::Stop) => {
-                                                info!("PPPoE service received stop during reconnect delay");
-                                                ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
-                                                break 'main_loop;
-                                            }
-                                            Some(SystemInterrupt::Restart) => {
-                                                info!("PPPoE service received restart during reconnect delay, retrying immediately");
-                                                self.attempt = 0;
-                                            }
-                                            _ => {}
-                                        }
+                                    if let Ok(timed) = event_res
+                                        && classify_system_event(&timed.event) == Some(SystemInterrupt::Shutdown)
+                                    {
+                                        info!("PPPoE service received shutdown during reconnect delay");
+                                        ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
+                                        break 'main_loop;
                                     }
                                 }
                                 delta_opt = self.config_sub.next() => {

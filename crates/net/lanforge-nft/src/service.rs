@@ -17,7 +17,7 @@ use lanforge_types::events::firewall::{FirewallAppliedSummary, FirewallEvent};
 use lanforge_types::events::pppoe::PppoeEvent;
 use lanforge_types::events::system::SystemEvent;
 use lanforge_types::network::firewall::{DynamicPortRequest, FirewallConfig, FirewallMode};
-use lanforge_types::system::{DormantReason, ServiceAction, ServiceId};
+use lanforge_types::system::{DormantReason, ServiceId};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::ruleset::RulesetBuilder;
@@ -362,20 +362,15 @@ impl AsyncService for NftService {
                 tokio::select! {
                     cmd = h.next_command() => {
                         match cmd {
-                            ServiceCommand::Stop => {
-                                info!("Firewall service received Stop command, flushing table and marking Inactive");
-                                let table = ctx
-                                    .get_firewall_config()
-                                    .map_or_else(|| "lanforge".into(), |c| c.table_name);
-                                Self::cleanup_table_internal(&table, self.inert).await;
-                                ctx.set_service_state(Self::SERVICE_ID, lanforge_types::system::ServiceState::Inactive);
-                            }
+                            // `cleanup()` removes the table once serve returns.
+                            ServiceCommand::Stop | ServiceCommand::Shutdown => break,
+                            // Reapplied in place: tearing the table down first would leave the
+                            // gateway without a firewall for the duration of the restart.
                             ServiceCommand::Start | ServiceCommand::Restart => {
                                 info!("Firewall service received Start/Restart command");
                                 self.reapply(&ctx, "service_control").await;
                                 h.ready();
                             }
-                            ServiceCommand::Shutdown => break,
                             _ => {}
                         }
                     }
@@ -446,22 +441,6 @@ impl AsyncService for NftService {
                     // System events: config reloads or shutdown
                     Ok(event) = sys_rx.recv() => {
                         match event.event {
-                            LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) if id == Self::SERVICE_ID => {
-                                match action {
-                                    ServiceAction::Stop => {
-                                        info!("Firewall service received Stop command, flushing table and marking Inactive");
-                                        let table = ctx
-                                            .get_firewall_config()
-                                            .map_or_else(|| "lanforge".into(), |c| c.table_name);
-                                        Self::cleanup_table_internal(&table, self.inert).await;
-                                        ctx.set_service_state(Self::SERVICE_ID, lanforge_types::system::ServiceState::Inactive);
-                                    }
-                                    ServiceAction::Start | ServiceAction::Restart => {
-                                        info!("Firewall service received Start/Restart command");
-                                        self.reapply(&ctx, "service_control").await;
-                                    }
-                                }
-                            }
                             LanforgeEvent::System(SystemEvent::ReloadConfig) => {
                                 debug!("Firewall configuration reload requested");
                                 self.reapply(&ctx, "config_reload").await;

@@ -1,5 +1,6 @@
 //! Per-service lifecycle runner task.
 
+use crate::supervisor::RunnerLinks;
 use crate::supervisor::backoff::{BackoffDecision, calculate_backoff, is_healthy};
 use crate::supervisor::node::{NodeHandle, is_settled};
 use futures::future::select_all;
@@ -10,13 +11,37 @@ use lanforge_core::service::{
     Activation, AsyncService, DegradedReason, Edge, EdgeKind, LanforgeService, LossPolicy,
     NodeStatus, ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_types::system::{ServiceId, ServiceState, StateDetail};
+use lanforge_types::system::{ServiceAction, ServiceId, ServiceState, StateDetail};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{Notify, mpsc, watch};
+use tokio::sync::{mpsc, watch};
+use tokio::time::sleep_until;
 use tracing::{debug, error, info, warn};
+
+/// Outcome of a wait that can be interrupted by shutdown or an admin request.
+enum Wake {
+    /// Re-run the lifecycle loop (condition, dependencies, start).
+    Retry,
+    /// The daemon is shutting down.
+    Shutdown,
+}
+
+/// Why the supervisor asked a running service to stop.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StopCause {
+    Admin,
+    Dormant,
+}
+
+/// Result of waiting for the dependencies of a node.
+enum DepsOutcome {
+    Ready,
+    /// A required dependency is dormant: this node is dormant too.
+    Dormant,
+    Interrupted(Wake),
+}
 
 /// Runner responsible for the complete lifecycle of one service.
 pub struct ServiceRunner<S, F>
@@ -29,8 +54,11 @@ where
     pub ctx: LanforgeContext,
     pub node: Arc<NodeHandle>,
     pub dep_rxs: HashMap<ServiceId, watch::Receiver<NodeStatus>>,
-    pub notify_condition: Arc<Notify>,
+    pub condition_rx: watch::Receiver<u64>,
+    pub control_rx: mpsc::Receiver<ServiceAction>,
     pub shutdown_rx: watch::Receiver<bool>,
+    /// Set by an admin `stop`; cleared by `start`/`restart`. Survives restarts of the loop.
+    admin_stopped: bool,
 }
 
 impl<S, F> ServiceRunner<S, F>
@@ -38,60 +66,74 @@ where
     S: AsyncService + LanforgeService + 'static,
     F: Fn() -> S + Send + Sync + 'static,
 {
+    /// Creates a runner for `spec` wired to the graph through `links`.
+    pub fn new(spec: ServiceSpec, factory: F, ctx: LanforgeContext, links: RunnerLinks) -> Self {
+        let shutdown_rx = links.node.shutdown_rx.clone();
+        Self {
+            spec,
+            factory,
+            ctx,
+            node: links.node,
+            dep_rxs: links.dep_rxs,
+            condition_rx: links.condition_rx,
+            control_rx: links.control_rx,
+            shutdown_rx,
+            admin_stopped: false,
+        }
+    }
+
+    fn is_shutting_down(&self) -> bool {
+        *self.shutdown_rx.borrow() || !self.ctx.is_running()
+    }
+
     /// Runs the supervised service loop until system shutdown.
     #[allow(clippy::too_many_lines)]
     pub async fn run(mut self) {
         let mut consecutive_failures: u32 = 0;
 
         loop {
-            if !self.ctx.is_running() || *self.shutdown_rx.borrow() {
-                self.node
-                    .set_status(&self.ctx, ServiceState::Inactive, None);
+            if self.is_shutting_down() {
                 break;
             }
 
-            // 1. Condition evaluation
-            let activation = self.spec.condition.evaluate(&self.ctx);
-            if let Activation::Dormant(reason) = activation {
+            // 0. Admin stop is sticky until an explicit start/restart (D-20).
+            if self.admin_stopped {
+                self.node.set_status(
+                    &self.ctx,
+                    ServiceState::Inactive,
+                    Some(StateDetail::AdminStopped),
+                );
+                match self.wait_while_idle(false).await {
+                    Wake::Retry => continue,
+                    Wake::Shutdown => break,
+                }
+            }
+
+            // 1. Condition evaluation. Mark the epoch seen *before* evaluating so a config
+            //    change racing with the evaluation still wakes the wait below.
+            self.condition_rx.borrow_and_update();
+            if let Activation::Dormant(reason) = self.spec.condition.evaluate(&self.ctx) {
                 debug!(service = %self.spec.id, reason = ?reason, "Service condition dormant");
                 self.node.set_status(
                     &self.ctx,
                     ServiceState::Inactive,
                     Some(StateDetail::Dormant(reason)),
                 );
-
-                // Wait for condition re-evaluation notification or shutdown
-                tokio::select! {
-                    () = self.notify_condition.notified() => continue,
-                    _ = self.shutdown_rx.changed() => {
-                        if *self.shutdown_rx.borrow() { break; }
-                    }
+                match self.wait_while_idle(true).await {
+                    Wake::Retry => continue,
+                    Wake::Shutdown => break,
                 }
-                continue;
             }
 
             // 2. Dependency resolution
             match self.wait_for_dependencies().await {
-                Ok(true) => {
-                    // All dependencies satisfied, proceed to start
-                }
-                Ok(false) => {
-                    // A required dependency is dormant; this service is now dormant
-                    // Wait for dependency change or condition notification
-                    tokio::select! {
-                        () = self.notify_condition.notified() => continue,
-                        _ = self.shutdown_rx.changed() => {
-                            if *self.shutdown_rx.borrow() { break; }
-                        }
-                    }
-                    continue;
-                }
-                Err(()) => {
-                    // Shutdown requested
-                    self.node
-                        .set_status(&self.ctx, ServiceState::Inactive, None);
-                    break;
-                }
+                DepsOutcome::Ready => {}
+                DepsOutcome::Dormant => match self.wait_while_idle(true).await {
+                    Wake::Retry => continue,
+                    Wake::Shutdown => break,
+                },
+                DepsOutcome::Interrupted(Wake::Retry) => continue,
+                DepsOutcome::Interrupted(Wake::Shutdown) => break,
             }
 
             // 3. Execution Phase
@@ -109,8 +151,10 @@ where
             if let Err(init_err) = service.init(&self.ctx).await {
                 error!(service = %self.spec.id, error = %init_err, "Service initialization failed");
                 consecutive_failures += 1;
-                self.handle_failure(init_err, consecutive_failures).await;
-                continue;
+                match self.handle_failure(init_err, consecutive_failures).await {
+                    Wake::Retry => continue,
+                    Wake::Shutdown => break,
+                }
             }
 
             // Listen for readiness events to sync NodeStatus watch channel
@@ -121,6 +165,8 @@ where
 
             let mut lost_deps: Vec<(ServiceId, LossPolicy)> = Vec::new();
             let mut loss_overridden = false;
+            let mut stop_cause: Option<StopCause> = None;
+            let mut stop_deadline: Option<tokio::time::Instant> = None;
             let serve_res = loop {
                 tokio::select! {
                     biased;
@@ -130,6 +176,43 @@ where
                         if *self.shutdown_rx.borrow() {
                             let _ = cmd_tx.send(ServiceCommand::Shutdown).await;
                             break None;
+                        }
+                    }
+
+                    // A service that ignores Stop is cancelled after its shutdown timeout.
+                    () = sleep_until(stop_deadline.unwrap_or_else(tokio::time::Instant::now)), if stop_deadline.is_some() => {
+                        warn!(service = %self.spec.id, "Service did not stop within its shutdown timeout; cancelling");
+                        break None;
+                    }
+
+                    Some(action) = self.control_rx.recv() => {
+                        match action {
+                            ServiceAction::Stop => {
+                                info!(service = %self.spec.id, "Admin stop requested");
+                                self.admin_stopped = true;
+                                stop_cause = Some(StopCause::Admin);
+                                stop_deadline.get_or_insert_with(|| tokio::time::Instant::now() + self.spec.shutdown_timeout);
+                                let _ = cmd_tx.send(ServiceCommand::Stop).await;
+                            }
+                            ServiceAction::Restart => {
+                                // The service decides: bounce in place (PPPoE, firewall) or return
+                                // after `request_restart()` so the runner starts it again.
+                                info!(service = %self.spec.id, "Admin restart requested");
+                                let _ = cmd_tx.send(ServiceCommand::Restart).await;
+                            }
+                            ServiceAction::Start => {
+                                debug!(service = %self.spec.id, "Admin start ignored: service already running");
+                            }
+                        }
+                    }
+
+                    // Live condition re-evaluation (D-3): a disabled service is stopped, others untouched.
+                    Ok(()) = self.condition_rx.changed(), if stop_cause.is_none() => {
+                        if let Activation::Dormant(reason) = self.spec.condition.evaluate(&self.ctx) {
+                            info!(service = %self.spec.id, ?reason, "Condition became dormant; stopping service");
+                            stop_cause = Some(StopCause::Dormant);
+                            stop_deadline.get_or_insert_with(|| tokio::time::Instant::now() + self.spec.shutdown_timeout);
+                            let _ = cmd_tx.send(ServiceCommand::Stop).await;
                         }
                     }
 
@@ -178,9 +261,7 @@ where
             let _ = service.on_shutdown();
             let _ = service.cleanup(&self.ctx).await;
 
-            if *self.shutdown_rx.borrow() || !self.ctx.is_running() {
-                self.node
-                    .set_status(&self.ctx, ServiceState::Inactive, None);
+            if self.is_shutting_down() {
                 break;
             }
 
@@ -188,105 +269,150 @@ where
                 consecutive_failures = 0;
             }
 
-            if let Some(res) = serve_res {
-                match res {
-                    Ok(()) => {
-                        if handle.is_restart_requested() {
-                            debug!(service = %self.spec.id, "Restart requested, recycling");
-                            continue;
-                        }
-                        info!(service = %self.spec.id, "Service exited cleanly");
-                        self.node
-                            .set_status(&self.ctx, ServiceState::Inactive, None);
-                        // Wait for condition reactivation or shutdown
-                        tokio::select! {
-                            () = self.notify_condition.notified() => {}
-                            _ = self.shutdown_rx.changed() => {
-                                if *self.shutdown_rx.borrow() { break; }
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        error!(service = %self.spec.id, error = %err, "Service terminated with error");
-                        consecutive_failures += 1;
-                        self.handle_failure(err, consecutive_failures).await;
+            // A supervisor-requested stop wins over whatever the service returned, including a
+            // restart it requested earlier and handled in place.
+            if stop_cause.is_some() {
+                continue;
+            }
+
+            match serve_res {
+                Some(Ok(())) if handle.is_restart_requested() => {
+                    debug!(service = %self.spec.id, "Restart requested, recycling");
+                }
+                Some(Ok(())) => {
+                    info!(service = %self.spec.id, "Service exited cleanly");
+                    self.node.set_status(
+                        &self.ctx,
+                        ServiceState::Inactive,
+                        Some(StateDetail::Exited),
+                    );
+                    if matches!(self.wait_while_idle(true).await, Wake::Shutdown) {
+                        break;
                     }
                 }
-            } else {
-                break;
+                Some(Err(err)) => {
+                    error!(service = %self.spec.id, error = %err, "Service terminated with error");
+                    consecutive_failures += 1;
+                    if matches!(
+                        self.handle_failure(err, consecutive_failures).await,
+                        Wake::Shutdown
+                    ) {
+                        break;
+                    }
+                }
+                // Cancelled outside of shutdown (only via the stop deadline, handled above).
+                None => {}
+            }
+        }
+
+        self.node
+            .set_status(&self.ctx, ServiceState::Inactive, None);
+    }
+
+    /// Waits while the node is not running: until shutdown, an admin request, or (when
+    /// `on_condition`) a condition epoch bump.
+    async fn wait_while_idle(&mut self, on_condition: bool) -> Wake {
+        loop {
+            tokio::select! {
+                _ = self.shutdown_rx.changed() => {
+                    if *self.shutdown_rx.borrow() {
+                        return Wake::Shutdown;
+                    }
+                }
+                Ok(()) = self.condition_rx.changed(), if on_condition => return Wake::Retry,
+                Some(action) = self.control_rx.recv() => {
+                    if let Some(wake) = self.apply_idle_action(action) {
+                        return wake;
+                    }
+                }
             }
         }
     }
 
-    async fn wait_for_dependencies(&mut self) -> Result<bool, ()> {
+    /// Applies an admin request received while the service is not running.
+    fn apply_idle_action(&mut self, action: ServiceAction) -> Option<Wake> {
+        match action {
+            ServiceAction::Stop if self.admin_stopped => None,
+            ServiceAction::Stop => {
+                info!(service = %self.spec.id, "Admin stop requested while idle");
+                self.admin_stopped = true;
+                Some(Wake::Retry)
+            }
+            ServiceAction::Start | ServiceAction::Restart => {
+                info!(service = %self.spec.id, ?action, "Admin start requested");
+                self.admin_stopped = false;
+                Some(Wake::Retry)
+            }
+        }
+    }
+
+    async fn wait_for_dependencies(&mut self) -> DepsOutcome {
         for &edge in self.spec.deps {
-            match edge.kind {
-                lanforge_core::service::EdgeKind::Requires => {
-                    let target = edge.target;
-                    if let Some(rx) = self.dep_rxs.get_mut(&target) {
-                        loop {
-                            let status = rx.borrow().clone();
-                            if status.state == ServiceState::Online
-                                || status.state == ServiceState::Degraded
-                            {
-                                break;
-                            }
-                            if status.state == ServiceState::Inactive
-                                && matches!(status.detail, Some(StateDetail::Dormant(_)))
-                            {
-                                // Required dependency is dormant -> propagate dormancy
-                                self.node.set_status(
-                                    &self.ctx,
-                                    ServiceState::Inactive,
-                                    Some(StateDetail::DependencyDormant(target)),
-                                );
-                                return Ok(false);
-                            }
-                            if *self.shutdown_rx.borrow() {
-                                return Err(());
-                            }
-
-                            tokio::select! {
-                                _ = self.shutdown_rx.changed() => {
-                                    if *self.shutdown_rx.borrow() { return Err(()); }
-                                }
-                                res = rx.changed() => {
-                                    if res.is_err() { return Err(()); }
-                                }
-                            }
+            let target = edge.target;
+            let Some(mut rx) = self.dep_rxs.get(&target).cloned() else {
+                continue;
+            };
+            loop {
+                let status = rx.borrow_and_update().clone();
+                let satisfied = match edge.kind {
+                    EdgeKind::Requires => {
+                        if matches!(status.state, ServiceState::Online | ServiceState::Degraded) {
+                            true
+                        } else if status.state == ServiceState::Inactive
+                            && matches!(
+                                status.detail,
+                                Some(
+                                    StateDetail::Dormant(_)
+                                        | StateDetail::DependencyDormant(_)
+                                        | StateDetail::AdminStopped
+                                )
+                            )
+                        {
+                            // Dormancy propagates transitively through Requires edges.
+                            self.node.set_status(
+                                &self.ctx,
+                                ServiceState::Inactive,
+                                Some(StateDetail::DependencyDormant(target)),
+                            );
+                            return DepsOutcome::Dormant;
+                        } else {
+                            false
                         }
                     }
-                }
-                lanforge_core::service::EdgeKind::After => {
-                    let target = edge.target;
-                    if let Some(rx) = self.dep_rxs.get_mut(&target) {
-                        loop {
-                            let status = rx.borrow().clone();
-                            if is_settled(status.state) {
-                                break;
-                            }
-                            if *self.shutdown_rx.borrow() {
-                                return Err(());
-                            }
-
-                            tokio::select! {
-                                _ = self.shutdown_rx.changed() => {
-                                    if *self.shutdown_rx.borrow() { return Err(()); }
-                                }
-                                res = rx.changed() => {
-                                    if res.is_err() { return Err(()); }
-                                }
-                            }
-                        }
-                    }
-                }
-                lanforge_core::service::EdgeKind::Wants => {
+                    EdgeKind::After => is_settled(status.state),
                     // Advisory: non-blocking
+                    EdgeKind::Wants => true,
+                };
+                if satisfied {
+                    break;
+                }
+
+                self.node.set_status(
+                    &self.ctx,
+                    ServiceState::Starting,
+                    Some(StateDetail::WaitingFor(target)),
+                );
+                tokio::select! {
+                    _ = self.shutdown_rx.changed() => {
+                        if *self.shutdown_rx.borrow() {
+                            return DepsOutcome::Interrupted(Wake::Shutdown);
+                        }
+                    }
+                    res = rx.changed() => {
+                        if res.is_err() {
+                            return DepsOutcome::Interrupted(Wake::Shutdown);
+                        }
+                    }
+                    Some(action) = self.control_rx.recv() => {
+                        if let Some(wake) = self.apply_idle_action(action) {
+                            return DepsOutcome::Interrupted(wake);
+                        }
+                    }
                 }
             }
         }
 
-        Ok(true)
+        DepsOutcome::Ready
     }
 
     /// Waits for the next loss or recovery transition of a `Requires` dependency.
@@ -359,9 +485,11 @@ where
         }
     }
 
-    async fn handle_failure(&mut self, err: CoreError, failures: u32) {
+    /// Publishes the failure, then waits for the backoff delay (or, once retries are
+    /// exhausted, for a config change or an admin start). An admin start/restart retries now.
+    async fn handle_failure(&mut self, err: CoreError, failures: u32) -> Wake {
         let decision = calculate_backoff(&self.spec.restart, failures);
-        match decision {
+        let (last_error, delay) = match decision {
             BackoffDecision::RetryIn(delay) => {
                 warn!(
                     service = %self.spec.id,
@@ -369,19 +497,7 @@ where
                     failures,
                     "Scheduling restart after backoff delay"
                 );
-                self.node.set_status(
-                    &self.ctx,
-                    ServiceState::Error,
-                    Some(StateDetail::Failed {
-                        attempts: failures,
-                        last_error: err.to_string(),
-                    }),
-                );
-                tokio::select! {
-                    () = tokio::time::sleep(delay) => {}
-                    _ = self.shutdown_rx.changed() => {}
-                    () = self.notify_condition.notified() => {}
-                }
+                (err.to_string(), Some(delay))
             }
             BackoffDecision::Exhausted => {
                 error!(
@@ -389,17 +505,38 @@ where
                     failures,
                     "Service retry limit exhausted; entering terminal Error state"
                 );
-                self.node.set_status(
-                    &self.ctx,
-                    ServiceState::Error,
-                    Some(StateDetail::Failed {
-                        attempts: failures,
-                        last_error: format!("Retries exhausted: {err}"),
-                    }),
-                );
-                tokio::select! {
-                    _ = self.shutdown_rx.changed() => {}
-                    () = self.notify_condition.notified() => {}
+                (format!("Retries exhausted: {err}"), None)
+            }
+        };
+        self.node.set_status(
+            &self.ctx,
+            ServiceState::Error,
+            Some(StateDetail::Failed {
+                attempts: failures,
+                last_error,
+            }),
+        );
+
+        let backoff = async {
+            match delay {
+                Some(delay) => tokio::time::sleep(delay).await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::pin!(backoff);
+        loop {
+            tokio::select! {
+                () = &mut backoff => return Wake::Retry,
+                _ = self.shutdown_rx.changed() => {
+                    if *self.shutdown_rx.borrow() {
+                        return Wake::Shutdown;
+                    }
+                }
+                Ok(()) = self.condition_rx.changed() => return Wake::Retry,
+                Some(action) = self.control_rx.recv() => {
+                    if let Some(wake) = self.apply_idle_action(action) {
+                        return wake;
+                    }
                 }
             }
         }

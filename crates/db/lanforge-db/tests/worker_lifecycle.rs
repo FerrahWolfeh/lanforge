@@ -6,7 +6,7 @@ use lanforge_api::config_file::{ConfigFile, Section};
 use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent, StorageEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::{AsyncService, ServiceHandle};
+use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use lanforge_db::config::DatabaseConfig;
 use lanforge_db::{
     DbWorker, DeviceStore, DhcpConfigStore, FirewallConfigStore, LanforgeDb, LogDb,
@@ -21,10 +21,11 @@ use lanforge_types::network::dns::adblock::RewriteAnswer;
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
-use lanforge_types::system::{ServiceAction, ServiceId, ServiceState};
+use lanforge_types::system::{ServiceId, ServiceState};
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
 use smallvec::smallvec;
 use tempfile::tempdir;
+use tokio::sync::mpsc;
 use tokio::time::{sleep, timeout};
 
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
@@ -552,10 +553,16 @@ async fn test_db_worker_service_control_and_restart_resilience() {
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
+    // Run 1 receives commands from the supervisor, as an admin `lanforge service restart db` does.
+    let (cmd_tx, cmd_rx) = mpsc::channel(8);
     let handle = tokio::spawn(async move {
-        let h1 = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
+        let h1 = ServiceHandle::with_command_channel(ServiceId::Db, ctx_clone.clone(), cmd_rx);
         // Run 1
         worker.serve(&ctx_clone, &h1).await.unwrap();
+        assert!(
+            h1.is_restart_requested(),
+            "restart must be requested before serve returns"
+        );
         let h2 = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
         // Run 2 (Supervisor re-invokes serve on same worker instance)
         worker.serve(&ctx_clone, &h2).await
@@ -568,11 +575,11 @@ async fn test_db_worker_service_control_and_restart_resilience() {
         .await
         .unwrap();
 
-    // 1. Issue ServiceAction::Restart
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {
-        id: lanforge_types::system::ServiceId::Db,
-        action: ServiceAction::Restart,
-    }));
+    // 1. Issue a restart command
+    cmd_tx
+        .send(ServiceCommand::Restart)
+        .await
+        .expect("worker alive");
 
     // Barrier 2: give worker a moment to enter Run 2, then query storage
     sleep(Duration::from_millis(50)).await;

@@ -30,7 +30,6 @@ use lanforge_db_core::{
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::QueryLogEntry;
 use lanforge_types::network::dns::{DnsRequest, DnsResponse};
-use lanforge_types::system::ServiceAction;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -762,14 +761,6 @@ impl AsyncService for DbWorker {
                                 let _ = log_db.save_dns_lifetime_stats(&stats);
                             }
                             break_loop = true;
-                        }
-                        LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) => {
-                            if *id == lanforge_types::system::ServiceId::Db && matches!(action, ServiceAction::Stop | ServiceAction::Restart) {
-                                info!(action = ?action, "Database worker received service control, flushing and exiting loop");
-                                self.flush_batch(&db, &log_db).await;
-                                self.flush_live_config_to_file(&db).await;
-                                break_loop = true;
-                            }
                         }
                         #[cfg(feature = "adblock")]
                         LanforgeEvent::Dns(DnsEvent::QueryBlocked { src_addr, domain }) => {
