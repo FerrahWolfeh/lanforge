@@ -23,8 +23,9 @@ use std::time::Duration;
 use tokio::time::{Instant, timeout_at};
 use tracing::debug;
 
-/// Overall authentication deadline (`pppd` waits 30 s per side).
-const AUTH_DEADLINE: Duration = Duration::from_secs(30);
+/// Overall authentication deadline: well above a slow RADIUS round trip (several seconds), short
+/// enough that a concentrator still holding the previous session is retried soon.
+const AUTH_DEADLINE: Duration = Duration::from_secs(20);
 /// PAP restart timer (RFC 1334 suggests the LCP default of 3 s).
 const PAP_RESTART_TIMER: Duration = Duration::from_secs(3);
 
@@ -57,6 +58,13 @@ pub async fn authenticate(
     let mut chap_answered: Option<u8> = None;
 
     loop {
+        // Checked every iteration: a peer that keeps sending frames must not extend the phase.
+        if Instant::now() >= deadline {
+            return Err(PppoeError::AuthTimeout(timeout_reason(
+                creds.auth,
+                chap_answered,
+            )));
+        }
         if creds.auth == AuthMethod::Pap && Instant::now() >= pap_resend_at {
             pap_id = pap_id.wrapping_add(1);
             send_pap_request(session, creds, pap_id).await?;

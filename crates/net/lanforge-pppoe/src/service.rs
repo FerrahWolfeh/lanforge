@@ -23,6 +23,7 @@ use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::pppoe::PppoeDataplane;
 use lanforge_types::system::{
     DegradedReason, DormantReason, PppoeSessionState, PppoeStatusResponse, ServiceId, ServiceState,
+    StateDetail,
 };
 use std::borrow::Cow;
 use std::io::Read;
@@ -248,6 +249,25 @@ impl PppoeService {
                 },
             }
         }
+    }
+
+    /// Settles the service for daemon readiness without a session. WAN readiness is the physical
+    /// path to the modem/terminal; the ISP session must never hold back the LAN services (or
+    /// systemd's start timeout kills the whole daemon). A live session is left as is.
+    fn settle_degraded(&self, why: DegradedReason) {
+        if self.ctx.get_service_state(Self::SERVICE_ID) == ServiceState::Online {
+            return;
+        }
+        self.ctx
+            .set_service_state(Self::SERVICE_ID, ServiceState::Degraded);
+        self.ctx
+            .set_service_detail(Self::SERVICE_ID, Some(StateDetail::Degraded(why)));
+        let _ = self
+            .ctx
+            .bus()
+            .publish(LanforgeEvent::System(SystemEvent::ServiceReady {
+                id: Self::SERVICE_ID,
+            }));
     }
 
     #[must_use]
@@ -669,6 +689,7 @@ impl PppoeService {
             PppoeSessionState::WaitingForCarrier,
             Some("No physical carrier detected (cable disconnected or power off)".into()),
         );
+        self.settle_degraded(DegradedReason::custom("no carrier on the WAN interface"));
 
         let mut bus_rx = self.ctx.bus().subscribe_system();
         let mut check_timer = tokio::time::interval(Duration::from_secs(1));
@@ -955,6 +976,9 @@ impl PppoeService {
             "Initiating PPPoE Active Discovery (PADI)"
         );
         self.publish_session_state(PppoeSessionState::Discovering, None);
+        // The physical path to the modem/terminal is confirmed (or its soft gate expired): what
+        // remains depends on the ISP and must not hold back daemon readiness.
+        self.settle_degraded(DegradedReason::custom("negotiating PPPoE session"));
         let disc_res = self.perform_discovery(ifindex, mac, &transport).await?;
         let keepalive_prober = if matches!(self.terminal_status, Some((true, _, _))) {
             prober.as_ref().map(|p| {

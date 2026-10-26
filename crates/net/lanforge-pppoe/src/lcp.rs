@@ -28,8 +28,9 @@ pub const LCP_OPT_MAGIC: u8 = 5;
 
 /// RFC 1661 §4.6 Restart timer default.
 const RESTART_TIMER: Duration = Duration::from_secs(3);
-/// Max-Configure (10) × Restart timer, as `pppd` does.
-const LCP_DEADLINE: Duration = Duration::from_secs(30);
+/// Five restart periods. A concentrator that has not completed LCP by then is usually still
+/// holding a previous session; failing early lets the reconnect backoff take over.
+const LCP_DEADLINE: Duration = Duration::from_secs(15);
 /// Bound on frames kept for the authentication phase.
 const MAX_EARLY_FRAMES: usize = 8;
 

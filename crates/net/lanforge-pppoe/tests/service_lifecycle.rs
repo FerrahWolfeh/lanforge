@@ -896,3 +896,56 @@ async fn test_pppoe_reacts_to_padt_from_the_concentrator() {
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_secs(2), handle).await;
 }
+
+/// Daemon readiness (`READY=1` to systemd) waits for every service to settle. WAN readiness is the
+/// physical path to the modem/terminal, not the ISP session: a concentrator that does not answer
+/// must not keep PPPoE unsettled, or `TimeoutStartSec` kills the daemon and the LAN (DHCP, DNS,
+/// firewall) restart-loops with it.
+#[tokio::test]
+async fn test_pppoe_settles_before_the_session_is_up() {
+    let (ctx, _bus) = create_test_context();
+
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        ..Default::default()
+    };
+    ctx.update_pppoe_config(cfg.clone());
+
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(
+        handle_inert,
+        MockBrasConfig {
+            fail_discovery: true,
+            ..Default::default()
+        },
+    );
+
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let (h, cmd_tx) = controlled_handle(&ctx);
+    let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
+
+    let settled = timeout(Duration::from_secs(2), async {
+        loop {
+            let st = ctx.get_service_state(ServiceId::Pppoe);
+            if matches!(st, ServiceState::Degraded | ServiceState::Online) {
+                return st;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert_eq!(
+        settled,
+        Ok(ServiceState::Degraded),
+        "PPPoE must settle (Degraded) while the ISP does not answer"
+    );
+
+    cmd_tx
+        .send(ServiceCommand::Stop)
+        .await
+        .expect("service alive");
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}
