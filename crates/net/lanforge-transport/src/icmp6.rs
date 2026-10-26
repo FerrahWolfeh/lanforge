@@ -185,6 +185,12 @@ impl Icmp6Transport {
     }
 }
 
+impl crate::metrics::TransportStats for Icmp6Transport {
+    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+        self.inner.metrics.snapshot()
+    }
+}
+
 fn set_icmp6_filter_rs_only(sock: &Socket) -> io::Result<()> {
     let mut filter = [0xFFu8; 32];
     let t = ICMPV6_TYPE_RS as usize;

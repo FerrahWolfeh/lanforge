@@ -1,4 +1,5 @@
 use crate::inert::{InertHandle, InertPort};
+use crate::metrics::TransportMetrics;
 use std::io;
 use std::net::Ipv4Addr;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -36,6 +37,7 @@ enum ArpBackend {
 pub struct ArpProber {
     local_mac: [u8; 6],
     backend: Arc<ArpBackend>,
+    metrics: Arc<TransportMetrics>,
 }
 
 impl ArpProber {
@@ -83,6 +85,7 @@ impl ArpProber {
                 fd: async_fd,
                 ifindex,
             }),
+            metrics: Arc::new(TransportMetrics::new()),
         })
     }
 
@@ -94,8 +97,15 @@ impl ArpProber {
         let prober = Self {
             local_mac,
             backend: Arc::new(ArpBackend::Inert(port)),
+            metrics: Arc::new(TransportMetrics::new()),
         };
         (handle, prober)
+    }
+
+    /// Accesses transparent traffic metrics.
+    #[must_use]
+    pub fn metrics(&self) -> &TransportMetrics {
+        &self.metrics
     }
 
     /// Sends an ARP probe to `target` and awaits a matching reply within `timeout`.
@@ -106,6 +116,7 @@ impl ArpProber {
         timeout: Duration,
     ) -> io::Result<Option<ArpReply>> {
         let frame = build_arp_probe(self.local_mac, target, sender);
+        self.metrics.record_tx(frame.len());
         let start = Instant::now();
 
         match self.backend.as_ref() {
@@ -166,6 +177,7 @@ impl ArpProber {
                         #[allow(clippy::cast_sign_loss)]
                         let len = n as usize;
                         if let Some(mac) = parse_arp_reply(&buf[..len], target) {
+                            self.metrics.record_rx(len);
                             return Ok(Some(ArpReply {
                                 mac,
                                 rtt: start.elapsed(),
@@ -197,6 +209,7 @@ impl ArpProber {
                         pkt = rx.recv() => {
                             if let Some((bytes, ())) = pkt {
                                 if let Some(mac) = parse_arp_reply(&bytes, target) {
+                                    self.metrics.record_rx(bytes.len());
                                     return Ok(Some(ArpReply {
                                         mac,
                                         rtt: start.elapsed(),
@@ -210,6 +223,12 @@ impl ArpProber {
                 }
             }
         }
+    }
+}
+
+impl crate::metrics::TransportStats for ArpProber {
+    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+        self.metrics.snapshot()
     }
 }
 

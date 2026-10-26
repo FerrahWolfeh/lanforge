@@ -79,3 +79,16 @@ impl InterfaceSnapshot {
         self.links.iter().find(|l| l.ifindex == ifindex)
     }
 }
+
+/// Point-in-time snapshot of low-level network transport metrics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct TransportSnapshot {
+    pub rx_packets: u64,
+    pub rx_bytes: u64,
+    pub tx_packets: u64,
+    pub tx_bytes: u64,
+    pub dropped: u64,
+    pub rate_limited: u64,
+    pub errors: u64,
+    pub last_error_age_secs: Option<u64>,
+}

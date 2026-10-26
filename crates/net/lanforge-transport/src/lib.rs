@@ -22,7 +22,7 @@ pub use icmp::{IcmpPinger, parse_icmpv4_echo_reply, parse_icmpv6_echo_reply};
 pub use icmp6::Icmp6Transport;
 pub use inert::InertHandle;
 pub use limiter::{RateLimitConfig, RateLimiter};
-pub use metrics::TransportMetrics;
+pub use metrics::{TransportMetrics, TransportSnapshot, TransportStats};
 pub use tcp::DualTcpListener;
 pub use udp::UdpTransport;
 pub use wol::{build_magic_packet, send_wol_magic_packet};

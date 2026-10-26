@@ -441,6 +441,8 @@ pub struct ServiceBanner {
     pub stats: Vec<(Cow<'static, str>, String)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<StateDetail>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<crate::network::snapshot::TransportSnapshot>,
 }
 
 /// Actions that can be performed on a service.

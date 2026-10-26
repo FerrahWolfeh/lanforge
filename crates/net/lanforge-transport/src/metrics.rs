@@ -1,4 +1,13 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub use lanforge_types::network::snapshot::TransportSnapshot;
+
+/// Trait for transport types exposing point-in-time metrics snapshots.
+pub trait TransportStats: Send + Sync {
+    /// Captures a point-in-time snapshot of low-level transport metrics.
+    fn snapshot(&self) -> TransportSnapshot;
+}
 
 /// Transparent, lock-free traffic counters for network transports.
 #[derive(Debug, Default)]
@@ -8,6 +17,9 @@ pub struct TransportMetrics {
     tx_packets: AtomicU64,
     tx_bytes: AtomicU64,
     dropped_packets: AtomicU64,
+    rate_limited_packets: AtomicU64,
+    errors: AtomicU64,
+    last_error_timestamp: AtomicU64,
 }
 
 impl TransportMetrics {
@@ -19,6 +31,9 @@ impl TransportMetrics {
             tx_packets: AtomicU64::new(0),
             tx_bytes: AtomicU64::new(0),
             dropped_packets: AtomicU64::new(0),
+            rate_limited_packets: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+            last_error_timestamp: AtomicU64::new(0),
         }
     }
 
@@ -37,6 +52,21 @@ impl TransportMetrics {
     #[inline]
     pub fn record_drop(&self) {
         self.dropped_packets.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_rate_limited(&self) {
+        self.rate_limited_packets.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_error(&self) {
+        self.errors.fetch_add(1, Ordering::Relaxed);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.last_error_timestamp.store(now, Ordering::Relaxed);
     }
 
     #[must_use]
@@ -64,12 +94,59 @@ impl TransportMetrics {
         self.dropped_packets.load(Ordering::Relaxed)
     }
 
+    #[must_use]
+    pub fn rate_limited_packets(&self) -> u64 {
+        self.rate_limited_packets.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn errors(&self) -> u64 {
+        self.errors.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn last_error_age_secs(&self) -> Option<u64> {
+        let ts = self.last_error_timestamp.load(Ordering::Relaxed);
+        if ts == 0 {
+            None
+        } else {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            Some(now.saturating_sub(ts))
+        }
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> TransportSnapshot {
+        TransportSnapshot {
+            rx_packets: self.rx_packets(),
+            rx_bytes: self.rx_bytes(),
+            tx_packets: self.tx_packets(),
+            tx_bytes: self.tx_bytes(),
+            dropped: self.dropped_packets(),
+            rate_limited: self.rate_limited_packets(),
+            errors: self.errors(),
+            last_error_age_secs: self.last_error_age_secs(),
+        }
+    }
+
     pub fn reset(&self) {
         self.rx_packets.store(0, Ordering::Relaxed);
         self.rx_bytes.store(0, Ordering::Relaxed);
         self.tx_packets.store(0, Ordering::Relaxed);
         self.tx_bytes.store(0, Ordering::Relaxed);
         self.dropped_packets.store(0, Ordering::Relaxed);
+        self.rate_limited_packets.store(0, Ordering::Relaxed);
+        self.errors.store(0, Ordering::Relaxed);
+        self.last_error_timestamp.store(0, Ordering::Relaxed);
+    }
+}
+
+impl TransportStats for TransportMetrics {
+    fn snapshot(&self) -> TransportSnapshot {
+        self.snapshot()
     }
 }
 

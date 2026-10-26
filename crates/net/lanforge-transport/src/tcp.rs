@@ -1,3 +1,4 @@
+use crate::metrics::TransportMetrics;
 use std::io;
 use std::net::{
     Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpListener as StdTcpListener,
@@ -14,13 +15,18 @@ enum TcpBackend {
     KernelSingle(TokioTcpListener),
 }
 
+struct TcpInner {
+    backend: TcpBackend,
+    metrics: TransportMetrics,
+}
+
 /// Y-Shaped Dual-Stack asynchronous TCP listener.
 ///
 /// Binds native IPv4 and native IPv6 listeners concurrently, accepting incoming
 /// connections through a single unified `accept().await` call.
 #[derive(Clone)]
 pub struct DualTcpListener {
-    inner: Arc<TcpBackend>,
+    inner: Arc<TcpInner>,
 }
 
 impl DualTcpListener {
@@ -69,19 +75,28 @@ impl DualTcpListener {
             (Ok(v4), Ok(v6)) => {
                 debug!(%v4_addr, %v6_addr, "TCP: Dual-socket Y-listener active");
                 Ok(Self {
-                    inner: Arc::new(TcpBackend::KernelDual { v4, v6 }),
+                    inner: Arc::new(TcpInner {
+                        backend: TcpBackend::KernelDual { v4, v6 },
+                        metrics: TransportMetrics::new(),
+                    }),
                 })
             }
             (Ok(v4), Err(e)) => {
                 warn!(%v6_addr, "TCP: IPv6 bind failed ({e}), falling back to IPv4 single-listener");
                 Ok(Self {
-                    inner: Arc::new(TcpBackend::KernelSingle(v4)),
+                    inner: Arc::new(TcpInner {
+                        backend: TcpBackend::KernelSingle(v4),
+                        metrics: TransportMetrics::new(),
+                    }),
                 })
             }
             (Err(e), Ok(v6)) => {
                 warn!(%v4_addr, "TCP: IPv4 bind failed ({e}), falling back to IPv6 single-listener");
                 Ok(Self {
-                    inner: Arc::new(TcpBackend::KernelSingle(v6)),
+                    inner: Arc::new(TcpInner {
+                        backend: TcpBackend::KernelSingle(v6),
+                        metrics: TransportMetrics::new(),
+                    }),
                 })
             }
             (Err(e4), Err(e6)) => Err(io::Error::new(
@@ -97,13 +112,22 @@ impl DualTcpListener {
         std_listener.set_nonblocking(true)?;
         let tokio_listener = TokioTcpListener::from_std(std_listener)?;
         Ok(Self {
-            inner: Arc::new(TcpBackend::KernelSingle(tokio_listener)),
+            inner: Arc::new(TcpInner {
+                backend: TcpBackend::KernelSingle(tokio_listener),
+                metrics: TransportMetrics::new(),
+            }),
         })
+    }
+
+    /// Accesses transparent traffic metrics.
+    #[must_use]
+    pub fn metrics(&self) -> &TransportMetrics {
+        &self.inner.metrics
     }
 
     /// Accepts the next incoming TCP connection from either the IPv4 or IPv6 arm.
     pub async fn accept(&self) -> io::Result<(TcpStream, SocketAddr)> {
-        match &*self.inner {
+        let res = match &self.inner.backend {
             TcpBackend::KernelDual { v4, v6 } => {
                 tokio::select! {
                     res = v4.accept() => res,
@@ -111,15 +135,31 @@ impl DualTcpListener {
                 }
             }
             TcpBackend::KernelSingle(listener) => listener.accept().await,
+        };
+
+        match &res {
+            Ok(_) => {
+                self.inner.metrics.record_rx(1);
+            }
+            Err(_) => {
+                self.inner.metrics.record_error();
+            }
         }
+        res
     }
 
     /// Returns the local addresses of the bound listeners.
     pub fn local_addrs(&self) -> io::Result<Vec<SocketAddr>> {
-        match &*self.inner {
+        match &self.inner.backend {
             TcpBackend::KernelDual { v4, v6 } => Ok(vec![v4.local_addr()?, v6.local_addr()?]),
             TcpBackend::KernelSingle(listener) => Ok(vec![listener.local_addr()?]),
         }
+    }
+}
+
+impl crate::metrics::TransportStats for DualTcpListener {
+    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+        self.inner.metrics.snapshot()
     }
 }
 

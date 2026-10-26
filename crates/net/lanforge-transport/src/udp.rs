@@ -291,6 +291,12 @@ impl UdpTransport {
     }
 }
 
+impl crate::metrics::TransportStats for UdpTransport {
+    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+        self.inner.metrics.snapshot()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
