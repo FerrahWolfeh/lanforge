@@ -62,6 +62,7 @@ use crate::traits::DhcpPool;
 pub use config::Dhcpv4Config;
 pub use io::{Dhcpv4InertChannels, Dhcpv4InertHandle, Dhcpv4InertReply, Dhcpv4Transport};
 use lanforge_core::context::LanforgeContext;
+use lanforge_transport::{TransportSnapshot, TransportStats};
 
 const DHCPV4_DEPS: &[Edge] = &[Edge::requires(
     ServiceId::Interfaces,
@@ -135,7 +136,20 @@ impl LanforgeService for Dhcpv4Service {
     }
 }
 
+impl TransportStats for Dhcpv4Service {
+    fn snapshot(&self) -> TransportSnapshot {
+        self.transport
+            .as_ref()
+            .map(TransportStats::snapshot)
+            .unwrap_or_default()
+    }
+}
+
 impl AsyncService for Dhcpv4Service {
+    fn transport_snapshot(&self, _ctx: &LanforgeContext) -> Option<TransportSnapshot> {
+        self.transport.as_ref().map(TransportStats::snapshot)
+    }
+
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
         let active_leases = ctx.with_state(|state| {
             u32::try_from(
@@ -358,7 +372,7 @@ impl Dhcpv4Service {
     }
 
     async fn run_server(
-        &self,
+        &mut self,
         pools: Vec<Dhcpv4Pool>,
         h: &ServiceHandle,
     ) -> Result<RunResult, CoreError> {
@@ -367,9 +381,12 @@ impl Dhcpv4Service {
         };
 
         let mut server = DhcpServer::new(current_cfg.clone(), self.ctx.clone());
-        let transport = match self.transport {
-            Some(ref t) => t.clone(),
-            None => Dhcpv4Transport::new(&current_cfg.iface, current_cfg.port)?,
+        let transport = if let Some(ref t) = self.transport {
+            t.clone()
+        } else {
+            let t = Dhcpv4Transport::new(&current_cfg.iface, current_cfg.port)?;
+            self.transport = Some(t.clone());
+            t
         };
 
         // Pre-allocate static reservations to avoid collisions with dynamic pool

@@ -73,6 +73,12 @@ impl Dhcpv6Transport {
     }
 }
 
+impl lanforge_transport::TransportStats for Dhcpv6Transport {
+    fn snapshot(&self) -> lanforge_transport::TransportSnapshot {
+        self.inner.snapshot()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -80,6 +80,7 @@ use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
     ServiceCommand, ServiceHandle, ServiceSpec,
 };
+use lanforge_transport::{TransportSnapshot, TransportStats};
 use lanforge_types::system::{DormantReason, ServiceId};
 
 /// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
@@ -167,7 +168,20 @@ impl LanforgeService for Dhcpv6Service {
     }
 }
 
+impl TransportStats for Dhcpv6Service {
+    fn snapshot(&self) -> TransportSnapshot {
+        self.transport
+            .as_ref()
+            .map(TransportStats::snapshot)
+            .unwrap_or_default()
+    }
+}
+
 impl AsyncService for Dhcpv6Service {
+    fn transport_snapshot(&self, _ctx: &LanforgeContext) -> Option<TransportSnapshot> {
+        self.transport.as_ref().map(TransportStats::snapshot)
+    }
+
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
         let active_leases = ctx.with_state(|state| {
             u32::try_from(
@@ -365,7 +379,7 @@ impl Dhcpv6Service {
 
     #[allow(clippy::too_many_lines)]
     async fn run_server(
-        &self,
+        &mut self,
         pools: Vec<Dhcpv6Pool>,
         h: &ServiceHandle,
     ) -> Result<RunResult, CoreError> {
@@ -391,9 +405,12 @@ impl Dhcpv6Service {
         self.initialize_pool_reservations(&mut server, &current_cfg);
 
         // Setup transport socket
-        let transport = match self.transport {
-            Some(ref t) => t.clone(),
-            None => io::Dhcpv6Transport::new(&current_cfg.iface, current_cfg.port)?,
+        let transport = if let Some(ref t) = self.transport {
+            t.clone()
+        } else {
+            let t = io::Dhcpv6Transport::new(&current_cfg.iface, current_cfg.port)?;
+            self.transport = Some(t.clone());
+            t
         };
         self.publish_pool_stats(&server);
 

@@ -1,6 +1,6 @@
 pub mod config;
 
-use crate::config::TftpConfig;
+pub use crate::config::TftpConfig;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
@@ -54,6 +54,20 @@ impl TftpService {
             cfg,
             bound_addr: Arc::new(RwLock::new(None)),
             transports: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+
+    #[must_use]
+    pub fn with_transports(
+        ctx: LanforgeContext,
+        cfg: TftpConfig,
+        transports: Vec<UdpTransport>,
+    ) -> Self {
+        Self {
+            _ctx: ctx,
+            cfg,
+            bound_addr: Arc::new(RwLock::new(None)),
+            transports: Arc::new(RwLock::new(transports)),
         }
     }
 }

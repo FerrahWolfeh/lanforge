@@ -14,6 +14,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
+use lanforge_transport::{TransportSnapshot, TransportStats};
 use lanforge_types::network::dns::{
     AdblockCheckResponse, AdblockSourceMatch, AdblockSourceStatus, DnsAdblockSourcesResponse,
     DnsCacheEntry, DnsCacheResponse, DnsCacheStatsExtResponse, DnsClass, DnsLifetimeStats,
@@ -238,7 +239,20 @@ impl lanforge_core::service::LanforgeService for DnsService {
     }
 }
 
+impl TransportStats for DnsService {
+    fn snapshot(&self) -> TransportSnapshot {
+        self.custom_transport
+            .as_ref()
+            .map(TransportStats::snapshot)
+            .unwrap_or_default()
+    }
+}
+
 impl AsyncService for DnsService {
+    fn transport_snapshot(&self, _ctx: &LanforgeContext) -> Option<TransportSnapshot> {
+        self.custom_transport.as_ref().map(TransportStats::snapshot)
+    }
+
     fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
         let snap = self.stats.snapshot();
         let total = snap.requests_total;
@@ -366,6 +380,9 @@ impl AsyncService for DnsService {
             for addr in &addrs {
                 let transport =
                     crate::server::transport::net::bind_udp(*addr).map_err(CoreError::Io)?;
+                if self.custom_transport.is_none() {
+                    self.custom_transport = Some(transport.clone());
+                }
                 info!(%addr, "DNS: UDP listening");
                 for _ in 0..parallelism {
                     workers.push(crate::server::worker::udp::spawn_udp_worker(

@@ -1,6 +1,7 @@
 use crate::v4::raw::RawSender;
 use dhcproto::{Decodable, Decoder};
 use lanforge_core::error::CoreError;
+use lanforge_transport::{TransportMetrics, TransportSnapshot, TransportStats};
 use lanforge_types::identifiers::MacAddr;
 use parking_lot::Mutex;
 use socket2::{Domain, Protocol, Socket, Type};
@@ -91,6 +92,7 @@ enum TransportBackend {
 #[derive(Clone)]
 pub struct Dhcpv4Transport {
     backend: TransportBackend,
+    metrics: Arc<TransportMetrics>,
 }
 
 impl Dhcpv4Transport {
@@ -103,6 +105,7 @@ impl Dhcpv4Transport {
                 socket: Arc::new(socket),
                 raw_tx: Arc::new(Mutex::new(raw_tx)),
             },
+            metrics: Arc::new(TransportMetrics::new()),
         })
     }
 
@@ -120,6 +123,7 @@ impl Dhcpv4Transport {
             handle,
             Self {
                 backend: TransportBackend::Inert { channels },
+                metrics: Arc::new(TransportMetrics::new()),
             },
         )
     }
@@ -132,7 +136,7 @@ impl Dhcpv4Transport {
 
     /// Receives a packet asynchronously from the transport.
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
-        match &self.backend {
+        let res = match &self.backend {
             TransportBackend::Kernel { socket, .. } => socket.recv_from(buf).await,
             TransportBackend::Inert { channels } => {
                 let mut rx = channels.in_rx.lock().await;
@@ -148,7 +152,14 @@ impl Dhcpv4Transport {
                     )),
                 }
             }
+        };
+
+        match &res {
+            Ok((n, _)) => self.metrics.record_rx(*n),
+            Err(_) => self.metrics.record_error(),
         }
+
+        res
     }
 
     /// Sends a DHCP reply, either via raw L2 socket (unicast/broadcast) or via the UDP socket to a relay agent,
@@ -164,7 +175,7 @@ impl Dhcpv4Transport {
         mac: MacAddr,
         port: u16,
     ) -> Result<(), CoreError> {
-        match &self.backend {
+        let res = match &self.backend {
             TransportBackend::Kernel { socket, raw_tx } => {
                 if giaddr == Ipv4Addr::UNSPECIFIED {
                     let (final_dst_ip, dst_mac_arr) = if broadcast {
@@ -202,7 +213,20 @@ impl Dhcpv4Transport {
                     CoreError::Generic(format!("Failed to deliver inert DHCP reply: {e}"))
                 })
             }
+        };
+
+        match &res {
+            Ok(()) => self.metrics.record_tx(packet.len()),
+            Err(_) => self.metrics.record_error(),
         }
+
+        res
+    }
+}
+
+impl TransportStats for Dhcpv4Transport {
+    fn snapshot(&self) -> TransportSnapshot {
+        self.metrics.snapshot()
     }
 }
 

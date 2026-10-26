@@ -71,7 +71,7 @@ use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
     ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::Icmp6Transport;
+use lanforge_transport::{Icmp6Transport, TransportSnapshot, TransportStats};
 use rand::RngExt;
 use std::collections::HashMap;
 use std::io;
@@ -441,7 +441,7 @@ impl RaService {
 
     #[allow(clippy::too_many_lines)]
     async fn run_server(
-        &self,
+        &mut self,
         mut current_cfg: RaConfig,
         h: &ServiceHandle,
     ) -> Result<RunResult, CoreError> {
@@ -460,21 +460,22 @@ impl RaService {
 
         let iface_index = self.ctx.target_ifindex().unwrap_or(1);
 
-        let (mac, transport) = match self.transport {
-            Some(ref t) => {
-                let mac = self
-                    .ctx
-                    .with_state(|state| {
-                        state
-                            .interfaces
-                            .interface_ips
-                            .get(&iface_index)
-                            .and_then(|i| i.mac)
-                    })
-                    .map_or([0x02, 0x11, 0x22, 0x33, 0x44, 0x55], |m| m.0);
-                (mac, t.clone())
-            }
-            None => self.resolve_interface_resources(iface_index).await?,
+        let (mac, transport) = if let Some(ref t) = self.transport {
+            let mac = self
+                .ctx
+                .with_state(|state| {
+                    state
+                        .interfaces
+                        .interface_ips
+                        .get(&iface_index)
+                        .and_then(|i| i.mac)
+                })
+                .map_or([0x02, 0x11, 0x22, 0x33, 0x44, 0x55], |m| m.0);
+            (mac, t.clone())
+        } else {
+            let (mac, t) = self.resolve_interface_resources(iface_index).await?;
+            self.transport = Some(t.clone());
+            (mac, t)
         };
 
         let mut state = RaState::new();
@@ -666,7 +667,20 @@ impl LanforgeService for RaService {
     }
 }
 
+impl TransportStats for RaService {
+    fn snapshot(&self) -> TransportSnapshot {
+        self.transport
+            .as_ref()
+            .map(TransportStats::snapshot)
+            .unwrap_or_default()
+    }
+}
+
 impl AsyncService for RaService {
+    fn transport_snapshot(&self, _ctx: &LanforgeContext) -> Option<TransportSnapshot> {
+        self.transport.as_ref().map(TransportStats::snapshot)
+    }
+
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
         let ra_status = ctx.ra_status();
         let if_state = ctx.get_interface_state(ctx.target_ifindex().unwrap_or(0));
