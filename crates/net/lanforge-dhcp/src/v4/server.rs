@@ -32,7 +32,7 @@
 //! | Decline | Mark IP as conflicted (2h quarantine) | None |
 //! | Inform | Provide config options (no IP) | Ack |
 
-const MAX_LEASE_TIME: u32 = 30 * 24 * 60 * 60; // 30 dias em segundos
+const MAX_LEASE_TIME: u32 = 30 * 24 * 60 * 60; // 30 days, in seconds
 const PROTECTED_OPTIONS: &[u8] = &[53, 54, 51, 1];
 
 use dhcproto::v4::{self, DhcpOption, HType, Message, MessageType, Opcode, UnknownOption};
@@ -464,12 +464,6 @@ impl DhcpServer {
         yiaddr: Ipv4Addr,
         device: Option<&Device>,
     ) {
-        let chaddr = request.chaddr();
-        let mac = MacAddr::from_slice(&chaddr[..6]).unwrap_or(MacAddr::ZERO);
-        let mut dev_owned = None;
-        let dev_ref = resolve_device(&self.ctx, mac, device, &mut dev_owned);
-        let is_static = dev_ref.is_some_and(lanforge_types::device::Device::is_static);
-
         let pool_opt = self.pool.pool_for_ip(yiaddr);
         let pool_router = pool_opt.and_then(|p| p.router).unwrap_or(self.cfg.router);
         let pool_mask = pool_opt
@@ -500,14 +494,14 @@ impl DhcpServer {
             }
         });
 
-        let effective_lease_time = pool_opt
-            .and_then(|p| p.lease_time)
-            .unwrap_or(self.cfg.lease_time);
-        let lease_time = if is_static {
-            u32::MAX
-        } else {
-            effective_lease_time
-        };
+        // Static hosts get the same finite lease as everyone else: a fixed address must not stop
+        // the client from renewing and picking up configuration changes.
+        let lease_time = std::cmp::min(
+            pool_opt
+                .and_then(|p| p.lease_time)
+                .unwrap_or(self.cfg.lease_time),
+            MAX_LEASE_TIME,
+        );
 
         opts.insert(DhcpOption::AddressLeaseTime(lease_time));
         opts.insert(DhcpOption::SubnetMask(pool_mask));
@@ -527,12 +521,9 @@ impl DhcpServer {
             opts.insert(DhcpOption::DomainSearch(names));
         }
 
-        let (t1, t2) = if is_static {
-            (u32::MAX, u32::MAX)
-        } else {
-            let safe_lease_time = std::cmp::min(effective_lease_time, MAX_LEASE_TIME);
-            (safe_lease_time / 2, safe_lease_time.saturating_mul(7) / 8)
-        };
+        // RFC 2131 §4.4.5 defaults: T1 = 0.5 × lease, T2 = 0.875 × lease.
+        // `lease_time` is clamped to 30 days, so `* 7` cannot overflow.
+        let (t1, t2) = (lease_time / 2, lease_time * 7 / 8);
         opts.insert(DhcpOption::Renewal(t1));
         opts.insert(DhcpOption::Rebinding(t2));
 
@@ -1384,7 +1375,9 @@ mod tests {
             panic!("Expected offer");
         }
 
-        // 3. Check static lease receives infinite lifetime
+        // 3. A static host is a device that always gets the same address, nothing more: it gets
+        // the normal finite lease and T1/T2 (RFC 2131 §4.4.5) so it renews and picks up DNS,
+        // router or MTU changes. An infinite lease meant it never asked again.
         // Make the device static in context
         let static_ip = Ipv4Addr::new(192, 168, 1, 10);
         let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
@@ -1407,12 +1400,14 @@ mod tests {
         let res_static = srv.handle_packet(&req, device.as_deref());
         if let HandleResult::Reply { packet, .. } = res_static {
             let reply = decode_reply(&packet);
+            let lease = srv.cfg.lease_time;
+            assert_eq!(reply.yiaddr(), static_ip);
             let lease_time = reply.opts().get(v4::OptionCode::AddressLeaseTime);
-            assert_eq!(lease_time, Some(&DhcpOption::AddressLeaseTime(u32::MAX)));
+            assert_eq!(lease_time, Some(&DhcpOption::AddressLeaseTime(lease)));
             let renewal = reply.opts().get(v4::OptionCode::Renewal);
-            assert_eq!(renewal, Some(&DhcpOption::Renewal(u32::MAX)));
+            assert_eq!(renewal, Some(&DhcpOption::Renewal(lease / 2)));
             let rebinding = reply.opts().get(v4::OptionCode::Rebinding);
-            assert_eq!(rebinding, Some(&DhcpOption::Rebinding(u32::MAX)));
+            assert_eq!(rebinding, Some(&DhcpOption::Rebinding(lease * 7 / 8)));
         } else {
             panic!("Expected ack");
         }
