@@ -9,7 +9,7 @@ use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_ra::{RaConfig, RaService};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::ra::{
-    PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RouterPriority,
+    PrefixLifetime, PrefixSource, PreviousLanPrefix, RAPrefix, RaServerConfig, RouterPriority,
 };
 use lanforge_types::system::ServiceState;
 use lanforge_types::update::{DeviceUpdate, InterfaceState};
@@ -294,6 +294,57 @@ async fn test_ra_prefix_deprecation_on_renumber() {
         "a returning prefix must not be advertised twice"
     );
     assert!(opts[0].2 > 0);
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    assert!(
+        timeout(Duration::from_millis(500), serve_handle)
+            .await
+            .is_ok()
+    );
+}
+
+/// The delegated prefix changed while the daemon was down: the first RA after startup must
+/// deprecate the prefix advertised before (hydrated from the DB), not leave clients preferring it.
+#[tokio::test]
+async fn test_ra_deprecates_prefix_from_before_restart() {
+    let (ctx, bus) = create_test_context();
+    ctx.update_ra_server_config(RaServerConfig {
+        enabled: true,
+        iface: Some("lan0".into()),
+        prefixes: vec![RAPrefix::gua_dynamic()],
+        deprecate_on_renumber: true,
+        ..RaServerConfig::default()
+    });
+    let old: Ipv6Addr = "2804:bdc:508e:db00::".parse().unwrap();
+    let new: Ipv6Addr = "2804:bdc:509d:4500::".parse().unwrap();
+    ctx.provide_shared(Arc::new(PreviousLanPrefix(
+        lanforge_types::network::Ipv6Prefix::from_addr(old),
+    )));
+    set_iface_gua(&ctx, 1, Some("2804:bdc:509d:4500::1".parse().unwrap()));
+
+    let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
+    let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+
+    let ra = timeout(Duration::from_millis(1000), handle.recv_payload())
+        .await
+        .expect("Timeout waiting for startup RA")
+        .expect("RA channel closed");
+    let prefixes = ra_prefixes(&ra);
+    let find = |p: Ipv6Addr| prefixes.iter().find(|(a, _, _)| *a == p).copied();
+    assert!(
+        find(new).is_some_and(|(_, _, pref)| pref > 0),
+        "current prefix advertised"
+    );
+    assert_eq!(
+        find(old).map(|(_, _, pref)| pref),
+        Some(0),
+        "previous prefix deprecated"
+    );
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     assert!(

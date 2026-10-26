@@ -22,6 +22,7 @@ use lanforge_types::network::dhcp::{
 use lanforge_types::network::dns::AdblockUrlEntry;
 #[cfg(feature = "dns")]
 use lanforge_types::network::dns::adblock::{AdblockRuleEntry, AdblockUrlKind};
+use lanforge_types::network::ra::PreviousLanPrefix;
 use lanforge_types::network::{
     IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, classify_ipv6, is_ula,
 };
@@ -195,9 +196,19 @@ impl Bootstrapper {
         let if_state = Self::perform_initial_scan(&handle, &messages, target_ifindex, &ctx).await?;
         Self::log_welcome_banner(&cfg, &if_state);
 
+        // The live LAN prefix comes from the scan above (the OS owns the interface, D-12). The
+        // stored one is only history: if the delegated prefix changed while we were down, RA
+        // deprecates it at startup. It must never override the scanned state.
         if let Ok(Some(stored_gua)) = db.load_last_gua_prefix() {
-            info!("Restored stored GUA prefix from DB: {stored_gua}");
-            let _ = ctx.signal_gua_prefix_change(target_ifindex, stored_gua, 7200, 7200);
+            let current = if_state
+                .gua
+                .map(lanforge_types::network::Ipv6Prefix::from_addr);
+            if current == Some(stored_gua) {
+                debug!("Stored LAN GUA prefix matches the interface: {stored_gua}");
+            } else {
+                info!(previous = %stored_gua, ?current, "LAN GUA prefix changed since last run; RA will deprecate the previous one");
+                ctx.provide_shared(Arc::new(PreviousLanPrefix(stored_gua)));
+            }
         }
 
         // --- PHASE 4/5: Handover to Daemon ---

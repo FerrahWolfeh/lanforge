@@ -58,7 +58,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::network::ra::{
     ICMPV6_TYPE_RS, MAX_INITIAL_RTR_ADVERT_INTERVAL, MAX_INITIAL_RTR_ADVERTISEMENTS,
-    MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS, RAPrefix, RaServerConfig,
+    MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS, PreviousLanPrefix, RAPrefix, RaServerConfig,
 };
 use lanforge_types::system::{DormantReason, RaStatusResponse, RunResult};
 
@@ -477,14 +477,22 @@ impl RaService {
 
         let mut state = RaState::new();
         // Seed the advertised prefixes from the LAN interface, so a renumbering after startup
-        // deprecates the prefix clients already hold.
+        // deprecates the prefix clients already hold. A prefix advertised before the daemon
+        // restarted that is no longer delegated is the starting point instead, so the first RA
+        // already deprecates it.
         let lan_ips = self.ctx.get_interface_state(iface_index);
-        state.last_gua = lan_ips
+        let current_gua = lan_ips
             .gua
             .map(lanforge_types::network::Ipv6Prefix::from_addr);
         state.last_ula = lan_ips
             .ula
             .map(lanforge_types::network::Ipv6Prefix::from_addr);
+        state.last_gua = self
+            .ctx
+            .get_shared::<PreviousLanPrefix>()
+            .map(|prev| prev.0)
+            .or(current_gua);
+        state.update_prefix_and_deprecate(current_gua, true, current_cfg.deprecate_on_renumber);
 
         // Immediate RA on startup
         send_ra_internal(

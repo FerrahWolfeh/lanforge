@@ -422,6 +422,13 @@ impl RouterPriority {
     }
 }
 
+/// LAN GUA prefix advertised before the last daemon restart (hydrated from the DB at boot).
+///
+/// If the delegated prefix changed while the daemon was down, RA deprecates this prefix at
+/// startup (RFC 4862 §5.5.3e) so clients stop preferring addresses that no longer route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreviousLanPrefix(pub crate::network::Ipv6Prefix);
+
 /// Full runtime configuration for the Router Advertisement service.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]

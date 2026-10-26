@@ -50,7 +50,8 @@ impl Default for Dhcpv6Config {
     fn default() -> Self {
         Self {
             enabled: true,
-            iface: "end0".into(),
+            // Empty: inherits `system.iface` when the TOML does not set one (same as DHCPv4).
+            iface: String::new(),
             lease_time: 86400,
             ula_prefix: None,
             ula_prefix_len: 64,

@@ -375,6 +375,18 @@ source = "broken" # Invalid variant
         assert!(file_cfg.hosts.contains_key("nas"));
     }
 
+    /// A `[dhcp.v6]` section without `iface` must leave it empty so `to_dhcpv6_config` inherits
+    /// `system.iface` (it used to default to "end0" and serve the wrong interface).
+    #[cfg(feature = "dhcp")]
+    #[test]
+    fn test_dhcpv6_iface_defaults_to_empty_for_inheritance() {
+        let cfg: TomlConfig =
+            toml::from_str("[system]\niface = \"lan0\"\n\n[dhcp.v6]\nenabled = true\n")
+                .expect("minimal config parses");
+        assert_eq!(cfg.dhcp.v6.iface, "");
+        assert_eq!(cfg.dhcp.v4.iface, "");
+    }
+
     #[test]
     fn test_docs_example_config_parses_cleanly() {
         let path = concat!(

@@ -677,8 +677,14 @@ impl AsyncService for DbWorker {
                     // 2. Process specific events
                     let mut break_loop = false;
                     lanforge_core::match_event!(timed_event, {
+                        // Remember the LAN's delegated prefix only (not `ppp0`'s own), and keep the
+                        // last known one while it is briefly withdrawn during a reconnect.
                         LanforgeEvent::Network(lanforge_core::bus::NetworkEvent::PrefixChanged(details)) => {
-                            let _ = db.save_last_gua_prefix(details.gua);
+                            if Some(details.ifindex) == ctx.target_ifindex()
+                                && let Some(gua) = details.gua
+                            {
+                                let _ = db.save_last_gua_prefix(Some(gua));
+                            }
                         }
                         LanforgeEvent::Device(DeviceEvent::NetworkUpdate { mac, change, .. }) => {
                             if change.is_persistent() {
