@@ -381,32 +381,6 @@ impl LanforgeContext {
         self.inner.runtime.set_recovery_mode(recovery);
     }
 
-    /// Returns true if the network interfaces are ready.
-    ///
-    /// This flag is set after interface discovery completes successfully.
-    #[must_use]
-    pub fn is_if_ready(&self) -> bool {
-        self.inner.runtime.is_if_ready()
-    }
-
-    /// Sets the interface readiness state.
-    pub fn set_if_ready(&self, ready: bool) {
-        self.inner.runtime.set_if_ready(ready);
-    }
-
-    /// Returns true if the `PPPoE` session is ready.
-    ///
-    /// This flag is set when `PPPoE` session is established or if `PPPoE` is disabled.
-    #[must_use]
-    pub fn is_pppoe_ready(&self) -> bool {
-        self.inner.runtime.is_pppoe_ready()
-    }
-
-    /// Sets the `PPPoE` session readiness state.
-    pub fn set_pppoe_ready(&self, ready: bool) {
-        self.inner.runtime.set_pppoe_ready(ready);
-    }
-
     /// Returns a point-in-time snapshot of the effective WAN L3 connectivity.
     #[must_use]
     pub fn wan_snapshot(&self) -> WanSnapshot {

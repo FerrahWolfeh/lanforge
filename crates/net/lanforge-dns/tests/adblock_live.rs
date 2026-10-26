@@ -96,7 +96,6 @@ async fn test_adblock_live_comprehensive_battery() {
 
     let bus = Arc::new(EventBus::new());
     let ctx_instance = LanforgeContext::new(bus, State::new(), None);
-    ctx_instance.set_pppoe_ready(true);
 
     // 1. Configure 3 sources:
     // Source 1: Live StevenBlack hosts from GitHub

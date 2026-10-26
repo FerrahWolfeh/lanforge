@@ -123,11 +123,11 @@ async fn test_service_handle_stream() {
     let mut handle = ctx.service_handle();
 
     // 1. Publish regular event
-    let _ = handle.publish(LanforgeEvent::System(SystemEvent::DbReady));
+    let _ = handle.publish(LanforgeEvent::System(SystemEvent::StateReady));
     let next = handle.next_event().await;
     assert!(matches!(
         next.unwrap().event,
-        LanforgeEvent::System(SystemEvent::DbReady)
+        LanforgeEvent::System(SystemEvent::StateReady)
     ));
 
     // 2. Shutdown terminates the stream

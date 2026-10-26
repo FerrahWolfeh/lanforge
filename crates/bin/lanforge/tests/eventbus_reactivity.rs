@@ -311,10 +311,6 @@ async fn test_traffic_eventbus_reactivity() {
     .expect("Timeout waiting for SqmCleared on ppp0");
     assert!(sqm_cleared);
 
-    // 4. SystemEvent::InterfaceReady: Absorbed without errors
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::InterfaceReady));
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
     // Clean shutdown
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_millis(500), handle).await;

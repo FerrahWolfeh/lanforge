@@ -110,7 +110,10 @@ type EbpfSessionHandle = Option<crate::ebpf::EbpfSession>;
 #[cfg(not(feature = "ebpf"))]
 type EbpfSessionHandle = Option<()>;
 
-const PPPOE_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
+const PPPOE_DEPS: &[Edge] = &[Edge::requires(
+    ServiceId::Interfaces,
+    lanforge_core::service::LossPolicy::Continue,
+)];
 
 pub struct PppoeService {
     cfg: PppoeConfig,
@@ -197,7 +200,9 @@ impl PppoeService {
     }
 
     async fn teardown_active_session(&mut self, reason: String) {
-        let had_session = self.active_session.is_some() || self.ctx.is_pppoe_ready();
+        let had_session = self.active_session.is_some()
+            || self.ctx.pppoe_status().is_some()
+            || self.ctx.wan_snapshot().is_up();
         let session_meta = self.active_session.take();
         self.connected_at = None;
         if let Some(ref meta) = session_meta
@@ -227,7 +232,6 @@ impl PppoeService {
             .await;
         }
 
-        self.ctx.set_pppoe_ready(false);
         self.ctx.set_pppoe_status(None);
 
         if had_session {
@@ -662,7 +666,6 @@ impl PppoeService {
                 },
             ))));
 
-        self.ctx.set_pppoe_ready(true);
         self.ctx
             .set_service_state(Self::SERVICE_ID, ServiceState::Online);
         self.ctx.set_service_detail(Self::SERVICE_ID, None);
@@ -1176,7 +1179,6 @@ impl AsyncService for PppoeService {
         if !self.cfg.enabled {
             info!("PPPoE service is disabled in configuration.");
             h.dormant(DormantReason::disabled("pppoe.enabled"));
-            ctx.set_pppoe_ready(true);
             return Ok(());
         }
 
@@ -1194,7 +1196,6 @@ impl AsyncService for PppoeService {
                     reason: "/dev/ppp device unavailable".into(),
                 }));
             ctx.set_service_state(Self::SERVICE_ID, ServiceState::Error);
-            ctx.set_pppoe_ready(true);
             return Ok(());
         }
 
@@ -1210,7 +1211,6 @@ impl AsyncService for PppoeService {
                     reason: "eBPF dataplane not compiled in".into(),
                 }));
             ctx.set_service_state(Self::SERVICE_ID, ServiceState::Error);
-            ctx.set_pppoe_ready(true);
             return Ok(());
         }
 

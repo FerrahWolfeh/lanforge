@@ -9,6 +9,7 @@ use tracing::{debug, info};
 use crate::bootstrap::BootstrapResult;
 use crate::event_loop::run_event_loop;
 use crate::registry::ServiceRegistry;
+use crate::synthetic::{InterfacesService, WanService};
 use lanforge_db::LogStore;
 use lanforge_db::worker::DbWorker;
 #[cfg(feature = "dhcp")]
@@ -166,6 +167,10 @@ impl Daemon {
         }
 
         crate::spawn_services!(self.registry, &self.ctx, {
+            // 0. Synthetic Graph Nodes (Supervisor & Observer Managed)
+            async [cfg] => InterfacesService::new(cfg.system.iface.clone()),
+            async [] => WanService::new(),
+
             async [ctx, cfg, db, log_db] => DbWorker::new(cfg.database.clone(), ctx, db, log_db),
 
             #[cfg(feature = "discovery")]

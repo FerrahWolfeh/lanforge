@@ -351,6 +351,7 @@ impl TrafficService {
         let mut sys_rx = ctx.bus().subscribe_system();
         let mut pppoe_rx = ctx.bus().subscribe_pppoe();
         let mut traffic_rx = ctx.bus().subscribe_traffic();
+        let mut if_rx = ctx.watch_interfaces();
 
         let mut telemetry_tick = tokio::time::interval(std::time::Duration::from_millis(2500));
         telemetry_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -383,6 +384,10 @@ impl TrafficService {
                         _ => {}
                     }
                 }
+                Ok(()) = if_rx.changed() => {
+                    self.handle_interface_ready(ctx).await;
+                }
+
                 _ = telemetry_tick.tick() => {
                     if !self.inert {
                         let wan = self.active_wan.as_deref();
@@ -418,8 +423,8 @@ impl TrafficService {
 
                 sys_event = sys_rx.recv() => {
                     match sys_event {
-                        Ok(te) => match te.event {
-                            LanforgeEvent::System(SystemEvent::Shutdown) => {
+                        Ok(te) => {
+                            if matches!(te.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
                                 debug!("Traffic: Shutdown signal received");
                                 let history = crate::collector::get_traffic_history_snapshot().await;
                                 if !history.is_empty() {
@@ -429,11 +434,7 @@ impl TrafficService {
                                 }
                                 break;
                             }
-                            LanforgeEvent::System(SystemEvent::InterfaceReady) => {
-                                self.handle_interface_ready(ctx).await;
-                            }
-                            _ => {}
-                        },
+                        }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     }

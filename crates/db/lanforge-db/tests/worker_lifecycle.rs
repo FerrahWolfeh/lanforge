@@ -37,7 +37,7 @@ fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
 #[tokio::test]
 async fn test_db_worker_init_and_clean_shutdown() {
     let (ctx, bus) = create_test_context();
-    let mut sys_sub = bus.subscribe_system();
+    let _sys_sub = bus.subscribe_system();
 
     let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
     let log_db = Arc::new(LogDb::open_in_memory());
@@ -54,16 +54,6 @@ async fn test_db_worker_init_and_clean_shutdown() {
     // 1. Initialize worker
     worker.init(&ctx).await.expect("init failed");
     assert!(ctx.is_db_ready());
-
-    // Verify DbReady event
-    let evt = timeout(Duration::from_millis(500), sys_sub.recv())
-        .await
-        .expect("timeout")
-        .expect("recv error");
-    assert!(matches!(
-        evt.event,
-        LanforgeEvent::System(SystemEvent::DbReady)
-    ));
 
     // 2. Spawn serve loop
     let ctx_clone = ctx.clone();

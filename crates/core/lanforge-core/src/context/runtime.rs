@@ -38,8 +38,6 @@ pub struct ServiceRuntime {
     pub bus: Arc<EventBus>,
     running_tx: watch::Sender<bool>,
     db_ready_tx: watch::Sender<bool>,
-    if_ready_tx: watch::Sender<bool>,
-    pppoe_ready_tx: watch::Sender<bool>,
     wan_tx: watch::Sender<WanSnapshot>,
     interfaces_tx: watch::Sender<InterfaceSnapshot>,
     recovery_mode: AtomicBool,
@@ -75,8 +73,6 @@ impl ServiceRuntime {
     pub fn new(bus: Arc<EventBus>) -> Self {
         let (running_tx, _) = watch::channel(true);
         let (db_ready_tx, _) = watch::channel(false);
-        let (if_ready_tx, _) = watch::channel(false);
-        let (pppoe_ready_tx, _) = watch::channel(false);
         let (wan_tx, _) = watch::channel(WanSnapshot::default());
         let (interfaces_tx, _) = watch::channel(InterfaceSnapshot::default());
 
@@ -84,8 +80,6 @@ impl ServiceRuntime {
             bus,
             running_tx,
             db_ready_tx,
-            if_ready_tx,
-            pppoe_ready_tx,
             wan_tx,
             interfaces_tx,
             recovery_mode: AtomicBool::new(false),
@@ -127,8 +121,6 @@ impl ServiceRuntime {
     pub fn reset_lifecycle(&self) {
         self.running_tx.send_replace(true);
         self.db_ready_tx.send_replace(false);
-        self.if_ready_tx.send_replace(true);
-        self.pppoe_ready_tx.send_replace(false);
         self.wan_tx.send_replace(WanSnapshot::default());
         self.interfaces_tx
             .send_replace(InterfaceSnapshot::default());
@@ -146,24 +138,6 @@ impl ServiceRuntime {
 
     pub fn set_db_ready(&self, ready: bool) {
         self.db_ready_tx.send_replace(ready);
-    }
-
-    #[must_use]
-    pub fn is_if_ready(&self) -> bool {
-        *self.if_ready_tx.borrow()
-    }
-
-    pub fn set_if_ready(&self, ready: bool) {
-        self.if_ready_tx.send_replace(ready);
-    }
-
-    #[must_use]
-    pub fn is_pppoe_ready(&self) -> bool {
-        *self.pppoe_ready_tx.borrow()
-    }
-
-    pub fn set_pppoe_ready(&self, ready: bool) {
-        self.pppoe_ready_tx.send_replace(ready);
     }
 
     #[must_use]
@@ -258,16 +232,16 @@ impl ServiceRuntime {
     ///
     /// Returns `CoreError::Shutdown` if the system shuts down while waiting.
     pub async fn wait_for_interfaces(&self) -> Result<(), CoreError> {
-        self.wait_watch_true(&self.if_ready_tx).await
+        self.wait_for_service(ServiceId::Interfaces).await
     }
 
-    /// Waits until `PPPoE` WAN is ready.
+    /// Waits until WAN connectivity is ready.
     ///
     /// # Errors
     ///
     /// Returns `CoreError::Shutdown` if the system shuts down while waiting.
     pub async fn wait_for_pppoe(&self) -> Result<(), CoreError> {
-        self.wait_watch_true(&self.pppoe_ready_tx).await
+        self.wait_for_service(ServiceId::Wan).await
     }
 
     /// Waits until a specific service becomes `Online`.

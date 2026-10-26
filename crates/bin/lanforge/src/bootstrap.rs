@@ -195,13 +195,6 @@ impl Bootstrapper {
         let if_state = Self::perform_initial_scan(&handle, &messages, target_ifindex, &ctx).await?;
         Self::log_welcome_banner(&cfg, &if_state);
 
-        ctx.set_if_ready(true);
-        let _ = bus.publish(LanforgeEvent::System(SystemEvent::InterfaceReady));
-
-        if !feat_flag!(pppoe, cfg.pppoe_enabled) {
-            ctx.set_pppoe_ready(true);
-        }
-
         if let Ok(Some(stored_gua)) = db.load_last_gua_prefix() {
             info!("Bootstrapper: Restored stored GUA prefix from DB: {stored_gua}");
             let _ = ctx.signal_gua_change(target_ifindex, stored_gua, 7200, 7200);

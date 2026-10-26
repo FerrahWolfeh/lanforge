@@ -31,7 +31,6 @@ async fn test_dns_adblock_update_failure_and_fallback() {
     // 3. Initialize DnsContext
     let bus = Arc::new(EventBus::new());
     let ctx_instance = LanforgeContext::new(bus, State::new(), None);
-    ctx_instance.set_pppoe_ready(true);
     ctx_instance.update_dns_adblock_urls(vec![AdblockUrlEntry {
         id: Some(1),
         name: None,

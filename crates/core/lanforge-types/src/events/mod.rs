@@ -69,8 +69,6 @@ impl TimedEvent {
                 e,
                 SystemEvent::Shutdown
                     | SystemEvent::StateReady
-                    | SystemEvent::DbReady
-                    | SystemEvent::InterfaceReady
                     | SystemEvent::ServiceReady { .. }
                     | SystemEvent::SystemReady
                     | SystemEvent::ReloadConfig

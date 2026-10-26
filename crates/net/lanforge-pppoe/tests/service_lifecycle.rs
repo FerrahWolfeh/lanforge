@@ -83,7 +83,6 @@ async fn test_pppoe_inert_session_up_and_shutdown() {
     assert_eq!(session.mru, 1492);
 
     // 2. Verify state and readiness
-    assert!(ctx.is_pppoe_ready());
     assert_eq!(
         ctx.get_service_state(ServiceId::Pppoe),
         ServiceState::Online
@@ -100,7 +99,6 @@ async fn test_pppoe_inert_session_up_and_shutdown() {
     assert_eq!(reason, "Graceful shutdown");
 
     // 4. Verify post-shutdown state
-    assert!(!ctx.is_pppoe_ready());
     assert!(ctx.pppoe_status().is_none());
 
     let res = timeout(Duration::from_secs(1), handle)
@@ -131,7 +129,10 @@ async fn test_pppoe_reacts_to_config_change_in_place() {
 
     // 1. Initial connect
     let _ = wait_for_session_up(&mut pppoe_sub).await;
-    assert!(ctx.is_pppoe_ready());
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Pppoe),
+        ServiceState::Online
+    );
 
     // 2. Change credentials in-place (Golden Rule of Isolation)
     let updated_cfg = PppoeConfig {
@@ -149,7 +150,10 @@ async fn test_pppoe_reacts_to_config_change_in_place() {
 
     let new_session = wait_for_session_up(&mut pppoe_sub).await;
     assert_eq!(new_session.interface, "ppp0");
-    assert!(ctx.is_pppoe_ready());
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Pppoe),
+        ServiceState::Online
+    );
 
     // 4. Disable PPPoE in-place
     let disabled_cfg = PppoeConfig {
@@ -172,7 +176,6 @@ async fn test_pppoe_reacts_to_config_change_in_place() {
         ctx.get_service_state(ServiceId::Pppoe),
         ServiceState::Inactive
     );
-    assert!(!ctx.is_pppoe_ready());
 }
 
 #[tokio::test]
@@ -208,7 +211,10 @@ async fn test_pppoe_reacts_to_service_control_restart() {
     assert!(down_reason.contains("Service control") || down_reason.contains("restarted"));
 
     let _ = wait_for_session_up(&mut pppoe_sub).await;
-    assert!(ctx.is_pppoe_ready());
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Pppoe),
+        ServiceState::Online
+    );
 
     // Clean exit
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -364,10 +370,6 @@ async fn test_pppoe_disabled_at_startup_transitions_to_inactive() {
         ctx.get_service_state(ServiceId::Pppoe),
         ServiceState::Inactive
     );
-    assert!(
-        ctx.is_pppoe_ready(),
-        "Disabled service must not block readiness"
-    );
 }
 
 #[tokio::test]
@@ -407,7 +409,7 @@ async fn test_pppoe_cleanup_guarantees_session_down_on_abort() {
     };
 
     service.publish_connected_status("ppp0", &disc_res, &lcp_res, &ipcp_res);
-    assert!(ctx.is_pppoe_ready());
+    assert!(ctx.pppoe_status().is_some());
 
     // 2. Call cleanup directly (as the supervisor would on unexpected task abort)
     let res = service.cleanup(&ctx_clone).await;
@@ -416,7 +418,6 @@ async fn test_pppoe_cleanup_guarantees_session_down_on_abort() {
     // 3. Verify SessionDown was published and state cleaned
     let reason = wait_for_session_down(&mut pppoe_sub).await;
     assert!(reason.contains("Service stopped or shut down"));
-    assert!(!ctx.is_pppoe_ready());
     assert!(ctx.pppoe_status().is_none());
 }
 

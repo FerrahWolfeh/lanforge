@@ -7,8 +7,6 @@ use crate::system::{ServiceAction, ServiceBanner, ServiceId};
 pub enum SystemEvent {
     Shutdown,
     StateReady,
-    DbReady,
-    InterfaceReady,
     ServiceReady {
         id: ServiceId,
     },

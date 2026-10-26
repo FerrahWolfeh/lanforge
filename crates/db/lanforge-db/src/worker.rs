@@ -554,9 +554,6 @@ impl AsyncService for DbWorker {
         };
         info!("Database worker initialized (mode: {mode})");
         ctx.set_db_ready(true);
-        let _ = ctx
-            .bus()
-            .publish(LanforgeEvent::System(SystemEvent::DbReady));
         Ok(())
     }
 
@@ -905,7 +902,7 @@ mod tests {
         let mut worker = DbWorker::new(DatabaseConfig::default(), ctx.clone(), db, log_db);
 
         // 1. Test log buffer capping
-        let sample_event = TimedEvent::new(LanforgeEvent::System(SystemEvent::DbReady));
+        let sample_event = TimedEvent::new(LanforgeEvent::System(SystemEvent::StateReady));
         for _ in 0..MAX_LOG_BUFFER + 10 {
             if worker.log_buffer.len() >= MAX_LOG_BUFFER {
                 worker.log_buffer.pop_front();

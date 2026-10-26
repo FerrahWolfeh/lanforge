@@ -50,7 +50,6 @@ async fn spawn_conditional_server() -> u16 {
 /// for `domain` to become blocked. Returns whether it was blocked.
 async fn boot_and_check(cache_dir: &Path, port: u16, domain: &str, timeout: Duration) -> bool {
     let ctx_instance = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
-    ctx_instance.set_pppoe_ready(true);
     ctx_instance.update_dns_adblock_urls(vec![AdblockUrlEntry {
         id: Some(1),
         name: None,

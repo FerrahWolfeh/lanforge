@@ -309,9 +309,18 @@ async fn test_traffic_reacts_to_interface_ready() {
         .unwrap()
         .unwrap();
 
-    // Change target interface to lan1 and notify
+    // Change target interface to lan1 and notify via interfaces snapshot
     ctx.set_target_interface_name("lan1".to_string());
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::InterfaceReady));
+    ctx.set_interfaces_snapshot(lanforge_types::network::snapshot::InterfaceSnapshot {
+        links: vec![lanforge_types::network::snapshot::LinkInfo {
+            ifindex: 2,
+            name: "lan1".to_string(),
+            carrier: true,
+            addrs: vec![].into(),
+        }]
+        .into(),
+        generation: 2,
+    });
 
     // Allow event to process
     tokio::time::sleep(Duration::from_millis(100)).await;
