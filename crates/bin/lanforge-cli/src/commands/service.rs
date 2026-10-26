@@ -68,6 +68,19 @@ async fn list_services(client: &LanforgeClient, printer: &Printer) -> Result<()>
     Ok(())
 }
 
+fn format_bytes(bytes: u64) -> String {
+    #[allow(clippy::cast_precision_loss)]
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
 fn render_services_table(resp: &ServiceBannersResponse, printer: &Printer) {
     if resp.banners.is_empty() {
         println!("No background services registered in daemon.");
@@ -84,16 +97,23 @@ fn render_services_table(resp: &ServiceBannersResponse, printer: &Printer) {
     ]);
 
     for banner in &resp.banners {
-        let metrics_summary = if banner.stats.is_empty() {
+        let mut parts = Vec::new();
+        if let Some(ref t) = banner.transport
+            && (t.rx_packets > 0 || t.tx_packets > 0)
+        {
+            parts.push(format!(
+                "RX: {} · TX: {}",
+                format_bytes(t.rx_bytes),
+                format_bytes(t.tx_bytes)
+            ));
+        }
+        for (k, v) in banner.stats.iter().take(2) {
+            parts.push(format!("{k}: {v}"));
+        }
+        let metrics_summary = if parts.is_empty() {
             "-".to_string()
         } else {
-            banner
-                .stats
-                .iter()
-                .take(3)
-                .map(|(k, v)| format!("{k}: {v}"))
-                .collect::<Vec<_>>()
-                .join(" · ")
+            parts.join(" · ")
         };
 
         let uptime_str = if banner.state.as_str() == "inactive" || banner.uptime_secs == 0 {
@@ -176,6 +196,49 @@ async fn show_service(client: &LanforgeClient, printer: &Printer, id: &str) -> R
         println!("\n  {}", "Metrics & State:".bold().cyan());
         for (k, v) in &banner.stats {
             println!("    {:<24} {}", format!("{k}:").dimmed(), v.white());
+        }
+    }
+
+    if let Some(ref t) = banner.transport
+        && (t.rx_packets > 0
+            || t.tx_packets > 0
+            || t.errors > 0
+            || t.rate_limited > 0
+            || t.dropped > 0)
+    {
+        println!("\n  {}", "Transport Telemetry:".bold().cyan());
+        println!(
+            "    {:<24} {} ({})",
+            "RX Traffic:".dimmed(),
+            format!("{} packets", t.rx_packets).white(),
+            format_bytes(t.rx_bytes).dimmed()
+        );
+        println!(
+            "    {:<24} {} ({})",
+            "TX Traffic:".dimmed(),
+            format!("{} packets", t.tx_packets).white(),
+            format_bytes(t.tx_bytes).dimmed()
+        );
+        if t.rate_limited > 0 {
+            println!(
+                "    {:<24} {}",
+                "Rate-limited:".dimmed(),
+                format!("{} packets", t.rate_limited).yellow()
+            );
+        }
+        if t.dropped > 0 {
+            println!(
+                "    {:<24} {}",
+                "Dropped:".dimmed(),
+                format!("{} packets", t.dropped).red()
+            );
+        }
+        if t.errors > 0 {
+            let err_str = t.last_error_age_secs.map_or_else(
+                || format!("{} errors", t.errors),
+                |age| format!("{} errors (last error {}s ago)", t.errors, age),
+            );
+            println!("    {:<24} {}", "Transport Errors:".dimmed(), err_str.red());
         }
     }
     println!();

@@ -118,6 +118,17 @@ export interface ResourceUsage {
 	vms_bytes?: number;
 }
 
+export interface TransportSnapshot {
+	rx_packets: number;
+	rx_bytes: number;
+	tx_packets: number;
+	tx_bytes: number;
+	dropped: number;
+	rate_limited: number;
+	errors: number;
+	last_error_age_secs?: number;
+}
+
 export interface ServiceBanner {
 	id?: string;
 	name: string;
@@ -125,6 +136,7 @@ export interface ServiceBanner {
 	uptime_secs: number;
 	stats: Record<string, string>;
 	detail?: any;
+	transport?: TransportSnapshot;
 }
 
 export interface CapabilitiesInfo {

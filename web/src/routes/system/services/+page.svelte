@@ -11,6 +11,7 @@
 	import { goto } from "$app/navigation";
 	import { onMount } from "svelte";
 	import { createPolling } from "$lib/utils/polling";
+	import { formatBytes } from "$lib/utils";
 
 	import ServerIcon from "@lucide/svelte/icons/server";
 	import CircleCheckIcon from "@lucide/svelte/icons/circle-check";
@@ -489,6 +490,24 @@
 										<span class="font-mono text-[10px] font-medium text-foreground">{v}</span>
 									</div>
 								{/each}
+							</div>
+						{/if}
+
+						<!-- Transport Telemetry -->
+						{#if banner.transport && (banner.transport.rx_packets > 0 || banner.transport.tx_packets > 0 || banner.transport.errors > 0 || banner.transport.rate_limited > 0 || banner.transport.dropped > 0)}
+							<div class="flex flex-wrap items-center gap-2 pt-1 border-t border-border/40 text-[10px] font-mono">
+								<span class="text-muted-foreground">Traffic:</span>
+								<span class="text-foreground font-medium">↓ {formatBytes(banner.transport.rx_bytes)}</span>
+								<span class="text-foreground font-medium">↑ {formatBytes(banner.transport.tx_bytes)}</span>
+								{#if banner.transport.rate_limited > 0}
+									<span class="text-amber-500 font-medium">{banner.transport.rate_limited} limited</span>
+								{/if}
+								{#if banner.transport.dropped > 0}
+									<span class="text-destructive font-medium">{banner.transport.dropped} dropped</span>
+								{/if}
+								{#if banner.transport.errors > 0}
+									<span class="text-destructive font-medium">{banner.transport.errors} errors</span>
+								{/if}
 							</div>
 						{/if}
 					</div>
