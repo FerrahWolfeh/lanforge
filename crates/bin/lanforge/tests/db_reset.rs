@@ -9,6 +9,7 @@ use lanforge_db::config::DatabaseConfig;
 use lanforge_db::worker::DbWorker;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::system::ServiceId;
 
 use lanforge_db::engine::LanforgeDb;
 use lanforge_db::log_engine::LogDb;
@@ -77,7 +78,7 @@ async fn test_full_db_reset_chain() {
     );
 
     let mut db_worker = DbWorker::new(cfg.database.clone(), ctx_db.clone(), db.clone(), log_db.clone());
-    let ctrl = ServiceControl::new("db", ctx.clone());
+    let ctrl = ServiceControl::new(ServiceId::Db, ctx.clone());
     tokio::spawn(async move {
         use lanforge_core::service::AsyncService;
         let _ = db_worker.init(&ctx_db).await;

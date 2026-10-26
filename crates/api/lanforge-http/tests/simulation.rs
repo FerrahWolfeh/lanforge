@@ -41,7 +41,7 @@ async fn test_http_simulation_basic() {
     let cfg = Arc::new(http_cfg);
 
     let mut service = HttpService::new(cfg, ctx.clone(), db, log_db);
-    let ctrl = ServiceControl::new("http", ctx.clone());
+    let ctrl = ServiceControl::new(lanforge_types::system::ServiceId::Http, ctx.clone());
     let ctx_service = ctx.clone();
 
     let mut rx = ctx.bus().subscribe();
@@ -53,8 +53,8 @@ async fn test_http_simulation_basic() {
     // Wait for ServiceReady event
     loop {
         let event = rx.recv().await.expect("Bus closed");
-        if let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = event.event
-            && name == "http"
+        if let LanforgeEvent::System(SystemEvent::ServiceReady { id }) = event.event
+            && id == lanforge_types::system::ServiceId::Http
         {
             break;
         }

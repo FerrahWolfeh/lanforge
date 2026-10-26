@@ -8,21 +8,29 @@ use lanforge_types::{
         ra::RaServerConfig,
         TrafficConfig,
     },
-    system::ServiceAction,
+    system::{ServiceAction, ServiceId},
 };
 
 
 impl ClientContext {
     pub async fn handle_service_control(&self, id: String, action: ServiceAction) -> Response {
+        let service_id = match id.parse::<ServiceId>() {
+            Ok(sid) => sid,
+            Err(e) => {
+                return Response::Error {
+                    error: format!("Invalid service id '{id}': {e}"),
+                };
+            }
+        };
         let _ = self
             .ctx
             .bus()
             .publish(LanforgeEvent::System(SystemEvent::ServiceControl {
-                id: id.clone(),
+                id: service_id,
                 action,
             }));
         Response::Success(SimpleSuccess {
-            message: format!("Service control action {action:?} sent for service {id}"),
+            message: format!("Service control action {action:?} sent for service {service_id}"),
         })
     }
 
@@ -88,7 +96,7 @@ impl ClientContext {
             .ctx
             .bus()
             .publish(LanforgeEvent::System(SystemEvent::ServiceControl {
-                id: "pppoe".to_string(),
+                id: ServiceId::Pppoe,
                 action: ServiceAction::Restart,
             }));
         Response::Success(SimpleSuccess {
@@ -101,7 +109,7 @@ impl ClientContext {
             .ctx
             .bus()
             .publish(LanforgeEvent::System(SystemEvent::ServiceControl {
-                id: "pppoe".to_string(),
+                id: ServiceId::Pppoe,
                 action: ServiceAction::Stop,
             }));
         Response::Success(SimpleSuccess {

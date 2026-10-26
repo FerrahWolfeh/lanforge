@@ -127,6 +127,98 @@ impl ServerCapabilities {
     }
 }
 
+/// Canonical strongly-typed identifier for all Lanforge background services.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceId {
+    #[default]
+    Db,
+    Nft,
+    Pppoe,
+    Dns,
+    Dhcp4,
+    Dhcp6,
+    Ra,
+    Traffic,
+    Tftp,
+    Discovery,
+    Mdns,
+    Http,
+    Uds,
+}
+
+impl ServiceId {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Db => "db",
+            Self::Nft => "nft",
+            Self::Pppoe => "pppoe",
+            Self::Dns => "dns",
+            Self::Dhcp4 => "dhcp4",
+            Self::Dhcp6 => "dhcp6",
+            Self::Ra => "ra",
+            Self::Traffic => "traffic",
+            Self::Tftp => "tftp",
+            Self::Discovery => "discovery",
+            Self::Mdns => "mdns",
+            Self::Http => "http",
+            Self::Uds => "uds",
+        }
+    }
+
+    pub const ALL: &'static [Self] = &[
+        Self::Db,
+        Self::Nft,
+        Self::Pppoe,
+        Self::Dns,
+        Self::Dhcp4,
+        Self::Dhcp6,
+        Self::Ra,
+        Self::Traffic,
+        Self::Tftp,
+        Self::Discovery,
+        Self::Mdns,
+        Self::Http,
+        Self::Uds,
+    ];
+}
+
+impl std::fmt::Display for ServiceId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl AsRef<str> for ServiceId {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::str::FromStr for ServiceId {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "db" | "database" => Ok(Self::Db),
+            "nft" | "firewall" | "nftables" => Ok(Self::Nft),
+            "pppoe" => Ok(Self::Pppoe),
+            "dns" => Ok(Self::Dns),
+            "dhcp4" | "dhcp_v4" | "dhcpv4" => Ok(Self::Dhcp4),
+            "dhcp6" | "dhcp_v6" | "dhcpv6" => Ok(Self::Dhcp6),
+            "ra" | "radvd" => Ok(Self::Ra),
+            "traffic" | "sqm" => Ok(Self::Traffic),
+            "tftp" => Ok(Self::Tftp),
+            "discovery" | "monitor" | "ndp" => Ok(Self::Discovery),
+            "mdns" => Ok(Self::Mdns),
+            "http" | "web" => Ok(Self::Http),
+            "uds" | "control" => Ok(Self::Uds),
+            other => Err(format!("Unknown service '{other}'")),
+        }
+    }
+}
+
 /// Represents the operating state of a decoupled service.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -290,11 +382,11 @@ impl std::fmt::Display for DegradedReason {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StateDetail {
-    WaitingFor(Cow<'static, str>),
+    WaitingFor(ServiceId),
     Dormant(DormantReason),
-    DependencyDormant(Cow<'static, str>),
+    DependencyDormant(ServiceId),
     Degraded(DegradedReason),
-    Paused(Cow<'static, str>),
+    Paused(ServiceId),
     Failed { attempts: u32, last_error: String },
     Exited,
     AdminStopped,
@@ -320,7 +412,7 @@ impl std::fmt::Display for StateDetail {
 /// Banner representing the status and metrics of a decoupled service.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ServiceBanner {
-    pub id: String,
+    pub id: ServiceId,
     pub name: String,
     pub state: ServiceState,
     pub uptime_secs: u64,

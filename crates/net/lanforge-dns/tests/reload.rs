@@ -47,11 +47,11 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
         service.serve(&ctx_service, &h).await.expect("Service failed");
     });
 
-    wait_for_service_online(&ctx, "dns").await;
+    wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
 
     // 3. Query once to populate the cache
     let client_addr: SocketAddr = "192.168.1.100:54327".parse().unwrap();
@@ -141,11 +141,11 @@ async fn dns_reload_rewrites_on_the_fly() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
         service.serve(&ctx_service, &h).await.expect("Service failed");
     });
 
-    wait_for_service_online(&ctx, "dns").await;
+    wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
 
     let client_addr: SocketAddr = "192.168.1.100:54328".parse().unwrap();
     let query_bytes = DnsPacketBuilder::query("my-site.lan", DnsRecordType::A)
@@ -265,11 +265,11 @@ async fn dns_conditional_split_upstream_routing() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
         service.serve(&ctx_service, &h).await.expect("DNS Service failed");
     });
 
-    wait_for_service_online(&ctx, "dns").await;
+    wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
 
     let client_addr: SocketAddr = "192.168.1.100:54329".parse().unwrap();
 

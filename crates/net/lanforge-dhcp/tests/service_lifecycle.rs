@@ -15,7 +15,7 @@ use lanforge_dhcp::{
 };
 use lanforge_types::device::{IPv4State, Origin};
 use lanforge_types::identifiers::{Duid, MacAddr};
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::{ServiceId, ServiceState};
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate};
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -27,15 +27,15 @@ const TEST_TIMEOUT: Duration = Duration::from_millis(1000);
 
 async fn wait_for_service_online(
     ctx: &LanforgeContext,
-    service_name: &str,
+    service_id: ServiceId,
 ) -> Result<(), Box<dyn Error>> {
     for _ in 0..100 {
-        if ctx.get_service_state(service_name) == ServiceState::Online {
+        if ctx.get_service_state(service_id) == ServiceState::Online {
             return Ok(());
         }
         tokio::task::yield_now().await;
     }
-    Err(format!("Service '{service_name}' did not transition to Online in time").into())
+    Err(format!("Service '{service_id:?}' did not transition to Online in time").into())
 }
 
 #[tokio::test]
@@ -56,12 +56,12 @@ async fn test_dhcpv4_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
-        let h = ServiceHandle::new("dhcpv4", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_clone.clone());
         service_clone.serve(&ctx_clone, &h).await
     });
 
     // Await Online state cooperatively without fixed sleep
-    wait_for_service_online(&ctx, "dhcpv4").await?;
+    wait_for_service_online(&ctx, ServiceId::Dhcp4).await?;
 
     let client_mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
     let client_src = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68);
@@ -183,12 +183,12 @@ async fn test_dhcpv6_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
-        let h = ServiceHandle::new("dhcpv6", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Dhcp6, ctx_clone.clone());
         service_clone.serve(&ctx_clone, &h).await
     });
 
     // Await Online state cooperatively without fixed sleep
-    wait_for_service_online(&ctx, "dhcpv6").await?;
+    wait_for_service_online(&ctx, ServiceId::Dhcp6).await?;
 
     let client_duid = Duid::new(vec![0x00, 0x03, 0x00, 0x01, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
     let client_src: SocketAddr = "[fe80::cafe:100]:546".parse()?;

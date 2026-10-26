@@ -56,11 +56,11 @@ async fn dns_simulation_udp() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
         service.serve(&ctx_service, &h).await.expect("Service failed");
     });
 
-    wait_for_service_online(&ctx, "dns").await;
+    wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
 
     // 4. Send DNS query for "my-device.lan" via inert transport
     let client_addr: SocketAddr = "192.168.1.100:54321".parse().unwrap();
@@ -121,11 +121,11 @@ async fn dns_simulation_forwarding_fallback() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
         service.serve(&ctx_service, &h).await.expect("Service failed");
     });
 
-    wait_for_service_online(&ctx, "dns").await;
+    wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
 
     // 4. Query for google.com via inert transport
     let client_addr: SocketAddr = "192.168.1.100:54322".parse().unwrap();
@@ -169,11 +169,11 @@ async fn dns_simulation_cache_case_insensitive() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
         service.serve(&ctx_service, &h).await.expect("Service failed");
     });
 
-    wait_for_service_online(&ctx, "dns").await;
+    wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
 
     let client_addr: SocketAddr = "192.168.1.100:54323".parse().unwrap();
 
@@ -233,11 +233,11 @@ async fn dns_simulation_malformed_and_special_prefixes() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
         let _ = service.serve(&ctx_service, &h).await;
     });
 
-    wait_for_service_online(&ctx, "dns").await;
+    wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
 
     let client_addr: SocketAddr = "192.168.1.100:54324".parse().unwrap();
 
@@ -301,11 +301,11 @@ async fn dns_simulation_transient_ip_reverse_dns() {
     ctx.set_db_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
         service.serve(&ctx_service, &h).await.expect("Service failed");
     });
 
-    wait_for_service_online(&ctx, "dns").await;
+    wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
 
     // 4. Mock upstream behavior to answer PTR queries
     let (tx_shutdown, mut rx_shutdown) = tokio::sync::oneshot::channel::<()>();

@@ -9,7 +9,7 @@ use std::io::ErrorKind;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy,
     RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_types::events::LanforgeEvent;
@@ -17,14 +17,14 @@ use lanforge_types::events::firewall::{FirewallAppliedSummary, FirewallEvent};
 use lanforge_types::events::pppoe::PppoeEvent;
 use lanforge_types::events::system::SystemEvent;
 use lanforge_types::network::firewall::{DynamicPortRequest, FirewallConfig, FirewallMode};
-use lanforge_types::system::{DormantReason, ServiceAction};
+use lanforge_types::system::{DormantReason, ServiceAction, ServiceId};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::ruleset::RulesetBuilder;
 
 const FIREWALL_DEPS: &[Edge] = &[
-    Edge::requires("interfaces", LossPolicy::Continue),
-    Edge::wants("wan"),
+    Edge::after(ServiceId::Db),
+    Edge::wants(ServiceId::Pppoe),
 ];
 
 #[derive(Clone)]
@@ -36,7 +36,7 @@ pub struct NftService {
 
 impl NftService {
     /// Static identifier for the service.
-    pub const SERVICE_ID: &'static str = "firewall";
+    pub const SERVICE_ID: ServiceId = ServiceId::Nft;
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -162,7 +162,7 @@ impl NftService {
     ) {
         if !cfg.enabled || cfg.mode == FirewallMode::Disabled {
             info!(reason, table = %cfg.table_name, "Firewall disabled; removing nftables table");
-            ctx.set_service_state("firewall", lanforge_types::system::ServiceState::Inactive);
+            ctx.set_service_state(Self::SERVICE_ID, lanforge_types::system::ServiceState::Inactive);
             Self::cleanup_table_internal(&cfg.table_name, self.inert).await;
             return;
         }
@@ -234,7 +234,7 @@ impl NftService {
 
         match result {
             Ok(()) => {
-                ctx.set_service_state("firewall", lanforge_types::system::ServiceState::Online);
+                ctx.set_service_state(Self::SERVICE_ID, lanforge_types::system::ServiceState::Online);
                 Self::publish_ruleset_applied(
                     ctx,
                     reason,
@@ -354,7 +354,7 @@ impl AsyncService for NftService {
                                     .get_firewall_config()
                                     .map_or_else(|| "lanforge".into(), |c| c.table_name);
                                 Self::cleanup_table_internal(&table, self.inert).await;
-                                ctx.set_service_state("firewall", lanforge_types::system::ServiceState::Inactive);
+                                ctx.set_service_state(Self::SERVICE_ID, lanforge_types::system::ServiceState::Inactive);
                             }
                             ServiceCommand::Start | ServiceCommand::Restart => {
                                 info!("Firewall service received Start/Restart command");
@@ -415,7 +415,7 @@ impl AsyncService for NftService {
                     // System events: config reloads or shutdown
                     Ok(event) = sys_rx.recv() => {
                         match event.event {
-                            LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) if id == "firewall" => {
+                            LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) if id == Self::SERVICE_ID => {
                                 match action {
                                     ServiceAction::Stop => {
                                         info!("Firewall service received Stop command, flushing table and marking Inactive");
@@ -423,7 +423,7 @@ impl AsyncService for NftService {
                                             .get_firewall_config()
                                             .map_or_else(|| "lanforge".into(), |c| c.table_name);
                                         Self::cleanup_table_internal(&table, self.inert).await;
-                                        ctx.set_service_state("firewall", lanforge_types::system::ServiceState::Inactive);
+                                        ctx.set_service_state(Self::SERVICE_ID, lanforge_types::system::ServiceState::Inactive);
                                     }
                                     ServiceAction::Start | ServiceAction::Restart => {
                                         info!("Firewall service received Start/Restart command");
@@ -460,7 +460,7 @@ impl AsyncService for NftService {
         let ctx_clone = ctx.clone();
         async move {
             info!(table = %table, "Firewall service shutting down, removing nftables table from kernel");
-            ctx_clone.set_service_state("firewall", lanforge_types::system::ServiceState::Inactive);
+            ctx_clone.set_service_state(Self::SERVICE_ID, lanforge_types::system::ServiceState::Inactive);
             Self::cleanup_table_internal(&table, inert).await;
             Ok(())
         }

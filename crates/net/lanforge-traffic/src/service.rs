@@ -1,7 +1,7 @@
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy,
     RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_types::events::pppoe::PppoeEvent;
@@ -9,15 +9,15 @@ use lanforge_types::events::system::SystemEvent;
 use lanforge_types::events::traffic::TrafficEvent;
 use lanforge_types::events::LanforgeEvent;
 use lanforge_types::network::TrafficConfig;
-use lanforge_types::system::{DormantReason, ServiceState, TrafficStatusResponse};
+use lanforge_types::system::{DormantReason, ServiceId, ServiceState, TrafficStatusResponse};
 use tracing::{debug, info};
 
 use crate::sqm::{apply_sqm, clear_sqm};
 use crate::tuning::apply_tuning;
 
 const TRAFFIC_DEPS: &[Edge] = &[
-    Edge::requires("interfaces", LossPolicy::Continue),
-    Edge::wants("wan"),
+    Edge::after(ServiceId::Db),
+    Edge::wants(ServiceId::Pppoe),
 ];
 
 #[derive(Clone)]
@@ -33,7 +33,7 @@ pub struct TrafficService {
 
 impl TrafficService {
     /// Static identifier for the service.
-    pub const SERVICE_ID: &'static str = "traffic";
+    pub const SERVICE_ID: ServiceId = ServiceId::Traffic;
     #[must_use]
     pub fn new(cfg: TrafficConfig) -> Self {
         let cpu_mask = crate::tuning::cpu::resolve_effective_cpu_mask(&cfg.tuning.cpu_mask);
@@ -188,7 +188,7 @@ impl TrafficService {
         } else {
             ServiceState::Inactive
         };
-        ctx.set_service_state("traffic", next_state);
+        ctx.set_service_state(Self::SERVICE_ID, next_state);
         self.publish_status(ctx, next_state);
     }
 
@@ -208,7 +208,7 @@ impl TrafficService {
             return false;
         }
 
-        ctx.set_service_state("traffic", ServiceState::Starting);
+        ctx.set_service_state(Self::SERVICE_ID, ServiceState::Starting);
 
         if is_tuning_enabled {
             let default_ifaces = Self::resolve_default_interfaces(ctx);
@@ -303,7 +303,7 @@ impl TrafficService {
                 if self.cfg.sqm.enabled {
                     self.apply_sqm_internal(ctx, &session.interface, true).await;
                 }
-                ctx.set_service_state("traffic", ServiceState::Online);
+                ctx.set_service_state(Self::SERVICE_ID, ServiceState::Online);
                 self.publish_status(ctx, ServiceState::Online);
             }
             PppoeEvent::SessionDown { reason } => {
@@ -482,7 +482,7 @@ impl AsyncService for TrafficService {
             self.clear_sqm_internal(ctx).await;
         }
 
-        ctx.set_service_state("traffic", ServiceState::Inactive);
+        ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
         self.publish_status(ctx, ServiceState::Inactive);
         Ok(())
     }
@@ -491,7 +491,7 @@ impl AsyncService for TrafficService {
         if self.cfg.sqm.enabled {
             self.clear_sqm_internal(ctx).await;
         }
-        ctx.set_service_state("traffic", ServiceState::Inactive);
+        ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
         self.publish_status(ctx, ServiceState::Inactive);
         Ok(())
     }

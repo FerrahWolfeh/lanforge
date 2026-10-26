@@ -9,7 +9,7 @@ use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
 use lanforge_types::network::firewall::{DynamicPortRequest, FirewallTransactionState};
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
 use lanforge_types::system::{
-    Cap, PppoeStatusResponse, RaStatusResponse, ServiceBanner, ServiceState, SystemStatus,
+    Cap, PppoeStatusResponse, RaStatusResponse, ServiceBanner, ServiceId, ServiceState, SystemStatus,
     TrafficStatusResponse,
 };
 use parking_lot::RwLock;
@@ -40,7 +40,7 @@ pub struct ServiceRuntime {
     if_ready_tx: watch::Sender<bool>,
     pppoe_ready_tx: watch::Sender<bool>,
     recovery_mode: AtomicBool,
-    services: RwLock<BTreeMap<String, ServiceSlot>>,
+    services: RwLock<BTreeMap<ServiceId, ServiceSlot>>,
     shared_by_type: RwLock<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
 
     // Operational telemetries (decoupled from State)
@@ -237,13 +237,13 @@ impl ServiceRuntime {
     /// # Errors
     ///
     /// Returns `CoreError::Shutdown` if the system shuts down or channel is closed.
-    pub async fn wait_for_service(&self, id: &str) -> Result<(), CoreError> {
+    pub async fn wait_for_service(&self, id: ServiceId) -> Result<(), CoreError> {
         if !self.is_running() {
             return Err(CoreError::Shutdown);
         }
         let (is_online, rx) = {
             let mut services = self.services.write();
-            let slot = services.entry(id.to_string()).or_insert_with(|| {
+            let slot = services.entry(id).or_insert_with(|| {
                 let (tx, _) = watch::channel(ServiceState::Offline);
                 ServiceSlot {
                     state_tx: tx,
@@ -294,10 +294,10 @@ impl ServiceRuntime {
     }
 
 
-    pub fn set_service_state(&self, id: &str, state: ServiceState) {
+    pub fn set_service_state(&self, id: ServiceId, state: ServiceState) {
         self.services
             .write()
-            .entry(id.to_string())
+            .entry(id)
             .or_insert_with(|| {
                 let (tx, _) = watch::channel(ServiceState::Offline);
                 ServiceSlot {
@@ -311,10 +311,10 @@ impl ServiceRuntime {
             .send_replace(state);
     }
 
-    pub fn set_service_detail(&self, id: &str, detail: Option<StateDetail>) {
+    pub fn set_service_detail(&self, id: ServiceId, detail: Option<StateDetail>) {
         self.services
             .write()
-            .entry(id.to_string())
+            .entry(id)
             .or_insert_with(|| {
                 let (tx, _) = watch::channel(ServiceState::Offline);
                 ServiceSlot {
@@ -328,25 +328,25 @@ impl ServiceRuntime {
     }
 
     #[must_use]
-    pub fn get_service_detail(&self, id: &str) -> Option<StateDetail> {
+    pub fn get_service_detail(&self, id: ServiceId) -> Option<StateDetail> {
         self.services
             .read()
-            .get(id)
+            .get(&id)
             .and_then(|slot| slot.detail.clone())
     }
 
     #[must_use]
-    pub fn get_service_state(&self, id: &str) -> ServiceState {
+    pub fn get_service_state(&self, id: ServiceId) -> ServiceState {
         self.services
             .read()
-            .get(id)
+            .get(&id)
             .map_or(ServiceState::Offline, |slot| *slot.state_tx.borrow())
     }
 
-    pub fn set_service_start(&self, id: &str, start: Instant) {
+    pub fn set_service_start(&self, id: ServiceId, start: Instant) {
         self.services
             .write()
-            .entry(id.to_string())
+            .entry(id)
             .or_insert_with(|| {
                 let (tx, _) = watch::channel(ServiceState::Offline);
                 ServiceSlot {
@@ -359,17 +359,17 @@ impl ServiceRuntime {
             .started_at = Some(start);
     }
 
-    pub fn clear_service_start(&self, id: &str) {
-        if let Some(slot) = self.services.write().get_mut(id) {
+    pub fn clear_service_start(&self, id: ServiceId) {
+        if let Some(slot) = self.services.write().get_mut(&id) {
             slot.started_at = None;
         }
     }
 
     #[must_use]
-    pub fn get_service_uptime(&self, id: &str) -> u64 {
+    pub fn get_service_uptime(&self, id: ServiceId) -> u64 {
         let services = self.services.read();
         services
-            .get(id)
+            .get(&id)
             .and_then(|slot| {
                 if *slot.state_tx.borrow() == ServiceState::Online {
                     slot.started_at.map(|s| s.elapsed().as_secs())

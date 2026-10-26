@@ -13,7 +13,7 @@ use lanforge_types::network::firewall::{
     DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallZone, L4Protocol,
     PortForwardRule,
 };
-use lanforge_types::system::{ServiceAction, ServiceState};
+use lanforge_types::system::{ServiceAction, ServiceId, ServiceState};
 use std::net::IpAddr;
 use tokio::sync::broadcast;
 use tokio::time::timeout;
@@ -75,7 +75,7 @@ async fn test_nft_service_inert_full_lifecycle() {
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
         let mut s = service_clone;
-        let h = ServiceHandle::new("firewall", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
         s.serve(&ctx_clone, &h).await
     });
 
@@ -167,7 +167,7 @@ async fn test_firewall_reacts_to_ruleset_changed_in_place() {
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
         let mut s = service_clone;
-        let h = ServiceHandle::new("firewall", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
         s.serve(&ctx_clone, &h).await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -238,13 +238,13 @@ async fn test_firewall_disabled_state_lifecycle_transitions() {
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
         let mut s = service_clone;
-        let h = ServiceHandle::new("firewall", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
         s.serve(&ctx_clone, &h).await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     assert_eq!(
-        ctx.get_service_state("firewall"),
+        ctx.get_service_state(ServiceId::Nft),
         ServiceState::Online
     );
 
@@ -258,7 +258,7 @@ async fn test_firewall_disabled_state_lifecycle_transitions() {
 
     // Service state must transition to Inactive
     assert_eq!(
-        ctx.get_service_state("firewall"),
+        ctx.get_service_state(ServiceId::Nft),
         ServiceState::Inactive
     );
 
@@ -271,7 +271,7 @@ async fn test_firewall_disabled_state_lifecycle_transitions() {
 
     // Service state must transition back to Online
     assert_eq!(
-        ctx.get_service_state("firewall"),
+        ctx.get_service_state(ServiceId::Nft),
         ServiceState::Online
     );
 
@@ -280,7 +280,7 @@ async fn test_firewall_disabled_state_lifecycle_transitions() {
     let _ = serve_handle.await;
     service.cleanup(&ctx).await.expect("Cleanup must succeed");
     assert_eq!(
-        ctx.get_service_state("firewall"),
+        ctx.get_service_state(ServiceId::Nft),
         ServiceState::Inactive
     );
 }
@@ -298,7 +298,7 @@ async fn test_firewall_reacts_to_pppoe_wan_reconnect_and_interface_swap() {
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
         let mut s = service_clone;
-        let h = ServiceHandle::new("firewall", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
         s.serve(&ctx_clone, &h).await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -373,7 +373,7 @@ async fn test_firewall_reacts_to_system_reload_config() {
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
         let mut s = service_clone;
-        let h = ServiceHandle::new("firewall", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
         s.serve(&ctx_clone, &h).await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -403,7 +403,7 @@ async fn test_firewall_concurrent_dynamic_port_burst() {
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
         let mut s = service_clone;
-        let h = ServiceHandle::new("firewall", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
         s.serve(&ctx_clone, &h).await
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -485,13 +485,13 @@ async fn test_firewall_service_control_stop_and_restart() {
     let mut service = NftService::inert();
     service.init(&ctx).await.expect("Init must succeed");
     let _ = wait_for_ruleset_applied(&mut fw_sub).await;
-    assert_eq!(ctx.get_service_state("firewall"), ServiceState::Online);
+    assert_eq!(ctx.get_service_state(ServiceId::Nft), ServiceState::Online);
 
     let service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
         let mut s = service_clone;
-        let h = ServiceHandle::new("firewall", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
         s.serve(&ctx_clone, &h).await
     });
 
@@ -499,22 +499,22 @@ async fn test_firewall_service_control_stop_and_restart() {
 
     // Send Stop command
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {
-        id: "firewall".into(),
+        id: ServiceId::Nft,
         action: ServiceAction::Stop,
     }));
 
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(ctx.get_service_state("firewall"), ServiceState::Inactive);
+    assert_eq!(ctx.get_service_state(ServiceId::Nft), ServiceState::Inactive);
 
     // Send Restart command
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {
-        id: "firewall".into(),
+        id: ServiceId::Nft,
         action: ServiceAction::Restart,
     }));
 
     let summary = wait_for_ruleset_applied(&mut fw_sub).await;
     assert_eq!(summary.table, "lanforge");
-    assert_eq!(ctx.get_service_state("firewall"), ServiceState::Online);
+    assert_eq!(ctx.get_service_state(ServiceId::Nft), ServiceState::Online);
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = serve_handle.await;

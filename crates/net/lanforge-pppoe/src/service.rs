@@ -13,7 +13,7 @@ use lanforge_core::bus::{LanforgeEvent, PppoeEvent, SystemEvent};
 use lanforge_core::context::{ConfigSubscription, LanforgeContext};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy,
     RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_transport::ArpProber;
@@ -22,7 +22,7 @@ use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::pppoe::PppoeDataplane;
 use lanforge_types::system::{
     DegradedReason, DormantReason, PppoeSessionState, PppoeStatusResponse, ServiceAction,
-    ServiceState,
+    ServiceId, ServiceState,
 };
 use smallvec::smallvec;
 use std::borrow::Cow;
@@ -52,7 +52,9 @@ pub(crate) enum SystemInterrupt {
 pub(crate) fn classify_system_event(event: &LanforgeEvent) -> Option<SystemInterrupt> {
     match event {
         LanforgeEvent::System(SystemEvent::Shutdown) => Some(SystemInterrupt::Shutdown),
-        LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) if id == "pppoe" => {
+        LanforgeEvent::System(SystemEvent::ServiceControl { id, action })
+            if *id == ServiceId::Pppoe =>
+        {
             match action {
                 ServiceAction::Stop => Some(SystemInterrupt::Stop),
                 ServiceAction::Restart => Some(SystemInterrupt::Restart),
@@ -108,7 +110,7 @@ type EbpfSessionHandle = Option<crate::ebpf::EbpfSession>;
 #[cfg(not(feature = "ebpf"))]
 type EbpfSessionHandle = Option<()>;
 
-const PPPOE_DEPS: &[Edge] = &[Edge::requires("interfaces", LossPolicy::Continue)];
+const PPPOE_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
 
 pub struct PppoeService {
     cfg: PppoeConfig,
@@ -124,7 +126,7 @@ pub struct PppoeService {
 
 impl PppoeService {
     /// Static identifier for the service.
-    pub const SERVICE_ID: &'static str = "pppoe";
+    pub const SERVICE_ID: ServiceId = ServiceId::Pppoe;
     #[must_use]
     pub fn new(mut cfg: PppoeConfig, ctx: LanforgeContext) -> Self {
         if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
@@ -328,7 +330,7 @@ impl PppoeService {
         };
 
         self.publish_connected_status(&interface_name, &disc_res, &lcp_res, &ipcp_res);
-        self.ctx.set_service_state("pppoe", ServiceState::Online);
+        self.ctx.set_service_state(Self::SERVICE_ID, ServiceState::Online);
 
         if self.cfg.username == "carrier_drop" {
             sleep(Duration::from_millis(30)).await;
@@ -660,13 +662,13 @@ impl PppoeService {
             ))));
 
         self.ctx.set_pppoe_ready(true);
-        self.ctx.set_service_state("pppoe", ServiceState::Online);
-        self.ctx.set_service_detail("pppoe", None);
+        self.ctx.set_service_state(Self::SERVICE_ID, ServiceState::Online);
+        self.ctx.set_service_detail(Self::SERVICE_ID, None);
         let _ = self
             .ctx
             .bus()
             .publish(LanforgeEvent::System(SystemEvent::ServiceReady {
-                name: "pppoe".to_string(),
+                id: Self::SERVICE_ID,
             }));
         self.attempt = 0;
     }
@@ -1186,7 +1188,7 @@ impl AsyncService for PppoeService {
                 .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionDown {
                     reason: "/dev/ppp device unavailable".into(),
                 }));
-            ctx.set_service_state("pppoe", ServiceState::Error);
+            ctx.set_service_state(Self::SERVICE_ID, ServiceState::Error);
             ctx.set_pppoe_ready(true);
             return Ok(());
         }
@@ -1202,7 +1204,7 @@ impl AsyncService for PppoeService {
                 .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionDown {
                     reason: "eBPF dataplane not compiled in".into(),
                 }));
-            ctx.set_service_state("pppoe", ServiceState::Error);
+            ctx.set_service_state(Self::SERVICE_ID, ServiceState::Error);
             ctx.set_pppoe_ready(true);
             return Ok(());
         }
@@ -1219,7 +1221,7 @@ impl AsyncService for PppoeService {
                         ServiceCommand::Stop | ServiceCommand::Shutdown => {
                             info!("PPPoE service received stop/shutdown command, exiting serve loop");
                             self.teardown_active_session("Graceful shutdown".into()).await;
-                            ctx.set_service_state("pppoe", ServiceState::Inactive);
+                            ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
                             break 'main_loop;
                         }
                         ServiceCommand::Restart => {
@@ -1235,12 +1237,12 @@ impl AsyncService for PppoeService {
                     match flow_res {
                         Ok(Some(SystemInterrupt::Shutdown)) => {
                             info!("PPPoE service session finished cleanly (daemon shutting down)");
-                            ctx.set_service_state("pppoe", ServiceState::Inactive);
+                            ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
                             break 'main_loop;
                         }
                         Ok(Some(SystemInterrupt::Stop)) => {
                             info!("PPPoE service stopped");
-                            ctx.set_service_state("pppoe", ServiceState::Inactive);
+                            ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
                             break 'main_loop;
                         }
                         Ok(Some(SystemInterrupt::Restart)) => {
@@ -1302,12 +1304,12 @@ impl AsyncService for PppoeService {
                                         match classify_system_event(&timed.event) {
                                             Some(SystemInterrupt::Shutdown) => {
                                                 info!("PPPoE service received shutdown during reconnect delay");
-                                                ctx.set_service_state("pppoe", ServiceState::Inactive);
+                                                ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
                                                 break 'main_loop;
                                             }
                                             Some(SystemInterrupt::Stop) => {
                                                 info!("PPPoE service received stop during reconnect delay");
-                                                ctx.set_service_state("pppoe", ServiceState::Inactive);
+                                                ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
                                                 break 'main_loop;
                                             }
                                             Some(SystemInterrupt::Restart) => {
@@ -1329,7 +1331,7 @@ impl AsyncService for PppoeService {
                                                 info!("PPPoE service received reconnect config update during reconnect delay, retrying immediately");
                                                 self.cfg = (*delta.new).clone();
                                                 if !self.cfg.enabled {
-                                                    ctx.set_service_state("pppoe", ServiceState::Inactive);
+                                                    ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
                                                     break 'main_loop;
                                                 }
                                                 self.attempt = 0;
@@ -1342,7 +1344,7 @@ impl AsyncService for PppoeService {
                                     match cmd {
                                         ServiceCommand::Stop | ServiceCommand::Shutdown => {
                                             info!("PPPoE service received stop/shutdown during reconnect delay");
-                                            ctx.set_service_state("pppoe", ServiceState::Inactive);
+                                            ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
                                             break 'main_loop;
                                         }
                                         ServiceCommand::Restart => {

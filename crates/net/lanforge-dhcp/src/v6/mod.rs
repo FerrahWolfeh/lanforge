@@ -77,10 +77,10 @@ use dhcproto::{Decodable, Decoder};
 
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy,
     RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_types::system::DormantReason;
+use lanforge_types::system::{DormantReason, ServiceId};
 
 /// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
 ///
@@ -90,8 +90,8 @@ use lanforge_types::system::DormantReason;
 /// - `PrefixChanged` (`GUA` updates → client `RECONFIGURE`)
 /// - `LeaseRenew` (manual RECONFIGURE send)
 const DHCPV6_DEPS: &[Edge] = &[
-    Edge::requires("interfaces", LossPolicy::Continue),
-    Edge::wants("wan"),
+    Edge::after(ServiceId::Db),
+    Edge::wants(ServiceId::Pppoe),
 ];
 
 /// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
@@ -104,7 +104,7 @@ pub struct Dhcpv6Service {
 
 impl Dhcpv6Service {
     /// Static identifier for the service.
-    pub const SERVICE_ID: &'static str = "dhcpv6";
+    pub const SERVICE_ID: ServiceId = ServiceId::Dhcp6;
 
     #[must_use]
     pub const fn new(config: Dhcpv6Config, ctx: LanforgeContext) -> Self {

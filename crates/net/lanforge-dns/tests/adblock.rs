@@ -55,11 +55,11 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     ctx.set_pppoe_ready(true);
 
     tokio::spawn(async move {
-        let h = lanforge_core::service::ServiceHandle::new("dns", ctx_service.clone());
+        let h = lanforge_core::service::ServiceHandle::new(lanforge_types::system::ServiceId::Dns, ctx_service.clone());
         service.serve(&ctx_service, &h).await.expect("Service failed");
     });
 
-    wait_for_service_online(&ctx, "dns").await;
+    wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
 
     let client_addr: SocketAddr = "192.168.1.100:54326".parse().unwrap();
     let query_bytes = DnsPacketBuilder::query("ads.example.com", DnsRecordType::A)

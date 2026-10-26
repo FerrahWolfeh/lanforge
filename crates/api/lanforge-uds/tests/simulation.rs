@@ -30,7 +30,7 @@ async fn dns_uds_simulation_basic() {
 
     // 2. Spawn UDS server control service
     let mut service = ControlService::new(cfg, ctx.clone());
-    let ctrl = ServiceControl::new("control", ctx.clone());
+    let ctrl = ServiceControl::new(lanforge_types::system::ServiceId::Uds, ctx.clone());
     let ctx_service = ctx.clone();
 
     let mut rx = ctx.bus().subscribe();
@@ -42,8 +42,8 @@ async fn dns_uds_simulation_basic() {
     // Wait for ServiceReady
     loop {
         let event = rx.recv().await.expect("Bus closed");
-        if let LanforgeEvent::System(SystemEvent::ServiceReady { name }) = event.event
-            && name == "control"
+        if let LanforgeEvent::System(SystemEvent::ServiceReady { id }) = event.event
+            && id == lanforge_types::system::ServiceId::Uds
         {
             break;
         }

@@ -186,7 +186,7 @@ async fn test_acceptance_reload_noop() {
     let log_db = Arc::new(lanforge_db::log_engine::LogDb::open(&db_cfg.runtime_path).unwrap());
     let mut db_worker = lanforge_db::worker::DbWorker::new(db_cfg, ctx.clone(), db, log_db);
     let ctx_db = ctx.clone();
-    let ctrl = lanforge_core::service::ServiceControl::new("db", ctx.clone());
+    let ctrl = lanforge_core::service::ServiceControl::new(lanforge_types::system::ServiceId::Db, ctx.clone());
     tokio::spawn(async move {
         use lanforge_core::service::AsyncService;
         let _ = db_worker.init(&ctx_db).await;

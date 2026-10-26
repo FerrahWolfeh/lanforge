@@ -36,7 +36,7 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
         if let Meta::NameValue(nv) = meta {
             let val = &nv.value;
             if nv.path.is_ident("id") {
-                id = Some(quote! { #val });
+                id = Some(val.clone());
             } else if nv.path.is_ident("name") {
                 name = Some(quote! { #val });
             } else if nv.path.is_ident("critical") {
@@ -87,10 +87,61 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
         }
     };
 
-    let id = id.expect(
-        "lanforge_service requires an 'id' argument (e.g., #[lanforge_service(id = \"my-id\")])",
+    let id_expr = id.expect(
+        "lanforge_service requires an 'id' argument (e.g., #[lanforge_service(id = \"db\")])",
     );
-    let display_name = name.unwrap_or_else(|| id.clone());
+    let id_str = match &id_expr {
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(s),
+            ..
+        }) => s.value(),
+        syn::Expr::Path(p) => p
+            .path
+            .segments
+            .last()
+            .map(|seg| seg.ident.to_string())
+            .unwrap_or_default(),
+        _ => quote!(#id_expr).to_string(),
+    };
+
+    let (service_id_variant, default_name) = match id_str.trim().to_ascii_lowercase().as_str() {
+        "db" | "database" => (quote! { lanforge_types::system::ServiceId::Db }, "Database"),
+        "nft" | "firewall" | "nftables" => {
+            (quote! { lanforge_types::system::ServiceId::Nft }, "Firewall")
+        }
+        "pppoe" => (quote! { lanforge_types::system::ServiceId::Pppoe }, "PPPoE"),
+        "dns" => (quote! { lanforge_types::system::ServiceId::Dns }, "DNS"),
+        "dhcp4" | "dhcp_v4" | "dhcpv4" => (
+            quote! { lanforge_types::system::ServiceId::Dhcp4 },
+            "DHCPv4",
+        ),
+        "dhcp6" | "dhcp_v6" | "dhcpv6" => (
+            quote! { lanforge_types::system::ServiceId::Dhcp6 },
+            "DHCPv6",
+        ),
+        "ra" | "radvd" => (
+            quote! { lanforge_types::system::ServiceId::Ra },
+            "IPv6 Router Advertisements",
+        ),
+        "traffic" | "sqm" => (
+            quote! { lanforge_types::system::ServiceId::Traffic },
+            "Traffic & SQM",
+        ),
+        "tftp" => (quote! { lanforge_types::system::ServiceId::Tftp }, "TFTP"),
+        "discovery" | "monitor" | "ndp" => (
+            quote! { lanforge_types::system::ServiceId::Discovery },
+            "Network Discovery",
+        ),
+        "mdns" => (quote! { lanforge_types::system::ServiceId::Mdns }, "mDNS"),
+        "http" | "web" => (quote! { lanforge_types::system::ServiceId::Http }, "HTTP API"),
+        "uds" | "control" => (
+            quote! { lanforge_types::system::ServiceId::Uds },
+            "Control Socket",
+        ),
+        other => panic!("Unknown service id: {other}"),
+    };
+
+    let display_name = name.unwrap_or_else(|| quote! { #default_name });
 
     let describe_method = if let Some(expr) = describe {
         quote! {
@@ -107,20 +158,20 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
 
         impl #struct_name {
             /// Static identifier for the service.
-            pub const SERVICE_ID: &'static str = #id;
+            pub const SERVICE_ID: lanforge_types::system::ServiceId = #service_id_variant;
         }
 
         impl lanforge_core::service::LanforgeService for #struct_name {
             fn spec(&self) -> lanforge_core::service::ServiceSpec {
                 lanforge_core::service::ServiceSpec {
-                    id: #id,
+                    id: Self::SERVICE_ID,
                     display_name: #display_name,
                     runtime: #runtime_expr,
                     restart: lanforge_core::service::RestartPolicy {
                         base_backoff: std::time::Duration::from_secs(#base_backoff as u64),
                         max_backoff: std::time::Duration::from_secs(#max_backoff as u64),
                         max_retries: #retries as u32,
-                        healthy_uptime: if #id == "pppoe" {
+                        healthy_uptime: if matches!(Self::SERVICE_ID, lanforge_types::system::ServiceId::Pppoe) {
                             std::time::Duration::from_secs(60)
                         } else {
                             std::time::Duration::from_secs(30)

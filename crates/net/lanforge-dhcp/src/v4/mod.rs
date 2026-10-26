@@ -41,7 +41,7 @@ use lanforge_core::bus::{
 };
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy,
     RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_types::config::ChangeImpact;
@@ -49,7 +49,7 @@ use lanforge_types::device::IPv4State;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{Dhcpv4Options, Dhcpv4Pool};
-use lanforge_types::system::{DormantReason, RunResult};
+use lanforge_types::system::{DormantReason, RunResult, ServiceId};
 use lanforge_types::update::{DeviceUpdate, DhcpV4PoolUpdate, LeaseTarget};
 use server::{DhcpServer, HandleResult};
 use smallvec::SmallVec;
@@ -63,7 +63,7 @@ pub use io::{Dhcpv4InertChannels, Dhcpv4InertHandle, Dhcpv4InertReply, Dhcpv4Tra
 use crate::traits::DhcpPool;
 use lanforge_core::context::LanforgeContext;
 
-const DHCPV4_DEPS: &[Edge] = &[Edge::requires("interfaces", LossPolicy::Degrade)];
+const DHCPV4_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
 
 /// `DHCPv4` Server Service.
 #[derive(Clone)]
@@ -75,7 +75,7 @@ pub struct Dhcpv4Service {
 
 impl Dhcpv4Service {
     /// Static identifier for the service.
-    pub const SERVICE_ID: &'static str = "dhcpv4";
+    pub const SERVICE_ID: ServiceId = ServiceId::Dhcp4;
 
     #[must_use]
     pub const fn new(cfg: Dhcpv4Config, ctx: LanforgeContext) -> Self {

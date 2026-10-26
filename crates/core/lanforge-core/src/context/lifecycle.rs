@@ -6,8 +6,8 @@ use std::time::Instant;
 
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
 use lanforge_types::system::{
-    Cap, PppoeStatusResponse, RaStatusResponse, ServerCapabilities, ServiceBanner, ServiceState,
-    SystemStatus, TrafficStatusResponse,
+    Cap, PppoeStatusResponse, RaStatusResponse, ServerCapabilities, ServiceBanner, ServiceId,
+    ServiceState, SystemStatus, TrafficStatusResponse,
 };
 use lanforge_types::update::{DhcpV4PoolUpdate, DhcpV6PoolUpdate};
 use smallvec::SmallVec;
@@ -163,40 +163,47 @@ impl LanforgeContext {
     }
 
     /// Sets the dynamic state of a service.
-    pub fn set_service_state(&self, id: &str, state: ServiceState) {
+    pub fn set_service_state(&self, id: ServiceId, state: ServiceState) {
         self.inner.runtime.set_service_state(id, state);
     }
 
     /// Sets the state detail explanation of a service.
-    pub fn set_service_detail(&self, id: &str, detail: Option<lanforge_types::system::StateDetail>) {
+    pub fn set_service_detail(
+        &self,
+        id: ServiceId,
+        detail: Option<lanforge_types::system::StateDetail>,
+    ) {
         self.inner.runtime.set_service_detail(id, detail);
     }
 
     /// Returns the state detail of a service if any.
     #[must_use]
-    pub fn get_service_detail(&self, id: &str) -> Option<lanforge_types::system::StateDetail> {
+    pub fn get_service_detail(
+        &self,
+        id: ServiceId,
+    ) -> Option<lanforge_types::system::StateDetail> {
         self.inner.runtime.get_service_detail(id)
     }
 
     /// Sets the start time of a service.
-    pub fn set_service_start(&self, id: &str, start: Instant) {
+    pub fn set_service_start(&self, id: ServiceId, start: Instant) {
         self.inner.runtime.set_service_start(id, start);
     }
 
     /// Clears the start time of a service.
-    pub fn clear_service_start(&self, id: &str) {
+    pub fn clear_service_start(&self, id: ServiceId) {
         self.inner.runtime.clear_service_start(id);
     }
 
     /// Returns the dynamic state of a service, defaulting to Offline.
     #[must_use]
-    pub fn get_service_state(&self, id: &str) -> ServiceState {
+    pub fn get_service_state(&self, id: ServiceId) -> ServiceState {
         self.inner.runtime.get_service_state(id)
     }
 
     /// Returns the uptime of a service in seconds, or 0 if not running.
     #[must_use]
-    pub fn get_service_uptime(&self, id: &str) -> u64 {
+    pub fn get_service_uptime(&self, id: ServiceId) -> u64 {
         self.inner.runtime.get_service_uptime(id)
     }
 
@@ -327,7 +334,7 @@ impl LanforgeContext {
     /// # Errors
     ///
     /// Returns `CoreError::Shutdown` if the system shuts down before the service is online.
-    pub async fn wait_for_service(&self, id: &str) -> Result<(), CoreError> {
+    pub async fn wait_for_service(&self, id: ServiceId) -> Result<(), CoreError> {
         self.inner.runtime.wait_for_service(id).await
     }
 

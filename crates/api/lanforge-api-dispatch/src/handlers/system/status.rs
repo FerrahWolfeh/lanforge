@@ -6,7 +6,7 @@ use lanforge_api::api::{
 };
 use lanforge_types::device::{IPv6State, Origin};
 use lanforge_types::network::firewall::{FirewallPolicy, FirewallStatus};
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::{ServiceId, ServiceState};
 use std::fs::metadata;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -103,7 +103,7 @@ impl ClientContext {
         }
 
         if status.state == lanforge_types::system::PppoeSessionState::Connected {
-            let uptime = self.ctx.get_service_uptime("pppoe");
+            let uptime = self.ctx.get_service_uptime(ServiceId::Pppoe);
             status.uptime_secs = Some(uptime);
         }
 
@@ -153,7 +153,7 @@ impl ClientContext {
         let status = traffic_status.map_or_else(
             || {
                 let cfg = self.ctx.get_traffic_config().unwrap_or_default();
-                let service_state = self.ctx.get_service_state("traffic");
+                let service_state = self.ctx.get_service_state(ServiceId::Traffic);
                 Box::new(lanforge_types::system::TrafficStatusResponse {
                     service_state,
                     tuning_applied: false,

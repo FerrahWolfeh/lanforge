@@ -14,7 +14,7 @@ use lanforge_core::service::{
     Activation, AsyncService, Condition, DormantReason, Edge, LanforgeService, LossPolicy,
     RestartPolicy, RuntimeClass, ServiceHandle, ServiceSpec,
 };
-use lanforge_types::system::{ServiceState, StateDetail};
+use lanforge_types::system::{ServiceId, ServiceState, StateDetail};
 use tokio::sync::Notify;
 use tokio::time::timeout;
 
@@ -28,13 +28,13 @@ fn init_test_ctx() -> LanforgeContext {
 }
 
 fn dummy_spec(
-    id: &'static str,
+    id: ServiceId,
     deps: &'static [Edge],
     condition: Condition,
 ) -> ServiceSpec {
     ServiceSpec {
         id,
-        display_name: id,
+        display_name: id.as_str(),
         runtime: RuntimeClass::Shared,
         restart: RestartPolicy {
             base_backoff: Duration::from_millis(1),
@@ -55,44 +55,44 @@ fn dummy_spec(
 #[test]
 fn test_graph_is_acyclic_real_catalog() {
     static DB_DEPS: &[Edge] = &[];
-    static HTTP_DEPS: &[Edge] = &[Edge::requires("db", LossPolicy::Restart)];
-    static DHCP4_DEPS: &[Edge] = &[Edge::after("db")];
-    static DHCP6_DEPS: &[Edge] = &[Edge::after("db")];
-    static RA_DEPS: &[Edge] = &[Edge::after("db")];
+    static HTTP_DEPS: &[Edge] = &[Edge::requires(ServiceId::Db, LossPolicy::Restart)];
+    static DHCP4_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
+    static DHCP6_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
+    static RA_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
     static DNS_DEPS: &[Edge] = &[
-        Edge::after("db"),
-        Edge::wants("dhcpv4"),
-        Edge::wants("dhcpv6"),
+        Edge::after(ServiceId::Db),
+        Edge::wants(ServiceId::Dhcp4),
+        Edge::wants(ServiceId::Dhcp6),
     ];
-    static MONITOR_DEPS: &[Edge] = &[Edge::after("db")];
-    static TRAFFIC_DEPS: &[Edge] = &[Edge::after("db")];
-    static TFTP_DEPS: &[Edge] = &[Edge::after("db")];
+    static MONITOR_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
+    static TRAFFIC_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
+    static TFTP_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
     static PPPOE_DEPS: &[Edge] = &[];
-    static NFT_DEPS: &[Edge] = &[Edge::after("db"), Edge::wants("pppoe")];
-    static CONTROL_DEPS: &[Edge] = &[];
+    static NFT_DEPS: &[Edge] = &[Edge::after(ServiceId::Db), Edge::wants(ServiceId::Pppoe)];
+    static UDS_DEPS: &[Edge] = &[];
 
     let catalog = vec![
-        dummy_spec("db", DB_DEPS, Condition::ALWAYS),
-        dummy_spec("http", HTTP_DEPS, Condition::ALWAYS),
-        dummy_spec("dhcpv4", DHCP4_DEPS, Condition::ALWAYS),
-        dummy_spec("dhcpv6", DHCP6_DEPS, Condition::ALWAYS),
-        dummy_spec("ra", RA_DEPS, Condition::ALWAYS),
-        dummy_spec("dns", DNS_DEPS, Condition::ALWAYS),
-        dummy_spec("monitor", MONITOR_DEPS, Condition::ALWAYS),
-        dummy_spec("traffic", TRAFFIC_DEPS, Condition::ALWAYS),
-        dummy_spec("tftp", TFTP_DEPS, Condition::ALWAYS),
-        dummy_spec("pppoe", PPPOE_DEPS, Condition::ALWAYS),
-        dummy_spec("nft", NFT_DEPS, Condition::ALWAYS),
-        dummy_spec("control", CONTROL_DEPS, Condition::ALWAYS),
+        dummy_spec(ServiceId::Db, DB_DEPS, Condition::ALWAYS),
+        dummy_spec(ServiceId::Http, HTTP_DEPS, Condition::ALWAYS),
+        dummy_spec(ServiceId::Dhcp4, DHCP4_DEPS, Condition::ALWAYS),
+        dummy_spec(ServiceId::Dhcp6, DHCP6_DEPS, Condition::ALWAYS),
+        dummy_spec(ServiceId::Ra, RA_DEPS, Condition::ALWAYS),
+        dummy_spec(ServiceId::Dns, DNS_DEPS, Condition::ALWAYS),
+        dummy_spec(ServiceId::Discovery, MONITOR_DEPS, Condition::ALWAYS),
+        dummy_spec(ServiceId::Traffic, TRAFFIC_DEPS, Condition::ALWAYS),
+        dummy_spec(ServiceId::Tftp, TFTP_DEPS, Condition::ALWAYS),
+        dummy_spec(ServiceId::Pppoe, PPPOE_DEPS, Condition::ALWAYS),
+        dummy_spec(ServiceId::Nft, NFT_DEPS, Condition::ALWAYS),
+        dummy_spec(ServiceId::Uds, UDS_DEPS, Condition::ALWAYS),
     ];
 
     let graph = DependencyGraph::build(catalog).expect("Real catalog must be acyclic");
     let order = graph.topological_order();
 
-    let db_idx = order.iter().position(|&s| s == "db").unwrap();
-    let http_idx = order.iter().position(|&s| s == "http").unwrap();
-    let dns_idx = order.iter().position(|&s| s == "dns").unwrap();
-    let nft_idx = order.iter().position(|&s| s == "nft").unwrap();
+    let db_idx = order.iter().position(|&s| s == ServiceId::Db).unwrap();
+    let http_idx = order.iter().position(|&s| s == ServiceId::Http).unwrap();
+    let dns_idx = order.iter().position(|&s| s == ServiceId::Dns).unwrap();
+    let nft_idx = order.iter().position(|&s| s == ServiceId::Nft).unwrap();
 
     assert!(db_idx < http_idx, "db must precede http");
     assert!(db_idx < dns_idx, "db must precede dns");
@@ -101,22 +101,22 @@ fn test_graph_is_acyclic_real_catalog() {
 
 #[test]
 fn test_graph_rejects_cycle() {
-    static A_DEPS: &[Edge] = &[Edge::after("b")];
-    static B_DEPS: &[Edge] = &[Edge::after("c")];
-    static C_DEPS: &[Edge] = &[Edge::after("a")];
+    static A_DEPS: &[Edge] = &[Edge::after(ServiceId::Dhcp4)];
+    static B_DEPS: &[Edge] = &[Edge::after(ServiceId::Dhcp6)];
+    static C_DEPS: &[Edge] = &[Edge::after(ServiceId::Dns)];
 
     let specs = vec![
-        dummy_spec("a", A_DEPS, Condition::ALWAYS),
-        dummy_spec("b", B_DEPS, Condition::ALWAYS),
-        dummy_spec("c", C_DEPS, Condition::ALWAYS),
+        dummy_spec(ServiceId::Dns, A_DEPS, Condition::ALWAYS),
+        dummy_spec(ServiceId::Dhcp4, B_DEPS, Condition::ALWAYS),
+        dummy_spec(ServiceId::Dhcp6, C_DEPS, Condition::ALWAYS),
     ];
 
     let err = DependencyGraph::build(specs).unwrap_err();
     match err {
         GraphError::CycleDetected(cycle) => {
-            assert!(cycle.contains(&"a".to_string()));
-            assert!(cycle.contains(&"b".to_string()));
-            assert!(cycle.contains(&"c".to_string()));
+            assert!(cycle.contains(&ServiceId::Dns));
+            assert!(cycle.contains(&ServiceId::Dhcp4));
+            assert!(cycle.contains(&ServiceId::Dhcp6));
         }
         other => panic!("Expected CycleDetected, got {other:?}"),
     }
@@ -124,16 +124,16 @@ fn test_graph_rejects_cycle() {
 
 #[test]
 fn test_graph_rejects_unknown_dep() {
-    static A_DEPS: &[Edge] = &[Edge::requires("missing_service", LossPolicy::Restart)];
+    static A_DEPS: &[Edge] = &[Edge::requires(ServiceId::Db, LossPolicy::Restart)];
 
-    let specs = vec![dummy_spec("a", A_DEPS, Condition::ALWAYS)];
+    let specs = vec![dummy_spec(ServiceId::Http, A_DEPS, Condition::ALWAYS)];
     let err = DependencyGraph::build(specs).unwrap_err();
 
     assert_eq!(
         err,
         GraphError::UnknownDependency {
-            from: "a".into(),
-            to: "missing_service".into()
+            from: ServiceId::Http,
+            to: ServiceId::Db,
         }
     );
 }
@@ -149,14 +149,14 @@ async fn test_requires_blocks_until_online() {
     let b_started = Arc::new(AtomicBool::new(false));
 
     static A_DEPS: &[Edge] = &[];
-    static B_DEPS: &[Edge] = &[Edge::requires("a", LossPolicy::Continue)];
+    static B_DEPS: &[Edge] = &[Edge::requires(ServiceId::Db, LossPolicy::Continue)];
 
     struct SvcA {
         gate: Arc<Notify>,
     }
     impl LanforgeService for SvcA {
         fn spec(&self) -> ServiceSpec {
-            dummy_spec("a", A_DEPS, Condition::ALWAYS)
+            dummy_spec(ServiceId::Db, A_DEPS, Condition::ALWAYS)
         }
     }
     impl AsyncService for SvcA {
@@ -173,7 +173,7 @@ async fn test_requires_blocks_until_online() {
     }
     impl LanforgeService for SvcB {
         fn spec(&self) -> ServiceSpec {
-            dummy_spec("b", B_DEPS, Condition::ALWAYS)
+            dummy_spec(ServiceId::Http, B_DEPS, Condition::ALWAYS)
         }
     }
     impl AsyncService for SvcB {
@@ -218,12 +218,12 @@ async fn test_wants_does_not_block() {
     let b_started = Arc::new(AtomicBool::new(false));
 
     static A_DEPS: &[Edge] = &[];
-    static B_DEPS: &[Edge] = &[Edge::wants("a")];
+    static B_DEPS: &[Edge] = &[Edge::wants(ServiceId::Db)];
 
     struct SvcA;
     impl LanforgeService for SvcA {
         fn spec(&self) -> ServiceSpec {
-            dummy_spec("a", A_DEPS, Condition::ALWAYS)
+            dummy_spec(ServiceId::Db, A_DEPS, Condition::ALWAYS)
         }
     }
     impl AsyncService for SvcA {
@@ -239,7 +239,7 @@ async fn test_wants_does_not_block() {
     }
     impl LanforgeService for SvcB {
         fn spec(&self) -> ServiceSpec {
-            dummy_spec("b", B_DEPS, Condition::ALWAYS)
+            dummy_spec(ServiceId::Http, B_DEPS, Condition::ALWAYS)
         }
     }
     impl AsyncService for SvcB {
@@ -279,14 +279,14 @@ async fn test_loss_policy_restart_bounces_service() {
     let b_runs = Arc::new(AtomicU32::new(0));
 
     static A_DEPS: &[Edge] = &[];
-    static B_DEPS: &[Edge] = &[Edge::requires("a", LossPolicy::Restart)];
+    static B_DEPS: &[Edge] = &[Edge::requires(ServiceId::Db, LossPolicy::Restart)];
 
     struct SvcA {
         dropped: bool,
     }
     impl LanforgeService for SvcA {
         fn spec(&self) -> ServiceSpec {
-            dummy_spec("a", A_DEPS, Condition::ALWAYS)
+            dummy_spec(ServiceId::Db, A_DEPS, Condition::ALWAYS)
         }
     }
     impl AsyncService for SvcA {
@@ -309,7 +309,7 @@ async fn test_loss_policy_restart_bounces_service() {
     }
     impl LanforgeService for SvcB {
         fn spec(&self) -> ServiceSpec {
-            dummy_spec("b", B_DEPS, Condition::ALWAYS)
+            dummy_spec(ServiceId::Http, B_DEPS, Condition::ALWAYS)
         }
     }
     impl AsyncService for SvcB {
@@ -349,17 +349,17 @@ async fn test_dormant_requires_propagates() {
     let ctx = init_test_ctx();
 
     static A_DEPS: &[Edge] = &[];
-    static B_DEPS: &[Edge] = &[Edge::requires("a", LossPolicy::Continue)];
+    static B_DEPS: &[Edge] = &[Edge::requires(ServiceId::Db, LossPolicy::Continue)];
 
     struct SvcA;
     impl LanforgeService for SvcA {
         fn spec(&self) -> ServiceSpec {
             dummy_spec(
-                "a",
+                ServiceId::Db,
                 A_DEPS,
                 Condition {
                     sections: &[],
-                    eval: |_| Activation::Dormant(DormantReason::disabled("a")),
+                    eval: |_| Activation::Dormant(DormantReason::disabled("db")),
                 },
             )
         }
@@ -373,7 +373,7 @@ async fn test_dormant_requires_propagates() {
     struct SvcB;
     impl LanforgeService for SvcB {
         fn spec(&self) -> ServiceSpec {
-            dummy_spec("b", B_DEPS, Condition::ALWAYS)
+            dummy_spec(ServiceId::Http, B_DEPS, Condition::ALWAYS)
         }
     }
     impl AsyncService for SvcB {
@@ -390,8 +390,8 @@ async fn test_dormant_requires_propagates() {
 
     timeout(Duration::from_millis(200), async {
         loop {
-            if ctx.get_service_state("b") == ServiceState::Inactive {
-                let detail = ctx.get_service_detail("b");
+            if ctx.get_service_state(ServiceId::Http) == ServiceState::Inactive {
+                let detail = ctx.get_service_detail(ServiceId::Http);
                 if matches!(detail, Some(StateDetail::DependencyDormant(_))) {
                     break;
                 }
@@ -415,17 +415,17 @@ async fn test_shutdown_reverse_order() {
     let stop_log = Arc::new(Mutex::new(Vec::new()));
 
     static DB_DEPS: &[Edge] = &[];
-    static HTTP_DEPS: &[Edge] = &[Edge::requires("db", LossPolicy::Restart)];
+    static HTTP_DEPS: &[Edge] = &[Edge::requires(ServiceId::Db, LossPolicy::Restart)];
 
     struct SvcDb {
-        log: Arc<Mutex<Vec<&'static str>>>,
+        log: Arc<Mutex<Vec<ServiceId>>>,
     }
     impl LanforgeService for SvcDb {
         fn spec(&self) -> ServiceSpec {
-            dummy_spec("db", DB_DEPS, Condition::ALWAYS)
+            dummy_spec(ServiceId::Db, DB_DEPS, Condition::ALWAYS)
         }
         fn on_shutdown(&mut self) -> Result<(), CoreError> {
-            self.log.lock().unwrap().push("db");
+            self.log.lock().unwrap().push(ServiceId::Db);
             Ok(())
         }
     }
@@ -438,14 +438,14 @@ async fn test_shutdown_reverse_order() {
     }
 
     struct SvcHttp {
-        log: Arc<Mutex<Vec<&'static str>>>,
+        log: Arc<Mutex<Vec<ServiceId>>>,
     }
     impl LanforgeService for SvcHttp {
         fn spec(&self) -> ServiceSpec {
-            dummy_spec("http", HTTP_DEPS, Condition::ALWAYS)
+            dummy_spec(ServiceId::Http, HTTP_DEPS, Condition::ALWAYS)
         }
         fn on_shutdown(&mut self) -> Result<(), CoreError> {
-            self.log.lock().unwrap().push("http");
+            self.log.lock().unwrap().push(ServiceId::Http);
             Ok(())
         }
     }
@@ -467,8 +467,8 @@ async fn test_shutdown_reverse_order() {
 
     // Wait until both are Online
     timeout(Duration::from_millis(500), async {
-        while ctx.get_service_state("db") != ServiceState::Online
-            || ctx.get_service_state("http") != ServiceState::Online
+        while ctx.get_service_state(ServiceId::Db) != ServiceState::Online
+            || ctx.get_service_state(ServiceId::Http) != ServiceState::Online
         {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -479,7 +479,7 @@ async fn test_shutdown_reverse_order() {
     supervisor.shutdown(&ctx, Duration::from_millis(500)).await;
 
     let order = stop_log.lock().unwrap().clone();
-    assert_eq!(order, vec!["http", "db"], "Reverse-topological shutdown must stop http before db");
+    assert_eq!(order, vec![ServiceId::Http, ServiceId::Db], "Reverse-topological shutdown must stop http before db");
 }
 
 #[tokio::test]
@@ -489,14 +489,14 @@ async fn test_after_waits_for_settled() {
     let b_started = Arc::new(AtomicBool::new(false));
 
     static A_DEPS: &[Edge] = &[];
-    static B_DEPS: &[Edge] = &[Edge::after("a")];
+    static B_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
 
     struct SvcA {
         gate: Arc<Notify>,
     }
     impl LanforgeService for SvcA {
         fn spec(&self) -> ServiceSpec {
-            dummy_spec("a", A_DEPS, Condition::ALWAYS)
+            dummy_spec(ServiceId::Db, A_DEPS, Condition::ALWAYS)
         }
     }
     impl AsyncService for SvcA {
@@ -512,7 +512,7 @@ async fn test_after_waits_for_settled() {
     }
     impl LanforgeService for SvcB {
         fn spec(&self) -> ServiceSpec {
-            dummy_spec("b", B_DEPS, Condition::ALWAYS)
+            dummy_spec(ServiceId::Http, B_DEPS, Condition::ALWAYS)
         }
     }
     impl AsyncService for SvcB {
@@ -562,7 +562,7 @@ async fn test_condition_toggle_isolated() {
     impl LanforgeService for ToggleSvc {
         fn spec(&self) -> ServiceSpec {
             dummy_spec(
-                "toggle_svc",
+                ServiceId::Tftp,
                 SVC_DEPS,
                 Condition {
                     sections: &[],
@@ -592,7 +592,7 @@ async fn test_condition_toggle_isolated() {
 
     // Wait until Online
     timeout(Duration::from_millis(300), async {
-        while ctx.get_service_state("toggle_svc") != ServiceState::Online {
+        while ctx.get_service_state(ServiceId::Tftp) != ServiceState::Online {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })

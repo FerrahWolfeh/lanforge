@@ -10,7 +10,7 @@ use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
 use lanforge_types::events::traffic::TrafficEvent;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::network::traffic::{NicTuningConfig, SqmConfig, SqmDiffserv, TrafficConfig};
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::{ServiceId, ServiceState};
 use tokio::sync::broadcast;
 use tokio::time::timeout;
 
@@ -80,7 +80,7 @@ async fn test_traffic_service_inert_full_lifecycle() {
     // 2. Spawn service task
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("traffic", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Traffic, ctx_clone.clone());
     let serve_handle = tokio::spawn(async move { service_clone.serve(&ctx_clone, &h).await });
 
     // Allow task to initialize and subscribe
@@ -197,7 +197,7 @@ async fn test_traffic_reacts_to_config_change_in_place() {
     let mut service = TrafficService::inert(cfg);
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("traffic", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Traffic, ctx_clone.clone());
     let serve_handle = tokio::spawn(async move { service_clone.serve(&ctx_clone, &h).await });
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -263,12 +263,12 @@ async fn test_traffic_inactive_when_all_disabled() {
 
     let mut service = TrafficService::inert(cfg);
     // When both are disabled, serve() must complete immediately with Ok(())
-    let h = ServiceHandle::new("traffic", ctx.clone());
+    let h = ServiceHandle::new(ServiceId::Traffic, ctx.clone());
     timeout(Duration::from_millis(500), service.serve(&ctx, &h)).await
         .expect("serve() must not hang when features are disabled")
         .expect("serve() must return Ok(())");
 
-    assert_eq!(ctx.get_service_state("traffic"), ServiceState::Inactive);
+    assert_eq!(ctx.get_service_state(ServiceId::Traffic), ServiceState::Inactive);
 }
 
 #[tokio::test]
@@ -291,7 +291,7 @@ async fn test_traffic_reacts_to_interface_ready() {
     let mut service = TrafficService::inert(cfg);
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("traffic", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Traffic, ctx_clone.clone());
     let serve_handle = tokio::spawn(async move { service_clone.serve(&ctx_clone, &h).await });
     tokio::time::sleep(Duration::from_millis(50)).await;
 

@@ -2,14 +2,14 @@
 
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::NodeStatus;
-use lanforge_types::system::{ServiceState, StateDetail};
+use lanforge_types::system::{ServiceId, ServiceState, StateDetail};
 use std::time::Instant;
 use tokio::sync::watch;
 
 /// Manages the state and status channel for a single service node in the graph.
 #[derive(Debug)]
 pub struct NodeHandle {
-    pub id: &'static str,
+    pub id: ServiceId,
     pub tx: watch::Sender<NodeStatus>,
     pub rx: watch::Receiver<NodeStatus>,
     pub shutdown_tx: watch::Sender<bool>,
@@ -19,7 +19,7 @@ pub struct NodeHandle {
 impl NodeHandle {
     /// Creates a new `NodeHandle` in the `Pending` state.
     #[must_use]
-    pub fn new(id: &'static str) -> Self {
+    pub fn new(id: ServiceId) -> Self {
         let (tx, rx) = watch::channel(NodeStatus {
             state: ServiceState::Inactive,
             detail: None,

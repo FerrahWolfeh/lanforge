@@ -70,7 +70,12 @@ impl FromRef<AppState> for Arc<dyn DatabaseStore> {
     }
 }
 
-const HTTP_DEPS: &[lanforge_core::service::Edge] = &[lanforge_core::service::Edge::after("db")];
+use lanforge_types::system::ServiceId;
+
+const HTTP_DEPS: &[lanforge_core::service::Edge] = &[lanforge_core::service::Edge::requires(
+    ServiceId::Db,
+    lanforge_core::service::LossPolicy::Restart,
+)];
 
 #[derive(Clone)]
 pub struct HttpService {
@@ -82,7 +87,7 @@ pub struct HttpService {
 
 impl HttpService {
     /// Static identifier for the service.
-    pub const SERVICE_ID: &'static str = "http";
+    pub const SERVICE_ID: ServiceId = ServiceId::Http;
     #[must_use]
     pub const fn new(
         cfg: Arc<HttpConfig>,

@@ -107,7 +107,9 @@ impl IfNameCache {
     }
 }
 
-const MONITOR_DEPS: &[Edge] = &[Edge::after("db")];
+use lanforge_types::system::ServiceId;
+
+const MONITOR_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
 
 /// Unified neighbor discovery (NDP/ARP) and active ICMP ping engine.
 ///
@@ -123,7 +125,7 @@ pub struct DiscoveryService {
 
 impl DiscoveryService {
     /// Static identifier for the service.
-    pub const SERVICE_ID: &'static str = "monitor";
+    pub const SERVICE_ID: ServiceId = ServiceId::Discovery;
 
     /// Creates a new `DiscoveryService` for the given interfaces.
     #[must_use]

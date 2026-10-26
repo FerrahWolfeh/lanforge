@@ -768,7 +768,7 @@ impl AsyncService for DbWorker {
                             break_loop = true;
                         }
                         LanforgeEvent::System(SystemEvent::ServiceControl { id, action }) => {
-                            if id == "db" && matches!(action, ServiceAction::Stop | ServiceAction::Restart) {
+                            if *id == lanforge_types::system::ServiceId::Db && matches!(action, ServiceAction::Stop | ServiceAction::Restart) {
                                 info!(action = ?action, "Database worker received service control, flushing and exiting loop");
                                 self.flush_batch(&db, &log_db).await;
                                 self.flush_live_config_to_file(&db).await;

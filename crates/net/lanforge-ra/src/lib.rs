@@ -68,7 +68,7 @@ use crate::error::NetworkError;
 use lanforge_core::bus::{LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy,
     RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_transport::Icmp6Transport;
@@ -296,9 +296,11 @@ impl RaState {
     }
 }
 
+use lanforge_types::system::ServiceId;
+
 const RA_DEPS: &[Edge] = &[
-    Edge::requires("interfaces", LossPolicy::Continue),
-    Edge::wants("wan"),
+    Edge::after(ServiceId::Db),
+    Edge::wants(ServiceId::Pppoe),
 ];
 #[derive(Clone)]
 pub struct RaService {
@@ -309,7 +311,7 @@ pub struct RaService {
 
 impl RaService {
     /// Static identifier for the service.
-    pub const SERVICE_ID: &'static str = "ra";
+    pub const SERVICE_ID: ServiceId = ServiceId::Ra;
 
     #[must_use]
     pub const fn new(cfg: RaConfig, ctx: LanforgeContext) -> Self {

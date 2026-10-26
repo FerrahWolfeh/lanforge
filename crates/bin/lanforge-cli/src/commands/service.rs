@@ -92,7 +92,7 @@ fn render_services_table(resp: &ServiceBannersResponse, printer: &Printer) {
 
         table.add_row(vec![
             Cell::new(&banner.name),
-            Cell::new(&banner.id),
+            Cell::new(banner.id),
             Cell::new(printer.service_badge(banner.state.as_str())),
             Cell::new(uptime_str),
             Cell::new(metrics_summary),
@@ -129,7 +129,7 @@ async fn show_service(client: &LanforgeClient, printer: &Printer, id: &str) -> R
     let target = id.to_lowercase();
 
     let banner = resp.banners.iter().find(|b| {
-        b.id.eq_ignore_ascii_case(&target) || b.name.to_lowercase().contains(&target)
+        b.id.as_str().eq_ignore_ascii_case(&target) || b.name.to_lowercase().contains(&target)
     });
 
     let Some(banner) = banner else {

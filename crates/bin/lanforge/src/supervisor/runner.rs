@@ -9,7 +9,7 @@ use lanforge_core::service::{
     Activation, AsyncService, DegradedReason, Edge, LanforgeService, LossPolicy, NodeStatus,
     ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_types::system::{ServiceState, StateDetail};
+use lanforge_types::system::{ServiceId, ServiceState, StateDetail};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,7 +27,7 @@ where
     pub factory: F,
     pub ctx: LanforgeContext,
     pub node: Arc<NodeHandle>,
-    pub dep_rxs: HashMap<&'static str, watch::Receiver<NodeStatus>>,
+    pub dep_rxs: HashMap<ServiceId, watch::Receiver<NodeStatus>>,
     pub notify_condition: Arc<Notify>,
     pub shutdown_rx: watch::Receiver<bool>,
 }
@@ -51,7 +51,7 @@ where
             // 1. Condition evaluation
             let activation = self.spec.condition.evaluate(&self.ctx);
             if let Activation::Dormant(reason) = activation {
-                debug!(service = self.spec.id, reason = ?reason, "Service condition dormant");
+                debug!(service = %self.spec.id, reason = ?reason, "Service condition dormant");
                 self.node.set_status(
                     &self.ctx,
                     ServiceState::Inactive,
@@ -101,9 +101,9 @@ where
 
             let mut service = (self.factory)();
 
-            debug!(service = self.spec.id, "Initializing service");
+            debug!(service = %self.spec.id, "Initializing service");
             if let Err(init_err) = service.init(&self.ctx).await {
-                error!(service = self.spec.id, error = %init_err, "Service initialization failed");
+                error!(service = %self.spec.id, error = %init_err, "Service initialization failed");
                 consecutive_failures += 1;
                 self.handle_failure(init_err, consecutive_failures).await;
                 continue;
@@ -112,7 +112,7 @@ where
             // Listen for readiness events to sync NodeStatus watch channel
             let mut sys_bus = self.ctx.bus().subscribe_system();
 
-            debug!(service = self.spec.id, "Serving service");
+            debug!(service = %self.spec.id, "Serving service");
             let mut serve_fut = Box::pin(service.serve(&self.ctx, &handle));
 
             let (serve_res, loss_restart) = loop {
@@ -129,8 +129,8 @@ where
 
                     // System bus events (e.g., ServiceReady from handle)
                     Ok(event) = sys_bus.recv() => {
-                        if let LanforgeEvent::System(SystemEvent::ServiceReady { ref name }) = event.event
-                            && name == self.spec.id
+                        if let LanforgeEvent::System(SystemEvent::ServiceReady { id }) = event.event
+                            && id == self.spec.id
                         {
                             let current_state = self.ctx.get_service_state(self.spec.id);
                             let current_detail = self.ctx.get_service_detail(self.spec.id);
@@ -142,8 +142,8 @@ where
                     loss = Self::check_required_dependency_loss(self.spec.deps, &mut self.dep_rxs) => {
                         if let Some((target, policy)) = loss {
                             debug!(
-                                service = self.spec.id,
-                                target,
+                                service = %self.spec.id,
+                                %target,
                                 policy = ?policy,
                                 "Required dependency lost"
                             );
@@ -156,7 +156,7 @@ where
                                     self.node.set_status(
                                         &self.ctx,
                                         ServiceState::Degraded,
-                                        Some(StateDetail::Degraded(DegradedReason::Custom(Cow::Borrowed(target)))),
+                                        Some(StateDetail::Degraded(DegradedReason::Custom(Cow::Owned(target.to_string())))),
                                     );
                                 }
                                 LossPolicy::Pause => {
@@ -164,10 +164,10 @@ where
                                     self.node.set_status(
                                         &self.ctx,
                                         ServiceState::Degraded,
-                                        Some(StateDetail::Paused(Cow::Borrowed(target))),
+                                        Some(StateDetail::Paused(target)),
                                     );
                                     // Wait for recovery
-                                    if let Some(rx) = self.dep_rxs.get_mut(target) {
+                                    if let Some(rx) = self.dep_rxs.get_mut(&target) {
                                         while rx.changed().await.is_ok() {
                                             let st = rx.borrow().state;
                                             if st == ServiceState::Online || st == ServiceState::Degraded {
@@ -179,7 +179,7 @@ where
                                     }
                                 }
                                 LossPolicy::Restart => {
-                                    warn!(service = self.spec.id, target, "Dependency lost with Restart policy; bouncing service");
+                                    warn!(service = %self.spec.id, %target, "Dependency lost with Restart policy; bouncing service");
                                     let _ = cmd_tx.send(ServiceCommand::Shutdown).await;
                                     break (None, true);
                                 }
@@ -212,10 +212,10 @@ where
                 match res {
                     Ok(()) => {
                         if handle.is_restart_requested() || loss_restart {
-                            debug!(service = self.spec.id, "Restart requested, recycling");
+                            debug!(service = %self.spec.id, "Restart requested, recycling");
                             continue;
                         }
-                        info!(service = self.spec.id, "Service exited cleanly");
+                        info!(service = %self.spec.id, "Service exited cleanly");
                         self.node.set_status(&self.ctx, ServiceState::Inactive, None);
                         // Wait for condition reactivation or shutdown
                         tokio::select! {
@@ -226,7 +226,7 @@ where
                         }
                     }
                     Err(err) => {
-                        error!(service = self.spec.id, error = %err, "Service terminated with error");
+                        error!(service = %self.spec.id, error = %err, "Service terminated with error");
                         consecutive_failures += 1;
                         self.handle_failure(err, consecutive_failures).await;
                     }
@@ -242,7 +242,7 @@ where
             match edge.kind {
                 lanforge_core::service::EdgeKind::Requires => {
                     let target = edge.target;
-                    if let Some(rx) = self.dep_rxs.get_mut(target) {
+                    if let Some(rx) = self.dep_rxs.get_mut(&target) {
                         loop {
                             let status = rx.borrow().clone();
                             if status.state == ServiceState::Online
@@ -257,7 +257,7 @@ where
                                 self.node.set_status(
                                     &self.ctx,
                                     ServiceState::Inactive,
-                                    Some(StateDetail::DependencyDormant(Cow::Borrowed(target))),
+                                    Some(StateDetail::DependencyDormant(target)),
                                 );
                                 return Ok(false);
                             }
@@ -278,7 +278,7 @@ where
                 }
                 lanforge_core::service::EdgeKind::After => {
                     let target = edge.target;
-                    if let Some(rx) = self.dep_rxs.get_mut(target) {
+                    if let Some(rx) = self.dep_rxs.get_mut(&target) {
                         loop {
                             let status = rx.borrow().clone();
                             if is_settled(status.state) {
@@ -310,11 +310,11 @@ where
 
     async fn check_required_dependency_loss(
         deps: &'static [Edge],
-        rxs: &mut HashMap<&'static str, watch::Receiver<NodeStatus>>,
-    ) -> Option<(&'static str, LossPolicy)> {
+        rxs: &mut HashMap<ServiceId, watch::Receiver<NodeStatus>>,
+    ) -> Option<(ServiceId, LossPolicy)> {
         for &edge in deps {
             if edge.kind == lanforge_core::service::EdgeKind::Requires
-                && let Some(rx) = rxs.get_mut(edge.target)
+                && let Some(rx) = rxs.get_mut(&edge.target)
                 && rx.has_changed().unwrap_or(false)
             {
                 let _ = rx.borrow_and_update();
@@ -333,7 +333,7 @@ where
         match decision {
             BackoffDecision::RetryIn(delay) => {
                 warn!(
-                    service = self.spec.id,
+                    service = %self.spec.id,
                     delay_secs = delay.as_secs(),
                     failures,
                     "Scheduling restart after backoff delay"
@@ -354,7 +354,7 @@ where
             }
             BackoffDecision::Exhausted => {
                 error!(
-                    service = self.spec.id,
+                    service = %self.spec.id,
                     failures,
                     "Service retry limit exhausted; entering terminal Error state"
                 );

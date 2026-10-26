@@ -9,7 +9,7 @@ use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_pppoe::{PppoeConfig, PppoeService};
 use lanforge_types::events::TimedEvent;
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
-use lanforge_types::system::{PppoeSessionState, ServiceAction, ServiceState};
+use lanforge_types::system::{PppoeSessionState, ServiceAction, ServiceId, ServiceState};
 use tokio::sync::broadcast;
 use tokio::time::timeout;
 
@@ -74,7 +74,7 @@ async fn test_pppoe_inert_session_up_and_shutdown() {
     assert!(service.is_inert());
 
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("pppoe", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     // 1. Verify SessionUp is emitted with complete parameters
@@ -87,7 +87,7 @@ async fn test_pppoe_inert_session_up_and_shutdown() {
 
     // 2. Verify state and readiness
     assert!(ctx.is_pppoe_ready());
-    assert_eq!(ctx.get_service_state("pppoe"), ServiceState::Online);
+    assert_eq!(ctx.get_service_state(ServiceId::Pppoe), ServiceState::Online);
     {
         let status = ctx.pppoe_status().expect("status set");
         assert_eq!(status.state, PppoeSessionState::Connected);
@@ -126,7 +126,7 @@ async fn test_pppoe_reacts_to_config_change_in_place() {
 
     let mut service = PppoeService::inert(cfg, ctx.clone());
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("pppoe", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     // 1. Initial connect
@@ -168,7 +168,7 @@ async fn test_pppoe_reacts_to_config_change_in_place() {
         .expect("join timeout")
         .expect("join handle error");
     assert!(res.is_ok());
-    assert_eq!(ctx.get_service_state("pppoe"), ServiceState::Inactive);
+    assert_eq!(ctx.get_service_state(ServiceId::Pppoe), ServiceState::Inactive);
     assert!(!ctx.is_pppoe_ready());
 }
 
@@ -188,7 +188,7 @@ async fn test_pppoe_reacts_to_service_control_restart() {
 
     let mut service = PppoeService::inert(cfg, ctx.clone());
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("pppoe", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     // 1. Initial connect
@@ -196,7 +196,7 @@ async fn test_pppoe_reacts_to_service_control_restart() {
 
     // 2. Issue Restart service control
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {
-        id: "pppoe".into(),
+        id: ServiceId::Pppoe,
         action: ServiceAction::Restart,
     }));
 
@@ -229,7 +229,7 @@ async fn test_pppoe_reacts_to_service_control_stop() {
 
     let mut service = PppoeService::inert(cfg, ctx.clone());
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("pppoe", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     // 1. Connect
@@ -237,7 +237,7 @@ async fn test_pppoe_reacts_to_service_control_stop() {
 
     // 2. Issue Stop service control
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {
-        id: "pppoe".into(),
+        id: ServiceId::Pppoe,
         action: ServiceAction::Stop,
     }));
 
@@ -250,7 +250,7 @@ async fn test_pppoe_reacts_to_service_control_stop() {
         .expect("join timeout")
         .expect("join handle error");
     assert!(res.is_ok());
-    assert_eq!(ctx.get_service_state("pppoe"), ServiceState::Inactive);
+    assert_eq!(ctx.get_service_state(ServiceId::Pppoe), ServiceState::Inactive);
 }
 
 #[tokio::test]
@@ -269,7 +269,7 @@ async fn test_pppoe_emits_auth_failed_and_reconnecting() {
 
     let mut service = PppoeService::inert(cfg, ctx.clone());
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("pppoe", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     // 1. Expect AuthFailed event
@@ -317,7 +317,7 @@ async fn test_pppoe_carrier_drop_and_recovery() {
 
     let mut service = PppoeService::inert(cfg, ctx.clone());
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("pppoe", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     // 1. Initial connect
@@ -350,11 +350,11 @@ async fn test_pppoe_disabled_at_startup_transitions_to_inactive() {
     };
 
     let mut service = PppoeService::inert(cfg, ctx.clone());
-    let h = ServiceHandle::new("pppoe", ctx.clone());
+    let h = ServiceHandle::new(ServiceId::Pppoe, ctx.clone());
     let res = service.serve(&ctx, &h).await;
     assert!(res.is_ok());
 
-    assert_eq!(ctx.get_service_state("pppoe"), ServiceState::Inactive);
+    assert_eq!(ctx.get_service_state(ServiceId::Pppoe), ServiceState::Inactive);
     assert!(ctx.is_pppoe_ready(), "Disabled service must not block readiness");
 }
 
@@ -428,7 +428,7 @@ async fn test_pppoe_with_terminal_probe_enabled_reports_terminal_status() {
 
     let mut service = PppoeService::inert(cfg, ctx.clone());
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("pppoe", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     let _ = wait_for_session_up(&mut pppoe_sub).await;
@@ -495,7 +495,7 @@ async fn test_pppoe_with_injected_prober_reports_probe_response() {
         }
     });
 
-    let h = ServiceHandle::new("pppoe", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let service_handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     let _ = wait_for_session_up(&mut pppoe_sub).await;

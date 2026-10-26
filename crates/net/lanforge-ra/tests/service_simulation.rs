@@ -68,7 +68,7 @@ async fn test_ra_inert_full_lifecycle() {
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let serve_handle = tokio::spawn(async move {
-        let h = ServiceHandle::new("ra", ctx_clone.clone());
+        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
         service_clone.serve(&ctx_clone, &h).await
     });
 
@@ -83,7 +83,7 @@ async fn test_ra_inert_full_lifecycle() {
     assert_eq!(startup_ra[0], 134, "Expected ICMPv6 Type 134 (Router Advertisement)");
 
     // Verify service state is Online
-    assert_eq!(ctx.get_service_state("ra"), ServiceState::Online);
+    assert_eq!(ctx.get_service_state(lanforge_types::system::ServiceId::Ra), ServiceState::Online);
 
     // Verify status was updated in context
     let initial_status = ctx.ra_status();

@@ -21,7 +21,7 @@ use lanforge_types::network::dns::{
     DnsStatsResponse, FilterMatch, FilterOrigin, TransportProtocol,
     upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget},
 };
-use lanforge_types::system::{DormantReason, ServiceState};
+use lanforge_types::system::{DormantReason, ServiceId, ServiceState};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -38,7 +38,7 @@ pub struct DnsService {
 
 impl DnsService {
     /// Static identifier for the service.
-    pub const SERVICE_ID: &'static str = "dns";
+    pub const SERVICE_ID: ServiceId = ServiceId::Dns;
     #[must_use]
     pub fn new(cfg: DnsConfig, ctx: LanforgeContext) -> Self {
         let lifetime = ctx
@@ -195,9 +195,10 @@ impl DnsService {
 }
 
 const DNS_DEPS: &[lanforge_core::service::Edge] = &[
-    lanforge_core::service::Edge::wants("wan"),
-    lanforge_core::service::Edge::wants("interfaces"),
-    lanforge_core::service::Edge::after("db"),
+    lanforge_core::service::Edge::after(ServiceId::Db),
+    lanforge_core::service::Edge::wants(ServiceId::Pppoe),
+    lanforge_core::service::Edge::wants(ServiceId::Dhcp4),
+    lanforge_core::service::Edge::wants(ServiceId::Dhcp6),
 ];
 
 impl lanforge_core::service::LanforgeService for DnsService {
@@ -632,7 +633,7 @@ impl AsyncService for DnsService {
         if let Some(w) = adblock_worker {
             w.abort();
         }
-        ctx.set_service_state("dns", ServiceState::Inactive);
+        ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
 
         Ok(())
     }

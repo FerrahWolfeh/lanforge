@@ -14,7 +14,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{
     AsyncService, LanforgeService, NodeStatus, RuntimeClass, ServiceSpec,
 };
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::{ServiceId, ServiceState};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,13 +30,13 @@ pub enum SpawnedService {
 
 /// Abstract runner factory decoupled from concrete service types.
 pub trait SpawnableRunner: Send {
-    fn id(&self) -> &'static str;
+    fn id(&self) -> ServiceId;
     fn spec(&self) -> ServiceSpec;
     fn spawn(
         self: Box<Self>,
         ctx: LanforgeContext,
         node: Arc<NodeHandle>,
-        dep_rxs: HashMap<&'static str, watch::Receiver<NodeStatus>>,
+        dep_rxs: HashMap<ServiceId, watch::Receiver<NodeStatus>>,
         notify_condition: Arc<Notify>,
     ) -> SpawnedService;
 }
@@ -72,7 +72,7 @@ where
     S: AsyncService + LanforgeService + 'static,
     F: Fn() -> S + Send + Sync + 'static,
 {
-    fn id(&self) -> &'static str {
+    fn id(&self) -> ServiceId {
         self.spec.id
     }
 
@@ -84,7 +84,7 @@ where
         self: Box<Self>,
         ctx: LanforgeContext,
         node: Arc<NodeHandle>,
-        dep_rxs: HashMap<&'static str, watch::Receiver<NodeStatus>>,
+        dep_rxs: HashMap<ServiceId, watch::Receiver<NodeStatus>>,
         notify_condition: Arc<Notify>,
     ) -> SpawnedService {
         let spec = self.spec.clone();
@@ -101,7 +101,7 @@ where
 
         match spec.runtime {
             RuntimeClass::Shared => {
-                debug!(service = spec.id, "Spawning shared service task");
+                debug!(service = %spec.id, "Spawning shared service task");
                 SpawnedService::Shared(tokio::spawn(runner.run()))
             }
             RuntimeClass::Dedicated {
@@ -110,7 +110,7 @@ where
             } => {
                 let display_name = spec.display_name.to_string();
                 let thread_name = format!("{display_name} worker");
-                debug!(service = spec.id, thread = %thread_name, "Spawning dedicated service runtime");
+                debug!(service = %spec.id, thread = %thread_name, "Spawning dedicated service runtime");
 
                 let handle = std::thread::Builder::new()
                     .name(thread_name.clone())
@@ -146,7 +146,7 @@ where
 /// Central orchestrator supervising all Lanforge services in a DAG.
 pub struct GraphSupervisor {
     graph: Arc<DependencyGraph>,
-    nodes: HashMap<&'static str, Arc<NodeHandle>>,
+    nodes: HashMap<ServiceId, Arc<NodeHandle>>,
     notify_condition: Arc<Notify>,
     shared_tasks: Vec<tokio::task::JoinHandle<()>>,
     dedicated_threads: Vec<std::thread::JoinHandle<()>>,
@@ -161,7 +161,7 @@ impl GraphSupervisor {
     pub fn start(
         ctx: &LanforgeContext,
         specs: Vec<ServiceSpec>,
-        mut runners: HashMap<&'static str, Box<dyn SpawnableRunner>>,
+        mut runners: HashMap<ServiceId, Box<dyn SpawnableRunner>>,
     ) -> Result<Self, graph::GraphError> {
         let graph = Arc::new(DependencyGraph::build(specs)?);
         let mut nodes = HashMap::new();
@@ -192,16 +192,16 @@ impl GraphSupervisor {
 
         for &id in graph.topological_order() {
             let runner = runners
-                .remove(id)
+                .remove(&id)
                 .expect("Runner missing for registered service");
             let spec = runner.spec();
-            let node = Arc::clone(nodes.get(id).unwrap());
+            let node = Arc::clone(nodes.get(&id).unwrap());
 
             // Build receiver map for all dependencies
             let mut dep_rxs = HashMap::new();
             for &edge in spec.deps {
                 let target = edge.target;
-                if let Some(target_node) = nodes.get(target) {
+                if let Some(target_node) = nodes.get(&target) {
                     dep_rxs.insert(target, target_node.rx.clone());
                 }
             }
@@ -239,8 +239,8 @@ impl GraphSupervisor {
 
     /// Queries the live status of a service.
     #[must_use]
-    pub fn status_of(&self, id: &str) -> Option<NodeStatus> {
-        self.nodes.get(id).map(|node| node.current())
+    pub fn status_of(&self, id: ServiceId) -> Option<NodeStatus> {
+        self.nodes.get(&id).map(|node| node.current())
     }
 
     /// Returns true if all registered services have reached a settled state.
@@ -262,9 +262,9 @@ impl GraphSupervisor {
         let per_node_timeout = timeout / u32::try_from(num_nodes).unwrap_or(1);
 
         // 2. Shut down nodes in reverse topological order (dependents first)
-        for &id in &self.graph.reverse_topological_order() {
-            if let Some(node) = self.nodes.get(id) {
-                debug!(service = id, "Signaling shutdown to service node");
+        for id in self.graph.reverse_topological_order() {
+            if let Some(node) = self.nodes.get(&id) {
+                debug!(service = %id, "Signaling shutdown to service node");
                 let _ = node.shutdown_tx.send(true);
 
                 // Wait for node to reach Inactive state or timeout

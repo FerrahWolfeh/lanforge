@@ -5,13 +5,13 @@ use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy,
     RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_transport::UdpTransport;
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::network::dhcp::TftpOptions;
-use lanforge_types::system::DormantReason;
+use lanforge_types::system::{DormantReason, ServiceId};
 use parking_lot::RwLock;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -31,7 +31,7 @@ pub enum TftpError {
     Protocol(String),
 }
 
-const TFTP_DEPS: &[Edge] = &[Edge::requires("interfaces", LossPolicy::Degrade)];
+const TFTP_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
 
 #[derive(Clone)]
 pub struct TftpService {
@@ -42,7 +42,7 @@ pub struct TftpService {
 
 impl TftpService {
     /// Static identifier for the service.
-    pub const SERVICE_ID: &'static str = "tftp";
+    pub const SERVICE_ID: ServiceId = ServiceId::Tftp;
 
     #[must_use]
     pub fn new(ctx: LanforgeContext, cfg: TftpConfig) -> Self {

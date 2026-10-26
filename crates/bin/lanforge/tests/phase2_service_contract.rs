@@ -13,7 +13,7 @@ use lanforge_core::service::{
     AsyncService, Condition, LanforgeService, RestartPolicy, RuntimeClass, ServiceHandle,
     ServiceSpec,
 };
-use lanforge_types::system::{DegradedReason, ServiceState, StateDetail};
+use lanforge_types::system::{DegradedReason, ServiceId, ServiceState, StateDetail};
 use tokio::time::timeout;
 
 // ---------------------------------------------------------------------------
@@ -25,31 +25,31 @@ async fn test_acceptance_ready_is_truthful() {
     let bus = Arc::new(EventBus::new());
     let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
 
-    let services = ["dns", "dhcpv4", "pppoe"];
+    let services = [ServiceId::Dns, ServiceId::Dhcp4, ServiceId::Pppoe];
     let mut expected_services = HashSet::new();
     for s in services {
-        expected_services.insert(s.to_string());
+        expected_services.insert(s);
     }
 
     let mut sys_listener = bus.subscribe_system();
     let mut tracker = ReadinessTracker::new(&ctx, expected_services);
 
     // Simulate DNS & DHCP becoming Online
-    let h_dns = ServiceHandle::new("dns", ctx.clone());
+    let h_dns = ServiceHandle::new(ServiceId::Dns, ctx.clone());
     h_dns.ready();
-    tracker.on_service_ready("dns");
+    tracker.on_service_ready(ServiceId::Dns);
 
-    let h_dhcp = ServiceHandle::new("dhcpv4", ctx.clone());
+    let h_dhcp = ServiceHandle::new(ServiceId::Dhcp4, ctx.clone());
     h_dhcp.ready();
-    tracker.on_service_ready("dhcpv4");
+    tracker.on_service_ready(ServiceId::Dhcp4);
 
     // Simulate PPPoE failing connection attempts and marking itself Degraded (truthful)
-    let h_pppoe = ServiceHandle::new("pppoe", ctx.clone());
-    assert_ne!(ctx.get_service_state("pppoe"), ServiceState::Online);
+    let h_pppoe = ServiceHandle::new(ServiceId::Pppoe, ctx.clone());
+    assert_ne!(ctx.get_service_state(ServiceId::Pppoe), ServiceState::Online);
     h_pppoe.degraded(DegradedReason::custom("no pppoe session"));
-    tracker.on_service_ready("pppoe");
+    tracker.on_service_ready(ServiceId::Pppoe);
 
-    assert_eq!(ctx.get_service_state("pppoe"), ServiceState::Degraded);
+    assert_eq!(ctx.get_service_state(ServiceId::Pppoe), ServiceState::Degraded);
 
     // Verify SystemReady is emitted because all services settled (Online + Degraded)
     let ready_event = timeout(Duration::from_millis(500), async {
@@ -79,7 +79,7 @@ async fn test_acceptance_ready_idempotent_and_reset() {
     let mut sub = bus.subscribe_system();
 
     // First generation
-    let h = ServiceHandle::new("test-svc", ctx.clone());
+    let h = ServiceHandle::new(ServiceId::Dns, ctx.clone());
     assert!(!h.is_ready());
 
     // Call ready multiple times in the same generation
@@ -92,14 +92,14 @@ async fn test_acceptance_ready_idempotent_and_reset() {
     let event1 = sub.recv().await.unwrap();
     assert!(matches!(
         event1.event,
-        LanforgeEvent::System(SystemEvent::ServiceReady { ref name }) if name == "test-svc"
+        LanforgeEvent::System(SystemEvent::ServiceReady { id }) if id == ServiceId::Dns
     ));
 
     // Ensure no spurious duplicate events were queued
     assert!(sub.try_recv().is_err());
 
     // Second generation (simulating restart via a new handle)
-    let h2 = ServiceHandle::new("test-svc", ctx.clone());
+    let h2 = ServiceHandle::new(ServiceId::Dns, ctx.clone());
     assert!(!h2.is_ready());
 
     h2.ready();
@@ -108,7 +108,7 @@ async fn test_acceptance_ready_idempotent_and_reset() {
     let event2 = sub.recv().await.unwrap();
     assert!(matches!(
         event2.event,
-        LanforgeEvent::System(SystemEvent::ServiceReady { ref name }) if name == "test-svc"
+        LanforgeEvent::System(SystemEvent::ServiceReady { id }) if id == ServiceId::Dns
     ));
     assert!(sub.try_recv().is_err());
 }
@@ -137,7 +137,7 @@ async fn test_acceptance_clean_exit_resettable() {
 
     // Must execute once and settle in Inactive
     assert_eq!(attempts.load(Ordering::Relaxed), 1);
-    assert_eq!(ctx.get_service_state("clean-exit"), ServiceState::Inactive);
+    assert_eq!(ctx.get_service_state(ServiceId::Tftp), ServiceState::Inactive);
 
     supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
 }
@@ -148,7 +148,7 @@ struct CleanExitService {
 impl LanforgeService for CleanExitService {
     fn spec(&self) -> ServiceSpec {
         ServiceSpec {
-            id: "clean-exit",
+            id: ServiceId::Tftp,
             display_name: "Clean Exit Service",
             runtime: RuntimeClass::Shared,
             restart: RestartPolicy {
@@ -192,8 +192,8 @@ async fn test_acceptance_retry_exhausted_keeps_daemon() {
     // Wait until retries are exhausted
     timeout(Duration::from_secs(2), async {
         loop {
-            if ctx.get_service_state("failing-svc") == ServiceState::Error {
-                let detail = ctx.get_service_detail("failing-svc");
+            if ctx.get_service_state(ServiceId::Traffic) == ServiceState::Error {
+                let detail = ctx.get_service_detail(ServiceId::Traffic);
                 if matches!(detail, Some(StateDetail::Failed { attempts: 3, .. })) {
                     break;
                 }
@@ -204,7 +204,7 @@ async fn test_acceptance_retry_exhausted_keeps_daemon() {
     .await
     .expect("Service must exhaust retries and settle in Error");
 
-    assert_eq!(ctx.get_service_state("failing-svc"), ServiceState::Error);
+    assert_eq!(ctx.get_service_state(ServiceId::Traffic), ServiceState::Error);
     assert!(ctx.is_running(), "Daemon must NOT be terminated on retry exhaustion!");
 
     supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
@@ -216,7 +216,7 @@ struct FailingService {
 impl LanforgeService for FailingService {
     fn spec(&self) -> ServiceSpec {
         ServiceSpec {
-            id: "failing-svc",
+            id: ServiceId::Traffic,
             display_name: "Failing Service",
             runtime: RuntimeClass::Shared,
             restart: RestartPolicy {

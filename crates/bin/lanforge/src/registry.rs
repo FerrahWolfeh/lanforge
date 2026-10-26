@@ -9,14 +9,16 @@ use lanforge_core::{
     service::{AsyncService, LanforgeService, ServiceSpec},
 };
 
+use lanforge_types::system::ServiceId;
+
 /// Centralized registry for Lanforge services.
 ///
 /// Collects service specifications and factories, validates the DAG,
 /// and delegates execution to `GraphSupervisor`.
 pub struct ServiceRegistry {
     specs: Vec<ServiceSpec>,
-    runners: HashMap<&'static str, Box<dyn SpawnableRunner>>,
-    ids: HashSet<String>,
+    runners: HashMap<ServiceId, Box<dyn SpawnableRunner>>,
+    ids: HashSet<ServiceId>,
 }
 
 impl ServiceRegistry {
@@ -39,7 +41,7 @@ impl ServiceRegistry {
         let sample = factory();
         let spec = sample.spec();
         let id = spec.id;
-        self.ids.insert(id.to_string());
+        self.ids.insert(id);
 
         ctx.register_status_provider(Arc::new(sample));
 
@@ -70,7 +72,7 @@ impl ServiceRegistry {
 
     /// Returns the IDs of all services registered in this registry.
     #[must_use]
-    pub fn registered_ids(&self) -> HashSet<String> {
+    pub fn registered_ids(&self) -> HashSet<ServiceId> {
         self.ids.clone()
     }
 }

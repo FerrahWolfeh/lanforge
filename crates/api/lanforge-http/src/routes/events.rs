@@ -350,10 +350,10 @@ fn enrich_event_details(
     // Enrich with service info if ServiceControl
     if let LanforgeEvent::System(SystemEvent::ServiceControl { id, .. }) = event {
         let mut svc_map = serde_json::Map::new();
-        svc_map.insert("id".to_string(), serde_json::Value::String(id.clone()));
-        let state = ctx.get_service_state(id);
+        svc_map.insert("id".to_string(), serde_json::Value::String(id.to_string()));
+        let state = ctx.get_service_state(*id);
         svc_map.insert("state".to_string(), serde_json::Value::String(format!("{state:?}")));
-        let uptime = ctx.get_service_uptime(id);
+        let uptime = ctx.get_service_uptime(*id);
         svc_map.insert("uptime_secs".to_string(), serde_json::Value::Number(uptime.into()));
         map.insert("service_info".to_string(), serde_json::Value::Object(svc_map));
     }

@@ -4,7 +4,7 @@ use colored::Colorize;
 use crate::client::LanforgeClient;
 use crate::output::{Printer, format_bytes, format_duration_secs};
 use lanforge_api::api::StatusResponse;
-use lanforge_types::system::ServiceBanner;
+use lanforge_types::system::{ServiceBanner, ServiceId};
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq, Default)]
 pub struct StatusArgs {
@@ -177,7 +177,7 @@ fn resolve_wan_info(status: &StatusResponse) -> (String, String) {
     if let Some(pppoe) = status
         .service_banners
         .iter()
-        .find(|b| b.id == "pppoe" || b.id == "pppoe_client")
+        .find(|b| b.id == ServiceId::Pppoe)
     {
         let stat = |key: &str| -> Option<&str> {
             pppoe
@@ -212,23 +212,23 @@ fn format_service_summary(banner: &ServiceBanner) -> String {
             .map(|(_, v)| v.as_str())
     };
 
-    match banner.id.as_str() {
-        "dhcp_v4" => {
+    match banner.id {
+        ServiceId::Dhcp4 => {
             let active = stat("leases_active").unwrap_or("0");
             let free = stat("pool_available").unwrap_or("0");
             format!("{active} active leases ({free} free in pool)")
         }
-        "dhcp_v6" => {
+        ServiceId::Dhcp6 => {
             let active = stat("leases_active").unwrap_or("0");
             format!("{active} active leases")
         }
-        "dns" => {
+        ServiceId::Dns => {
             let port = stat("listen").unwrap_or("53");
             let entries = stat("cache_entries").unwrap_or("0");
             let hit_rate = stat("cache_hit_rate").unwrap_or("0.0%");
             format!("Port {port} · {entries} cache entries (hit rate: {hit_rate})")
         }
-        "pppoe" | "pppoe_client" => {
+        ServiceId::Pppoe => {
             let state = stat("state").unwrap_or("Unknown");
             let ip = stat("local_ip").unwrap_or("no IP");
             let iface = stat("ppp_interface").unwrap_or("ppp0");
@@ -238,7 +238,7 @@ fn format_service_summary(banner: &ServiceBanner) -> String {
                 state.to_string()
             }
         }
-        "ra" | "ra_server" => {
+        ServiceId::Ra => {
             let gua = stat("gua_prefix").unwrap_or("-");
             if gua == "-" {
                 "Announcing prefixes".to_string()
@@ -246,59 +246,37 @@ fn format_service_summary(banner: &ServiceBanner) -> String {
                 format!("Announcing GUA prefix ({gua})")
             }
         }
-        "http_api" => {
+        ServiceId::Http => {
             let listen = stat("listen").unwrap_or("[::]:8080");
             let auth = stat("auth_enabled")
                 .map_or("", |a| if a == "true" { " · Auth enabled" } else { "" });
             format!("Listening on {listen}{auth}")
         }
-        "control_api" => {
+        ServiceId::Uds => {
             let path = stat("socket_path").unwrap_or("/run/lanforge/control.sock");
             let clients = stat("active_clients").unwrap_or("0");
             let s = if clients == "1" { "" } else { "s" };
             format!("{path} ({clients} active client{s})")
         }
-        "discovery" => {
+        ServiceId::Discovery => {
             let active = stat("active_devices").unwrap_or("0");
             let total = stat("total_devices").unwrap_or("0");
             format!("{active} active devices ({total} total tracked)")
         }
-        "firewall" => "Active & stateful packet filtering".to_string(),
-        "traffic" => "Active & monitoring interface telemetry".to_string(),
-        "db_worker" => {
+        ServiceId::Nft => "Active & stateful packet filtering".to_string(),
+        ServiceId::Traffic => "Active & monitoring interface telemetry".to_string(),
+        ServiceId::Db => {
             let flushes = stat("flush_count").unwrap_or("0");
             let last = stat("last_flush").unwrap_or("0s ago");
             format!("Operational ({flushes} flushes · last: {last})")
         }
-        "mdns" => "Active prober".to_string(),
-        "tftp" => {
+        ServiceId::Mdns => "Active prober".to_string(),
+        ServiceId::Tftp => {
             if banner.state.as_str() == "inactive" {
                 "Inactive (disabled)".to_string()
             } else {
                 let dir = stat("root_dir").unwrap_or("/var/lib/lanforge/tftp");
                 format!("Serving {dir}")
-            }
-        }
-        "dot" => {
-            if banner.state.as_str() == "inactive" {
-                "Inactive (disabled)".to_string()
-            } else {
-                "Active on port 853".to_string()
-            }
-        }
-        _ => {
-            if banner.state.as_str() == "inactive" {
-                "Inactive".to_string()
-            } else if banner.stats.is_empty() {
-                "Active".to_string()
-            } else {
-                banner
-                    .stats
-                    .iter()
-                    .take(2)
-                    .map(|(k, v)| format!("{k}: {v}"))
-                    .collect::<Vec<_>>()
-                    .join(" · ")
             }
         }
     }
@@ -345,7 +323,7 @@ mod tests {
             server_caps: ServerCapabilities::default(),
             service_banners: vec![
                 ServiceBanner {
-                    id: "pppoe".to_string(),
+                    id: ServiceId::Pppoe,
                     name: "PPPoE Client".to_string(),
                     state: ServiceState::Online,
                     uptime_secs: 2733,
@@ -358,7 +336,7 @@ mod tests {
                     detail: None,
                 },
                 ServiceBanner {
-                    id: "dhcp_v4".to_string(),
+                    id: ServiceId::Dhcp4,
                     name: "DHCPv4 Server".to_string(),
                     state: ServiceState::Online,
                     uptime_secs: 2733,
@@ -369,7 +347,7 @@ mod tests {
                     detail: None,
                 },
                 ServiceBanner {
-                    id: "dhcp_v6".to_string(),
+                    id: ServiceId::Dhcp6,
                     name: "DHCPv6 Server".to_string(),
                     state: ServiceState::Online,
                     uptime_secs: 2733,
@@ -377,7 +355,7 @@ mod tests {
                     detail: None,
                 },
                 ServiceBanner {
-                    id: "dns".to_string(),
+                    id: ServiceId::Dns,
                     name: "DNS Server".to_string(),
                     state: ServiceState::Online,
                     uptime_secs: 2733,
@@ -389,7 +367,7 @@ mod tests {
                     detail: None,
                 },
                 ServiceBanner {
-                    id: "firewall".to_string(),
+                    id: ServiceId::Nft,
                     name: "Firewall & NAT".to_string(),
                     state: ServiceState::Online,
                     uptime_secs: 2733,
@@ -397,7 +375,7 @@ mod tests {
                     detail: None,
                 },
                 ServiceBanner {
-                    id: "tftp".to_string(),
+                    id: ServiceId::Tftp,
                     name: "TFTP Server".to_string(),
                     state: ServiceState::Inactive,
                     uptime_secs: 0,

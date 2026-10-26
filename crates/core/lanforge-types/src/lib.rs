@@ -13,4 +13,4 @@ pub mod update;
 pub mod utils;
 
 pub use config::{ChangeImpact, ConfigDomain, ConfigSection, DnsAllowlist, DnsListenConfig, DomainSet};
-pub use system::{DegradedReason, DormantReason, ServiceBanner, ServiceState, StateDetail};
+pub use system::{DegradedReason, DormantReason, ServiceBanner, ServiceId, ServiceState, StateDetail};

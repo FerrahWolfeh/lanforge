@@ -147,7 +147,7 @@ pub(crate) async fn run_keepalive(
                         return Ok(Some(SystemInterrupt::Shutdown));
                     }
                     LanforgeEvent::System(SystemEvent::ServiceControl { ref id, ref action })
-                        if id == "pppoe" =>
+                        if *id == lanforge_types::system::ServiceId::Pppoe =>
                     {
                         match action {
                             ServiceAction::Stop => {

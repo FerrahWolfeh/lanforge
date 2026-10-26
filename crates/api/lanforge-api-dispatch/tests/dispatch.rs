@@ -40,7 +40,7 @@ async fn init_test_context() -> ClientContext {
         lanforge_db::worker::DbWorker::new(DatabaseConfig::default(), ctx.clone(), db, log_db);
     let ctx_worker = ctx.clone();
     tokio::spawn(async move {
-        let h = ServiceHandle::new("db", ctx_worker.clone());
+        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Db, ctx_worker.clone());
         let _ = worker.serve(&ctx_worker, &h).await;
     });
 

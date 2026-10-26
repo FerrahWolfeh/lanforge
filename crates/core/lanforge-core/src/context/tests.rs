@@ -8,7 +8,7 @@ use lanforge_types::network::firewall::{
     DynamicPortRequest, FirewallConfig, L4Protocol,
 };
 use lanforge_types::network::pppoe::PppoeConfig;
-use lanforge_types::system::{Cap, ServiceState, SystemStatus};
+use lanforge_types::system::{Cap, ServiceId, ServiceState, SystemStatus};
 use lanforge_types::update::DeviceUpdate;
 use std::sync::Arc;
 use std::time::Duration;
@@ -68,9 +68,9 @@ async fn test_wait_for_service_dependency() {
     let ctx = LanforgeContext::new(bus.clone(), state, None);
 
     // 1. When already online, wait_for_service returns Ok(()) immediately
-    ctx.set_service_state("dns", ServiceState::Online);
+    ctx.set_service_state(lanforge_types::system::ServiceId::Dns, ServiceState::Online);
     let res = ctx
-        .wait_for_service("dns")
+        .wait_for_service(lanforge_types::system::ServiceId::Dns)
         .await;
     assert!(res.is_ok());
 
@@ -78,15 +78,15 @@ async fn test_wait_for_service_dependency() {
     let ctx_clone = ctx.clone();
     let wait_handle = tokio::spawn(async move {
         ctx_clone
-            .wait_for_service("db")
+            .wait_for_service(lanforge_types::system::ServiceId::Db)
             .await
     });
 
     // Cooperative yield to let wait_handle spawn and register its listener
     tokio::task::yield_now().await;
-    ctx.set_service_state("db", ServiceState::Online);
+    ctx.set_service_state(lanforge_types::system::ServiceId::Db, ServiceState::Online);
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceReady {
-        name: "db".to_string(),
+        id: lanforge_types::system::ServiceId::Db,
     }));
 
     let res = wait_handle.await.unwrap();
@@ -144,16 +144,16 @@ async fn test_service_control_idempotency() {
     let ctx = LanforgeContext::new(bus.clone(), state, None);
     let mut rx = bus.subscribe_system();
 
-    let ctrl = ServiceControl::new("test-svc", ctx.clone());
-    assert_eq!(ctrl.id(), "test-svc");
+    let ctrl = ServiceControl::new(ServiceId::Dns, ctx.clone());
+    assert_eq!(ctrl.id(), ServiceId::Dns);
 
     // Signal ready first time
     ctrl.signal_ready();
-    assert_eq!(ctx.get_service_state("test-svc"), ServiceState::Online);
+    assert_eq!(ctx.get_service_state(ServiceId::Dns), ServiceState::Online);
 
     let mut ready_count = 0;
     while let Ok(ev) = rx.try_recv() {
-        if matches!(ev.event, LanforgeEvent::System(SystemEvent::ServiceReady { ref name }) if name == "test-svc") {
+        if matches!(ev.event, LanforgeEvent::System(SystemEvent::ServiceReady { id }) if id == ServiceId::Dns) {
             ready_count += 1;
         }
     }
@@ -162,7 +162,7 @@ async fn test_service_control_idempotency() {
     // Signal ready a second time (should be a no-op due to atomic swap)
     ctrl.signal_ready();
     while let Ok(ev) = rx.try_recv() {
-        if matches!(ev.event, LanforgeEvent::System(SystemEvent::ServiceReady { ref name }) if name == "test-svc") {
+        if matches!(ev.event, LanforgeEvent::System(SystemEvent::ServiceReady { id }) if id == ServiceId::Dns) {
             ready_count += 1;
         }
     }

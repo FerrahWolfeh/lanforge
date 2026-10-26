@@ -21,7 +21,7 @@
 //! # Example
 //!
 //! ```rust
-//! use lanforge_core::service::{AsyncService, LanforgeService, ServiceSpec, RuntimeClass, RestartPolicy, Condition};
+//! use lanforge_core::service::{AsyncService, LanforgeService, ServiceId, ServiceSpec, RuntimeClass, RestartPolicy, Condition};
 //! use lanforge_core::context::LanforgeContext;
 //! use lanforge_core::error::CoreError;
 //! use std::time::Duration;
@@ -31,7 +31,7 @@
 //! impl LanforgeService for MyService {
 //!     fn spec(&self) -> ServiceSpec {
 //!         ServiceSpec {
-//!             id: "my-service",
+//!             id: ServiceId::Db,
 //!             display_name: "My Service",
 //!             runtime: RuntimeClass::Shared,
 //!             restart: RestartPolicy::default(),
@@ -56,7 +56,7 @@ use crate::context::LanforgeContext;
 use crate::error::CoreError;
 use lanforge_types::config::ConfigDomain;
 pub use lanforge_types::system::{
-    DegradedReason, DormantReason, ServiceBanner, ServiceState, StateDetail,
+    DegradedReason, DormantReason, ServiceBanner, ServiceId, ServiceState, StateDetail,
 };
 use std::borrow::Cow;
 use std::future::Future;
@@ -99,7 +99,7 @@ impl Default for RestartPolicy {
 /// Inter-service dependency edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Edge {
-    pub target: &'static str,
+    pub target: ServiceId,
     pub kind: EdgeKind,
     pub on_loss: LossPolicy,
 }
@@ -107,13 +107,13 @@ pub struct Edge {
 impl Edge {
     /// Returns the target service identifier of this edge.
     #[must_use]
-    pub const fn target(&self) -> &'static str {
+    pub const fn target(&self) -> ServiceId {
         self.target
     }
 
     /// Edge indicating that this node must start after the target has settled.
     #[must_use]
-    pub const fn after(target: &'static str) -> Self {
+    pub const fn after(target: ServiceId) -> Self {
         Self {
             target,
             kind: EdgeKind::After,
@@ -123,7 +123,7 @@ impl Edge {
 
     /// Edge indicating that this node watches the target without blocking boot.
     #[must_use]
-    pub const fn wants(target: &'static str) -> Self {
+    pub const fn wants(target: ServiceId) -> Self {
         Self {
             target,
             kind: EdgeKind::Wants,
@@ -133,7 +133,7 @@ impl Edge {
 
     /// Edge indicating that this node requires the target to be Online before starting.
     #[must_use]
-    pub const fn requires(target: &'static str, on_loss: LossPolicy) -> Self {
+    pub const fn requires(target: ServiceId, on_loss: LossPolicy) -> Self {
         Self {
             target,
             kind: EdgeKind::Requires,
@@ -238,7 +238,7 @@ impl std::cmp::Eq for Condition {}
 /// Declarative service specification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceSpec {
-    pub id: &'static str,
+    pub id: ServiceId,
     pub display_name: &'static str,
     pub runtime: RuntimeClass,
     pub restart: RestartPolicy,
@@ -254,8 +254,8 @@ pub enum ServiceCommand {
     Start,
     Restart,
     Shutdown,
-    DependencyLost { id: &'static str, policy: LossPolicy },
-    DependencyRestored { id: &'static str },
+    DependencyLost { id: ServiceId, policy: LossPolicy },
+    DependencyRestored { id: ServiceId },
 }
 
 /// Core trait defining a service within the Lanforge system.
@@ -289,7 +289,7 @@ pub trait AsyncService: LanforgeService {
     fn banner(&self, ctx: &LanforgeContext) -> ServiceBanner {
         let spec = self.spec();
         ServiceBanner {
-            id: spec.id.to_string(),
+            id: spec.id,
             name: spec.display_name.to_string(),
             state: ctx.get_service_state(spec.id),
             uptime_secs: ctx.get_service_uptime(spec.id),
@@ -325,7 +325,7 @@ pub trait AsyncService: LanforgeService {
 /// A handle provided to services to manage their lifecycle, truthful readiness, and commands.
 #[derive(Clone)]
 pub struct ServiceHandle {
-    id: &'static str,
+    id: ServiceId,
     ctx: LanforgeContext,
     signaled: Arc<AtomicBool>,
     restart_requested: Arc<AtomicBool>,
@@ -336,7 +336,7 @@ pub struct ServiceHandle {
 impl ServiceHandle {
     /// Creates a new service handle.
     #[must_use]
-    pub fn new(id: &'static str, ctx: LanforgeContext) -> Self {
+    pub fn new(id: ServiceId, ctx: LanforgeContext) -> Self {
         let (tx, rx) = tokio::sync::mpsc::channel(16);
         Self {
             id,
@@ -351,7 +351,7 @@ impl ServiceHandle {
     /// Creates a new service handle with a specific command receiver channel.
     #[must_use]
     pub fn with_command_channel(
-        id: &'static str,
+        id: ServiceId,
         ctx: LanforgeContext,
         cmd_rx: tokio::sync::mpsc::Receiver<ServiceCommand>,
     ) -> Self {
@@ -367,7 +367,7 @@ impl ServiceHandle {
 
     /// Returns the ID of the service this handle belongs to.
     #[must_use]
-    pub const fn id(&self) -> &'static str {
+    pub const fn id(&self) -> ServiceId {
         self.id
     }
 
@@ -381,7 +381,7 @@ impl ServiceHandle {
                 .ctx
                 .bus()
                 .publish(LanforgeEvent::System(SystemEvent::ServiceReady {
-                    name: self.id.to_string(),
+                    id: self.id,
                 }));
         }
     }
@@ -407,7 +407,7 @@ impl ServiceHandle {
                 .ctx
                 .bus()
                 .publish(LanforgeEvent::System(SystemEvent::ServiceReady {
-                    name: self.id.to_string(),
+                    id: self.id,
                 }));
         }
     }
@@ -428,7 +428,7 @@ impl ServiceHandle {
                 .ctx
                 .bus()
                 .publish(LanforgeEvent::System(SystemEvent::ServiceReady {
-                    name: self.id.to_string(),
+                    id: self.id,
                 }));
         }
     }

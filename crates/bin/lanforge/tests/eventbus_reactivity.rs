@@ -26,6 +26,7 @@ use lanforge_types::network::firewall::{
 };
 use lanforge_types::network::ra::{PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RouterPriority};
 use lanforge_types::network::traffic::{NicTuningConfig, SqmConfig, SqmDiffserv, TrafficConfig};
+use lanforge_types::system::ServiceId;
 use lanforge_types::update::LeaseTarget;
 use tokio::time::timeout;
 
@@ -86,7 +87,7 @@ async fn test_firewall_eventbus_reactivity() {
     let mut service = NftService::inert();
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move {
-        let h = ServiceHandle::new("firewall", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
         service.serve(&ctx_clone, &h).await
     });
 
@@ -195,7 +196,7 @@ async fn test_traffic_eventbus_reactivity() {
     let mut service = TrafficService::inert(cfg);
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move {
-        let h = ServiceHandle::new("traffic", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Traffic, ctx_clone.clone());
         service.serve(&ctx_clone, &h).await
     });
 
@@ -335,7 +336,7 @@ async fn test_ra_eventbus_reactivity() {
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move {
-        let h = ServiceHandle::new("ra", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Ra, ctx_clone.clone());
         service_clone.serve(&ctx_clone, &h).await
     });
 
@@ -417,7 +418,7 @@ async fn test_dhcp_eventbus_reactivity() {
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move {
-        let h = ServiceHandle::new("dhcpv4", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_clone.clone());
         service_clone.serve(&ctx_clone, &h).await
     });
 
@@ -575,22 +576,22 @@ async fn test_cross_domain_wan_transition_cascade() {
 
     let c1 = ctx.clone();
     let t_nft = tokio::spawn(async move {
-        let h = ServiceHandle::new("firewall", c1.clone());
+        let h = ServiceHandle::new(ServiceId::Nft, c1.clone());
         nft_service.serve(&c1, &h).await
     });
     let c2 = ctx.clone();
     let t_traffic = tokio::spawn(async move {
-        let h = ServiceHandle::new("traffic", c2.clone());
+        let h = ServiceHandle::new(ServiceId::Traffic, c2.clone());
         traffic_service.serve(&c2, &h).await
     });
     let c3 = ctx.clone();
     let t_ra = tokio::spawn(async move {
-        let h = ServiceHandle::new("ra", c3.clone());
+        let h = ServiceHandle::new(ServiceId::Ra, c3.clone());
         ra_service.serve(&c3, &h).await
     });
     let c4 = ctx.clone();
     let t_dhcp = tokio::spawn(async move {
-        let h = ServiceHandle::new("dhcpv4", c4.clone());
+        let h = ServiceHandle::new(ServiceId::Dhcp4, c4.clone());
         dhcp_service.serve(&c4, &h).await
     });
 
@@ -643,8 +644,8 @@ async fn test_cross_domain_wan_transition_cascade() {
     assert!(fw_bound);
 
     // 3. Verify Golden Rule of Isolation: RA and DHCP remain Online and unaffected
-    assert_eq!(ctx.get_service_state("ra"), lanforge_types::system::ServiceState::Online);
-    assert_eq!(ctx.get_service_state("dhcpv4"), lanforge_types::system::ServiceState::Online);
+    assert_eq!(ctx.get_service_state(ServiceId::Ra), lanforge_types::system::ServiceState::Online);
+    assert_eq!(ctx.get_service_state(ServiceId::Dhcp4), lanforge_types::system::ServiceState::Online);
 
     // 4. Clean Shutdown across all 4 services
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));

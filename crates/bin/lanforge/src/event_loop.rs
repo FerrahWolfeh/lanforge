@@ -5,7 +5,7 @@ use crate::supervisor::GraphSupervisor;
 use anyhow::Result;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent, TimedEvent};
 use lanforge_core::context::LanforgeContext;
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::{ServiceId, ServiceState};
 
 use std::collections::HashSet;
 use std::hash::BuildHasher;
@@ -17,13 +17,13 @@ use tracing::{debug, error, info, warn};
 /// Tracks service settled states and emits `SystemReady` when all expected services are settled.
 pub struct ReadinessTracker<'a, S> {
     ctx: &'a LanforgeContext,
-    expected_services: HashSet<String, S>,
-    ready_services: HashSet<String, S>,
+    expected_services: HashSet<ServiceId, S>,
+    ready_services: HashSet<ServiceId, S>,
     system_ready_sent: bool,
 }
 
 impl<'a, S: BuildHasher + Clone> ReadinessTracker<'a, S> {
-    pub fn new(ctx: &'a LanforgeContext, expected_services: HashSet<String, S>) -> Self {
+    pub fn new(ctx: &'a LanforgeContext, expected_services: HashSet<ServiceId, S>) -> Self {
         let mut tracker = Self {
             ctx,
             ready_services: HashSet::with_hasher(expected_services.hasher().clone()),
@@ -33,8 +33,8 @@ impl<'a, S: BuildHasher + Clone> ReadinessTracker<'a, S> {
 
         // Pre-seed any services that already settled before subscription
         for s in &tracker.expected_services {
-            let st = ctx.get_service_state(s);
-            if is_settled_state(st) && tracker.ready_services.insert(s.clone()) {
+            let st = ctx.get_service_state(*s);
+            if is_settled_state(st) && tracker.ready_services.insert(*s) {
                 debug!(
                     "Service '{}' pre-seeded settled ({:?}) ({}/{})",
                     s,
@@ -49,14 +49,14 @@ impl<'a, S: BuildHasher + Clone> ReadinessTracker<'a, S> {
         tracker
     }
 
-    pub fn on_service_ready(&mut self, name: &str) {
-        if self.expected_services.contains(name) && self.ready_services.insert(name.to_string()) {
-            if self.ctx.get_service_state(name) == ServiceState::Starting {
-                self.ctx.set_service_state(name, ServiceState::Online);
+    pub fn on_service_ready(&mut self, id: ServiceId) {
+        if self.expected_services.contains(&id) && self.ready_services.insert(id) {
+            if self.ctx.get_service_state(id) == ServiceState::Starting {
+                self.ctx.set_service_state(id, ServiceState::Online);
             }
             debug!(
                 "Service '{}' reported ready ({}/{})",
-                name,
+                id,
                 self.ready_services.len(),
                 self.expected_services.len()
             );
@@ -94,8 +94,8 @@ impl<'a, S: BuildHasher + Clone> ReadinessTracker<'a, S> {
             let mut missing: Vec<_> = self
                 .expected_services
                 .iter()
-                .filter(|s| !self.ready_services.contains(*s))
-                .map(String::as_str)
+                .filter(|s| !self.ready_services.contains(s))
+                .map(ServiceId::as_str)
                 .collect();
             if !missing.is_empty() {
                 missing.sort_unstable();
@@ -125,7 +125,7 @@ pub async fn run_event_loop<S>(
     ctx: LanforgeContext,
     mut sys_rx: Receiver<TimedEvent>,
     mut net_rx: Receiver<TimedEvent>,
-    expected_services: HashSet<String, S>,
+    expected_services: HashSet<ServiceId, S>,
     supervisor: &GraphSupervisor,
 ) -> Result<()>
 where
@@ -141,7 +141,7 @@ where
     let mut stale_timer = interval(stale_check_interval);
     stale_timer.tick().await;
 
-    let mut expected_sorted: Vec<_> = expected_services.iter().map(String::as_str).collect();
+    let mut expected_sorted: Vec<_> = expected_services.iter().map(ServiceId::as_str).collect();
     expected_sorted.sort_unstable();
     info!(
         "Event loop: expecting readiness from {} services: {:?}",
@@ -179,8 +179,8 @@ where
                 match event {
                     Ok(timed_event) => {
                         match timed_event.event {
-                            LanforgeEvent::System(SystemEvent::ServiceReady { name }) => {
-                                tracker.on_service_ready(&name);
+                            LanforgeEvent::System(SystemEvent::ServiceReady { id }) => {
+                                tracker.on_service_ready(id);
                             }
                             LanforgeEvent::System(SystemEvent::ReloadConfig) => {
                                 info!("ReloadConfig: in-place configuration reload");

@@ -21,7 +21,7 @@ use lanforge_types::network::dns::adblock::RewriteAnswer;
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
-use lanforge_types::system::ServiceAction;
+use lanforge_types::system::{ServiceAction, ServiceId};
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
 use smallvec::smallvec;
 use tempfile::tempdir;
@@ -67,7 +67,7 @@ async fn test_db_worker_init_and_clean_shutdown() {
 
     // 2. Spawn serve loop
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("db", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
     let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
 
     // Verify storage handle works
@@ -105,7 +105,7 @@ async fn test_db_worker_batches_and_flushes_devices() {
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("db", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
     let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
 
     // Synchronization barrier: ensure worker.serve() has subscribed to the event bus
@@ -194,7 +194,7 @@ async fn test_db_worker_purges_device_immediately() {
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("db", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
     let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
 
     // Synchronization barrier
@@ -262,7 +262,7 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
         worker.init(&ctx).await.unwrap();
 
         let ctx_clone = ctx.clone();
-        let h = ServiceHandle::new("db", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
     let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
 
         // Synchronization barrier: ensure worker is active and subscribed
@@ -400,7 +400,7 @@ async fn test_db_worker_storage_query_dispatch() {
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("db", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
     let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
     let storage = ctx.storage_handle().expect("storage handle present");
 
@@ -568,10 +568,10 @@ async fn test_db_worker_service_control_and_restart_resilience() {
 
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move {
-        let h1 = ServiceHandle::new("db", ctx_clone.clone());
+        let h1 = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
         // Run 1
         worker.serve(&ctx_clone, &h1).await.unwrap();
-        let h2 = ServiceHandle::new("db", ctx_clone.clone());
+        let h2 = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
         // Run 2 (Supervisor re-invokes serve on same worker instance)
         worker.serve(&ctx_clone, &h2).await
     });
@@ -585,7 +585,7 @@ async fn test_db_worker_service_control_and_restart_resilience() {
 
     // 1. Issue ServiceAction::Restart
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::ServiceControl {
-        id: "db".into(),
+        id: lanforge_types::system::ServiceId::Db,
         action: ServiceAction::Restart,
     }));
 
@@ -630,7 +630,7 @@ async fn api_storage_mutation_is_written_to_valid_toml_on_worker_shutdown() {
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("db", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
     let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
     let storage = ctx.storage_handle().expect("storage handle present");
     let _ = storage
@@ -689,7 +689,7 @@ async fn failed_live_toml_write_preserves_file_and_does_not_advance_hash() {
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("db", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
     let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
     let storage = ctx.storage_handle().expect("storage handle present");
     let _ = storage
@@ -744,7 +744,7 @@ async fn test_db_worker_write_behind_dns_config_and_flush_now() {
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new("db", ctx_clone.clone());
+    let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
     let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
 
     let storage = ctx.storage_handle().expect("storage handle present");

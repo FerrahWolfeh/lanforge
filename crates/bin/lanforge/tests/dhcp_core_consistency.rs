@@ -12,6 +12,7 @@ use lanforge_dhcp::{Dhcpv4Config, Dhcpv4Service, Dhcpv4Transport};
 use lanforge_types::device::{IPv4State, Origin};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
+use lanforge_types::system::ServiceId;
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate, LeaseTarget};
 use tokio::time::timeout;
 
@@ -116,7 +117,7 @@ async fn test_dynamic_to_static_lease_transition_consistency() {
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move {
-        let h = ServiceHandle::new("dhcpv4", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_clone.clone());
         service_clone.serve(&ctx_clone, &h).await
     });
 
@@ -244,7 +245,7 @@ async fn test_static_lease_outside_pool_bounds() {
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move {
-        let h = ServiceHandle::new("dhcpv4", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_clone.clone());
         service_clone.serve(&ctx_clone, &h).await
     });
 
@@ -305,7 +306,7 @@ async fn test_ip_stealing_prevention() {
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move {
-        let h = ServiceHandle::new("dhcpv4", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_clone.clone());
         service_clone.serve(&ctx_clone, &h).await
     });
 
@@ -371,7 +372,7 @@ async fn test_dhcp_decline_quarantine_consistency() {
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move {
-        let h = ServiceHandle::new("dhcpv4", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_clone.clone());
         service_clone.serve(&ctx_clone, &h).await
     });
 
@@ -436,7 +437,7 @@ async fn test_eventbus_ip_deleted_recovers_pool() {
     let mut service_clone = service.clone();
     let ctx_clone = ctx.clone();
     let handle = tokio::spawn(async move {
-        let h = ServiceHandle::new("dhcpv4", ctx_clone.clone());
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_clone.clone());
         service_clone.serve(&ctx_clone, &h).await
     });
 

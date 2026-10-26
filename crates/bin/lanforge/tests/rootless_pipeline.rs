@@ -19,7 +19,7 @@ use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
 use lanforge_types::network::ra::{PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RouterPriority};
 use lanforge_types::network::traffic::{NicTuningConfig, SqmConfig, SqmDiffserv, TrafficConfig};
-use lanforge_types::system::ServiceState;
+use lanforge_types::system::{ServiceId, ServiceState};
 use lanforge_types::update::DeviceUpdate;
 use tokio::time::timeout;
 
@@ -174,25 +174,25 @@ async fn test_rootless_pipeline_e2e() {
     // -----------------------------------------------------------------------
     let ctx_nft = ctx.clone();
     let nft_task = tokio::spawn(async move {
-        let h = ServiceHandle::new("firewall", ctx_nft.clone());
+        let h = ServiceHandle::new(ServiceId::Nft, ctx_nft.clone());
         nft_service.serve(&ctx_nft, &h).await
     });
 
     let ctx_traffic = ctx.clone();
     let traffic_task = tokio::spawn(async move {
-        let h = ServiceHandle::new("traffic", ctx_traffic.clone());
+        let h = ServiceHandle::new(ServiceId::Traffic, ctx_traffic.clone());
         traffic_service.serve(&ctx_traffic, &h).await
     });
 
     let ctx_ra = ctx.clone();
     let ra_task = tokio::spawn(async move {
-        let h = ServiceHandle::new("ra", ctx_ra.clone());
+        let h = ServiceHandle::new(ServiceId::Ra, ctx_ra.clone());
         ra_service.serve(&ctx_ra, &h).await
     });
 
     let ctx_dhcp = ctx.clone();
     let dhcp_task = tokio::spawn(async move {
-        let h = ServiceHandle::new("dhcpv4", ctx_dhcp.clone());
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_dhcp.clone());
         dhcp_service.serve(&ctx_dhcp, &h).await
     });
 
@@ -200,10 +200,10 @@ async fn test_rootless_pipeline_e2e() {
     tokio::time::sleep(Duration::from_millis(60)).await;
 
     // Verify all active services transitioned to Online
-    assert_eq!(ctx.get_service_state("firewall"), ServiceState::Online);
-    assert_eq!(ctx.get_service_state("traffic"), ServiceState::Online);
-    assert_eq!(ctx.get_service_state("ra"), ServiceState::Online);
-    assert_eq!(ctx.get_service_state("dhcpv4"), ServiceState::Online);
+    assert_eq!(ctx.get_service_state(ServiceId::Nft), ServiceState::Online);
+    assert_eq!(ctx.get_service_state(ServiceId::Traffic), ServiceState::Online);
+    assert_eq!(ctx.get_service_state(ServiceId::Ra), ServiceState::Online);
+    assert_eq!(ctx.get_service_state(ServiceId::Dhcp4), ServiceState::Online);
 
     // -----------------------------------------------------------------------
     // 4. Verify Initial Service Outputs & Events
