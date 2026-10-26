@@ -288,6 +288,13 @@ impl RaState {
                         .push((old_addr, deprecation_end, valid_end));
                 }
             }
+            // A prefix that comes back (address flap) is live again: never advertise it twice,
+            // once valid and once deprecated.
+            if let Some(cur) = current {
+                let cur_addr = cur.to_addr();
+                self.deprecated_prefixes
+                    .retain(|(ip, _, _)| *ip != cur_addr);
+            }
             let prefix_type = if is_gua { "GUA" } else { "ULA" };
             debug!("Internal {prefix_type} prefix state updated: {current:?}");
             if is_gua {
@@ -469,6 +476,15 @@ impl RaService {
         };
 
         let mut state = RaState::new();
+        // Seed the advertised prefixes from the LAN interface, so a renumbering after startup
+        // deprecates the prefix clients already hold.
+        let lan_ips = self.ctx.get_interface_state(iface_index);
+        state.last_gua = lan_ips
+            .gua
+            .map(lanforge_types::network::Ipv6Prefix::from_addr);
+        state.last_ula = lan_ips
+            .ula
+            .map(lanforge_types::network::Ipv6Prefix::from_addr);
 
         // Immediate RA on startup
         send_ra_internal(
@@ -494,7 +510,6 @@ impl RaService {
         let mut handle = self.ctx.service_handle_network();
         let mut ra_sub = self.ctx.config_subscription::<RaServerConfig>();
         let mut prefix_sub = self.ctx.config_subscription::<Vec<RAPrefix>>();
-        let mut wan_rx = self.ctx.watch_wan();
 
         loop {
             let now = Instant::now();
@@ -571,7 +586,7 @@ impl RaService {
                         match delta.impact {
                             ChangeImpact::None => {}
                             ChangeImpact::Hot | ChangeImpact::Rebind | ChangeImpact::Reconnect => {
-                                info!("Prefixes updated in place — sending immediate RA burst");
+                                info!("RA prefix configuration updated in place — sending immediate RA burst");
                                 current_cfg.prefixes.clone_from(&(*delta.new));
                                 if current_cfg.prefixes.is_empty() {
                                     return Ok(RunResult::ConfigChanged);
@@ -583,42 +598,25 @@ impl RaService {
                     }
                 }
 
-                // 4. WAN snapshot changes
-                Ok(()) = wan_rx.changed() => {
-                    let snap = wan_rx.borrow().clone();
-                    if snap.is_up() && !snap.v6_prefixes.is_empty() {
-                        let new_gua_prefix = lanforge_types::network::Ipv6Prefix::from(snap.v6_prefixes[0]);
-                        if state.last_gua != Some(new_gua_prefix) {
-                            let old_str = state.last_gua.map_or_else(|| "None".to_string(), |p| p.to_string());
-                            info!(
-                                old_prefix = %old_str,
-                                new_prefix = %new_gua_prefix,
-                                "WAN IPv6 prefix renumbered via WanSnapshot — triggering immediate RA burst"
-                            );
-                            state.update_prefix_and_deprecate(Some(new_gua_prefix), true, current_cfg.deprecate_on_renumber);
-                            state.initial_sent = 0;
-                            next_ra_at = Instant::now();
-                        }
-                    }
-                }
-
                 // 5. EventBus signals
                 res = handle.next_event() => {
                     let Some(timed_event) = res else {
                         return Ok(RunResult::Shutdown);
                     };
                     lanforge_core::match_event!(timed_event, {
+                        // The advertised GUA is the one on the LAN interface (e.g. delegated by the
+                        // OS DHCPv6-PD client); `ppp0`'s own prefix must never be advertised. A lost
+                        // prefix is deprecated right away, a new one is advertised with a burst.
                         LanforgeEvent::Network(NetworkEvent::PrefixChanged(details)) => {
-                            if let Some(prefix) = details.gua
-                                && state.last_gua != Some(prefix)
-                            {
+                            if details.ifindex == iface_index && details.gua != state.last_gua {
                                 let old_str = state.last_gua.map_or_else(|| "None".to_string(), |p| p.to_string());
+                                let new_str = details.gua.map_or_else(|| "None".to_string(), |p| p.to_string());
                                 info!(
                                     old_prefix = %old_str,
-                                    new_prefix = %prefix,
-                                    "Prefix change detected — sending immediate RA burst"
+                                    new_prefix = %new_str,
+                                    "LAN GUA prefix changed — sending immediate RA burst"
                                 );
-                                state.update_prefix_and_deprecate(Some(prefix), true, current_cfg.deprecate_on_renumber);
+                                state.update_prefix_and_deprecate(details.gua, true, current_cfg.deprecate_on_renumber);
                                 state.initial_sent = 0;
                                 next_ra_at = Instant::now();
                             }
@@ -909,10 +907,11 @@ fn send_ra_internal(
         None if transport.is_inert() => Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0200, 0, 0, 1),
         None => return Err(NetworkError::NoLinkLocal(iface_index)),
     };
-    let gua = if_ips.gua.or_else(|| {
-        let wan_snap = lctx.wan_snapshot();
-        wan_snap.v6_prefixes.first().map(|net| net.addr)
-    });
+    // Only the LAN interface's own GUA (e.g. delegated by the OS DHCPv6-PD client) is
+    // advertised. Never fall back to the WAN link prefix: it is not routed to the LAN, and
+    // clients that autoconfigure from it lose IPv6 connectivity. No LAN GUA => the previous one
+    // is deprecated below and nothing new is advertised until a prefix is delegated again.
+    let gua = if_ips.gua;
     let ula = if_ips.ula;
 
     let now = Instant::now();

@@ -337,25 +337,15 @@ impl State {
         ifindex: u32,
         state: &InterfaceState,
     ) -> EventVec {
+        // `state` is a full snapshot of the interface's addresses (netlink dump): a missing
+        // address was removed and must not be resurrected from the previous snapshot (a
+        // withdrawn delegated prefix would otherwise stay advertised forever). Only the MAC,
+        // which comes from a separate link query that may fail, falls back to the known value.
         let mut merged = state.clone();
-        if let Some(old) = self.interfaces.interface_ips.get(&ifindex) {
-            if merged.mac.is_none() {
-                merged.mac = old.mac;
-            }
-            if merged.link_local.is_none() {
-                merged.link_local = old.link_local;
-            }
-            if merged.v4.is_none() {
-                merged.v4 = old.v4;
-            }
-            if merged.ula.is_none() {
-                merged.ula = old.ula;
-            }
-            if merged.gua.is_none() {
-                merged.gua = old.gua;
-                merged.gua_preferred = old.gua_preferred;
-                merged.gua_valid = old.gua_valid;
-            }
+        if let Some(old) = self.interfaces.interface_ips.get(&ifindex)
+            && merged.mac.is_none()
+        {
+            merged.mac = old.mac;
         }
 
         let old_state = self.interfaces.interface_ips.get(&ifindex);
@@ -386,6 +376,7 @@ impl State {
             self.rebuild_indices();
             events.push(LanforgeEvent::Network(NetworkEvent::PrefixChanged(
                 Box::new(PrefixChangeDetails {
+                    ifindex,
                     gua: new_gua_prefix,
                     ula: new_ula_prefix,
                     preferred: merged.gua_preferred,

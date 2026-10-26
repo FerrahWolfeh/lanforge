@@ -27,6 +27,10 @@ pub async fn refresh_interface(
     let mut state = InterfaceState::default();
 
     while let Some(msg) = stream.try_next().await? {
+        // Lifetimes belong to the address of the same message: only the GUA's are kept
+        // (link-local/ULA/IPv4 lifetimes must not leak into the advertised GUA lifetimes).
+        let mut is_gua = false;
+        let mut lifetimes = None;
         for attr in &msg.attributes {
             match attr {
                 AddressAttribute::Address(IpAddr::V4(v4)) => {
@@ -38,16 +42,20 @@ pub async fn refresh_interface(
                         state.link_local = Some(*v6);
                     } else if (0x20..=0x3F).contains(&o[0]) {
                         state.gua = Some(*v6);
+                        is_gua = true;
                     } else if o[0] == 0xFD {
                         state.ula = Some(*v6);
                     }
                 }
                 AddressAttribute::CacheInfo(info) => {
-                    state.gua_preferred = info.ifa_preferred;
-                    state.gua_valid = info.ifa_valid;
+                    lifetimes = Some((info.ifa_preferred, info.ifa_valid));
                 }
                 _ => {}
             }
+        }
+        if is_gua && let Some((preferred, valid)) = lifetimes {
+            state.gua_preferred = preferred;
+            state.gua_valid = valid;
         }
     }
 

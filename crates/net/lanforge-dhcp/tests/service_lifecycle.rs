@@ -17,7 +17,7 @@ use lanforge_dhcp::{Dhcpv4Service, Dhcpv4Transport, Dhcpv6Service, Dhcpv6Transpo
 use lanforge_types::device::{IPv4State, Origin};
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::system::{ServiceId, ServiceState};
-use lanforge_types::update::{CliHostUpdate, DeviceUpdate};
+use lanforge_types::update::{CliHostUpdate, DeviceUpdate, InterfaceState};
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::Ordering;
@@ -318,5 +318,100 @@ async fn test_dhcpv6_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
     let shutdown_res = timeout(TEST_TIMEOUT, serve_handle).await?;
     assert!(shutdown_res.is_ok());
 
+    Ok(())
+}
+
+/// All IA_NA addresses offered in an ADVERTISE.
+fn advertised_addrs(adv: &MessageV6) -> Vec<Ipv6Addr> {
+    adv.opts()
+        .iter()
+        .filter_map(|opt| match opt {
+            Dhcpv6Option::IANA(iana) => Some(iana.opts.iter().filter_map(|o| match o {
+                Dhcpv6Option::IAAddr(a) => Some(a.addr),
+                _ => None,
+            })),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+/// Pools follow the prefix of the served LAN interface only. On a PPPoE reconnect `ppp0` gets
+/// its own /64; leasing addresses from it leaves clients with an unroutable IPv6 address.
+#[tokio::test]
+async fn test_dhcpv6_pool_ignores_wan_prefix_changes() -> Result<(), Box<dyn Error>> {
+    const LAN: u32 = 1;
+    const PPP0: u32 = 10;
+    let server_mac = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+    let (ctx, bus) = init_test_context_with_interface(LAN, "lan0", server_mac);
+    let cfg = create_test_v6_config();
+    ctx.update_dhcp_v6_pools(cfg.pools.clone());
+
+    let (handle, transport) = Dhcpv6Transport::inert();
+    let mut service = Dhcpv6Service::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp6, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    wait_for_service_online(&ctx, ServiceId::Dhcp6).await?;
+
+    let set_gua = |ifindex: u32, gua: &str| {
+        let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+            ifindex,
+            state: Box::new(InterfaceState {
+                v4: (ifindex == LAN).then_some((Ipv4Addr::new(192, 168, 1, 1), 24)),
+                link_local: Some("fe80::1".parse().unwrap()),
+                gua: Some(gua.parse().unwrap()),
+                ula: (ifindex == LAN).then(|| "fd97:f00d:cafe:3731::".parse().unwrap()),
+                gua_preferred: 3600,
+                gua_valid: 7200,
+                mac: Some(server_mac),
+            }),
+        });
+    };
+    let handle = &handle;
+    let solicit = |n: u8| async move {
+        let duid = Duid::new(vec![
+            0x00, 0x03, 0x00, 0x01, 0x10, 0x20, 0x30, 0x40, 0x50, n,
+        ]);
+        handle
+            .inject(
+                Dhcpv6PacketBuilder::solicit(duid).build(),
+                "[fe80::cafe:200]:546".parse().unwrap(),
+            )
+            .await;
+        let reply = timeout(TEST_TIMEOUT, handle.recv_payload())
+            .await
+            .expect("advertise in time")
+            .expect("reply channel open");
+        advertised_addrs(&MessageV6::decode(&mut Decoder::new(&reply)).expect("valid DHCPv6"))
+    };
+    let in_prefix = |addr: &Ipv6Addr, prefix: &str| {
+        let p: Ipv6Addr = prefix.parse().unwrap();
+        addr.segments()[..4] == p.segments()[..4]
+    };
+
+    // `ppp0` renumbers: no lease may come from its prefix.
+    set_gua(PPP0, "2804:bdc:1f38:c8e4::1");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let addrs = solicit(1).await;
+    assert!(
+        !addrs.iter().any(|a| in_prefix(a, "2804:bdc:1f38:c8e4::")),
+        "leased from the WAN prefix: {addrs:?}"
+    );
+
+    // The LAN gets a delegated prefix: leases follow it.
+    set_gua(LAN, "2804:bdc:508e:db00::1");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let addrs = solicit(2).await;
+    assert!(
+        addrs.iter().any(|a| in_prefix(a, "2804:bdc:508e:db00::")),
+        "expected a lease from the LAN prefix: {addrs:?}"
+    );
+    assert!(!addrs.iter().any(|a| in_prefix(a, "2804:bdc:1f38:c8e4::")));
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
     Ok(())
 }

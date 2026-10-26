@@ -4,6 +4,9 @@ use std::net::Ipv4Addr;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrefixChangeDetails {
+    /// Interface whose addresses changed. Every interface emits this event (LAN, `ppp0`, ...):
+    /// consumers must filter on the interface they serve, never assume it is "theirs".
+    pub ifindex: u32,
     pub gua: Option<Ipv6Prefix>,
     pub ula: Option<Ipv6Prefix>,
     pub preferred: u32,

@@ -372,6 +372,8 @@ async fn test_ra_eventbus_reactivity() {
     let new_gua: Ipv6Addr = "2001:db8:20::".parse().unwrap();
     let _ = bus.publish(LanforgeEvent::Network(NetworkEvent::PrefixChanged(
         Box::new(PrefixChangeDetails {
+            // The RA target interface (no LAN ifindex configured in this context falls back to 1).
+            ifindex: 1,
             gua: Some(lanforge_types::network::Ipv6Prefix::from_addr(new_gua)),
             ula: None,
             preferred: 14400,

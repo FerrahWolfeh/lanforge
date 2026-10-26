@@ -201,6 +201,8 @@ impl AsyncService for WanService {
                 net_res = net_rx.recv() => {
                     if let Ok(timed_event) = net_res
                         && let LanforgeEvent::Network(NetworkEvent::PrefixChanged(ref details)) = timed_event.event
+                        // Only the WAN link's own addresses; the LAN (delegated) prefix is not WAN state.
+                        && current_snapshot.ifindex == Some(details.ifindex)
                         && let Some(gua_prefix) = details.gua
                     {
                         let new_net = Ipv6Net::from(gua_prefix);

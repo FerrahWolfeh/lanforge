@@ -356,10 +356,11 @@ impl Dhcpv6Service {
         server.pool.reserve_statics(active_dynamic_ips);
 
         // Re-sync GUA from global state (honoring configured interface)
-        if let Some(ifindex) = pnet::datalink::interfaces()
+        let served_ifindex = pnet::datalink::interfaces()
             .iter()
             .find(|i| i.name == current_cfg.iface)
-            .map(|i| i.index)
+            .map(|i| i.index);
+        if let Some(ifindex) = served_ifindex
             && let Some((gua_prefix, pref, val)) = self.ctx.get_interface_gua_prefix_at(ifindex)
         {
             info!(
@@ -418,13 +419,17 @@ impl Dhcpv6Service {
 
         let mut buf = [0u8; 2048];
         let mut resp_vec = Vec::with_capacity(1024);
+        let served_ifindex = pnet::datalink::interfaces()
+            .iter()
+            .find(|i| i.name == current_cfg.iface)
+            .map(|i| i.index)
+            .or_else(|| self.ctx.target_ifindex());
         // Topic-isolated: prefix changes (network) and lease/admin updates (device) only.
         let mut net_events = self.ctx.service_handle_network();
         let mut device_events = self.ctx.service_handle_device();
         let mut pools_sub = self.ctx.config_subscription::<Vec<Dhcpv6Pool>>();
         let mut options_sub = self.ctx.config_subscription::<Dhcpv6Options>();
         let mut stats_timer = tokio::time::interval(Duration::from_mins(1));
-        let mut wan_rx = self.ctx.watch_wan();
 
         info!(
             iface = %current_cfg.iface,
@@ -497,20 +502,13 @@ impl Dhcpv6Service {
                     let Some(timed_event) = event else {
                         return Ok(RunResult::Shutdown);
                     };
-                    self.handle_bus_event(&timed_event, &mut server, &transport);
+                    self.handle_bus_event(&timed_event, &mut server, &transport, served_ifindex);
                 }
                 event = device_events.next_event() => {
                     let Some(timed_event) = event else {
                         return Ok(RunResult::Shutdown);
                     };
-                    self.handle_bus_event(&timed_event, &mut server, &transport);
-                }
-                Ok(()) = wan_rx.changed() => {
-                    let snap = wan_rx.borrow().clone();
-                    if snap.is_up() && !snap.v6_prefixes.is_empty() {
-                        let new_gua = Ipv6Prefix::from(snap.v6_prefixes[0]);
-                        self.handle_prefix_change(&mut server, &transport, Some(new_gua), 3600, 7200);
-                    }
+                    self.handle_bus_event(&timed_event, &mut server, &transport, served_ifindex);
                 }
                 _ = stats_timer.tick() => {
                     self.publish_pool_stats(&server);
@@ -653,6 +651,7 @@ impl Dhcpv6Service {
         event: &TimedEvent,
         server: &mut Dhcpv6Server,
         transport: &io::Dhcpv6Transport,
+        served_ifindex: Option<u32>,
     ) {
         match_event!(event, {
             LanforgeEvent::Device(DeviceEvent::LeaseRelease {
@@ -679,8 +678,12 @@ impl Dhcpv6Service {
                     }
                 }
             }
+            // Pools follow the prefix of the interface this server listens on (the delegated LAN
+            // prefix); `ppp0`'s own prefix changes must never rebase them.
             LanforgeEvent::Network(NetworkEvent::PrefixChanged(details)) => {
-                self.handle_prefix_change(server, transport, details.gua, details.preferred, details.valid);
+                if served_ifindex == Some(details.ifindex) {
+                    self.handle_prefix_change(server, transport, details.gua, details.preferred, details.valid);
+                }
             }
             LanforgeEvent::Device(DeviceEvent::LeaseRenew {
                 mac,
