@@ -515,9 +515,16 @@ impl DhcpServer {
             }
         });
 
-        let lease_time = self.lease_time_for(yiaddr);
-
-        opts.insert(DhcpOption::AddressLeaseTime(lease_time));
+        // An ACK to INFORM grants no address (yiaddr 0): RFC 2131 table 3 forbids lease time,
+        // T1 and T2 there.
+        if !yiaddr.is_unspecified() {
+            let lease_time = self.lease_time_for(yiaddr);
+            // RFC 2131 §4.4.5 defaults: T1 = 0.5 × lease, T2 = 0.875 × lease.
+            // `lease_time` is clamped to 30 days, so `* 7` cannot overflow.
+            opts.insert(DhcpOption::AddressLeaseTime(lease_time));
+            opts.insert(DhcpOption::Renewal(lease_time / 2));
+            opts.insert(DhcpOption::Rebinding(lease_time * 7 / 8));
+        }
         opts.insert(DhcpOption::SubnetMask(pool_mask));
         opts.insert(DhcpOption::Router(vec![pool_router]));
         opts.insert(DhcpOption::DomainNameServer(pool_dns.clone()));
@@ -534,12 +541,6 @@ impl DhcpServer {
                 .collect();
             opts.insert(DhcpOption::DomainSearch(names));
         }
-
-        // RFC 2131 §4.4.5 defaults: T1 = 0.5 × lease, T2 = 0.875 × lease.
-        // `lease_time` is clamped to 30 days, so `* 7` cannot overflow.
-        let (t1, t2) = (lease_time / 2, lease_time * 7 / 8);
-        opts.insert(DhcpOption::Renewal(t1));
-        opts.insert(DhcpOption::Rebinding(t2));
 
         // Dynamic MTU (Option 26)
         if let Some(DhcpOption::ParameterRequestList(req_list)) =
@@ -838,6 +839,38 @@ mod tests {
     // -----------------------------------------------------------------------
     // Suíte de Testes da Máquina de Estados (DORA)
     // -----------------------------------------------------------------------
+
+    /// RFC 2131 §4.3.5 and table 3: a DHCPACK to DHCPINFORM carries configuration only — no
+    /// address (yiaddr 0) and MUST NOT carry lease time, T1 or T2: the client configured its
+    /// address itself.
+    #[test]
+    fn inform_ack_carries_no_lease_times() {
+        let (mut srv, _ctx) = dummy_server();
+        let ciaddr = Ipv4Addr::new(192, 168, 1, 77);
+        let raw_msg = build_raw_msg(MessageType::Inform, dummy_mac(), None, Some(ciaddr), None);
+
+        let HandleResult::Reply {
+            packet, dest_ip, ..
+        } = srv.handle_packet(&raw_msg, None)
+        else {
+            panic!("INFORM must be answered");
+        };
+        assert_eq!(dest_ip, ciaddr, "unicast to ciaddr");
+        let reply = decode_reply(&packet);
+        assert_eq!(reply.yiaddr(), Ipv4Addr::UNSPECIFIED);
+        assert!(reply.opts().get(v4::OptionCode::Router).is_some());
+        assert!(reply.opts().get(v4::OptionCode::DomainNameServer).is_some());
+        for code in [
+            v4::OptionCode::AddressLeaseTime,
+            v4::OptionCode::Renewal,
+            v4::OptionCode::Rebinding,
+        ] {
+            assert!(
+                reply.opts().get(code).is_none(),
+                "{code:?} must not be in an INFORM ACK"
+            );
+        }
+    }
 
     #[test]
     fn invalid_packet_is_ignored() {
