@@ -10,6 +10,7 @@ use crate::resolver::{
 };
 use crate::server::{CompiledIgnoreClients, DnsContext};
 use crate::telemetry::{DnsStats, DnsStatsSnapshot, QueryRing};
+use futures::future::join_all;
 #[cfg(feature = "adblock")]
 use lanforge_core::context::ConfigSubscription;
 use lanforge_core::context::LanforgeContext;
@@ -613,15 +614,18 @@ impl AsyncService for DnsService {
                             #[cfg(feature = "adblock")]
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::AdblockToggle { enabled, duration_secs }) => {
                                 if let Some(filter) = &dns_ctx.filter {
-                                    filter.set_enabled(enabled);
+                                    // Arm the pause deadline *before* disabling: the adblock worker
+                                    // treats "disabled with no deadline" as a permanent state.
                                     if !enabled && let Some(secs) = duration_secs {
                                         let until = std::time::SystemTime::now()
                                             .duration_since(std::time::UNIX_EPOCH)
                                             .unwrap_or_default()
                                             .as_secs() + secs;
                                         filter.timer.disabled_until.store(until, std::sync::atomic::Ordering::Relaxed);
+                                        filter.set_enabled(false);
                                         info!(duration_secs = secs, "Adblocker disabled temporarily");
                                     } else {
+                                        filter.set_enabled(enabled);
                                         info!(enabled = enabled, "Adblocker toggle updated");
                                     }
                                     dns_ctx.cache.invalidate_all();
@@ -636,26 +640,22 @@ impl AsyncService for DnsService {
             }
         }
 
-        for w in workers {
-            w.abort();
-        }
-        if let Some(w) = tcp_worker {
-            w.abort();
-        }
-        cache_worker.abort();
-        mpsc_worker.abort();
+        // Abort *and* await every worker: an aborted JoinHandle resolves only once its future
+        // (and the sockets it owns) has been dropped, so a restart can rebind port 53 at once.
+        let mut tasks = workers;
+        tasks.extend(tcp_worker);
+        tasks.push(cache_worker);
+        tasks.push(mpsc_worker);
         #[cfg(feature = "dot")]
-        if let Some(w) = dot_worker {
-            w.abort();
-        }
+        tasks.extend(dot_worker);
         #[cfg(feature = "doq")]
-        if let Some(w) = doq_worker {
-            w.abort();
-        }
+        tasks.extend(doq_worker);
         #[cfg(feature = "adblock")]
-        if let Some(w) = adblock_worker {
-            w.abort();
+        tasks.extend(adblock_worker);
+        for task in &tasks {
+            task.abort();
         }
+        join_all(tasks).await;
         ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
 
         Ok(())

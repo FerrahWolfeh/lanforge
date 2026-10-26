@@ -11,6 +11,8 @@ use std::{
 };
 
 #[cfg(feature = "adblock")]
+use crate::resolver::AdBlocker;
+#[cfg(feature = "adblock")]
 use crate::resolver::filter::DiskBlocklist;
 #[cfg(feature = "adblock")]
 use crate::resolver::filter::manifest::{AdblockManifest, SourceManifestEntry};
@@ -437,13 +439,9 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                 filter.sync_from_context(&ctx.ctx);
                 ctx.cache.invalidate_all();
 
-                // Ensure enabled after first successful load (if it was intended to be enabled).
                 // Re-read the config: `db_cfg` dates from the top of this pass, and adblock may
                 // have been disabled while the lists were loading.
-                if !filter.is_enabled()
-                    && filter.blocklist_size() > 0
-                    && ctx.ctx.get_dns_adblock().enabled
-                {
+                if should_auto_enable(filter, ctx.ctx.get_dns_adblock().enabled) {
                     filter.set_enabled(true);
                     info!(
                         blocked_domains = filter.blocklist_size(),
@@ -552,6 +550,17 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
 
 /// Computes the next local DateTime when the daily blocklist check should trigger.
 #[cfg(feature = "adblock")]
+/// Whether the worker should switch the filter on after a successful list load.
+///
+/// Only when the config wants adblock on, rules are loaded, and the filter is off for no
+/// other reason. A temporary pause (`disabled_until` armed) keeps the config `enabled`, so
+/// it must never be overridden here.
+#[cfg(feature = "adblock")]
+fn should_auto_enable(filter: &AdBlocker, config_enabled: bool) -> bool {
+    let paused = filter.timer.disabled_until.load(Ordering::Relaxed) != 0;
+    config_enabled && !paused && !filter.is_enabled() && filter.blocklist_size() > 0
+}
+
 pub fn compute_next_refresh_target(
     now: chrono::DateTime<chrono::Local>,
     refresh_time: TimeOfDay,
@@ -590,6 +599,36 @@ fn compute_retry_backoff(consecutive_failures: u32) -> Duration {
 #[cfg(all(test, feature = "adblock"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_enable_never_overrides_a_temporary_pause() {
+        let filter = AdBlocker::new(true);
+        filter.add_block("ads.example.com");
+
+        // Paused for 30 s by the toggle: config still says enabled.
+        let until = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            + 30;
+        filter.timer.disabled_until.store(until, Ordering::Relaxed);
+        filter.set_enabled(false);
+        assert!(
+            !should_auto_enable(&filter, true),
+            "a pause must survive a list reload"
+        );
+
+        // Disabled in the config: stays off.
+        filter.timer.disabled_until.store(0, Ordering::Relaxed);
+        assert!(!should_auto_enable(&filter, false));
+
+        // Off with no pause and config enabled (first load): switched on.
+        assert!(should_auto_enable(&filter, true));
+
+        // Already on: nothing to do.
+        filter.set_enabled(true);
+        assert!(!should_auto_enable(&filter, true));
+    }
 
     #[test]
     fn test_retry_backoff_schedule() {
