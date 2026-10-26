@@ -7,7 +7,7 @@ use std::time::Duration;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
+use lanforge_core::service::{AsyncService, LossPolicy, ServiceCommand, ServiceHandle};
 use lanforge_pppoe::{PppoeConfig, PppoeService};
 use lanforge_transport::PppoeTransport;
 use lanforge_types::events::TimedEvent;
@@ -719,6 +719,64 @@ async fn test_pppoe_session_survives_a_lagged_system_bus() {
     assert_eq!(
         ctx.get_service_state(ServiceId::Pppoe),
         ServiceState::Online
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}
+
+/// D-1: losing a `Requires` dependency with `LossPolicy::Continue` must not touch the service. The
+/// serve loop raced commands against the session future, so *any* command — including the
+/// `DependencyLost` the supervisor sends when `interfaces` flaps — dropped the live session
+/// (no PADT, no SessionDown) and started a new discovery while the concentrator still held the old
+/// session.
+#[tokio::test]
+async fn test_pppoe_session_survives_dependency_notifications() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        ..Default::default()
+    };
+    ctx.update_pppoe_config(cfg.clone());
+
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
+
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let (h, cmd_tx) = controlled_handle(&ctx);
+    let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
+    wait_for_session_up(&mut pppoe_sub).await;
+
+    for cmd in [
+        ServiceCommand::DependencyLost {
+            id: ServiceId::Interfaces,
+            policy: LossPolicy::Continue,
+        },
+        ServiceCommand::DependencyRestored {
+            id: ServiceId::Interfaces,
+        },
+        ServiceCommand::Start,
+    ] {
+        cmd_tx.send(cmd).await.expect("service alive");
+    }
+
+    let churn = timeout(
+        Duration::from_millis(500),
+        wait_for_pppoe_event(&mut pppoe_sub, |evt| match evt {
+            PppoeEvent::SessionDown { reason } => Some(format!("down: {reason}")),
+            PppoeEvent::SessionUp(_) => Some("renegotiated".into()),
+            _ => None,
+        }),
+    )
+    .await;
+    assert!(
+        churn.is_err(),
+        "session disturbed by a notification: {churn:?}"
     );
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));

@@ -1174,94 +1174,127 @@ impl AsyncService for PppoeService {
                 break 'main_loop;
             }
 
-            tokio::select! {
-                biased;
-                cmd = h.next_command() => {
-                    match cmd {
-                        cmd @ (ServiceCommand::Stop | ServiceCommand::Shutdown) => {
-                            info!("PPPoE service received stop/shutdown command, exiting serve loop");
-                            let reason = if cmd == ServiceCommand::Stop { "Service stopped" } else { "Graceful shutdown" };
-                            self.teardown_active_session(reason.into()).await;
-                            ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
-                            break 'main_loop;
-                        }
-                        ServiceCommand::Restart => {
-                            // Bounced in place (PADT + new discovery); the task keeps running.
-                            info!("PPPoE service received restart command, restarting session");
-                            self.teardown_active_session("Service restarted".into()).await;
-                            self.backoff.reset();
-                        }
-                        _ => {}
+            // Only Stop/Shutdown/Restart may interrupt the session. Racing every command against
+            // the session future dropped a live session on mere notifications (DependencyLost
+            // when `interfaces` flaps): no PADT, no SessionDown, and a new discovery while the
+            // concentrator still held the old session.
+            let interrupted = {
+                let flow = self.run_session_flow();
+                tokio::pin!(flow);
+                loop {
+                    tokio::select! {
+                        biased;
+                        cmd = h.next_command() => match cmd {
+                            ServiceCommand::Stop | ServiceCommand::Shutdown | ServiceCommand::Restart => {
+                                break Err(cmd);
+                            }
+                            other => debug!(command = ?other, "PPPoE keeps its session on a service notification"),
+                        },
+                        res = &mut flow => break Ok(res),
                     }
                 }
-                flow_res = self.run_session_flow() => {
-                    let (end, error) = match flow_res {
-                        Ok(Some(SystemInterrupt::Shutdown)) => {
-                            info!("PPPoE service session finished cleanly (daemon shutting down)");
-                            ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
-                            break 'main_loop;
-                        }
-                        Ok(Some(SystemInterrupt::ConfigDisabled)) => {
-                            info!("PPPoE service stopped");
-                            ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
-                            break 'main_loop;
-                        }
-                        Ok(Some(SystemInterrupt::ConfigUpdated)) => {
-                            info!("PPPoE session restart requested, reconnecting");
-                            self.backoff.reset();
-                            continue 'main_loop;
-                        }
-                        Ok(None) => {
-                            if !ctx.is_running() {
-                                info!("PPPoE service session finished cleanly (daemon shutting down)");
-                                break 'main_loop;
-                            }
-                            if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
-                                self.cfg = dynamic_cfg;
-                            }
-                            if !self.cfg.enabled {
-                                info!("PPPoE service disabled in config, transitioning to Inactive");
-                                h.dormant(DormantReason::disabled("pppoe.enabled"));
-                                break 'main_loop;
-                            }
-                            (SessionEnd { uptime: self.last_uptime, rejected: false }, None)
-                        }
-                        Err(e) => {
-                            if !ctx.is_running() {
-                                break 'main_loop;
-                            }
-                            let rejected = matches!(e, PppoeError::AuthFailed(_));
-                            (SessionEnd { uptime: self.last_uptime, rejected }, Some(e))
-                        }
+            };
+            let flow_res = match interrupted {
+                Ok(res) => res,
+                Err(ServiceCommand::Restart) => {
+                    // Bounced in place (PADT + new discovery); the task keeps running.
+                    info!("PPPoE service received restart command, restarting session");
+                    self.teardown_active_session("Service restarted".into())
+                        .await;
+                    self.backoff.reset();
+                    continue 'main_loop;
+                }
+                Err(cmd) => {
+                    info!("PPPoE service received stop/shutdown command, exiting serve loop");
+                    let reason = if cmd == ServiceCommand::Stop {
+                        "Service stopped"
+                    } else {
+                        "Graceful shutdown"
                     };
-
-                    let delay = self.backoff.next_delay(end, reconnect_jitter());
-                    let attempt = self.backoff.failures();
-                    warn!(
-                        wan_iface = %self.cfg.wan_iface,
-                        attempt,
-                        uptime_secs = end.uptime.map(|u| u.as_secs()),
-                        error = error.as_ref().map(ToString::to_string),
-                        delay_secs = delay.as_secs(),
-                        "PPPoE session ended; scheduling reconnection"
-                    );
-                    if attempt >= 3 {
-                        h.degraded(DegradedReason::custom("no session"));
-                    }
-                    self.publish_session_state(
-                        PppoeSessionState::Reconnecting,
-                        error.as_ref().map(ToString::to_string),
-                    );
-                    let _ = ctx.bus().publish(LanforgeEvent::Pppoe(PppoeEvent::Reconnecting {
-                        attempt,
-                        next_retry_secs: delay.as_secs(),
-                    }));
-
-                    if !self.wait_before_reconnect(h, delay).await {
-                        ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
+                    self.teardown_active_session(reason.into()).await;
+                    ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
+                    break 'main_loop;
+                }
+            };
+            let (end, error) = match flow_res {
+                Ok(Some(SystemInterrupt::Shutdown)) => {
+                    info!("PPPoE service session finished cleanly (daemon shutting down)");
+                    ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
+                    break 'main_loop;
+                }
+                Ok(Some(SystemInterrupt::ConfigDisabled)) => {
+                    info!("PPPoE service stopped");
+                    ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
+                    break 'main_loop;
+                }
+                Ok(Some(SystemInterrupt::ConfigUpdated)) => {
+                    info!("PPPoE session restart requested, reconnecting");
+                    self.backoff.reset();
+                    continue 'main_loop;
+                }
+                Ok(None) => {
+                    if !ctx.is_running() {
+                        info!("PPPoE service session finished cleanly (daemon shutting down)");
                         break 'main_loop;
                     }
+                    if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
+                        self.cfg = dynamic_cfg;
+                    }
+                    if !self.cfg.enabled {
+                        info!("PPPoE service disabled in config, transitioning to Inactive");
+                        h.dormant(DormantReason::disabled("pppoe.enabled"));
+                        break 'main_loop;
+                    }
+                    (
+                        SessionEnd {
+                            uptime: self.last_uptime,
+                            rejected: false,
+                        },
+                        None,
+                    )
                 }
+                Err(e) => {
+                    if !ctx.is_running() {
+                        break 'main_loop;
+                    }
+                    let rejected = matches!(e, PppoeError::AuthFailed(_));
+                    (
+                        SessionEnd {
+                            uptime: self.last_uptime,
+                            rejected,
+                        },
+                        Some(e),
+                    )
+                }
+            };
+
+            let delay = self.backoff.next_delay(end, reconnect_jitter());
+            let attempt = self.backoff.failures();
+            warn!(
+                wan_iface = %self.cfg.wan_iface,
+                attempt,
+                uptime_secs = end.uptime.map(|u| u.as_secs()),
+                error = error.as_ref().map(ToString::to_string),
+                delay_secs = delay.as_secs(),
+                "PPPoE session ended; scheduling reconnection"
+            );
+            if attempt >= 3 {
+                h.degraded(DegradedReason::custom("no session"));
+            }
+            self.publish_session_state(
+                PppoeSessionState::Reconnecting,
+                error.as_ref().map(ToString::to_string),
+            );
+            let _ = ctx
+                .bus()
+                .publish(LanforgeEvent::Pppoe(PppoeEvent::Reconnecting {
+                    attempt,
+                    next_retry_secs: delay.as_secs(),
+                }));
+
+            if !self.wait_before_reconnect(h, delay).await {
+                ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
+                break 'main_loop;
             }
         }
 
