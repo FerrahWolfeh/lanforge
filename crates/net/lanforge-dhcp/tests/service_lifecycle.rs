@@ -695,3 +695,118 @@ async fn test_dhcpv4_offer_is_not_a_lease() -> Result<(), Box<dyn Error>> {
     let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
     Ok(())
 }
+
+// characterization: pins behaviour that is already correct (owner-verified on hardware) so a
+// refactor cannot silently break it; it cannot be made to fail on the current code.
+/// Renaming or editing a pool without changing its range keeps every existing lease: a renewing
+/// client gets the same address and the state keeps its lease.
+#[tokio::test]
+async fn test_dhcpv4_pool_rename_keeps_leases() -> Result<(), Box<dyn Error>> {
+    let (ctx, bus) = init_test_context();
+    ctx.set_target_interface_name("lan0".to_string());
+    let cfg = create_test_v4_config();
+    ctx.update_dhcp_v4_pools(cfg.pools.clone());
+
+    let (handle, transport) = Dhcpv4Transport::inert();
+    let mut service = Dhcpv4Service::with_transport(cfg.clone(), ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    wait_for_service_online(&ctx, ServiceId::Dhcp4).await?;
+
+    let mac = MacAddr([0x02, 0, 0, 0, 0, 0x42]);
+    let leased = dhcpv4_acquire(&handle, mac, cfg.server_id).await?.yiaddr();
+
+    let mut renamed = cfg.pools.clone();
+    renamed[0].name = Some("Renamed scope".into());
+    renamed[0].dns_servers = vec![Ipv4Addr::new(1, 1, 1, 1)];
+    ctx.update_dhcp_v4_pools(renamed);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let src = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68);
+    handle
+        .inject(
+            Dhcpv4PacketBuilder::request(mac, leased, cfg.server_id).build(),
+            src,
+        )
+        .await;
+    let ack = timeout(TEST_TIMEOUT, handle.recv_reply())
+        .await?
+        .ok_or("reply channel closed")?
+        .message()?;
+    assert_eq!(
+        ack.opts().get(dhcproto::v4::OptionCode::MessageType),
+        Some(&dhcproto::v4::DhcpOption::MessageType(MessageTypeV4::Ack))
+    );
+    assert_eq!(
+        ack.yiaddr(),
+        leased,
+        "renewal after a pool rename keeps the address"
+    );
+    let dev = ctx.get_device(&mac).ok_or("device registered")?;
+    assert!(matches!(dev.v4, IPv4State::Dynamic(ref l) if l.ip == leased));
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
+    Ok(())
+}
+
+// characterization: static reservations win over dynamic requests (the static registry is part
+// of `get_mac_by_ip` for IPv4).
+/// A dynamic client asking (INIT-REBOOT) for an address reserved for another host is refused, even
+/// while that host is offline.
+#[tokio::test]
+async fn test_dhcpv4_static_reservation_beats_a_dynamic_request() -> Result<(), Box<dyn Error>> {
+    let (ctx, bus) = init_test_context();
+    ctx.set_target_interface_name("lan0".to_string());
+    let cfg = create_test_v4_config();
+    ctx.update_dhcp_v4_pools(cfg.pools.clone());
+
+    let reserved = Ipv4Addr::new(192, 168, 1, 120);
+    let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
+        mac: MacAddr([0x02, 0, 0, 0, 0, 0x5a]),
+        update: Box::new(CliHostUpdate {
+            hostname: Some("nas".to_string()).into(),
+            duid: None.into(),
+            v4_static: Some(reserved).into(),
+            v6_suffix: None.into(),
+            boot_file: None.into(),
+            dns_fallback: None.into(),
+            class: None.into(),
+            origin: Origin::Static,
+        }),
+    });
+
+    let (handle, transport) = Dhcpv4Transport::inert();
+    let mut service = Dhcpv4Service::with_transport(cfg.clone(), ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    wait_for_service_online(&ctx, ServiceId::Dhcp4).await?;
+
+    let intruder = MacAddr([0x02, 0, 0, 0, 0, 0x66]);
+    let src = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68);
+    handle
+        .inject(
+            Dhcpv4PacketBuilder::request(intruder, reserved, cfg.server_id).build(),
+            src,
+        )
+        .await;
+    let reply = timeout(TEST_TIMEOUT, handle.recv_reply())
+        .await?
+        .ok_or("reply channel closed")?
+        .message()?;
+    assert_eq!(
+        reply.opts().get(dhcproto::v4::OptionCode::MessageType),
+        Some(&dhcproto::v4::DhcpOption::MessageType(MessageTypeV4::Nak)),
+        "a reserved address must not be leased to another client"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
+    Ok(())
+}
