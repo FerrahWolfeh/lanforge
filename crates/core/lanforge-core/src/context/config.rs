@@ -491,6 +491,13 @@ impl LanforgeContext {
         let mut changed = DomainSet::empty();
         let mut max_impact = ChangeImpact::None;
 
+        // Store the new DynamicConfig before any watch below fires: a woken subscriber may read
+        // it back through the `get_*` getters, which must never return the previous value.
+        // Storing an equal copy when nothing changed is harmless (readers see the same content).
+        let mut next_cfg = (**current_cfg).clone();
+        patch.apply_to_dynamic(&mut next_cfg);
+        self.inner.config.store(Arc::new(next_cfg));
+
         macro_rules! check_and_apply_opt {
             ($field:ident, $store_pair:expr, $domain:ident) => {
                 if let Some(ref new_val) = patch.$field {
@@ -610,12 +617,6 @@ impl LanforgeContext {
         check_and_apply!(dns_listen, self.inner.config_store.dns_listen, DNS_LISTEN);
 
         if !changed.is_empty() {
-            // Synchronize DynamicConfig
-            let current_cfg = self.inner.config.load();
-            let mut next_cfg = (**current_cfg).clone();
-            patch.apply_to_dynamic(&mut next_cfg);
-            self.inner.config.store(Arc::new(next_cfg));
-
             // Derived notifications for legacy listeners & db worker
             let bus = self.bus_ref();
             if changed.contains(DomainSet::PPPOE) {
@@ -911,6 +912,32 @@ mod tests {
     fn create_test_context() -> LanforgeContext {
         let bus = Arc::new(EventBus::new());
         LanforgeContext::new(bus, State::default(), None)
+    }
+
+    /// A subscriber woken by `apply_config` must already see the new value through the getters
+    /// (they read `DynamicConfig`), never the previous one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn subscriber_never_reads_stale_getter() {
+        let ctx = create_test_context();
+        for round in 0..500_u32 {
+            let mut sub = ctx.config_subscription::<DnsAllowlist>();
+            let reader = {
+                let ctx = ctx.clone();
+                tokio::spawn(async move {
+                    let delta = sub.next().await.expect("config store alive");
+                    (delta.new.0.clone(), ctx.get_dns_allowlist())
+                })
+            };
+            tokio::task::yield_now().await;
+            let _ = ctx.apply_config(
+                ConfigPatch::new().with_dns_allowlist(vec![format!("d{round}.example")]),
+            );
+            let (seen, getter) = reader.await.expect("reader task");
+            assert_eq!(
+                seen, getter,
+                "round {round}: getter returned a stale allowlist"
+            );
+        }
     }
 
     #[tokio::test]

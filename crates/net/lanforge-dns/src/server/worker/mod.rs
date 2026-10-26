@@ -437,8 +437,13 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                 filter.sync_from_context(&ctx.ctx);
                 ctx.cache.invalidate_all();
 
-                // Ensure enabled after first successful load (if it was intended to be enabled)
-                if !filter.is_enabled() && filter.blocklist_size() > 0 && db_cfg.enabled {
+                // Ensure enabled after first successful load (if it was intended to be enabled).
+                // Re-read the config: `db_cfg` dates from the top of this pass, and adblock may
+                // have been disabled while the lists were loading.
+                if !filter.is_enabled()
+                    && filter.blocklist_size() > 0
+                    && ctx.ctx.get_dns_adblock().enabled
+                {
                     filter.set_enabled(true);
                     info!(
                         blocked_domains = filter.blocklist_size(),
