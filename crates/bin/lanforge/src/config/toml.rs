@@ -387,6 +387,17 @@ source = "broken" # Invalid variant
         assert_eq!(cfg.dhcp.v4.iface, "");
     }
 
+    /// Prefix deprecation (D-16) is on by default, with or without an `[ra]` section.
+    #[cfg(feature = "ra")]
+    #[test]
+    fn test_ra_deprecate_on_renumber_defaults_on() {
+        let without: TomlConfig = toml::from_str("[system]\niface = \"lan0\"\n").expect("parses");
+        assert!(without.ra.deprecate_on_renumber);
+        let with: TomlConfig =
+            toml::from_str("[system]\niface = \"lan0\"\n\n[ra]\nenabled = true\n").expect("parses");
+        assert!(with.ra.deprecate_on_renumber);
+    }
+
     #[test]
     fn test_docs_example_config_parses_cleanly() {
         let path = concat!(

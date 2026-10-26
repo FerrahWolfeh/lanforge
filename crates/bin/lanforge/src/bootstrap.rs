@@ -22,7 +22,7 @@ use lanforge_types::network::dhcp::{
 use lanforge_types::network::dns::AdblockUrlEntry;
 #[cfg(feature = "dns")]
 use lanforge_types::network::dns::adblock::{AdblockRuleEntry, AdblockUrlKind};
-use lanforge_types::network::ra::PreviousLanPrefix;
+use lanforge_types::network::ra::PreviousLanPrefixes;
 use lanforge_types::network::{
     IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, classify_ipv6, is_ula,
 };
@@ -197,18 +197,22 @@ impl Bootstrapper {
         Self::log_welcome_banner(&cfg, &if_state);
 
         // The live LAN prefix comes from the scan above (the OS owns the interface, D-12). The
-        // stored one is only history: if the delegated prefix changed while we were down, RA
-        // deprecates it at startup. It must never override the scanned state.
-        if let Ok(Some(stored_gua)) = db.load_last_gua_prefix() {
-            let current = if_state
-                .gua
-                .map(lanforge_types::network::Ipv6Prefix::from_addr);
-            if current == Some(stored_gua) {
-                debug!("Stored LAN GUA prefix matches the interface: {stored_gua}");
-            } else {
-                info!(previous = %stored_gua, ?current, "LAN GUA prefix changed since last run; RA will deprecate the previous one");
-                ctx.provide_shared(Arc::new(PreviousLanPrefix(stored_gua)));
-            }
+        // stored one is only history and must never override the scanned state. Both are handed
+        // to RA, which deprecates whichever is gone from the LAN by the time it starts: the
+        // delegated prefix can change while we are down, or be withdrawn right after this scan.
+        let scanned = if_state
+            .gua
+            .map(lanforge_types::network::Ipv6Prefix::from_addr);
+        let stored = db.load_last_gua_prefix().ok().flatten();
+        if let Some(stored) = stored
+            && scanned != Some(stored)
+        {
+            info!(previous = %stored, current = ?scanned, "LAN GUA prefix changed since last run; RA will deprecate the previous one");
+        }
+        let mut previous: Vec<_> = stored.into_iter().collect();
+        previous.extend(scanned.filter(|p| Some(*p) != stored));
+        if !previous.is_empty() {
+            ctx.provide_shared(Arc::new(PreviousLanPrefixes(previous)));
         }
 
         // --- PHASE 4/5: Handover to Daemon ---

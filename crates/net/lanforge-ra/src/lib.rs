@@ -58,7 +58,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::network::ra::{
     ICMPV6_TYPE_RS, MAX_INITIAL_RTR_ADVERT_INTERVAL, MAX_INITIAL_RTR_ADVERTISEMENTS,
-    MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS, PreviousLanPrefix, RAPrefix, RaServerConfig,
+    MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS, PreviousLanPrefixes, RAPrefix, RaServerConfig,
 };
 use lanforge_types::system::{DormantReason, RaStatusResponse, RunResult};
 
@@ -487,12 +487,12 @@ impl RaService {
         state.last_ula = lan_ips
             .ula
             .map(lanforge_types::network::Ipv6Prefix::from_addr);
-        state.last_gua = self
-            .ctx
-            .get_shared::<PreviousLanPrefix>()
-            .map(|prev| prev.0)
-            .or(current_gua);
-        state.update_prefix_and_deprecate(current_gua, true, current_cfg.deprecate_on_renumber);
+        let previous = self.ctx.get_shared::<PreviousLanPrefixes>();
+        for prev in previous.iter().flat_map(|p| p.0.iter().copied()) {
+            state.last_gua = Some(prev);
+            state.update_prefix_and_deprecate(current_gua, true, current_cfg.deprecate_on_renumber);
+        }
+        state.last_gua = current_gua;
 
         // Immediate RA on startup
         send_ra_internal(

@@ -9,7 +9,7 @@ use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_ra::{RaConfig, RaService};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::ra::{
-    PrefixLifetime, PrefixSource, PreviousLanPrefix, RAPrefix, RaServerConfig, RouterPriority,
+    PrefixLifetime, PrefixSource, PreviousLanPrefixes, RAPrefix, RaServerConfig, RouterPriority,
 };
 use lanforge_types::system::ServiceState;
 use lanforge_types::update::{DeviceUpdate, InterfaceState};
@@ -317,9 +317,9 @@ async fn test_ra_deprecates_prefix_from_before_restart() {
     });
     let old: Ipv6Addr = "2804:bdc:508e:db00::".parse().unwrap();
     let new: Ipv6Addr = "2804:bdc:509d:4500::".parse().unwrap();
-    ctx.provide_shared(Arc::new(PreviousLanPrefix(
+    ctx.provide_shared(Arc::new(PreviousLanPrefixes(vec![
         lanforge_types::network::Ipv6Prefix::from_addr(old),
-    )));
+    ])));
     set_iface_gua(&ctx, 1, Some("2804:bdc:509d:4500::1".parse().unwrap()));
 
     let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
@@ -345,6 +345,68 @@ async fn test_ra_deprecates_prefix_from_before_restart() {
         Some(0),
         "previous prefix deprecated"
     );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    assert!(
+        timeout(Duration::from_millis(500), serve_handle)
+            .await
+            .is_ok()
+    );
+}
+
+/// The prefix found at boot is withdrawn before RA starts (NetworkManager during a reconnect):
+/// RA starts with no LAN GUA, and when the new one arrives the boot prefix must be deprecated.
+#[tokio::test]
+async fn test_ra_deprecates_boot_prefix_withdrawn_before_start() {
+    let (ctx, bus) = create_test_context();
+    ctx.update_ra_server_config(RaServerConfig {
+        enabled: true,
+        iface: Some("lan0".into()),
+        prefixes: vec![RAPrefix::gua_dynamic()],
+        deprecate_on_renumber: true,
+        ..RaServerConfig::default()
+    });
+    let boot: Ipv6Addr = "2804:bdc:50a7:e800::".parse().unwrap();
+    let new: Ipv6Addr = "2804:bdc:50a9:f300::".parse().unwrap();
+    ctx.provide_shared(Arc::new(PreviousLanPrefixes(vec![
+        lanforge_types::network::Ipv6Prefix::from_addr(boot),
+    ])));
+    set_iface_gua(&ctx, 1, None);
+
+    let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
+    let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    let next_ra = || async {
+        timeout(Duration::from_millis(1000), handle.recv_payload())
+            .await
+            .expect("Timeout waiting for RA")
+            .expect("RA channel closed")
+    };
+    let pref_of = |ra: &[u8], p: Ipv6Addr| {
+        ra_prefixes(ra)
+            .into_iter()
+            .find(|(a, _, _)| *a == p)
+            .map(|(_, _, pref)| pref)
+    };
+
+    let ra = next_ra().await;
+    assert_eq!(
+        pref_of(&ra, boot),
+        Some(0),
+        "boot prefix deprecated at startup"
+    );
+
+    set_iface_gua(&ctx, 1, Some("2804:bdc:50a9:f300::1".parse().unwrap()));
+    let ra = next_ra().await;
+    assert!(
+        pref_of(&ra, new).is_some_and(|p| p > 0),
+        "new prefix advertised"
+    );
+    assert_eq!(pref_of(&ra, boot), Some(0), "boot prefix still deprecated");
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     assert!(

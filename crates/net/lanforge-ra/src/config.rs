@@ -88,7 +88,7 @@ const fn default_true() -> bool {
 }
 
 /// Simplified RA configuration used in the TOML file.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RaServiceConfig {
     pub enabled: bool,
@@ -109,6 +109,30 @@ pub struct RaServiceConfig {
     pub dnssl: Vec<DnsslConfig>,
     #[serde(default = "default_true")]
     pub deprecate_on_renumber: bool,
+}
+
+// Manual impl: a derived `Default` would set `deprecate_on_renumber = false` (the serde field
+// default only applies to a missing key, not to a missing `[ra]` section), silently disabling
+// prefix deprecation (D-16, default on).
+impl Default for RaServiceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            iface: None,
+            managed: None,
+            other_config: None,
+            hop_limit: None,
+            max_interval: 0,
+            lifetime: None,
+            reachable_time: None,
+            retrans_timer: None,
+            mtu: None,
+            prefixes: Vec::new(),
+            rdnss: Vec::new(),
+            dnssl: Vec::new(),
+            deprecate_on_renumber: true,
+        }
+    }
 }
 
 impl RaServiceConfig {

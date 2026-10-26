@@ -422,12 +422,14 @@ impl RouterPriority {
     }
 }
 
-/// LAN GUA prefix advertised before the last daemon restart (hydrated from the DB at boot).
+/// LAN GUA prefixes clients may still hold when RA starts: the one stored by the last run
+/// (DB) and the one found on the interface at boot (hydrated by the bootstrap, D-10).
 ///
-/// If the delegated prefix changed while the daemon was down, RA deprecates this prefix at
-/// startup (RFC 4862 §5.5.3e) so clients stop preferring addresses that no longer route.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PreviousLanPrefix(pub crate::network::Ipv6Prefix);
+/// RA deprecates every entry that is no longer on the LAN when it starts (RFC 4862 §5.5.3e),
+/// so a prefix withdrawn while the daemon was down -- or between the boot scan and the RA
+/// start, as `NetworkManager` does during a reconnect -- stops being preferred by clients.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PreviousLanPrefixes(pub Vec<crate::network::Ipv6Prefix>);
 
 /// Full runtime configuration for the Router Advertisement service.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
