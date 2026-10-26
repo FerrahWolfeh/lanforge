@@ -208,6 +208,20 @@ impl DhcpServer {
         self.handle_message(&msg, device)
     }
 
+    /// Lease (seconds) granted for `ip`: its pool's lease, else the global one, capped at 30 days.
+    /// The single source for both option 51 and the expiry the daemon records. Static hosts get
+    /// the same finite lease: a fixed address must not stop the client from renewing.
+    #[must_use]
+    pub fn lease_time_for(&self, ip: Ipv4Addr) -> u32 {
+        std::cmp::min(
+            self.pool
+                .pool_for_ip(ip)
+                .and_then(|p| p.lease_time)
+                .unwrap_or(self.cfg.lease_time),
+            MAX_LEASE_TIME,
+        )
+    }
+
     // ── DISCOVER → OFFER ─────────────────────────────────────────────────
 
     fn handle_discover(
@@ -494,14 +508,7 @@ impl DhcpServer {
             }
         });
 
-        // Static hosts get the same finite lease as everyone else: a fixed address must not stop
-        // the client from renewing and picking up configuration changes.
-        let lease_time = std::cmp::min(
-            pool_opt
-                .and_then(|p| p.lease_time)
-                .unwrap_or(self.cfg.lease_time),
-            MAX_LEASE_TIME,
-        );
+        let lease_time = self.lease_time_for(yiaddr);
 
         opts.insert(DhcpOption::AddressLeaseTime(lease_time));
         opts.insert(DhcpOption::SubnetMask(pool_mask));

@@ -566,3 +566,75 @@ async fn test_dhcpv6_static_suffix_follows_renumbered_gua() -> Result<(), Box<dy
     let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
     Ok(())
 }
+
+/// Runs DISCOVER → OFFER → REQUEST → ACK for `mac` and returns the ACK.
+async fn dhcpv4_acquire(
+    handle: &lanforge_dhcp::v4::io::Dhcpv4InertHandle,
+    mac: MacAddr,
+    server_id: Ipv4Addr,
+) -> Result<dhcproto::v4::Message, Box<dyn Error>> {
+    let src = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68);
+    handle
+        .inject(Dhcpv4PacketBuilder::discover(mac).build(), src)
+        .await;
+    let offer = timeout(TEST_TIMEOUT, handle.recv_reply())
+        .await?
+        .ok_or("reply channel closed")?
+        .message()?;
+    handle
+        .inject(
+            Dhcpv4PacketBuilder::request(mac, offer.yiaddr(), server_id).build(),
+            src,
+        )
+        .await;
+    Ok(timeout(TEST_TIMEOUT, handle.recv_reply())
+        .await?
+        .ok_or("reply channel closed")?
+        .message()?)
+}
+
+/// The lease the daemon records must be the lease the client was given. With a pool lease longer
+/// than the global one, the state expired the lease early and the address could be handed to
+/// another device while the first still used it.
+#[tokio::test]
+async fn test_dhcpv4_records_the_pool_lease_the_client_received() -> Result<(), Box<dyn Error>> {
+    let (ctx, bus) = init_test_context();
+    ctx.set_target_interface_name("lan0".to_string());
+    let mut cfg = create_test_v4_config();
+    cfg.lease_time = 3600;
+    cfg.pools[0].lease_time = Some(86_400);
+    ctx.update_dhcp_v4_pools(cfg.pools.clone());
+
+    let (handle, transport) = Dhcpv4Transport::inert();
+    let mut service = Dhcpv4Service::with_transport(cfg.clone(), ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    wait_for_service_online(&ctx, ServiceId::Dhcp4).await?;
+
+    let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x66]);
+    let ack = dhcpv4_acquire(&handle, mac, cfg.server_id).await?;
+    assert_eq!(
+        ack.opts().get(dhcproto::v4::OptionCode::AddressLeaseTime),
+        Some(&dhcproto::v4::DhcpOption::AddressLeaseTime(86_400))
+    );
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let dev = ctx.get_device(&mac).ok_or("device registered")?;
+    let IPv4State::Dynamic(ref lease) = dev.v4 else {
+        return Err("expected a dynamic lease".into());
+    };
+    let recorded = u64::from(lease.expires).saturating_sub(now);
+    assert!(
+        (86_390..=86_400).contains(&recorded),
+        "state records a {recorded}s lease, the client was given 86400s"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
+    Ok(())
+}
