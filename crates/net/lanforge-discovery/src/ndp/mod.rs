@@ -109,7 +109,13 @@ impl IfNameCache {
 
 use lanforge_types::system::ServiceId;
 
-const MONITOR_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
+const MONITOR_DEPS: &[Edge] = &[
+    Edge::requires(
+        ServiceId::Interfaces,
+        lanforge_core::service::LossPolicy::Degrade,
+    ),
+    Edge::after(ServiceId::Db),
+];
 
 /// Unified neighbor discovery (NDP/ARP) and active ICMP ping engine.
 ///

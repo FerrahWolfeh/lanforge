@@ -22,7 +22,13 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::ruleset::RulesetBuilder;
 
-const FIREWALL_DEPS: &[Edge] = &[Edge::after(ServiceId::Db), Edge::wants(ServiceId::Pppoe)];
+const FIREWALL_DEPS: &[Edge] = &[
+    Edge::requires(
+        ServiceId::Interfaces,
+        lanforge_core::service::LossPolicy::Continue,
+    ),
+    Edge::wants(ServiceId::Wan),
+];
 
 #[derive(Clone)]
 pub struct NftService {
@@ -150,6 +156,7 @@ impl NftService {
             )));
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn apply_ruleset_internal(
         &self,
         ctx: &LanforgeContext,
@@ -332,6 +339,7 @@ impl AsyncService for NftService {
         let mut pppoe_rx = ctx.bus().subscribe_pppoe();
         let mut fw_rx = ctx.bus().subscribe_firewall();
         let mut sys_rx = ctx.bus().subscribe_system();
+        let mut wan_rx = ctx.watch_wan();
         let ctx = ctx.clone();
         let h = h.clone();
 
@@ -368,6 +376,17 @@ impl AsyncService for NftService {
                             _ => {}
                         }
                     }
+                    Ok(()) = wan_rx.changed() => {
+                        let snap = wan_rx.borrow().clone();
+                        debug!(
+                            generation = snap.generation,
+                            state = ?snap.state,
+                            "Firewall: WAN snapshot updated; recompiling ruleset in-place"
+                        );
+                        self.active_wan = snap.ifname;
+                        self.reapply(&ctx, "wan_generation").await;
+                    }
+
                     // PPPoE WAN state updates
                     Ok(event) = pppoe_rx.recv() => {
                         match event.event {

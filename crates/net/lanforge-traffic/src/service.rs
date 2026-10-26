@@ -15,7 +15,13 @@ use tracing::{debug, info};
 use crate::sqm::{apply_sqm, clear_sqm};
 use crate::tuning::apply_tuning;
 
-const TRAFFIC_DEPS: &[Edge] = &[Edge::after(ServiceId::Db), Edge::wants(ServiceId::Pppoe)];
+const TRAFFIC_DEPS: &[Edge] = &[
+    Edge::requires(
+        ServiceId::Interfaces,
+        lanforge_core::service::LossPolicy::Continue,
+    ),
+    Edge::wants(ServiceId::Wan),
+];
 
 #[derive(Clone)]
 pub struct TrafficService {
@@ -296,6 +302,38 @@ impl TrafficService {
         self.update_service_state(ctx);
     }
 
+    async fn handle_wan_snapshot(
+        &mut self,
+        ctx: &LanforgeContext,
+        snap: &lanforge_types::network::snapshot::WanSnapshot,
+    ) {
+        if snap.is_up() {
+            if let Some(ref ifname) = snap.ifname {
+                info!(
+                    interface = %ifname,
+                    generation = snap.generation,
+                    "Traffic: WAN Up/changed, applying SQM"
+                );
+                let is_pppoe = ifname.starts_with("ppp");
+                self.is_pppoe_active = is_pppoe;
+                self.active_wan = Some(ifname.clone());
+                if self.cfg.sqm.enabled {
+                    self.apply_sqm_internal(ctx, ifname, is_pppoe).await;
+                }
+                ctx.set_service_state(Self::SERVICE_ID, ServiceState::Online);
+                self.publish_status(ctx, ServiceState::Online);
+            }
+        } else {
+            info!(
+                generation = snap.generation,
+                "Traffic: WAN Down, pausing SQM queues"
+            );
+            self.is_pppoe_active = false;
+            self.clear_sqm_internal(ctx).await;
+            self.update_service_state(ctx);
+        }
+    }
+
     async fn handle_pppoe_event(&mut self, ctx: &LanforgeContext, event: &PppoeEvent) {
         match event {
             PppoeEvent::SessionUp(session) => {
@@ -352,6 +390,7 @@ impl TrafficService {
         let mut pppoe_rx = ctx.bus().subscribe_pppoe();
         let mut traffic_rx = ctx.bus().subscribe_traffic();
         let mut if_rx = ctx.watch_interfaces();
+        let mut wan_rx = ctx.watch_wan();
 
         let mut telemetry_tick = tokio::time::interval(std::time::Duration::from_millis(2500));
         telemetry_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -386,6 +425,11 @@ impl TrafficService {
                 }
                 Ok(()) = if_rx.changed() => {
                     self.handle_interface_ready(ctx).await;
+                }
+
+                Ok(()) = wan_rx.changed() => {
+                    let snap = wan_rx.borrow().clone();
+                    self.handle_wan_snapshot(ctx, &snap).await;
                 }
 
                 _ = telemetry_tick.tick() => {

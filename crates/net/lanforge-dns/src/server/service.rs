@@ -195,7 +195,8 @@ impl DnsService {
 
 const DNS_DEPS: &[lanforge_core::service::Edge] = &[
     lanforge_core::service::Edge::after(ServiceId::Db),
-    lanforge_core::service::Edge::wants(ServiceId::Pppoe),
+    lanforge_core::service::Edge::wants(ServiceId::Wan),
+    lanforge_core::service::Edge::wants(ServiceId::Interfaces),
     lanforge_core::service::Edge::wants(ServiceId::Dhcp4),
     lanforge_core::service::Edge::wants(ServiceId::Dhcp6),
 ];
@@ -450,6 +451,7 @@ impl AsyncService for DnsService {
         let mut bus_rx = ctx.bus().subscribe_dns();
         let mut sys_rx = ctx.bus().subscribe_system();
         let mut pppoe_rx = ctx.bus().subscribe_pppoe();
+        let mut wan_rx = ctx.watch_wan();
 
         let mpsc_worker = {
             let dns_ctx = Arc::clone(&dns_ctx);
@@ -468,6 +470,15 @@ impl AsyncService for DnsService {
                 break;
             }
             tokio::select! {
+                Ok(()) = wan_rx.changed() => {
+                    let snap = wan_rx.borrow().clone();
+                    if snap.is_up() {
+                        h.recovered();
+                    } else {
+                        h.degraded(lanforge_types::system::DegradedReason::UpstreamUnreachable);
+                    }
+                }
+
                 cmd = h.next_command() => {
                     match cmd {
                         ServiceCommand::Stop | ServiceCommand::Shutdown => {

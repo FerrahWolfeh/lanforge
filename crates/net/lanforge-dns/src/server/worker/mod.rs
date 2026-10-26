@@ -153,7 +153,6 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     let _ = std::fs::remove_file(&target_block_path);
                     let _ = std::fs::remove_file(&target_allow_path);
                 } else {
-                    let _ = ctx.ctx.wait_for_pppoe().await;
                     debug!(
                         sources = configured_sources.len(),
                         "Adblock: starting source refresh"

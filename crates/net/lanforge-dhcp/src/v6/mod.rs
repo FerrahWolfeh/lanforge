@@ -89,7 +89,13 @@ use lanforge_types::system::{DormantReason, ServiceId};
 /// - `DeviceUpdated` (`V6` suffix changes)
 /// - `PrefixChanged` (`GUA` updates → client `RECONFIGURE`)
 /// - `LeaseRenew` (manual RECONFIGURE send)
-const DHCPV6_DEPS: &[Edge] = &[Edge::after(ServiceId::Db), Edge::wants(ServiceId::Pppoe)];
+const DHCPV6_DEPS: &[Edge] = &[
+    Edge::requires(
+        ServiceId::Interfaces,
+        lanforge_core::service::LossPolicy::Continue,
+    ),
+    Edge::wants(ServiceId::Wan),
+];
 
 /// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
 #[derive(Clone)]

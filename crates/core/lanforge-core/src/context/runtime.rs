@@ -235,15 +235,6 @@ impl ServiceRuntime {
         self.wait_for_service(ServiceId::Interfaces).await
     }
 
-    /// Waits until WAN connectivity is ready.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CoreError::Shutdown` if the system shuts down while waiting.
-    pub async fn wait_for_pppoe(&self) -> Result<(), CoreError> {
-        self.wait_for_service(ServiceId::Wan).await
-    }
-
     /// Waits until a specific service becomes `Online`.
     ///
     /// # Errors

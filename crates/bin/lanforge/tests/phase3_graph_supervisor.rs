@@ -50,25 +50,49 @@ fn dummy_spec(id: ServiceId, deps: &'static [Edge], condition: Condition) -> Ser
 
 #[test]
 fn test_graph_is_acyclic_real_catalog() {
+    static INTERFACES_DEPS: &[Edge] = &[];
     static DB_DEPS: &[Edge] = &[];
     static HTTP_DEPS: &[Edge] = &[Edge::requires(ServiceId::Db, LossPolicy::Restart)];
-    static DHCP4_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
-    static DHCP6_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
-    static RA_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
+    static PPPOE_DEPS: &[Edge] = &[Edge::requires(ServiceId::Interfaces, LossPolicy::Continue)];
+    static WAN_DEPS: &[Edge] = &[
+        Edge::wants(ServiceId::Pppoe),
+        Edge::wants(ServiceId::Interfaces),
+    ];
+    static DHCP4_DEPS: &[Edge] = &[Edge::requires(ServiceId::Interfaces, LossPolicy::Degrade)];
+    static DHCP6_DEPS: &[Edge] = &[
+        Edge::requires(ServiceId::Interfaces, LossPolicy::Continue),
+        Edge::wants(ServiceId::Wan),
+    ];
+    static RA_DEPS: &[Edge] = &[
+        Edge::requires(ServiceId::Interfaces, LossPolicy::Continue),
+        Edge::wants(ServiceId::Wan),
+    ];
     static DNS_DEPS: &[Edge] = &[
         Edge::after(ServiceId::Db),
+        Edge::wants(ServiceId::Wan),
+        Edge::wants(ServiceId::Interfaces),
         Edge::wants(ServiceId::Dhcp4),
         Edge::wants(ServiceId::Dhcp6),
     ];
-    static MONITOR_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
-    static TRAFFIC_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
-    static TFTP_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
-    static PPPOE_DEPS: &[Edge] = &[];
-    static NFT_DEPS: &[Edge] = &[Edge::after(ServiceId::Db), Edge::wants(ServiceId::Pppoe)];
+    static MONITOR_DEPS: &[Edge] = &[
+        Edge::requires(ServiceId::Interfaces, LossPolicy::Degrade),
+        Edge::after(ServiceId::Db),
+    ];
+    static TRAFFIC_DEPS: &[Edge] = &[
+        Edge::requires(ServiceId::Interfaces, LossPolicy::Continue),
+        Edge::wants(ServiceId::Wan),
+    ];
+    static TFTP_DEPS: &[Edge] = &[Edge::requires(ServiceId::Interfaces, LossPolicy::Degrade)];
+    static NFT_DEPS: &[Edge] = &[
+        Edge::requires(ServiceId::Interfaces, LossPolicy::Continue),
+        Edge::wants(ServiceId::Wan),
+    ];
     static UDS_DEPS: &[Edge] = &[];
 
     let catalog = vec![
+        dummy_spec(ServiceId::Interfaces, INTERFACES_DEPS, Condition::ALWAYS),
         dummy_spec(ServiceId::Db, DB_DEPS, Condition::ALWAYS),
+        dummy_spec(ServiceId::Wan, WAN_DEPS, Condition::ALWAYS),
         dummy_spec(ServiceId::Http, HTTP_DEPS, Condition::ALWAYS),
         dummy_spec(ServiceId::Dhcp4, DHCP4_DEPS, Condition::ALWAYS),
         dummy_spec(ServiceId::Dhcp6, DHCP6_DEPS, Condition::ALWAYS),
@@ -85,14 +109,17 @@ fn test_graph_is_acyclic_real_catalog() {
     let graph = DependencyGraph::build(catalog).expect("Real catalog must be acyclic");
     let order = graph.topological_order();
 
-    let db_idx = order.iter().position(|&s| s == ServiceId::Db).unwrap();
-    let http_idx = order.iter().position(|&s| s == ServiceId::Http).unwrap();
-    let dns_idx = order.iter().position(|&s| s == ServiceId::Dns).unwrap();
+    let if_idx = order
+        .iter()
+        .position(|&s| s == ServiceId::Interfaces)
+        .unwrap();
+    let pppoe_idx = order.iter().position(|&s| s == ServiceId::Pppoe).unwrap();
+    let wan_idx = order.iter().position(|&s| s == ServiceId::Wan).unwrap();
     let nft_idx = order.iter().position(|&s| s == ServiceId::Nft).unwrap();
 
-    assert!(db_idx < http_idx, "db must precede http");
-    assert!(db_idx < dns_idx, "db must precede dns");
-    assert!(db_idx < nft_idx, "db must precede nft");
+    assert!(if_idx < pppoe_idx, "interfaces must precede pppoe");
+    assert!(pppoe_idx < wan_idx, "pppoe must precede wan");
+    assert!(wan_idx < nft_idx, "wan must precede nft");
 }
 
 #[test]

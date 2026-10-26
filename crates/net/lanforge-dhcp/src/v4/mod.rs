@@ -63,7 +63,10 @@ pub use config::Dhcpv4Config;
 pub use io::{Dhcpv4InertChannels, Dhcpv4InertHandle, Dhcpv4InertReply, Dhcpv4Transport};
 use lanforge_core::context::LanforgeContext;
 
-const DHCPV4_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
+const DHCPV4_DEPS: &[Edge] = &[Edge::requires(
+    ServiceId::Interfaces,
+    lanforge_core::service::LossPolicy::Degrade,
+)];
 
 /// `DHCPv4` Server Service.
 #[derive(Clone)]

@@ -321,15 +321,6 @@ impl LanforgeContext {
         self.inner.runtime.wait_for_db().await
     }
 
-    /// Blocks until the `PPPoE` session is established (or short-circuits if `PPPoE` is disabled/ready).
-    ///
-    /// # Errors
-    ///
-    /// Returns `CoreError` if the wait condition cannot be met or the system shuts down.
-    pub async fn wait_for_pppoe(&self) -> Result<(), CoreError> {
-        self.inner.runtime.wait_for_pppoe().await
-    }
-
     /// Blocks until the specified service is `Online`.
     ///
     /// # Errors

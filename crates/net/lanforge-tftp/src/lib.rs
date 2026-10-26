@@ -31,7 +31,10 @@ pub enum TftpError {
     Protocol(String),
 }
 
-const TFTP_DEPS: &[Edge] = &[Edge::after(ServiceId::Db)];
+const TFTP_DEPS: &[Edge] = &[Edge::requires(
+    ServiceId::Interfaces,
+    lanforge_core::service::LossPolicy::Degrade,
+)];
 
 #[derive(Clone)]
 pub struct TftpService {

@@ -296,7 +296,13 @@ impl RaState {
 
 use lanforge_types::system::ServiceId;
 
-const RA_DEPS: &[Edge] = &[Edge::after(ServiceId::Db), Edge::wants(ServiceId::Pppoe)];
+const RA_DEPS: &[Edge] = &[
+    Edge::requires(
+        ServiceId::Interfaces,
+        lanforge_core::service::LossPolicy::Continue,
+    ),
+    Edge::wants(ServiceId::Wan),
+];
 #[derive(Clone)]
 pub struct RaService {
     cfg: RaConfig,
