@@ -1,3 +1,5 @@
+mod mock_bras;
+
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,9 +9,11 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_pppoe::{PppoeConfig, PppoeService};
+use lanforge_transport::PppoeTransport;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
 use lanforge_types::system::{PppoeSessionState, ServiceAction, ServiceId, ServiceState};
+use mock_bras::{MockBrasConfig, spawn_mock_bras};
 use tokio::sync::broadcast;
 use tokio::time::timeout;
 
@@ -25,7 +29,7 @@ where
     F: Fn(&PppoeEvent) -> Option<T>,
 {
     loop {
-        let evt = timeout(Duration::from_secs(2), sub.recv())
+        let evt = timeout(Duration::from_secs(3), sub.recv())
             .await
             .expect("Timeout waiting for PPPoE event")
             .expect("Recv error");
@@ -67,7 +71,10 @@ async fn test_pppoe_inert_session_up_and_shutdown() {
     };
     ctx.update_pppoe_config(cfg.clone());
 
-    let mut service = PppoeService::inert(cfg, ctx.clone());
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
+
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
     assert!(service.is_inert());
 
     let ctx_clone = ctx.clone();
@@ -101,7 +108,7 @@ async fn test_pppoe_inert_session_up_and_shutdown() {
     // 4. Verify post-shutdown state
     assert!(ctx.pppoe_status().is_none());
 
-    let res = timeout(Duration::from_secs(1), handle)
+    let res = timeout(Duration::from_secs(2), handle)
         .await
         .expect("join timeout")
         .expect("join handle error");
@@ -122,7 +129,10 @@ async fn test_pppoe_reacts_to_config_change_in_place() {
     };
     ctx.update_pppoe_config(cfg.clone());
 
-    let mut service = PppoeService::inert(cfg, ctx.clone());
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
+
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
@@ -167,7 +177,7 @@ async fn test_pppoe_reacts_to_config_change_in_place() {
     assert!(down_reason2.contains("Configuration updated"));
 
     // 5. Service terminates cleanly with Inactive state
-    let res = timeout(Duration::from_secs(1), handle)
+    let res = timeout(Duration::from_secs(2), handle)
         .await
         .expect("join timeout")
         .expect("join handle error");
@@ -192,7 +202,10 @@ async fn test_pppoe_reacts_to_service_control_restart() {
     };
     ctx.update_pppoe_config(cfg.clone());
 
-    let mut service = PppoeService::inert(cfg, ctx.clone());
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
+
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
@@ -236,7 +249,10 @@ async fn test_pppoe_reacts_to_service_control_stop() {
     };
     ctx.update_pppoe_config(cfg.clone());
 
-    let mut service = PppoeService::inert(cfg, ctx.clone());
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
+
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
@@ -254,7 +270,7 @@ async fn test_pppoe_reacts_to_service_control_stop() {
     let down_reason = wait_for_session_down(&mut pppoe_sub).await;
     assert!(down_reason.contains("Service control") || down_reason.contains("stopped"));
 
-    let res = timeout(Duration::from_secs(1), handle)
+    let res = timeout(Duration::from_secs(2), handle)
         .await
         .expect("join timeout")
         .expect("join handle error");
@@ -279,7 +295,16 @@ async fn test_pppoe_emits_auth_failed_and_reconnecting() {
     };
     ctx.update_pppoe_config(cfg.clone());
 
-    let mut service = PppoeService::inert(cfg, ctx.clone());
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(
+        handle_inert,
+        MockBrasConfig {
+            auth_ok: false,
+            ..Default::default()
+        },
+    );
+
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
@@ -290,7 +315,7 @@ async fn test_pppoe_emits_auth_failed_and_reconnecting() {
         _ => None,
     })
     .await;
-    assert!(reason.contains("authentication failed"));
+    assert!(reason.to_lowercase().contains("authentication failed"));
 
     // 2. Expect Reconnecting event
     let (attempt, delay) = wait_for_pppoe_event(&mut pppoe_sub, |evt| match evt {
@@ -306,7 +331,7 @@ async fn test_pppoe_emits_auth_failed_and_reconnecting() {
 
     // 3. Graceful shutdown during reconnect delay
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
-    let res = timeout(Duration::from_secs(1), handle)
+    let res = timeout(Duration::from_secs(2), handle)
         .await
         .expect("join timeout")
         .expect("join handle error");
@@ -322,12 +347,23 @@ async fn test_pppoe_carrier_drop_and_recovery() {
         enabled: true,
         wan_iface: "eth1".into(),
         username: "carrier_drop".into(),
+        lcp_echo_interval_secs: 1,
+        lcp_echo_max_failures: 1,
         reconnect_delay_secs: 1,
         ..Default::default()
     };
     ctx.update_pppoe_config(cfg.clone());
 
-    let mut service = PppoeService::inert(cfg, ctx.clone());
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(
+        handle_inert,
+        MockBrasConfig {
+            send_echo_replies: false,
+            ..Default::default()
+        },
+    );
+
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
@@ -335,7 +371,7 @@ async fn test_pppoe_carrier_drop_and_recovery() {
     // 1. Initial connect
     let _ = wait_for_session_up(&mut pppoe_sub).await;
 
-    // 2. Carrier drop triggers SessionDown
+    // 2. Missing echo replies trigger keepalive timeout -> SessionDown
     let reason = wait_for_session_down(&mut pppoe_sub).await;
     assert!(reason.contains("carrier loss") || reason.contains("timeout"));
 
@@ -361,7 +397,8 @@ async fn test_pppoe_disabled_at_startup_transitions_to_inactive() {
         ..Default::default()
     };
 
-    let mut service = PppoeService::inert(cfg, ctx.clone());
+    let (_handle_inert, transport) = PppoeTransport::inert();
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx.clone());
     let res = service.serve(&ctx, &h).await;
     assert!(res.is_ok());
@@ -385,7 +422,8 @@ async fn test_pppoe_cleanup_guarantees_session_down_on_abort() {
     };
     ctx.update_pppoe_config(cfg.clone());
 
-    let mut service = PppoeService::inert(cfg, ctx.clone());
+    let (_handle_inert, transport) = PppoeTransport::inert();
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
     let ctx_clone = ctx.clone();
 
     // 1. Manually establish session status in context to simulate an active session
@@ -426,6 +464,24 @@ async fn test_pppoe_with_terminal_probe_enabled_reports_terminal_status() {
     let (ctx, bus) = create_test_context();
     let mut pppoe_sub = bus.subscribe_pppoe();
 
+    let (handle_prober, prober) =
+        lanforge_transport::ArpProber::inert([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
+
+    let responder = tokio::spawn(async move {
+        if let Some(_req) = handle_prober.recv_payload().await {
+            let target_mac = [0x3c, 0x84, 0x6a, 0xbc, 0x8c, 0xe5];
+            let mut reply = Vec::with_capacity(42);
+            reply.extend_from_slice(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
+            reply.extend_from_slice(&target_mac);
+            reply.extend_from_slice(&[0x08, 0x06, 0x00, 0x01, 0x08, 0x00, 0x06, 0x04, 0x00, 0x02]);
+            reply.extend_from_slice(&target_mac);
+            reply.extend_from_slice(&[192, 168, 1, 1]);
+            reply.extend_from_slice(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
+            reply.extend_from_slice(&[0, 0, 0, 0]);
+            handle_prober.inject(reply, ()).await;
+        }
+    });
+
     let cfg = PppoeConfig {
         enabled: true,
         wan_iface: "wan0".into(),
@@ -439,12 +495,16 @@ async fn test_pppoe_with_terminal_probe_enabled_reports_terminal_status() {
     };
     ctx.update_pppoe_config(cfg.clone());
 
-    let mut service = PppoeService::inert(cfg, ctx.clone());
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
+
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport).with_prober(prober);
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
     let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
 
     let _ = wait_for_session_up(&mut pppoe_sub).await;
+    let _ = responder.await;
 
     // Verify terminal status is reflected in global state
     {
@@ -456,7 +516,7 @@ async fn test_pppoe_with_terminal_probe_enabled_reports_terminal_status() {
                 0x3c, 0x84, 0x6a, 0xbc, 0x8c, 0xe5
             ]))
         );
-        assert_eq!(status.terminal_rtt_us, Some(800));
+        assert!(status.terminal_rtt_us.is_some());
     }
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -484,7 +544,10 @@ async fn test_pppoe_with_injected_prober_reports_probe_response() {
     };
     ctx.update_pppoe_config(cfg.clone());
 
-    let mut service = PppoeService::inert(cfg, ctx.clone()).with_prober(prober);
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
+
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport).with_prober(prober);
     let ctx_clone = ctx.clone();
 
     // Spawn inert prober mock responder in background

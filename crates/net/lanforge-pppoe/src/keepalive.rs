@@ -2,16 +2,14 @@ use crate::config::PppoeConfig;
 use crate::error::PppoeError;
 use crate::lcp::{LCP_CONF_REQ, LCP_ECHO_REP, LCP_ECHO_REQ, LCP_TERM_ACK, LCP_TERM_REQ, PPP_LCP};
 use crate::service::SystemInterrupt;
+use crate::session::PppoeSession;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_transport::ArpProber;
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::system::ServiceAction;
-use nix::unistd::{read, write};
 use std::net::Ipv4Addr;
-use std::os::fd::OwnedFd;
 use std::time::Duration;
-use tokio::io::unix::AsyncFd;
 use tokio::time::interval;
 use tracing::{debug, info, warn};
 
@@ -20,7 +18,7 @@ pub const PPP_IPV6: u16 = 0x0057;
 
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn run_keepalive(
-    chan_fd: &OwnedFd,
+    session: &PppoeSession,
     ctx: &LanforgeContext,
     local_magic: u32,
     peer_magic: u32,
@@ -28,7 +26,6 @@ pub(crate) async fn run_keepalive(
     mut max_failures: u32,
     prober: Option<(&ArpProber, Ipv4Addr, Option<Ipv4Addr>, Duration)>,
 ) -> Result<Option<SystemInterrupt>, PppoeError> {
-    let async_chan_fd = unsafe { AsyncFd::register(chan_fd.try_clone()?)? };
     let mut echo_id: u8 = 0;
     let mut failed_echoes: u32 = 0;
 
@@ -50,7 +47,7 @@ pub(crate) async fn run_keepalive(
                 let Some(delta) = delta_opt else { return Ok(None); };
                 if !delta.new.enabled {
                     info!("PPPoE disabled during keepalive; terminating session");
-                    return Ok(Some(SystemInterrupt::Stop));
+                    return Ok(Some(SystemInterrupt::ConfigDisabled));
                 }
                 match delta.impact {
                     ChangeImpact::None => {}
@@ -62,7 +59,7 @@ pub(crate) async fn run_keepalive(
                     }
                     ChangeImpact::Reconnect | ChangeImpact::Rebind => {
                         info!("PPPoE keepalive received config change requiring reconnect; terminating session to reconnect");
-                        return Ok(Some(SystemInterrupt::Restart));
+                        return Ok(Some(SystemInterrupt::ConfigUpdated));
                     }
                 }
             }
@@ -70,10 +67,10 @@ pub(crate) async fn run_keepalive(
                 if interval_secs > 0 {
                     echo_id = echo_id.wrapping_add(1);
                     if let Err(e) = send_echo_request(
-                        chan_fd,
+                        session,
                         echo_id,
                         local_magic,
-                    ) {
+                    ).await {
                         warn!(error = %e, "Failed to send LCP Echo-Request");
                     }
 
@@ -111,44 +108,41 @@ pub(crate) async fn run_keepalive(
                 }
             }
 
-            guard_res = async_chan_fd.readable() => {
-                let mut guard = guard_res?;
-                match read(chan_fd, &mut read_buf) {
+            read_res = session.recv_ppp_frame(&mut read_buf) => {
+                match read_res {
                     Ok(n) if n > 0 => {
-                        guard.clear_ready();
                         let action = handle_incoming_frame(
-                            chan_fd,
+                            session,
                             &read_buf[..n],
                             local_magic,
                             peer_magic,
                             &mut failed_echoes,
-                        );
+                        ).await;
                         if action == KeepaliveAction::PeerTerminated {
                             return Err(PppoeError::LcpFailed(
                                 "Peer terminated session (LCP Terminate-Request)".into(),
                             ));
                         }
                     }
-                    Ok(_) | Err(nix::errno::Errno::EWOULDBLOCK) => {
-                        guard.clear_ready();
-                    }
+                    Ok(_) => {}
                     Err(e) => {
                         warn!(error = %e, "PPPoE channel read error during keepalive");
-                        return Err(PppoeError::Nix(e));
+                        return Err(e);
                     }
                 }
             }
 
-            res = bus_rx.recv() => {
-                let Ok(event) = res else { continue; };
-                match event.event {
+            event_res = bus_rx.recv() => {
+                let Ok(timed) = event_res else { break; };
+                match timed.event {
                     LanforgeEvent::System(SystemEvent::Shutdown) => {
-                        info!("PPPoE keepalive received daemon shutdown, disconnecting session");
+                        info!("PPPoE keepalive received system shutdown");
                         return Ok(Some(SystemInterrupt::Shutdown));
                     }
-                    LanforgeEvent::System(SystemEvent::ServiceControl { ref id, ref action })
-                        if *id == lanforge_types::system::ServiceId::Pppoe =>
-                    {
+                    LanforgeEvent::System(SystemEvent::ServiceControl {
+                        id: lanforge_types::system::ServiceId::Pppoe,
+                        action,
+                    }) => {
                         match action {
                             ServiceAction::Stop => {
                                 info!("PPPoE keepalive received service stop");
@@ -166,9 +160,11 @@ pub(crate) async fn run_keepalive(
             }
         }
     }
+
+    Ok(None)
 }
 
-fn send_echo_request(fd: &OwnedFd, id: u8, magic: u32) -> Result<(), PppoeError> {
+async fn send_echo_request(session: &PppoeSession, id: u8, magic: u32) -> Result<(), PppoeError> {
     let mut pkt = [0u8; 10];
     pkt[0..2].copy_from_slice(&PPP_LCP.to_be_bytes());
     pkt[2] = LCP_ECHO_REQ;
@@ -176,13 +172,7 @@ fn send_echo_request(fd: &OwnedFd, id: u8, magic: u32) -> Result<(), PppoeError>
     pkt[4..6].copy_from_slice(&8u16.to_be_bytes());
     pkt[6..10].copy_from_slice(&magic.to_be_bytes());
 
-    let n = write(fd, &pkt)?;
-    if n != 10 {
-        return Err(PppoeError::NegotiationFailed(
-            "Short write on LCP Echo-Request".into(),
-        ));
-    }
-    Ok(())
+    session.send_ppp_frame(&pkt).await
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,8 +181,8 @@ pub enum KeepaliveAction {
     PeerTerminated,
 }
 
-fn handle_incoming_frame(
-    fd: &OwnedFd,
+async fn handle_incoming_frame(
+    session: &PppoeSession,
     frame: &[u8],
     local_magic: u32,
     _peer_magic: u32,
@@ -210,7 +200,7 @@ fn handle_incoming_frame(
 
     let proto = u16::from_be_bytes([data[0], data[1]]);
     if proto == PPP_LCP {
-        handle_lcp_frame(fd, &data[2..], local_magic, failed_echoes)
+        handle_lcp_frame(session, &data[2..], local_magic, failed_echoes).await
     } else if proto == PPP_IP || proto == PPP_IPV6 {
         debug!(
             proto = format_args!("{proto:#06x}"),
@@ -223,13 +213,13 @@ fn handle_incoming_frame(
             proto = format_args!("{proto:#06x}"),
             "Unknown PPP protocol received, sending Protocol-Reject"
         );
-        send_protocol_reject(fd, proto, data);
+        send_protocol_reject(session, proto, data).await;
         KeepaliveAction::Continue
     }
 }
 
-fn handle_lcp_frame(
-    fd: &OwnedFd,
+async fn handle_lcp_frame(
+    session: &PppoeSession,
     lcp_data: &[u8],
     local_magic: u32,
     failed_echoes: &mut u32,
@@ -278,7 +268,7 @@ fn handle_lcp_frame(
                     rep[10..10 + extra].copy_from_slice(&payload[4..4 + extra]);
                 }
             }
-            let _ = write(fd, &rep[..rep_len]);
+            let _ = session.send_ppp_frame(&rep[..rep_len]).await;
             KeepaliveAction::Continue
         }
         LCP_TERM_REQ => {
@@ -288,7 +278,7 @@ fn handle_lcp_frame(
             ack[2] = LCP_TERM_ACK;
             ack[3] = id;
             ack[4..6].copy_from_slice(&4u16.to_be_bytes());
-            let _ = write(fd, &ack);
+            let _ = session.send_ppp_frame(&ack).await;
             KeepaliveAction::PeerTerminated
         }
         LCP_TERM_ACK => {
@@ -306,7 +296,7 @@ fn handle_lcp_frame(
     }
 }
 
-fn send_protocol_reject(fd: &OwnedFd, rejected_proto: u16, original_data: &[u8]) {
+async fn send_protocol_reject(session: &PppoeSession, rejected_proto: u16, original_data: &[u8]) {
     let mut rej = [0u8; 512];
     let extra_len = original_data.len().min(500);
     let total_len = 6 + 2 + extra_len;
@@ -320,5 +310,5 @@ fn send_protocol_reject(fd: &OwnedFd, rejected_proto: u16, original_data: &[u8])
     rej[6..8].copy_from_slice(&rejected_proto.to_be_bytes());
     rej[8..8 + extra_len].copy_from_slice(&original_data[..extra_len]);
 
-    let _ = write(fd, &rej[..total_len]);
+    let _ = session.send_ppp_frame(&rej[..total_len]).await;
 }

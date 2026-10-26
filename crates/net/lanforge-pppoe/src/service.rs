@@ -16,7 +16,7 @@ use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
     ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::ArpProber;
+use lanforge_transport::{ArpProber, PppoeTransport, TransportStats};
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::pppoe::PppoeDataplane;
@@ -24,10 +24,9 @@ use lanforge_types::system::{
     DegradedReason, DormantReason, PppoeSessionState, PppoeStatusResponse, ServiceAction,
     ServiceId, ServiceState,
 };
-use smallvec::smallvec;
 use std::borrow::Cow;
 use std::io::Read;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::Ipv4Addr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -47,6 +46,8 @@ pub(crate) enum SystemInterrupt {
     Shutdown,
     Stop,
     Restart,
+    ConfigUpdated,
+    ConfigDisabled,
 }
 
 pub(crate) fn classify_system_event(event: &LanforgeEvent) -> Option<SystemInterrupt> {
@@ -99,14 +100,18 @@ pub fn read_carrier(iface: &str) -> Option<bool> {
         }
     };
 
-    check(iface).or_else(|| {
-        let parent = resolve_parent_iface(iface);
-        if parent == iface { None } else { check(parent) }
-    })
+    if let Some(c) = check(iface) {
+        return Some(c);
+    }
+    let parent = resolve_parent_iface(iface);
+    if parent != iface {
+        return check(parent);
+    }
+    None
 }
 
 #[cfg(feature = "ebpf")]
-type EbpfSessionHandle = Option<crate::ebpf::EbpfSession>;
+type EbpfSessionHandle = Option<EbpfSession>;
 #[cfg(not(feature = "ebpf"))]
 type EbpfSessionHandle = Option<()>;
 
@@ -117,11 +122,11 @@ const PPPOE_DEPS: &[Edge] = &[Edge::requires(
 
 pub struct PppoeService {
     cfg: PppoeConfig,
+    transport: Option<PppoeTransport>,
     ctx: LanforgeContext,
     attempt: u32,
     active_session: Option<ActiveSessionMeta>,
     connected_at: Option<Instant>,
-    inert: bool,
     prober: Option<ArpProber>,
     terminal_status: Option<(bool, Option<MacAddr>, Option<u32>)>,
     config_sub: ConfigSubscription<PppoeConfig>,
@@ -130,6 +135,7 @@ pub struct PppoeService {
 impl PppoeService {
     /// Static identifier for the service.
     pub const SERVICE_ID: ServiceId = ServiceId::Pppoe;
+
     #[must_use]
     pub fn new(mut cfg: PppoeConfig, ctx: LanforgeContext) -> Self {
         if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
@@ -139,20 +145,24 @@ impl PppoeService {
         config_sub.mark_applied(Arc::new(cfg.clone()));
         Self {
             cfg,
+            transport: None,
             ctx,
             attempt: 0,
             active_session: None,
             connected_at: None,
-            inert: false,
             prober: None,
             terminal_status: None,
             config_sub,
         }
     }
 
-    /// Creates an inert instance of `PppoeService` for rootless simulation and testing.
+    /// Creates an instance of `PppoeService` with an injected transport (e.g. for rootless tests).
     #[must_use]
-    pub fn inert(mut cfg: PppoeConfig, ctx: LanforgeContext) -> Self {
+    pub fn with_transport(
+        mut cfg: PppoeConfig,
+        ctx: LanforgeContext,
+        transport: PppoeTransport,
+    ) -> Self {
         if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
             cfg = dynamic_cfg;
         }
@@ -160,11 +170,11 @@ impl PppoeService {
         config_sub.mark_applied(Arc::new(cfg.clone()));
         Self {
             cfg,
+            transport: Some(transport),
             ctx,
             attempt: 0,
             active_session: None,
             connected_at: None,
-            inert: true,
             prober: None,
             terminal_status: None,
             config_sub,
@@ -189,14 +199,10 @@ impl PppoeService {
     }
 
     #[must_use]
-    pub const fn with_inert(mut self, inert: bool) -> Self {
-        self.inert = inert;
-        self
-    }
-
-    #[must_use]
-    pub const fn is_inert(&self) -> bool {
-        self.inert
+    pub fn is_inert(&self) -> bool {
+        self.transport
+            .as_ref()
+            .is_some_and(PppoeTransport::is_inert)
     }
 
     async fn teardown_active_session(&mut self, reason: String) {
@@ -207,7 +213,7 @@ impl PppoeService {
         self.connected_at = None;
         if let Some(ref meta) = session_meta
             && self.cfg.send_padt_on_shutdown
-            && !self.inert
+            && let Some(ref transport) = self.transport
         {
             info!(
                 wan_iface = %self.cfg.wan_iface,
@@ -215,6 +221,7 @@ impl PppoeService {
                 "Sending PPPoE PADT frame during session teardown"
             );
             let _ = send_padt(
+                transport,
                 &self.cfg.wan_iface,
                 meta.wan_mac,
                 meta.ac_mac,
@@ -223,7 +230,7 @@ impl PppoeService {
             .await;
         }
 
-        if !self.inert {
+        if !self.is_inert() {
             deconfigure_interface(
                 &self.cfg.wan_iface,
                 self.cfg.dataplane == PppoeDataplane::Ebpf,
@@ -247,156 +254,6 @@ impl PppoeService {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
-    async fn run_inert_session_flow(&mut self) -> Result<Option<SystemInterrupt>, PppoeError> {
-        if self.cfg.username == "fail_auth" {
-            sleep(Duration::from_millis(10)).await;
-            let reason = "PAP/CHAP authentication failed: invalid credentials".to_string();
-            let _ = self
-                .ctx
-                .bus()
-                .publish(LanforgeEvent::Pppoe(PppoeEvent::AuthFailed {
-                    reason: reason.clone(),
-                }));
-            return Err(PppoeError::AuthFailed(reason));
-        }
-
-        if self.cfg.username == "discovery_timeout" {
-            sleep(Duration::from_millis(10)).await;
-            return Err(PppoeError::DiscoveryTimeout);
-        }
-
-        let ac_mac = MacAddr([0x02, 0x00, 0x00, 0xac, 0x00, 0x01]);
-        let wan_mac = MacAddr([0x02, 0x00, 0x00, 0x00, 0x00, 0x02]);
-        let session_id = 0x0042;
-        let local_ip = Ipv4Addr::new(100, 64, 0, 2);
-        let peer_ip = Ipv4Addr::new(100, 64, 0, 1);
-        self.active_session = Some(ActiveSessionMeta {
-            wan_mac,
-            ac_mac,
-            session_id,
-            peer_ip: Some(peer_ip),
-        });
-
-        let disc_res = crate::discovery::DiscoveryResult {
-            ac_mac,
-            ac_name: Some("lanforge-bras".into()),
-            session_id,
-        };
-        let lcp_res = crate::lcp::LcpNegotiated {
-            mru: self.cfg.mru,
-            auth_method: self.cfg.auth,
-            local_magic: 0x1234_5678,
-            peer_magic: 0x8765_4321,
-        };
-        let ipcp_res = crate::ipcp::IpcpNegotiated {
-            local_ip: Some(local_ip),
-            peer_ip: Some(peer_ip),
-            dns: smallvec![
-                IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
-                IpAddr::V4(Ipv4Addr::new(1, 0, 0, 1)),
-            ],
-            local_v6_ll: None,
-            peer_v6_ll: None,
-        };
-
-        if self.cfg.terminal_probe.enabled {
-            if let Some(ref prober) = self.prober {
-                let target = self.cfg.terminal_probe.target_ip;
-                let sender = self.cfg.terminal_probe.sender_ip;
-                let timeout = Duration::from_millis(self.cfg.terminal_probe.timeout_ms);
-                match prober.probe(target, sender, timeout).await {
-                    Ok(Some(reply)) => {
-                        let rtt_us = u32::try_from(reply.rtt.as_micros()).unwrap_or(u32::MAX);
-                        self.terminal_status = Some((true, Some(MacAddr(reply.mac)), Some(rtt_us)));
-                    }
-                    _ => {
-                        self.terminal_status = Some((false, None, None));
-                    }
-                }
-            } else if self.cfg.username == "terminal_unreachable" {
-                self.terminal_status = Some((false, None, None));
-            } else {
-                self.terminal_status = Some((
-                    true,
-                    Some(MacAddr([0x3c, 0x84, 0x6a, 0xbc, 0x8c, 0xe5])),
-                    Some(800),
-                ));
-            }
-        } else {
-            self.terminal_status = None;
-        }
-
-        let interface_name = if self.cfg.dataplane == PppoeDataplane::Ebpf {
-            self.cfg.wan_iface.clone()
-        } else {
-            "ppp0".to_string()
-        };
-
-        self.publish_connected_status(&interface_name, &disc_res, &lcp_res, &ipcp_res);
-        self.ctx
-            .set_service_state(Self::SERVICE_ID, ServiceState::Online);
-
-        if self.cfg.username == "carrier_drop" {
-            sleep(Duration::from_millis(30)).await;
-            self.teardown_active_session("LCP Keepalive Echo timeout (carrier loss)".into())
-                .await;
-            return Err(PppoeError::KeepAliveTimeout);
-        }
-
-        let mut bus_rx = self.ctx.bus().subscribe_system();
-        loop {
-            tokio::select! {
-                delta_opt = self.config_sub.next() => {
-                    let Some(delta) = delta_opt else { break; };
-                    if !delta.new.enabled {
-                        self.teardown_active_session("Configuration updated".into()).await;
-                        return Ok(Some(SystemInterrupt::Stop));
-                    }
-                    match delta.impact {
-                        ChangeImpact::None => {}
-                        ChangeImpact::Hot => {
-                            info!("PPPoE inert session hot swap applied in place");
-                            self.apply_hot_config(&delta.new);
-                        }
-                        ChangeImpact::Reconnect | ChangeImpact::Rebind => {
-                            info!("PPPoE inert session reconnecting for config changes");
-                            self.teardown_active_session("Configuration updated".into()).await;
-                            return Ok(Some(SystemInterrupt::Restart));
-                        }
-                    }
-                }
-                event_res = bus_rx.recv() => {
-                    match event_res {
-                        Ok(timed) => match classify_system_event(&timed.event) {
-                            Some(SystemInterrupt::Shutdown) => {
-                                info!("PPPoE inert keepalive received shutdown");
-                                self.teardown_active_session("Graceful shutdown".into()).await;
-                                return Ok(Some(SystemInterrupt::Shutdown));
-                            }
-                            Some(SystemInterrupt::Stop) => {
-                                info!("PPPoE inert keepalive received stop");
-                                self.teardown_active_session("Service control Stop".into()).await;
-                                return Ok(Some(SystemInterrupt::Stop));
-                            }
-                            Some(SystemInterrupt::Restart) => {
-                                info!("PPPoE inert keepalive received restart");
-                                self.teardown_active_session("Service control Restart".into()).await;
-                                return Ok(Some(SystemInterrupt::Restart));
-                            }
-                            None => {}
-                        },
-                        Err(_) => break,
-                    }
-                }
-            }
-        }
-
-        self.teardown_active_session("Channel closed".into()).await;
-        Ok(None)
-    }
-
-    #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
     fn find_interface_details(iface_name: &str) -> Option<(u32, MacAddr)> {
         let mut ifname_buf = [0u8; libc::IF_NAMESIZE];
         let if_bytes = iface_name.as_bytes();
@@ -416,7 +273,7 @@ impl PppoeService {
 
         let mut ifr: libc::ifreq = unsafe { std::mem::zeroed() };
         for (i, &b) in if_bytes.iter().enumerate() {
-            ifr.ifr_name[i] = b as libc::c_char;
+            ifr.ifr_name[i] = b.cast_signed();
         }
 
         let res = unsafe { libc::ioctl(sock, libc::SIOCGIFHWADDR, &mut ifr) };
@@ -428,29 +285,34 @@ impl PppoeService {
 
         let hw = unsafe { ifr.ifr_ifru.ifru_hwaddr.sa_data };
         let mac = [
-            hw[0] as u8,
-            hw[1] as u8,
-            hw[2] as u8,
-            hw[3] as u8,
-            hw[4] as u8,
-            hw[5] as u8,
+            hw[0].cast_unsigned(),
+            hw[1].cast_unsigned(),
+            hw[2].cast_unsigned(),
+            hw[3].cast_unsigned(),
+            hw[4].cast_unsigned(),
+            hw[5].cast_unsigned(),
         ];
         Some((ifindex, MacAddr(mac)))
     }
 
     fn get_interface_details(&self) -> Result<(u32, MacAddr), PppoeError> {
-        Self::find_interface_details(&self.cfg.wan_iface).ok_or_else(|| {
-            PppoeError::NegotiationFailed(format!(
-                "Interface {} not found or has no MAC address",
-                self.cfg.wan_iface
-            ))
-        })
+        if let Some(details) = Self::find_interface_details(&self.cfg.wan_iface) {
+            return Ok(details);
+        }
+        if self.is_inert() {
+            return Ok((1, MacAddr([0x02, 0x00, 0x00, 0x00, 0x00, 0x02])));
+        }
+        Err(PppoeError::NegotiationFailed(format!(
+            "Interface {} not found or has no MAC address",
+            self.cfg.wan_iface
+        )))
     }
 
     async fn perform_discovery(
         &mut self,
         ifindex: u32,
         mac: MacAddr,
+        transport: &PppoeTransport,
     ) -> Result<crate::discovery::DiscoveryResult, PppoeError> {
         info!(wan_iface = %self.cfg.wan_iface, "Starting PPPoE discovery");
         let discovery = PppoeDiscovery::new(
@@ -461,7 +323,7 @@ impl PppoeService {
             self.cfg.service_name.clone(),
             self.cfg.ac_name.clone(),
         );
-        let disc_res = discovery.run().await?;
+        let disc_res = discovery.run_with_transport(transport).await?;
         self.active_session = Some(ActiveSessionMeta {
             wan_mac: mac,
             ac_mac: disc_res.ac_mac,
@@ -481,6 +343,7 @@ impl PppoeService {
         &self,
         disc_res: &crate::discovery::DiscoveryResult,
         mac: MacAddr,
+        transport: &PppoeTransport,
     ) -> Result<
         (
             PppoeSession,
@@ -489,8 +352,12 @@ impl PppoeService {
         ),
         PppoeError,
     > {
-        let session =
-            PppoeSession::connect(&self.cfg.wan_iface, disc_res.ac_mac, disc_res.session_id)?;
+        let session = PppoeSession::connect(
+            transport.clone(),
+            &self.cfg.wan_iface,
+            disc_res.ac_mac,
+            disc_res.session_id,
+        )?;
 
         debug!(wan_iface = %self.cfg.wan_iface, "Negotiating LCP");
         let lcp_res = negotiate_lcp(&session, self.cfg.mru, self.cfg.auth).await?;
@@ -543,12 +410,20 @@ impl PppoeService {
     ) -> Result<
         (
             String,
-            std::os::fd::OwnedFd,
             EbpfSessionHandle,
             Option<crate::kernel::KernelSession>,
         ),
         PppoeError,
     > {
+        if session.is_inert() {
+            let interface_name = if self.cfg.dataplane == PppoeDataplane::Ebpf {
+                self.cfg.wan_iface.clone()
+            } else {
+                "ppp0".to_string()
+            };
+            return Ok((interface_name, None, None));
+        }
+
         if self.cfg.dataplane == PppoeDataplane::Ebpf {
             #[cfg(feature = "ebpf")]
             {
@@ -576,12 +451,7 @@ impl PppoeService {
                     lcp_res.mru,
                 )
                 .await?;
-                Ok((
-                    self.cfg.wan_iface.clone(),
-                    session.session_fd().try_clone()?,
-                    Some(ebpf_sess),
-                    None,
-                ))
+                Ok((self.cfg.wan_iface.clone(), Some(ebpf_sess), None))
             }
             #[cfg(not(feature = "ebpf"))]
             {
@@ -592,7 +462,10 @@ impl PppoeService {
             }
         } else {
             info!("Performing kernel ppp_generic handoff...");
-            let kernel_session = handoff_to_kernel(session.session_fd(), lcp_res.mru)?;
+            let session_fd = session.try_clone_session_fd()?.ok_or_else(|| {
+                PppoeError::NegotiationFailed("No session fd available for kernel handoff".into())
+            })?;
+            let kernel_session = handoff_to_kernel(&session_fd, lcp_res.mru)?;
             configure_interface(
                 &kernel_session.interface_name,
                 ipcp_res.local_ip,
@@ -603,10 +476,8 @@ impl PppoeService {
                 lcp_res.mru,
             )
             .await?;
-            let chan_fd = kernel_session.ppp_chan_fd.try_clone()?;
             Ok((
                 kernel_session.interface_name.clone(),
-                chan_fd,
                 None,
                 Some(kernel_session),
             ))
@@ -620,7 +491,6 @@ impl PppoeService {
         lcp_res: &crate::lcp::LcpNegotiated,
         ipcp_res: &crate::ipcp::IpcpNegotiated,
     ) {
-        self.connected_at = Some(Instant::now());
         let (terminal_reachable, terminal_mac, terminal_rtt_us) = self
             .terminal_status
             .map_or((None, None, None), |(r, m, rtt)| (Some(r), m, rtt));
@@ -648,24 +518,26 @@ impl PppoeService {
         };
 
         self.ctx.set_pppoe_status(Some(pppoe_status));
+        self.connected_at = Some(Instant::now());
+
+        let session_up = lanforge_types::events::pppoe::PppoeSessionUp {
+            interface: interface_name.to_string(),
+            ipv4: ipcp_res.local_ip,
+            ipv4_peer: ipcp_res.peer_ip,
+            dns: ipcp_res.dns.to_vec(),
+            ipv6_link_local: ipcp_res.local_v6_ll.is_some(),
+            mru: lcp_res.mru,
+            session_id: disc_res.session_id,
+            ac_mac: Some(disc_res.ac_mac),
+            ac_name: disc_res.ac_name.clone(),
+        };
 
         let _ = self
             .ctx
             .bus()
             .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(
-                lanforge_types::events::PppoeSessionUp {
-                    interface: interface_name.to_string(),
-                    ac_mac: Some(disc_res.ac_mac),
-                    ac_name: disc_res.ac_name.clone(),
-                    session_id: disc_res.session_id,
-                    mru: lcp_res.mru,
-                    ipv4: ipcp_res.local_ip,
-                    ipv4_peer: ipcp_res.peer_ip,
-                    dns: ipcp_res.dns.to_vec(),
-                    ipv6_link_local: ipcp_res.local_v6_ll.is_some(),
-                },
+                session_up,
             ))));
-
         self.ctx
             .set_service_state(Self::SERVICE_ID, ServiceState::Online);
         self.ctx.set_service_detail(Self::SERVICE_ID, None);
@@ -709,10 +581,10 @@ impl PppoeService {
     }
 
     async fn wait_for_carrier(&mut self) -> Result<(), PppoeError> {
-        if !Path::new("/sys/class/net").exists() {
+        if self.is_inert() || !Path::new("/sys/class/net").exists() {
             info!(
                 wan_iface = %self.cfg.wan_iface,
-                "Sysfs net class unavailable, skipping physical carrier check"
+                "Sysfs net class unavailable or inert mode, skipping physical carrier check"
             );
             return Ok(());
         }
@@ -796,7 +668,7 @@ impl PppoeService {
                             info!(wan_iface = %self.cfg.wan_iface, "Carrier wait interrupted by service control");
                             return Err(PppoeError::NegotiationFailed("Service stopped or restarted".into()));
                         }
-                        None => {}
+                        _ => {}
                     }
                 }
             }
@@ -990,7 +862,7 @@ impl PppoeService {
                             info!(wan_iface = %self.cfg.wan_iface, "Terminal wait interrupted by service control");
                             return Err(PppoeError::NegotiationFailed("Service stopped or restarted".into()));
                         }
-                        None => {}
+                        _ => {}
                     }
                 }
             }
@@ -998,9 +870,15 @@ impl PppoeService {
     }
 
     async fn run_session_flow(&mut self) -> Result<Option<SystemInterrupt>, PppoeError> {
-        if self.inert {
-            return self.run_inert_session_flow().await;
-        }
+        let transport = if let Some(t) = &self.transport {
+            t.clone()
+        } else {
+            let (ifindex, _) = self.get_interface_details()?;
+            let t = PppoeTransport::bind(ifindex)
+                .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))?;
+            self.transport = Some(t.clone());
+            t
+        };
 
         self.wait_for_carrier().await?;
 
@@ -1014,8 +892,7 @@ impl PppoeService {
             "Initiating PPPoE Active Discovery (PADI)"
         );
         self.publish_session_state(PppoeSessionState::Discovering, None);
-        let disc_res = self.perform_discovery(ifindex, mac).await?;
-
+        let disc_res = self.perform_discovery(ifindex, mac, &transport).await?;
         let keepalive_prober = if matches!(self.terminal_status, Some((true, _, _))) {
             prober.as_ref().map(|p| {
                 (
@@ -1037,11 +914,12 @@ impl PppoeService {
                 "PADO/PADS handshake complete, starting LCP/Authentication negotiation"
             );
             self.publish_session_state(PppoeSessionState::Authenticating, None);
-            let (session, lcp_res, ipcp_res) = self.negotiate_session(&disc_res, mac).await?;
+            let (session, lcp_res, ipcp_res) =
+                self.negotiate_session(&disc_res, mac, &transport).await?;
             if let Some(ref mut meta) = self.active_session {
                 meta.peer_ip = ipcp_res.peer_ip;
             }
-            let (interface_name, control_fd, _ebpf_session, _kernel_session) = self
+            let (interface_name, _ebpf_session, _kernel_session) = self
                 .setup_dataplane(&session, &disc_res, mac, ifindex, &lcp_res, &ipcp_res)
                 .await?;
 
@@ -1057,7 +935,7 @@ impl PppoeService {
             );
 
             run_keepalive(
-                &control_fd,
+                &session,
                 &self.ctx,
                 lcp_res.local_magic,
                 lcp_res.peer_magic,
@@ -1077,12 +955,27 @@ impl PppoeService {
             Ok(Some(SystemInterrupt::Shutdown) | None) => "Graceful shutdown".to_string(),
             Ok(Some(SystemInterrupt::Stop)) => "Service control Stop".to_string(),
             Ok(Some(SystemInterrupt::Restart)) => "Service control Restart".to_string(),
+            Ok(Some(SystemInterrupt::ConfigUpdated)) => {
+                "Configuration updated (reconnect required)".to_string()
+            }
+            Ok(Some(SystemInterrupt::ConfigDisabled)) => {
+                "Configuration updated (disabled)".to_string()
+            }
             Err(e) => e.to_string(),
         };
 
         self.teardown_active_session(reason).await;
 
         flow_res
+    }
+}
+
+impl TransportStats for PppoeService {
+    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+        self.transport
+            .as_ref()
+            .map(TransportStats::snapshot)
+            .unwrap_or_default()
     }
 }
 
@@ -1122,6 +1015,13 @@ impl LanforgeService for PppoeService {
 }
 
 impl AsyncService for PppoeService {
+    fn transport_snapshot(
+        &self,
+        _ctx: &LanforgeContext,
+    ) -> Option<lanforge_types::network::snapshot::TransportSnapshot> {
+        Some(self.snapshot())
+    }
+
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
         let (state_str, local_ip, ppp_iface, term_str) = ctx.pppoe_status().map_or_else(
             || {
@@ -1151,6 +1051,7 @@ impl AsyncService for PppoeService {
                 )
             },
         );
+        let snap = self.snapshot();
         vec![
             (Cow::Borrowed("wan_iface"), self.cfg.wan_iface.clone()),
             (Cow::Borrowed("username"), self.cfg.username.clone()),
@@ -1167,6 +1068,8 @@ impl AsyncService for PppoeService {
                 Cow::Borrowed("reconnect_attempts"),
                 self.attempt.to_string(),
             ),
+            (Cow::Borrowed("rx_packets"), snap.rx_packets.to_string()),
+            (Cow::Borrowed("tx_packets"), snap.tx_packets.to_string()),
         ]
     }
 
@@ -1182,7 +1085,7 @@ impl AsyncService for PppoeService {
             return Ok(());
         }
 
-        if !self.inert
+        if !self.is_inert()
             && self.cfg.dataplane == PppoeDataplane::Kernel
             && !Path::new("/dev/ppp").exists()
         {
@@ -1200,7 +1103,7 @@ impl AsyncService for PppoeService {
         }
 
         #[cfg(not(feature = "ebpf"))]
-        if !self.inert && self.cfg.dataplane == PppoeDataplane::Ebpf {
+        if !self.is_inert() && self.cfg.dataplane == PppoeDataplane::Ebpf {
             warn!(
                 service = "PPPoE",
                 "eBPF dataplane requested but not compiled into this binary (compile with --features ebpf). Disabling PPPoE service."
@@ -1245,12 +1148,12 @@ impl AsyncService for PppoeService {
                             ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
                             break 'main_loop;
                         }
-                        Ok(Some(SystemInterrupt::Stop)) => {
+                        Ok(Some(SystemInterrupt::Stop | SystemInterrupt::ConfigDisabled)) => {
                             info!("PPPoE service stopped");
                             ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
                             break 'main_loop;
                         }
-                        Ok(Some(SystemInterrupt::Restart)) => {
+                        Ok(Some(SystemInterrupt::Restart | SystemInterrupt::ConfigUpdated)) => {
                             info!("PPPoE session restart requested, reconnecting");
                             self.attempt = 0;
                         }
@@ -1321,7 +1224,7 @@ impl AsyncService for PppoeService {
                                                 info!("PPPoE service received restart during reconnect delay, retrying immediately");
                                                 self.attempt = 0;
                                             }
-                                            None => {}
+                                            _ => {}
                                         }
                                     }
                                 }

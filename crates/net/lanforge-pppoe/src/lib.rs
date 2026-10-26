@@ -21,4 +21,5 @@ pub mod session;
 
 pub use config::{AuthMethod, PppoeConfig, PppoeCredentials};
 pub use error::PppoeError;
+pub use lanforge_transport::PppoeTransport;
 pub use service::PppoeService;

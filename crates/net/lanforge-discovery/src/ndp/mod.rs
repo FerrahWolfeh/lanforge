@@ -133,7 +133,11 @@ pub struct DiscoveryService {
 
 impl TransportStats for DiscoveryService {
     fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
-        let mut snap = self.pinger.as_ref().map(|p| p.snapshot()).unwrap_or_default();
+        let mut snap = self
+            .pinger
+            .as_ref()
+            .map(|p| p.snapshot())
+            .unwrap_or_default();
         let probers = self.prober_cache.lock();
         for p in probers.values() {
             let s = p.snapshot();
@@ -145,7 +149,8 @@ impl TransportStats for DiscoveryService {
             snap.rate_limited += s.rate_limited;
             snap.errors += s.errors;
             if s.last_error_age_secs.is_some()
-                && (snap.last_error_age_secs.is_none() || s.last_error_age_secs < snap.last_error_age_secs)
+                && (snap.last_error_age_secs.is_none()
+                    || s.last_error_age_secs < snap.last_error_age_secs)
             {
                 snap.last_error_age_secs = s.last_error_age_secs;
             }

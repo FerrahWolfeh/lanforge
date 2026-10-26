@@ -72,7 +72,8 @@ impl TransportStats for TftpService {
             snap.rate_limited += s.rate_limited;
             snap.errors += s.errors;
             if s.last_error_age_secs.is_some()
-                && (snap.last_error_age_secs.is_none() || s.last_error_age_secs < snap.last_error_age_secs)
+                && (snap.last_error_age_secs.is_none()
+                    || s.last_error_age_secs < snap.last_error_age_secs)
             {
                 snap.last_error_age_secs = s.last_error_age_secs;
             }
@@ -534,7 +535,8 @@ async fn transfer_file(
         let n = file.read(&mut packet[4..4 + block_size]).await?;
         let packet_slice = &packet[..4 + n];
 
-        send_block_with_retries(session_transport, packet_slice, target_addr, block_num, cfg).await?;
+        send_block_with_retries(session_transport, packet_slice, target_addr, block_num, cfg)
+            .await?;
 
         if n < block_size {
             break;

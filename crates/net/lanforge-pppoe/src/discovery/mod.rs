@@ -2,15 +2,13 @@ pub mod frame;
 
 use crate::error::PppoeError;
 use frame::{
-    CODE_PADI, CODE_PADO, CODE_PADR, CODE_PADS, CODE_PADT, ETH_P_PPP_DISC, PppoeDiscoveryFrame,
-    TAG_AC_COOKIE, TAG_AC_NAME, TAG_HOST_UNIQ, TAG_SERVICE_NAME, Tag,
+    CODE_PADI, CODE_PADO, CODE_PADR, CODE_PADS, CODE_PADT, PppoeDiscoveryFrame, TAG_AC_COOKIE,
+    TAG_AC_NAME, TAG_HOST_UNIQ, TAG_SERVICE_NAME, Tag,
 };
+use lanforge_transport::PppoeTransport;
 use lanforge_types::identifiers::MacAddr;
-use nix::sys::socket::{AddressFamily, SockFlag, SockProtocol, SockType, socket};
 use smallvec::{SmallVec, smallvec};
-use std::os::fd::{AsRawFd, OwnedFd};
 use std::time::Duration;
-use tokio::io::unix::AsyncFd;
 use tracing::{debug, info, warn};
 
 pub struct DiscoveryResult {
@@ -49,14 +47,15 @@ impl PppoeDiscovery {
     }
 
     #[allow(clippy::similar_names)]
-    pub async fn run(&self) -> Result<DiscoveryResult, PppoeError> {
-        let fd = bind_discovery_socket(self.ifindex)?;
-        let async_fd = unsafe { AsyncFd::register(fd)? };
+    pub async fn run_with_transport(
+        &self,
+        transport: &PppoeTransport,
+    ) -> Result<DiscoveryResult, PppoeError> {
         let host_uniq: [u8; 4] = rand::random();
 
         // 1. Send PADI and wait for PADO
         let (ac_mac, ac_name, ac_cookie) = exchange_padi(
-            &async_fd,
+            transport,
             self.local_mac,
             &host_uniq,
             self.padi_retries,
@@ -68,7 +67,7 @@ impl PppoeDiscovery {
 
         // 2. Send PADR and wait for PADS
         let session_id = exchange_padr(
-            &async_fd,
+            transport,
             self.local_mac,
             ac_mac,
             ac_cookie.as_deref(),
@@ -83,44 +82,17 @@ impl PppoeDiscovery {
             session_id,
         })
     }
-}
 
-fn bind_discovery_socket(ifindex: u32) -> Result<OwnedFd, PppoeError> {
-    let fd = socket(
-        AddressFamily::Packet,
-        SockType::Raw,
-        SockFlag::SOCK_CLOEXEC | SockFlag::SOCK_NONBLOCK,
-        SockProtocol::EthAll,
-    )?;
-
-    let saddr = libc::sockaddr_ll {
-        sll_family: u16::try_from(libc::AF_PACKET).unwrap(),
-        sll_protocol: ETH_P_PPP_DISC.to_be(),
-        sll_ifindex: ifindex.cast_signed(),
-        sll_hatype: 0,
-        sll_pkttype: 0,
-        sll_halen: 6,
-        sll_addr: [0; 8],
-    };
-
-    let res = unsafe {
-        libc::bind(
-            fd.as_raw_fd(),
-            std::ptr::addr_of!(saddr).cast::<libc::sockaddr>(),
-            libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_ll>()).unwrap(),
-        )
-    };
-
-    if res < 0 {
-        return Err(PppoeError::Nix(nix::errno::Errno::last()));
+    pub async fn run(&self) -> Result<DiscoveryResult, PppoeError> {
+        let transport = PppoeTransport::bind(self.ifindex)
+            .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))?;
+        self.run_with_transport(&transport).await
     }
-
-    Ok(fd)
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn exchange_padi(
-    async_fd: &AsyncFd<OwnedFd>,
+    transport: &PppoeTransport,
     local_mac: MacAddr,
     host_uniq: &[u8; 4],
     padi_retries: u32,
@@ -154,9 +126,10 @@ async fn exchange_padi(
 
     for attempt in 0..padi_retries {
         debug!(attempt, "Sending PPPoE PADI frame...");
-        let guard = async_fd.writable().await?;
-        let _ = nix::unistd::write(async_fd.get_ref(), &padi_bytes);
-        drop(guard);
+        transport
+            .send_discovery(&padi_bytes)
+            .await
+            .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))?;
 
         // Wait for PADO
         let timeout = Duration::from_secs(padi_timeout_secs);
@@ -164,49 +137,45 @@ async fn exchange_padi(
 
         while start.elapsed() < timeout {
             let remaining = timeout.saturating_sub(start.elapsed());
-            if let Ok(Ok(mut guard)) = tokio::time::timeout(remaining, async_fd.readable()).await {
-                let mut buf = [0u8; 2048];
-                if let Ok(n) = nix::unistd::read(async_fd.get_ref(), &mut buf) {
-                    guard.clear_ready();
-                    if let Some(frame) = PppoeDiscoveryFrame::parse(&buf[..n])
-                        && frame.code == CODE_PADO
-                    {
-                        // Verify host_uniq
-                        let matches_uniq = frame
-                            .tags
-                            .iter()
-                            .any(|t| t.tag_type == TAG_HOST_UNIQ && t.value == host_uniq);
-                        if matches_uniq {
-                            let mut frame_ac_name = None;
-                            let mut frame_ac_cookie = None;
-                            for tag in &frame.tags {
-                                if tag.tag_type == TAG_AC_COOKIE {
-                                    frame_ac_cookie = Some(SmallVec::from_slice(tag.value));
-                                } else if tag.tag_type == TAG_AC_NAME {
-                                    frame_ac_name = std::str::from_utf8(tag.value)
-                                        .ok()
-                                        .map(ToString::to_string);
-                                }
-                            }
-
-                            if let Some(filter) = ac_name_filter
-                                && frame_ac_name.as_deref() != Some(filter)
-                            {
-                                debug!(
-                                    expected = filter,
-                                    actual = ?frame_ac_name,
-                                    "Ignoring PADO from non-matching Access Concentrator"
-                                );
-                                continue;
-                            }
-
-                            ac_mac = Some(frame.src_mac);
-                            ac_name = frame_ac_name;
-                            ac_cookie = frame_ac_cookie;
-                            debug!("Received valid PPPoE PADO frame");
-                            break;
+            let mut buf = [0u8; 2048];
+            if let Ok(Ok(n)) =
+                tokio::time::timeout(remaining, transport.recv_discovery(&mut buf)).await
+                && let Some(frame) = PppoeDiscoveryFrame::parse(&buf[..n])
+                && frame.code == CODE_PADO
+            {
+                // Verify host_uniq
+                let matches_uniq = frame
+                    .tags
+                    .iter()
+                    .any(|t| t.tag_type == TAG_HOST_UNIQ && t.value == host_uniq);
+                if matches_uniq {
+                    let mut frame_ac_name = None;
+                    let mut frame_ac_cookie = None;
+                    for tag in &frame.tags {
+                        if tag.tag_type == TAG_AC_COOKIE {
+                            frame_ac_cookie = Some(SmallVec::from_slice(tag.value));
+                        } else if tag.tag_type == TAG_AC_NAME {
+                            frame_ac_name =
+                                std::str::from_utf8(tag.value).ok().map(ToString::to_string);
                         }
                     }
+
+                    if let Some(filter) = ac_name_filter
+                        && frame_ac_name.as_deref() != Some(filter)
+                    {
+                        debug!(
+                            expected = filter,
+                            actual = ?frame_ac_name,
+                            "Ignoring PADO from non-matching Access Concentrator"
+                        );
+                        continue;
+                    }
+
+                    ac_mac = Some(frame.src_mac);
+                    ac_name = frame_ac_name;
+                    ac_cookie = frame_ac_cookie;
+                    debug!("Received valid PPPoE PADO frame");
+                    break;
                 }
             }
         }
@@ -221,7 +190,7 @@ async fn exchange_padi(
 }
 
 async fn exchange_padr(
-    async_fd: &AsyncFd<OwnedFd>,
+    transport: &PppoeTransport,
     local_mac: MacAddr,
     ac_mac: MacAddr,
     ac_cookie: Option<&[u8]>,
@@ -259,9 +228,10 @@ async fn exchange_padr(
 
     for attempt in 0..3 {
         debug!(attempt, "Sending PPPoE PADR frame...");
-        let guard = async_fd.writable().await?;
-        let _ = nix::unistd::write(async_fd.get_ref(), &padr_bytes);
-        drop(guard);
+        transport
+            .send_discovery(&padr_bytes)
+            .await
+            .map_err(|e| PppoeError::NegotiationFailed(e.to_string()))?;
 
         // Wait for PADS
         let timeout = Duration::from_secs(3);
@@ -269,23 +239,20 @@ async fn exchange_padr(
 
         while start.elapsed() < timeout {
             let remaining = timeout.saturating_sub(start.elapsed());
-            if let Ok(Ok(mut guard)) = tokio::time::timeout(remaining, async_fd.readable()).await {
-                let mut buf = [0u8; 2048];
-                if let Ok(n) = nix::unistd::read(async_fd.get_ref(), &mut buf) {
-                    guard.clear_ready();
-                    if let Some(frame) = PppoeDiscoveryFrame::parse(&buf[..n])
-                        && frame.code == CODE_PADS
-                    {
-                        let matches_uniq = frame
-                            .tags
-                            .iter()
-                            .any(|t| t.tag_type == TAG_HOST_UNIQ && t.value == host_uniq);
-                        if matches_uniq {
-                            session_id = Some(frame.session_id);
-                            debug!(session_id = frame.session_id, "Received PPPoE PADS frame");
-                            break;
-                        }
-                    }
+            let mut buf = [0u8; 2048];
+            if let Ok(Ok(n)) =
+                tokio::time::timeout(remaining, transport.recv_discovery(&mut buf)).await
+                && let Some(frame) = PppoeDiscoveryFrame::parse(&buf[..n])
+                && frame.code == CODE_PADS
+            {
+                let matches_uniq = frame
+                    .tags
+                    .iter()
+                    .any(|t| t.tag_type == TAG_HOST_UNIQ && t.value == host_uniq);
+                if matches_uniq {
+                    session_id = Some(frame.session_id);
+                    debug!(session_id = frame.session_id, "Received PPPoE PADS frame");
+                    break;
                 }
             }
         }
@@ -299,6 +266,7 @@ async fn exchange_padr(
 }
 
 pub async fn send_padt(
+    transport: &PppoeTransport,
     ifname: &str,
     wan_mac: MacAddr,
     ac_mac: MacAddr,
@@ -312,65 +280,16 @@ pub async fn send_padt(
         tags: smallvec![],
     };
 
-    let raw_fd = socket(
-        AddressFamily::Packet,
-        SockType::Raw,
-        SockFlag::SOCK_CLOEXEC,
-        Some(SockProtocol::EthAll),
-    )?;
-
-    let mut ifname_buf = [0u8; libc::IF_NAMESIZE];
-    let if_bytes = ifname.as_bytes();
-    if if_bytes.len() >= libc::IF_NAMESIZE || if_bytes.contains(&0) {
-        return Err(PppoeError::NegotiationFailed(
-            "Invalid interface name".into(),
-        ));
-    }
-    ifname_buf[..if_bytes.len()].copy_from_slice(if_bytes);
-    let ifindex = unsafe { libc::if_nametoindex(ifname_buf.as_ptr().cast()) };
-    if ifindex == 0 {
-        return Err(PppoeError::NegotiationFailed("Interface not found".into()));
-    }
-
     let bytes = frame.encode();
-    let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
-    sll.sll_family = u16::try_from(libc::AF_PACKET).unwrap();
-    sll.sll_ifindex = ifindex.cast_signed();
-    sll.sll_protocol = ETH_P_PPP_DISC.to_be();
-    sll.sll_halen = 6;
-    sll.sll_addr[..6].copy_from_slice(&ac_mac.0);
-
-    let bind_res = unsafe {
-        libc::bind(
-            raw_fd.as_raw_fd(),
-            std::ptr::addr_of!(sll).cast::<libc::sockaddr>(),
-            libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_ll>()).unwrap(),
-        )
-    };
-    if bind_res < 0 {
-        warn!(error = %std::io::Error::last_os_error(), "Failed to bind raw socket for PADT");
-    }
-
-    // Transmit PADT frame in burst (3 frames spaced by 10ms) to guarantee BRAS receives termination
     for i in 0..3 {
-        let sent = unsafe {
-            libc::sendto(
-                raw_fd.as_raw_fd(),
-                bytes.as_ptr().cast::<libc::c_void>(),
-                bytes.len(),
-                0,
-                std::ptr::addr_of!(sll).cast::<libc::sockaddr>(),
-                libc::socklen_t::try_from(std::mem::size_of::<libc::sockaddr_ll>()).unwrap(),
-            )
-        };
-        if sent < 0 {
+        if let Err(e) = transport.send_discovery(&bytes).await {
             warn!(
                 attempt = i + 1,
-                error = %std::io::Error::last_os_error(),
+                error = %e,
                 "Failed to transmit PPPoE PADT frame"
             );
         }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
     info!(

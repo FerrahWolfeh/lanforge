@@ -140,7 +140,16 @@ impl AsyncService for MdnsProber {
         let (tx, rx) = mpsc::channel(32);
         self.tx = tx.clone();
 
-        if let Err(e) = run_mdns_worker(self.cfg.clone(), ctx.clone(), rx, tx, self.metrics.clone(), h).await {
+        if let Err(e) = run_mdns_worker(
+            self.cfg.clone(),
+            ctx.clone(),
+            rx,
+            tx,
+            self.metrics.clone(),
+            h,
+        )
+        .await
+        {
             error!("mDNS worker fatal error: {e}");
             return Err(CoreError::Generic(e.to_string()));
         }
@@ -410,7 +419,12 @@ fn broadcast_query(sock4: &UdpSocket, sock6: &UdpSocket, metrics: &TransportMetr
     debug!("mDNS broadcast probe sent");
 }
 
-fn send_unicast_query(sock4: &UdpSocket, sock6: &UdpSocket, target: IpAddr, metrics: &TransportMetrics) {
+fn send_unicast_query(
+    sock4: &UdpSocket,
+    sock6: &UdpSocket,
+    target: IpAddr,
+    metrics: &TransportMetrics,
+) {
     let mut msg = DnsMessage::new();
     msg.header.qdcount = 1;
 
@@ -451,12 +465,14 @@ fn send_unicast_query(sock4: &UdpSocket, sock6: &UdpSocket, target: IpAddr, metr
     // For now, simple multicast.
     match target {
         IpAddr::V4(_) => {
-            if let Ok(n) = sock4.send_to(&bytes, SocketAddr::new(IpAddr::V4(MDNS_IPV4), MDNS_PORT)) {
+            if let Ok(n) = sock4.send_to(&bytes, SocketAddr::new(IpAddr::V4(MDNS_IPV4), MDNS_PORT))
+            {
                 metrics.record_tx(n);
             }
         }
         IpAddr::V6(_) => {
-            if let Ok(n) = sock6.send_to(&bytes, SocketAddr::new(IpAddr::V6(MDNS_IPV6), MDNS_PORT)) {
+            if let Ok(n) = sock6.send_to(&bytes, SocketAddr::new(IpAddr::V6(MDNS_IPV6), MDNS_PORT))
+            {
                 metrics.record_tx(n);
             }
         }
