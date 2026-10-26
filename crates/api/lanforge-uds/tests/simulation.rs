@@ -2,7 +2,7 @@ use lanforge_api::rpc::{RpcRequest, RpcResponse};
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::{AsyncService, ServiceControl};
+use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_uds::config::ApiConfig;
 use lanforge_uds::server::ControlService;
 use std::sync::Arc;
@@ -30,7 +30,7 @@ async fn dns_uds_simulation_basic() {
 
     // 2. Spawn UDS server control service
     let mut service = ControlService::new(cfg, ctx.clone());
-    let ctrl = ServiceControl::new(lanforge_types::system::ServiceId::Uds, ctx.clone());
+    let ctrl = ServiceHandle::new(lanforge_types::system::ServiceId::Uds, ctx.clone());
     let ctx_service = ctx.clone();
 
     let mut rx = ctx.bus().subscribe();

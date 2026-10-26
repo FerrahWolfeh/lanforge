@@ -44,7 +44,6 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
     // 2. Start DNS Service in inert mode
     let (handle, mut service) = DnsService::inert(cfg, ctx.clone());
     let ctx_service = ctx.clone();
-    ctx.set_db_ready(true);
 
     tokio::spawn(async move {
         let h = lanforge_core::service::ServiceHandle::new(
@@ -144,7 +143,6 @@ async fn dns_reload_rewrites_on_the_fly() {
 
     let (handle, mut service) = DnsService::inert(cfg, ctx.clone());
     let ctx_service = ctx.clone();
-    ctx.set_db_ready(true);
 
     tokio::spawn(async move {
         let h = lanforge_core::service::ServiceHandle::new(
@@ -277,7 +275,6 @@ async fn dns_conditional_split_upstream_routing() {
 
     let (handle, mut service) = DnsService::inert(cfg, ctx.clone());
     let ctx_service = ctx.clone();
-    ctx.set_db_ready(true);
 
     tokio::spawn(async move {
         let h = lanforge_core::service::ServiceHandle::new(

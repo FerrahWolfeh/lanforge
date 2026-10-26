@@ -303,7 +303,6 @@ const fn event_topic_and_kind(event: &LanforgeEvent) -> (&'static str, &'static 
             "system",
             match s {
                 SystemEvent::Shutdown => "Shutdown",
-                SystemEvent::StateReady => "StateReady",
                 SystemEvent::ServiceReady { .. } => "ServiceReady",
                 SystemEvent::SystemReady => "SystemReady",
                 SystemEvent::ReloadConfig => "ReloadConfig",

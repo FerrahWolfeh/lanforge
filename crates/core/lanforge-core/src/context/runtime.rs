@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime};
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::watch;
 
 use lanforge_types::network::snapshot::{InterfaceSnapshot, WanSnapshot};
@@ -37,7 +38,6 @@ pub struct ServiceSlot {
 pub struct ServiceRuntime {
     pub bus: Arc<EventBus>,
     running_tx: watch::Sender<bool>,
-    db_ready_tx: watch::Sender<bool>,
     wan_tx: watch::Sender<WanSnapshot>,
     interfaces_tx: watch::Sender<InterfaceSnapshot>,
     recovery_mode: AtomicBool,
@@ -72,14 +72,12 @@ impl ServiceRuntime {
     #[must_use]
     pub fn new(bus: Arc<EventBus>) -> Self {
         let (running_tx, _) = watch::channel(true);
-        let (db_ready_tx, _) = watch::channel(false);
         let (wan_tx, _) = watch::channel(WanSnapshot::default());
         let (interfaces_tx, _) = watch::channel(InterfaceSnapshot::default());
 
         Self {
             bus,
             running_tx,
-            db_ready_tx,
             wan_tx,
             interfaces_tx,
             recovery_mode: AtomicBool::new(false),
@@ -120,7 +118,6 @@ impl ServiceRuntime {
 
     pub fn reset_lifecycle(&self) {
         self.running_tx.send_replace(true);
-        self.db_ready_tx.send_replace(false);
         self.wan_tx.send_replace(WanSnapshot::default());
         self.interfaces_tx
             .send_replace(InterfaceSnapshot::default());
@@ -129,15 +126,6 @@ impl ServiceRuntime {
             slot.state_tx.send_replace(ServiceState::Offline);
             slot.started_at = None;
         }
-    }
-
-    #[must_use]
-    pub fn is_db_ready(&self) -> bool {
-        *self.db_ready_tx.borrow()
-    }
-
-    pub fn set_db_ready(&self, ready: bool) {
-        self.db_ready_tx.send_replace(ready);
     }
 
     #[must_use]
@@ -175,55 +163,6 @@ impl ServiceRuntime {
 
     pub fn set_recovery_mode(&self, recovery: bool) {
         self.recovery_mode.store(recovery, Ordering::Relaxed);
-    }
-
-    async fn wait_watch_true(&self, tx: &watch::Sender<bool>) -> Result<(), CoreError> {
-        if !self.is_running() {
-            return Err(CoreError::Shutdown);
-        }
-        if *tx.borrow() {
-            return Ok(());
-        }
-        let mut rx = tx.subscribe();
-        let mut stop_rx = self.running_tx.subscribe();
-        let mut sys_rx = self.bus.subscribe_system();
-        loop {
-            tokio::select! {
-                res = rx.changed() => {
-                    res.map_err(|_| CoreError::Shutdown)?;
-                    if *rx.borrow() {
-                        return Ok(());
-                    }
-                }
-                _ = stop_rx.changed() => {
-                    if !*stop_rx.borrow() {
-                        return Err(CoreError::Shutdown);
-                    }
-                }
-                event = sys_rx.recv() => {
-                    match event {
-                        Ok(evt) => {
-                            if matches!(evt.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
-                                self.terminate();
-                                return Err(CoreError::Shutdown);
-                            }
-                        }
-                        Err(_) => {
-                            return Err(CoreError::Shutdown);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Waits until the database is ready.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CoreError::Shutdown` if the system shuts down while waiting.
-    pub async fn wait_for_db(&self) -> Result<(), CoreError> {
-        self.wait_watch_true(&self.db_ready_tx).await
     }
 
     /// Waits until network interfaces are ready.
@@ -287,9 +226,9 @@ impl ServiceRuntime {
                                 return Err(CoreError::Shutdown);
                             }
                         }
-                        Err(_) => {
-                            return Err(CoreError::Shutdown);
-                        }
+                        // A lagged receiver only missed events; keep waiting.
+                        Err(RecvError::Lagged(_)) => {}
+                        Err(RecvError::Closed) => return Err(CoreError::Shutdown),
                     }
                 }
             }

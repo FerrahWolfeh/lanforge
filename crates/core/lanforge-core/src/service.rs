@@ -400,12 +400,6 @@ impl ServiceHandle {
         }
     }
 
-    /// Backward compatibility alias for `ready()`.
-    #[inline]
-    pub fn signal_ready(&self) {
-        self.ready();
-    }
-
     /// Returns true if readiness has been signaled for this generation.
     #[must_use]
     pub fn is_ready(&self) -> bool {
@@ -496,9 +490,6 @@ impl ServiceHandle {
         }
     }
 }
-
-/// Compatibility alias for `ServiceHandle`.
-pub type ServiceControl = ServiceHandle;
 
 /// Trait implemented by decoupled services to provide dynamic status and metrics.
 pub trait StatusProvider: Send + Sync {

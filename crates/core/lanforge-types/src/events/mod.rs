@@ -68,7 +68,6 @@ impl TimedEvent {
             LanforgeEvent::System(e) => matches!(
                 e,
                 SystemEvent::Shutdown
-                    | SystemEvent::StateReady
                     | SystemEvent::ServiceReady { .. }
                     | SystemEvent::SystemReady
                     | SystemEvent::ReloadConfig

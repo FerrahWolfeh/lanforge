@@ -32,7 +32,7 @@
 //!   ├── db.load_all_devices()            → reconstructs State from database
 //!   ├── LanforgeContext::new(bus, state)
 //!   ├── applies TOML overrides          → configuration precedence
-//!   └── set_db_ready(true)              → unblocks dependent services
+//!   └── supervisor starts the `db` node → `Online` once the worker serves
 //! ```
 //!
 //! ## Modules

@@ -4,7 +4,7 @@ use lanforge_api_dispatch::ClientContext;
 use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::ServiceControl;
+use lanforge_core::service::ServiceHandle;
 use lanforge_db::config::DatabaseConfig;
 use lanforge_db::worker::DbWorker;
 use lanforge_types::device::Origin;
@@ -77,16 +77,18 @@ async fn test_full_db_reset_chain() {
         db.clone(),
         log_db.clone(),
     );
-    let ctrl = ServiceControl::new(ServiceId::Db, ctx.clone());
+    let ctrl = ServiceHandle::new(ServiceId::Db, ctx.clone());
     tokio::spawn(async move {
         use lanforge_core::service::AsyncService;
         let _ = db_worker.init(&ctx_db).await;
-        ctrl.signal_ready();
+        ctrl.ready();
         let _ = db_worker.serve(&ctx_db, &ctrl).await;
     });
 
     // Wait for DB ready
-    ctx.wait_for_db().await.expect("DB failed to become ready");
+    ctx.wait_for_service(ServiceId::Db)
+        .await
+        .expect("DB failed to become ready");
 
     // Force a flush to disk so we have something to reset
     let _ = ctx

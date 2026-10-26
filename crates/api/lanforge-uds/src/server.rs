@@ -24,7 +24,6 @@ use lanforge_types::system::DormantReason;
 #[lanforge_macros::lanforge_service(
     id = "control",
     name = "Control API",
-    critical = true,
     retries = 0,
     base_backoff = 1,
     max_backoff = 30,

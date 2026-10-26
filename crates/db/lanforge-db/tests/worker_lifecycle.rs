@@ -21,7 +21,7 @@ use lanforge_types::network::dns::adblock::RewriteAnswer;
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
-use lanforge_types::system::{ServiceAction, ServiceId};
+use lanforge_types::system::{ServiceAction, ServiceId, ServiceState};
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
 use smallvec::smallvec;
 use tempfile::tempdir;
@@ -47,18 +47,21 @@ async fn test_db_worker_init_and_clean_shutdown() {
         ..DatabaseConfig::default()
     };
 
-    assert!(!ctx.is_db_ready());
+    assert_ne!(ctx.get_service_state(ServiceId::Db), ServiceState::Online);
 
     let mut worker = DbWorker::new(cfg, ctx.clone(), db, log_db);
 
     // 1. Initialize worker
     worker.init(&ctx).await.expect("init failed");
-    assert!(ctx.is_db_ready());
 
     // 2. Spawn serve loop
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
     let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
+    timeout(Duration::from_secs(1), ctx.wait_for_service(ServiceId::Db))
+        .await
+        .expect("db worker must become Online")
+        .expect("wait aborted");
 
     // Verify storage handle works
     let storage = ctx.storage_handle().expect("storage handle present");

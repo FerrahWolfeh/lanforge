@@ -66,7 +66,6 @@ pub enum PendingDeviceOp {
 #[lanforge_macros::lanforge_service(
     id = "db",
     name = "Database Worker",
-    critical = true,
     retries = 5,
     base_backoff = 1,
     max_backoff = 30,
@@ -553,7 +552,6 @@ impl AsyncService for DbWorker {
             "redb (persistent)"
         };
         info!("Database worker initialized (mode: {mode})");
-        ctx.set_db_ready(true);
         Ok(())
     }
 
@@ -902,7 +900,7 @@ mod tests {
         let mut worker = DbWorker::new(DatabaseConfig::default(), ctx.clone(), db, log_db);
 
         // 1. Test log buffer capping
-        let sample_event = TimedEvent::new(LanforgeEvent::System(SystemEvent::StateReady));
+        let sample_event = TimedEvent::new(LanforgeEvent::System(SystemEvent::SystemReady));
         for _ in 0..MAX_LOG_BUFFER + 10 {
             if worker.log_buffer.len() >= MAX_LOG_BUFFER {
                 worker.log_buffer.pop_front();

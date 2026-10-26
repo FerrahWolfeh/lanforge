@@ -312,15 +312,6 @@ impl LanforgeContext {
         self.inner.runtime.wait_for_interfaces().await
     }
 
-    /// Blocks until the database is ready.
-    ///
-    /// # Errors
-    ///
-    /// Returns `CoreError` if the wait condition cannot be met or the system shuts down.
-    pub async fn wait_for_db(&self) -> Result<(), CoreError> {
-        self.inner.runtime.wait_for_db().await
-    }
-
     /// Blocks until the specified service is `Online`.
     ///
     /// # Errors
@@ -343,22 +334,9 @@ impl LanforgeContext {
         self.inner.runtime.terminate();
     }
 
-    /// Resets the lifecycle flags (`running`, `db_ready`, `if_ready`, `pppoe_ready`) to initial state.
+    /// Resets the lifecycle flags (`running` and the service/synthetic node slots) to initial state.
     pub fn reset_lifecycle(&self) {
         self.inner.runtime.reset_lifecycle();
-    }
-
-    /// Returns true if the database is ready.
-    ///
-    /// This flag is set by the database worker after successful initialization.
-    #[must_use]
-    pub fn is_db_ready(&self) -> bool {
-        self.inner.runtime.is_db_ready()
-    }
-
-    /// Sets the database readiness state.
-    pub fn set_db_ready(&self, ready: bool) {
-        self.inner.runtime.set_db_ready(ready);
     }
 
     /// Returns true if the system is running in recovery mode (in-memory fallback due to database unavailability).

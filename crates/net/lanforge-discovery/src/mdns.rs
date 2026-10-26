@@ -17,9 +17,9 @@
 //! `SO_REUSEPORT` on port 5353 — the standard async `UdpSocket` cannot share
 //! this port with other processes. Commands are sent via an `mpsc` channel.
 //!
-//! ## Non-Critical Service
+//! ## Failure Handling
 //!
-//! Marked as `critical: false` — failure does not halt the daemon.
+//! Failures are retried by the supervisor with backoff; they never halt the daemon.
 
 use lanforge_types::device::{DeviceClass, TransientOrigin};
 use lanforge_types::network::{
@@ -82,7 +82,6 @@ enum MdnsCommand {
 #[lanforge_macros::lanforge_service(
     id = "mdns",
     name = "mDNS Prober",
-    critical = false,
     retries = 0,
     base_backoff = 2,
     max_backoff = 30

@@ -7,7 +7,6 @@ use syn::{Data, DeriveInput, Ident, ItemStruct, ItemTrait, LitStr, Meta, parse_m
 /// # Arguments
 /// - `id`: The stable identifier for the service (required).
 /// - `name`: Human-readable display name (optional, defaults to `id`).
-/// - `critical`: Boolean, if true system exits on failure (optional, default: false).
 /// - `retries`: Max restart attempts, 0 for infinite (optional, default: 0).
 /// - `base_backoff`: Initial backoff in seconds (optional, default: 1).
 /// - `max_backoff`: Maximum backoff cap in seconds (optional, default: 60).
@@ -21,7 +20,6 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let mut id = None;
     let mut name = None;
-    let mut critical_passed = false;
     let mut retries = quote! { 0 };
     let mut base_backoff = quote! { 1 };
     let mut max_backoff = quote! { 60 };
@@ -37,8 +35,6 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
                 id = Some(val.clone());
             } else if nv.path.is_ident("name") {
                 name = Some(quote! { #val });
-            } else if nv.path.is_ident("critical") {
-                critical_passed = true;
             } else if nv.path.is_ident("retries") {
                 retries = quote! { #val };
             } else if nv.path.is_ident("base_backoff") {
@@ -55,11 +51,13 @@ pub fn lanforge_service(args: TokenStream, input: TokenStream) -> TokenStream {
                 runtime_class = Some(quote! { #val });
             } else if nv.path.is_ident("describe") {
                 describe = Some(quote! { #val });
+            } else {
+                return syn::Error::new_spanned(&nv.path, "unknown lanforge_service attribute")
+                    .to_compile_error()
+                    .into();
             }
         }
     }
-
-    let _ = critical_passed; // 'critical' is deprecated no-op
 
     let runtime_expr = if let Some(rc) = runtime_class {
         quote! {

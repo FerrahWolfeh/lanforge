@@ -51,7 +51,6 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     // 3. Start DNS Service in inert mode
     let (handle, mut service) = DnsService::inert(cfg, ctx.clone());
     let ctx_service = ctx.clone();
-    ctx.set_db_ready(true);
 
     tokio::spawn(async move {
         let h = lanforge_core::service::ServiceHandle::new(

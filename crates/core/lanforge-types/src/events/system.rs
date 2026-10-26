@@ -6,7 +6,6 @@ use crate::system::{ServiceAction, ServiceBanner, ServiceId};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SystemEvent {
     Shutdown,
-    StateReady,
     ServiceReady {
         id: ServiceId,
     },

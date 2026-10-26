@@ -2,7 +2,7 @@ use anyhow::Result;
 use bytesize::ByteSize;
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
-use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
+use lanforge_core::bus::EventBus;
 use lanforge_core::context::state::State;
 use lanforge_core::context::{ConfigPatch, LanforgeContext};
 use lanforge_db::{
@@ -186,8 +186,6 @@ impl Bootstrapper {
             let traffic_history = log_db.load_traffic_history().unwrap_or_default();
             lanforge_traffic::restore_traffic_history(traffic_history);
         }
-
-        let _ = bus.publish(LanforgeEvent::System(SystemEvent::StateReady));
 
         // --- PHASE 2: Netlink Setup ---
         let (handle, messages) = Self::start_netlink_dispatcher()?;

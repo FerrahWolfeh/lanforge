@@ -26,9 +26,9 @@
 //!   (paced at 10ms/address to avoid CPU spikes)
 //! - **Prefix tracking**: Updates GUA/ULA context from RA for SLAAC classification
 //!
-//! ## Critical Service
+//! ## Failure Handling
 //!
-//! Marked as `critical: true` — failure halts the daemon.
+//! Failures are retried by the supervisor with backoff; they never halt the daemon.
 
 pub mod config;
 #[cfg(test)]

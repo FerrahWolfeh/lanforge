@@ -53,7 +53,6 @@ async fn dns_simulation_udp() {
     // 3. Start DNS Service in inert mode
     let (handle, mut service) = DnsService::inert(cfg, ctx.clone());
     let ctx_service = ctx.clone();
-    ctx.set_db_ready(true);
 
     tokio::spawn(async move {
         let h = lanforge_core::service::ServiceHandle::new(
@@ -127,7 +126,6 @@ async fn dns_simulation_forwarding_fallback() {
     // 3. Start DNS Service in inert mode
     let (handle, mut service) = DnsService::inert(cfg, ctx.clone());
     let ctx_service = ctx.clone();
-    ctx.set_db_ready(true);
 
     tokio::spawn(async move {
         let h = lanforge_core::service::ServiceHandle::new(
@@ -184,7 +182,6 @@ async fn dns_simulation_cache_case_insensitive() {
 
     let (handle, mut service) = DnsService::inert(cfg, ctx.clone());
     let ctx_service = ctx.clone();
-    ctx.set_db_ready(true);
 
     tokio::spawn(async move {
         let h = lanforge_core::service::ServiceHandle::new(
@@ -260,7 +257,6 @@ async fn dns_simulation_malformed_and_special_prefixes() {
 
     let (handle, mut service) = DnsService::inert(cfg, ctx.clone());
     let ctx_service = ctx.clone();
-    ctx.set_db_ready(true);
 
     tokio::spawn(async move {
         let h = lanforge_core::service::ServiceHandle::new(
@@ -337,7 +333,6 @@ async fn dns_simulation_transient_ip_reverse_dns() {
     // 3. Start DNS Service in inert mode
     let (handle, mut service) = DnsService::inert(cfg, ctx.clone());
     let ctx_service = ctx.clone();
-    ctx.set_db_ready(true);
 
     tokio::spawn(async move {
         let h = lanforge_core::service::ServiceHandle::new(
