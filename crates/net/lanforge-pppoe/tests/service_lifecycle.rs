@@ -844,3 +844,55 @@ async fn test_pppoe_stop_then_cleanup_publishes_one_session_down() {
         "exactly one SessionDown per session"
     );
 }
+
+/// RFC 2516 §5.5: either side may end the session with a PADT. Ignoring the concentrator's PADT
+/// left the WAN dead until the LCP echo gave up (5 × 20 s by default) before reconnecting.
+#[tokio::test(start_paused = true)]
+async fn test_pppoe_reacts_to_padt_from_the_concentrator() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        ..Default::default()
+    };
+    ctx.update_pppoe_config(cfg.clone());
+
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(
+        handle_inert,
+        MockBrasConfig {
+            padt_after: Some(Duration::from_secs(1)),
+            ..Default::default()
+        },
+    );
+
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
+    let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
+    wait_for_session_up(&mut pppoe_sub).await;
+    let up_at = tokio::time::Instant::now();
+
+    let reason = timeout(Duration::from_secs(600), async {
+        loop {
+            if let Ok(evt) = pppoe_sub.recv().await
+                && let LanforgeEvent::Pppoe(PppoeEvent::SessionDown { reason }) = evt.event
+            {
+                return reason;
+            }
+        }
+    })
+    .await
+    .expect("session must go down");
+    let after = up_at.elapsed();
+    assert!(
+        after < Duration::from_secs(5),
+        "PADT noticed after {after:?} ({reason})"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}

@@ -40,6 +40,11 @@ pub enum PppoeError {
     #[error("PPPoE session terminated remotely: {0}")]
     Terminated(String),
 
+    /// The access concentrator ended the session with a PADT: the session no longer exists on
+    /// its side, so no PADT is sent back (RFC 2516 §5.5).
+    #[error("PPPoE session terminated by the access concentrator (PADT)")]
+    PadtReceived,
+
     #[error("No carrier on {0}")]
     CarrierDown(String),
 

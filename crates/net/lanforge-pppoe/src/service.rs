@@ -6,7 +6,7 @@ use crate::discovery::{PppoeDiscovery, send_padt};
 use crate::ebpf::EbpfSession;
 use crate::error::PppoeError;
 use crate::ipcp::negotiate_ipcp;
-use crate::keepalive::run_keepalive;
+use crate::keepalive::{PadtWatch, run_keepalive};
 use crate::kernel::{configure_interface, deconfigure_interface, handoff_to_kernel};
 use crate::lcp::negotiate_lcp;
 use crate::session::PppoeSession;
@@ -263,12 +263,18 @@ impl PppoeService {
             .is_some_and(PppoeTransport::is_inert)
     }
 
-    /// Idempotent: PADT once per negotiated session, `SessionDown` once per `SessionUp`.
     async fn teardown_active_session(&mut self, reason: String) {
+        self.teardown_session(reason, true).await;
+    }
+
+    /// Idempotent: PADT once per negotiated session, `SessionDown` once per `SessionUp`.
+    /// `notify_peer` is false when the concentrator already ended the session.
+    async fn teardown_session(&mut self, reason: String, notify_peer: bool) {
         let had_session = std::mem::take(&mut self.announced);
         let session_meta = self.active_session.take();
         self.connected_at = None;
         if let Some(ref meta) = session_meta
+            && notify_peer
             && self.cfg.send_padt_on_shutdown
             && let Some(ref transport) = self.transport
         {
@@ -999,6 +1005,11 @@ impl PppoeService {
                 self.cfg.lcp_echo_interval_secs,
                 self.cfg.lcp_echo_max_failures,
                 keepalive_prober,
+                PadtWatch {
+                    transport: &transport,
+                    ac_mac: disc_res.ac_mac,
+                    session_id: disc_res.session_id,
+                },
             )
             .await
         }
@@ -1020,7 +1031,8 @@ impl PppoeService {
         };
 
         self.last_uptime = self.connected_at.map(|t| t.elapsed());
-        self.teardown_active_session(reason).await;
+        let peer_ended = matches!(flow_res, Err(PppoeError::PadtReceived));
+        self.teardown_session(reason, !peer_ended).await;
 
         flow_res
     }

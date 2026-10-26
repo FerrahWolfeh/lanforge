@@ -23,6 +23,8 @@ pub struct MockBrasConfig {
     pub send_echo_replies: bool,
     /// Send an LCP Terminate-Request this long after the session comes up (flapping concentrator).
     pub terminate_after: Option<Duration>,
+    /// Send a PADT (discovery stage) this long after the session comes up (ISP-side hangup).
+    pub padt_after: Option<Duration>,
 }
 
 impl Default for MockBrasConfig {
@@ -38,6 +40,7 @@ impl Default for MockBrasConfig {
             fail_discovery: false,
             send_echo_replies: true,
             terminate_after: None,
+            padt_after: None,
         }
     }
 }
@@ -45,6 +48,8 @@ impl Default for MockBrasConfig {
 pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut terminate_at: Option<Instant> = None;
+        let mut padt_at: Option<Instant> = None;
+        let mut client_mac = MacAddr([0; 6]);
         // Discovery phase
         loop {
             tokio::select! {
@@ -56,6 +61,22 @@ pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHan
                 } => {
                     terminate_at = None;
                     handle.inject_session(vec![0xc0, 0x21, 0x05, 0x99, 0x00, 0x04]).await;
+                }
+                () = async {
+                    match padt_at {
+                        Some(at) => sleep_until(at).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    padt_at = None;
+                    let padt = PppoeDiscoveryFrame {
+                        dst_mac: client_mac,
+                        src_mac: cfg.ac_mac,
+                        code: CODE_PADT,
+                        session_id: cfg.session_id,
+                        tags: smallvec![],
+                    };
+                    handle.inject_discovery(padt.encode().to_vec()).await;
                 }
                 disc_opt = handle.recv_discovery() => {
                     let Some(bytes) = disc_opt else { break; };
@@ -87,6 +108,7 @@ pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHan
                             };
                             handle.inject_discovery(pado.encode().to_vec()).await;
                         } else if frame.code == CODE_PADR {
+                            client_mac = frame.src_mac;
                             let host_uniq = frame.tags.iter().find(|t| t.tag_type == TAG_HOST_UNIQ);
                             let mut tags: SmallVec<[Tag; 8]> = smallvec![
                                 Tag {
@@ -269,6 +291,7 @@ pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHan
                                     ack[2] = 0x02; // Conf-Ack
                                     handle.inject_session(ack).await;
                                     terminate_at = cfg.terminate_after.map(|d| Instant::now() + d);
+                                    padt_at = cfg.padt_after.map(|d| Instant::now() + d);
 
                                     // Send BRAS IPCP Conf-Req with peer IP
                                     let peer_octets = cfg.peer_ip.octets();

@@ -1,12 +1,14 @@
 use crate::config::PppoeConfig;
+use crate::discovery::frame::{CODE_PADT, PppoeDiscoveryFrame};
 use crate::error::PppoeError;
 use crate::lcp::{LCP_CONF_REQ, LCP_ECHO_REP, LCP_ECHO_REQ, LCP_TERM_ACK, LCP_TERM_REQ, PPP_LCP};
 use crate::service::SystemInterrupt;
 use crate::session::PppoeSession;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
-use lanforge_transport::ArpProber;
+use lanforge_transport::{ArpProber, PppoeTransport};
 use lanforge_types::config::ChangeImpact;
+use lanforge_types::identifiers::MacAddr;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
@@ -16,7 +18,23 @@ use tracing::{debug, info, warn};
 pub const PPP_IP: u16 = 0x0021;
 pub const PPP_IPV6: u16 = 0x0057;
 
-#[allow(clippy::too_many_lines)]
+/// The discovery-stage identity of the live session, to recognise the concentrator's PADT.
+#[derive(Clone, Copy)]
+pub(crate) struct PadtWatch<'a> {
+    pub transport: &'a PppoeTransport,
+    pub ac_mac: MacAddr,
+    pub session_id: u16,
+}
+
+impl PadtWatch<'_> {
+    fn matches(&self, frame: &[u8]) -> bool {
+        PppoeDiscoveryFrame::parse(frame).is_some_and(|f| {
+            f.code == CODE_PADT && f.session_id == self.session_id && f.src_mac == self.ac_mac
+        })
+    }
+}
+
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub(crate) async fn run_keepalive(
     session: &PppoeSession,
     ctx: &LanforgeContext,
@@ -25,8 +43,11 @@ pub(crate) async fn run_keepalive(
     mut interval_secs: u64,
     mut max_failures: u32,
     prober: Option<(&ArpProber, Ipv4Addr, Option<Ipv4Addr>, Duration)>,
+    padt: PadtWatch<'_>,
 ) -> Result<Option<SystemInterrupt>, PppoeError> {
     let mut echo_id: u8 = 0;
+    let mut disc_buf = [0u8; 1500];
+    let mut watch_padt = true;
     let mut failed_echoes: u32 = 0;
 
     let check_interval = Duration::from_secs(interval_secs.max(1));
@@ -133,6 +154,19 @@ pub(crate) async fn run_keepalive(
                 }
             }
 
+            // RFC 2516 §5.5: the concentrator may end the session at any time with a PADT.
+            disc_res = padt.transport.recv_discovery(&mut disc_buf), if watch_padt => match disc_res {
+                Ok(n) if padt.matches(&disc_buf[..n]) => {
+                    warn!(session_id = padt.session_id, "Access concentrator terminated the session (PADT)");
+                    return Err(PppoeError::PadtReceived);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    // LCP echo still detects a dead session; do not spin on a broken socket.
+                    warn!(error = %e, "Discovery socket error; no longer watching for PADT");
+                    watch_padt = false;
+                }
+            },
             event_res = bus_rx.recv() => match event_res {
                 Ok(timed) if matches!(timed.event, LanforgeEvent::System(SystemEvent::Shutdown)) => {
                     info!("PPPoE keepalive received system shutdown");
