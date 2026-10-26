@@ -43,6 +43,7 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tracing::{debug, error, info, warn};
 
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
+use lanforge_transport::{TransportMetrics, TransportStats};
 
 use crate::error::NetworkError;
 
@@ -89,11 +90,26 @@ enum MdnsCommand {
 pub struct MdnsProber {
     cfg: MdnsConfig,
     tx: Sender<MdnsCommand>,
+    metrics: Arc<TransportMetrics>,
     _ctx: LanforgeContext,
 }
 
+impl TransportStats for MdnsProber {
+    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+        self.metrics.snapshot()
+    }
+}
+
 impl AsyncService for MdnsProber {
+    fn transport_snapshot(
+        &self,
+        _ctx: &LanforgeContext,
+    ) -> Option<lanforge_types::network::snapshot::TransportSnapshot> {
+        Some(self.snapshot())
+    }
+
     fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
+        let snap = self.snapshot();
         vec![
             (
                 std::borrow::Cow::Borrowed("enabled"),
@@ -102,6 +118,14 @@ impl AsyncService for MdnsProber {
             (
                 std::borrow::Cow::Borrowed("probe_interval_secs"),
                 self.cfg.probe_interval.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("rx_packets"),
+                snap.rx_packets.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("tx_packets"),
+                snap.tx_packets.to_string(),
             ),
         ]
     }
@@ -116,7 +140,7 @@ impl AsyncService for MdnsProber {
         let (tx, rx) = mpsc::channel(32);
         self.tx = tx.clone();
 
-        if let Err(e) = run_mdns_worker(self.cfg.clone(), ctx.clone(), rx, tx, h).await {
+        if let Err(e) = run_mdns_worker(self.cfg.clone(), ctx.clone(), rx, tx, self.metrics.clone(), h).await {
             error!("mDNS worker fatal error: {e}");
             return Err(CoreError::Generic(e.to_string()));
         }
@@ -129,7 +153,12 @@ impl MdnsProber {
     #[must_use]
     pub fn new(cfg: MdnsConfig, ctx: LanforgeContext) -> Self {
         let (tx, _) = mpsc::channel(32);
-        Self { cfg, tx, _ctx: ctx }
+        Self {
+            cfg,
+            tx,
+            metrics: Arc::new(TransportMetrics::new()),
+            _ctx: ctx,
+        }
     }
 
     /// Requests a full mDNS broadcast probe across all interfaces.
@@ -149,6 +178,7 @@ async fn run_mdns_worker(
     ctx: LanforgeContext,
     mut rx: Receiver<MdnsCommand>,
     tx: Sender<MdnsCommand>,
+    metrics: Arc<TransportMetrics>,
     h: &ServiceHandle,
 ) -> Result<(), NetworkError> {
     let bus = ctx.bus();
@@ -169,6 +199,7 @@ async fn run_mdns_worker(
     let resp_tx_v4 = resp_tx.clone();
 
     let ctx_v4 = ctx.clone();
+    let metrics_v4 = metrics.clone();
     tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
         while ctx_v4.is_running() {
@@ -179,6 +210,7 @@ async fn run_mdns_worker(
                 Err(ref e)
                     if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
                 Err(e) => {
+                    metrics_v4.record_error();
                     warn!("mDNS v4 listen error: {e}");
                     break;
                 }
@@ -196,6 +228,7 @@ async fn run_mdns_worker(
     let resp_tx_v6 = resp_tx.clone();
 
     let ctx_v6 = ctx.clone();
+    let metrics_v6 = metrics.clone();
     tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
         while ctx_v6.is_running() {
@@ -206,6 +239,7 @@ async fn run_mdns_worker(
                 Err(ref e)
                     if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
                 Err(e) => {
+                    metrics_v6.record_error();
                     warn!("mDNS v6 listen error: {e}");
                     break;
                 }
@@ -253,12 +287,13 @@ async fn run_mdns_worker(
             }
             cmd = rx.recv() => {
                 if let Some(c) = cmd {
-                    handle_command(&c, &socket_v4, &socket_v6);
+                    handle_command(&c, &socket_v4, &socket_v6, &metrics);
                 } else {
                     break;
                 }
             }
             Some((data_vec, addr)) = resp_rx.recv() => {
+                metrics.record_rx(data_vec.len());
                 handle_mdns_packet(&ctx, &data_vec, addr);
             }
             _ = probe_timer.tick() => {
@@ -272,13 +307,18 @@ async fn run_mdns_worker(
     Ok(())
 }
 
-fn handle_command(cmd: &MdnsCommand, socket_v4: &UdpSocket, socket_v6: &UdpSocket) {
+fn handle_command(
+    cmd: &MdnsCommand,
+    socket_v4: &UdpSocket,
+    socket_v6: &UdpSocket,
+    metrics: &TransportMetrics,
+) {
     match cmd {
         MdnsCommand::ProbeAll => {
-            broadcast_query(socket_v4, socket_v6);
+            broadcast_query(socket_v4, socket_v6, metrics);
         }
         MdnsCommand::ProbeIp(ip) => {
-            send_unicast_query(socket_v4, socket_v6, *ip);
+            send_unicast_query(socket_v4, socket_v6, *ip, metrics);
         }
     }
 }
@@ -348,7 +388,7 @@ fn setup_multicast_socket_v6() -> Result<UdpSocket, NetworkError> {
     Ok(socket.into())
 }
 
-fn broadcast_query(sock4: &UdpSocket, sock6: &UdpSocket) {
+fn broadcast_query(sock4: &UdpSocket, sock6: &UdpSocket, metrics: &TransportMetrics) {
     let mut msg = DnsMessage::new();
     msg.header.qdcount = 1;
     msg.questions.push(DnsQuestion {
@@ -360,13 +400,17 @@ fn broadcast_query(sock4: &UdpSocket, sock6: &UdpSocket) {
     let mut encoder = WireEncoder::new();
     let bytes = encoder.encode_message(&msg);
 
-    let _ = sock4.send_to(&bytes, SocketAddr::new(IpAddr::V4(MDNS_IPV4), MDNS_PORT));
-    let _ = sock6.send_to(&bytes, SocketAddr::new(IpAddr::V6(MDNS_IPV6), MDNS_PORT));
+    if let Ok(n) = sock4.send_to(&bytes, SocketAddr::new(IpAddr::V4(MDNS_IPV4), MDNS_PORT)) {
+        metrics.record_tx(n);
+    }
+    if let Ok(n) = sock6.send_to(&bytes, SocketAddr::new(IpAddr::V6(MDNS_IPV6), MDNS_PORT)) {
+        metrics.record_tx(n);
+    }
 
     debug!("mDNS broadcast probe sent");
 }
 
-fn send_unicast_query(sock4: &UdpSocket, sock6: &UdpSocket, target: IpAddr) {
+fn send_unicast_query(sock4: &UdpSocket, sock6: &UdpSocket, target: IpAddr, metrics: &TransportMetrics) {
     let mut msg = DnsMessage::new();
     msg.header.qdcount = 1;
 
@@ -407,10 +451,14 @@ fn send_unicast_query(sock4: &UdpSocket, sock6: &UdpSocket, target: IpAddr) {
     // For now, simple multicast.
     match target {
         IpAddr::V4(_) => {
-            let _ = sock4.send_to(&bytes, SocketAddr::new(IpAddr::V4(MDNS_IPV4), MDNS_PORT));
+            if let Ok(n) = sock4.send_to(&bytes, SocketAddr::new(IpAddr::V4(MDNS_IPV4), MDNS_PORT)) {
+                metrics.record_tx(n);
+            }
         }
         IpAddr::V6(_) => {
-            let _ = sock6.send_to(&bytes, SocketAddr::new(IpAddr::V6(MDNS_IPV6), MDNS_PORT));
+            if let Ok(n) = sock6.send_to(&bytes, SocketAddr::new(IpAddr::V6(MDNS_IPV6), MDNS_PORT)) {
+                metrics.record_tx(n);
+            }
         }
     }
 

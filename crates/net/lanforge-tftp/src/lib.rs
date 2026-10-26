@@ -8,7 +8,7 @@ use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
     ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::UdpTransport;
+use lanforge_transport::{TransportStats, UdpTransport};
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::network::dhcp::TftpOptions;
 use lanforge_types::system::{DormantReason, ServiceId};
@@ -19,7 +19,6 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
-use tokio::net::UdpSocket;
 use tokio::time::{Duration, timeout};
 use tracing::{debug, error, info};
 
@@ -41,6 +40,7 @@ pub struct TftpService {
     _ctx: LanforgeContext,
     cfg: TftpConfig,
     bound_addr: Arc<RwLock<Option<String>>>,
+    transports: Arc<RwLock<Vec<UdpTransport>>>,
 }
 
 impl TftpService {
@@ -53,7 +53,32 @@ impl TftpService {
             _ctx: ctx,
             cfg,
             bound_addr: Arc::new(RwLock::new(None)),
+            transports: Arc::new(RwLock::new(Vec::new())),
         }
+    }
+}
+
+impl TransportStats for TftpService {
+    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+        let transports = self.transports.read();
+        let mut snap = lanforge_types::network::snapshot::TransportSnapshot::default();
+        for t in transports.iter() {
+            let s = t.snapshot();
+            snap.rx_packets += s.rx_packets;
+            snap.rx_bytes += s.rx_bytes;
+            snap.tx_packets += s.tx_packets;
+            snap.tx_bytes += s.tx_bytes;
+            snap.dropped += s.dropped;
+            snap.rate_limited += s.rate_limited;
+            snap.errors += s.errors;
+            if s.last_error_age_secs.is_some()
+                && (snap.last_error_age_secs.is_none() || s.last_error_age_secs < snap.last_error_age_secs)
+            {
+                snap.last_error_age_secs = s.last_error_age_secs;
+            }
+        }
+        drop(transports);
+        snap
     }
 }
 
@@ -90,12 +115,20 @@ impl LanforgeService for TftpService {
 }
 
 impl AsyncService for TftpService {
+    fn transport_snapshot(
+        &self,
+        _ctx: &LanforgeContext,
+    ) -> Option<lanforge_types::network::snapshot::TransportSnapshot> {
+        Some(self.snapshot())
+    }
+
     fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
         let listen = self
             .bound_addr
             .read()
             .clone()
             .unwrap_or_else(|| self.cfg.listen.to_string());
+        let snap = self.snapshot();
         vec![
             (std::borrow::Cow::Borrowed("listen"), listen),
             (
@@ -105,6 +138,14 @@ impl AsyncService for TftpService {
             (
                 std::borrow::Cow::Borrowed("block_size"),
                 self.cfg.block_size.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("rx_packets"),
+                snap.rx_packets.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("tx_packets"),
+                snap.tx_packets.to_string(),
             ),
         ]
     }
@@ -187,6 +228,7 @@ impl AsyncService for TftpService {
 
             let bound_str = actual_bound.join(", ");
             *self.bound_addr.write() = Some(bound_str.clone());
+            (*self.transports.write()).clone_from(&transports);
             info!(addr = %bound_str, "TFTP: Server listening");
             h.ready();
 
@@ -296,6 +338,7 @@ impl AsyncService for TftpService {
             }
 
             *self.bound_addr.write() = None;
+            self.transports.write().clear();
 
             if !should_rebind || !ctx.is_running() {
                 break;
@@ -308,6 +351,7 @@ impl AsyncService for TftpService {
     #[allow(clippy::unused_async_trait_impl)]
     async fn cleanup(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
         *self.bound_addr.write() = None;
+        self.transports.write().clear();
         Ok(())
     }
 }
@@ -432,15 +476,16 @@ async fn validate_rrq_path(
     Ok(Some((path, meta.len(), filename)))
 }
 
-async fn bind_session_socket(src: SocketAddr) -> Result<(UdpSocket, SocketAddr), TftpError> {
-    match src {
-        SocketAddr::V6(_) => Ok((UdpSocket::bind("[::]:0").await?, src)),
-        SocketAddr::V4(_) => Ok((UdpSocket::bind("0.0.0.0:0").await?, src)),
-    }
+fn bind_session_transport(src: SocketAddr) -> Result<UdpTransport, TftpError> {
+    let bind_addr = match src {
+        SocketAddr::V6(_) => SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 0)),
+        SocketAddr::V4(_) => SocketAddr::from(([0, 0, 0, 0], 0)),
+    };
+    UdpTransport::bind_single(bind_addr).map_err(TftpError::Io)
 }
 
 async fn send_block_with_retries(
-    session_socket: &UdpSocket,
+    session_transport: &UdpTransport,
     packet_slice: &[u8],
     target_addr: SocketAddr,
     block_num: u16,
@@ -448,12 +493,12 @@ async fn send_block_with_retries(
 ) -> Result<(), TftpError> {
     let mut retries = 0;
     loop {
-        session_socket.send_to(packet_slice, target_addr).await?;
+        session_transport.send_to(packet_slice, target_addr).await?;
 
         let mut ack_buf = [0u8; 4];
         if let Ok(Ok((4, _))) = timeout(
             Duration::from_secs(cfg.timeout),
-            session_socket.recv_from(&mut ack_buf),
+            session_transport.recv_from(&mut ack_buf),
         )
         .await
         {
@@ -475,7 +520,7 @@ async fn send_block_with_retries(
 async fn transfer_file(
     file_path: std::path::PathBuf,
     block_size: usize,
-    session_socket: &UdpSocket,
+    session_transport: &UdpTransport,
     target_addr: SocketAddr,
     cfg: &TftpConfig,
 ) -> Result<(), TftpError> {
@@ -489,7 +534,7 @@ async fn transfer_file(
         let n = file.read(&mut packet[4..4 + block_size]).await?;
         let packet_slice = &packet[..4 + n];
 
-        send_block_with_retries(session_socket, packet_slice, target_addr, block_num, cfg).await?;
+        send_block_with_retries(session_transport, packet_slice, target_addr, block_num, cfg).await?;
 
         if n < block_size {
             break;
@@ -522,13 +567,13 @@ async fn handle_rrq(
 
     info!("TFTP: Sending {filename} ({file_len} bytes) to {src}");
 
-    let (session_socket, target_addr) = bind_session_socket(src).await?;
+    let session_transport = bind_session_transport(src)?;
     let block_size = opts.blksize.unwrap_or(cfg.block_size) as usize;
 
     if opts.blksize.is_some() || opts.tsize {
         handle_oack_handshake(
-            &session_socket,
-            target_addr,
+            &session_transport,
+            src,
             opts.blksize,
             opts.tsize,
             file_len,
@@ -537,11 +582,11 @@ async fn handle_rrq(
         .await?;
     }
 
-    transfer_file(path, block_size, &session_socket, target_addr, cfg).await
+    transfer_file(path, block_size, &session_transport, src, cfg).await
 }
 
 async fn handle_oack_handshake(
-    session_socket: &UdpSocket,
+    session_transport: &UdpTransport,
     target_addr: SocketAddr,
     requested_blksize: Option<u16>,
     requested_tsize: bool,
@@ -562,11 +607,11 @@ async fn handle_oack_handshake(
 
     let mut oack_retries = 0;
     loop {
-        session_socket.send_to(&oack, target_addr).await?;
+        session_transport.send_to(&oack, target_addr).await?;
         let mut ack_buf = [0u8; 4];
         if let Ok(Ok((4, _))) = timeout(
             Duration::from_secs(cfg.timeout),
-            session_socket.recv_from(&mut ack_buf),
+            session_transport.recv_from(&mut ack_buf),
         )
         .await
         {

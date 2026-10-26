@@ -45,7 +45,7 @@ use lanforge_core::service::{
     AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass, ServiceCommand,
     ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::ArpProber;
+use lanforge_transport::{ArpProber, TransportStats};
 use lanforge_types::device::{IPv4State, IPv6State, Origin};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::NeighborEvent;
@@ -127,6 +127,32 @@ pub struct DiscoveryService {
     messages: NetlinkMessageStream,
     target_ifindexes: Vec<u32>,
     ctx: LanforgeContext,
+    pinger: Option<Arc<IcmpPinger>>,
+    prober_cache: Arc<Mutex<HashMap<String, ArpProber>>>,
+}
+
+impl TransportStats for DiscoveryService {
+    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+        let mut snap = self.pinger.as_ref().map(|p| p.snapshot()).unwrap_or_default();
+        let probers = self.prober_cache.lock();
+        for p in probers.values() {
+            let s = p.snapshot();
+            snap.rx_packets += s.rx_packets;
+            snap.rx_bytes += s.rx_bytes;
+            snap.tx_packets += s.tx_packets;
+            snap.tx_bytes += s.tx_bytes;
+            snap.dropped += s.dropped;
+            snap.rate_limited += s.rate_limited;
+            snap.errors += s.errors;
+            if s.last_error_age_secs.is_some()
+                && (snap.last_error_age_secs.is_none() || s.last_error_age_secs < snap.last_error_age_secs)
+            {
+                snap.last_error_age_secs = s.last_error_age_secs;
+            }
+        }
+        drop(probers);
+        snap
+    }
 }
 
 impl DiscoveryService {
@@ -135,19 +161,26 @@ impl DiscoveryService {
 
     /// Creates a new `DiscoveryService` for the given interfaces.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         cfg: MonitorConfig,
         handle: Handle,
         messages: NetlinkMessageStream,
         target_ifindexes: Vec<u32>,
         ctx: LanforgeContext,
     ) -> Self {
+        let pinger = if cfg.ping_enabled {
+            IcmpPinger::new().ok().map(Arc::new)
+        } else {
+            None
+        };
         Self {
             cfg,
             handle,
             messages,
             target_ifindexes,
             ctx,
+            pinger,
+            prober_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -249,6 +282,13 @@ impl LanforgeService for DiscoveryService {
 }
 
 impl AsyncService for DiscoveryService {
+    fn transport_snapshot(
+        &self,
+        _ctx: &LanforgeContext,
+    ) -> Option<lanforge_types::network::snapshot::TransportSnapshot> {
+        Some(self.snapshot())
+    }
+
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
         let (total_devices, active_devices) = ctx.with_state(|state| {
             let total = state.devices.len();
@@ -259,6 +299,7 @@ impl AsyncService for DiscoveryService {
                 .count();
             (total, active)
         });
+        let snap = self.snapshot();
         vec![
             (
                 std::borrow::Cow::Borrowed("target_ifindexes"),
@@ -279,6 +320,14 @@ impl AsyncService for DiscoveryService {
             (
                 std::borrow::Cow::Borrowed("active_devices"),
                 active_devices.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("rx_packets"),
+                snap.rx_packets.to_string(),
+            ),
+            (
+                std::borrow::Cow::Borrowed("tx_packets"),
+                snap.tx_packets.to_string(),
             ),
         ]
     }
@@ -331,6 +380,7 @@ impl AsyncService for DiscoveryService {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         if !self.cfg.enabled {
             info!("Discovery service is disabled in configuration.");
@@ -339,7 +389,13 @@ impl AsyncService for DiscoveryService {
         }
 
         if self.cfg.ping_enabled {
-            spawn_active_pinger(ctx, self.cfg.ping_interval_secs);
+            if let Some(ref pinger) = self.pinger {
+                info!("Discovery: Active ICMP ping probe initialized");
+                spawn_sweep_task(pinger.clone(), ctx.clone(), self.cfg.ping_interval_secs);
+                spawn_jit_offline_task(pinger.clone(), self.prober_cache.clone(), ctx.clone());
+            } else {
+                warn!("Discovery: Failed to initialize ICMP ping probe");
+            }
         }
 
         let mut handle = ctx.service_handle_network();
@@ -437,22 +493,6 @@ impl AsyncService for DiscoveryService {
         info!("DiscoveryService: Service stopped");
         Ok(())
     }
-}
-
-fn spawn_active_pinger(ctx: &LanforgeContext, ping_interval_secs: u64) {
-    let pinger = match IcmpPinger::new() {
-        Ok(p) => {
-            info!("Discovery: Active ICMP ping probe initialized");
-            Arc::new(p)
-        }
-        Err(e) => {
-            warn!("Discovery: Failed to initialize ICMP ping probe: {e}");
-            return;
-        }
-    };
-
-    spawn_sweep_task(pinger.clone(), ctx.clone(), ping_interval_secs);
-    spawn_jit_offline_task(pinger, ctx.clone());
 }
 
 fn spawn_sweep_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext, ping_interval: u64) {
@@ -569,9 +609,11 @@ fn get_or_create_arp_prober(
     None
 }
 
-fn spawn_jit_offline_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext) {
-    let prober_cache: Arc<Mutex<HashMap<String, ArpProber>>> = Arc::new(Mutex::new(HashMap::new()));
-
+fn spawn_jit_offline_task(
+    pinger: Arc<IcmpPinger>,
+    prober_cache: Arc<Mutex<HashMap<String, ArpProber>>>,
+    ctx: LanforgeContext,
+) {
     tokio::spawn(async move {
         let mut bus_rx = ctx.bus().subscribe_device();
         let mut seq_counter = 0u16;

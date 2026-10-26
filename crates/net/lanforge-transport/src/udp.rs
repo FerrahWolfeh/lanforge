@@ -268,6 +268,16 @@ impl UdpTransport {
         res
     }
 
+    /// Sends a datagram to the specified destination address.
+    pub async fn send_to(&self, payload: &[u8], target: SocketAddr) -> io::Result<usize> {
+        self.send(payload, &target).await
+    }
+
+    /// Receives a datagram into the provided buffer (alias to `recv`).
+    pub async fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        self.recv(buf).await
+    }
+
     /// Attempts to send a datagram immediately without awaiting.
     pub fn try_send(&self, payload: &[u8], target: &SocketAddr) -> io::Result<usize> {
         let res = match &self.inner.backend {

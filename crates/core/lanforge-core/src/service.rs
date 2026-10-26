@@ -285,6 +285,14 @@ pub trait AsyncService: LanforgeService {
         Vec::new()
     }
 
+    /// Returns optional transport telemetry snapshot for the status banner.
+    fn transport_snapshot(
+        &self,
+        _ctx: &LanforgeContext,
+    ) -> Option<lanforge_types::network::snapshot::TransportSnapshot> {
+        None
+    }
+
     /// Generates the complete service status banner containing health, uptime, and metrics.
     fn banner(&self, ctx: &LanforgeContext) -> ServiceBanner {
         let spec = self.spec();
@@ -294,6 +302,7 @@ pub trait AsyncService: LanforgeService {
             state: ctx.get_service_state(spec.id),
             uptime_secs: ctx.get_service_uptime(spec.id),
             stats: self.stats(ctx),
+            transport: self.transport_snapshot(ctx),
             detail: ctx.get_service_detail(spec.id),
         }
     }

@@ -1,4 +1,5 @@
 use crate::inert::{InertHandle, InertPort};
+use crate::metrics::{TransportMetrics, TransportStats};
 use parking_lot::Mutex;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
@@ -34,6 +35,7 @@ pub struct IcmpPinger {
     backend: Arc<IcmpBackend>,
     registry: PendingRegistry,
     ident: u16,
+    metrics: Arc<TransportMetrics>,
     _shutdown_tx: Arc<watch::Sender<bool>>,
 }
 
@@ -90,6 +92,7 @@ impl IcmpPinger {
             }),
             registry,
             ident,
+            metrics: Arc::new(TransportMetrics::new()),
             _shutdown_tx: Arc::new(shutdown_tx),
         };
 
@@ -111,6 +114,7 @@ impl IcmpPinger {
             backend: Arc::new(IcmpBackend::Inert { port: port.clone() }),
             registry,
             ident,
+            metrics: Arc::new(TransportMetrics::new()),
             _shutdown_tx: Arc::new(shutdown_tx),
         };
 
@@ -343,17 +347,27 @@ impl IcmpPinger {
 
         if !sent {
             self.registry.lock().remove(&(ip, ident, seq));
+            self.metrics.record_error();
             return Err(io::Error::other("Socket unavailable"));
         }
+        self.metrics.record_tx(PACKET_LEN);
 
         if tokio::time::timeout(timeout, rx).await == Ok(Ok(())) {
             debug!("Ping response received from {ip}");
+            self.metrics.record_rx(PACKET_LEN);
             Ok(true)
         } else {
             self.registry.lock().remove(&(ip, ident, seq));
+            self.metrics.record_error();
             debug!("Ping timeout/failed for {ip}");
             Ok(false)
         }
+    }
+}
+
+impl TransportStats for IcmpPinger {
+    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+        self.metrics.snapshot()
     }
 }
 

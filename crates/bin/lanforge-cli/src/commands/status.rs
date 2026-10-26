@@ -343,6 +343,7 @@ mod tests {
                         (Cow::Borrowed("wan_iface"), "wan0".to_string()),
                     ],
                     detail: None,
+                    transport: None,
                 },
                 ServiceBanner {
                     id: ServiceId::Dhcp4,
@@ -354,6 +355,7 @@ mod tests {
                         (Cow::Borrowed("pool_available"), "126".to_string()),
                     ],
                     detail: None,
+                    transport: None,
                 },
                 ServiceBanner {
                     id: ServiceId::Dhcp6,
@@ -362,6 +364,7 @@ mod tests {
                     uptime_secs: 2733,
                     stats: vec![(Cow::Borrowed("leases_active"), "0".to_string())],
                     detail: None,
+                    transport: None,
                 },
                 ServiceBanner {
                     id: ServiceId::Dns,
@@ -374,6 +377,7 @@ mod tests {
                         (Cow::Borrowed("cache_hit_rate"), "0.0%".to_string()),
                     ],
                     detail: None,
+                    transport: None,
                 },
                 ServiceBanner {
                     id: ServiceId::Nft,
@@ -382,6 +386,7 @@ mod tests {
                     uptime_secs: 2733,
                     stats: vec![],
                     detail: None,
+                    transport: None,
                 },
                 ServiceBanner {
                     id: ServiceId::Tftp,
@@ -390,6 +395,7 @@ mod tests {
                     uptime_secs: 0,
                     stats: vec![],
                     detail: None,
+                    transport: None,
                 },
             ],
         };
