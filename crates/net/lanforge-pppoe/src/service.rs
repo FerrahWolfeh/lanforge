@@ -365,7 +365,7 @@ impl PppoeService {
             password: self.cfg.password.clone(),
             auth: lcp_res.auth_method,
         };
-        if let Err(e) = authenticate(&session, &creds).await {
+        if let Err(e) = authenticate(&session, &creds, &lcp_res).await {
             let _ = self
                 .ctx
                 .bus()

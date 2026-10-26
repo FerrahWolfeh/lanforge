@@ -17,8 +17,13 @@ pub enum PppoeError {
     #[error("PPP LCP negotiation failed: {0}")]
     LcpFailed(String),
 
+    /// The peer explicitly rejected the credentials (PAP Auth-Nak, CHAP Failure).
     #[error("PPP Authentication failed: {0}")]
     AuthFailed(String),
+
+    /// The peer did not answer in time: a busy or rate-limiting concentrator, not bad credentials.
+    #[error("PPP Authentication timed out: {0}")]
+    AuthTimeout(String),
 
     #[error("PPP IPCP negotiation failed: {0}")]
     IpcpFailed(String),

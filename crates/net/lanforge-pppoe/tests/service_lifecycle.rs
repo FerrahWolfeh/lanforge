@@ -452,6 +452,7 @@ async fn test_pppoe_cleanup_guarantees_session_down_on_abort() {
         local_magic: 1,
         peer_magic: 2,
         auth_method: lanforge_types::network::pppoe::AuthMethod::ChapMd5,
+        early_frames: Vec::new(),
     };
     let ipcp_res = lanforge_pppoe::ipcp::IpcpNegotiated {
         local_ip: Some(Ipv4Addr::new(100, 64, 0, 2)),

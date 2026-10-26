@@ -5,7 +5,7 @@ use crate::session::PppoeSession;
 use rand::random;
 use smallvec::{SmallVec, smallvec};
 use std::time::Duration;
-use tokio::time::{Instant, timeout};
+use tokio::time::{Instant, timeout_at};
 use tracing::debug;
 
 pub const PPP_LCP: u16 = 0xc021;
@@ -25,6 +25,13 @@ pub const LCP_ECHO_REP: u8 = 0x0a;
 pub const LCP_OPT_MRU: u8 = 1;
 pub const LCP_OPT_AUTH: u8 = 3;
 pub const LCP_OPT_MAGIC: u8 = 5;
+
+/// RFC 1661 §4.6 Restart timer default.
+const RESTART_TIMER: Duration = Duration::from_secs(3);
+/// Max-Configure (10) × Restart timer, as `pppd` does.
+const LCP_DEADLINE: Duration = Duration::from_secs(30);
+/// Bound on frames kept for the authentication phase.
+const MAX_EARLY_FRAMES: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LcpOption<'a> {
@@ -114,8 +121,13 @@ pub struct LcpNegotiated {
     pub local_magic: u32,
     pub peer_magic: u32,
     pub auth_method: AuthMethod,
+    /// Non-LCP frames (in practice the CHAP Challenge) received before LCP completed on our side.
+    /// The peer may reach Opened first and challenge right away; dropping that frame leaves the
+    /// authentication phase waiting for a Challenge the peer will not repeat.
+    pub early_frames: Vec<Vec<u8>>,
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn negotiate_lcp(
     session: &PppoeSession,
     desired_mru: u16,
@@ -130,6 +142,7 @@ pub async fn negotiate_lcp(
     let mut peer_magic = 0u32;
     let mut negotiated_mru = desired_mru;
     let mut negotiated_auth = AuthMethod::None;
+    let mut early_frames = Vec::new();
 
     let mut mru_bytes = desired_mru.to_be_bytes();
     let magic_bytes = local_magic.to_be_bytes();
@@ -138,11 +151,11 @@ pub async fn negotiate_lcp(
         .send_ppp_frame(&build_conf_req(req_id, &mru_bytes, &magic_bytes).encode())
         .await?;
 
-    let lcp_timeout = Duration::from_secs(10);
-    let start = Instant::now();
+    let deadline = Instant::now() + LCP_DEADLINE;
+    let mut retransmit_at = Instant::now() + RESTART_TIMER;
     let mut buf = [0u8; 1500];
 
-    while start.elapsed() < lcp_timeout {
+    while Instant::now() < deadline {
         if my_ack_received && peer_ack_sent {
             debug!(
                 mru = negotiated_mru,
@@ -154,20 +167,29 @@ pub async fn negotiate_lcp(
                 local_magic,
                 peer_magic,
                 auth_method: negotiated_auth,
+                early_frames,
             });
         }
 
-        let Ok(Ok(n)) = timeout(Duration::from_secs(1), session.recv_ppp_frame(&mut buf)).await
-        else {
-            // Timeout, retransmit
-            req_id = req_id.wrapping_add(1);
-            session
-                .send_ppp_frame(&build_conf_req(req_id, &mru_bytes, &magic_bytes).encode())
-                .await?;
+        let wait = retransmit_at.min(deadline);
+        let Ok(recv) = timeout_at(wait, session.recv_ppp_frame(&mut buf)).await else {
+            // RFC 1661 §5.1: a retransmission MAY keep its Identifier. Keeping it lets a late
+            // Ack for this very request still count. Once acked, only the peer's request is
+            // missing: re-sending ours would make an Opened peer renegotiate.
+            if !my_ack_received {
+                session
+                    .send_ppp_frame(&build_conf_req(req_id, &mru_bytes, &magic_bytes).encode())
+                    .await?;
+            }
+            retransmit_at = Instant::now() + RESTART_TIMER;
             continue;
         };
+        let n = recv?;
 
         let Some(packet) = LcpPacket::parse(&buf[..n]) else {
+            if is_auth_frame(&buf[..n]) && early_frames.len() < MAX_EARLY_FRAMES {
+                early_frames.push(buf[..n].to_vec());
+            }
             continue;
         };
 
@@ -195,6 +217,7 @@ pub async fn negotiate_lcp(
                     session
                         .send_ppp_frame(&build_conf_req(req_id, &mru_bytes, &magic_bytes).encode())
                         .await?;
+                    retransmit_at = Instant::now() + RESTART_TIMER;
                 }
             }
             LCP_CONF_REQ => {
@@ -224,6 +247,15 @@ pub async fn negotiate_lcp(
     }
 
     Err(PppoeError::LcpFailed("LCP negotiation timed out".into()))
+}
+
+fn is_auth_frame(bytes: &[u8]) -> bool {
+    let data = if bytes.len() >= 2 && bytes[0] == 0xff && bytes[1] == 0x03 {
+        &bytes[2..]
+    } else {
+        bytes
+    };
+    data.len() >= 2 && matches!(u16::from_be_bytes([data[0], data[1]]), PPP_CHAP | PPP_PAP)
 }
 
 fn build_conf_req<'a>(id: u8, mru_bytes: &'a [u8; 2], magic_bytes: &'a [u8; 4]) -> LcpPacket<'a> {
