@@ -76,6 +76,34 @@ fn default_on_stop() -> String {
     "lockdown".to_string()
 }
 
+fn default_firewall_mode() -> String {
+    "full".to_string()
+}
+
+fn default_table_name() -> String {
+    "lanforge".to_string()
+}
+
+fn default_zone_external() -> String {
+    "external".to_string()
+}
+
+/// A file without the key keeps the default matrix; `forwardings = []` means no routing.
+fn default_forwardings() -> Vec<ZoneForwardingFile> {
+    [
+        ("internal", "external"),
+        ("trusted", "external"),
+        ("trusted", "internal"),
+        ("internal", "trusted"),
+    ]
+    .into_iter()
+    .map(|(from, to)| ZoneForwardingFile {
+        from: from.to_string(),
+        to: to.to_string(),
+    })
+    .collect()
+}
+
 fn default_policy_accept() -> String {
     "accept".to_string()
 }
@@ -577,6 +605,11 @@ pub struct AdblockRuleFile {
 pub struct FirewallFile {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// `full`, `minimal` or `disabled`.
+    #[serde(default = "default_firewall_mode")]
+    pub mode: String,
+    #[serde(default = "default_table_name")]
+    pub table_name: String,
     #[serde(default = "default_true")]
     pub flow_offload: bool,
     #[serde(default = "default_true")]
@@ -594,8 +627,20 @@ pub struct FirewallFile {
     pub custom_rules_file: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub zones: BTreeMap<String, FirewallZoneFile>,
+    /// Routed traffic allowed between zones. Always written, even empty: an absent key means
+    /// the default matrix.
+    #[serde(default = "default_forwardings")]
+    pub forwardings: Vec<ZoneForwardingFile>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub port_forwards: BTreeMap<String, PortForwardFile>,
+}
+
+/// Inter-zone routing permission (`from` zone may open connections to `to` zone).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ZoneForwardingFile {
+    pub from: String,
+    pub to: String,
 }
 
 impl Default for FirewallFile {
@@ -647,6 +692,8 @@ impl Default for FirewallFile {
 
         Self {
             enabled: true,
+            mode: default_firewall_mode(),
+            table_name: default_table_name(),
             flow_offload: true,
             bypass_dns: true,
             bypass_vowifi: true,
@@ -655,6 +702,7 @@ impl Default for FirewallFile {
             on_stop: default_on_stop(),
             custom_rules_file: None,
             zones,
+            forwardings: default_forwardings(),
             port_forwards: BTreeMap::new(),
         }
     }
@@ -700,6 +748,11 @@ impl Default for FirewallZoneFile {
 pub struct PortForwardFile {
     #[serde(default = "default_proto_tcp")]
     pub proto: String,
+    /// Zone the traffic arrives from.
+    #[serde(default = "default_zone_external")]
+    pub zone: String,
+    #[serde(default = "default_true")]
+    pub hairpin: bool,
     pub port: u16,
     pub to: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

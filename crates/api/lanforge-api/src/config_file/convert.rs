@@ -15,7 +15,7 @@ use lanforge_types::network::dns::adblock::{
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::firewall::{
     FirewallConfig, FirewallMode, FirewallPolicy, FirewallStopAction, FirewallZone, HostPortRule,
-    L4Protocol, PortForwardRule,
+    L4Protocol, PortForwardRule, ZoneForwarding,
 };
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{
@@ -35,7 +35,7 @@ use super::sections::{
     AdblockFile, AdblockRuleFile, AdblockSourceFile, DhcpFile, Dhcpv4PoolFile, Dhcpv6PoolFile,
     DnsFile, DnsRewriteFile, DnsUpstreamFile, FirewallFile, FirewallZoneFile, HostFileEntry,
     NicTuningFile, PortForwardFile, PppoeFile, RaDnsslFile, RaFile, RaPrefixFile, RaRdnssFile,
-    SqmFile, TrafficFile,
+    SqmFile, TrafficFile, ZoneForwardingFile,
 };
 
 fn policy_to_str(p: FirewallPolicy) -> &'static str {
@@ -51,6 +51,32 @@ fn str_to_policy(s: &str) -> FirewallPolicy {
         "accept" => FirewallPolicy::Accept,
         "reject" => FirewallPolicy::Reject,
         _ => FirewallPolicy::Drop,
+    }
+}
+
+fn mode_to_str(m: FirewallMode) -> &'static str {
+    match m {
+        FirewallMode::Full => "full",
+        FirewallMode::Minimal => "minimal",
+        FirewallMode::Disabled => "disabled",
+    }
+}
+
+/// Unknown values keep the full firewall: never weaken protection on a typo.
+fn str_to_mode(s: &str) -> FirewallMode {
+    match s.trim().to_lowercase().as_str() {
+        "minimal" => FirewallMode::Minimal,
+        "disabled" => FirewallMode::Disabled,
+        _ => FirewallMode::Full,
+    }
+}
+
+/// Parses `tcp`, `udp` and `tcp/udp` (as written by `L4Protocol::as_str`) or `both`.
+fn str_to_l4(s: &str) -> L4Protocol {
+    match s.trim().to_lowercase().as_str() {
+        "udp" => L4Protocol::Udp,
+        "tcp/udp" | "both" => L4Protocol::Both,
+        _ => L4Protocol::Tcp,
     }
 }
 
@@ -353,6 +379,8 @@ impl From<&SystemConfigExport> for ConfigFile {
         if let Some(ref fw) = export.firewall_config {
             let mut fw_file = FirewallFile {
                 enabled: fw.enabled,
+                mode: mode_to_str(fw.mode).to_string(),
+                table_name: fw.table_name.clone(),
                 flow_offload: fw.flow_offload,
                 bypass_dns: fw.bypass_dns,
                 bypass_vowifi: fw.bypass_vowifi,
@@ -361,6 +389,14 @@ impl From<&SystemConfigExport> for ConfigFile {
                 on_stop: fw.on_stop.as_str().to_string(),
                 custom_rules_file: fw.custom_rules_file.clone(),
                 zones: BTreeMap::new(),
+                forwardings: fw
+                    .forwardings
+                    .iter()
+                    .map(|f| ZoneForwardingFile {
+                        from: f.from.clone(),
+                        to: f.to.clone(),
+                    })
+                    .collect(),
                 port_forwards: BTreeMap::new(),
             };
 
@@ -400,6 +436,8 @@ impl From<&SystemConfigExport> for ConfigFile {
                     name,
                     PortForwardFile {
                         proto: pf.protocol.as_str().to_string(),
+                        zone: pf.src_zone.clone(),
+                        hairpin: pf.enable_hairpin,
                         port: pf.external_port,
                         to: pf.internal_ip.to_string(),
                         to_port: Some(pf.internal_port),
@@ -720,13 +758,9 @@ impl From<&ConfigFile> for SystemConfigExport {
                 if let Some((port_part, proto_part)) = p_str.split_once('/')
                     && let Ok(port) = port_part.trim().parse::<u16>()
                 {
-                    let proto = match proto_part.trim().to_lowercase().as_str() {
-                        "udp" => L4Protocol::Udp,
-                        _ => L4Protocol::Tcp,
-                    };
                     open_ports.push(HostPortRule {
                         port,
-                        protocol: proto,
+                        protocol: str_to_l4(proto_part),
                         comment: None,
                     });
                 }
@@ -753,10 +787,6 @@ impl From<&ConfigFile> for SystemConfigExport {
 
         let mut port_forwards = Vec::new();
         for pf in cfg.firewall.port_forwards.values() {
-            let proto = match pf.proto.to_lowercase().as_str() {
-                "udp" => L4Protocol::Udp,
-                _ => L4Protocol::Tcp,
-            };
             let internal_ip = pf
                 .to
                 .parse::<IpAddr>()
@@ -764,21 +794,29 @@ impl From<&ConfigFile> for SystemConfigExport {
             let internal_port = pf.to_port.unwrap_or(pf.port);
 
             port_forwards.push(PortForwardRule {
-                src_zone: "external".to_string(),
+                src_zone: pf.zone.clone(),
                 external_port: pf.port,
                 internal_ip,
                 internal_port,
-                protocol: proto,
+                protocol: str_to_l4(&pf.proto),
                 comment: pf.description.clone(),
-                enable_hairpin: true,
+                enable_hairpin: pf.hairpin,
             });
         }
 
         let firewall_config = Some(Box::new(FirewallConfig {
-            table_name: "lanforge".to_string(),
-            mode: FirewallMode::Full,
+            table_name: cfg.firewall.table_name.clone(),
+            mode: str_to_mode(&cfg.firewall.mode),
             zones,
-            forwardings: Vec::new(),
+            forwardings: cfg
+                .firewall
+                .forwardings
+                .iter()
+                .map(|f| ZoneForwarding {
+                    from: f.from.clone(),
+                    to: f.to.clone(),
+                })
+                .collect(),
             port_forwards,
             custom_rules_file: cfg.firewall.custom_rules_file.clone(),
             enabled: cfg.firewall.enabled,
@@ -1080,6 +1118,90 @@ mod tests {
         let roundtripped = SystemConfigExport::from(&parsed);
 
         assert_eq!(roundtripped.dns_rewrites, rewrites);
+    }
+
+    fn sorted_firewall(mut fw: FirewallConfig) -> FirewallConfig {
+        // TOML tables are keyed maps: order is not part of the contract, content is.
+        fw.zones.sort_by(|a, b| a.name.cmp(&b.name));
+        // Open ports are written as `port/proto`: their comments are cosmetic and not kept.
+        for zone in &mut fw.zones {
+            for port in &mut zone.open_ports {
+                port.comment = None;
+            }
+        }
+        fw.port_forwards.sort_by(|a, b| a.comment.cmp(&b.comment));
+        fw
+    }
+
+    fn firewall_through_toml(fw: &FirewallConfig) -> FirewallConfig {
+        let export = SystemConfigExport {
+            firewall_config: Some(Box::new(fw.clone())),
+            ..Default::default()
+        };
+        let rendered = ConfigFile::from(&export).render_full().unwrap();
+        let parsed = ConfigFile::parse(&rendered).unwrap();
+        *SystemConfigExport::from(&parsed).firewall_config.unwrap()
+    }
+
+    /// Owner outage: editing `[firewall]` in the TOML re-imported the section into the DB and
+    /// silently dropped every zone forwarding, so `internal -> external` vanished and the LAN lost
+    /// the internet. The file must carry everything the daemon persists.
+    #[test]
+    fn firewall_config_roundtrips_through_config_file() {
+        let default = FirewallConfig::default();
+        assert_eq!(
+            sorted_firewall(firewall_through_toml(&default)),
+            sorted_firewall(default.clone()),
+            "default firewall config must survive the TOML round trip"
+        );
+
+        let mut custom = default;
+        custom.mode = FirewallMode::Minimal;
+        custom.table_name = "edge".into();
+        custom.on_stop = FirewallStopAction::Remove;
+        custom.forwardings.truncate(1);
+        custom.port_forwards = vec![
+            PortForwardRule {
+                comment: Some("game".into()),
+                src_zone: "trusted".into(),
+                internal_ip: "192.168.0.128".parse().unwrap(),
+                external_port: 6881,
+                internal_port: 6881,
+                protocol: L4Protocol::Both,
+                enable_hairpin: false,
+            },
+            PortForwardRule {
+                comment: Some("nas".into()),
+                src_zone: "external".into(),
+                internal_ip: "fd97:f00d:cafe:3731::501".parse().unwrap(),
+                external_port: 8443,
+                internal_port: 443,
+                protocol: L4Protocol::Tcp,
+                enable_hairpin: true,
+            },
+        ];
+        custom.zones[0].open_ports.push(HostPortRule {
+            comment: None,
+            port: 5353,
+            protocol: L4Protocol::Both,
+        });
+        assert_eq!(
+            sorted_firewall(firewall_through_toml(&custom)),
+            sorted_firewall(custom),
+        );
+    }
+
+    /// A file written before `forwardings` existed must not open or close routing silently:
+    /// a missing key means the default matrix, an explicit empty list means none.
+    #[test]
+    fn firewall_forwardings_missing_key_means_defaults() {
+        let cfg = ConfigFile::parse("[firewall]\nenabled = true\n").unwrap();
+        let fw = SystemConfigExport::from(&cfg).firewall_config.unwrap();
+        assert_eq!(fw.forwardings, FirewallConfig::default().forwardings);
+
+        let cfg = ConfigFile::parse("[firewall]\nforwardings = []\n").unwrap();
+        let fw = SystemConfigExport::from(&cfg).firewall_config.unwrap();
+        assert!(fw.forwardings.is_empty());
     }
 
     #[test]
