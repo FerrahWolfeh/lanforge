@@ -341,8 +341,13 @@ async fn test_pppoe_emits_auth_failed_and_reconnecting() {
         _ => None,
     })
     .await;
+    // An explicit reject cannot be fixed by retrying fast: at least the reject floor, even with
+    // `reconnect_delay_secs = 1`.
     assert_eq!(attempt, 1);
-    assert_eq!(delay, 1);
+    assert!(
+        delay >= lanforge_pppoe::backoff::REJECT_FLOOR.as_secs(),
+        "rejected credentials retried after {delay}s"
+    );
 
     // 3. Graceful shutdown during reconnect delay
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -610,4 +615,61 @@ async fn test_pppoe_with_injected_prober_reports_probe_response() {
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = service_handle.await;
+}
+
+/// A concentrator that drops the session seconds after it comes up must not be hammered: the
+/// failure count survives a short-lived session and the retry delay grows (ISPs flag accounts that
+/// reconnect in tight loops).
+#[tokio::test(start_paused = true)]
+async fn test_pppoe_flapping_session_backs_off() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "flap".into(),
+        reconnect_delay_secs: 10,
+        ..Default::default()
+    };
+    ctx.update_pppoe_config(cfg.clone());
+
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(
+        handle_inert,
+        MockBrasConfig {
+            terminate_after: Some(Duration::from_secs(3)),
+            ..Default::default()
+        },
+    );
+
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let h = ServiceHandle::new(ServiceId::Pppoe, ctx_clone.clone());
+    let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
+
+    // Virtual clock: minutes of backoff pass instantly.
+    let mut seen = Vec::new();
+    while seen.len() < 4 {
+        let evt = timeout(Duration::from_secs(3600), pppoe_sub.recv())
+            .await
+            .expect("no Reconnecting within an hour")
+            .expect("bus open");
+        if let LanforgeEvent::Pppoe(PppoeEvent::Reconnecting {
+            attempt,
+            next_retry_secs,
+        }) = evt.event
+        {
+            seen.push((attempt, next_retry_secs));
+        }
+    }
+
+    let attempts: Vec<u32> = seen.iter().map(|(a, _)| *a).collect();
+    assert_eq!(attempts, [1, 2, 3, 4], "flaps must accumulate: {seen:?}");
+    for pair in seen.windows(2) {
+        assert!(pair[1].1 > pair[0].1, "delay must grow: {seen:?}");
+    }
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
 }

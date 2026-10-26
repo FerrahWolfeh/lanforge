@@ -7,6 +7,7 @@
 #![allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
 
 pub mod auth;
+pub mod backoff;
 pub mod config;
 pub mod discovery;
 #[cfg(feature = "ebpf")]

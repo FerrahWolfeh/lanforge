@@ -6,7 +6,9 @@ use lanforge_transport::PppoeInertHandle;
 use lanforge_types::identifiers::MacAddr;
 use smallvec::{SmallVec, smallvec};
 use std::net::Ipv4Addr;
+use std::time::Duration;
 use tokio::task::JoinHandle;
+use tokio::time::{Instant, sleep_until};
 
 #[derive(Debug, Clone)]
 pub struct MockBrasConfig {
@@ -19,6 +21,8 @@ pub struct MockBrasConfig {
     pub auth_ok: bool,
     pub fail_discovery: bool,
     pub send_echo_replies: bool,
+    /// Send an LCP Terminate-Request this long after the session comes up (flapping concentrator).
+    pub terminate_after: Option<Duration>,
 }
 
 impl Default for MockBrasConfig {
@@ -33,15 +37,26 @@ impl Default for MockBrasConfig {
             auth_ok: true,
             fail_discovery: false,
             send_echo_replies: true,
+            terminate_after: None,
         }
     }
 }
 
 pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let mut terminate_at: Option<Instant> = None;
         // Discovery phase
         loop {
             tokio::select! {
+                () = async {
+                    match terminate_at {
+                        Some(at) => sleep_until(at).await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    terminate_at = None;
+                    handle.inject_session(vec![0xc0, 0x21, 0x05, 0x99, 0x00, 0x04]).await;
+                }
                 disc_opt = handle.recv_discovery() => {
                     let Some(bytes) = disc_opt else { break; };
                     if let Some(frame) = PppoeDiscoveryFrame::parse(&bytes) {
@@ -253,6 +268,7 @@ pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHan
                                     let mut ack = bytes.clone();
                                     ack[2] = 0x02; // Conf-Ack
                                     handle.inject_session(ack).await;
+                                    terminate_at = cfg.terminate_after.map(|d| Instant::now() + d);
 
                                     // Send BRAS IPCP Conf-Req with peer IP
                                     let peer_octets = cfg.peer_ip.octets();

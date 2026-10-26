@@ -1,4 +1,5 @@
 use crate::auth::authenticate;
+use crate::backoff::{ReconnectBackoff, SessionEnd};
 use crate::config::{PppoeConfig, PppoeCredentials};
 use crate::discovery::{PppoeDiscovery, send_padt};
 #[cfg(feature = "ebpf")]
@@ -30,7 +31,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::time::{Instant, sleep};
+use tokio::time::{Instant, sleep_until};
 use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone)]
@@ -55,6 +56,11 @@ pub(crate) const fn classify_system_event(event: &LanforgeEvent) -> Option<Syste
         LanforgeEvent::System(SystemEvent::Shutdown) => Some(SystemInterrupt::Shutdown),
         _ => None,
     }
+}
+
+/// Jitter factor for reconnect delays, uniform in `[0.8, 1.2]`.
+fn reconnect_jitter() -> f64 {
+    0.4f64.mul_add(rand::random::<f64>(), 0.8)
 }
 
 /// Extracts the base physical device name from a potential VLAN interface (e.g. "eth0.10" -> "eth0").
@@ -115,9 +121,11 @@ pub struct PppoeService {
     cfg: PppoeConfig,
     transport: Option<PppoeTransport>,
     ctx: LanforgeContext,
-    attempt: u32,
+    backoff: ReconnectBackoff,
     active_session: Option<ActiveSessionMeta>,
     connected_at: Option<Instant>,
+    /// Uptime of the session that just ended, `None` if it never came up.
+    last_uptime: Option<Duration>,
     prober: Option<ArpProber>,
     terminal_status: Option<(bool, Option<MacAddr>, Option<u32>)>,
     config_sub: ConfigSubscription<PppoeConfig>,
@@ -135,12 +143,13 @@ impl PppoeService {
         let mut config_sub = ctx.config_subscription::<PppoeConfig>();
         config_sub.mark_applied(Arc::new(cfg.clone()));
         Self {
+            backoff: ReconnectBackoff::new(Duration::from_secs(cfg.reconnect_delay_secs)),
             cfg,
             transport: None,
             ctx,
-            attempt: 0,
             active_session: None,
             connected_at: None,
+            last_uptime: None,
             prober: None,
             terminal_status: None,
             config_sub,
@@ -160,12 +169,13 @@ impl PppoeService {
         let mut config_sub = ctx.config_subscription::<PppoeConfig>();
         config_sub.mark_applied(Arc::new(cfg.clone()));
         Self {
+            backoff: ReconnectBackoff::new(Duration::from_secs(cfg.reconnect_delay_secs)),
             cfg,
             transport: Some(transport),
             ctx,
-            attempt: 0,
             active_session: None,
             connected_at: None,
+            last_uptime: None,
             prober: None,
             terminal_status: None,
             config_sub,
@@ -176,11 +186,64 @@ impl PppoeService {
         self.cfg.lcp_echo_interval_secs = new_cfg.lcp_echo_interval_secs;
         self.cfg.lcp_echo_max_failures = new_cfg.lcp_echo_max_failures;
         self.cfg.reconnect_delay_secs = new_cfg.reconnect_delay_secs;
+        self.backoff
+            .set_base(Duration::from_secs(new_cfg.reconnect_delay_secs));
         self.cfg.send_padt_on_shutdown = new_cfg.send_padt_on_shutdown;
         self.cfg.discovery_padi_retries = new_cfg.discovery_padi_retries;
         self.cfg.discovery_padi_timeout_secs = new_cfg.discovery_padi_timeout_secs;
         self.cfg.terminal_probe.clone_from(&new_cfg.terminal_probe);
         self.cfg.nftables.clone_from(&new_cfg.nftables);
+    }
+
+    /// Waits `delay` before the next attempt. Returns `false` when the service must exit instead.
+    /// An admin restart or a reconnect-level config change ends the wait early (no pacing for
+    /// explicit requests); a lagged bus never does.
+    async fn wait_before_reconnect(&mut self, h: &ServiceHandle, delay: Duration) -> bool {
+        let wake = Instant::now() + delay;
+        let mut sys_rx = self.ctx.bus().subscribe_system();
+        loop {
+            tokio::select! {
+                () = sleep_until(wake) => return true,
+                event_res = sys_rx.recv() => match event_res {
+                    Ok(timed)
+                        if classify_system_event(&timed.event) == Some(SystemInterrupt::Shutdown) =>
+                    {
+                        info!("PPPoE service received shutdown during reconnect delay");
+                        return false;
+                    }
+                    Err(RecvError::Closed) => return false,
+                    Ok(_) | Err(RecvError::Lagged(_)) => {}
+                },
+                delta_opt = self.config_sub.next() => {
+                    let Some(delta) = delta_opt else { return false };
+                    match delta.impact {
+                        ChangeImpact::Hot => {
+                            info!("PPPoE service received hot config update during reconnect delay");
+                            self.apply_hot_config(&delta.new);
+                        }
+                        ChangeImpact::Reconnect | ChangeImpact::Rebind => {
+                            info!("PPPoE config changed during reconnect delay, retrying immediately");
+                            self.cfg = (*delta.new).clone();
+                            self.backoff.reset();
+                            return self.cfg.enabled;
+                        }
+                        ChangeImpact::None => {}
+                    }
+                }
+                cmd = h.next_command() => match cmd {
+                    ServiceCommand::Stop | ServiceCommand::Shutdown => {
+                        info!("PPPoE service received stop/shutdown during reconnect delay");
+                        return false;
+                    }
+                    ServiceCommand::Restart => {
+                        info!("PPPoE service received restart during reconnect delay, retrying immediately");
+                        self.backoff.reset();
+                        return true;
+                    }
+                    _ => {}
+                },
+            }
+        }
     }
 
     #[must_use]
@@ -501,7 +564,7 @@ impl PppoeService {
             mru: Some(lcp_res.mru),
             dns_servers: ipcp_res.dns.to_vec(),
             uptime_secs: Some(0),
-            reconnect_attempts: self.attempt,
+            reconnect_attempts: self.backoff.failures(),
             last_error: None,
             auth: Some(lcp_res.auth_method),
             terminal_reachable,
@@ -539,7 +602,6 @@ impl PppoeService {
             .publish(LanforgeEvent::System(SystemEvent::ServiceReady {
                 id: Self::SERVICE_ID,
             }));
-        self.attempt = 0;
     }
 
     pub fn publish_session_state(&self, state: PppoeSessionState, last_error: Option<String>) {
@@ -561,7 +623,7 @@ impl PppoeService {
             mru: Some(self.cfg.mru),
             dns_servers: Vec::new(),
             uptime_secs: None,
-            reconnect_attempts: self.attempt,
+            reconnect_attempts: self.backoff.failures(),
             last_error,
             auth: Some(self.cfg.auth),
             terminal_reachable,
@@ -637,7 +699,8 @@ impl PppoeService {
                             waited_secs = wait_ticks,
                             "Physical carrier detected on WAN interface (link UP), proceeding to PPPoE discovery"
                         );
-                        self.attempt = 0;
+                        // A re-plugged cable is a new situation, not one more failure.
+                        self.backoff.reset();
                         return Ok(());
                     }
 
@@ -858,6 +921,7 @@ impl PppoeService {
     }
 
     async fn run_session_flow(&mut self) -> Result<Option<SystemInterrupt>, PppoeError> {
+        self.last_uptime = None;
         self.wait_for_carrier().await?;
 
         let prober = self.wait_for_terminal().await?;
@@ -951,6 +1015,7 @@ impl PppoeService {
             Err(e) => e.to_string(),
         };
 
+        self.last_uptime = self.connected_at.map(|t| t.elapsed());
         self.teardown_active_session(reason).await;
 
         flow_res
@@ -1053,7 +1118,7 @@ impl AsyncService for PppoeService {
             ),
             (
                 Cow::Borrowed("reconnect_attempts"),
-                self.attempt.to_string(),
+                self.backoff.failures().to_string(),
             ),
             (Cow::Borrowed("rx_packets"), snap.rx_packets.to_string()),
             (Cow::Borrowed("tx_packets"), snap.tx_packets.to_string()),
@@ -1124,13 +1189,13 @@ impl AsyncService for PppoeService {
                             // Bounced in place (PADT + new discovery); the task keeps running.
                             info!("PPPoE service received restart command, restarting session");
                             self.teardown_active_session("Service restarted".into()).await;
-                            self.attempt = 0;
+                            self.backoff.reset();
                         }
                         _ => {}
                     }
                 }
                 flow_res = self.run_session_flow() => {
-                    match flow_res {
+                    let (end, error) = match flow_res {
                         Ok(Some(SystemInterrupt::Shutdown)) => {
                             info!("PPPoE service session finished cleanly (daemon shutting down)");
                             ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
@@ -1143,7 +1208,8 @@ impl AsyncService for PppoeService {
                         }
                         Ok(Some(SystemInterrupt::ConfigUpdated)) => {
                             info!("PPPoE session restart requested, reconnecting");
-                            self.attempt = 0;
+                            self.backoff.reset();
+                            continue 'main_loop;
                         }
                         Ok(None) => {
                             if !ctx.is_running() {
@@ -1158,88 +1224,42 @@ impl AsyncService for PppoeService {
                                 h.dormant(DormantReason::disabled("pppoe.enabled"));
                                 break 'main_loop;
                             }
-                            info!("PPPoE session completed, reconnecting with active configuration");
-                            self.attempt = 0;
+                            (SessionEnd { uptime: self.last_uptime, rejected: false }, None)
                         }
                         Err(e) => {
                             if !ctx.is_running() {
                                 break 'main_loop;
                             }
-                            self.attempt += 1;
-                            warn!(
-                                wan_iface = %self.cfg.wan_iface,
-                                attempt = self.attempt,
-                                error = %e,
-                                delay_secs = self.cfg.reconnect_delay_secs,
-                                "PPPoE session failed; scheduling reconnection"
-                            );
-
-                            if self.attempt >= 3 {
-                                h.degraded(DegradedReason::custom("no session"));
-                            }
-
-                            self.publish_session_state(
-                                PppoeSessionState::Reconnecting,
-                                Some(e.to_string()),
-                            );
-
-                            let _ =
-                                ctx
-                                    .bus()
-                                    .publish(LanforgeEvent::Pppoe(PppoeEvent::Reconnecting {
-                                        attempt: self.attempt,
-                                        next_retry_secs: self.cfg.reconnect_delay_secs,
-                                    }));
-
-                            let mut sys_rx = ctx.bus().subscribe_system();
-                            let delay = Duration::from_secs(self.cfg.reconnect_delay_secs);
-                            tokio::select! {
-                                () = sleep(delay) => {}
-                                event_res = sys_rx.recv() => {
-                                    if let Ok(timed) = event_res
-                                        && classify_system_event(&timed.event) == Some(SystemInterrupt::Shutdown)
-                                    {
-                                        info!("PPPoE service received shutdown during reconnect delay");
-                                        ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
-                                        break 'main_loop;
-                                    }
-                                }
-                                delta_opt = self.config_sub.next() => {
-                                    if let Some(delta) = delta_opt {
-                                        match delta.impact {
-                                            ChangeImpact::Hot => {
-                                                info!("PPPoE service received hot config update during reconnect delay");
-                                                self.apply_hot_config(&delta.new);
-                                            }
-                                            ChangeImpact::Reconnect | ChangeImpact::Rebind => {
-                                                info!("PPPoE service received reconnect config update during reconnect delay, retrying immediately");
-                                                self.cfg = (*delta.new).clone();
-                                                if !self.cfg.enabled {
-                                                    ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
-                                                    break 'main_loop;
-                                                }
-                                                self.attempt = 0;
-                                            }
-                                            ChangeImpact::None => {}
-                                        }
-                                    }
-                                }
-                                cmd = h.next_command() => {
-                                    match cmd {
-                                        ServiceCommand::Stop | ServiceCommand::Shutdown => {
-                                            info!("PPPoE service received stop/shutdown during reconnect delay");
-                                            ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
-                                            break 'main_loop;
-                                        }
-                                        ServiceCommand::Restart => {
-                                            info!("PPPoE service received restart during reconnect delay, retrying immediately");
-                                            self.attempt = 0;
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
+                            let rejected = matches!(e, PppoeError::AuthFailed(_));
+                            (SessionEnd { uptime: self.last_uptime, rejected }, Some(e))
                         }
+                    };
+
+                    let delay = self.backoff.next_delay(end, reconnect_jitter());
+                    let attempt = self.backoff.failures();
+                    warn!(
+                        wan_iface = %self.cfg.wan_iface,
+                        attempt,
+                        uptime_secs = end.uptime.map(|u| u.as_secs()),
+                        error = error.as_ref().map(ToString::to_string),
+                        delay_secs = delay.as_secs(),
+                        "PPPoE session ended; scheduling reconnection"
+                    );
+                    if attempt >= 3 {
+                        h.degraded(DegradedReason::custom("no session"));
+                    }
+                    self.publish_session_state(
+                        PppoeSessionState::Reconnecting,
+                        error.as_ref().map(ToString::to_string),
+                    );
+                    let _ = ctx.bus().publish(LanforgeEvent::Pppoe(PppoeEvent::Reconnecting {
+                        attempt,
+                        next_retry_secs: delay.as_secs(),
+                    }));
+
+                    if !self.wait_before_reconnect(h, delay).await {
+                        ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
+                        break 'main_loop;
                     }
                 }
             }

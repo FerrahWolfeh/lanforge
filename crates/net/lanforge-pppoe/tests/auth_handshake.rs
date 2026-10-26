@@ -102,7 +102,8 @@ async fn run_bras(h: PppoeInertHandle, b: Bras) {
             ([0xc0, 0x23], 0x01) => {
                 pap_requests += 1;
                 if pap_requests > 1 {
-                    h.inject_session(vec![0xc0, 0x23, 0x02, id, 0x00, 0x05, 0x00]).await;
+                    h.inject_session(vec![0xc0, 0x23, 0x02, id, 0x00, 0x05, 0x00])
+                        .await;
                 }
             }
             (CHAP, 0x02) => {
