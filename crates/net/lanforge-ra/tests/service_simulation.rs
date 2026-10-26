@@ -152,3 +152,137 @@ async fn test_ra_inert_full_lifecycle() {
     let shutdown_res = timeout(Duration::from_millis(500), serve_handle).await;
     assert!(shutdown_res.is_ok());
 }
+
+#[tokio::test]
+async fn test_ra_prefix_deprecation_on_renumber() {
+    use lanforge_types::network::snapshot::{Ipv6Net, WanSnapshot, WanState};
+
+    let (ctx, bus) = create_test_context();
+
+    // 1. Configure RA with dynamic GUA prefix
+    ctx.update_ra_server_config(RaServerConfig {
+        enabled: true,
+        iface: Some("lan0".into()),
+        managed: false,
+        other_config: false,
+        hop_limit: 64,
+        priority: RouterPriority::Medium,
+        max_interval_secs: 600,
+        min_interval_secs: Some(200),
+        lifetime_secs: Some(1800),
+        reachable_time_ms: 0,
+        retrans_timer_ms: 0,
+        mtu: Some(1500),
+        prefixes: vec![RAPrefix::gua_dynamic()],
+        rdnss: vec![],
+        dnssl: vec![],
+        deprecate_on_renumber: true,
+    });
+
+    let initial_p1: Ipv6Addr = "2001:db8:1000::1".parse().unwrap();
+    ctx.set_wan_snapshot(WanSnapshot {
+        state: WanState::Up,
+        ifindex: Some(10),
+        ifname: Some("ppp0".into()),
+        v4: None,
+        v6_prefixes: vec![Ipv6Net {
+            addr: initial_p1,
+            prefix_len: 64,
+        }]
+        .into(),
+        generation: 1,
+    });
+
+    let cfg = RaConfig::default();
+    let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
+    let service = RaService::with_transport(cfg, ctx.clone(), transport);
+
+    let mut service_clone = service.clone();
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
+        service_clone.serve(&ctx_clone, &h).await
+    });
+
+    // 2. Receive initial RA
+    let initial_ra = timeout(Duration::from_millis(500), handle.recv_payload())
+        .await
+        .expect("Timeout waiting for initial RA")
+        .expect("RA channel closed");
+    assert_eq!(initial_ra[0], 134);
+
+    // 3. Renumber WAN prefix to 2001:db8:2000::1
+    let new_p2: Ipv6Addr = "2001:db8:2000::1".parse().unwrap();
+    ctx.set_wan_snapshot(WanSnapshot {
+        state: WanState::Up,
+        ifindex: Some(10),
+        ifname: Some("ppp0".into()),
+        v4: None,
+        v6_prefixes: vec![Ipv6Net {
+            addr: new_p2,
+            prefix_len: 64,
+        }]
+        .into(),
+        generation: 2,
+    });
+
+    // 4. Renumbering triggers immediate burst RA within 1 second
+    let burst_ra = timeout(Duration::from_millis(1000), handle.recv_payload())
+        .await
+        .expect("Timeout waiting for burst RA after renumbering")
+        .expect("RA channel closed");
+    assert_eq!(burst_ra[0], 134);
+
+    // Parse prefix options in burst_ra
+    let mut offset = 16; // skip 16B fixed header + SLLAO
+    let mut prefixes: Vec<(Ipv6Addr, u32, u32)> = Vec::new();
+    while offset + 8 <= burst_ra.len() {
+        let opt_type = burst_ra[offset];
+        let opt_len = burst_ra[offset + 1] as usize * 8;
+        if opt_len == 0 || offset + opt_len > burst_ra.len() {
+            break;
+        }
+        if opt_type == 3 && opt_len >= 32 {
+            let valid_lt = u32::from_be_bytes(burst_ra[offset + 4..offset + 8].try_into().unwrap());
+            let pref_lt = u32::from_be_bytes(burst_ra[offset + 8..offset + 12].try_into().unwrap());
+            let addr_bytes: [u8; 16] = burst_ra[offset + 16..offset + 32].try_into().unwrap();
+            let addr = Ipv6Addr::from(addr_bytes);
+            prefixes.push((addr, valid_lt, pref_lt));
+        }
+        offset += opt_len;
+    }
+
+    let expected_new: Ipv6Addr = "2001:db8:2000::".parse().unwrap();
+    let expected_old: Ipv6Addr = "2001:db8:1000::".parse().unwrap();
+
+    // Must contain the new prefix (preferred > 0, valid > 0)
+    let new_opt = prefixes.iter().find(|(addr, _, _)| *addr == expected_new);
+    assert!(
+        new_opt.is_some(),
+        "New prefix should be advertised in burst RA"
+    );
+    let (_, new_valid, new_pref) = new_opt.unwrap();
+    assert!(*new_valid > 0);
+    assert!(*new_pref > 0);
+
+    // Must contain the deprecated old prefix (RFC 4862 §5.5.3e: preferred = 0, valid <= 7200)
+    let dep_opt = prefixes.iter().find(|(addr, _, _)| *addr == expected_old);
+    assert!(
+        dep_opt.is_some(),
+        "Old prefix should be deprecated in burst RA"
+    );
+    let (_, dep_valid, dep_pref) = dep_opt.unwrap();
+    assert_eq!(
+        *dep_pref, 0,
+        "Deprecated prefix must have preferred_lifetime = 0"
+    );
+    assert!(
+        *dep_valid <= 7200 && *dep_valid > 0,
+        "Deprecated prefix valid_lifetime must be capped at 7200s"
+    );
+
+    // Clean shutdown
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let shutdown_res = timeout(Duration::from_millis(500), serve_handle).await;
+    assert!(shutdown_res.is_ok());
+}

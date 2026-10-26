@@ -403,6 +403,7 @@ impl Dhcpv6Service {
         let mut pools_sub = self.ctx.config_subscription::<Vec<Dhcpv6Pool>>();
         let mut options_sub = self.ctx.config_subscription::<Dhcpv6Options>();
         let mut stats_timer = tokio::time::interval(Duration::from_mins(1));
+        let mut wan_rx = self.ctx.watch_wan();
 
         info!(
             iface = %current_cfg.iface,
@@ -475,6 +476,13 @@ impl Dhcpv6Service {
                         return Ok(RunResult::Shutdown);
                     };
                     self.handle_bus_event(&timed_event, &mut server, &transport);
+                }
+                Ok(()) = wan_rx.changed() => {
+                    let snap = wan_rx.borrow().clone();
+                    if snap.is_up() && !snap.v6_prefixes.is_empty() {
+                        let new_gua = snap.v6_prefixes[0].addr;
+                        self.handle_prefix_change(&mut server, &transport, Some(new_gua), 3600, 7200);
+                    }
                 }
                 _ = stats_timer.tick() => {
                     self.publish_pool_stats(&server);

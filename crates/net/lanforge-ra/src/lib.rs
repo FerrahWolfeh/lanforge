@@ -263,20 +263,21 @@ impl RaState {
         &mut self,
         current: Option<Ipv6Addr>,
         is_gua: bool,
+        deprecate_on_renumber: bool,
     ) -> bool {
         let last = if is_gua { self.last_gua } else { self.last_ula };
         if current == last {
             false
         } else {
-            if let Some(old) = last {
+            if let Some(old) = last
+                && deprecate_on_renumber
+            {
                 let now = Instant::now();
-                let (deprecation_end, valid_end) = if is_gua {
-                    // RFC 9096: Set valid_lifetime = 0 for obsolete GUA prefix upon prefix change,
-                    // and announce preferred=0 / valid=0 for 60s to ensure all LAN hosts purge it.
-                    (now + Duration::from_mins(1), now)
-                } else {
-                    (now + Duration::from_hours(2), now + Duration::from_hours(2))
-                };
+                // RFC 4862 §5.5.3e:
+                // Deprecate old prefix with preferred_lifetime = 0 and valid_lifetime = min(remaining, 7200) (2 hours).
+                let valid_duration = Duration::from_secs(7200);
+                let valid_end = now + valid_duration;
+                let deprecation_end = valid_end;
                 if !self.deprecated_prefixes.iter().any(|(ip, _, _)| *ip == old) {
                     self.deprecated_prefixes
                         .push((old, deprecation_end, valid_end));
@@ -502,6 +503,7 @@ impl RaService {
         let mut handle = self.ctx.service_handle_network();
         let mut ra_sub = self.ctx.config_subscription::<RaServerConfig>();
         let mut prefix_sub = self.ctx.config_subscription::<Vec<RAPrefix>>();
+        let mut wan_rx = self.ctx.watch_wan();
 
         loop {
             let now = Instant::now();
@@ -590,7 +592,24 @@ impl RaService {
                     }
                 }
 
-                // 4. EventBus signals
+                // 4. WAN snapshot changes
+                Ok(()) = wan_rx.changed() => {
+                    let snap = wan_rx.borrow().clone();
+                    if snap.is_up() && !snap.v6_prefixes.is_empty() {
+                        let new_gua = snap.v6_prefixes[0].addr;
+                        if state.last_gua != Some(new_gua) {
+                            info!(
+                                old_prefix = ?state.last_gua,
+                                new_prefix = %new_gua,
+                                "RA: WAN IPv6 prefix renumbered via WanSnapshot — triggering immediate RA burst"
+                            );
+                            state.initial_sent = 0;
+                            next_ra_at = Instant::now();
+                        }
+                    }
+                }
+
+                // 5. EventBus signals
                 res = handle.next_event() => {
                     let Some(timed_event) = res else {
                         return Ok(RunResult::Shutdown);
@@ -874,13 +893,16 @@ fn send_ra_internal(
         None if transport.is_inert() => Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0200, 0, 0, 1),
         None => return Err(NetworkError::NoLinkLocal(iface_index)),
     };
-    let gua = if_ips.gua;
+    let gua = if_ips.gua.or_else(|| {
+        let wan_snap = lctx.wan_snapshot();
+        wan_snap.v6_prefixes.first().map(|net| net.addr)
+    });
     let ula = if_ips.ula;
 
     let now = Instant::now();
 
-    state.update_prefix_and_deprecate(gua, true);
-    state.update_prefix_and_deprecate(ula, false);
+    state.update_prefix_and_deprecate(gua, true, cfg.deprecate_on_renumber);
+    state.update_prefix_and_deprecate(ula, false, cfg.deprecate_on_renumber);
 
     // Clean up expired deprecated prefixes
     state
@@ -892,9 +914,17 @@ fn send_ra_internal(
     let dst_ip: Ipv6Addr = unicast_dst.unwrap_or(ALL_NODES_MULTICAST);
     let dst_sa = SocketAddrV6::new(dst_ip, 0, 0, iface_index);
 
-    let gua_info = gua
-        .as_ref()
-        .map(|g| (g, if_ips.gua_preferred, if_ips.gua_valid));
+    let gua_pref = if if_ips.gua_preferred > 0 {
+        if_ips.gua_preferred
+    } else {
+        3600
+    };
+    let gua_val = if if_ips.gua_valid > 0 {
+        if_ips.gua_valid
+    } else {
+        7200
+    };
+    let gua_info = gua.as_ref().map(|g| (g, gua_pref, gua_val));
     let mut pkt = build_ra_packet(cfg, mac, gua_info, ula.as_ref(), &deprecated_list);
 
     let csum = icmpv6_checksum(&src_ll, &dst_ip, &pkt);
@@ -1030,11 +1060,15 @@ mod tests {
         assert_eq!(if_ips.gua, Some(new_gua));
 
         // 5. Simulate send_ra_internal transition for rotation:
-        state.update_prefix_and_deprecate(if_ips.gua, true);
+        state.update_prefix_and_deprecate(if_ips.gua, true, true);
 
-        // Verify that old_gua is now deprecated in state
+        // Verify that old_gua is now deprecated in state with RFC 4862 §5.5.3e valid lifetime (2 hours = 7200s)
         assert_eq!(state.deprecated_prefixes.len(), 1);
         assert_eq!(state.deprecated_prefixes[0].0, old_gua);
+        let deprecated_list = state.deprecated_list(std::time::Instant::now());
+        assert_eq!(deprecated_list.len(), 1);
+        assert_eq!(deprecated_list[0].0, old_gua);
+        assert!(deprecated_list[0].1 >= 7199 && deprecated_list[0].1 <= 7200);
 
         // 6. Test build_ra_packet with the deprecated prefix list
         let cfg = RaConfig {
