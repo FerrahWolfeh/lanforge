@@ -391,6 +391,9 @@ impl AsyncService for NftService {
     ) -> impl Future<Output = Result<(), CoreError>> + Send {
         let ctx = ctx.clone();
         async move {
+            // WAN events only report changes: a firewall (re)started while the WAN is already up
+            // would otherwise compile without it until the next reconnect.
+            self.active_wan = ctx.wan_snapshot().ifname;
             let fw_cfg = ctx.get_firewall_config().unwrap_or_default();
             if fw_cfg.enabled && fw_cfg.mode != FirewallMode::Disabled {
                 self.reapply(&ctx, "startup").await;
@@ -419,7 +422,12 @@ impl AsyncService for NftService {
                 return Ok(());
             }
 
-            if self.last_applied_payload().is_none() {
+            // The WAN may have changed between `init` and this subscription.
+            let live_wan = wan_rx.borrow_and_update().ifname.clone();
+            if live_wan != self.active_wan {
+                self.active_wan = live_wan;
+                self.reapply(&ctx, "wan_generation").await;
+            } else if self.last_applied_payload().is_none() {
                 self.reapply(&ctx, "startup").await;
             }
             h.ready();

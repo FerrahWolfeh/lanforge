@@ -13,6 +13,7 @@ use lanforge_types::network::firewall::{
     DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallStopAction,
     FirewallZone, HostPortRule, L4Protocol, PortForwardRule,
 };
+use lanforge_types::network::snapshot::{WanSnapshot, WanState};
 use lanforge_types::system::{ServiceId, ServiceState};
 use std::net::IpAddr;
 use tokio::sync::{broadcast, mpsc};
@@ -725,4 +726,26 @@ async fn test_firewall_stop_removes_table_when_configured() {
         ctx.get_service_state(ServiceId::Nft),
         ServiceState::Inactive
     );
+}
+
+/// A firewall started while the WAN is already up (admin `service stop/start firewall`, or a
+/// supervisor restart) gets no `SessionUp` and no WAN watch change: it must read the current WAN
+/// instead of compiling a ruleset without it.
+#[tokio::test]
+async fn test_firewall_start_with_wan_already_up_binds_wan() {
+    let (ctx, bus) = create_test_context();
+    ctx.set_wan_snapshot(WanSnapshot {
+        state: WanState::Up,
+        ifname: Some("ppp0".into()),
+        generation: 1,
+        ..Default::default()
+    });
+
+    let mut fw_sub = bus.subscribe_firewall();
+    let mut service = NftService::inert();
+    service.init(&ctx).await.expect("Init must succeed");
+    let summary = wait_for_ruleset_applied(&mut fw_sub).await;
+    assert_eq!(summary.wan_iface.as_deref(), Some("ppp0"));
+    let payload = service.last_applied_payload().unwrap();
+    assert!(payload.contains("\"ppp0\""), "startup ruleset must bind the live WAN");
 }
