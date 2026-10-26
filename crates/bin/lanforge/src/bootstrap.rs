@@ -14,7 +14,9 @@ use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
 use lanforge_discovery::refresh_interface;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::Ipv6Prefix;
+use lanforge_types::network::{
+    IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, classify_ipv6, is_ula,
+};
 #[cfg(feature = "dhcp")]
 use lanforge_types::network::dhcp::{
     DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, TftpOptions,
@@ -1030,12 +1032,27 @@ impl Bootstrapper {
                 }
             });
 
+            // Use ULA if available; otherwise GUA; never Link-Local for the system host
+            let mut ula_v6 = None;
+            let mut gua_v6 = None;
+            for ip in &iface.ips {
+                if let IpNetwork::V6(v6) = ip {
+                    let addr = v6.ip();
+                    if is_ula(&addr) {
+                        ula_v6 = Some(addr);
+                    } else if matches!(classify_ipv6(&addr), IpClassification::Gua) {
+                        gua_v6 = Some(addr);
+                    }
+                }
+            }
+            let v6_static = ula_v6.or(gua_v6).map(Ipv6AddrOrSuffix::Full);
+
             table.add_static_device(
                 mac,
                 hostname,
                 None, // DUID not required for the host itself here
                 v4_static,
-                None, // V6 suffix will be picked up by scan
+                v6_static,
                 None,
                 Origin::System,
             );

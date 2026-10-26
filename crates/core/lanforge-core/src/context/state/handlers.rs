@@ -402,52 +402,51 @@ impl State {
             .find(|(_, d)| d.origin == Origin::System)
         {
             let mac = *mac;
-            let mut system_events = self.mutate_device(mac, |dev| {
-                let mut changed = false;
+            if merged.mac.is_none_or(|m| m == mac) {
+                let mut system_events = self.mutate_device(mac, |dev| {
+                    let mut changed = false;
 
-                // Sync IPv4
-                if let Some((v4, _)) = state.v4 {
-                    let new_v4 = IPv4State::Static(v4);
-                    if dev.v4 != new_v4 {
-                        dev.v4 = new_v4;
+                    // Sync IPv4
+                    if let Some((v4, _)) = merged.v4 {
+                        let new_v4 = IPv4State::Static(v4);
+                        if dev.v4 != new_v4 {
+                            dev.v4 = new_v4;
+                            changed = true;
+                        }
+                    }
+
+                    // Sync IPv6: The host system device should not announce itself with
+                    // its Link-Local address. If ULA is available on the primary interface,
+                    // that is the IPv6 it announces; otherwise, use GUA, or none if neither exists.
+                    let mut new_v6 = Vec::new();
+                    let now = SystemTime::now();
+
+                    if let Some(ula) = merged.ula {
+                        new_v6.push(IPv6State::Static(Ipv6AddrOrSuffix::Full(ula), now));
+                    } else if let Some(gua) = merged.gua {
+                        new_v6.push(IPv6State::Static(Ipv6AddrOrSuffix::Full(gua), now));
+                    }
+
+                    // Only update if the set of IPs actually changed
+                    if dev.v6.len() != new_v6.len()
+                        || dev.v6.iter().zip(new_v6.iter()).any(|(a, b)| a != b)
+                    {
+                        dev.v6 = new_v6;
                         changed = true;
                     }
-                }
 
-                // Sync IPv6 (Link-Local, GUA, ULA)
-                // We treat system IPs as static entries in the device state
-                let mut new_v6 = Vec::new();
-                let now = SystemTime::now();
-
-                if let Some(ll) = state.link_local {
-                    new_v6.push(IPv6State::Static(Ipv6AddrOrSuffix::Full(ll), now));
-                }
-                if let Some(gua) = state.gua {
-                    new_v6.push(IPv6State::Static(Ipv6AddrOrSuffix::Full(gua), now));
-                }
-                if let Some(ula) = state.ula {
-                    new_v6.push(IPv6State::Static(Ipv6AddrOrSuffix::Full(ula), now));
-                }
-
-                // Only update if the set of IPs actually changed
-                if dev.v6.len() != new_v6.len()
-                    || dev.v6.iter().zip(new_v6.iter()).any(|(a, b)| a != b)
-                {
-                    dev.v6 = new_v6;
-                    changed = true;
-                }
-
-                if changed {
-                    Some(NetworkChange::StatusChanged {
-                        online: true,
-                        status: DeviceStatus::Online,
-                        hostname: None,
-                    })
-                } else {
-                    None
-                }
-            });
-            events.append(&mut system_events);
+                    if changed {
+                        Some(NetworkChange::StatusChanged {
+                            online: true,
+                            status: DeviceStatus::Online,
+                            hostname: None,
+                        })
+                    } else {
+                        None
+                    }
+                });
+                events.append(&mut system_events);
+            }
         }
 
         events

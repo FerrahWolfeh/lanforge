@@ -1385,10 +1385,14 @@ fn test_interface_prefix_renumbering_and_system_host() {
         Some(client_mac)
     );
 
-    // Verify system host device updated
+    // Verify system host device updated: prefers ULA over GUA, never sets Link-Local
     let sys_dev = ctx.get_device(&sys_mac).unwrap();
     assert!(
         matches!(sys_dev.v4, IPv4State::Static(ip) if ip == "192.168.1.1".parse::<Ipv4Addr>().unwrap())
+    );
+    assert_eq!(sys_dev.v6.len(), 1);
+    assert!(
+        matches!(&sys_dev.v6[0], IPv6State::Static(Ipv6AddrOrSuffix::Full(ip), _) if *ip == ula1)
     );
 
     // 2. Renumber interface prefix
@@ -1408,6 +1412,92 @@ fn test_interface_prefix_renumbering_and_system_host() {
     assert_eq!(
         ctx.get_mac_by_ip("fd00:2::55".parse().unwrap()),
         Some(client_mac)
+    );
+
+    // System host updated to new ULA
+    let sys_dev2 = ctx.get_device(&sys_mac).unwrap();
+    assert_eq!(sys_dev2.v6.len(), 1);
+    assert!(
+        matches!(&sys_dev2.v6[0], IPv6State::Static(Ipv6AddrOrSuffix::Full(ip), _) if *ip == ula2)
+    );
+}
+
+#[test]
+fn test_system_host_ipv6_precedence_ula_over_gua_no_link_local() {
+    let ctx = setup();
+    let sys_mac = MacAddr([0x00, 0x00, 0x5e, 0x00, 0x53, 0x99]);
+    let mut sys_dev = Device::new(sys_mac);
+    sys_dev.identity_mut().origin = Origin::System;
+    sys_dev.identity_mut().hostname.name = "gateway".to_string();
+    ctx.insert_device(sys_mac, sys_dev);
+
+    // 1. Only Link-Local on interface: System device must NOT announce Link-Local
+    let if_ll_only = lanforge_types::update::InterfaceState {
+        v4: Some(("10.0.0.1".parse().unwrap(), 24)),
+        link_local: Some("fe80::1".parse().unwrap()),
+        ..Default::default()
+    };
+    let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+        ifindex: 1,
+        state: Box::new(if_ll_only),
+    });
+    let dev = ctx.get_device(&sys_mac).unwrap();
+    assert!(
+        dev.v6.is_empty(),
+        "System host must not announce Link-Local IPv6"
+    );
+
+    // 2. Add GUA: System host should announce GUA
+    let gua: Ipv6Addr = "2001:db8:acad::1".parse().unwrap();
+    let if_gua = lanforge_types::update::InterfaceState {
+        gua: Some(gua),
+        ..Default::default()
+    };
+    let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+        ifindex: 1,
+        state: Box::new(if_gua),
+    });
+    let dev = ctx.get_device(&sys_mac).unwrap();
+    assert_eq!(dev.v6.len(), 1);
+    assert!(
+        matches!(&dev.v6[0], IPv6State::Static(Ipv6AddrOrSuffix::Full(ip), _) if *ip == gua)
+    );
+
+    // 3. Add ULA: System host must prefer ULA over GUA
+    let ula: Ipv6Addr = "fd00:dead:beef::1".parse().unwrap();
+    let if_ula = lanforge_types::update::InterfaceState {
+        ula: Some(ula),
+        ..Default::default()
+    };
+    let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+        ifindex: 1,
+        state: Box::new(if_ula),
+    });
+    let dev = ctx.get_device(&sys_mac).unwrap();
+    assert_eq!(dev.v6.len(), 1, "Must only announce the single primary IPv6 (ULA)");
+    assert!(
+        matches!(&dev.v6[0], IPv6State::Static(Ipv6AddrOrSuffix::Full(ip), _) if *ip == ula)
+    );
+
+    // 4. Clear ULA: Falls back to GUA
+    let if_no_ula = lanforge_types::update::InterfaceState {
+        gua: Some(gua),
+        ..Default::default()
+    };
+    // To clear ULA in merged interface state, update interface_ips directly or test fallback
+    ctx.with_state_mut(|state| {
+        if let Some(if_state) = state.interfaces.interface_ips.get_mut(&1) {
+            if_state.ula = None;
+        }
+    });
+    let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+        ifindex: 1,
+        state: Box::new(if_no_ula),
+    });
+    let dev = ctx.get_device(&sys_mac).unwrap();
+    assert_eq!(dev.v6.len(), 1);
+    assert!(
+        matches!(&dev.v6[0], IPv6State::Static(Ipv6AddrOrSuffix::Full(ip), _) if *ip == gua)
     );
 }
 
