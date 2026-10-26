@@ -638,3 +638,60 @@ async fn test_dhcpv4_records_the_pool_lease_the_client_received() -> Result<(), 
     let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
     Ok(())
 }
+
+/// RFC 2131 §4.3.1: an OFFER only reserves the address; the lease exists once the server ACKs.
+/// The daemon recorded a full lease on OFFER, so a client that took another server's offer (a
+/// repeater or ISP modem with DHCP left on) kept a phantom lease and the address stayed taken.
+#[tokio::test]
+async fn test_dhcpv4_offer_is_not_a_lease() -> Result<(), Box<dyn Error>> {
+    let (ctx, bus) = init_test_context();
+    ctx.set_target_interface_name("lan0".to_string());
+    let mut cfg = create_test_v4_config();
+    let only_ip = Ipv4Addr::new(192, 168, 1, 150);
+    cfg.pools[0].range_start = only_ip;
+    cfg.pools[0].range_end = only_ip;
+    ctx.update_dhcp_v4_pools(cfg.pools.clone());
+
+    let (handle, transport) = Dhcpv4Transport::inert();
+    let mut service = Dhcpv4Service::with_transport(cfg.clone(), ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp4, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    wait_for_service_online(&ctx, ServiceId::Dhcp4).await?;
+    let src = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68);
+
+    // Client A is offered the only address but has not requested it yet: no lease.
+    let a = MacAddr([0x02, 0, 0, 0, 0, 0x0a]);
+    handle
+        .inject(Dhcpv4PacketBuilder::discover(a).build(), src)
+        .await;
+    let offer = timeout(TEST_TIMEOUT, handle.recv_reply())
+        .await?
+        .ok_or("reply channel closed")?
+        .message()?;
+    assert_eq!(offer.yiaddr(), only_ip);
+    let leased = ctx
+        .get_device(&a)
+        .is_some_and(|d| matches!(d.v4, IPv4State::Dynamic(_)));
+    assert!(!leased, "OFFER must not create a lease");
+
+    // A takes another server's offer.
+    let other_server = Ipv4Addr::new(192, 168, 1, 254);
+    handle
+        .inject(
+            Dhcpv4PacketBuilder::request(a, only_ip, other_server).build(),
+            src,
+        )
+        .await;
+
+    // Client B must get the address A declined by choosing elsewhere.
+    let b = MacAddr([0x02, 0, 0, 0, 0, 0x0b]);
+    let ack = dhcpv4_acquire(&handle, b, cfg.server_id).await?;
+    assert_eq!(ack.yiaddr(), only_ip);
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
+    Ok(())
+}

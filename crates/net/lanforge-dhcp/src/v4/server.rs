@@ -40,7 +40,7 @@ use dhcproto::{Decodable, Decoder, Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
 use lanforge_types::device::{Device, IPv4State};
 use lanforge_types::identifiers::MacAddr;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;
 use tracing::{debug, info, warn};
 
@@ -273,7 +273,14 @@ impl DhcpServer {
             msg.opts().get(v4::OptionCode::ServerIdentifier)
             && *sid != self.cfg.server_id
         {
-            // Client selected a different server — release our offer
+            // RFC 2131 §4.3.2: the client chose another server's offer. Return our reservation
+            // unless the address is leased or reserved in the state.
+            if let Some(offered) = Self::get_requested_ip(msg)
+                && self.ctx.get_mac_by_ip(IpAddr::V4(offered)).is_none()
+                && !self.ctx.get_static_registry().v4.contains_key(&offered)
+            {
+                self.pool.release(&offered);
+            }
             debug!("{identity} selected different server {sid}");
             return HandleResult::Ignore;
         }

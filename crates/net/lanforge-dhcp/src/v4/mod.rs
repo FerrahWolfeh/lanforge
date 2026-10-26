@@ -542,7 +542,11 @@ impl Dhcpv4Service {
 
         let mut updates = SmallVec::<[DeviceUpdate; 3]>::new();
 
-        if let Some(assigned_ip) = server.last_assignment_for() {
+        // RFC 2131 §4.3.1: an OFFER only reserves the address (in the pool); the lease exists
+        // once we ACK.
+        if let Some(assigned_ip) = server.last_assignment_for()
+            && msg_type == MessageType::Ack
+        {
             let lease_secs = u64::from(server.lease_time_for(assigned_ip));
             let expires = SystemTime::now() + Duration::from_secs(lease_secs);
 
