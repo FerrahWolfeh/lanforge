@@ -12,6 +12,7 @@ use lanforge_pppoe::{PppoeConfig, PppoeService};
 use lanforge_transport::PppoeTransport;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
+use lanforge_types::network::snapshot::{WanSnapshot, WanState};
 use lanforge_types::system::{PppoeSessionState, ServiceId, ServiceState};
 use mock_bras::{MockBrasConfig, spawn_mock_bras};
 use tokio::sync::{broadcast, mpsc};
@@ -332,8 +333,9 @@ async fn test_pppoe_emits_auth_failed_and_reconnecting() {
     .await;
     assert!(reason.to_lowercase().contains("authentication failed"));
 
-    // 2. Expect Reconnecting event
+    // 2. Expect Reconnecting event, and no SessionDown: the session never came up.
     let (attempt, delay) = wait_for_pppoe_event(&mut pppoe_sub, |evt| match evt {
+        PppoeEvent::SessionDown { reason } => panic!("SessionDown without SessionUp: {reason}"),
         PppoeEvent::Reconnecting {
             attempt,
             next_retry_secs,
@@ -781,4 +783,64 @@ async fn test_pppoe_session_survives_dependency_notifications() {
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_secs(2), handle).await;
+}
+
+/// One SessionDown per SessionUp. An admin stop tears the session down in the serve loop and the
+/// supervisor then calls `cleanup()`; the old heuristic also looked at the WAN snapshot, which the
+/// `wan` service updates asynchronously, so the second teardown published a second SessionDown and
+/// every consumer (firewall, traffic, DNS) reacted twice.
+#[tokio::test]
+async fn test_pppoe_stop_then_cleanup_publishes_one_session_down() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        ..Default::default()
+    };
+    ctx.update_pppoe_config(cfg.clone());
+
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
+
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let (h, cmd_tx) = controlled_handle(&ctx);
+    let handle = tokio::spawn(async move {
+        let res = service.serve(&ctx_clone, &h).await;
+        (service, res)
+    });
+    let up = wait_for_session_up(&mut pppoe_sub).await;
+    // What the `wan` service publishes on SessionUp; it has not processed SessionDown yet.
+    ctx.set_wan_snapshot(WanSnapshot {
+        state: WanState::Up,
+        ifname: Some(up.interface),
+        generation: 1,
+        ..Default::default()
+    });
+
+    cmd_tx
+        .send(ServiceCommand::Stop)
+        .await
+        .expect("service alive");
+    let (mut service, res) = timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("serve returns on Stop")
+        .expect("join");
+    assert!(res.is_ok());
+    service.cleanup(&ctx).await.expect("cleanup");
+
+    let mut downs = Vec::new();
+    while let Ok(Ok(evt)) = timeout(Duration::from_millis(200), pppoe_sub.recv()).await {
+        if let LanforgeEvent::Pppoe(PppoeEvent::SessionDown { reason }) = evt.event {
+            downs.push(reason);
+        }
+    }
+    assert_eq!(
+        downs,
+        ["Service stopped"],
+        "exactly one SessionDown per session"
+    );
 }

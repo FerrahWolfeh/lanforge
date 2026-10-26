@@ -126,6 +126,8 @@ pub struct PppoeService {
     connected_at: Option<Instant>,
     /// Uptime of the session that just ended, `None` if it never came up.
     last_uptime: Option<Duration>,
+    /// `SessionUp` was published and its `SessionDown` not yet: consumers pair the two.
+    announced: bool,
     prober: Option<ArpProber>,
     terminal_status: Option<(bool, Option<MacAddr>, Option<u32>)>,
     config_sub: ConfigSubscription<PppoeConfig>,
@@ -150,6 +152,7 @@ impl PppoeService {
             active_session: None,
             connected_at: None,
             last_uptime: None,
+            announced: false,
             prober: None,
             terminal_status: None,
             config_sub,
@@ -176,6 +179,7 @@ impl PppoeService {
             active_session: None,
             connected_at: None,
             last_uptime: None,
+            announced: false,
             prober: None,
             terminal_status: None,
             config_sub,
@@ -259,10 +263,9 @@ impl PppoeService {
             .is_some_and(PppoeTransport::is_inert)
     }
 
+    /// Idempotent: PADT once per negotiated session, `SessionDown` once per `SessionUp`.
     async fn teardown_active_session(&mut self, reason: String) {
-        let had_session = self.active_session.is_some()
-            || self.ctx.pppoe_status().is_some()
-            || self.ctx.wan_snapshot().is_up();
+        let had_session = std::mem::take(&mut self.announced);
         let session_meta = self.active_session.take();
         self.connected_at = None;
         if let Some(ref meta) = session_meta
@@ -574,6 +577,7 @@ impl PppoeService {
 
         self.ctx.set_pppoe_status(Some(pppoe_status));
         self.connected_at = Some(Instant::now());
+        self.announced = true;
 
         let session_up = lanforge_types::events::pppoe::PppoeSessionUp {
             interface: interface_name.to_string(),
@@ -1167,6 +1171,21 @@ impl AsyncService for PppoeService {
                 }));
             ctx.set_service_state(Self::SERVICE_ID, ServiceState::Error);
             return Ok(());
+        }
+
+        // A previous instance that died mid-session (panic, abort past the shutdown timeout) left
+        // its status behind and never paired its SessionUp: close it for the consumers.
+        if ctx
+            .pppoe_status()
+            .is_some_and(|s| s.state == PppoeSessionState::Connected)
+        {
+            warn!("PPPoE status left over by a previous instance; publishing its SessionDown");
+            ctx.set_pppoe_status(None);
+            let _ = ctx
+                .bus()
+                .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionDown {
+                    reason: "PPPoE task restarted, previous session lost".into(),
+                }));
         }
 
         'main_loop: loop {
