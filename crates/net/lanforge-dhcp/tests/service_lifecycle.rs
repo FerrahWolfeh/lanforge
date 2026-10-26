@@ -415,3 +415,154 @@ async fn test_dhcpv6_pool_ignores_wan_prefix_changes() -> Result<(), Box<dyn Err
     let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
     Ok(())
 }
+
+/// Static host with a fixed suffix: the ULA lease is infinite (our own prefix), the GUA lease is
+/// bounded by the delegated prefix, and T1 stays finite so the client renews and follows a
+/// renumbered GUA (clients ignore Reconfigure in practice). On the renewal after a renumbering
+/// the old GUA address comes back with zero lifetimes and the new one keeps the same suffix.
+#[tokio::test]
+async fn test_dhcpv6_static_suffix_follows_renumbered_gua() -> Result<(), Box<dyn Error>> {
+    const LAN: u32 = 1;
+    let server_mac = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+    let (ctx, bus) = init_test_context_with_interface(LAN, "lan0", server_mac);
+    let cfg = create_test_v6_config();
+    ctx.update_dhcp_v6_pools(cfg.pools.clone());
+
+    let set_lan_gua = |gua: &str| {
+        let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+            ifindex: LAN,
+            state: Box::new(InterfaceState {
+                v4: Some((Ipv4Addr::new(192, 168, 1, 1), 24)),
+                link_local: Some("fe80::1".parse().unwrap()),
+                gua: Some(gua.parse().unwrap()),
+                ula: Some("fd97:f00d:cafe:3731::".parse().unwrap()),
+                gua_preferred: 3600,
+                gua_valid: 7200,
+                mac: Some(server_mac),
+            }),
+        });
+    };
+    set_lan_gua("2804:bdc:50a7:e800::1");
+
+    // Static host with the `::1057:cafe` token.
+    let duid = Duid::new(vec![
+        0x00, 0x03, 0x00, 0x01, 0x02, 0x11, 0x22, 0x33, 0x44, 0x55,
+    ]);
+    let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
+        mac: MacAddr([0x02, 0x11, 0x22, 0x33, 0x44, 0x55]),
+        update: Box::new(CliHostUpdate {
+            hostname: Some("desktop".to_string()).into(),
+            duid: Some(duid.clone()).into(),
+            v4_static: None.into(),
+            v6_suffix: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix(
+                "::1057:cafe".parse()?,
+            ))
+            .into(),
+            boot_file: None.into(),
+            dns_fallback: None.into(),
+            class: None.into(),
+            origin: Origin::Static,
+        }),
+    });
+
+    let (handle, transport) = Dhcpv6Transport::inert();
+    let mut service = Dhcpv6Service::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp6, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    wait_for_service_online(&ctx, ServiceId::Dhcp6).await?;
+    let client_src: SocketAddr = "[fe80::1057:cafe]:546".parse()?;
+
+    let exchange = |bytes: Vec<u8>| {
+        let handle = &handle;
+        async move {
+            handle.inject(bytes, client_src).await;
+            let reply = timeout(TEST_TIMEOUT, handle.recv_payload())
+                .await
+                .expect("reply in time")
+                .expect("reply channel open");
+            MessageV6::decode(&mut Decoder::new(&reply)).expect("valid DHCPv6")
+        }
+    };
+    /// `(addr, preferred, valid)` of every IA_NA address, plus the IA's T1.
+    fn ia_view(msg: &MessageV6) -> (Vec<(Ipv6Addr, u32, u32)>, u32) {
+        let mut addrs = Vec::new();
+        let mut t1 = 0;
+        for opt in msg.opts().iter() {
+            if let Dhcpv6Option::IANA(iana) = opt {
+                t1 = iana.t1;
+                for o in iana.opts.iter() {
+                    if let Dhcpv6Option::IAAddr(a) = o {
+                        addrs.push((a.addr, a.preferred_life, a.valid_life));
+                    }
+                }
+            }
+        }
+        (addrs, t1)
+    }
+
+    let old_gua: Ipv6Addr = "2804:bdc:50a7:e800::1057:cafe".parse()?;
+    let new_gua: Ipv6Addr = "2804:bdc:50a9:f300::1057:cafe".parse()?;
+    let ula: Ipv6Addr = "fd97:f00d:cafe:3731::1057:cafe".parse()?;
+
+    let adv = exchange(Dhcpv6PacketBuilder::solicit(duid.clone()).build()).await;
+    let server_duid = match adv.opts().get(OptionCodeV6::ServerId) {
+        Some(Dhcpv6Option::ServerId(d)) => Duid::new(d.clone()),
+        _ => return Err("Expected ServerId in Advertise".into()),
+    };
+    let (addrs, t1) = ia_view(&adv);
+    let find = |a: Ipv6Addr| addrs.iter().find(|(x, _, _)| *x == a).copied();
+    assert_eq!(
+        find(ula).map(|(_, p, v)| (p, v)),
+        Some((u32::MAX, u32::MAX)),
+        "ULA lease is infinite: {addrs:?}"
+    );
+    assert_eq!(
+        find(old_gua).map(|(_, p, v)| (p, v)),
+        Some((3600, 7200)),
+        "GUA lease bounded by the PD: {addrs:?}"
+    );
+    assert!(
+        t1 > 0 && t1 <= 3600,
+        "T1 must be finite and capped, got {t1}"
+    );
+
+    // Bind the lease (Request), as the client does after the Advertise.
+    let bound = exchange(
+        Dhcpv6PacketBuilder::request(duid.clone(), server_duid.clone())
+            .with_ia_na(1, Some(old_gua))
+            .build(),
+    )
+    .await;
+    assert!(
+        ia_view(&bound).0.iter().any(|(a, _, _)| *a == old_gua),
+        "lease bound"
+    );
+
+    // The ISP delegates a new prefix; at T1 the client renews the address it holds.
+    set_lan_gua("2804:bdc:50a9:f300::1");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let reply = exchange(
+        Dhcpv6PacketBuilder::renew(duid, server_duid)
+            .with_ia_na(1, Some(old_gua))
+            .build(),
+    )
+    .await;
+    let (addrs, _) = ia_view(&reply);
+    let find = |a: Ipv6Addr| addrs.iter().find(|(x, _, _)| *x == a).copied();
+    assert_eq!(
+        find(old_gua).map(|(_, p, v)| (p, v)),
+        Some((0, 0)),
+        "old GUA withdrawn: {addrs:?}"
+    );
+    assert!(
+        find(new_gua).is_some_and(|(_, p, _)| p > 0),
+        "same suffix on the new GUA: {addrs:?}"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
+    Ok(())
+}

@@ -784,15 +784,21 @@ impl Ipv6Pool {
     }
 
     #[must_use]
-    pub const fn is_on_link(&self, ip: &Ipv6Addr) -> bool {
-        let Some(ula) = self.ula_prefix else {
-            return false;
-        };
-
-        let ula_int = u128::from_be_bytes(ula.octets());
-        let ip_int = u128::from_be_bytes(ip.octets());
-        let mask = !0u128 << (128 - self.ula_prefix_len);
-        (ip_int & mask) == (ula_int & mask)
+    /// Whether `ip` belongs to a prefix served on this link: the ULA (with its configured
+    /// length), the current GUA, or a fixed pool prefix. Checking the ULA alone rejected every
+    /// Request whose first address was a GUA with `NotOnLink`.
+    pub fn is_on_link(&self, ip: &Ipv6Addr) -> bool {
+        if let Some(ula) = self.ula_prefix {
+            let ula_int = u128::from_be_bytes(ula.octets());
+            let ip_int = u128::from_be_bytes(ip.octets());
+            let mask = !0u128 << (128 - u32::from(self.ula_prefix_len));
+            if (ip_int & mask) == (ula_int & mask) {
+                return true;
+            }
+        }
+        self.get_active_prefixes()
+            .iter()
+            .any(|prefix| Self::is_on_prefix(ip, prefix))
     }
 
     pub fn decline(&mut self, ip: Ipv6Addr) {

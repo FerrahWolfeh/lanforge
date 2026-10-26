@@ -40,6 +40,9 @@
 
 const PROTECTED_OPTIONS: &[u16] = &[1, 2, 3, 5, 25];
 
+/// Upper bound for T1 (renew), even when the leased lifetimes are longer or infinite.
+const MAX_T1_SECS: u32 = 3600;
+
 use dhcproto::v6::{
     DhcpOption, DhcpOptions, IAAddr, IANA, IAPD, IAPrefix, Message, MessageType, OptionCode,
     Status, StatusCode, UnknownOption,
@@ -48,6 +51,7 @@ use dhcproto::{Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
 use lanforge_types::device::Device;
 use lanforge_types::identifiers::{Duid, MacAddr};
+use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::utils::mac_from_eui64_link_local;
 use std::net::Ipv6Addr;
 use std::str::FromStr;
@@ -153,23 +157,42 @@ impl Dhcpv6Server {
         (preferred, valid)
     }
 
-    fn get_effective_lifetimes(
-        &self,
-        client_duid: &Duid,
-        identity: Option<&DeviceIdentity>,
-    ) -> (u32, u32) {
-        let mac = identity
+    fn is_static_client(&self, client_duid: &Duid, identity: Option<&DeviceIdentity>) -> bool {
+        identity
             .map(|i| i.mac)
-            .or_else(|| self.ctx.get_mac_by_duid(client_duid));
-        let is_static = mac
+            .or_else(|| self.ctx.get_mac_by_duid(client_duid))
             .and_then(|m| self.ctx.get_device(&m))
             .as_deref()
-            .is_some_and(Device::is_static);
-        if is_static {
-            (u32::MAX, u32::MAX)
-        } else {
-            self.get_lifetimes()
+            .is_some_and(Device::is_static)
+    }
+
+    /// Lifetimes for one leased address or delegated prefix.
+    ///
+    /// Static hosts keep their fixed suffix forever on the ULA (a prefix we own), but an
+    /// address built on the GUA can never outlive the delegated prefix it comes from: the ISP
+    /// may withdraw it on any reconnect, and an infinite lease would pin the client to it.
+    fn addr_lifetimes(&self, addr: Ipv6Addr, is_static: bool) -> (u32, u32) {
+        let in_gua = self
+            .pool
+            .gua_prefix
+            .is_some_and(|gua| gua == Ipv6Prefix::from_addr(addr));
+        match (is_static, in_gua) {
+            (true, false) => (u32::MAX, u32::MAX),
+            (true, true) => self
+                .prefix_lifetimes
+                .unwrap_or_else(|| self.get_lifetimes()),
+            (false, _) => self.get_lifetimes(),
         }
+    }
+
+    /// T1/T2 for an IA whose shortest preferred lifetime is `shortest_pref`.
+    ///
+    /// RFC 8415 ratios (0.5 / 0.8), with T1 capped at [`MAX_T1_SECS`] even for infinite
+    /// lifetimes: clients do not accept Reconfigure in practice (`NetworkManager`), so renewing
+    /// is the only way they learn about a renumbered GUA.
+    fn ia_timers(shortest_pref: u32) -> (u32, u32) {
+        let t1 = (shortest_pref / 2).min(MAX_T1_SECS);
+        (t1, t1.saturating_mul(8) / 5)
     }
 
     fn add_ntp_options(&self, reply: &mut Message) {
@@ -410,7 +433,7 @@ impl Dhcpv6Server {
             return None;
         }
 
-        let (pref, valid) = self.get_effective_lifetimes(client_duid, identity);
+        let is_static = self.is_static_client(client_duid, identity);
         let action = if is_rapid_commit {
             "REPLY (RC)"
         } else {
@@ -425,7 +448,10 @@ impl Dhcpv6Server {
             info!("Anonymous soliciting -> {action} [{}]", ip_list.join(", "));
         }
 
+        let mut shortest_pref = u32::MAX;
         for ip in &ips {
+            let (pref, valid) = self.addr_lifetimes(*ip, is_static);
+            shortest_pref = shortest_pref.min(pref);
             ia_opts.insert(DhcpOption::IAAddr(IAAddr {
                 addr: *ip,
                 preferred_life: pref,
@@ -434,14 +460,11 @@ impl Dhcpv6Server {
             }));
         }
 
+        let (t1, t2) = Self::ia_timers(shortest_pref);
         reply.opts_mut().insert(DhcpOption::IANA(IANA {
             id: iana.id,
-            t1: if pref == u32::MAX { u32::MAX } else { pref / 2 },
-            t2: if pref == u32::MAX {
-                u32::MAX
-            } else {
-                pref.saturating_mul(4) / 5
-            },
+            t1,
+            t2,
             opts: ia_opts,
         }));
         Some(client_duid.clone())
@@ -458,7 +481,8 @@ impl Dhcpv6Server {
             self.pool
                 .allocate_prefix(&self.ctx, client_duid, iapd.id, None)
         {
-            let (pref, valid) = self.get_effective_lifetimes(client_duid, identity);
+            let is_static = self.is_static_client(client_duid, identity);
+            let (pref, valid) = self.addr_lifetimes(prefix, is_static);
             info!("Delegating prefix {prefix}/{len} to {identity:?}");
 
             let mut ia_opts = DhcpOptions::new();
@@ -470,14 +494,11 @@ impl Dhcpv6Server {
                 opts: DhcpOptions::new(),
             }));
 
+            let (t1, t2) = Self::ia_timers(pref);
             reply.opts_mut().insert(DhcpOption::IAPD(IAPD {
                 id: iapd.id,
-                t1: if pref == u32::MAX { u32::MAX } else { pref / 2 },
-                t2: if pref == u32::MAX {
-                    u32::MAX
-                } else {
-                    pref.saturating_mul(4) / 5
-                },
+                t1,
+                t2,
                 opts: ia_opts,
             }));
             Some(client_duid.clone())
@@ -513,7 +534,7 @@ impl Dhcpv6Server {
         if !ips.is_empty() {
             self.last_assignments
                 .insert((client_duid.clone(), iana.id), ips.clone());
-            let (pref, valid) = self.get_effective_lifetimes(client_duid, identity);
+            let is_static = self.is_static_client(client_duid, identity);
             let mut ia_opts = DhcpOptions::new();
             let ip_list: Vec<String> = ips.iter().map(ToString::to_string).collect();
 
@@ -523,7 +544,10 @@ impl Dhcpv6Server {
                 info!("Assigning [{}] to anonymous device", ip_list.join(", "));
             }
 
+            let mut shortest_pref = u32::MAX;
             for ip in &ips {
+                let (pref, valid) = self.addr_lifetimes(*ip, is_static);
+                shortest_pref = shortest_pref.min(pref);
                 ia_opts.insert(DhcpOption::IAAddr(IAAddr {
                     addr: *ip,
                     preferred_life: pref,
@@ -546,14 +570,11 @@ impl Dhcpv6Server {
                 }
             }
 
+            let (t1, t2) = Self::ia_timers(shortest_pref);
             reply.opts_mut().insert(DhcpOption::IANA(IANA {
                 id: iana.id,
-                t1: if pref == u32::MAX { u32::MAX } else { pref / 2 },
-                t2: if pref == u32::MAX {
-                    u32::MAX
-                } else {
-                    pref.saturating_mul(4) / 5
-                },
+                t1,
+                t2,
                 opts: ia_opts,
             }));
         }
@@ -570,7 +591,8 @@ impl Dhcpv6Server {
             self.pool
                 .allocate_prefix(&self.ctx, client_duid, iapd.id, None)
         {
-            let (pref, valid) = self.get_effective_lifetimes(client_duid, identity);
+            let is_static = self.is_static_client(client_duid, identity);
+            let (pref, valid) = self.addr_lifetimes(prefix, is_static);
             let mut ia_opts = DhcpOptions::new();
             ia_opts.insert(DhcpOption::IAPrefix(IAPrefix {
                 prefix_ip: prefix,
@@ -579,14 +601,11 @@ impl Dhcpv6Server {
                 valid_lifetime: valid,
                 opts: DhcpOptions::new(),
             }));
+            let (t1, t2) = Self::ia_timers(pref);
             reply.opts_mut().insert(DhcpOption::IAPD(IAPD {
                 id: iapd.id,
-                t1: if pref == u32::MAX { u32::MAX } else { pref / 2 },
-                t2: if pref == u32::MAX {
-                    u32::MAX
-                } else {
-                    pref.saturating_mul(4) / 5
-                },
+                t1,
+                t2,
                 opts: ia_opts,
             }));
         }
@@ -616,8 +635,12 @@ impl Dhcpv6Server {
                 }
             });
 
-            // RFC 8415 §18.2.1: If the requested address is not on-link, respond with NotOnLink.
-            if let Some(ip) = requested_ip
+            // RFC 8415 §18.3.2: a Request for an address that is not on-link gets NotOnLink.
+            // Renew/Rebind (§18.3.4/§18.3.5) share this path but must instead return that
+            // address with zero lifetimes next to the new ones (`process_request_iana`): that is
+            // how a client holding an address from a withdrawn prefix moves to the new prefix.
+            if msg.msg_type() == MessageType::Request
+                && let Some(ip) = requested_ip
                 && !self.pool.is_on_link(&ip)
             {
                 return self.send_ia_status(
@@ -1828,8 +1851,10 @@ mod tests {
         if let HandleResult::Reply(bytes, _, _, _, _, _, _) = res {
             let reply = decode_reply(bytes);
             if let Some(DhcpOption::IANA(iana)) = reply.opts().get(OptionCode::IANA) {
-                assert_eq!(iana.t1, u32::MAX);
-                assert_eq!(iana.t2, u32::MAX);
+                // Static ULA lease stays infinite, but T1/T2 are capped so the client still
+                // renews (and follows a renumbered GUA).
+                assert_eq!(iana.t1, MAX_T1_SECS);
+                assert_eq!(iana.t2, MAX_T1_SECS * 8 / 5);
                 if let Some(DhcpOption::IAAddr(ia_addr)) = iana.opts.get(OptionCode::IAAddr) {
                     assert_eq!(ia_addr.preferred_life, u32::MAX);
                     assert_eq!(ia_addr.valid_life, u32::MAX);

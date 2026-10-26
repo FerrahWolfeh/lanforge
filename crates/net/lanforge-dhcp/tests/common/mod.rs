@@ -307,6 +307,17 @@ impl Dhcpv6PacketBuilder {
     }
 
     #[must_use]
+    pub const fn renew(client_duid: Duid, server_duid: Duid) -> Self {
+        Self {
+            msg_type: MessageTypeV6::Renew,
+            client_duid,
+            server_duid: Some(server_duid),
+            ia_na: Some((1, None)),
+            rapid_commit: false,
+        }
+    }
+
+    #[must_use]
     pub const fn release(client_duid: Duid, server_duid: Duid) -> Self {
         Self {
             msg_type: MessageTypeV6::Release,

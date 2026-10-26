@@ -356,11 +356,7 @@ impl Dhcpv6Service {
         server.pool.reserve_statics(active_dynamic_ips);
 
         // Re-sync GUA from global state (honoring configured interface)
-        let served_ifindex = pnet::datalink::interfaces()
-            .iter()
-            .find(|i| i.name == current_cfg.iface)
-            .map(|i| i.index);
-        if let Some(ifindex) = served_ifindex
+        if let Some(ifindex) = self.served_ifindex(&current_cfg.iface)
             && let Some((gua_prefix, pref, val)) = self.ctx.get_interface_gua_prefix_at(ifindex)
         {
             info!(
@@ -419,11 +415,7 @@ impl Dhcpv6Service {
 
         let mut buf = [0u8; 2048];
         let mut resp_vec = Vec::with_capacity(1024);
-        let served_ifindex = pnet::datalink::interfaces()
-            .iter()
-            .find(|i| i.name == current_cfg.iface)
-            .map(|i| i.index)
-            .or_else(|| self.ctx.target_ifindex());
+        let served_ifindex = self.served_ifindex(&current_cfg.iface);
         // Topic-isolated: prefix changes (network) and lease/admin updates (device) only.
         let mut net_events = self.ctx.service_handle_network();
         let mut device_events = self.ctx.service_handle_device();
@@ -519,6 +511,16 @@ impl Dhcpv6Service {
 }
 
 impl Dhcpv6Service {
+    /// Index of the interface this server serves: the configured one if it exists, else the
+    /// LAN (`target_ifindex`). Its GUA is the prefix the pools are built on.
+    fn served_ifindex(&self, iface: &str) -> Option<u32> {
+        pnet::datalink::interfaces()
+            .iter()
+            .find(|i| i.name == iface)
+            .map(|i| i.index)
+            .or_else(|| self.ctx.target_ifindex())
+    }
+
     fn publish_pool_stats(&self, server: &Dhcpv6Server) {
         let stats = server.pool.stats_per_prefix(&self.ctx);
         self.ctx.clear_dhcp_v6_pool_stats();
