@@ -22,6 +22,8 @@ use lanforge_types::network::dhcp::{
 use lanforge_types::network::dns::AdblockUrlEntry;
 #[cfg(feature = "dns")]
 use lanforge_types::network::dns::adblock::{AdblockRuleEntry, AdblockUrlKind};
+#[cfg(feature = "dns")]
+use lanforge_types::network::dns::upstream::UpstreamMode;
 use lanforge_types::network::ra::PreviousLanPrefixes;
 use lanforge_types::network::{
     IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, classify_ipv6, is_ula,
@@ -324,7 +326,7 @@ impl Bootstrapper {
         }
 
         #[cfg(feature = "dns")]
-        Self::load_dns_state_into_patch(db, &mut patch);
+        Self::load_dns_state_into_patch(db, cfg.dns_toml.upstream_mode, &mut patch);
 
         #[cfg(feature = "pppoe")]
         {
@@ -366,14 +368,20 @@ impl Bootstrapper {
     }
 
     #[cfg(feature = "dns")]
-    fn load_dns_state_into_patch(db: &LanforgeDb, patch: &mut ConfigPatch) {
+    /// `file_mode` (`[dns] upstream_mode`) seeds the live mode when the database has none.
+    fn load_dns_state_into_patch(
+        db: &LanforgeDb,
+        file_mode: UpstreamMode,
+        patch: &mut ConfigPatch,
+    ) {
         if let Ok(upstreams) = db.load_dns_upstreams() {
             let list = upstreams.into_iter().map(|row| row.to_target()).collect();
             patch.dns_upstreams = Some(list);
         }
-        if let Ok(Some(mode)) = db.load_dns_upstream_mode() {
-            patch.dns_upstream_mode = Some(mode);
-        }
+        patch.dns_upstream_mode = Some(match db.load_dns_upstream_mode() {
+            Ok(Some(mode)) => mode,
+            _ => file_mode,
+        });
         if let Ok(rewrites) = db.load_dns_rewrites() {
             patch.dns_rewrites = Some(rewrites);
         }

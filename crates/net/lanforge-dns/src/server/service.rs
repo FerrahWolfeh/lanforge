@@ -22,15 +22,16 @@ use lanforge_transport::{TransportSnapshot, TransportStats};
 use lanforge_types::config::DnsAllowlist;
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::AdblockRuleEntry;
-#[cfg(feature = "adblock")]
-use lanforge_types::network::dns::{AdblockSourceMatch, AdblockSourceStatus, FilterMatch, FilterOrigin};
 use lanforge_types::network::dns::{
-    AdblockCheckResponse, DnsAdblockSourcesResponse,
-    DnsCacheEntry, DnsCacheResponse, DnsCacheStatsExtResponse, DnsClass, DnsLifetimeStats,
-    DnsMessage, DnsQuestion, DnsRecordEntry, DnsRecordType, DnsRequest, DnsResponse,
-    DnsStatsResponse, TransportProtocol,
+    AdblockCheckResponse, DnsAdblockSourcesResponse, DnsCacheEntry, DnsCacheResponse,
+    DnsCacheStatsExtResponse, DnsClass, DnsLifetimeStats, DnsMessage, DnsQuestion, DnsRecordEntry,
+    DnsRecordType, DnsRequest, DnsResponse, DnsStatsResponse, TransportProtocol,
     adblock::{AdblockDbConfig, RewriteRule},
     upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget},
+};
+#[cfg(feature = "adblock")]
+use lanforge_types::network::dns::{
+    AdblockSourceMatch, AdblockSourceStatus, FilterMatch, FilterOrigin,
 };
 use lanforge_types::system::{DormantReason, PppoeSessionState, ServiceId, ServiceState};
 use std::collections::{HashMap, HashSet};
@@ -147,12 +148,9 @@ impl DnsService {
         let soa_master_ns: Arc<str> = Arc::from(format!("ns.{domain_base}"));
         let soa_mailbox: Arc<str> = Arc::from(format!("hostmaster.{domain_base}"));
 
-        let initial_mode = self.ctx.get_dns_upstream_mode();
-        let mode = if initial_mode != UpstreamMode::Sequential {
-            initial_mode
-        } else {
-            self.cfg.upstream_mode
-        };
+        // The live config is the only source: `Sequential` is a valid choice, not "unset" (the
+        // bootstrap seeds it from `[dns] upstream_mode` when the database has none).
+        let mode = self.ctx.get_dns_upstream_mode();
         let recursive = Arc::new(UpstreamStrategy::new(mode, upstreams));
 
         let query_log = if self.cfg.query_log.enabled {
@@ -256,7 +254,7 @@ impl AsyncService for DnsService {
         self.custom_transport.as_ref().map(TransportStats::snapshot)
     }
 
-    fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
+    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
         let snap = self.stats.snapshot();
         let total = snap.requests_total;
         let hits = snap.cache_hits;
@@ -278,7 +276,7 @@ impl AsyncService for DnsService {
             ),
             (
                 std::borrow::Cow::Borrowed("upstream_mode"),
-                format!("{:?}", self.cfg.upstream_mode),
+                format!("{:?}", ctx.get_dns_upstream_mode()),
             ),
             (
                 std::borrow::Cow::Borrowed("requests_total"),

@@ -1,0 +1,37 @@
+mod common;
+
+use common::*;
+use lanforge_core::service::AsyncService;
+use lanforge_dns::config::DnsConfig;
+use lanforge_dns::server::service::DnsService;
+use lanforge_types::network::dns::upstream::UpstreamMode;
+
+/// The live config is the only source of the upstream mode. `Sequential` is both the default
+/// and a valid admin choice: the service used to read it as "unset" and fall back to the
+/// static `[dns] upstream_mode`, so a WebUI choice of Sequential flipped back on a DNS restart,
+/// and the service status always showed the static value.
+#[tokio::test]
+async fn upstream_mode_comes_from_the_live_config() {
+    let ctx = init_test_context();
+    ctx.update_dns_upstream_mode(UpstreamMode::Sequential);
+    let cfg = DnsConfig {
+        upstream_mode: UpstreamMode::Parallel,
+        ..mock_config()
+    };
+    let service = DnsService::new(cfg, ctx.clone());
+
+    let dns_ctx = service.init_dns_context().await.expect("dns context");
+    assert_eq!(dns_ctx.recursive.mode(), UpstreamMode::Sequential);
+
+    ctx.update_dns_upstream_mode(UpstreamMode::Fastest);
+    let shown = service
+        .stats(&ctx)
+        .into_iter()
+        .find(|(k, _)| k == "upstream_mode")
+        .map(|(_, v)| v);
+    assert_eq!(
+        shown.as_deref(),
+        Some("Fastest"),
+        "status shows the live mode"
+    );
+}
