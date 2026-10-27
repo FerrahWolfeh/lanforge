@@ -518,7 +518,18 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                             info!("Adblock: source list changed, reloading");
                             break;
                         }
-                        Ok(evt) = rx.recv() => {
+                        evt_res = rx.recv() => {
+                            let evt = match evt_res {
+                                Ok(evt) => evt,
+                                // A missed block/allow/toggle: reload, which re-syncs every
+                                // manual rule from the context.
+                                Err(RecvError::Lagged(_)) => {
+                                    info!("Adblock: event bus lagged, re-syncing filter");
+                                    break;
+                                }
+                                // Never `break` here: the reload would loop on a closed bus.
+                                Err(RecvError::Closed) => return,
+                            };
                             match evt.event {
                                 LanforgeEvent::Dns(DnsEvent::AdblockReload) => {
                                     info!("Adblock: manual reload triggered via event bus");

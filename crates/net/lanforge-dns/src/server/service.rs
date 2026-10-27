@@ -30,11 +30,12 @@ use lanforge_types::network::dns::{
     adblock::{AdblockDbConfig, RewriteRule},
     upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget},
 };
-use lanforge_types::system::{DormantReason, ServiceId, ServiceState};
+use lanforge_types::system::{DormantReason, PppoeSessionState, ServiceId, ServiceState};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, error, info};
 
 #[derive(Clone)]
@@ -108,14 +109,7 @@ impl DnsService {
         self.stats
             .cache_capacity
             .store(self.cfg.cache_size, Ordering::Relaxed);
-        let mut upstreams = Vec::new();
-        let ctx_upstreams = self.ctx.get_dns_upstreams();
-        for target in ctx_upstreams {
-            match UpstreamManager::new(&target, Arc::clone(&cache)).await {
-                Ok(mgr) => upstreams.push(mgr),
-                Err(e) => error!("Failed to initialize upstream {}: {}", target.addr, e),
-            }
-        }
+        let upstreams = build_upstreams(&effective_upstream_targets(&self.ctx), &cache).await;
 
         if upstreams.is_empty() && self.cfg.enabled && !self.cfg.search_domains.is_empty() {
             tracing::warn!("No upstreams configured — only local resolution active");
@@ -519,63 +513,37 @@ impl AsyncService for DnsService {
                         _ => {}
                     }
                 }
-                Ok(event) = sys_rx.recv() => {
-                    if let lanforge_core::bus::LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown) = event.event {
-                        info!("DNS service received shutdown signal, terminating event loop");
-                        break;
-                    }
-                }
-                Ok(event) = pppoe_rx.recv() => {
-                    match event.event {
-                        lanforge_core::bus::LanforgeEvent::Pppoe(lanforge_core::bus::PppoeEvent::SessionUp(ref session)) => {
-                            // Auto-adopt ISP DNS upstreams if user has not configured custom static upstreams
-                            if ctx.get_dns_upstreams().is_empty() && !session.dns.is_empty() {
-                                info!(count = session.dns.len(), "Auto-adopting ISP DNS upstreams from PPPoE WAN session");
-                                let mut upstreams = Vec::new();
-                                for ip in &session.dns {
-                                    let target = UpstreamTarget {
-                                        addr: SocketAddr::new(*ip, 53),
-                                        protocol: UpstreamProtocol::Udp,
-                                        hostname: None,
-                                        domain: None,
-                                    };
-                                    match UpstreamManager::new(&target, Arc::clone(&dns_ctx.cache)).await {
-                                        Ok(mgr) => upstreams.push(mgr),
-                                        Err(e) => error!(addr = %target.addr, error = %e, "Failed to initialize ISP upstream"),
-                                    }
-                                }
-                                dns_ctx.recursive.replace_upstreams(upstreams);
-                                if !dns_ctx.recursive.is_empty() {
-                                    dns_ctx.cache.invalidate_all();
-                                    info!("ISP upstreams activated and cache cleared");
-                                }
-                            }
+                event_res = sys_rx.recv() => match event_res {
+                    Ok(event) => {
+                        if let lanforge_core::bus::LanforgeEvent::System(lanforge_core::bus::SystemEvent::Shutdown) = event.event {
+                            info!("DNS service received shutdown signal, terminating event loop");
+                            break;
                         }
-                        lanforge_core::bus::LanforgeEvent::Pppoe(lanforge_core::bus::PppoeEvent::SessionDown { reason })
-                            if ctx.get_dns_upstreams().is_empty() =>
-                        {
-                            info!(reason = %reason, "PPPoE session down, clearing ISP upstreams");
-                            dns_ctx.recursive.replace_upstreams(Vec::new());
-                        }
-                        _ => {}
                     }
-                }
+                    Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => break,
+                },
+                // The ISP resolvers come from the live PPPoE status, not from the event payload: a
+                // lagged topic loses nothing, it just resyncs.
+                event_res = pppoe_rx.recv() => match event_res {
+                    Ok(event) => {
+                        if matches!(
+                            event.event,
+                            lanforge_core::bus::LanforgeEvent::Pppoe(
+                                lanforge_core::bus::PppoeEvent::SessionUp(_)
+                                    | lanforge_core::bus::PppoeEvent::SessionDown { .. }
+                            )
+                        ) {
+                            resync_upstreams(ctx, &dns_ctx, false).await;
+                        }
+                    }
+                    Err(RecvError::Lagged(_)) => resync_upstreams(ctx, &dns_ctx, false).await,
+                    Err(RecvError::Closed) => break,
+                },
                 // Live config sections: applied in place, sockets untouched (D-9).
-                Some(delta) = upstreams_sub.next() => {
+                Some(_) = upstreams_sub.next() => {
                     info!("Reloading upstreams");
-                    let mut upstreams = Vec::new();
-                    for target in delta.new.iter() {
-                        match UpstreamManager::new(target, Arc::clone(&dns_ctx.cache)).await {
-                            Ok(mgr) => upstreams.push(mgr),
-                            Err(e) => error!(addr = %target.addr, error = %e, "Failed to initialize upstream"),
-                        }
-                    }
-                    dns_ctx.recursive.replace_upstreams(upstreams);
-                    info!("Upstreams reloaded");
-                    if !dns_ctx.recursive.is_empty() {
-                        dns_ctx.cache.invalidate_all();
-                        info!("Cache invalidated after upstream reload");
-                    }
+                    resync_upstreams(ctx, &dns_ctx, true).await;
                 }
                 Some(delta) = mode_sub.next() => {
                     info!(mode = ?*delta.new, "Upstream resolution mode changed");
@@ -659,6 +627,68 @@ impl AsyncService for DnsService {
         ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
 
         Ok(())
+    }
+}
+
+/// Upstreams DNS forwards to: the configured ones or, when none is configured, the resolvers the
+/// ISP announced on the live PPPoE session. Derived from current state, never from an event
+/// payload, so a restart with the session up or a lagged bus cannot leave the LAN without one.
+fn effective_upstream_targets(ctx: &LanforgeContext) -> Vec<UpstreamTarget> {
+    let configured = ctx.get_dns_upstreams();
+    if !configured.is_empty() {
+        return configured;
+    }
+    ctx.pppoe_status()
+        .filter(|s| s.state == PppoeSessionState::Connected)
+        .map(|s| {
+            s.dns_servers
+                .iter()
+                .map(|ip| UpstreamTarget {
+                    addr: SocketAddr::new(*ip, 53),
+                    protocol: UpstreamProtocol::Udp,
+                    hostname: None,
+                    domain: None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn build_upstreams(
+    targets: &[UpstreamTarget],
+    cache: &Arc<DnsCache>,
+) -> Vec<Arc<UpstreamManager>> {
+    let mut upstreams = Vec::with_capacity(targets.len());
+    for target in targets {
+        match UpstreamManager::new(target, Arc::clone(cache)).await {
+            Ok(mgr) => upstreams.push(mgr),
+            Err(e) => error!(addr = %target.addr, error = %e, "Failed to initialize upstream"),
+        }
+    }
+    upstreams
+}
+
+/// Points the resolver at [`effective_upstream_targets`]. `force` rebuilds even an unchanged set
+/// (an explicit config change); otherwise an unchanged set is left alone, cache included.
+async fn resync_upstreams(ctx: &LanforgeContext, dns_ctx: &DnsContext, force: bool) {
+    let targets = effective_upstream_targets(ctx);
+    let current: Vec<(SocketAddr, UpstreamProtocol)> = dns_ctx
+        .recursive
+        .snapshots()
+        .iter()
+        .map(|s| (s.target, s.protocol))
+        .collect();
+    let wanted: Vec<(SocketAddr, UpstreamProtocol)> =
+        targets.iter().map(|t| (t.addr, t.protocol)).collect();
+    if !force && current == wanted {
+        return;
+    }
+    info!(upstreams = ?wanted, "DNS upstreams updated");
+    dns_ctx
+        .recursive
+        .replace_upstreams(build_upstreams(&targets, &dns_ctx.cache).await);
+    if !dns_ctx.recursive.is_empty() {
+        dns_ctx.cache.invalidate_all();
     }
 }
 
