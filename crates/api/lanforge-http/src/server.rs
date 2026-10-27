@@ -258,7 +258,10 @@ impl HttpService {
                 let app_clone = app.clone();
 
                 server_tasks.push(tokio::spawn(async move {
-                    axum::serve(tcp_listener, app_clone)
+                    axum::serve(
+                        tcp_listener,
+                        app_clone.into_make_service_with_connect_info::<SocketAddr>(),
+                    )
                     .with_graceful_shutdown(async move {
                         let _ = shutdown_rx.changed().await;
                     })
