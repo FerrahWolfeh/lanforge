@@ -83,6 +83,8 @@ pub struct DbWorker {
     bytes_buf: Vec<u8>,
     storage_rx: Option<mpsc::Receiver<StorageCommand>>,
     dirty_sections: lanforge_api::config_file::SectionSet,
+    /// The config file could not be read or parsed at the last write-back (warned once).
+    config_file_unusable: bool,
     log_flush_failing: bool,
     dns_flush_failing: bool,
     device_flush_failing: bool,
@@ -111,6 +113,7 @@ impl DbWorker {
             bytes_buf: Vec::with_capacity(4096),
             storage_rx: Some(rx),
             dirty_sections: lanforge_api::config_file::SectionSet::empty(),
+            config_file_unusable: false,
             log_flush_failing: false,
             dns_flush_failing: false,
             device_flush_failing: false,
@@ -457,8 +460,35 @@ impl DbWorker {
             return;
         };
 
-        let existing = std::fs::read_to_string(&path).unwrap_or_default();
-        let mut doc = existing.parse::<DocumentMut>().unwrap_or_default();
+        // Patch the file as it is: one that cannot be read or parsed (mid hand-edit) is left
+        // alone and the change stays pending. Starting from an empty document would write back
+        // only the dirty sections and erase the rest of the configuration.
+        let parsed = std::fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|text| text.parse::<DocumentMut>().map_err(|e| e.to_string()));
+        let mut doc = match parsed {
+            Ok(doc) => {
+                if self.config_file_unusable {
+                    info!(
+                        "Config file {} is valid again; resuming live write-back",
+                        path.display()
+                    );
+                    self.config_file_unusable = false;
+                }
+                doc
+            }
+            Err(e) => {
+                if !self.config_file_unusable {
+                    warn!(
+                        "Config file {} cannot be read or parsed ({e}); live write-back paused \
+                         until it is fixed, changes are kept in memory",
+                        path.display()
+                    );
+                    self.config_file_unusable = true;
+                }
+                return;
+            }
+        };
 
         let export = self.build_current_export(db);
         let config_file = ConfigFile::from(&export);
@@ -1003,5 +1033,35 @@ mod tests {
         // 4. Purge in same tick overrides to Delete
         pending.insert(mac, PendingDeviceOp::Delete);
         assert_eq!(pending.get(&mac), Some(&PendingDeviceOp::Delete));
+    }
+
+    /// The live write-back patches the dirty sections into the file as it is on disk. An
+    /// unreadable or invalid file (mid hand-edit) used to be replaced by an empty document,
+    /// so the write kept only the dirty sections and erased the rest of the configuration.
+    #[tokio::test]
+    async fn live_write_back_never_replaces_an_invalid_file() {
+        let (ctx, _bus) = create_test_context();
+        let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
+        let log_db = Arc::new(LogDb::open_in_memory());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        let broken = "[system]\niface = \"lan0\"\n[firewall\nmode = \"full\"\n";
+        std::fs::write(&path, broken).unwrap();
+        ctx.set_config_path(&path);
+        ctx.set_config_writable(true);
+
+        let mut worker = DbWorker::new(DatabaseConfig::default(), ctx.clone(), db.clone(), log_db);
+        worker.dirty_sections = SectionSet::TRAFFIC;
+        worker.flush_live_config_to_file(&db).await;
+
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            broken,
+            "an invalid file must be left alone, not rewritten from scratch"
+        );
+        assert!(
+            worker.dirty_sections.contains(SectionSet::TRAFFIC),
+            "the change stays pending for when the file is fixed"
+        );
     }
 }
