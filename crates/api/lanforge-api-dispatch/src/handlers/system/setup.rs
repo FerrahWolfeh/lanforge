@@ -130,19 +130,18 @@ impl ClientContext {
             };
         };
 
-        let is_provisioned = {
-            let prov = storage
-                .call(|s: &Stores| s.db().is_provisioned())
-                .await
-                .unwrap_or(false);
-            let has_users = storage
-                .call(|s: &Stores| s.auth().list_users())
-                .await
-                .map(|u| !u.is_empty())
-                .unwrap_or(false);
-            prov || has_users
+        // Fails closed: an unreadable flag or user table must not reopen first-run setup.
+        let prov = storage.call(|s: &Stores| s.db().is_provisioned()).await;
+        let users = storage.call(|s: &Stores| s.auth().list_users()).await;
+        let is_provisioned = match (prov, users) {
+            (Ok(prov), Ok(users)) => prov || !users.is_empty(),
+            _ => {
+                return Response::Error {
+                    error: "persistence unavailable".to_string(),
+                };
+            }
         };
-        if is_provisioned {
+        if is_provisioned || self.ctx.is_recovery_mode() {
             return Response::Error {
                 error: "Forbidden: Initial onboarding setup has already been completed and locked."
                     .to_string(),

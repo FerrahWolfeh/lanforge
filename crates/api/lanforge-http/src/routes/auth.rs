@@ -12,7 +12,7 @@ use lanforge_types::auth::UserRole;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use crate::auth::{AuthenticatedUser, extract_token, looks_like_jwt};
+use crate::auth::{AuthenticatedUser, auth_required, extract_token, looks_like_jwt};
 use crate::error::{HttpError, Result as HttpResult};
 use crate::routes::create_client_ctx;
 use crate::server::AppState;
@@ -217,15 +217,13 @@ async fn handle_validate(
 }
 
 fn check_auth_required(state: &AppState) -> bool {
-    state.cfg.auth_password_hash.is_some() || state.auth.has_users_cached() || {
-        let count = state.db.count_users().unwrap_or(0);
-        if count > 0 {
-            state.auth.set_has_users(true);
-            true
-        } else {
-            false
-        }
-    }
+    auth_required(
+        &state.cfg,
+        &state.auth,
+        state.db.as_ref(),
+        state.ctx.is_recovery_mode(),
+    )
+    .unwrap_or(true)
 }
 
 fn build_login_response(
@@ -353,6 +351,14 @@ fn authenticate_via_password(
             .auth
             .generate_token_with_ttl("admin", "admin", ttl_secs)?;
         return Ok((session_token, "admin".to_string(), "password"));
+    }
+
+    // Recovery mode without a password hash file: the real users are in the database that
+    // did not open, so no login can succeed here. Say so instead of "invalid credentials".
+    if user_count == 0 && state.ctx.is_recovery_mode() {
+        return Err(HttpError::ServiceUnavailable(
+            "persistence unavailable".into(),
+        ));
     }
 
     Err(HttpError::Auth("Invalid credentials".to_string()))

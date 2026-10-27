@@ -161,9 +161,18 @@ async fn handle_setup(
     State(state): State<AppState>,
     Json(payload): Json<lanforge_types::system::SetupPayload>,
 ) -> impl IntoResponse {
-    let is_provisioned =
-        state.db.is_provisioned().unwrap_or(false) || (state.db.count_users().unwrap_or(0) > 0);
-    if is_provisioned {
+    // Fails closed: an unreadable flag or user table must not reopen first-run setup.
+    let is_provisioned = match (state.db.is_provisioned(), state.db.count_users()) {
+        (Ok(provisioned), Ok(users)) => provisioned || users > 0,
+        _ => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": "persistence unavailable" })),
+            )
+                .into_response();
+        }
+    };
+    if is_provisioned || state.ctx.is_recovery_mode() {
         return (
             axum::http::StatusCode::FORBIDDEN,
             Json(serde_json::json!({

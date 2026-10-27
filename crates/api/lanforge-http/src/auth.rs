@@ -15,6 +15,7 @@ use axum::{
     response::Response as AxumResponse,
 };
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use lanforge_core::context::LanforgeContext;
 use lanforge_db_core::DatabaseStore;
 use lanforge_types::auth::{ApiScope, ApiScopes};
 use serde::{Deserialize, Serialize};
@@ -312,10 +313,40 @@ fn is_public_auth_path(path: &str) -> bool {
     )
 }
 
+/// Whether requests must carry credentials. Fails closed (D-11).
+///
+/// Authentication is off only when no password hash is configured and the user table is
+/// readable and empty. Recovery mode (an in-memory stand-in for a database that did not
+/// open) never counts as empty.
+pub fn auth_required(
+    cfg: &HttpConfig,
+    auth_manager: &AuthManager,
+    db: &dyn DatabaseStore,
+    recovery: bool,
+) -> HttpResult<bool> {
+    if cfg.auth_password_hash.is_some() || auth_manager.has_users_cached() || recovery {
+        return Ok(true);
+    }
+    match db.count_users() {
+        Ok(0) => Ok(false),
+        Ok(_) => {
+            auth_manager.set_has_users(true);
+            Ok(true)
+        }
+        Err(e) => {
+            error!("Database error counting users: {e}");
+            Err(HttpError::ServiceUnavailable(
+                "persistence unavailable".into(),
+            ))
+        }
+    }
+}
+
 pub async fn middleware(
     State(cfg): State<Arc<HttpConfig>>,
     State(db): State<Arc<dyn DatabaseStore>>,
     State(auth_manager): State<AuthManager>,
+    State(ctx): State<LanforgeContext>,
     mut req: Request<Body>,
     next: Next,
 ) -> HttpResult<AxumResponse> {
@@ -327,13 +358,8 @@ pub async fn middleware(
         return Ok(next.run(req).await);
     }
 
-    // If no password hash is set AND no DB users exist, authentication is globally disabled.
-    if cfg.auth_password_hash.is_none() && !auth_manager.has_users_cached() {
-        let count = db.count_users().unwrap_or(0);
-        if count == 0 {
-            return Ok(next.run(req).await);
-        }
-        auth_manager.set_has_users(true);
+    if !auth_required(&cfg, &auth_manager, db.as_ref(), ctx.is_recovery_mode())? {
+        return Ok(next.run(req).await);
     }
 
     let token = extract_token(req.headers(), req.uri().query()).ok_or_else(|| {

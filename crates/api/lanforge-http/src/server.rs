@@ -70,6 +70,12 @@ impl FromRef<AppState> for Arc<dyn DatabaseStore> {
     }
 }
 
+impl FromRef<AppState> for LanforgeContext {
+    fn from_ref(state: &AppState) -> Self {
+        state.ctx.clone()
+    }
+}
+
 use lanforge_types::system::ServiceId;
 
 // `After` only: the DB is never a hard dependency (D-4). With the DB down, auth fails

@@ -1335,3 +1335,153 @@ async fn test_events_contract() {
     let data = body["data"].as_array().expect("data array");
     assert_eq!(data.len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// D-11 — authentication fails closed when the user table cannot be read
+// ---------------------------------------------------------------------------
+
+/// State with no password hash and **no storage worker**: a setup request that slips past
+/// the HTTP gate reaches the dispatcher and fails there with 400, never touching files.
+fn bare_state(db: &Arc<LanforgeDb>) -> AppState {
+    AppState {
+        cfg: Arc::new(HttpConfig {
+            auth_password_hash: None,
+            allow_plaintext_http: true,
+            ..Default::default()
+        }),
+        ctx: LanforgeContext::new(Arc::new(EventBus::new()), CoreState::new(), None),
+        db: Arc::new(db.redb().clone()),
+        log_db: Arc::new(LogDb::open_in_memory()),
+        auth: Arc::new(AuthManager::new()),
+        start_time: Instant::now(),
+    }
+}
+
+fn in_memory_db() -> Arc<LanforgeDb> {
+    Arc::new(
+        LanforgeDb::open(&DatabaseConfig {
+            config_path: "memory".to_string(),
+            ..Default::default()
+        })
+        .unwrap(),
+    )
+}
+
+/// Replaces a table with one of the wrong key/value types: every open of it then errors.
+fn break_table(db: &LanforgeDb, name: &str) {
+    let txn = db.redb().begin_write().unwrap();
+    txn.delete_table(redb::TableDefinition::<&str, &[u8]>::new(name))
+        .unwrap();
+    txn.open_table(redb::TableDefinition::<u64, u64>::new(name))
+        .unwrap();
+    txn.commit().unwrap();
+}
+
+fn setup_request() -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/api/v1/system/setup")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "admin_username": "intruder",
+                "admin_password": "intruder-password",
+                "lan_iface": "lan0",
+                "lan_ip": "192.168.1.1",
+                "domain_name": "lan",
+                "dhcp_enabled": true,
+                "dhcp_pool_start": "192.168.1.100",
+                "dhcp_pool_end": "192.168.1.200",
+                "adblock_enabled": false,
+                "wan": null
+            }))
+            .unwrap(),
+        ))
+        .unwrap()
+}
+
+async fn auth_status_required(router: &Router) -> bool {
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/auth/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    body["data"]["auth_required"].as_bool().unwrap()
+}
+
+#[tokio::test]
+async fn test_auth_fails_closed_when_user_table_unreadable() {
+    let db = in_memory_db();
+    break_table(&db, "users");
+    break_table(&db, "meta");
+    let router = build_router(bare_state(&db));
+
+    // A protected endpoint without any token: 503, never served unauthenticated.
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    assert!(auth_status_required(&router).await);
+
+    // First-run setup must not reopen because the user table cannot be read.
+    let res = router.clone().oneshot(setup_request()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn test_recovery_mode_requires_auth_and_locks_setup() {
+    // Recovery mode: the persistent DB did not open, an empty in-memory one stands in.
+    let db = in_memory_db();
+    let state = bare_state(&db);
+    state.ctx.set_recovery_mode(true);
+    let router = build_router(state);
+
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    assert!(auth_status_required(&router).await);
+
+    // No hash file and the real users unreachable: login says why instead of "invalid".
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({"password": "anything"})).unwrap(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let res = router.clone().oneshot(setup_request()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}

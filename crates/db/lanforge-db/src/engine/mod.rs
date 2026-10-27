@@ -22,33 +22,17 @@ pub struct LanforgeDb {
 
 impl LanforgeDb {
     /// Opens the Redb database pool/file according to configuration.
+    ///
+    /// A persistent database that cannot be opened is an error, never a silent fallback to
+    /// another file: an empty stand-in would look like a first run. The caller decides
+    /// whether to continue in recovery mode.
     pub fn open(cfg: &crate::config::DatabaseConfig) -> Result<Self, DbError> {
         if cfg.is_in_memory() {
             let db = RedbDatabase::open_temp()?;
             return Ok(Self { inner: db });
         }
-        let path = cfg.db_path();
-        match RedbDatabase::open(&path) {
-            Ok(db) => Ok(Self { inner: db }),
-            Err(DbError::Validation(e)) => Err(DbError::Validation(e)),
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to open redb at {}: {e}. Falling back to ./lanforge.redb",
-                    path.display()
-                );
-                match RedbDatabase::open("./lanforge.redb") {
-                    Ok(db) => Ok(Self { inner: db }),
-                    Err(DbError::Validation(e2)) => Err(DbError::Validation(e2)),
-                    Err(e2) => {
-                        tracing::warn!(
-                            "Failed to open local redb at ./lanforge.redb: {e2}. Falling back to in-memory mode."
-                        );
-                        let db = RedbDatabase::open_temp()?;
-                        Ok(Self { inner: db })
-                    }
-                }
-            }
-        }
+        let db = RedbDatabase::open(cfg.db_path())?;
+        Ok(Self { inner: db })
     }
 
     /// Opens an isolated in-memory temporary database.

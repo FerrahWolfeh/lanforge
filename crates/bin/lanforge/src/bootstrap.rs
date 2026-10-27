@@ -40,7 +40,7 @@ use rtnetlink::packet_route::RouteNetlinkMessage;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
 
@@ -539,7 +539,7 @@ impl Bootstrapper {
     ) -> Result<(State, LanforgeDb, LogDb)> {
         let (db, log_db) = Self::open_databases(cfg)?;
         let user_count = db.count_users().unwrap_or(0);
-        let is_provisioned = Self::check_provisioning_mode(cfg, &db, user_count);
+        let is_provisioned = Self::check_provisioning_mode(cfg, &db);
 
         if is_provisioned {
             let config_path = PathBuf::from(&cfg.config_path);
@@ -637,9 +637,28 @@ impl Bootstrapper {
         Ok((db, log_db))
     }
 
-    fn check_provisioning_mode(cfg: &mut Config, db: &LanforgeDb, user_count: i64) -> bool {
-        let is_provisioned =
-            db.is_provisioned().unwrap_or(false) || (user_count > 0) || cfg.system.auto_provision;
+    /// Decides first-run (provisioning) mode, which makes DHCP/RA/PPPoE dormant and opens
+    /// `/setup`. Fails toward "provisioned": an unreadable flag or user table, or recovery
+    /// mode (an in-memory stand-in for a persistent DB that did not open), is not a first
+    /// run — treating it as one takes the LAN offline and lets anyone on it claim the admin.
+    fn check_provisioning_mode(cfg: &mut Config, db: &LanforgeDb) -> bool {
+        let recovery = db.is_in_memory() && !cfg.database.is_in_memory();
+        if recovery {
+            error!(
+                "Bootstrap: RECOVERY MODE — setup stays locked and services run from '{}'; \
+                 fix the database and restart",
+                cfg.config_path
+            );
+            // The stand-in DB is what `/setup` and setup-status consult: lock them.
+            if let Err(e) = db.set_provisioned(true) {
+                warn!("Bootstrap: Failed to mark the in-memory database provisioned: {e}");
+            }
+        }
+
+        let is_provisioned = recovery
+            || db.is_provisioned().unwrap_or(true)
+            || db.count_users().map_or(true, |n| n > 0)
+            || cfg.system.auto_provision;
 
         if cfg.system.auto_provision && !db.is_provisioned().unwrap_or(false) {
             info!("Bootstrap: Auto-provisioning enabled via configuration/CLI");
@@ -1315,5 +1334,65 @@ impl Bootstrapper {
             gua_prefix = %gua_str,
             "Lanforge Daemon ready on interface"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lanforge_db::redb;
+    use std::path::Path;
+
+    fn config_with_db(path: &std::path::Path) -> Config {
+        let mut cfg = Config::default();
+        cfg.database.config_path = path.display().to_string();
+        cfg.database.runtime_path = "memory".to_string();
+        cfg.system.auto_provision = false;
+        cfg
+    }
+
+    #[test]
+    fn unreadable_persistent_db_is_not_a_first_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.redb");
+        std::fs::write(&path, b"definitely not a redb file").unwrap();
+        let mut cfg = config_with_db(&path);
+
+        let (db, _log_db) = Bootstrapper::open_databases(&cfg).unwrap();
+        assert!(
+            db.is_in_memory(),
+            "an unopenable DB must enter recovery mode"
+        );
+
+        assert!(Bootstrapper::check_provisioning_mode(&mut cfg, &db));
+        assert!(
+            db.is_provisioned().unwrap(),
+            "the stand-in DB must lock /setup"
+        );
+        assert!(
+            !dir.path().join("lanforge.redb").exists() && !Path::new("lanforge.redb").exists(),
+            "no fallback DB file may be created"
+        );
+    }
+
+    #[test]
+    fn unreadable_provisioning_state_is_not_a_first_run() {
+        const META: redb::TableDefinition<u64, u64> = redb::TableDefinition::new("meta");
+        const USERS: redb::TableDefinition<u64, u64> = redb::TableDefinition::new("users");
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config_with_db(&dir.path().join("config.redb"));
+        let (db, _log_db) = Bootstrapper::open_databases(&cfg).unwrap();
+        assert!(!db.is_in_memory());
+        {
+            let txn = db.redb().begin_write().unwrap();
+            txn.delete_table(redb::TableDefinition::<&str, &[u8]>::new("meta"))
+                .unwrap();
+            txn.open_table(META).unwrap();
+            txn.open_table(USERS).unwrap();
+            txn.commit().unwrap();
+        }
+        assert!(db.is_provisioned().is_err() && db.count_users().is_err());
+
+        assert!(Bootstrapper::check_provisioning_mode(&mut cfg, &db));
     }
 }
