@@ -90,7 +90,11 @@ async fn adblock_failed_refresh_retries_when_upstreams_appear() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(hits.load(Ordering::SeqCst), 1, "first pass tried once and failed");
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "first pass tried once and failed"
+    );
     assert_eq!(filter.blocklist_size(), 0);
 
     // PPPoE comes up: the list host resolves now, and the DNS service installs upstreams.

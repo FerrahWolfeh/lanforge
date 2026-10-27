@@ -23,8 +23,8 @@ use lanforge_core::{
     error::CoreError,
     service::{AsyncService, LanforgeService, ServiceCommand, ServiceHandle},
 };
-use lanforge_db_core::{DatabaseStore, LogStore};
 use lanforge_crypto::tls as tls_utils;
+use lanforge_db_core::{DatabaseStore, LogStore};
 use lanforge_types::system::DormantReason;
 #[cfg(feature = "webui")]
 use lanforge_webui::WebUiAssets;

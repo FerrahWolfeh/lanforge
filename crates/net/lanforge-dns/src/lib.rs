@@ -5,7 +5,12 @@
 
 // rustls needs a crypto provider: without one, building a TLS config panics at runtime.
 #[cfg(all(
-    any(feature = "dot", feature = "doq", feature = "doh-upstream", feature = "adblock"),
+    any(
+        feature = "dot",
+        feature = "doq",
+        feature = "doh-upstream",
+        feature = "adblock"
+    ),
     not(any(feature = "ring", feature = "aws-lc"))
 ))]
 compile_error!(

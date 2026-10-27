@@ -45,7 +45,9 @@ fn load_certs(input: &str) -> Result<Vec<CertificateDer<'static>>, TlsError> {
         let path = Path::new(input);
         Ok(CertificateDer::pem_file_iter(path)?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| TlsError::Invalid(format!("Failed to read certificate file {input}: {e}")))?)
+            .map_err(|e| {
+                TlsError::Invalid(format!("Failed to read certificate file {input}: {e}"))
+            })?)
     }
 }
 
@@ -63,7 +65,9 @@ fn load_private_key(input: &str) -> Result<PrivateKeyDer<'static>, TlsError> {
             .next()
             .ok_or_else(|| TlsError::Invalid(format!("No private key found in {input}")))?
             .map(|k| k.clone_key())
-            .map_err(|e| TlsError::Invalid(format!("Failed to read private key file {input}: {e}")))?)
+            .map_err(|e| {
+                TlsError::Invalid(format!("Failed to read private key file {input}: {e}"))
+            })?)
     }
 }
 

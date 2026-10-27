@@ -106,7 +106,8 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     }
                     resumed_fresh = !force_refresh
                         && filter.blocklist_size() > 0
-                        && last_refresh.is_some_and(|t| t.elapsed() < Duration::from_secs(20 * 3600));
+                        && last_refresh
+                            .is_some_and(|t| t.elapsed() < Duration::from_secs(20 * 3600));
                 }
 
                 // 1. Try to load from disk if not yet loaded

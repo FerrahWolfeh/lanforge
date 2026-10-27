@@ -93,7 +93,11 @@ async fn adblock_toggle_and_pause_do_not_refetch_lists() {
     }
     assert!(filter.blocklist_size() > 0, "initial list loaded");
     settle().await;
-    assert_eq!(hits.load(Ordering::SeqCst), 1, "initial pass fetched the source once");
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "initial pass fetched the source once"
+    );
 
     let toggle = |enabled: bool, duration_secs: Option<u64>| {
         let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::AdblockToggle {
@@ -109,7 +113,11 @@ async fn adblock_toggle_and_pause_do_not_refetch_lists() {
     filter.set_enabled(true);
     toggle(true, None);
     settle().await;
-    assert_eq!(hits.load(Ordering::SeqCst), 1, "pause/resume must not re-download");
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "pause/resume must not re-download"
+    );
 
     // Permanent off/on: the API writes the config *and* publishes the toggle.
     ctx.update_dns_adblock(AdblockDbConfig {
@@ -123,15 +131,26 @@ async fn adblock_toggle_and_pause_do_not_refetch_lists() {
     filter.set_enabled(true);
     toggle(true, None);
     settle().await;
-    assert_eq!(hits.load(Ordering::SeqCst), 1, "off/on must not re-download");
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "off/on must not re-download"
+    );
 
     // A new daily refresh time only reschedules.
     ctx.update_dns_adblock(AdblockDbConfig {
-        refresh_time: TimeOfDay { hour: 4, minute: 30 },
+        refresh_time: TimeOfDay {
+            hour: 4,
+            minute: 30,
+        },
         ..enabled_cfg.clone()
     });
     settle().await;
-    assert_eq!(hits.load(Ordering::SeqCst), 1, "a schedule change must not re-download");
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "a schedule change must not re-download"
+    );
     assert!(filter.blocklist_size() > 0 && filter.is_enabled());
 
     // A new source list is the one change that needs a download pass.
@@ -141,7 +160,11 @@ async fn adblock_toggle_and_pause_do_not_refetch_lists() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     settle().await;
-    assert_eq!(hits.load(Ordering::SeqCst), 3, "one fetch per configured source");
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        3,
+        "one fetch per configured source"
+    );
 
     manager.abort();
 }

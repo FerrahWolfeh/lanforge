@@ -943,7 +943,10 @@ async fn test_dhcpv6_rapid_commit_reply_is_a_binding() -> Result<(), Box<dyn Err
         _ => return Err("Expected ServerId in Reply".into()),
     };
     let granted: Vec<_> = ia_na_addrs(&rc).into_iter().map(|(a, _, _)| a).collect();
-    assert!(granted.contains(&ula) && granted.contains(&old_gua), "{granted:?}");
+    assert!(
+        granted.contains(&ula) && granted.contains(&old_gua),
+        "{granted:?}"
+    );
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // T1, same prefix: the server must know the binding it just granted.
@@ -954,9 +957,15 @@ async fn test_dhcpv6_rapid_commit_reply_is_a_binding() -> Result<(), Box<dyn Err
     )
     .await
     .ok_or("no Reply to Renew")?;
-    assert_eq!(status_code(&renew), None, "Renew answered with a status: {renew:?}");
+    assert_eq!(
+        status_code(&renew),
+        None,
+        "Renew answered with a status: {renew:?}"
+    );
     assert!(
-        ia_na_addrs(&renew).iter().any(|(a, p, _)| *a == old_gua && *p > 0),
+        ia_na_addrs(&renew)
+            .iter()
+            .any(|(a, p, _)| *a == old_gua && *p > 0),
         "binding renewed: {:?}",
         ia_na_addrs(&renew)
     );
@@ -973,7 +982,11 @@ async fn test_dhcpv6_rapid_commit_reply_is_a_binding() -> Result<(), Box<dyn Err
     .ok_or("Rebind for a binding we granted was ignored")?;
     let addrs = ia_na_addrs(&rebind);
     let find = |a: Ipv6Addr| addrs.iter().find(|(x, _, _)| *x == a).copied();
-    assert_eq!(find(old_gua).map(|(_, p, v)| (p, v)), Some((0, 0)), "{addrs:?}");
+    assert_eq!(
+        find(old_gua).map(|(_, p, v)| (p, v)),
+        Some((0, 0)),
+        "{addrs:?}"
+    );
     assert!(find(new_gua).is_some_and(|(_, p, _)| p > 0), "{addrs:?}");
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -992,8 +1005,12 @@ async fn test_dhcpv6_dynamic_lease_follows_renumbered_gua() -> Result<(), Box<dy
     let mut cfg = create_test_v6_config();
     // A GUA pool by suffix, like the owner's `::100`-`::fff` scope.
     cfg.pools = vec![lanforge_types::network::dhcp::Dhcpv6Pool {
-        range_start: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix("::200".parse()?)),
-        range_end: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix("::2ff".parse()?)),
+        range_start: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix(
+            "::200".parse()?,
+        )),
+        range_end: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix(
+            "::2ff".parse()?,
+        )),
         ..Default::default()
     }];
     ctx.update_dhcp_v6_pools(cfg.pools.clone());
@@ -1027,8 +1044,10 @@ async fn test_dhcpv6_dynamic_lease_follows_renumbered_gua() -> Result<(), Box<dy
             }
         }
     };
-    let old_prefix = lanforge_types::network::Ipv6Prefix::from_addr("2804:bdc:5090:5600::".parse()?);
-    let new_prefix = lanforge_types::network::Ipv6Prefix::from_addr("2804:bdc:5071:9400::".parse()?);
+    let old_prefix =
+        lanforge_types::network::Ipv6Prefix::from_addr("2804:bdc:5090:5600::".parse()?);
+    let new_prefix =
+        lanforge_types::network::Ipv6Prefix::from_addr("2804:bdc:5071:9400::".parse()?);
 
     let adv = exchange(
         Dhcpv6PacketBuilder::solicit(duid.clone())
@@ -1067,11 +1086,15 @@ async fn test_dhcpv6_dynamic_lease_follows_renumbered_gua() -> Result<(), Box<dy
     .ok_or("no Reply to Renew")?;
     let addrs = ia_na_addrs(&reply);
     assert!(
-        addrs.iter().any(|(a, p, v)| *a == old_gua && (*p, *v) == (0, 0)),
+        addrs
+            .iter()
+            .any(|(a, p, v)| *a == old_gua && (*p, *v) == (0, 0)),
         "withdrawn GUA must come back with zero lifetimes: {addrs:?}"
     );
     assert!(
-        addrs.iter().any(|(a, p, _)| new_prefix.matches(a) && *p > 0),
+        addrs
+            .iter()
+            .any(|(a, p, _)| new_prefix.matches(a) && *p > 0),
         "an address on the current GUA: {addrs:?}"
     );
 
