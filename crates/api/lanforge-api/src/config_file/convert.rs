@@ -20,7 +20,6 @@ use lanforge_types::network::firewall::{
 use lanforge_types::network::ra::{
     DnsslConfig, PrefixLifetime, PrefixSource, RAPrefix, RdnssConfig,
 };
-use lanforge_types::network::traffic::{NicTuningConfig, SqmConfig, TrafficConfig};
 use lanforge_types::network::{DnsRecordType, IpSubnet, Ipv6AddrOrSuffix};
 
 use crate::api::devices::HostConfigEntry;
@@ -33,8 +32,7 @@ use super::duration::HumanDuration;
 use super::sections::{
     AdblockFile, AdblockRuleFile, AdblockSourceFile, DhcpFile, Dhcpv4PoolFile, Dhcpv6PoolFile,
     DnsFile, DnsRewriteFile, DnsUpstreamFile, FirewallFile, FirewallZoneFile, HostFileEntry,
-    NicTuningFile, PortForwardFile, RaDnsslFile, RaFile, RaPrefixFile, RaRdnssFile, SqmFile,
-    TrafficFile, ZoneForwardingFile,
+    PortForwardFile, RaDnsslFile, RaFile, RaPrefixFile, RaRdnssFile, ZoneForwardingFile,
 };
 
 fn policy_to_str(p: FirewallPolicy) -> &'static str {
@@ -454,25 +452,7 @@ impl From<&SystemConfigExport> for ConfigFile {
 
         // 8. Traffic
         if let Some(ref tr) = export.traffic_config {
-            cfg.traffic = TrafficFile {
-                tuning: NicTuningFile {
-                    enabled: tr.tuning.enabled,
-                    interfaces: tr.tuning.interfaces.clone(),
-                    cpu_mask: tr.tuning.cpu_mask.clone(),
-                    rps_flow_entries: Some(tr.tuning.rps_flow_entries),
-                    rps_flow_cnt: Some(tr.tuning.rps_flow_cnt),
-                    rx_ring: tr.tuning.rx_ring.clone(),
-                    tx_ring: tr.tuning.tx_ring.clone(),
-                    disable_eee: tr.tuning.disable_eee,
-                    udp_gro_forwarding: tr.tuning.udp_gro_forwarding,
-                },
-                sqm: SqmFile {
-                    enabled: tr.sqm.enabled,
-                    interface: Some(tr.sqm.interface.clone()),
-                    download_mbps: Some(tr.sqm.download_mbps),
-                    upload_mbps: Some(tr.sqm.upload_mbps),
-                },
-            };
+            cfg.traffic = (**tr).clone();
         }
 
         cfg
@@ -824,31 +804,7 @@ impl From<&ConfigFile> for SystemConfigExport {
         let pppoe_config = Some(Box::new(cfg.pppoe.clone()));
 
         // 8. Traffic
-        let traffic_config = Some(Box::new(TrafficConfig {
-            tuning: NicTuningConfig {
-                enabled: cfg.traffic.tuning.enabled,
-                interfaces: cfg.traffic.tuning.interfaces.clone(),
-                cpu_mask: cfg.traffic.tuning.cpu_mask.clone(),
-                rps_flow_entries: cfg.traffic.tuning.rps_flow_entries.unwrap_or(32768),
-                rps_flow_cnt: cfg.traffic.tuning.rps_flow_cnt.unwrap_or(4096),
-                rx_ring: cfg.traffic.tuning.rx_ring.clone(),
-                tx_ring: cfg.traffic.tuning.tx_ring.clone(),
-                disable_eee: cfg.traffic.tuning.disable_eee,
-                udp_gro_forwarding: cfg.traffic.tuning.udp_gro_forwarding,
-            },
-            sqm: SqmConfig {
-                enabled: cfg.traffic.sqm.enabled,
-                interface: cfg
-                    .traffic
-                    .sqm
-                    .interface
-                    .clone()
-                    .unwrap_or_else(|| "auto".to_string()),
-                download_mbps: cfg.traffic.sqm.download_mbps.unwrap_or_default(),
-                upload_mbps: cfg.traffic.sqm.upload_mbps.unwrap_or_default(),
-                ..Default::default()
-            },
-        }));
+        let traffic_config = Some(Box::new(cfg.traffic.clone()));
 
         Self {
             hosts,

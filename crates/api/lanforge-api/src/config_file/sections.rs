@@ -112,18 +112,6 @@ fn default_proto_tcp() -> String {
     "tcp".to_string()
 }
 
-fn default_cpu_mask() -> String {
-    "auto".to_string()
-}
-
-fn default_rx_ring() -> String {
-    "auto".to_string()
-}
-
-fn default_tx_ring() -> String {
-    "auto".to_string()
-}
-
 // ============================================================================
 // Static Sections
 // ============================================================================
@@ -755,70 +743,6 @@ pub struct PortForwardFile {
     pub to_port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-}
-
-/// Traffic shaping, SQM, and NIC tuning configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct TrafficFile {
-    #[serde(default)]
-    pub tuning: NicTuningFile,
-    #[serde(default)]
-    pub sqm: SqmFile,
-}
-
-/// NIC hardware tuning settings.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct NicTuningFile {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub interfaces: Vec<String>,
-    #[serde(default = "default_cpu_mask")]
-    pub cpu_mask: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rps_flow_entries: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rps_flow_cnt: Option<u32>,
-    #[serde(default = "default_rx_ring")]
-    pub rx_ring: String,
-    #[serde(default = "default_tx_ring")]
-    pub tx_ring: String,
-    #[serde(default = "default_true")]
-    pub disable_eee: bool,
-    #[serde(default = "default_true")]
-    pub udp_gro_forwarding: bool,
-}
-
-impl Default for NicTuningFile {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            interfaces: Vec::new(),
-            cpu_mask: default_cpu_mask(),
-            rps_flow_entries: Some(32768),
-            rps_flow_cnt: Some(4096),
-            rx_ring: default_rx_ring(),
-            tx_ring: default_tx_ring(),
-            disable_eee: true,
-            udp_gro_forwarding: true,
-        }
-    }
-}
-
-/// SQM (Smart Queue Management) settings.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct SqmFile {
-    #[serde(default = "default_false")]
-    pub enabled: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub interface: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub download_mbps: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub upload_mbps: Option<u32>,
 }
 
 /// A static host or pinned client entry in `[hosts.<name>]`.

@@ -22,7 +22,6 @@ use lanforge_api::config_file::{
 };
 use lanforge_core::bus::{
     DeviceEvent, DnsEvent, FirewallEvent, LanforgeEvent, StorageEvent, SystemEvent, TimedEvent,
-    TrafficEvent,
 };
 use lanforge_db_core::{
     ApiTokenStore, DeviceStore, DnsUpstreamEntry, LogStore, RaConfigStore, config_keys::*,
@@ -195,11 +194,6 @@ impl DbWorker {
                     && let Some(config) = self.ctx.get_firewall_config()
                 {
                     tx.set(FIREWALL, &config)?;
-                }
-                if self.dirty_sections.contains(SectionSet::TRAFFIC)
-                    && let Some(config) = self.ctx.get_traffic_config()
-                {
-                    tx.set(TRAFFIC, &config)?;
                 }
                 if self.dirty_sections.contains(SectionSet::DNS) {
                     tx.set(DNS_REWRITES, &self.ctx.get_dns_rewrites())?;
@@ -854,13 +848,10 @@ impl AsyncService for DbWorker {
                         LanforgeEvent::Firewall(FirewallEvent::RulesetChanged) => {
                             self.dirty_sections |= SectionSet::FIREWALL;
                         }
-                        LanforgeEvent::Traffic(event) => {
-                            if matches!(**event, TrafficEvent::RulesetChanged) {
-                                self.dirty_sections |= SectionSet::TRAFFIC;
-                            }
-                        }
                         LanforgeEvent::System(SystemEvent::ConfigChanged { sections }) => {
-                            self.dirty_sections |= SectionSet::from(*sections);
+                            // File-owned sections are written by the API before they apply.
+                            self.dirty_sections |=
+                                SectionSet::from(*sections).difference(SectionSet::FILE_OWNED);
                         }
                     });
 

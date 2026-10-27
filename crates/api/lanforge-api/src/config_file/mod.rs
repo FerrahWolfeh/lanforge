@@ -1,4 +1,5 @@
 use lanforge_types::network::pppoe::PppoeConfig;
+use lanforge_types::network::traffic::TrafficConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -51,7 +52,8 @@ pub struct ConfigFile {
     /// The PPPoE client's own type: this file is its only source (config-storage step 2).
     pub pppoe: PppoeConfig,
     #[serde(default)]
-    pub traffic: TrafficFile,
+    /// NIC tuning and SQM: the traffic service's own type, file-owned like `pppoe`.
+    pub traffic: TrafficConfig,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub hosts: BTreeMap<String, HostFileEntry>,
 }

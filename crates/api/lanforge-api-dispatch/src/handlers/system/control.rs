@@ -182,10 +182,21 @@ impl ClientContext {
     }
 
     pub async fn handle_update_traffic_config(&self, cfg: TrafficConfig) -> Response {
+        let persisted = match self
+            .persist_config_sections(SectionSet::TRAFFIC, |file| file.traffic = cfg.clone())
+        {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("Traffic configuration not saved: {e}");
+                return Response::Error {
+                    error: format!("Traffic configuration not saved: {e}"),
+                };
+            }
+        };
         self.ctx.update_traffic_config(cfg);
 
         Response::Success(SimpleSuccess {
-            message: "Traffic and SQM configuration updated successfully".to_string(),
+            message: persisted.message("Traffic and SQM configuration"),
         })
     }
 

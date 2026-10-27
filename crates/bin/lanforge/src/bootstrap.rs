@@ -714,7 +714,7 @@ impl Bootstrapper {
         Self::migrate_pppoe_config(db, cfg)?;
 
         #[cfg(feature = "traffic")]
-        Self::seed_traffic_config(db, cfg)?;
+        Self::migrate_traffic_config(db, cfg)?;
 
         #[cfg(feature = "nft")]
         Self::seed_firewall_config(db, cfg)?;
@@ -842,62 +842,81 @@ impl Bootstrapper {
         Ok(())
     }
 
-    /// Config-storage cut-over for `PPPoE`, whose only source is now `[pppoe]` in the config
-    /// file. A `PPPOE` key left in redb by an older binary holds the full configuration the
-    /// daemon ran with (the file kept only six of its fields): it is written to the file once,
-    /// with a backup of the file, and then removed. Until the file can take it (read-only
-    /// config, write error), the stored value is used and the key kept.
-    #[cfg(feature = "pppoe")]
-    fn migrate_pppoe_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
-        use lanforge_api::config_file::{ConfigFile, SectionSet, persist_sections};
-        use lanforge_db::config_keys::PPPOE;
-
-        let Some(stored) = db.load_pppoe_config()? else {
-            return Ok(());
-        };
-        cfg.pppoe_enabled = stored.enabled;
-        cfg.pppoe_toml = stored.clone();
+    /// Config-storage cut-over for a file-owned section (`SectionSet::FILE_OWNED`), whose only
+    /// source is now its table in the config file. The redb key an older binary left holds the
+    /// full configuration the daemon ran with (the file kept only part of it): it is written to
+    /// the file once, with a backup of the file, and then removed. Until the file can take it
+    /// (read-only config, write error) the key is kept; the caller uses the stored value anyway.
+    fn move_section_to_file<T>(
+        db: &LanforgeDb,
+        cfg: &Config,
+        name: &str,
+        key: lanforge_db::ConfigKey<T>,
+        section: lanforge_api::config_file::SectionSet,
+        fill: impl FnOnce(&mut lanforge_api::config_file::ConfigFile),
+    ) -> Result<()> {
+        use lanforge_api::config_file::{ConfigFile, persist_sections};
 
         let path = std::path::Path::new(&cfg.config_path);
         if !cfg.config_writable || !path.exists() {
             warn!(
-                "Config: PPPoE settings stay in the database until '{}' is writable",
+                "Config: {name} settings stay in the database until '{}' is writable",
                 path.display()
             );
             return Ok(());
         }
         let backup = path.with_extension("toml.bak");
-        let file = ConfigFile {
-            pppoe: stored,
-            ..ConfigFile::default()
-        };
+        let mut section_cfg = ConfigFile::default();
+        fill(&mut section_cfg);
         let moved = std::fs::copy(path, &backup)
-            .and_then(|_| persist_sections(path, &file, SectionSet::PPPOE));
+            .and_then(|_| persist_sections(path, &section_cfg, section));
         if let Err(e) = moved {
             warn!(
-                "Config: could not move PPPoE settings to '{}' ({e}); keeping them in the database",
+                "Config: could not move {name} settings to '{}' ({e}); keeping them in the database",
                 path.display()
             );
             return Ok(());
         }
-        db.write(|tx| tx.remove(PPPOE))?;
+        db.write(|tx| tx.remove(key))?;
         info!(
-            "Config: moved PPPoE settings from the database to [pppoe] in '{}' (previous file kept as '{}')",
+            "Config: moved {name} settings from the database to '{}' (previous file kept as '{}')",
             path.display(),
             backup.display()
         );
         Ok(())
     }
 
+    #[cfg(feature = "pppoe")]
+    fn migrate_pppoe_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+        let Some(stored) = db.load_pppoe_config()? else {
+            return Ok(());
+        };
+        cfg.pppoe_enabled = stored.enabled;
+        cfg.pppoe_toml = stored.clone();
+        Self::move_section_to_file(
+            db,
+            cfg,
+            "PPPoE",
+            lanforge_db::config_keys::PPPOE,
+            lanforge_api::config_file::SectionSet::PPPOE,
+            |file| file.pppoe = stored,
+        )
+    }
+
     #[cfg(feature = "traffic")]
-    fn seed_traffic_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
-        if db.seed_traffic_if_empty(&cfg.traffic_toml)? {
-            info!("Seeded Traffic configuration from TOML into database");
-        }
-        if let Some(loaded) = db.load_traffic_config()? {
-            cfg.traffic_toml = loaded;
-        }
-        Ok(())
+    fn migrate_traffic_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+        let Some(stored) = db.load_traffic_config()? else {
+            return Ok(());
+        };
+        cfg.traffic_toml = stored.clone();
+        Self::move_section_to_file(
+            db,
+            cfg,
+            "traffic",
+            lanforge_db::config_keys::TRAFFIC,
+            lanforge_api::config_file::SectionSet::TRAFFIC,
+            |file| file.traffic = stored,
+        )
     }
 
     #[cfg(feature = "nft")]
@@ -1512,6 +1531,43 @@ mod tests {
         Bootstrapper::migrate_pppoe_config(&db, &mut cfg).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
         assert!(!path.with_extension("toml.bak").exists());
+    }
+
+    /// Same cut-over for traffic/SQM: the six SQM fields the old `[traffic]` dropped survive.
+    #[cfg(feature = "traffic")]
+    #[test]
+    fn traffic_config_moves_from_the_database_to_the_file_once() {
+        use lanforge_api::config_file::ConfigFile;
+        use lanforge_types::network::traffic::TrafficConfig;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        std::fs::write(
+            &path,
+            "# box\n[traffic.sqm]\nenabled = true\ndownload_mbps = 770\n",
+        )
+        .unwrap();
+        let mut cfg = config_with_db(&dir.path().join("config.redb"));
+        cfg.config_path = path.display().to_string();
+        cfg.config_writable = true;
+        let db = LanforgeDb::open_in_memory().unwrap();
+        let mut stored = TrafficConfig::default();
+        stored.sqm.enabled = true;
+        stored.sqm.download_mbps = 770;
+        stored.sqm.upload_mbps = 380;
+        stored.sqm.rtt_ms = Some(40);
+        stored.sqm.per_host_isolation = false;
+        stored.sqm.raw_cake_args = Some("ack-filter".into());
+        stored.tuning.interfaces = vec!["lan0".into(), "wan0".into()];
+        db.save_traffic_config(&stored).unwrap();
+
+        Bootstrapper::migrate_traffic_config(&db, &mut cfg).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(ConfigFile::parse(&text).unwrap().traffic, stored, "{text}");
+        assert!(text.starts_with("# box"));
+        assert_eq!(cfg.traffic_toml, stored);
+        assert!(db.load_traffic_config().unwrap().is_none(), "key removed");
     }
 
     /// A file that cannot take the config keeps it in the database, in use.

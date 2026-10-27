@@ -628,13 +628,27 @@ impl ClientContext {
         }
 
         if let Some(tr) = traffic_config {
-            patch = patch.with_traffic(*tr);
-            results.push(ImportResult {
-                section: ImportSection::TrafficConfig,
-                success: true,
-                count: 1,
-                error: None,
-            });
+            // File-owned: imported only if it reaches the config file.
+            match self
+                .persist_config_sections(lanforge_api::config_file::SectionSet::TRAFFIC, |file| {
+                    file.traffic = (*tr).clone()
+                }) {
+                Ok(_) => {
+                    patch = patch.with_traffic(*tr);
+                    results.push(ImportResult {
+                        section: ImportSection::TrafficConfig,
+                        success: true,
+                        count: 1,
+                        error: None,
+                    });
+                }
+                Err(e) => results.push(ImportResult {
+                    section: ImportSection::TrafficConfig,
+                    success: false,
+                    count: 0,
+                    error: Some(e),
+                }),
+            }
         }
 
         if dhcp_v4_dirty {

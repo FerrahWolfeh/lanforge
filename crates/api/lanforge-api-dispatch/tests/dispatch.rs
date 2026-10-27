@@ -662,3 +662,26 @@ async fn pppoe_update_on_read_only_config_applies_in_memory_and_says_so() {
     assert_eq!(client_ctx.ctx.get_pppoe_config(), Some(cfg));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "[system]\n");
 }
+
+#[tokio::test]
+async fn traffic_update_is_written_to_the_config_file() {
+    let client_ctx = init_test_context().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    std::fs::write(&path, "# mine\n[system]\niface = \"lan0\"\n").unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(true);
+
+    let mut cfg = lanforge_types::network::TrafficConfig::default();
+    cfg.sqm.enabled = true;
+    cfg.sqm.rtt_ms = Some(25);
+    cfg.sqm.raw_cake_args = Some("ack-filter".into());
+    let res = client_ctx.handle_update_traffic_config(cfg.clone()).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    let file = lanforge_api::config_file::ConfigFile::parse(&text).unwrap();
+    assert_eq!(file.traffic, cfg, "every field reaches the file");
+    assert!(text.contains("# mine"));
+    assert_eq!(client_ctx.ctx.get_traffic_config(), Some(cfg));
+}

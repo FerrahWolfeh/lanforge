@@ -6,9 +6,9 @@ use anyhow::{Context, Result};
 use lanforge_api::api::SystemConfigExport;
 use lanforge_api::config_file::{ConfigFile, Section, section_hashes, write_toml_atomically};
 use lanforge_db::config_keys::{
-    DHCP_OPTIONS, DHCP_V4_POOLS, DHCP_V6_POOLS, FIREWALL, RA_DNSSL, RA_PREFIXES, RA_RDNSS, TRAFFIC,
+    DHCP_OPTIONS, DHCP_V4_POOLS, DHCP_V6_POOLS, FIREWALL, RA_DNSSL, RA_PREFIXES, RA_RDNSS,
 };
-use lanforge_db::{DhcpConfigStore, FirewallConfigStore, LanforgeDb, TrafficConfigStore};
+use lanforge_db::{DhcpConfigStore, FirewallConfigStore, LanforgeDb};
 use tracing::info;
 
 /// Synchronizes configuration between `lanforge.toml` and `config.redb` during boot and reload.
@@ -152,18 +152,6 @@ fn sync_section_from_db_to_config_file(db: &LanforgeDb, sec: Section, cfg: &mut 
                 cfg.firewall = imported_cfg.firewall;
             }
         }
-        Section::Traffic =>
-        {
-            #[cfg(feature = "traffic")]
-            if let Ok(Some(tr)) = db.load_traffic_config() {
-                let export = SystemConfigExport {
-                    traffic_config: Some(Box::new(tr)),
-                    ..Default::default()
-                };
-                let imported_cfg = ConfigFile::from(&export);
-                cfg.traffic = imported_cfg.traffic;
-            }
-        }
         _ => {}
     }
 }
@@ -210,13 +198,6 @@ fn apply_sections_to_db(db: &LanforgeDb, sections: &[Section], cfg: &ConfigFile)
                     #[cfg(feature = "nft")]
                     if let Some(ref firewall) = export.firewall_config {
                         tx.set(FIREWALL, firewall)?;
-                    }
-                }
-                Section::Traffic =>
-                {
-                    #[cfg(feature = "traffic")]
-                    if let Some(ref traffic) = export.traffic_config {
-                        tx.set(TRAFFIC, traffic)?;
                     }
                 }
                 _ => {}

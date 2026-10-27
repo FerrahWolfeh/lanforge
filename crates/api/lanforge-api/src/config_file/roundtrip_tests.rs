@@ -436,17 +436,8 @@ const KNOWN_LOSSES: &[(&str, &[&str])] = &[
     ),
     ("ra_rdnss", &[]),
     ("system_iface", &[]),
-    (
-        "traffic_config",
-        &[
-            "/sqm/diffserv",
-            "/sqm/ingress_device",
-            "/sqm/overhead",
-            "/sqm/per_host_isolation",
-            "/sqm/raw_cake_args",
-            "/sqm/rtt_ms",
-        ],
-    ),
+    // Migrated: the file holds `TrafficConfig` itself.
+    ("traffic_config", &[]),
 ];
 
 #[test]

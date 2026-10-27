@@ -32,7 +32,15 @@ pub fn reload_file_sections(ctx: &LanforgeContext) {
         info!("Reload: [pppoe] changed in '{}'; applying", path.display());
         ctx.update_pppoe_config(file.pppoe);
     }
-    #[cfg(not(feature = "pppoe"))]
+    #[cfg(feature = "traffic")]
+    if ctx.get_traffic_config().as_ref() != Some(&file.traffic) {
+        info!(
+            "Reload: [traffic] changed in '{}'; applying",
+            path.display()
+        );
+        ctx.update_traffic_config(file.traffic);
+    }
+    #[cfg(not(any(feature = "pppoe", feature = "traffic")))]
     let _ = file;
 }
 
@@ -62,6 +70,27 @@ mod tests {
         let live = ctx.get_pppoe_config().expect("applied");
         assert_eq!(live.username, "new-user");
         assert!(!live.nftables.bypass_dns, "nested fields are applied too");
+    }
+
+    #[cfg(feature = "traffic")]
+    #[test]
+    fn reload_applies_an_offline_traffic_edit() {
+        let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        std::fs::write(
+            &path,
+            "[traffic.sqm]\nenabled = true\ndownload_mbps = 700\nrtt_ms = 30\n",
+        )
+        .unwrap();
+        ctx.set_config_path(&path);
+
+        reload_file_sections(&ctx);
+
+        let live = ctx.get_traffic_config().expect("applied");
+        assert!(live.sqm.enabled);
+        assert_eq!(live.sqm.download_mbps, 700);
+        assert_eq!(live.sqm.rtt_ms, Some(30));
     }
 
     #[test]
