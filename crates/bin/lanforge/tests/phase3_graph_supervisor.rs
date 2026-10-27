@@ -1227,3 +1227,74 @@ async fn unrelated_config_changes_do_not_cut_a_backoff_short() {
 
     supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
 }
+
+/// Goes Online, then Degraded, then Online again, one step per `step` notification.
+struct Flapping {
+    step: Arc<Notify>,
+}
+impl LanforgeService for Flapping {
+    fn spec(&self) -> ServiceSpec {
+        dummy_spec(ServiceId::Dns, &[], Condition::ALWAYS)
+    }
+}
+impl AsyncService for Flapping {
+    async fn serve(&mut self, _ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        h.ready();
+        self.step.notified().await;
+        h.degraded(DegradedReason::custom("upstream down"));
+        self.step.notified().await;
+        h.ready();
+        h.run_until_stopped(std::future::pending::<Result<(), CoreError>>())
+            .await
+            .map(|_| ())
+    }
+}
+
+async fn wait_node_state(
+    supervisor: &lanforge::supervisor::GraphSupervisor,
+    id: ServiceId,
+    state: ServiceState,
+) {
+    timeout(Duration::from_secs(1), async {
+        while supervisor.status_of(id).map(|s| s.state) != Some(state) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "{id}: node expected {state:?}, got {:?}",
+            supervisor.status_of(id).map(|s| s.state)
+        )
+    });
+}
+
+/// Dependents follow the node watch, not the context. A service's own `degraded()` after its first
+/// `ready()` reached only the context (the runner synced the node on the first ServiceReady only),
+/// and `ready()` after `degraded()` was a no-op: the node said Online while the service was
+/// degraded, and a recovered service stayed Degraded.
+#[tokio::test]
+async fn self_reported_state_reaches_the_node_every_time() {
+    let ctx = init_test_ctx();
+    let step = Arc::new(Notify::new());
+    let mut registry = ServiceRegistry::new();
+    let s = Arc::clone(&step);
+    registry.register(&ctx, move || Flapping {
+        step: Arc::clone(&s),
+    });
+    let supervisor = registry.start(&ctx).expect("start supervisor");
+
+    wait_node_state(&supervisor, ServiceId::Dns, ServiceState::Online).await;
+    step.notify_one();
+    wait_node_state(&supervisor, ServiceId::Dns, ServiceState::Degraded).await;
+    assert_eq!(
+        ctx.get_service_state(ServiceId::Dns),
+        ServiceState::Degraded
+    );
+    step.notify_one();
+    wait_node_state(&supervisor, ServiceId::Dns, ServiceState::Online).await;
+    assert_eq!(ctx.get_service_state(ServiceId::Dns), ServiceState::Online);
+    assert_eq!(ctx.get_service_detail(ServiceId::Dns), None);
+
+    supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
+}

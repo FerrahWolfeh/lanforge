@@ -336,11 +336,17 @@ pub trait AsyncService: LanforgeService {
     }
 }
 
+/// The latest state a service reported about itself (`None` until it reports).
+pub type StatusReport = Option<(ServiceState, Option<StateDetail>)>;
+
 /// A handle provided to services to manage their lifecycle, truthful readiness, and commands.
 #[derive(Clone)]
 pub struct ServiceHandle {
     id: ServiceId,
     ctx: LanforgeContext,
+    /// Carries every self-reported state to the supervisor runner, which publishes it on the
+    /// node watch that dependents follow. A `watch`: the latest report is never lost.
+    status_tx: Option<Arc<tokio::sync::watch::Sender<StatusReport>>>,
     signaled: Arc<AtomicBool>,
     restart_requested: Arc<AtomicBool>,
     cmd_rx: Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<ServiceCommand>>>,
@@ -355,6 +361,7 @@ impl ServiceHandle {
         Self {
             id,
             ctx,
+            status_tx: None,
             signaled: Arc::new(AtomicBool::new(false)),
             restart_requested: Arc::new(AtomicBool::new(false)),
             cmd_rx: Arc::new(tokio::sync::Mutex::new(rx)),
@@ -372,10 +379,37 @@ impl ServiceHandle {
         Self {
             id,
             ctx,
+            status_tx: None,
             signaled: Arc::new(AtomicBool::new(false)),
             restart_requested: Arc::new(AtomicBool::new(false)),
             cmd_rx: Arc::new(tokio::sync::Mutex::new(cmd_rx)),
             _keepalive_tx: None,
+        }
+    }
+
+    /// Routes every self-reported state to the supervisor (see [`StatusReport`]).
+    #[must_use]
+    pub fn with_status_reporter(mut self, tx: tokio::sync::watch::Sender<StatusReport>) -> Self {
+        self.status_tx = Some(Arc::new(tx));
+        self
+    }
+
+    /// Applies a self-reported state: the context at once (CLI, `WebUI`, readiness tracking) and
+    /// the supervisor's node watch (dependents). The first report of a start also publishes
+    /// `ServiceReady`.
+    fn report(&self, state: ServiceState, detail: Option<StateDetail>) {
+        self.ctx.set_service_state(self.id, state);
+        self.ctx.set_service_detail(self.id, detail.clone());
+        if let Some(tx) = &self.status_tx {
+            tx.send_replace(Some((state, detail)));
+        }
+        if !self.signaled.swap(true, Ordering::SeqCst) {
+            let _ = self
+                .ctx
+                .bus()
+                .publish(LanforgeEvent::System(SystemEvent::ServiceReady {
+                    id: self.id,
+                }));
         }
     }
 
@@ -385,19 +419,11 @@ impl ServiceHandle {
         self.id
     }
 
-    /// Signals that the service is initialized and actively serving traffic (Starting|Degraded -> Online).
-    /// This is idempotent per start generation; multiple calls in the same start will only publish one `ServiceReady` event.
+    /// Signals that the service is serving (Starting|Degraded -> Online). Applies every time, so a
+    /// recovered service returns to Online; only the first report of a start publishes
+    /// `ServiceReady`.
     pub fn ready(&self) {
-        if !self.signaled.swap(true, Ordering::SeqCst) {
-            self.ctx.set_service_state(self.id, ServiceState::Online);
-            self.ctx.set_service_detail(self.id, None);
-            let _ = self
-                .ctx
-                .bus()
-                .publish(LanforgeEvent::System(SystemEvent::ServiceReady {
-                    id: self.id,
-                }));
-        }
+        self.report(ServiceState::Online, None);
     }
 
     /// Returns true if readiness has been signaled for this generation.
@@ -406,41 +432,20 @@ impl ServiceHandle {
         self.signaled.load(Ordering::SeqCst)
     }
 
-    /// Marks the service as degraded with a specific reason.
+    /// Marks the service as degraded with a specific reason (settled for readiness).
     pub fn degraded(&self, why: DegradedReason) {
-        self.ctx.set_service_state(self.id, ServiceState::Degraded);
-        self.ctx
-            .set_service_detail(self.id, Some(StateDetail::Degraded(why)));
-        if !self.signaled.swap(true, Ordering::SeqCst) {
-            let _ = self
-                .ctx
-                .bus()
-                .publish(LanforgeEvent::System(SystemEvent::ServiceReady {
-                    id: self.id,
-                }));
-        }
+        self.report(ServiceState::Degraded, Some(StateDetail::Degraded(why)));
     }
 
-    /// Recovers from a degraded state back to Online.
+    /// Recovers from a degraded state back to Online (same as [`Self::ready`]).
     pub fn recovered(&self) {
-        self.ctx.set_service_state(self.id, ServiceState::Online);
-        self.ctx.set_service_detail(self.id, None);
+        self.ready();
     }
 
     /// Marks the service as dormant (Inactive) due to a condition and settles it cleanly.
     /// The service should return Ok(()) immediately after calling this.
     pub fn dormant(&self, why: DormantReason) {
-        self.ctx.set_service_state(self.id, ServiceState::Inactive);
-        self.ctx
-            .set_service_detail(self.id, Some(StateDetail::Dormant(why)));
-        if !self.signaled.swap(true, Ordering::SeqCst) {
-            let _ = self
-                .ctx
-                .bus()
-                .publish(LanforgeEvent::System(SystemEvent::ServiceReady {
-                    id: self.id,
-                }));
-        }
+        self.report(ServiceState::Inactive, Some(StateDetail::Dormant(why)));
     }
 
     /// Requests an explicit supervisor restart when `serve()` returns `Ok(())`.

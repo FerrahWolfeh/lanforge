@@ -9,7 +9,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
     Activation, AsyncService, DegradedReason, Edge, EdgeKind, LanforgeService, LossPolicy,
-    NodeStatus, ServiceCommand, ServiceHandle, ServiceSpec,
+    NodeStatus, ServiceCommand, ServiceHandle, ServiceSpec, StatusReport,
 };
 use lanforge_types::system::{ServiceAction, ServiceId, ServiceState, StateDetail};
 use std::borrow::Cow;
@@ -142,8 +142,10 @@ where
             let start_time = Instant::now();
 
             let (cmd_tx, cmd_rx) = mpsc::channel(32);
+            let (status_tx, mut status_rx) = watch::channel::<StatusReport>(None);
             let handle =
-                ServiceHandle::with_command_channel(self.spec.id, self.ctx.clone(), cmd_rx);
+                ServiceHandle::with_command_channel(self.spec.id, self.ctx.clone(), cmd_rx)
+                    .with_status_reporter(status_tx);
 
             let mut service = (self.factory)();
 
@@ -165,6 +167,8 @@ where
 
             let mut lost_deps: Vec<(ServiceId, LossPolicy)> = Vec::new();
             let mut loss_overridden = false;
+            // Last state the service reported; restored when a dependency loss clears.
+            let mut reported: (ServiceState, Option<StateDetail>) = (ServiceState::Online, None);
             let mut stop_cause: Option<StopCause> = None;
             let mut stop_deadline: Option<tokio::time::Instant> = None;
             let serve_res = loop {
@@ -216,7 +220,20 @@ where
                         }
                     }
 
-                    // System bus events (e.g., ServiceReady from handle)
+                    // Every state the service reports through its handle reaches the node, which
+                    // dependents follow. A supervisor-imposed loss status stays in force until the
+                    // loss clears, then this report is restored.
+                    Ok(()) = status_rx.changed() => {
+                        if let Some(status) = status_rx.borrow_and_update().clone() {
+                            reported = status;
+                            if !loss_overridden {
+                                self.node.set_status(&self.ctx, reported.0, reported.1.clone());
+                            }
+                        }
+                    }
+
+                    // Compatibility for services that still write their state to the context
+                    // directly and announce it with ServiceReady.
                     Ok(event) = sys_bus.recv() => {
                         if let LanforgeEvent::System(SystemEvent::ServiceReady { id }) = event.event
                             && id == self.spec.id
@@ -245,7 +262,7 @@ where
                             lost_deps.retain(|&(id, _)| id != target);
                             ServiceCommand::DependencyRestored { id: target }
                         };
-                        self.apply_loss_status(&lost_deps, &mut loss_overridden);
+                        self.apply_loss_status(&lost_deps, &mut loss_overridden, &reported);
                         let _ = cmd_tx.send(cmd).await;
                     }
 
@@ -459,7 +476,12 @@ where
     ///
     /// `overridden` tracks whether the supervisor (not the service) set the current status, so
     /// clearing the last loss only restores `Online` when the supervisor caused the downgrade.
-    fn apply_loss_status(&self, lost_deps: &[(ServiceId, LossPolicy)], overridden: &mut bool) {
+    fn apply_loss_status(
+        &self,
+        lost_deps: &[(ServiceId, LossPolicy)],
+        overridden: &mut bool,
+        reported: &(ServiceState, Option<StateDetail>),
+    ) {
         let detail = lost_deps.iter().find_map(|&(target, policy)| match policy {
             LossPolicy::Pause => Some(StateDetail::Paused(target)),
             LossPolicy::Degrade | LossPolicy::Continue => None,
@@ -478,7 +500,8 @@ where
                 *overridden = true;
             }
             None if *overridden => {
-                self.node.set_status(&self.ctx, ServiceState::Online, None);
+                self.node
+                    .set_status(&self.ctx, reported.0, reported.1.clone());
                 *overridden = false;
             }
             None => {}
