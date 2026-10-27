@@ -28,3 +28,8 @@ for features in "" "tls,ring" "tls,aws-lc"; do
     RUSTFLAGS="${RUSTFLAGS:-} -D warnings" cargo test -p lanforge-crypto --no-default-features \
         ${features:+--features "$features"} --quiet
 done
+
+# Consumers built alongside lanforge-dns get its features through unification; each one
+# must still compile with only the features it declares itself.
+echo "==> lanforge-http with lanforge-dns (feature unification)"
+RUSTFLAGS="${RUSTFLAGS:-} -D warnings" cargo check -p lanforge-dns -p lanforge-http --all-targets --quiet

@@ -16,8 +16,8 @@ use lanforge_api::api::{HttpPaginatedResponse, LogMeta};
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
 use lanforge_types::events::{
-    DeviceEvent, DnsEvent, FirewallEvent, NetworkEvent, PppoeEvent, StorageEvent, SystemEvent,
-    TimedEvent, TrafficEvent,
+    DeviceEvent, FirewallEvent, NetworkEvent, PppoeEvent, StorageEvent, SystemEvent, TimedEvent,
+    TrafficEvent,
 };
 use lanforge_types::identifiers::MacAddr;
 use serde::Deserialize;
@@ -361,30 +361,7 @@ const fn event_topic_and_kind(event: &LanforgeEvent) -> (&'static str, &'static 
                 TrafficEvent::RulesetChanged => "RulesetChanged",
             },
         ),
-        LanforgeEvent::Dns(d) => (
-            "dns",
-            match d {
-                #[cfg(feature = "adblock")]
-                DnsEvent::AdblockToggle { .. } => "AdblockToggle",
-                #[cfg(feature = "adblock")]
-                DnsEvent::AdblockReload => "AdblockReload",
-                #[cfg(feature = "adblock")]
-                DnsEvent::AdblockBlock(..) => "AdblockBlock",
-                #[cfg(feature = "adblock")]
-                DnsEvent::AdblockAllow(..) => "AdblockAllow",
-                #[cfg(feature = "adblock")]
-                DnsEvent::QueryBlocked { .. } => "QueryBlocked",
-                DnsEvent::QueryResolved(..) => "QueryResolved",
-                DnsEvent::CacheFlush => "CacheFlush",
-                DnsEvent::ConfigRewritesChanged => "ConfigRewritesChanged",
-                DnsEvent::ConfigAllowlistChanged => "ConfigAllowlistChanged",
-                DnsEvent::ConfigAdblockChanged => "ConfigAdblockChanged",
-                DnsEvent::ConfigAdblockRulesChanged => "ConfigAdblockRulesChanged",
-                DnsEvent::ConfigUpstreamsChanged => "ConfigUpstreamsChanged",
-                DnsEvent::ConfigUpstreamModeChanged(_) => "ConfigUpstreamModeChanged",
-                DnsEvent::ConfigReverseResolversChanged => "ConfigReverseResolversChanged",
-            },
-        ),
+        LanforgeEvent::Dns(d) => ("dns", d.name()),
     }
 }
 

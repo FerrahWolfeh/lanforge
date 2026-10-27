@@ -41,3 +41,33 @@ pub enum DnsEvent {
     /// DNS reverse resolvers changed.
     ConfigReverseResolversChanged,
 }
+
+impl DnsEvent {
+    /// Stable variant name for event streams. Lives here so the adblock variants follow this
+    /// crate's `adblock` feature: a consumer gating them on its own feature breaks as soon as
+    /// feature unification enables them through another crate.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            #[cfg(feature = "adblock")]
+            Self::AdblockToggle { .. } => "AdblockToggle",
+            #[cfg(feature = "adblock")]
+            Self::AdblockReload => "AdblockReload",
+            #[cfg(feature = "adblock")]
+            Self::AdblockBlock(..) => "AdblockBlock",
+            #[cfg(feature = "adblock")]
+            Self::AdblockAllow(..) => "AdblockAllow",
+            #[cfg(feature = "adblock")]
+            Self::QueryBlocked { .. } => "QueryBlocked",
+            Self::QueryResolved(..) => "QueryResolved",
+            Self::CacheFlush => "CacheFlush",
+            Self::ConfigRewritesChanged => "ConfigRewritesChanged",
+            Self::ConfigAllowlistChanged => "ConfigAllowlistChanged",
+            Self::ConfigAdblockChanged => "ConfigAdblockChanged",
+            Self::ConfigAdblockRulesChanged => "ConfigAdblockRulesChanged",
+            Self::ConfigUpstreamsChanged => "ConfigUpstreamsChanged",
+            Self::ConfigUpstreamModeChanged(_) => "ConfigUpstreamModeChanged",
+            Self::ConfigReverseResolversChanged => "ConfigReverseResolversChanged",
+        }
+    }
+}
