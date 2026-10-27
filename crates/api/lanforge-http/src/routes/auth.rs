@@ -12,7 +12,9 @@ use lanforge_types::auth::UserRole;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use crate::auth::{AuthMethod, AuthenticatedUser, auth_required, extract_token, looks_like_jwt};
+use crate::auth::{
+    AuthMethod, AuthenticatedUser, ELEVATION_TTL_SECS, auth_required, extract_token, looks_like_jwt,
+};
 use crate::error::{HttpError, Result as HttpResult};
 use crate::routes::create_client_ctx;
 use crate::server::AppState;
@@ -55,6 +57,11 @@ pub struct AuthStatusResponse {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ElevateRequest {
+    pub password: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ChangePasswordRequest {
     #[serde(alias = "old_password")]
     pub current_password: Option<String>,
@@ -75,6 +82,7 @@ pub fn router() -> Router<AppState> {
         .route("/status", get(handle_status))
         .route("/me", get(handle_me))
         .route("/change-password", post(handle_change_password))
+        .route("/elevate", post(handle_elevate))
 }
 
 pub(crate) async fn handle_logout() -> impl IntoResponse {
@@ -115,19 +123,8 @@ async fn handle_list_tokens(State(state): State<AppState>) -> impl IntoResponse 
 
 async fn handle_generate_token(
     State(state): State<AppState>,
-    user: Option<Extension<AuthenticatedUser>>,
     Json(payload): Json<GenerateTokenRequest>,
 ) -> impl IntoResponse {
-    if let Some(Extension(u)) = user
-        && u.role != "admin"
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": "Admin role required to generate API tokens" })),
-        )
-            .into_response();
-    }
-
     let parsed_scopes = payload.scopes.and_then(|s| {
         let mut vec = lanforge_types::auth::ApiScopes::new();
         match s {
@@ -162,36 +159,16 @@ async fn handle_generate_token(
 
 async fn handle_delete_token(
     State(state): State<AppState>,
-    user: Option<Extension<AuthenticatedUser>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(Extension(u)) = user
-        && u.role != "admin"
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": "Admin role required to delete API tokens" })),
-        )
-            .into_response();
-    }
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_ak_delete(id).await, Success)
 }
 
 async fn handle_renew_token(
     State(state): State<AppState>,
-    user: Option<Extension<AuthenticatedUser>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    if let Some(Extension(u)) = user
-        && u.role != "admin"
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": "Admin role required to renew API tokens" })),
-        )
-            .into_response();
-    }
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_ak_renew(id).await, AuthToken)
 }
@@ -258,7 +235,6 @@ fn build_login_response(
 fn authenticate_via_api_token(
     state: &AppState,
     payload: &LoginRequest,
-    ttl_secs: u64,
 ) -> HttpResult<Option<(String, String, &'static str)>> {
     let candidate_token = payload.token.clone().or_else(|| {
         payload.password.as_ref().and_then(|p| {
@@ -277,12 +253,9 @@ fn authenticate_via_api_token(
             .as_secs()
             .cast_signed();
         match state.db.validate_api_token(&token_str, now) {
-            Ok(Some((name, _scopes))) => {
-                let session_token = state
-                    .auth
-                    .generate_token_with_ttl(&name, "admin", ttl_secs)?;
-                return Ok(Some((session_token, name, "api_token")));
-            }
+            // The token itself is the session: it keeps its scopes and expiry. Minting a
+            // JWT here made any token (even monitoring-only) an admin session.
+            Ok(Some((name, _scopes))) => return Ok(Some((token_str, name, "api_token"))),
             Ok(None) => return Err(HttpError::Auth("Invalid API token".to_string())),
             Err(e) => {
                 error!("Database error during login token validation: {e}");
@@ -383,9 +356,7 @@ pub async fn handle_login(
         86_400 // 24 hours
     };
 
-    if let Some((session_token, name, method)) =
-        authenticate_via_api_token(&state, &payload, ttl_secs)?
-    {
+    if let Some((session_token, name, method)) = authenticate_via_api_token(&state, &payload)? {
         return Ok(build_login_response(
             session_token,
             name,
@@ -445,6 +416,39 @@ async fn handle_me(Extension(user): Extension<AuthenticatedUser>) -> impl IntoRe
             "scopes": user.scopes,
         }
     }))
+}
+
+/// Re-authenticates a password session: returns a short-lived elevation token that sensitive
+/// actions (users, token creation, database reset) take in the `X-Lanforge-Elevation` header.
+async fn handle_elevate(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(payload): Json<ElevateRequest>,
+) -> HttpResult<impl IntoResponse> {
+    if !matches!(user.method, AuthMethod::Jwt) {
+        return Err(HttpError::Forbidden(
+            "API tokens cannot re-authenticate".to_string(),
+        ));
+    }
+    let db_user = match state.db.get_user_by_username(&user.name) {
+        Ok(Some(u)) => u,
+        Ok(None) => return Err(HttpError::Forbidden("Invalid password".to_string())),
+        Err(e) => {
+            error!("Database error looking up user {}: {e}", user.name);
+            return Err(HttpError::ServiceUnavailable(
+                "persistence unavailable".into(),
+            ));
+        }
+    };
+    if !verify_password(&db_user.password_hash, &payload.password) {
+        return Err(HttpError::Forbidden("Invalid password".to_string()));
+    }
+    let token = state
+        .auth
+        .generate_elevation_token(&db_user.username, db_user.role.as_str())?;
+    Ok(Json(serde_json::json!({
+        "data": { "elevation_token": token, "expires_in": ELEVATION_TTL_SECS }
+    })))
 }
 
 /// Changes the session user's own password. Requires a password session (an API token's

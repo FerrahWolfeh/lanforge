@@ -35,6 +35,8 @@ struct TestApp {
     router: Router,
     /// JWT bearer token, stored here once acquired via login.
     token: Option<String>,
+    /// Elevation token sent with every request once `elevate` ran.
+    elevation: Option<String>,
 }
 
 /// Build the same router the real `HttpService` builds, minus
@@ -105,6 +107,7 @@ impl TestApp {
         Self {
             router: build_router(make_state(false).await),
             token: None,
+            elevation: None,
         }
     }
 
@@ -147,7 +150,22 @@ impl TestApp {
         Self {
             router,
             token: Some(token),
+            elevation: None,
         }
+    }
+
+    /// Re-authenticates with the password: sensitive actions (users, token creation) need it.
+    async fn elevate(&mut self) {
+        let (status, body) = self
+            .post("/api/v1/auth/elevate", &json!({"password": "testpass"}))
+            .await;
+        assert_eq!(status, StatusCode::OK, "elevation failed: {body}");
+        self.elevation = Some(
+            body["data"]["elevation_token"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        );
     }
 
     /// Core dispatcher: build a request and drive it through the router.
@@ -166,6 +184,9 @@ impl TestApp {
 
         if authed && let Some(token) = &self.token {
             builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        if authed && let Some(elevation) = &self.elevation {
+            builder = builder.header("x-lanforge-elevation", elevation);
         }
 
         let req = builder.body(Body::from(body.unwrap_or_default())).unwrap();
@@ -266,6 +287,7 @@ async fn test_auth_middleware_contract() {
     let unauthed_app = TestApp {
         router,
         token: None,
+        elevation: None,
     };
 
     // Grid: (description, expected_status)
@@ -357,7 +379,17 @@ async fn test_auth_middleware_contract() {
         "validate endpoint should be public"
     );
 
-    // Token generation via HTTP is permitted for authenticated admin
+    // Token generation needs re-authentication, then works for the admin
+    let (status, _) = authed_app
+        .post("/api/v1/auth/tokens", &json!({"name": "test-token"}))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "token creation needs elevation"
+    );
+    let mut authed_app = authed_app;
+    authed_app.elevate().await;
     let (status, body) = authed_app
         .post("/api/v1/auth/tokens", &json!({"name": "test-token"}))
         .await;
@@ -1241,7 +1273,8 @@ async fn test_firewall_transactional_handshake_contract() {
 
 #[tokio::test]
 async fn test_users_contract() {
-    let app = TestApp::with_auth().await;
+    let mut app = TestApp::with_auth().await;
+    app.elevate().await;
 
     // 1. List users
     let (status, body) = app.get("/api/v1/users").await;
@@ -1311,6 +1344,7 @@ async fn test_events_contract() {
     let app = TestApp {
         router,
         token: None,
+        elevation: None,
     };
 
     // 1. GET /api/v1/events (REST fallback)
@@ -1607,4 +1641,298 @@ async fn test_change_password_db_error_is_unavailable() {
     )
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+// ---------------------------------------------------------------------------
+// Authorization — roles, token scopes and re-authentication are enforced
+// ---------------------------------------------------------------------------
+
+/// Full state (with storage worker) holding an admin and a viewer, plus a monitoring token
+/// named "admin" (a token name is not a user).
+async fn authz_app() -> Router {
+    let state = make_state(false).await;
+    for (name, role) in [("admin", UserRole::Admin), ("viewer", UserRole::Viewer)] {
+        state
+            .db
+            .create_user(
+                name,
+                &lanforge_crypto::hash_password(ADMIN_PASSWORD),
+                role,
+                0,
+            )
+            .unwrap();
+    }
+    state
+        .db
+        .store_api_token(
+            "lf_ak_monitoring",
+            "admin",
+            &ApiScopes::from_slice(&[ApiScope::Monitoring]),
+            None,
+            0,
+        )
+        .unwrap();
+    build_router(state)
+}
+
+async fn send(
+    router: &Router,
+    method: &str,
+    uri: &str,
+    token: &str,
+    elevation: Option<&str>,
+    body: Value,
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(e) = elevation {
+        builder = builder.header("x-lanforge-elevation", e);
+    }
+    let res = router
+        .clone()
+        .oneshot(
+            builder
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+async fn login(router: &Router, body: Value) -> (StatusCode, String) {
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/login")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    let token = body["data"]["token"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    (status, token)
+}
+
+async fn elevate(router: &Router, session: &str, password: &str) -> (StatusCode, String) {
+    let (status, body) = send(
+        router,
+        "POST",
+        "/api/v1/auth/elevate",
+        session,
+        None,
+        json!({ "password": password }),
+    )
+    .await;
+    let token = body["data"]["elevation_token"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    (status, token)
+}
+
+#[tokio::test]
+async fn test_viewer_cannot_write_or_read_secrets() {
+    let router = authz_app().await;
+    let (_, viewer) = login(
+        &router,
+        json!({"username": "viewer", "password": ADMIN_PASSWORD}),
+    )
+    .await;
+    assert!(!viewer.is_empty());
+
+    let (status, _) = send(
+        &router,
+        "GET",
+        "/api/v1/devices",
+        &viewer,
+        None,
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Elevation proves who you are, it does not add permissions.
+    let (status, elevation) = elevate(&router, &viewer, ADMIN_PASSWORD).await;
+    assert_eq!(status, StatusCode::OK);
+    for (method, uri, body) in [
+        (
+            "PUT",
+            "/api/v1/users/admin/password",
+            json!({"password": "taken-over"}),
+        ),
+        (
+            "POST",
+            "/api/v1/users",
+            json!({"username": "x", "password": "xxxxxxxx", "role": "admin"}),
+        ),
+        (
+            "POST",
+            "/api/v1/auth/tokens",
+            json!({"name": "mine", "scopes": ["admin"]}),
+        ),
+        ("POST", "/api/v1/system/shutdown", json!(null)),
+        ("GET", "/api/v1/pppoe/config", json!(null)),
+        ("GET", "/api/v1/system/config/toml", json!(null)),
+    ] {
+        let (status, _) = send(&router, method, uri, &viewer, Some(&elevation), body).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "viewer {method} {uri}");
+    }
+}
+
+#[tokio::test]
+async fn test_monitoring_token_is_read_only_even_after_login() {
+    let router = authz_app().await;
+
+    let (status, _) = send(
+        &router,
+        "GET",
+        "/api/v1/status",
+        "lf_ak_monitoring",
+        None,
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    for (method, uri) in [
+        ("POST", "/api/v1/auth/tokens"),
+        ("PUT", "/api/v1/users/admin/password"),
+        ("POST", "/api/v1/firewall/config"),
+        ("GET", "/api/v1/pppoe/config"),
+    ] {
+        let (status, _) = send(
+            &router,
+            method,
+            uri,
+            "lf_ak_monitoring",
+            None,
+            json!({"name": "x", "password": "taken-over"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "token {method} {uri}");
+    }
+
+    // Logging in with the token must not mint an admin session.
+    let (status, session) = login(&router, json!({"token": "lf_ak_monitoring"})).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(
+        &router,
+        "POST",
+        "/api/v1/auth/tokens",
+        &session,
+        None,
+        json!({"name": "escalated", "scopes": ["admin"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = send(
+        &router,
+        "GET",
+        "/api/v1/pppoe/config",
+        &session,
+        None,
+        json!(null),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "token login must keep the token's scopes"
+    );
+    let (status, _) = send(
+        &router,
+        "GET",
+        "/api/v1/auth/me",
+        &session,
+        None,
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_admin_needs_reauthentication_for_account_changes() {
+    let router = authz_app().await;
+    let (_, admin) = login(
+        &router,
+        json!({"username": "admin", "password": ADMIN_PASSWORD}),
+    )
+    .await;
+    let reset = json!({"password": "new-viewer-pw"});
+
+    // A session alone (e.g. stolen) cannot reset a password.
+    let (status, _) = send(
+        &router,
+        "PUT",
+        "/api/v1/users/viewer/password",
+        &admin,
+        None,
+        reset.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _) = elevate(&router, &admin, "wrong-password").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Another user's elevation token does not count.
+    let (_, viewer) = login(
+        &router,
+        json!({"username": "viewer", "password": ADMIN_PASSWORD}),
+    )
+    .await;
+    let (_, viewer_elevation) = elevate(&router, &viewer, ADMIN_PASSWORD).await;
+    let (status, _) = send(
+        &router,
+        "PUT",
+        "/api/v1/users/viewer/password",
+        &admin,
+        Some(&viewer_elevation),
+        reset.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // An elevation token is not a session.
+    let (status, elevation) = elevate(&router, &admin, ADMIN_PASSWORD).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(
+        &router,
+        "GET",
+        "/api/v1/status",
+        &elevation,
+        None,
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, _) = send(
+        &router,
+        "PUT",
+        "/api/v1/users/viewer/password",
+        &admin,
+        Some(&elevation),
+        reset,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
 }

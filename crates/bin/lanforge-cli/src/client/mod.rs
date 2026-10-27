@@ -54,6 +54,10 @@ use hyper_util::client::legacy::connect::HttpConnector;
 #[cfg(feature = "remote")]
 use hyper_util::rt::TokioExecutor;
 
+/// Error text of a 403 that asks the session to re-enter its password.
+#[cfg(feature = "remote")]
+const REAUTH_REQUIRED: &str = "Re-authentication required";
+
 #[cfg(feature = "remote")]
 pub type HttpClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>;
 
@@ -234,12 +238,72 @@ impl LanforgeClient {
         Ok(T::unwrap(wrapper))
     }
 
+    /// Sends a request; when the server asks for re-authentication (users, token creation,
+    /// database reset), prompts for the password, elevates the session and retries once.
     #[cfg(feature = "remote")]
     async fn send_request(
         &self,
         method: Method,
         path: &str,
         body: Option<Bytes>,
+    ) -> Result<(StatusCode, Bytes)> {
+        let (status, bytes) = self
+            .send_once(method.clone(), path, body.clone(), None)
+            .await?;
+        let (status, bytes) =
+            if status == StatusCode::FORBIDDEN && Self::error_text(&bytes) == REAUTH_REQUIRED {
+                let elevation = self.elevate().await?;
+                self.send_once(method, path, body, Some(&elevation)).await?
+            } else {
+                (status, bytes)
+            };
+
+        if !status.is_success() {
+            color_eyre::eyre::bail!("API Error ({status}): {}", Self::error_text(&bytes));
+        }
+        Ok((status, bytes))
+    }
+
+    #[cfg(feature = "remote")]
+    fn error_text(bytes: &Bytes) -> String {
+        serde_json::from_slice::<HttpErrorResponse>(bytes)
+            .map_or_else(|_| String::from_utf8_lossy(bytes).to_string(), |e| e.error)
+    }
+
+    /// Prompts for the session user's password and returns an elevation token.
+    #[cfg(feature = "remote")]
+    async fn elevate(&self) -> Result<String> {
+        let password = inquire::Password::new("This action needs your password:")
+            .without_confirmation()
+            .with_display_mode(inquire::PasswordDisplayMode::Masked)
+            .prompt()
+            .context("re-authentication required")?;
+        let body = Bytes::from(serde_json::to_vec(
+            &serde_json::json!({ "password": password }),
+        )?);
+        let (status, bytes) = self
+            .send_once(Method::POST, "/auth/elevate", Some(body), None)
+            .await?;
+        if !status.is_success() {
+            color_eyre::eyre::bail!(
+                "Re-authentication failed ({status}): {}",
+                Self::error_text(&bytes)
+            );
+        }
+        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        value["data"]["elevation_token"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| eyre!("Re-authentication returned no token"))
+    }
+
+    #[cfg(feature = "remote")]
+    async fn send_once(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Bytes>,
+        elevation: Option<&str>,
     ) -> Result<(StatusCode, Bytes)> {
         let base = self
             .remote
@@ -252,6 +316,9 @@ impl LanforgeClient {
 
         if let Some(t) = &self.token {
             builder = builder.header("Authorization", format!("Bearer {t}"));
+        }
+        if let Some(e) = elevation {
+            builder = builder.header("X-Lanforge-Elevation", e);
         }
 
         if body.is_some() {
@@ -277,15 +344,6 @@ impl LanforgeClient {
             .await
             .map_err(|e| eyre!("Failed to read response body: {e}"))?
             .to_bytes();
-
-        if !status.is_success() {
-            let err_body: HttpErrorResponse =
-                serde_json::from_slice(&bytes).unwrap_or_else(|_| HttpErrorResponse {
-                    error: String::from_utf8_lossy(&bytes).to_string(),
-                });
-            color_eyre::eyre::bail!("API Error ({status}): {}", err_body.error);
-        }
-
         Ok((status, bytes))
     }
 

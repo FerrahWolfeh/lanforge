@@ -161,12 +161,65 @@ function extractPaginated<T>(res: any, key: string): { entries: T[]; total: numb
 	return { entries: list, total };
 }
 
+// ---------------------------------------------------------------------------
+// Re-authentication: sensitive actions (users, token creation, database reset)
+// answer 403 "Re-authentication required" until the session proves its password.
+// The server then issues a short-lived elevation token sent in a header.
+// ---------------------------------------------------------------------------
+
+const REAUTH_REQUIRED = 'Re-authentication required';
+
+/** Asks the user for their password; resolves `null` when cancelled. */
+export type ReauthPrompt = (error?: string) => Promise<string | null>;
+
+let reauthPrompt: ReauthPrompt | null = null;
+let elevation: { token: string; expiresAt: number } | null = null;
+
+export function setReauthPrompt(prompt: ReauthPrompt | null) {
+	reauthPrompt = prompt;
+}
+
+function currentElevation(): string | null {
+	if (elevation && Date.now() < elevation.expiresAt) return elevation.token;
+	elevation = null;
+	return null;
+}
+
+/** Prompts until the password is accepted; false when the user cancels. */
+async function reauthenticate(): Promise<boolean> {
+	if (!reauthPrompt) return false;
+	let error: string | undefined;
+	for (;;) {
+		const password = await reauthPrompt(error);
+		if (password === null) return false;
+		try {
+			const res = await requestCore<{ elevation_token: string; expires_in: number }>(
+				'POST',
+				'/auth/elevate',
+				{ password },
+				undefined,
+				false,
+				true
+			);
+			// Renew a little before the server-side expiry.
+			elevation = {
+				token: res.elevation_token,
+				expiresAt: Date.now() + Math.max(res.expires_in - 15, 0) * 1000
+			};
+			return true;
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Re-authentication failed';
+		}
+	}
+}
+
 async function requestCore<T>(
 	method: string,
 	path: string,
 	body?: unknown,
 	extraHeaders?: Record<string, string>,
-	raw: boolean = false
+	raw: boolean = false,
+	noReauth: boolean = false
 ): Promise<T> {
 	const token = getToken();
 	const headers: Record<string, string> = {
@@ -174,6 +227,8 @@ async function requestCore<T>(
 		...extraHeaders
 	};
 	if (token) headers['Authorization'] = `Bearer ${token}`;
+	const elevated = currentElevation();
+	if (elevated) headers['X-Lanforge-Elevation'] = elevated;
 
 	const res = await fetch(`/api/v1${path}`, {
 		method,
@@ -197,6 +252,12 @@ async function requestCore<T>(
 		if (res.status === 401) handleUnauthorized(path);
 		const errorMsg =
 			json?.error ?? (typeof json === 'string' ? json : null) ?? text ?? `HTTP ${res.status}`;
+		if (res.status === 403 && errorMsg === REAUTH_REQUIRED && !noReauth) {
+			elevation = null;
+			if (await reauthenticate()) {
+				return requestCore<T>(method, path, body, extraHeaders, raw, true);
+			}
+		}
 		throw new ApiError(res.status, errorMsg);
 	}
 

@@ -12,6 +12,7 @@
 	import AppSidebar from "$lib/components/AppSidebar.svelte";
 	import Topbar from "$lib/components/Topbar.svelte";
 	import CommandPalette from "$lib/components/CommandPalette.svelte";
+	import ReauthDialog from "$lib/components/ReauthDialog.svelte";
 	import NavigationProgressBar from "$lib/components/NavigationProgressBar.svelte";
 	import { commandState } from "$lib/stores/command.svelte";
 	import { createPolling } from "$lib/utils";
@@ -176,4 +177,5 @@
 	{/if}
 
 	<Toaster richColors />
+	<ReauthDialog />
 	<CommandPalette />

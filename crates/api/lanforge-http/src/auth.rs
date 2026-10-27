@@ -17,10 +17,11 @@ use axum::{
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use lanforge_core::context::LanforgeContext;
 use lanforge_db_core::DatabaseStore;
-use lanforge_types::auth::{ApiScope, ApiScopes};
+use lanforge_types::auth::ApiScopes;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
+use crate::authz;
 use crate::config::HttpConfig;
 use crate::error::{HttpError, Result as HttpResult};
 
@@ -30,7 +31,16 @@ pub struct Claims {
     pub sub: String,  // Username
     pub role: String, // User role ("admin", "operator", "viewer")
     pub exp: usize,   // Expiration
+    /// Elevation token (re-authentication for sensitive actions), never a session.
+    #[serde(default)]
+    pub elev: bool,
 }
+
+/// Header carrying the elevation token that sensitive actions require.
+pub const ELEVATION_HEADER: &str = "x-lanforge-elevation";
+
+/// How long an elevation token lasts.
+pub const ELEVATION_TTL_SECS: u64 = 300;
 
 /// Represents an authenticated user (either via JWT or API Token).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,9 +110,43 @@ impl AuthManager {
             role: role.to_string(),
             exp: usize::try_from(expiration)
                 .map_err(|_| HttpError::Time("Expiration timestamp too large".into()))?,
+            elev: false,
         };
 
         Ok(encode(&Header::default(), &claims, &self.encoding_key)?)
+    }
+
+    /// Issues a short-lived elevation token for `username`, after it re-entered its password.
+    pub fn generate_elevation_token(&self, username: &str, role: &str) -> HttpResult<String> {
+        let expiration = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| HttpError::Time(e.to_string()))?
+            .as_secs()
+            + ELEVATION_TTL_SECS;
+        let claims = Claims {
+            sub: username.to_string(),
+            role: role.to_string(),
+            exp: usize::try_from(expiration)
+                .map_err(|_| HttpError::Time("Expiration timestamp too large".into()))?,
+            elev: true,
+        };
+        Ok(encode(&Header::default(), &claims, &self.encoding_key)?)
+    }
+
+    /// Whether `token` is a valid elevation token for `username`.
+    #[must_use]
+    pub fn is_elevated(&self, token: &str, username: &str) -> bool {
+        self.validate_token(token)
+            .is_ok_and(|c| c.elev && c.sub == username)
+    }
+
+    /// Validates a session token: an elevation token is not one.
+    fn validate_session(&self, token: &str) -> HttpResult<Claims> {
+        let claims = self.validate_token(token)?;
+        if claims.elev {
+            return Err(HttpError::Auth("Invalid or expired token".into()));
+        }
+        Ok(claims)
     }
 
     pub fn validate_token(&self, token: &str) -> HttpResult<Claims> {
@@ -207,13 +251,13 @@ pub fn authenticate_token(
 ) -> HttpResult<AuthenticatedUser> {
     // 1. Fast-path JWT validation (sub-microsecond in-memory HMAC, zero disk I/O)
     if looks_like_jwt(token)
-        && let Ok(claims) = auth_manager.validate_token(token)
+        && let Ok(claims) = auth_manager.validate_session(token)
     {
         return Ok(AuthenticatedUser {
             name: claims.sub,
             role: claims.role,
             method: AuthMethod::Jwt,
-            scopes: ApiScopes::from_slice(&[ApiScope::Admin]),
+            scopes: ApiScopes::new(),
         });
     }
 
@@ -225,22 +269,23 @@ pub fn authenticate_token(
 
     // 2. Validate against database API tokens
     match db.validate_api_token(token, now) {
+        // A token is not a user: no role, only its scopes (see `authz`).
         Ok(Some((name, scopes))) => Ok(AuthenticatedUser {
             name,
-            role: "admin".to_string(),
+            role: "token".to_string(),
             method: AuthMethod::ApiToken,
             scopes,
         }),
         Ok(None) => {
             // If not previously attempted as JWT, try as fallback
             if !looks_like_jwt(token)
-                && let Ok(claims) = auth_manager.validate_token(token)
+                && let Ok(claims) = auth_manager.validate_session(token)
             {
                 return Ok(AuthenticatedUser {
                     name: claims.sub,
                     role: claims.role,
                     method: AuthMethod::Jwt,
-                    scopes: ApiScopes::from_slice(&[ApiScope::Admin]),
+                    scopes: ApiScopes::new(),
                 });
             }
             Err(HttpError::Auth("Invalid or expired token".into()))
@@ -342,6 +387,29 @@ pub fn auth_required(
     }
 }
 
+/// Sensitive actions need a password session that re-authenticated recently: a stolen
+/// session (or any API token) alone cannot take an account over or mint lasting access.
+fn check_elevation(
+    user: &AuthenticatedUser,
+    headers: &axum::http::HeaderMap,
+    auth_manager: &AuthManager,
+) -> HttpResult<()> {
+    if !matches!(user.method, AuthMethod::Jwt) {
+        return Err(HttpError::Forbidden(
+            "API tokens cannot manage users, tokens or the database".into(),
+        ));
+    }
+    let elevated = headers
+        .get(ELEVATION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|t| auth_manager.is_elevated(t, &user.name));
+    if elevated {
+        Ok(())
+    } else {
+        Err(HttpError::Forbidden("Re-authentication required".into()))
+    }
+}
+
 pub async fn middleware(
     State(cfg): State<Arc<HttpConfig>>,
     State(db): State<Arc<dyn DatabaseStore>>,
@@ -367,6 +435,14 @@ pub async fn middleware(
     })?;
 
     let user = authenticate_token(&token, &auth_manager, db.as_ref())?;
+
+    let need = authz::requirement(req.method(), req.uri().path());
+    if !authz::grants(&user, need.permission) {
+        return Err(HttpError::Forbidden("Insufficient permissions".into()));
+    }
+    if need.sensitive {
+        check_elevation(&user, req.headers(), &auth_manager)?;
+    }
 
     req.extensions_mut().insert(user);
 
