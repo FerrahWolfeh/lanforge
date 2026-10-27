@@ -66,6 +66,10 @@ pub enum HttpError {
     #[error("Bad request: {0}")]
     BadRequest(String),
 
+    /// Authenticated, but not allowed to do this.
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+
     /// Resource not found.
     #[error("Not found: {0}")]
     NotFound(String),
@@ -97,6 +101,7 @@ impl IntoResponse for HttpError {
             Self::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
             Self::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
             Self::BadRequest(msg) | Self::Validation(msg) => (StatusCode::BAD_REQUEST, msg),
+            Self::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
             Self::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };

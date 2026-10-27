@@ -12,7 +12,7 @@ use lanforge_types::auth::UserRole;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use crate::auth::{AuthenticatedUser, auth_required, extract_token, looks_like_jwt};
+use crate::auth::{AuthMethod, AuthenticatedUser, auth_required, extract_token, looks_like_jwt};
 use crate::error::{HttpError, Result as HttpResult};
 use crate::routes::create_client_ctx;
 use crate::server::AppState;
@@ -56,7 +56,8 @@ pub struct AuthStatusResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct ChangePasswordRequest {
-    pub old_password: Option<String>,
+    #[serde(alias = "old_password")]
+    pub current_password: Option<String>,
     pub new_password: String,
 }
 
@@ -446,11 +447,24 @@ async fn handle_me(Extension(user): Extension<AuthenticatedUser>) -> impl IntoRe
     }))
 }
 
+/// Changes the session user's own password. Requires a password session (an API token's
+/// name is not a username) and the current password, so a stolen session cannot take the
+/// account over. A wrong current password is 403, not 401: a 401 logs the `WebUI` out.
 async fn handle_change_password(
     State(state): State<AppState>,
     Extension(user): Extension<AuthenticatedUser>,
     Json(payload): Json<ChangePasswordRequest>,
 ) -> HttpResult<impl IntoResponse> {
+    if !matches!(user.method, AuthMethod::Jwt) {
+        return Err(HttpError::Forbidden(
+            "API tokens cannot change a user password".to_string(),
+        ));
+    }
+    let current = payload
+        .current_password
+        .as_deref()
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| HttpError::Validation("Current password is required".to_string()))?;
     if payload.new_password.len() < 8 {
         return Err(HttpError::Validation(
             "New password must be at least 8 characters long".to_string(),
@@ -462,25 +476,34 @@ async fn handle_change_password(
         .as_secs()
         .cast_signed();
 
-    if let Ok(Some(db_user)) = state.db.get_user_by_username(&user.name) {
-        if let Some(old_pw) = &payload.old_password
-            && !verify_password(&db_user.password_hash, old_pw)
-        {
-            return Err(HttpError::Auth("Invalid current password".to_string()));
+    let db_user = match state.db.get_user_by_username(&user.name) {
+        Ok(Some(u)) => u,
+        Ok(None) => {
+            return Err(HttpError::NotFound(format!(
+                "User '{}' not found",
+                user.name
+            )));
         }
-        let new_hash = hash_password(&payload.new_password);
-        state
-            .db
-            .update_user_password(&user.name, &new_hash, now)
-            .map_err(|e| HttpError::Internal(e.to_string()))?;
-        Ok((
-            StatusCode::OK,
-            Json(serde_json::json!({ "data": { "message": "Password updated successfully" } })),
-        ))
-    } else {
-        Err(HttpError::NotFound(format!(
-            "User '{}' not found",
-            user.name
-        )))
+        Err(e) => {
+            error!("Database error looking up user {}: {e}", user.name);
+            return Err(HttpError::ServiceUnavailable(
+                "persistence unavailable".into(),
+            ));
+        }
+    };
+    if !verify_password(&db_user.password_hash, current) {
+        return Err(HttpError::Forbidden("Invalid current password".to_string()));
     }
+    let new_hash = hash_password(&payload.new_password);
+    state
+        .db
+        .update_user_password(&user.name, &new_hash, now)
+        .map_err(|e| {
+            error!("Database error updating password for {}: {e}", user.name);
+            HttpError::ServiceUnavailable("persistence unavailable".into())
+        })?;
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "data": { "message": "Password updated successfully" } })),
+    ))
 }

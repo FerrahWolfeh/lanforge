@@ -36,8 +36,8 @@
 			toast.error("Please enter a new password.");
 			return;
 		}
-		if (newPassword.length < 4) {
-			toast.error("Password must be at least 4 characters.");
+		if (newPassword.length < 8) {
+			toast.error("Password must be at least 8 characters.");
 			return;
 		}
 		if (newPassword !== confirmPassword) {

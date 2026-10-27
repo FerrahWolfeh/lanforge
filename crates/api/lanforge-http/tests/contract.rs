@@ -16,9 +16,12 @@ use lanforge_core::{
     context::{LanforgeContext, state::State as CoreState},
     service::AsyncService,
 };
-use lanforge_db::{config::DatabaseConfig, engine::LanforgeDb, log_engine::LogDb, redb};
+use lanforge_db::{UserStore, config::DatabaseConfig, engine::LanforgeDb, log_engine::LogDb, redb};
 use lanforge_http::{auth::AuthManager, config::HttpConfig, routes, server::AppState};
-use lanforge_types::network::firewall::FirewallConfig;
+use lanforge_types::{
+    auth::{ApiScope, ApiScopes, UserRole},
+    network::firewall::FirewallConfig,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Instant};
@@ -1484,4 +1487,124 @@ async fn test_recovery_mode_requires_auth_and_locks_setup() {
 
     let res = router.clone().oneshot(setup_request()).await.unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+// ---------------------------------------------------------------------------
+// change-password — only the session's own user, only with the current password
+// ---------------------------------------------------------------------------
+
+const ADMIN_PASSWORD: &str = "correct-horse";
+
+/// Auth-enabled state with an `admin` user and a valid session token for it.
+fn state_with_admin(db: &Arc<LanforgeDb>) -> (AppState, String) {
+    let state = bare_state(db);
+    state
+        .db
+        .create_user(
+            "admin",
+            &lanforge_crypto::hash_password(ADMIN_PASSWORD),
+            UserRole::Admin,
+            0,
+        )
+        .unwrap();
+    let session = state.auth.generate_token("admin", "admin").unwrap();
+    (state, session)
+}
+
+async fn change_password(router: &Router, token: &str, body: Value) -> StatusCode {
+    router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/change-password")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+fn admin_password_is(db: &LanforgeDb, password: &str) -> bool {
+    let user = db.redb().get_user_by_username("admin").unwrap().unwrap();
+    lanforge_crypto::verify_password(&user.password_hash, password)
+}
+
+#[tokio::test]
+async fn test_change_password_requires_the_current_password() {
+    let db = in_memory_db();
+    let (state, session) = state_with_admin(&db);
+    let router = build_router(state);
+
+    // A stolen session alone must not be enough to take the account over.
+    let status = change_password(&router, &session, json!({"new_password": "attacker-pw"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(admin_password_is(&db, ADMIN_PASSWORD));
+
+    // A wrong current password is refused with 403, not 401: a 401 logs the WebUI out.
+    let status = change_password(
+        &router,
+        &session,
+        json!({"current_password": "wrong", "new_password": "attacker-pw"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(admin_password_is(&db, ADMIN_PASSWORD));
+
+    // The field name the WebUI sends.
+    let status = change_password(
+        &router,
+        &session,
+        json!({"current_password": ADMIN_PASSWORD, "new_password": "new-secret-1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(admin_password_is(&db, "new-secret-1"));
+}
+
+#[tokio::test]
+async fn test_api_token_cannot_change_a_user_password() {
+    let db = in_memory_db();
+    let (state, _session) = state_with_admin(&db);
+    // A token's name is not a username: one named "admin" must not act as the admin user.
+    state
+        .db
+        .store_api_token(
+            "monitoring-token",
+            "admin",
+            &ApiScopes::from_slice(&[ApiScope::Monitoring]),
+            None,
+            0,
+        )
+        .unwrap();
+    let router = build_router(state);
+
+    let status = change_password(
+        &router,
+        "monitoring-token",
+        json!({"current_password": ADMIN_PASSWORD, "new_password": "attacker-pw"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(admin_password_is(&db, ADMIN_PASSWORD));
+}
+
+#[tokio::test]
+async fn test_change_password_db_error_is_unavailable() {
+    let db = in_memory_db();
+    let (state, session) = state_with_admin(&db);
+    state.auth.set_has_users(true);
+    break_table(&db, "users");
+    let router = build_router(state);
+
+    let status = change_password(
+        &router,
+        &session,
+        json!({"current_password": ADMIN_PASSWORD, "new_password": "new-secret-1"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 }
