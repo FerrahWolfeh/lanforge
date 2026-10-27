@@ -433,6 +433,13 @@ impl Dhcpv6Server {
             return None;
         }
 
+        // A Rapid Commit Reply is the binding (RFC 8415 §18.3.1): record it like a Request,
+        // or the lease is never stored and every Renew gets NoBinding. An Advertise binds
+        // nothing.
+        if is_rapid_commit {
+            self.last_assignments
+                .insert((client_duid.clone(), iana.id), ips.clone());
+        }
         let is_static = self.is_static_client(client_duid, identity);
         let action = if is_rapid_commit {
             "REPLY (RC)"

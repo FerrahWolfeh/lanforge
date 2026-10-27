@@ -810,3 +810,171 @@ async fn test_dhcpv4_static_reservation_beats_a_dynamic_request() -> Result<(), 
     let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
     Ok(())
 }
+
+/// `(addr, preferred, valid)` of every IA_NA address in `msg`.
+fn ia_na_addrs(msg: &MessageV6) -> Vec<(Ipv6Addr, u32, u32)> {
+    let mut addrs = Vec::new();
+    for opt in msg.opts().iter() {
+        if let Dhcpv6Option::IANA(iana) = opt {
+            for o in iana.opts.iter() {
+                if let Dhcpv6Option::IAAddr(a) = o {
+                    addrs.push((a.addr, a.preferred_life, a.valid_life));
+                }
+            }
+        }
+    }
+    addrs
+}
+
+fn status_code(msg: &MessageV6) -> Option<u16> {
+    msg.opts().iter().find_map(|opt| match opt {
+        Dhcpv6Option::IANA(iana) => iana.opts.iter().find_map(|o| match o {
+            Dhcpv6Option::StatusCode(s) => Some(u16::from(s.status)),
+            _ => None,
+        }),
+        Dhcpv6Option::StatusCode(s) => Some(u16::from(s.status)),
+        _ => None,
+    })
+}
+
+fn set_lan_gua(ctx: &LanforgeContext, ifindex: u32, server_mac: MacAddr, gua: &str) {
+    let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+        ifindex,
+        state: Box::new(InterfaceState {
+            v4: Some((Ipv4Addr::new(192, 168, 1, 1), 24)),
+            link_local: Some("fe80::1".parse().unwrap()),
+            gua: Some(gua.parse().unwrap()),
+            ula: Some("fd97:f00d:cafe:3731::".parse().unwrap()),
+            gua_preferred: 3600,
+            gua_valid: 7200,
+            mac: Some(server_mac),
+        }),
+    });
+}
+
+/// Owner's desktop (`NetworkManager`): DUID-UUID (no MAC inside), a stable-privacy link-local
+/// (not EUI-64), a static host registered by MAC only, and a Rapid Commit Solicit. The Reply
+/// granted `::1057:cafe` but recorded no binding, so every Renew got NoBinding and every
+/// Rebind was ignored: the client stayed on a withdrawn GUA until its valid lifetime ran out.
+#[tokio::test]
+async fn test_dhcpv6_rapid_commit_reply_is_a_binding() -> Result<(), Box<dyn Error>> {
+    const LAN: u32 = 1;
+    let server_mac = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+    let (ctx, bus) = init_test_context_with_interface(LAN, "lan0", server_mac);
+    let cfg = create_test_v6_config();
+    ctx.update_dhcp_v6_pools(cfg.pools.clone());
+    set_lan_gua(&ctx, LAN, server_mac, "2804:bdc:50e2:7d00::1");
+
+    let client_mac = MacAddr([0xbc, 0xfc, 0xe7, 0x8a, 0xa9, 0x73]);
+    let client_ll: Ipv6Addr = "fe80::415:21a7:cd05:c6f9".parse()?;
+    let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
+        mac: client_mac,
+        update: Box::new(CliHostUpdate {
+            hostname: Some("archie".to_string()).into(),
+            duid: None.into(),
+            v4_static: None.into(),
+            v6_suffix: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix(
+                "::1057:cafe".parse()?,
+            ))
+            .into(),
+            boot_file: None.into(),
+            dns_fallback: None.into(),
+            class: None.into(),
+            origin: Origin::Static,
+        }),
+    });
+    // Discovery saw the client's link-local before it spoke DHCPv6.
+    let _ = ctx.apply(DeviceUpdate::NdpSeen {
+        mac: client_mac,
+        ip: client_ll,
+        is_active: true,
+    });
+
+    // DUID-UUID (type 4).
+    let mut duid_bytes = vec![0x00, 0x04];
+    duid_bytes.extend_from_slice(&[
+        0x5e, 0x22, 0x6b, 0xc2, 0xab, 0xe4, 0x5c, 0x01, 0x4f, 0xbf, 0x23, 0xa8, 0xdd, 0x61, 0x2a,
+        0x24,
+    ]);
+    let duid = Duid::new(duid_bytes);
+    const IAID: u32 = 0x1609_2fc9;
+
+    let (handle, transport) = Dhcpv6Transport::inert();
+    let mut service = Dhcpv6Service::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp6, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    wait_for_service_online(&ctx, ServiceId::Dhcp6).await?;
+    let client_src = SocketAddr::new(IpAddr::V6(client_ll), 546);
+    let exchange = |bytes: Vec<u8>| {
+        let handle = &handle;
+        async move {
+            handle.inject(bytes, client_src).await;
+            // Skip the Reconfigure the server multicasts on a renumber.
+            loop {
+                let reply = timeout(TEST_TIMEOUT, handle.recv_payload()).await.ok()??;
+                let msg = MessageV6::decode(&mut Decoder::new(&reply)).ok()?;
+                if msg.msg_type() != MessageTypeV6::Reconfigure {
+                    return Some(msg);
+                }
+            }
+        }
+    };
+
+    let ula: Ipv6Addr = "fd97:f00d:cafe:3731::1057:cafe".parse()?;
+    let old_gua: Ipv6Addr = "2804:bdc:50e2:7d00::1057:cafe".parse()?;
+    let new_gua: Ipv6Addr = "2804:bdc:5071:9400::1057:cafe".parse()?;
+
+    let rc = exchange(
+        Dhcpv6PacketBuilder::solicit(duid.clone())
+            .with_ia_na(IAID, None)
+            .with_rapid_commit(true)
+            .build(),
+    )
+    .await
+    .ok_or("no Reply to the Rapid Commit Solicit")?;
+    assert_eq!(rc.msg_type(), MessageTypeV6::Reply);
+    let server_duid = match rc.opts().get(OptionCodeV6::ServerId) {
+        Some(Dhcpv6Option::ServerId(d)) => Duid::new(d.clone()),
+        _ => return Err("Expected ServerId in Reply".into()),
+    };
+    let granted: Vec<_> = ia_na_addrs(&rc).into_iter().map(|(a, _, _)| a).collect();
+    assert!(granted.contains(&ula) && granted.contains(&old_gua), "{granted:?}");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // T1, same prefix: the server must know the binding it just granted.
+    let renew = exchange(
+        Dhcpv6PacketBuilder::renew(duid.clone(), server_duid.clone())
+            .with_ia_na(IAID, Some(old_gua))
+            .build(),
+    )
+    .await
+    .ok_or("no Reply to Renew")?;
+    assert_eq!(status_code(&renew), None, "Renew answered with a status: {renew:?}");
+    assert!(
+        ia_na_addrs(&renew).iter().any(|(a, p, _)| *a == old_gua && *p > 0),
+        "binding renewed: {:?}",
+        ia_na_addrs(&renew)
+    );
+
+    // The ISP renumbers; past T2 the client rebinds (multicast, no Server ID).
+    set_lan_gua(&ctx, LAN, server_mac, "2804:bdc:5071:9400::1");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let rebind = exchange(
+        Dhcpv6PacketBuilder::rebind(duid)
+            .with_ia_na(IAID, Some(old_gua))
+            .build(),
+    )
+    .await
+    .ok_or("Rebind for a binding we granted was ignored")?;
+    let addrs = ia_na_addrs(&rebind);
+    let find = |a: Ipv6Addr| addrs.iter().find(|(x, _, _)| *x == a).copied();
+    assert_eq!(find(old_gua).map(|(_, p, v)| (p, v)), Some((0, 0)), "{addrs:?}");
+    assert!(find(new_gua).is_some_and(|(_, p, _)| p > 0), "{addrs:?}");
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
+    Ok(())
+}

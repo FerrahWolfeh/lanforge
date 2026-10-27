@@ -317,6 +317,18 @@ impl Dhcpv6PacketBuilder {
         }
     }
 
+    /// Multicast Rebind: carries no Server Identifier (RFC 8415 §18.2.5).
+    #[must_use]
+    pub const fn rebind(client_duid: Duid) -> Self {
+        Self {
+            msg_type: MessageTypeV6::Rebind,
+            client_duid,
+            server_duid: None,
+            ia_na: Some((1, None)),
+            rapid_commit: false,
+        }
+    }
+
     #[must_use]
     pub const fn release(client_duid: Duid, server_duid: Duid) -> Self {
         Self {
