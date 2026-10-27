@@ -22,11 +22,13 @@ use lanforge_transport::{TransportSnapshot, TransportStats};
 use lanforge_types::config::DnsAllowlist;
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::AdblockRuleEntry;
+#[cfg(feature = "adblock")]
+use lanforge_types::network::dns::{AdblockSourceMatch, AdblockSourceStatus, FilterMatch, FilterOrigin};
 use lanforge_types::network::dns::{
-    AdblockCheckResponse, AdblockSourceMatch, AdblockSourceStatus, DnsAdblockSourcesResponse,
+    AdblockCheckResponse, DnsAdblockSourcesResponse,
     DnsCacheEntry, DnsCacheResponse, DnsCacheStatsExtResponse, DnsClass, DnsLifetimeStats,
     DnsMessage, DnsQuestion, DnsRecordEntry, DnsRecordType, DnsRequest, DnsResponse,
-    DnsStatsResponse, FilterMatch, FilterOrigin, TransportProtocol,
+    DnsStatsResponse, TransportProtocol,
     adblock::{AdblockDbConfig, RewriteRule},
     upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget},
 };
@@ -36,7 +38,9 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::sync::broadcast::error::RecvError;
-use tracing::{debug, error, info};
+#[cfg(feature = "adblock")]
+use tracing::debug;
+use tracing::{error, info};
 
 #[derive(Clone)]
 pub struct DnsService {
@@ -266,6 +270,7 @@ impl AsyncService for DnsService {
         #[cfg(not(feature = "adblock"))]
         let blocked = 0u64;
 
+        #[cfg_attr(not(any(feature = "dot", feature = "doq")), allow(unused_mut))]
         let mut stats = vec![
             (
                 std::borrow::Cow::Borrowed("listen"),

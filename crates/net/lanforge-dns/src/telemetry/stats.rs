@@ -215,7 +215,6 @@ mod tests {
             recursions: 80,
             resolved_total: 95,
             failed_total: 5,
-            #[cfg(feature = "adblock")]
             blocked_queries: 12,
             cache_hits: 40,
             cache_misses: 20,

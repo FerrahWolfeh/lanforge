@@ -28,6 +28,7 @@ use tokio::sync::oneshot::{self, Sender};
 use tokio::time::timeout;
 use tracing::trace;
 
+#[cfg(feature = "dot")]
 const DOT_POOL_MAX: usize = 8;
 
 pub(crate) struct PendingQuery {

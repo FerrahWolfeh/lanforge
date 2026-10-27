@@ -1,4 +1,5 @@
 pub mod net;
+#[cfg(any(feature = "dot", feature = "doq"))]
 pub mod tls;
 
 #[cfg(feature = "doh-upstream")]

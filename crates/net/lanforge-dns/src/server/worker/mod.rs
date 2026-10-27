@@ -27,10 +27,11 @@ use crate::server::DnsContext;
 use chrono::Datelike;
 #[cfg(feature = "adblock")]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
-use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::adblock::AdblockDbConfig;
 #[cfg(feature = "adblock")]
-use lanforge_types::network::dns::adblock::{AdblockSourceFormat, TimeOfDay};
+use lanforge_types::network::dns::AdblockUrlEntry;
+#[cfg(feature = "adblock")]
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockSourceFormat, TimeOfDay};
+#[cfg(feature = "adblock")]
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 #[cfg(feature = "adblock")]
@@ -559,8 +560,6 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
     })
 }
 
-/// Computes the next local DateTime when the daily blocklist check should trigger.
-#[cfg(feature = "adblock")]
 /// Whether the worker should switch the filter on after a successful list load.
 ///
 /// Only when the config wants adblock on, rules are loaded, and the filter is off for no
@@ -572,6 +571,8 @@ fn should_auto_enable(filter: &AdBlocker, config_enabled: bool) -> bool {
     config_enabled && !paused && !filter.is_enabled() && filter.blocklist_size() > 0
 }
 
+/// Computes the next local DateTime when the daily blocklist check should trigger.
+#[cfg(feature = "adblock")]
 pub fn compute_next_refresh_target(
     now: chrono::DateTime<chrono::Local>,
     refresh_time: TimeOfDay,

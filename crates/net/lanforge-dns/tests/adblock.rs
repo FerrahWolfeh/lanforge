@@ -1,3 +1,5 @@
+#![cfg(feature = "adblock")]
+
 #[path = "common/mod.rs"]
 mod common;
 
@@ -12,7 +14,6 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-#[cfg(feature = "adblock")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_adblock_service_lifecycle_and_rebuild() {
     // 1. Spawn a mock HTTP server to host our blocklist

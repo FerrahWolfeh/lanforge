@@ -1,3 +1,5 @@
+#![cfg(feature = "adblock")]
+
 mod common;
 
 use common::*;

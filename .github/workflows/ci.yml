@@ -29,6 +29,9 @@ jobs:
       - name: Cargo Test
         run: cargo test --workspace
 
+      - name: DNS feature matrix
+        run: ./scripts/check-dns-features.sh
+
   web:
     name: WebUI Build & Check
     runs-on: ubuntu-latest

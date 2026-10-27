@@ -6,7 +6,7 @@ use quinn::{Connection, Endpoint, ServerConfig, TransportConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 use crate::pipeline::DnsPipelineRequest;
 use crate::server::DnsContext;

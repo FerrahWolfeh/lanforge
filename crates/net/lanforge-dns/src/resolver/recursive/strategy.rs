@@ -6,6 +6,7 @@ use dashmap::DashMap;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
+#[cfg(not(all(feature = "dot", feature = "doq", feature = "doh-upstream")))]
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::dns::{
     DnsClass, DnsMessage, DnsQuestion, DnsRecordType, UpstreamHealthSnapshot,
