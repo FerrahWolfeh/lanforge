@@ -266,6 +266,15 @@ impl From<&lanforge_api::config_file::ConfigFile> for TomlConfig {
     }
 }
 
+/// Logs config values that were not applied as written (left out or closed).
+#[must_use]
+pub fn log_issues(issues: Vec<String>) -> Vec<String> {
+    for issue in &issues {
+        tracing::error!("Config: {issue}");
+    }
+    issues
+}
+
 /// Logs each set-aside section and words it for the admin.
 #[must_use]
 pub fn set_aside_issues(set_aside: &[(lanforge_api::config_file::Section, String)]) -> Vec<String> {
@@ -301,6 +310,9 @@ pub fn load_toml(path: &str) -> TomlConfig {
             info!("Config: Loaded from '{path}' using named-section schema");
             let mut cfg = TomlConfig::from(&file_cfg);
             cfg.config_issues = set_aside_issues(&set_aside);
+            #[cfg(feature = "nft")]
+            cfg.config_issues
+                .extend(log_issues(file_cfg.firewall.to_config().1));
             cfg
         }
         Err(e) => {

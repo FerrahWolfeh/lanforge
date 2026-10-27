@@ -366,8 +366,8 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
         assert_eq!(pools[0].router, Some(Ipv4Addr::new(192, 168, 1, 1)));
 
         // 3. Verify Firewall config survived
-        let fw = db.load_firewall_config().expect("load fw");
-        assert!(fw.is_some_and(|f| f.enabled));
+        // Firewall is file-owned (config-storage step 2): not copied into redb by the worker.
+        assert!(db.load_firewall_config().expect("load fw").is_none());
 
         // 4. PPPoE is file-owned (config-storage step 2): the worker no longer copies it into
         // redb; the API writes it to `[pppoe]` in the config file.

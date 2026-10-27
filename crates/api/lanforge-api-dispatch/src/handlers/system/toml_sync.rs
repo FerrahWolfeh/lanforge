@@ -49,9 +49,9 @@ impl Persisted {
     pub fn message(self, what: &str) -> String {
         match self {
             Self::File => format!("{what} updated successfully"),
-            Self::MemoryOnly => {
-                format!("{what} applied, but not saved: the configuration file is read-only")
-            }
+            Self::MemoryOnly => format!(
+                "{what} updated in memory only, not saved: the configuration file is read-only or not set"
+            ),
         }
     }
 }
@@ -77,6 +77,21 @@ impl ClientContext {
         persist_sections(&path, &cfg, sections)
             .map(|()| Persisted::File)
             .map_err(|e| format!("cannot write {}: {e}", path.display()))
+    }
+
+    /// Writes `fw` to `[firewall]` (see [`Self::persist_config_sections`]). Zones are keyed by
+    /// name in the file, so a zone defined twice cannot be written and is refused.
+    pub fn persist_firewall(
+        &self,
+        fw: &lanforge_types::network::firewall::FirewallConfig,
+    ) -> Result<Persisted, String> {
+        let mut seen = std::collections::HashSet::new();
+        if let Some(dup) = fw.zones.iter().find(|z| !seen.insert(z.name.as_str())) {
+            return Err(format!("zone '{}' is defined twice", dup.name));
+        }
+        self.persist_config_sections(SectionSet::FIREWALL, |file| {
+            file.firewall = lanforge_api::config_file::FirewallFile::from_config(fw);
+        })
     }
 
     /// Extracts the consolidated static configuration snapshot of the system.

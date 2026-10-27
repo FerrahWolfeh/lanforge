@@ -70,7 +70,7 @@ impl Section {
     pub const fn is_dynamic(&self) -> bool {
         matches!(
             self,
-            Self::Dhcp | Self::Ra | Self::Dns | Self::Adblock | Self::Firewall | Self::Hosts
+            Self::Dhcp | Self::Ra | Self::Dns | Self::Adblock | Self::Hosts
         )
     }
 
@@ -127,11 +127,11 @@ bitflags! {
                        | Self::HTTP.bits() | Self::MONITOR.bits() | Self::MDNS.bits() | Self::TFTP.bits();
 
         const DYNAMIC  = Self::DHCP.bits() | Self::RA.bits() | Self::DNS.bits()
-                       | Self::ADBLOCK.bits() | Self::FIREWALL.bits() | Self::HOSTS.bits();
+                       | Self::ADBLOCK.bits() | Self::HOSTS.bits();
 
         /// Migrated to "files are config": the file is their only source, written by the API
         /// before the change is applied; never synced with redb nor rewritten by the db worker.
-        const FILE_OWNED = Self::PPPOE.bits() | Self::TRAFFIC.bits();
+        const FILE_OWNED = Self::PPPOE.bits() | Self::TRAFFIC.bits() | Self::FIREWALL.bits();
     }
 }
 

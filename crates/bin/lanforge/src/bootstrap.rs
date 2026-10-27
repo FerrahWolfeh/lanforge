@@ -718,7 +718,7 @@ impl Bootstrapper {
         Self::migrate_traffic_config(db, cfg)?;
 
         #[cfg(feature = "nft")]
-        Self::seed_firewall_config(db, cfg)?;
+        Self::migrate_firewall_config(db, cfg)?;
 
         Ok(())
     }
@@ -920,102 +920,43 @@ impl Bootstrapper {
         )
     }
 
+    /// Moves a firewall an older binary kept in redb into `[firewall]` (once), then derives the
+    /// firewall the daemon runs (`effective_firewall`): in memory only, the file keeps what the
+    /// admin wrote.
     #[cfg(feature = "nft")]
-    fn seed_firewall_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
-        #[cfg(feature = "pppoe")]
-        {
-            if !cfg.pppoe_toml.nftables.flow_offload {
-                cfg.firewall_toml.flow_offload = false;
-            }
-            if !cfg.pppoe_toml.nftables.bypass_dns {
-                cfg.firewall_toml.bypass_dns = false;
-            }
-            if !cfg.pppoe_toml.nftables.bypass_vowifi {
-                cfg.firewall_toml.bypass_vowifi = false;
-            }
+    fn migrate_firewall_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+        if let Some(stored) = db.load_firewall_config()? {
+            cfg.firewall_toml = stored.clone();
+            Self::move_section_to_file(
+                db,
+                cfg,
+                "firewall",
+                lanforge_db::config_keys::FIREWALL,
+                lanforge_api::config_file::SectionSet::FIREWALL,
+                |file| {
+                    file.firewall = lanforge_api::config_file::FirewallFile::from_config(&stored);
+                },
+            )?;
         }
 
-        // Ensure primary LAN interface is included in internal zone
-        if !cfg.system.iface.is_empty() {
-            for zone in &mut cfg.firewall_toml.zones {
-                if (zone.name == "internal" || zone.name == "lan")
-                    && !zone.interfaces.contains(&cfg.system.iface)
-                {
-                    zone.interfaces.push(cfg.system.iface.clone());
-                }
-            }
-        }
-
-        if db.seed_firewall_if_empty(&cfg.firewall_toml)? {
-            info!("Seeded Firewall configuration from TOML into database");
-        }
-        if let Some(mut loaded) = db.load_firewall_config()? {
-            let mut modified = false;
+        #[cfg(feature = "traffic")]
+        let sqm_enabled = cfg.traffic_toml.sqm.enabled;
+        #[cfg(not(feature = "traffic"))]
+        let sqm_enabled = false;
+        let effective = crate::config::firewall::effective_firewall(
+            cfg.firewall_toml.clone(),
             #[cfg(feature = "pppoe")]
-            {
-                if !cfg.pppoe_toml.nftables.flow_offload && loaded.flow_offload {
-                    info!(
-                        "Firewall bootstrap: disabling flow_offload to match existing PPPoE/SQM configuration"
-                    );
-                    loaded.flow_offload = false;
-                    modified = true;
-                }
-            }
-            #[cfg(feature = "traffic")]
-            {
-                if cfg.traffic_toml.sqm.enabled && loaded.flow_offload {
-                    info!(
-                        "Firewall bootstrap: disabling flow_offload because SQM (CAKE) traffic shaping is active"
-                    );
-                    loaded.flow_offload = false;
-                    modified = true;
-                }
-            }
-            // Auto-heal / assign primary LAN interface to internal zone if unassigned in any zone
-            if !cfg.system.iface.is_empty() {
-                let is_assigned = loaded
-                    .zones
-                    .iter()
-                    .any(|z| z.interfaces.contains(&cfg.system.iface));
-                if !is_assigned
-                    && let Some(internal_zone) = loaded
-                        .zones
-                        .iter_mut()
-                        .find(|z| z.name == "internal" || z.name == "lan")
-                {
-                    info!(
-                        iface = %cfg.system.iface,
-                        zone = %internal_zone.name,
-                        "Firewall bootstrap: auto-assigning primary LAN interface to internal firewall zone"
-                    );
-                    internal_zone.interfaces.push(cfg.system.iface.clone());
-                    modified = true;
-                }
-            }
-            // Auto-heal / ensure trusted zone includes container wildcard "podman*"
-            if let Some(trusted_zone) = loaded.zones.iter_mut().find(|z| z.name == "trusted") {
-                if !trusted_zone
-                    .interfaces
-                    .iter()
-                    .any(|i| i == "podman*" || i.starts_with("podman"))
-                {
-                    info!("Firewall bootstrap: adding 'podman*' wildcard to trusted firewall zone");
-                    trusted_zone.interfaces.push("podman*".into());
-                    modified = true;
-                } else if !trusted_zone.interfaces.iter().any(|i| i == "podman*") {
-                    info!(
-                        "Firewall bootstrap: ensuring 'podman*' wildcard in trusted firewall zone"
-                    );
-                    trusted_zone.interfaces.push("podman*".into());
-                    modified = true;
-                }
-            }
-            if modified {
-                let _ = db.save_firewall_config(&loaded);
-            }
-            cfg.firewall_enabled = loaded.enabled;
-            cfg.firewall_toml = loaded;
+            Some(&cfg.pppoe_toml),
+            sqm_enabled,
+            &cfg.system.iface,
+        );
+        if effective != cfg.firewall_toml {
+            info!(
+                "Firewall: adjusted for PPPoE/SQM/LAN settings (in memory, not written to the file)"
+            );
         }
+        cfg.firewall_enabled = effective.enabled;
+        cfg.firewall_toml = effective;
         Ok(())
     }
 
@@ -1569,6 +1510,88 @@ mod tests {
         assert!(text.starts_with("# box"));
         assert_eq!(cfg.traffic_toml, stored);
         assert!(db.load_traffic_config().unwrap().is_none(), "key removed");
+    }
+
+    /// The owner's real firewall (2026-10-27, internal addresses replaced by documentation
+    /// ones) through the cut-over: the file it had, the redb value the daemon ran with. The
+    /// firewall the daemon runs afterwards must be the same value, and so the very same nft
+    /// ruleset, byte for byte (`ppp0` up, as on the box).
+    #[cfg(all(feature = "nft", feature = "pppoe", feature = "traffic"))]
+    #[test]
+    fn owner_firewall_cut_over_keeps_the_same_ruleset() {
+        use lanforge_api::config_file::ConfigFile;
+        use lanforge_nft::{FirewallConfig, RulesetBuilder};
+
+        const LIVE: &str = r#"{
+          "bypass_dns": true, "bypass_vowifi": true, "custom_rules_file": null,
+          "default_forward_policy": "Drop", "default_input_policy": "Drop", "enabled": true,
+          "flow_offload": false,
+          "forwardings": [
+            {"from": "internal", "to": "external"}, {"from": "trusted", "to": "external"},
+            {"from": "trusted", "to": "internal"}, {"from": "internal", "to": "trusted"}],
+          "mode": "full", "on_stop": "lockdown",
+          "port_forwards": [
+            {"comment": "qBittorrent", "enable_hairpin": true, "external_port": 6881,
+             "internal_ip": "192.0.2.128", "internal_port": 6881, "protocol": "Tcp", "src_zone": "external"},
+            {"comment": "qBittorrent [IPv6]", "enable_hairpin": true, "external_port": 6881,
+             "internal_ip": "2001:db8:cafe:3731::501", "internal_port": 6881, "protocol": "Tcp", "src_zone": "external"}],
+          "table_name": "lanforge",
+          "zones": [
+            {"allowed_subnets": [], "forward_policy": "Drop", "input_policy": "Drop", "interfaces": ["wan0"],
+             "masquerade": true, "mtu_fix": true, "name": "external", "open_ports": []},
+            {"allowed_subnets": [], "forward_policy": "Accept", "input_policy": "Accept", "interfaces": ["lan0"],
+             "masquerade": false, "mtu_fix": false, "name": "internal", "open_ports": [
+               {"comment": null, "port": 22, "protocol": "Tcp"}, {"comment": null, "port": 53, "protocol": "Udp"},
+               {"comment": null, "port": 53, "protocol": "Tcp"}, {"comment": null, "port": 67, "protocol": "Udp"},
+               {"comment": null, "port": 8088, "protocol": "Tcp"}, {"comment": null, "port": 9090, "protocol": "Tcp"}]},
+            {"allowed_subnets": [], "forward_policy": "Accept", "input_policy": "Accept",
+             "interfaces": ["tailscale0", "podman*"], "masquerade": false, "mtu_fix": false,
+             "name": "trusted", "open_ports": []}]
+        }"#;
+        const OLD_FILE: &str = "[system]\niface = \"lan0\"\n\n[firewall]\nenabled = true\nflow_offload = false\nbypass_dns = true\nbypass_vowifi = true\ndefault_input_policy = \"drop\"\ndefault_forward_policy = \"drop\"\n\n[firewall.zones.external]\ninterfaces = [\"wan0\"]\ninput = \"drop\"\nforward = \"drop\"\nmasquerade = true\nmtu_fix = true\n\n[firewall.zones.internal]\ninterfaces = [\"lan0\"]\ninput = \"accept\"\nforward = \"accept\"\nmasquerade = false\nmtu_fix = false\nopen_ports = [\"22/tcp\", \"53/udp\", \"53/tcp\", \"67/udp\", \"8088/tcp\", \"9090/tcp\"]\n\n[firewall.zones.trusted]\ninterfaces = [\"tailscale0\", \"podman*\"]\ninput = \"accept\"\nforward = \"accept\"\nmasquerade = false\nmtu_fix = false\n\n[firewall.port_forwards.qBittorrent]\nproto = \"tcp\"\nport = 6881\nto = \"192.0.2.128\"\nto_port = 6881\ndescription = \"qBittorrent\"\n\n[firewall.port_forwards.\"qBittorrent [IPv6]\"]\nproto = \"tcp\"\nport = 6881\nto = \"2001:db8:cafe:3731::501\"\nto_port = 6881\ndescription = \"qBittorrent [IPv6]\"\n";
+
+        let live: FirewallConfig = serde_json::from_str(LIVE).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        std::fs::write(&path, OLD_FILE).unwrap();
+        let mut cfg = config_with_db(&dir.path().join("config.redb"));
+        cfg.config_path = path.display().to_string();
+        cfg.config_writable = true;
+        cfg.system.iface = "lan0".into();
+        // As on the box: SQM on (CAKE 770/380), PPPoE dataplane defaults.
+        cfg.traffic_toml.sqm.enabled = true;
+        let db = LanforgeDb::open_in_memory().unwrap();
+        db.save_firewall_config(&live).unwrap();
+
+        Bootstrapper::migrate_firewall_config(&db, &mut cfg).unwrap();
+
+        assert!(db.load_firewall_config().unwrap().is_none(), "key removed");
+        let file = ConfigFile::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let (from_file, issues) = file.firewall.to_config();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(from_file, live, "the file holds the live firewall");
+        assert_eq!(cfg.firewall_toml, live, "the daemon runs the live firewall");
+
+        let ruleset = |fw: &FirewallConfig| {
+            serde_json::to_string(
+                &RulesetBuilder::new(fw)
+                    .with_active_wan(Some("ppp0"))
+                    .with_primary_lan(Some("lan0"))
+                    .build(),
+            )
+            .unwrap()
+        };
+        assert_eq!(ruleset(&cfg.firewall_toml), ruleset(&live));
+
+        // Next boot: the file is the only source and yields the same firewall again.
+        let mut next = config_with_db(&dir.path().join("config.redb"));
+        next.config_path = cfg.config_path.clone();
+        next.config_writable = true;
+        next.system.iface = "lan0".into();
+        next.traffic_toml.sqm.enabled = true;
+        next.firewall_toml = from_file;
+        Bootstrapper::migrate_firewall_config(&db, &mut next).unwrap();
+        assert_eq!(next.firewall_toml, live);
     }
 
     /// A file that cannot take the config keeps it in the database, in use.

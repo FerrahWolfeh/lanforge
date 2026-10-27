@@ -618,13 +618,24 @@ impl ClientContext {
         }
 
         if let Some(fw) = firewall_config {
-            patch = patch.with_firewall(*fw);
-            results.push(ImportResult {
-                section: ImportSection::FirewallConfig,
-                success: true,
-                count: 1,
-                error: None,
-            });
+            // File-owned: imported only if it reaches the config file.
+            if let Err(e) = self.persist_firewall(&fw) {
+                results.push(ImportResult {
+                    section: ImportSection::FirewallConfig,
+                    success: false,
+                    count: 0,
+                    error: Some(e),
+                });
+                total_success = false;
+            } else {
+                patch = patch.with_firewall(*fw);
+                results.push(ImportResult {
+                    section: ImportSection::FirewallConfig,
+                    success: true,
+                    count: 1,
+                    error: None,
+                });
+            }
         }
 
         if let Some(tr) = traffic_config {

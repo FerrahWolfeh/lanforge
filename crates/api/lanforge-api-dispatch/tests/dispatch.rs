@@ -685,3 +685,107 @@ async fn traffic_update_is_written_to_the_config_file() {
     assert!(text.contains("# mine"));
     assert_eq!(client_ctx.ctx.get_traffic_config(), Some(cfg));
 }
+
+// ---------------------------------------------------------------------------
+// Firewall is file-owned: saved before it applies; a trial (auto-rollback) is not saved
+// ---------------------------------------------------------------------------
+
+fn file_firewall(path: &std::path::Path) -> lanforge_types::network::firewall::FirewallConfig {
+    let text = std::fs::read_to_string(path).unwrap();
+    let (fw, issues) = lanforge_api::config_file::ConfigFile::parse(&text)
+        .unwrap()
+        .firewall
+        .to_config();
+    assert!(issues.is_empty(), "{issues:?}");
+    fw
+}
+
+async fn firewall_ctx() -> (ClientContext, tempfile::TempDir, std::path::PathBuf) {
+    let client_ctx = init_test_context().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    std::fs::write(&path, "[system]\niface = \"lan0\"\n").unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(true);
+    (client_ctx, dir, path)
+}
+
+fn with_forward(port: u16) -> lanforge_types::network::firewall::FirewallConfig {
+    let mut fw = lanforge_types::network::firewall::FirewallConfig::default();
+    fw.port_forwards
+        .push(lanforge_types::network::firewall::PortForwardRule {
+            comment: Some("game".into()),
+            src_zone: "external".into(),
+            internal_ip: "192.0.2.7".parse().unwrap(),
+            external_port: port,
+            internal_port: port,
+            protocol: lanforge_types::network::firewall::L4Protocol::Udp,
+            enable_hairpin: true,
+        });
+    fw
+}
+
+#[tokio::test]
+async fn firewall_update_is_written_to_the_config_file() {
+    let (client_ctx, _dir, path) = firewall_ctx().await;
+    let fw = with_forward(7777);
+    let res = client_ctx.handle_update_firewall_config(fw.clone()).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    assert_eq!(file_firewall(&path), fw);
+    assert_eq!(client_ctx.ctx.get_firewall_config(), Some(fw));
+}
+
+#[tokio::test]
+async fn firewall_with_a_zone_defined_twice_is_refused() {
+    let (client_ctx, _dir, path) = firewall_ctx().await;
+    let mut fw = lanforge_types::network::firewall::FirewallConfig::default();
+    fw.zones.push(fw.zones[0].clone());
+    let before = client_ctx.ctx.get_firewall_config();
+
+    let res = client_ctx.handle_update_firewall_config(fw).await;
+
+    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert_eq!(client_ctx.ctx.get_firewall_config(), before);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "[system]\niface = \"lan0\"\n"
+    );
+}
+
+#[tokio::test]
+async fn firewall_trial_is_saved_only_when_confirmed() {
+    use lanforge_types::network::firewall::FirewallCommitRequest;
+
+    let (client_ctx, _dir, path) = firewall_ctx().await;
+    let saved = with_forward(7777);
+    assert!(matches!(
+        client_ctx
+            .handle_update_firewall_config(saved.clone())
+            .await,
+        Response::Success(_)
+    ));
+
+    let candidate = with_forward(8888);
+    let Response::FirewallValidation(report) =
+        client_ctx.handle_firewall_propose(candidate.clone()).await
+    else {
+        panic!("propose");
+    };
+    let tx_id = report.tx_id.clone().expect("valid candidate");
+    let res = client_ctx
+        .handle_firewall_commit(FirewallCommitRequest {
+            tx_id: tx_id.clone(),
+            auto_rollback_secs: Some(60),
+        })
+        .await;
+    assert!(matches!(res, Response::FirewallCommit(_)), "{res:?}");
+    assert_eq!(
+        client_ctx.ctx.get_firewall_config(),
+        Some(candidate.clone())
+    );
+    assert_eq!(file_firewall(&path), saved, "a trial is not saved");
+
+    let res = client_ctx.handle_firewall_confirm(tx_id).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    assert_eq!(file_firewall(&path), candidate, "confirmed: saved");
+}

@@ -8,6 +8,8 @@
 
 pub mod args;
 pub mod auto_detect;
+#[cfg(feature = "nft")]
+pub mod firewall;
 pub mod reload;
 pub mod sync;
 pub mod toml;

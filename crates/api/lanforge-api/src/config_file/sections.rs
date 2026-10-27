@@ -601,15 +601,60 @@ pub struct FirewallFile {
     pub on_stop: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_rules_file: Option<String>,
-    /// Always written, even empty: an absent key means the default zones.
-    #[serde(default = "default_firewall_zones")]
-    pub zones: BTreeMap<String, FirewallZoneFile>,
+    /// Always written, even empty: an absent key means the default zones. In file order: the
+    /// ruleset is built zone by zone.
+    #[serde(default = "default_firewall_zones", with = "named_tables")]
+    pub zones: Vec<(String, FirewallZoneFile)>,
     /// Routed traffic allowed between zones. Always written, even empty: an absent key means
     /// the default matrix.
     #[serde(default = "default_forwardings")]
     pub forwardings: Vec<ZoneForwardingFile>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub port_forwards: BTreeMap<String, PortForwardFile>,
+    /// In file order. Keys are labels only (unique per file); the rule's comment is
+    /// `description`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", with = "named_tables")]
+    pub port_forwards: Vec<(String, PortForwardFile)>,
+}
+
+/// `[parent.<name>]` tables kept as an ordered list: a `BTreeMap` sorted them by name, and
+/// `toml_edit` reads tables in document order, so the order written is the order read back.
+mod named_tables {
+    use std::fmt;
+    use std::marker::PhantomData;
+
+    use serde::de::{MapAccess, Visitor};
+    use serde::ser::SerializeMap;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer, T: Serialize>(
+        entries: &[(String, T)],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(entries.len()))?;
+        for (name, value) in entries {
+            map.serialize_entry(name, value)?;
+        }
+        map.end()
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<(String, T)>, D::Error> {
+        struct Ordered<T>(PhantomData<T>);
+        impl<'de, T: Deserialize<'de>> Visitor<'de> for Ordered<T> {
+            type Value = Vec<(String, T)>;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a table of named tables")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut out = Vec::new();
+                while let Some((name, value)) = map.next_entry::<String, T>()? {
+                    out.push((name, value));
+                }
+                Ok(out)
+            }
+        }
+        deserializer.deserialize_map(Ordered(PhantomData))
+    }
 }
 
 /// Inter-zone routing permission (`from` zone may open connections to `to` zone).
@@ -622,51 +667,52 @@ pub struct ZoneForwardingFile {
 
 /// The zones a file gets when it has no `zones` key: without `internal`, the default-drop input
 /// policy would cut the LAN off the router (DNS, DHCP, UI, SSH).
-fn default_firewall_zones() -> BTreeMap<String, FirewallZoneFile> {
-    let mut zones = BTreeMap::new();
-    zones.insert(
-        "internal".to_string(),
-        FirewallZoneFile {
-            interfaces: Vec::new(),
-            input: default_policy_accept(),
-            forward: default_policy_accept(),
-            masquerade: false,
-            mtu_fix: false,
-            open_ports: vec![
-                "22/tcp".to_string(),
-                "53/udp".to_string(),
-                "53/tcp".to_string(),
-                "67/udp".to_string(),
-                "8088/tcp".to_string(),
-                "9090/tcp".to_string(),
-            ],
-            allowed_subnets: Vec::new(),
-        },
-    );
-    zones.insert(
-        "external".to_string(),
-        FirewallZoneFile {
-            interfaces: vec!["ppp0".to_string(), "wan0".to_string()],
-            input: default_policy_drop(),
-            forward: default_policy_drop(),
-            masquerade: true,
-            mtu_fix: true,
-            open_ports: Vec::new(),
-            allowed_subnets: Vec::new(),
-        },
-    );
-    zones.insert(
-        "trusted".to_string(),
-        FirewallZoneFile {
-            interfaces: vec!["tailscale0".to_string(), "podman*".to_string()],
-            input: default_policy_accept(),
-            forward: default_policy_accept(),
-            masquerade: false,
-            mtu_fix: false,
-            open_ports: Vec::new(),
-            allowed_subnets: Vec::new(),
-        },
-    );
+fn default_firewall_zones() -> Vec<(String, FirewallZoneFile)> {
+    // Name order, as the former `BTreeMap` produced: a file without `zones` keeps its ruleset.
+    let mut zones = vec![
+        (
+            "internal".to_string(),
+            FirewallZoneFile {
+                interfaces: Vec::new(),
+                input: default_policy_accept(),
+                forward: default_policy_accept(),
+                masquerade: false,
+                mtu_fix: false,
+                open_ports: [
+                    "22/tcp", "53/udp", "53/tcp", "67/udp", "8088/tcp", "9090/tcp",
+                ]
+                .into_iter()
+                .map(|p| OpenPortFile::Short(p.to_string()))
+                .collect(),
+                allowed_subnets: Vec::new(),
+            },
+        ),
+        (
+            "external".to_string(),
+            FirewallZoneFile {
+                interfaces: vec!["ppp0".to_string(), "wan0".to_string()],
+                input: default_policy_drop(),
+                forward: default_policy_drop(),
+                masquerade: true,
+                mtu_fix: true,
+                open_ports: Vec::new(),
+                allowed_subnets: Vec::new(),
+            },
+        ),
+        (
+            "trusted".to_string(),
+            FirewallZoneFile {
+                interfaces: vec!["tailscale0".to_string(), "podman*".to_string()],
+                input: default_policy_accept(),
+                forward: default_policy_accept(),
+                masquerade: false,
+                mtu_fix: false,
+                open_ports: Vec::new(),
+                allowed_subnets: Vec::new(),
+            },
+        ),
+    ];
+    zones.sort_by(|a, b| a.0.cmp(&b.0));
     zones
 }
 
@@ -685,9 +731,24 @@ impl Default for FirewallFile {
             custom_rules_file: None,
             zones: default_firewall_zones(),
             forwardings: default_forwardings(),
-            port_forwards: BTreeMap::new(),
+            port_forwards: Vec::new(),
         }
     }
+}
+
+/// A port the router accepts in a zone: `"22/tcp"`, or `{ port = 22, proto = "tcp", comment =
+/// "SSH" }` when it carries a comment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OpenPortFile {
+    Short(String),
+    Full {
+        port: u16,
+        #[serde(default = "default_proto_tcp")]
+        proto: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        comment: Option<String>,
+    },
 }
 
 /// A named firewall zone.
@@ -707,7 +768,7 @@ pub struct FirewallZoneFile {
     #[serde(default = "default_false")]
     pub mtu_fix: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub open_ports: Vec<String>,
+    pub open_ports: Vec<OpenPortFile>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_subnets: Vec<String>,
 }

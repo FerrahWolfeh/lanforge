@@ -446,12 +446,9 @@ impl ClientContext {
                 to: "external".into(),
             });
         }
+        // File-owned: written with the rest of the setup TOML below.
         patch = patch.with_firewall(initial_firewall.clone());
         let _ = self.ctx.apply_config(patch);
-
-        let _ = storage
-            .call(move |s: &Stores| s.db().save_firewall_config(&initial_firewall))
-            .await;
 
         // 8. Write complete declarative TOML file atomically to authoritative path
         let target_path = self.resolve_config_path().unwrap_or_else(|| {
@@ -467,6 +464,7 @@ impl ClientContext {
 
         let (cfg_file, toml_content) = generate_setup_toml(
             &payload,
+            &initial_firewall,
             router_ip,
             subnet_mask,
             v6_range_str,
@@ -566,6 +564,7 @@ fn setup_pppoe_config(payload: &SetupPayload) -> Option<PppoeConfig> {
 
 fn generate_setup_toml(
     payload: &SetupPayload,
+    firewall: &FirewallConfig,
     router_ip: Ipv4Addr,
     subnet_mask: Ipv4Addr,
     v6_range_str: &str,
@@ -722,6 +721,9 @@ fn generate_setup_toml(
             );
         }
     }
+
+    // Firewall: the same value the daemon applies (zones bound to the chosen interfaces).
+    cfg.firewall = lanforge_api::config_file::FirewallFile::from_config(firewall);
 
     // PPPoE: the same value the daemon applies, so the file holds every field.
     if let Some(pppoe) = setup_pppoe_config(payload) {

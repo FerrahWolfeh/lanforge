@@ -32,7 +32,8 @@ use super::duration::HumanDuration;
 use super::sections::{
     AdblockFile, AdblockRuleFile, AdblockSourceFile, DhcpFile, Dhcpv4PoolFile, Dhcpv6PoolFile,
     DnsFile, DnsRewriteFile, DnsUpstreamFile, FirewallFile, FirewallZoneFile, HostFileEntry,
-    PortForwardFile, RaDnsslFile, RaFile, RaPrefixFile, RaRdnssFile, ZoneForwardingFile,
+    OpenPortFile, PortForwardFile, RaDnsslFile, RaFile, RaPrefixFile, RaRdnssFile,
+    ZoneForwardingFile,
 };
 
 fn policy_to_str(p: FirewallPolicy) -> &'static str {
@@ -43,11 +44,12 @@ fn policy_to_str(p: FirewallPolicy) -> &'static str {
     }
 }
 
-fn str_to_policy(s: &str) -> FirewallPolicy {
+fn parse_policy(s: &str) -> Option<FirewallPolicy> {
     match s.trim().to_lowercase().as_str() {
-        "accept" => FirewallPolicy::Accept,
-        "reject" => FirewallPolicy::Reject,
-        _ => FirewallPolicy::Drop,
+        "drop" => Some(FirewallPolicy::Drop),
+        "accept" => Some(FirewallPolicy::Accept),
+        "reject" => Some(FirewallPolicy::Reject),
+        _ => None,
     }
 }
 
@@ -59,30 +61,277 @@ fn mode_to_str(m: FirewallMode) -> &'static str {
     }
 }
 
-/// Unknown values keep the full firewall: never weaken protection on a typo.
-fn str_to_mode(s: &str) -> FirewallMode {
+fn parse_mode(s: &str) -> Option<FirewallMode> {
     match s.trim().to_lowercase().as_str() {
-        "minimal" => FirewallMode::Minimal,
-        "disabled" => FirewallMode::Disabled,
-        _ => FirewallMode::Full,
+        "full" => Some(FirewallMode::Full),
+        "minimal" => Some(FirewallMode::Minimal),
+        "disabled" => Some(FirewallMode::Disabled),
+        _ => None,
     }
 }
 
-/// Parses `tcp`, `udp` and `tcp/udp` (as written by `L4Protocol::as_str`) or `both`.
-fn str_to_l4(s: &str) -> L4Protocol {
+/// `tcp`, `udp` and `tcp/udp` (as written by `L4Protocol::as_str`) or `both`.
+fn parse_l4(s: &str) -> Option<L4Protocol> {
     match s.trim().to_lowercase().as_str() {
-        "udp" => L4Protocol::Udp,
-        "tcp/udp" | "both" => L4Protocol::Both,
-        _ => L4Protocol::Tcp,
+        "tcp" => Some(L4Protocol::Tcp),
+        "udp" => Some(L4Protocol::Udp),
+        "tcp/udp" | "both" => Some(L4Protocol::Both),
+        _ => None,
     }
 }
 
-/// Anything but an explicit `remove` keeps the WAN closed.
-fn str_to_stop_action(s: &str) -> FirewallStopAction {
-    if s.trim().eq_ignore_ascii_case("remove") {
-        FirewallStopAction::Remove
-    } else {
-        FirewallStopAction::Lockdown
+fn parse_stop_action(s: &str) -> Option<FirewallStopAction> {
+    match s.trim().to_lowercase().as_str() {
+        "lockdown" => Some(FirewallStopAction::Lockdown),
+        "remove" => Some(FirewallStopAction::Remove),
+        _ => None,
+    }
+}
+
+/// `parsed`, or the closed `default` with a message naming the key and the bad value.
+fn or_closed<T>(
+    parsed: Option<T>,
+    (default, default_text): (T, &str),
+    (key, value): (&str, &str),
+    issues: &mut Vec<String>,
+) -> T {
+    parsed.unwrap_or_else(|| {
+        issues.push(format!(
+            "[firewall] {key} = \"{value}\" is not valid; using \"{default_text}\""
+        ));
+        default
+    })
+}
+
+impl FirewallFile {
+    /// The file form of `fw`, losing nothing: zones and port forwards keep their order, open
+    /// ports keep their comments, and port forwards sharing a comment get distinct labels.
+    #[must_use]
+    pub fn from_config(fw: &FirewallConfig) -> Self {
+        let zones = fw
+            .zones
+            .iter()
+            .map(|zone| {
+                let open_ports = zone
+                    .open_ports
+                    .iter()
+                    .map(|p| match &p.comment {
+                        None => OpenPortFile::Short(format!("{}/{}", p.port, p.protocol.as_str())),
+                        Some(comment) => OpenPortFile::Full {
+                            port: p.port,
+                            proto: p.protocol.as_str().to_string(),
+                            comment: Some(comment.clone()),
+                        },
+                    })
+                    .collect();
+                let file_zone = FirewallZoneFile {
+                    interfaces: zone.interfaces.clone(),
+                    input: policy_to_str(zone.input_policy).to_string(),
+                    forward: policy_to_str(zone.forward_policy).to_string(),
+                    masquerade: zone.masquerade,
+                    mtu_fix: zone.mtu_fix,
+                    open_ports,
+                    allowed_subnets: zone
+                        .allowed_subnets
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                };
+                (zone.name.clone(), file_zone)
+            })
+            .collect();
+
+        let mut port_forwards: Vec<(String, PortForwardFile)> = Vec::new();
+        for (idx, pf) in fw.port_forwards.iter().enumerate() {
+            let base = pf
+                .comment
+                .clone()
+                .unwrap_or_else(|| format!("rule-{}", idx + 1));
+            let mut label = base.clone();
+            let mut n = 2;
+            while port_forwards.iter().any(|(l, _)| *l == label) {
+                label = format!("{base} #{n}");
+                n += 1;
+            }
+            port_forwards.push((
+                label,
+                PortForwardFile {
+                    proto: pf.protocol.as_str().to_string(),
+                    zone: pf.src_zone.clone(),
+                    hairpin: pf.enable_hairpin,
+                    port: pf.external_port,
+                    to: pf.internal_ip.to_string(),
+                    to_port: Some(pf.internal_port),
+                    description: pf.comment.clone(),
+                },
+            ));
+        }
+
+        Self {
+            enabled: fw.enabled,
+            mode: mode_to_str(fw.mode).to_string(),
+            table_name: fw.table_name.clone(),
+            flow_offload: fw.flow_offload,
+            bypass_dns: fw.bypass_dns,
+            bypass_vowifi: fw.bypass_vowifi,
+            default_input_policy: policy_to_str(fw.default_input_policy).to_string(),
+            default_forward_policy: policy_to_str(fw.default_forward_policy).to_string(),
+            on_stop: fw.on_stop.as_str().to_string(),
+            custom_rules_file: fw.custom_rules_file.clone(),
+            zones,
+            forwardings: fw
+                .forwardings
+                .iter()
+                .map(|f| ZoneForwardingFile {
+                    from: f.from.clone(),
+                    to: f.to.clone(),
+                })
+                .collect(),
+            port_forwards,
+        }
+    }
+
+    /// The firewall this file describes, plus one message per value it gets wrong. A wrong
+    /// value never becomes a guess: an open port, subnet or port forward that cannot be read is
+    /// left out (nothing is opened for it), and a wrong policy, mode or stop action takes its
+    /// closed default (`drop`, `full`, `lockdown`).
+    #[must_use]
+    pub fn to_config(&self) -> (FirewallConfig, Vec<String>) {
+        let mut issues = Vec::new();
+        let mode = or_closed(
+            parse_mode(&self.mode),
+            (FirewallMode::Full, "full"),
+            ("mode", &self.mode),
+            &mut issues,
+        );
+        let on_stop = or_closed(
+            parse_stop_action(&self.on_stop),
+            (FirewallStopAction::Lockdown, "lockdown"),
+            ("on_stop", &self.on_stop),
+            &mut issues,
+        );
+        let drop = (FirewallPolicy::Drop, "drop");
+        let default_input_policy = or_closed(
+            parse_policy(&self.default_input_policy),
+            drop,
+            ("default_input_policy", &self.default_input_policy),
+            &mut issues,
+        );
+        let default_forward_policy = or_closed(
+            parse_policy(&self.default_forward_policy),
+            drop,
+            ("default_forward_policy", &self.default_forward_policy),
+            &mut issues,
+        );
+
+        let mut zones = Vec::with_capacity(self.zones.len());
+        for (name, z) in &self.zones {
+            let input_policy = or_closed(
+                parse_policy(&z.input),
+                drop,
+                (&format!("zones.{name}.input"), &z.input),
+                &mut issues,
+            );
+            let forward_policy = or_closed(
+                parse_policy(&z.forward),
+                drop,
+                (&format!("zones.{name}.forward"), &z.forward),
+                &mut issues,
+            );
+            let mut open_ports = Vec::new();
+            for p in &z.open_ports {
+                let (port, proto, comment) = match p {
+                    OpenPortFile::Short(text) => match text.split_once('/') {
+                        Some((port, proto)) => (port.trim().parse::<u16>().ok(), proto, None),
+                        None => (None, "", None),
+                    },
+                    OpenPortFile::Full {
+                        port,
+                        proto,
+                        comment,
+                    } => (Some(*port), proto.as_str(), comment.clone()),
+                };
+                match (port, parse_l4(proto)) {
+                    (Some(port), Some(protocol)) => open_ports.push(HostPortRule {
+                        port,
+                        protocol,
+                        comment,
+                    }),
+                    _ => issues.push(format!(
+                        "[firewall.zones.{name}] open port {} is not valid (\"22/tcp\", \"53/udp\" or \"53/tcp/udp\"); not opened",
+                        serde_json::to_string(p).unwrap_or_default()
+                    )),
+                }
+            }
+            let mut allowed_subnets = Vec::new();
+            for text in &z.allowed_subnets {
+                match text.parse::<IpSubnet>() {
+                    Ok(subnet) => allowed_subnets.push(subnet),
+                    Err(_) => issues.push(format!(
+                        "[firewall.zones.{name}] allowed subnet \"{text}\" is not valid; left out"
+                    )),
+                }
+            }
+            zones.push(FirewallZone {
+                name: name.clone(),
+                interfaces: z.interfaces.clone(),
+                open_ports,
+                allowed_subnets,
+                input_policy,
+                forward_policy,
+                masquerade: z.masquerade,
+                mtu_fix: z.mtu_fix,
+            });
+        }
+
+        let mut port_forwards = Vec::new();
+        for (label, pf) in &self.port_forwards {
+            let internal_ip = pf.to.parse::<IpAddr>();
+            let protocol = parse_l4(&pf.proto);
+            match (internal_ip, protocol) {
+                (Ok(internal_ip), Some(protocol)) => port_forwards.push(PortForwardRule {
+                    src_zone: pf.zone.clone(),
+                    external_port: pf.port,
+                    internal_ip,
+                    internal_port: pf.to_port.unwrap_or(pf.port),
+                    protocol,
+                    comment: pf.description.clone(),
+                    enable_hairpin: pf.hairpin,
+                }),
+                (Err(_), _) => issues.push(format!(
+                    "[firewall.port_forwards.\"{label}\"] to = \"{}\" is not an IP address; port not forwarded",
+                    pf.to
+                )),
+                (_, None) => issues.push(format!(
+                    "[firewall.port_forwards.\"{label}\"] proto = \"{}\" is not tcp, udp or tcp/udp; port not forwarded",
+                    pf.proto
+                )),
+            }
+        }
+
+        let config = FirewallConfig {
+            table_name: self.table_name.clone(),
+            mode,
+            zones,
+            forwardings: self
+                .forwardings
+                .iter()
+                .map(|f| ZoneForwarding {
+                    from: f.from.clone(),
+                    to: f.to.clone(),
+                })
+                .collect(),
+            port_forwards,
+            custom_rules_file: self.custom_rules_file.clone(),
+            enabled: self.enabled,
+            flow_offload: self.flow_offload,
+            bypass_dns: self.bypass_dns,
+            bypass_vowifi: self.bypass_vowifi,
+            default_input_policy,
+            default_forward_policy,
+            on_stop,
+        };
+        (config, issues)
     }
 }
 
@@ -374,75 +623,7 @@ impl From<&SystemConfigExport> for ConfigFile {
 
         // 6. Firewall
         if let Some(ref fw) = export.firewall_config {
-            let mut fw_file = FirewallFile {
-                enabled: fw.enabled,
-                mode: mode_to_str(fw.mode).to_string(),
-                table_name: fw.table_name.clone(),
-                flow_offload: fw.flow_offload,
-                bypass_dns: fw.bypass_dns,
-                bypass_vowifi: fw.bypass_vowifi,
-                default_input_policy: policy_to_str(fw.default_input_policy).to_string(),
-                default_forward_policy: policy_to_str(fw.default_forward_policy).to_string(),
-                on_stop: fw.on_stop.as_str().to_string(),
-                custom_rules_file: fw.custom_rules_file.clone(),
-                zones: BTreeMap::new(),
-                forwardings: fw
-                    .forwardings
-                    .iter()
-                    .map(|f| ZoneForwardingFile {
-                        from: f.from.clone(),
-                        to: f.to.clone(),
-                    })
-                    .collect(),
-                port_forwards: BTreeMap::new(),
-            };
-
-            for zone in &fw.zones {
-                let open_ports: Vec<String> = zone
-                    .open_ports
-                    .iter()
-                    .map(|p| format!("{}/{}", p.port, p.protocol.as_str()))
-                    .collect();
-
-                let allowed_subnets: Vec<String> = zone
-                    .allowed_subnets
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect();
-
-                fw_file.zones.insert(
-                    zone.name.clone(),
-                    FirewallZoneFile {
-                        interfaces: zone.interfaces.clone(),
-                        input: policy_to_str(zone.input_policy).to_string(),
-                        forward: policy_to_str(zone.forward_policy).to_string(),
-                        masquerade: zone.masquerade,
-                        mtu_fix: zone.mtu_fix,
-                        open_ports,
-                        allowed_subnets,
-                    },
-                );
-            }
-
-            for (idx, pf) in fw.port_forwards.iter().enumerate() {
-                let name = pf
-                    .comment
-                    .clone()
-                    .unwrap_or_else(|| format!("rule-{}", idx + 1));
-                fw_file.port_forwards.insert(
-                    name,
-                    PortForwardFile {
-                        proto: pf.protocol.as_str().to_string(),
-                        zone: pf.src_zone.clone(),
-                        hairpin: pf.enable_hairpin,
-                        port: pf.external_port,
-                        to: pf.internal_ip.to_string(),
-                        to_port: Some(pf.internal_port),
-                        description: pf.comment.clone(),
-                    },
-                );
-            }
-            cfg.firewall = fw_file;
+            cfg.firewall = FirewallFile::from_config(fw);
         }
 
         // 7. PPPoE
@@ -722,83 +903,8 @@ impl From<&ConfigFile> for SystemConfigExport {
             })
             .collect();
 
-        // 6. Firewall
-        let mut zones = Vec::new();
-        for (name, z) in &cfg.firewall.zones {
-            let mut open_ports = Vec::new();
-            for p_str in &z.open_ports {
-                if let Some((port_part, proto_part)) = p_str.split_once('/')
-                    && let Ok(port) = port_part.trim().parse::<u16>()
-                {
-                    open_ports.push(HostPortRule {
-                        port,
-                        protocol: str_to_l4(proto_part),
-                        comment: None,
-                    });
-                }
-            }
-
-            let mut allowed_subnets = Vec::new();
-            for s_str in &z.allowed_subnets {
-                if let Ok(sub) = s_str.parse::<IpSubnet>() {
-                    allowed_subnets.push(sub);
-                }
-            }
-
-            zones.push(FirewallZone {
-                name: name.clone(),
-                interfaces: z.interfaces.clone(),
-                open_ports,
-                allowed_subnets,
-                input_policy: str_to_policy(&z.input),
-                forward_policy: str_to_policy(&z.forward),
-                masquerade: z.masquerade,
-                mtu_fix: z.mtu_fix,
-            });
-        }
-
-        let mut port_forwards = Vec::new();
-        for pf in cfg.firewall.port_forwards.values() {
-            let internal_ip = pf
-                .to
-                .parse::<IpAddr>()
-                .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-            let internal_port = pf.to_port.unwrap_or(pf.port);
-
-            port_forwards.push(PortForwardRule {
-                src_zone: pf.zone.clone(),
-                external_port: pf.port,
-                internal_ip,
-                internal_port,
-                protocol: str_to_l4(&pf.proto),
-                comment: pf.description.clone(),
-                enable_hairpin: pf.hairpin,
-            });
-        }
-
-        let firewall_config = Some(Box::new(FirewallConfig {
-            table_name: cfg.firewall.table_name.clone(),
-            mode: str_to_mode(&cfg.firewall.mode),
-            zones,
-            forwardings: cfg
-                .firewall
-                .forwardings
-                .iter()
-                .map(|f| ZoneForwarding {
-                    from: f.from.clone(),
-                    to: f.to.clone(),
-                })
-                .collect(),
-            port_forwards,
-            custom_rules_file: cfg.firewall.custom_rules_file.clone(),
-            enabled: cfg.firewall.enabled,
-            flow_offload: cfg.firewall.flow_offload,
-            bypass_dns: cfg.firewall.bypass_dns,
-            bypass_vowifi: cfg.firewall.bypass_vowifi,
-            default_input_policy: str_to_policy(&cfg.firewall.default_input_policy),
-            default_forward_policy: str_to_policy(&cfg.firewall.default_forward_policy),
-            on_stop: str_to_stop_action(&cfg.firewall.on_stop),
-        }));
+        // 6. Firewall (entries the file gets wrong are left out; see `FirewallFile::to_config`)
+        let firewall_config = Some(Box::new(cfg.firewall.to_config().0));
 
         // 7. PPPoE
         let pppoe_config = Some(Box::new(cfg.pppoe.clone()));

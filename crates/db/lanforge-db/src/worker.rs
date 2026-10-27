@@ -21,7 +21,7 @@ use lanforge_api::config_file::{
     write_toml_atomically,
 };
 use lanforge_core::bus::{
-    DeviceEvent, DnsEvent, FirewallEvent, LanforgeEvent, StorageEvent, SystemEvent, TimedEvent,
+    DeviceEvent, DnsEvent, LanforgeEvent, StorageEvent, SystemEvent, TimedEvent,
 };
 use lanforge_db_core::{
     ApiTokenStore, DeviceStore, DnsUpstreamEntry, LogStore, RaConfigStore, config_keys::*,
@@ -189,11 +189,6 @@ impl DbWorker {
                     tx.set(RA_PREFIXES, &self.ctx.get_ra_prefixes())?;
                     tx.set(RA_RDNSS, &self.ctx.get_ra_rdnss())?;
                     tx.set(RA_DNSSL, &self.ctx.get_ra_dnssl())?;
-                }
-                if self.dirty_sections.contains(SectionSet::FIREWALL)
-                    && let Some(config) = self.ctx.get_firewall_config()
-                {
-                    tx.set(FIREWALL, &config)?;
                 }
                 if self.dirty_sections.contains(SectionSet::DNS) {
                     tx.set(DNS_REWRITES, &self.ctx.get_dns_rewrites())?;
@@ -844,9 +839,6 @@ impl AsyncService for DbWorker {
                         }
                         LanforgeEvent::System(SystemEvent::ConfigRaChanged) => {
                             self.dirty_sections |= SectionSet::RA;
-                        }
-                        LanforgeEvent::Firewall(FirewallEvent::RulesetChanged) => {
-                            self.dirty_sections |= SectionSet::FIREWALL;
                         }
                         LanforgeEvent::System(SystemEvent::ConfigChanged { sections }) => {
                             // File-owned sections are written by the API before they apply.

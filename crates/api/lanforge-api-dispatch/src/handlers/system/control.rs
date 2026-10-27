@@ -225,10 +225,19 @@ impl ClientContext {
     }
 
     pub async fn handle_update_firewall_config(&self, cfg: FirewallConfig) -> Response {
+        let persisted = match self.persist_firewall(&cfg) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("Firewall configuration not saved: {e}");
+                return Response::Error {
+                    error: format!("Firewall configuration not saved: {e}"),
+                };
+            }
+        };
         self.ctx.update_firewall_config(cfg);
 
         Response::Success(SimpleSuccess {
-            message: "Firewall configuration updated successfully".to_string(),
+            message: persisted.message("Firewall configuration"),
         })
     }
 
@@ -269,7 +278,8 @@ impl ClientContext {
         let previous = staged.previous_config.clone().unwrap_or_default();
 
         if let Some(rollback_secs) = req.auto_rollback_secs {
-            // Apply candidate to runtime context and reload kernel ruleset
+            // On trial: applied in memory only. The file keeps the previous config until the
+            // admin confirms, so a restart during the trial window also rolls back.
             self.ctx.update_firewall_config(candidate);
             let _ = self
                 .ctx
@@ -313,12 +323,20 @@ impl ClientContext {
             }))
         } else {
             // Permanent commit without rollback
+            let persisted = match self.persist_firewall(&candidate) {
+                Ok(p) => p,
+                Err(e) => {
+                    return Response::Error {
+                        error: format!("Firewall configuration not saved: {e}"),
+                    };
+                }
+            };
             self.ctx.update_firewall_config(candidate);
             let _ = self.ctx.clear_staged_firewall_transaction(Some(&req.tx_id));
 
             Response::FirewallCommit(Box::new(FirewallCommitResponse {
                 success: true,
-                message: "Firewall configuration committed and persisted successfully".to_string(),
+                message: persisted.message("Firewall configuration"),
                 auto_rollback_active: false,
                 rollback_deadline_secs: None,
             }))
@@ -326,9 +344,27 @@ impl ClientContext {
     }
 
     pub async fn handle_firewall_confirm(&self, tx_id: String) -> Response {
-        let Some(staged) = self.ctx.clear_staged_firewall_transaction(Some(&tx_id)) else {
+        let Some(staged) = self
+            .ctx
+            .get_staged_firewall_transaction()
+            .filter(|s| s.tx_id == tx_id)
+        else {
             return Response::Error {
                 error: format!("No active transaction found with ID '{tx_id}' to confirm"),
+            };
+        };
+        // Saved before the transaction ends: if the file cannot take it, the trial stays
+        // under its auto-rollback.
+        if let Err(e) = self.persist_firewall(&staged.candidate_config) {
+            return Response::Error {
+                error: format!(
+                    "Firewall transaction '{tx_id}' not confirmed, configuration not saved: {e}"
+                ),
+            };
+        }
+        let Some(staged) = self.ctx.clear_staged_firewall_transaction(Some(&tx_id)) else {
+            return Response::Error {
+                error: format!("Firewall transaction '{tx_id}' expired before it was confirmed"),
             };
         };
 

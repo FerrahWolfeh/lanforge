@@ -405,19 +405,8 @@ const KNOWN_LOSSES: &[(&str, &[&str])] = &[
     ),
     ("dns_rewrites", &["/0/id"]),
     ("dns_upstreams", &[]),
-    (
-        "firewall_config",
-        &[
-            "/zones/0/open_ports/0/comment",
-            "/zones/1/open_ports/0/comment",
-            "/zones/1/open_ports/1/comment",
-            "/zones/1/open_ports/2/comment",
-            "/zones/1/open_ports/3/comment",
-            "/zones/1/open_ports/4/comment",
-            "/zones/1/open_ports/5/comment",
-            "/zones/2/open_ports/0/comment",
-        ],
-    ),
+    // Kept as its own file form, now lossless (see the exact tests below).
+    ("firewall_config", &[]),
     (
         "hosts",
         &["/0/ignored_log_domains", "/0/ignored_log_domains/0"],
@@ -482,4 +471,202 @@ fn round_trip_losses_match_the_known_list() {
         report.is_empty(),
         "round trip changed — a migrated section must drop its entries, a new loss is a bug:\n{report}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Firewall: exact (order-sensitive) round trips, on the owner's real configuration
+// ---------------------------------------------------------------------------
+
+/// The owner's live firewall (`lanforge firewall --json`, 2026-10-27; internal addresses
+/// replaced by documentation ones).
+const OWNER_LIVE_FIREWALL: &str = r#"{
+  "bypass_dns": true, "bypass_vowifi": true, "custom_rules_file": null,
+  "default_forward_policy": "Drop", "default_input_policy": "Drop", "enabled": true,
+  "flow_offload": false,
+  "forwardings": [
+    {"from": "internal", "to": "external"}, {"from": "trusted", "to": "external"},
+    {"from": "trusted", "to": "internal"}, {"from": "internal", "to": "trusted"}
+  ],
+  "mode": "full", "on_stop": "lockdown",
+  "port_forwards": [
+    {"comment": "qBittorrent", "enable_hairpin": true, "external_port": 6881,
+     "internal_ip": "192.0.2.128", "internal_port": 6881, "protocol": "Tcp", "src_zone": "external"},
+    {"comment": "qBittorrent [IPv6]", "enable_hairpin": true, "external_port": 6881,
+     "internal_ip": "2001:db8:cafe:3731::501", "internal_port": 6881, "protocol": "Tcp", "src_zone": "external"}
+  ],
+  "table_name": "lanforge",
+  "zones": [
+    {"allowed_subnets": [], "forward_policy": "Drop", "input_policy": "Drop", "interfaces": ["wan0"],
+     "masquerade": true, "mtu_fix": true, "name": "external", "open_ports": []},
+    {"allowed_subnets": [], "forward_policy": "Accept", "input_policy": "Accept", "interfaces": ["lan0"],
+     "masquerade": false, "mtu_fix": false, "name": "internal", "open_ports": [
+       {"comment": null, "port": 22, "protocol": "Tcp"}, {"comment": null, "port": 53, "protocol": "Udp"},
+       {"comment": null, "port": 53, "protocol": "Tcp"}, {"comment": null, "port": 67, "protocol": "Udp"},
+       {"comment": null, "port": 8088, "protocol": "Tcp"}, {"comment": null, "port": 9090, "protocol": "Tcp"}]},
+    {"allowed_subnets": [], "forward_policy": "Accept", "input_policy": "Accept",
+     "interfaces": ["tailscale0", "podman*"], "masquerade": false, "mtu_fix": false,
+     "name": "trusted", "open_ports": []}
+  ]
+}"#;
+
+/// The owner's `[firewall]` as the old binaries wrote it (same address replacement).
+const OWNER_FILE_FIREWALL: &str = r#"
+[firewall]
+enabled = true
+flow_offload = false
+bypass_dns = true
+bypass_vowifi = true
+default_input_policy = "drop"
+default_forward_policy = "drop"
+
+[firewall.zones.external]
+interfaces = ["wan0"]
+input = "drop"
+forward = "drop"
+masquerade = true
+mtu_fix = true
+
+[firewall.zones.internal]
+interfaces = ["lan0"]
+input = "accept"
+forward = "accept"
+masquerade = false
+mtu_fix = false
+open_ports = ["22/tcp", "53/udp", "53/tcp", "67/udp", "8088/tcp", "9090/tcp"]
+
+[firewall.zones.trusted]
+interfaces = ["tailscale0", "podman*"]
+input = "accept"
+forward = "accept"
+masquerade = false
+mtu_fix = false
+
+[firewall.port_forwards.qBittorrent]
+proto = "tcp"
+port = 6881
+to = "192.0.2.128"
+to_port = 6881
+description = "qBittorrent"
+
+[firewall.port_forwards."qBittorrent [IPv6]"]
+proto = "tcp"
+port = 6881
+to = "2001:db8:cafe:3731::501"
+to_port = 6881
+description = "qBittorrent [IPv6]"
+"#;
+
+fn firewall_through_file(
+    fw: &lanforge_types::network::firewall::FirewallConfig,
+) -> (
+    lanforge_types::network::firewall::FirewallConfig,
+    Vec<String>,
+) {
+    let file = ConfigFile {
+        firewall: super::FirewallFile::from_config(fw),
+        ..ConfigFile::default()
+    };
+    let rendered = file.render_full().unwrap();
+    ConfigFile::parse(&rendered)
+        .unwrap_or_else(|e| panic!("{e}\n{rendered}"))
+        .firewall
+        .to_config()
+}
+
+#[test]
+fn owner_file_reads_as_the_live_firewall() {
+    let live: lanforge_types::network::firewall::FirewallConfig =
+        serde_json::from_str(OWNER_LIVE_FIREWALL).unwrap();
+    let (from_file, issues) = ConfigFile::parse(OWNER_FILE_FIREWALL)
+        .unwrap()
+        .firewall
+        .to_config();
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(from_file, live);
+}
+
+#[test]
+fn owner_live_firewall_survives_the_cut_over_exactly() {
+    let live: lanforge_types::network::firewall::FirewallConfig =
+        serde_json::from_str(OWNER_LIVE_FIREWALL).unwrap();
+    let (back, issues) = firewall_through_file(&live);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(back, live);
+}
+
+#[test]
+fn firewall_order_comments_and_shared_labels_survive() {
+    use lanforge_types::network::firewall::{FirewallConfig, HostPortRule, L4Protocol};
+
+    let mut fw: FirewallConfig = serde_json::from_str(OWNER_LIVE_FIREWALL).unwrap();
+    // Zones out of name order, a commented open port, two forwards with one comment.
+    fw.zones.reverse();
+    fw.zones[0].open_ports.push(HostPortRule {
+        comment: Some("Plex".into()),
+        port: 32400,
+        protocol: L4Protocol::Both,
+    });
+    let mut twin = fw.port_forwards[0].clone();
+    twin.external_port = 6882;
+    twin.internal_port = 6882;
+    fw.port_forwards.push(twin);
+    fw.port_forwards[1].comment = Some("qBittorrent".into());
+
+    let (back, issues) = firewall_through_file(&fw);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(back, fw);
+}
+
+#[test]
+fn every_firewall_field_survives_exactly() {
+    let export = base();
+    let (export, _) = mutate_all(&export, "/firewall_config");
+    let fw = export.firewall_config.unwrap();
+    let (back, issues) = firewall_through_file(&fw);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(back, *fw);
+}
+
+#[test]
+fn wrong_firewall_values_close_instead_of_guessing() {
+    use lanforge_types::network::firewall::{FirewallMode, FirewallPolicy, FirewallStopAction};
+
+    let text = r#"
+[firewall]
+mode = "ful"
+on_stop = "keep"
+default_input_policy = "allow"
+
+[firewall.zones.external]
+interfaces = ["wan0"]
+input = "acept"
+open_ports = ["22/tpc", "443"]
+allowed_subnets = ["10.0.0.0/33"]
+
+[firewall.port_forwards.nas]
+port = 445
+to = "192.0.2.300"
+
+[firewall.port_forwards.game]
+proto = "sctp"
+port = 7777
+to = "192.0.2.7"
+
+[firewall.port_forwards.ok]
+port = 8080
+to = "192.0.2.8"
+"#;
+    let (fw, issues) = ConfigFile::parse(text).unwrap().firewall.to_config();
+    assert_eq!(fw.mode, FirewallMode::Full);
+    assert_eq!(fw.on_stop, FirewallStopAction::Lockdown);
+    assert_eq!(fw.default_input_policy, FirewallPolicy::Drop);
+    assert_eq!(fw.zones[0].input_policy, FirewallPolicy::Drop);
+    assert!(
+        fw.zones[0].open_ports.is_empty(),
+        "nothing opened for bad ports"
+    );
+    assert!(fw.zones[0].allowed_subnets.is_empty());
+    assert_eq!(fw.port_forwards.len(), 1, "only the valid forward");
+    assert_eq!(fw.port_forwards[0].external_port, 8080);
+    assert_eq!(issues.len(), 9, "{issues:#?}");
 }

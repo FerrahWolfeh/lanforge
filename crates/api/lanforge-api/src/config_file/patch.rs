@@ -215,7 +215,7 @@ input = "accept"
         let mut cfg = ConfigFile::default();
         cfg.system.iface = "end0".to_string();
         cfg.system.search_domains = vec!["lan".to_string()];
-        cfg.firewall.zones.insert(
+        cfg.firewall.zones.push((
             "lan".to_string(),
             super::super::sections::FirewallZoneFile {
                 interfaces: vec!["br0".to_string(), "lan0".to_string()],
@@ -223,10 +223,12 @@ input = "accept"
                 forward: "accept".to_string(),
                 masquerade: false,
                 mtu_fix: false,
-                open_ports: vec!["22/tcp".to_string()],
+                open_ports: vec![super::super::sections::OpenPortFile::Short(
+                    "22/tcp".to_string(),
+                )],
                 allowed_subnets: Vec::new(),
             },
-        );
+        ));
 
         // Patch ONLY firewall
         patch_sections(&mut doc, &cfg, SectionSet::FIREWALL).unwrap();
