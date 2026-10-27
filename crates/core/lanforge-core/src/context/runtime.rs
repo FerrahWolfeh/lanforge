@@ -1,7 +1,9 @@
 use crate::bus::{EventBus, LanforgeEvent, SystemEvent};
 use crate::context::caps::CompiledCaps;
 use crate::context::state::network::DhcpPoolStats;
-use crate::context::{DbWorkerMetrics, DnsHandle, EventCounters, LanforgeContext, StorageHandle};
+use crate::context::{
+    DbWorkerMetrics, DnsHandle, DnsRequestRx, EventCounters, LanforgeContext, StorageHandle,
+};
 use crate::error::CoreError;
 use crate::service::StatusProvider;
 use arc_swap::ArcSwapOption;
@@ -62,6 +64,8 @@ pub struct ServiceRuntime {
     pub last_db_flush: RwLock<Option<SystemTime>>,
     pub start_time: Instant,
     pub dns_handle: RwLock<Option<DnsHandle>>,
+    /// Receiving end of `dns_handle`, parked here while no DNS instance is serving it.
+    pub dns_requests: parking_lot::Mutex<Option<DnsRequestRx>>,
     pub storage_handle: RwLock<Option<StorageHandle>>,
     pub config_path: RwLock<Option<PathBuf>>,
     pub config_writable: AtomicBool,
@@ -100,6 +104,7 @@ impl ServiceRuntime {
             last_db_flush: RwLock::new(None),
             start_time: Instant::now(),
             dns_handle: RwLock::new(None),
+            dns_requests: parking_lot::Mutex::new(None),
             storage_handle: RwLock::new(None),
             config_path: RwLock::new(None),
             config_writable: AtomicBool::new(true),

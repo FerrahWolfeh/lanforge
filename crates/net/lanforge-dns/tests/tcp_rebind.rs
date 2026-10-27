@@ -122,3 +122,72 @@ async fn live_listen_change_restarts_dns_on_the_new_port() {
         .expect("service alive");
     let _ = timeout(Duration::from_secs(2), serve).await;
 }
+
+/// Internal callers (API, db worker) hold the same `DnsHandle` across a DNS restart: a request
+/// sent while no instance is serving waits and is answered by the next one, instead of failing
+/// on the closed channel of the instance that stopped.
+#[tokio::test]
+async fn dns_requests_wait_through_a_restart() {
+    use lanforge_types::network::dns::{DnsRequest, DnsResponse};
+
+    let ctx = init_test_context();
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, free_port()));
+    ctx.update_dns_listen(DnsListenConfig {
+        listen: ListenConfig::Single(addr),
+        ..DnsListenConfig::default()
+    });
+    let cfg = DnsConfig {
+        enabled: true,
+        ..mock_config()
+    };
+    let start = || {
+        let ctx = ctx.clone();
+        let mut service = DnsService::new(cfg.clone(), ctx.clone());
+        let (cmd_tx, cmd_rx) = mpsc::channel(4);
+        let h = ServiceHandle::with_command_channel(ServiceId::Dns, ctx.clone(), cmd_rx);
+        let serve = tokio::spawn(async move { service.serve(&ctx, &h).await });
+        (cmd_tx, serve)
+    };
+
+    let (cmd_tx, serve) = start();
+    wait_for_service_online(&ctx, ServiceId::Dns).await;
+    let handle = ctx.dns_handle().expect("DNS handle registered");
+    assert!(matches!(
+        handle.send_request(DnsRequest::Stats).await,
+        Ok(DnsResponse::Stats(_))
+    ));
+
+    cmd_tx
+        .send(ServiceCommand::Stop)
+        .await
+        .expect("service alive");
+    timeout(Duration::from_secs(2), serve)
+        .await
+        .expect("serve returns on Stop")
+        .expect("join")
+        .expect("serve ok");
+
+    // Restart window: the request is sent while nothing serves the queue.
+    let pending = tokio::spawn(async move { handle.send_request(DnsRequest::Stats).await });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !pending.is_finished(),
+        "the request waits instead of failing"
+    );
+
+    let (cmd_tx, serve) = start();
+    let answer = timeout(Duration::from_secs(3), pending)
+        .await
+        .expect("answered by the next instance")
+        .expect("join");
+    assert!(
+        matches!(answer, Ok(DnsResponse::Stats(_))),
+        "{:?}",
+        answer.err()
+    );
+    cmd_tx
+        .send(ServiceCommand::Stop)
+        .await
+        .expect("service alive");
+    let _ = timeout(Duration::from_secs(2), serve).await;
+}

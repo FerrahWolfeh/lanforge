@@ -85,7 +85,7 @@ pub use self::config::{
     ApplyReport, ConfigDelta, ConfigPatch, ConfigStore, ConfigSubscription, DynamicConfig,
     SubscribableSection,
 };
-pub use self::dns_handle::DnsHandle;
+pub use self::dns_handle::{DnsHandle, DnsRequestRx};
 pub use self::runtime::ServiceRuntime;
 pub use self::storage_handle::{StorageCommand, StorageHandle};
 

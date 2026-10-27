@@ -13,7 +13,7 @@ lanforge-types = { workspace = true }
 # Workspace
 tracing = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "sync"] }
+tokio = { workspace = true, features = ["macros", "sync", "time"] }
 serde = { workspace = true, features = ["rc"] }
 hotpath = { workspace = true, optional = true }
 smallvec = { workspace = true }

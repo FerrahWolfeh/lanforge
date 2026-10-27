@@ -14,7 +14,7 @@ use lanforge_types::update::{DhcpV4PoolUpdate, DhcpV6PoolUpdate};
 use smallvec::SmallVec;
 
 use crate::context::state::network::DhcpPoolStats;
-use crate::context::{DnsHandle, LanforgeContext, StorageHandle};
+use crate::context::{DnsHandle, DnsRequestRx, LanforgeContext, StorageHandle};
 use crate::error::CoreError;
 use crate::service::StatusProvider;
 
@@ -136,6 +136,25 @@ impl LanforgeContext {
     /// Sets the decoupled DNS handle.
     pub fn set_dns_handle(&self, handle: DnsHandle) {
         *self.inner.runtime.dns_handle.write() = Some(handle);
+    }
+
+    /// Hands the DNS request queue to a starting DNS instance. The queue (and the `DnsHandle`
+    /// senders) outlive a DNS restart: requests sent meanwhile wait and are answered by the next
+    /// instance. Creates the queue on first use, or anew if the previous receiver was lost.
+    #[must_use]
+    pub fn take_dns_requests(&self) -> DnsRequestRx {
+        let parked = self.inner.runtime.dns_requests.lock().take();
+        if let Some(rx) = parked {
+            return rx;
+        }
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        self.set_dns_handle(DnsHandle::new(tx));
+        rx
+    }
+
+    /// Parks the DNS request queue when a DNS instance stops, for the next one.
+    pub fn return_dns_requests(&self, rx: DnsRequestRx) {
+        *self.inner.runtime.dns_requests.lock() = Some(rx);
     }
 
     /// Returns the decoupled DNS handle, if available.

@@ -355,9 +355,9 @@ impl AsyncService for DnsService {
         let dns_ctx = self.init_dns_context().await?;
         ctx.provide_shared(Arc::clone(&dns_ctx));
 
-        let (tx, mut mpsc_rx) = tokio::sync::mpsc::channel(100);
-        let dns_handle = lanforge_core::context::DnsHandle::new(tx);
-        ctx.set_dns_handle(dns_handle);
+        // The request queue outlives this instance: callers keep the same `DnsHandle` and wait
+        // through a restart instead of failing on a closed channel.
+        let mut mpsc_rx = ctx.take_dns_requests();
 
         let is_inert = self.custom_transport.as_ref().is_some_and(|t| t.is_inert());
         let parallelism = if is_inert {
@@ -482,13 +482,25 @@ impl AsyncService for DnsService {
         let mut rewrites_sub = ctx.config_subscription::<Vec<RewriteRule>>();
         let mut filter_subs = FilterSubscriptions::new(ctx);
 
+        let (mpsc_stop_tx, mut mpsc_stop_rx) = tokio::sync::oneshot::channel::<()>();
         let mpsc_worker = {
             let dns_ctx = Arc::clone(&dns_ctx);
             tokio::spawn(async move {
-                while let Some((req, resp_tx)) = mpsc_rx.recv().await {
-                    let resp = handle_dns_request(req, Arc::clone(&dns_ctx)).await;
-                    let _ = resp_tx.send(resp);
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = &mut mpsc_stop_rx => break,
+                        msg = mpsc_rx.recv() => match msg {
+                            Some((req, resp_tx)) => {
+                                let resp = handle_dns_request(req, Arc::clone(&dns_ctx)).await;
+                                let _ = resp_tx.send(resp);
+                            }
+                            None => break,
+                        },
+                    }
                 }
+                // Handed back so the next instance serves whatever queued up meanwhile.
+                mpsc_rx
             })
         };
 
@@ -629,7 +641,6 @@ impl AsyncService for DnsService {
         let mut tasks = workers;
         tasks.extend(tcp_worker);
         tasks.push(cache_worker);
-        tasks.push(mpsc_worker);
         #[cfg(feature = "dot")]
         tasks.extend(dot_worker);
         #[cfg(feature = "doq")]
@@ -640,6 +651,10 @@ impl AsyncService for DnsService {
             task.abort();
         }
         join_all(tasks).await;
+        let _ = mpsc_stop_tx.send(());
+        if let Ok(rx) = mpsc_worker.await {
+            ctx.return_dns_requests(rx);
+        }
         ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
 
         Ok(())
