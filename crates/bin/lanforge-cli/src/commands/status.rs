@@ -398,6 +398,7 @@ mod tests {
                     transport: None,
                 },
             ],
+            config_issues: Vec::new(),
         };
 
         let printer = Printer::new(false, false, false);
