@@ -486,19 +486,27 @@ impl AsyncService for DnsService {
         let mpsc_worker = {
             let dns_ctx = Arc::clone(&dns_ctx);
             tokio::spawn(async move {
+                // Requests run concurrently: one waiting on an upstream (a diagnostic query)
+                // must not hold up stats or adblock toggles behind it.
+                let mut in_flight = tokio::task::JoinSet::new();
                 loop {
                     tokio::select! {
                         biased;
                         _ = &mut mpsc_stop_rx => break,
                         msg = mpsc_rx.recv() => match msg {
                             Some((req, resp_tx)) => {
-                                let resp = handle_dns_request(req, Arc::clone(&dns_ctx)).await;
-                                let _ = resp_tx.send(resp);
+                                let dns_ctx = Arc::clone(&dns_ctx);
+                                in_flight.spawn(async move {
+                                    let _ = resp_tx.send(handle_dns_request(req, dns_ctx).await);
+                                });
                             }
                             None => break,
                         },
+                        Some(_) = in_flight.join_next(), if !in_flight.is_empty() => {}
                     }
                 }
+                // In-flight requests belong to this instance: their callers get an error.
+                in_flight.shutdown().await;
                 // Handed back so the next instance serves whatever queued up meanwhile.
                 mpsc_rx
             })

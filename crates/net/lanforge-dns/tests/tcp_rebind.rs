@@ -289,3 +289,69 @@ async fn idle_tcp_connection_is_closed() {
         .expect("service alive");
     let _ = timeout(Duration::from_secs(2), serve).await;
 }
+
+/// `DnsHandle` requests were served one at a time: a diagnostic query stuck on a silent
+/// upstream held up every other request (stats, adblock toggles, cache) for its whole timeout,
+/// freezing the WebUI's DNS pages.
+#[tokio::test]
+async fn slow_handle_request_does_not_block_others() {
+    use lanforge_types::network::dns::upstream::UpstreamTarget;
+    use lanforge_types::network::dns::{DnsRecordType, DnsRequest, DnsResponse};
+
+    let silent = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let silent_target = format!("udp://{}", silent.local_addr().unwrap())
+        .parse::<UpstreamTarget>()
+        .unwrap();
+
+    let ctx = init_test_context();
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, free_port()));
+    ctx.update_dns_listen(DnsListenConfig {
+        listen: ListenConfig::Single(addr),
+        ..DnsListenConfig::default()
+    });
+    ctx.update_dns_upstreams(vec![silent_target]);
+    let mut service = DnsService::new(
+        DnsConfig {
+            enabled: true,
+            ..mock_config()
+        },
+        ctx.clone(),
+    );
+    let (cmd_tx, cmd_rx) = mpsc::channel(4);
+    let h = ServiceHandle::with_command_channel(ServiceId::Dns, ctx.clone(), cmd_rx);
+    let ctx_serve = ctx.clone();
+    let serve = tokio::spawn(async move { service.serve(&ctx_serve, &h).await });
+    wait_for_service_online(&ctx, ServiceId::Dns).await;
+    let handle = ctx.dns_handle().expect("DNS handle registered");
+
+    let slow_handle = handle.clone();
+    let slow = tokio::spawn(async move {
+        slow_handle
+            .send_request(DnsRequest::Query {
+                name: "stuck.example.org".into(),
+                qtype: DnsRecordType::A,
+            })
+            .await
+    });
+    let mut probe = [0u8; 64];
+    let _ = silent.recv_from(&mut probe).await; // the diagnostic query is in flight
+
+    let stats = timeout(
+        Duration::from_millis(500),
+        handle.send_request(DnsRequest::Stats),
+    )
+    .await
+    .expect("Stats must not wait behind a slow query");
+    assert!(matches!(stats, Ok(DnsResponse::Stats(_))));
+
+    slow.abort();
+    cmd_tx
+        .send(ServiceCommand::Stop)
+        .await
+        .expect("service alive");
+    timeout(Duration::from_secs(2), serve)
+        .await
+        .expect("serve returns on Stop with a request in flight")
+        .expect("join")
+        .expect("serve ok");
+}
