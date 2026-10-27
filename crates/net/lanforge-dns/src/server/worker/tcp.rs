@@ -12,6 +12,13 @@ use tokio::net::TcpStream;
 use tokio::task::{JoinHandle, JoinSet};
 use tracing::{error, trace};
 
+/// An open connection with no complete query for this long is closed (RFC 7766 §6.2.3); `DoT`
+/// uses the same idle bound.
+const TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Connections served at once per listener; more are refused so clients cannot exhaust the
+/// daemon's tasks and file descriptors.
+const MAX_TCP_CONNECTIONS: usize = 128;
+
 /// Spawns the plain-TCP DNS listeners.
 ///
 /// Listeners and their connections are owned by the returned task (no detached tasks), so
@@ -38,6 +45,11 @@ async fn serve_listener(listener: DualTcpListener, addr: SocketAddr, ctx: Arc<Dn
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, src)) => {
+                    if connections.len() >= MAX_TCP_CONNECTIONS {
+                        trace!(%src, "TCP connection limit reached, refusing");
+                        drop(stream);
+                        continue;
+                    }
                     connections.spawn(handle_connection(stream, src, Arc::clone(&ctx)));
                 }
                 Err(e) => {
@@ -53,14 +65,20 @@ async fn serve_listener(listener: DualTcpListener, addr: SocketAddr, ctx: Arc<Dn
 
 async fn handle_connection(mut stream: TcpStream, src: SocketAddr, task_ctx: Arc<DnsContext>) {
     let mut len_buf = [0u8; 2];
-    while stream.read_exact(&mut len_buf).await.is_ok() {
+    while matches!(
+        tokio::time::timeout(TCP_IDLE_TIMEOUT, stream.read_exact(&mut len_buf)).await,
+        Ok(Ok(_))
+    ) {
         let len = u16::from_be_bytes(len_buf) as usize;
         if len > 4096 {
             break;
         }
 
         let mut data = vec![0u8; len];
-        if stream.read_exact(&mut data).await.is_err() {
+        if !matches!(
+            tokio::time::timeout(TCP_IDLE_TIMEOUT, stream.read_exact(&mut data)).await,
+            Ok(Ok(_))
+        ) {
             break;
         }
 

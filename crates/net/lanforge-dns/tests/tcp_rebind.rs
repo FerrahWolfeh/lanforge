@@ -249,3 +249,43 @@ async fn stop_releases_udp_socket_with_upstream_queries_in_flight() {
     let rebind = std::net::UdpSocket::bind(addr);
     assert!(rebind.is_ok(), "UDP {addr} still held: {:?}", rebind.err());
 }
+
+/// An idle DNS-over-TCP connection is closed by the server (RFC 7766 §6.2.3). It used to stay
+/// open forever, one task and one fd each: a misbehaving client could exhaust the daemon's fds.
+#[tokio::test]
+async fn idle_tcp_connection_is_closed() {
+    use tokio::io::AsyncReadExt;
+
+    let ctx = init_test_context();
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, free_port()));
+    ctx.update_dns_listen(DnsListenConfig {
+        listen: ListenConfig::Single(addr),
+        ..DnsListenConfig::default()
+    });
+    let mut service = DnsService::new(
+        DnsConfig {
+            enabled: true,
+            ..mock_config()
+        },
+        ctx.clone(),
+    );
+    let (cmd_tx, cmd_rx) = mpsc::channel(4);
+    let h = ServiceHandle::with_command_channel(ServiceId::Dns, ctx.clone(), cmd_rx);
+    let ctx_serve = ctx.clone();
+    let serve = tokio::spawn(async move { service.serve(&ctx_serve, &h).await });
+    wait_for_service_online(&ctx, ServiceId::Dns).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let mut idle = tokio::net::TcpStream::connect(addr).await.expect("connect");
+    let mut byte = [0u8; 1];
+    let read = timeout(Duration::from_secs(15), idle.read(&mut byte))
+        .await
+        .expect("server must close an idle connection");
+    assert_eq!(read.expect("clean close"), 0, "EOF from the server");
+
+    cmd_tx
+        .send(ServiceCommand::Stop)
+        .await
+        .expect("service alive");
+    let _ = timeout(Duration::from_secs(2), serve).await;
+}
