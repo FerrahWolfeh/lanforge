@@ -6,6 +6,8 @@
 use std::future::Future;
 use std::io::ErrorKind;
 
+use tokio::sync::broadcast::error::RecvError;
+
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
@@ -462,7 +464,17 @@ impl AsyncService for NftService {
                     }
 
                     // PPPoE WAN state updates
-                    Ok(event) = pppoe_rx.recv() => {
+                    event_res = pppoe_rx.recv() => {
+                        let event = match event_res {
+                            Ok(event) => event,
+                            // A missed SessionUp/Down: take the WAN from the live snapshot.
+                            Err(RecvError::Lagged(_)) => {
+                                self.active_wan = ctx.wan_snapshot().ifname;
+                                self.reapply(&ctx, "bus_lagged").await;
+                                continue;
+                            }
+                            Err(RecvError::Closed) => break,
+                        };
                         match event.event {
                             LanforgeEvent::Pppoe(PppoeEvent::SessionUp(session)) => {
                                 if self.active_wan.as_deref() != Some(session.interface.as_str()) {
@@ -483,7 +495,17 @@ impl AsyncService for NftService {
                     }
 
                     // Firewall events: dynamic port open/release requests or config changes
-                    Ok(event) = fw_rx.recv() => {
+                    event_res = fw_rx.recv() => {
+                        let event = match event_res {
+                            Ok(event) => event,
+                            // Whatever was missed (config change, port open/release), the
+                            // current state is authoritative: reapplying is idempotent.
+                            Err(RecvError::Lagged(_)) => {
+                                self.reapply(&ctx, "bus_lagged").await;
+                                continue;
+                            }
+                            Err(RecvError::Closed) => break,
+                        };
                         match event.event {
                             LanforgeEvent::Firewall(FirewallEvent::PortOpenRequested(req)) => {
                                 debug!(
@@ -513,7 +535,12 @@ impl AsyncService for NftService {
                     }
 
                     // System events: config reloads or shutdown
-                    Ok(event) = sys_rx.recv() => {
+                    event_res = sys_rx.recv() => {
+                        let event = match event_res {
+                            Ok(event) => event,
+                            Err(RecvError::Lagged(_)) => continue,
+                            Err(RecvError::Closed) => break,
+                        };
                         match event.event {
                             LanforgeEvent::System(SystemEvent::ReloadConfig) => {
                                 debug!("Firewall configuration reload requested");

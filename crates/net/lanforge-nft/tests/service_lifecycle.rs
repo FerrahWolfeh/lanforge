@@ -756,3 +756,70 @@ async fn test_firewall_start_with_wan_already_up_binds_wan() {
         "startup ruleset must bind the live WAN"
     );
 }
+
+/// AGENTS.md async hygiene: a lagged receiver must not silently drop state. A `RulesetChanged`
+/// (or `PortOpenRequested`, bursty at boot) lost to a lagged firewall topic left the old ruleset in
+/// the kernel — a new port forward simply never appeared. On lag the firewall must resync.
+#[tokio::test]
+async fn test_firewall_resyncs_after_a_lagged_bus() {
+    let (ctx, bus) = create_test_context();
+    // External-zone port forwards only compile with a WAN interface.
+    ctx.set_wan_snapshot(WanSnapshot {
+        state: WanState::Up,
+        ifname: Some("ppp0".into()),
+        generation: 1,
+        ..Default::default()
+    });
+    let mut service = NftService::inert();
+    service.init(&ctx).await.expect("Init must succeed");
+    let probe = service.clone();
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // The config change is announced, then buried under a burst the receiver cannot keep up with.
+    let mut cfg = ctx.get_firewall_config().unwrap();
+    cfg.port_forwards.push(PortForwardRule {
+        comment: Some("late".into()),
+        src_zone: "external".into(),
+        internal_ip: "192.168.1.77".parse().unwrap(),
+        external_port: 7777,
+        internal_port: 7777,
+        protocol: L4Protocol::Tcp,
+        enable_hairpin: false,
+    });
+    ctx.update_firewall_config(cfg);
+    for _ in 0..1000 {
+        let _ = bus.publish(LanforgeEvent::Firewall(FirewallEvent::RulesetApplied(
+            Box::new(FirewallAppliedSummary {
+                table: "noise".into(),
+                wan_iface: None,
+                rules_count: 0,
+                flow_offload: false,
+            }),
+        )));
+    }
+
+    let applied = timeout(Duration::from_millis(500), async {
+        loop {
+            if probe
+                .last_applied_payload()
+                .is_some_and(|p| p.contains("192.168.1.77"))
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(
+        applied.is_ok(),
+        "port forward lost to a lagged firewall topic"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(1), serve_handle).await;
+}
