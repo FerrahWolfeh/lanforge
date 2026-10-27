@@ -337,8 +337,14 @@ export const me = async (): Promise<UserInfo> => {
 	if (res?.data) return res.data as UserInfo;
 	return res as UserInfo;
 };
-export const changePassword = (current_password: string, new_password: string) =>
-	post<void>('/auth/change-password', { current_password, new_password });
+/** Changing the password ends every session of the user; keep this one on the new token. */
+export const changePassword = async (current_password: string, new_password: string) => {
+	const res = await post<{ message: string; token?: string }>('/auth/change-password', {
+		current_password,
+		new_password
+	});
+	if (res?.token) setClientToken(res.token);
+};
 export const listTokens = async (): Promise<AuthToken[]> =>
 	extractList<AuthToken>(await get<any>('/auth/tokens'), 'tokens');
 

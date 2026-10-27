@@ -1541,7 +1541,7 @@ fn state_with_admin(db: &Arc<LanforgeDb>) -> (AppState, String) {
             0,
         )
         .unwrap();
-    let session = state.auth.generate_token("admin", "admin").unwrap();
+    let session = state.auth.generate_token("admin", "admin", 0).unwrap();
     (state, session)
 }
 
@@ -1935,4 +1935,96 @@ async fn test_admin_needs_reauthentication_for_account_changes() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+}
+
+// ---------------------------------------------------------------------------
+// Session revocation — a password change, reset or user deletion ends sessions
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_password_change_ends_other_sessions() {
+    let router = authz_app().await;
+    let creds = json!({"username": "admin", "password": ADMIN_PASSWORD});
+    let (_, stolen) = login(&router, creds.clone()).await;
+    let (_, mine) = login(&router, creds).await;
+
+    let (status, body) = send(
+        &router,
+        "POST",
+        "/api/v1/auth/change-password",
+        &mine,
+        None,
+        json!({"current_password": ADMIN_PASSWORD, "new_password": "brand-new-pw"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let renewed = body["data"]["token"].as_str().unwrap().to_string();
+
+    let (status, _) = send(&router, "GET", "/api/v1/status", &stolen, None, json!(null)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "old sessions must end");
+    let (status, _) = send(
+        &router,
+        "GET",
+        "/api/v1/status",
+        &renewed,
+        None,
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the changer keeps a session");
+}
+
+#[tokio::test]
+async fn test_admin_reset_and_delete_end_the_users_sessions() {
+    let router = authz_app().await;
+    let (_, admin) = login(
+        &router,
+        json!({"username": "admin", "password": ADMIN_PASSWORD}),
+    )
+    .await;
+    let (_, elevation) = elevate(&router, &admin, ADMIN_PASSWORD).await;
+    let (_, viewer) = login(
+        &router,
+        json!({"username": "viewer", "password": ADMIN_PASSWORD}),
+    )
+    .await;
+
+    let (status, _) = send(
+        &router,
+        "PUT",
+        "/api/v1/users/viewer/password",
+        &admin,
+        Some(&elevation),
+        json!({"password": "reset-by-admin"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(&router, "GET", "/api/v1/status", &viewer, None, json!(null)).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "reset must end the session"
+    );
+
+    let (_, viewer) = login(
+        &router,
+        json!({"username": "viewer", "password": "reset-by-admin"}),
+    )
+    .await;
+    let (status, _) = send(
+        &router,
+        "DELETE",
+        "/api/v1/users/viewer",
+        &admin,
+        Some(&elevation),
+        json!(null),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(&router, "GET", "/api/v1/status", &viewer, None, json!(null)).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a deleted user is signed out"
+    );
 }

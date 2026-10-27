@@ -34,6 +34,11 @@ pub struct Claims {
     /// Elevation token (re-authentication for sensitive actions), never a session.
     #[serde(default)]
     pub elev: bool,
+    /// The user's credential version (`updated_at`) when the session was issued: a password
+    /// or role change bumps it and ends the session. Compared for equality, so a wrong
+    /// clock (an SBC without RTC before NTP) cannot lock users out.
+    #[serde(default)]
+    pub uv: i64,
 }
 
 /// Header carrying the elevation token that sensitive actions require.
@@ -89,14 +94,15 @@ impl AuthManager {
         self.has_users.store(val, Ordering::Relaxed);
     }
 
-    pub fn generate_token(&self, username: &str, role: &str) -> HttpResult<String> {
-        self.generate_token_with_ttl(username, role, 86400) // Default 24 hours
+    pub fn generate_token(&self, username: &str, role: &str, version: i64) -> HttpResult<String> {
+        self.generate_token_with_ttl(username, role, version, 86400) // Default 24 hours
     }
 
     pub fn generate_token_with_ttl(
         &self,
         username: &str,
         role: &str,
+        version: i64,
         ttl_secs: u64,
     ) -> HttpResult<String> {
         let expiration = SystemTime::now()
@@ -111,6 +117,7 @@ impl AuthManager {
             exp: usize::try_from(expiration)
                 .map_err(|_| HttpError::Time("Expiration timestamp too large".into()))?,
             elev: false,
+            uv: version,
         };
 
         Ok(encode(&Header::default(), &claims, &self.encoding_key)?)
@@ -129,6 +136,7 @@ impl AuthManager {
             exp: usize::try_from(expiration)
                 .map_err(|_| HttpError::Time("Expiration timestamp too large".into()))?,
             elev: true,
+            uv: 0,
         };
         Ok(encode(&Header::default(), &claims, &self.encoding_key)?)
     }
@@ -244,6 +252,29 @@ pub fn looks_like_jwt(token: &str) -> bool {
     dots == 2
 }
 
+/// Resolves a valid session to its user as stored now: a deleted user, or one whose
+/// password or role changed since the session was issued, is no longer signed in, and the
+/// role is the current one, not the one in the token.
+fn session_user(claims: &Claims, db: &dyn DatabaseStore) -> HttpResult<AuthenticatedUser> {
+    match db.get_user_by_username(&claims.sub) {
+        Ok(Some(user)) if user.updated_at == claims.uv => Ok(AuthenticatedUser {
+            name: user.username,
+            role: user.role.as_str().to_string(),
+            method: AuthMethod::Jwt,
+            scopes: ApiScopes::new(),
+        }),
+        Ok(_) => Err(HttpError::Auth(
+            "Session expired, please log in again".into(),
+        )),
+        Err(e) => {
+            error!("Database error during session validation: {e}");
+            Err(HttpError::ServiceUnavailable(
+                "persistence unavailable".into(),
+            ))
+        }
+    }
+}
+
 pub fn authenticate_token(
     token: &str,
     auth_manager: &AuthManager,
@@ -253,12 +284,7 @@ pub fn authenticate_token(
     if looks_like_jwt(token)
         && let Ok(claims) = auth_manager.validate_session(token)
     {
-        return Ok(AuthenticatedUser {
-            name: claims.sub,
-            role: claims.role,
-            method: AuthMethod::Jwt,
-            scopes: ApiScopes::new(),
-        });
+        return session_user(&claims, db);
     }
 
     let now = SystemTime::now()
@@ -281,12 +307,7 @@ pub fn authenticate_token(
             if !looks_like_jwt(token)
                 && let Ok(claims) = auth_manager.validate_session(token)
             {
-                return Ok(AuthenticatedUser {
-                    name: claims.sub,
-                    role: claims.role,
-                    method: AuthMethod::Jwt,
-                    scopes: ApiScopes::new(),
-                });
+                return session_user(&claims, db);
             }
             Err(HttpError::Auth("Invalid or expired token".into()))
         }

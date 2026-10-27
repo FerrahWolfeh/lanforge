@@ -7,7 +7,7 @@ async fn test_auth_manager_token_lifecycle() {
 
     // Generate
     let token = auth
-        .generate_token("admin", "admin")
+        .generate_token("admin", "admin", 0)
         .expect("Token generation failed");
     assert_ne!(token, "");
 
@@ -27,7 +27,7 @@ async fn test_auth_token_expiration() {
     let auth = AuthManager::new();
     // Since we can't easily mock time in jsonwebtoken without more effort,
     // we just verify that exp is set in the future.
-    let token = auth.generate_token("admin", "admin").unwrap();
+    let token = auth.generate_token("admin", "admin", 0).unwrap();
 
     let claims = auth.validate_token(&token).unwrap();
 

@@ -8,16 +8,22 @@ use axum::{
     routing::{delete, get, post},
 };
 use lanforge_crypto::{hash_password, verify_password};
+use lanforge_db_core::UserEntry;
 use lanforge_types::auth::UserRole;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
 use crate::auth::{
-    AuthMethod, AuthenticatedUser, ELEVATION_TTL_SECS, auth_required, extract_token, looks_like_jwt,
+    AuthMethod, AuthenticatedUser, ELEVATION_TTL_SECS, auth_required, authenticate_token,
+    extract_token,
 };
 use crate::error::{HttpError, Result as HttpResult};
 use crate::routes::create_client_ctx;
 use crate::server::AppState;
+
+/// Session lifetime (24 h), and with "remember me" (30 days).
+pub(crate) const SESSION_TTL_SECS: u64 = 86_400;
+pub(crate) const REMEMBER_ME_TTL_SECS: u64 = 2_592_000;
 
 #[derive(Debug, Deserialize)]
 pub struct ValidateRequest {
@@ -177,20 +183,7 @@ async fn handle_validate(
     State(state): State<AppState>,
     Json(payload): Json<ValidateRequest>,
 ) -> impl IntoResponse {
-    let valid =
-        if looks_like_jwt(&payload.token) && state.auth.validate_token(&payload.token).is_ok() {
-            true
-        } else {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                .cast_signed();
-            match state.db.validate_api_token(&payload.token, now) {
-                Ok(Some(_)) => true,
-                _ => state.auth.validate_token(&payload.token).is_ok(),
-            }
-        };
+    let valid = authenticate_token(&payload.token, &state.auth, state.db.as_ref()).is_ok();
     Json(serde_json::json!({ "data": { "valid": valid } }))
 }
 
@@ -268,6 +261,20 @@ fn authenticate_via_api_token(
     Ok(None)
 }
 
+/// Issues a session bound to the user's current credential version (see `Claims::uv`).
+pub(crate) fn issue_session(
+    state: &AppState,
+    user: &UserEntry,
+    ttl_secs: u64,
+) -> HttpResult<String> {
+    state.auth.generate_token_with_ttl(
+        &user.username,
+        user.role.as_str(),
+        user.updated_at,
+        ttl_secs,
+    )
+}
+
 fn authenticate_via_password(
     state: &AppState,
     username: &str,
@@ -288,11 +295,7 @@ fn authenticate_via_password(
         Ok(Some(db_user)) => {
             if verify_password(&db_user.password_hash, password) {
                 let _ = state.db.update_user_last_login(&db_user.username, now);
-                let session_token = state.auth.generate_token_with_ttl(
-                    &db_user.username,
-                    db_user.role.as_str(),
-                    ttl_secs,
-                )?;
+                let session_token = issue_session(state, &db_user, ttl_secs)?;
                 return Ok((session_token, db_user.username, "password"));
             }
             return Err(HttpError::Auth("Invalid credentials".to_string()));
@@ -320,11 +323,15 @@ fn authenticate_via_password(
         && let Some(hash) = &state.cfg.auth_password_hash
         && verify_password(hash, password)
     {
-        let _ = state.db.create_user("admin", hash, UserRole::Admin, now);
-        let session_token = state
-            .auth
-            .generate_token_with_ttl("admin", "admin", ttl_secs)?;
-        return Ok((session_token, "admin".to_string(), "password"));
+        let admin = state
+            .db
+            .create_user("admin", hash, UserRole::Admin, now)
+            .map_err(|e| {
+                error!("Database error seeding the admin user: {e}");
+                HttpError::ServiceUnavailable("persistence unavailable".into())
+            })?;
+        let session_token = issue_session(state, &admin, ttl_secs)?;
+        return Ok((session_token, admin.username, "password"));
     }
 
     // Recovery mode without a password hash file: the real users are in the database that
@@ -351,9 +358,9 @@ pub async fn handle_login(
         .to_lowercase();
 
     let ttl_secs = if payload.remember_me.unwrap_or(false) {
-        2_592_000 // 30 days
+        REMEMBER_ME_TTL_SECS
     } else {
-        86_400 // 24 hours
+        SESSION_TTL_SECS
     };
 
     if let Some((session_token, name, method)) = authenticate_via_api_token(&state, &payload)? {
@@ -382,23 +389,8 @@ pub async fn handle_login(
 async fn handle_status(State(state): State<AppState>, req: Request) -> impl IntoResponse {
     let auth_required = check_auth_required(&state);
 
-    let authenticated = if let Some(token) = extract_token(req.headers(), req.uri().query()) {
-        if looks_like_jwt(&token) && state.auth.validate_token(&token).is_ok() {
-            true
-        } else {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                .cast_signed();
-            match state.db.validate_api_token(&token, now) {
-                Ok(Some(_)) => true,
-                _ => state.auth.validate_token(&token).is_ok(),
-            }
-        }
-    } else {
-        false
-    };
+    let authenticated = extract_token(req.headers(), req.uri().query())
+        .is_some_and(|token| authenticate_token(&token, &state.auth, state.db.as_ref()).is_ok());
 
     Json(AuthStatusResponse {
         data: AuthStatusData {
@@ -506,8 +498,24 @@ async fn handle_change_password(
             error!("Database error updating password for {}: {e}", user.name);
             HttpError::ServiceUnavailable("persistence unavailable".into())
         })?;
+    // Every session of this user just ended (other devices too): hand this one a new token.
+    let db_user = UserEntry {
+        password_hash: new_hash,
+        updated_at: now,
+        ..db_user
+    };
+    let token = issue_session(&state, &db_user, SESSION_TTL_SECS)?;
+    let mut headers = HeaderMap::new();
+    if let Ok(v) = HeaderValue::from_str(&format!(
+        "session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_TTL_SECS}"
+    )) {
+        headers.insert(SET_COOKIE, v);
+    }
     Ok((
         StatusCode::OK,
-        Json(serde_json::json!({ "data": { "message": "Password updated successfully" } })),
+        headers,
+        Json(serde_json::json!({
+            "data": { "message": "Password updated successfully", "token": token }
+        })),
     ))
 }

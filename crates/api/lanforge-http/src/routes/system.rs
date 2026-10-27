@@ -9,6 +9,7 @@ use lanforge_api::api::SystemConfigExport;
 use lanforge_types::system::ServiceAction;
 use serde::Deserialize;
 
+use crate::routes::auth::{REMEMBER_ME_TTL_SECS, issue_session};
 use crate::routes::create_client_ctx;
 use crate::server::AppState;
 
@@ -188,14 +189,21 @@ async fn handle_setup(
 
     match res {
         lanforge_api::api::Response::Setup(mut setup_res) => {
-            let token = state
-                .auth
-                .generate_token_with_ttl(&username, "admin", 2_592_000)
-                .unwrap_or_default();
+            // Setup stores the name trimmed and lowercased.
+            let token = match state
+                .db
+                .get_user_by_username(&username.trim().to_lowercase())
+            {
+                Ok(Some(admin)) => {
+                    issue_session(&state, &admin, REMEMBER_ME_TTL_SECS).unwrap_or_default()
+                }
+                _ => String::new(),
+            };
             setup_res.token.clone_from(&token);
 
-            let cookie_header =
-                format!("session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000");
+            let cookie_header = format!(
+                "session={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={REMEMBER_ME_TTL_SECS}"
+            );
             let mut headers = axum::http::HeaderMap::new();
             if let Ok(v) = axum::http::HeaderValue::from_str(&cookie_header) {
                 headers.insert(axum::http::header::SET_COOKIE, v);
