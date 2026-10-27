@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::ClientContext;
 use lanforge_api::api::SystemConfigExport;
 use lanforge_api::config_file::{
-    ConfigFile, SectionSet, patch_sections, toml_edit::DocumentMut,
+    ConfigFile, SectionSet, patch_sections, persist_sections, toml_edit::DocumentMut,
     write_toml_atomically as api_write_toml_atomically,
 };
 
@@ -34,7 +34,51 @@ pub fn generate_toml_from_export(
     cfg.render_full().unwrap_or_default()
 }
 
+/// Whether a config change reached the config file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Persisted {
+    /// Written to the config file.
+    File,
+    /// The config file is read-only (or unknown): the change lives in memory only.
+    MemoryOnly,
+}
+
+impl Persisted {
+    /// The success message for a change of `what`.
+    #[must_use]
+    pub fn message(self, what: &str) -> String {
+        match self {
+            Self::File => format!("{what} updated successfully"),
+            Self::MemoryOnly => {
+                format!("{what} applied, but not saved: the configuration file is read-only")
+            }
+        }
+    }
+}
+
 impl ClientContext {
+    /// Writes the `sections` set by `fill` into the config file (file-owned sections, see
+    /// `phase-7-config-storage`). Call it **before** applying the change in memory: an error
+    /// means nothing was written and the change must be rejected.
+    pub fn persist_config_sections(
+        &self,
+        sections: SectionSet,
+        fill: impl FnOnce(&mut ConfigFile),
+    ) -> Result<Persisted, String> {
+        if !self.ctx.is_config_writable() {
+            return Ok(Persisted::MemoryOnly);
+        }
+        let Some(path) = self.ctx.config_path() else {
+            return Ok(Persisted::MemoryOnly);
+        };
+        let mut cfg = ConfigFile::default();
+        fill(&mut cfg);
+        let _file_guard = self.ctx.config_file_lock();
+        persist_sections(&path, &cfg, sections)
+            .map(|()| Persisted::File)
+            .map_err(|e| format!("cannot write {}: {e}", path.display()))
+    }
+
     /// Extracts the consolidated static configuration snapshot of the system.
     pub async fn export_system_config_data(&self) -> SystemConfigExport {
         if let lanforge_api::api::Response::SystemConfig(export) =

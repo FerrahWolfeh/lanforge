@@ -1,3 +1,4 @@
+use lanforge_types::network::pppoe::PppoeConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -47,7 +48,8 @@ pub struct ConfigFile {
     #[serde(default)]
     pub firewall: FirewallFile,
     #[serde(default)]
-    pub pppoe: PppoeFile,
+    /// The PPPoE client's own type: this file is its only source (config-storage step 2).
+    pub pppoe: PppoeConfig,
     #[serde(default)]
     pub traffic: TrafficFile,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -69,6 +71,23 @@ impl ConfigFile {
         out.push_str(&content);
         Ok(out)
     }
+}
+
+/// Writes `sections` of `cfg` into the config file at `path`, keeping everything else in the
+/// file (other sections, comments, formatting). A file that cannot be read or parsed is an
+/// error, never replaced: the caller must not apply a change it could not persist.
+pub fn persist_sections(
+    path: &std::path::Path,
+    cfg: &ConfigFile,
+    sections: SectionSet,
+) -> Result<(), std::io::Error> {
+    use std::io::{Error, ErrorKind};
+    let text = std::fs::read_to_string(path)?;
+    let mut doc = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| Error::new(ErrorKind::InvalidData, format!("invalid TOML: {e}")))?;
+    patch_sections(&mut doc, cfg, sections).map_err(|e| Error::other(e.to_string()))?;
+    write_toml_atomically(path, &doc.to_string())
 }
 
 /// Atomically writes content to a file using a temporary file in the same directory.

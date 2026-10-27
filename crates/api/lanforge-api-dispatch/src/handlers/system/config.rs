@@ -555,13 +555,27 @@ impl ClientContext {
             }
         }
         if let Some(pppoe_cfg) = pppoe_config {
-            patch = patch.with_pppoe(*pppoe_cfg);
-            results.push(ImportResult {
-                section: ImportSection::PppoeConfig,
-                success: true,
-                count: 1,
-                error: None,
-            });
+            // File-owned: imported only if it reaches the config file.
+            match self
+                .persist_config_sections(lanforge_api::config_file::SectionSet::PPPOE, |file| {
+                    file.pppoe = (*pppoe_cfg).clone()
+                }) {
+                Ok(_) => {
+                    patch = patch.with_pppoe(*pppoe_cfg);
+                    results.push(ImportResult {
+                        section: ImportSection::PppoeConfig,
+                        success: true,
+                        count: 1,
+                        error: None,
+                    });
+                }
+                Err(e) => results.push(ImportResult {
+                    section: ImportSection::PppoeConfig,
+                    success: false,
+                    count: 0,
+                    error: Some(e),
+                }),
+            }
         }
 
         if let Some(opts) = dhcp_options {

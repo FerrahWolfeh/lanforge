@@ -588,3 +588,77 @@ async fn test_static_host_creation_creates_all_leases_for_specific_mac() {
     assert_eq!(allocated_v6.len(), 1);
     assert_eq!(allocated_v6[0], "fd00::100".parse::<Ipv6Addr>().unwrap());
 }
+
+// ---------------------------------------------------------------------------
+// PPPoE is file-owned: an API change is written to `[pppoe]` before it is applied
+// ---------------------------------------------------------------------------
+
+fn pppoe_with(username: &str) -> lanforge_types::network::pppoe::PppoeConfig {
+    let mut cfg = lanforge_types::network::pppoe::PppoeConfig {
+        enabled: true,
+        username: username.into(),
+        password: "secret".into(),
+        ..Default::default()
+    };
+    cfg.nftables.bypass_vowifi = false;
+    cfg
+}
+
+#[tokio::test]
+async fn pppoe_update_is_written_to_the_config_file() {
+    let client_ctx = init_test_context().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    std::fs::write(&path, "# mine\n[system]\niface = \"lan0\"\n").unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(true);
+
+    let cfg = pppoe_with("api-user");
+    let res = client_ctx.handle_update_pppoe_config(cfg.clone()).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    let file = lanforge_api::config_file::ConfigFile::parse(&text).unwrap();
+    assert_eq!(file.pppoe, cfg, "every field reaches the file");
+    assert!(text.contains("# mine") && text.contains("iface = \"lan0\""));
+    assert_eq!(client_ctx.ctx.get_pppoe_config(), Some(cfg));
+}
+
+#[tokio::test]
+async fn pppoe_update_is_rejected_when_the_file_cannot_take_it() {
+    let client_ctx = init_test_context().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    std::fs::write(&path, "[system\nbroken").unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(true);
+    let before = client_ctx.ctx.get_pppoe_config();
+
+    let res = client_ctx
+        .handle_update_pppoe_config(pppoe_with("lost"))
+        .await;
+
+    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert_eq!(client_ctx.ctx.get_pppoe_config(), before, "not applied");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "[system\nbroken");
+}
+
+#[tokio::test]
+async fn pppoe_update_on_read_only_config_applies_in_memory_and_says_so() {
+    let client_ctx = init_test_context().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    std::fs::write(&path, "[system]\n").unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(false);
+
+    let cfg = pppoe_with("ram-only");
+    let res = client_ctx.handle_update_pppoe_config(cfg.clone()).await;
+
+    let Response::Success(ok) = res else {
+        panic!("{res:?}");
+    };
+    assert!(ok.message.contains("not saved"), "{}", ok.message);
+    assert_eq!(client_ctx.ctx.get_pppoe_config(), Some(cfg));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "[system]\n");
+}

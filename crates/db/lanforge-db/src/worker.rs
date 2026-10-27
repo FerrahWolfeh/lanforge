@@ -201,11 +201,6 @@ impl DbWorker {
                 {
                     tx.set(TRAFFIC, &config)?;
                 }
-                if self.dirty_sections.contains(SectionSet::PPPOE)
-                    && let Some(config) = self.ctx.get_pppoe_config()
-                {
-                    tx.set(PPPOE, &config)?;
-                }
                 if self.dirty_sections.contains(SectionSet::DNS) {
                     tx.set(DNS_REWRITES, &self.ctx.get_dns_rewrites())?;
                     let upstreams: Vec<DnsUpstreamEntry> = self
@@ -459,6 +454,8 @@ impl DbWorker {
         let Some(path) = self.ctx.config_path() else {
             return;
         };
+        let ctx = self.ctx.clone();
+        let _file_guard = ctx.config_file_lock();
 
         // Patch the file as it is: one that cannot be read or parsed (mid hand-edit) is left
         // alone and the change stays pending. Starting from an empty document would write back
@@ -861,9 +858,6 @@ impl AsyncService for DbWorker {
                             if matches!(**event, TrafficEvent::RulesetChanged) {
                                 self.dirty_sections |= SectionSet::TRAFFIC;
                             }
-                        }
-                        LanforgeEvent::System(SystemEvent::ConfigPppoeChanged) => {
-                            self.dirty_sections |= SectionSet::PPPOE;
                         }
                         LanforgeEvent::System(SystemEvent::ConfigChanged { sections }) => {
                             self.dirty_sections |= SectionSet::from(*sections);

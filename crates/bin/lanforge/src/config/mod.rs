@@ -8,6 +8,7 @@
 
 pub mod args;
 pub mod auto_detect;
+pub mod reload;
 pub mod sync;
 pub mod toml;
 

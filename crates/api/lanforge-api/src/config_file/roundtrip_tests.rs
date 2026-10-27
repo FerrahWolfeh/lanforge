@@ -104,6 +104,8 @@ fn leaf_paths(v: &Value, prefix: &str, out: &mut Vec<String>) {
                 leaf_paths(child, &format!("{prefix}/{k}"), out);
             }
         }
+        // An empty list has no leaves to move: report it so `base()` gets an entry.
+        Value::Array(items) if items.is_empty() => out.push(prefix.to_string()),
         Value::Array(items) => {
             for (i, child) in items.iter().enumerate() {
                 leaf_paths(child, &format!("{prefix}/{i}"), out);
@@ -229,7 +231,7 @@ fn base() -> SystemConfigExport {
     use crate::api::devices::HostConfigEntry;
     use crate::api::dns::{AllowlistEntry, DnsUpstreamConfig};
 
-    SystemConfigExport {
+    let export = SystemConfigExport {
         hosts: vec![HostConfigEntry {
             mac: MacAddr::parse("aa:bb:cc:dd:ee:01").unwrap(),
             hostname: "nas".into(),
@@ -302,7 +304,51 @@ fn base() -> SystemConfigExport {
         traffic_config: Some(Box::new(TrafficConfig::default())),
         system_iface: Some("lan0".into()),
         overwrite: false,
+    };
+    fill_empty_lists(export)
+}
+
+/// Gives every empty list in the fixture one element, so its contents are round-tripped too.
+fn fill_empty_lists(export: SystemConfigExport) -> SystemConfigExport {
+    let mut json = serde_json::to_value(&export).unwrap();
+    let open_port = json["firewall_config"]["zones"][0]["open_ports"][0].clone();
+    let port_forward = serde_json::json!({
+        "comment": "plex",
+        "src_zone": "external",
+        "internal_ip": "192.168.1.20",
+        "external_port": 32400,
+        "internal_port": 32400,
+        "protocol": "Tcp",
+        "enable_hairpin": true,
+    });
+    let scalars = [
+        "home.lan",
+        "192.0.2.123",
+        "2001:db8::53",
+        "192.168.1.0/24",
+        "lan0",
+    ];
+    let mut paths = Vec::new();
+    leaf_paths(&json, "", &mut paths);
+    for path in paths {
+        if json.pointer(&path) != Some(&Value::Array(Vec::new())) {
+            continue;
+        }
+        let subnet = serde_json::json!({ "addr": "192.168.1.0", "prefix_len": 24 });
+        let objects = [open_port.clone(), port_forward.clone(), subnet];
+        let candidates = objects.into_iter().chain(scalars.map(Value::from));
+        for cand in candidates {
+            let filled = Value::Array(vec![cand]);
+            *json.pointer_mut(&path).unwrap() = filled.clone();
+            if serde_json::from_value::<SystemConfigExport>(json.clone())
+                .is_ok_and(|e| serde_json::to_value(e).unwrap().pointer(&path) == Some(&filled))
+            {
+                break;
+            }
+            *json.pointer_mut(&path).unwrap() = Value::Array(Vec::new());
+        }
     }
+    serde_json::from_value(json).unwrap()
 }
 
 /// Fields each section loses today on `redb → lanforge.toml → redb`. Migrating a section
@@ -327,9 +373,27 @@ const KNOWN_LOSSES: &[(&str, &[&str])] = &[
     ),
     (
         "dhcp_v4_pools",
-        &["/0/boot_file", "/0/domain_name", "/0/tftp_server"],
+        &[
+            "/0/boot_file",
+            "/0/domain_name",
+            "/0/ntp_servers",
+            "/0/ntp_servers/0",
+            "/0/search_domains",
+            "/0/search_domains/0",
+            "/0/tftp_server",
+        ],
     ),
-    ("dhcp_v6_pools", &["/0/address", "/0/boot_file"]),
+    (
+        "dhcp_v6_pools",
+        &[
+            "/0/address",
+            "/0/boot_file",
+            "/0/ntp_servers",
+            "/0/ntp_servers/0",
+            "/0/search_domains",
+            "/0/search_domains/0",
+        ],
+    ),
     ("dns_adblock_config", &[]),
     ("dns_adblock_rules", &["/0/id", "/0/name"]),
     ("dns_adblock_urls", &["/0/id"]),
@@ -344,45 +408,22 @@ const KNOWN_LOSSES: &[(&str, &[&str])] = &[
     (
         "firewall_config",
         &[
+            "/zones/0/open_ports/0/comment",
             "/zones/1/open_ports/0/comment",
             "/zones/1/open_ports/1/comment",
             "/zones/1/open_ports/2/comment",
             "/zones/1/open_ports/3/comment",
             "/zones/1/open_ports/4/comment",
             "/zones/1/open_ports/5/comment",
+            "/zones/2/open_ports/0/comment",
         ],
     ),
-    ("hosts", &["/0/ignored_log_domains/0"]),
     (
-        "pppoe_config",
-        &[
-            "/ac_name",
-            "/auth",
-            "/dataplane",
-            "/discovery_padi_retries",
-            "/discovery_padi_timeout_secs",
-            "/lcp_echo_interval_secs",
-            "/lcp_echo_max_failures",
-            "/nftables/bypass_dns",
-            "/nftables/bypass_vowifi",
-            "/nftables/custom_rules_file",
-            "/nftables/enabled",
-            "/nftables/flow_offload",
-            "/nftables/masquerade",
-            "/nftables/mss_clamping",
-            "/nftables/table_name",
-            "/reconnect_delay_secs",
-            "/send_padt_on_shutdown",
-            "/service_name",
-            "/terminal_probe/enabled",
-            "/terminal_probe/iface",
-            "/terminal_probe/max_wait_secs",
-            "/terminal_probe/poll_interval_secs",
-            "/terminal_probe/sender_ip",
-            "/terminal_probe/target_ip",
-            "/terminal_probe/timeout_ms",
-        ],
+        "hosts",
+        &["/0/ignored_log_domains", "/0/ignored_log_domains/0"],
     ),
+    // Migrated: the file holds `PppoeConfig` itself.
+    ("pppoe_config", &[]),
     ("ra_dnssl", &[]),
     // `infinity` lifetimes are rendered as nothing and read back as the defaults.
     (
@@ -424,13 +465,14 @@ fn every_config_section_is_covered() {
 
 #[test]
 fn every_field_is_moved_by_the_fixture() {
-    for (section, _) in KNOWN_LOSSES {
-        let (_, untouched) = section_losses(section, &base());
-        assert!(
-            untouched.is_empty(),
-            "{section}: extend `base()` so these move: {untouched:?}"
-        );
-    }
+    let untouched: Vec<String> = KNOWN_LOSSES
+        .iter()
+        .flat_map(|(section, _)| section_losses(section, &base()).1)
+        .collect();
+    assert!(
+        untouched.is_empty(),
+        "extend `base()` so these move: {untouched:#?}"
+    );
 }
 
 #[test]

@@ -223,6 +223,7 @@ where
                             }
                             LanforgeEvent::System(SystemEvent::ReloadConfig) => {
                                 info!("ReloadConfig: in-place configuration reload");
+                                crate::config::reload::reload_file_sections(&ctx);
                                 supervisor.reevaluate_conditions();
                             }
                             LanforgeEvent::System(SystemEvent::ConfigUpdate { password_hash }) => {

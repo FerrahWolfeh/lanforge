@@ -372,39 +372,11 @@ impl ClientContext {
         // 6. Configure WAN / Uplink
         if let Some(ref wan) = payload.wan {
             match wan {
-                SetupWanConfig::Pppoe {
-                    interface,
-                    username: pppoe_user,
-                    password: pppoe_pass,
-                    vlan_id,
-                    mtu,
-                    nftables,
-                } => {
-                    let wan_if = if let Some(vid) = vlan_id {
-                        format!("{interface}.{vid}")
-                    } else {
-                        interface.clone()
-                    };
-                    let mut pppoe_cfg = PppoeConfig {
-                        enabled: true,
-                        wan_iface: wan_if,
-                        username: pppoe_user.clone(),
-                        password: pppoe_pass.clone(),
-                        mru: mtu.unwrap_or(1492),
-                        ..Default::default()
-                    };
-                    if let Some(nft) = nftables {
-                        pppoe_cfg.nftables.flow_offload = nft.flow_offload;
-                        pppoe_cfg.nftables.mss_clamping = nft.mss_clamping;
-                        pppoe_cfg.nftables.masquerade = nft.masquerade;
-                        pppoe_cfg.nftables.bypass_dns = nft.bypass_dns;
-                        pppoe_cfg.nftables.bypass_vowifi = nft.bypass_vowifi;
-                        pppoe_cfg.nftables.lan_ifaces = vec![payload.lan_iface.clone()];
+                SetupWanConfig::Pppoe { .. } => {
+                    // File-owned: written with the rest of the setup TOML below.
+                    if let Some(pppoe_cfg) = setup_pppoe_config(&payload) {
+                        patch = patch.with_pppoe(pppoe_cfg);
                     }
-                    patch = patch.with_pppoe(pppoe_cfg.clone());
-                    let _ = storage
-                        .call(move |s: &Stores| s.db().save_pppoe_config(&pppoe_cfg))
-                        .await;
                 }
                 SetupWanConfig::SystemGateway { gateway_ip } => {
                     opts.v4.router = Some(*gateway_ip);
@@ -557,6 +529,39 @@ fn parse_v6_pool_from_range(
     } else {
         (None, None)
     }
+}
+
+/// The PPPoE client configuration the setup wizard asks for, if the WAN is PPPoE.
+fn setup_pppoe_config(payload: &SetupPayload) -> Option<PppoeConfig> {
+    let Some(SetupWanConfig::Pppoe {
+        interface,
+        username,
+        password,
+        vlan_id,
+        mtu,
+        nftables,
+    }) = &payload.wan
+    else {
+        return None;
+    };
+    let wan_iface = vlan_id.map_or_else(|| interface.clone(), |vid| format!("{interface}.{vid}"));
+    let mut cfg = PppoeConfig {
+        enabled: true,
+        wan_iface,
+        username: username.clone(),
+        password: password.clone(),
+        mru: mtu.unwrap_or(1492),
+        ..Default::default()
+    };
+    if let Some(nft) = nftables {
+        cfg.nftables.flow_offload = nft.flow_offload;
+        cfg.nftables.mss_clamping = nft.mss_clamping;
+        cfg.nftables.masquerade = nft.masquerade;
+        cfg.nftables.bypass_dns = nft.bypass_dns;
+        cfg.nftables.bypass_vowifi = nft.bypass_vowifi;
+        cfg.nftables.lan_ifaces = vec![payload.lan_iface.clone()];
+    }
+    Some(cfg)
 }
 
 fn generate_setup_toml(
@@ -718,30 +723,9 @@ fn generate_setup_toml(
         }
     }
 
-    // PPPoE
-    if let Some(ref wan) = payload.wan {
-        match wan {
-            SetupWanConfig::Pppoe {
-                interface,
-                username,
-                password,
-                vlan_id,
-                mtu,
-                ..
-            } => {
-                let wan_if = if let Some(vid) = vlan_id {
-                    format!("{interface}.{vid}")
-                } else {
-                    interface.clone()
-                };
-                cfg.pppoe.enabled = true;
-                cfg.pppoe.wan_iface = Some(wan_if);
-                cfg.pppoe.username = Some(username.clone());
-                cfg.pppoe.password = Some(password.clone());
-                cfg.pppoe.mru = *mtu;
-            }
-            SetupWanConfig::SystemGateway { .. } => {}
-        }
+    // PPPoE: the same value the daemon applies, so the file holds every field.
+    if let Some(pppoe) = setup_pppoe_config(payload) {
+        cfg.pppoe = pppoe;
     }
 
     let rendered = cfg.render_full().unwrap_or_default();

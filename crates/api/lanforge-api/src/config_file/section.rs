@@ -65,6 +65,7 @@ impl Section {
     }
 
     /// Whether this section is a dynamic section where `config.redb` is the primary source of truth.
+    /// Sections migrated to "files are config" (PPPoE) are not: the file is their only source.
     #[must_use]
     pub const fn is_dynamic(&self) -> bool {
         matches!(
@@ -74,7 +75,6 @@ impl Section {
                 | Self::Dns
                 | Self::Adblock
                 | Self::Firewall
-                | Self::Pppoe
                 | Self::Traffic
                 | Self::Hosts
         )
@@ -133,7 +133,7 @@ bitflags! {
                        | Self::HTTP.bits() | Self::MONITOR.bits() | Self::MDNS.bits() | Self::TFTP.bits();
 
         const DYNAMIC  = Self::DHCP.bits() | Self::RA.bits() | Self::DNS.bits()
-                       | Self::ADBLOCK.bits() | Self::FIREWALL.bits() | Self::PPPOE.bits()
+                       | Self::ADBLOCK.bits() | Self::FIREWALL.bits()
                        | Self::TRAFFIC.bits() | Self::HOSTS.bits();
     }
 }

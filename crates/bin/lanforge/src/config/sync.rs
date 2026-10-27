@@ -6,12 +6,9 @@ use anyhow::{Context, Result};
 use lanforge_api::api::SystemConfigExport;
 use lanforge_api::config_file::{ConfigFile, Section, section_hashes, write_toml_atomically};
 use lanforge_db::config_keys::{
-    DHCP_OPTIONS, DHCP_V4_POOLS, DHCP_V6_POOLS, FIREWALL, PPPOE, RA_DNSSL, RA_PREFIXES, RA_RDNSS,
-    TRAFFIC,
+    DHCP_OPTIONS, DHCP_V4_POOLS, DHCP_V6_POOLS, FIREWALL, RA_DNSSL, RA_PREFIXES, RA_RDNSS, TRAFFIC,
 };
-use lanforge_db::{
-    DhcpConfigStore, FirewallConfigStore, LanforgeDb, PppoeConfigStore, TrafficConfigStore,
-};
+use lanforge_db::{DhcpConfigStore, FirewallConfigStore, LanforgeDb, TrafficConfigStore};
 use tracing::info;
 
 /// Synchronizes configuration between `lanforge.toml` and `config.redb` during boot and reload.
@@ -167,17 +164,6 @@ fn sync_section_from_db_to_config_file(db: &LanforgeDb, sec: Section, cfg: &mut 
                 cfg.traffic = imported_cfg.traffic;
             }
         }
-        Section::Pppoe =>
-        {
-            #[cfg(feature = "pppoe")]
-            if let Ok(Some(pppoe)) = db.load_pppoe_config() {
-                cfg.pppoe.enabled = pppoe.enabled;
-                cfg.pppoe.wan_iface = Some(pppoe.wan_iface);
-                cfg.pppoe.username = Some(pppoe.username);
-                cfg.pppoe.password = Some(pppoe.password);
-                cfg.pppoe.mru = Some(pppoe.mru);
-            }
-        }
         _ => {}
     }
 }
@@ -231,13 +217,6 @@ fn apply_sections_to_db(db: &LanforgeDb, sections: &[Section], cfg: &ConfigFile)
                     #[cfg(feature = "traffic")]
                     if let Some(ref traffic) = export.traffic_config {
                         tx.set(TRAFFIC, traffic)?;
-                    }
-                }
-                Section::Pppoe =>
-                {
-                    #[cfg(feature = "pppoe")]
-                    if let Some(ref pppoe) = export.pppoe_config {
-                        tx.set(PPPOE, pppoe)?;
                     }
                 }
                 _ => {}

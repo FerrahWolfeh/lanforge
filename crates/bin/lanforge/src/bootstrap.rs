@@ -711,7 +711,7 @@ impl Bootstrapper {
         Self::load_dns_config(db, cfg)?;
 
         #[cfg(feature = "pppoe")]
-        Self::seed_pppoe_config(db, cfg)?;
+        Self::migrate_pppoe_config(db, cfg)?;
 
         #[cfg(feature = "traffic")]
         Self::seed_traffic_config(db, cfg)?;
@@ -842,15 +842,50 @@ impl Bootstrapper {
         Ok(())
     }
 
+    /// Config-storage cut-over for `PPPoE`, whose only source is now `[pppoe]` in the config
+    /// file. A `PPPOE` key left in redb by an older binary holds the full configuration the
+    /// daemon ran with (the file kept only six of its fields): it is written to the file once,
+    /// with a backup of the file, and then removed. Until the file can take it (read-only
+    /// config, write error), the stored value is used and the key kept.
     #[cfg(feature = "pppoe")]
-    fn seed_pppoe_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
-        if db.seed_pppoe_if_empty(&cfg.pppoe_toml)? {
-            info!("Seeded PPPoE configuration from TOML into database");
+    fn migrate_pppoe_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+        use lanforge_api::config_file::{ConfigFile, SectionSet, persist_sections};
+        use lanforge_db::config_keys::PPPOE;
+
+        let Some(stored) = db.load_pppoe_config()? else {
+            return Ok(());
+        };
+        cfg.pppoe_enabled = stored.enabled;
+        cfg.pppoe_toml = stored.clone();
+
+        let path = std::path::Path::new(&cfg.config_path);
+        if !cfg.config_writable || !path.exists() {
+            warn!(
+                "Config: PPPoE settings stay in the database until '{}' is writable",
+                path.display()
+            );
+            return Ok(());
         }
-        if let Some(loaded) = db.load_pppoe_config()? {
-            cfg.pppoe_enabled = loaded.enabled;
-            cfg.pppoe_toml = loaded;
+        let backup = path.with_extension("toml.bak");
+        let file = ConfigFile {
+            pppoe: stored,
+            ..ConfigFile::default()
+        };
+        let moved = std::fs::copy(path, &backup)
+            .and_then(|_| persist_sections(path, &file, SectionSet::PPPOE));
+        if let Err(e) = moved {
+            warn!(
+                "Config: could not move PPPoE settings to '{}' ({e}); keeping them in the database",
+                path.display()
+            );
+            return Ok(());
         }
+        db.write(|tx| tx.remove(PPPOE))?;
+        info!(
+            "Config: moved PPPoE settings from the database to [pppoe] in '{}' (previous file kept as '{}')",
+            path.display(),
+            backup.display()
+        );
         Ok(())
     }
 
@@ -1424,6 +1459,85 @@ mod tests {
             !Path::new("sqlite:").exists(),
             "a URL must not be created as a relative directory"
         );
+    }
+
+    /// The cut-over moves the full `PPPoE` config an older binary kept in redb into the file,
+    /// once: every field survives, the rest of the file (comments included) is untouched, the
+    /// previous file is backed up and the key is gone.
+    #[cfg(feature = "pppoe")]
+    #[test]
+    fn pppoe_config_moves_from_the_database_to_the_file_once() {
+        use lanforge_api::config_file::ConfigFile;
+        use lanforge_types::network::pppoe::{AuthMethod, PppoeConfig};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        let old_file = "# home router\n[system]\niface = \"lan0\" # LAN port\n\n\
+                        [pppoe]\nenabled = true\nwan_iface = \"wan0\"\nusername = \"user\"\n";
+        std::fs::write(&path, old_file).unwrap();
+        let mut cfg = config_with_db(&dir.path().join("config.redb"));
+        cfg.config_path = path.display().to_string();
+        cfg.config_writable = true;
+
+        let db = LanforgeDb::open_in_memory().unwrap();
+        let mut stored = PppoeConfig {
+            enabled: true,
+            wan_iface: "wan0".into(),
+            username: "user".into(),
+            password: "secret".into(),
+            auth: AuthMethod::Pap,
+            service_name: Some("isp".into()),
+            lcp_echo_interval_secs: 30,
+            ..PppoeConfig::default()
+        };
+        stored.nftables.bypass_vowifi = false;
+        stored.nftables.lan_ifaces = vec!["lan0".into()];
+        stored.terminal_probe.enabled = true;
+        db.save_pppoe_config(&stored).unwrap();
+
+        Bootstrapper::migrate_pppoe_config(&db, &mut cfg).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(ConfigFile::parse(&text).unwrap().pppoe, stored, "{text}");
+        assert!(text.contains("# home router") && text.contains("# LAN port"));
+        assert_eq!(cfg.pppoe_toml, stored);
+        assert!(db.load_pppoe_config().unwrap().is_none(), "key removed");
+        assert_eq!(
+            std::fs::read_to_string(path.with_extension("toml.bak")).unwrap(),
+            old_file
+        );
+
+        // Second boot: the file is the source, nothing moves.
+        std::fs::remove_file(path.with_extension("toml.bak")).unwrap();
+        Bootstrapper::migrate_pppoe_config(&db, &mut cfg).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        assert!(!path.with_extension("toml.bak").exists());
+    }
+
+    /// A file that cannot take the config keeps it in the database, in use.
+    #[cfg(feature = "pppoe")]
+    #[test]
+    fn pppoe_config_stays_in_the_database_if_the_file_cannot_take_it() {
+        use lanforge_types::network::pppoe::PppoeConfig;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        std::fs::write(&path, "[pppoe\nbroken").unwrap();
+        let mut cfg = config_with_db(&dir.path().join("config.redb"));
+        cfg.config_path = path.display().to_string();
+        cfg.config_writable = true;
+        let db = LanforgeDb::open_in_memory().unwrap();
+        let stored = PppoeConfig {
+            username: "kept".into(),
+            ..PppoeConfig::default()
+        };
+        db.save_pppoe_config(&stored).unwrap();
+
+        Bootstrapper::migrate_pppoe_config(&db, &mut cfg).unwrap();
+
+        assert_eq!(cfg.pppoe_toml, stored);
+        assert_eq!(db.load_pppoe_config().unwrap(), Some(stored));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[pppoe\nbroken");
     }
 
     #[test]

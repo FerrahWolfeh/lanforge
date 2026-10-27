@@ -274,6 +274,13 @@ impl LanforgeContext {
         self.inner.runtime.config_path.read().clone()
     }
 
+    /// Held across every read-modify-write of the config file: its writers (API handlers, the
+    /// db worker) each patch their own sections into the file as it is on disk, and two
+    /// unserialized writes lose one of the updates.
+    pub fn config_file_lock(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.inner.runtime.config_file_lock.lock()
+    }
+
     /// Sets whether live write-back to the TOML configuration file is enabled.
     pub fn set_config_writable(&self, writable: bool) {
         self.inner

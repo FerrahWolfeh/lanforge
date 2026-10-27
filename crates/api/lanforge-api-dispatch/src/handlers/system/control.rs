@@ -1,5 +1,6 @@
 use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess};
+use lanforge_api::config_file::SectionSet;
 use lanforge_core::bus::{FirewallEvent, LanforgeEvent, NetworkEvent, SystemEvent};
 use lanforge_types::{
     network::{
@@ -133,10 +134,21 @@ impl ClientContext {
             "PPPoE configuration updated via API"
         );
 
+        let persisted = match self
+            .persist_config_sections(SectionSet::PPPOE, |file| file.pppoe = cfg.clone())
+        {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("PPPoE configuration not saved: {e}");
+                return Response::Error {
+                    error: format!("PPPoE configuration not saved: {e}"),
+                };
+            }
+        };
         self.ctx.update_pppoe_config(cfg);
 
         Response::Success(SimpleSuccess {
-            message: "PPPoE configuration updated successfully".to_string(),
+            message: persisted.message("PPPoE configuration"),
         })
     }
 

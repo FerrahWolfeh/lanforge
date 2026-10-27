@@ -246,22 +246,7 @@ impl From<&lanforge_api::config_file::ConfigFile> for TomlConfig {
 
         #[cfg(feature = "pppoe")]
         {
-            cfg.pppoe.enabled = fc.pppoe.enabled;
-            if let Some(ref w) = fc.pppoe.wan_iface {
-                cfg.pppoe.wan_iface.clone_from(w);
-            }
-            if let Some(ref u) = fc.pppoe.username {
-                cfg.pppoe.username.clone_from(u);
-            }
-            if let Some(ref p) = fc.pppoe.password {
-                cfg.pppoe.password.clone_from(p);
-            }
-            if let Some(ref s) = fc.pppoe.service_name {
-                cfg.pppoe.service_name = Some(s.clone());
-            }
-            if let Some(m) = fc.pppoe.mru {
-                cfg.pppoe.mru = m;
-            }
+            cfg.pppoe = fc.pppoe.clone();
         }
 
         #[cfg(feature = "nft")]

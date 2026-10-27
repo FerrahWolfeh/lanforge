@@ -17,7 +17,6 @@ use lanforge_types::network::firewall::{
     FirewallConfig, FirewallMode, FirewallPolicy, FirewallStopAction, FirewallZone, HostPortRule,
     L4Protocol, PortForwardRule, ZoneForwarding,
 };
-use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{
     DnsslConfig, PrefixLifetime, PrefixSource, RAPrefix, RdnssConfig,
 };
@@ -34,8 +33,8 @@ use super::duration::HumanDuration;
 use super::sections::{
     AdblockFile, AdblockRuleFile, AdblockSourceFile, DhcpFile, Dhcpv4PoolFile, Dhcpv6PoolFile,
     DnsFile, DnsRewriteFile, DnsUpstreamFile, FirewallFile, FirewallZoneFile, HostFileEntry,
-    NicTuningFile, PortForwardFile, PppoeFile, RaDnsslFile, RaFile, RaPrefixFile, RaRdnssFile,
-    SqmFile, TrafficFile, ZoneForwardingFile,
+    NicTuningFile, PortForwardFile, RaDnsslFile, RaFile, RaPrefixFile, RaRdnssFile, SqmFile,
+    TrafficFile, ZoneForwardingFile,
 };
 
 fn policy_to_str(p: FirewallPolicy) -> &'static str {
@@ -450,14 +449,7 @@ impl From<&SystemConfigExport> for ConfigFile {
 
         // 7. PPPoE
         if let Some(ref pppoe) = export.pppoe_config {
-            cfg.pppoe = PppoeFile {
-                enabled: pppoe.enabled,
-                wan_iface: Some(pppoe.wan_iface.clone()),
-                username: Some(pppoe.username.clone()),
-                password: Some(pppoe.password.clone()),
-                service_name: None,
-                mru: Some(pppoe.mru),
-            };
+            cfg.pppoe = (**pppoe).clone();
         }
 
         // 8. Traffic
@@ -829,18 +821,7 @@ impl From<&ConfigFile> for SystemConfigExport {
         }));
 
         // 7. PPPoE
-        let pppoe_config = if cfg.pppoe.enabled {
-            Some(Box::new(PppoeConfig {
-                enabled: cfg.pppoe.enabled,
-                wan_iface: cfg.pppoe.wan_iface.clone().unwrap_or_default(),
-                username: cfg.pppoe.username.clone().unwrap_or_default(),
-                password: cfg.pppoe.password.clone().unwrap_or_default(),
-                mru: cfg.pppoe.mru.unwrap_or(1492),
-                ..Default::default()
-            }))
-        } else {
-            None
-        };
+        let pppoe_config = Some(Box::new(cfg.pppoe.clone()));
 
         // 8. Traffic
         let traffic_config = Some(Box::new(TrafficConfig {

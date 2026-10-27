@@ -369,12 +369,9 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
         let fw = db.load_firewall_config().expect("load fw");
         assert!(fw.is_some_and(|f| f.enabled));
 
-        // 4. Verify PPPoE config survived
-        let pppoe = db.load_pppoe_config().expect("load pppoe");
-        let pppoe = pppoe.expect("pppoe exists");
-        assert!(pppoe.enabled);
-        assert_eq!(pppoe.username, "persisted_pppoe_user");
-        assert_eq!(pppoe.password, "secret_password");
+        // 4. PPPoE is file-owned (config-storage step 2): the worker no longer copies it into
+        // redb; the API writes it to `[pppoe]` in the config file.
+        assert!(db.load_pppoe_config().expect("load pppoe").is_none());
     }
 }
 
