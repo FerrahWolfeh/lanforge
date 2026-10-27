@@ -168,3 +168,47 @@ async fn adblock_toggle_and_pause_do_not_refetch_lists() {
 
     manager.abort();
 }
+
+/// A temporary pause is not a disable: the filter re-enables itself lazily when the pause ends,
+/// with no event. A worker that reached its schedule (or started) during a pause parked in the
+/// "disabled" wait, which only a toggle or config change ends: lists stopped refreshing.
+#[tokio::test(flavor = "multi_thread")]
+async fn adblock_lists_refresh_during_a_pause() {
+    let (port, hits) = spawn_counting_server().await;
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let bus = Arc::new(EventBus::new());
+    let ctx = LanforgeContext::new(bus, State::new(), None);
+    ctx.update_dns_adblock_urls(vec![source(1, port, "a.txt")]);
+    ctx.update_dns_adblock(AdblockDbConfig {
+        enabled: true,
+        ..Default::default()
+    });
+    let cfg = DnsConfig {
+        enabled: true,
+        adblock_enabled: true,
+        adblock_cache_dir: Some(temp_dir.path().to_str().unwrap().to_string()),
+        ..mock_config()
+    };
+    let dns_ctx = Arc::new(mock_dns_context(ctx, cfg).await);
+    let filter = dns_ctx.filter.clone().expect("adblock filter");
+
+    // Paused for 30 s (as the DNS service applies a WebUI pause).
+    let until = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 30;
+    filter.timer.disabled_until.store(until, Ordering::SeqCst);
+    filter.set_enabled(false);
+
+    let manager = spawn_adblock_manager(dns_ctx.clone());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while hits.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "lists refresh while paused");
+    assert!(!filter.is_enabled(), "the pause itself is untouched");
+
+    manager.abort();
+}

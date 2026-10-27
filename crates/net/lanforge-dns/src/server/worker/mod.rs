@@ -74,9 +74,12 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
             loop {
                 let db_cfg = ctx.ctx.get_dns_adblock();
 
-                // Wait if disabled
+                // Wait if disabled. A temporary pause is not a disable: the filter re-enables
+                // itself lazily when it ends (no event), so the lists keep refreshing meanwhile.
                 let mut resumed_fresh = false;
-                if !filter.is_enabled() {
+                let enabled = filter.is_enabled();
+                let paused = filter.timer.disabled_until.load(Ordering::Relaxed) != 0;
+                if !enabled && !paused {
                     debug!("Adblock: currently disabled, waiting for toggle or reload");
                     loop {
                         tokio::select! {
@@ -92,7 +95,12 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                     }) => break,
                                     _ => {}
                                 },
-                                Err(RecvError::Lagged(_)) => {}
+                                // A missed enable: the filter state is the truth.
+                                Err(RecvError::Lagged(_)) => {
+                                    if filter.is_enabled() {
+                                        break;
+                                    }
+                                }
                                 Err(RecvError::Closed) => return,
                             },
                             // Enabling adblock in the config must start the list download too.
@@ -511,6 +519,12 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
 
                 let alarm = tokio::time::sleep(sleep_dur);
                 tokio::pin!(alarm);
+                // Created once per wait: a `sleep` built inside the select would restart on every
+                // wake-up (one per client query on this topic) and never fire under traffic.
+                let mut clock_check = tokio::time::interval_at(
+                    tokio::time::Instant::now() + Duration::from_secs(1800),
+                    Duration::from_secs(1800),
+                );
 
                 // Wait for next refresh or reload signal
                 loop {
@@ -519,7 +533,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                             info!("Adblock: daily scheduled refresh triggered");
                             break;
                         }
-                        _ = tokio::time::sleep(Duration::from_secs(1800)) => {
+                        _ = clock_check.tick() => {
                             // Periodic 30m sanity check: detect NTP clock adjustments
                             let current = chrono::Local::now();
                             if current >= target_time {

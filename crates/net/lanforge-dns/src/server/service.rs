@@ -629,7 +629,11 @@ impl AsyncService for DnsService {
                             }
                             _ => {}
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        // Toggles, blocks and allows are also config writes, re-applied by
+                        // `filter_subs`; only a temporary pause lives in the event alone.
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(lost = n, "DNS bus lagged; a temporary adblock pause may have been missed");
+                        }
                         Err(_) => break,
                     }
                 }
