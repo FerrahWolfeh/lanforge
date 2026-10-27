@@ -2447,6 +2447,9 @@ version = "0.2.0"
 dependencies = [
  "argon2",
  "password-hash",
+ "rustls",
+ "rustls-pki-types",
+ "thiserror 2.0.21",
  "xxhash-rust",
 ]
 
@@ -2576,6 +2579,7 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "lanforge-core",
+ "lanforge-crypto",
  "lanforge-dns-wire",
  "lanforge-macros",
  "lanforge-transport",
@@ -2819,7 +2823,6 @@ dependencies = [
  "lanforge-api-dispatch",
  "lanforge-core",
  "lanforge-db",
- "lanforge-dns",
  "lanforge-macros",
  "lanforge-types",
  "postcard",

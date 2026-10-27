@@ -19,7 +19,7 @@ lanforge-types = { workspace = true, features = ["adblock"] }
 lanforge-core = { workspace = true, features = ["adblock"] }
 lanforge-dns-wire = { workspace = true }
 lanforge-dhcp = { workspace = true }
-lanforge-dns = { workspace = true }
+lanforge-dns = { workspace = true, features = ["adblock", "dot", "doh-upstream", "ring"] }
 lanforge-ra = { workspace = true }
 lanforge-discovery = { workspace = true }
 

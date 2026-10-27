@@ -56,9 +56,4 @@ pub enum DnsError {
     /// A generic or internal error.
     #[error("Generic error: {0}")]
     Generic(String),
-
-    /// TLS PEM parsing error.
-    #[cfg(any(feature = "dot", feature = "doq"))]
-    #[error("TLS PEM parsing error: {0}")]
-    TlsPem(#[from] rustls_pki_types::pem::Error),
 }

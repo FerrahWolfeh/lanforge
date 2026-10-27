@@ -24,7 +24,7 @@ use lanforge_core::{
     service::{AsyncService, LanforgeService, ServiceCommand, ServiceHandle},
 };
 use lanforge_db_core::{DatabaseStore, LogStore};
-use lanforge_dns::server::transport::tls as tls_utils;
+use lanforge_crypto::tls as tls_utils;
 use lanforge_types::system::DormantReason;
 #[cfg(feature = "webui")]
 use lanforge_webui::WebUiAssets;

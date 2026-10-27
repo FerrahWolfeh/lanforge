@@ -364,10 +364,15 @@ const fn event_topic_and_kind(event: &LanforgeEvent) -> (&'static str, &'static 
         LanforgeEvent::Dns(d) => (
             "dns",
             match d {
+                #[cfg(feature = "adblock")]
                 DnsEvent::AdblockToggle { .. } => "AdblockToggle",
+                #[cfg(feature = "adblock")]
                 DnsEvent::AdblockReload => "AdblockReload",
+                #[cfg(feature = "adblock")]
                 DnsEvent::AdblockBlock(..) => "AdblockBlock",
+                #[cfg(feature = "adblock")]
                 DnsEvent::AdblockAllow(..) => "AdblockAllow",
+                #[cfg(feature = "adblock")]
                 DnsEvent::QueryBlocked { .. } => "QueryBlocked",
                 DnsEvent::QueryResolved(..) => "QueryResolved",
                 DnsEvent::CacheFlush => "CacheFlush",

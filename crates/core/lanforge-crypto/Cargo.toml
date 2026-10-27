@@ -9,3 +9,11 @@ authors.workspace = true
 argon2 = { workspace = true }
 password-hash = { workspace = true }
 xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
+rustls = { workspace = true, optional = true }
+rustls-pki-types = { version = "1.14.1", features = ["std"], optional = true }
+thiserror = { workspace = true, optional = true }
+
+[features]
+tls = ["dep:rustls", "dep:rustls-pki-types", "dep:thiserror"]
+ring = ["rustls?/ring"]
+aws-lc = ["rustls?/aws-lc-rs"]

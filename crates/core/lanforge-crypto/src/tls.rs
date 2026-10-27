@@ -1,18 +1,23 @@
+//! TLS server configuration from a PEM certificate chain and private key, shared by every
+//! TLS listener (DoT, DoQ, HTTPS). Each input is either raw PEM text or a file path.
+
 use std::io::Cursor;
 use std::path::Path;
-use std::sync::Arc;
 
 use rustls::ServerConfig;
-use rustls_pki_types::pem::PemObject;
+use rustls_pki_types::pem::{self, PemObject};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 
-use crate::error::DnsError;
-
-pub struct TlsAcceptor {
-    pub config: Arc<ServerConfig>,
+#[derive(Debug, thiserror::Error)]
+pub enum TlsError {
+    #[error("{0}")]
+    Invalid(String),
+    #[error("TLS PEM parsing error: {0}")]
+    Pem(#[from] pem::Error),
 }
 
-pub fn load_tls_config(cert_input: &str, key_input: &str) -> Result<ServerConfig, DnsError> {
+/// Builds a rustls server config, installing the compiled-in crypto provider first.
+pub fn load_tls_config(cert_input: &str, key_input: &str) -> Result<ServerConfig, TlsError> {
     #[cfg(feature = "ring")]
     let _ = rustls::crypto::ring::default_provider().install_default();
     #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
@@ -24,41 +29,41 @@ pub fn load_tls_config(cert_input: &str, key_input: &str) -> Result<ServerConfig
     let config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
-        .map_err(|e| DnsError::Tls(format!("Failed to create TLS config: {e}")))?;
+        .map_err(|e| TlsError::Invalid(format!("Failed to create TLS config: {e}")))?;
 
     Ok(config)
 }
 
-fn load_certs(input: &str) -> Result<Vec<CertificateDer<'static>>, DnsError> {
+fn load_certs(input: &str) -> Result<Vec<CertificateDer<'static>>, TlsError> {
     if is_pem_format(input) {
         let mut cursor = Cursor::new(input.as_bytes());
         CertificateDer::pem_reader_iter(&mut cursor)
             .map(|res| res.map(CertificateDer::into_owned))
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| DnsError::Tls(format!("Failed to parse raw PEM certificate: {e}")))
+            .map_err(|e| TlsError::Invalid(format!("Failed to parse raw PEM certificate: {e}")))
     } else {
         let path = Path::new(input);
         Ok(CertificateDer::pem_file_iter(path)?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| DnsError::Tls(format!("Failed to read certificate file {input}: {e}")))?)
+            .map_err(|e| TlsError::Invalid(format!("Failed to read certificate file {input}: {e}")))?)
     }
 }
 
-fn load_private_key(input: &str) -> Result<PrivateKeyDer<'static>, DnsError> {
+fn load_private_key(input: &str) -> Result<PrivateKeyDer<'static>, TlsError> {
     if is_pem_format(input) {
         let mut cursor = Cursor::new(input.as_bytes());
         PrivateKeyDer::pem_reader_iter(&mut cursor)
             .next()
-            .ok_or_else(|| DnsError::Tls("No private key found in PEM".to_string()))?
+            .ok_or_else(|| TlsError::Invalid("No private key found in PEM".to_string()))?
             .map(|k| k.clone_key())
-            .map_err(|e| DnsError::Tls(format!("Failed to parse raw PEM private key: {e}")))
+            .map_err(|e| TlsError::Invalid(format!("Failed to parse raw PEM private key: {e}")))
     } else {
         let path = Path::new(input);
         Ok(PrivateKeyDer::pem_file_iter(path)?
             .next()
-            .ok_or_else(|| DnsError::Tls(format!("No private key found in {input}")))?
+            .ok_or_else(|| TlsError::Invalid(format!("No private key found in {input}")))?
             .map(|k| k.clone_key())
-            .map_err(|e| DnsError::Tls(format!("Failed to read private key file {input}: {e}")))?)
+            .map_err(|e| TlsError::Invalid(format!("Failed to read private key file {input}: {e}")))?)
     }
 }
 

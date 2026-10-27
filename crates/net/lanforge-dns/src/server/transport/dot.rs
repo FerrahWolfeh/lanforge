@@ -12,7 +12,7 @@ use tracing::{debug, error, info};
 
 use crate::pipeline::DnsPipelineRequest;
 use crate::server::DnsContext;
-use crate::server::transport::tls::load_tls_config;
+use lanforge_crypto::tls::load_tls_config;
 
 /// Runs the internal DoT worker listener on the given socket address.
 pub async fn run_dot_worker(

@@ -10,7 +10,7 @@ use tracing::{debug, info};
 
 use crate::pipeline::DnsPipelineRequest;
 use crate::server::DnsContext;
-use crate::server::transport::tls::load_tls_config;
+use lanforge_crypto::tls::load_tls_config;
 
 /// Runs the internal DoQ worker endpoint on the given socket address.
 pub async fn run_doq_worker(

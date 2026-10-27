@@ -12,6 +12,7 @@ lanforge-macros = { workspace = true }
 lanforge-transport = { workspace = true }
 lanforge-types = { workspace = true }
 lanforge-dns-wire = { workspace = true }
+lanforge-crypto = { workspace = true, optional = true }
 
 # Workspace
 tokio = { workspace = true, features = ["io-util", "net", "time", "rt"] }
@@ -62,12 +63,14 @@ fst = { version = "0.4.7", optional = true }
 
 [features]
 aws-lc = [
+    "lanforge-crypto?/aws-lc",
     "rustls?/aws-lc-rs",
     "quinn?/rustls-aws-lc-rs",
     "hyper-rustls?/aws-lc-rs",
     "tokio-rustls?/aws-lc-rs",
 ]
 ring = [
+    "lanforge-crypto?/ring",
     "rustls?/ring",
     "quinn?/rustls-ring",
     "hyper-rustls?/ring",
@@ -86,12 +89,13 @@ adblock = [
     "lanforge-core/adblock",
 ]
 dot = [
+    "lanforge-crypto/tls",
     "dep:rustls",
     "dep:rustls-pki-types",
     "dep:tokio-rustls",
     "dep:webpki-roots",
 ]
-doq = ["dep:quinn", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
+doq = ["lanforge-crypto/tls", "dep:quinn", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
 doh-upstream = [
     "dep:hyper",
     "dep:hyper-util",

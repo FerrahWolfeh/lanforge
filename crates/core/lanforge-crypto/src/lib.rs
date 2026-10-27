@@ -4,8 +4,14 @@
 //! (e.g. Argon2id password hashing, and future TLS / DoT / DoQ primitives)
 //! and deterministic content hashing from higher-level orchestration crates.
 
+// rustls needs a crypto provider: without one, building a TLS config panics at runtime.
+#[cfg(all(feature = "tls", not(any(feature = "ring", feature = "aws-lc"))))]
+compile_error!("lanforge-crypto: `tls` needs a crypto provider; enable `ring` or `aws-lc`");
+
 pub mod hash;
 pub mod password;
+#[cfg(feature = "tls")]
+pub mod tls;
 
 pub use hash::{
     content_hash_hex, content_hash_short_hex, content_hash64, content_hash128, slugify,

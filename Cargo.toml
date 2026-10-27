@@ -40,7 +40,7 @@ lanforge-webui = { path = "crates/webui/lanforge-webui" }
 lanforge-uds = { path = "crates/api/lanforge-uds" }
 lanforge-cli = { path = "crates/bin/lanforge-cli" }
 lanforge-discovery = { path = "crates/net/lanforge-discovery" }
-lanforge-dns = { path = "crates/net/lanforge-dns" }
+lanforge-dns = { path = "crates/net/lanforge-dns", default-features = false }
 lanforge-dns-wire = { path = "crates/net/lanforge-dns-wire" }
 lanforge-dhcp = { path = "crates/net/lanforge-dhcp" }
 lanforge-ra = { path = "crates/net/lanforge-ra" }
