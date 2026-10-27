@@ -83,9 +83,7 @@ server = [
     "dep:futures",
     "dep:rustls",
     "dep:lanforge-db-core",
-    "dep:lanforge-dns",
     "dep:lanforge-api-dispatch",
-    "dep:lanforge-dns-wire",
     "dep:lanforge-macros",
     "dep:lanforge-core",
     "dep:lanforge-dhcp",
@@ -104,7 +102,7 @@ client = [
     "dep:rustls",
     "dep:url",
 ]
-doh = ["server", "dep:base64"]
+doh = ["server", "dep:base64", "dep:lanforge-dns", "dep:lanforge-dns-wire"]
 webui = ["server", "dep:lanforge-webui"]
 adblock = [
     "lanforge-api-dispatch/adblock",
@@ -115,7 +113,7 @@ hotpath = [
     "lanforge-core/hotpath",
     "lanforge-api-dispatch/hotpath",
     "lanforge-db-core/hotpath",
-    "lanforge-dns/hotpath",
+    "lanforge-dns?/hotpath",
 ]
 
 [dev-dependencies]

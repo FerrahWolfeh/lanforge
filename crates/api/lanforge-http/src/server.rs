@@ -215,7 +215,9 @@ impl HttpService {
                     shutdown_handle.graceful_shutdown(Some(Duration::from_secs(5)));
                 });
 
-                let app_service = app.clone().into_make_service();
+                let app_service = app
+                    .clone()
+                    .into_make_service_with_connect_info::<SocketAddr>();
                 let server = axum_server::from_tcp_rustls(std_listener, rustls_cfg)
                     .map_err(|e| CoreError::Generic(format!("Failed to create TLS server: {e}")))?;
                 server_tasks.push(tokio::spawn(async move {
@@ -257,11 +259,11 @@ impl HttpService {
 
                 server_tasks.push(tokio::spawn(async move {
                     axum::serve(tcp_listener, app_clone)
-                        .with_graceful_shutdown(async move {
-                            let _ = shutdown_rx.changed().await;
-                        })
-                        .await
-                        .map_err(|e| CoreError::Generic(format!("Axum server error: {e}")))
+                    .with_graceful_shutdown(async move {
+                        let _ = shutdown_rx.changed().await;
+                    })
+                    .await
+                    .map_err(|e| CoreError::Generic(format!("Axum server error: {e}")))
                 }));
             }
         }
@@ -486,7 +488,7 @@ fn bind_tcp_dual_stack(addr: SocketAddr) -> Result<Vec<std::net::TcpListener>, C
 
 async fn handle_metrics(State(state): State<AppState>) -> HttpResult<impl IntoResponse> {
     let uptime = state.start_time.elapsed().as_secs();
-    let body = crate::metrics::generate_metrics(&state.ctx, uptime);
+    let body = crate::metrics::generate_metrics(&state.ctx, uptime).await;
 
     axum::response::Response::builder()
         .header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

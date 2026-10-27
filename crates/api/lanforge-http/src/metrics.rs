@@ -1,11 +1,16 @@
 use std::fmt::Write;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use lanforge_core::context::{EventCounters, LanforgeContext};
-use lanforge_dns::server::DnsContext;
-use lanforge_dns::telemetry::DnsStats;
 use lanforge_types::device::Origin;
+use lanforge_types::network::dns::{
+    DnsRequest, DnsResponse, DnsStatsResponse, UpstreamHealthSnapshot,
+};
 use lanforge_types::system::SystemStatus;
+
+/// How long a scrape waits for the DNS service; past it the DNS section is left out.
+const DNS_SCRAPE_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Default)]
 struct DeviceMetricsSummary {
@@ -17,9 +22,42 @@ struct DeviceMetricsSummary {
     v6_leases: usize,
 }
 
+/// DNS counters and upstream health, asked through the `DnsHandle` like any other client.
+#[derive(Default)]
+struct DnsMetrics {
+    stats: Option<DnsStatsResponse>,
+    upstreams: Vec<UpstreamHealthSnapshot>,
+}
+
+async fn fetch_dns_metrics(ctx: &LanforgeContext) -> DnsMetrics {
+    let Some(handle) = ctx.dns_handle() else {
+        return DnsMetrics::default();
+    };
+    let ask = |req| {
+        let handle = handle.clone();
+        async move {
+            tokio::time::timeout(DNS_SCRAPE_TIMEOUT, handle.send_request(req))
+                .await
+                .ok()
+                .and_then(Result::ok)
+        }
+    };
+    let (stats, upstreams) = tokio::join!(ask(DnsRequest::Stats), ask(DnsRequest::Upstreams));
+    DnsMetrics {
+        stats: match stats {
+            Some(DnsResponse::Stats(s)) => Some(s),
+            _ => None,
+        },
+        upstreams: match upstreams {
+            Some(DnsResponse::Upstreams(u)) => u,
+            _ => Vec::new(),
+        },
+    }
+}
+
 /// Generates a Prometheus-formatted metrics string.
-#[must_use]
-pub fn generate_metrics(ctx: &LanforgeContext, uptime_secs: u64) -> String {
+pub async fn generate_metrics(ctx: &LanforgeContext, uptime_secs: u64) -> String {
+    let dns = fetch_dns_metrics(ctx).await;
     let mut out = String::with_capacity(4096);
     let summary = ctx.with_state(|state| {
         let mut summary = DeviceMetricsSummary::default();
@@ -45,7 +83,7 @@ pub fn generate_metrics(ctx: &LanforgeContext, uptime_secs: u64) -> String {
 
     append_device_metrics(&mut out, &summary);
     append_dhcp_metrics(&mut out, ctx, &status, summary.v4_leases, summary.v6_leases);
-    append_dns_metrics(&mut out, ctx);
+    append_dns_metrics(&mut out, &dns);
     append_core_metrics(&mut out, counters);
     append_system_metrics(&mut out, &status, uptime_secs);
 
@@ -219,12 +257,11 @@ fn append_dhcp_metrics(
     }
 }
 
-fn append_dns_metrics(out: &mut String, ctx: &LanforgeContext) {
-    if let Some(stats) = ctx.get_shared::<DnsStats>() {
-        let snap = stats.snapshot();
+fn append_dns_metrics(out: &mut String, dns: &DnsMetrics) {
+    if let Some(snap) = &dns.stats {
         out.push_str("# HELP lanforge_dns_queries_total Total DNS queries received\n");
         out.push_str("# TYPE lanforge_dns_queries_total counter\n");
-        let _ = writeln!(out, "lanforge_dns_queries_total {}", snap.requests_total);
+        let _ = writeln!(out, "lanforge_dns_queries_total {}", snap.total_requests);
 
         out.push_str("# HELP lanforge_dns_cache_hits_total DNS queries answered from cache\n");
         out.push_str("# TYPE lanforge_dns_cache_hits_total counter\n");
@@ -245,7 +282,7 @@ fn append_dns_metrics(out: &mut String, ctx: &LanforgeContext) {
         );
     }
 
-    if let Some(dns_ctx) = ctx.get_shared::<DnsContext>() {
+    if dns.stats.is_some() {
         out.push_str("# HELP lanforge_dns_upstream_rtt_us Round-trip time to upstream resolver in microseconds\n");
         out.push_str("# TYPE lanforge_dns_upstream_rtt_us gauge\n");
         out.push_str(
@@ -257,24 +294,23 @@ fn append_dns_metrics(out: &mut String, ctx: &LanforgeContext) {
         );
         out.push_str("# TYPE lanforge_dns_upstream_failures_total counter\n");
 
-        for mgr in dns_ctx.recursive.all_upstreams() {
-            let target = &mgr.target.addr.to_string();
-            let proto = format!("{:?}", mgr.target.protocol).to_lowercase();
-            let rtt = mgr.health.rtt_ewma_us.load(Ordering::Relaxed);
-            let queries = mgr.health.total_successes.load(Ordering::Relaxed);
-            let failures = mgr.health.total_failures.load(Ordering::Relaxed);
-
+        for up in &dns.upstreams {
+            let target = up.target;
+            let proto = format!("{:?}", up.protocol).to_lowercase();
             let _ = writeln!(
                 out,
-                "lanforge_dns_upstream_rtt_us{{target=\"{target}\",proto=\"{proto}\"}} {rtt}"
+                "lanforge_dns_upstream_rtt_us{{target=\"{target}\",proto=\"{proto}\"}} {}",
+                up.rtt_ewma_us
             );
             let _ = writeln!(
                 out,
-                "lanforge_dns_upstream_queries_total{{target=\"{target}\",proto=\"{proto}\"}} {queries}"
+                "lanforge_dns_upstream_queries_total{{target=\"{target}\",proto=\"{proto}\"}} {}",
+                up.total_successes
             );
             let _ = writeln!(
                 out,
-                "lanforge_dns_upstream_failures_total{{target=\"{target}\",proto=\"{proto}\"}} {failures}"
+                "lanforge_dns_upstream_failures_total{{target=\"{target}\",proto=\"{proto}\"}} {}",
+                up.total_failures
             );
         }
     }
@@ -336,5 +372,69 @@ fn append_system_metrics(out: &mut String, status: &SystemStatus, uptime_secs: u
             out.push_str("# TYPE lanforge_memory_rss_bytes gauge\n");
             let _ = writeln!(out, "lanforge_memory_rss_bytes {rss_bytes}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use lanforge_core::bus::EventBus;
+    use lanforge_core::context::state::State;
+    use lanforge_types::network::dns::UpstreamStatus;
+    use lanforge_types::network::dns::upstream::UpstreamProtocol;
+
+    use super::*;
+
+    /// The DNS section comes from the `DnsHandle` (the DNS service's public interface), not
+    /// from its internal context: a fake service answering the handle is all it needs.
+    #[tokio::test]
+    async fn dns_section_is_served_through_the_handle() {
+        let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+        let mut rx = ctx.take_dns_requests();
+        tokio::spawn(async move {
+            while let Some((req, resp_tx)) = rx.recv().await {
+                let resp = match req {
+                    DnsRequest::Stats => DnsResponse::Stats(DnsStatsResponse {
+                        total_requests: 42,
+                        cache_hits: 7,
+                        ..DnsStatsResponse::default()
+                    }),
+                    DnsRequest::Upstreams => DnsResponse::Upstreams(vec![UpstreamHealthSnapshot {
+                        target: "9.9.9.9:53".parse().unwrap(),
+                        protocol: UpstreamProtocol::Udp,
+                        rtt_ewma_us: 1500,
+                        last_rtt_us: 1400,
+                        total_queries: 10,
+                        total_successes: 9,
+                        total_failures: 1,
+                        status: UpstreamStatus::Healthy,
+                        last_success_secs_ago: Some(1),
+                        domain: None,
+                    }]),
+                    _ => continue,
+                };
+                let _ = resp_tx.send(resp);
+            }
+        });
+
+        let out = generate_metrics(&ctx, 1).await;
+        assert!(out.contains("lanforge_dns_queries_total 42"), "{out}");
+        assert!(out.contains("lanforge_dns_cache_hits_total 7"));
+        assert!(out.contains(
+            "lanforge_dns_upstream_failures_total{target=\"9.9.9.9:53\",proto=\"udp\"} 1"
+        ));
+    }
+
+    /// A DNS that does not answer leaves its section out instead of stalling the scrape.
+    #[tokio::test]
+    async fn silent_dns_does_not_stall_the_scrape() {
+        let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+        let _rx = ctx.take_dns_requests();
+        let out = tokio::time::timeout(Duration::from_secs(3), generate_metrics(&ctx, 1))
+            .await
+            .expect("scrape returns");
+        assert!(!out.contains("lanforge_dns_queries_total"));
+        assert!(out.contains("lanforge_uptime_seconds 1"));
     }
 }
