@@ -7,15 +7,29 @@ use lanforge_types::network::dns::TransportProtocol;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tracing::{error, trace};
 
+/// Upstream queries one worker keeps in flight; beyond it a miss is answered SERVFAIL (the
+/// client retries) instead of piling up tasks on a slow or dead upstream.
+const MAX_UPSTREAM_QUERIES: usize = 256;
+
+/// Spawns one UDP receive loop on `transport`.
+///
+/// Cache misses run in a `JoinSet` owned by this task: they hold the socket, so aborting the
+/// worker must take them along or a restart cannot rebind the port (AGENTS.md async hygiene).
 pub fn spawn_udp_worker(ctx: Arc<DnsContext>, transport: UdpTransport) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut buf = [0u8; 1500]; // Standard MTU-ish buffer on stack
         let mut resp_buf = Vec::with_capacity(512); // Reused response buffer for inline fast-path
+        let mut upstream_queries = JoinSet::new();
         loop {
-            match transport.recv(&mut buf).await {
+            let received = tokio::select! {
+                received = transport.recv(&mut buf) => received,
+                // Reap finished upstream queries so the set stays bounded.
+                Some(_) = upstream_queries.join_next(), if !upstream_queries.is_empty() => continue,
+            };
+            match received {
                 Ok((len, src)) => {
                     let len = len.min(buf.len());
                     let packet_data = &buf[..len];
@@ -73,11 +87,24 @@ pub fn spawn_udp_worker(ctx: Arc<DnsContext>, transport: UdpTransport) -> JoinHa
                             // Genuine cache miss! Upstream async network I/O needed.
                             // Copy packet bytes into SmallVec<[u8; 128]> (stack buffer for <= 128B DNS queries;
                             // safe heap spill if oversized EDNS0).
+                            if upstream_queries.len() >= MAX_UPSTREAM_QUERIES {
+                                resp_buf.clear();
+                                WireResponseWriter::write_error_response(
+                                    packet_data,
+                                    &question,
+                                    2, // SERVFAIL
+                                    edns,
+                                    true,
+                                    &mut resp_buf,
+                                );
+                                let _ = transport.send(&resp_buf, &src).await;
+                                continue;
+                            }
                             let task_ctx = Arc::clone(&ctx);
                             let task_transport = transport.clone();
                             let data = smallvec::SmallVec::<[u8; 128]>::from_slice(packet_data);
 
-                            tokio::spawn(async move {
+                            upstream_queries.spawn(async move {
                                 if let Err(e) = handle_udp_upstream_query(
                                     task_ctx,
                                     task_transport,

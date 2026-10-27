@@ -191,3 +191,61 @@ async fn dns_requests_wait_through_a_restart() {
         .expect("service alive");
     let _ = timeout(Duration::from_secs(2), serve).await;
 }
+
+/// A cache miss waits on the upstream in a child task that holds the UDP socket. Those children
+/// were detached `tokio::spawn`s: aborting the UDP worker left them alive, so a restart on the
+/// same port could not rebind :53 until every in-flight upstream query timed out.
+#[tokio::test]
+async fn stop_releases_udp_socket_with_upstream_queries_in_flight() {
+    use common::DnsPacketBuilder;
+    use lanforge_types::network::dns::DnsRecordType;
+    use lanforge_types::network::dns::upstream::UpstreamTarget;
+
+    // An upstream that never answers keeps the query in flight.
+    let silent = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let silent_target = format!("udp://{}", silent.local_addr().unwrap())
+        .parse::<UpstreamTarget>()
+        .unwrap();
+
+    let ctx = init_test_context();
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, free_port()));
+    ctx.update_dns_listen(DnsListenConfig {
+        listen: ListenConfig::Single(addr),
+        ..DnsListenConfig::default()
+    });
+    ctx.update_dns_upstreams(vec![silent_target]);
+    let mut service = DnsService::new(
+        DnsConfig {
+            enabled: true,
+            ..mock_config()
+        },
+        ctx.clone(),
+    );
+    let (cmd_tx, cmd_rx) = mpsc::channel(4);
+    let h = ServiceHandle::with_command_channel(ServiceId::Dns, ctx.clone(), cmd_rx);
+    let ctx_serve = ctx.clone();
+    let serve = tokio::spawn(async move { service.serve(&ctx_serve, &h).await });
+    wait_for_service_online(&ctx, ServiceId::Dns).await;
+
+    let client = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    for name in ["a.example.org", "b.example.org", "c.example.org"] {
+        let query = DnsPacketBuilder::query(name, DnsRecordType::A).build_bytes();
+        client.send_to(&query, addr).await.unwrap();
+    }
+    let mut probe = [0u8; 64];
+    let _ = silent.recv_from(&mut probe).await; // the miss reached the upstream
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    cmd_tx
+        .send(ServiceCommand::Stop)
+        .await
+        .expect("service alive");
+    timeout(Duration::from_secs(2), serve)
+        .await
+        .expect("serve returns on Stop")
+        .expect("join")
+        .expect("serve ok");
+
+    let rebind = std::net::UdpSocket::bind(addr);
+    assert!(rebind.is_ok(), "UDP {addr} still held: {:?}", rebind.err());
+}
