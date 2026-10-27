@@ -420,13 +420,18 @@ impl Ipv6Pool {
             return static_ips;
         }
 
-        if !sticky_ips.is_empty() {
-            return sticky_ips;
-        }
+        // A sticky lease only survives while its prefix is still served: after a renumber the
+        // withdrawn GUA must not be renewed, and the IAID gets an address on the new one.
+        let mut assigned: Vec<Ipv6Addr> = sticky_ips
+            .into_iter()
+            .filter(|ip| prefixes.iter().any(|p| Self::is_on_prefix(ip, p)))
+            .collect();
 
-        // 3. Fresh dynamic allocation from pools.
-        let mut assigned = Vec::new();
+        // 3. Fresh dynamic allocation for every served prefix the IAID has no address on.
         for prefix in prefixes {
+            if assigned.iter().any(|ip| Self::is_on_prefix(ip, &prefix)) {
+                continue;
+            }
             if let Some(ip) = self.allocate_for_prefix(ctx, prefix, duid, mac, requested, &assigned)
             {
                 assigned.push(ip);

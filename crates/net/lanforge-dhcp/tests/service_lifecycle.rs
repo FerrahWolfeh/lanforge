@@ -978,3 +978,102 @@ async fn test_dhcpv6_rapid_commit_reply_is_a_binding() -> Result<(), Box<dyn Err
     let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
     Ok(())
 }
+
+/// A dynamic lease is sticky per IAID, but only while its prefix is still served: after a
+/// renumber the owner's phone kept renewing `5090:5600::260` (three PDs old) with full
+/// lifetimes and never got an address on the current GUA.
+#[tokio::test]
+async fn test_dhcpv6_dynamic_lease_follows_renumbered_gua() -> Result<(), Box<dyn Error>> {
+    const LAN: u32 = 1;
+    let server_mac = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+    let (ctx, bus) = init_test_context_with_interface(LAN, "lan0", server_mac);
+    let mut cfg = create_test_v6_config();
+    // A GUA pool by suffix, like the owner's `::100`-`::fff` scope.
+    cfg.pools = vec![lanforge_types::network::dhcp::Dhcpv6Pool {
+        range_start: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix("::200".parse()?)),
+        range_end: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix("::2ff".parse()?)),
+        ..Default::default()
+    }];
+    ctx.update_dhcp_v6_pools(cfg.pools.clone());
+    set_lan_gua(&ctx, LAN, server_mac, "2804:bdc:5090:5600::1");
+
+    let duid = Duid::new(vec![
+        0x00, 0x01, 0x00, 0x01, 0x32, 0x72, 0x5e, 0x1a, 0x54, 0x44, 0xa3, 0x46, 0xc2, 0x94,
+    ]);
+    const IAID: u32 = 2_739_323_540;
+
+    let (handle, transport) = Dhcpv6Transport::inert();
+    let mut service = Dhcpv6Service::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let serve_handle = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp6, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    wait_for_service_online(&ctx, ServiceId::Dhcp6).await?;
+    let client_src: SocketAddr = "[fe80::5644:a3ff:fe46:c294]:546".parse()?;
+    let exchange = |bytes: Vec<u8>| {
+        let handle = &handle;
+        async move {
+            handle.inject(bytes, client_src).await;
+            // Skip the Reconfigure the server multicasts on a renumber.
+            loop {
+                let reply = timeout(TEST_TIMEOUT, handle.recv_payload()).await.ok()??;
+                let msg = MessageV6::decode(&mut Decoder::new(&reply)).ok()?;
+                if msg.msg_type() != MessageTypeV6::Reconfigure {
+                    return Some(msg);
+                }
+            }
+        }
+    };
+    let old_prefix = lanforge_types::network::Ipv6Prefix::from_addr("2804:bdc:5090:5600::".parse()?);
+    let new_prefix = lanforge_types::network::Ipv6Prefix::from_addr("2804:bdc:5071:9400::".parse()?);
+
+    let adv = exchange(
+        Dhcpv6PacketBuilder::solicit(duid.clone())
+            .with_ia_na(IAID, None)
+            .build(),
+    )
+    .await
+    .ok_or("no Advertise")?;
+    let server_duid = match adv.opts().get(OptionCodeV6::ServerId) {
+        Some(Dhcpv6Option::ServerId(d)) => Duid::new(d.clone()),
+        _ => return Err("Expected ServerId in Advertise".into()),
+    };
+    let old_gua = ia_na_addrs(&adv)
+        .into_iter()
+        .map(|(a, _, _)| a)
+        .find(|a| old_prefix.matches(a))
+        .ok_or("no GUA offered")?;
+    let bound = exchange(
+        Dhcpv6PacketBuilder::request(duid.clone(), server_duid.clone())
+            .with_ia_na(IAID, Some(old_gua))
+            .build(),
+    )
+    .await
+    .ok_or("no Reply to Request")?;
+    assert!(ia_na_addrs(&bound).iter().any(|(a, _, _)| *a == old_gua));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    set_lan_gua(&ctx, LAN, server_mac, "2804:bdc:5071:9400::1");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let reply = exchange(
+        Dhcpv6PacketBuilder::renew(duid, server_duid)
+            .with_ia_na(IAID, Some(old_gua))
+            .build(),
+    )
+    .await
+    .ok_or("no Reply to Renew")?;
+    let addrs = ia_na_addrs(&reply);
+    assert!(
+        addrs.iter().any(|(a, p, v)| *a == old_gua && (*p, *v) == (0, 0)),
+        "withdrawn GUA must come back with zero lifetimes: {addrs:?}"
+    );
+    assert!(
+        addrs.iter().any(|(a, p, _)| new_prefix.matches(a) && *p > 0),
+        "an address on the current GUA: {addrs:?}"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
+    Ok(())
+}
