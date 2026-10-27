@@ -26,6 +26,7 @@ impl ClientContext {
             capabilities: Self::gather_capabilities(),
             server_caps: self.ctx.server_capabilities(),
             service_banners: self.ctx.service_banners(),
+            config_issues: self.ctx.config_issues(),
         };
 
         let (total_devices, counts) = self.ctx.with_state(|state| {

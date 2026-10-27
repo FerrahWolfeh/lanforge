@@ -291,6 +291,7 @@ impl Bootstrapper {
         }
         ctx.set_config_path(&cfg.config_path);
         ctx.set_config_writable(cfg.config_writable);
+        ctx.set_config_issues(cfg.config_issues.clone());
 
         let mut patch = ConfigPatch::new();
 

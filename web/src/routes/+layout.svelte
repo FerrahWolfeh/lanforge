@@ -16,9 +16,11 @@
 	import NavigationProgressBar from "$lib/components/NavigationProgressBar.svelte";
 	import { commandState } from "$lib/stores/command.svelte";
 	import { createPolling } from "$lib/utils";
+	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 
 	let { children } = $props();
 	let uptime = $state(0);
+	let configIssues = $state<string[]>([]);
 	let mainContentEl = $state<HTMLElement | null>(null);
 
 	onNavigate((navigation) => {
@@ -122,6 +124,7 @@
 				const s = await status();
 				if (active) {
 					uptime = s.uptime_secs;
+					configIssues = s.config_issues ?? [];
 					capabilitiesState.updateFromStatus(s);
 				}
 			} catch {
@@ -165,6 +168,21 @@
 			>
 				<NavigationProgressBar />
 				<Topbar {uptime} />
+				{#if configIssues.length > 0}
+					<!-- Parts of the config file the daemon could not apply: they run on defaults. -->
+					<div
+						role="alert"
+						class="mx-3 mt-3 sm:mx-6 flex gap-2.5 rounded-xl border border-destructive/40 bg-destructive/10 px-3.5 py-2.5 text-xs text-destructive"
+					>
+						<TriangleAlertIcon class="size-4 shrink-0 mt-0.5" />
+						<div class="flex flex-col gap-1 min-w-0">
+							<span class="font-semibold">Configuration file problems — fix the file and run <code>lanforge reload</code></span>
+							{#each configIssues as issue}
+								<span class="break-words font-mono">{issue}</span>
+							{/each}
+						</div>
+					</div>
+				{/if}
 				<main
 					id="page-content"
 					bind:this={mainContentEl}

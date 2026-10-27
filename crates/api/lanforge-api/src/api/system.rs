@@ -43,6 +43,9 @@ pub struct StatusResponse {
     pub server_caps: ServerCapabilities,
     /// Decoupled service banners.
     pub service_banners: Vec<ServiceBanner>,
+    /// Config file problems found at the last load or reload: what is not applied and why.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub config_issues: Vec<String>,
 }
 
 /// Response containing all decoupled service banners.

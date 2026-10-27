@@ -50,6 +50,9 @@ pub struct TomlConfig {
     pub firewall: lanforge_nft::FirewallConfig,
     #[cfg(feature = "traffic")]
     pub traffic: lanforge_traffic::TrafficConfig,
+    /// Problems found while loading the file (set-aside sections), shown to the admin.
+    #[serde(skip)]
+    pub config_issues: Vec<String>,
 }
 
 #[cfg(feature = "dhcp")]
@@ -263,6 +266,19 @@ impl From<&lanforge_api::config_file::ConfigFile> for TomlConfig {
     }
 }
 
+/// Logs each set-aside section and words it for the admin.
+#[must_use]
+pub fn set_aside_issues(set_aside: &[(lanforge_api::config_file::Section, String)]) -> Vec<String> {
+    set_aside
+        .iter()
+        .map(|(sec, err)| {
+            let issue = format!("[{sec}] is invalid and was not applied (defaults in use): {err}");
+            tracing::error!("Config: {issue}");
+            issue
+        })
+        .collect()
+}
+
 pub fn load_toml(path: &str) -> TomlConfig {
     if !Path::new(path).exists() {
         if path != "/etc/lanforge/lanforge.toml" {
@@ -280,10 +296,12 @@ pub fn load_toml(path: &str) -> TomlConfig {
         }
     };
 
-    match lanforge_api::config_file::ConfigFile::parse(&content) {
-        Ok(file_cfg) => {
+    match lanforge_api::config_file::ConfigFile::parse_lenient(&content) {
+        Ok((file_cfg, set_aside)) => {
             info!("Config: Loaded from '{path}' using named-section schema");
-            TomlConfig::from(&file_cfg)
+            let mut cfg = TomlConfig::from(&file_cfg);
+            cfg.config_issues = set_aside_issues(&set_aside);
+            cfg
         }
         Err(e) => {
             warn!("[config] Invalid configuration '{path}': {e}; using defaults");

@@ -64,6 +64,39 @@ impl ConfigFile {
         toml::from_str(content)
     }
 
+    /// Parses like [`Self::parse`], but a file-owned section (`SectionSet::FILE_OWNED`) that does
+    /// not fit its type is set aside instead of failing the whole file: it takes its default and
+    /// is returned with the error. One wrong value in `[firewall]` must not take DHCP and DNS down
+    /// with it. A file that is not TOML at all, or a wrong value elsewhere, is still an error.
+    pub fn parse_lenient(content: &str) -> Result<(Self, Vec<(Section, String)>), toml::de::Error> {
+        let first_error = match Self::parse(content) {
+            Ok(cfg) => return Ok((cfg, Vec::new())),
+            Err(e) => e,
+        };
+        let Ok(mut doc) = content.parse::<toml_edit::DocumentMut>() else {
+            return Err(first_error);
+        };
+        let mut set_aside = Vec::new();
+        for sec in Section::ALL {
+            if !SectionSet::FILE_OWNED.contains(sec.as_bitflag()) {
+                continue;
+            }
+            let Some(item) = doc.get(sec.name()) else {
+                continue;
+            };
+            let mut alone = toml_edit::DocumentMut::new();
+            alone.insert(sec.name(), item.clone());
+            if let Err(e) = Self::parse(&alone.to_string()) {
+                doc.remove(sec.name());
+                set_aside.push((sec, e.message().trim().to_string()));
+            }
+        }
+        if set_aside.is_empty() {
+            return Err(first_error);
+        }
+        Self::parse(&doc.to_string()).map(|cfg| (cfg, set_aside))
+    }
+
     /// Renders the complete configuration as a well-formatted TOML string.
     pub fn render_full(&self) -> Result<String, toml::ser::Error> {
         let mut out = String::from(
@@ -124,6 +157,30 @@ mod roundtrip_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_broken_file_owned_section_is_set_aside_not_the_whole_file() {
+        let text = "[system]\niface = \"lan0\"\n\n[pppoe]\nmru = \"big\"\n\n[traffic.sqm]\nenabled = true\n";
+        assert!(ConfigFile::parse(text).is_err());
+
+        let (cfg, set_aside) = ConfigFile::parse_lenient(text).unwrap();
+        assert_eq!(cfg.system.iface, "lan0", "the rest of the file is read");
+        assert!(cfg.traffic.sqm.enabled);
+        assert_eq!(cfg.pppoe, PppoeConfig::default());
+        assert_eq!(set_aside.len(), 1);
+        assert_eq!(set_aside[0].0, Section::Pppoe);
+        assert!(
+            set_aside[0].1.contains("mru") || set_aside[0].1.contains("invalid"),
+            "{:?}",
+            set_aside[0].1
+        );
+    }
+
+    #[test]
+    fn errors_outside_file_owned_sections_still_fail() {
+        assert!(ConfigFile::parse_lenient("[system]\niface = 3\n").is_err());
+        assert!(ConfigFile::parse_lenient("[pppoe\n").is_err());
+    }
 
     #[test]
     fn test_roundtrip_lossless() {

@@ -102,6 +102,8 @@ pub struct Config {
 
     pub config_path: String,
     pub config_writable: bool,
+    /// Problems found while loading the config file, shown to the admin.
+    pub config_issues: Vec<String>,
 }
 
 impl Config {
@@ -246,6 +248,7 @@ impl Config {
             traffic_enabled: toml_cfg.traffic.tuning.enabled || toml_cfg.traffic.sqm.enabled,
             #[cfg(feature = "traffic")]
             traffic_toml: toml_cfg.traffic,
+            config_issues: toml_cfg.config_issues,
             config_path: cli.resolved_config_path().to_string_lossy().to_string(),
             config_writable: if cli.dev {
                 false
@@ -733,6 +736,7 @@ impl Default for Config {
             traffic_toml: lanforge_traffic::TrafficConfig::default(),
             config_path: "/etc/lanforge/lanforge.toml".to_string(),
             config_writable: true,
+            config_issues: Vec::new(),
         }
     }
 }

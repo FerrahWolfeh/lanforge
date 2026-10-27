@@ -151,6 +151,8 @@ export interface ServerCapabilities {
 
 export interface StatusResponse {
 	uptime_secs: number;
+	/** Config file problems found at the last load or reload: what is not applied and why. */
+	config_issues?: string[];
 	version?: string;
 	network: NetworkStatus;
 	db: DbStatus;

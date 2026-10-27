@@ -20,8 +20,9 @@ pub fn sync_boot_config(
     let mut file_cfg = if config_path.exists() {
         let content = fs::read_to_string(config_path)
             .with_context(|| format!("Failed to read '{}'", config_path.display()))?;
-        match ConfigFile::parse(&content) {
-            Ok(c) => c,
+        // Set-aside sections are file-owned (never synced); the loader already reported them.
+        match ConfigFile::parse_lenient(&content) {
+            Ok((c, _)) => c,
             Err(e) => {
                 return Err(e).with_context(|| {
                     format!(

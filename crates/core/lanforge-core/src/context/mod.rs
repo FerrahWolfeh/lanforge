@@ -281,6 +281,18 @@ impl LanforgeContext {
         self.inner.runtime.config_file_lock.lock()
     }
 
+    /// Replaces the config file problems found at the last load or reload (set-aside sections,
+    /// ignored entries). Shown in the status so the admin sees what is not applied.
+    pub fn set_config_issues(&self, issues: Vec<String>) {
+        *self.inner.runtime.config_issues.write() = issues;
+    }
+
+    /// Config file problems found at the last load or reload.
+    #[must_use]
+    pub fn config_issues(&self) -> Vec<String> {
+        self.inner.runtime.config_issues.read().clone()
+    }
+
     /// Sets whether live write-back to the TOML configuration file is enabled.
     pub fn set_config_writable(&self, writable: bool) {
         self.inner
