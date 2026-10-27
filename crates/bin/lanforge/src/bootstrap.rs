@@ -12,6 +12,8 @@ use lanforge_db::{
 #[cfg(feature = "dhcp")]
 use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
 use lanforge_discovery::refresh_interface;
+#[cfg(feature = "dns")]
+use lanforge_types::DnsListenConfig;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
 #[cfg(feature = "dhcp")]
@@ -326,7 +328,20 @@ impl Bootstrapper {
         }
 
         #[cfg(feature = "dns")]
-        Self::load_dns_state_into_patch(db, cfg.dns_toml.upstream_mode, &mut patch);
+        {
+            Self::load_dns_state_into_patch(db, cfg.dns_toml.upstream_mode, &mut patch);
+            // The DNS service binds from the live listeners; the file is their source.
+            let dns = cfg.to_dns_config();
+            patch = patch.with_dns_listen(DnsListenConfig {
+                listen: dns.listen,
+                dot_listen: dns.dot_listen,
+                dot_enabled: dns.dot_listen.is_some(),
+                tls_cert: dns.tls_cert,
+                tls_key: dns.tls_key,
+                doq_listen: dns.doq_listen,
+                doq_enabled: dns.doq_listen.is_some(),
+            });
+        }
 
         #[cfg(feature = "pppoe")]
         {

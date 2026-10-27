@@ -20,6 +20,7 @@ use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_transport::{TransportSnapshot, TransportStats};
 #[cfg(feature = "adblock")]
 use lanforge_types::config::DnsAllowlist;
+use lanforge_types::config::DnsListenConfig;
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::AdblockRuleEntry;
 use lanforge_types::network::dns::{
@@ -347,6 +348,10 @@ impl AsyncService for DnsService {
             return Ok(());
         }
 
+        // Listeners come from the live config (seeded from `[dns]` at boot); every reader below
+        // (TCP worker, DoT, DoQ, status) sees them through `self.cfg`.
+        self.cfg = Arc::new(with_live_listeners(&self.cfg, &ctx.get_dns_listen()));
+
         let dns_ctx = self.init_dns_context().await?;
         ctx.provide_shared(Arc::clone(&dns_ctx));
 
@@ -473,6 +478,7 @@ impl AsyncService for DnsService {
         let mut wan_rx = ctx.watch_wan();
         let mut upstreams_sub = ctx.config_subscription::<Vec<UpstreamTarget>>();
         let mut mode_sub = ctx.config_subscription::<UpstreamMode>();
+        let mut listen_sub = ctx.config_subscription::<DnsListenConfig>();
         let mut rewrites_sub = ctx.config_subscription::<Vec<RewriteRule>>();
         let mut filter_subs = FilterSubscriptions::new(ctx);
 
@@ -547,6 +553,13 @@ impl AsyncService for DnsService {
                 Some(_) = upstreams_sub.next() => {
                     info!("Reloading upstreams");
                     resync_upstreams(ctx, &dns_ctx, true).await;
+                }
+                // New listen address/port or TLS identity: restart the DNS service alone (the
+                // daemon, PPPoE and every other service keep running).
+                Some(_) = listen_sub.next() => {
+                    info!("DNS listeners changed, restarting the DNS service");
+                    h.request_restart();
+                    break;
                 }
                 Some(delta) = mode_sub.next() => {
                     info!(mode = ?*delta.new, "Upstream resolution mode changed");
@@ -673,6 +686,18 @@ async fn build_upstreams(
 
 /// Points the resolver at [`effective_upstream_targets`]. `force` rebuilds even an unchanged set
 /// (an explicit config change); otherwise an unchanged set is left alone, cache included.
+/// `cfg` with its listener fields taken from the live `DnsListenConfig`.
+fn with_live_listeners(cfg: &DnsConfig, live: &DnsListenConfig) -> DnsConfig {
+    DnsConfig {
+        listen: live.listen.clone(),
+        dot_listen: live.dot_listen.filter(|_| live.dot_enabled),
+        doq_listen: live.doq_listen.filter(|_| live.doq_enabled),
+        tls_cert: live.tls_cert.clone(),
+        tls_key: live.tls_key.clone(),
+        ..cfg.clone()
+    }
+}
+
 async fn resync_upstreams(ctx: &LanforgeContext, dns_ctx: &DnsContext, force: bool) {
     let targets = effective_upstream_targets(ctx);
     let current: Vec<(SocketAddr, UpstreamProtocol)> = dns_ctx
