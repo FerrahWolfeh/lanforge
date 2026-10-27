@@ -98,6 +98,9 @@ pub fn write_toml_atomically(path: &std::path::Path, content: &str) -> Result<()
 }
 
 #[cfg(test)]
+mod roundtrip_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
