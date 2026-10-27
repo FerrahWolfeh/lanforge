@@ -67,6 +67,9 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
             let mut force_refresh = false;
             // When the last download pass ran: re-enabling within a day reuses the loaded lists.
             let mut last_refresh: Option<Instant> = None;
+            // List downloads resolve through the system resolver, usually this DNS server: a
+            // pass that fails before it has upstreams (boot, PPPoE down) retries once they appear.
+            let mut upstreams_rx = ctx.recursive.watch_upstreams();
 
             loop {
                 let db_cfg = ctx.ctx.get_dns_adblock();
@@ -168,6 +171,8 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                 }
 
                 let start = Instant::now();
+                // Upstream changes during this pass still wake the failure retry below.
+                upstreams_rx.borrow_and_update();
                 let configured_sources = ctx.ctx.get_dns_adblock_urls();
 
                 if skip_download_pass {
@@ -549,6 +554,12 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                         Some(_) = urls_sub.next() => {
                             info!("Adblock: source list changed, reloading");
                             break;
+                        }
+                        Ok(()) = upstreams_rx.changed(), if max_failures > 0 => {
+                            if !ctx.recursive.is_empty() {
+                                info!("Adblock: DNS upstreams available, retrying failed sources");
+                                break;
+                            }
                         }
                         evt_res = rx.recv() => {
                             let evt = match evt_res {

@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::broadcast::Sender;
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep};
 
@@ -94,6 +95,8 @@ pub struct UpstreamStrategy {
     fallback_upstreams: parking_lot::RwLock<Arc<[Arc<UpstreamManager>]>>,
     pub rr_index: AtomicUsize,
     in_flight: DashMap<CacheKey, (InFlightTx, u64)>,
+    /// Bumped on every `replace_upstreams`: wakes tasks waiting for upstreams to exist.
+    upstreams_epoch: watch::Sender<u64>,
 }
 
 impl UpstreamStrategy {
@@ -110,9 +113,15 @@ impl UpstreamStrategy {
             )),
             rr_index: AtomicUsize::new(0),
             in_flight: DashMap::new(),
+            upstreams_epoch: watch::Sender::new(0),
         };
         strategy.replace_upstreams(upstreams);
         strategy
+    }
+
+    /// Changes on every upstream replacement (PPPoE up, config change, ...).
+    pub fn watch_upstreams(&self) -> watch::Receiver<u64> {
+        self.upstreams_epoch.subscribe()
     }
 
     pub fn mode(&self) -> UpstreamMode {
@@ -154,6 +163,7 @@ impl UpstreamStrategy {
         // Sort descending by number of labels (longest suffix match wins)
         routes.sort_by_key(|a| std::cmp::Reverse(a.labels.len()));
         *self.conditional_routes.write() = Arc::from(routes);
+        self.upstreams_epoch.send_modify(|epoch| *epoch += 1);
     }
 
     pub fn replace_fallback_upstreams(&self, fallbacks: Vec<Arc<UpstreamManager>>) {
