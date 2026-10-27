@@ -26,16 +26,16 @@ pub struct DatabaseConfig {
 }
 
 impl DatabaseConfig {
-    /// Returns true if an in-memory database mode was requested or specified for the config database.
+    /// Returns true if a memory-only config database was asked for by name. A blank path or
+    /// a leftover SQL-era URL is a broken persistent config, not a request: it must fail to
+    /// open (recovery mode) instead of booting as a fresh install with setup open.
     #[must_use]
     pub fn is_in_memory(&self) -> bool {
         let u = self.config_path.trim().to_lowercase();
-        u.is_empty()
-            || u == "memory"
+        u == "memory"
             || u == "none"
             || u == "mock"
             || u.starts_with("mock:")
-            || u.starts_with("sqlite:")
             || u.contains(":memory:")
     }
 

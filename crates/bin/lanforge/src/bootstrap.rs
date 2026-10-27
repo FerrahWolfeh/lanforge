@@ -286,7 +286,7 @@ impl Bootstrapper {
         if !cfg.system.iface.is_empty() {
             ctx.set_target_interface_name(cfg.system.iface.clone());
         }
-        if db.is_in_memory() && !cfg.database.is_in_memory() {
+        if Self::is_recovery(cfg, db) {
             ctx.set_recovery_mode(true);
         }
         ctx.set_config_path(&cfg.config_path);
@@ -637,12 +637,19 @@ impl Bootstrapper {
         Ok((db, log_db))
     }
 
+    /// Recovery mode: the persistent DB did not open and an in-memory one stands in for it.
+    /// Not to be confused with `storage = "in_memory"` in the config, an intentional
+    /// memory-only run that provisions like any first run.
+    fn is_recovery(cfg: &Config, db: &LanforgeDb) -> bool {
+        db.is_in_memory() && !cfg.database.is_in_memory()
+    }
+
     /// Decides first-run (provisioning) mode, which makes DHCP/RA/PPPoE dormant and opens
     /// `/setup`. Fails toward "provisioned": an unreadable flag or user table, or recovery
     /// mode (an in-memory stand-in for a persistent DB that did not open), is not a first
     /// run — treating it as one takes the LAN offline and lets anyone on it claim the admin.
     fn check_provisioning_mode(cfg: &mut Config, db: &LanforgeDb) -> bool {
-        let recovery = db.is_in_memory() && !cfg.database.is_in_memory();
+        let recovery = Self::is_recovery(cfg, db);
         if recovery {
             error!(
                 "Bootstrap: RECOVERY MODE — setup stays locked and services run from '{}'; \
@@ -1372,6 +1379,50 @@ mod tests {
         assert!(
             !dir.path().join("lanforge.redb").exists() && !Path::new("lanforge.redb").exists(),
             "no fallback DB file may be created"
+        );
+    }
+
+    #[test]
+    fn memory_only_by_config_is_a_first_run() {
+        let mut cfg = Config::default();
+        cfg.database.config_path = "memory".to_string();
+        cfg.database.runtime_path = "memory".to_string();
+        cfg.system.auto_provision = false;
+        assert!(cfg.database.is_in_memory());
+
+        let (db, _log_db) = Bootstrapper::open_databases(&cfg).unwrap();
+        assert!(db.is_in_memory());
+        assert!(!Bootstrapper::is_recovery(&cfg, &db));
+        assert!(
+            !Bootstrapper::check_provisioning_mode(&mut cfg, &db),
+            "an intentional memory-only run must offer first-run setup"
+        );
+        assert!(!db.is_provisioned().unwrap(), "setup must stay open");
+    }
+
+    /// Memory-only must be asked for by name: a blank path or a leftover SQL-era URL is a
+    /// broken persistent config (recovery), never a fresh install with `/setup` open.
+    #[test]
+    fn blank_or_legacy_db_path_is_recovery_not_memory_only() {
+        for path in ["", "  ", "sqlite:///var/lib/lanforge/lanforge.db"] {
+            let mut cfg = Config::default();
+            cfg.database.config_path = path.to_string();
+            cfg.database.runtime_path = "memory".to_string();
+            cfg.system.auto_provision = false;
+
+            let (db, _log_db) = Bootstrapper::open_databases(&cfg).unwrap();
+            assert!(
+                Bootstrapper::is_recovery(&cfg, &db),
+                "{path:?} must enter recovery mode"
+            );
+            assert!(
+                Bootstrapper::check_provisioning_mode(&mut cfg, &db),
+                "{path:?} must not look like a first run"
+            );
+        }
+        assert!(
+            !Path::new("sqlite:").exists(),
+            "a URL must not be created as a relative directory"
         );
     }
 

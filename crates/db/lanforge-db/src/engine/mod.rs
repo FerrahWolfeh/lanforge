@@ -15,6 +15,16 @@ pub mod types {
     };
 }
 
+/// True for `<scheme>:...` (RFC 3986 scheme syntax), i.e. a URL rather than a file path.
+fn has_url_scheme(path: &str) -> bool {
+    path.split_once(':').is_some_and(|(scheme, _)| {
+        scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    })
+}
+
 #[derive(Clone)]
 pub struct LanforgeDb {
     inner: RedbDatabase,
@@ -31,7 +41,16 @@ impl LanforgeDb {
             let db = RedbDatabase::open_temp()?;
             return Ok(Self { inner: db });
         }
-        let db = RedbDatabase::open(cfg.db_path())?;
+        let path = cfg.db_path();
+        // A URL left over from another backend (`sqlite://...`, `postgres://...`) would
+        // otherwise be created as a relative directory tree holding a fresh, empty DB.
+        if has_url_scheme(&path.to_string_lossy()) {
+            return Err(DbError::Validation(format!(
+                "unsupported database URL '{}': expected a file path or redb://",
+                cfg.config_path
+            )));
+        }
+        let db = RedbDatabase::open(path)?;
         Ok(Self { inner: db })
     }
 
