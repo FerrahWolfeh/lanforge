@@ -1204,6 +1204,52 @@ mod tests {
         assert!(fw.forwardings.is_empty());
     }
 
+    /// An empty file and `ConfigFile::default()` must be the same configuration: every
+    /// `#[serde(default = "...")]` has to agree with the hand-written `Default` impls, or a
+    /// config built in code and one read from a file missing the key silently differ (the
+    /// `deprecate_on_renumber` class).
+    #[test]
+    fn empty_file_equals_default_config() {
+        let parsed = ConfigFile::parse("").unwrap();
+        let default = ConfigFile::default();
+        let (p, d) = (
+            toml::to_string(&parsed).unwrap(),
+            toml::to_string(&default).unwrap(),
+        );
+        if p != d {
+            let diff: Vec<_> = p
+                .lines()
+                .zip(d.lines())
+                .filter(|(a, b)| a != b)
+                .map(|(a, b)| format!("parsed: {a}\ndefault: {b}"))
+                .collect();
+            panic!("empty file != Default:\n{}", diff.join("\n---\n"));
+        }
+    }
+
+    /// Same check one level down: a section that is present but empty must parse to that
+    /// section's `Default`. Field-level `#[serde(default = "...")]` only apply here.
+    #[test]
+    fn empty_sections_equal_their_defaults() {
+        let default = toml::Value::try_from(ConfigFile::default()).unwrap();
+        let mut mismatches = Vec::new();
+        for (name, value) in default.as_table().unwrap() {
+            if !value.is_table() {
+                continue;
+            }
+            let parsed = ConfigFile::parse(&format!("[{name}]\n")).unwrap();
+            let parsed = toml::Value::try_from(parsed).unwrap();
+            let got = parsed
+                .get(name)
+                .cloned()
+                .unwrap_or(toml::Value::Table(Default::default()));
+            if &got != value {
+                mismatches.push(format!("[{name}]\n  empty:   {got}\n  default: {value}"));
+            }
+        }
+        assert!(mismatches.is_empty(), "\n{}", mismatches.join("\n"));
+    }
+
     #[test]
     fn ra_ula_prefix_inherits_system_ula_prefix() {
         let cfg = ConfigFile::parse(

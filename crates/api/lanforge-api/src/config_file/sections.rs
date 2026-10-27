@@ -129,7 +129,7 @@ fn default_tx_ring() -> String {
 // ============================================================================
 
 /// Global system configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SystemFile {
     #[serde(default)]
@@ -148,21 +148,6 @@ pub struct SystemFile {
     pub auto_provision: bool,
     #[serde(default = "default_false")]
     pub allow_unprivileged: bool,
-}
-
-impl Default for SystemFile {
-    fn default() -> Self {
-        Self {
-            iface: String::new(),
-            ula_prefix: None,
-            debounce_secs: Some(2),
-            search_domains: Vec::new(),
-            tls_cert: None,
-            tls_key: None,
-            auto_provision: false,
-            allow_unprivileged: false,
-        }
-    }
 }
 
 /// Embedded database configuration.
@@ -438,9 +423,11 @@ impl Default for RaFile {
             enabled: true,
             managed: true,
             other_config: true,
-            max_interval: Some(HumanDuration(200)),
-            lifetime: Some(HumanDuration(600)),
-            mtu: Some(1500),
+            // `None` = the daemon's built-in value (200 s, 3 × max_interval, no MTU option), the
+            // same as a `[ra]` section without these keys.
+            max_interval: None,
+            lifetime: None,
+            mtu: None,
             prefixes: BTreeMap::new(),
             rdnss: BTreeMap::new(),
             dnssl: BTreeMap::new(),
@@ -515,7 +502,8 @@ impl Default for DnsFile {
     fn default() -> Self {
         Self {
             enabled: true,
-            listen: Some("[::]:53".to_string()),
+            // `None` = the daemon's built-in `[::]:53`, as for a `[dns]` section without `listen`.
+            listen: None,
             upstreams: BTreeMap::new(),
             rewrites: BTreeMap::new(),
         }
@@ -625,7 +613,8 @@ pub struct FirewallFile {
     pub on_stop: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_rules_file: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    /// Always written, even empty: an absent key means the default zones.
+    #[serde(default = "default_firewall_zones")]
     pub zones: BTreeMap<String, FirewallZoneFile>,
     /// Routed traffic allowed between zones. Always written, even empty: an absent key means
     /// the default matrix.
@@ -643,53 +632,58 @@ pub struct ZoneForwardingFile {
     pub to: String,
 }
 
+/// The zones a file gets when it has no `zones` key: without `internal`, the default-drop input
+/// policy would cut the LAN off the router (DNS, DHCP, UI, SSH).
+fn default_firewall_zones() -> BTreeMap<String, FirewallZoneFile> {
+    let mut zones = BTreeMap::new();
+    zones.insert(
+        "internal".to_string(),
+        FirewallZoneFile {
+            interfaces: Vec::new(),
+            input: default_policy_accept(),
+            forward: default_policy_accept(),
+            masquerade: false,
+            mtu_fix: false,
+            open_ports: vec![
+                "22/tcp".to_string(),
+                "53/udp".to_string(),
+                "53/tcp".to_string(),
+                "67/udp".to_string(),
+                "8088/tcp".to_string(),
+                "9090/tcp".to_string(),
+            ],
+            allowed_subnets: Vec::new(),
+        },
+    );
+    zones.insert(
+        "external".to_string(),
+        FirewallZoneFile {
+            interfaces: vec!["ppp0".to_string(), "wan0".to_string()],
+            input: default_policy_drop(),
+            forward: default_policy_drop(),
+            masquerade: true,
+            mtu_fix: true,
+            open_ports: Vec::new(),
+            allowed_subnets: Vec::new(),
+        },
+    );
+    zones.insert(
+        "trusted".to_string(),
+        FirewallZoneFile {
+            interfaces: vec!["tailscale0".to_string(), "podman*".to_string()],
+            input: default_policy_accept(),
+            forward: default_policy_accept(),
+            masquerade: false,
+            mtu_fix: false,
+            open_ports: Vec::new(),
+            allowed_subnets: Vec::new(),
+        },
+    );
+    zones
+}
+
 impl Default for FirewallFile {
     fn default() -> Self {
-        let mut zones = BTreeMap::new();
-        zones.insert(
-            "internal".to_string(),
-            FirewallZoneFile {
-                interfaces: Vec::new(),
-                input: default_policy_accept(),
-                forward: default_policy_accept(),
-                masquerade: false,
-                mtu_fix: false,
-                open_ports: vec![
-                    "22/tcp".to_string(),
-                    "53/udp".to_string(),
-                    "53/tcp".to_string(),
-                    "67/udp".to_string(),
-                    "8088/tcp".to_string(),
-                    "9090/tcp".to_string(),
-                ],
-                allowed_subnets: Vec::new(),
-            },
-        );
-        zones.insert(
-            "external".to_string(),
-            FirewallZoneFile {
-                interfaces: vec!["ppp0".to_string(), "wan0".to_string()],
-                input: default_policy_drop(),
-                forward: default_policy_drop(),
-                masquerade: true,
-                mtu_fix: true,
-                open_ports: Vec::new(),
-                allowed_subnets: Vec::new(),
-            },
-        );
-        zones.insert(
-            "trusted".to_string(),
-            FirewallZoneFile {
-                interfaces: vec!["tailscale0".to_string(), "podman*".to_string()],
-                input: default_policy_accept(),
-                forward: default_policy_accept(),
-                masquerade: false,
-                mtu_fix: false,
-                open_ports: Vec::new(),
-                allowed_subnets: Vec::new(),
-            },
-        );
-
         Self {
             enabled: true,
             mode: default_firewall_mode(),
@@ -701,7 +695,7 @@ impl Default for FirewallFile {
             default_forward_policy: default_policy_drop(),
             on_stop: default_on_stop(),
             custom_rules_file: None,
-            zones,
+            zones: default_firewall_zones(),
             forwardings: default_forwardings(),
             port_forwards: BTreeMap::new(),
         }
@@ -714,9 +708,11 @@ impl Default for FirewallFile {
 pub struct FirewallZoneFile {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub interfaces: Vec<String>,
-    #[serde(default = "default_policy_accept")]
+    /// A zone written without policies is closed (fail closed): an `external` zone missing
+    /// `input` must not open the WAN.
+    #[serde(default = "default_policy_drop")]
     pub input: String,
-    #[serde(default = "default_policy_accept")]
+    #[serde(default = "default_policy_drop")]
     pub forward: String,
     #[serde(default = "default_false")]
     pub masquerade: bool,
@@ -732,8 +728,8 @@ impl Default for FirewallZoneFile {
     fn default() -> Self {
         Self {
             interfaces: Vec::new(),
-            input: default_policy_accept(),
-            forward: default_policy_accept(),
+            input: default_policy_drop(),
+            forward: default_policy_drop(),
             masquerade: false,
             mtu_fix: false,
             open_ports: Vec::new(),
