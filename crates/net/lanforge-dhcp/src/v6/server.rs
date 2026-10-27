@@ -41,7 +41,11 @@
 const PROTECTED_OPTIONS: &[u16] = &[1, 2, 3, 5, 25];
 
 /// Upper bound for T1 (renew), even when the leased lifetimes are longer or infinite.
-const MAX_T1_SECS: u32 = 3600;
+///
+/// Clients drop Reconfigure and the RA cannot deprecate a `DHCPv6` address, so after a PD
+/// renumber a client keeps the withdrawn GUA as a preferred source (IPv6 black-holed) until it
+/// renews: T1 is that outage. Renewing every 5 min is negligible on a home LAN.
+const MAX_T1_SECS: u32 = 300;
 
 use dhcproto::v6::{
     DhcpOption, DhcpOptions, IAAddr, IANA, IAPD, IAPrefix, Message, MessageType, OptionCode,

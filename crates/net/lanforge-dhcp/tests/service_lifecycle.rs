@@ -524,9 +524,11 @@ async fn test_dhcpv6_static_suffix_follows_renumbered_gua() -> Result<(), Box<dy
         Some((3600, 7200)),
         "GUA lease bounded by the PD: {addrs:?}"
     );
+    // Until the client renews it keeps the withdrawn GUA as a preferred source address and
+    // its IPv6 traffic is black-holed: T1 bounds that outage after a renumber.
     assert!(
-        t1 > 0 && t1 <= 3600,
-        "T1 must be finite and capped, got {t1}"
+        t1 > 0 && t1 <= 300,
+        "T1 must be finite and capped at 5 min, got {t1}"
     );
 
     // Bind the lease (Request), as the client does after the Advertise.
