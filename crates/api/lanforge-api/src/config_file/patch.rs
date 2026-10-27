@@ -69,13 +69,24 @@ pub fn patch_sections(
             }
         } else {
             let mut table = parsed.into_table();
-            // If the section table contains only subtables without root scalar values
-            // (e.g. [dhcp] containing only [dhcp.v4] and [dhcp.v6]), mark it implicit
-            // so toml_edit does not emit an empty, dead `[dhcp]` header.
-            if sec == Section::Dhcp {
+            // A section with only subtables (e.g. [dhcp] holding [dhcp.v4] and [dhcp.v6]) is
+            // implicit, so toml_edit does not emit an empty, dead `[dhcp]` header.
+            if table
+                .iter()
+                .all(|(_, item)| item.is_table() || item.is_array_of_tables())
+            {
                 table.set_implicit(true);
             }
-            doc.insert(key, Item::Table(table));
+            // Keep the comment written above the section's first header.
+            let mut item = Item::Table(table);
+            if let Some(prefix) = doc
+                .get_mut(key)
+                .and_then(|old| first_header_decor(old).and_then(|d| d.prefix().cloned()))
+                && let Some(decor) = first_header_decor(&mut item)
+            {
+                decor.set_prefix(prefix);
+            }
+            doc.insert(key, item);
         }
     }
 
@@ -132,6 +143,22 @@ pub fn patch_sections(
     Ok(())
 }
 
+/// The decor of the first header the section prints: its own, or its first subtable's when the
+/// section table is implicit.
+fn first_header_decor(item: &mut Item) -> Option<&mut toml_edit::Decor> {
+    match item {
+        Item::Table(t) => {
+            if t.is_implicit() {
+                first_header_decor(t.iter_mut().next()?.1)
+            } else {
+                Some(t.decor_mut())
+            }
+        }
+        Item::ArrayOfTables(arr) => arr.iter_mut().next().map(toml_edit::Table::decor_mut),
+        _ => None,
+    }
+}
+
 fn ensure_leading_newline(decor: &mut toml_edit::Decor) {
     let p = decor.prefix().and_then(|s| s.as_str()).unwrap_or("");
     if !p.starts_with('\n') {
@@ -142,6 +169,28 @@ fn ensure_leading_newline(decor: &mut toml_edit::Decor) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A comment written above a section's header belongs to the header in `toml_edit`: it
+    /// used to be dropped every time the section was rewritten (a WebUI change).
+    #[test]
+    fn comment_above_a_patched_section_is_kept() {
+        let mut doc: DocumentMut = "[system]\niface = \"lan0\"\n\n# ISP login, ask before changing\n[pppoe]\nenabled = true\n\n# shaping\n[traffic.sqm]\nenabled = false\n"
+            .parse()
+            .unwrap();
+        let mut cfg = ConfigFile::default();
+        cfg.pppoe.username = "user".into();
+        cfg.traffic.sqm.enabled = true;
+
+        patch_sections(&mut doc, &cfg, SectionSet::PPPOE | SectionSet::TRAFFIC).unwrap();
+
+        let out = doc.to_string();
+        assert!(
+            out.contains("# ISP login, ask before changing\n[pppoe]"),
+            "{out}"
+        );
+        assert!(out.contains("# shaping\n[traffic."), "{out}");
+        assert!(!out.contains("[traffic]\n"), "no empty header: {out}");
+    }
 
     #[test]
     fn test_patch_sections_preserves_comments() {
