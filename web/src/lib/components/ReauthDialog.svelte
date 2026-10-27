@@ -45,7 +45,8 @@
 		if (!isOpen && resolver) settle(null);
 	}}
 >
-	<Dialog.Content class="sm:max-w-sm rounded-2xl">
+	<!-- Opens over the dialog whose action needs the password: keep it a layer above. -->
+	<Dialog.Content class="sm:max-w-sm rounded-2xl z-[60]" overlayClass="z-[60]">
 		<Dialog.Header>
 			<Dialog.Title class="text-base font-bold flex items-center gap-2">
 				<ShieldCheckIcon class="size-5 text-primary" />
