@@ -129,6 +129,9 @@ pub struct PppoeService {
     last_uptime: Option<Duration>,
     /// `SessionUp` was published and its `SessionDown` not yet: consumers pair the two.
     announced: bool,
+    /// Handle of the current `serve`; states go through it so the supervisor node (followed by
+    /// `wan`) sees them. `None` outside `serve` (direct calls in tests).
+    handle: Option<ServiceHandle>,
     prober: Option<ArpProber>,
     terminal_status: Option<(bool, Option<MacAddr>, Option<u32>)>,
     config_sub: ConfigSubscription<PppoeConfig>,
@@ -154,6 +157,7 @@ impl PppoeService {
             connected_at: None,
             last_uptime: None,
             announced: false,
+            handle: None,
             prober: None,
             terminal_status: None,
             config_sub,
@@ -181,6 +185,7 @@ impl PppoeService {
             connected_at: None,
             last_uptime: None,
             announced: false,
+            handle: None,
             prober: None,
             terminal_status: None,
             config_sub,
@@ -256,6 +261,10 @@ impl PppoeService {
     /// systemd's start timeout kills the whole daemon). A live session is left as is.
     fn settle_degraded(&self, why: DegradedReason) {
         if self.ctx.get_service_state(Self::SERVICE_ID) == ServiceState::Online {
+            return;
+        }
+        if let Some(h) = &self.handle {
+            h.degraded(why);
             return;
         }
         self.ctx
@@ -623,6 +632,10 @@ impl PppoeService {
             .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(
                 session_up,
             ))));
+        if let Some(h) = &self.handle {
+            h.ready();
+            return;
+        }
         self.ctx
             .set_service_state(Self::SERVICE_ID, ServiceState::Online);
         self.ctx.set_service_detail(Self::SERVICE_ID, None);
@@ -1167,6 +1180,7 @@ impl AsyncService for PppoeService {
 
     #[allow(clippy::too_many_lines)]
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        self.handle = Some(h.clone());
         if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
             self.cfg = dynamic_cfg;
         }

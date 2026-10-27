@@ -7,7 +7,9 @@ use std::time::Duration;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
-use lanforge_core::service::{AsyncService, LossPolicy, ServiceCommand, ServiceHandle};
+use lanforge_core::service::{
+    AsyncService, LossPolicy, ServiceCommand, ServiceHandle, StatusReport,
+};
 use lanforge_pppoe::{PppoeConfig, PppoeService};
 use lanforge_transport::PppoeTransport;
 use lanforge_types::events::TimedEvent;
@@ -942,6 +944,61 @@ async fn test_pppoe_settles_before_the_session_is_up() {
         Ok(ServiceState::Degraded),
         "PPPoE must settle (Degraded) while the ISP does not answer"
     );
+
+    cmd_tx
+        .send(ServiceCommand::Stop)
+        .await
+        .expect("service alive");
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}
+
+/// The supervisor node (what dependents such as `wan` follow) only learns states reported through
+/// the handle. PPPoE wrote Online/Degraded straight into the context and relied on the
+/// once-per-start ServiceReady bridge, so its node could disagree with its real state.
+#[tokio::test]
+async fn test_pppoe_reports_its_state_through_the_handle() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        ..Default::default()
+    };
+    ctx.update_pppoe_config(cfg.clone());
+
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
+
+    let (status_tx, mut status_rx) = tokio::sync::watch::channel::<StatusReport>(None);
+    let (cmd_tx, cmd_rx) = mpsc::channel(8);
+    let h = ServiceHandle::with_command_channel(ServiceId::Pppoe, ctx.clone(), cmd_rx)
+        .with_status_reporter(status_tx);
+
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let handle = tokio::spawn(async move { service.serve(&ctx_clone, &h).await });
+    wait_for_session_up(&mut pppoe_sub).await;
+
+    let mut seen = Vec::new();
+    timeout(Duration::from_secs(1), async {
+        loop {
+            if let Some((state, _)) = status_rx.borrow_and_update().clone() {
+                if seen.last() != Some(&state) {
+                    seen.push(state);
+                }
+                if state == ServiceState::Online {
+                    return;
+                }
+            }
+            if status_rx.changed().await.is_err() {
+                return;
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("handle never reported Online: {seen:?}"));
+    assert_eq!(seen.last(), Some(&ServiceState::Online));
 
     cmd_tx
         .send(ServiceCommand::Stop)
