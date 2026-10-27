@@ -11,8 +11,14 @@ use std::collections::HashSet;
 use std::hash::BuildHasher;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::broadcast::{Receiver, error::RecvError};
-use tokio::time::{Duration, interval};
+use tokio::time::{Duration, Instant, interval};
 use tracing::{debug, error, info, warn};
+
+/// How long systemd waits for `READY=1` before it is sent anyway.
+///
+/// Well under the unit's `TimeoutStartSec` (30 s): one service stuck in its start must not get the
+/// whole daemon — and the LAN it serves — killed by systemd.
+pub const SYSTEMD_READY_DEADLINE: Duration = Duration::from_secs(15);
 
 /// Tracks service settled states and emits `SystemReady` when all expected services are settled.
 pub struct ReadinessTracker<'a, S> {
@@ -20,6 +26,9 @@ pub struct ReadinessTracker<'a, S> {
     expected_services: HashSet<ServiceId, S>,
     ready_services: HashSet<ServiceId, S>,
     system_ready_sent: bool,
+    /// `READY=1` already sent to systemd (possibly at the deadline, before `SystemReady`).
+    systemd_ready_sent: bool,
+    started: Instant,
 }
 
 impl<'a, S: BuildHasher + Clone> ReadinessTracker<'a, S> {
@@ -29,24 +38,37 @@ impl<'a, S: BuildHasher + Clone> ReadinessTracker<'a, S> {
             ready_services: HashSet::with_hasher(expected_services.hasher().clone()),
             expected_services,
             system_ready_sent: false,
+            systemd_ready_sent: false,
+            started: Instant::now(),
         };
 
         // Pre-seed any services that already settled before subscription
-        for s in &tracker.expected_services {
-            let st = ctx.get_service_state(*s);
-            if is_settled_state(st) && tracker.ready_services.insert(*s) {
+        tracker.reconcile_settled();
+        tracker.try_emit_system_ready();
+        tracker
+    }
+
+    /// Adds every expected service whose real state is settled. `ServiceReady` events are only a
+    /// fast path: one lost to a lagged bus must not leave readiness waiting forever.
+    fn reconcile_settled(&mut self) {
+        for s in &self.expected_services {
+            let st = self.ctx.get_service_state(*s);
+            if is_settled_state(st) && self.ready_services.insert(*s) {
                 debug!(
-                    "Service '{}' pre-seeded settled ({:?}) ({}/{})",
+                    "Service '{}' settled ({:?}) ({}/{})",
                     s,
                     st,
-                    tracker.ready_services.len(),
-                    tracker.expected_services.len()
+                    self.ready_services.len(),
+                    self.expected_services.len()
                 );
             }
         }
+    }
 
-        tracker.try_emit_system_ready();
-        tracker
+    /// `READY=1` has been sent to systemd.
+    #[must_use]
+    pub const fn systemd_ready_sent(&self) -> bool {
+        self.systemd_ready_sent
     }
 
     pub fn on_service_ready(&mut self, id: ServiceId) {
@@ -84,27 +106,44 @@ impl<'a, S: BuildHasher + Clone> ReadinessTracker<'a, S> {
                 .ctx
                 .bus()
                 .publish(LanforgeEvent::System(SystemEvent::SystemReady));
-            sd_notify_ready("READY=1\nSTATUS=Lanforge daemon is ready");
+            sd_notify_ready("Lanforge daemon is ready");
+            self.systemd_ready_sent = true;
         }
     }
 
     pub fn check_pending(&mut self) {
+        self.check_pending_at(Instant::now());
+    }
+
+    /// Periodic check: re-reads real states, then, past [`SYSTEMD_READY_DEADLINE`], tells systemd
+    /// the daemon is up with the laggards named in its status (`SystemReady` still waits for them).
+    pub fn check_pending_at(&mut self, now: Instant) {
+        self.reconcile_settled();
         self.try_emit_system_ready();
-        if !self.system_ready_sent {
-            let mut missing: Vec<_> = self
-                .expected_services
-                .iter()
-                .filter(|s| !self.ready_services.contains(s))
-                .map(ServiceId::as_str)
-                .collect();
-            if !missing.is_empty() {
-                missing.sort_unstable();
-                warn!(
-                    "Still waiting for {} services to settle: {:?}",
-                    missing.len(),
-                    missing
-                );
-            }
+        if self.system_ready_sent {
+            return;
+        }
+        let mut missing: Vec<_> = self
+            .expected_services
+            .iter()
+            .filter(|s| !self.ready_services.contains(s))
+            .map(ServiceId::as_str)
+            .collect();
+        missing.sort_unstable();
+        warn!(
+            "Still waiting for {} services to settle: {:?}",
+            missing.len(),
+            missing
+        );
+        if !self.systemd_ready_sent
+            && now.saturating_duration_since(self.started) >= SYSTEMD_READY_DEADLINE
+        {
+            warn!(
+                ?missing,
+                "Readiness deadline reached; reporting READY to systemd while these services start"
+            );
+            sd_notify_ready(&format!("Running; still starting: {}", missing.join(", ")));
+            self.systemd_ready_sent = true;
         }
     }
 }

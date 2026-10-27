@@ -91,3 +91,68 @@ async fn test_event_loop_concurrent_broadcast_readiness() {
         event.event
     );
 }
+
+/// A ServiceReady lost to a lagged bus (15 services starting at once) was never recovered: the
+/// periodic check only re-logged "still waiting", READY=1 never reached systemd and its start
+/// timeout killed the whole daemon. The periodic check must re-read the services' real state.
+#[tokio::test]
+async fn test_periodic_check_recovers_a_lost_service_ready() {
+    let bus = Arc::new(EventBus::new());
+    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Starting);
+    let mut sys_listener = bus.subscribe_system();
+
+    let mut tracker = ReadinessTracker::new(&ctx, HashSet::from([ServiceId::Dns]));
+    assert!(sys_listener.try_recv().is_err(), "not ready yet");
+
+    // The service settles, but its ServiceReady never reaches the tracker.
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Online);
+    tracker.check_pending();
+
+    let event = timeout(Duration::from_millis(200), sys_listener.recv())
+        .await
+        .expect("SystemReady after the periodic check")
+        .expect("bus open");
+    assert!(matches!(
+        event.event,
+        LanforgeEvent::System(SystemEvent::SystemReady)
+    ));
+}
+
+/// One service stuck starting must not get the daemon killed by systemd's start timeout: past the
+/// deadline READY=1 goes out, while SystemReady still waits for every service.
+#[tokio::test]
+async fn test_systemd_ready_is_not_held_hostage_by_one_service() {
+    let bus = Arc::new(EventBus::new());
+    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Online);
+    ctx.set_service_state(ServiceId::Pppoe, ServiceState::Starting);
+    let mut sys_listener = bus.subscribe_system();
+
+    let mut tracker =
+        ReadinessTracker::new(&ctx, HashSet::from([ServiceId::Dns, ServiceId::Pppoe]));
+    let start = tokio::time::Instant::now();
+
+    tracker.check_pending_at(start + Duration::from_secs(5));
+    assert!(!tracker.systemd_ready_sent(), "too early");
+
+    tracker.check_pending_at(start + lanforge::event_loop::SYSTEMD_READY_DEADLINE);
+    assert!(
+        tracker.systemd_ready_sent(),
+        "deadline passed: READY=1 must go out"
+    );
+    assert!(
+        sys_listener.try_recv().is_err(),
+        "SystemReady still waits for the stuck service"
+    );
+
+    ctx.set_service_state(ServiceId::Pppoe, ServiceState::Degraded);
+    tracker.check_pending_at(start + Duration::from_secs(20));
+    let event = sys_listener
+        .try_recv()
+        .expect("SystemReady once all settled");
+    assert!(matches!(
+        event.event,
+        LanforgeEvent::System(SystemEvent::SystemReady)
+    ));
+}

@@ -224,7 +224,10 @@ where
                     // dependents follow. A supervisor-imposed loss status stays in force until the
                     // loss clears, then this report is restored.
                     Ok(()) = status_rx.changed() => {
-                        if let Some(status) = status_rx.borrow_and_update().clone() {
+                        // Release the watch borrow before publishing: the service's next report
+                        // must never wait on it.
+                        let report = status_rx.borrow_and_update().clone();
+                        if let Some(status) = report {
                             reported = status;
                             if !loss_overridden {
                                 self.node.set_status(&self.ctx, reported.0, reported.1.clone());
