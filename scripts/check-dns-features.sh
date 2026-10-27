@@ -16,10 +16,23 @@ FEATURE_SETS=(
     "adblock,dot,doq,doh-upstream,aws-lc"
 )
 
+# Tests (about 20 linked binaries per set) run on the two ends; the sets in between only need
+# to type-check every target, which is where a missing gate shows up.
+TEST_SETS=("" "adblock,dot,doq,doh-upstream,aws-lc")
+
 for features in "${FEATURE_SETS[@]}"; do
-    echo "==> lanforge-dns [${features:-no features}]"
-    RUSTFLAGS="${RUSTFLAGS:-} -D warnings" cargo test -p lanforge-dns --no-default-features \
-        ${features:+--features "$features"} --quiet
+    action=check
+    for t in "${TEST_SETS[@]}"; do
+        [[ "$features" == "$t" ]] && action=test
+    done
+    echo "==> lanforge-dns [${features:-no features}] ($action)"
+    if [[ $action == test ]]; then
+        RUSTFLAGS="${RUSTFLAGS:-} -D warnings" cargo test -p lanforge-dns --no-default-features \
+            ${features:+--features "$features"} --quiet
+    else
+        RUSTFLAGS="${RUSTFLAGS:-} -D warnings" cargo check -p lanforge-dns --no-default-features \
+            ${features:+--features "$features"} --all-targets --quiet
+    fi
 done
 
 # The TLS loader shared by DoT, DoQ and HTTPS lives in lanforge-crypto.
