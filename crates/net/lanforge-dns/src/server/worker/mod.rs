@@ -65,11 +65,14 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
             let mut urls_sub = ctx.ctx.config_subscription::<Vec<AdblockUrlEntry>>();
             let mut cache_loaded = false;
             let mut force_refresh = false;
+            // When the last download pass ran: re-enabling within a day reuses the loaded lists.
+            let mut last_refresh: Option<Instant> = None;
 
             loop {
                 let db_cfg = ctx.ctx.get_dns_adblock();
 
                 // Wait if disabled
+                let mut resumed_fresh = false;
                 if !filter.is_enabled() {
                     debug!("Adblock: currently disabled, waiting for toggle or reload");
                     loop {
@@ -98,10 +101,16 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                             }
                         }
                     }
+                    resumed_fresh = !force_refresh
+                        && filter.blocklist_size() > 0
+                        && last_refresh.is_some_and(|t| t.elapsed() < Duration::from_secs(20 * 3600));
                 }
 
                 // 1. Try to load from disk if not yet loaded
-                let mut skip_download_pass = false;
+                let mut skip_download_pass = resumed_fresh;
+                if resumed_fresh {
+                    info!("Adblock: re-enabled with recent lists, skipping download pass");
+                }
                 if !cache_loaded {
                     if target_block_path.exists() {
                         info!("Adblock: loading compiled blocklist from disk");
@@ -469,8 +478,9 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     .max()
                     .unwrap_or(0);
 
+                last_refresh = Some(Instant::now());
                 let now_local = chrono::Local::now();
-                let target_time = compute_next_refresh_target(now_local, db_cfg.refresh_time);
+                let mut target_time = compute_next_refresh_target(now_local, db_cfg.refresh_time);
                 let scheduled_dur = (target_time - now_local)
                     .to_std()
                     .unwrap_or(Duration::from_secs(60));
@@ -511,9 +521,30 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                 break;
                             }
                         }
-                        Some(_) = adblock_sub.next() => {
-                            info!("Adblock: config changed, reloading");
-                            break;
+                        // Toggles and blocking settings are applied by the DNS service; only the
+                        // schedule and a first enable with nothing loaded concern this worker.
+                        Some(delta) = adblock_sub.next() => {
+                            if delta.new.refresh_time != delta.old.refresh_time {
+                                let now_local = chrono::Local::now();
+                                target_time =
+                                    compute_next_refresh_target(now_local, delta.new.refresh_time);
+                                let wait = (target_time - now_local)
+                                    .to_std()
+                                    .unwrap_or(Duration::from_secs(60));
+                                // A pending failure retry that comes sooner is kept.
+                                let deadline = alarm
+                                    .deadline()
+                                    .min(tokio::time::Instant::now() + wait);
+                                alarm.as_mut().reset(deadline);
+                                info!(
+                                    target = %target_time.format("%Y-%m-%d %H:%M:%S"),
+                                    "Adblock: refresh time changed, rescheduled"
+                                );
+                            }
+                            if delta.new.enabled && filter.blocklist_size() == 0 {
+                                info!("Adblock: enabled with no list loaded, refreshing");
+                                break;
+                            }
                         }
                         Some(_) = urls_sub.next() => {
                             info!("Adblock: source list changed, reloading");
@@ -522,11 +553,13 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                         evt_res = rx.recv() => {
                             let evt = match evt_res {
                                 Ok(evt) => evt,
-                                // A missed block/allow/toggle: reload, which re-syncs every
-                                // manual rule from the context.
+                                // A missed block/allow: re-sync the manual rules from the context
+                                // in place. The lists themselves did not change.
                                 Err(RecvError::Lagged(_)) => {
-                                    info!("Adblock: event bus lagged, re-syncing filter");
-                                    break;
+                                    info!("Adblock: event bus lagged, re-syncing manual rules");
+                                    filter.sync_from_context(&ctx.ctx);
+                                    ctx.cache.invalidate_all();
+                                    continue;
                                 }
                                 // Never `break` here: the reload would loop on a closed bus.
                                 Err(RecvError::Closed) => return,
@@ -538,10 +571,9 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                     break;
                                 }
 
-                                LanforgeEvent::Dns(DnsEvent::AdblockToggle { .. }) => {
-                                    info!("Adblock: toggle event received, checking status");
-                                    break;
-                                }
+                                // The DNS service flips the filter; a disable is picked up at the
+                                // next pass (the worker idles while disabled).
+                                LanforgeEvent::Dns(DnsEvent::AdblockToggle { .. }) => continue,
                                 LanforgeEvent::Dns(DnsEvent::AdblockBlock(domain)) => {
                                     filter.add_block(&domain);
                                     ctx.cache.invalidate_all();
