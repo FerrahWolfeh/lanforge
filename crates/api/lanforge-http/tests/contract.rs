@@ -5,6 +5,7 @@
 // Each test function covers a logical group of scenarios in a grid table,
 // reducing boilerplate while maximising coverage of the API contract.
 
+#![cfg(feature = "server")]
 use axum::{
     Router,
     body::Body,

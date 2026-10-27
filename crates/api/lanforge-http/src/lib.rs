@@ -25,5 +25,5 @@ pub use remote::RemoteClient;
 #[cfg(feature = "server")]
 pub use server::HttpService;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod tests;

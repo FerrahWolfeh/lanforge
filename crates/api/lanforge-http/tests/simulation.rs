@@ -1,3 +1,6 @@
+// Drives the server with the crate's own remote client.
+#![cfg(all(feature = "server", feature = "client"))]
+
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
