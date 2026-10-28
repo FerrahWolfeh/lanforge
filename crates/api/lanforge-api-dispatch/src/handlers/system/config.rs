@@ -151,8 +151,6 @@ impl ClientContext {
             };
         };
 
-        let mut dhcp_v4_dirty = overwrite;
-        let mut dhcp_v6_dirty = overwrite;
         let mut ra_dirty = overwrite;
 
         let mut total_success = true;
@@ -497,26 +495,6 @@ impl ClientContext {
             patch = patch.with_dns_adblock(adblock_to_apply);
         }
 
-        if let Some(ref pools) = dhcp_v4_pools {
-            patch = patch.with_dhcp_v4_pools(pools.clone());
-            dhcp_v4_dirty = false;
-            results.push(ImportResult {
-                section: ImportSection::DhcpV4Pools,
-                success: true,
-                count: pools.len(),
-                error: None,
-            });
-        }
-        if let Some(ref pools) = dhcp_v6_pools {
-            patch = patch.with_dhcp_v6_pools(pools.clone());
-            dhcp_v6_dirty = false;
-            results.push(ImportResult {
-                section: ImportSection::DhcpV6Pools,
-                success: true,
-                count: pools.len(),
-                error: None,
-            });
-        }
         if ra_prefixes.is_some() || ra_rdnss.is_some() || ra_dnssl.is_some() {
             let prefixes = ra_prefixes
                 .clone()
@@ -578,14 +556,50 @@ impl ClientContext {
             }
         }
 
-        if let Some(opts) = dhcp_options {
-            patch = patch.with_dhcp_options(*opts);
-            results.push(ImportResult {
-                section: ImportSection::DhcpOptions,
-                success: true,
-                count: 1,
-                error: None,
+        // File-owned: imported only if it reaches the config file. Overwrite clears the pools
+        // the import does not carry.
+        let dhcp_v4_pools = dhcp_v4_pools.or_else(|| overwrite.then(Vec::new));
+        let dhcp_v6_pools = dhcp_v6_pools.or_else(|| overwrite.then(Vec::new));
+        if dhcp_options.is_some() || dhcp_v4_pools.is_some() || dhcp_v6_pools.is_some() {
+            let sections = [
+                (ImportSection::DhcpOptions, dhcp_options.as_ref().map(|_| 1)),
+                (
+                    ImportSection::DhcpV4Pools,
+                    dhcp_v4_pools.as_ref().map(Vec::len),
+                ),
+                (
+                    ImportSection::DhcpV6Pools,
+                    dhcp_v6_pools.as_ref().map(Vec::len),
+                ),
+            ];
+            let outcome = self.change_dhcp(|dhcp| {
+                if let Some(opts) = dhcp_options {
+                    dhcp.options = *opts;
+                }
+                if let Some(pools) = dhcp_v4_pools {
+                    dhcp.v4_pools = pools;
+                }
+                if let Some(pools) = dhcp_v6_pools {
+                    dhcp.v6_pools = pools;
+                }
             });
+            for (section, count) in sections {
+                let Some(count) = count else { continue };
+                results.push(match &outcome {
+                    Ok(_) => ImportResult {
+                        section,
+                        success: true,
+                        count,
+                        error: None,
+                    },
+                    Err(e) => ImportResult {
+                        section,
+                        success: false,
+                        count: 0,
+                        error: Some(e.clone()),
+                    },
+                });
+            }
         }
 
         if let Some(resolvers) = dns_reverse_resolvers {
@@ -662,12 +676,6 @@ impl ClientContext {
             }
         }
 
-        if dhcp_v4_dirty {
-            patch = patch.with_dhcp_v4_pools(Vec::new());
-        }
-        if dhcp_v6_dirty {
-            patch = patch.with_dhcp_v6_pools(Vec::new());
-        }
         if ra_dirty {
             patch = patch
                 .with_ra_prefixes(Vec::new())

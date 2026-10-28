@@ -789,3 +789,81 @@ async fn firewall_trial_is_saved_only_when_confirmed() {
     assert!(matches!(res, Response::Success(_)), "{res:?}");
     assert_eq!(file_firewall(&path), candidate, "confirmed: saved");
 }
+
+#[tokio::test]
+async fn dhcp_updates_are_written_to_the_config_file() {
+    use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+
+    let client_ctx = init_test_context().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    std::fs::write(&path, "# mine\n[system]\niface = \"lan0\"\n").unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(true);
+
+    let pool = Dhcpv4Pool {
+        name: Some("lan".into()),
+        range_start: "192.168.1.100".parse().unwrap(),
+        range_end: "192.168.1.200".parse().unwrap(),
+        ntp_servers: vec!["192.0.2.123".parse().unwrap()],
+        boot_file: Some("pxelinux.0".into()),
+        ..Default::default()
+    };
+    let res = client_ctx
+        .handle_update_dhcp_pools_config(vec![pool.clone()], vec![Dhcpv6Pool::default()])
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    // The unnamed v6 pool is named as the file names it.
+    let v6 = client_ctx.ctx.get_dhcp_v6_pools();
+    assert_eq!(v6[0].name.as_deref(), Some("pool-1"));
+
+    let mut options = client_ctx.ctx.get_dhcp_options();
+    options.v4.raw_options.insert(43, "vendor".into());
+    options.tftp.enabled = true;
+    let res = client_ctx.handle_update_dhcp_options(options.clone()).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    let (file, issues) = lanforge_api::config_file::ConfigFile::parse(&text)
+        .unwrap()
+        .dhcp_settings();
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(
+        file.options, options,
+        "every option reaches the file, TFTP too"
+    );
+    assert_eq!(
+        file.v4_pools,
+        vec![pool.clone()],
+        "the options update kept the pools"
+    );
+    assert!(text.contains("# mine"));
+    assert_eq!(client_ctx.ctx.get_dhcp_options(), options);
+    assert_eq!(client_ctx.ctx.get_dhcp_v4_pools(), vec![pool]);
+}
+
+#[tokio::test]
+async fn a_dhcp_pool_the_file_cannot_hold_is_refused_and_not_applied() {
+    use lanforge_types::network::dhcp::Dhcpv4Pool;
+
+    let client_ctx = init_test_context().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    std::fs::write(&path, "[system]\n").unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(true);
+    let before = client_ctx.ctx.get_dhcp_v4_pools();
+
+    let reversed = Dhcpv4Pool {
+        name: Some("lan".into()),
+        range_start: "192.168.1.200".parse().unwrap(),
+        range_end: "192.168.1.100".parse().unwrap(),
+        ..Default::default()
+    };
+    let res = client_ctx
+        .handle_update_dhcp_pools_config(vec![reversed], Vec::new())
+        .await;
+    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert_eq!(client_ctx.ctx.get_dhcp_v4_pools(), before);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "[system]\n");
+}

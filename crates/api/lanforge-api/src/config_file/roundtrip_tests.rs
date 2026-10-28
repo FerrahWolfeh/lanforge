@@ -354,46 +354,10 @@ fn fill_empty_lists(export: SystemConfigExport) -> SystemConfigExport {
 /// Fields each section loses today on `redb → lanforge.toml → redb`. Migrating a section
 /// (config-storage step 2) empties its list; the test then holds it at zero.
 const KNOWN_LOSSES: &[(&str, &[&str])] = &[
-    (
-        "dhcp_options",
-        &[
-            "/tftp/block_size",
-            "/tftp/enabled",
-            "/tftp/listen_addr",
-            "/tftp/max_retries",
-            "/tftp/root_dir",
-            "/tftp/timeout",
-            "/v4/ntp_servers/0",
-            "/v4/ntp_servers/1",
-            "/v4/tftp_server",
-            "/v6/boot_file",
-            "/v6/ntp_servers/0",
-            "/v6/ntp_servers/1",
-        ],
-    ),
-    (
-        "dhcp_v4_pools",
-        &[
-            "/0/boot_file",
-            "/0/domain_name",
-            "/0/ntp_servers",
-            "/0/ntp_servers/0",
-            "/0/search_domains",
-            "/0/search_domains/0",
-            "/0/tftp_server",
-        ],
-    ),
-    (
-        "dhcp_v6_pools",
-        &[
-            "/0/address",
-            "/0/boot_file",
-            "/0/ntp_servers",
-            "/0/ntp_servers/0",
-            "/0/search_domains",
-            "/0/search_domains/0",
-        ],
-    ),
+    // Kept as its own file form (`[dhcp]` + `[tftp]`), now lossless (exact tests below).
+    ("dhcp_options", &[]),
+    ("dhcp_v4_pools", &[]),
+    ("dhcp_v6_pools", &[]),
     ("dns_adblock_config", &[]),
     ("dns_adblock_rules", &["/0/id", "/0/name"]),
     ("dns_adblock_urls", &["/0/id"]),
@@ -669,4 +633,209 @@ to = "192.0.2.8"
     assert_eq!(fw.port_forwards.len(), 1, "only the valid forward");
     assert_eq!(fw.port_forwards[0].external_port, 8080);
     assert_eq!(issues.len(), 9, "{issues:#?}");
+}
+
+// ---------------------------------------------------------------------------
+// DHCP: exact round trips, on the owner's real configuration
+// ---------------------------------------------------------------------------
+
+/// The owner's live DHCP options (`lanforge dhcp --json`, 2026-10-28).
+const OWNER_LIVE_DHCP_OPTIONS: &str = r#"{
+  "tftp": {"block_size": 512, "enabled": false, "listen_addr": "0.0.0.0:69", "max_retries": 3,
+           "root_dir": "/var/lib/lanforge/tftp", "timeout": 5},
+  "v4": {"boot_file": null, "dns_servers": ["192.168.3.1"], "domain_name": "lan", "enabled": true,
+         "lease_time": 86400, "ntp_servers": ["162.159.200.1", "216.239.35.0"], "raw_options": {},
+         "router": "192.168.3.1", "search_domains": [], "subnet_mask": "255.255.252.0",
+         "tftp_server": null},
+  "v6": {"boot_file": null, "dns_servers": [], "enabled": true, "lease_time": 86400,
+         "ntp_servers": ["time.cloudflare.com", "time.google.com"], "raw_options": {},
+         "search_domains": []}
+}"#;
+
+/// The owner's `[dhcp]` as the old binaries wrote it.
+const OWNER_FILE_DHCP: &str = r#"
+[dhcp.v4]
+enabled = true
+lease = "1d"
+router = "192.168.3.1"
+dns = ["192.168.3.1"]
+subnet_mask = "255.255.252.0"
+domain_name = "lan"
+
+[dhcp.v4.pools."Primary LAN"]
+range = "192.168.1.2-192.168.1.240"
+
+[dhcp.v6]
+enabled = true
+lease = "1d"
+
+[dhcp.v6.pools."Main Scope"]
+range = "::100-::1fff"
+"#;
+
+/// The owner's pools as redb holds them: the seed and the old converter filled each pool
+/// with the scope values (the `--json` output shows only usage, not these fields).
+fn owner_live_dhcp() -> super::DhcpSettings {
+    use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+    let router = "192.168.3.1".parse().unwrap();
+    super::DhcpSettings {
+        options: serde_json::from_str(OWNER_LIVE_DHCP_OPTIONS).unwrap(),
+        v4_pools: vec![Dhcpv4Pool {
+            name: Some("Primary LAN".into()),
+            range_start: "192.168.1.2".parse().unwrap(),
+            range_end: "192.168.1.240".parse().unwrap(),
+            subnet_mask: Some("255.255.252.0".parse().unwrap()),
+            router: Some(router),
+            dns_servers: vec![router],
+            lease_time: Some(86400),
+            ..Default::default()
+        }],
+        v6_pools: vec![Dhcpv6Pool {
+            name: Some("Main Scope".into()),
+            range_start: "::100".parse().ok(),
+            range_end: "::1fff".parse().ok(),
+            lease_time: Some(86400),
+            ..Default::default()
+        }],
+    }
+}
+
+fn dhcp_through_file(dhcp: &super::DhcpSettings) -> (super::DhcpSettings, Vec<String>) {
+    let mut file = ConfigFile::default();
+    file.set_dhcp_settings(dhcp);
+    let rendered = file.render_full().unwrap();
+    ConfigFile::parse(&rendered)
+        .unwrap_or_else(|e| panic!("{e}\n{rendered}"))
+        .dhcp_settings()
+}
+
+#[test]
+fn owner_dhcp_file_reads_as_the_live_options() {
+    let (from_file, issues) = ConfigFile::parse(OWNER_FILE_DHCP).unwrap().dhcp_settings();
+    assert!(issues.is_empty(), "{issues:?}");
+    let live = owner_live_dhcp();
+    assert_eq!(
+        from_file.options, live.options,
+        "NTP and TFTP take the live defaults"
+    );
+    // The pools leave their fields to the scope, which holds the same values.
+    let v4 = &from_file.v4_pools[0];
+    assert_eq!(v4.name.as_deref(), Some("Primary LAN"));
+    assert_eq!(
+        (v4.range_start, v4.range_end),
+        (live.v4_pools[0].range_start, live.v4_pools[0].range_end)
+    );
+    assert_eq!(
+        (v4.router, v4.subnet_mask, v4.lease_time),
+        (None, None, None)
+    );
+    let v6 = &from_file.v6_pools[0];
+    assert_eq!(v6.name.as_deref(), Some("Main Scope"));
+    assert_eq!(
+        (v6.range_start, v6.range_end),
+        (live.v6_pools[0].range_start, live.v6_pools[0].range_end)
+    );
+}
+
+#[test]
+fn owner_live_dhcp_survives_the_cut_over_exactly() {
+    let live = owner_live_dhcp();
+    let (back, issues) = dhcp_through_file(&live);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(back, live);
+}
+
+#[test]
+fn every_dhcp_field_survives_exactly() {
+    let mut export = base();
+    for section in ["/dhcp_options", "/dhcp_v4_pools", "/dhcp_v6_pools"] {
+        export = mutate_all(&export, section).0;
+    }
+    let mut options = *export.dhcp_options.unwrap();
+    options
+        .v4
+        .raw_options
+        .insert(43, "01:04:c0:a8:01:0a".into());
+    options.v6.raw_options.insert(17, "vendor".into());
+    let mut v6_pools = export.dhcp_v6_pools.unwrap();
+    v6_pools[0].address = Some("2001:db8::/64".into());
+    let dhcp = super::DhcpSettings {
+        options,
+        v4_pools: export.dhcp_v4_pools.unwrap(),
+        v6_pools,
+    };
+    let (back, issues) = dhcp_through_file(&dhcp);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(back, dhcp);
+}
+
+#[test]
+fn dhcp_pool_order_and_names_survive() {
+    use lanforge_types::network::dhcp::Dhcpv4Pool;
+    let mut dhcp = owner_live_dhcp();
+    let pool = |name: &str, last: u8| Dhcpv4Pool {
+        name: Some(name.into()),
+        range_start: "192.168.2.1".parse().unwrap(),
+        range_end: std::net::Ipv4Addr::new(192, 168, 2, last),
+        ..Default::default()
+    };
+    // Out of name order, and an empty NTP list (advertise none) unlike an absent one.
+    dhcp.v4_pools.insert(0, pool("zeta", 10));
+    dhcp.v4_pools.push(pool("alpha", 20));
+    dhcp.options.v4.ntp_servers.clear();
+    let (back, issues) = dhcp_through_file(&dhcp);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(back, dhcp);
+
+    // An unnamed pool is named, a repeated name made unique: both still served.
+    dhcp.v4_pools[0].name = None;
+    dhcp.v4_pools[2].name = Some("Primary LAN".into());
+    let (back, _) = dhcp_through_file(&dhcp);
+    let names: Vec<_> = back
+        .v4_pools
+        .iter()
+        .map(|p| p.name.clone().unwrap())
+        .collect();
+    assert_eq!(names, ["pool-1", "Primary LAN", "Primary LAN #2"]);
+}
+
+#[test]
+fn wrong_dhcp_values_leave_the_entry_out() {
+    let text = r#"
+[dhcp.v4]
+options = { "43" = "ok", "ab" = "bad" }
+
+[dhcp.v4.pools.typo]
+range = "192.168.1.10-192.168.1.300"
+
+[dhcp.v4.pools.reversed]
+range = "192.168.1.200-192.168.1.100"
+
+[dhcp.v4.pools.single]
+range = "192.168.1.10"
+
+[dhcp.v4.pools.good]
+range = "192.168.1.100-192.168.1.200"
+
+[dhcp.v6.pools.bad]
+range = "::100-::zz"
+
+[dhcp.v6.pools.static]
+address = "2001:db8::/64"
+"#;
+    let (dhcp, issues) = ConfigFile::parse(text).unwrap().dhcp_settings();
+    let v4: Vec<_> = dhcp
+        .v4_pools
+        .iter()
+        .map(|p| p.name.clone().unwrap())
+        .collect();
+    assert_eq!(v4, ["good"], "no address is leased from a guessed range");
+    let v6: Vec<_> = dhcp
+        .v6_pools
+        .iter()
+        .map(|p| p.name.clone().unwrap())
+        .collect();
+    assert_eq!(v6, ["static"]);
+    assert_eq!(dhcp.options.v4.raw_options.len(), 1);
+    assert_eq!(issues.len(), 5, "{issues:#?}");
 }

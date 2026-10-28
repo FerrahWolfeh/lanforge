@@ -214,17 +214,11 @@ impl ClientContext {
             dns_servers: vec![payload.lan_ip],
             ..Default::default()
         };
-        patch = patch.with_dhcp_v4_pools(vec![v4_pool.clone()]);
         opts.v4.enabled = payload.dhcp_enabled;
         opts.v4.router = Some(router_ip);
         opts.v4.subnet_mask = Some(subnet_mask);
         opts.v4.dns_servers = vec![payload.lan_ip];
         opts.v4.domain_name = Some(payload.domain_name.clone());
-
-        let v4_pool_clone = v4_pool.clone();
-        let _ = storage
-            .call(move |s: &Stores| s.db().save_dhcp_v4_pools(&[v4_pool_clone]))
-            .await;
 
         let v6_range_str = payload
             .dhcp_v6_pool_range
@@ -240,14 +234,8 @@ impl ClientContext {
             search_domains: vec![payload.domain_name.clone()],
             ..Default::default()
         };
-        patch = patch.with_dhcp_v6_pools(vec![v6_pool.clone()]);
         opts.v6.enabled = payload.dhcp_v6_enabled;
         opts.v6.search_domains = vec![payload.domain_name.clone()];
-
-        let v6_pool_clone = v6_pool.clone();
-        let _ = storage
-            .call(move |s: &Stores| s.db().save_dhcp_v6_pools(&[v6_pool_clone]))
-            .await;
 
         // 4. Configure IPv6 Router Advertisement (RA)
         let mut prefixes = Vec::new();
@@ -384,11 +372,16 @@ impl ClientContext {
             }
         }
 
-        patch = patch.with_dhcp_options(opts.clone());
-        let opts_clone = opts.clone();
-        let _ = storage
-            .call(move |s: &Stores| s.db().save_dhcp_options(&opts_clone))
-            .await;
+        // File-owned: written with the rest of the setup TOML below.
+        let dhcp = lanforge_api::config_file::DhcpSettings {
+            options: opts,
+            v4_pools: vec![v4_pool],
+            v6_pools: vec![v6_pool],
+        };
+        patch = patch
+            .with_dhcp_options(dhcp.options.clone())
+            .with_dhcp_v4_pools(dhcp.v4_pools.clone())
+            .with_dhcp_v6_pools(dhcp.v6_pools.clone());
 
         // 7. Seed initial Firewall configuration
         let wan_interface = if let Some(ref wan) = payload.wan {
@@ -462,14 +455,8 @@ impl ClientContext {
             }
         });
 
-        let (cfg_file, toml_content) = generate_setup_toml(
-            &payload,
-            &initial_firewall,
-            router_ip,
-            subnet_mask,
-            v6_range_str,
-            &adblock_sources,
-        );
+        let (cfg_file, toml_content) =
+            generate_setup_toml(&payload, &initial_firewall, &dhcp, &adblock_sources);
 
         if let Err(e) =
             lanforge_api::config_file::write_toml_atomically(&target_path, &toml_content)
@@ -565,9 +552,7 @@ fn setup_pppoe_config(payload: &SetupPayload) -> Option<PppoeConfig> {
 fn generate_setup_toml(
     payload: &SetupPayload,
     firewall: &FirewallConfig,
-    router_ip: Ipv4Addr,
-    subnet_mask: Ipv4Addr,
-    v6_range_str: &str,
+    dhcp: &lanforge_api::config_file::DhcpSettings,
     adblock_sources: &[lanforge_types::network::dns::AdblockUrlEntry],
 ) -> (lanforge_api::config_file::ConfigFile, String) {
     let mut cfg = lanforge_api::config_file::ConfigFile::default();
@@ -576,35 +561,8 @@ fn generate_setup_toml(
     cfg.system.debounce_secs = Some(2);
     cfg.system.auto_provision = true;
 
-    // DHCPv4
-    cfg.dhcp.v4.enabled = payload.dhcp_enabled;
-    cfg.dhcp.v4.router = Some(router_ip);
-    cfg.dhcp.v4.dns = vec![payload.lan_ip];
-    cfg.dhcp.v4.subnet_mask = Some(subnet_mask);
-    cfg.dhcp.v4.pools.insert(
-        "lan".to_string(),
-        lanforge_api::config_file::Dhcpv4PoolFile {
-            range: format!("{}-{}", payload.dhcp_pool_start, payload.dhcp_pool_end),
-            lease: Some(lanforge_api::config_file::HumanDuration(86400)),
-            router: Some(router_ip),
-            subnet_mask: Some(subnet_mask),
-            dns: vec![payload.lan_ip],
-        },
-    );
-
-    // DHCPv6
-    cfg.dhcp.v6.enabled = payload.dhcp_v6_enabled;
-    cfg.dhcp.v6.search_domains = vec![payload.domain_name.clone()];
-    if payload.dhcp_v6_enabled {
-        cfg.dhcp.v6.pools.insert(
-            "lan".to_string(),
-            lanforge_api::config_file::Dhcpv6PoolFile {
-                range: v6_range_str.to_string(),
-                lease: Some(lanforge_api::config_file::HumanDuration(86400)),
-                dns: Vec::new(),
-            },
-        );
-    }
+    // DHCP and TFTP: what setup applies.
+    cfg.set_dhcp_settings(dhcp);
 
     // RA
     let (ra_enabled, managed, other_config) = if let Some(ref ra) = payload.ra {

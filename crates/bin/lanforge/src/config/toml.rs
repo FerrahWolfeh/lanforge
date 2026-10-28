@@ -61,6 +61,9 @@ pub struct TomlConfig {
 pub struct DhcpCfg {
     pub v4: Dhcpv4Config,
     pub v6: Dhcpv6Config,
+    /// `[dhcp]` + `[tftp]` as the options and pools the daemon runs (their only source).
+    #[serde(skip)]
+    pub settings: lanforge_api::config_file::DhcpSettings,
 }
 
 /// System-wide global configuration.
@@ -159,56 +162,42 @@ impl From<&lanforge_api::config_file::ConfigFile> for TomlConfig {
         }
 
         #[cfg(feature = "tftp")]
-        {
-            cfg.tftp.enabled = fc.tftp.enabled;
-            if let Ok(l) = fc.tftp.listen.parse() {
-                cfg.tftp.listen = l;
-            }
-            cfg.tftp.root_dir = std::path::PathBuf::from(&fc.tftp.root_dir);
-        }
+        apply_tftp_options(&mut cfg.tftp, &fc.tftp.to_options());
 
         #[cfg(feature = "dhcp")]
         {
-            cfg.dhcp.v4.enabled = fc.dhcp.v4.enabled;
-            cfg.dhcp.v4.lease_time = fc
-                .dhcp
-                .v4
-                .lease
-                .map_or(86400, |d| u32::try_from(d.0).unwrap_or(u32::MAX));
-            if let Some(r) = fc.dhcp.v4.router {
+            // Entries the file gets wrong are left out (reported by `load_toml`).
+            let settings = fc.dhcp_settings().0;
+            let (v4, v6) = (&settings.options.v4, &settings.options.v6);
+            cfg.dhcp.v4.enabled = v4.enabled;
+            cfg.dhcp.v4.lease_time = v4.lease_time;
+            if let Some(r) = v4.router {
                 cfg.dhcp.v4.router = r;
                 cfg.dhcp.v4.server_id = r;
             }
-            if let Some(m) = fc.dhcp.v4.subnet_mask {
+            if let Some(m) = v4.subnet_mask {
                 cfg.dhcp.v4.subnet_mask = m;
             }
-            if !fc.dhcp.v4.dns.is_empty() {
-                cfg.dhcp.v4.dns.clone_from(&fc.dhcp.v4.dns);
+            if !v4.dns_servers.is_empty() {
+                cfg.dhcp.v4.dns.clone_from(&v4.dns_servers);
             }
-            cfg.dhcp.v4.search_domains = if fc.dhcp.v4.search_domains.is_empty() {
+            cfg.dhcp.v4.search_domains = if v4.search_domains.is_empty() {
                 fc.system.search_domains.clone()
             } else {
-                fc.dhcp.v4.search_domains.clone()
+                v4.search_domains.clone()
             };
-            if let Some(pools) = export.dhcp_v4_pools {
-                cfg.dhcp.v4.pools = pools;
-            }
+            cfg.dhcp.v4.pools.clone_from(&settings.v4_pools);
 
-            cfg.dhcp.v6.enabled = fc.dhcp.v6.enabled;
-            cfg.dhcp.v6.lease_time = fc
-                .dhcp
-                .v6
-                .lease
-                .map_or(86400, |d| u32::try_from(d.0).unwrap_or(u32::MAX));
-            cfg.dhcp.v6.dns_servers.clone_from(&fc.dhcp.v6.dns);
-            cfg.dhcp.v6.search_domains = if fc.dhcp.v6.search_domains.is_empty() {
+            cfg.dhcp.v6.enabled = v6.enabled;
+            cfg.dhcp.v6.lease_time = v6.lease_time;
+            cfg.dhcp.v6.dns_servers.clone_from(&v6.dns_servers);
+            cfg.dhcp.v6.search_domains = if v6.search_domains.is_empty() {
                 fc.system.search_domains.clone()
             } else {
-                fc.dhcp.v6.search_domains.clone()
+                v6.search_domains.clone()
             };
-            if let Some(pools) = export.dhcp_v6_pools {
-                cfg.dhcp.v6.pools = pools;
-            }
+            cfg.dhcp.v6.pools.clone_from(&settings.v6_pools);
+            cfg.dhcp.settings = settings;
         }
 
         #[cfg(feature = "ra")]
@@ -266,6 +255,19 @@ impl From<&lanforge_api::config_file::ConfigFile> for TomlConfig {
     }
 }
 
+/// Sets the TFTP service's start-up config from `[tftp]` (the same values the DHCP options carry).
+#[cfg(feature = "tftp")]
+pub fn apply_tftp_options(cfg: &mut TftpConfig, tftp: &lanforge_types::network::dhcp::TftpOptions) {
+    cfg.enabled = tftp.enabled;
+    if let Ok(l) = tftp.listen_addr.parse() {
+        cfg.listen = l;
+    }
+    cfg.root_dir = std::path::PathBuf::from(&tftp.root_dir);
+    cfg.block_size = tftp.block_size;
+    cfg.timeout = tftp.timeout;
+    cfg.max_retries = tftp.max_retries;
+}
+
 /// Logs config values that were not applied as written (left out or closed).
 #[must_use]
 pub fn log_issues(issues: Vec<String>) -> Vec<String> {
@@ -313,6 +315,9 @@ pub fn load_toml(path: &str) -> TomlConfig {
             #[cfg(feature = "nft")]
             cfg.config_issues
                 .extend(log_issues(file_cfg.firewall.to_config().1));
+            #[cfg(feature = "dhcp")]
+            cfg.config_issues
+                .extend(log_issues(file_cfg.dhcp.to_config().1));
             cfg
         }
         Err(e) => {
@@ -386,7 +391,7 @@ source = "broken" # Invalid variant
         assert_eq!(file_cfg.system.iface, "end0");
         assert!(file_cfg.system.ula_prefix.is_none());
         assert!(file_cfg.ra.prefixes.is_empty());
-        assert!(file_cfg.dhcp.v4.pools.contains_key("lan"));
+        assert!(file_cfg.dhcp.v4.pools.iter().any(|(name, _)| name == "lan"));
         assert!(file_cfg.hosts.contains_key("nas"));
     }
 

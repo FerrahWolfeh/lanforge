@@ -5,10 +5,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use lanforge_api::api::SystemConfigExport;
 use lanforge_api::config_file::{ConfigFile, Section, section_hashes, write_toml_atomically};
-use lanforge_db::config_keys::{
-    DHCP_OPTIONS, DHCP_V4_POOLS, DHCP_V6_POOLS, RA_DNSSL, RA_PREFIXES, RA_RDNSS,
-};
-use lanforge_db::{DhcpConfigStore, LanforgeDb};
+use lanforge_db::LanforgeDb;
+use lanforge_db::config_keys::{RA_DNSSL, RA_PREFIXES, RA_RDNSS};
 use tracing::info;
 
 /// Synchronizes configuration between `lanforge.toml` and `config.redb` during boot and reload.
@@ -17,7 +15,7 @@ pub fn sync_boot_config(
     db: &LanforgeDb,
     is_writable: bool,
 ) -> Result<ConfigFile> {
-    let mut file_cfg = if config_path.exists() {
+    let file_cfg = if config_path.exists() {
         let content = fs::read_to_string(config_path)
             .with_context(|| format!("Failed to read '{}'", config_path.display()))?;
         // Set-aside sections are file-owned (never synced); the loader already reported them.
@@ -72,10 +70,8 @@ pub fn sync_boot_config(
         let stored_hash = db.get_config_section_hash(sec.name())?;
         let file_h = file_hashes.get(sec).copied();
 
-        if file_h == stored_hash {
-            // hash == stored -> file was not modified offline. DB is source of truth.
-            sync_section_from_db_to_config_file(db, *sec, &mut file_cfg);
-        } else {
+        // hash == stored -> file was not modified offline: the DB is the source of truth.
+        if file_h != stored_hash {
             // hash != stored -> user edited offline! Apply file section to DB.
             info!(
                 "[config] Section [{}] was edited offline; applying file changes to database.",
@@ -114,37 +110,6 @@ pub fn sync_boot_config(
     Ok(file_cfg)
 }
 
-fn sync_section_from_db_to_config_file(db: &LanforgeDb, sec: Section, cfg: &mut ConfigFile) {
-    match sec {
-        Section::Dhcp =>
-        {
-            #[cfg(feature = "dhcp")]
-            if let Ok(pools) = db.load_dhcp_v4_pools() {
-                cfg.dhcp.v4.pools.clear();
-                for (idx, p) in pools.iter().enumerate() {
-                    let name = p
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| format!("pool-{}", idx + 1));
-                    cfg.dhcp.v4.pools.insert(
-                        name,
-                        lanforge_api::config_file::Dhcpv4PoolFile {
-                            range: format!("{}-{}", p.range_start, p.range_end),
-                            lease: p
-                                .lease_time
-                                .map(|l| lanforge_api::config_file::HumanDuration(u64::from(l))),
-                            router: p.router,
-                            subnet_mask: p.subnet_mask,
-                            dns: p.dns_servers.clone(),
-                        },
-                    );
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
 fn apply_sections_to_db(db: &LanforgeDb, sections: &[Section], cfg: &ConfigFile) -> Result<()> {
     let export = SystemConfigExport::from(cfg);
     let has_dns_adblock = sections
@@ -153,36 +118,19 @@ fn apply_sections_to_db(db: &LanforgeDb, sections: &[Section], cfg: &ConfigFile)
 
     db.write(|tx| {
         for sec in sections {
-            match sec {
-                Section::Dhcp => {
-                    #[cfg(feature = "dhcp")]
-                    {
-                        if let Some(ref pools) = export.dhcp_v4_pools {
-                            tx.set(DHCP_V4_POOLS, pools)?;
-                        }
-                        if let Some(ref pools) = export.dhcp_v6_pools {
-                            tx.set(DHCP_V6_POOLS, pools)?;
-                        }
-                        if let Some(ref opts) = export.dhcp_options {
-                            tx.set(DHCP_OPTIONS, opts)?;
-                        }
+            if *sec == Section::Ra {
+                #[cfg(feature = "ra")]
+                {
+                    if let Some(ref prefixes) = export.ra_prefixes {
+                        tx.set(RA_PREFIXES, prefixes)?;
+                    }
+                    if let Some(ref rdnss) = export.ra_rdnss {
+                        tx.set(RA_RDNSS, rdnss)?;
+                    }
+                    if let Some(ref dnssl) = export.ra_dnssl {
+                        tx.set(RA_DNSSL, dnssl)?;
                     }
                 }
-                Section::Ra => {
-                    #[cfg(feature = "ra")]
-                    {
-                        if let Some(ref prefixes) = export.ra_prefixes {
-                            tx.set(RA_PREFIXES, prefixes)?;
-                        }
-                        if let Some(ref rdnss) = export.ra_rdnss {
-                            tx.set(RA_RDNSS, rdnss)?;
-                        }
-                        if let Some(ref dnssl) = export.ra_dnssl {
-                            tx.set(RA_DNSSL, dnssl)?;
-                        }
-                    }
-                }
-                _ => {}
             }
         }
         if has_dns_adblock {

@@ -68,6 +68,9 @@ pub struct Config {
     pub dhcpv6_enabled: bool,
     #[cfg(feature = "dhcp")]
     pub dhcpv6_toml: Dhcpv6Config,
+    /// The DHCP options and pools the daemon runs: `[dhcp]` + `[tftp]`, their only source.
+    #[cfg(feature = "dhcp")]
+    pub dhcp: lanforge_api::config_file::DhcpSettings,
 
     // DNS
     #[cfg(feature = "dns")]
@@ -209,6 +212,8 @@ impl Config {
             dhcpv6_enabled: toml_cfg.dhcp.v6.enabled,
             #[cfg(feature = "dhcp")]
             dhcpv6_toml: toml_cfg.dhcp.v6,
+            #[cfg(feature = "dhcp")]
+            dhcp: toml_cfg.dhcp.settings,
             #[cfg(feature = "dns")]
             dns_enabled: toml_cfg.dns.enabled,
             #[cfg(feature = "dns")]
@@ -709,6 +714,8 @@ impl Default for Config {
             dhcpv6_enabled: true,
             #[cfg(feature = "dhcp")]
             dhcpv6_toml: Dhcpv6Config::default(),
+            #[cfg(feature = "dhcp")]
+            dhcp: lanforge_api::config_file::DhcpSettings::default(),
             #[cfg(feature = "dns")]
             dns_enabled: true,
             #[cfg(feature = "dns")]

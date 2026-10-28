@@ -71,6 +71,8 @@ pub struct ServiceRuntime {
     pub config_writable: AtomicBool,
     /// Serializes read-modify-write of the config file between its writers (API, db worker).
     pub config_file_lock: parking_lot::Mutex<()>,
+    /// Serializes changes built from the live config, written to the file, then applied.
+    pub config_change_lock: parking_lot::Mutex<()>,
     /// Config file problems found at the last load or reload, shown to the admin.
     pub config_issues: RwLock<Vec<String>>,
     pub compiled_caps: RwLock<SmallVec<[Cap; 32]>>,
@@ -113,6 +115,7 @@ impl ServiceRuntime {
             config_path: RwLock::new(None),
             config_writable: AtomicBool::new(true),
             config_file_lock: parking_lot::Mutex::new(()),
+            config_change_lock: parking_lot::Mutex::new(()),
             config_issues: RwLock::new(Vec::new()),
             compiled_caps: RwLock::new(CompiledCaps::detect_default_compiled()),
         }

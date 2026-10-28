@@ -359,11 +359,9 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
         assert_eq!(dev2.primary_v4(), Some(Ipv4Addr::new(192, 168, 1, 60)));
         assert_eq!(dev2.status, DeviceStatus::Offline);
 
-        // 2. Verify DHCPv4 pool survived
-        let pools = db.load_dhcp_v4_pools().expect("load pools");
-        assert_eq!(pools.len(), 1);
-        assert_eq!(pools[0].name.as_deref(), Some("default_lan"));
-        assert_eq!(pools[0].router, Some(Ipv4Addr::new(192, 168, 1, 1)));
+        // 2. DHCP is file-owned (config-storage step 2): the worker no longer copies pools
+        // into redb; the API writes them to `[dhcp]` in the config file.
+        assert!(db.load_dhcp_v4_pools().expect("load pools").is_empty());
 
         // 3. Verify Firewall config survived
         // Firewall is file-owned (config-storage step 2): not copied into redb by the worker.

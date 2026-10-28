@@ -10,6 +10,7 @@ pub mod patch;
 pub mod section;
 pub mod sections;
 
+pub use convert::DhcpSettings;
 pub use duration::HumanDuration;
 pub use hash::section_hashes;
 pub use patch::patch_sections;
@@ -188,7 +189,7 @@ mod tests {
         cfg.system.iface = "end0".to_string();
         cfg.system.search_domains = vec!["lan".to_string(), "home.arpa".to_string()];
 
-        cfg.dhcp.v4.pools.insert(
+        cfg.dhcp.v4.pools.push((
             "lan".to_string(),
             Dhcpv4PoolFile {
                 range: "192.168.1.100-192.168.1.200".to_string(),
@@ -196,8 +197,9 @@ mod tests {
                 router: Some("192.168.1.1".parse().unwrap()),
                 subnet_mask: Some("255.255.255.0".parse().unwrap()),
                 dns: vec!["192.168.1.1".parse().unwrap()],
+                ..Default::default()
             },
-        );
+        ));
 
         cfg.dns.rewrites.insert(
             "nas.lan".to_string(),

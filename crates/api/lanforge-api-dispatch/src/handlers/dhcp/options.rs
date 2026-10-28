@@ -10,6 +10,13 @@ use lanforge_types::device::IPv4State;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
 
+fn not_saved(what: &str, e: &str) -> Response {
+    tracing::error!("{what} not saved: {e}");
+    Response::Error {
+        error: format!("{what} not saved: {e}"),
+    }
+}
+
 impl ClientContext {
     pub async fn handle_get_dhcp_options(&self) -> Response {
         let options = self.ctx.get_dhcp_options();
@@ -17,10 +24,12 @@ impl ClientContext {
     }
 
     pub async fn handle_update_dhcp_options(&self, options: DhcpOptionsConfig) -> Response {
-        self.ctx.update_dhcp_options(options);
-        Response::Success(SimpleSuccess {
-            message: "DHCP & TFTP options updated successfully".to_string(),
-        })
+        match self.change_dhcp(|dhcp| dhcp.options = options) {
+            Ok(persisted) => Response::Success(SimpleSuccess {
+                message: persisted.message("DHCP & TFTP options"),
+            }),
+            Err(e) => not_saved("DHCP & TFTP options", &e),
+        }
     }
 
     pub async fn handle_get_dhcp_pools_config(&self) -> Response {
@@ -57,13 +66,15 @@ impl ClientContext {
         v4_pools: Vec<Dhcpv4Pool>,
         v6_pools: Vec<Dhcpv6Pool>,
     ) -> Response {
-        let patch = lanforge_core::context::ConfigPatch::new()
-            .with_dhcp_v4_pools(v4_pools)
-            .with_dhcp_v6_pools(v6_pools);
-        let _ = self.ctx.apply_config(patch);
-        Response::Success(SimpleSuccess {
-            message: "DHCP pools configuration updated successfully".to_string(),
-        })
+        match self.change_dhcp(|dhcp| {
+            dhcp.v4_pools = v4_pools;
+            dhcp.v6_pools = v6_pools;
+        }) {
+            Ok(persisted) => Response::Success(SimpleSuccess {
+                message: persisted.message("DHCP pools configuration"),
+            }),
+            Err(e) => not_saved("DHCP pools", &e),
+        }
     }
 
     pub async fn handle_dhcp_reconcile(&self) -> Response {

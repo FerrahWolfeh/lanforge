@@ -94,6 +94,47 @@ impl ClientContext {
         })
     }
 
+    /// Changes the DHCP options and/or pools: `change` edits the live settings, the result is
+    /// written to `[dhcp]` and `[tftp]` (see [`Self::persist_config_sections`]) and then
+    /// applied as the file now holds it (unnamed pools are named, repeated names made unique).
+    /// A value the file form cannot hold (a pool whose first address is past its last, ...) is
+    /// refused: nothing written, nothing applied.
+    pub fn change_dhcp(
+        &self,
+        change: impl FnOnce(&mut lanforge_api::config_file::DhcpSettings),
+    ) -> Result<Persisted, String> {
+        let _serial = self.ctx.config_change_lock();
+        let live = lanforge_api::config_file::DhcpSettings {
+            options: self.ctx.get_dhcp_options(),
+            v4_pools: self.ctx.get_dhcp_v4_pools(),
+            v6_pools: self.ctx.get_dhcp_v6_pools(),
+        };
+        let mut wanted = live.clone();
+        change(&mut wanted);
+        let mut file = ConfigFile::default();
+        file.set_dhcp_settings(&wanted);
+        let (dhcp, issues) = file.dhcp_settings();
+        if !issues.is_empty() {
+            return Err(issues.join("; "));
+        }
+        let persisted = self.persist_config_sections(SectionSet::DHCP | SectionSet::TFTP, |f| {
+            f.dhcp = file.dhcp;
+            f.tftp = file.tftp;
+        })?;
+        let mut patch = lanforge_core::context::ConfigPatch::new();
+        if dhcp.options != live.options {
+            patch = patch.with_dhcp_options(dhcp.options);
+        }
+        if dhcp.v4_pools != live.v4_pools {
+            patch = patch.with_dhcp_v4_pools(dhcp.v4_pools);
+        }
+        if dhcp.v6_pools != live.v6_pools {
+            patch = patch.with_dhcp_v6_pools(dhcp.v6_pools);
+        }
+        let _ = self.ctx.apply_config(patch);
+        Ok(persisted)
+    }
+
     /// Extracts the consolidated static configuration snapshot of the system.
     pub async fn export_system_config_data(&self) -> SystemConfigExport {
         if let lanforge_api::api::Response::SystemConfig(export) =

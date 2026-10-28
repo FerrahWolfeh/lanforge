@@ -255,16 +255,13 @@ enabled = true
         let mut cfg = ConfigFile::default();
         cfg.system.iface = "lan0".to_string();
         cfg.dhcp.v4.enabled = true;
-        cfg.dhcp.v4.pools.insert(
+        cfg.dhcp.v4.pools.push((
             "lan".to_string(),
             super::super::sections::Dhcpv4PoolFile {
                 range: "192.168.1.10-192.168.1.50".to_string(),
-                lease: None,
-                router: None,
-                subnet_mask: None,
-                dns: Vec::new(),
+                ..Default::default()
             },
-        );
+        ));
 
         patch_sections(&mut doc, &cfg, SectionSet::DHCP).unwrap();
 

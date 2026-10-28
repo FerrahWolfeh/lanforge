@@ -31,6 +31,33 @@ pub fn reload_file_sections(ctx: &LanforgeContext) {
     // other source, not for replacing a working configuration.
     let applies = |sec: Section| !set_aside.iter().any(|(s, _)| *s == sec);
 
+    // Before the sections below move their parts out of `file`.
+    #[cfg(feature = "dhcp")]
+    if applies(Section::Dhcp) {
+        let _serial = ctx.config_change_lock();
+        let (dhcp, dhcp_issues) = file.dhcp_settings();
+        issues.extend(crate::config::toml::log_issues(dhcp_issues));
+        let options_changed = ctx.get_dhcp_options() != dhcp.options;
+        let v4_changed = ctx.get_dhcp_v4_pools() != dhcp.v4_pools;
+        let v6_changed = ctx.get_dhcp_v6_pools() != dhcp.v6_pools;
+        if options_changed || v4_changed || v6_changed {
+            info!(
+                "Reload: [dhcp]/[tftp] changed in '{}'; applying",
+                path.display()
+            );
+            let mut update = lanforge_core::context::ConfigPatch::new();
+            if options_changed {
+                update = update.with_dhcp_options(dhcp.options);
+            }
+            if v4_changed {
+                update = update.with_dhcp_v4_pools(dhcp.v4_pools);
+            }
+            if v6_changed {
+                update = update.with_dhcp_v6_pools(dhcp.v6_pools);
+            }
+            let _ = ctx.apply_config(update);
+        }
+    }
     #[cfg(feature = "pppoe")]
     if applies(Section::Pppoe) && ctx.get_pppoe_config().as_ref() != Some(&file.pppoe) {
         info!("Reload: [pppoe] changed in '{}'; applying", path.display());
@@ -63,7 +90,12 @@ pub fn reload_file_sections(ctx: &LanforgeContext) {
             ctx.update_firewall_config(effective);
         }
     }
-    #[cfg(not(any(feature = "pppoe", feature = "traffic", feature = "nft")))]
+    #[cfg(not(any(
+        feature = "pppoe",
+        feature = "traffic",
+        feature = "nft",
+        feature = "dhcp"
+    )))]
     let _ = (file, applies);
     ctx.set_config_issues(issues);
 }
@@ -115,6 +147,42 @@ mod tests {
         assert!(live.sqm.enabled);
         assert_eq!(live.sqm.download_mbps, 700);
         assert_eq!(live.sqm.rtt_ms, Some(30));
+    }
+
+    /// An offline `[dhcp]` edit applies on reload; a pool with a wrong range is left out (no
+    /// address leased from it) and reported, the rest applies.
+    #[cfg(feature = "dhcp")]
+    #[test]
+    fn reload_applies_a_dhcp_edit_and_leaves_out_a_wrong_pool() {
+        let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        std::fs::write(
+            &path,
+            "[dhcp.v4]\nlease = \"12h\"\nntp = []\n\n\
+             [dhcp.v4.pools.lan]\nrange = \"192.168.1.100-192.168.1.200\"\n\n\
+             [dhcp.v4.pools.typo]\nrange = \"192.168.1.10-192.168.1.300\"\n\n\
+             [tftp]\nenabled = true\nblock_size = 1468\n",
+        )
+        .unwrap();
+        ctx.set_config_path(&path);
+
+        reload_file_sections(&ctx);
+
+        let options = ctx.get_dhcp_options();
+        assert_eq!(options.v4.lease_time, 43200);
+        assert!(
+            options.v4.ntp_servers.is_empty(),
+            "ntp = [] advertises none"
+        );
+        assert!(options.tftp.enabled);
+        assert_eq!(options.tftp.block_size, 1468);
+        let pools = ctx.get_dhcp_v4_pools();
+        assert_eq!(pools.len(), 1);
+        assert_eq!(pools[0].name.as_deref(), Some("lan"));
+        let issues = ctx.config_issues();
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(issues[0].contains("typo"), "{issues:?}");
     }
 
     /// A broken `[pppoe]` on reload leaves the running `PPPoE` alone (its default would disable

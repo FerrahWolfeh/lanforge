@@ -281,6 +281,14 @@ impl LanforgeContext {
         self.inner.runtime.config_file_lock.lock()
     }
 
+    /// Held across a change built from the live config, written to the file and then applied
+    /// (read, persist, apply), when the change covers only part of a file section: DHCP options
+    /// and pools share `[dhcp]`, so two such changes at once would write back each other's
+    /// old half. Never taken inside `config_file_lock`.
+    pub fn config_change_lock(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.inner.runtime.config_change_lock.lock()
+    }
+
     /// Replaces the config file problems found at the last load or reload (set-aside sections,
     /// ignored entries). Shown in the status so the admin sees what is not applied.
     pub fn set_config_issues(&self, issues: Vec<String>) {

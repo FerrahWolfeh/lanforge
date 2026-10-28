@@ -180,11 +180,6 @@ impl DbWorker {
         // latest context snapshot and commit every dirty section in one txn.
         if !self.dirty_sections.is_empty() {
             let result = db.write(|tx| {
-                if self.dirty_sections.contains(SectionSet::DHCP) {
-                    tx.set(DHCP_V4_POOLS, &self.ctx.get_dhcp_v4_pools())?;
-                    tx.set(DHCP_V6_POOLS, &self.ctx.get_dhcp_v6_pools())?;
-                    tx.set(DHCP_OPTIONS, &self.ctx.get_dhcp_options())?;
-                }
                 if self.dirty_sections.contains(SectionSet::RA) {
                     tx.set(RA_PREFIXES, &self.ctx.get_ra_prefixes())?;
                     tx.set(RA_RDNSS, &self.ctx.get_ra_rdnss())?;
@@ -827,15 +822,6 @@ impl AsyncService for DbWorker {
                             | DnsEvent::ConfigReverseResolversChanged,
                         ) => {
                             self.dirty_sections |= SectionSet::DNS;
-                        }
-                        LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed) => {
-                            self.dirty_sections |= SectionSet::DHCP;
-                        }
-                        LanforgeEvent::System(SystemEvent::ConfigDhcpV6Changed) => {
-                            self.dirty_sections |= SectionSet::DHCP;
-                        }
-                        LanforgeEvent::System(SystemEvent::ConfigDhcpOptionsChanged) => {
-                            self.dirty_sections |= SectionSet::DHCP;
                         }
                         LanforgeEvent::System(SystemEvent::ConfigRaChanged) => {
                             self.dirty_sections |= SectionSet::RA;

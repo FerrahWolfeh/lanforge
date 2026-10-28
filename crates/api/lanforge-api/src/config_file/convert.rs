@@ -5,7 +5,7 @@ use std::str::FromStr;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{
-    DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, Dhcpv6Pool,
+    DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, Dhcpv6Pool, TftpOptions,
 };
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{
@@ -30,10 +30,10 @@ use crate::api::system::SystemConfigExport;
 use super::ConfigFile;
 use super::duration::HumanDuration;
 use super::sections::{
-    AdblockFile, AdblockRuleFile, AdblockSourceFile, DhcpFile, Dhcpv4PoolFile, Dhcpv6PoolFile,
-    DnsFile, DnsRewriteFile, DnsUpstreamFile, FirewallFile, FirewallZoneFile, HostFileEntry,
-    OpenPortFile, PortForwardFile, RaDnsslFile, RaFile, RaPrefixFile, RaRdnssFile,
-    ZoneForwardingFile,
+    AdblockFile, AdblockRuleFile, AdblockSourceFile, DhcpFile, Dhcpv4File, Dhcpv4PoolFile,
+    Dhcpv6File, Dhcpv6PoolFile, DnsFile, DnsRewriteFile, DnsUpstreamFile, FirewallFile,
+    FirewallZoneFile, HostFileEntry, OpenPortFile, PortForwardFile, RaDnsslFile, RaFile,
+    RaPrefixFile, RaRdnssFile, TftpFile, ZoneForwardingFile,
 };
 
 fn policy_to_str(p: FirewallPolicy) -> &'static str {
@@ -335,6 +335,312 @@ impl FirewallFile {
     }
 }
 
+/// The DHCP and TFTP settings the daemon runs, as one value: `[dhcp]` holds the scope options
+/// and pools, `[tftp]` the TFTP part of the options.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DhcpSettings {
+    pub options: DhcpOptionsConfig,
+    pub v4_pools: Vec<Dhcpv4Pool>,
+    pub v6_pools: Vec<Dhcpv6Pool>,
+}
+
+/// `base`, or `base #2`, `base #3`... — the first label not in `taken`.
+fn unique_label<'a>(base: String, taken: impl Iterator<Item = &'a String> + Clone) -> String {
+    let mut label = base.clone();
+    let mut n = 2;
+    while taken.clone().any(|l| *l == label) {
+        label = format!("{base} #{n}");
+        n += 1;
+    }
+    label
+}
+
+/// A lease in whole seconds, saturated (with an issue) when it does not fit DHCP's 32 bits.
+fn lease_secs(lease: HumanDuration, at: &str, issues: &mut Vec<String>) -> u32 {
+    u32::try_from(lease.0).unwrap_or_else(|_| {
+        issues.push(format!(
+            "{at} lease = {}s is longer than DHCP allows; using {}s",
+            lease.0,
+            u32::MAX
+        ));
+        u32::MAX
+    })
+}
+
+/// Raw options keyed by their code as text; a key that is not a code is left out.
+fn raw_options<K: FromStr + std::hash::Hash + Eq>(
+    file: &BTreeMap<String, String>,
+    at: &str,
+    issues: &mut Vec<String>,
+) -> std::collections::HashMap<K, String> {
+    let mut out = std::collections::HashMap::new();
+    for (code, value) in file {
+        match code.trim().parse::<K>() {
+            Ok(k) => {
+                out.insert(k, value.clone());
+            }
+            Err(_) => issues.push(format!(
+                "{at} option \"{code}\" is not an option code; left out"
+            )),
+        }
+    }
+    out
+}
+
+impl DhcpFile {
+    /// The file form of `dhcp`, losing nothing: pools keep their order and every field; an
+    /// unnamed pool is named `pool-N`, a repeated name gets a `#2` suffix.
+    #[must_use]
+    pub fn from_config(dhcp: &DhcpSettings) -> Self {
+        let (v4, v6) = (&dhcp.options.v4, &dhcp.options.v6);
+        let mut v4_pools: Vec<(String, Dhcpv4PoolFile)> = Vec::new();
+        for (idx, p) in dhcp.v4_pools.iter().enumerate() {
+            let base = p
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("pool-{}", idx + 1));
+            let name = unique_label(base, v4_pools.iter().map(|(n, _)| n));
+            v4_pools.push((
+                name,
+                Dhcpv4PoolFile {
+                    range: format!("{}-{}", p.range_start, p.range_end),
+                    lease: p.lease_time.map(HumanDuration::from),
+                    router: p.router,
+                    subnet_mask: p.subnet_mask,
+                    dns: p.dns_servers.clone(),
+                    domain_name: p.domain_name.clone(),
+                    search_domains: p.search_domains.clone(),
+                    ntp: p.ntp_servers.clone(),
+                    tftp_server: p.tftp_server.clone(),
+                    boot_file: p.boot_file.clone(),
+                },
+            ));
+        }
+        let mut v6_pools: Vec<(String, Dhcpv6PoolFile)> = Vec::new();
+        for (idx, p) in dhcp.v6_pools.iter().enumerate() {
+            let base = p
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("pool-{}", idx + 1));
+            let name = unique_label(base, v6_pools.iter().map(|(n, _)| n));
+            let range = match (&p.range_start, &p.range_end) {
+                (Some(s), Some(e)) => Some(format!("{s}-{e}")),
+                _ => None,
+            };
+            v6_pools.push((
+                name,
+                Dhcpv6PoolFile {
+                    range,
+                    address: p.address.clone(),
+                    lease: p.lease_time.map(HumanDuration::from),
+                    dns: p.dns_servers.clone(),
+                    search_domains: p.search_domains.clone(),
+                    ntp: p.ntp_servers.clone(),
+                    boot_file: p.boot_file.clone(),
+                },
+            ));
+        }
+        let default_v4_ntp = Dhcpv4Options::default().ntp_servers;
+        let default_v6_ntp = Dhcpv6Options::default().ntp_servers;
+        Self {
+            v4: Dhcpv4File {
+                enabled: v4.enabled,
+                lease: Some(HumanDuration::from(v4.lease_time)),
+                router: v4.router,
+                dns: v4.dns_servers.clone(),
+                subnet_mask: v4.subnet_mask,
+                domain_name: v4.domain_name.clone(),
+                search_domains: v4.search_domains.clone(),
+                ntp: (v4.ntp_servers != default_v4_ntp).then(|| v4.ntp_servers.clone()),
+                tftp_server: v4.tftp_server.clone(),
+                boot_file: v4.boot_file.clone(),
+                options: v4
+                    .raw_options
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.clone()))
+                    .collect(),
+                pools: v4_pools,
+            },
+            v6: Dhcpv6File {
+                enabled: v6.enabled,
+                lease: Some(HumanDuration::from(v6.lease_time)),
+                dns: v6.dns_servers.clone(),
+                search_domains: v6.search_domains.clone(),
+                ntp: (v6.ntp_servers != default_v6_ntp).then(|| v6.ntp_servers.clone()),
+                boot_file: v6.boot_file.clone(),
+                options: v6
+                    .raw_options
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.clone()))
+                    .collect(),
+                pools: v6_pools,
+            },
+        }
+    }
+
+    /// The DHCP options and pools this file describes (TFTP at its defaults; see
+    /// `ConfigFile::dhcp_settings`), plus one message per value it gets wrong. A pool whose
+    /// range cannot be read is left out — no address is leased from a guess — and so is a raw
+    /// option whose code is not a number.
+    #[must_use]
+    pub fn to_config(&self) -> (DhcpSettings, Vec<String>) {
+        let mut issues = Vec::new();
+        let (v4, v6) = (&self.v4, &self.v6);
+
+        let mut v4_pools = Vec::with_capacity(v4.pools.len());
+        for (name, p) in &v4.pools {
+            let at = format!("[dhcp.v4.pools.\"{name}\"]");
+            let range = p.range.split_once('-').and_then(|(s, e)| {
+                Some((
+                    s.trim().parse::<Ipv4Addr>().ok()?,
+                    e.trim().parse::<Ipv4Addr>().ok()?,
+                ))
+            });
+            let Some((range_start, range_end)) = range.filter(|(s, e)| s <= e) else {
+                issues.push(format!(
+                    "{at} range = \"{}\" is not \"first-last\" (e.g. \"192.168.1.100-192.168.1.200\"); pool not served",
+                    p.range
+                ));
+                continue;
+            };
+            v4_pools.push(Dhcpv4Pool {
+                name: Some(name.clone()),
+                range_start,
+                range_end,
+                subnet_mask: p.subnet_mask,
+                router: p.router,
+                dns_servers: p.dns.clone(),
+                domain_name: p.domain_name.clone(),
+                search_domains: p.search_domains.clone(),
+                ntp_servers: p.ntp.clone(),
+                lease_time: p.lease.map(|l| lease_secs(l, &at, &mut issues)),
+                boot_file: p.boot_file.clone(),
+                tftp_server: p.tftp_server.clone(),
+            });
+        }
+
+        let mut v6_pools = Vec::with_capacity(v6.pools.len());
+        for (name, p) in &v6.pools {
+            let at = format!("[dhcp.v6.pools.\"{name}\"]");
+            let (range_start, range_end) = match &p.range {
+                None => (None, None),
+                Some(text) => {
+                    let range = text.split_once('-').and_then(|(s, e)| {
+                        Some((
+                            Ipv6AddrOrSuffix::from_str(s.trim()).ok()?,
+                            Ipv6AddrOrSuffix::from_str(e.trim()).ok()?,
+                        ))
+                    });
+                    let Some((s, e)) = range else {
+                        issues.push(format!(
+                            "{at} range = \"{text}\" is not \"first-last\" (e.g. \"::100-::1fff\"); pool not served"
+                        ));
+                        continue;
+                    };
+                    (Some(s), Some(e))
+                }
+            };
+            v6_pools.push(Dhcpv6Pool {
+                name: Some(name.clone()),
+                range_start,
+                range_end,
+                address: p.address.clone(),
+                dns_servers: p.dns.clone(),
+                search_domains: p.search_domains.clone(),
+                ntp_servers: p.ntp.clone(),
+                lease_time: p.lease.map(|l| lease_secs(l, &at, &mut issues)),
+                boot_file: p.boot_file.clone(),
+            });
+        }
+
+        let options = DhcpOptionsConfig {
+            v4: Dhcpv4Options {
+                enabled: v4.enabled,
+                lease_time: v4
+                    .lease
+                    .map_or(86400, |l| lease_secs(l, "[dhcp.v4]", &mut issues)),
+                router: v4.router,
+                subnet_mask: v4.subnet_mask,
+                dns_servers: v4.dns.clone(),
+                domain_name: v4.domain_name.clone(),
+                search_domains: v4.search_domains.clone(),
+                ntp_servers: v4
+                    .ntp
+                    .clone()
+                    .unwrap_or_else(|| Dhcpv4Options::default().ntp_servers),
+                tftp_server: v4.tftp_server.clone(),
+                boot_file: v4.boot_file.clone(),
+                raw_options: raw_options(&v4.options, "[dhcp.v4]", &mut issues),
+            },
+            v6: Dhcpv6Options {
+                enabled: v6.enabled,
+                lease_time: v6
+                    .lease
+                    .map_or(86400, |l| lease_secs(l, "[dhcp.v6]", &mut issues)),
+                dns_servers: v6.dns.clone(),
+                search_domains: v6.search_domains.clone(),
+                ntp_servers: v6
+                    .ntp
+                    .clone()
+                    .unwrap_or_else(|| Dhcpv6Options::default().ntp_servers),
+                boot_file: v6.boot_file.clone(),
+                raw_options: raw_options(&v6.options, "[dhcp.v6]", &mut issues),
+            },
+            tftp: TftpOptions::default(),
+        };
+        (
+            DhcpSettings {
+                options,
+                v4_pools,
+                v6_pools,
+            },
+            issues,
+        )
+    }
+}
+
+impl TftpFile {
+    #[must_use]
+    pub fn from_options(tftp: &TftpOptions) -> Self {
+        Self {
+            enabled: tftp.enabled,
+            listen: tftp.listen_addr.clone(),
+            root_dir: tftp.root_dir.clone(),
+            block_size: tftp.block_size,
+            timeout: tftp.timeout,
+            max_retries: tftp.max_retries,
+        }
+    }
+
+    #[must_use]
+    pub fn to_options(&self) -> TftpOptions {
+        TftpOptions {
+            enabled: self.enabled,
+            listen_addr: self.listen.clone(),
+            root_dir: self.root_dir.clone(),
+            block_size: self.block_size,
+            timeout: self.timeout,
+            max_retries: self.max_retries,
+        }
+    }
+}
+
+impl ConfigFile {
+    /// `[dhcp]` and `[tftp]` as the settings the daemon runs, plus the issues of `[dhcp]`.
+    #[must_use]
+    pub fn dhcp_settings(&self) -> (DhcpSettings, Vec<String>) {
+        let (mut dhcp, issues) = self.dhcp.to_config();
+        dhcp.options.tftp = self.tftp.to_options();
+        (dhcp, issues)
+    }
+
+    /// Writes `dhcp` into `[dhcp]` and `[tftp]` (persist both: `SectionSet::DHCP | TFTP`).
+    pub fn set_dhcp_settings(&mut self, dhcp: &DhcpSettings) {
+        self.dhcp = DhcpFile::from_config(dhcp);
+        self.tftp = TftpFile::from_options(&dhcp.options.tftp);
+    }
+}
+
 impl From<&SystemConfigExport> for ConfigFile {
     fn from(export: &SystemConfigExport) -> Self {
         let mut cfg = ConfigFile::default();
@@ -365,87 +671,19 @@ impl From<&SystemConfigExport> for ConfigFile {
             );
         }
 
-        // 2. DHCP options & pools
-        let mut dhcp = DhcpFile::default();
-        if let Some(ref opts) = export.dhcp_options {
-            dhcp.v4.enabled = opts.v4.enabled;
-            dhcp.v4.lease = Some(HumanDuration(opts.v4.lease_time as u64));
-            dhcp.v4.router = opts.v4.router;
-            dhcp.v4.subnet_mask = opts.v4.subnet_mask;
-            dhcp.v4.dns = opts.v4.dns_servers.clone();
-            dhcp.v4.domain_name = opts.v4.domain_name.clone();
-            dhcp.v4.search_domains = opts.v4.search_domains.clone();
-            dhcp.v4.boot_file = opts.v4.boot_file.clone();
-
-            dhcp.v6.enabled = opts.v6.enabled;
-            dhcp.v6.lease = Some(HumanDuration(opts.v6.lease_time as u64));
-            dhcp.v6.dns = opts.v6.dns_servers.clone();
-            dhcp.v6.search_domains = opts.v6.search_domains.clone();
+        // 2. DHCP options & pools, TFTP
+        if export.dhcp_options.is_some()
+            || export.dhcp_v4_pools.is_some()
+            || export.dhcp_v6_pools.is_some()
+        {
+            let options = export.dhcp_options.as_deref().cloned().unwrap_or_default();
+            cfg.tftp = TftpFile::from_options(&options.tftp);
+            cfg.dhcp = DhcpFile::from_config(&DhcpSettings {
+                options,
+                v4_pools: export.dhcp_v4_pools.clone().unwrap_or_default(),
+                v6_pools: export.dhcp_v6_pools.clone().unwrap_or_default(),
+            });
         }
-
-        if let Some(ref pools) = export.dhcp_v4_pools {
-            for (idx, p) in pools.iter().enumerate() {
-                let name = p
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("pool-{}", idx + 1));
-                dhcp.v4.pools.insert(
-                    name,
-                    Dhcpv4PoolFile {
-                        range: format!("{}-{}", p.range_start, p.range_end),
-                        lease: p.lease_time.map(|l| HumanDuration(u64::from(l))),
-                        router: p.router,
-                        subnet_mask: p.subnet_mask,
-                        dns: p.dns_servers.clone(),
-                    },
-                );
-            }
-        }
-
-        if let Some(ref pools) = export.dhcp_v6_pools {
-            for (idx, p) in pools.iter().enumerate() {
-                let name = p
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("pool-{}", idx + 1));
-                let range = match (&p.range_start, &p.range_end) {
-                    (Some(s), Some(e)) => format!("{s}-{e}"),
-                    _ => p.address.clone().unwrap_or_default(),
-                };
-                dhcp.v6.pools.insert(
-                    name,
-                    Dhcpv6PoolFile {
-                        range,
-                        lease: p.lease_time.map(|l| HumanDuration(u64::from(l))),
-                        dns: p.dns_servers.clone(),
-                    },
-                );
-            }
-        }
-
-        for pool in dhcp.v4.pools.values_mut() {
-            if pool.lease == dhcp.v4.lease {
-                pool.lease = None;
-            }
-            if pool.router == dhcp.v4.router {
-                pool.router = None;
-            }
-            if pool.subnet_mask == dhcp.v4.subnet_mask {
-                pool.subnet_mask = None;
-            }
-            if pool.dns == dhcp.v4.dns {
-                pool.dns.clear();
-            }
-        }
-        for pool in dhcp.v6.pools.values_mut() {
-            if pool.lease == dhcp.v6.lease {
-                pool.lease = None;
-            }
-            if pool.dns == dhcp.v6.dns {
-                pool.dns.clear();
-            }
-        }
-        cfg.dhcp = dhcp;
 
         // 3. Router Advertisement
         let mut ra = RaFile::default();
@@ -674,79 +912,12 @@ impl From<&ConfigFile> for SystemConfigExport {
             });
         }
 
-        // 2. DHCP options & pools
-        let mut dhcp_v4_pools = Vec::new();
-        for (name, p) in &cfg.dhcp.v4.pools {
-            let (start, end) = parse_ipv4_range(&p.range);
-            dhcp_v4_pools.push(Dhcpv4Pool {
-                name: Some(name.clone()),
-                range_start: start,
-                range_end: end,
-                subnet_mask: p.subnet_mask.or(cfg.dhcp.v4.subnet_mask),
-                router: p.router.or(cfg.dhcp.v4.router),
-                dns_servers: if p.dns.is_empty() {
-                    cfg.dhcp.v4.dns.clone()
-                } else {
-                    p.dns.clone()
-                },
-                domain_name: None,
-                search_domains: Vec::new(),
-                ntp_servers: Vec::new(),
-                lease_time: p.lease.or(cfg.dhcp.v4.lease).map(|l| l.as_secs() as u32),
-                boot_file: None,
-                tftp_server: None,
-            });
-        }
-
-        let mut dhcp_v6_pools = Vec::new();
-        for (name, p) in &cfg.dhcp.v6.pools {
-            let (start, end) = parse_ipv6_range(&p.range);
-            dhcp_v6_pools.push(Dhcpv6Pool {
-                name: Some(name.clone()),
-                range_start: start,
-                range_end: end,
-                address: None,
-                dns_servers: if p.dns.is_empty() {
-                    cfg.dhcp.v6.dns.clone()
-                } else {
-                    p.dns.clone()
-                },
-                lease_time: p.lease.or(cfg.dhcp.v6.lease).map(|l| l.as_secs() as u32),
-                search_domains: Vec::new(),
-                ntp_servers: Vec::new(),
-                boot_file: None,
-            });
-        }
-
-        let dhcp_options = Some(Box::new(DhcpOptionsConfig {
-            v4: Dhcpv4Options {
-                enabled: cfg.dhcp.v4.enabled,
-                lease_time: cfg.dhcp.v4.lease.map_or(86400, |l| l.as_secs() as u32),
-                router: cfg.dhcp.v4.router,
-                subnet_mask: cfg.dhcp.v4.subnet_mask,
-                dns_servers: cfg.dhcp.v4.dns.clone(),
-                domain_name: cfg.dhcp.v4.domain_name.clone(),
-                search_domains: if cfg.dhcp.v4.search_domains.is_empty() {
-                    cfg.system.search_domains.clone()
-                } else {
-                    cfg.dhcp.v4.search_domains.clone()
-                },
-                boot_file: cfg.dhcp.v4.boot_file.clone(),
-                ..Default::default()
-            },
-            v6: Dhcpv6Options {
-                enabled: cfg.dhcp.v6.enabled,
-                lease_time: cfg.dhcp.v6.lease.map_or(86400, |l| l.as_secs() as u32),
-                dns_servers: cfg.dhcp.v6.dns.clone(),
-                search_domains: if cfg.dhcp.v6.search_domains.is_empty() {
-                    cfg.system.search_domains.clone()
-                } else {
-                    cfg.dhcp.v6.search_domains.clone()
-                },
-                ..Default::default()
-            },
-            tftp: Default::default(),
-        }));
+        // 2. DHCP options & pools, TFTP (entries the file gets wrong are left out; see
+        // `ConfigFile::dhcp_settings`)
+        let dhcp = cfg.dhcp_settings().0;
+        let dhcp_v4_pools = dhcp.v4_pools;
+        let dhcp_v6_pools = dhcp.v6_pools;
+        let dhcp_options = Some(Box::new(dhcp.options));
 
         // 3. Router Advertisement
         let mut ra_prefixes = Vec::new();
@@ -947,32 +1118,6 @@ impl From<ConfigFile> for SystemConfigExport {
     }
 }
 
-fn parse_ipv4_range(range_str: &str) -> (Ipv4Addr, Ipv4Addr) {
-    if let Some((start, end)) = range_str.split_once('-') {
-        let s = start
-            .trim()
-            .parse::<Ipv4Addr>()
-            .unwrap_or(Ipv4Addr::UNSPECIFIED);
-        let e = end
-            .trim()
-            .parse::<Ipv4Addr>()
-            .unwrap_or(Ipv4Addr::UNSPECIFIED);
-        (s, e)
-    } else {
-        (Ipv4Addr::UNSPECIFIED, Ipv4Addr::UNSPECIFIED)
-    }
-}
-
-fn parse_ipv6_range(range_str: &str) -> (Option<Ipv6AddrOrSuffix>, Option<Ipv6AddrOrSuffix>) {
-    if let Some((start, end)) = range_str.split_once('-') {
-        let s = Ipv6AddrOrSuffix::from_str(start.trim()).ok();
-        let e = Ipv6AddrOrSuffix::from_str(end.trim()).ok();
-        (s, e)
-    } else {
-        (None, None)
-    }
-}
-
 fn parse_upstream_addr(addr_str: &str) -> (UpstreamProtocol, SocketAddr) {
     let (proto, target) = if let Some(stripped) = addr_str.strip_prefix("tls://") {
         (UpstreamProtocol::Tls, stripped)
@@ -1110,10 +1255,8 @@ mod tests {
         assert_eq!(cfg.hosts.len(), 1);
         assert_eq!(cfg.hosts["nas"].mac.as_deref(), Some("aa:bb:cc:dd:ee:ff"));
         assert_eq!(cfg.hosts["nas"].v4, Some("192.168.1.10".parse().unwrap()));
-        assert_eq!(
-            cfg.dhcp.v4.pools["lan"].range,
-            "192.168.1.100-192.168.1.200"
-        );
+        assert_eq!(cfg.dhcp.v4.pools[0].0, "lan");
+        assert_eq!(cfg.dhcp.v4.pools[0].1.range, "192.168.1.100-192.168.1.200");
         assert_eq!(cfg.dns.rewrites["nas.lan"].target, "192.168.1.10");
 
         let re_exported = SystemConfigExport::from(&cfg);

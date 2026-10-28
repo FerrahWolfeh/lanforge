@@ -6,8 +6,8 @@ use lanforge_core::bus::EventBus;
 use lanforge_core::context::state::State;
 use lanforge_core::context::{ConfigPatch, LanforgeContext};
 use lanforge_db::{
-    AdblockStore, DhcpConfigStore, DnsStore, DnsUpstreamStore, FirewallConfigStore, LanforgeDb,
-    LogDb, LogStore, PppoeConfigStore, RaConfigStore, TrafficConfigStore, UserStore,
+    AdblockStore, DnsStore, DnsUpstreamStore, FirewallConfigStore, LanforgeDb, LogDb, LogStore,
+    PppoeConfigStore, RaConfigStore, TrafficConfigStore, UserStore,
 };
 #[cfg(feature = "dhcp")]
 use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
@@ -17,9 +17,7 @@ use lanforge_types::DnsListenConfig;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
 #[cfg(feature = "dhcp")]
-use lanforge_types::network::dhcp::{
-    DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, TftpOptions,
-};
+use lanforge_types::network::dhcp::Dhcpv4Pool;
 #[cfg(feature = "dns")]
 use lanforge_types::network::dns::AdblockUrlEntry;
 #[cfg(feature = "dns")]
@@ -298,11 +296,9 @@ impl Bootstrapper {
         #[cfg(feature = "dhcp")]
         {
             patch = patch
-                .with_dhcp_v4_pools(cfg.dhcpv4_toml.pools.clone())
-                .with_dhcp_v6_pools(cfg.dhcpv6_toml.pools.clone());
-            if let Ok(Some(opts)) = db.load_dhcp_options() {
-                patch = patch.with_dhcp_options(opts);
-            }
+                .with_dhcp_v4_pools(cfg.dhcp.v4_pools.clone())
+                .with_dhcp_v6_pools(cfg.dhcp.v6_pools.clone())
+                .with_dhcp_options(cfg.dhcp.options.clone());
         }
         #[cfg(feature = "ra")]
         {
@@ -586,7 +582,7 @@ impl Bootstrapper {
         // 2c. Check/reconcile DHCPv4 topology sanity against physical interface and host identity
         #[cfg(feature = "dhcp")]
         if is_provisioned {
-            Self::reconcile_dhcp_v4_topology_sanity(&db, cfg, &table, host_ifaces);
+            Self::reconcile_dhcp_v4_topology_sanity(cfg, &table, host_ifaces);
         }
 
         if let Ok(resolvers) = db.load_dns_reverse_resolvers() {
@@ -703,7 +699,7 @@ impl Bootstrapper {
 
     fn seed_provisioned_configs(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
         #[cfg(feature = "dhcp")]
-        Self::seed_dhcp_configs(db, cfg)?;
+        Self::migrate_dhcp_config(db, cfg)?;
 
         #[cfg(feature = "ra")]
         Self::seed_ra_configs(db, cfg)?;
@@ -723,96 +719,80 @@ impl Bootstrapper {
         Ok(())
     }
 
+    /// Moves the DHCP options and pools an older binary kept in redb (three keys, the TFTP
+    /// options inside the first) into `[dhcp]` and `[tftp]` (once). A key that is missing keeps
+    /// what the file has.
     #[cfg(feature = "dhcp")]
-    fn seed_dhcp_configs(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
-        let mut seed_v4 = Vec::new();
-        for mut pool in cfg.dhcpv4_toml.get_effective_pools() {
-            if pool.lease_time.is_none() {
-                pool.lease_time = Some(cfg.dhcpv4_toml.lease_time);
-            }
-            seed_v4.push(pool);
-        }
-        if seed_v4.is_empty() {
-            use std::net::Ipv4Addr;
+    fn migrate_dhcp_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+        use lanforge_db::config_keys::{DHCP_OPTIONS, DHCP_V4_POOLS, DHCP_V6_POOLS};
 
-            seed_v4.push(Dhcpv4Pool {
-                name: Some("Primary LAN Scope".to_string()),
-                range_start: Ipv4Addr::new(192, 168, 1, 100),
-                range_end: Ipv4Addr::new(192, 168, 1, 240),
-                lease_time: Some(cfg.dhcpv4_toml.lease_time),
-                router: Some(cfg.dhcpv4_toml.router),
-                subnet_mask: Some(cfg.dhcpv4_toml.subnet_mask),
-                dns_servers: cfg.dhcpv4_toml.dns.clone(),
-                ..Default::default()
-            });
+        let options = db.get(DHCP_OPTIONS)?;
+        let v4_pools = db.get(DHCP_V4_POOLS)?;
+        let v6_pools = db.get(DHCP_V6_POOLS)?;
+        if options.is_some() || v4_pools.is_some() || v6_pools.is_some() {
+            let stored = lanforge_api::config_file::DhcpSettings {
+                options: options.unwrap_or_else(|| cfg.dhcp.options.clone()),
+                v4_pools: v4_pools.unwrap_or_else(|| cfg.dhcp.v4_pools.clone()),
+                v6_pools: v6_pools.unwrap_or_else(|| cfg.dhcp.v6_pools.clone()),
+            };
+            cfg.dhcp = stored.clone();
+            Self::move_section_to_file(
+                db,
+                cfg,
+                "DHCP",
+                &[
+                    DHCP_OPTIONS.name(),
+                    DHCP_V4_POOLS.name(),
+                    DHCP_V6_POOLS.name(),
+                ],
+                lanforge_api::config_file::SectionSet::DHCP
+                    | lanforge_api::config_file::SectionSet::TFTP,
+                |file| file.set_dhcp_settings(&stored),
+            )?;
         }
-        if db.seed_dhcp_v4_if_empty(&seed_v4)? {
-            info!(
-                "Seeded {} DHCPv4 pools from configuration into database",
-                seed_v4.len()
-            );
-        }
-        cfg.dhcpv4_toml.pools = db.load_dhcp_v4_pools()?;
+        Self::sync_dhcp_service_configs(cfg);
+        Ok(())
+    }
+
+    /// Carries `cfg.dhcp` (what the daemon runs) into the services' start-up configs.
+    #[cfg(feature = "dhcp")]
+    fn sync_dhcp_service_configs(cfg: &mut Config) {
+        cfg.dhcpv4_enabled = cfg.dhcp.options.v4.enabled;
+        cfg.dhcpv6_enabled = cfg.dhcp.options.v6.enabled;
+        cfg.dhcpv4_toml.pools.clone_from(&cfg.dhcp.v4_pools);
+        cfg.dhcpv6_toml.pools.clone_from(&cfg.dhcp.v6_pools);
         cfg.dhcpv4_toml.range_start = None;
         cfg.dhcpv4_toml.range_end = None;
+        #[cfg(feature = "tftp")]
+        crate::config::toml::apply_tftp_options(&mut cfg.tftp_toml, &cfg.dhcp.options.tftp);
+    }
 
-        let mut seed_v6 = Vec::new();
-        for pool in &cfg.dhcpv6_toml.pools {
-            let mut p = pool.clone();
-            if p.lease_time.is_none() {
-                p.lease_time = Some(cfg.dhcpv6_toml.lease_time);
-            }
-            seed_v6.push(p);
-        }
-        if db.seed_dhcp_v6_if_empty(&seed_v6)? {
-            info!(
-                "Seeded {} DHCPv6 pools from TOML configuration into database",
-                seed_v6.len()
+    /// Writes an automatic change of `cfg.dhcp` (startup sanity) to `[dhcp]`, as it used to be
+    /// written to the database; a read-only file keeps it in memory for this run.
+    #[cfg(feature = "dhcp")]
+    fn persist_dhcp_heal(cfg: &Config) {
+        use lanforge_api::config_file::{ConfigFile, SectionSet, persist_sections};
+
+        let path = std::path::Path::new(&cfg.config_path);
+        if !cfg.config_writable || !path.exists() {
+            warn!(
+                "DHCPv4 Startup Sanity: '{}' is read-only; the correction applies to this run only",
+                path.display()
             );
+            return;
         }
-        cfg.dhcpv6_toml.pools = db.load_dhcp_v6_pools()?;
-
-        let seed_opts = DhcpOptionsConfig {
-            v4: Dhcpv4Options {
-                enabled: cfg.dhcpv4_toml.enabled,
-                lease_time: cfg.dhcpv4_toml.lease_time,
-                router: Some(cfg.dhcpv4_toml.router),
-                subnet_mask: Some(cfg.dhcpv4_toml.subnet_mask),
-                dns_servers: cfg.dhcpv4_toml.dns.clone(),
-                domain_name: cfg.dhcpv4_toml.domain_name.clone(),
-                search_domains: cfg.dhcpv4_toml.search_domains.clone(),
-                ntp_servers: cfg.dhcpv4_toml.ntp_servers.clone(),
-                tftp_server: cfg.dhcpv4_toml.tftp_server.clone(),
-                boot_file: cfg.dhcpv4_toml.boot_file.clone(),
-                raw_options: cfg.dhcpv4_toml.options.clone(),
-            },
-            v6: Dhcpv6Options {
-                enabled: cfg.dhcpv6_toml.enabled,
-                lease_time: cfg.dhcpv6_toml.lease_time,
-                dns_servers: cfg.dhcpv6_toml.dns_servers.clone(),
-                search_domains: cfg.dhcpv6_toml.search_domains.clone(),
-                ntp_servers: cfg.dhcpv6_toml.ntp_servers.clone(),
-                boot_file: cfg.dhcpv6_toml.boot_file.clone(),
-                raw_options: cfg.dhcpv6_toml.options.clone(),
-            },
-            #[cfg(feature = "tftp")]
-            tftp: TftpOptions {
-                enabled: cfg.tftp_toml.enabled,
-                listen_addr: cfg.tftp_toml.listen.to_string(),
-                root_dir: cfg.tftp_toml.root_dir.to_string_lossy().to_string(),
-                block_size: cfg.tftp_toml.block_size,
-                timeout: cfg.tftp_toml.timeout,
-                max_retries: cfg.tftp_toml.max_retries,
-            },
-            #[cfg(not(feature = "tftp"))]
-            tftp: TftpOptions::default(),
-        };
-
-        if db.seed_dhcp_options_if_empty(&seed_opts)? {
-            info!("Seeded DHCP & TFTP scope options from configuration into database");
+        let mut file = ConfigFile::default();
+        file.set_dhcp_settings(&cfg.dhcp);
+        match persist_sections(path, &file, SectionSet::DHCP) {
+            Ok(()) => info!(
+                "DHCPv4 Startup Sanity: correction saved to [dhcp] in '{}'",
+                path.display()
+            ),
+            Err(e) => warn!(
+                "DHCPv4 Startup Sanity: could not save the correction to '{}': {e}",
+                path.display()
+            ),
         }
-
-        Ok(())
     }
 
     #[cfg(feature = "ra")]
@@ -848,11 +828,11 @@ impl Bootstrapper {
     /// full configuration the daemon ran with (the file kept only part of it): it is written to
     /// the file once, with a backup of the file, and then removed. Until the file can take it
     /// (read-only config, write error) the key is kept; the caller uses the stored value anyway.
-    fn move_section_to_file<T>(
+    fn move_section_to_file(
         db: &LanforgeDb,
         cfg: &Config,
         name: &str,
-        key: lanforge_db::ConfigKey<T>,
+        keys: &[&str],
         section: lanforge_api::config_file::SectionSet,
         fill: impl FnOnce(&mut lanforge_api::config_file::ConfigFile),
     ) -> Result<()> {
@@ -878,7 +858,7 @@ impl Bootstrapper {
             );
             return Ok(());
         }
-        db.write(|tx| tx.remove(key))?;
+        db.write(|tx| keys.iter().try_for_each(|key| tx.remove_config(key)))?;
         info!(
             "Config: moved {name} settings from the database to '{}' (previous file kept as '{}')",
             path.display(),
@@ -898,7 +878,7 @@ impl Bootstrapper {
             db,
             cfg,
             "PPPoE",
-            lanforge_db::config_keys::PPPOE,
+            &[lanforge_db::config_keys::PPPOE.name()],
             lanforge_api::config_file::SectionSet::PPPOE,
             |file| file.pppoe = stored,
         )
@@ -914,7 +894,7 @@ impl Bootstrapper {
             db,
             cfg,
             "traffic",
-            lanforge_db::config_keys::TRAFFIC,
+            &[lanforge_db::config_keys::TRAFFIC.name()],
             lanforge_api::config_file::SectionSet::TRAFFIC,
             |file| file.traffic = stored,
         )
@@ -931,7 +911,7 @@ impl Bootstrapper {
                 db,
                 cfg,
                 "firewall",
-                lanforge_db::config_keys::FIREWALL,
+                &[lanforge_db::config_keys::FIREWALL.name()],
                 lanforge_api::config_file::SectionSet::FIREWALL,
                 |file| {
                     file.firewall = lanforge_api::config_file::FirewallFile::from_config(&stored);
@@ -1119,7 +1099,6 @@ impl Bootstrapper {
 
     #[cfg(feature = "dhcp")]
     fn reconcile_dhcp_v4_topology_sanity(
-        db: &LanforgeDb,
         cfg: &mut Config,
         table: &State,
         all_ifaces: &[pnet::datalink::NetworkInterface],
@@ -1160,22 +1139,26 @@ impl Bootstrapper {
                     .and_then(|d| d.v4.ip())
             });
 
-        Self::audit_and_heal_dhcp_options(db, cfg, v4, iface_ip, iface_mask, prev_host_ip);
-        Self::audit_and_heal_dhcp_pools(db, cfg, v4);
+        let healed_options =
+            Self::audit_and_heal_dhcp_options(cfg, v4, iface_ip, iface_mask, prev_host_ip);
+        let healed_pools = Self::audit_and_heal_dhcp_pools(cfg, v4);
+        if healed_options || healed_pools {
+            Self::sync_dhcp_service_configs(cfg);
+            Self::persist_dhcp_heal(cfg);
+        }
     }
 
     #[cfg(feature = "dhcp")]
+    /// Corrects the advertised gateway and mask in `cfg.dhcp` to the LAN interface; true when
+    /// something changed.
     fn audit_and_heal_dhcp_options(
-        db: &LanforgeDb,
-        cfg: &Config,
+        cfg: &mut Config,
         v4: Ipv4Network,
         iface_ip: std::net::Ipv4Addr,
         iface_mask: std::net::Ipv4Addr,
         prev_host_ip: Option<std::net::Ipv4Addr>,
-    ) {
-        let Ok(Some(mut opts)) = db.load_dhcp_options() else {
-            return;
-        };
+    ) -> bool {
+        let opts = &mut cfg.dhcp.options;
         let mut opts_modified = false;
 
         match opts.v4.router {
@@ -1197,7 +1180,7 @@ impl Bootstrapper {
                     opts_modified = true;
                 } else if !v4.contains(r) {
                     warn!(
-                        "DHCPv4 Startup Sanity: Database gateway '{r}' is outside interface '{}' subnet ({}/{}). Auto-healing database to {iface_ip}.",
+                        "DHCPv4 Startup Sanity: Configured gateway '{r}' is outside interface '{}' subnet ({}/{}). Auto-healing to {iface_ip}.",
                         cfg.system.iface,
                         v4.network(),
                         v4.prefix()
@@ -1210,58 +1193,44 @@ impl Bootstrapper {
 
         if opts.v4.subnet_mask != Some(iface_mask) {
             warn!(
-                "DHCPv4 Startup Sanity: Database subnet mask {:?} does not match interface '{}' mask {iface_mask}. Auto-healing database.",
+                "DHCPv4 Startup Sanity: Configured subnet mask {:?} does not match interface '{}' mask {iface_mask}. Auto-healing.",
                 opts.v4.subnet_mask, cfg.system.iface
             );
             opts.v4.subnet_mask = Some(iface_mask);
             opts_modified = true;
         }
 
-        if opts_modified {
-            if let Err(e) = db.save_dhcp_options(&opts) {
-                warn!(
-                    "DHCPv4 Startup Sanity: Failed to persist auto-healed DHCP options to DB: {e}"
-                );
-            } else {
-                info!("DHCPv4 Startup Sanity: Auto-healed DHCP options saved to database.");
-            }
-        }
+        opts_modified
     }
 
+    /// Replaces the `DHCPv4` pools in `cfg.dhcp` with one derived from the LAN interface when
+    /// none of them is in its subnet; true when it did.
     #[cfg(feature = "dhcp")]
-    fn audit_and_heal_dhcp_pools(db: &LanforgeDb, cfg: &mut Config, v4: Ipv4Network) {
-        if cfg.dhcpv4_toml.pools.is_empty() {
-            return;
+    fn audit_and_heal_dhcp_pools(cfg: &mut Config, v4: Ipv4Network) -> bool {
+        let pools = &cfg.dhcp.v4_pools;
+        if pools.is_empty()
+            || pools
+                .iter()
+                .any(|p| v4.contains(p.range_start) && v4.contains(p.range_end))
+        {
+            return false;
         }
-        let any_in_subnet = cfg
-            .dhcpv4_toml
-            .pools
-            .iter()
-            .any(|p| v4.contains(p.range_start) && v4.contains(p.range_end));
-
-        if !any_in_subnet {
-            warn!(
-                "DHCPv4 Startup Sanity: Stored DHCPv4 pools are outside interface '{}' subnet ({}). Auto-healing dynamic pools in database.",
-                cfg.system.iface, v4
-            );
-            let derived = derive_dhcp_defaults_from_v4(&v4);
-            let healed_pool = Dhcpv4Pool {
-                name: Some("Auto-Healed LAN Scope".to_string()),
-                range_start: derived.range_start,
-                range_end: derived.range_end,
-                lease_time: Some(cfg.dhcpv4_toml.lease_time),
-                router: Some(derived.router),
-                subnet_mask: Some(derived.subnet_mask),
-                dns_servers: vec![derived.router],
-                ..Default::default()
-            };
-            cfg.dhcpv4_toml.pools = vec![healed_pool];
-            if let Err(e) = db.save_dhcp_v4_pools(&cfg.dhcpv4_toml.pools) {
-                warn!("DHCPv4 Startup Sanity: Failed to persist auto-healed pools to DB: {e}");
-            } else {
-                info!("DHCPv4 Startup Sanity: Auto-healed dynamic pools saved to database.");
-            }
-        }
+        warn!(
+            "DHCPv4 Startup Sanity: Configured DHCPv4 pools are outside interface '{}' subnet ({}). Auto-healing dynamic pools.",
+            cfg.system.iface, v4
+        );
+        let derived = derive_dhcp_defaults_from_v4(&v4);
+        cfg.dhcp.v4_pools = vec![Dhcpv4Pool {
+            name: Some("Auto-Healed LAN Scope".to_string()),
+            range_start: derived.range_start,
+            range_end: derived.range_end,
+            lease_time: Some(cfg.dhcp.options.v4.lease_time),
+            router: Some(derived.router),
+            subnet_mask: Some(derived.subnet_mask),
+            dns_servers: vec![derived.router],
+            ..Default::default()
+        }];
+        true
     }
 
     fn find_target_interface(
@@ -1592,6 +1561,135 @@ mod tests {
         next.firewall_toml = from_file;
         Bootstrapper::migrate_firewall_config(&db, &mut next).unwrap();
         assert_eq!(next.firewall_toml, live);
+    }
+
+    /// The owner's DHCP as redb holds it (`lanforge dhcp --json`, 2026-10-28; the pools filled
+    /// with the scope values by the old seed).
+    #[cfg(feature = "dhcp")]
+    fn owner_stored_dhcp() -> lanforge_api::config_file::DhcpSettings {
+        use lanforge_types::network::dhcp::Dhcpv6Pool;
+
+        let options = serde_json::from_str(
+            r#"{"tftp": {"block_size": 512, "enabled": false, "listen_addr": "0.0.0.0:69",
+                "max_retries": 3, "root_dir": "/var/lib/lanforge/tftp", "timeout": 5},
+              "v4": {"boot_file": null, "dns_servers": ["192.168.3.1"], "domain_name": "lan",
+                "enabled": true, "lease_time": 86400, "ntp_servers": ["162.159.200.1", "216.239.35.0"],
+                "raw_options": {}, "router": "192.168.3.1", "search_domains": [],
+                "subnet_mask": "255.255.252.0", "tftp_server": null},
+              "v6": {"boot_file": null, "dns_servers": [], "enabled": true, "lease_time": 86400,
+                "ntp_servers": ["time.cloudflare.com", "time.google.com"], "raw_options": {},
+                "search_domains": []}}"#,
+        )
+        .unwrap();
+        let router = "192.168.3.1".parse().unwrap();
+        lanforge_api::config_file::DhcpSettings {
+            options,
+            v4_pools: vec![Dhcpv4Pool {
+                name: Some("Primary LAN".into()),
+                range_start: "192.168.1.2".parse().unwrap(),
+                range_end: "192.168.1.240".parse().unwrap(),
+                subnet_mask: Some("255.255.252.0".parse().unwrap()),
+                router: Some(router),
+                dns_servers: vec![router],
+                lease_time: Some(86400),
+                ..Default::default()
+            }],
+            v6_pools: vec![Dhcpv6Pool {
+                name: Some("Main Scope".into()),
+                range_start: "::100".parse().ok(),
+                range_end: "::1fff".parse().ok(),
+                lease_time: Some(86400),
+                ..Default::default()
+            }],
+        }
+    }
+
+    /// DHCP cut-over on the owner's data: the three redb keys land in `[dhcp]`/`[tftp]`
+    /// exactly, the rest of the file is kept, and the keys are gone.
+    #[cfg(feature = "dhcp")]
+    #[test]
+    fn dhcp_config_moves_from_the_database_to_the_file_once() {
+        use lanforge_api::config_file::ConfigFile;
+        use lanforge_db::DhcpConfigStore;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        std::fs::write(
+            &path,
+            "# box\n[system]\niface = \"lan0\"\n\n[dhcp.v4]\nenabled = true\nlease = \"1d\"\n\n\
+             [dhcp.v4.pools.\"Primary LAN\"]\nrange = \"192.168.1.2-192.168.1.240\"\n",
+        )
+        .unwrap();
+        let mut cfg = config_with_db(&dir.path().join("config.redb"));
+        cfg.config_path = path.display().to_string();
+        cfg.config_writable = true;
+        let db = LanforgeDb::open_in_memory().unwrap();
+        let stored = owner_stored_dhcp();
+        db.save_dhcp_options(&stored.options).unwrap();
+        db.save_dhcp_v4_pools(&stored.v4_pools).unwrap();
+        db.save_dhcp_v6_pools(&stored.v6_pools).unwrap();
+
+        Bootstrapper::migrate_dhcp_config(&db, &mut cfg).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        let (from_file, issues) = ConfigFile::parse(&text).unwrap().dhcp_settings();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(from_file, stored, "{text}");
+        assert!(text.starts_with("# box"));
+        assert!(text.contains("iface = \"lan0\""));
+        assert_eq!(cfg.dhcp, stored);
+        assert_eq!(cfg.dhcpv4_toml.pools, stored.v4_pools);
+        assert_eq!(cfg.dhcpv6_toml.pools, stored.v6_pools);
+        assert!(db.load_dhcp_options().unwrap().is_none(), "keys removed");
+        assert_eq!(db.load_dhcp_v4_pools().unwrap(), Vec::new());
+        assert_eq!(db.load_dhcp_v6_pools().unwrap(), Vec::new());
+
+        // Second boot: nothing left to move, the file is the source.
+        let before = std::fs::read_to_string(&path).unwrap();
+        let mut cfg2 = config_with_db(&dir.path().join("config.redb"));
+        cfg2.config_path = cfg.config_path.clone();
+        cfg2.config_writable = true;
+        cfg2.dhcp = from_file;
+        Bootstrapper::migrate_dhcp_config(&db, &mut cfg2).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        assert_eq!(cfg2.dhcp, stored);
+    }
+
+    /// The host moved to a new address: the gateway it advertised follows, and the correction
+    /// is saved to the file — kept in memory only, the next boot (whose host record already
+    /// has the new address) would advertise the old gateway again.
+    #[cfg(feature = "dhcp")]
+    #[test]
+    fn a_gateway_that_followed_the_host_is_saved_to_the_file() {
+        use lanforge_api::config_file::ConfigFile;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        std::fs::write(&path, "[system]\niface = \"lan0\"\n").unwrap();
+        let mut cfg = config_with_db(&dir.path().join("config.redb"));
+        cfg.config_path = path.display().to_string();
+        cfg.config_writable = true;
+        cfg.dhcp = owner_stored_dhcp();
+        let v4: Ipv4Network = "192.168.3.2/22".parse().unwrap();
+        let old = "192.168.3.1".parse().unwrap();
+
+        assert!(Bootstrapper::audit_and_heal_dhcp_options(
+            &mut cfg,
+            v4,
+            v4.ip(),
+            v4.mask(),
+            Some(old)
+        ));
+        assert!(
+            !Bootstrapper::audit_and_heal_dhcp_pools(&mut cfg, v4),
+            "pools still fit"
+        );
+        Bootstrapper::persist_dhcp_heal(&cfg);
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        let (dhcp, _) = ConfigFile::parse(&text).unwrap().dhcp_settings();
+        assert_eq!(dhcp.options.v4.router, Some(v4.ip()));
+        assert_eq!(dhcp.v4_pools, owner_stored_dhcp().v4_pools);
     }
 
     /// A file that cannot take the config keeps it in the database, in use.

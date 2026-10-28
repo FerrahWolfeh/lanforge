@@ -52,6 +52,18 @@ fn default_tftp_root_dir() -> String {
     "/var/lib/lanforge/tftp".to_string()
 }
 
+const fn default_tftp_block_size() -> u16 {
+    512
+}
+
+const fn default_tftp_timeout() -> u64 {
+    5
+}
+
+const fn default_tftp_max_retries() -> u8 {
+    3
+}
+
 fn default_blocking_mode() -> String {
     "nxdomain".to_string()
 }
@@ -261,6 +273,13 @@ pub struct TftpFile {
     pub listen: String,
     #[serde(default = "default_tftp_root_dir")]
     pub root_dir: String,
+    #[serde(default = "default_tftp_block_size")]
+    pub block_size: u16,
+    /// Seconds.
+    #[serde(default = "default_tftp_timeout")]
+    pub timeout: u64,
+    #[serde(default = "default_tftp_max_retries")]
+    pub max_retries: u8,
 }
 
 impl Default for TftpFile {
@@ -269,6 +288,9 @@ impl Default for TftpFile {
             enabled: false,
             listen: default_tftp_listen(),
             root_dir: default_tftp_root_dir(),
+            block_size: default_tftp_block_size(),
+            timeout: default_tftp_timeout(),
+            max_retries: default_tftp_max_retries(),
         }
     }
 }
@@ -278,6 +300,10 @@ impl Default for TftpFile {
 // ============================================================================
 
 /// DHCP subsystem configuration.
+///
+/// The file form of the DHCP scope options and pools (`DhcpFile::from_config` / `to_config`):
+/// pools keyed by name in file order, `range = "start-end"`, human leases. A pool field left
+/// out inherits the scope value at lease time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct DhcpFile {
@@ -305,10 +331,19 @@ pub struct Dhcpv4File {
     pub domain_name: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub search_domains: Vec<String>,
+    /// Absent: the default public NTP servers. `ntp = []` advertises none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ntp: Option<Vec<Ipv4Addr>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tftp_server: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boot_file: Option<String>,
+    /// Raw options by code: `options = { "43" = "..." }`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub pools: BTreeMap<String, Dhcpv4PoolFile>,
+    pub options: BTreeMap<String, String>,
+    /// In file order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", with = "named_tables")]
+    pub pools: Vec<(String, Dhcpv4PoolFile)>,
 }
 
 impl Default for Dhcpv4File {
@@ -321,14 +356,17 @@ impl Default for Dhcpv4File {
             subnet_mask: None,
             domain_name: None,
             search_domains: Vec::new(),
+            ntp: None,
+            tftp_server: None,
             boot_file: None,
-            pools: BTreeMap::new(),
+            options: BTreeMap::new(),
+            pools: Vec::new(),
         }
     }
 }
 
 /// A named DHCPv4 dynamic address pool.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Dhcpv4PoolFile {
     pub range: String,
@@ -340,6 +378,16 @@ pub struct Dhcpv4PoolFile {
     pub subnet_mask: Option<Ipv4Addr>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dns: Vec<Ipv4Addr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub search_domains: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ntp: Vec<Ipv4Addr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tftp_server: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot_file: Option<String>,
 }
 
 /// DHCPv6 server configuration.
@@ -354,8 +402,17 @@ pub struct Dhcpv6File {
     pub dns: Vec<Ipv6Addr>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub search_domains: Vec<String>,
+    /// Absent: the default public NTP servers. `ntp = []` advertises none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ntp: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot_file: Option<String>,
+    /// Raw options by code: `options = { "17" = "..." }`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub pools: BTreeMap<String, Dhcpv6PoolFile>,
+    pub options: BTreeMap<String, String>,
+    /// In file order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", with = "named_tables")]
+    pub pools: Vec<(String, Dhcpv6PoolFile)>,
 }
 
 impl Default for Dhcpv6File {
@@ -365,20 +422,33 @@ impl Default for Dhcpv6File {
             lease: Some(HumanDuration(86400)),
             dns: Vec::new(),
             search_domains: Vec::new(),
-            pools: BTreeMap::new(),
+            ntp: None,
+            boot_file: None,
+            options: BTreeMap::new(),
+            pools: Vec::new(),
         }
     }
 }
 
-/// A named DHCPv6 dynamic address pool.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A named DHCPv6 dynamic address pool: a `range` (suffixes such as `"::100-::1fff"` follow the
+/// LAN prefix, full addresses are fixed) and/or a static `address`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Dhcpv6PoolFile {
-    pub range: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lease: Option<HumanDuration>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dns: Vec<Ipv6Addr>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub search_domains: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ntp: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot_file: Option<String>,
 }
 
 /// IPv6 Router Advertisement (RFC 4861) configuration.
