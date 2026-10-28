@@ -268,27 +268,7 @@ pub fn apply_tftp_options(cfg: &mut TftpConfig, tftp: &lanforge_types::network::
     cfg.max_retries = tftp.max_retries;
 }
 
-/// Logs config values that were not applied as written (left out or closed).
-#[must_use]
-pub fn log_issues(issues: Vec<String>) -> Vec<String> {
-    for issue in &issues {
-        tracing::error!("Config: {issue}");
-    }
-    issues
-}
-
-/// Logs each set-aside section and words it for the admin.
-#[must_use]
-pub fn set_aside_issues(set_aside: &[(lanforge_api::config_file::Section, String)]) -> Vec<String> {
-    set_aside
-        .iter()
-        .map(|(sec, err)| {
-            let issue = format!("[{sec}] is invalid and was not applied (defaults in use): {err}");
-            tracing::error!("Config: {issue}");
-            issue
-        })
-        .collect()
-}
+pub use lanforge_api::config_file::{log_issues, set_aside_issues};
 
 pub fn load_toml(path: &str) -> TomlConfig {
     if !Path::new(path).exists() {

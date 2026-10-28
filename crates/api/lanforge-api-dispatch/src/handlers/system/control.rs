@@ -34,52 +34,6 @@ impl ClientContext {
         })
     }
 
-    pub async fn handle_reload(&self) -> Response {
-        let Some(path) = self.resolve_config_path() else {
-            return Response::Error {
-                error: "Configuration file path could not be resolved".to_string(),
-            };
-        };
-
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) => {
-                return Response::Error {
-                    error: format!("Failed to read configuration from {}: {e}", path.display()),
-                };
-            }
-        };
-
-        let cfg_file = match lanforge_api::config_file::ConfigFile::parse(&content) {
-            Ok(f) => f,
-            Err(e) => {
-                return Response::Error {
-                    error: format!("Failed to parse configuration from {}: {e}", path.display()),
-                };
-            }
-        };
-
-        let export = lanforge_api::api::SystemConfigExport::from(cfg_file);
-        let res = self.handle_system_config_import(export).await;
-        match res {
-            Response::SystemConfigImport(import_res) => {
-                if import_res.total_success {
-                    Response::Success(SimpleSuccess {
-                        message: format!("Configuration reloaded from {}", path.display()),
-                    })
-                } else {
-                    Response::Error {
-                        error: format!(
-                            "Configuration reload completed with errors: {:?}",
-                            import_res.results
-                        ),
-                    }
-                }
-            }
-            other => other,
-        }
-    }
-
     pub async fn handle_shutdown(&self) -> Response {
         self.ctx.terminate();
         let _ = self

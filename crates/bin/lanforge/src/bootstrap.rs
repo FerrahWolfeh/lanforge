@@ -923,10 +923,13 @@ impl Bootstrapper {
         let sqm_enabled = cfg.traffic_toml.sqm.enabled;
         #[cfg(not(feature = "traffic"))]
         let sqm_enabled = false;
-        let effective = crate::config::firewall::effective_firewall(
+        #[cfg(feature = "pppoe")]
+        let pppoe = Some(&cfg.pppoe_toml);
+        #[cfg(not(feature = "pppoe"))]
+        let pppoe = None;
+        let effective = lanforge_api::config_file::effective_firewall(
             cfg.firewall_toml.clone(),
-            #[cfg(feature = "pppoe")]
-            Some(&cfg.pppoe_toml),
+            pppoe,
             sqm_enabled,
             &cfg.system.iface,
         );

@@ -1,9 +1,31 @@
-//! The firewall the daemon runs: `[firewall]` plus what other settings force on it.
-//!
-//! Derived in memory at boot and on reload, never written back: the file keeps what the admin
-//! wrote.
+//! What the daemon runs for a file-owned section when other settings change it, and how
+//! config file problems are reported. Derived in memory at boot and on reload, never written
+//! back: the file keeps what the admin wrote.
 
-use lanforge_nft::FirewallConfig;
+use lanforge_types::network::firewall::FirewallConfig;
+use lanforge_types::network::pppoe::PppoeConfig;
+
+/// Logs config values that were not applied as written (left out or closed).
+#[must_use]
+pub fn log_issues(issues: Vec<String>) -> Vec<String> {
+    for issue in &issues {
+        tracing::error!("Config: {issue}");
+    }
+    issues
+}
+
+/// Logs each set-aside section and words it for the admin.
+#[must_use]
+pub fn set_aside_issues(set_aside: &[(super::Section, String)]) -> Vec<String> {
+    set_aside
+        .iter()
+        .map(|(sec, err)| {
+            let issue = format!("[{sec}] is invalid and was not applied (defaults in use): {err}");
+            tracing::error!("Config: {issue}");
+            issue
+        })
+        .collect()
+}
 
 /// What other sections force on the configured firewall:
 /// - flowtable offload and the DNS/`VoWiFi` bypasses off when the `PPPoE` dataplane turns them
@@ -14,11 +36,10 @@ use lanforge_nft::FirewallConfig;
 #[must_use]
 pub fn effective_firewall(
     mut fw: FirewallConfig,
-    #[cfg(feature = "pppoe")] pppoe: Option<&lanforge_types::network::pppoe::PppoeConfig>,
+    pppoe: Option<&PppoeConfig>,
     sqm_enabled: bool,
     lan_iface: &str,
 ) -> FirewallConfig {
-    #[cfg(feature = "pppoe")]
     if let Some(nft) = pppoe.map(|p| &p.nftables) {
         fw.flow_offload &= nft.flow_offload;
         fw.bypass_dns &= nft.bypass_dns;
@@ -52,13 +73,7 @@ mod tests {
     use super::*;
 
     fn run(fw: FirewallConfig, sqm: bool, lan: &str) -> FirewallConfig {
-        effective_firewall(
-            fw,
-            #[cfg(feature = "pppoe")]
-            None,
-            sqm,
-            lan,
-        )
+        effective_firewall(fw, None, sqm, lan)
     }
 
     #[test]

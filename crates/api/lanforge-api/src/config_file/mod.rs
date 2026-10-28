@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 pub mod convert;
 pub mod duration;
+pub mod effective;
 pub mod hash;
 pub mod patch;
 pub mod section;
@@ -12,6 +13,7 @@ pub mod sections;
 
 pub use convert::DhcpSettings;
 pub use duration::HumanDuration;
+pub use effective::{effective_firewall, log_issues, set_aside_issues};
 pub use hash::section_hashes;
 pub use patch::patch_sections;
 pub use section::{Section, SectionSet};

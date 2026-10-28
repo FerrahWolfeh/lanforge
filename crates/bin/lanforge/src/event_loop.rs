@@ -222,8 +222,7 @@ where
                                 tracker.on_service_ready(id);
                             }
                             LanforgeEvent::System(SystemEvent::ReloadConfig) => {
-                                info!("ReloadConfig: in-place configuration reload");
-                                crate::config::reload::reload_file_sections(&ctx);
+                                // `lanforge reload` applies the file in place (API `handle_reload`).
                                 supervisor.reevaluate_conditions();
                             }
                             LanforgeEvent::System(SystemEvent::ConfigUpdate { password_hash }) => {
