@@ -182,3 +182,46 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
 
     ctx.terminate();
 }
+
+/// The status carries the configured refresh time: the WebUI settings dialog reads it there
+/// (it used to export the whole system configuration for it).
+#[tokio::test(flavor = "multi_thread")]
+async fn adblock_status_reports_the_refresh_time() {
+    use lanforge_types::network::dns::adblock::{AdblockDbConfig, TimeOfDay};
+    use lanforge_types::network::dns::{DnsRequest, DnsResponse};
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let ctx = init_test_context();
+    let refresh_time = TimeOfDay::new(4, 30).unwrap();
+    ctx.update_dns_adblock(AdblockDbConfig {
+        enabled: false,
+        refresh_time,
+        ..Default::default()
+    });
+    let cfg = DnsConfig {
+        enabled: true,
+        adblock_enabled: false,
+        adblock_cache_dir: Some(temp_dir.path().to_str().unwrap().to_string()),
+        ..common::mock_config()
+    };
+    let (_handle, mut service) = DnsService::inert(cfg, ctx.clone());
+    let ctx_service = ctx.clone();
+    tokio::spawn(async move {
+        let h = lanforge_core::service::ServiceHandle::new(
+            lanforge_types::system::ServiceId::Dns,
+            ctx_service.clone(),
+        );
+        service.serve(&ctx_service, &h).await.expect("Service failed");
+    });
+    wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
+
+    let reply = ctx
+        .dns_handle()
+        .expect("DNS handle")
+        .send_request(DnsRequest::AdblockStatus)
+        .await;
+    let Ok(DnsResponse::AdblockStatus(status)) = reply else {
+        panic!("expected an adblock status, got {reply:?}");
+    };
+    assert_eq!(status.refresh_time, refresh_time);
+}

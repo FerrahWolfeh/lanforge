@@ -1,6 +1,6 @@
 use crate::{
     identifiers::MacAddr,
-    network::dns::adblock::{AdblockUrlKind, BlockingMode},
+    network::dns::adblock::{AdblockUrlKind, BlockingMode, TimeOfDay},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -715,6 +715,9 @@ pub struct DnsAdblockStatusResponse {
     pub sources_ok: usize,
     #[serde(default)]
     pub sources_failing: usize,
+    /// Local time of the daily list refresh (`[adblock] refresh_time`).
+    #[serde(default)]
+    pub refresh_time: TimeOfDay,
 }
 
 /// A single adblock source URL entry.

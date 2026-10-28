@@ -872,6 +872,7 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                             next_update,
                             sources_ok,
                             sources_failing,
+                            refresh_time: adblock_cfg.refresh_time,
                         },
                     )
                 } else {

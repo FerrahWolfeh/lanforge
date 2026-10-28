@@ -125,6 +125,7 @@ impl ClientContext {
                 next_update: res.next_update,
                 sources_ok: res.sources_ok,
                 sources_failing: res.sources_failing,
+                refresh_time: res.refresh_time,
             }));
         }
 

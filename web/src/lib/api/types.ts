@@ -987,6 +987,7 @@ export interface DnsAdblockStatusResponse {
 	blocking_mode: BlockingMode;
 	blocking_ip_v4?: string | null;
 	blocking_ip_v6?: string | null;
+	refresh_time: TimeOfDay;
 }
 
 export interface DnsAdblockUrlEntry {
