@@ -1,8 +1,8 @@
-use crate::network::DnsRecordType;
+use crate::network::{DnsRecordType, IpSubnet};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     fmt::Display,
-    net::{Ipv4Addr, Ipv6Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     str::FromStr,
 };
 
@@ -552,10 +552,75 @@ impl AdblockRuleEntry {
     }
 }
 
+/// The clients an adblock group or `bypass` applies to: a subnet (`192.168.1.64/28`, a bare
+/// address is one host) or a device (`dev:<name|mac>`, matched by its name whatever MAC it has).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ClientSelector {
+    Subnet(IpSubnet),
+    Device(DeviceIdentifier),
+}
+
+impl FromStr for ClientSelector {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        if let Some(device) = s.strip_prefix("dev:") {
+            return device.parse().map(Self::Device);
+        }
+        if let Ok(addr) = s.parse::<IpAddr>() {
+            let prefix_len = if addr.is_ipv4() { 32 } else { 128 };
+            return Ok(Self::Subnet(IpSubnet { addr, prefix_len }));
+        }
+        s.parse()
+            .map(Self::Subnet)
+            .map_err(|e| format!("not a subnet, an address or \"dev:<name|mac>\" ({e})"))
+    }
+}
+
+impl Display for ClientSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Subnet(s) if s.prefix_len == if s.addr.is_ipv4() { 32 } else { 128 } => {
+                write!(f, "{}", s.addr)
+            }
+            Self::Subnet(s) => write!(f, "{s}"),
+            Self::Device(device) => write!(f, "dev:{device}"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    #[test]
+    fn client_selectors_parse_and_print_back() {
+        let cases = [
+            ("192.168.1.64/28", "192.168.1.64/28"),
+            ("192.168.1.9", "192.168.1.9"),
+            ("192.168.1.9/32", "192.168.1.9"),
+            ("fd00::/64", "fd00::/64"),
+            ("fd00::64", "fd00::64"),
+            ("dev:Pixel-Faiko", "dev:pixel-faiko"),
+            ("dev:AA:BB:CC:DD:EE:FF", "dev:aa:bb:cc:dd:ee:ff"),
+        ];
+        for (text, shown) in cases {
+            let selector = ClientSelector::from_str(text).unwrap();
+            assert_eq!(selector.to_string(), shown, "{text}");
+            assert_eq!(ClientSelector::from_str(shown).unwrap(), selector, "{text}");
+        }
+        assert_eq!(
+            ClientSelector::from_str("dev:aa:bb:cc:dd:ee:ff").unwrap(),
+            ClientSelector::Device(DeviceIdentifier::Mac(
+                crate::identifiers::MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap()
+            ))
+        );
+        for bad in ["", "dev:", "pixel", "10.0.0.0/33", "dev:galaxy tab"] {
+            assert!(ClientSelector::from_str(bad).is_err(), "{bad:?}");
+        }
+    }
 
     #[test]
     fn test_deterministic_ids() {

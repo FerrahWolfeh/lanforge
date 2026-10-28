@@ -2,6 +2,7 @@ use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::traffic::TrafficConfig;
 use serde::{Deserialize, Serialize};
 
+pub mod adblock;
 pub mod convert;
 pub mod dns;
 pub mod duration;
