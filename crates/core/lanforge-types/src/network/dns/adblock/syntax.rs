@@ -197,6 +197,22 @@ impl AdblockSourceFormat {
 }
 
 impl ParsedRule {
+    /// Parses one line of a local rules file, where formats mix per line as in Pi-hole and AGH: hosts lines, adblock rules, and plain domains (exact match, `*.x` = subdomains).
+    pub fn parse_rules_line(
+        line: &str,
+        out: &mut Vec<Self>,
+        stats: &mut ParseStats,
+        unsupported_samples: &mut Vec<String>,
+    ) {
+        let trimmed = line.trim();
+        let format = match trimmed.split_whitespace().next() {
+            Some(first) if IpAddr::from_str(first).is_ok() => AdblockSourceFormat::Hosts,
+            _ if trimmed.contains(['|', '^', '$', '/', '@']) => AdblockSourceFormat::Adblock,
+            _ => AdblockSourceFormat::Domains,
+        };
+        Self::parse_line(trimmed, format, out, stats, unsupported_samples);
+    }
+
     /// Parses a single line based on the source format.
     pub fn parse_line(
         line: &str,
