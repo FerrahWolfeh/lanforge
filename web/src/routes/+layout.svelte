@@ -57,7 +57,6 @@
 		"/dns/adblock": "Adblock",
 		"/dns/adblock/lists": "Adblock Lists",
 		"/dns/adblock/rules": "Adblock Rules",
-		"/dns/adblock/services": "Blocked Services",
 		"/dns/adblock/settings": "Adblock Settings",
 		"/dhcp": "DHCP Server",
 		"/dhcp/leases": "DHCP Leases",

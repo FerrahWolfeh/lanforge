@@ -27,12 +27,10 @@
 		dnsAdblockRuleStatus,
 	} from "$lib/api/client";
 	import { page } from "$app/state";
-	import LockIcon from "@lucide/svelte/icons/lock";
 	import type { AllowlistEntry, AdblockRuleEntry } from "$lib/api/types";
 	import DnsAdblockImportRulesDialog from "./components/DnsAdblockImportRulesDialog.svelte";
-	import DnsAdblockServicesTab from "./components/DnsAdblockServicesTab.svelte";
 
-	let activeTab = $state<"allow" | "block" | "services">("allow");
+	let activeTab = $state<"allow" | "block">("allow");
 	let loading = $state(true);
 	let allowlist = $state<AllowlistEntry[]>([]);
 	let customRules = $state<AdblockRuleEntry[]>([]);
@@ -149,7 +147,7 @@
 
 	onMount(() => {
 		const tabParam = page.url.searchParams.get("tab");
-		if (tabParam === "services" || tabParam === "block" || tabParam === "allow") {
+		if (tabParam === "block" || tabParam === "allow") {
 			activeTab = tabParam;
 		}
 		loadAll();
@@ -178,58 +176,49 @@
 							{customBlocks.length}
 						</Badge>
 					</Tabs.Trigger>
-					<Tabs.Trigger value="services" class="gap-1.5 text-xs shrink-0">
-						<LockIcon class="size-3.5 text-primary" />
-						<span class="hidden sm:inline">Blocked Services & SafeSearch</span>
-						<span class="sm:hidden">Services</span>
-					</Tabs.Trigger>
 				</Tabs.List>
 			</div>
 
-			{#if activeTab !== "services"}
-				<div class="flex items-center gap-2 w-full sm:w-auto">
-					<div class="relative flex-1 sm:w-60 sm:flex-initial">
-						<SearchIcon class="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
-						<Input
-							type="text"
-							placeholder="Search rules..."
-							class="pl-8 h-8 text-xs font-mono w-full"
-							bind:value={searchQuery}
-						/>
-					</div>
-
-					<Button
-						variant="outline"
-						size="sm"
-						class="h-8 gap-1.5 text-xs shrink-0"
-						onclick={() => (importDialogOpen = true)}
-					>
-						<FileTextIcon class="size-3.5" />
-						<span>Bulk Import</span>
-					</Button>
+			<div class="flex items-center gap-2 w-full sm:w-auto">
+				<div class="relative flex-1 sm:w-60 sm:flex-initial">
+					<SearchIcon class="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
+					<Input
+						type="text"
+						placeholder="Search rules..."
+						class="pl-8 h-8 text-xs font-mono w-full"
+						bind:value={searchQuery}
+					/>
 				</div>
-			{/if}
+
+				<Button
+					variant="outline"
+					size="sm"
+					class="h-8 gap-1.5 text-xs shrink-0"
+					onclick={() => (importDialogOpen = true)}
+				>
+					<FileTextIcon class="size-3.5" />
+					<span>Bulk Import</span>
+				</Button>
+			</div>
 		</div>
 
 		<!-- Add Domain Inline Form -->
-		{#if activeTab !== "services"}
-			<Card.Root class="p-3">
-				<form onsubmit={handleAddDomain} class="flex items-center gap-2">
-					<Input
-						placeholder={activeTab === "allow"
-							? "Enter domain to always permit (e.g. tracking-exception.com)..."
-							: "Enter domain to block manually (e.g. bad-tracker.net)..."}
-						class="h-9 text-xs font-mono flex-1"
-						bind:value={newDomain}
-						required
-					/>
-					<Button type="submit" size="sm" class="h-9 gap-1.5 text-xs shrink-0" disabled={adding}>
-						<PlusIcon class="size-3.5" />
-						{activeTab === "allow" ? "Add to Allowlist" : "Add to Blocklist"}
-					</Button>
-				</form>
-			</Card.Root>
-		{/if}
+		<Card.Root class="p-3">
+			<form onsubmit={handleAddDomain} class="flex items-center gap-2">
+				<Input
+					placeholder={activeTab === "allow"
+						? "Enter domain to always permit (e.g. tracking-exception.com)..."
+						: "Enter domain to block manually (e.g. bad-tracker.net)..."}
+					class="h-9 text-xs font-mono flex-1"
+					bind:value={newDomain}
+					required
+				/>
+				<Button type="submit" size="sm" class="h-9 gap-1.5 text-xs shrink-0" disabled={adding}>
+					<PlusIcon class="size-3.5" />
+					{activeTab === "allow" ? "Add to Allowlist" : "Add to Blocklist"}
+				</Button>
+			</form>
+		</Card.Root>
 
 		<!-- Allowlist Tab Content -->
 		<Tabs.Content value="allow" class="m-0">
@@ -410,9 +399,6 @@
 					</Table.Root>
 				</Card.Content>
 			</Card.Root>
-		</Tabs.Content>
-		<Tabs.Content value="services" class="m-0">
-			<DnsAdblockServicesTab />
 		</Tabs.Content>
 	</Tabs.Root>
 </div>

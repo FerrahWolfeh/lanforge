@@ -2,5 +2,5 @@ import { redirect } from "@sveltejs/kit";
 import type { PageLoad } from "./$types";
 
 export const load: PageLoad = () => {
-	throw redirect(307, "/dns/adblock/rules?tab=services");
+	throw redirect(307, "/dns/adblock/rules");
 };
