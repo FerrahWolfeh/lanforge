@@ -30,7 +30,7 @@ pub mod blocklist;
 pub mod engine;
 pub mod manifest;
 pub mod source;
-pub use blocklist::DiskBlocklist;
+pub use blocklist::{DiskBlocklist, ListMatches};
 
 pub struct AdBlocker {
     pub blocklist: RwLock<Option<Arc<DiskBlocklist>>>,
@@ -155,51 +155,37 @@ impl AdBlocker {
             }
         }
         let block_guard = self.blocklist.read();
-        if let Some(bl) = block_guard.as_ref() {
-            let (allow_cand, block_cand) = bl.match_domain_pair(qname);
+        block_guard
+            .as_ref()
+            .and_then(|bl| Self::list_verdict(bl, bl.match_lists(qname)))
+    }
 
-            match (allow_cand, block_cand) {
-                (Some(a), Some(b)) => {
-                    if b.flags.is_important() && !a.flags.is_important() {
-                        let source_id = bl.resolve_source_id(b.source_idx);
-                        return Some(FilterMatch {
-                            action: FilterAction::Block,
-                            origin: FilterOrigin::List { source_id },
-                            rule: None,
-                            important: true,
-                        });
-                    }
-                    let source_id = bl.resolve_source_id(a.source_idx);
-                    Some(FilterMatch {
-                        action: FilterAction::Allow,
-                        origin: FilterOrigin::List { source_id },
-                        rule: None,
-                        important: a.flags.is_important(),
-                    })
-                }
-                (Some(a), None) => {
-                    let source_id = bl.resolve_source_id(a.source_idx);
-                    Some(FilterMatch {
-                        action: FilterAction::Allow,
-                        origin: FilterOrigin::List { source_id },
-                        rule: None,
-                        important: a.flags.is_important(),
-                    })
-                }
-                (None, Some(b)) => {
-                    let source_id = bl.resolve_source_id(b.source_idx);
-                    Some(FilterMatch {
-                        action: FilterAction::Block,
-                        origin: FilterOrigin::List { source_id },
-                        rule: None,
-                        important: b.flags.is_important(),
-                    })
-                }
-                (None, None) => None,
-            }
+    /// The lists' verdict, AdGuard precedence: an important block wins unless an important allow
+    /// also matches; otherwise any allow wins over any block. Attributed to the first list.
+    fn list_verdict(bl: &DiskBlocklist, m: ListMatches) -> Option<FilterMatch> {
+        let (action, mask, important) = if m.block_important != 0 && m.allow_important == 0 {
+            (FilterAction::Block, m.block_important, true)
+        } else if m.allow != 0 {
+            let important = m.allow_important != 0;
+            let mask = if important {
+                m.allow_important
+            } else {
+                m.allow
+            };
+            (FilterAction::Allow, mask, important)
+        } else if m.block != 0 {
+            (FilterAction::Block, m.block, false)
         } else {
-            None
-        }
+            return None;
+        };
+        Some(FilterMatch {
+            action,
+            origin: FilterOrigin::List {
+                source_id: bl.source_id(mask.trailing_zeros()),
+            },
+            rule: None,
+            important,
+        })
     }
 
     #[inline]
@@ -220,24 +206,10 @@ impl AdBlocker {
             }
         }
         let block_guard = self.blocklist.read();
-        let Some(bl) = block_guard.as_ref() else {
-            return false;
-        };
-        let mut key_buf = [0u8; 256];
-        let Some(len) = engine::encode_reversed_domain(qname, &mut key_buf) else {
-            return false;
-        };
-        let rev_key = &key_buf[..len];
-        let Some(b) = bl.block_map.match_reversed(rev_key) else {
-            return false;
-        };
-        if b.flags.is_important() {
-            return true;
-        }
-        bl.allow_map
-            .as_ref()
-            .and_then(|m| m.match_reversed(rev_key))
-            .is_none()
+        block_guard.as_ref().is_some_and(|bl| {
+            Self::list_verdict(bl, bl.match_lists(qname))
+                .is_some_and(|m| m.action == FilterAction::Block)
+        })
     }
 
     fn find_matching_rule<'a>(set: &'a HashSet<Box<str>>, qname: &str) -> Option<&'a str> {
@@ -413,11 +385,7 @@ impl AdBlocker {
         self.blocklist
             .read()
             .as_ref()
-            .and_then(|bl| {
-                bl.allow_map
-                    .as_ref()
-                    .map(crate::resolver::filter::engine::DiskFilterMap::len)
-            })
+            .map(|bl| bl.exceptions_len())
             .unwrap_or(0)
     }
 

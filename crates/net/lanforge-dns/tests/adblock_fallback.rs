@@ -23,9 +23,11 @@ use std::time::Duration;
 async fn test_dns_adblock_update_failure_and_fallback() {
     let temp_dir = tempfile::tempdir().unwrap();
     let cache_dir_path = temp_dir.path().to_str().unwrap().to_string();
-    let cache_path = temp_dir.path().join("blocklist.fst");
+    let sources_dir = temp_dir.path().join("adblock").join("sources");
+    std::fs::create_dir_all(&sources_dir).unwrap();
+    let cache_path = sources_dir.join("1.block.fst");
 
-    // 1. Create a pre-existing FST cache containing ads.example.com
+    // 1. Create a pre-existing compiled list (source 1) containing ads.example.com
     let mut initial_domains = HashSet::new();
     initial_domains.insert("ads.example.com".to_string());
     DiskBlocklist::build(initial_domains, &cache_path, 50000).unwrap();

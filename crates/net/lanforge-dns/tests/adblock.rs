@@ -111,7 +111,11 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
 
     // Wait for downloader to run and rebuild FST
     let mut fst_built = false;
-    let fst_file_path = temp_dir.path().join("adblock").join("block.fst");
+    let fst_file_path = temp_dir
+        .path()
+        .join("adblock")
+        .join("sources")
+        .join("1.block.fst");
     for _ in 0..50 {
         if fst_file_path.exists() {
             fst_built = true;

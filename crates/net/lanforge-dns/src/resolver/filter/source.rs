@@ -1,12 +1,10 @@
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
-use fst::map::OpBuilder;
-use fst::{Map, MapBuilder, Streamer};
 use http_body_util::{BodyExt, Full};
 use hyper::header::{ETAG, IF_MODIFIED_SINCE, IF_NONE_MATCH, LAST_MODIFIED, LOCATION};
 use hyper::{Method, Request, Uri};
@@ -14,15 +12,12 @@ use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
-use memmap2::Mmap;
 
 use lanforge_types::network::dns::adblock::AdblockSourceFormat;
-use lanforge_types::network::dns::adblock::syntax::{MatchFlags, RuleAction};
+use lanforge_types::network::dns::adblock::syntax::RuleAction;
 
 use crate::error::DnsError;
-use crate::resolver::filter::engine::{
-    LABEL_SEPARATOR, build_fst_map, decode_val, encode_val, reverse_domain_key,
-};
+use crate::resolver::filter::engine::{build_fst_map, encode_val, reverse_domain_key};
 use crate::resolver::filter::manifest::SourceManifestEntry;
 
 const MAX_BODY_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
@@ -272,259 +267,116 @@ pub fn compile_source_artifacts(
     })
 }
 
-/// Merges all source block and allow FSTs into the final `block.fst` and `allow.fst`.
-/// Applies $badfilter removals, union of flags, and single-pass descendant pruning.
-pub fn merge_all_sources(
-    sources_dir: &Path,
-    active_source_ids: &[i64],
-    target_block_path: &Path,
-    target_allow_path: &Path,
-) -> Result<(usize, usize, usize), DnsError> {
-    // 1. Collect all badfilters across all sources
-    let mut global_badfilter = HashSet::new();
-    for id in active_source_ids {
-        let bad_path = sources_dir.join(format!("{id}.bad"));
-        if bad_path.exists()
-            && let Ok(file) = File::open(&bad_path)
-        {
-            for line in BufReader::new(file).lines().map_while(Result::ok) {
-                let trimmed = line.trim();
-                if !trimmed.is_empty() {
-                    global_badfilter.insert(trimmed.to_string());
-                }
-            }
-        }
-    }
-
-    // 2. Open all source block FSTs
-    let mut block_maps = Vec::new();
-    for id in active_source_ids {
-        let p = sources_dir.join(format!("{id}.block.fst"));
-        if p.exists()
-            && let Ok(file) = File::open(&p)
-            && let Ok(mmap) = unsafe { Mmap::map(&file) }
-            && let Ok(map) = Map::new(mmap)
-        {
-            block_maps.push(map);
-        }
-    }
-
-    // 3. Open all source allow FSTs
-    let mut allow_maps = Vec::new();
-    for id in active_source_ids {
-        let p = sources_dir.join(format!("{id}.allow.fst"));
-        if p.exists()
-            && let Ok(file) = File::open(&p)
-            && let Ok(mmap) = unsafe { Mmap::map(&file) }
-            && let Ok(map) = Map::new(mmap)
-        {
-            allow_maps.push(map);
-        }
-    }
-
-    // 4. Merge block maps via OpBuilder::union
-    let (merged_blocks, pruned_count) = merge_fst_stream(
-        &block_maps,
-        &global_badfilter,
-        target_block_path,
-        true, // apply wildcard pruning on blocks
-    )?;
-
-    // 5. Merge allow maps via OpBuilder::union
-    let (merged_allows, _) = merge_fst_stream(
-        &allow_maps,
-        &global_badfilter,
-        target_allow_path,
-        false, // don't prune allow rules
-    )?;
-
-    Ok((merged_blocks, merged_allows, pruned_count))
-}
-
-fn merge_fst_stream(
-    maps: &[Map<Mmap>],
-    badfilters: &HashSet<String>,
-    target_path: &Path,
-    prune_wildcards: bool,
-) -> Result<(usize, usize), DnsError> {
-    let parent = target_path.parent().unwrap_or_else(|| Path::new("."));
-    if !parent.as_os_str().is_empty() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
-    let tmp_file = tempfile::Builder::new()
-        .prefix("merged-fst-")
-        .suffix(".tmp")
-        .tempfile_in(parent)
-        .map_err(|e| DnsError::Generic(format!("Failed to create merge tempfile: {e}")))?;
-
-    let mut writer = BufWriter::new(tmp_file);
-    let mut builder = MapBuilder::new(&mut writer)
-        .map_err(|e| DnsError::Generic(format!("MapBuilder creation failed: {e}")))?;
-
-    if maps.is_empty() {
-        builder
-            .finish()
-            .map_err(|e| DnsError::Generic(format!("MapBuilder finish failed: {e}")))?;
-        let tmp_file = writer
-            .into_inner()
-            .map_err(|e| DnsError::Generic(e.to_string()))?;
-        tmp_file
-            .persist(target_path)
-            .map_err(|e| DnsError::Generic(e.to_string()))?;
-        return Ok((0, 0));
-    }
-
-    let mut op = OpBuilder::new();
-    for map in maps {
-        op.push(map.stream());
-    }
-
-    let mut stream = op.union();
-
-    let mut total_inserted = 0;
-    let mut pruned_count = 0;
-    let mut current_wildcard_prefix: Option<(Vec<u8>, bool)> = None;
-
-    while let Some((key_bytes, items)) = stream.next() {
-        // 1. Check if badfilter applies
-        if !badfilters.is_empty()
-            && let Ok(k_str) = std::str::from_utf8(key_bytes)
-            && badfilters.contains(k_str)
-        {
-            continue;
-        }
-
-        let mut combined_flags = MatchFlags::empty();
-        let mut first_src_idx = 0u16;
-        let mut first = true;
-        for iv in items {
-            let (flags, _) = decode_val(iv.value);
-            combined_flags = MatchFlags(combined_flags.0 | flags.0);
-            if first || flags.is_important() {
-                first_src_idx = (iv.index as u16).min(u16::MAX - 1);
-                first = false;
-            }
-        }
-        let val = encode_val(combined_flags, first_src_idx);
-        let flags = combined_flags;
-
-        // 2. Wildcard pruning
-        if prune_wildcards {
-            if let Some((prefix, ancestor_important)) = &current_wildcard_prefix {
-                if key_bytes.starts_with(prefix) {
-                    if *ancestor_important || !flags.is_important() {
-                        pruned_count += 1;
-                        continue;
-                    }
-                } else {
-                    current_wildcard_prefix = None;
-                }
-            }
-
-            if flags.is_subdomains() {
-                let mut prefix = key_bytes.to_vec();
-                prefix.push(LABEL_SEPARATOR);
-                current_wildcard_prefix = Some((prefix, flags.is_important()));
-            }
-        }
-
-        builder
-            .insert(key_bytes, val)
-            .map_err(|e| DnsError::Generic(format!("FST stream insertion error: {e}")))?;
-        total_inserted += 1;
-    }
-
-    builder
-        .finish()
-        .map_err(|e| DnsError::Generic(format!("MapBuilder finish failed: {e}")))?;
-
-    std::io::Write::flush(&mut writer)
-        .map_err(|e| DnsError::Generic(format!("MapBuilder flush failed: {e}")))?;
-
-    let tmp_file = writer
-        .into_inner()
-        .map_err(|e| DnsError::Generic(format!("Buffer unwrap failed: {e}")))?;
-
-    tmp_file
-        .persist(target_path)
-        .map_err(|e| DnsError::Generic(format!("Atomic persist failed: {e}")))?;
-
-    Ok((total_inserted, pruned_count))
-}
-
 #[cfg(test)]
 mod tests {
+    use lanforge_types::network::dns::adblock::AdblockUrlKind;
+
     use super::*;
+    use crate::resolver::filter::{DiskBlocklist, ListMatches};
+
+    fn compile(dir: &Path, id: i64, format: AdblockSourceFormat, text: &str) {
+        compile_source_artifacts(id, 0, "http://test", format, text, None, None, dir).unwrap();
+    }
+
+    /// Each list answers from its own FSTs, one bit per list in load order.
+    #[test]
+    fn lists_are_queried_in_place_one_bit_each() {
+        let dir = tempfile::tempdir().unwrap();
+        compile(
+            dir.path(),
+            1,
+            AdblockSourceFormat::Adblock,
+            "||ads.example.com^\n||tracking.com^\n@@||good.tracking.com^\n",
+        );
+        compile(
+            dir.path(),
+            2,
+            AdblockSourceFormat::Hosts,
+            "0.0.0.0 ads.example.com\n0.0.0.0 extra.com\n",
+        );
+        let kinds = [
+            (1, AdblockUrlKind::Blocklist),
+            (2, AdblockUrlKind::Blocklist),
+        ];
+        let (bl, failed) = DiskBlocklist::load(dir.path(), &kinds);
+        assert!(failed.is_empty());
+        let m = |d: &str| bl.match_lists(d);
+        assert_eq!(m("ads.example.com").block, 0b11);
+        assert_eq!(m("x.ads.example.com").block, 0b01, "hosts lines are exact");
+        assert_eq!(m("good.tracking.com").allow, 0b01);
+        assert_eq!(m("good.tracking.com").block, 0b01);
+        assert_eq!(m("extra.com").block, 0b10);
+        assert_eq!(m("unlisted.com"), ListMatches::default());
+        assert_eq!((bl.source_id(0), bl.source_id(1)), (1, 2));
+        assert_eq!((bl.len(), bl.exceptions_len()), (4, 1));
+    }
+
+    /// Failed on the merged engine: the source kind was never read, so an allowlist URL blocked
+    /// every domain it was meant to allow.
+    #[test]
+    fn an_allowlist_source_allows() {
+        let dir = tempfile::tempdir().unwrap();
+        compile(
+            dir.path(),
+            1,
+            AdblockSourceFormat::Hosts,
+            "0.0.0.0 bank.com\n",
+        );
+        compile(dir.path(), 2, AdblockSourceFormat::Domains, "bank.com\n");
+        let kinds = [
+            (1, AdblockUrlKind::Blocklist),
+            (2, AdblockUrlKind::Allowlist),
+        ];
+        let (bl, _) = DiskBlocklist::load(dir.path(), &kinds);
+        let m = bl.match_lists("bank.com");
+        assert_eq!((m.block, m.allow), (0b01, 0b10));
+        assert_eq!((bl.len(), bl.exceptions_len()), (1, 1));
+    }
+
+    /// A `$badfilter` in one list disables the same rule in every list; other levels still match.
+    #[test]
+    fn a_badfilter_disables_the_rule_in_other_lists() {
+        let dir = tempfile::tempdir().unwrap();
+        compile(
+            dir.path(),
+            1,
+            AdblockSourceFormat::Adblock,
+            "||ads.com^\n||x.ads.com^\n",
+        );
+        compile(
+            dir.path(),
+            2,
+            AdblockSourceFormat::Adblock,
+            "||x.ads.com^$badfilter\n||other.com^\n",
+        );
+        let kinds = [
+            (1, AdblockUrlKind::Blocklist),
+            (2, AdblockUrlKind::Blocklist),
+        ];
+        let (bl, _) = DiskBlocklist::load(dir.path(), &kinds);
+        assert_eq!(
+            bl.match_lists("x.ads.com").block,
+            0b01,
+            "still matched by ||ads.com^"
+        );
+        assert_eq!(bl.match_lists("ads.com").block, 0b01);
+        let (only, _) = DiskBlocklist::load(dir.path(), &kinds[1..]);
+        assert_eq!(only.match_lists("other.com").block, 0b01);
+    }
 
     #[test]
-    fn test_compile_and_merge_sources() {
+    fn an_unreadable_list_is_skipped_and_reported() {
         let dir = tempfile::tempdir().unwrap();
-        let sources_dir = dir.path().join("sources");
-        std::fs::create_dir_all(&sources_dir).unwrap();
-
-        let s1 = r#"
-||ads.example.com^
-||tracking.com^
-@@||good.tracking.com^
-"#;
-        let s2 = r#"
-0.0.0.0 ads.example.com
-0.0.0.0 extra.com
-||bad.tracking.com^$badfilter
-"#;
-
-        let entry1 = compile_source_artifacts(
-            1,
-            1,
-            "http://s1.test",
-            AdblockSourceFormat::Adblock,
-            s1,
-            None,
-            None,
-            &sources_dir,
-        )
-        .unwrap();
-
-        let entry2 = compile_source_artifacts(
-            2,
-            2,
-            "http://s2.test",
-            AdblockSourceFormat::Hosts,
-            s2,
-            None,
-            None,
-            &sources_dir,
-        )
-        .unwrap();
-
-        assert_eq!(entry1.stats.blocks, 2);
-        assert_eq!(entry1.stats.exceptions, 1);
-        assert_eq!(entry2.stats.blocks, 2);
-
-        let merged_block_path = dir.path().join("block.fst");
-        let merged_allow_path = dir.path().join("allow.fst");
-
-        let (blocks, allows, _pruned) = merge_all_sources(
-            &sources_dir,
-            &[1, 2],
-            &merged_block_path,
-            &merged_allow_path,
-        )
-        .unwrap();
-
-        assert_eq!(blocks, 3); // ads.example.com, tracking.com, extra.com
-        assert_eq!(allows, 1); // good.tracking.com
-
-        let block_map =
-            Map::new(unsafe { Mmap::map(&File::open(&merged_block_path).unwrap()).unwrap() })
-                .unwrap();
-        let allow_map =
-            Map::new(unsafe { Mmap::map(&File::open(&merged_allow_path).unwrap()).unwrap() })
-                .unwrap();
-
-        assert_eq!(block_map.len(), 3);
-        assert_eq!(allow_map.len(), 1);
+        compile(dir.path(), 1, AdblockSourceFormat::Hosts, "0.0.0.0 a.com\n");
+        std::fs::write(dir.path().join("2.block.fst"), b"garbage").unwrap();
+        let kinds = [
+            (2, AdblockUrlKind::Blocklist),
+            (1, AdblockUrlKind::Blocklist),
+        ];
+        let (bl, failed) = DiskBlocklist::load(dir.path(), &kinds);
+        assert_eq!(failed, vec![2]);
+        assert_eq!(bl.match_lists("a.com").block, 0b01);
+        assert_eq!(bl.source_id(0), 1);
     }
 
     #[tokio::test]
