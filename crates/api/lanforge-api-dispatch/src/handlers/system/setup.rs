@@ -16,23 +16,10 @@ use lanforge_types::network::firewall::{FirewallConfig, ZoneForwarding};
 use lanforge_types::network::pppoe::PppoeConfig;
 use pnet::datalink::interfaces;
 use pnet::ipnetwork::IpNetwork;
-use rand::RngExt;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{error, info};
-
-fn generate_rfc4193_ula_str() -> String {
-    let mut bytes = [0u8; 16];
-    bytes[0] = 0xfd;
-    let mut rng = rand::rng();
-    let mut global_id = [0u8; 5];
-    rng.fill(&mut global_id);
-    bytes[1..6].copy_from_slice(&global_id);
-    bytes[7] = 1; // Subnet ID = 1
-    let addr = Ipv6Addr::from(bytes);
-    format!("{addr}/64")
-}
 
 impl ClientContext {
     /// Inspects the host environment to report first-run readiness and discovered network interfaces.
@@ -60,21 +47,28 @@ impl ClientContext {
             .map(|s| s.lan_iface.clone())
             .unwrap_or_default();
         let detected_gateway = detect_system_gateway();
-        let detected_ula_prefix = status
-            .as_ref()
-            .and_then(|s| s.ula_prefix.map(|p| p.to_string()))
-            .filter(|p| !p.starts_with("fd97:f00d:cafe:3731"))
-            .unwrap_or_else(generate_rfc4193_ula_str);
 
         let all_interfaces = interfaces();
         let mut detected_subnet_mask = None;
+        // The ULA the admin put on the LAN interface (lanforge never assigns one); none found
+        // leaves the choice to `auto_ula`.
+        let mut detected_ula_prefix = String::new();
         if !detected_lan_iface.is_empty()
             && let Some(lan) = all_interfaces.iter().find(|i| i.name == detected_lan_iface)
         {
             for ip in &lan.ips {
-                if let IpNetwork::V4(v4) = ip {
-                    detected_subnet_mask = Some(v4.mask());
-                    break;
+                match ip {
+                    IpNetwork::V4(v4) if detected_subnet_mask.is_none() => {
+                        detected_subnet_mask = Some(v4.mask());
+                    }
+                    IpNetwork::V6(v6)
+                        if detected_ula_prefix.is_empty()
+                            && lanforge_types::network::is_ula(&v6.ip()) =>
+                    {
+                        let prefix = lanforge_types::network::Ipv6Prefix::from_addr(v6.ip());
+                        detected_ula_prefix = format!("{}/64", prefix.to_addr());
+                    }
+                    _ => {}
                 }
             }
         }

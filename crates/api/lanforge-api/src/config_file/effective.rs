@@ -92,7 +92,7 @@ pub struct RaInputs {
 /// What the daemon fills in when `[ra]` leaves it out:
 /// - the interface: the LAN interface;
 /// - no prefix at all: the site ULA (or one found on the interface) and the delegated GUA;
-/// - a `ula` prefix without an address: the site ULA;
+/// - a `ula` prefix without an address: the site ULA, or the one on the interface (`auto_ula`);
 /// - no RDNSS: the `[dhcp.v6]` DNS servers; no DNSSL: the search domains.
 ///
 /// The same rules the file-to-database conversion used to apply and save.
@@ -104,10 +104,12 @@ pub fn effective_ra(mut ra: RaServerConfig, inputs: &RaInputs) -> RaServerConfig
     if ra.prefixes.is_empty() {
         add_default_ra_prefixes(&mut ra.prefixes, inputs.ula);
     }
-    if let Some(ula) = inputs.ula {
-        for p in &mut ra.prefixes {
-            if p.source == PrefixSource::Ula && p.address.is_none() {
-                p.address = Some(ula.to_addr().to_string());
+    for p in &mut ra.prefixes {
+        if p.source == PrefixSource::Ula && p.address.is_none() {
+            match inputs.ula {
+                Some(ula) => p.address = Some(ula.to_addr().to_string()),
+                // No site ULA named: the one on the interface, found at run time.
+                None => p.source = PrefixSource::AutoUla,
             }
         }
     }
@@ -219,6 +221,29 @@ mod tests {
         let ra = effective_ra(ra, &ra_inputs());
         assert_eq!(ra.prefixes.len(), 1);
         assert_eq!(ra.prefixes[0].address.as_deref(), Some("fd12:3456:789a::"));
+    }
+
+    /// No site ULA named (the admin sets it on the interface): nothing is invented, the
+    /// defaults and an address-less `ula` prefix follow the interface (`auto_ula`).
+    #[test]
+    fn without_a_site_ula_the_interface_ula_is_used() {
+        let no_ula = RaInputs {
+            ula: None,
+            ..ra_inputs()
+        };
+        let defaults = effective_ra(RaServerConfig::default(), &no_ula);
+        let sources: Vec<_> = defaults.prefixes.iter().map(|p| p.source.clone()).collect();
+        assert_eq!(sources, [PrefixSource::AutoUla, PrefixSource::AutoGua]);
+
+        let mut ra = RaServerConfig::default();
+        ra.prefixes.push(RAPrefix {
+            source: PrefixSource::Ula,
+            address: None,
+            ..RAPrefix::default()
+        });
+        let ra = effective_ra(ra, &no_ula);
+        assert_eq!(ra.prefixes[0].source, PrefixSource::AutoUla);
+        assert_eq!(ra.prefixes[0].address, None);
     }
 
     #[test]

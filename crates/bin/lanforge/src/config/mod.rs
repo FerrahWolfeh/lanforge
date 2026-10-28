@@ -136,17 +136,9 @@ impl Config {
             .or(Some(toml_cfg.system.iface.as_str()));
         toml_cfg.system.iface = auto_detect::detect_lan_interface(configured_iface, wan_iface);
 
-        // 2. Resolve IPv6 SLAAC target prefix with RFC 4193 ULA generator
-        if toml_cfg.system.target_prefix.is_empty()
-            || toml_cfg.system.target_prefix == "fd97:f00d:cafe:3731"
-        {
-            if let Some(ref cli_prefix) = cli.target_prefix {
-                toml_cfg.system.target_prefix.clone_from(cli_prefix);
-            } else {
-                toml_cfg.system.target_prefix =
-                    auto_detect::generate_rfc4193_ula().to_addr().to_string();
-            }
-        }
+        // 2. The site ULA is the one the admin put on the LAN interface (lanforge never assigns
+        //    addresses): `[system] ula_prefix` names it, or RA finds it on the interface at run
+        //    time (`auto_ula`). Never generated here.
 
         // 3. Resolve DHCP defaults if pools are unconfigured
         #[cfg(feature = "dhcp")]

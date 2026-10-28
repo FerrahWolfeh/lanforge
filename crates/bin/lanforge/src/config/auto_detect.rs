@@ -5,11 +5,9 @@
 
 #[cfg(feature = "dhcp")]
 use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
-use lanforge_types::network::Ipv6Prefix;
 use pnet::datalink::interfaces;
 use pnet::ipnetwork::IpNetwork;
-use rand::RngExt;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::Ipv4Addr;
 use std::path::Path;
 use tracing::{info, warn};
 
@@ -251,24 +249,6 @@ pub fn score_interface(iface: &pnet::datalink::NetworkInterface) -> i32 {
     score
 }
 
-/// Generates an RFC 4193 compliant random IPv6 Unique Local Address (ULA) prefix (`/64`).
-///
-/// Uses `0xfd00::/8` with a 40-bit cryptographically random Global ID and subnet ID `1`.
-#[must_use]
-pub fn generate_rfc4193_ula() -> Ipv6Prefix {
-    let mut bytes = [0u8; 16];
-    bytes[0] = 0xfd;
-
-    let mut rng = rand::rng();
-    let mut global_id = [0u8; 5];
-    rng.fill(&mut global_id);
-
-    bytes[1..6].copy_from_slice(&global_id);
-    bytes[7] = 1; // Subnet ID = 1
-
-    Ipv6Prefix::from_addr(Ipv6Addr::from(bytes))
-}
-
 /// Default network parameters derived for an interface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DerivedDhcpDefaults {
@@ -362,14 +342,6 @@ mod tests {
         assert!(!is_docker_bridge_hash("br-lan"));
         assert!(!is_docker_bridge_hash("br0"));
         assert!(!is_docker_bridge_hash("bridge0"));
-    }
-
-    #[test]
-    fn test_generate_rfc4193_ula() {
-        let prefix = generate_rfc4193_ula();
-        let octets = prefix.to_addr().octets();
-        assert_eq!(octets[0], 0xfd);
-        assert_eq!(octets[7], 1);
     }
 
     #[test]
