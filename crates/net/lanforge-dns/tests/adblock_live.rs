@@ -3,15 +3,14 @@
 mod common;
 
 use common::*;
-use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent};
+use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_dns::config::DnsConfig;
 use lanforge_dns::server::worker::spawn_adblock_manager;
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
 use lanforge_types::network::dns::adblock::{
-    AdblockDbConfig, AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, AdblockUrlKind,
-    BlockingMode,
+    AdblockDbConfig, AdblockSourceFormat, AdblockUrlKind, BlockingMode,
 };
 use lanforge_types::network::dns::{
     AdblockUrlEntry, DnsClass, DnsMessage, DnsQuestion, DnsRecordType, DnsResponseCode,
@@ -277,17 +276,10 @@ async fn test_adblock_live_comprehensive_battery() {
     // =========================================================================
     // Case 8: User dynamic custom block rules
     // =========================================================================
-    ctx_instance.update_dns_adblock_rules(vec![AdblockRuleEntry {
-        id: Some(101),
-        name: Some("custom-ad".to_string()),
-        domain: "my-custom-ad.internal".to_string(),
-        action: AdblockRuleAction::Block,
-        enabled: true,
-    }]);
-    let _ = dns_ctx
-        .bus
-        .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockRulesChanged));
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // The DNS service re-reads the rules on a context change (`FilterSubscriptions`); no service
+    // runs here, so the test does what it does.
+    ctx_instance.update_dns_adblock_rules("||my-custom-ad.internal^\n".to_string());
+    filter.sync_from_context(&ctx_instance);
 
     let m_custom = filter
         .check_domain("my-custom-ad.internal")
@@ -299,11 +291,9 @@ async fn test_adblock_live_comprehensive_battery() {
     // Case 9: User dynamic allowlist override
     // =========================================================================
     // Add doubleclick.net to user allowlist -> should override FST block
-    ctx_instance.update_dns_allowlist(vec!["doubleclick.net".to_string()]);
-    let _ = dns_ctx
-        .bus
-        .publish(LanforgeEvent::Dns(DnsEvent::ConfigAllowlistChanged));
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    ctx_instance
+        .update_dns_adblock_rules("||my-custom-ad.internal^\n@@||doubleclick.net^\n".to_string());
+    filter.sync_from_context(&ctx_instance);
 
     let m_allowed = filter
         .check_domain("doubleclick.net")
@@ -312,11 +302,8 @@ async fn test_adblock_live_comprehensive_battery() {
     assert_eq!(m_allowed.origin, FilterOrigin::UserAllowlist);
 
     // Remove from allowlist -> should block again
-    ctx_instance.update_dns_allowlist(vec![]);
-    let _ = dns_ctx
-        .bus
-        .publish(LanforgeEvent::Dns(DnsEvent::ConfigAllowlistChanged));
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    ctx_instance.update_dns_adblock_rules("||my-custom-ad.internal^\n".to_string());
+    filter.sync_from_context(&ctx_instance);
 
     let m_reblocked = filter
         .check_domain("doubleclick.net")

@@ -7,10 +7,6 @@ use lanforge_types::network::dhcp::{
     DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, Dhcpv6Pool, TftpOptions,
 };
 use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::adblock::{
-    AdblockDbConfig, AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, AdblockUrlKind,
-    BlockingMode, TimeOfDay,
-};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::firewall::{
     FirewallConfig, FirewallMode, FirewallPolicy, FirewallStopAction, FirewallZone, HostPortRule,
@@ -23,16 +19,16 @@ use lanforge_types::network::ra::{
 use lanforge_types::network::{IpSubnet, Ipv6AddrOrSuffix};
 
 use crate::api::devices::HostConfigEntry;
-use crate::api::dns::AllowlistEntry;
 use crate::api::dns::DnsUpstreamConfig;
 use crate::api::system::SystemConfigExport;
 
+use super::adblock::{AdblockFile, AdblockSettings};
 use super::dns::{DnsFile, DnsSettings, NamedUpstream};
 use super::duration::HumanDuration;
 use super::sections::{
-    AdblockFile, AdblockRuleFile, AdblockSourceFile, DhcpFile, Dhcpv4File, Dhcpv4PoolFile,
-    Dhcpv6File, Dhcpv6PoolFile, FirewallFile, FirewallZoneFile, LifetimeFile, OpenPortFile,
-    PortForwardFile, RaDnsslFile, RaFile, RaPrefixFile, RaRdnssFile, TftpFile, ZoneForwardingFile,
+    DhcpFile, Dhcpv4File, Dhcpv4PoolFile, Dhcpv6File, Dhcpv6PoolFile, FirewallFile,
+    FirewallZoneFile, LifetimeFile, OpenPortFile, PortForwardFile, RaDnsslFile, RaFile,
+    RaPrefixFile, RaRdnssFile, TftpFile, ZoneForwardingFile,
 };
 use super::{ConfigFile, StaticHost};
 
@@ -946,51 +942,27 @@ impl From<&SystemConfigExport> for ConfigFile {
             ..DnsSettings::default()
         });
 
-        // 5. Adblock
-        let mut adblock = AdblockFile {
-            enabled: export.dns_adblock_config.enabled,
-            blocking_mode: export.dns_adblock_config.blocking_mode.to_string(),
-            blocking_ip_v4: export.dns_adblock_config.blocking_ip_v4,
-            blocking_ip_v6: export.dns_adblock_config.blocking_ip_v6,
-            refresh_time: export.dns_adblock_config.refresh_time.to_string(),
-            sources: BTreeMap::new(),
-            allowlist: export
-                .dns_allowlist
-                .iter()
-                .map(|a| a.domain.clone())
-                .collect(),
-            rules: BTreeMap::new(),
-        };
-
-        for url_entry in &export.dns_adblock_urls {
-            let name = lanforge_crypto::stable_id_or_hash(
-                url_entry.name.as_deref(),
-                url_entry.url.as_bytes(),
-                "src",
-            );
-            adblock.sources.insert(
-                name,
-                AdblockSourceFile {
-                    url: url_entry.url.clone(),
-                    format: url_entry.format.to_string(),
-                    kind: url_entry.kind.to_string(),
-                    enabled: true,
-                },
-            );
-        }
-
-        if let Some(ref rules) = export.dns_adblock_rules {
-            for r in rules {
-                adblock.rules.insert(
-                    r.domain.clone(),
-                    AdblockRuleFile {
-                        action: r.action.to_string(),
-                        enabled: r.enabled,
-                    },
-                );
-            }
-        }
-        cfg.adblock = adblock;
+        // 5. Adblock: every source in the global layer. The rules live in their own file, not
+        // in `lanforge.toml`.
+        let sources: Vec<AdblockUrlEntry> = export
+            .dns_adblock_urls
+            .iter()
+            .map(|u| AdblockUrlEntry {
+                id: None,
+                name: Some(lanforge_crypto::stable_id_or_hash(
+                    u.name.as_deref(),
+                    u.url.as_bytes(),
+                    "src",
+                )),
+                ..u.clone()
+            })
+            .collect();
+        cfg.adblock = AdblockFile::from_config(&AdblockSettings {
+            config: export.dns_adblock_config.clone(),
+            lists: sources.iter().filter_map(|s| s.name.clone()).collect(),
+            sources,
+            ..AdblockSettings::default()
+        });
 
         // 6. Firewall
         if let Some(ref fw) = export.firewall_config {
@@ -1065,54 +1037,11 @@ impl From<&ConfigFile> for SystemConfigExport {
         let dns_rewrites = dns.rewrites;
         let dns_reverse_resolvers = Some(dns.reverse);
 
-        // 5. Adblock
-        let blocking_mode =
-            BlockingMode::from_str(&cfg.adblock.blocking_mode).unwrap_or(BlockingMode::NxDomain);
-        let refresh_time =
-            TimeOfDay::from_str(&cfg.adblock.refresh_time).unwrap_or(TimeOfDay::DEFAULT);
-
-        let dns_adblock_config = AdblockDbConfig {
-            enabled: cfg.adblock.enabled,
-            blocking_mode,
-            blocking_ip_v4: cfg.adblock.blocking_ip_v4,
-            blocking_ip_v6: cfg.adblock.blocking_ip_v6,
-            refresh_time,
-        };
-
-        let mut dns_adblock_urls = Vec::new();
-        for (name, s) in &cfg.adblock.sources {
-            dns_adblock_urls.push(AdblockUrlEntry {
-                id: None,
-                name: Some(name.clone()),
-                url: s.url.clone(),
-                kind: AdblockUrlKind::from_str(&s.kind).unwrap_or_default(),
-                format: AdblockSourceFormat::from_str(&s.format).unwrap_or_default(),
-            });
-        }
-
-        let dns_allowlist: Vec<AllowlistEntry> = cfg
-            .adblock
-            .allowlist
-            .iter()
-            .enumerate()
-            .map(|(idx, d)| AllowlistEntry {
-                id: idx as i64 + 1,
-                domain: d.clone(),
-            })
-            .collect();
-
-        let dns_adblock_rules: Vec<AdblockRuleEntry> = cfg
-            .adblock
-            .rules
-            .iter()
-            .map(|(dom, r)| AdblockRuleEntry {
-                id: None,
-                name: Some(dom.clone()),
-                domain: dom.clone(),
-                action: AdblockRuleAction::from_str(&r.action).unwrap_or(AdblockRuleAction::Block),
-                enabled: r.enabled,
-            })
-            .collect();
+        // 5. Adblock: the settings and the global layer's sources (entries the file gets wrong
+        // are left out). The rules are in the rules file: not part of this export.
+        let adblock = cfg.adblock.to_config().0;
+        let dns_adblock_urls = adblock.global_sources().cloned().collect();
+        let dns_adblock_config = adblock.config;
 
         // 6. Firewall (entries the file gets wrong are left out; see `FirewallFile::to_config`)
         let firewall_config = Some(Box::new(cfg.firewall.to_config().0));
@@ -1129,8 +1058,8 @@ impl From<&ConfigFile> for SystemConfigExport {
             dns_upstreams,
             dns_adblock_config,
             dns_adblock_urls,
-            dns_allowlist,
-            dns_adblock_rules: Some(dns_adblock_rules),
+            dns_allowlist: Vec::new(),
+            dns_adblock_rules: None,
             api_tokens: None,
             dhcp_v4_pools: Some(dhcp_v4_pools),
             dhcp_v6_pools: Some(dhcp_v6_pools),

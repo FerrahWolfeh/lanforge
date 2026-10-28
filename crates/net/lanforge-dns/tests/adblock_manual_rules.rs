@@ -1,6 +1,8 @@
 #![cfg(feature = "adblock")]
-//! The manual layer decides what the stored allowlist and rules decided before they were read
-//! through the rules-file parser (item f2a): same decisions, same attribution.
+//! The stored allowlist and rules, written as rules-file lines by the cut-over
+//! (`AdblockRuleEntry::to_rules_line` / `allowlist_line`), decide what the database sets decided
+//! (the expected table below passed on the engine before item f2a): same decisions, same
+//! attribution.
 
 use std::sync::Arc;
 
@@ -43,17 +45,16 @@ fn decisions(filter: &AdBlocker, queries: &[&str]) -> String {
 
 #[test]
 fn stored_rules_decide_as_before() {
-    let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
     // The owner's 4 Bradesco allows, plus every stored spelling the WebUI/CLI could produce.
-    ctx.update_dns_allowlist(vec![
-        "app-measurement.com".into(),
-        "www.googletagmanager.com".into(),
-        "js-cdn.dynatrace.com".into(),
-        "analytics.google.com".into(),
-        "@@||allow-syntax.com^".into(),
-        "Upper.Example.com".into(),
-    ]);
-    ctx.update_dns_adblock_rules(vec![
+    let allowlist: [&str; 6] = [
+        "app-measurement.com",
+        "www.googletagmanager.com",
+        "js-cdn.dynatrace.com",
+        "analytics.google.com",
+        "@@||allow-syntax.com^",
+        "Upper.Example.com",
+    ];
+    let rules = [
         rule("ads.example.com", AdblockRuleAction::Block, true),
         rule("||wild.example.com^", AdblockRuleAction::Block, true),
         rule("|pipe.example.com^", AdblockRuleAction::Block, true),
@@ -68,7 +69,19 @@ fn stored_rules_decide_as_before() {
         rule("ok.ads.example.com", AdblockRuleAction::Allow, true),
         rule("google.com", AdblockRuleAction::Block, true),
         rule("trailing.example.com.", AdblockRuleAction::Block, true),
-    ]);
+    ];
+    let mut text = String::new();
+    for line in allowlist
+        .iter()
+        .filter_map(|d| AdblockRuleEntry::allowlist_line(d))
+        .chain(rules.iter().filter_map(AdblockRuleEntry::to_rules_line))
+    {
+        text.push_str(&line);
+        text.push('\n');
+    }
+    // Through the context, as the daemon loads it.
+    let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+    ctx.update_dns_adblock_rules(text);
     let filter = AdBlocker::new(true);
     filter.sync_from_context(&ctx);
 

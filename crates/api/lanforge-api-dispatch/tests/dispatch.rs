@@ -257,14 +257,26 @@ async fn test_dispatch_system_config_import_export() {
             );
             assert_eq!(cfg.dns_adblock_urls[0].kind, AdblockUrlKind::Blocklist);
 
-            assert_eq!(cfg.dns_allowlist.len(), 1);
-            assert_eq!(cfg.dns_allowlist[0].domain, "allowed-import.lan");
-
+            // The allowlist of an (older) export becomes allow rules of the rules file; an
+            // export carries every manual rule as written there.
+            assert_eq!(cfg.dns_allowlist.len(), 0);
             let rules = cfg.dns_adblock_rules.as_ref().expect("rules present");
-            assert_eq!(rules.len(), 1);
-            assert_eq!(rules[0].domain, "custom-blocked.com");
-            assert_eq!(rules[0].action, AdblockRuleAction::Block);
-            assert!(rules[0].enabled);
+            let rules: Vec<_> = rules
+                .iter()
+                .map(|r| (r.domain.as_str(), r.action, r.enabled))
+                .collect();
+            assert_eq!(
+                rules,
+                [
+                    ("@@||allowed-import.lan^", AdblockRuleAction::Allow, true),
+                    ("||custom-blocked.com^", AdblockRuleAction::Block, true),
+                ]
+            );
+            let Response::DnsAllowlist(allowlist) = client_ctx.handle_dns_allowlist().await else {
+                panic!("Expected Response::DnsAllowlist");
+            };
+            assert_eq!(allowlist.allowlist.len(), 1);
+            assert_eq!(allowlist.allowlist[0].domain, "allowed-import.lan");
         } else {
             assert_eq!(cfg.dns_adblock_urls.len(), 0);
             assert_eq!(cfg.dns_allowlist.len(), 0);
@@ -1231,4 +1243,213 @@ async fn dns_import_overwrite_replaces_the_file_lists() {
     assert_eq!(dns.rewrites.len(), 1);
     assert_eq!(dns.rewrites[0].domain, "nas.lan");
     assert_eq!(client_ctx.ctx.get_dns_rewrites(), dns.rewrites);
+}
+
+/// The owner's `[adblock]` and global rules (approved file form, 2026-10-28).
+#[cfg(feature = "adblock")]
+const OWNER_ADBLOCK: &str = "[system]\niface = \"lan0\"\n\n# filtering\n[adblock]\nenabled = true\n\
+    blocking_mode = \"nxdomain\"\nrefresh_time = \"03:00\"\nlists = [\"src-7cc6f305\"]\n\
+    rules = \"adblock/global.rules\"\n\n[adblock.sources.src-7cc6f305]\n\
+    url = \"https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts\"\nformat = \"hosts\"\n";
+
+#[cfg(feature = "adblock")]
+const OWNER_RULES: &str = "! Bradesco\n@@||app-measurement.com^\n@@||www.googletagmanager.com^\n\
+    @@||js-cdn.dynatrace.com^\n@@||analytics.google.com^\n";
+
+/// A client whose live adblock settings and rules are the owner's, as the boot applies them.
+#[cfg(feature = "adblock")]
+async fn owner_adblock_client(writable: bool) -> (ClientContext, tempfile::TempDir) {
+    let client_ctx = init_test_context().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    std::fs::write(&path, OWNER_ADBLOCK).unwrap();
+    std::fs::create_dir(dir.path().join("adblock")).unwrap();
+    std::fs::write(dir.path().join("adblock/global.rules"), OWNER_RULES).unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(writable);
+    let (adblock, issues) = lanforge_api::config_file::ConfigFile::parse(OWNER_ADBLOCK)
+        .unwrap()
+        .adblock
+        .to_config();
+    assert!(issues.is_empty(), "{issues:?}");
+    client_ctx.apply_adblock_settings(&adblock);
+    client_ctx
+        .ctx
+        .update_dns_adblock_rules(OWNER_RULES.to_string());
+    (client_ctx, dir)
+}
+
+/// `[adblock]` and the rules file as the boot reads them, plus the `lanforge.toml` text.
+#[cfg(feature = "adblock")]
+fn adblock_in_files(
+    dir: &tempfile::TempDir,
+) -> (lanforge_api::config_file::AdblockSettings, String, String) {
+    let text = std::fs::read_to_string(dir.path().join("lanforge.toml")).unwrap();
+    let (adblock, issues) = lanforge_api::config_file::ConfigFile::parse(&text)
+        .unwrap()
+        .adblock
+        .to_config();
+    assert!(issues.is_empty(), "{issues:?}\n{text}");
+    let (rules, rule_issues) = adblock.load_rules(&dir.path().join("lanforge.toml"));
+    assert!(rule_issues.is_empty(), "{rule_issues:?}");
+    (adblock, rules.unwrap(), text)
+}
+
+/// Every adblock change of the API reaches `[adblock]` or the rules file before it applies:
+/// what runs is what the files hold, the comment and the source name stay.
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn adblock_changes_are_written_to_the_files() {
+    use lanforge_types::network::dns::adblock::{BlockingMode, TimeOfDay};
+
+    let (client_ctx, dir) = owner_adblock_client(true).await;
+    let ok = |res: Response| assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    ok(client_ctx
+        .handle_dns_adblock_url_add(
+            Some("oisd".into()),
+            "https://small.oisd.nl".into(),
+            AdblockUrlKind::Blocklist,
+            None,
+        )
+        .await);
+    ok(client_ctx
+        .handle_dns_adblock_config_set(
+            Some(BlockingMode::NullIp),
+            None,
+            None,
+            Some(TimeOfDay::new(4, 30).unwrap()),
+        )
+        .await);
+    ok(client_ctx.handle_dns_block("ads.example".into()).await);
+    ok(client_ctx
+        .handle_dns_adblock_rule_add("||track.example^$important".into(), "block".into())
+        .await);
+    // Allowing a blocked domain replaces its block rule.
+    ok(client_ctx.handle_dns_allow("ads.example".into()).await);
+    ok(client_ctx
+        .handle_dns_unallow("analytics.google.com".into())
+        .await);
+
+    let (adblock, rules, text) = adblock_in_files(&dir);
+    assert!(text.contains("# filtering\n[adblock]"), "{text}");
+    assert_eq!(adblock.lists, ["src-7cc6f305", "oisd"], "{text}");
+    assert_eq!(adblock.config.blocking_mode, BlockingMode::NullIp);
+    assert_eq!(adblock.config.refresh_time, TimeOfDay::new(4, 30).unwrap());
+    assert_eq!(
+        rules,
+        "! Bradesco\n@@||app-measurement.com^\n@@||www.googletagmanager.com^\n\
+         @@||js-cdn.dynatrace.com^\n||track.example^$important\n@@||ads.example^\n"
+    );
+    assert_eq!(client_ctx.ctx.get_dns_adblock_rules(), rules);
+    assert_eq!(client_ctx.ctx.get_dns_adblock(), adblock.config);
+    assert_eq!(
+        client_ctx.ctx.get_dns_adblock_urls(),
+        adblock.global_sources().cloned().collect::<Vec<_>>()
+    );
+
+    // Disable, then remove, by the id the listing gives.
+    let Response::DnsAdblockRules(listed) = client_ctx.handle_dns_adblock_rules().await else {
+        panic!("Expected Response::DnsAdblockRules");
+    };
+    let track = listed
+        .rules
+        .iter()
+        .find(|r| r.domain == "||track.example^$important")
+        .and_then(|r| r.id)
+        .unwrap();
+    ok(client_ctx
+        .handle_dns_adblock_rule_status(track, false)
+        .await);
+    assert!(
+        adblock_in_files(&dir)
+            .1
+            .contains("# ||track.example^$important\n")
+    );
+    ok(client_ctx.handle_dns_adblock_rule_remove(track).await);
+    assert!(!adblock_in_files(&dir).1.contains("track.example"));
+
+    ok(client_ctx
+        .handle_dns_adblock_url_remove(
+            "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts".into(),
+        )
+        .await);
+    let (adblock, _, _) = adblock_in_files(&dir);
+    assert_eq!(adblock.lists, ["oisd"]);
+    assert_eq!(adblock.sources.len(), 1);
+}
+
+/// A rule the rules file refuses (a `$client` modifier is never widened to everyone) and an
+/// unknown id write and apply nothing.
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn a_refused_adblock_change_writes_and_applies_nothing() {
+    let (client_ctx, dir) = owner_adblock_client(true).await;
+    for res in [
+        client_ctx
+            .handle_dns_adblock_rule_add("||x.example^$client=10.0.0.1".into(), "block".into())
+            .await,
+        client_ctx.handle_dns_adblock_rule_remove(42).await,
+        client_ctx
+            .handle_dns_adblock_url_add(
+                None,
+                "ftp://example.com/list".into(),
+                AdblockUrlKind::Blocklist,
+                None,
+            )
+            .await,
+    ] {
+        assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    }
+    let (_, rules, text) = adblock_in_files(&dir);
+    assert_eq!(rules, OWNER_RULES);
+    assert_eq!(text, OWNER_ADBLOCK);
+    assert_eq!(client_ctx.ctx.get_dns_adblock_rules(), OWNER_RULES);
+    assert_eq!(client_ctx.ctx.get_dns_adblock_urls().len(), 1);
+}
+
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn adblock_change_on_read_only_config_applies_in_memory_and_says_so() {
+    let (client_ctx, dir) = owner_adblock_client(false).await;
+    let res = client_ctx.handle_dns_block("ads.example".into()).await;
+    let Response::Success(ok) = res else {
+        panic!("{res:?}");
+    };
+    assert!(ok.message.contains("not saved"), "{}", ok.message);
+    assert!(
+        client_ctx
+            .ctx
+            .get_dns_adblock_rules()
+            .ends_with("||ads.example^\n")
+    );
+    let (_, rules, text) = adblock_in_files(&dir);
+    assert_eq!(
+        (rules.as_str(), text.as_str()),
+        (OWNER_RULES, OWNER_ADBLOCK)
+    );
+}
+
+/// Without a rules file, the first manual rule creates `adblock/global.rules` and names it in
+/// `[adblock]`.
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn the_first_rule_creates_the_rules_file() {
+    let client_ctx = init_test_context().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    std::fs::write(&path, "[adblock]\nenabled = true\n").unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(true);
+
+    let res = client_ctx.handle_dns_allow("bank.example".into()).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let (adblock, rules, _) = adblock_in_files(&dir);
+    assert_eq!(adblock.rules.as_deref(), Some("adblock/global.rules"));
+    assert_eq!(rules, "@@||bank.example^\n");
+    let Response::DnsAllowlist(list) = client_ctx.handle_dns_allowlist().await else {
+        panic!("Expected Response::DnsAllowlist");
+    };
+    assert_eq!(list.allowlist.len(), 1);
+    assert_eq!(list.allowlist[0].domain, "bank.example");
 }

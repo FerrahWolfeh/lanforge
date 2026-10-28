@@ -68,7 +68,7 @@ impl Section {
     /// Sections migrated to "files are config" (`SectionSet::FILE_OWNED`) are not: the file is their only source.
     #[must_use]
     pub const fn is_dynamic(&self) -> bool {
-        matches!(self, Self::Adblock)
+        SectionSet::DYNAMIC.contains(self.as_bitflag())
     }
 
     /// Returns the corresponding `SectionSet` bitflag.
@@ -123,13 +123,14 @@ bitflags! {
         const STATIC   = Self::SYSTEM.bits() | Self::DATABASE.bits() | Self::API.bits()
                        | Self::HTTP.bits() | Self::MONITOR.bits() | Self::MDNS.bits() | Self::TFTP.bits();
 
-        const DYNAMIC  = Self::ADBLOCK.bits();
+        /// Empty since `[adblock]` moved to the file: the hash sync has nothing left to sync.
+        const DYNAMIC  = 0;
 
         /// Migrated to "files are config": the file is their only source, written by the API
         /// before the change is applied; never synced with redb nor rewritten by the db worker.
         const FILE_OWNED = Self::PPPOE.bits() | Self::TRAFFIC.bits() | Self::FIREWALL.bits()
                          | Self::DHCP.bits() | Self::RA.bits() | Self::HOSTS.bits()
-                         | Self::DNS.bits();
+                         | Self::DNS.bits() | Self::ADBLOCK.bits();
     }
 }
 
@@ -172,9 +173,7 @@ impl From<lanforge_types::config::ConfigDomain> for Section {
             | lanforge_types::config::ConfigDomain::DnsRewrites
             | lanforge_types::config::ConfigDomain::DnsReverse
             | lanforge_types::config::ConfigDomain::DnsListen => Self::Dns,
-            // The allowlist is `[adblock] allowlist`.
-            lanforge_types::config::ConfigDomain::DnsAllowlist
-            | lanforge_types::config::ConfigDomain::DnsAdblock
+            lanforge_types::config::ConfigDomain::DnsAdblock
             | lanforge_types::config::ConfigDomain::DnsAdblockUrls
             | lanforge_types::config::ConfigDomain::DnsAdblockRules => Self::Adblock,
             lanforge_types::config::ConfigDomain::Discovery => Self::Monitor,

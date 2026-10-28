@@ -10,7 +10,7 @@ pub mod user;
 
 use lanforge_db_core::{DbError, DnsUpstreamEntry};
 use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
+use lanforge_types::network::dns::adblock::{AdblockRuleEntry, RewriteRule};
 pub use redb;
 use redb::{Database, Durability, ReadableDatabase, ReadableTable, WriteTransaction};
 use std::fmt;
@@ -93,29 +93,6 @@ impl DbWriteTx<'_> {
     /// Removes one configuration value for a typed ConfigKey within this transaction.
     pub fn remove<T>(&mut self, key: lanforge_db_core::ConfigKey<T>) -> Result<(), DbError> {
         self.remove_config(key.name())
-    }
-
-    /// Atomically replaces the adblock configuration (settings, allowlist, sources, rules).
-    /// The DNS keys are not touched: `[dns]` lives in the config file only.
-    pub fn replace_adblock(
-        &mut self,
-        adblock: &AdblockDbConfig,
-        allowlist: &[String],
-        urls: &[AdblockUrlEntry],
-        rules: &[AdblockRuleEntry],
-    ) -> Result<(), DbError> {
-        use lanforge_db_core::config_keys::*;
-
-        self.set(ADBLOCK_CONFIG, adblock)?;
-        self.set(DNS_ALLOWLIST, &allowlist.to_vec())?;
-        self.set(ADBLOCK_URLS, &urls.to_vec())?;
-        self.set(ADBLOCK_RULES, &rules.to_vec())?;
-
-        let _ = self.txn.delete_table(TABLE_DNS_ALLOWLIST);
-        let _ = self.txn.delete_table(TABLE_ADBLOCK_URLS);
-        let _ = self.txn.delete_table(TABLE_ADBLOCK_RULES);
-
-        Ok(())
     }
 }
 

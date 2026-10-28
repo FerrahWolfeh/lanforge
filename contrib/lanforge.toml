@@ -193,21 +193,29 @@ addresses = [
 # addresses = ["tls://10.20.0.53:853", "tls://10.20.0.54:853"]
 # domain = "corp.example"
 
-[dns.rewrites."router.lan"]
-target = "192.168.1.1"
-# rtype = "A" # inferred from target when omitted
-# Special targets: "dev:<device-name-or-mac>" resolves a tracked device;
-# "dev:<device>|<fallback>" uses the fallback when the device has no address;
-# "srv:<service>:<tcp-or-udp>:<device>:<port>" creates an SRV answer, e.g.
-# "srv:https:tcp:nas:443". A MAC address can be used as the device identifier.
+# Rewrites: "<domain>" = answer (IPv4, IPv6, a host name, or "dev:<name|mac>" for a
+# tracked device's current addresses), a list of answers, or a table
+# { answer = "dev:nas", rtype = "A", fallback = ["192.168.1.50", "fd00::50"] }.
+# rtype (A, AAAA or CNAME) limits what the rule answers; it is inferred when absent.
+# A rewritten name never leaves the router: other query types get an empty answer.
+[dns.rewrites]
+"router.lan" = "192.168.1.1"
+# "*.home.example" = "dev:nas|192.168.1.50"
 
 # ------------------------------------------------------------------------------
 # [adblock] — DNS filtering
-# Defaults: enabled = false; blocking_mode = "nxdomain"; refresh_time = "04:00".
-# blocking_mode accepts nxdomain, null_ip, or custom_ip; custom responses use
-# blocking_ip_v4 / blocking_ip_v6. Sources are named tables; kind is blocklist or
-# allowlist, format accepts auto/adblock/hosts/domains/wildcard_domains. Custom
-# rules are keyed by domain.
+# Defaults: enabled = false; blocking_mode = "nxdomain"; refresh_time = "03:00".
+# blocking_mode accepts nxdomain, null_ip, custom_ip or refused; custom responses
+# use blocking_ip_v4 / blocking_ip_v6. Sources are named tables (url; optional
+# kind = blocklist | allowlist and format = adblock | hosts | domains |
+# wildcard_domains, detected when absent). A source is used by naming it in
+# `lists` (every client) or in a group; there is no per-source `enabled`.
+# Manual rules live in the `rules` file, one per line, relative to this file:
+#   ||ads.example^       blocks the domain and its subdomains
+#   @@||bank.example^    allows them (wins over the lists)
+#   # ||off.example^     a disabled rule
+# Groups (`[adblock.groups.<name>]`: lists, rules, clients = CIDR or
+# "dev:<name|mac>") and `bypass` are read and checked, not applied yet.
 # ------------------------------------------------------------------------------
 [adblock]
 enabled = false
@@ -215,17 +223,13 @@ blocking_mode = "nxdomain"
 refresh_time = "03:00"
 # blocking_ip_v4 = "0.0.0.0"
 # blocking_ip_v6 = "::"
-# allowlist = ["trusted.example"]
+lists = ["oisd"]
+rules = "adblock/global.rules"
+# bypass = ["dev:work-laptop"]
 
 [adblock.sources.oisd]
 url = "https://small.oisd.nl"
-kind = "blocklist"
 format = "domains"
-# enabled = true
-
-[adblock.rules."telemetry.microsoft.com"]
-action = "block" # block or allow
-enabled = true
 
 # ------------------------------------------------------------------------------
 # [firewall] — stateful nftables filtering and forwarding

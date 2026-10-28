@@ -320,3 +320,44 @@ async fn an_unreadable_dns_section_keeps_the_running_dns() {
     assert_eq!(client.ctx.get_dns_upstreams(), running);
     assert!(client.ctx.config_issues()[0].starts_with("[dns]"));
 }
+
+/// `[adblock]` and its rules file apply on reload; a rules file that cannot be read keeps the
+/// rules that run (an unread file is not an empty one).
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn reload_applies_adblock_and_keeps_rules_it_cannot_read() {
+    let file = "[adblock]\nenabled = true\nlists = [\"l\"]\nrules = \"adblock/global.rules\"\n\n\
+                [adblock.sources.l]\nurl = \"https://example.com/l\"\n";
+    let (client, dir, _path) = with_file(file);
+    std::fs::create_dir(dir.path().join("adblock")).unwrap();
+    std::fs::write(
+        dir.path().join("adblock/global.rules"),
+        "@@||bank.example^\n",
+    )
+    .unwrap();
+
+    reload(&client).await;
+    assert!(client.ctx.get_dns_adblock().enabled);
+    let urls = client.ctx.get_dns_adblock_urls();
+    assert_eq!(urls.len(), 1);
+    assert_eq!(urls[0].url, "https://example.com/l");
+    assert_eq!(client.ctx.get_dns_adblock_rules(), "@@||bank.example^\n");
+
+    std::fs::remove_file(dir.path().join("adblock/global.rules")).unwrap();
+    std::fs::create_dir(dir.path().join("adblock/global.rules")).unwrap();
+    let _ = client.handle_reload().await;
+    assert_eq!(
+        client.ctx.get_dns_adblock_rules(),
+        "@@||bank.example^\n",
+        "an unreadable rules file must not drop the rules"
+    );
+    assert!(
+        client
+            .ctx
+            .config_issues()
+            .iter()
+            .any(|i| i.contains("cannot be read")),
+        "{:?}",
+        client.ctx.config_issues()
+    );
+}

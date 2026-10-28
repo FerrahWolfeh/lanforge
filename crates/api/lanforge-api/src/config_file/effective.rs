@@ -23,13 +23,15 @@ pub fn log_issues(issues: Vec<String>) -> Vec<String> {
 /// Logs each set-aside section and words it for the admin.
 #[must_use]
 pub fn set_aside_issues(set_aside: &[(super::Section, String)]) -> Vec<String> {
+    log_issues(set_aside_messages(set_aside))
+}
+
+/// Each set-aside section, worded for the admin (not logged).
+#[must_use]
+pub fn set_aside_messages(set_aside: &[(super::Section, String)]) -> Vec<String> {
     set_aside
         .iter()
-        .map(|(sec, err)| {
-            let issue = format!("[{sec}] is invalid and was not applied (defaults in use): {err}");
-            tracing::error!("Config: {issue}");
-            issue
-        })
+        .map(|(sec, err)| format!("[{sec}] is invalid and was not applied (defaults in use): {err}"))
         .collect()
 }
 

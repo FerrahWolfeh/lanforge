@@ -79,6 +79,12 @@ pub struct Config {
     /// resolvers and rewrites. The file is their only source.
     #[cfg(feature = "dns")]
     pub dns: lanforge_api::config_file::DnsSettings,
+    /// `[adblock]` as the settings the daemon runs. The file is their only source.
+    #[cfg(feature = "dns")]
+    pub adblock: lanforge_api::config_file::AdblockSettings,
+    /// The text of the global adblock rules file (`[adblock] rules`).
+    #[cfg(feature = "dns")]
+    pub adblock_rules: String,
     pub search_domains: Vec<String>,
 
     // Monitor & mDNS
@@ -216,6 +222,10 @@ impl Config {
             dns_toml: toml_cfg.dns,
             #[cfg(feature = "dns")]
             dns: toml_cfg.dns_settings,
+            #[cfg(feature = "dns")]
+            adblock: toml_cfg.adblock,
+            #[cfg(feature = "dns")]
+            adblock_rules: toml_cfg.adblock_rules,
             search_domains,
             #[cfg(feature = "discovery")]
             monitor_toml: toml_cfg.monitor,
@@ -725,6 +735,10 @@ impl Default for Config {
             dns_toml: DnsConfig::default(),
             #[cfg(feature = "dns")]
             dns: lanforge_api::config_file::DnsSettings::default(),
+            #[cfg(feature = "dns")]
+            adblock: lanforge_api::config_file::AdblockSettings::default(),
+            #[cfg(feature = "dns")]
+            adblock_rules: String::new(),
             search_domains: vec!["lan".to_string()],
             #[cfg(feature = "discovery")]
             monitor_toml: MonitorConfig::default(),

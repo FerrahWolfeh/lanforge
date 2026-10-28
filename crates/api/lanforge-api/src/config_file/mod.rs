@@ -13,6 +13,7 @@ pub mod patch;
 pub mod section;
 pub mod sections;
 
+pub use adblock::{AdblockFile, AdblockGroup, AdblockSettings};
 pub use convert::DhcpSettings;
 pub use dns::{
     DnsFile, DnsRewriteItem, DnsRewriteTable, DnsRewriteValue, DnsSettings, DnsUpstreamFile,
@@ -21,7 +22,7 @@ pub use dns::{
 pub use duration::HumanDuration;
 pub use effective::{
     RaInputs, add_default_ra_prefixes, effective_firewall, effective_ra, log_issues,
-    set_aside_issues,
+    set_aside_issues, set_aside_messages,
 };
 pub use hash::section_hashes;
 pub use hosts::StaticHost;

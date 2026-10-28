@@ -325,32 +325,31 @@ impl ClientContext {
         } else {
             payload.adblock_sources.clone()
         };
+        // `[adblock]` is file-owned: written with the rest of the setup TOML below, every
+        // source in the global layer.
         for entry in &mut adblock_sources {
-            if entry.id.is_none() {
-                entry.id = Some(entry.source_id());
-            }
+            entry.id = None;
+            entry.name = Some(lanforge_crypto::stable_id_or_hash(
+                entry.name.as_deref(),
+                entry.url.as_bytes(),
+                "src",
+            ));
         }
-
-        let adb_cfg = AdblockDbConfig {
-            enabled: payload.adblock_enabled,
+        let adblock = lanforge_api::config_file::AdblockSettings {
+            config: AdblockDbConfig {
+                enabled: payload.adblock_enabled,
+                ..Default::default()
+            },
+            lists: adblock_sources
+                .iter()
+                .filter_map(|s| s.name.clone())
+                .collect(),
+            sources: adblock_sources,
             ..Default::default()
         };
         patch = patch
-            .with_dns_adblock(adb_cfg.clone())
-            .with_dns_adblock_urls(adblock_sources.clone());
-        let _ = storage
-            .call(move |s: &Stores| s.db().save_adblock_config(&adb_cfg))
-            .await;
-        let sources_clone = adblock_sources.clone();
-        let _ = storage
-            .call(move |s: &Stores| {
-                let _ = s.db().clear_adblock_urls();
-                for src in &sources_clone {
-                    let _ = s.db().add_adblock_url(&src.url, src.kind, src.format);
-                }
-                Ok::<(), lanforge_db_core::DbError>(())
-            })
-            .await;
+            .with_dns_adblock(adblock.config.clone())
+            .with_dns_adblock_urls(adblock.global_sources().cloned().collect());
 
         // 6. Configure WAN / Uplink
         if let Some(ref wan) = payload.wan {
@@ -456,7 +455,7 @@ impl ClientContext {
             &dhcp,
             &ra,
             &upstreams,
-            &adblock_sources,
+            &adblock,
         );
 
         if let Err(e) =
@@ -556,7 +555,7 @@ fn generate_setup_toml(
     dhcp: &lanforge_api::config_file::DhcpSettings,
     ra: &lanforge_types::network::ra::RaServerConfig,
     upstreams: &[UpstreamTarget],
-    adblock_sources: &[lanforge_types::network::dns::AdblockUrlEntry],
+    adblock: &lanforge_api::config_file::AdblockSettings,
 ) -> (lanforge_api::config_file::ConfigFile, String) {
     let mut cfg = lanforge_api::config_file::ConfigFile::default();
     cfg.system.iface = payload.lan_iface.clone();
@@ -583,21 +582,8 @@ fn generate_setup_toml(
             ..Default::default()
         });
 
-    // DNS Adblock
-    cfg.adblock.enabled = payload.adblock_enabled;
-    if payload.adblock_enabled {
-        for (idx, src) in adblock_sources.iter().enumerate() {
-            cfg.adblock.sources.insert(
-                format!("preset_{}", idx + 1),
-                lanforge_api::config_file::AdblockSourceFile {
-                    url: src.url.clone(),
-                    format: src.format.as_str().to_string(),
-                    kind: src.kind.to_string(),
-                    enabled: true,
-                },
-            );
-        }
-    }
+    // DNS Adblock: what setup applies.
+    cfg.adblock = lanforge_api::config_file::AdblockFile::from_config(adblock);
 
     // Firewall: the same value the daemon applies (zones bound to the chosen interfaces).
     cfg.firewall = lanforge_api::config_file::FirewallFile::from_config(firewall);

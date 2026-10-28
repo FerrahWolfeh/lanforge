@@ -6,7 +6,8 @@
 
 use std::fmt::Display;
 
-use super::syntax::{ParseStats, ParsedRule};
+use super::syntax::{ParseStats, ParsedRule, RuleAction};
+use super::{AdblockRuleAction, AdblockRuleEntry};
 
 /// Why a rules-file line is ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,12 +231,51 @@ impl<'a> RulesFile<'a> {
         });
         changed.then_some(out)
     }
+
+    /// The rules, enabled or not, in file order as the API lists them: the id, the rule text as
+    /// written (`domain`) and its action (allow when it allows).
+    #[must_use]
+    pub fn rule_entries(&self) -> Vec<AdblockRuleEntry> {
+        let mut entries = Vec::new();
+        self.for_each_line(|line, rules| {
+            if let RulesLineKind::Rule { id, enabled } = line.kind {
+                let allow = rules.iter().any(|r| r.action == RuleAction::Allow);
+                entries.push(AdblockRuleEntry {
+                    id: Some(id),
+                    name: None,
+                    domain: line.rule.to_string(),
+                    action: if allow {
+                        AdblockRuleAction::Allow
+                    } else {
+                        AdblockRuleAction::Block
+                    },
+                    enabled,
+                });
+            }
+        });
+        entries
+    }
+
+    /// The ignored lines, as config issues of the file at `at`.
+    #[must_use]
+    pub fn issues(&self, at: &str) -> Vec<String> {
+        let mut issues = Vec::new();
+        self.for_each_line(|line, _| {
+            if let RulesLineKind::Ignored(issue) = line.kind {
+                issues.push(format!(
+                    "{at} line {}: \"{}\": {issue}; ignored",
+                    line.number, line.rule
+                ));
+            }
+        });
+        issues
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::dns::adblock::syntax::{MatchFlags, RuleAction};
+    use crate::network::dns::adblock::syntax::MatchFlags;
 
     /// Kind and rules of every line.
     fn read(text: &str) -> Vec<(RulesLineKind, Vec<ParsedRule>)> {
@@ -267,6 +307,33 @@ mod tests {
 @@||js-cdn.dynatrace.com^
 @@||analytics.google.com^
 ";
+
+    #[test]
+    fn rules_are_listed_with_their_text_action_and_state() {
+        let text = "! c\n@@||ok.com^\n# ||off.com^\n0.0.0.0 a.com\n/re/\n";
+        let entry = |rule: &str, action, enabled| AdblockRuleEntry {
+            id: Some(RulesFile::rule_id(rule)),
+            name: None,
+            domain: rule.into(),
+            action,
+            enabled,
+        };
+        assert_eq!(
+            RulesFile::new(text).rule_entries(),
+            vec![
+                entry("@@||ok.com^", AdblockRuleAction::Allow, true),
+                entry("||off.com^", AdblockRuleAction::Block, false),
+                entry("0.0.0.0 a.com", AdblockRuleAction::Block, true),
+            ]
+        );
+        assert_eq!(
+            RulesFile::new(text).issues("adblock/global.rules"),
+            vec![
+                "adblock/global.rules line 5: \"/re/\": unsupported syntax (regex, or a modifier other than $important); ignored"
+                    .to_string()
+            ]
+        );
+    }
 
     #[test]
     fn owner_allowlist_reads_as_four_allow_rules_with_subdomains() {

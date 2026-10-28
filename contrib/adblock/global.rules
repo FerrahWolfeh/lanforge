@@ -1,0 +1,3 @@
+! Manual adblock rules, checked before the lists. One rule per line.
+||telemetry.microsoft.com^
+# @@||trusted.example^

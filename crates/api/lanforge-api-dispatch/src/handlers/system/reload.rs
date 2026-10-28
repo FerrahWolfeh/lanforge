@@ -39,7 +39,7 @@ impl ClientContext {
         };
 
         let mut issues = set_aside_issues(&set_aside);
-        self.reload_file_owned(&file, &set_aside, &mut issues);
+        self.reload_file_owned(&path, &file, &set_aside, &mut issues);
         self.ctx.set_config_issues(issues);
 
         let mut export = SystemConfigExport::from(&file);
@@ -56,6 +56,11 @@ impl ClientContext {
         export.dns_upstreams = Vec::new();
         export.dns_reverse_resolvers = None;
         export.hosts = Vec::new();
+        // Applied above (`[adblock]` and its rules file): the live settings, nothing to import.
+        export.dns_adblock_config = self.ctx.get_dns_adblock();
+        export.dns_adblock_urls = Vec::new();
+        export.dns_allowlist = Vec::new();
+        export.dns_adblock_rules = None;
         match self.handle_system_config_import(export).await {
             Response::SystemConfigImport(import_res) => {
                 if import_res.total_success {
@@ -80,6 +85,7 @@ impl ClientContext {
     /// for replacing a working configuration.
     fn reload_file_owned(
         &self,
+        path: &std::path::Path,
         file: &ConfigFile,
         set_aside: &[(Section, String)],
         issues: &mut Vec<String>,
@@ -156,6 +162,25 @@ impl ClientContext {
             if live != wanted {
                 info!("Reload: [dns] changed; applying (listen takes effect on restart)");
                 self.apply_dns_settings(dns);
+            }
+        }
+        if applies(Section::Adblock) {
+            let _serial = ctx.config_change_lock();
+            let (adblock, adblock_issues) = file.adblock.to_config();
+            issues.extend(log_issues(adblock_issues));
+            let sources: Vec<_> = adblock.global_sources().cloned().collect();
+            if ctx.get_dns_adblock() != adblock.config || ctx.get_dns_adblock_urls() != sources {
+                info!("Reload: [adblock] changed; applying");
+                self.apply_adblock_settings(&adblock);
+            }
+            // A rules file that cannot be read keeps the rules that run.
+            let (rules, rules_issues) = adblock.load_rules(path);
+            issues.extend(log_issues(rules_issues));
+            if let Some(rules) = rules
+                && ctx.get_dns_adblock_rules() != rules
+            {
+                info!("Reload: adblock rules file changed; applying");
+                ctx.update_dns_adblock_rules(rules);
             }
         }
         if applies(Section::Dhcp) {

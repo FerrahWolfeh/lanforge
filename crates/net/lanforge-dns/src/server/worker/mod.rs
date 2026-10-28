@@ -432,9 +432,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     }
                 }
 
-                // Compile allowlist and custom manual blocklist
-                filter.sync_from_context(&ctx.ctx);
-                ctx.cache.invalidate_all();
+                // The manual rules are the DNS service's (`FilterSubscriptions`), not the lists'.
 
                 // Re-read the config: `db_cfg` dates from the top of this pass, and adblock may
                 // have been disabled while the lists were loading.
@@ -552,14 +550,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                         evt_res = rx.recv() => {
                             let evt = match evt_res {
                                 Ok(evt) => evt,
-                                // A missed block/allow: re-sync the manual rules from the context
-                                // in place. The lists themselves did not change.
-                                Err(RecvError::Lagged(_)) => {
-                                    info!("Adblock: event bus lagged, re-syncing manual rules");
-                                    filter.sync_from_context(&ctx.ctx);
-                                    ctx.cache.invalidate_all();
-                                    continue;
-                                }
+                                Err(RecvError::Lagged(_)) => continue,
                                 // Never `break` here: the reload would loop on a closed bus.
                                 Err(RecvError::Closed) => return,
                             };
@@ -569,19 +560,9 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                     force_refresh = true;
                                     break;
                                 }
-
-                                // The DNS service flips the filter; a disable is picked up at the
-                                // next pass (the worker idles while disabled).
-                                LanforgeEvent::Dns(DnsEvent::AdblockToggle { .. }) => continue,
-                                LanforgeEvent::Dns(DnsEvent::AdblockBlock(domain)) => {
-                                    filter.add_block(&domain);
-                                    ctx.cache.invalidate_all();
-                                }
-                                LanforgeEvent::Dns(DnsEvent::AdblockAllow(domain)) => {
-                                    filter.add_allow(&domain);
-                                    ctx.cache.invalidate_all();
-                                }
-                                _ => continue, // Ignore other events
+                                // The DNS service flips the filter on a toggle; a disable is picked
+                                // up at the next pass (the worker idles while disabled).
+                                _ => continue,
                             }
                         }
                     }
@@ -646,7 +627,7 @@ mod tests {
     #[test]
     fn auto_enable_never_overrides_a_temporary_pause() {
         let filter = AdBlocker::new(true);
-        filter.add_block("ads.example.com");
+        filter.replace_rules("||ads.example.com^\n");
 
         // Paused for 30 s by the toggle: config still says enabled.
         let until = SystemTime::now()

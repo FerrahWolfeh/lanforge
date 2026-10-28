@@ -1,14 +1,39 @@
 use crate::ClientContext;
 use lanforge_api::api::{
-    AllowlistEntry, DnsUpstreamConfig, ImportResult, ImportSection, Response, SystemConfigExport,
+    DnsUpstreamConfig, ImportResult, ImportSection, Response, SystemConfigExport,
     SystemConfigImportResponse,
 };
 use lanforge_api::config_file::NamedUpstream;
 use lanforge_db_core::Stores;
-use lanforge_types::network::dns::adblock::AdblockDbConfig;
+use lanforge_types::network::dns::AdblockUrlEntry;
+use lanforge_types::network::dns::adblock::rules_file::RulesFile;
+use lanforge_types::network::dns::adblock::{AdblockRuleAction, AdblockRuleEntry};
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 
+use crate::handlers::dns::adblock::with_rule_only;
 use crate::handlers::dns::rewrite::upsert_rewrite;
+
+/// The import result of a section that `outcome` wrote (`count` entries) or refused.
+fn import_result(
+    section: ImportSection,
+    count: usize,
+    outcome: &Result<(), String>,
+) -> ImportResult {
+    match outcome {
+        Ok(()) => ImportResult {
+            section,
+            success: true,
+            count,
+            error: None,
+        },
+        Err(e) => ImportResult {
+            section,
+            success: false,
+            count: 0,
+            error: Some(e.clone()),
+        },
+    }
+}
 
 impl ClientContext {
     pub async fn handle_system_config_export(&self) -> Response {
@@ -45,20 +70,13 @@ impl ClientContext {
         // 5. Adblock URLs
         let dns_adblock_urls = self.ctx.get_dns_adblock_urls();
 
-        // 6. DNS Allowlist
-        let dns_allowlist = self
-            .ctx
-            .get_dns_allowlist()
-            .into_iter()
-            .enumerate()
-            .map(|(id, domain)| AllowlistEntry {
-                id: id as i64 + 1,
-                domain,
-            })
-            .collect();
-
-        // 6b. DNS Adblock Rules
-        let dns_adblock_rules = Some(self.ctx.get_dns_adblock_rules());
+        // 6. Manual adblock rules, the allowlist among them (`@@||x^`): the rules file's rules,
+        // each as written.
+        let dns_allowlist = Vec::new();
+        let dns_adblock_rules = Some(
+            self.ctx
+                .with_config(|c| RulesFile::new(&c.dns_adblock_rules.0).rule_entries()),
+        );
 
         // 7. API Tokens
         let api_tokens = if let Some(storage) = self.ctx.storage_handle() {
@@ -159,48 +177,6 @@ impl ClientContext {
         let mut results = Vec::new();
 
         if overwrite {
-            // Clear adblock URLs, allowlist (the `[dns]` lists are replaced below)
-            if let Err(e) = storage.call(|s: &Stores| s.db().clear_adblock_urls()).await {
-                total_success = false;
-                results.push(ImportResult {
-                    section: ImportSection::DnsAdblockUrls,
-                    success: false,
-                    count: 0,
-                    error: Some(format!("Failed to clear Adblock URLs: {e}")),
-                });
-            } else {
-                self.ctx.update_dns_adblock_urls(Vec::new());
-            }
-            if let Err(e) = storage
-                .call(|s: &Stores| s.db().clear_dns_allowlist())
-                .await
-            {
-                total_success = false;
-                results.push(ImportResult {
-                    section: ImportSection::DnsAllowlist,
-                    success: false,
-                    count: 0,
-                    error: Some(format!("Failed to clear DNS allowlist: {e}")),
-                });
-            } else {
-                self.ctx.update_dns_allowlist(Vec::new());
-            }
-
-            if let Err(e) = storage
-                .call(|s: &Stores| s.db().clear_adblock_rules())
-                .await
-            {
-                total_success = false;
-                results.push(ImportResult {
-                    section: ImportSection::DnsAdblockRules,
-                    success: false,
-                    count: 0,
-                    error: Some(format!("Failed to clear Adblock rules: {e}")),
-                });
-            } else {
-                self.ctx.update_dns_adblock_rules(Vec::new());
-            }
-
             // Clear API Tokens
             if let Ok(existing_tokens) = storage.call(|s: &Stores| s.auth().load_api_tokens()).await
             {
@@ -309,124 +285,101 @@ impl ClientContext {
             });
         }
 
-        // 4. Import Adblock Config
-        let AdblockDbConfig {
-            enabled,
-            blocking_mode,
-            blocking_ip_v4,
-            blocking_ip_v6,
-            refresh_time,
-        } = dns_adblock_config;
-
-        let cfg_to_save = AdblockDbConfig {
-            enabled,
-            blocking_mode,
-            blocking_ip_v4,
-            blocking_ip_v6,
-            refresh_time,
-        };
-        let adblock_to_apply = AdblockDbConfig {
-            enabled,
-            blocking_mode,
-            blocking_ip_v4,
-            blocking_ip_v6,
-            refresh_time,
-        };
-        let (adblock_cfg_success, adblock_cfg_err) = match storage
-            .call(move |s: &Stores| s.db().save_adblock_config(&cfg_to_save))
-            .await
+        // 4-6. Adblock settings and sources, then the manual rules (allowlist included). File-owned:
+        // imported only if they reach `[adblock]` / the rules file; overwrite replaces them.
+        let url_count = dns_adblock_urls.len();
+        let adblock_outcome = if overwrite
+            || !dns_adblock_urls.is_empty()
+            || dns_adblock_config != self.ctx.get_dns_adblock()
         {
-            Ok(()) => (true, None),
-            Err(e) => (false, Some(format!("Failed to save adblock config: {e}"))),
-        };
-        if !adblock_cfg_success {
-            total_success = false;
-        }
-        results.push(ImportResult {
-            section: ImportSection::DnsAdblockConfig,
-            success: adblock_cfg_success,
-            count: if adblock_cfg_success { 1 } else { 0 },
-            error: adblock_cfg_err,
-        });
-
-        // 5. Import Adblock URLs
-        let mut url_count = 0;
-        let mut url_success = true;
-        let mut url_err = None;
-        for u in dns_adblock_urls {
-            match self
-                .handle_dns_adblock_url_add(u.name.clone(), u.url, u.kind, Some(u.format))
-                .await
-            {
-                Response::Success(_) => url_count += 1,
-                Response::Error { error } => {
-                    url_success = false;
-                    url_err = Some(error);
-                }
-                _ => {}
-            }
-        }
-        if !url_success {
-            total_success = false;
-        }
-        results.push(ImportResult {
-            section: ImportSection::DnsAdblockUrls,
-            success: url_success,
-            count: url_count,
-            error: url_err,
-        });
-
-        // 6. Import DNS allowlist
-        let mut allow_count = 0;
-        let mut allow_success = true;
-        let mut allow_err = None;
-        for a in dns_allowlist {
-            match self.handle_dns_allow(a.domain).await {
-                Response::Success(_) => allow_count += 1,
-                Response::Error { error } => {
-                    allow_success = false;
-                    allow_err = Some(error);
-                }
-                _ => {}
-            }
-        }
-        if !allow_success {
-            total_success = false;
-        }
-        results.push(ImportResult {
-            section: ImportSection::DnsAllowlist,
-            success: allow_success,
-            count: allow_count,
-            error: allow_err,
-        });
-
-        // 6b. Import Adblock Rules
-        if let Some(rules) = dns_adblock_rules {
-            let mut rules_count = 0;
-            let mut rules_success = true;
-            let mut rules_err = None;
-            for r in rules {
-                match self
-                    .handle_dns_adblock_rule_add(r.domain, r.action.to_string())
-                    .await
-                {
-                    Response::Success(_) => rules_count += 1,
-                    Response::Error { error } => {
-                        rules_success = false;
-                        rules_err = Some(error);
+            self.change_adblock(|a| {
+                if overwrite {
+                    a.sources.clear();
+                    a.lists.clear();
+                    for group in &mut a.groups {
+                        group.lists.clear();
                     }
-                    _ => {}
                 }
-            }
-            if !rules_success {
-                total_success = false;
-            }
-            results.push(ImportResult {
-                section: ImportSection::DnsAdblockRules,
-                success: rules_success,
-                count: rules_count,
-                error: rules_err,
-            });
+                a.config = dns_adblock_config;
+                for u in dns_adblock_urls {
+                    let name = match a.sources.iter().find(|s| s.url == u.url) {
+                        Some(known) => known.name.clone().unwrap_or_default(),
+                        None => {
+                            let name = lanforge_crypto::stable_id_or_hash(
+                                u.name.as_deref(),
+                                u.url.as_bytes(),
+                                "src",
+                            );
+                            a.sources.push(AdblockUrlEntry {
+                                id: None,
+                                name: Some(name.clone()),
+                                ..u
+                            });
+                            name
+                        }
+                    };
+                    if !a.lists.contains(&name) {
+                        a.lists.push(name);
+                    }
+                }
+            })
+            .map(|_| ())
+        } else {
+            Ok(())
+        };
+        for (section, count) in [
+            (ImportSection::DnsAdblockConfig, 1),
+            (ImportSection::DnsAdblockUrls, url_count),
+        ] {
+            results.push(import_result(section, count, &adblock_outcome));
+        }
+
+        let rules = dns_adblock_rules.unwrap_or_default();
+        let (allow_count, rules_count) = (dns_allowlist.len(), rules.len());
+        let rules_outcome = if overwrite || allow_count > 0 || rules_count > 0 {
+            self.change_adblock_rules(|live| {
+                let mut text = if overwrite {
+                    String::new()
+                } else {
+                    live.to_string()
+                };
+                let lines =
+                    dns_allowlist
+                        .iter()
+                        .map(|a| {
+                            (
+                                AdblockRuleEntry::rule_line(&a.domain, AdblockRuleAction::Allow),
+                                true,
+                            )
+                        })
+                        .chain(rules.iter().map(|r| {
+                            (AdblockRuleEntry::rule_line(&r.domain, r.action), r.enabled)
+                        }));
+                for (line, enabled) in lines {
+                    if let Some(new) = with_rule_only(&text, &line)? {
+                        text = new;
+                    }
+                    if !enabled
+                        && let Some(new) = RulesFile::new(&text)
+                            .with_rule_enabled(RulesFile::rule_id(&line), false)
+                    {
+                        text = new;
+                    }
+                }
+                Ok((text != live).then_some(text))
+            })
+            .map(|_| ())
+        } else {
+            Ok(())
+        };
+        for (section, count) in [
+            (ImportSection::DnsAllowlist, allow_count),
+            (ImportSection::DnsAdblockRules, rules_count),
+        ] {
+            results.push(import_result(section, count, &rules_outcome));
+        }
+        if adblock_outcome.is_err() || rules_outcome.is_err() {
+            total_success = false;
         }
 
         // 7. Import API Tokens
@@ -469,9 +422,6 @@ impl ClientContext {
 
         // 8. Import Dynamic Configs
         let mut patch = lanforge_core::context::ConfigPatch::new();
-        if adblock_cfg_success {
-            patch = patch.with_dns_adblock(adblock_to_apply);
-        }
 
         // File-owned: imported only if it reaches the config file. Overwrite clears the lists
         // the import does not carry.

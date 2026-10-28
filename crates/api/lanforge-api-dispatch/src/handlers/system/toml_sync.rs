@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use crate::ClientContext;
 use lanforge_api::api::SystemConfigExport;
 use lanforge_api::config_file::{
-    ConfigFile, SectionSet, patch_sections, persist_sections, toml_edit::DocumentMut,
-    write_toml_atomically as api_write_toml_atomically,
+    AdblockFile, AdblockSettings, ConfigFile, SectionSet, patch_sections, persist_sections,
+    toml_edit::DocumentMut, write_toml_atomically as api_write_toml_atomically,
 };
 
 /// Atomically writes content to a file using a temporary file in the same directory.
@@ -275,6 +275,123 @@ impl ClientContext {
         }
     }
 
+    /// The adblock settings running now, as `[adblock]` holds them: the filter settings and the
+    /// global layer (its sources, in order) are the live ones; the groups, `bypass`, the rules
+    /// path and the sources no layer uses are not kept in memory and come from the file.
+    pub(crate) fn live_adblock_settings(&self) -> AdblockSettings {
+        let mut adblock = self
+            .ctx
+            .config_path()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|text| ConfigFile::parse_lenient(&text).ok())
+            .map(|(cfg, _)| cfg.adblock.to_config().0)
+            .unwrap_or_default();
+        let mut sources: Vec<_> = self
+            .ctx
+            .get_dns_adblock_urls()
+            .into_iter()
+            .map(|mut s| {
+                s.id = None;
+                s.name = Some(lanforge_crypto::stable_id_or_hash(
+                    s.name.as_deref(),
+                    s.url.as_bytes(),
+                    "src",
+                ));
+                s
+            })
+            .collect();
+        adblock.lists = sources.iter().filter_map(|s| s.name.clone()).collect();
+        for unused in std::mem::take(&mut adblock.sources) {
+            if !sources
+                .iter()
+                .any(|s| s.url == unused.url || s.name == unused.name)
+            {
+                sources.push(unused);
+            }
+        }
+        adblock.sources = sources;
+        adblock.config = self.ctx.get_dns_adblock();
+        adblock
+    }
+
+    /// Changes the adblock settings: `change` edits the live ones, the result is written to
+    /// `[adblock]` (see [`Self::persist_config_sections`]) and then applied as the file now holds
+    /// it. A value the file form refuses (a source without an http(s) URL, a list name that is
+    /// not a source, ...) is refused: nothing written, nothing applied. Issues the file already
+    /// had (a hand-written source no layer uses) do not block an unrelated change.
+    pub fn change_adblock(
+        &self,
+        change: impl FnOnce(&mut AdblockSettings),
+    ) -> Result<Persisted, String> {
+        let _serial = self.ctx.config_change_lock();
+        let live = self.live_adblock_settings();
+        let (_, known) = AdblockFile::from_config(&live).to_config();
+        let mut wanted = live;
+        change(&mut wanted);
+        let file = AdblockFile::from_config(&wanted);
+        let (adblock, issues) = file.to_config();
+        let new: Vec<String> = issues.into_iter().filter(|i| !known.contains(i)).collect();
+        if !new.is_empty() {
+            return Err(new.join("; "));
+        }
+        let persisted = self.persist_config_sections(SectionSet::ADBLOCK, |f| f.adblock = file)?;
+        self.apply_adblock_settings(&adblock);
+        Ok(persisted)
+    }
+
+    /// Applies the filter settings and the global layer's sources of `adblock` that differ from
+    /// the live ones. The rules file is applied by [`Self::change_adblock_rules`] / the reload.
+    pub fn apply_adblock_settings(&self, adblock: &AdblockSettings) {
+        let sources: Vec<_> = adblock.global_sources().cloned().collect();
+        let mut patch = lanforge_core::context::ConfigPatch::new();
+        if self.ctx.get_dns_adblock() != adblock.config {
+            patch = patch.with_dns_adblock(adblock.config.clone());
+        }
+        if self.ctx.get_dns_adblock_urls() != sources {
+            patch = patch.with_dns_adblock_urls(sources);
+        }
+        let _ = self.ctx.apply_config(patch);
+    }
+
+    /// Changes the global adblock rules file: `change` gets the live text and returns the new
+    /// one, or `None` when nothing changes. The file `[adblock] rules` names is written before
+    /// the text applies; without one, `adblock/global.rules` is created and named in
+    /// `[adblock]`. A read-only config applies in memory only.
+    pub fn change_adblock_rules(
+        &self,
+        change: impl FnOnce(&str) -> Result<Option<String>, String>,
+    ) -> Result<Persisted, String> {
+        let _serial = self.ctx.config_change_lock();
+        let live = self.ctx.get_dns_adblock_rules();
+        let Some(text) = change(&live)? else {
+            return Ok(Persisted::File);
+        };
+        let persisted = match self.ctx.config_path() {
+            Some(path) if self.ctx.is_config_writable() => {
+                let mut adblock = self.live_adblock_settings();
+                let named = adblock.rules.is_some();
+                if !named {
+                    adblock.rules = Some(AdblockSettings::DEFAULT_RULES.to_string());
+                }
+                let rules_path = adblock.rules_path(&path).unwrap_or_default();
+                if let Some(dir) = rules_path.parent() {
+                    std::fs::create_dir_all(dir)
+                        .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+                }
+                write_toml_atomically(&rules_path, &text)
+                    .map_err(|e| format!("cannot write {}: {e}", rules_path.display()))?;
+                if !named {
+                    let file = AdblockFile::from_config(&adblock);
+                    self.persist_config_sections(SectionSet::ADBLOCK, |f| f.adblock = file)?;
+                }
+                Persisted::File
+            }
+            _ => Persisted::MemoryOnly,
+        };
+        self.ctx.update_dns_adblock_rules(text);
+        Ok(persisted)
+    }
+
     /// Extracts the consolidated static configuration snapshot of the system.
     pub async fn export_system_config_data(&self) -> SystemConfigExport {
         if let lanforge_api::api::Response::SystemConfig(export) =
@@ -432,18 +549,18 @@ mod tests {
             toml_str.contains("https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts")
         );
         assert!(toml_str.contains("https://example.com/allowlist.txt"));
-        assert!(toml_str.contains("safe-subdomain.example.com"));
-        assert!(toml_str.contains("tracking.bad.com"));
-        assert!(toml_str.contains("action = \"block\""));
-        assert!(toml_str.contains("goodsite.org"));
-        assert!(toml_str.contains("action = \"allow\""));
+        // Manual rules live in the rules file, never in `lanforge.toml`.
+        assert!(!toml_str.contains("safe-subdomain.example.com"));
+        assert!(!toml_str.contains("tracking.bad.com"));
+        assert!(!toml_str.contains("goodsite.org"));
         assert!(toml_str.contains("udp://1.1.1.1:53"));
 
-        // Ensure it parses back into ConfigFile
+        // Ensure it parses back into ConfigFile, both sources in the global layer
         let parsed = ConfigFile::parse(&toml_str).expect("Generated TOML must be valid ConfigFile");
         assert!(parsed.adblock.enabled);
         assert_eq!(parsed.adblock.blocking_mode, "nxdomain");
+        assert_eq!(parsed.adblock.lists, ["stevenblack", "example-allow"]);
         assert_eq!(parsed.adblock.sources.len(), 2);
-        assert_eq!(parsed.adblock.rules.len(), 2);
+        assert_eq!(parsed.adblock.rules, None);
     }
 }

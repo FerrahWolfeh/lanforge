@@ -4,10 +4,11 @@
 //! per-source `enabled`. Manual rules live in line files (`adblock/*.rules`), not here.
 
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
 use lanforge_types::network::dns::AdblockUrlEntry;
+use lanforge_types::network::dns::adblock::rules_file::RulesFile;
 use lanforge_types::network::dns::adblock::{
     AdblockDbConfig, AdblockSourceFormat, AdblockUrlKind, BlockingMode, ClientSelector, TimeOfDay,
 };
@@ -52,6 +53,38 @@ pub struct AdblockGroup {
 }
 
 impl AdblockSettings {
+    /// The default global rules file, as the cut-over and the API create it.
+    pub const DEFAULT_RULES: &str = "adblock/global.rules";
+
+    /// The global rules file's path: `rules` taken from the directory of `lanforge.toml`.
+    #[must_use]
+    pub fn rules_path(&self, config_path: &Path) -> Option<PathBuf> {
+        let rules = self.rules.as_deref()?;
+        Some(config_path.parent().unwrap_or(Path::new(".")).join(rules))
+    }
+
+    /// The global rules file's text and one issue per line it ignores. Without `rules`, no
+    /// rules. A file that cannot be read is an issue and `None`: not "no rules" — a reload keeps
+    /// the rules that run, a boot starts without any.
+    #[must_use]
+    pub fn load_rules(&self, config_path: &Path) -> (Option<String>, Vec<String>) {
+        let (Some(rules), Some(path)) = (self.rules.as_deref(), self.rules_path(config_path))
+        else {
+            return (Some(String::new()), Vec::new());
+        };
+        let at = format!("[adblock] rules \"{rules}\"");
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                let issues = RulesFile::new(&text).issues(&at);
+                (Some(text), issues)
+            }
+            Err(e) => (
+                None,
+                vec![format!("{at} cannot be read ({}: {e})", path.display())],
+            ),
+        }
+    }
+
     /// The sources of the global layer, in `lists` order.
     pub fn global_sources(&self) -> impl Iterator<Item = &AdblockUrlEntry> {
         self.lists.iter().filter_map(|name| {
@@ -536,6 +569,42 @@ format = "hosts"
         assert!(
             text.contains("\"fd00::64\""),
             "a host is written bare:\n{text}"
+        );
+    }
+
+    #[test]
+    fn the_rules_file_is_read_next_to_the_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("lanforge.toml");
+        std::fs::create_dir(dir.path().join("adblock")).unwrap();
+        std::fs::write(
+            dir.path().join("adblock/global.rules"),
+            "@@||ok.com^\n||client.com^$client=10.0.0.1\n",
+        )
+        .unwrap();
+        let mut adblock = owner_settings();
+        let (text, issues) = adblock.load_rules(&config);
+        assert_eq!(
+            text.as_deref(),
+            Some("@@||ok.com^\n||client.com^$client=10.0.0.1\n")
+        );
+        assert_eq!(
+            issues,
+            vec![
+                "[adblock] rules \"adblock/global.rules\" line 2: \"||client.com^$client=10.0.0.1\": unsupported syntax (regex, or a modifier other than $important); ignored"
+            ]
+        );
+
+        adblock.rules = Some("adblock/missing.rules".into());
+        let (text, issues) = adblock.load_rules(&config);
+        assert_eq!(text, None, "unreadable is not empty");
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].starts_with("[adblock] rules \"adblock/missing.rules\" cannot be read"));
+
+        adblock.rules = None;
+        assert_eq!(
+            adblock.load_rules(&config),
+            (Some(String::new()), Vec::new())
         );
     }
 

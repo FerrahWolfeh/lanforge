@@ -38,6 +38,14 @@ pub struct TomlConfig {
     #[cfg(feature = "dns")]
     #[serde(skip)]
     pub dns_settings: lanforge_api::config_file::DnsSettings,
+    /// `[adblock]` as the settings the daemon runs (its only source).
+    #[cfg(feature = "dns")]
+    #[serde(skip)]
+    pub adblock: lanforge_api::config_file::AdblockSettings,
+    /// The text of the global rules file `[adblock] rules` names.
+    #[cfg(feature = "dns")]
+    #[serde(skip)]
+    pub adblock_rules: String,
     #[cfg(feature = "discovery")]
     pub monitor: MonitorConfig,
     #[cfg(feature = "discovery")]
@@ -225,8 +233,10 @@ impl From<&lanforge_api::config_file::ConfigFile> for TomlConfig {
             // Upstreams, mode, rewrites and reverse resolvers reach the service through the
             // context (`dns_settings`), never through `DnsConfig`: its upstream list feeds the
             // DHCPv6 DNS fallback and must stay as it was.
-            cfg.dns.adblock_enabled = fc.adblock.enabled;
             cfg.dns_settings = dns;
+            let adblock = fc.adblock.to_config().0;
+            cfg.dns.adblock_enabled = adblock.config.enabled;
+            cfg.adblock = adblock;
         }
 
         #[cfg(feature = "pppoe")]
@@ -261,6 +271,7 @@ pub fn apply_tftp_options(cfg: &mut TftpConfig, tftp: &lanforge_types::network::
     cfg.max_retries = tftp.max_retries;
 }
 
+use lanforge_api::config_file::set_aside_messages;
 pub use lanforge_api::config_file::{log_issues, set_aside_issues};
 
 pub fn load_toml(path: &str) -> TomlConfig {
@@ -283,26 +294,30 @@ pub fn load_toml(path: &str) -> TomlConfig {
     match lanforge_api::config_file::ConfigFile::parse_lenient(&content) {
         Ok((file_cfg, set_aside)) => {
             info!("Config: Loaded from '{path}' using named-section schema");
+            // Logged once at boot, after the cut-overs: the one-time migration of a section from
+            // the database replaces its old file form, whose issues must not be reported.
             let mut cfg = TomlConfig::from(&file_cfg);
-            cfg.config_issues = set_aside_issues(&set_aside);
+            cfg.config_issues = set_aside_messages(&set_aside);
             #[cfg(feature = "nft")]
-            cfg.config_issues
-                .extend(log_issues(file_cfg.firewall.to_config().1));
+            cfg.config_issues.extend(file_cfg.firewall.to_config().1);
             #[cfg(feature = "dhcp")]
-            cfg.config_issues
-                .extend(log_issues(file_cfg.dhcp.to_config().1));
+            cfg.config_issues.extend(file_cfg.dhcp.to_config().1);
             #[cfg(feature = "ra")]
-            cfg.config_issues
-                .extend(log_issues(file_cfg.ra.to_config().1));
+            cfg.config_issues.extend(file_cfg.ra.to_config().1);
             #[cfg(feature = "dns")]
-            cfg.config_issues
-                .extend(log_issues(file_cfg.dns.to_config().1));
+            {
+                cfg.config_issues.extend(file_cfg.dns.to_config().1);
+                cfg.config_issues.extend(file_cfg.adblock.to_config().1);
+                let (rules, issues) = cfg.adblock.load_rules(Path::new(path));
+                cfg.adblock_rules = rules.unwrap_or_default();
+                cfg.config_issues.extend(issues);
+            }
             if !set_aside
                 .iter()
                 .any(|(sec, _)| *sec == lanforge_api::config_file::Section::Hosts)
             {
                 let (hosts, issues) = file_cfg.static_hosts();
-                cfg.config_issues.extend(log_issues(issues));
+                cfg.config_issues.extend(issues);
                 cfg.static_hosts = Some(hosts);
             }
             cfg
@@ -380,6 +395,13 @@ source = "broken" # Invalid variant
         assert_eq!(file_cfg.ra.prefixes, Vec::new());
         assert!(file_cfg.dhcp.v4.pools.iter().any(|(name, _)| name == "lan"));
         assert!(file_cfg.hosts.iter().any(|(name, _)| name == "nas"));
+        #[cfg(feature = "dns")]
+        {
+            assert_eq!(file_cfg.adblock.to_config().1, Vec::<String>::new());
+            assert_eq!(cfg.adblock.lists, ["oisd"]);
+            assert!(cfg.adblock_rules.contains("||telemetry.microsoft.com^"));
+        }
+        assert_eq!(cfg.config_issues, Vec::<String>::new());
     }
 
     /// A `[dhcp.v6]` section without `iface` must leave it empty so `to_dhcpv6_config` inherits

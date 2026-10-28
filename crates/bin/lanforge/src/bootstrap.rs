@@ -6,8 +6,8 @@ use lanforge_core::bus::EventBus;
 use lanforge_core::context::state::State;
 use lanforge_core::context::{ConfigPatch, LanforgeContext};
 use lanforge_db::{
-    AdblockStore, DnsStore, FirewallConfigStore, LanforgeDb, LogDb, LogStore, PppoeConfigStore,
-    RaConfigStore, TrafficConfigStore, UserStore,
+    DnsStore, FirewallConfigStore, LanforgeDb, LogDb, LogStore, PppoeConfigStore, RaConfigStore,
+    TrafficConfigStore, UserStore,
 };
 #[cfg(feature = "dhcp")]
 use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
@@ -21,7 +21,7 @@ use lanforge_types::network::dhcp::Dhcpv4Pool;
 #[cfg(feature = "dns")]
 use lanforge_types::network::dns::AdblockUrlEntry;
 #[cfg(feature = "dns")]
-use lanforge_types::network::dns::adblock::{AdblockRuleEntry, AdblockUrlKind};
+use lanforge_types::network::dns::adblock::AdblockRuleEntry;
 use lanforge_types::network::ra::PreviousLanPrefixes;
 use lanforge_types::network::{
     IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, classify_ipv6, is_ula,
@@ -169,6 +169,10 @@ impl Bootstrapper {
         let host_ifaces = interfaces();
         let target_ifindex = Self::find_target_interface(&mut cfg, &host_ifaces)?;
         let (initial_table, db, log_db) = Self::init_device_table(&mut cfg, &host_ifaces)?;
+        // Logged here, after the cut-overs (`seed_provisioned_configs`): an old file form they
+        // replace is not a problem of the file that runs.
+        cfg.config_issues =
+            lanforge_api::config_file::log_issues(std::mem::take(&mut cfg.config_issues));
         let db = Arc::new(db);
         let log_db = Arc::new(log_db);
         let cfg = Arc::new(cfg);
@@ -319,7 +323,10 @@ impl Bootstrapper {
                 .with_dns_upstream_mode(cfg.dns.upstream_mode)
                 .with_dns_rewrites(cfg.dns.rewrites.clone())
                 .with_dns_reverse(cfg.dns.reverse.clone());
-            Self::load_adblock_state_into_patch(db, &mut patch);
+            patch = patch
+                .with_dns_adblock(cfg.adblock.config.clone())
+                .with_dns_adblock_urls(cfg.adblock.global_sources().cloned().collect())
+                .with_dns_adblock_rules(cfg.adblock_rules.clone());
             // The DNS service binds from the live listeners; the file is their source.
             let dns = cfg.to_dns_config();
             patch = patch.with_dns_listen(DnsListenConfig {
@@ -370,116 +377,6 @@ impl Bootstrapper {
         });
 
         Ok((handle, messages))
-    }
-
-    #[cfg(feature = "dns")]
-    /// The adblock settings, still kept in the database (`[dns]` comes from the file).
-    fn load_adblock_state_into_patch(db: &LanforgeDb, patch: &mut ConfigPatch) {
-        if let Ok(allowlist) = db.load_dns_allowlist() {
-            patch.dns_allowlist = Some(allowlist.into_iter().map(|(_, d)| d).collect());
-        }
-        if let Ok(adblock) = db.load_adblock_config() {
-            patch.dns_adblock = Some(adblock);
-        }
-        if let Ok(urls) = db.load_adblock_urls() {
-            patch.dns_adblock_urls = Some(
-                urls.into_iter()
-                    .map(|(id, url, kind, format)| AdblockUrlEntry {
-                        id: Some(id),
-                        name: Some(lanforge_crypto::stable_id_or_hash(
-                            None,
-                            url.as_bytes(),
-                            "src",
-                        )),
-                        url,
-                        kind,
-                        format,
-                    })
-                    .collect(),
-            );
-        }
-        if let Ok(rules) = db.load_adblock_rules() {
-            patch.dns_adblock_rules = Some(
-                rules
-                    .into_iter()
-                    .map(|(id, domain, action, enabled)| AdblockRuleEntry {
-                        id: Some(id),
-                        name: Some(lanforge_crypto::slugify(&domain)),
-                        domain,
-                        action,
-                        enabled,
-                    })
-                    .collect(),
-            );
-        }
-    }
-
-    #[cfg(feature = "dns")]
-    fn seed_adblock_config(db: &LanforgeDb, cfg: &Config) -> Result<()> {
-        // Seed allowlist if empty in DB
-        let allowlist = db.load_dns_allowlist()?;
-        if allowlist.is_empty() && !cfg.dns_toml.allowlist.is_empty() {
-            for domain in &cfg.dns_toml.allowlist {
-                db.add_dns_allowlist(domain)?;
-            }
-            info!(
-                "Seeded {} DNS allowlist domains from configuration into database",
-                cfg.dns_toml.allowlist.len()
-            );
-        }
-
-        // Seed adblock urls if empty in DB
-        let adblock_urls = db.load_adblock_urls()?;
-        let is_new_adblock = adblock_urls.is_empty();
-        if is_new_adblock {
-            let mut count = 0;
-            for url in &cfg.dns_toml.adblock_urls {
-                db.add_adblock_url(
-                    url,
-                    AdblockUrlKind::Blocklist,
-                    lanforge_types::network::dns::adblock::AdblockSourceFormat::Auto,
-                )?;
-                count += 1;
-            }
-            for url in &cfg.dns_toml.adblock_allowlist_urls {
-                db.add_adblock_url(
-                    url,
-                    AdblockUrlKind::Allowlist,
-                    lanforge_types::network::dns::adblock::AdblockSourceFormat::Auto,
-                )?;
-                count += 1;
-            }
-            if count > 0 {
-                info!("Seeded {count} Adblock source URLs from configuration into database");
-            }
-
-            // Seed adblock config overrides from TOML on first run
-            let adblock_cfg = lanforge_types::network::dns::adblock::AdblockDbConfig {
-                enabled: cfg.dns_toml.adblock_enabled,
-                blocking_mode: cfg.dns_toml.blocking_mode,
-                blocking_ip_v4: cfg.dns_toml.blocking_ip_v4,
-                blocking_ip_v6: cfg.dns_toml.blocking_ip_v6,
-                refresh_time: cfg.dns_toml.adblock_refresh_time,
-            };
-            db.save_adblock_config(&adblock_cfg)?;
-        }
-
-        // Seed adblock custom rules if empty in DB
-        let adblock_rules = db.load_adblock_rules()?;
-        if adblock_rules.is_empty() && !cfg.dns_toml.adblock_rules.is_empty() {
-            for rule in &cfg.dns_toml.adblock_rules {
-                let id = db.add_adblock_rule(&rule.domain, rule.action)?;
-                if !rule.enabled {
-                    let _ = db.update_adblock_rule_status(id, false);
-                }
-            }
-            info!(
-                "Seeded {} Adblock custom rules from configuration into database",
-                cfg.dns_toml.adblock_rules.len()
-            );
-        }
-
-        Ok(())
     }
 
     fn init_device_table(
@@ -665,7 +562,7 @@ impl Bootstrapper {
         Self::migrate_dns_config(db, cfg)?;
 
         #[cfg(feature = "dns")]
-        Self::seed_adblock_config(db, cfg)?;
+        Self::migrate_adblock_config(db, cfg)?;
 
         #[cfg(feature = "pppoe")]
         Self::migrate_pppoe_config(db, cfg)?;
@@ -897,9 +794,154 @@ impl Bootstrapper {
             info!("Config: [dns] written from the database (old file form replaced)");
         }
         cfg.config_issues.retain(|i| !i.starts_with("[dns"));
-        cfg.config_issues
-            .extend(lanforge_api::config_file::log_issues(issues));
+        cfg.config_issues.extend(issues);
         cfg.set_dns(stored);
+        Ok(())
+    }
+
+    /// `text` with the stored rules' `lines` active (`# rule`: present but disabled), each once.
+    #[cfg(feature = "dns")]
+    fn with_stored_rules(mut text: String, lines: &[String]) -> String {
+        use lanforge_types::network::dns::adblock::rules_file::RulesFile;
+
+        for line in lines {
+            let (rule, enabled) = line
+                .strip_prefix("# ")
+                .map_or((line.as_str(), true), |r| (r, false));
+            match RulesFile::new(&text).with_rule(rule) {
+                Ok(Some(new)) => text = new,
+                Ok(None) => {}
+                Err(issue) => {
+                    warn!("Config: stored adblock rule \"{rule}\" not moved: {issue}");
+                    continue;
+                }
+            }
+            if !enabled
+                && let Some(new) =
+                    RulesFile::new(&text).with_rule_enabled(RulesFile::rule_id(rule), false)
+            {
+                text = new;
+            }
+        }
+        text
+    }
+
+    /// Writes a rules file (and its directory) for the cut-over; a failure keeps the database.
+    #[cfg(feature = "dns")]
+    fn write_rules_file(path: &std::path::Path, text: &str) -> bool {
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| lanforge_api::config_file::write_toml_atomically(path, text));
+        if let Err(e) = &written {
+            warn!(
+                "Config: could not write '{}' ({e}); adblock settings stay in the database",
+                path.display()
+            );
+        }
+        written.is_ok()
+    }
+
+    /// Moves the adblock settings an older binary kept in redb (settings, sources, allowlist and
+    /// manual rules) into `[adblock]` and the global rules file, once. The allowlist becomes
+    /// `@@||x^` lines and a stored rule the line it meant (`||x^`, a disabled one commented
+    /// out), appended to what the rules file already holds; the rules file is written before
+    /// `[adblock]`, both before the keys go. Source names are the ones the old sync gave the
+    /// file; source ids stay derived from the URL, so the compiled lists on disk are kept.
+    #[cfg(feature = "dns")]
+    fn migrate_adblock_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+        use lanforge_api::config_file::{AdblockFile, AdblockSettings, SectionSet};
+        use lanforge_db::config_keys::{
+            ADBLOCK_CONFIG, ADBLOCK_RULES, ADBLOCK_URLS, DNS_ALLOWLIST,
+        };
+        use lanforge_types::network::dns::adblock::rules_file::RulesFile;
+
+        let config = db.get(ADBLOCK_CONFIG)?;
+        let urls = db.get(ADBLOCK_URLS)?;
+        let allowlist = db.get(DNS_ALLOWLIST)?;
+        let rules = db.get(ADBLOCK_RULES)?;
+        if config.is_none() && urls.is_none() && allowlist.is_none() && rules.is_none() {
+            return Ok(());
+        }
+        // The file's `[adblock]` is the old form (set aside) or the defaults: the database
+        // holds what ran.
+        let mut stored = cfg.adblock.clone();
+        if let Some(config) = config {
+            stored.config = config;
+        }
+        if let Some(urls) = urls {
+            stored.sources = urls
+                .into_iter()
+                .map(|u| AdblockUrlEntry {
+                    id: None,
+                    name: Some(lanforge_crypto::stable_id_or_hash(
+                        u.name.as_deref(),
+                        u.url.as_bytes(),
+                        "src",
+                    )),
+                    ..u
+                })
+                .collect();
+            stored.lists = stored
+                .sources
+                .iter()
+                .filter_map(|s| s.name.clone())
+                .collect();
+        }
+        stored
+            .rules
+            .get_or_insert_with(|| AdblockSettings::DEFAULT_RULES.to_string());
+
+        let path = std::path::Path::new(&cfg.config_path);
+        let lines = allowlist
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|d| AdblockRuleEntry::allowlist_line(d))
+            .chain(
+                rules
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(AdblockRuleEntry::to_rules_line),
+            )
+            .collect::<Vec<_>>();
+        let text = Self::with_stored_rules(stored.load_rules(path).0.unwrap_or_default(), &lines);
+
+        let rules_written = cfg.config_writable
+            && path.exists()
+            && stored
+                .rules_path(path)
+                .is_some_and(|rules_path| Self::write_rules_file(&rules_path, &text));
+        if rules_written {
+            let file = AdblockFile::from_config(&stored);
+            let moved = Self::move_section_to_file(
+                db,
+                cfg,
+                "adblock",
+                &[
+                    ADBLOCK_CONFIG.name(),
+                    ADBLOCK_URLS.name(),
+                    DNS_ALLOWLIST.name(),
+                    ADBLOCK_RULES.name(),
+                ],
+                SectionSet::ADBLOCK,
+                |f| f.adblock = file,
+            )?;
+            if moved {
+                info!(
+                    rules = lines.len(),
+                    "Config: [adblock] and its rules file written from the database (old file form replaced)"
+                );
+            }
+        }
+        let (stored, mut issues) = AdblockFile::from_config(&stored).to_config();
+        issues.extend(RulesFile::new(&text).issues(&format!(
+            "[adblock] rules \"{}\"",
+            stored.rules.as_deref().unwrap_or_default()
+        )));
+        cfg.config_issues.retain(|i| !i.starts_with("[adblock"));
+        cfg.config_issues.extend(issues);
+        cfg.adblock = stored;
+        cfg.adblock_rules = text;
         Ok(())
     }
 
@@ -1877,6 +1919,201 @@ mod tests {
             "second boot: no-op"
         );
         assert_eq!(cfg.dns, expected);
+    }
+
+    /// The owner's file as the box runs it (2026-10-28, `4813e5cd`): `[dns]` in the new form,
+    /// `[adblock]` still in the form the hash sync wrote (per-source `enabled`).
+    #[cfg(feature = "dns")]
+    const OWNER_OLD_ADBLOCK: &str = "# box\n[dns]\nenabled = true\nlisten = \"[::]:53\"\n\n\
+        [dns.rewrites]\n\"*.eonteam.xyz\" = \"dev:pixie\"\n\n\
+        [adblock]\nenabled = true\nblocking_mode = \"nxdomain\"\nrefresh_time = \"03:00\"\n\n\
+        [adblock.sources.src-7cc6f305]\n\
+        url = \"https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts\"\n\
+        format = \"hosts\"\nkind = \"blocklist\"\nenabled = true\n";
+
+    /// Adblock cut-over on the owner's data, through the real loader (`load_toml`): what redb
+    /// held (adblock on, the `StevenBlack` list, the 4 Bradesco allowlist entries) lands in
+    /// `[adblock]` and `adblock/global.rules` exactly; the source keeps its name and the id of
+    /// the list compiled on the box; the old form's issue goes, `[dns]` and the comment stay,
+    /// the keys are gone, and a second boot changes nothing.
+    #[cfg(feature = "dns")]
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn adblock_settings_move_from_the_database_to_the_files_once() {
+        use lanforge_api::config_file::{AdblockSettings, ConfigFile};
+        use lanforge_db::config_keys::{
+            ADBLOCK_CONFIG, ADBLOCK_RULES, ADBLOCK_URLS, DNS_ALLOWLIST,
+        };
+        use lanforge_types::network::dns::adblock::{
+            AdblockDbConfig, AdblockSourceFormat, AdblockUrlKind,
+        };
+
+        const STEVENBLACK: &str =
+            "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts";
+        const BRADESCO: [&str; 4] = [
+            "app-measurement.com",
+            "www.googletagmanager.com",
+            "js-cdn.dynatrace.com",
+            "analytics.google.com",
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        std::fs::write(&path, OWNER_OLD_ADBLOCK).unwrap();
+        let loaded = crate::config::load_toml(path.to_str().unwrap());
+        assert_eq!(loaded.config_issues.len(), 1, "{:?}", loaded.config_issues);
+        assert!(loaded.config_issues[0].starts_with("[adblock] is invalid"));
+        let mut cfg = config_with_db(&dir.path().join("config.redb"));
+        cfg.config_path = path.display().to_string();
+        cfg.config_writable = true;
+        cfg.config_issues = loaded.config_issues;
+        cfg.adblock = loaded.adblock;
+        cfg.adblock_rules = loaded.adblock_rules;
+
+        let db = LanforgeDb::open_in_memory().unwrap();
+        let live = AdblockDbConfig {
+            enabled: true,
+            ..AdblockDbConfig::default()
+        };
+        let source = AdblockUrlEntry {
+            id: Some(1_023_162_918_584_372_960),
+            name: None,
+            url: STEVENBLACK.into(),
+            kind: AdblockUrlKind::Blocklist,
+            format: AdblockSourceFormat::Hosts,
+        };
+        db.write(|tx| {
+            tx.set(ADBLOCK_CONFIG, &live)?;
+            tx.set(ADBLOCK_URLS, &vec![source.clone()])?;
+            tx.set(
+                DNS_ALLOWLIST,
+                &BRADESCO.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            )?;
+            tx.set(ADBLOCK_RULES, &Vec::new())
+        })
+        .unwrap();
+
+        Bootstrapper::migrate_adblock_config(&db, &mut cfg).unwrap();
+
+        let expected = AdblockSettings {
+            config: live,
+            sources: vec![AdblockUrlEntry {
+                id: None,
+                name: Some("src-7cc6f305".into()),
+                ..source.clone()
+            }],
+            lists: vec!["src-7cc6f305".into()],
+            rules: Some("adblock/global.rules".into()),
+            ..AdblockSettings::default()
+        };
+        let rules = "@@||app-measurement.com^\n@@||www.googletagmanager.com^\n\
+                     @@||js-cdn.dynatrace.com^\n@@||analytics.google.com^\n";
+        let text = std::fs::read_to_string(&path).unwrap();
+        let (from_file, issues) = ConfigFile::parse(&text).unwrap().adblock.to_config();
+        assert!(issues.is_empty(), "{issues:?}\n{text}");
+        assert_eq!(from_file, expected, "{text}");
+        assert_eq!(cfg.adblock, expected);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("adblock/global.rules")).unwrap(),
+            rules
+        );
+        assert_eq!(cfg.adblock_rules, rules);
+        let ids: Vec<i64> = cfg
+            .adblock
+            .global_sources()
+            .map(AdblockUrlEntry::source_id)
+            .collect();
+        assert_eq!(ids, vec![source.source_id()], "compiled list kept");
+        assert!(cfg.config_issues.is_empty(), "{:?}", cfg.config_issues);
+        assert!(text.starts_with("# box"), "{text}");
+        assert!(text.contains("\"*.eonteam.xyz\" = \"dev:pixie\""), "{text}");
+        assert!(db.get(ADBLOCK_CONFIG).unwrap().is_none(), "keys removed");
+        assert!(db.get(ADBLOCK_URLS).unwrap().is_none());
+        assert!(db.get(DNS_ALLOWLIST).unwrap().is_none());
+        assert!(db.get(ADBLOCK_RULES).unwrap().is_none());
+
+        // Second boot, through the loader again: nothing left to move, the files are the source.
+        let loaded = crate::config::load_toml(path.to_str().unwrap());
+        assert!(
+            loaded.config_issues.is_empty(),
+            "{:?}",
+            loaded.config_issues
+        );
+        assert_eq!(loaded.adblock, expected);
+        assert_eq!(loaded.adblock_rules, rules);
+        let mut cfg2 = config_with_db(&dir.path().join("config.redb"));
+        cfg2.config_path = cfg.config_path.clone();
+        cfg2.config_writable = true;
+        cfg2.adblock = loaded.adblock;
+        cfg2.adblock_rules = loaded.adblock_rules;
+        Bootstrapper::migrate_adblock_config(&db, &mut cfg2).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            text,
+            "second boot: no-op"
+        );
+        assert_eq!(cfg2.adblock, expected);
+    }
+
+    /// A stored rule becomes the line it meant, appended to a rules file the admin already
+    /// wrote (kept as written); a disabled one is commented out. A read-only config keeps the
+    /// keys and runs what the database held.
+    #[cfg(feature = "dns")]
+    #[test]
+    fn stored_rules_are_appended_to_the_rules_file_and_kept_when_read_only() {
+        use lanforge_db::config_keys::{ADBLOCK_RULES, DNS_ALLOWLIST};
+        use lanforge_types::network::dns::adblock::AdblockRuleAction;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        std::fs::write(&path, "[adblock]\nrules = \"mine.rules\"\n").unwrap();
+        std::fs::write(dir.path().join("mine.rules"), "! mine\n||ads.example^\n").unwrap();
+        let db = LanforgeDb::open_in_memory().unwrap();
+        let rule = |domain: &str, action, enabled| AdblockRuleEntry {
+            id: Some(1),
+            name: None,
+            domain: domain.into(),
+            action,
+            enabled,
+        };
+        db.write(|tx| {
+            tx.set(DNS_ALLOWLIST, &vec!["ok.example".to_string()])?;
+            tx.set(
+                ADBLOCK_RULES,
+                &vec![
+                    rule("ads.example", AdblockRuleAction::Block, true),
+                    rule("off.example", AdblockRuleAction::Block, false),
+                ],
+            )
+        })
+        .unwrap();
+        let load = |writable| {
+            let loaded = crate::config::load_toml(path.to_str().unwrap());
+            let mut cfg = config_with_db(&dir.path().join("config.redb"));
+            cfg.config_path = path.display().to_string();
+            cfg.config_writable = writable;
+            cfg.adblock = loaded.adblock;
+            cfg.adblock_rules = loaded.adblock_rules;
+            cfg
+        };
+        let expected = "! mine\n||ads.example^\n@@||ok.example^\n# ||off.example^\n";
+
+        let mut read_only = load(false);
+        Bootstrapper::migrate_adblock_config(&db, &mut read_only).unwrap();
+        assert_eq!(read_only.adblock_rules, expected, "runs what redb held");
+        assert!(db.get(DNS_ALLOWLIST).unwrap().is_some(), "keys kept");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("mine.rules")).unwrap(),
+            "! mine\n||ads.example^\n"
+        );
+
+        let mut cfg = load(true);
+        Bootstrapper::migrate_adblock_config(&db, &mut cfg).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("mine.rules")).unwrap(),
+            expected
+        );
+        assert_eq!(cfg.adblock.rules.as_deref(), Some("mine.rules"));
+        assert!(db.get(DNS_ALLOWLIST).unwrap().is_none(), "keys removed");
     }
 
     /// RA cut-over on the owner's data: the redb lists (ULA first) land in `[ra]` exactly, with

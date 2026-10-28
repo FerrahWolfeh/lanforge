@@ -64,22 +64,6 @@ const fn default_tftp_max_retries() -> u8 {
     3
 }
 
-fn default_blocking_mode() -> String {
-    "nxdomain".to_string()
-}
-
-fn default_refresh_time() -> String {
-    "03:00".to_string()
-}
-
-fn default_source_format() -> String {
-    "auto".to_string()
-}
-
-fn default_blocklist_kind() -> String {
-    "blocklist".to_string()
-}
-
 fn default_policy_drop() -> String {
     "drop".to_string()
 }
@@ -599,65 +583,6 @@ pub struct RaDnsslFile {
     pub domains: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifetime: Option<HumanDuration>,
-}
-
-/// DNS Adblock subsystem configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AdblockFile {
-    #[serde(default = "default_false")]
-    pub enabled: bool,
-    #[serde(default = "default_blocking_mode")]
-    pub blocking_mode: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blocking_ip_v4: Option<Ipv4Addr>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blocking_ip_v6: Option<Ipv6Addr>,
-    #[serde(default = "default_refresh_time")]
-    pub refresh_time: String,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub sources: BTreeMap<String, AdblockSourceFile>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowlist: Vec<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub rules: BTreeMap<String, AdblockRuleFile>,
-}
-
-impl Default for AdblockFile {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            blocking_mode: default_blocking_mode(),
-            blocking_ip_v4: None,
-            blocking_ip_v6: None,
-            refresh_time: default_refresh_time(),
-            sources: BTreeMap::new(),
-            allowlist: Vec::new(),
-            rules: BTreeMap::new(),
-        }
-    }
-}
-
-/// A named adblock list source.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AdblockSourceFile {
-    pub url: String,
-    #[serde(default = "default_source_format")]
-    pub format: String,
-    #[serde(default = "default_blocklist_kind")]
-    pub kind: String,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-}
-
-/// A named custom adblock rule.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AdblockRuleFile {
-    pub action: String,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
 }
 
 /// Stateful Netlink/nftables firewall configuration.

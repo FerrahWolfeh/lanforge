@@ -8,7 +8,7 @@ use lanforge_types::network::dns::adblock::rules_file::{RulesFile, RulesLineKind
 use lanforge_types::network::dns::adblock::syntax::{MatchFlags, ParsedRule, RuleAction};
 
 /// The enabled rules of a rules file, by domain.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct ManualRules {
     allow: HashMap<Box<str>, MatchFlags>,
     block: HashMap<Box<str>, MatchFlags>,
@@ -55,18 +55,6 @@ impl ManualRules {
             &mut self.block
         };
         map.entry(rule.domain.as_str().into()).or_default().0 |= rule.flags.0;
-    }
-
-    /// Adds `||domain^` (the domain and its subdomains) as a block or an allow rule.
-    pub fn insert_wildcard(&mut self, domain: &str, action: FilterAction) {
-        self.insert(&ParsedRule {
-            domain: domain.to_string(),
-            action: match action {
-                FilterAction::Allow => RuleAction::Allow,
-                FilterAction::Block => RuleAction::Block,
-            },
-            flags: MatchFlags::wildcard(),
-        });
     }
 
     #[must_use]

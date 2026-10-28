@@ -197,45 +197,9 @@ impl AdBlocker {
         debug!("Adblock: blocklist cleared");
     }
 
-    /// Today's stored manual rules, until they move to the rules file: a domain (whatever
-    /// `@@`, `||`, `^` or `$modifiers` it was stored with) covers itself and its subdomains.
-    fn normalize_custom_domain(raw: &str) -> Option<&str> {
-        let mut s = raw.trim();
-        s = s.strip_prefix("@@").unwrap_or(s);
-        s = s
-            .strip_prefix("||")
-            .or_else(|| s.strip_prefix("*."))
-            .or_else(|| s.strip_prefix('|'))
-            .unwrap_or(s);
-        if let Some((before_mod, _)) = s.split_once('$') {
-            s = before_mod;
-        }
-        s = s
-            .trim_end_matches('^')
-            .trim_end_matches('|')
-            .trim_end_matches('.');
-        (!s.is_empty()).then_some(s)
-    }
-
-    /// Loads the manual rules from the context's allowlist and stored rules, written as the
-    /// rules-file lines they mean (`@@||x^`, `||x^`).
+    /// Loads the manual rules from the context (the global rules file's text).
     pub fn sync_from_context(&self, ctx: &lanforge_core::context::LanforgeContext) {
-        use std::fmt::Write;
-        let mut text = String::new();
-        for domain in ctx.get_dns_allowlist().iter() {
-            if let Some(d) = Self::normalize_custom_domain(domain) {
-                let _ = writeln!(text, "@@||{d}^");
-            }
-        }
-        for rule in ctx.get_dns_adblock_rules() {
-            if rule.enabled
-                && let Some(d) = Self::normalize_custom_domain(&rule.domain)
-            {
-                let prefix = if rule.is_allow() { "@@" } else { "" };
-                let _ = writeln!(text, "{prefix}||{d}^");
-            }
-        }
-        self.replace_rules(&text);
+        ctx.with_config(|c| self.replace_rules(&c.dns_adblock_rules.0));
     }
 
     /// Replaces the manual rules with those of a rules file's text.
@@ -257,27 +221,6 @@ impl AdBlocker {
     ) {
         *self.config.write() = AdblockRuntimeConfig { mode, ipv4, ipv6 };
         debug!("Adblock: runtime config updated (mode: {:?})", mode);
-    }
-
-    /// Blocks `domain` and its subdomains at once, ahead of the context resync.
-    pub fn add_block(&self, domain: &str) {
-        self.add_manual(domain, FilterAction::Block);
-    }
-
-    /// Allows `domain` and its subdomains at once, ahead of the context resync.
-    pub fn add_allow(&self, domain: &str) {
-        self.add_manual(domain, FilterAction::Allow);
-    }
-
-    fn add_manual(&self, domain: &str, action: FilterAction) {
-        let Some(d) = Self::normalize_custom_domain(domain) else {
-            return;
-        };
-        let d = d.to_ascii_lowercase();
-        let mut lock = self.manual.write();
-        let mut rules = ManualRules::clone(&lock);
-        rules.insert_wildcard(&d, action);
-        *lock = Arc::new(rules);
     }
 
     #[must_use]
