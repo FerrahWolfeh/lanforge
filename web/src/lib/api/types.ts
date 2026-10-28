@@ -1034,14 +1034,6 @@ export function formatRewriteAnswer(ans: unknown): string {
 			const fb = dev.fallback ? `|${formatRewriteAnswer(dev.fallback)}` : "";
 			return `dev:${id}${fb}`;
 		}
-		if (obj.service) {
-			const s = obj.service;
-			const svc = s.service ?? "_http";
-			const proto = s.protocol ?? "_tcp";
-			const dev = typeof s.device === "string" ? s.device : JSON.stringify(s.device ?? "");
-			const port = s.port ?? 80;
-			return `srv:${svc}:${proto}:${dev}:${port}`;
-		}
 		// Single key serde enum fallback e.g. { Cname: "dev:raspie" }
 		const keys = Object.keys(obj);
 		if (keys.length === 1) {

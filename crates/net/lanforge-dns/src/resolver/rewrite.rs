@@ -185,27 +185,6 @@ impl RewriteStore {
                     })
                 }
             }
-            RewriteAnswer::Service {
-                service,
-                protocol,
-                device,
-                port,
-            } if any || qtype == DnsRecordType::SRV => {
-                let target_domain = format!("{device}.lan");
-                WireResponseWriter::write_srv_response(
-                    data,
-                    question,
-                    service.clone(),
-                    *protocol,
-                    &target_domain,
-                    *port,
-                    5, // Short 5s TTL
-                    edns,
-                    ra,
-                    resp,
-                );
-                true
-            }
             _ => false,
         }
     }

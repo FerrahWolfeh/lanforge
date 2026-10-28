@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use smallvec::SmallVec;
 
-use lanforge_types::network::dns::adblock::{DnsService, DnsServiceProtocol};
 use lanforge_types::network::dns::{DnsSoaData, DnsSvcbData};
 use lanforge_types::network::{
     DnsClass, DnsHeader, DnsMessage, DnsQuestion, DnsRData, DnsRecord, DnsRecordType,
@@ -871,89 +870,6 @@ impl WireResponseWriter {
         resp.extend_from_slice(&[0, 0]); // Placeholder for RDLEN
         Self::write_domain_labels(resp, target);
         resp.push(0); // Null terminator
-        let rdlen = u16::try_from(resp.len() - rdlen_pos - 2).unwrap_or(u16::MAX);
-        let rdlen_bytes = rdlen.to_be_bytes();
-        resp[rdlen_pos] = rdlen_bytes[0];
-        resp[rdlen_pos + 1] = rdlen_bytes[1];
-
-        // 4. EDNS
-        if let Some(opt) = edns {
-            Self::write_opt(resp, opt);
-        }
-    }
-
-    /// Writes an SRV response into the buffer.
-    #[allow(clippy::too_many_arguments)]
-    pub fn write_srv_response(
-        query_data: &[u8],
-        question: &WireQuestion,
-        _service: DnsService,
-        _proto: DnsServiceProtocol,
-        target: &str,
-        port: u16,
-        ttl: u32,
-        edns: Option<WireOptScanner>,
-        ra: bool,
-        resp: &mut Vec<u8>,
-    ) {
-        resp.clear();
-        let capacity = 12 + question.data.len() + 12 + 6 + target.len() + 2;
-        if resp.capacity() < capacity {
-            resp.reserve(capacity);
-        }
-
-        // 1. Header
-        let mut h = [0u8; 12];
-        h.copy_from_slice(&query_data[0..12]);
-        h[2] |= 0x80; // QR = 1
-        h[2] |= 0x04; // AA = 1
-        if ra {
-            h[3] |= 0x80;
-        }
-        h[3] &= 0xF0;
-        h[6] = 0;
-        h[7] = 1; // ANCOUNT = 1
-        h[11] = u8::from(edns.is_some());
-        resp.extend_from_slice(&h);
-
-        // 2. Question
-        resp.extend_from_slice(&question.data[12..]);
-
-        // 3. Answer (SRV)
-        let ttl_bytes = ttl.to_be_bytes();
-        let ans_hdr: [u8; 10] = [
-            0xC0,
-            0x0C,
-            0x00,
-            33, // Type SRV (33)
-            0x00,
-            0x01, // Class IN (1)
-            ttl_bytes[0],
-            ttl_bytes[1],
-            ttl_bytes[2],
-            ttl_bytes[3],
-        ];
-        resp.extend_from_slice(&ans_hdr);
-
-        // RDLEN and RDATA in a single pass
-        let rdlen_pos = resp.len();
-        resp.extend_from_slice(&[0, 0]); // Placeholder for RDLEN
-
-        // RDATA: Priority (2 bytes), Weight (2 bytes), Port (2 bytes), Target (variable)
-        let port_bytes = port.to_be_bytes();
-        let srv_fixed: [u8; 6] = [
-            0,
-            0, // Priority = 0
-            0,
-            0, // Weight = 0
-            port_bytes[0],
-            port_bytes[1],
-        ];
-        resp.extend_from_slice(&srv_fixed);
-
-        Self::write_domain_labels(resp, target);
-        resp.push(0); // Null terminator
-
         let rdlen = u16::try_from(resp.len() - rdlen_pos - 2).unwrap_or(u16::MAX);
         let rdlen_bytes = rdlen.to_be_bytes();
         resp[rdlen_pos] = rdlen_bytes[0];

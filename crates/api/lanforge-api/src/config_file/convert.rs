@@ -974,14 +974,6 @@ impl From<&SystemConfigExport> for ConfigFile {
                     Some(fallback) => format!("dev:{identifier}|{fallback}"),
                     None => format!("dev:{identifier}"),
                 },
-                RewriteAnswer::Service {
-                    service,
-                    protocol,
-                    device,
-                    port,
-                } => {
-                    format!("srv:{service}:{protocol}:{device}:{port}")
-                }
             };
             dns.rewrites.insert(
                 rw.domain.clone(),
@@ -1261,12 +1253,10 @@ fn parse_rewrite_target(target: &str, rtype: Option<&str>) -> (DnsRecordType, Re
             RewriteAnswer::Aaaa(_) => DnsRecordType::AAAA,
             RewriteAnswer::Cname(_) => DnsRecordType::CNAME,
             RewriteAnswer::Device { .. } => DnsRecordType::Device,
-            RewriteAnswer::Service { .. } => DnsRecordType::SRV,
         };
         if matches!(answer, RewriteAnswer::Device { .. })
             || rtype
                 .is_none_or(|rt| rt.eq_ignore_ascii_case("A") || rt.eq_ignore_ascii_case("AAAA"))
-            || matches!(answer, RewriteAnswer::Service { .. })
         {
             return (answer_type, answer);
         }
@@ -1380,7 +1370,6 @@ mod tests {
             (DnsRecordType::CNAME, "nas.lan"),
             (DnsRecordType::Device, "dev:nas"),
             (DnsRecordType::Device, "dev:aa:bb:cc:dd:ee:ff|192.0.2.9"),
-            (DnsRecordType::SRV, "srv:https:tcp:nas:443"),
         ];
         let rewrites = cases
             .iter()

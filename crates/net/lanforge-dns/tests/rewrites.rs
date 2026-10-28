@@ -46,13 +46,6 @@ async fn test_dns_rewrites_integration() {
             rtype: DnsRecordType::A,
             answer: RewriteAnswer::from_str("dev:offline-nas").unwrap(),
         },
-        // 5. srv: service discovery rule
-        RewriteRule {
-            id: None,
-            domain: "_http._tcp.nas.home".to_string(),
-            rtype: DnsRecordType::SRV,
-            answer: RewriteAnswer::from_str("srv:http:tcp:nas-box:8096").unwrap(),
-        },
     ];
 
     // Register active devices in the state
@@ -207,51 +200,5 @@ async fn test_dns_rewrites_integration() {
         let response = decoder.decode_message().unwrap();
         assert_eq!(response.header.rcode, DnsResponseCode::NoError);
         assert!(response.answers.is_empty());
-    }
-
-    // --- Query 5: srv:http:tcp:nas-box:8096 (SRV Record) ---
-    {
-        let mut query = DnsMessage::new();
-        query.header.id = 5;
-        query.header.qdcount = 1;
-        query.questions.push(DnsQuestion {
-            name: Arc::from("_http._tcp.nas.home"),
-            qtype: DnsRecordType::SRV,
-            qclass: DnsClass::IN,
-        });
-
-        let mut encoder = WireEncoder::new();
-        let query_bytes = encoder.encode_message(&query);
-        let mut resp_bytes = Vec::new();
-
-        let resolved = process_query_test(
-            &query_bytes,
-            &dns_ctx,
-            "127.0.0.1".parse().unwrap(),
-            &mut resp_bytes,
-        )
-        .await
-        .unwrap();
-        assert!(resolved);
-
-        let mut decoder = WireDecoder::new(&resp_bytes);
-        let response = decoder.decode_message().unwrap();
-        assert_eq!(response.header.rcode, DnsResponseCode::NoError);
-        assert_eq!(response.answers.len(), 1);
-        assert_eq!(response.answers[0].ttl, 5); // Short TTL
-        if let DnsRData::SRV {
-            priority,
-            weight,
-            port,
-            target,
-        } = &response.answers[0].rdata
-        {
-            assert_eq!(*priority, 0);
-            assert_eq!(*weight, 0);
-            assert_eq!(*port, 8096);
-            assert_eq!(target.as_ref(), "nas-box.lan");
-        } else {
-            panic!("Expected SRV record");
-        }
     }
 }

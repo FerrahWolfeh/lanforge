@@ -12,7 +12,6 @@
 	import Trash2Icon from "@lucide/svelte/icons/trash-2";
 	import SearchCodeIcon from "@lucide/svelte/icons/search-code";
 	import LaptopIcon from "@lucide/svelte/icons/laptop";
-	import ServerIcon from "@lucide/svelte/icons/server";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import { toast } from "svelte-sonner";
 	import { dnsQuery, dnsRewriteRemove } from "$lib/api/client";
@@ -61,7 +60,6 @@
 		"MX",
 		"NS",
 		"SOA",
-		"SRV",
 		"HTTPS",
 		"SVCB",
 	];
@@ -196,8 +194,6 @@
 							typeVariants[rule.rtype] ||
 							"bg-secondary text-secondary-foreground border-border"}
 						{@const isDevice = ans.startsWith("dev:") || rule.rtype === "DEVICE"}
-						{@const isService =
-							ans.startsWith("srv:") || rule.rtype === "SRV"}
 
 						<Table.Row
 							class="hover:bg-muted/50 transition-colors cursor-pointer group"
@@ -270,25 +266,6 @@
 												class="truncate max-w-[220px] text-foreground font-mono font-medium"
 											>
 												{ans.slice(4)}
-											</span>
-										</div>
-									{:else if isService}
-										<div
-											class="flex items-center gap-1.5 min-w-0"
-										>
-											<Badge
-												variant="outline"
-												class="bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20 text-[11px] font-mono gap-1 shrink-0"
-											>
-												<ServerIcon class="h-3 w-3" />
-												srv:
-											</Badge>
-											<span
-												class="truncate max-w-[220px] text-foreground font-mono font-medium"
-											>
-												{ans.startsWith("srv:")
-													? ans.slice(4)
-													: ans}
 											</span>
 										</div>
 									{:else}

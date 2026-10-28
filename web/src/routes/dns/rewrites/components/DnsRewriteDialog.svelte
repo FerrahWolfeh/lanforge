@@ -9,7 +9,6 @@
 	import ArrowRightLeftIcon from "@lucide/svelte/icons/arrow-right-left";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import LaptopIcon from "@lucide/svelte/icons/laptop";
-	import ServerIcon from "@lucide/svelte/icons/server";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import { toast } from "svelte-sonner";
 	import { listDevices } from "$lib/api/client";
@@ -32,7 +31,7 @@
 		onSave?: (rule: any) => Promise<void>;
 	} = $props();
 
-	let mode = $state<"static" | "device" | "service">("static");
+	let mode = $state<"static" | "device">("static");
 	let domain = $state("");
 	let rtype = $state<DnsRecordType>("A");
 	let saving = $state(false);
@@ -46,12 +45,6 @@
 	let selectedDeviceIdentifier = $state("");
 	let deviceFallbackIp = $state("");
 
-	// Mode 3: Dynamic SRV Target (srv:)
-	let srvService = $state("_plex");
-	let srvProtocol = $state("_tcp");
-	let srvDeviceIdentifier = $state("");
-	let srvPort = $state<number>(32400);
-
 	const RECORD_TYPES: DnsRecordType[] = [
 		"A",
 		"AAAA",
@@ -61,7 +54,6 @@
 		"MX",
 		"NS",
 		"SOA",
-		"SRV",
 		"HTTPS",
 		"SVCB",
 	];
@@ -99,19 +91,6 @@
 						selectedDeviceIdentifier = content;
 						deviceFallbackIp = "";
 					}
-				} else if (ans.startsWith("srv:") || rule.rtype === "SRV") {
-					mode = "service";
-					if (ans.startsWith("srv:")) {
-						const parts = ans.slice(4).split(":");
-						if (parts.length >= 4) {
-							srvService = parts[0];
-							srvProtocol = parts[1];
-							srvPort = Number(parts[parts.length - 1]) || 80;
-							srvDeviceIdentifier = parts
-								.slice(2, parts.length - 1)
-								.join(":");
-						}
-					}
 				} else {
 					mode = "static";
 					staticAnswer = ans;
@@ -124,10 +103,6 @@
 				mode = "static";
 				selectedDeviceIdentifier = "";
 				deviceFallbackIp = "";
-				srvService = "_http";
-				srvProtocol = "_tcp";
-				srvDeviceIdentifier = "";
-				srvPort = 80;
 			}
 		}
 	});
@@ -141,22 +116,6 @@
 			const fallback = deviceFallbackIp.trim();
 			const ans = fallback ? `dev:${devId}|${fallback}` : `dev:${devId}`;
 			return { answer: ans, type: "DEVICE" };
-		}
-
-		if (mode === "service") {
-			const svc = srvService.trim() || "_service";
-			const proto = srvProtocol.trim() || "_tcp";
-			const dev = srvDeviceIdentifier.trim();
-			if (!dev) {
-				throw new Error(
-					"Please specify a target device for SRV service",
-				);
-			}
-			const port = srvPort || 80;
-			return {
-				answer: `srv:${svc}:${proto}:${dev}:${port}`,
-				type: "SRV",
-			};
 		}
 
 		const ans = staticAnswer.trim();
@@ -235,7 +194,7 @@
 
 			<!-- Target Mode Selector Tabs -->
 			<Tabs.Root value={mode} onValueChange={(v) => (mode = v as any)}>
-				<Tabs.List class="grid grid-cols-3 w-full h-9">
+				<Tabs.List class="grid grid-cols-2 w-full h-9">
 					<Tabs.Trigger value="static" class="text-xs gap-1">
 						<GlobeIcon class="h-3.5 w-3.5" />
 						Static Target
@@ -243,10 +202,6 @@
 					<Tabs.Trigger value="device" class="text-xs gap-1">
 						<LaptopIcon class="h-3.5 w-3.5" />
 						Device (dev:)
-					</Tabs.Trigger>
-					<Tabs.Trigger value="service" class="text-xs gap-1">
-						<ServerIcon class="h-3.5 w-3.5" />
-						SRV Service
 					</Tabs.Trigger>
 				</Tabs.List>
 
@@ -324,62 +279,6 @@
 					</p>
 				</Tabs.Content>
 
-				<!-- Mode 3: Dynamic SRV Service (srv:) -->
-				<Tabs.Content value="service" class="space-y-3 pt-3">
-					<div class="grid grid-cols-2 gap-2">
-						<div class="space-y-1.5">
-							<Label for="srv-name" class="text-xs font-medium"
-								>Service Name</Label
-							>
-							<Input
-								id="srv-name"
-								type="text"
-								placeholder="_plex, _http, _matrix"
-								class="h-9 text-xs font-mono"
-								bind:value={srvService}
-							/>
-						</div>
-
-						<div class="space-y-1.5">
-							<Label for="srv-proto" class="text-xs font-medium"
-								>Protocol</Label
-							>
-							<Input
-								id="srv-proto"
-								type="text"
-								placeholder="_tcp or _udp"
-								class="h-9 text-xs font-mono"
-								bind:value={srvProtocol}
-							/>
-						</div>
-					</div>
-
-					<div class="grid grid-cols-3 gap-2">
-						<div class="col-span-2 space-y-1.5">
-							<Label class="text-xs font-medium"
-								>Target Device</Label
-							>
-							<DeviceCombobox
-								bind:value={srvDeviceIdentifier}
-								devices={knownDevices}
-								placeholder="Select target device..."
-							/>
-						</div>
-
-						<div class="col-span-1 space-y-1.5">
-							<Label for="srv-port" class="text-xs font-medium"
-								>Port</Label
-							>
-							<Input
-								id="srv-port"
-								type="number"
-								placeholder="32400"
-								class="h-9 text-xs font-mono"
-								bind:value={srvPort}
-							/>
-						</div>
-					</div>
-				</Tabs.Content>
 			</Tabs.Root>
 		</div>
 
