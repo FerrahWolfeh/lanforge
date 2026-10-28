@@ -3,6 +3,7 @@ use lanforge_types::network::traffic::TrafficConfig;
 use serde::{Deserialize, Serialize};
 
 pub mod convert;
+pub mod dns;
 pub mod duration;
 pub mod effective;
 pub mod hash;

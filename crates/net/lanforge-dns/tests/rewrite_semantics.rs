@@ -85,6 +85,23 @@ async fn setup() -> DnsContext {
             DnsRecordType::Device,
             "dev:offline-nas|192.168.1.99",
         ),
+        // `fallback = [v4, v6]` in the file: one rule per family
+        rule(
+            "fb2.home",
+            DnsRecordType::Device,
+            "dev:offline-nas|192.168.1.98",
+        ),
+        rule(
+            "fb2.home",
+            DnsRecordType::Device,
+            "dev:offline-nas|fd00::98",
+        ),
+        rule(
+            "fb2-v4.home",
+            DnsRecordType::Device,
+            "dev:nas-box|192.168.1.97",
+        ),
+        rule("fb2-v4.home", DnsRecordType::Device, "dev:nas-box|fd00::97"),
     ];
     let pixie = MacAddr([0x02, 0, 0, 0, 0, 0x01]);
     register_test_device(&ctx, "pixie", pixie, Ipv4Addr::new(192, 168, 1, 2));
@@ -165,5 +182,22 @@ async fn a_device_without_the_family_or_offline_is_nodata_not_nxdomain() {
     assert_nodata(
         &ask(&dns, "gone-fb.home", DnsRecordType::AAAA).await,
         "v4 fallback, AAAA",
+    );
+}
+
+#[tokio::test]
+async fn a_fallback_per_family_answers_only_the_family_the_device_lacks() {
+    let dns = setup().await;
+    let a = ask(&dns, "fb2.home", DnsRecordType::A).await;
+    assert_eq!(ips(&a), [ip("192.168.1.98")], "offline, A");
+    let aaaa = ask(&dns, "fb2.home", DnsRecordType::AAAA).await;
+    assert_eq!(ips(&aaaa), [ip("fd00::98")], "offline, AAAA");
+    let a = ask(&dns, "fb2-v4.home", DnsRecordType::A).await;
+    assert_eq!(ips(&a), [ip("192.168.1.10")], "v4-only device, A");
+    let aaaa = ask(&dns, "fb2-v4.home", DnsRecordType::AAAA).await;
+    assert_eq!(ips(&aaaa), [ip("fd00::97")], "v4-only device, AAAA");
+    assert_nodata(
+        &ask(&dns, "fb2.home", DnsRecordType::HTTPS).await,
+        "HTTPS with two fallbacks",
     );
 }
