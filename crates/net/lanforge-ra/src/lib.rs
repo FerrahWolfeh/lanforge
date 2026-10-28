@@ -60,7 +60,7 @@ use lanforge_types::network::ra::{
     ICMPV6_TYPE_RS, MAX_INITIAL_RTR_ADVERT_INTERVAL, MAX_INITIAL_RTR_ADVERTISEMENTS,
     MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS, PreviousLanPrefixes, RAPrefix, RaServerConfig,
 };
-use lanforge_types::system::{DormantReason, RaStatusResponse, RunResult};
+use lanforge_types::system::{DormantReason, RaStatusResponse, RunResult, ServiceState};
 
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
@@ -950,7 +950,21 @@ fn send_ra_internal(
         7200
     };
     let gua_info = gua.as_ref().map(|g| (g, gua_pref, gua_val));
-    let mut pkt = build_ra_packet(cfg, mac, gua_info, ula.as_ref(), &deprecated_list);
+    // No RDNSS configured: clients use this router's DNS while it serves, at the address the
+    // admin gave the LAN interface (its ULA: stable when the delegated prefix changes).
+    let dns_serving = matches!(
+        lctx.get_service_state(ServiceId::Dns),
+        ServiceState::Online | ServiceState::Active | ServiceState::Degraded
+    );
+    let router_dns = ula.filter(|_| dns_serving);
+    let mut pkt = build_ra_packet(
+        cfg,
+        mac,
+        gua_info,
+        ula.as_ref(),
+        &deprecated_list,
+        router_dns,
+    );
 
     let csum = icmpv6_checksum(&src_ll, &dst_ip, &pkt);
     pkt[2] = (csum >> 8) as u8;
@@ -1117,6 +1131,7 @@ mod tests {
             Some((&new_gua, 7 * 24 * 3600, 30 * 24 * 3600)),
             None,
             &deprecated_list,
+            None,
         );
 
         // Find prefix options in the packet

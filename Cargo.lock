@@ -2318,7 +2318,6 @@ dependencies = [
  "libc",
  "netlink-sys",
  "pnet",
- "rand 0.10.3",
  "rtnetlink",
  "rustls",
  "sd-notify",

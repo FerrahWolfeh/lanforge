@@ -15,7 +15,7 @@
 //! [ Option 31: DNSSL (search domains) ]
 //! ```
 
-use lanforge_types::network::ra::{PrefixSource, RAPrefix};
+use lanforge_types::network::ra::{PrefixSource, RAPrefix, RdnssConfig};
 
 use std::net::Ipv6Addr;
 
@@ -35,6 +35,8 @@ pub const ICMPV6_TYPE_RA: u8 = 134;
 /// * `cfg` — RA service configuration (prefixes, DNS, flags, lifetimes)
 /// * `mac` — source link-layer address (router's MAC)
 /// * `gua_prefix` — current `GUA` prefix for `AutoGua` prefix resolution
+/// * `router_dns` — this router's address, advertised as RDNSS when `cfg` names no RDNSS
+///   server (the caller passes it only while the DNS service is serving)
 ///
 /// # Returns
 ///
@@ -48,6 +50,7 @@ pub fn build_ra_packet(
     gua_prefix: Option<(&Ipv6Addr, u32, u32)>,
     ula_prefix: Option<&Ipv6Addr>,
     deprecated_prefixes: &[(Ipv6Addr, u32)],
+    router_dns: Option<Ipv6Addr>,
 ) -> Vec<u8> {
     let mut p = Vec::with_capacity(256);
 
@@ -133,7 +136,11 @@ pub fn build_ra_packet(
     }
 
     // ── Option 25: RDNSS (RFC 8106 §3.1) ─────────────────────────────────
-    for rdnss in &cfg.rdnss {
+    let configured = cfg.rdnss.iter().any(|r| !r.servers.is_empty());
+    let router_rdnss = router_dns
+        .filter(|_| !configured)
+        .map(|addr| RdnssConfig::new(vec![addr]));
+    for rdnss in cfg.rdnss.iter().chain(router_rdnss.as_ref()) {
         if rdnss.servers.is_empty() {
             continue;
         }
@@ -316,7 +323,6 @@ pub fn icmpv6_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, payload: &[u8]) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use lanforge_types::network::ra::RdnssConfig;
 
     use super::*;
     use std::time::Duration;
@@ -429,7 +435,7 @@ mod tests {
             ..Default::default()
         };
         let mac = [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66];
-        let pkt = build_ra_packet(&cfg, mac, None, None, &[]);
+        let pkt = build_ra_packet(&cfg, mac, None, None, &[], None);
 
         assert_eq!(pkt[0], ICMPV6_TYPE_RA, "tipo ICMPv6 deve ser 134");
         assert_eq!(pkt[1], 0, "code deve ser 0");
@@ -448,7 +454,7 @@ mod tests {
 
         // Sem MTU configurado
         let cfg_no_mtu = RaConfig::default();
-        let pkt_no_mtu = build_ra_packet(&cfg_no_mtu, mac, None, None, &[]);
+        let pkt_no_mtu = build_ra_packet(&cfg_no_mtu, mac, None, None, &[], None);
         // Não deve conter o byte de type '5' (MTU option) após o Source Link-Layer (type 1)
         assert!(!pkt_no_mtu.windows(2).any(|w| w[0] == 5 && w[1] == 1));
 
@@ -457,7 +463,7 @@ mod tests {
             mtu: Some(1492),
             ..Default::default()
         };
-        let pkt_with_mtu = build_ra_packet(&cfg_with_mtu, mac, None, None, &[]);
+        let pkt_with_mtu = build_ra_packet(&cfg_with_mtu, mac, None, None, &[], None);
 
         // Deve conter Type 5, Length 1, Reservado (2 bytes), MTU 1492 (0x05D4)
         let expected_mtu_block = [5u8, 1, 0, 0, 0, 0, 0x05, 0xD4];
@@ -476,10 +482,52 @@ mod tests {
             ..Default::default()
         };
         let mac = [0x11; 6];
-        let pkt = build_ra_packet(&cfg, mac, None, None, &[]);
+        let pkt = build_ra_packet(&cfg, mac, None, None, &[], None);
 
         assert!(!pkt.contains(&25u8), "Pacote não deve conter option RDNSS");
         assert!(!pkt.contains(&31u8), "Pacote não deve conter option DNSSL");
+    }
+
+    /// Without configured RDNSS servers the router's own address is advertised (while DNS
+    /// serves); configured servers always win.
+    #[test]
+    fn router_dns_fills_in_only_when_no_rdnss_is_configured() {
+        let router: Ipv6Addr = "fd97:f00d:cafe:3731::1".parse().unwrap();
+        let rdnss_servers = |pkt: &[u8]| -> Vec<Ipv6Addr> {
+            let mut out = Vec::new();
+            let mut idx = 16; // RA header
+            while idx + 8 <= pkt.len() {
+                let (kind, len) = (pkt[idx], usize::from(pkt[idx + 1]) * 8);
+                if kind == 25 {
+                    for chunk in pkt[idx + 8..idx + len].chunks(16) {
+                        out.push(Ipv6Addr::from(<[u8; 16]>::try_from(chunk).unwrap()));
+                    }
+                }
+                idx += len.max(8);
+            }
+            out
+        };
+        let mac = [0x11; 6];
+
+        let none = RaConfig::default();
+        assert_eq!(
+            rdnss_servers(&build_ra_packet(&none, mac, None, None, &[], Some(router))),
+            [router]
+        );
+        assert_eq!(
+            rdnss_servers(&build_ra_packet(&none, mac, None, None, &[], None)),
+            Vec::<Ipv6Addr>::new()
+        );
+
+        let configured: Ipv6Addr = "2001:db8::53".parse().unwrap();
+        let cfg = RaConfig {
+            rdnss: vec![RdnssConfig::new(vec![configured])],
+            ..Default::default()
+        };
+        assert_eq!(
+            rdnss_servers(&build_ra_packet(&cfg, mac, None, None, &[], Some(router))),
+            [configured]
+        );
     }
 
     #[test]
@@ -495,7 +543,7 @@ mod tests {
         let mac = [0x11; 6];
         let gua: Ipv6Addr = "2001:db8::".parse().unwrap();
 
-        let pkt = build_ra_packet(&cfg, mac, Some((&gua, 1800, 3600)), None, &[]);
+        let pkt = build_ra_packet(&cfg, mac, Some((&gua, 1800, 3600)), None, &[], None);
 
         // Opção de prefixo (Type 3) deve aparecer exatamente duas vezes
         let prefix_count = pkt.windows(2).filter(|w| w[0] == 3 && w[1] == 4).count();
