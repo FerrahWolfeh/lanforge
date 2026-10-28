@@ -99,9 +99,8 @@
 	}
 
 	async function handleRemoveBlock(rule: AdblockRuleEntry) {
-		if (rule.id === undefined) return;
 		try {
-			await dnsAdblockRuleRemove(rule.id);
+			await dnsAdblockRuleRemove(rule.domain);
 			toast.success(`Removed "${rule.domain}" from blacklist`);
 			await loadAll();
 		} catch (err: any) {
@@ -110,9 +109,8 @@
 	}
 
 	async function handleToggleStatus(rule: AdblockRuleEntry) {
-		if (rule.id === undefined) return;
 		try {
-			await dnsAdblockRuleStatus(rule.id, !rule.enabled);
+			await dnsAdblockRuleStatus(rule.domain, !rule.enabled);
 			rule.enabled = !rule.enabled;
 			toast.success(`Rule "${rule.domain}" ${rule.enabled ? "enabled" : "disabled"}`);
 		} catch (err: any) {
@@ -355,7 +353,7 @@
 									</Table.Cell>
 								</Table.Row>
 							{:else}
-								{#each filteredCustomBlocks as entry (entry.id)}
+								{#each filteredCustomBlocks as entry, i (`${entry.domain}-${i}`)}
 									<Table.Row class="hover:bg-muted/40 transition-colors group">
 										<Table.Cell class="font-mono text-xs">
 											<div class="flex items-center gap-2">

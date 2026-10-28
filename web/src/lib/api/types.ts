@@ -1007,6 +1007,7 @@ export interface AllowlistEntry {
 // ---------------------------------------------------------------------------
 
 export interface RewriteRule {
+	/** 63-bit content hash, rounded by JSON.parse: display only, never send it back. */
 	id: number | null;
 	domain: string;
 	rtype: DnsRecordType;
@@ -1365,6 +1366,7 @@ export interface AdblockDbConfig {
 }
 
 export interface AdblockRuleEntry {
+	/** 63-bit content hash, rounded by JSON.parse: address a rule by its text (`domain`). */
 	id?: number;
 	domain: string;
 	action: 'block' | 'allow';

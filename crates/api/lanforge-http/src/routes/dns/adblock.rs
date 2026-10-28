@@ -6,6 +6,7 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post, put},
 };
+use lanforge_types::network::dns::adblock::rules_file::RulesFile;
 use lanforge_types::network::dns::adblock::{
     AdblockSourceFormat, AdblockUrlKind, BlockingMode, TimeOfDay,
 };
@@ -65,6 +66,19 @@ pub struct AdblockRuleStatusRequest {
     pub enabled: bool,
 }
 
+/// A rule addressed by its text (the listing's `domain`): the id is a hash of it, and a 63-bit
+/// id does not survive a JavaScript client (JSON numbers are doubles there).
+#[derive(Debug, Deserialize)]
+pub struct AdblockRuleTextRequest {
+    pub rule: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdblockRuleTextStatusRequest {
+    pub rule: String,
+    pub enabled: bool,
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
@@ -87,8 +101,11 @@ pub fn router() -> Router<AppState> {
         .route("/adblock/block", post(handle_block))
         .route(
             "/adblock/rules",
-            get(handle_adblock_rules).post(handle_adblock_rule_add),
+            get(handle_adblock_rules)
+                .post(handle_adblock_rule_add)
+                .delete(handle_adblock_rule_remove_text),
         )
+        .route("/adblock/rules/status", put(handle_adblock_rule_status_text))
         .route("/adblock/rules/{id}", delete(handle_adblock_rule_remove))
         .route(
             "/adblock/rules/{id}/status",
@@ -241,6 +258,30 @@ async fn handle_adblock_rule_status(
     let ctx = create_client_ctx(&state);
     crate::http_response!(
         ctx.handle_dns_adblock_rule_status(id, payload.enabled).await,
+        Success => NoContent
+    )
+}
+
+async fn handle_adblock_rule_remove_text(
+    State(state): State<AppState>,
+    Json(payload): Json<AdblockRuleTextRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_dns_adblock_rule_remove(RulesFile::rule_id(&payload.rule))
+            .await,
+        Success => NoContent
+    )
+}
+
+async fn handle_adblock_rule_status_text(
+    State(state): State<AppState>,
+    Json(payload): Json<AdblockRuleTextStatusRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_dns_adblock_rule_status(RulesFile::rule_id(&payload.rule), payload.enabled)
+            .await,
         Success => NoContent
     )
 }

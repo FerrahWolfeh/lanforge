@@ -41,6 +41,16 @@ impl ClientContext {
     }
 
     pub async fn handle_dns_rewrite_remove(&self, id: i64) -> Response {
+        if !self
+            .ctx
+            .get_dns_rewrites()
+            .iter()
+            .any(|r| r.effective_id() == id)
+        {
+            return Response::Error {
+                error: format!("DNS rewrite with ID {id} not found"),
+            };
+        }
         dns_reply(
             self.change_dns(|dns| dns.rewrites.retain(|r| r.effective_id() != id)),
             format!("DNS rewrite with ID {id} removed"),

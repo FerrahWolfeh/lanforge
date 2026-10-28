@@ -577,10 +577,11 @@ export const dnsAdblockRules = async (): Promise<AdblockRuleEntry[]> =>
 	extractList<AdblockRuleEntry>(await get<any>('/dns/adblock/rules'), 'rules');
 export const dnsAdblockRuleAdd = (domain: string, action: 'block' | 'allow') =>
 	post<void>('/dns/adblock/rules', { domain, action });
-export const dnsAdblockRuleRemove = (id: number) =>
-	del<void>(`/dns/adblock/rules/${id}`);
-export const dnsAdblockRuleStatus = (id: number, enabled: boolean) =>
-	put<void>(`/dns/adblock/rules/${id}/status`, { enabled });
+// Rules and rewrites are addressed by content: their ids are 63-bit hashes that JSON.parse rounds.
+export const dnsAdblockRuleRemove = (rule: string) =>
+	del<void>('/dns/adblock/rules', { rule });
+export const dnsAdblockRuleStatus = (rule: string, enabled: boolean) =>
+	put<void>('/dns/adblock/rules/status', { rule, enabled });
 
 // ---------------------------------------------------------------------------
 // DNS — rewrites
@@ -589,7 +590,8 @@ export const dnsAdblockRuleStatus = (id: number, enabled: boolean) =>
 export const dnsRewriteList = async (): Promise<RewriteRule[]> =>
 	extractList<RewriteRule>(await get<any>('/dns/rewrites'), 'rewrites');
 export const dnsRewriteAdd = (rule: Omit<RewriteRule, 'id'>) => post<void>('/dns/rewrites', rule);
-export const dnsRewriteRemove = (id: number) => del<void>(`/dns/rewrites/${id}`);
+export const dnsRewriteRemove = (rule: RewriteRule) =>
+	del<void>('/dns/rewrites/rule', { domain: rule.domain, rtype: rule.rtype, answer: rule.answer });
 export const dnsRewriteClear = () => del<void>('/dns/rewrites');
 export const dnsRewriteExport = async (): Promise<RewriteRule[]> =>
 	extractList<RewriteRule>(await get<any>('/dns/rewrites/export'), 'rewrites');

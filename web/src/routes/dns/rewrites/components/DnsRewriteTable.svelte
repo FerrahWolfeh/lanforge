@@ -108,9 +108,8 @@
 	}
 
 	async function handleDelete(rule: RewriteRule) {
-		if (!rule.id) return;
 		try {
-			await dnsRewriteRemove(rule.id);
+			await dnsRewriteRemove(rule);
 			toast.success(
 				`Removed rewrite rule for ${cleanDomain(rule.domain)}`,
 			);
