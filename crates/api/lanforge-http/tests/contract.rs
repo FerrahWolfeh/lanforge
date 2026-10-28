@@ -241,6 +241,7 @@ impl TestApp {
         self.call("DELETE", path, None, true).await
     }
 
+    #[cfg(feature = "adblock")]
     async fn put<T: Serialize>(&self, path: &str, body: &T) -> (StatusCode, Value) {
         self.call("PUT", path, Some(serde_json::to_vec(body).unwrap()), true)
             .await
