@@ -44,7 +44,9 @@ pub struct StatusResponse {
     /// Decoupled service banners.
     pub service_banners: Vec<ServiceBanner>,
     /// Config file problems found at the last load or reload: what is not applied and why.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Always serialized: postcard (UDS) has no field names, a skipped field ends the message
+    /// early and the client cannot decode it.
+    #[serde(default)]
     pub config_issues: Vec<String>,
 }
 
