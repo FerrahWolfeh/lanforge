@@ -240,6 +240,7 @@ fn base() -> SystemConfigExport {
             origin: Origin::Static,
             ignore_dns_log: false,
             ignored_log_domains: vec!["example.org".into()],
+            boot_file: None,
         }],
         dns_rewrites: vec![RewriteRule {
             id: None,
@@ -372,9 +373,15 @@ const KNOWN_LOSSES: &[(&str, &[&str])] = &[
     ("dns_upstreams", &[]),
     // Kept as its own file form, now lossless (see the exact tests below).
     ("firewall_config", &[]),
+    // Migrated: the file holds the reservation only; the DNS log settings stay with the device
+    // (WebUI settings, owner decision 2026-10-28), so a file export does not carry them.
     (
         "hosts",
-        &["/0/ignored_log_domains", "/0/ignored_log_domains/0"],
+        &[
+            "/0/ignore_dns_log",
+            "/0/ignored_log_domains",
+            "/0/ignored_log_domains/0",
+        ],
     ),
     // Migrated: the file holds `PppoeConfig` itself.
     ("pppoe_config", &[]),

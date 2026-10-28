@@ -61,6 +61,7 @@ impl State {
             | DeviceUpdate::ClassHint { .. } => self.apply_host_meta_update(update, discovery),
 
             DeviceUpdate::HostRemoved { .. }
+            | DeviceUpdate::HostDemoted { .. }
             | DeviceUpdate::InterfaceIpsChanged { .. }
             | DeviceUpdate::TransientHostResolved(_) => {
                 self.apply_system_service_update(update, discovery)
@@ -163,6 +164,7 @@ impl State {
     ) -> EventVec {
         match update {
             DeviceUpdate::HostRemoved { mac } => self.handle_host_removed(mac),
+            DeviceUpdate::HostDemoted { mac } => self.handle_host_demoted(mac),
             DeviceUpdate::InterfaceIpsChanged { ifindex, state } => {
                 self.handle_interface_ips_changed(ifindex, &state)
             }

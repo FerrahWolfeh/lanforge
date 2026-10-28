@@ -109,6 +109,9 @@ pub enum AdminChange {
 
     /// The device was entirely removed from the active table due to user/admin action.
     HostRemoved,
+
+    /// The device's static configuration was removed: it is a discovered device again.
+    Demoted,
 }
 
 /// Lightweight representation of `DHCPv4` message types for diagnostics.

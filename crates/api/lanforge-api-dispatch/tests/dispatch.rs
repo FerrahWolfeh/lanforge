@@ -94,6 +94,7 @@ async fn test_dispatch_hosts_crud() {
         origin: Origin::Static,
         ignore_dns_log: false,
         ignored_log_domains: Vec::new(),
+        boot_file: None,
     };
     let add_res = client_ctx.handle_host_add(entry).await;
     assert!(matches!(add_res, Response::Success(_)));
@@ -149,6 +150,7 @@ async fn test_dispatch_system_config_import_export() {
             origin: Origin::Static,
             ignore_dns_log: false,
             ignored_log_domains: Vec::new(),
+            boot_file: None,
         }],
         dns_rewrites: vec![RewriteRule {
             id: None,
@@ -314,6 +316,7 @@ async fn test_dispatch_host_set_invalid_ip_ignored() {
         origin: Origin::Static,
         ignore_dns_log: false,
         ignored_log_domains: Vec::new(),
+        boot_file: None,
     };
     let add_res = client_ctx.handle_host_add(entry).await;
     assert!(matches!(add_res, Response::Success(_)));
@@ -350,6 +353,7 @@ async fn test_dispatch_system_config_import_overwrite() {
         origin: Origin::Static,
         ignore_dns_log: false,
         ignored_log_domains: Vec::new(),
+        boot_file: None,
     };
     let _ = client_ctx.handle_host_add(entry1).await;
 
@@ -362,6 +366,7 @@ async fn test_dispatch_system_config_import_overwrite() {
         origin: Origin::Static,
         ignore_dns_log: false,
         ignored_log_domains: Vec::new(),
+        boot_file: None,
     };
 
     // Case A: Import with overwrite = false
@@ -403,6 +408,7 @@ async fn test_dispatch_system_config_import_overwrite() {
         origin: Origin::Static,
         ignore_dns_log: false,
         ignored_log_domains: Vec::new(),
+        boot_file: None,
     };
     let import_cfg_overwrite = SystemConfigExport {
         hosts: vec![new_entry_3],
@@ -488,8 +494,10 @@ async fn wol_sends_packet_to_correct_device() {
     }
 }
 
+/// `host remove` drops the reservation (owner decision 2026-10-28): the device stays, as a
+/// discovered device again, without its static address; purging forgets it entirely.
 #[tokio::test]
-async fn test_static_host_deletion_should_purge_all_leases() {
+async fn removing_a_static_host_demotes_it_and_purging_forgets_it() {
     let client_ctx = init_test_context().await;
     let mac = MacAddr::parse("00:11:22:33:44:55").unwrap();
 
@@ -502,6 +510,7 @@ async fn test_static_host_deletion_should_purge_all_leases() {
         origin: Origin::Static,
         ignore_dns_log: false,
         ignored_log_domains: Vec::new(),
+        boot_file: None,
     };
     let add_res = client_ctx.handle_host_add(entry).await;
     assert!(matches!(add_res, Response::Success(_)));
@@ -520,11 +529,20 @@ async fn test_static_host_deletion_should_purge_all_leases() {
         assert!(dev.v4.ip().is_some());
     }
 
-    // 3. Remove host
+    // 3. Remove host: a discovered device again
     let remove_res = client_ctx.handle_host_remove(mac).await;
     assert!(matches!(remove_res, Response::Success(_)));
+    let dev = client_ctx.ctx.get_device(&mac).expect("the device stays");
+    assert_eq!(dev.origin, Origin::Dynamic);
+    assert!(!matches!(
+        dev.v4,
+        lanforge_types::device::IPv4State::Static(_)
+    ));
+    assert!(client_ctx.ctx.static_hosts().is_empty());
 
-    // 4. Verify device is purged from memory context
+    // 4. Purge forgets it
+    let res = client_ctx.handle_purge(mac).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
     assert!(client_ctx.ctx.get_device(&mac).is_none());
 }
 
@@ -549,6 +567,7 @@ async fn test_static_host_creation_creates_all_leases_for_specific_mac() {
         origin: Origin::Static,
         ignore_dns_log: false,
         ignored_log_domains: Vec::new(),
+        boot_file: None,
     };
     let add_res = client_ctx.handle_host_add(entry).await;
     assert!(matches!(add_res, Response::Success(_)));
@@ -913,4 +932,87 @@ async fn ra_update_is_written_to_the_config_file_without_the_lan_interface() {
     let res = client_ctx.handle_update_ra_config(bad).await;
     assert!(matches!(res, Response::Error { .. }), "{res:?}");
     assert_eq!(client_ctx.ctx.get_ra_server_config(), cfg);
+}
+
+/// Host changes reach `[hosts]` before they apply: the reservation and the boot file are
+/// written (comments kept), the DNS log switch is not (a WebUI setting, kept on the device).
+#[tokio::test]
+async fn host_changes_are_written_to_the_config_file() {
+    let client_ctx = init_test_context().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    std::fs::write(&path, "# mine\n[system]\niface = \"lan0\"\n").unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(true);
+    let mac = MacAddr::parse("04:d9:f5:0a:25:94").unwrap();
+
+    let entry = HostConfigEntry {
+        mac,
+        hostname: "solarium".into(),
+        v4_fixed: Some("192.168.0.128".parse().unwrap()),
+        v6_suffix: Ipv6AddrOrSuffix::parse("::501"),
+        origin: Origin::Static,
+        ignore_dns_log: true,
+        ignored_log_domains: Vec::new(),
+        boot_file: Some("pxelinux.0".into()),
+    };
+    let res = client_ctx.handle_host_add(entry).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let res = client_ctx
+        .handle_host_set(mac, "v4".into(), "192.168.0.129".into())
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    let (hosts, issues) = lanforge_api::config_file::ConfigFile::parse(&text)
+        .unwrap()
+        .static_hosts();
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(hosts, client_ctx.ctx.static_hosts());
+    assert_eq!(hosts[0].v4, Some("192.168.0.129".parse().unwrap()));
+    assert_eq!(hosts[0].boot_file.as_deref(), Some("pxelinux.0"));
+    assert!(text.contains("# mine"));
+    assert!(!text.contains("dns ="), "{text}");
+    assert!(
+        client_ctx.ctx.get_device(&mac).unwrap().ignore_dns_log,
+        "kept on the device"
+    );
+
+    // A value the file cannot hold is refused, nothing written or applied.
+    let res = client_ctx
+        .handle_host_set(mac, "v6".into(), "::zz".into())
+        .await;
+    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+
+    // Removing it empties `[hosts]`; the device stays.
+    let res = client_ctx.handle_host_remove(mac).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("[hosts"), "{text}");
+    assert!(client_ctx.ctx.get_device(&mac).is_some());
+}
+
+/// An update without a boot file (the WebUI does not send one) keeps the host's.
+#[tokio::test]
+async fn a_host_update_without_a_boot_file_keeps_it() {
+    let client_ctx = init_test_context().await;
+    let mac = MacAddr::parse("04:d9:f5:0a:25:94").unwrap();
+    let res = client_ctx
+        .handle_host_set(mac, "boot_file".into(), "pxelinux.0".into())
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let entry = HostConfigEntry {
+        mac,
+        hostname: "solarium".into(),
+        v4_fixed: Some("192.168.0.128".parse().unwrap()),
+        origin: Origin::Static,
+        ..Default::default()
+    };
+    let res = client_ctx.handle_host_add(entry).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    assert_eq!(
+        client_ctx.ctx.static_hosts()[0].boot_file.as_deref(),
+        Some("pxelinux.0")
+    );
 }

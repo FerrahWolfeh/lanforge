@@ -164,6 +164,37 @@ impl ClientContext {
         Ok(persisted)
     }
 
+    /// Changes the static hosts: `change` edits the live ones (`ctx.static_hosts`), the result is
+    /// written to `[hosts]` (see [`Self::persist_config_sections`]) and the device table is made
+    /// to follow it (`apply_static_hosts`: a host left out becomes a discovered device again).
+    /// A host the file form cannot hold, or the router itself, is refused: nothing written,
+    /// nothing applied.
+    pub fn change_hosts(
+        &self,
+        change: impl FnOnce(&mut Vec<lanforge_types::device::StaticHost>),
+    ) -> Result<Persisted, String> {
+        let _serial = self.ctx.config_change_lock();
+        let mut wanted = self.ctx.static_hosts();
+        change(&mut wanted);
+        if let Some(router) = wanted.iter().find(|h| {
+            self.ctx
+                .get_device(&h.mac)
+                .is_some_and(|d| d.origin == lanforge_types::device::Origin::System)
+        }) {
+            return Err(format!("{} is this router; not a static host", router.mac));
+        }
+        let mut file = ConfigFile::default();
+        file.set_static_hosts(&wanted);
+        let (hosts, issues) = file.static_hosts();
+        if !issues.is_empty() {
+            return Err(issues.join("; "));
+        }
+        let persisted =
+            self.persist_config_sections(SectionSet::HOSTS, |f| f.hosts = file.hosts)?;
+        let _ = self.ctx.apply_static_hosts(&hosts);
+        Ok(persisted)
+    }
+
     /// Extracts the consolidated static configuration snapshot of the system.
     pub async fn export_system_config_data(&self) -> SystemConfigExport {
         if let lanforge_api::api::Response::SystemConfig(export) =

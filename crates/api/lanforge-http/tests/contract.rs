@@ -689,9 +689,9 @@ async fn test_hosts_contract() {
 
     let edge_cases: &[(&str, Value, StatusCode)] = &[
         (
-            "patch with invalid IP — dispatch silently ignores",
+            "patch with invalid IP — refused (it used to be ignored and still pin the host)",
             json!({"field": "v4_static", "value": "not-an-ip"}),
-            StatusCode::NO_CONTENT,
+            StatusCode::INTERNAL_SERVER_ERROR,
         ),
         (
             "patch with unknown field — dispatch returns 500",

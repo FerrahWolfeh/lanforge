@@ -1,12 +1,12 @@
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::traffic::TrafficConfig;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 pub mod convert;
 pub mod duration;
 pub mod effective;
 pub mod hash;
+pub mod hosts;
 pub mod patch;
 pub mod section;
 pub mod sections;
@@ -18,6 +18,7 @@ pub use effective::{
     set_aside_issues,
 };
 pub use hash::section_hashes;
+pub use hosts::StaticHost;
 pub use patch::patch_sections;
 pub use section::{Section, SectionSet};
 pub use sections::*;
@@ -60,8 +61,13 @@ pub struct ConfigFile {
     #[serde(default)]
     /// NIC tuning and SQM: the traffic service's own type, file-owned like `pppoe`.
     pub traffic: TrafficConfig,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub hosts: BTreeMap<String, HostFileEntry>,
+    /// Static hosts, in file order (see `HostFileEntry`).
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "sections::named_tables"
+    )]
+    pub hosts: Vec<(String, HostFileEntry)>,
 }
 
 impl ConfigFile {
@@ -214,16 +220,17 @@ mod tests {
             },
         );
 
-        cfg.hosts.insert(
+        cfg.hosts.push((
             "nas".to_string(),
             HostFileEntry {
                 mac: Some("aa:bb:cc:dd:ee:ff".to_string()),
                 v4: Some("192.168.1.10".parse().unwrap()),
                 v6_suffix: Some("::10".to_string()),
                 v6: None,
-                dns: Some(true),
+                dns: None,
+                ..Default::default()
             },
-        );
+        ));
 
         let rendered = cfg.render_full().unwrap();
         let parsed = ConfigFile::parse(&rendered).unwrap();

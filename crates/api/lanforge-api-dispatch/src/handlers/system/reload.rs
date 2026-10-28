@@ -52,6 +52,7 @@ impl ClientContext {
         export.ra_prefixes = None;
         export.ra_rdnss = None;
         export.ra_dnssl = None;
+        export.hosts = Vec::new();
         match self.handle_system_config_import(export).await {
             Response::SystemConfigImport(import_res) => {
                 if import_res.total_success {
@@ -120,6 +121,15 @@ impl ClientContext {
                 info!("Reload: [ra] changed; applying");
                 ctx.update_ra_server_config(effective);
             }
+        }
+        if applies(Section::Hosts) {
+            let _serial = ctx.config_change_lock();
+            let (hosts, host_issues) = file.static_hosts();
+            issues.extend(log_issues(host_issues));
+            if ctx.static_hosts() != hosts {
+                info!("Reload: [hosts] changed; applying");
+            }
+            issues.extend(log_issues(ctx.apply_static_hosts(&hosts)));
         }
         if applies(Section::Dhcp) {
             let _serial = ctx.config_change_lock();

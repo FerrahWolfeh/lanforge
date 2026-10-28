@@ -174,6 +174,10 @@ pub enum DeviceUpdate {
     HostRemoved {
         mac: MacAddr,
     },
+    /// The device left `[hosts]`: its static configuration goes, the device and its history stay.
+    HostDemoted {
+        mac: MacAddr,
+    },
     LeaseReleased {
         mac: MacAddr,
         target: LeaseTarget,

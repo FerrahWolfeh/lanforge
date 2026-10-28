@@ -155,21 +155,6 @@ impl ClientContext {
         let mut results = Vec::new();
 
         if overwrite {
-            // Clear existing static hosts
-            let static_macs = self.ctx.with_state(|state| {
-                state
-                    .devices
-                    .values()
-                    .filter(|dev| dev.origin == lanforge_types::device::Origin::Static)
-                    .map(|dev| dev.mac)
-                    .collect::<Vec<_>>()
-            });
-            for mac in static_macs {
-                let _ = self
-                    .ctx
-                    .apply(lanforge_types::update::DeviceUpdate::HostRemoved { mac });
-            }
-
             // Clear DNS rewrites, upstreams, adblock URLs, allowlist
             if let Err(e) = storage.call(|s: &Stores| s.db().clear_dns_rewrites()).await {
                 total_success = false;
@@ -254,29 +239,28 @@ impl ClientContext {
                 .await;
         }
 
-        // 1. Import hosts
-        let mut hosts_count = 0;
-        let mut hosts_success = true;
-        let mut hosts_err = None;
-        for entry in hosts {
-            match self.handle_host_add(entry).await {
-                Response::Success(_) => hosts_count += 1,
-                Response::Error { error } => {
-                    hosts_success = false;
-                    hosts_err = Some(error);
-                }
-                _ => {}
+        // 1. Import hosts. File-owned: imported only if they reach `[hosts]`; overwrite makes
+        // the static hosts not imported discovered devices again (their history stays).
+        if overwrite || !hosts.is_empty() {
+            let outcome = self.import_hosts(hosts, overwrite);
+            if outcome.is_err() {
+                total_success = false;
             }
+            results.push(match outcome {
+                Ok(count) => ImportResult {
+                    section: ImportSection::Hosts,
+                    success: true,
+                    count,
+                    error: None,
+                },
+                Err(e) => ImportResult {
+                    section: ImportSection::Hosts,
+                    success: false,
+                    count: 0,
+                    error: Some(e),
+                },
+            });
         }
-        if !hosts_success {
-            total_success = false;
-        }
-        results.push(ImportResult {
-            section: ImportSection::Hosts,
-            success: hosts_success,
-            count: hosts_count,
-            error: hosts_err,
-        });
 
         // 2. Import DNS rewrites
         let mut rewrites_count = 0;

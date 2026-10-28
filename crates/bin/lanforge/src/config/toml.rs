@@ -53,6 +53,10 @@ pub struct TomlConfig {
     /// Problems found while loading the file (set-aside sections), shown to the admin.
     #[serde(skip)]
     pub config_issues: Vec<String>,
+    /// `[hosts]`, when the file was read and the section not set aside. `None` leaves the
+    /// device table's static hosts as they are: an unread `[hosts]` is not an empty one.
+    #[serde(skip)]
+    pub static_hosts: Option<Vec<lanforge_types::device::StaticHost>>,
 }
 
 #[cfg(feature = "dhcp")]
@@ -282,6 +286,14 @@ pub fn load_toml(path: &str) -> TomlConfig {
             #[cfg(feature = "ra")]
             cfg.config_issues
                 .extend(log_issues(file_cfg.ra.to_config().1));
+            if !set_aside
+                .iter()
+                .any(|(sec, _)| *sec == lanforge_api::config_file::Section::Hosts)
+            {
+                let (hosts, issues) = file_cfg.static_hosts();
+                cfg.config_issues.extend(log_issues(issues));
+                cfg.static_hosts = Some(hosts);
+            }
             cfg
         }
         Err(e) => {
@@ -356,7 +368,7 @@ source = "broken" # Invalid variant
         assert!(file_cfg.system.ula_prefix.is_none());
         assert_eq!(file_cfg.ra.prefixes, Vec::new());
         assert!(file_cfg.dhcp.v4.pools.iter().any(|(name, _)| name == "lan"));
-        assert!(file_cfg.hosts.contains_key("nas"));
+        assert!(file_cfg.hosts.iter().any(|(name, _)| name == "nas"));
     }
 
     /// A `[dhcp.v6]` section without `iface` must leave it empty so `to_dhcpv6_config` inherits
@@ -380,6 +392,35 @@ source = "broken" # Invalid variant
         let with: TomlConfig =
             toml::from_str("[system]\niface = \"lan0\"\n\n[ra]\nenabled = true\n").expect("parses");
         assert!(with.ra.deprecate_on_renumber);
+    }
+
+    /// An unreadable `[hosts]` is set aside as "not read", not as "no hosts": applying an
+    /// empty list would make every static host a discovered device.
+    #[test]
+    fn a_broken_hosts_section_is_not_an_empty_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        std::fs::write(&path, "[hosts.archie]\nmac = 7\n").unwrap();
+        let cfg = load_toml(path.to_str().unwrap());
+        assert_eq!(cfg.static_hosts, None);
+        assert!(
+            cfg.config_issues[0].starts_with("[hosts]"),
+            "{:?}",
+            cfg.config_issues
+        );
+
+        std::fs::write(&path, "[hosts.archie]\nmac = \"bc:fc:e7:8a:a9:73\"\n").unwrap();
+        assert_eq!(
+            load_toml(path.to_str().unwrap())
+                .static_hosts
+                .map(|h| h.len()),
+            Some(1)
+        );
+        assert_eq!(
+            TomlConfig::default().static_hosts,
+            None,
+            "no file: not read"
+        );
     }
 
     #[test]

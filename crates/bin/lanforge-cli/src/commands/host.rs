@@ -386,6 +386,7 @@ async fn add_host(client: &LanforgeClient, printer: &Printer, args: HostAddArgs)
         origin: Origin::Static,
         ignore_dns_log,
         ignored_log_domains: Vec::new(),
+        boot_file: None,
     };
 
     let resp = client.host_add(entry).await?;
@@ -850,6 +851,7 @@ mod tests {
                     origin: Origin::Static,
                     ignore_dns_log: false,
                     ignored_log_domains: Vec::new(),
+                    boot_file: None,
                 },
                 HostConfigEntry {
                     mac: MacAddr::from_str("48:2c:67:89:ab:cd").unwrap(),
@@ -859,6 +861,7 @@ mod tests {
                     origin: Origin::Static,
                     ignore_dns_log: true,
                     ignored_log_domains: vec!["telemetry.local".to_string()],
+                    boot_file: None,
                 },
             ],
         };

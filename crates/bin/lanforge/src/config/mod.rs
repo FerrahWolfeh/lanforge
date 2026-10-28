@@ -107,6 +107,8 @@ pub struct Config {
     pub config_writable: bool,
     /// Problems found while loading the config file, shown to the admin.
     pub config_issues: Vec<String>,
+    /// `[hosts]` (`None`: not read, the table's static hosts stay as they are).
+    pub static_hosts: Option<Vec<lanforge_types::device::StaticHost>>,
 }
 
 impl Config {
@@ -246,6 +248,7 @@ impl Config {
             #[cfg(feature = "traffic")]
             traffic_toml: toml_cfg.traffic,
             config_issues: toml_cfg.config_issues,
+            static_hosts: toml_cfg.static_hosts,
             config_path: cli.resolved_config_path().to_string_lossy().to_string(),
             config_writable: if cli.dev {
                 false
@@ -734,6 +737,7 @@ impl Default for Config {
             config_path: "/etc/lanforge/lanforge.toml".to_string(),
             config_writable: true,
             config_issues: Vec::new(),
+            static_hosts: None,
         }
     }
 }

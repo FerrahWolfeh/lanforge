@@ -3,7 +3,6 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
 
 use lanforge_types::device::Origin;
-use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{
     DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, Dhcpv6Pool, TftpOptions,
 };
@@ -28,14 +27,14 @@ use crate::api::dns::AllowlistEntry;
 use crate::api::dns::DnsUpstreamConfig;
 use crate::api::system::SystemConfigExport;
 
-use super::ConfigFile;
 use super::duration::HumanDuration;
 use super::sections::{
     AdblockFile, AdblockRuleFile, AdblockSourceFile, DhcpFile, Dhcpv4File, Dhcpv4PoolFile,
     Dhcpv6File, Dhcpv6PoolFile, DnsFile, DnsRewriteFile, DnsUpstreamFile, FirewallFile,
-    FirewallZoneFile, HostFileEntry, LifetimeFile, OpenPortFile, PortForwardFile, RaDnsslFile,
-    RaFile, RaPrefixFile, RaRdnssFile, TftpFile, ZoneForwardingFile,
+    FirewallZoneFile, LifetimeFile, OpenPortFile, PortForwardFile, RaDnsslFile, RaFile,
+    RaPrefixFile, RaRdnssFile, TftpFile, ZoneForwardingFile,
 };
+use super::{ConfigFile, StaticHost};
 
 fn policy_to_str(p: FirewallPolicy) -> &'static str {
     match p {
@@ -900,27 +899,20 @@ impl From<&SystemConfigExport> for ConfigFile {
             cfg.system.iface = iface.clone();
         }
 
-        // 1. Hosts
-        for host in &export.hosts {
-            if host.origin == Origin::System {
-                continue;
-            }
-            let name = if host.hostname.is_empty() {
-                format!("host-{}", host.mac.to_string().replace(':', ""))
-            } else {
-                host.hostname.clone()
-            };
-            cfg.hosts.insert(
-                name,
-                HostFileEntry {
-                    mac: Some(host.mac.to_string()),
-                    v4: host.v4_fixed,
-                    v6_suffix: host.v6_suffix.as_ref().map(ToString::to_string),
-                    v6: None,
-                    dns: Some(!host.ignore_dns_log),
-                },
-            );
-        }
+        // 1. Hosts (static ones only; the router itself is not a host)
+        let hosts: Vec<StaticHost> = export
+            .hosts
+            .iter()
+            .filter(|h| h.origin == Origin::Static)
+            .map(|h| StaticHost {
+                mac: h.mac,
+                hostname: h.hostname.clone(),
+                v4: h.v4_fixed,
+                v6: h.v6_suffix,
+                boot_file: h.boot_file.clone(),
+            })
+            .collect();
+        cfg.set_static_hosts(&hosts);
 
         // 2. DHCP options & pools, TFTP
         if export.dhcp_options.is_some()
@@ -1074,31 +1066,23 @@ impl From<SystemConfigExport> for ConfigFile {
 
 impl From<&ConfigFile> for SystemConfigExport {
     fn from(cfg: &ConfigFile) -> Self {
-        // 1. Hosts
-        let mut hosts = Vec::with_capacity(cfg.hosts.len());
-        for (hostname, entry) in &cfg.hosts {
-            let mac = entry
-                .mac
-                .as_deref()
-                .and_then(MacAddr::parse)
-                .unwrap_or(MacAddr::ZERO);
-
-            let v6_suffix = entry
-                .v6_suffix
-                .as_deref()
-                .and_then(|s| Ipv6AddrOrSuffix::from_str(s).ok())
-                .or_else(|| entry.v6.map(Ipv6AddrOrSuffix::Full));
-
-            hosts.push(HostConfigEntry {
-                mac,
-                hostname: hostname.clone(),
-                v4_fixed: entry.v4,
-                v6_suffix,
+        // 1. Hosts (entries the file gets wrong are left out; see `ConfigFile::static_hosts`).
+        // The DNS log settings are not file settings: an export from the file carries none.
+        let hosts = cfg
+            .static_hosts()
+            .0
+            .into_iter()
+            .map(|h| HostConfigEntry {
+                mac: h.mac,
+                hostname: h.hostname,
+                v4_fixed: h.v4,
+                v6_suffix: h.v6,
                 origin: Origin::Static,
-                ignore_dns_log: entry.dns.is_some_and(|d| !d),
+                ignore_dns_log: false,
                 ignored_log_domains: Vec::new(),
-            });
-        }
+                boot_file: h.boot_file,
+            })
+            .collect::<Vec<_>>();
 
         // 2. DHCP options & pools, TFTP (entries the file gets wrong are left out; see
         // `ConfigFile::dhcp_settings`)
@@ -1324,6 +1308,7 @@ fn parse_rewrite_target(target: &str, rtype: Option<&str>) -> (DnsRecordType, Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lanforge_types::identifiers::MacAddr;
 
     #[test]
     fn test_export_to_config_file_and_back() {
@@ -1337,6 +1322,7 @@ mod tests {
                 origin: Origin::Static,
                 ignore_dns_log: false,
                 ignored_log_domains: Vec::new(),
+                boot_file: None,
             }],
             dns_rewrites: vec![RewriteRule {
                 id: None,
@@ -1365,8 +1351,9 @@ mod tests {
 
         let cfg = ConfigFile::from(&export);
         assert_eq!(cfg.hosts.len(), 1);
-        assert_eq!(cfg.hosts["nas"].mac.as_deref(), Some("aa:bb:cc:dd:ee:ff"));
-        assert_eq!(cfg.hosts["nas"].v4, Some("192.168.1.10".parse().unwrap()));
+        assert_eq!(cfg.hosts[0].0, "nas");
+        assert_eq!(cfg.hosts[0].1.mac.as_deref(), Some("aa:bb:cc:dd:ee:ff"));
+        assert_eq!(cfg.hosts[0].1.v4, Some("192.168.1.10".parse().unwrap()));
         assert_eq!(cfg.dhcp.v4.pools[0].0, "lan");
         assert_eq!(cfg.dhcp.v4.pools[0].1.range, "192.168.1.100-192.168.1.200");
         assert_eq!(cfg.dns.rewrites["nas.lan"].target, "192.168.1.10");

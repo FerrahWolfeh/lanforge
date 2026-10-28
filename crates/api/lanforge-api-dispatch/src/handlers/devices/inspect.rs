@@ -124,7 +124,16 @@ impl ClientContext {
     }
 
     pub async fn handle_purge(&self, mac: MacAddr) -> Response {
-        // HostRemoved also purges from memory if it's dynamic
+        // A static host leaves `[hosts]` first, or the next boot would bring it back.
+        let is_static = self
+            .ctx
+            .get_device(&mac)
+            .is_some_and(|d| d.origin == lanforge_types::device::Origin::Static);
+        if is_static && let Err(e) = self.change_hosts(|hosts| hosts.retain(|h| h.mac != mac)) {
+            return Response::Error {
+                error: format!("Device {mac} not purged: {e}"),
+            };
+        }
         if !self.ctx.apply(DeviceUpdate::HostRemoved { mac }) {
             return Response::Error {
                 error: "Failed to purge device".to_string(),

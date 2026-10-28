@@ -295,6 +295,14 @@ impl State {
         EventVec::new()
     }
 
+    pub(crate) fn handle_host_demoted(&mut self, mac: MacAddr) -> EventVec {
+        let events = self.mutate_device_admin(mac, |dev| {
+            (dev.origin == Origin::Static).then(|| dev.demote_to_dynamic())
+        });
+        self.rebuild_static_registry();
+        events
+    }
+
     pub(crate) fn handle_lease_released(&mut self, mac: MacAddr, target: LeaseTarget) -> EventVec {
         self.mutate_device(mac, |dev| dev.release_lease(target))
     }

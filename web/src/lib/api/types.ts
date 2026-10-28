@@ -634,6 +634,8 @@ export interface HostConfigEntry {
 	origin?: 'Static' | 'Dynamic' | 'System' | string;
 	ignore_dns_log?: boolean;
 	ignored_log_domains?: string[];
+	/** PXE boot file; left out on an update, the host keeps its own. */
+	boot_file?: string | null;
 }
 
 export type LeaseKind = 'v4' | 'v6' | 'v6_prefix';

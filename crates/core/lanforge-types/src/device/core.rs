@@ -991,6 +991,24 @@ impl Device {
         result
     }
 
+    /// Makes a static host a discovered device again: its reserved addresses, boot file and
+    /// pinned hostname go (the name stays until DHCP or mDNS offers another), the device, its
+    /// leases and history stay.
+    pub fn demote_to_dynamic(&mut self) -> AdminChange {
+        if matches!(self.v4, IPv4State::Static(_)) {
+            self.v4 = IPv4State::None;
+        }
+        self.v6.retain(|s| !matches!(s, IPv6State::Static(_, _)));
+        let identity = self.identity_mut();
+        identity.boot_file = None;
+        identity.origin = Origin::Dynamic;
+        identity.managed_at = None;
+        if identity.hostname.origin == HostnameOrigin::Static {
+            identity.hostname.origin = HostnameOrigin::Dhcp;
+        }
+        AdminChange::Demoted
+    }
+
     /// Releases an address lease matching the target specification.
     pub fn release_lease(&mut self, target: LeaseTarget) -> Option<NetworkChange> {
         let changed = match target {

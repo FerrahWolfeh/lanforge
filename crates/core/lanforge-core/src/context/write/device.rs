@@ -18,6 +18,70 @@ use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
 use std::net::Ipv4Addr;
 
 impl LanforgeContext {
+    /// The static hosts in the device table (by hostname, then MAC): what `[hosts]` holds.
+    #[must_use]
+    pub fn static_hosts(&self) -> Vec<lanforge_types::device::StaticHost> {
+        let mut hosts: Vec<_> = self.with_state(|state| {
+            state
+                .devices
+                .values()
+                .filter_map(|dev| dev.static_host())
+                .collect()
+        });
+        hosts.sort_by(|a, b| {
+            (a.hostname.to_lowercase(), a.mac).cmp(&(b.hostname.to_lowercase(), b.mac))
+        });
+        hosts
+    }
+
+    /// Makes the device table's static hosts exactly `hosts` (`[hosts]`, its only source): a
+    /// listed host is (re)reserved where it differs, a static host no longer listed becomes a
+    /// discovered device again (`HostDemoted`). Returns one message per host not applied: the
+    /// router itself cannot be a static host.
+    #[must_use = "the messages name hosts that were not applied"]
+    pub fn apply_static_hosts(&self, hosts: &[lanforge_types::device::StaticHost]) -> Vec<String> {
+        use lanforge_types::device::Origin;
+        use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
+
+        let mut issues = Vec::new();
+        for host in hosts {
+            let live = self.get_device(&host.mac);
+            if live.as_ref().is_some_and(|d| d.origin == Origin::System) {
+                issues.push(format!(
+                    "[hosts.\"{}\"] mac = \"{}\" is this router; not a static host",
+                    host.hostname, host.mac
+                ));
+                continue;
+            }
+            if live.and_then(|d| d.static_host()).as_ref() == Some(host) {
+                continue;
+            }
+            let _ = self.apply(DeviceUpdate::CliHostUpdated {
+                mac: host.mac,
+                update: Box::new(CliHostUpdate {
+                    hostname: if host.hostname.is_empty() {
+                        FieldUpdate::NoChange
+                    } else {
+                        FieldUpdate::Set(host.hostname.clone())
+                    },
+                    duid: FieldUpdate::NoChange,
+                    v4_static: host.v4.into(),
+                    v6_suffix: host.v6.into(),
+                    boot_file: host.boot_file.clone().into(),
+                    dns_fallback: FieldUpdate::NoChange,
+                    class: FieldUpdate::NoChange,
+                    origin: Origin::Static,
+                }),
+            });
+        }
+        for live in self.static_hosts() {
+            if !hosts.iter().any(|h| h.mac == live.mac) {
+                let _ = self.apply(DeviceUpdate::HostDemoted { mac: live.mac });
+            }
+        }
+        issues
+    }
+
     /// Triggers the background garbage collection process.
     pub fn expire_stale(&self, interval: Duration) {
         let events = self.with_state_mut(|state| state.expire_stale(interval));

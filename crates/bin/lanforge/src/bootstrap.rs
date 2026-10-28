@@ -177,6 +177,15 @@ impl Bootstrapper {
 
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
         Self::populate_context(&ctx, &cfg, &db);
+        // `[hosts]` is the static hosts' only source: the table follows it.
+        if let Some(hosts) = cfg.static_hosts.as_ref() {
+            let issues = lanforge_api::config_file::log_issues(ctx.apply_static_hosts(hosts));
+            if !issues.is_empty() {
+                let mut all = ctx.config_issues();
+                all.extend(issues);
+                ctx.set_config_issues(all);
+            }
+        }
 
         #[cfg(feature = "dns")]
         {
@@ -560,6 +569,10 @@ impl Bootstrapper {
             Err(error) => warn!(%error, "Could not hydrate volatile device observations"),
         }
 
+        if is_provisioned {
+            Self::migrate_hosts(&db, cfg, &table)?;
+        }
+
         // 2c. Check/reconcile DHCPv4 topology sanity against physical interface and host identity
         #[cfg(feature = "dhcp")]
         if is_provisioned {
@@ -776,6 +789,49 @@ impl Bootstrapper {
         }
     }
 
+    /// Config-storage cut-over for `[hosts]`: static hosts lived in the device table, mirrored
+    /// into the file by the db worker; the file is now their only source. Once, the table's
+    /// static hosts (what the daemon ran with) are merged into `[hosts]` — a host only the file
+    /// lists is kept — with a backup of the file, and a marker is set. Until the file can take
+    /// them the merge is used for this run; an unreadable `[hosts]` waits for the next boot.
+    fn migrate_hosts(db: &LanforgeDb, cfg: &mut Config, table: &State) -> Result<()> {
+        use lanforge_db::ConfigStore;
+        const MARKER: &str = "config_storage:hosts_in_file";
+
+        if db.get_meta(MARKER)?.is_some() {
+            return Ok(());
+        }
+        let Some(file_hosts) = cfg.static_hosts.as_ref() else {
+            return Ok(());
+        };
+        let mut hosts: Vec<lanforge_types::device::StaticHost> = table
+            .devices
+            .values()
+            .filter_map(|dev| dev.static_host())
+            .collect();
+        hosts.sort_by(|a, b| {
+            (a.hostname.to_lowercase(), a.mac).cmp(&(b.hostname.to_lowercase(), b.mac))
+        });
+        for host in file_hosts {
+            if !hosts.iter().any(|h| h.mac == host.mac) {
+                hosts.push(host.clone());
+            }
+        }
+        let moved = Self::move_section_to_file(
+            db,
+            cfg,
+            "static hosts",
+            &[],
+            lanforge_api::config_file::SectionSet::HOSTS,
+            |file| file.set_static_hosts(&hosts),
+        )?;
+        cfg.static_hosts = Some(hosts);
+        if moved {
+            db.set_meta(MARKER, &[1])?;
+        }
+        Ok(())
+    }
+
     /// Moves the RA lists an older binary kept in redb (prefixes, RDNSS, DNSSL) into `[ra]`
     /// (once); its other keys were already file-only. A key that is missing keeps what the
     /// file has.
@@ -807,6 +863,7 @@ impl Bootstrapper {
             lanforge_api::config_file::SectionSet::RA,
             |file| file.ra = lanforge_api::config_file::RaFile::from_config(&stored),
         )
+        .map(|_| ())
     }
 
     /// Config-storage cut-over for a file-owned section (`SectionSet::FILE_OWNED`), whose only
@@ -814,6 +871,7 @@ impl Bootstrapper {
     /// full configuration the daemon ran with (the file kept only part of it): it is written to
     /// the file once, with a backup of the file, and then removed. Until the file can take it
     /// (read-only config, write error) the key is kept; the caller uses the stored value anyway.
+    /// Returns whether the file took it.
     fn move_section_to_file(
         db: &LanforgeDb,
         cfg: &Config,
@@ -821,7 +879,7 @@ impl Bootstrapper {
         keys: &[&str],
         section: lanforge_api::config_file::SectionSet,
         fill: impl FnOnce(&mut lanforge_api::config_file::ConfigFile),
-    ) -> Result<()> {
+    ) -> Result<bool> {
         use lanforge_api::config_file::{ConfigFile, persist_sections};
 
         let path = std::path::Path::new(&cfg.config_path);
@@ -830,7 +888,7 @@ impl Bootstrapper {
                 "Config: {name} settings stay in the database until '{}' is writable",
                 path.display()
             );
-            return Ok(());
+            return Ok(false);
         }
         let backup = path.with_extension("toml.bak");
         let mut section_cfg = ConfigFile::default();
@@ -842,7 +900,7 @@ impl Bootstrapper {
                 "Config: could not move {name} settings to '{}' ({e}); keeping them in the database",
                 path.display()
             );
-            return Ok(());
+            return Ok(false);
         }
         db.write(|tx| keys.iter().try_for_each(|key| tx.remove_config(key)))?;
         info!(
@@ -850,7 +908,7 @@ impl Bootstrapper {
             path.display(),
             backup.display()
         );
-        Ok(())
+        Ok(true)
     }
 
     #[cfg(feature = "pppoe")]
@@ -868,6 +926,7 @@ impl Bootstrapper {
             lanforge_api::config_file::SectionSet::PPPOE,
             |file| file.pppoe = stored,
         )
+        .map(|_| ())
     }
 
     #[cfg(feature = "traffic")]
@@ -884,6 +943,7 @@ impl Bootstrapper {
             lanforge_api::config_file::SectionSet::TRAFFIC,
             |file| file.traffic = stored,
         )
+        .map(|_| ())
     }
 
     /// Moves a firewall an older binary kept in redb into `[firewall]` (once), then derives the
@@ -1744,6 +1804,101 @@ mod tests {
         assert_eq!(db.load_ra_prefixes().unwrap(), Vec::new(), "keys removed");
         assert_eq!(db.load_ra_rdnss().unwrap(), Vec::new());
         assert_eq!(db.load_ra_dnssl().unwrap(), Vec::new());
+    }
+
+    /// Hosts cut-over on the owner's data: the table's static hosts (incl. a boot file the old
+    /// `[hosts]` could not hold) land in the file, a host only the file listed is kept, the
+    /// marker is set and a second boot changes nothing.
+    #[test]
+    fn static_hosts_move_from_the_device_table_to_the_file_once() {
+        use lanforge_api::config_file::ConfigFile;
+        use lanforge_types::device::{Ipv6AddrOrSuffix, StaticHost};
+        use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        let old_file = "# box\n[hosts.media-container]\nmac = \"02:4d:45:44:49:41\"\n\
+                        v4 = \"192.168.2.9\"\nv6_suffix = \"fd97:f00d:cafe:3731::f00f\"\ndns = false\n\n\
+                        [hosts.handwritten]\nmac = \"aa:bb:cc:00:00:01\"\nv4 = \"192.168.0.50\"\n";
+        std::fs::write(&path, old_file).unwrap();
+        let mut cfg = config_with_db(&dir.path().join("config.redb"));
+        cfg.config_path = path.display().to_string();
+        cfg.config_writable = true;
+        cfg.static_hosts = Some(ConfigFile::parse(old_file).unwrap().static_hosts().0);
+        let db = LanforgeDb::open_in_memory().unwrap();
+
+        let table_hosts = [
+            (
+                "02:4d:45:44:49:41",
+                "media-container",
+                "192.168.2.9",
+                Some("fd97:f00d:cafe:3731::f00f"),
+                None,
+            ),
+            (
+                "04:d9:f5:0a:25:94",
+                "solarium",
+                "192.168.0.128",
+                Some("::501"),
+                Some("pxelinux.0"),
+            ),
+            (
+                "bc:fc:e7:8a:a9:73",
+                "archie",
+                "192.168.0.2",
+                Some("::1057:cafe"),
+                None,
+            ),
+        ];
+        let mut table = State::new();
+        for (mac, name, v4, v6, boot) in table_hosts {
+            let _ = table.apply_update(
+                DeviceUpdate::CliHostUpdated {
+                    mac: MacAddr::parse(mac).unwrap(),
+                    update: Box::new(CliHostUpdate {
+                        hostname: FieldUpdate::Set(name.into()),
+                        duid: FieldUpdate::NoChange,
+                        v4_static: FieldUpdate::Set(v4.parse().unwrap()),
+                        v6_suffix: v6.and_then(Ipv6AddrOrSuffix::parse).into(),
+                        boot_file: boot.map(String::from).into(),
+                        dns_fallback: FieldUpdate::NoChange,
+                        class: FieldUpdate::NoChange,
+                        origin: Origin::Static,
+                    }),
+                },
+                &lanforge_core::context::state::DiscoveryStore::default(),
+            );
+        }
+
+        Bootstrapper::migrate_hosts(&db, &mut cfg, &table).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        let (from_file, issues) = ConfigFile::parse(&text).unwrap().static_hosts();
+        assert!(issues.is_empty(), "{issues:?}");
+        let names: Vec<_> = from_file.iter().map(|h| h.hostname.as_str()).collect();
+        assert_eq!(
+            names,
+            ["archie", "media-container", "solarium", "handwritten"],
+            "{text}"
+        );
+        let solarium: &StaticHost = &from_file[2];
+        assert_eq!(solarium.boot_file.as_deref(), Some("pxelinux.0"));
+        assert!(text.starts_with("# box"));
+        assert!(!text.contains("dns ="), "{text}");
+        assert_eq!(cfg.static_hosts.as_deref(), Some(from_file.as_slice()));
+
+        // Second boot: the marker is set, the file is the only source.
+        std::fs::write(&path, "[hosts.archie]\nmac = \"bc:fc:e7:8a:a9:73\"\n").unwrap();
+        let mut cfg2 = config_with_db(&dir.path().join("config.redb"));
+        cfg2.config_path = cfg.config_path.clone();
+        cfg2.config_writable = true;
+        cfg2.static_hosts = Some(Vec::new());
+        Bootstrapper::migrate_hosts(&db, &mut cfg2, &table).unwrap();
+        assert_eq!(cfg2.static_hosts, Some(Vec::new()), "not merged again");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[hosts.archie]\nmac = \"bc:fc:e7:8a:a9:73\"\n"
+        );
     }
 
     /// A file that cannot take the config keeps it in the database, in use.

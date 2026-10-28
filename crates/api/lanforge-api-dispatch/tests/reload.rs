@@ -232,3 +232,46 @@ async fn an_unchanged_ra_reload_keeps_the_derived_lists() {
     reload(&client).await;
     assert_eq!(client.ctx.get_ra_server_config(), first);
 }
+
+fn static_host(mac: &str, name: &str) -> lanforge_types::device::StaticHost {
+    lanforge_types::device::StaticHost {
+        mac: lanforge_types::identifiers::MacAddr::parse(mac).unwrap(),
+        hostname: name.into(),
+        v4: None,
+        v6: None,
+        boot_file: None,
+    }
+}
+
+/// A host taken out of `[hosts]` offline becomes a discovered device on reload; the others
+/// stay reserved.
+#[tokio::test]
+async fn reload_demotes_a_host_taken_out_of_the_file() {
+    let (client, _dir, _) =
+        with_file("[hosts.archie]\nmac = \"bc:fc:e7:8a:a9:73\"\nv4 = \"192.168.0.2\"\n");
+    let solarium = static_host("04:d9:f5:0a:25:94", "solarium");
+    let _ = client
+        .ctx
+        .apply_static_hosts(&[static_host("bc:fc:e7:8a:a9:73", "archie"), solarium.clone()]);
+    reload(&client).await;
+    let hosts = client.ctx.static_hosts();
+    assert_eq!(hosts.len(), 1);
+    assert_eq!(hosts[0].v4, Some("192.168.0.2".parse().unwrap()));
+    let dev = client
+        .ctx
+        .get_device(&solarium.mac)
+        .expect("the device stays");
+    assert_eq!(dev.origin, lanforge_types::device::Origin::Dynamic);
+}
+
+/// An unreadable `[hosts]` keeps every static host as it is (its default, no hosts, would
+/// demote them all) and is reported.
+#[tokio::test]
+async fn an_unreadable_hosts_section_keeps_the_static_hosts() {
+    let (client, _dir, _) = with_file("[hosts.archie]\nmac = 7\n");
+    let hosts = vec![static_host("bc:fc:e7:8a:a9:73", "archie")];
+    let _ = client.ctx.apply_static_hosts(&hosts);
+    reload(&client).await;
+    assert_eq!(client.ctx.static_hosts(), hosts);
+    assert!(client.ctx.config_issues()[0].starts_with("[hosts]"));
+}

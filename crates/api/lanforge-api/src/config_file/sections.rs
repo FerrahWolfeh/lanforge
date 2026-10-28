@@ -746,7 +746,7 @@ pub struct FirewallFile {
 
 /// `[parent.<name>]` tables kept as an ordered list: a `BTreeMap` sorted them by name, and
 /// `toml_edit` reads tables in document order, so the order written is the order read back.
-mod named_tables {
+pub(crate) mod named_tables {
     use std::fmt;
     use std::marker::PhantomData;
 
@@ -935,18 +935,29 @@ pub struct PortForwardFile {
     pub description: Option<String>,
 }
 
-/// A static host or pinned client entry in `[hosts.<name>]`.
+/// A static host in `[hosts.<name>]` (`ConfigFile::static_hosts` / `set_static_hosts`): only
+/// what a minimal router needs — the reservation and the boot file. The table name is the
+/// hostname. DNS log settings and the device class are WebUI settings kept with the device.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct HostFileEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mac: Option<String>,
+    /// The hostname when it is not the table name (a repeated or empty one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub v4: Option<Ipv4Addr>,
+    /// A suffix (`"::501"`, follows the LAN prefix) or a full address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub v6_suffix: Option<String>,
+    /// Older files: a full address (read as `v6_suffix`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub v6: Option<Ipv6Addr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot_file: Option<String>,
+    /// Older files: the DNS log switch, now a WebUI setting kept with the device. Read and
+    /// ignored, never written.
+    #[serde(default, skip_serializing)]
     pub dns: Option<bool>,
 }

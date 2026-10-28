@@ -49,7 +49,11 @@ pub fn patch_sections(
             Section::Hosts => {
                 #[derive(serde::Serialize)]
                 struct HostsWrapper<'a> {
-                    hosts: &'a std::collections::BTreeMap<String, super::sections::HostFileEntry>,
+                    #[serde(
+                        serialize_with = "super::sections::named_tables::serialize",
+                        skip_serializing_if = "<[_]>::is_empty"
+                    )]
+                    hosts: &'a [(String, super::sections::HostFileEntry)],
                 }
                 let wrapper = HostsWrapper { hosts: &cfg.hosts };
                 toml::to_string(&wrapper)
@@ -63,7 +67,16 @@ pub fn patch_sections(
 
         if sec == Section::Hosts {
             if let Some(item) = parsed.get("hosts") {
-                doc.insert("hosts", item.clone());
+                // Keep the comment written above the first `[hosts.<name>]`, as below.
+                let mut item = item.clone();
+                if let Some(prefix) = doc
+                    .get_mut("hosts")
+                    .and_then(|old| first_header_decor(old).and_then(|d| d.prefix().cloned()))
+                    && let Some(decor) = first_header_decor(&mut item)
+                {
+                    decor.set_prefix(prefix);
+                }
+                doc.insert("hosts", item);
             } else {
                 doc.remove("hosts");
             }
@@ -298,26 +311,28 @@ domains = ["lan"]
         let mut doc: DocumentMut = initial_toml.parse().unwrap();
         let mut cfg = ConfigFile::default();
         cfg.system.iface = "lan0".to_string();
-        cfg.hosts.insert(
+        cfg.hosts.push((
             "TL-SG105E".to_string(),
             super::super::sections::HostFileEntry {
                 mac: Some("68:ff:7b:45:49:a2".to_string()),
                 v4: Some("192.168.3.4".parse().unwrap()),
                 v6_suffix: None,
                 v6: None,
-                dns: Some(true),
+                dns: None,
+                ..Default::default()
             },
-        );
-        cfg.hosts.insert(
+        ));
+        cfg.hosts.push((
             "archie".to_string(),
             super::super::sections::HostFileEntry {
                 mac: Some("bc:fc:e7:8a:a9:73".to_string()),
                 v4: Some("192.168.0.2".parse().unwrap()),
                 v6_suffix: None,
                 v6: None,
-                dns: Some(true),
+                dns: None,
+                ..Default::default()
             },
-        );
+        ));
 
         // Patch ONLY hosts into an existing document that has RA and database
         patch_sections(&mut doc, &cfg, SectionSet::HOSTS).unwrap();

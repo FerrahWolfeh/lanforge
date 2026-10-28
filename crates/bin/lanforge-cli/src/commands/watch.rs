@@ -270,6 +270,9 @@ fn render_device_event(time_str: &str, evt: &DeviceEvent, printer: &Printer, ver
                 }
                 AdminChange::Classified { class } => format!("Classified as: {class:?}"),
                 AdminChange::HostRemoved => "Static host removed".red().to_string(),
+                AdminChange::Demoted => {
+                    "Static config removed; discovered device again".to_string()
+                }
             };
             print_log(
                 time_str,

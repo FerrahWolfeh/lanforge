@@ -336,6 +336,7 @@ impl DbWorker {
                     origin: dev.origin,
                     ignore_dns_log: dev.ignore_dns_log,
                     ignored_log_domains: dev.ignored_log_domains.clone(),
+                    boot_file: None,
                 })
                 .collect()
         });
@@ -717,7 +718,6 @@ impl AsyncService for DbWorker {
                                     }
                                 })
                                 .or_insert(PendingDeviceOp::UpsertBase);
-                            self.dirty_sections |= SectionSet::HOSTS;
                         }
                         LanforgeEvent::Device(DeviceEvent::Discovered { mac, .. })
                         | LanforgeEvent::Device(DeviceEvent::Expired { mac, .. }) => {
@@ -725,7 +725,6 @@ impl AsyncService for DbWorker {
                         }
                         LanforgeEvent::Device(DeviceEvent::Purged { mac }) => {
                             self.pending_devices.insert(*mac, PendingDeviceOp::Delete);
-                            self.dirty_sections |= SectionSet::HOSTS;
 
                             // Flush immediately for administrative host removal
                             self.flush_batch(&db, &log_db).await;

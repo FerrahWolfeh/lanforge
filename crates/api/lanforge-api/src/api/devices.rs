@@ -77,6 +77,9 @@ pub struct HostConfigEntry {
     /// Specific domains or wildcards to suppress from DNS query logs for this host.
     #[serde(default)]
     pub ignored_log_domains: Vec<String>,
+    /// PXE boot file offered to this host. Absent on an add or import: the device keeps its own.
+    #[serde(default)]
+    pub boot_file: Option<String>,
 }
 
 /// A single device discovered on the network.
