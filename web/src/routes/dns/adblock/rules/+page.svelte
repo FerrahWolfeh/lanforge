@@ -62,7 +62,7 @@
 
 	async function handleAddDomain(e: Event) {
 		e.preventDefault();
-		const domain = newDomain.trim().toLowerCase().replace(/\.$/, "");
+		const domain = newDomain.trim();
 		if (!domain) {
 			toast.error("Please enter a domain name");
 			return;

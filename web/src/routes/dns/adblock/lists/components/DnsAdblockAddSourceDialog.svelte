@@ -6,7 +6,7 @@
 	import { Label } from "$lib/components/ui/label";
 	import LinkIcon from "@lucide/svelte/icons/link";
 	import { toast } from "svelte-sonner";
-	import { dnsAdblockUrlAdd, dnsAdblockReload } from "$lib/api/client";
+	import { dnsAdblockUrlAdd } from "$lib/api/client";
 	import type { AdblockSourceFormat, DnsAdblockUrlEntry } from "$lib/api/types";
 
 	let {
@@ -50,11 +50,11 @@
 			url = "";
 			format = "auto";
 			open = false;
+			// The daemon loads a new source on its own (the others are only revalidated); a
+			// forced reload would download every list again.
 			onAdded();
-			dnsAdblockReload().then(() => {
-				setTimeout(onAdded, 1500);
-				setTimeout(onAdded, 3500);
-			}).catch(() => {});
+			setTimeout(onAdded, 1500);
+			setTimeout(onAdded, 3500);
 		} catch (err: any) {
 			toast.error(err?.message ?? "Failed to add source URL");
 		} finally {

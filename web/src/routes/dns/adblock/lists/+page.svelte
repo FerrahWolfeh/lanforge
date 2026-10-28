@@ -132,11 +132,10 @@
 				format: format ?? "auto",
 			});
 			toast.success(`Added preset "${name}". Compiling rules in background...`);
+			// Loaded by the daemon on its own, like a source added by hand.
 			await loadSources();
-			dnsAdblockReload().then(() => {
-				setTimeout(loadSources, 1500);
-				setTimeout(loadSources, 3500);
-			}).catch(() => {});
+			setTimeout(loadSources, 1500);
+			setTimeout(loadSources, 3500);
 		} catch (err: any) {
 			toast.error(err?.message ?? `Failed to add "${name}"`);
 		}
