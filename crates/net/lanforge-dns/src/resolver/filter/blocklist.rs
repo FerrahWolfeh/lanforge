@@ -1,12 +1,13 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use lanforge_types::network::dns::adblock::syntax::MatchFlags;
+
 use crate::error::DnsError;
 use crate::resolver::filter::engine::{
     DiskFilterMap, MatchCandidate, build_fst_map, encode_reversed_domain, encode_val,
     reverse_domain_key,
 };
-use crate::resolver::filter::parse::MatchFlags;
 
 use std::sync::Arc;
 

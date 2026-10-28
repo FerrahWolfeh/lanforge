@@ -30,6 +30,8 @@ use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::AdblockUrlEntry;
 #[cfg(feature = "adblock")]
+use lanforge_types::network::dns::adblock::syntax::ParseStats;
+#[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockSourceFormat, TimeOfDay};
 #[cfg(feature = "adblock")]
 use tokio::sync::broadcast::error::RecvError;
@@ -280,27 +282,30 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                     Ok(Err(e)) => {
                                         failed_sources += 1;
                                         error!(url = %entry.url, error = %e, "Adblock: compilation error");
-                                        let m_entry = manifest.sources.entry(source_id).or_insert_with(|| {
-                                            let now = SystemTime::now()
-                                                .duration_since(UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_secs();
-                                            SourceManifestEntry {
-                                                id: source_id,
-                                                url: entry.url.clone(),
-                                                format_configured: entry.format,
-                                                format_detected: AdblockSourceFormat::Auto,
-                                                etag: None,
-                                                last_modified: None,
-                                                last_attempt: now,
-                                                last_success: 0,
-                                                consecutive_failures: 0,
-                                                last_error: None,
-                                                stats: crate::resolver::filter::parse::ParseStats::default(),
-                                                unsupported_samples: Vec::new(),
-                                                content_hash: 0,
-                                            }
-                                        });
+                                        let m_entry = manifest
+                                            .sources
+                                            .entry(source_id)
+                                            .or_insert_with(|| {
+                                                let now = SystemTime::now()
+                                                    .duration_since(UNIX_EPOCH)
+                                                    .unwrap_or_default()
+                                                    .as_secs();
+                                                SourceManifestEntry {
+                                                    id: source_id,
+                                                    url: entry.url.clone(),
+                                                    format_configured: entry.format,
+                                                    format_detected: AdblockSourceFormat::Auto,
+                                                    etag: None,
+                                                    last_modified: None,
+                                                    last_attempt: now,
+                                                    last_success: 0,
+                                                    consecutive_failures: 0,
+                                                    last_error: None,
+                                                    stats: ParseStats::default(),
+                                                    unsupported_samples: Vec::new(),
+                                                    content_hash: 0,
+                                                }
+                                            });
                                         m_entry.last_attempt = SystemTime::now()
                                             .duration_since(UNIX_EPOCH)
                                             .unwrap_or_default()
@@ -338,9 +343,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                             last_success: 0,
                                             consecutive_failures: 0,
                                             last_error: None,
-                                            stats:
-                                                crate::resolver::filter::parse::ParseStats::default(
-                                                ),
+                                            stats: ParseStats::default(),
                                             unsupported_samples: Vec::new(),
                                             content_hash: 0,
                                         }

@@ -4,10 +4,10 @@ use std::path::Path;
 
 use fst::raw::{Fst, Output};
 use fst::{Map, MapBuilder};
+use lanforge_types::network::dns::adblock::syntax::MatchFlags;
 use memmap2::Mmap;
 
 use crate::error::DnsError;
-use crate::resolver::filter::parse::MatchFlags;
 
 pub const LABEL_SEPARATOR: u8 = b'\x01';
 

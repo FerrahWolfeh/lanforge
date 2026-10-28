@@ -4,10 +4,10 @@ use std::io::{BufReader, BufWriter};
 use std::path::Path;
 
 use lanforge_types::network::dns::adblock::AdblockSourceFormat;
+use lanforge_types::network::dns::adblock::syntax::ParseStats;
 use serde::{Deserialize, Serialize};
 
 use crate::error::DnsError;
-use crate::resolver::filter::parse::ParseStats;
 
 pub const CURRENT_FORMAT_VERSION: u32 = 1;
 

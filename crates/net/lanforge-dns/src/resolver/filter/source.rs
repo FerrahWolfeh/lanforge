@@ -17,13 +17,13 @@ use hyper_util::rt::TokioExecutor;
 use memmap2::Mmap;
 
 use lanforge_types::network::dns::adblock::AdblockSourceFormat;
+use lanforge_types::network::dns::adblock::syntax::{MatchFlags, RuleAction};
 
 use crate::error::DnsError;
 use crate::resolver::filter::engine::{
     LABEL_SEPARATOR, build_fst_map, decode_val, encode_val, reverse_domain_key,
 };
 use crate::resolver::filter::manifest::SourceManifestEntry;
-use crate::resolver::filter::parse::{MatchFlags, RuleAction, parse_source};
 
 const MAX_BODY_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
 
@@ -193,7 +193,7 @@ pub fn compile_source_artifacts(
         .unwrap_or_default()
         .as_secs();
 
-    let parse_res = parse_source(content, format);
+    let parse_res = format.parse(content);
 
     let mut blocks = Vec::with_capacity(parse_res.stats.blocks as usize);
     let mut allows = Vec::with_capacity(parse_res.stats.exceptions as usize);

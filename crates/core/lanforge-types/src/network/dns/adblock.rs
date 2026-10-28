@@ -8,6 +8,8 @@ use std::{
 
 use crate::identifiers::DeviceIdentifier;
 
+pub mod syntax;
+
 /// Represents a DNS rewrite rule (domain -> IP/Hostname).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct RewriteRule {

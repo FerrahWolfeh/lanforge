@@ -29,7 +29,6 @@ use crate::server::DnsContext;
 pub mod blocklist;
 pub mod engine;
 pub mod manifest;
-pub mod parse;
 pub mod source;
 pub use blocklist::DiskBlocklist;
 
