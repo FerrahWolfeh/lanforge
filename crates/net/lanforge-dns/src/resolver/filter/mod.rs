@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -21,13 +20,15 @@ use crate::server::DnsContext;
 pub mod blocklist;
 pub mod engine;
 pub mod manifest;
+pub mod manual;
 pub mod source;
 pub use blocklist::{DiskBlocklist, ListMatches};
+pub use manual::ManualRules;
 
 pub struct AdBlocker {
     pub blocklist: RwLock<Option<Arc<DiskBlocklist>>>,
-    pub allowlist: RwLock<Arc<HashSet<Box<str>>>>,
-    pub custom_blocks: RwLock<Arc<HashSet<Box<str>>>>,
+    /// The rules files' rules, checked before the lists.
+    pub manual: RwLock<Arc<ManualRules>>,
     pub timer: Arc<AdblockTimerState>,
     pub config: RwLock<AdblockRuntimeConfig>,
     per_ip_stats: DashMap<IpAddr, AtomicU64>,
@@ -73,8 +74,7 @@ impl AdBlocker {
     pub fn new(enabled: bool) -> Self {
         Self {
             blocklist: RwLock::new(None),
-            allowlist: RwLock::new(Arc::new(HashSet::new())),
-            custom_blocks: RwLock::new(Arc::new(HashSet::new())),
+            manual: RwLock::new(Arc::new(ManualRules::default())),
             timer: Arc::new(AdblockTimerState::new(enabled)),
             config: RwLock::new(AdblockRuntimeConfig::default()),
             per_ip_stats: DashMap::new(),
@@ -109,42 +109,22 @@ impl AdBlocker {
         }
     }
 
-    /// Evaluates a domain against custom rules, allowlist, and compiled blocklist, returning match attribution.
+    /// Evaluates a domain against the manual rules, then the lists, returning match attribution.
     pub fn check_domain(&self, qname: &str) -> Option<FilterMatch> {
         if !self.is_enabled() {
             return None;
         }
-        {
-            let allow = self.allowlist.read();
-            if let Some(rule) = Self::find_matching_rule(&allow, qname) {
-                let rule_str = if rule != qname {
-                    Some(rule.into())
+        if let Some(v) = self.manual.read().verdict(qname) {
+            return Some(FilterMatch {
+                action: v.action,
+                origin: if v.action == FilterAction::Allow {
+                    FilterOrigin::UserAllowlist
                 } else {
-                    None
-                };
-                return Some(FilterMatch {
-                    action: FilterAction::Allow,
-                    origin: FilterOrigin::UserAllowlist,
-                    rule: rule_str,
-                    important: false,
-                });
-            }
-        }
-        {
-            let custom_blocks = self.custom_blocks.read();
-            if let Some(rule) = Self::find_matching_rule(&custom_blocks, qname) {
-                let rule_str = if rule != qname {
-                    Some(rule.into())
-                } else {
-                    None
-                };
-                return Some(FilterMatch {
-                    action: FilterAction::Block,
-                    origin: FilterOrigin::UserRule,
-                    rule: rule_str,
-                    important: false,
-                });
-            }
+                    FilterOrigin::UserRule
+                },
+                rule: (v.domain != qname).then(|| v.domain.into()),
+                important: v.important,
+            });
         }
         let block_guard = self.blocklist.read();
         block_guard
@@ -185,43 +165,14 @@ impl AdBlocker {
         if !self.is_enabled() {
             return false;
         }
-        {
-            let allow = self.allowlist.read();
-            if Self::find_matching_rule(&allow, qname).is_some() {
-                return false;
-            }
-        }
-        {
-            let custom_blocks = self.custom_blocks.read();
-            if Self::find_matching_rule(&custom_blocks, qname).is_some() {
-                return true;
-            }
+        if let Some(v) = self.manual.read().verdict(qname) {
+            return v.action == FilterAction::Block;
         }
         let block_guard = self.blocklist.read();
         block_guard.as_ref().is_some_and(|bl| {
             Self::list_verdict(bl, bl.match_lists(qname))
                 .is_some_and(|m| m.action == FilterAction::Block)
         })
-    }
-
-    fn find_matching_rule<'a>(set: &'a HashSet<Box<str>>, qname: &str) -> Option<&'a str> {
-        if set.is_empty() {
-            return None;
-        }
-        if let Some(r) = set.get(qname) {
-            return Some(r);
-        }
-        let mut current = qname;
-        while let Some(pos) = current.find('.') {
-            current = &current[pos + 1..];
-            if current.is_empty() {
-                break;
-            }
-            if let Some(r) = set.get(current) {
-                return Some(r);
-            }
-        }
-        None
     }
 
     pub fn inc_ip_stats(&self, ip: IpAddr) {
@@ -246,19 +197,16 @@ impl AdBlocker {
         debug!("Adblock: blocklist cleared");
     }
 
-    #[must_use]
-    pub fn normalize_custom_domain(raw: &str) -> Option<Box<str>> {
+    /// Today's stored manual rules, until they move to the rules file: a domain (whatever
+    /// `@@`, `||`, `^` or `$modifiers` it was stored with) covers itself and its subdomains.
+    fn normalize_custom_domain(raw: &str) -> Option<&str> {
         let mut s = raw.trim();
-        if let Some(rest) = s.strip_prefix("@@") {
-            s = rest;
-        }
-        if let Some(rest) = s.strip_prefix("||") {
-            s = rest;
-        } else if let Some(rest) = s.strip_prefix("*.") {
-            s = rest;
-        } else if let Some(rest) = s.strip_prefix('|') {
-            s = rest;
-        }
+        s = s.strip_prefix("@@").unwrap_or(s);
+        s = s
+            .strip_prefix("||")
+            .or_else(|| s.strip_prefix("*."))
+            .or_else(|| s.strip_prefix('|'))
+            .unwrap_or(s);
         if let Some((before_mod, _)) = s.split_once('$') {
             s = before_mod;
         }
@@ -266,52 +214,39 @@ impl AdBlocker {
             .trim_end_matches('^')
             .trim_end_matches('|')
             .trim_end_matches('.');
-        if s.is_empty() {
-            return None;
-        }
-        Some(s.to_ascii_lowercase().into_boxed_str())
+        (!s.is_empty()).then_some(s)
     }
 
+    /// Loads the manual rules from the context's allowlist and stored rules, written as the
+    /// rules-file lines they mean (`@@||x^`, `||x^`).
     pub fn sync_from_context(&self, ctx: &lanforge_core::context::LanforgeContext) {
-        let mut allow_set: HashSet<Box<str>> = ctx
-            .get_dns_allowlist()
-            .into_iter()
-            .filter_map(|d| Self::normalize_custom_domain(&d))
-            .collect();
-        let mut block_set: HashSet<Box<str>> = HashSet::new();
-        for rule in ctx.get_dns_adblock_rules() {
-            if rule.enabled
-                && let Some(norm) = Self::normalize_custom_domain(&rule.domain)
-            {
-                if rule.is_allow() {
-                    allow_set.insert(norm);
-                } else if rule.is_block() {
-                    block_set.insert(norm);
-                }
+        use std::fmt::Write;
+        let mut text = String::new();
+        for domain in ctx.get_dns_allowlist().iter() {
+            if let Some(d) = Self::normalize_custom_domain(domain) {
+                let _ = writeln!(text, "@@||{d}^");
             }
         }
-        *self.allowlist.write() = Arc::new(allow_set);
-        *self.custom_blocks.write() = Arc::new(block_set);
+        for rule in ctx.get_dns_adblock_rules() {
+            if rule.enabled
+                && let Some(d) = Self::normalize_custom_domain(&rule.domain)
+            {
+                let prefix = if rule.is_allow() { "@@" } else { "" };
+                let _ = writeln!(text, "{prefix}||{d}^");
+            }
+        }
+        self.replace_rules(&text);
     }
 
-    pub fn replace_allowlist(&self, new_list: HashSet<String>) {
-        let boxed_set: HashSet<Box<str>> = new_list
-            .into_iter()
-            .filter_map(|d| Self::normalize_custom_domain(&d))
-            .collect();
-        let count = boxed_set.len();
-        *self.allowlist.write() = Arc::new(boxed_set);
-        debug!("Adblock: allowlist updated with {} entries", count);
-    }
-
-    pub fn replace_custom_blocks(&self, new_blocks: HashSet<String>) {
-        let boxed_set: HashSet<Box<str>> = new_blocks
-            .into_iter()
-            .filter_map(|d| Self::normalize_custom_domain(&d))
-            .collect();
-        let count = boxed_set.len();
-        *self.custom_blocks.write() = Arc::new(boxed_set);
-        debug!("Adblock: custom blocks updated with {} entries", count);
+    /// Replaces the manual rules with those of a rules file's text.
+    pub fn replace_rules(&self, text: &str) {
+        let rules = ManualRules::from_text(text);
+        debug!(
+            blocks = rules.block_len(),
+            allows = rules.allow_len(),
+            "Adblock: manual rules updated"
+        );
+        *self.manual.write() = Arc::new(rules);
     }
 
     pub fn replace_config(
@@ -324,52 +259,36 @@ impl AdBlocker {
         debug!("Adblock: runtime config updated (mode: {:?})", mode);
     }
 
+    /// Blocks `domain` and its subdomains at once, ahead of the context resync.
     pub fn add_block(&self, domain: &str) {
-        if let Some(norm) = Self::normalize_custom_domain(domain) {
-            let mut list_lock = self.custom_blocks.write();
-            let mut new_set = (**list_lock).clone();
-            new_set.insert(norm);
-            *list_lock = Arc::new(new_set);
-        }
+        self.add_manual(domain, FilterAction::Block);
     }
 
-    pub fn remove_block(&self, domain: &str) {
-        if let Some(norm) = Self::normalize_custom_domain(domain) {
-            let mut list_lock = self.custom_blocks.write();
-            let mut new_set = (**list_lock).clone();
-            new_set.remove(norm.as_ref());
-            *list_lock = Arc::new(new_set);
-        }
-    }
-
+    /// Allows `domain` and its subdomains at once, ahead of the context resync.
     pub fn add_allow(&self, domain: &str) {
-        if let Some(norm) = Self::normalize_custom_domain(domain) {
-            let mut list_lock = self.allowlist.write();
-            let mut new_set = (**list_lock).clone();
-            new_set.insert(norm);
-            *list_lock = Arc::new(new_set);
-        }
+        self.add_manual(domain, FilterAction::Allow);
     }
 
-    pub fn remove_allow(&self, domain: &str) {
-        if let Some(norm) = Self::normalize_custom_domain(domain) {
-            let mut list_lock = self.allowlist.write();
-            let mut new_set = (**list_lock).clone();
-            new_set.remove(norm.as_ref());
-            *list_lock = Arc::new(new_set);
-        }
+    fn add_manual(&self, domain: &str, action: FilterAction) {
+        let Some(d) = Self::normalize_custom_domain(domain) else {
+            return;
+        };
+        let d = d.to_ascii_lowercase();
+        let mut lock = self.manual.write();
+        let mut rules = ManualRules::clone(&lock);
+        rules.insert_wildcard(&d, action);
+        *lock = Arc::new(rules);
     }
 
     #[must_use]
     pub fn blocklist_size(&self) -> usize {
         let disk_size = self.blocklist.read().as_ref().map_or(0, |bl| bl.len());
-        let custom_size = self.custom_blocks.read().len();
-        disk_size + custom_size
+        disk_size + self.manual.read().block_len()
     }
 
     #[must_use]
     pub fn allowlist_size(&self) -> usize {
-        self.allowlist.read().len()
+        self.manual.read().allow_len()
     }
 
     #[must_use]
