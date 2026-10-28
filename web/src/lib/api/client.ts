@@ -55,7 +55,6 @@ import type {
 	DbMetrics,
 	SystemConfigExport,
 	SystemConfigImportResponse,
-	DbEngineSwitchRequest,
 	GenerateTokenRequest,
 	FirewallConfig,
 	FirewallStatus,
@@ -680,8 +679,6 @@ export const exportSystemConfig = () => get<SystemConfigExport>('/system/config'
 export const exportSystemConfigToml = () => getText('/system/config', { format: 'toml' });
 export const importSystemConfig = (config: SystemConfigExport) =>
 	post<SystemConfigImportResponse>('/system/config', config);
-export const switchDbEngine = (req: DbEngineSwitchRequest) =>
-	post<void>('/db/engine', req);
 
 // ---------------------------------------------------------------------------
 // Users

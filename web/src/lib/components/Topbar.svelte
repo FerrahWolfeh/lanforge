@@ -43,7 +43,6 @@
 		"/system": "System Status",
 		"/system/services": "System Services",
 		"/system/database": "Database & Persistence",
-		"/system/database/settings": "Database Storage Settings",
 		"/system/database/maintenance": "Database Maintenance",
 		"/system/database/backup": "Database Backup & Restore",
 		"/system/users": "User Accounts",

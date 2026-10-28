@@ -66,7 +66,6 @@
 		"/system": "System Status",
 		"/system/services": "Services",
 		"/system/database": "Database",
-		"/system/database/settings": "Storage Settings",
 		"/system/database/maintenance": "Maintenance",
 		"/system/database/backup": "Backups",
 		"/system/users": "Users",

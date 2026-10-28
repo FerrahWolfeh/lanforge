@@ -496,36 +496,6 @@ impl HttpWrappedResponse for SetupResponse {
     }
 }
 
-use lanforge_types::system::StorageMode;
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DbEngineSwitchRequest {
-    #[serde(alias = "engine")]
-    pub mode: StorageMode,
-    #[serde(default, alias = "url")]
-    pub path: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DbEngineSwitchResponse {
-    pub success: bool,
-    #[serde(alias = "engine")]
-    pub mode: StorageMode,
-    pub message: String,
-}
-
-impl HttpWrappedResponse for DbEngineSwitchResponse {
-    type Wrapper = HttpDataResponse<DbEngineSwitchResponse>;
-
-    fn wrap(self) -> Self::Wrapper {
-        HttpDataResponse { data: self }
-    }
-
-    fn unwrap(wrapper: Self::Wrapper) -> Self {
-        wrapper.data
-    }
-}
-
 impl HttpWrappedResponse for FirewallConfig {
     type Wrapper = HttpDataResponse<FirewallConfig>;
 
