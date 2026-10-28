@@ -13,6 +13,10 @@ pub mod section;
 pub mod sections;
 
 pub use convert::DhcpSettings;
+pub use dns::{
+    DnsFile, DnsRewriteItem, DnsRewriteTable, DnsRewriteValue, DnsSettings, DnsUpstreamFile,
+    NamedUpstream,
+};
 pub use duration::HumanDuration;
 pub use effective::{
     RaInputs, add_default_ra_prefixes, effective_firewall, effective_ra, log_issues,
@@ -213,13 +217,10 @@ mod tests {
             },
         ));
 
-        cfg.dns.rewrites.insert(
+        cfg.dns.rewrites.push((
             "nas.lan".to_string(),
-            DnsRewriteFile {
-                target: "192.168.1.10".to_string(),
-                rtype: Some("A".to_string()),
-            },
-        );
+            DnsRewriteValue(vec![DnsRewriteItem::Answer("192.168.1.10".to_string())]),
+        ));
 
         cfg.hosts.push((
             "nas".to_string(),

@@ -195,6 +195,86 @@ impl ClientContext {
         Ok(persisted)
     }
 
+    /// The DNS settings running now, as `[dns]` holds them: upstreams, mode, rewrites and
+    /// reverse resolvers are the live ones; the listener and the upstream group names are not
+    /// kept in memory and come from the file (an upstream it does not name is named after the
+    /// domain it forwards, else `default`).
+    pub(crate) fn live_dns_settings(&self) -> lanforge_api::config_file::DnsSettings {
+        use lanforge_api::config_file::{DnsSettings, NamedUpstream};
+
+        let file = self
+            .ctx
+            .config_path()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|text| ConfigFile::parse_lenient(&text).ok())
+            .map(|(cfg, _)| cfg.dns.to_config().0)
+            .unwrap_or_default();
+        let upstreams = self
+            .ctx
+            .get_dns_upstreams()
+            .into_iter()
+            .map(|target| NamedUpstream {
+                name: file
+                    .upstreams
+                    .iter()
+                    .find(|u| u.target == target)
+                    .map(|u| u.name.clone())
+                    .or_else(|| target.domain.clone())
+                    .unwrap_or_else(|| "default".to_string()),
+                target,
+            })
+            .collect();
+        DnsSettings {
+            enabled: file.enabled,
+            listen: file.listen,
+            upstream_mode: self.ctx.get_dns_upstream_mode(),
+            upstreams,
+            reverse: self.ctx.all_reverse_resolvers(),
+            rewrites: self.ctx.get_dns_rewrites(),
+        }
+    }
+
+    /// Changes the DNS settings: `change` edits the live ones, the result is written to `[dns]`
+    /// (see [`Self::persist_config_sections`]) and then applied as the file now holds it. A value
+    /// the file form cannot hold (a rewrite whose type does not fit its answer, ...) is refused:
+    /// nothing written, nothing applied.
+    pub fn change_dns(
+        &self,
+        change: impl FnOnce(&mut lanforge_api::config_file::DnsSettings),
+    ) -> Result<Persisted, String> {
+        let _serial = self.ctx.config_change_lock();
+        let mut wanted = self.live_dns_settings();
+        change(&mut wanted);
+        let file = lanforge_api::config_file::DnsFile::from_config(&wanted);
+        let (dns, issues) = file.to_config();
+        if !issues.is_empty() {
+            return Err(issues.join("; "));
+        }
+        let persisted = self.persist_config_sections(SectionSet::DNS, |f| f.dns = file)?;
+        self.apply_dns_settings(dns);
+        Ok(persisted)
+    }
+
+    /// Applies the parts of `dns` that differ from the live settings. The listener is bound at
+    /// start-up and is not changed here.
+    pub fn apply_dns_settings(&self, dns: lanforge_api::config_file::DnsSettings) {
+        let upstreams: Vec<_> = dns.upstreams.into_iter().map(|u| u.target).collect();
+        let mut patch = lanforge_core::context::ConfigPatch::new();
+        if self.ctx.get_dns_upstreams() != upstreams {
+            patch = patch.with_dns_upstreams(upstreams);
+        }
+        if self.ctx.get_dns_upstream_mode() != dns.upstream_mode {
+            patch = patch.with_dns_upstream_mode(dns.upstream_mode);
+        }
+        if self.ctx.get_dns_rewrites() != dns.rewrites {
+            patch = patch.with_dns_rewrites(dns.rewrites);
+        }
+        let _ = self.ctx.apply_config(patch);
+        if self.ctx.all_reverse_resolvers() != dns.reverse {
+            self.ctx.set_reverse_resolvers(dns.reverse);
+        }
+    }
+
     /// Extracts the consolidated static configuration snapshot of the system.
     pub async fn export_system_config_data(&self) -> SystemConfigExport {
         if let lanforge_api::api::Response::SystemConfig(export) =

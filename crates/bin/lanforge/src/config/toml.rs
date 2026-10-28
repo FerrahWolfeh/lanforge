@@ -34,6 +34,10 @@ pub struct TomlConfig {
     pub dhcp: DhcpCfg,
     #[cfg(feature = "dns")]
     pub dns: DnsConfig,
+    /// `[dns]` as the settings the daemon runs (its only source).
+    #[cfg(feature = "dns")]
+    #[serde(skip)]
+    pub dns_settings: lanforge_api::config_file::DnsSettings,
     #[cfg(feature = "discovery")]
     pub monitor: MonitorConfig,
     #[cfg(feature = "discovery")]
@@ -212,13 +216,17 @@ impl From<&lanforge_api::config_file::ConfigFile> for TomlConfig {
 
         #[cfg(feature = "dns")]
         {
-            cfg.dns.enabled = fc.dns.enabled;
-            if let Some(ref l) = fc.dns.listen
-                && let Ok(listen) = l.parse()
-            {
-                cfg.dns.listen = listen;
+            // Entries the file gets wrong are left out (reported by `load_toml`).
+            let dns = fc.dns.to_config().0;
+            cfg.dns.enabled = dns.enabled;
+            if let Some(ref listen) = dns.listen {
+                cfg.dns.listen = listen.clone();
             }
+            // Upstreams, mode, rewrites and reverse resolvers reach the service through the
+            // context (`dns_settings`), never through `DnsConfig`: its upstream list feeds the
+            // DHCPv6 DNS fallback and must stay as it was.
             cfg.dns.adblock_enabled = fc.adblock.enabled;
+            cfg.dns_settings = dns;
         }
 
         #[cfg(feature = "pppoe")]
@@ -286,6 +294,9 @@ pub fn load_toml(path: &str) -> TomlConfig {
             #[cfg(feature = "ra")]
             cfg.config_issues
                 .extend(log_issues(file_cfg.ra.to_config().1));
+            #[cfg(feature = "dns")]
+            cfg.config_issues
+                .extend(log_issues(file_cfg.dns.to_config().1));
             if !set_aside
                 .iter()
                 .any(|(sec, _)| *sec == lanforge_api::config_file::Section::Hosts)

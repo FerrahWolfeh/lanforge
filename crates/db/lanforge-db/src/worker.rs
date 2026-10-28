@@ -23,9 +23,7 @@ use lanforge_api::config_file::{
 use lanforge_core::bus::{
     DeviceEvent, DnsEvent, LanforgeEvent, StorageEvent, SystemEvent, TimedEvent,
 };
-use lanforge_db_core::{
-    ApiTokenStore, DeviceStore, DnsUpstreamEntry, LogStore, RaConfigStore, config_keys::*,
-};
+use lanforge_db_core::{ApiTokenStore, DeviceStore, LogStore, RaConfigStore, config_keys::*};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::QueryLogEntry;
 use lanforge_types::network::dns::{DnsRequest, DnsResponse};
@@ -180,31 +178,12 @@ impl DbWorker {
         // latest context snapshot and commit every dirty section in one txn.
         if !self.dirty_sections.is_empty() {
             let result = db.write(|tx| {
-                if self.dirty_sections.contains(SectionSet::DNS) {
-                    tx.set(DNS_REWRITES, &self.ctx.get_dns_rewrites())?;
-                    let upstreams: Vec<DnsUpstreamEntry> = self
-                        .ctx
-                        .get_dns_upstreams()
-                        .into_iter()
-                        .map(|target| {
-                            let mut entry = DnsUpstreamEntry {
-                                id: 0,
-                                name: target.domain.clone(),
-                                addr: target.addr,
-                                protocol: target.protocol,
-                                domain: target.domain,
-                            };
-                            entry.id = entry.deterministic_id();
-                            entry
-                        })
-                        .collect();
-                    tx.set(DNS_UPSTREAMS, &upstreams)?;
-                    tx.set(DNS_UPSTREAM_MODE, &self.ctx.get_dns_upstream_mode())?;
+                // `[dns]` is file-owned: only the adblock keys are still kept here.
+                if self.dirty_sections.contains(SectionSet::ADBLOCK) {
                     tx.set(DNS_ALLOWLIST, &self.ctx.get_dns_allowlist())?;
                     tx.set(ADBLOCK_CONFIG, &self.ctx.get_dns_adblock())?;
                     tx.set(ADBLOCK_URLS, &self.ctx.get_dns_adblock_urls())?;
                     tx.set(ADBLOCK_RULES, &self.ctx.get_dns_adblock_rules())?;
-                    tx.set(DNS_REVERSE_RESOLVERS, &self.ctx.all_reverse_resolvers())?;
                 }
                 Ok(())
             });
@@ -806,16 +785,14 @@ impl AsyncService for DbWorker {
                                 }
                             }
                         }
+                        // DNS upstreams, mode, rewrites and reverse resolvers are written to
+                        // `[dns]` by the API before they apply.
                         LanforgeEvent::Dns(
-                            DnsEvent::ConfigRewritesChanged
-                            | DnsEvent::ConfigAllowlistChanged
+                            DnsEvent::ConfigAllowlistChanged
                             | DnsEvent::ConfigAdblockChanged
-                            | DnsEvent::ConfigAdblockRulesChanged
-                            | DnsEvent::ConfigUpstreamsChanged
-                            | DnsEvent::ConfigUpstreamModeChanged(_)
-                            | DnsEvent::ConfigReverseResolversChanged,
+                            | DnsEvent::ConfigAdblockRulesChanged,
                         ) => {
-                            self.dirty_sections |= SectionSet::DNS;
+                            self.dirty_sections |= SectionSet::ADBLOCK;
                         }
                         LanforgeEvent::System(SystemEvent::ConfigChanged { sections }) => {
                             // File-owned sections are written by the API before they apply.

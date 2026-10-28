@@ -275,3 +275,48 @@ async fn an_unreadable_hosts_section_keeps_the_static_hosts() {
     assert_eq!(client.ctx.static_hosts(), hosts);
     assert!(client.ctx.config_issues()[0].starts_with("[hosts]"));
 }
+
+/// An offline `[dns]` edit applies on reload, a wrong answer is left out and reported, and the
+/// file is not rewritten.
+#[tokio::test]
+async fn reload_applies_a_dns_edit_and_leaves_out_a_wrong_answer() {
+    use lanforge_types::network::dns::upstream::UpstreamMode;
+
+    let text = "[dns]\nupstream_mode = \"parallel\"\n\n[dns.upstreams.default]\n\
+                addresses = [\"udp://9.9.9.9:53\"]\n\n[dns.reverse]\n\
+                \"10.8.0.0/24\" = \"udp://10.8.0.1:53\"\n\n[dns.rewrites]\n\
+                \"nas.lan\" = \"192.0.2.10\"\n\"bad.lan\" = \"pixie\"\n";
+    let (client, _dir, path) = with_file(text);
+    reload(&client).await;
+
+    let ctx = &client.ctx;
+    assert_eq!(ctx.get_dns_upstream_mode(), UpstreamMode::Parallel);
+    assert_eq!(
+        ctx.get_dns_upstreams(),
+        vec!["udp://9.9.9.9:53".parse().unwrap()]
+    );
+    assert_eq!(ctx.all_reverse_resolvers().len(), 1);
+    let rewrites = ctx.get_dns_rewrites();
+    assert_eq!(rewrites.len(), 1, "{rewrites:?}");
+    assert_eq!(rewrites[0].domain, "nas.lan");
+    let issues = ctx.config_issues();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert!(issues[0].contains("\"bad.lan\""), "{issues:?}");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        text,
+        "file untouched"
+    );
+}
+
+/// A `[dns]` that does not fit its type is set aside: the running DNS keeps working.
+#[tokio::test]
+async fn an_unreadable_dns_section_keeps_the_running_dns() {
+    let (client, _dir, _) = with_file("[dns]\nupstreams = 7\n");
+    let running: Vec<lanforge_types::network::dns::upstream::UpstreamTarget> =
+        vec!["udp://1.1.1.1:53".parse().unwrap()];
+    client.ctx.update_dns_upstreams(running.clone());
+    reload(&client).await;
+    assert_eq!(client.ctx.get_dns_upstreams(), running);
+    assert!(client.ctx.config_issues()[0].starts_with("[dns]"));
+}

@@ -281,9 +281,6 @@ impl ClientContext {
         // 5. Configure Upstream DNS & Adblock
         let mut upstreams = Vec::new();
         if !payload.upstream_dns.is_empty() {
-            let _ = storage
-                .call(|s: &Stores| s.db().clear_dns_upstreams())
-                .await;
             for server in &payload.upstream_dns {
                 let s = server.trim();
                 if !s.is_empty() {
@@ -301,11 +298,6 @@ impl ClientContext {
                             hostname: None,
                             domain: None,
                         });
-                        let _ = storage
-                            .call(move |s: &Stores| {
-                                s.db().add_dns_upstream(addr, UpstreamProtocol::Udp, None)
-                            })
-                            .await;
                     }
                 }
             }
@@ -458,8 +450,14 @@ impl ClientContext {
             }
         });
 
-        let (cfg_file, toml_content) =
-            generate_setup_toml(&payload, &initial_firewall, &dhcp, &ra, &adblock_sources);
+        let (cfg_file, toml_content) = generate_setup_toml(
+            &payload,
+            &initial_firewall,
+            &dhcp,
+            &ra,
+            &upstreams,
+            &adblock_sources,
+        );
 
         if let Err(e) =
             lanforge_api::config_file::write_toml_atomically(&target_path, &toml_content)
@@ -557,6 +555,7 @@ fn generate_setup_toml(
     firewall: &FirewallConfig,
     dhcp: &lanforge_api::config_file::DhcpSettings,
     ra: &lanforge_types::network::ra::RaServerConfig,
+    upstreams: &[UpstreamTarget],
     adblock_sources: &[lanforge_types::network::dns::AdblockUrlEntry],
 ) -> (lanforge_api::config_file::ConfigFile, String) {
     let mut cfg = lanforge_api::config_file::ConfigFile::default();
@@ -571,16 +570,18 @@ fn generate_setup_toml(
     // RA: what setup applies.
     cfg.ra = lanforge_api::config_file::RaFile::from_config(ra);
 
-    // DNS Upstreams
-    if !payload.upstream_dns.is_empty() {
-        cfg.dns.upstreams.insert(
-            "default".to_string(),
-            lanforge_api::config_file::DnsUpstreamFile {
-                addresses: payload.upstream_dns.clone(),
-                domain: None,
-            },
-        );
-    }
+    // DNS: the upstreams setup applies.
+    cfg.dns =
+        lanforge_api::config_file::DnsFile::from_config(&lanforge_api::config_file::DnsSettings {
+            upstreams: upstreams
+                .iter()
+                .map(|target| lanforge_api::config_file::NamedUpstream {
+                    name: "default".to_string(),
+                    target: target.clone(),
+                })
+                .collect(),
+            ..Default::default()
+        });
 
     // DNS Adblock
     cfg.adblock.enabled = payload.adblock_enabled;

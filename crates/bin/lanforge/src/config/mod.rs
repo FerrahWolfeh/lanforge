@@ -75,6 +75,10 @@ pub struct Config {
     pub dns_enabled: bool,
     #[cfg(feature = "dns")]
     pub dns_toml: DnsConfig,
+    /// `[dns]` as the settings the daemon runs: upstreams (with their names), mode, reverse
+    /// resolvers and rewrites. The file is their only source.
+    #[cfg(feature = "dns")]
+    pub dns: lanforge_api::config_file::DnsSettings,
     pub search_domains: Vec<String>,
 
     // Monitor & mDNS
@@ -210,6 +214,8 @@ impl Config {
             dns_enabled: toml_cfg.dns.enabled,
             #[cfg(feature = "dns")]
             dns_toml: toml_cfg.dns,
+            #[cfg(feature = "dns")]
+            dns: toml_cfg.dns_settings,
             search_domains,
             #[cfg(feature = "discovery")]
             monitor_toml: toml_cfg.monitor,
@@ -416,6 +422,12 @@ impl Config {
         }
 
         cfg
+    }
+
+    /// Runs `dns` as the DNS settings (`[dns]`); the boot hands them to the context.
+    #[cfg(feature = "dns")]
+    pub fn set_dns(&mut self, dns: lanforge_api::config_file::DnsSettings) {
+        self.dns = dns;
     }
 
     /// Builds a `DnsConfig` from the merged configuration.
@@ -711,6 +723,8 @@ impl Default for Config {
             dns_enabled: true,
             #[cfg(feature = "dns")]
             dns_toml: DnsConfig::default(),
+            #[cfg(feature = "dns")]
+            dns: lanforge_api::config_file::DnsSettings::default(),
             search_domains: vec!["lan".to_string()],
             #[cfg(feature = "discovery")]
             monitor_toml: MonitorConfig::default(),

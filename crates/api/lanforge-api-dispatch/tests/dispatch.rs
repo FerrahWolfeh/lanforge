@@ -279,21 +279,32 @@ async fn test_dns_rewrite_add_dynamic() {
     use std::str::FromStr;
 
     let client_ctx = init_test_context().await;
-    let rule = RewriteRule {
+    // A device answer is not a CNAME: refused, nothing applied.
+    let wrong = RewriteRule {
         id: None,
         domain: "*.eonteam.xyz".to_string(),
         rtype: DnsRecordType::CNAME,
         answer: RewriteAnswer::from_str("dev:raspie").unwrap(),
     };
+    let res = client_ctx.handle_dns_rewrite_add(wrong).await;
+    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert!(client_ctx.ctx.get_dns_rewrites().is_empty());
+
+    let rule = RewriteRule {
+        id: None,
+        domain: "*.eonteam.xyz".to_string(),
+        rtype: DnsRecordType::Device,
+        answer: RewriteAnswer::from_str("dev:raspie").unwrap(),
+    };
     let res = client_ctx.handle_dns_rewrite_add(rule).await;
-    assert!(matches!(res, Response::Success(_)));
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
 
     // Try loading rewrites back
     let load_res = client_ctx.handle_dns_rewrites().await;
     if let Response::DnsRewrites(r) = load_res {
         assert_eq!(r.rewrites.len(), 1);
         assert_eq!(r.rewrites[0].domain, "*.eonteam.xyz");
-        assert_eq!(r.rewrites[0].rtype, DnsRecordType::CNAME);
+        assert_eq!(r.rewrites[0].rtype, DnsRecordType::Device);
         assert_eq!(
             r.rewrites[0].answer,
             RewriteAnswer::from_str("dev:raspie").unwrap()
@@ -1015,4 +1026,209 @@ async fn a_host_update_without_a_boot_file_keeps_it() {
         client_ctx.ctx.static_hosts()[0].boot_file.as_deref(),
         Some("pxelinux.0")
     );
+}
+
+/// The owner's `[dns]` (approved file form, 2026-10-28), with a comment above it.
+const OWNER_DNS: &str = "[system]\niface = \"lan0\"\n\n# resolvers\n[dns]\nenabled = true\n\
+    listen = \"[::]:53\"\nupstream_mode = \"sequential\"\n\n[dns.upstreams.default]\n\
+    addresses = [\"udp://1.1.1.1:53\", \"udp://1.0.0.1:53\"]\n\n[dns.rewrites]\n\
+    \"*.eonteam.xyz\" = \"dev:pixie\"\n";
+
+/// A client whose live DNS settings are `OWNER_DNS`, as the boot applies them.
+async fn owner_dns_client(writable: bool) -> (ClientContext, tempfile::TempDir) {
+    let client_ctx = init_test_context().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    std::fs::write(&path, OWNER_DNS).unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(writable);
+    let (dns, issues) = lanforge_api::config_file::ConfigFile::parse(OWNER_DNS)
+        .unwrap()
+        .dns
+        .to_config();
+    assert!(issues.is_empty(), "{issues:?}");
+    client_ctx.apply_dns_settings(dns);
+    (client_ctx, dir)
+}
+
+fn dns_in_file(dir: &tempfile::TempDir) -> (lanforge_api::config_file::DnsSettings, String) {
+    let text = std::fs::read_to_string(dir.path().join("lanforge.toml")).unwrap();
+    let (dns, issues) = lanforge_api::config_file::ConfigFile::parse(&text)
+        .unwrap()
+        .dns
+        .to_config();
+    assert!(issues.is_empty(), "{issues:?}\n{text}");
+    (dns, text)
+}
+
+/// Every DNS change of the API reaches `[dns]` before it applies: the file keeps the group
+/// names, the listener and the comment, and holds exactly what runs.
+#[tokio::test]
+async fn dns_changes_are_written_to_the_config_file() {
+    use lanforge_types::network::dns::upstream::UpstreamMode;
+    use std::str::FromStr;
+
+    let (client_ctx, dir) = owner_dns_client(true).await;
+
+    let res = client_ctx
+        .handle_dns_rewrite_add(RewriteRule {
+            id: None,
+            domain: "nas.lan".into(),
+            rtype: DnsRecordType::A,
+            answer: RewriteAnswer::from_str("192.0.2.10").unwrap(),
+        })
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let res = client_ctx
+        .handle_dns_upstream_add("9.9.9.9:53".parse().unwrap(), UpstreamProtocol::Udp, None)
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let res = client_ctx
+        .handle_dns_upstream_mode_set(UpstreamMode::Parallel)
+        .await;
+    assert!(matches!(res, Response::DnsUpstreamMode(_)), "{res:?}");
+    let res = client_ctx
+        .handle_dns_reverse_resolver_add("10.8.0.0/24".into(), "udp://10.8.0.1:53".into())
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    let (dns, text) = dns_in_file(&dir);
+    assert!(text.contains("# resolvers"), "{text}");
+    assert!(text.contains("listen = \"[::]:53\""), "{text}");
+    assert_eq!(dns.upstream_mode, UpstreamMode::Parallel);
+    let names: Vec<_> = dns.upstreams.iter().map(|u| u.name.as_str()).collect();
+    assert_eq!(names, ["default", "default", "default"], "{text}");
+    assert_eq!(dns.reverse.len(), 1);
+    assert_eq!(
+        dns.rewrites
+            .iter()
+            .map(|r| r.domain.as_str())
+            .collect::<Vec<_>>(),
+        ["*.eonteam.xyz", "nas.lan"]
+    );
+    // What runs is what the file holds.
+    let ctx = &client_ctx.ctx;
+    assert_eq!(
+        ctx.get_dns_upstreams(),
+        dns.upstreams
+            .iter()
+            .map(|u| u.target.clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(ctx.get_dns_upstream_mode(), dns.upstream_mode);
+    assert_eq!(ctx.get_dns_rewrites(), dns.rewrites);
+    assert_eq!(ctx.all_reverse_resolvers(), dns.reverse);
+
+    // Removing through the ids the listing gives.
+    let Response::DnsRewrites(listed) = client_ctx.handle_dns_rewrites().await else {
+        panic!("listing");
+    };
+    let nas = listed
+        .rewrites
+        .iter()
+        .find(|r| r.domain == "nas.lan")
+        .unwrap();
+    let res = client_ctx.handle_dns_rewrite_remove(nas.id.unwrap()).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let res = client_ctx
+        .handle_dns_upstream_remove("9.9.9.9:53".parse().unwrap(), UpstreamProtocol::Udp, None)
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let res = client_ctx
+        .handle_dns_reverse_resolver_remove("10.8.0.0/24".into())
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let res = client_ctx
+        .handle_dns_upstream_mode_set(UpstreamMode::Sequential)
+        .await;
+    assert!(matches!(res, Response::DnsUpstreamMode(_)), "{res:?}");
+
+    let (back, text) = dns_in_file(&dir);
+    let owner = lanforge_api::config_file::ConfigFile::parse(OWNER_DNS)
+        .unwrap()
+        .dns
+        .to_config()
+        .0;
+    assert_eq!(back, owner, "back to the owner's settings\n{text}");
+}
+
+/// A change the file form cannot hold, or a file that cannot be written, changes nothing.
+#[tokio::test]
+async fn a_refused_dns_change_writes_and_applies_nothing() {
+    let (client_ctx, dir) = owner_dns_client(true).await;
+    let res = client_ctx
+        .handle_dns_rewrite_add(RewriteRule {
+            id: None,
+            domain: "mismatch.lan".into(),
+            rtype: DnsRecordType::AAAA,
+            answer: RewriteAnswer::A("192.0.2.1".parse().unwrap()),
+        })
+        .await;
+    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("lanforge.toml")).unwrap(),
+        OWNER_DNS
+    );
+    assert_eq!(client_ctx.ctx.get_dns_rewrites().len(), 1);
+
+    std::fs::write(dir.path().join("lanforge.toml"), "[system\nbroken").unwrap();
+    let res = client_ctx.handle_dns_upstream_clear().await;
+    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert_eq!(client_ctx.ctx.get_dns_upstreams().len(), 2, "not applied");
+}
+
+#[tokio::test]
+async fn dns_change_on_read_only_config_applies_in_memory_and_says_so() {
+    let (client_ctx, dir) = owner_dns_client(false).await;
+    let res = client_ctx.handle_dns_rewrite_clear().await;
+    let Response::Success(ok) = res else {
+        panic!("{res:?}");
+    };
+    assert!(ok.message.contains("not saved"), "{}", ok.message);
+    assert!(client_ctx.ctx.get_dns_rewrites().is_empty());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("lanforge.toml")).unwrap(),
+        OWNER_DNS
+    );
+}
+
+/// An overwriting import replaces the `[dns]` lists in one write; nothing goes to redb.
+#[tokio::test]
+async fn dns_import_overwrite_replaces_the_file_lists() {
+    let (client_ctx, dir) = owner_dns_client(true).await;
+    let export = SystemConfigExport {
+        dns_upstreams: vec![DnsUpstreamConfig {
+            name: Some("quad9".into()),
+            addr: "9.9.9.9:53".parse().unwrap(),
+            protocol: UpstreamProtocol::Udp,
+            domain: None,
+        }],
+        dns_rewrites: vec![RewriteRule {
+            id: None,
+            domain: "nas.lan".into(),
+            rtype: DnsRecordType::A,
+            answer: RewriteAnswer::A("192.0.2.10".parse().unwrap()),
+        }],
+        overwrite: true,
+        ..Default::default()
+    };
+    let res = client_ctx.handle_system_config_import(export).await;
+    let Response::SystemConfigImport(r) = res else {
+        panic!("{res:?}");
+    };
+    let dns_results: Vec<_> = r
+        .results
+        .iter()
+        .filter(|x| format!("{:?}", x.section).starts_with("Dns"))
+        .filter(|x| !format!("{:?}", x.section).starts_with("DnsAdblock"))
+        .filter(|x| !format!("{:?}", x.section).starts_with("DnsAllow"))
+        .collect();
+    assert!(dns_results.iter().all(|x| x.success), "{dns_results:?}");
+
+    let (dns, text) = dns_in_file(&dir);
+    assert_eq!(dns.upstreams.len(), 1, "{text}");
+    assert_eq!(dns.upstreams[0].name, "quad9");
+    assert_eq!(dns.rewrites.len(), 1);
+    assert_eq!(dns.rewrites[0].domain, "nas.lan");
+    assert_eq!(client_ctx.ctx.get_dns_rewrites(), dns.rewrites);
 }

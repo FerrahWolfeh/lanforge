@@ -3,8 +3,12 @@ use lanforge_api::api::{
     AllowlistEntry, DnsUpstreamConfig, ImportResult, ImportSection, Response, SystemConfigExport,
     SystemConfigImportResponse,
 };
+use lanforge_api::config_file::NamedUpstream;
 use lanforge_db_core::Stores;
 use lanforge_types::network::dns::adblock::AdblockDbConfig;
+use lanforge_types::network::dns::upstream::UpstreamTarget;
+
+use crate::handlers::dns::rewrite::upsert_rewrite;
 
 impl ClientContext {
     pub async fn handle_system_config_export(&self) -> Response {
@@ -22,16 +26,16 @@ impl ClientContext {
             Vec::new()
         };
 
-        // 3. DNS Upstreams
+        // 3. DNS Upstreams, under their `[dns.upstreams]` group names
         let dns_upstreams = self
-            .ctx
-            .get_dns_upstreams()
+            .live_dns_settings()
+            .upstreams
             .into_iter()
-            .map(|row| DnsUpstreamConfig {
-                name: row.domain.clone(),
-                addr: row.addr,
-                protocol: row.protocol,
-                domain: row.domain,
+            .map(|up| DnsUpstreamConfig {
+                name: Some(up.name),
+                addr: up.target.addr,
+                protocol: up.target.protocol,
+                domain: up.target.domain,
             })
             .collect();
 
@@ -155,32 +159,7 @@ impl ClientContext {
         let mut results = Vec::new();
 
         if overwrite {
-            // Clear DNS rewrites, upstreams, adblock URLs, allowlist
-            if let Err(e) = storage.call(|s: &Stores| s.db().clear_dns_rewrites()).await {
-                total_success = false;
-                results.push(ImportResult {
-                    section: ImportSection::DnsRewrites,
-                    success: false,
-                    count: 0,
-                    error: Some(format!("Failed to clear DNS rewrites: {e}")),
-                });
-            } else {
-                self.ctx.update_dns_rewrites(Vec::new());
-            }
-            if let Err(e) = storage
-                .call(|s: &Stores| s.db().clear_dns_upstreams())
-                .await
-            {
-                total_success = false;
-                results.push(ImportResult {
-                    section: ImportSection::DnsUpstreams,
-                    success: false,
-                    count: 0,
-                    error: Some(format!("Failed to clear DNS upstreams: {e}")),
-                });
-            } else {
-                self.ctx.update_dns_upstreams(Vec::new());
-            }
+            // Clear adblock URLs, allowlist (the `[dns]` lists are replaced below)
             if let Err(e) = storage.call(|s: &Stores| s.db().clear_adblock_urls()).await {
                 total_success = false;
                 results.push(ImportResult {
@@ -232,11 +211,6 @@ impl ClientContext {
                         .await;
                 }
             }
-
-            // Clear Dynamic Configs (will be flushed in final atomic patch)
-            let _ = storage
-                .call(|s: &Stores| s.db().clear_dns_reverse_resolvers())
-                .await;
         }
 
         // 1. Import hosts. File-owned: imported only if they reach `[hosts]`; overwrite makes
@@ -262,56 +236,78 @@ impl ClientContext {
             });
         }
 
-        // 2. Import DNS rewrites
-        let mut rewrites_count = 0;
-        let mut rewrites_success = true;
-        let mut rewrites_err = None;
-        for rule in dns_rewrites {
-            match self.handle_dns_rewrite_add(rule).await {
-                Response::Success(_) => rewrites_count += 1,
-                Response::Error { error } => {
-                    rewrites_success = false;
-                    rewrites_err = Some(error);
-                }
-                _ => {}
-            }
+        // 2. DNS rewrites, upstreams and reverse resolvers. File-owned: imported only if they
+        // reach `[dns]`, in one write; overwrite replaces the lists.
+        let mut dns_sections = vec![
+            (ImportSection::DnsRewrites, dns_rewrites.len()),
+            (ImportSection::DnsUpstreams, dns_upstreams.len()),
+        ];
+        if let Some(ref resolvers) = dns_reverse_resolvers {
+            dns_sections.push((ImportSection::DnsReverseResolvers, resolvers.len()));
         }
-        if !rewrites_success {
+        let dns_outcome = if overwrite
+            || !dns_rewrites.is_empty()
+            || !dns_upstreams.is_empty()
+            || dns_reverse_resolvers.is_some()
+        {
+            self.change_dns(|dns| {
+                if overwrite {
+                    dns.rewrites.clear();
+                    dns.upstreams.clear();
+                    dns.reverse.clear();
+                }
+                for rule in dns_rewrites {
+                    upsert_rewrite(&mut dns.rewrites, rule);
+                }
+                for up in dns_upstreams {
+                    let known = dns.upstreams.iter().any(|u| {
+                        u.target.addr == up.addr
+                            && u.target.protocol == up.protocol
+                            && u.target.domain == up.domain
+                    });
+                    if !known {
+                        dns.upstreams.push(NamedUpstream {
+                            name: up
+                                .name
+                                .or_else(|| up.domain.clone())
+                                .unwrap_or_else(|| "default".to_string()),
+                            target: UpstreamTarget {
+                                addr: up.addr,
+                                protocol: up.protocol,
+                                hostname: None,
+                                domain: up.domain,
+                            },
+                        });
+                    }
+                }
+                for r in dns_reverse_resolvers.unwrap_or_default() {
+                    dns.reverse.retain(|known| known.subnet != r.subnet);
+                    dns.reverse.push(r);
+                }
+            })
+            .map(|_| ())
+        } else {
+            Ok(())
+        };
+        if dns_outcome.is_err() {
             total_success = false;
         }
-        results.push(ImportResult {
-            section: ImportSection::DnsRewrites,
-            success: rewrites_success,
-            count: rewrites_count,
-            error: rewrites_err,
-        });
-
-        // 3. Import DNS upstreams
-        let mut upstream_count = 0;
-        let mut upstreams_success = true;
-        let mut upstreams_err = None;
-        for u in dns_upstreams {
-            match self
-                .handle_dns_upstream_add(u.addr, u.protocol, u.domain)
-                .await
-            {
-                Response::Success(_) => upstream_count += 1,
-                Response::Error { error } => {
-                    upstreams_success = false;
-                    upstreams_err = Some(error);
-                }
-                _ => {}
-            }
+        for (section, count) in dns_sections {
+            results.push(match &dns_outcome {
+                Ok(()) => ImportResult {
+                    section,
+                    success: true,
+                    count,
+                    error: None,
+                },
+                Err(e) => ImportResult {
+                    section,
+                    success: false,
+                    count: 0,
+                    error: Some(e.clone()),
+                },
+            });
         }
-        if !upstreams_success {
-            total_success = false;
-        }
-        results.push(ImportResult {
-            section: ImportSection::DnsUpstreams,
-            success: upstreams_success,
-            count: upstream_count,
-            error: upstreams_err,
-        });
 
         // 4. Import Adblock Config
         let AdblockDbConfig {
@@ -588,35 +584,6 @@ impl ClientContext {
                     },
                 });
             }
-        }
-
-        if let Some(resolvers) = dns_reverse_resolvers {
-            let mut res_count = 0;
-            let mut res_success = true;
-            let mut res_err = None;
-            for r in resolvers {
-                let sub = r.subnet;
-                let res = r.resolver.clone();
-                if let Err(e) = storage
-                    .call(move |s: &Stores| s.db().add_dns_reverse_resolver(&sub, &res))
-                    .await
-                {
-                    res_success = false;
-                    res_err = Some(e.to_string());
-                } else {
-                    self.ctx.add_reverse_resolver(r);
-                    res_count += 1;
-                }
-            }
-            if !res_success {
-                total_success = false;
-            }
-            results.push(ImportResult {
-                section: ImportSection::DnsReverseResolvers,
-                success: res_success,
-                count: res_count,
-                error: res_err,
-            });
         }
 
         if let Some(fw) = firewall_config {

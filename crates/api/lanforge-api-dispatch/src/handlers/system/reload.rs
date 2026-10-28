@@ -52,6 +52,9 @@ impl ClientContext {
         export.ra_prefixes = None;
         export.ra_rdnss = None;
         export.ra_dnssl = None;
+        export.dns_rewrites = Vec::new();
+        export.dns_upstreams = Vec::new();
+        export.dns_reverse_resolvers = None;
         export.hosts = Vec::new();
         match self.handle_system_config_import(export).await {
             Response::SystemConfigImport(import_res) => {
@@ -130,6 +133,30 @@ impl ClientContext {
                 info!("Reload: [hosts] changed; applying");
             }
             issues.extend(log_issues(ctx.apply_static_hosts(&hosts)));
+        }
+        if applies(Section::Dns) {
+            let _serial = ctx.config_change_lock();
+            let (dns, dns_issues) = file.dns.to_config();
+            issues.extend(log_issues(dns_issues));
+            let live = (
+                ctx.get_dns_upstreams(),
+                ctx.get_dns_upstream_mode(),
+                ctx.get_dns_rewrites(),
+                ctx.all_reverse_resolvers(),
+            );
+            let wanted = (
+                dns.upstreams
+                    .iter()
+                    .map(|u| u.target.clone())
+                    .collect::<Vec<_>>(),
+                dns.upstream_mode,
+                dns.rewrites.clone(),
+                dns.reverse.clone(),
+            );
+            if live != wanted {
+                info!("Reload: [dns] changed; applying (listen takes effect on restart)");
+                self.apply_dns_settings(dns);
+            }
         }
         if applies(Section::Dhcp) {
             let _serial = ctx.config_change_lock();

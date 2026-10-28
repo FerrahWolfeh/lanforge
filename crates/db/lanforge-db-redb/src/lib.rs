@@ -11,7 +11,6 @@ pub mod user;
 use lanforge_db_core::{DbError, DnsUpstreamEntry};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
-use lanforge_types::network::dns::upstream::UpstreamProtocol;
 pub use redb;
 use redb::{Database, Durability, ReadableDatabase, ReadableTable, WriteTransaction};
 use std::fmt;
@@ -96,13 +95,11 @@ impl DbWriteTx<'_> {
         self.remove_config(key.name())
     }
 
-    /// Atomically replaces imported DNS and Adblock configuration across all
-    /// related keys.
-    pub fn replace_dns_adblock(
+    /// Atomically replaces the adblock configuration (settings, allowlist, sources, rules).
+    /// The DNS keys are not touched: `[dns]` lives in the config file only.
+    pub fn replace_adblock(
         &mut self,
         adblock: &AdblockDbConfig,
-        rewrites: &[RewriteRule],
-        upstreams: &[(std::net::SocketAddr, UpstreamProtocol, Option<String>)],
         allowlist: &[String],
         urls: &[AdblockUrlEntry],
         rules: &[AdblockRuleEntry],
@@ -110,26 +107,10 @@ impl DbWriteTx<'_> {
         use lanforge_db_core::config_keys::*;
 
         self.set(ADBLOCK_CONFIG, adblock)?;
-        self.set(DNS_REWRITES, &rewrites.to_vec())?;
-
-        let upstreams_entries: Vec<DnsUpstreamEntry> = upstreams
-            .iter()
-            .enumerate()
-            .map(|(i, (addr, protocol, domain))| DnsUpstreamEntry {
-                id: i as i64 + 1,
-                name: None,
-                addr: *addr,
-                protocol: *protocol,
-                domain: domain.clone(),
-            })
-            .collect();
-        self.set(DNS_UPSTREAMS, &upstreams_entries)?;
         self.set(DNS_ALLOWLIST, &allowlist.to_vec())?;
         self.set(ADBLOCK_URLS, &urls.to_vec())?;
         self.set(ADBLOCK_RULES, &rules.to_vec())?;
 
-        let _ = self.txn.delete_table(TABLE_DNS_REWRITES);
-        let _ = self.txn.delete_table(TABLE_DNS_UPSTREAMS);
         let _ = self.txn.delete_table(TABLE_DNS_ALLOWLIST);
         let _ = self.txn.delete_table(TABLE_ADBLOCK_URLS);
         let _ = self.txn.delete_table(TABLE_ADBLOCK_RULES);

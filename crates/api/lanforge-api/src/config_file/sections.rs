@@ -601,50 +601,6 @@ pub struct RaDnsslFile {
     pub lifetime: Option<HumanDuration>,
 }
 
-/// DNS server, upstreams, and rewrite rules configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DnsFile {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub listen: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub upstreams: BTreeMap<String, DnsUpstreamFile>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub rewrites: BTreeMap<String, DnsRewriteFile>,
-}
-
-impl Default for DnsFile {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            // `None` = the daemon's built-in `[::]:53`, as for a `[dns]` section without `listen`.
-            listen: None,
-            upstreams: BTreeMap::new(),
-            rewrites: BTreeMap::new(),
-        }
-    }
-}
-
-/// A named group of DNS upstream endpoints.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DnsUpstreamFile {
-    pub addresses: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub domain: Option<String>,
-}
-
-/// A named DNS rewrite rule (domain mapping).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DnsRewriteFile {
-    pub target: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rtype: Option<String>,
-}
-
 /// DNS Adblock subsystem configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

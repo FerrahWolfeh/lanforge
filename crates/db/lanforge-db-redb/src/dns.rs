@@ -84,9 +84,12 @@ impl StoredRewriteAnswer {
 }
 
 impl DnsStore for RedbDatabase {
-    fn load_dns_rewrites(&self) -> Result<Vec<RewriteRule>, DbError> {
-        let stored = self.get(STORED_DNS_REWRITES)?.unwrap_or_default();
-        Ok(stored
+    fn stored_dns_rewrites(&self) -> Result<Option<Vec<RewriteRule>>, DbError> {
+        let Some(stored) = self.get(STORED_DNS_REWRITES)? else {
+            return Ok(None);
+        };
+        Ok(Some(
+            stored
             .into_iter()
             .filter_map(|rule| {
                 let Some(answer) = rule.answer.into_answer() else {
@@ -100,7 +103,8 @@ impl DnsStore for RedbDatabase {
                     answer,
                 })
             })
-            .collect())
+            .collect(),
+        ))
     }
 
     fn upsert_dns_rewrite(

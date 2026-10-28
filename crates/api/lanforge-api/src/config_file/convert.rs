@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 use lanforge_types::device::Origin;
@@ -9,9 +9,9 @@ use lanforge_types::network::dhcp::{
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{
     AdblockDbConfig, AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, AdblockUrlKind,
-    BlockingMode, RewriteAnswer, RewriteRule, TimeOfDay,
+    BlockingMode, TimeOfDay,
 };
-use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::firewall::{
     FirewallConfig, FirewallMode, FirewallPolicy, FirewallStopAction, FirewallZone, HostPortRule,
     L4Protocol, PortForwardRule, ZoneForwarding,
@@ -20,19 +20,19 @@ use lanforge_types::network::ra::{
     DnsslConfig, PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RdnssConfig,
     RouterPriority,
 };
-use lanforge_types::network::{DnsRecordType, IpSubnet, Ipv6AddrOrSuffix};
+use lanforge_types::network::{IpSubnet, Ipv6AddrOrSuffix};
 
 use crate::api::devices::HostConfigEntry;
 use crate::api::dns::AllowlistEntry;
 use crate::api::dns::DnsUpstreamConfig;
 use crate::api::system::SystemConfigExport;
 
+use super::dns::{DnsFile, DnsSettings, NamedUpstream};
 use super::duration::HumanDuration;
 use super::sections::{
     AdblockFile, AdblockRuleFile, AdblockSourceFile, DhcpFile, Dhcpv4File, Dhcpv4PoolFile,
-    Dhcpv6File, Dhcpv6PoolFile, DnsFile, DnsRewriteFile, DnsUpstreamFile, FirewallFile,
-    FirewallZoneFile, LifetimeFile, OpenPortFile, PortForwardFile, RaDnsslFile, RaFile,
-    RaPrefixFile, RaRdnssFile, TftpFile, ZoneForwardingFile,
+    Dhcpv6File, Dhcpv6PoolFile, FirewallFile, FirewallZoneFile, LifetimeFile, OpenPortFile,
+    PortForwardFile, RaDnsslFile, RaFile, RaPrefixFile, RaRdnssFile, TftpFile, ZoneForwardingFile,
 };
 use super::{ConfigFile, StaticHost};
 
@@ -937,53 +937,14 @@ impl From<&SystemConfigExport> for ConfigFile {
             cfg.ra = RaFile::from_config(&ra);
         }
 
-        // 4. DNS Upstreams & Rewrites
-        let mut dns = DnsFile::default();
-        for up in &export.dns_upstreams {
-            let name = up
-                .name
-                .clone()
-                .or_else(|| up.domain.clone())
-                .unwrap_or_else(|| "default".to_string());
-            let proto_prefix = match up.protocol {
-                UpstreamProtocol::Udp => "udp://",
-                UpstreamProtocol::Tls => "tls://",
-                UpstreamProtocol::Quic => "quic://",
-                UpstreamProtocol::Https => "https://",
-            };
-            let addr = format!("{proto_prefix}{}", up.addr);
-            let upstream = dns
-                .upstreams
-                .entry(name)
-                .or_insert_with(|| DnsUpstreamFile {
-                    addresses: Vec::new(),
-                    domain: up.domain.clone(),
-                });
-            upstream.addresses.push(addr);
-        }
-
-        for rw in &export.dns_rewrites {
-            let target = match &rw.answer {
-                RewriteAnswer::A(ip) => ip.to_string(),
-                RewriteAnswer::Aaaa(ip) => ip.to_string(),
-                RewriteAnswer::Cname(host) => host.clone(),
-                RewriteAnswer::Device {
-                    identifier,
-                    fallback,
-                } => match fallback {
-                    Some(fallback) => format!("dev:{identifier}|{fallback}"),
-                    None => format!("dev:{identifier}"),
-                },
-            };
-            dns.rewrites.insert(
-                rw.domain.clone(),
-                DnsRewriteFile {
-                    target,
-                    rtype: Some(rw.rtype.to_string()),
-                },
-            );
-        }
-        cfg.dns = dns;
+        // 4. DNS upstreams, rewrites and reverse resolvers (the export carries no listen nor
+        // upstream mode: they keep their defaults)
+        cfg.dns = DnsFile::from_config(&DnsSettings {
+            upstreams: export.dns_upstreams.iter().map(named_upstream).collect(),
+            reverse: export.dns_reverse_resolvers.clone().unwrap_or_default(),
+            rewrites: export.dns_rewrites.clone(),
+            ..DnsSettings::default()
+        });
 
         // 5. Adblock
         let mut adblock = AdblockFile {
@@ -1088,30 +1049,21 @@ impl From<&ConfigFile> for SystemConfigExport {
         let ra = cfg.ra.to_config().0;
         let (ra_prefixes, ra_rdnss, ra_dnssl) = (ra.prefixes, ra.rdnss, ra.dnssl);
 
-        // 4. DNS Upstreams & Rewrites
-        let mut dns_upstreams = Vec::new();
-        for (name, up) in &cfg.dns.upstreams {
-            for address in &up.addresses {
-                let (protocol, socket_addr) = parse_upstream_addr(address);
-                dns_upstreams.push(DnsUpstreamConfig {
-                    name: Some(name.clone()),
-                    addr: socket_addr,
-                    protocol,
-                    domain: up.domain.clone(),
-                });
-            }
-        }
-
-        let mut dns_rewrites = Vec::new();
-        for (domain, rw) in &cfg.dns.rewrites {
-            let (rtype, answer) = parse_rewrite_target(&rw.target, rw.rtype.as_deref());
-            dns_rewrites.push(RewriteRule {
-                id: None,
-                domain: domain.clone(),
-                rtype,
-                answer,
-            });
-        }
+        // 4. DNS upstreams, rewrites and reverse resolvers (entries the file gets wrong are
+        // left out; see `DnsFile::to_config`)
+        let dns = cfg.dns.to_config().0;
+        let dns_upstreams = dns
+            .upstreams
+            .into_iter()
+            .map(|up| DnsUpstreamConfig {
+                name: Some(up.name),
+                addr: up.target.addr,
+                protocol: up.target.protocol,
+                domain: up.target.domain,
+            })
+            .collect();
+        let dns_rewrites = dns.rewrites;
+        let dns_reverse_resolvers = Some(dns.reverse);
 
         // 5. Adblock
         let blocking_mode =
@@ -1187,7 +1139,7 @@ impl From<&ConfigFile> for SystemConfigExport {
             ra_dnssl: Some(ra_dnssl),
             pppoe_config,
             dhcp_options,
-            dns_reverse_resolvers: None,
+            dns_reverse_resolvers,
             firewall_config,
             traffic_config,
             system_iface: if cfg.system.iface.is_empty() {
@@ -1206,92 +1158,21 @@ impl From<ConfigFile> for SystemConfigExport {
     }
 }
 
-fn parse_upstream_addr(addr_str: &str) -> (UpstreamProtocol, SocketAddr) {
-    let (proto, target) = if let Some(stripped) = addr_str.strip_prefix("tls://") {
-        (UpstreamProtocol::Tls, stripped)
-    } else if let Some(stripped) = addr_str.strip_prefix("quic://") {
-        (UpstreamProtocol::Quic, stripped)
-    } else if let Some(stripped) = addr_str.strip_prefix("https://") {
-        (UpstreamProtocol::Https, stripped)
-    } else if let Some(stripped) = addr_str.strip_prefix("udp://") {
-        (UpstreamProtocol::Udp, stripped)
-    } else {
-        (UpstreamProtocol::Udp, addr_str)
-    };
-
-    let target_clean = if let Some((_, ip_part)) = target.split_once('@') {
-        ip_part
-    } else {
-        target
-    };
-
-    let socket_addr = if let Ok(sa) = target_clean.parse::<SocketAddr>() {
-        sa
-    } else if let Ok(ip) = target_clean.parse::<Ipv4Addr>() {
-        let port = match proto {
-            UpstreamProtocol::Tls | UpstreamProtocol::Quic | UpstreamProtocol::Https => 853,
-            UpstreamProtocol::Udp => 53,
-        };
-        SocketAddr::new(std::net::IpAddr::V4(ip), port)
-    } else if let Ok(ip) = target_clean.parse::<Ipv6Addr>() {
-        let port = match proto {
-            UpstreamProtocol::Tls | UpstreamProtocol::Quic | UpstreamProtocol::Https => 853,
-            UpstreamProtocol::Udp => 53,
-        };
-        SocketAddr::new(std::net::IpAddr::V6(ip), port)
-    } else {
-        SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 53)
-    };
-
-    (proto, socket_addr)
-}
-
-fn parse_rewrite_target(target: &str, rtype: Option<&str>) -> (DnsRecordType, RewriteAnswer) {
-    if let Ok(answer) = RewriteAnswer::from_str(target) {
-        let answer_type = match &answer {
-            RewriteAnswer::A(_) => DnsRecordType::A,
-            RewriteAnswer::Aaaa(_) => DnsRecordType::AAAA,
-            RewriteAnswer::Cname(_) => DnsRecordType::CNAME,
-            RewriteAnswer::Device { .. } => DnsRecordType::Device,
-        };
-        if matches!(answer, RewriteAnswer::Device { .. })
-            || rtype
-                .is_none_or(|rt| rt.eq_ignore_ascii_case("A") || rt.eq_ignore_ascii_case("AAAA"))
-        {
-            return (answer_type, answer);
-        }
-    }
-    if let Some(rt) = rtype {
-        match rt.to_uppercase().as_str() {
-            "A" => {
-                if let Ok(ip) = target.parse::<Ipv4Addr>() {
-                    return (DnsRecordType::A, RewriteAnswer::A(ip));
-                }
-            }
-            "AAAA" => {
-                if let Ok(ip) = target.parse::<Ipv6Addr>() {
-                    return (DnsRecordType::AAAA, RewriteAnswer::Aaaa(ip));
-                }
-            }
-            "CNAME" => {
-                return (
-                    DnsRecordType::CNAME,
-                    RewriteAnswer::Cname(target.to_string()),
-                );
-            }
-            _ => {}
-        }
-    }
-
-    if let Ok(ip) = target.parse::<Ipv4Addr>() {
-        (DnsRecordType::A, RewriteAnswer::A(ip))
-    } else if let Ok(ip) = target.parse::<Ipv6Addr>() {
-        (DnsRecordType::AAAA, RewriteAnswer::Aaaa(ip))
-    } else {
-        (
-            DnsRecordType::CNAME,
-            RewriteAnswer::Cname(target.to_string()),
-        )
+/// An export upstream under its name: the domain it forwards when it has none, else `default`
+/// (as the database named them).
+fn named_upstream(up: &DnsUpstreamConfig) -> NamedUpstream {
+    NamedUpstream {
+        name: up
+            .name
+            .clone()
+            .or_else(|| up.domain.clone())
+            .unwrap_or_else(|| "default".to_string()),
+        target: UpstreamTarget {
+            addr: up.addr,
+            protocol: up.protocol,
+            hostname: None,
+            domain: up.domain.clone(),
+        },
     }
 }
 
@@ -1299,6 +1180,9 @@ fn parse_rewrite_target(target: &str, rtype: Option<&str>) -> (DnsRecordType, Re
 mod tests {
     use super::*;
     use lanforge_types::identifiers::MacAddr;
+    use lanforge_types::network::DnsRecordType;
+    use lanforge_types::network::dns::adblock::{RewriteAnswer, RewriteRule};
+    use lanforge_types::network::dns::upstream::UpstreamProtocol;
 
     #[test]
     fn test_export_to_config_file_and_back() {
@@ -1346,7 +1230,15 @@ mod tests {
         assert_eq!(cfg.hosts[0].1.v4, Some("192.168.1.10".parse().unwrap()));
         assert_eq!(cfg.dhcp.v4.pools[0].0, "lan");
         assert_eq!(cfg.dhcp.v4.pools[0].1.range, "192.168.1.100-192.168.1.200");
-        assert_eq!(cfg.dns.rewrites["nas.lan"].target, "192.168.1.10");
+        assert_eq!(
+            cfg.dns.rewrites,
+            vec![(
+                "nas.lan".to_string(),
+                super::super::DnsRewriteValue(vec![super::super::DnsRewriteItem::Answer(
+                    "192.168.1.10".to_string()
+                )])
+            )]
+        );
 
         let re_exported = SystemConfigExport::from(&cfg);
         assert_eq!(re_exported.hosts.len(), 1);

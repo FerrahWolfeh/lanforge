@@ -1,8 +1,6 @@
 //! `[dns]`, in its own file form: the DNS server settings that live in `lanforge.toml` (listen,
 //! upstreams, reverse resolvers, rewrites). The query log, cache and TTL knobs, DoT/DoQ and the
 //! device visibility threshold are dynamic and stay out of the file.
-//!
-//! Not wired in yet: `ConfigFile.dns` is still `sections::DnsFile` until the DNS cut-over.
 
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};

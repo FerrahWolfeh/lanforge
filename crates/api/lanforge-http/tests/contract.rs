@@ -781,11 +781,11 @@ async fn test_dns_rewrites_contract() {
         Some(0)
     );
 
-    // --- dev: dynamic rewrite ---
+    // --- dev: dynamic rewrite (the WebUI sends rtype DEVICE) ---
     let (status, _) = app
         .post(
             "/api/v1/dns/rewrites",
-            &json!({"domain": "dynamic.lan", "rtype": "CNAME", "answer": "dev:testhost"}),
+            &json!({"domain": "dynamic.lan", "rtype": "DEVICE", "answer": "dev:testhost"}),
         )
         .await;
     assert_eq!(
@@ -794,6 +794,24 @@ async fn test_dns_rewrites_contract() {
         "dev: rewrite should be accepted"
     );
     app.delete("/api/v1/dns/rewrites").await; // clean up
+
+    // A device answer is not a CNAME: refused (today a 500, like every refused change), not
+    // stored.
+    let (status, _) = app
+        .post(
+            "/api/v1/dns/rewrites",
+            &json!({"domain": "dynamic.lan", "rtype": "CNAME", "answer": "dev:testhost"}),
+        )
+        .await;
+    assert!(
+        status.is_client_error() || status.is_server_error(),
+        "CNAME rtype with a dev: answer must be refused, got {status}"
+    );
+    let (_, body) = app.get("/api/v1/dns/rewrites").await;
+    assert_eq!(
+        body["data"]["rewrites"].as_array().map(|a| a.len()),
+        Some(0)
+    );
 
     // --- Validation guardrails (negative grid) ---
     // (description, body, ideal_expected_status)

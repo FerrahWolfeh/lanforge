@@ -6,8 +6,8 @@ use lanforge_core::bus::EventBus;
 use lanforge_core::context::state::State;
 use lanforge_core::context::{ConfigPatch, LanforgeContext};
 use lanforge_db::{
-    AdblockStore, DnsStore, DnsUpstreamStore, FirewallConfigStore, LanforgeDb, LogDb, LogStore,
-    PppoeConfigStore, RaConfigStore, TrafficConfigStore, UserStore,
+    AdblockStore, DnsStore, FirewallConfigStore, LanforgeDb, LogDb, LogStore, PppoeConfigStore,
+    RaConfigStore, TrafficConfigStore, UserStore,
 };
 #[cfg(feature = "dhcp")]
 use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
@@ -22,8 +22,6 @@ use lanforge_types::network::dhcp::Dhcpv4Pool;
 use lanforge_types::network::dns::AdblockUrlEntry;
 #[cfg(feature = "dns")]
 use lanforge_types::network::dns::adblock::{AdblockRuleEntry, AdblockUrlKind};
-#[cfg(feature = "dns")]
-use lanforge_types::network::dns::upstream::UpstreamMode;
 use lanforge_types::network::ra::PreviousLanPrefixes;
 use lanforge_types::network::{
     IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, classify_ipv6, is_ula,
@@ -316,7 +314,12 @@ impl Bootstrapper {
 
         #[cfg(feature = "dns")]
         {
-            Self::load_dns_state_into_patch(db, cfg.dns_toml.upstream_mode, &mut patch);
+            patch = patch
+                .with_dns_upstreams(cfg.dns.upstreams.iter().map(|u| u.target.clone()).collect())
+                .with_dns_upstream_mode(cfg.dns.upstream_mode)
+                .with_dns_rewrites(cfg.dns.rewrites.clone())
+                .with_dns_reverse(cfg.dns.reverse.clone());
+            Self::load_adblock_state_into_patch(db, &mut patch);
             // The DNS service binds from the live listeners; the file is their source.
             let dns = cfg.to_dns_config();
             patch = patch.with_dns_listen(DnsListenConfig {
@@ -370,23 +373,8 @@ impl Bootstrapper {
     }
 
     #[cfg(feature = "dns")]
-    /// `file_mode` (`[dns] upstream_mode`) seeds the live mode when the database has none.
-    fn load_dns_state_into_patch(
-        db: &LanforgeDb,
-        file_mode: UpstreamMode,
-        patch: &mut ConfigPatch,
-    ) {
-        if let Ok(upstreams) = db.load_dns_upstreams() {
-            let list = upstreams.into_iter().map(|row| row.to_target()).collect();
-            patch.dns_upstreams = Some(list);
-        }
-        patch.dns_upstream_mode = Some(match db.load_dns_upstream_mode() {
-            Ok(Some(mode)) => mode,
-            _ => file_mode,
-        });
-        if let Ok(rewrites) = db.load_dns_rewrites() {
-            patch.dns_rewrites = Some(rewrites);
-        }
+    /// The adblock settings, still kept in the database (`[dns]` comes from the file).
+    fn load_adblock_state_into_patch(db: &LanforgeDb, patch: &mut ConfigPatch) {
         if let Ok(allowlist) = db.load_dns_allowlist() {
             patch.dns_allowlist = Some(allowlist.into_iter().map(|(_, d)| d).collect());
         }
@@ -427,33 +415,7 @@ impl Bootstrapper {
     }
 
     #[cfg(feature = "dns")]
-    fn load_dns_config(db: &LanforgeDb, cfg: &Config) -> Result<()> {
-        // Seed upstreams if empty in DB
-        let upstreams = db.load_dns_upstreams()?;
-        if upstreams.is_empty() && !cfg.dns_toml.upstreams.is_empty() {
-            for entry in &cfg.dns_toml.upstreams {
-                let target = &entry.target;
-                let _ =
-                    db.add_dns_upstream(target.addr, target.protocol, target.domain.as_deref())?;
-            }
-            info!(
-                "Seeded {} DNS upstreams from configuration into database",
-                cfg.dns_toml.upstreams.len()
-            );
-        }
-
-        // Seed rewrites if empty in DB
-        let rewrites = db.load_dns_rewrites()?;
-        if rewrites.is_empty() && !cfg.dns_toml.rewrites.is_empty() {
-            for rule in &cfg.dns_toml.rewrites {
-                db.upsert_dns_rewrite(&rule.domain, rule.rtype, &rule.answer)?;
-            }
-            info!(
-                "Seeded {} DNS rewrites from configuration into database",
-                cfg.dns_toml.rewrites.len()
-            );
-        }
-
+    fn seed_adblock_config(db: &LanforgeDb, cfg: &Config) -> Result<()> {
         // Seed allowlist if empty in DB
         let allowlist = db.load_dns_allowlist()?;
         if allowlist.is_empty() && !cfg.dns_toml.allowlist.is_empty() {
@@ -579,8 +541,9 @@ impl Bootstrapper {
             Self::reconcile_dhcp_v4_topology_sanity(cfg, &table, host_ifaces);
         }
 
-        if let Ok(resolvers) = db.load_dns_reverse_resolvers() {
-            table.reverse_resolvers = resolvers;
+        #[cfg(feature = "dns")]
+        {
+            table.reverse_resolvers.clone_from(&cfg.dns.reverse);
         }
 
         Self::log_db_status(&db, &log_db, &table, cfg, user_count);
@@ -699,7 +662,10 @@ impl Bootstrapper {
         Self::migrate_ra_config(db, cfg)?;
 
         #[cfg(feature = "dns")]
-        Self::load_dns_config(db, cfg)?;
+        Self::migrate_dns_config(db, cfg)?;
+
+        #[cfg(feature = "dns")]
+        Self::seed_adblock_config(db, cfg)?;
 
         #[cfg(feature = "pppoe")]
         Self::migrate_pppoe_config(db, cfg)?;
@@ -864,6 +830,77 @@ impl Bootstrapper {
             |file| file.ra = lanforge_api::config_file::RaFile::from_config(&stored),
         )
         .map(|_| ())
+    }
+
+    /// Moves the DNS settings an older binary kept in redb (upstreams, upstream mode, reverse
+    /// resolvers, rewrites) into `[dns]` (once), with the listener settings the file already
+    /// had. A key that is missing keeps what the file has. An upstream without a name is named
+    /// after the domain it forwards, else `default`, as the database showed it.
+    #[cfg(feature = "dns")]
+    fn migrate_dns_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+        use lanforge_api::config_file::{DnsFile, NamedUpstream, SectionSet};
+        use lanforge_db::config_keys::{
+            DNS_REVERSE_RESOLVERS, DNS_REWRITES, DNS_UPSTREAM_MODE, DNS_UPSTREAMS,
+        };
+
+        let upstreams = db.get(DNS_UPSTREAMS)?;
+        let mode = db.get(DNS_UPSTREAM_MODE)?;
+        let reverse = db.get(DNS_REVERSE_RESOLVERS)?;
+        let rewrites = db.stored_dns_rewrites()?;
+        if upstreams.is_none() && mode.is_none() && reverse.is_none() && rewrites.is_none() {
+            return Ok(());
+        }
+        let mut stored = cfg.dns.clone();
+        if let Some(upstreams) = upstreams {
+            stored.upstreams = upstreams
+                .into_iter()
+                .map(|entry| NamedUpstream {
+                    name: entry
+                        .name
+                        .clone()
+                        .or_else(|| entry.domain.clone())
+                        .unwrap_or_else(|| "default".to_string()),
+                    target: entry.to_target(),
+                })
+                .collect();
+        }
+        if let Some(mode) = mode {
+            stored.upstream_mode = mode;
+        }
+        if let Some(reverse) = reverse {
+            stored.reverse = reverse;
+        }
+        if let Some(rewrites) = rewrites {
+            stored.rewrites = rewrites
+                .into_iter()
+                .map(|rule| lanforge_types::network::dns::adblock::RewriteRule { id: None, ..rule })
+                .collect();
+        }
+        // The old file form of `[dns]` (`[dns.rewrites."x"] target = ...`) read as wrong
+        // entries; what the database held replaces it, so its issues go with it.
+        let file = DnsFile::from_config(&stored);
+        let (stored, issues) = file.to_config();
+        let moved = Self::move_section_to_file(
+            db,
+            cfg,
+            "DNS",
+            &[
+                DNS_UPSTREAMS.name(),
+                DNS_UPSTREAM_MODE.name(),
+                DNS_REVERSE_RESOLVERS.name(),
+                DNS_REWRITES.name(),
+            ],
+            SectionSet::DNS,
+            |f| f.dns = file,
+        )?;
+        if moved {
+            info!("Config: [dns] written from the database (old file form replaced)");
+        }
+        cfg.config_issues.retain(|i| !i.starts_with("[dns"));
+        cfg.config_issues
+            .extend(lanforge_api::config_file::log_issues(issues));
+        cfg.set_dns(stored);
+        Ok(())
     }
 
     /// Config-storage cut-over for a file-owned section (`SectionSet::FILE_OWNED`), whose only
@@ -1739,6 +1776,107 @@ mod tests {
         let (dhcp, _) = ConfigFile::parse(&text).unwrap().dhcp_settings();
         assert_eq!(dhcp.options.v4.router, Some(v4.ip()));
         assert_eq!(dhcp.v4_pools, owner_stored_dhcp().v4_pools);
+    }
+
+    /// The owner's `[dns]` as the hash sync wrote it (2026-10-28): the old file form.
+    #[cfg(feature = "dns")]
+    const OWNER_OLD_DNS: &str = "# box\n[dns]\nenabled = true\nlisten = \"[::]:53\"\n\n\
+        [dns.upstreams.default]\naddresses = [\"udp://1.1.1.1:53\", \"udp://1.0.0.1:53\", \
+        \"udp://[2606:4700:4700::1111]:53\", \"udp://[2606:4700:4700::1001]:53\"]\n\n\
+        [dns.rewrites.\"*.eonteam.xyz\"]\ntarget = \"dev:pixie\"\nrtype = \"DEVICE\"\n\n\
+        [adblock]\nenabled = true\nblocking_mode = \"nxdomain\"\nrefresh_time = \"03:00\"\n";
+
+    /// DNS cut-over on the owner's data: what redb held (four Cloudflare upstreams without a
+    /// name, sequential, one device rewrite) lands in `[dns]` exactly, in the new form; the
+    /// old form's issues go, `[adblock]` and the comment stay, the keys are gone, and a second
+    /// boot changes nothing.
+    #[cfg(feature = "dns")]
+    #[test]
+    fn dns_settings_move_from_the_database_to_the_file_once() {
+        use lanforge_api::config_file::{ConfigFile, DnsSettings, NamedUpstream};
+        use lanforge_db::DnsUpstreamStore;
+        use lanforge_db::config_keys::{
+            DNS_REVERSE_RESOLVERS, DNS_REWRITES, DNS_UPSTREAM_MODE, DNS_UPSTREAMS,
+        };
+        use lanforge_types::network::DnsRecordType;
+        use lanforge_types::network::dns::adblock::{RewriteAnswer, RewriteRule};
+        use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamProtocol};
+        use std::str::FromStr;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        std::fs::write(&path, OWNER_OLD_DNS).unwrap();
+        let mut cfg = config_with_db(&dir.path().join("config.redb"));
+        cfg.config_path = path.display().to_string();
+        cfg.config_writable = true;
+        let (from_old_file, old_issues) = ConfigFile::parse(OWNER_OLD_DNS).unwrap().dns.to_config();
+        assert_eq!(old_issues.len(), 1, "the old rewrite form reads as wrong");
+        cfg.config_issues = old_issues;
+        cfg.set_dns(from_old_file);
+
+        let db = LanforgeDb::open_in_memory().unwrap();
+        let cloudflare = [
+            "1.1.1.1:53",
+            "1.0.0.1:53",
+            "[2606:4700:4700::1111]:53",
+            "[2606:4700:4700::1001]:53",
+        ];
+        for addr in cloudflare {
+            db.add_dns_upstream(addr.parse().unwrap(), UpstreamProtocol::Udp, None)
+                .unwrap();
+        }
+        db.save_dns_upstream_mode(UpstreamMode::Sequential).unwrap();
+        db.upsert_dns_rewrite(
+            "*.eonteam.xyz",
+            DnsRecordType::Device,
+            &RewriteAnswer::from_str("dev:pixie").unwrap(),
+        )
+        .unwrap();
+        db.write(|tx| tx.set(DNS_REVERSE_RESOLVERS, &Vec::new()))
+            .unwrap();
+
+        Bootstrapper::migrate_dns_config(&db, &mut cfg).unwrap();
+
+        let expected = DnsSettings {
+            enabled: true,
+            listen: Some("[::]:53".parse().unwrap()),
+            upstream_mode: UpstreamMode::Sequential,
+            upstreams: cloudflare
+                .iter()
+                .map(|a| NamedUpstream {
+                    name: "default".into(),
+                    target: format!("udp://{a}").parse().unwrap(),
+                })
+                .collect(),
+            reverse: Vec::new(),
+            rewrites: vec![RewriteRule {
+                id: None,
+                domain: "*.eonteam.xyz".into(),
+                rtype: DnsRecordType::Device,
+                answer: RewriteAnswer::from_str("dev:pixie").unwrap(),
+            }],
+        };
+        let text = std::fs::read_to_string(&path).unwrap();
+        let (from_file, issues) = ConfigFile::parse(&text).unwrap().dns.to_config();
+        assert!(issues.is_empty(), "{issues:?}\n{text}");
+        assert_eq!(from_file, expected, "{text}");
+        assert_eq!(cfg.dns, expected);
+        assert!(cfg.config_issues.is_empty(), "{:?}", cfg.config_issues);
+        assert!(text.contains("\"*.eonteam.xyz\" = \"dev:pixie\""), "{text}");
+        assert!(text.starts_with("# box"), "{text}");
+        assert!(text.contains("[adblock]\nenabled = true"), "{text}");
+        assert!(db.get(DNS_UPSTREAMS).unwrap().is_none(), "keys removed");
+        assert_eq!(db.get(DNS_UPSTREAM_MODE).unwrap(), None);
+        assert_eq!(db.get(DNS_REWRITES).unwrap(), None);
+        assert_eq!(db.get(DNS_REVERSE_RESOLVERS).unwrap(), None);
+
+        Bootstrapper::migrate_dns_config(&db, &mut cfg).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            text,
+            "second boot: no-op"
+        );
+        assert_eq!(cfg.dns, expected);
     }
 
     /// RA cut-over on the owner's data: the redb lists (ULA first) land in `[ra]` exactly, with

@@ -149,8 +149,8 @@ impl DnsService {
         let soa_master_ns: Arc<str> = Arc::from(format!("ns.{domain_base}"));
         let soa_mailbox: Arc<str> = Arc::from(format!("hostmaster.{domain_base}"));
 
-        // The live config is the only source: `Sequential` is a valid choice, not "unset" (the
-        // bootstrap seeds it from `[dns] upstream_mode` when the database has none).
+        // The live config is the only source (`[dns] upstream_mode`): `Sequential` is a valid
+        // choice, not "unset".
         let mode = self.ctx.get_dns_upstream_mode();
         let recursive = Arc::new(UpstreamStrategy::new(mode, upstreams));
 

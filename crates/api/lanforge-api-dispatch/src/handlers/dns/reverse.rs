@@ -1,5 +1,6 @@
+use super::rewrite::dns_reply;
 use crate::ClientContext;
-use lanforge_api::api::{DnsReverseResolversResponse, Response, SimpleSuccess};
+use lanforge_api::api::{DnsReverseResolversResponse, Response};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet, dns::upstream::UpstreamTarget};
 
 impl ClientContext {
@@ -25,12 +26,13 @@ impl ClientContext {
             }
         };
 
-        self.ctx
-            .add_reverse_resolver(DnsReverseResolver { subnet, resolver });
-
-        Response::Success(SimpleSuccess {
-            message: "Reverse resolver added successfully".to_string(),
-        })
+        dns_reply(
+            self.change_dns(|dns| {
+                dns.reverse.retain(|r| r.subnet != subnet);
+                dns.reverse.push(DnsReverseResolver { subnet, resolver });
+            }),
+            "Reverse resolver added successfully".to_string(),
+        )
     }
 
     pub async fn handle_dns_reverse_resolver_remove(&self, subnet_str: String) -> Response {
@@ -43,11 +45,10 @@ impl ClientContext {
             }
         };
 
-        self.ctx.remove_reverse_resolver(subnet);
-
-        Response::Success(SimpleSuccess {
-            message: "Reverse resolver removed successfully".to_string(),
-        })
+        dns_reply(
+            self.change_dns(|dns| dns.reverse.retain(|r| r.subnet != subnet)),
+            "Reverse resolver removed successfully".to_string(),
+        )
     }
 
     pub async fn handle_dns_reverse_resolver_list(&self) -> Response {
