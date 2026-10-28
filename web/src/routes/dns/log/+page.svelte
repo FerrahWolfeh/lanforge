@@ -9,8 +9,8 @@
 	import { toast } from "svelte-sonner";
 	import { onMount, onDestroy } from "svelte";
 	import { page } from "$app/state";
-	import { dnsQueryLog, dnsLogSseUrl, dnsStats, dnsRewriteAdd } from "$lib/api/client";
-	import type { DnsQueryLogEntry, DnsStatsResponse, RewriteRule } from "$lib/api/types";
+	import { dnsQueryLog, dnsLogSseUrl, dnsStats } from "$lib/api/client";
+	import type { DnsQueryLogEntry, DnsStatsResponse } from "$lib/api/types";
 	import PageHeader from "$lib/components/PageHeader.svelte";
 
 	// Child components
@@ -45,7 +45,7 @@
 	let inspectRecord = $state<DnsQueryLogEntry | null>(null);
 	let inspectDialogOpen = $state(false);
 	let rewriteDialogOpen = $state(false);
-	let activeRewriteRule = $state<RewriteRule | null>(null);
+	let rewritePrefill = $state<{ domain: string; answer: string } | null>(null);
 
 	async function loadDaemonStats() {
 		try {
@@ -201,24 +201,8 @@
 	}
 
 	function handleOpenRewrite(domain: string, target: string) {
-		activeRewriteRule = {
-			domain,
-			rtype: "A",
-			answer: target && target !== "—" ? { kind: "static", value: target } : { kind: "static", value: "127.0.0.1" },
-			enabled: true,
-		} as any;
+		rewritePrefill = { domain, answer: target && target !== "—" ? target : "" };
 		rewriteDialogOpen = true;
-	}
-
-	async function handleSaveRewrite(payload: any) {
-		try {
-			await dnsRewriteAdd(payload);
-			toast.success(`Created DNS rewrite rule for ${payload.domain}`);
-			rewriteDialogOpen = false;
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to save DNS rewrite rule");
-			throw err;
-		}
 	}
 
 	onMount(() => {
@@ -364,6 +348,5 @@
 <!-- Shared DNS Rewrite Creation Dialog -->
 <DnsRewriteDialog
 	bind:open={rewriteDialogOpen}
-	rule={activeRewriteRule}
-	onSave={handleSaveRewrite}
+	prefill={rewritePrefill}
 />

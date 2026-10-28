@@ -39,6 +39,7 @@ import type {
 	LoginResponse,
 	ReverseResolverEntry,
 	RewriteRule,
+	DnsRecordType,
 	SetupPayload,
 	SetupResponse,
 	SetupStatusResponse,
@@ -589,7 +590,8 @@ export const dnsAdblockRuleStatus = (rule: string, enabled: boolean) =>
 
 export const dnsRewriteList = async (): Promise<RewriteRule[]> =>
 	extractList<RewriteRule>(await get<any>('/dns/rewrites'), 'rewrites');
-export const dnsRewriteAdd = (rule: Omit<RewriteRule, 'id'>) => post<void>('/dns/rewrites', rule);
+export const dnsRewriteAdd = (rule: { domain: string; rtype: DnsRecordType; answer: string }) =>
+	post<void>('/dns/rewrites', rule);
 export const dnsRewriteRemove = (rule: RewriteRule) =>
 	del<void>('/dns/rewrites/rule', { domain: rule.domain, rtype: rule.rtype, answer: rule.answer });
 export const dnsRewriteClear = () => del<void>('/dns/rewrites');

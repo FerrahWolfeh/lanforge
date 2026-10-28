@@ -1047,6 +1047,14 @@ export function formatRewriteAnswer(ans: unknown): string {
 	return String(ans);
 }
 
+/** Splits a `dev:<device>|<fallback>` answer; `null` for a static answer. */
+export function splitDeviceAnswer(ans: unknown): { device: string; fallback: string } | null {
+	const text = formatRewriteAnswer(ans);
+	if (!text.startsWith("dev:")) return null;
+	const [device, fallback = ""] = text.slice(4).split("|");
+	return { device, fallback };
+}
+
 export interface EventDeviceInfo {
 	mac: string;
 	hostname?: string;

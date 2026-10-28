@@ -50,19 +50,7 @@
 
 	let copiedItem = $state<string | null>(null);
 
-	const RECORD_TYPES: DnsRecordType[] = [
-		"A",
-		"AAAA",
-		"DEVICE",
-		"CNAME",
-		"PTR",
-		"TXT",
-		"MX",
-		"NS",
-		"SOA",
-		"HTTPS",
-		"SVCB",
-	];
+	const RECORD_TYPES: DnsRecordType[] = ["A", "AAAA", "CNAME", "DEVICE"];
 
 	const typeVariants: Record<string, string> = {
 		A: "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20",
