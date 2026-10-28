@@ -39,7 +39,7 @@ async fn test_dns_rewrites_integration() {
             rtype: DnsRecordType::A,
             answer: RewriteAnswer::from_str("dev:offline-nas|192.168.1.99").unwrap(),
         },
-        // 4. dev: target offline without fallback (returns NXDOMAIN)
+        // 4. dev: target offline without fallback (NODATA: the name exists, never leaves the router)
         RewriteRule {
             id: None,
             domain: "nas-offline.home".to_string(),
@@ -205,7 +205,8 @@ async fn test_dns_rewrites_integration() {
 
         let mut decoder = WireDecoder::new(&resp_bytes);
         let response = decoder.decode_message().unwrap();
-        assert_eq!(response.header.rcode, DnsResponseCode::NXDomain);
+        assert_eq!(response.header.rcode, DnsResponseCode::NoError);
+        assert!(response.answers.is_empty());
     }
 
     // --- Query 5: srv:http:tcp:nas-box:8096 (SRV Record) ---
