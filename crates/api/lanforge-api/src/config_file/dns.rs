@@ -257,16 +257,6 @@ impl<'de> Deserialize<'de> for DnsRewriteValue {
     }
 }
 
-/// The record type a rule of this answer has when the file does not say.
-const fn inferred_rtype(answer: &RewriteAnswer) -> DnsRecordType {
-    match answer {
-        RewriteAnswer::A(_) => DnsRecordType::A,
-        RewriteAnswer::Aaaa(_) => DnsRecordType::AAAA,
-        RewriteAnswer::Cname(_) => DnsRecordType::CNAME,
-        RewriteAnswer::Device { .. } => DnsRecordType::Device,
-    }
-}
-
 /// A host name a CNAME may point at: dot-separated labels of letters, digits, `-` and `_`.
 fn is_dns_name(name: &str) -> bool {
     let name = name.strip_suffix('.').unwrap_or(name);
@@ -376,9 +366,9 @@ fn fits(rtype: DnsRecordType, answer: &RewriteAnswer) -> bool {
                 || (matches!(rtype, DnsRecordType::A | DnsRecordType::AAAA)
                     && fallback
                         .as_deref()
-                        .is_none_or(|fb| inferred_rtype(fb) == rtype))
+                        .is_none_or(|fb| fb.inferred_rtype() == rtype))
         }
-        other => inferred_rtype(other) == rtype,
+        other => other.inferred_rtype() == rtype,
     }
 }
 
@@ -386,7 +376,7 @@ fn fits(rtype: DnsRecordType, answer: &RewriteAnswer) -> bool {
 fn table_rules(table: &DnsRewriteTable) -> Result<Vec<(DnsRecordType, RewriteAnswer)>, String> {
     let answer = parse_answer(&table.answer)?;
     let rtype = match &table.rtype {
-        None => inferred_rtype(&answer),
+        None => answer.inferred_rtype(),
         Some(text) => parse_rtype(text)
             .ok_or_else(|| format!("rtype = \"{text}\" is not A, AAAA or CNAME"))?,
     };
@@ -407,12 +397,10 @@ fn table_rules(table: &DnsRewriteTable) -> Result<Vec<(DnsRecordType, RewriteAns
     let mut fallbacks = Vec::with_capacity(table.fallback.len());
     for text in &table.fallback {
         let fb = parse_static(text.trim()).map_err(|e| format!("fallback {e}"))?;
-        let kind = inferred_rtype(&fb);
-        let clash = fallbacks.iter().any(|f: &RewriteAnswer| {
-            let other = inferred_rtype(f);
-            other == kind || other == DnsRecordType::CNAME || kind == DnsRecordType::CNAME
-        });
-        if clash {
+        if fallbacks
+            .iter()
+            .any(|f: &RewriteAnswer| f.competes_as_fallback(&fb))
+        {
             return Err(
                 "fallback takes at most one IPv4 and one IPv6 address, or one host name"
                     .to_string(),
@@ -438,7 +426,7 @@ fn item_rules(item: &DnsRewriteItem) -> Result<Vec<(DnsRecordType, RewriteAnswer
     let rules = match item {
         DnsRewriteItem::Answer(text) => {
             let answer = parse_answer(text)?;
-            vec![(inferred_rtype(&answer), answer)]
+            vec![(answer.inferred_rtype(), answer)]
         }
         DnsRewriteItem::Detailed(table) => table_rules(table)?,
         DnsRewriteItem::Invalid(toml::Value::Table(t)) => {
@@ -466,7 +454,7 @@ fn item_rules(item: &DnsRewriteItem) -> Result<Vec<(DnsRecordType, RewriteAnswer
 
 /// The file item of one rule: the bare answer when its type is the inferred one.
 fn rule_item(rule: &RewriteRule) -> DnsRewriteItem {
-    if rule.rtype == inferred_rtype(&rule.answer) {
+    if rule.rtype == rule.answer.inferred_rtype() {
         DnsRewriteItem::Answer(rule.answer.to_string())
     } else {
         DnsRewriteItem::Detailed(DnsRewriteTable {
@@ -493,7 +481,7 @@ fn fallback_pair(a: &RewriteRule, b: &RewriteRule) -> Option<DnsRewriteItem> {
     else {
         return None;
     };
-    let families = (inferred_rtype(fb_a), inferred_rtype(fb_b));
+    let families = (fb_a.inferred_rtype(), fb_b.inferred_rtype());
     let pair = matches!(
         families,
         (DnsRecordType::A, DnsRecordType::AAAA) | (DnsRecordType::AAAA, DnsRecordType::A)

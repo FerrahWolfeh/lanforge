@@ -65,6 +65,36 @@ pub enum RewriteAnswer {
     },
 }
 
+impl RewriteAnswer {
+    /// The record type the answer gives on its own: `DEVICE` for a device (both families).
+    #[must_use]
+    pub const fn inferred_rtype(&self) -> DnsRecordType {
+        match self {
+            Self::A(_) => DnsRecordType::A,
+            Self::Aaaa(_) => DnsRecordType::AAAA,
+            Self::Cname(_) => DnsRecordType::CNAME,
+            Self::Device { .. } => DnsRecordType::Device,
+        }
+    }
+
+    /// A device answer's static fallback.
+    #[must_use]
+    pub fn fallback(&self) -> Option<&Self> {
+        match self {
+            Self::Device { fallback, .. } => fallback.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Whether two fallbacks of one device compete: a device holds one IPv4 and one IPv6
+    /// address, or one host name.
+    #[must_use]
+    pub fn competes_as_fallback(&self, other: &Self) -> bool {
+        let (a, b) = (self.inferred_rtype(), other.inferred_rtype());
+        a == b || a == DnsRecordType::CNAME || b == DnsRecordType::CNAME
+    }
+}
+
 impl FromStr for RewriteAnswer {
     type Err = String;
 

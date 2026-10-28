@@ -1164,6 +1164,55 @@ async fn dns_changes_are_written_to_the_config_file() {
     assert_eq!(back, owner, "back to the owner's settings\n{text}");
 }
 
+/// A device keeps one IPv4 and one IPv6 fallback, as the file's table form: adding the second
+/// family keeps the first, a new address of a family replaces that one, and a device rule
+/// without fallback replaces both.
+#[tokio::test]
+async fn device_rewrite_keeps_one_fallback_per_family() {
+    use std::str::FromStr;
+
+    let (client_ctx, dir) = owner_dns_client(true).await;
+    let add = |answer: &str| {
+        let rule = RewriteRule {
+            id: None,
+            domain: "tv.lan".into(),
+            rtype: DnsRecordType::Device,
+            answer: RewriteAnswer::from_str(answer).unwrap(),
+        };
+        let client_ctx = &client_ctx;
+        async move {
+            let res = client_ctx.handle_dns_rewrite_add(rule).await;
+            assert!(matches!(res, Response::Success(_)), "{res:?}");
+        }
+    };
+    let tv = |dir: &tempfile::TempDir| {
+        let (dns, text) = dns_in_file(dir);
+        let answers: Vec<String> = dns
+            .rewrites
+            .iter()
+            .filter(|r| r.domain == "tv.lan")
+            .map(|r| r.answer.to_string())
+            .collect();
+        (answers, text)
+    };
+
+    add("dev:tv|192.0.2.20").await;
+    add("dev:tv|2001:db8::20").await;
+    let (answers, text) = tv(&dir);
+    assert_eq!(answers, ["dev:tv|192.0.2.20", "dev:tv|2001:db8::20"], "{text}");
+    assert!(text.contains("fallback = ["), "one table item:\n{text}");
+
+    add("dev:tv|192.0.2.21").await;
+    assert_eq!(tv(&dir).0, ["dev:tv|192.0.2.21", "dev:tv|2001:db8::20"]);
+
+    add("dev:tv|tv.example").await;
+    assert_eq!(tv(&dir).0, ["dev:tv|tv.example"]);
+
+    add("dev:tv").await;
+    assert_eq!(tv(&dir).0, ["dev:tv"]);
+    assert_eq!(client_ctx.ctx.get_dns_rewrites(), dns_in_file(&dir).0.rewrites);
+}
+
 /// A change the file form cannot hold, or a file that cannot be written, changes nothing.
 #[tokio::test]
 async fn a_refused_dns_change_writes_and_applies_nothing() {

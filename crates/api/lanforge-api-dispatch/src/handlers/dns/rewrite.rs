@@ -16,15 +16,33 @@ pub(crate) fn dns_reply(result: Result<Persisted, String>, what: String) -> Resp
     }
 }
 
-/// Adds `rule`, or gives the rule of the same domain and type its answer.
+/// Adds `rule` in place of the rules of the same domain and type it competes with. Device
+/// fallbacks compete as in the file's table form (one IPv4 and one IPv6 address, or one host
+/// name), so `dev:x|<v4>` and `dev:x|<v6>` stand side by side, kept next to each other.
 pub(crate) fn upsert_rewrite(rewrites: &mut Vec<RewriteRule>, rule: RewriteRule) {
-    if let Some(existing) = rewrites
-        .iter_mut()
-        .find(|r| r.domain.eq_ignore_ascii_case(&rule.domain) && r.rtype == rule.rtype)
-    {
-        existing.answer = rule.answer;
-    } else {
-        rewrites.push(rule);
+    let same = |r: &RewriteRule| r.domain.eq_ignore_ascii_case(&rule.domain) && r.rtype == rule.rtype;
+    let competes = |r: &RewriteRule| {
+        same(r)
+            && match (r.answer.fallback(), rule.answer.fallback()) {
+                (Some(old), Some(new)) => old.competes_as_fallback(new),
+                _ => true,
+            }
+    };
+    let at = rewrites.iter().position(competes);
+    let sibling = rewrites.iter().rposition(same);
+    match at {
+        Some(at) => {
+            for i in (at + 1..rewrites.len()).rev() {
+                if competes(&rewrites[i]) {
+                    rewrites.remove(i);
+                }
+            }
+            rewrites[at] = rule;
+        }
+        None => match sibling {
+            Some(last) => rewrites.insert(last + 1, rule),
+            None => rewrites.push(rule),
+        },
     }
 }
 
