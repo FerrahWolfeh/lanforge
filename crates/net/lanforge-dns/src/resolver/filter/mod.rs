@@ -1,20 +1,12 @@
 use std::collections::HashSet;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use bytes::Bytes;
 use dashmap::DashMap;
-use http_body_util::{BodyExt, Full};
-use hyper::header::LOCATION;
-use hyper::{Method, Request, Uri};
-use hyper_util::client::legacy::Client;
-use hyper_util::client::legacy::connect::HttpConnector;
 use parking_lot::RwLock;
-use tracing::{debug, error, info, trace};
+use tracing::debug;
 
 use lanforge_dns_wire::{WireHeader, WireOptScanner, WireQuestion, WireResponseWriter};
 use lanforge_types::network::dns::DnsRecordType;
@@ -388,159 +380,6 @@ impl AdBlocker {
             .map(|bl| bl.exceptions_len())
             .unwrap_or(0)
     }
-
-    pub async fn load_from_urls(
-        &self,
-        name: &str,
-        urls: &[String],
-    ) -> Result<HashSet<String>, DnsError> {
-        let mut new_list = HashSet::new();
-        let client = source::build_adblock_http_client();
-
-        let mut total_domains = 0;
-
-        let mut successful_urls = 0;
-
-        info!(
-            "Adblock: Starting {name} update from {} sources",
-            urls.len()
-        );
-
-        for url in urls {
-            if !self.is_enabled() {
-                info!("Adblock: stopping {name} update — adblock was disabled");
-                return Err(DnsError::Generic(format!(
-                    "Adblock disabled during {name} update"
-                )));
-            }
-            trace!("Adblock: fetching {}", url);
-            match fetch_url(&client, url.clone()).await {
-                Ok(body_bytes) => {
-                    let mut line_count = 0;
-                    let text = String::from_utf8_lossy(&body_bytes);
-                    for line in text.lines() {
-                        let domain = line.trim();
-                        if domain.is_empty() || domain.starts_with('#') {
-                            continue;
-                        }
-
-                        // Handle both "domain" and "1.2.3.4 domain" (hosts file) formats
-                        let domain = if let Some((_ip, d)) = domain.split_once(char::is_whitespace)
-                        {
-                            d.trim()
-                        } else {
-                            domain
-                        };
-
-                        if !domain.is_empty() {
-                            new_list.insert(domain.to_lowercase());
-                            line_count += 1;
-                        }
-                    }
-                    debug!("Adblock: loaded {} domains from {}", line_count, url);
-                    total_domains += line_count;
-                    successful_urls += 1;
-                }
-                Err(e) => {
-                    error!("Adblock: failed to fetch {}: {}", url, e);
-                }
-            }
-        }
-        info!(
-            "Adblock: {name} update complete (unique: {}, raw lines: {}, sources: {}/{})",
-            new_list.len(),
-            total_domains,
-            successful_urls,
-            urls.len()
-        );
-        Ok(new_list)
-    }
-}
-
-async fn fetch_url(
-    client: &Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>,
-    target_url: String,
-) -> Result<Bytes, DnsError> {
-    tokio::time::timeout(
-        Duration::from_secs(120),
-        fetch_url_inner(client, target_url),
-    )
-    .await
-    .map_err(|_| DnsError::Generic("Request timed out (120s limit)".to_string()))?
-}
-
-async fn fetch_url_inner(
-    client: &Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>,
-    mut target_url: String,
-) -> Result<Bytes, DnsError> {
-    const MAX_BODY_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
-
-    for _ in 0..5 {
-        let uri: Uri = target_url
-            .parse()
-            .map_err(|e| DnsError::Generic(format!("Invalid URL: {e}")))?;
-
-        let req = Request::builder()
-            .method(Method::GET)
-            .uri(uri.clone())
-            .header("User-Agent", "lanforge-dns")
-            .body(Full::default())
-            .map_err(|e| DnsError::Generic(e.to_string()))?;
-
-        let resp = client.request(req).await.map_err(|e| {
-            DnsError::Generic(format!(
-                "HTTP request error: {}",
-                source::format_error_chain(&e)
-            ))
-        })?;
-
-        let status = resp.status();
-
-        if status.is_redirection() {
-            if let Some(loc) = resp.headers().get(LOCATION) {
-                let loc_str = loc
-                    .to_str()
-                    .map_err(|e| DnsError::Generic(format!("Invalid redirect location: {e}")))?;
-                if loc_str.starts_with("http://") || loc_str.starts_with("https://") {
-                    target_url = loc_str.to_string();
-                } else if loc_str.starts_with('/') {
-                    let authority = uri.authority().map_or("", |a| a.as_str());
-                    let scheme = uri.scheme_str().unwrap_or("https");
-                    target_url = format!("{scheme}://{authority}{loc_str}");
-                } else {
-                    target_url = loc_str.to_string();
-                }
-                continue;
-            }
-            return Err(DnsError::Generic(
-                "Redirect without Location header".to_string(),
-            ));
-        }
-
-        if !status.is_success() {
-            return Err(DnsError::Generic(format!("HTTP status {status}")));
-        }
-
-        let mut body = resp.into_body();
-        let mut body_bytes = Vec::new();
-
-        while let Some(frame_res) = body.frame().await {
-            let frame =
-                frame_res.map_err(|e| DnsError::Generic(format!("Body frame error: {e}")))?;
-            if let Ok(data) = frame.into_data() {
-                if body_bytes.len() + data.len() > MAX_BODY_SIZE {
-                    return Err(DnsError::Generic(format!(
-                        "Response body exceeded limit of 64 MiB (read {} bytes)",
-                        body_bytes.len() + data.len()
-                    )));
-                }
-                body_bytes.extend_from_slice(&data);
-            }
-        }
-        return Ok(Bytes::from(body_bytes));
-    }
-
-    Err(DnsError::Generic("Too many redirects".to_string()))
 }
 
 impl AdBlocker {
@@ -639,15 +478,4 @@ impl Default for AdBlocker {
     fn default() -> Self {
         Self::new(false)
     }
-}
-
-#[must_use]
-pub fn hash_set_unordered<T: Hash>(set: &HashSet<T>) -> u64 {
-    let mut total_hash = 0u64;
-    for item in set {
-        let mut hasher = DefaultHasher::new();
-        item.hash(&mut hasher);
-        total_hash = total_hash.wrapping_add(hasher.finish());
-    }
-    total_hash
 }
