@@ -452,43 +452,90 @@ pub struct Dhcpv6PoolFile {
 }
 
 /// IPv6 Router Advertisement (RFC 4861) configuration.
+///
+/// The file form of `RaServerConfig` (`RaFile::from_config` / `to_config`). What the daemon
+/// derives when a key is left out (interface, default prefixes, the ULA from `[system]`,
+/// RDNSS/DNSSL from DHCPv6 and the search domains) is applied in memory, never written here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RaFile {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Absent: the LAN interface (`[system] iface`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iface: Option<String>,
     #[serde(default = "default_true")]
     pub managed: bool,
     #[serde(default = "default_true")]
     pub other_config: bool,
+    /// Absent: 64.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hop_limit: Option<u8>,
+    /// `low`, `medium` (absent) or `high`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_interval: Option<HumanDuration>,
+    /// Absent: a third of `max_interval` (at least 3 s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_interval: Option<HumanDuration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifetime: Option<HumanDuration>,
+    /// Milliseconds; absent: unspecified (0).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mtu: Option<u16>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub prefixes: BTreeMap<String, RaPrefixFile>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub rdnss: BTreeMap<String, RaRdnssFile>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub dnssl: BTreeMap<String, RaDnsslFile>,
+    pub reachable_time: Option<u32>,
+    /// Milliseconds; absent: unspecified (0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrans_timer: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtu: Option<u32>,
+    #[serde(default = "default_true")]
+    pub deprecate_on_renumber: bool,
+    /// In file order: RA lists the prefixes as written.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", with = "named_tables")]
+    pub prefixes: Vec<(String, RaPrefixFile)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty", with = "named_tables")]
+    pub rdnss: Vec<(String, RaRdnssFile)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty", with = "named_tables")]
+    pub dnssl: Vec<(String, RaDnsslFile)>,
 }
 
 impl Default for RaFile {
     fn default() -> Self {
         Self {
             enabled: true,
+            iface: None,
             managed: true,
             other_config: true,
+            hop_limit: None,
+            priority: None,
             // `None` = the daemon's built-in value (200 s, 3 × max_interval, no MTU option), the
             // same as a `[ra]` section without these keys.
             max_interval: None,
+            min_interval: None,
             lifetime: None,
+            reachable_time: None,
+            retrans_timer: None,
             mtu: None,
-            prefixes: BTreeMap::new(),
-            rdnss: BTreeMap::new(),
-            dnssl: BTreeMap::new(),
+            deprecate_on_renumber: true,
+            prefixes: Vec::new(),
+            rdnss: Vec::new(),
+            dnssl: Vec::new(),
+        }
+    }
+}
+
+/// A prefix lifetime: a duration (`"30d"`, `"4h"`, seconds) or `"infinity"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(transparent)]
+pub struct LifetimeFile(pub lanforge_types::network::ra::PrefixLifetime);
+
+impl Serialize for LifetimeFile {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use lanforge_types::network::ra::PrefixLifetime;
+        match self.0 {
+            PrefixLifetime::Infinity => serializer.serialize_str("infinity"),
+            PrefixLifetime::Secs(s) => HumanDuration(u64::from(s)).serialize(serializer),
         }
     }
 }
@@ -497,18 +544,28 @@ impl Default for RaFile {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RaPrefixFile {
+    /// `static`, `ula`, `auto_ula` or `auto_gua`. Absent: `ula` for an `fc00::/7` prefix,
+    /// `static` for another one, `auto_gua` without one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// `"address/len"` (`/64` if left out).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
+    /// Length of a prefix found at run time (no `prefix`); absent: 64.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix_len: Option<u8>,
     #[serde(default = "default_true")]
     pub on_link: bool,
     #[serde(default = "default_true")]
     pub autonomous: bool,
+    #[serde(default = "default_true")]
+    pub router_addr: bool,
+    /// Absent: 1 day.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub valid_lifetime: Option<HumanDuration>,
+    pub valid_lifetime: Option<LifetimeFile>,
+    /// Absent: 4 hours.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preferred_lifetime: Option<HumanDuration>,
+    pub preferred_lifetime: Option<LifetimeFile>,
 }
 
 impl Default for RaPrefixFile {
@@ -516,8 +573,10 @@ impl Default for RaPrefixFile {
         Self {
             source: None,
             prefix: None,
+            prefix_len: None,
             on_link: true,
             autonomous: true,
+            router_addr: true,
             valid_lifetime: None,
             preferred_lifetime: None,
         }

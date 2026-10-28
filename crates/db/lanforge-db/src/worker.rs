@@ -180,11 +180,6 @@ impl DbWorker {
         // latest context snapshot and commit every dirty section in one txn.
         if !self.dirty_sections.is_empty() {
             let result = db.write(|tx| {
-                if self.dirty_sections.contains(SectionSet::RA) {
-                    tx.set(RA_PREFIXES, &self.ctx.get_ra_prefixes())?;
-                    tx.set(RA_RDNSS, &self.ctx.get_ra_rdnss())?;
-                    tx.set(RA_DNSSL, &self.ctx.get_ra_dnssl())?;
-                }
                 if self.dirty_sections.contains(SectionSet::DNS) {
                     tx.set(DNS_REWRITES, &self.ctx.get_dns_rewrites())?;
                     let upstreams: Vec<DnsUpstreamEntry> = self
@@ -822,9 +817,6 @@ impl AsyncService for DbWorker {
                             | DnsEvent::ConfigReverseResolversChanged,
                         ) => {
                             self.dirty_sections |= SectionSet::DNS;
-                        }
-                        LanforgeEvent::System(SystemEvent::ConfigRaChanged) => {
-                            self.dirty_sections |= SectionSet::RA;
                         }
                         LanforgeEvent::System(SystemEvent::ConfigChanged { sections }) => {
                             // File-owned sections are written by the API before they apply.

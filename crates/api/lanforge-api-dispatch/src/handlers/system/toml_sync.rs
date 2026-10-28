@@ -135,6 +135,35 @@ impl ClientContext {
         Ok(persisted)
     }
 
+    /// Changes the RA configuration: `change` edits the live one, the result is written to
+    /// `[ra]` (see [`Self::persist_config_sections`]) and then applied as the file now holds it.
+    /// The LAN interface the daemon fills in is not written (the file follows `[system] iface`).
+    /// A value the file form cannot hold (a prefix address that is not IPv6, ...) is refused:
+    /// nothing written, nothing applied.
+    pub fn change_ra(
+        &self,
+        change: impl FnOnce(&mut lanforge_types::network::ra::RaServerConfig),
+    ) -> Result<Persisted, String> {
+        let _serial = self.ctx.config_change_lock();
+        let mut wanted = self.ctx.get_ra_server_config();
+        change(&mut wanted);
+        let lan_iface = self.ctx.target_interface_name();
+        if wanted.iface.is_some() && wanted.iface == lan_iface {
+            wanted.iface = None;
+        }
+        let file = lanforge_api::config_file::RaFile::from_config(&wanted);
+        let (mut ra, issues) = file.to_config();
+        if !issues.is_empty() {
+            return Err(issues.join("; "));
+        }
+        let persisted = self.persist_config_sections(SectionSet::RA, |f| f.ra = file)?;
+        if ra.iface.is_none() {
+            ra.iface = lan_iface;
+        }
+        self.ctx.update_ra_server_config(ra);
+        Ok(persisted)
+    }
+
     /// Extracts the consolidated static configuration snapshot of the system.
     pub async fn export_system_config_data(&self) -> SystemConfigExport {
         if let lanforge_api::api::Response::SystemConfig(export) =

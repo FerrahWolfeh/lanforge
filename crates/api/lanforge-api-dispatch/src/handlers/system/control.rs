@@ -112,11 +112,17 @@ impl ClientContext {
     }
 
     pub async fn handle_update_ra_config(&self, cfg: RaServerConfig) -> Response {
-        self.ctx.update_ra_server_config(cfg);
-
-        Response::Success(SimpleSuccess {
-            message: "Router Advertisement configuration updated successfully".to_string(),
-        })
+        match self.change_ra(|ra| *ra = cfg) {
+            Ok(persisted) => Response::Success(SimpleSuccess {
+                message: persisted.message("Router Advertisement configuration"),
+            }),
+            Err(e) => {
+                tracing::error!("Router Advertisement configuration not saved: {e}");
+                Response::Error {
+                    error: format!("Router Advertisement configuration not saved: {e}"),
+                }
+            }
+        }
     }
 
     pub async fn handle_ra_trigger(&self) -> Response {

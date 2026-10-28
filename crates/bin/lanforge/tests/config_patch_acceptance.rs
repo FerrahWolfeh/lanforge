@@ -243,8 +243,16 @@ username = ""
 
     // Hydrate context to match the on-disk initial state
     let cfg_file = lanforge_api::config_file::ConfigFile::parse(initial_toml).unwrap();
+    // The RA the boot runs: `[ra]` plus what the daemon derives (no LAN interface set here).
+    let ra = lanforge_api::config_file::effective_ra(
+        cfg_file.ra.to_config().0,
+        &lanforge_api::config_file::RaInputs {
+            search_domains: cfg_file.search_domains(),
+            ..Default::default()
+        },
+    );
     let export = lanforge_api::api::SystemConfigExport::from(cfg_file);
-    let mut initial_patch = ConfigPatch::new();
+    let mut initial_patch = ConfigPatch::new().with_ra_server(ra);
     if let Some(pppoe) = export.pppoe_config {
         initial_patch = initial_patch.with_pppoe(*pppoe);
     }

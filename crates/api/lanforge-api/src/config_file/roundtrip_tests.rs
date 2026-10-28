@@ -288,6 +288,7 @@ fn base() -> SystemConfigExport {
             ..Default::default()
         }]),
         ra_prefixes: Some(vec![RAPrefix {
+            address: Some("fd00:1::".into()),
             valid_lifetime: PrefixLifetime::Infinity,
             preferred_lifetime: PrefixLifetime::Infinity,
             ..RAPrefix::default()
@@ -378,15 +379,8 @@ const KNOWN_LOSSES: &[(&str, &[&str])] = &[
     // Migrated: the file holds `PppoeConfig` itself.
     ("pppoe_config", &[]),
     ("ra_dnssl", &[]),
-    // `infinity` lifetimes are rendered as nothing and read back as the defaults.
-    (
-        "ra_prefixes",
-        &[
-            "/0/preferred_lifetime",
-            "/0/router_addr",
-            "/0/valid_lifetime",
-        ],
-    ),
+    // Kept as its own file form, now lossless (exact tests below).
+    ("ra_prefixes", &[]),
     ("ra_rdnss", &[]),
     ("system_iface", &[]),
     // Migrated: the file holds `TrafficConfig` itself.
@@ -838,4 +832,194 @@ address = "2001:db8::/64"
     assert_eq!(v6, ["static"]);
     assert_eq!(dhcp.options.v4.raw_options.len(), 1);
     assert_eq!(issues.len(), 5, "{issues:#?}");
+}
+
+// ---------------------------------------------------------------------------
+// RA: exact round trips, on the owner's real configuration
+// ---------------------------------------------------------------------------
+
+/// The owner's `[ra]` as the old binaries wrote it (2026-10-28).
+const OWNER_FILE_RA: &str = r#"
+[ra]
+enabled = true
+managed = true
+other_config = true
+max_interval = "200s"
+lifetime = "10m"
+mtu = 1500
+
+[ra.prefixes.auto_gua]
+source = "auto_gua"
+on_link = true
+autonomous = true
+valid_lifetime = "30d"
+preferred_lifetime = "7d"
+
+[ra.prefixes.ula]
+source = "ula"
+prefix = "fd97:f00d:cafe:3731::/64"
+on_link = true
+autonomous = true
+valid_lifetime = "1d"
+preferred_lifetime = "4h"
+
+[ra.rdnss.lan]
+servers = ["fd97:f00d:cafe:3731::1"]
+
+[ra.dnssl.lan]
+domains = ["lan"]
+"#;
+
+/// The owner's live RA (`lanforge ra --json`, 2026-10-28): the lists as redb holds them
+/// (ULA first), the rest as the file sets it.
+fn owner_live_ra() -> lanforge_types::network::ra::RaServerConfig {
+    use lanforge_types::network::ra::{
+        DnsslConfig, PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RdnssConfig,
+    };
+    RaServerConfig {
+        enabled: true,
+        managed: true,
+        other_config: true,
+        max_interval_secs: 200,
+        lifetime_secs: Some(600),
+        mtu: Some(1500),
+        prefixes: vec![
+            RAPrefix {
+                source: PrefixSource::Ula,
+                address: Some("fd97:f00d:cafe:3731::".into()),
+                prefix_len: 64,
+                on_link: true,
+                autonomous: true,
+                router_addr: true,
+                valid_lifetime: PrefixLifetime::Secs(86400),
+                preferred_lifetime: PrefixLifetime::Secs(14400),
+            },
+            RAPrefix {
+                source: PrefixSource::AutoGua,
+                address: None,
+                prefix_len: 64,
+                on_link: true,
+                autonomous: true,
+                router_addr: true,
+                valid_lifetime: PrefixLifetime::Secs(2_592_000),
+                preferred_lifetime: PrefixLifetime::Secs(604_800),
+            },
+        ],
+        rdnss: vec![RdnssConfig::new(vec![
+            "fd97:f00d:cafe:3731::1".parse().unwrap(),
+        ])],
+        dnssl: vec![DnsslConfig {
+            domains: vec!["lan".into()],
+            lifetime: None,
+        }],
+        ..RaServerConfig::default()
+    }
+}
+
+fn ra_through_file(
+    ra: &lanforge_types::network::ra::RaServerConfig,
+) -> (lanforge_types::network::ra::RaServerConfig, Vec<String>) {
+    let file = ConfigFile {
+        ra: super::RaFile::from_config(ra),
+        ..ConfigFile::default()
+    };
+    let rendered = file.render_full().unwrap();
+    ConfigFile::parse(&rendered)
+        .unwrap_or_else(|e| panic!("{e}\n{rendered}"))
+        .ra
+        .to_config()
+}
+
+#[test]
+fn owner_ra_file_reads_as_the_live_ra() {
+    let (from_file, issues) = ConfigFile::parse(OWNER_FILE_RA).unwrap().ra.to_config();
+    assert!(issues.is_empty(), "{issues:?}");
+    let mut live = owner_live_ra();
+    // The old writer sorted the prefixes by name; redb kept the ULA first.
+    live.prefixes.reverse();
+    assert_eq!(from_file, live);
+}
+
+#[test]
+fn owner_live_ra_survives_the_cut_over_exactly() {
+    let live = owner_live_ra();
+    let (back, issues) = ra_through_file(&live);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(back, live);
+}
+
+#[test]
+fn every_ra_field_survives_exactly() {
+    use lanforge_types::network::ra::{PrefixLifetime, RouterPriority};
+    let export = mutate_all(&base(), "/ra_prefixes").0;
+    let export = mutate_all(&export, "/ra_rdnss").0;
+    let export = mutate_all(&export, "/ra_dnssl").0;
+    let mut ra = owner_live_ra();
+    ra.prefixes = export.ra_prefixes.unwrap();
+    ra.rdnss = export.ra_rdnss.unwrap();
+    ra.dnssl = export.ra_dnssl.unwrap();
+    // Every scalar away from its default, an infinite lifetime and a found prefix of /56.
+    ra.enabled = false;
+    ra.iface = Some("br-lan".into());
+    ra.managed = false;
+    ra.hop_limit = 255;
+    ra.priority = RouterPriority::High;
+    ra.max_interval_secs = 600;
+    ra.min_interval_secs = Some(30);
+    ra.reachable_time_ms = 30_000;
+    ra.retrans_timer_ms = 1_000;
+    ra.deprecate_on_renumber = false;
+    let mut found = owner_live_ra().prefixes[1].clone();
+    found.prefix_len = 56;
+    found.router_addr = false;
+    found.valid_lifetime = PrefixLifetime::Infinity;
+    ra.prefixes.push(found);
+    let (back, issues) = ra_through_file(&ra);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(back, ra);
+}
+
+#[test]
+fn two_prefixes_of_one_source_both_survive() {
+    let mut ra = owner_live_ra();
+    let mut second = ra.prefixes[0].clone();
+    second.address = Some("fd00:beef::".into());
+    ra.prefixes.push(second);
+    let (back, issues) = ra_through_file(&ra);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(
+        back, ra,
+        "the old writer keyed both as `ula`: one overwrote the other"
+    );
+}
+
+#[test]
+fn wrong_ra_values_leave_the_prefix_out() {
+    let text = r#"
+[ra]
+priority = "urgent"
+
+[ra.prefixes.typo]
+prefix = "fd97:f00d:cafe:37311::/64"
+
+[ra.prefixes.len]
+prefix = "fd97::/129"
+
+[ra.prefixes.kind]
+source = "auto-gua"
+
+[ra.prefixes.ok]
+prefix = "2001:db8:1::/64"
+"#;
+    let (ra, issues) = ConfigFile::parse(text).unwrap().ra.to_config();
+    assert_eq!(ra.prefixes.len(), 1, "nothing advertised from a guess");
+    assert_eq!(
+        ra.prefixes[0].source,
+        lanforge_types::network::ra::PrefixSource::Static
+    );
+    assert_eq!(
+        ra.priority,
+        lanforge_types::network::ra::RouterPriority::Medium
+    );
+    assert_eq!(issues.len(), 4, "{issues:#?}");
 }

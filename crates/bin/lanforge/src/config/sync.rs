@@ -6,7 +6,6 @@ use anyhow::{Context, Result};
 use lanforge_api::api::SystemConfigExport;
 use lanforge_api::config_file::{ConfigFile, Section, section_hashes, write_toml_atomically};
 use lanforge_db::LanforgeDb;
-use lanforge_db::config_keys::{RA_DNSSL, RA_PREFIXES, RA_RDNSS};
 use tracing::info;
 
 /// Synchronizes configuration between `lanforge.toml` and `config.redb` during boot and reload.
@@ -117,22 +116,6 @@ fn apply_sections_to_db(db: &LanforgeDb, sections: &[Section], cfg: &ConfigFile)
         .any(|sec| matches!(sec, Section::Dns | Section::Adblock));
 
     db.write(|tx| {
-        for sec in sections {
-            if *sec == Section::Ra {
-                #[cfg(feature = "ra")]
-                {
-                    if let Some(ref prefixes) = export.ra_prefixes {
-                        tx.set(RA_PREFIXES, prefixes)?;
-                    }
-                    if let Some(ref rdnss) = export.ra_rdnss {
-                        tx.set(RA_RDNSS, rdnss)?;
-                    }
-                    if let Some(ref dnssl) = export.ra_dnssl {
-                        tx.set(RA_DNSSL, dnssl)?;
-                    }
-                }
-            }
-        }
         if has_dns_adblock {
             #[cfg(any(feature = "dns", feature = "adblock"))]
             {

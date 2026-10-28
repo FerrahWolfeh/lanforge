@@ -13,7 +13,10 @@ pub mod sections;
 
 pub use convert::DhcpSettings;
 pub use duration::HumanDuration;
-pub use effective::{effective_firewall, log_issues, set_aside_issues};
+pub use effective::{
+    RaInputs, add_default_ra_prefixes, effective_firewall, effective_ra, log_issues,
+    set_aside_issues,
+};
 pub use hash::section_hashes;
 pub use patch::patch_sections;
 pub use section::{Section, SectionSet};

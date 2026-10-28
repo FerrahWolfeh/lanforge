@@ -151,8 +151,6 @@ impl ClientContext {
             };
         };
 
-        let mut ra_dirty = overwrite;
-
         let mut total_success = true;
         let mut results = Vec::new();
 
@@ -495,40 +493,46 @@ impl ClientContext {
             patch = patch.with_dns_adblock(adblock_to_apply);
         }
 
+        // File-owned: imported only if it reaches the config file. Overwrite clears the lists
+        // the import does not carry.
+        let ra_prefixes = ra_prefixes.or_else(|| overwrite.then(Vec::new));
+        let ra_rdnss = ra_rdnss.or_else(|| overwrite.then(Vec::new));
+        let ra_dnssl = ra_dnssl.or_else(|| overwrite.then(Vec::new));
         if ra_prefixes.is_some() || ra_rdnss.is_some() || ra_dnssl.is_some() {
-            let prefixes = ra_prefixes
-                .clone()
-                .unwrap_or_else(|| self.ctx.get_ra_prefixes());
-            let rdnss = ra_rdnss.clone().unwrap_or_else(|| self.ctx.get_ra_rdnss());
-            let dnssl = ra_dnssl.clone().unwrap_or_else(|| self.ctx.get_ra_dnssl());
-            patch = patch
-                .with_ra_prefixes(prefixes)
-                .with_ra_rdnss(rdnss)
-                .with_ra_dnssl(dnssl);
-            ra_dirty = false;
-
-            if let Some(ref p) = ra_prefixes {
-                results.push(ImportResult {
-                    section: ImportSection::RaPrefixes,
-                    success: true,
-                    count: p.len(),
-                    error: None,
-                });
-            }
-            if let Some(ref r) = ra_rdnss {
-                results.push(ImportResult {
-                    section: ImportSection::RaRdnss,
-                    success: true,
-                    count: r.len(),
-                    error: None,
-                });
-            }
-            if let Some(ref d) = ra_dnssl {
-                results.push(ImportResult {
-                    section: ImportSection::RaDnssl,
-                    success: true,
-                    count: d.len(),
-                    error: None,
+            let sections = [
+                (
+                    ImportSection::RaPrefixes,
+                    ra_prefixes.as_ref().map(Vec::len),
+                ),
+                (ImportSection::RaRdnss, ra_rdnss.as_ref().map(Vec::len)),
+                (ImportSection::RaDnssl, ra_dnssl.as_ref().map(Vec::len)),
+            ];
+            let outcome = self.change_ra(|ra| {
+                if let Some(prefixes) = ra_prefixes {
+                    ra.prefixes = prefixes;
+                }
+                if let Some(rdnss) = ra_rdnss {
+                    ra.rdnss = rdnss;
+                }
+                if let Some(dnssl) = ra_dnssl {
+                    ra.dnssl = dnssl;
+                }
+            });
+            for (section, count) in sections {
+                let Some(count) = count else { continue };
+                results.push(match &outcome {
+                    Ok(_) => ImportResult {
+                        section,
+                        success: true,
+                        count,
+                        error: None,
+                    },
+                    Err(e) => ImportResult {
+                        section,
+                        success: false,
+                        count: 0,
+                        error: Some(e.clone()),
+                    },
                 });
             }
         }
@@ -674,13 +678,6 @@ impl ClientContext {
                     error: Some(e),
                 }),
             }
-        }
-
-        if ra_dirty {
-            patch = patch
-                .with_ra_prefixes(Vec::new())
-                .with_ra_rdnss(Vec::new())
-                .with_ra_dnssl(Vec::new());
         }
 
         let _ = self.ctx.apply_config(patch);

@@ -194,3 +194,41 @@ async fn invalid_file_applies_nothing() {
     assert!(matches!(res, Response::Error { .. }), "{res:?}");
     assert_eq!(client.ctx.get_pppoe_config(), before);
 }
+
+/// An offline `[ra]` edit applies with what the daemon derives (interface, DNSSL from the
+/// search domains); a prefix that cannot be read is left out and reported.
+#[tokio::test]
+async fn reload_applies_an_ra_edit_and_leaves_out_a_wrong_prefix() {
+    let (client, _dir, _) = with_file(
+        "[ra]\nmtu = 1492\n\n[ra.prefixes.ula]\nprefix = \"fd00:1::/64\"\n\
+         valid_lifetime = \"infinity\"\n\n[ra.prefixes.typo]\nprefix = \"fd00:zz::/64\"\n",
+    );
+    client.ctx.set_target_interface_name("lan0".into());
+    reload(&client).await;
+    let ra = client.ctx.get_ra_server_config();
+    assert_eq!(ra.mtu, Some(1492));
+    assert_eq!(ra.iface.as_deref(), Some("lan0"));
+    assert_eq!(ra.prefixes.len(), 1);
+    assert_eq!(
+        ra.prefixes[0].valid_lifetime,
+        lanforge_types::network::ra::PrefixLifetime::Infinity
+    );
+    assert_eq!(ra.dnssl[0].domains, vec!["lan".to_string()], "derived");
+    let issues = client.ctx.config_issues();
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert!(issues[0].contains("typo"), "{issues:?}");
+}
+
+/// Reloading an unchanged file keeps what the daemon derived (here the DNSSL): the lists are
+/// not imported raw over the live ones.
+#[tokio::test]
+async fn an_unchanged_ra_reload_keeps_the_derived_lists() {
+    let (client, _dir, _) = with_file(
+        "[system]\nsearch_domains = [\"home.arpa\"]\n\n[ra.prefixes.gua]\nsource = \"auto_gua\"\n",
+    );
+    reload(&client).await;
+    let first = client.ctx.get_ra_server_config();
+    assert_eq!(first.dnssl[0].domains, ["home.arpa", "lan"]);
+    reload(&client).await;
+    assert_eq!(client.ctx.get_ra_server_config(), first);
+}

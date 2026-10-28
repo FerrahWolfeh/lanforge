@@ -302,26 +302,7 @@ impl Bootstrapper {
         }
         #[cfg(feature = "ra")]
         {
-            let ra_cfg = cfg.to_ra_config();
-            let ra_srv = lanforge_types::network::ra::RaServerConfig {
-                enabled: cfg.ra_toml.enabled,
-                iface: Some(ra_cfg.iface),
-                managed: ra_cfg.managed,
-                other_config: ra_cfg.other_config,
-                hop_limit: ra_cfg.hop_limit,
-                priority: ra_cfg.priority,
-                max_interval_secs: ra_cfg.max_interval.as_secs(),
-                min_interval_secs: ra_cfg.min_interval.map(|d| d.as_secs()),
-                lifetime_secs: ra_cfg.lifetime.map(|d| d.as_secs()),
-                reachable_time_ms: ra_cfg.reachable_time,
-                retrans_timer_ms: ra_cfg.retrans_timer,
-                mtu: ra_cfg.mtu,
-                prefixes: cfg.ra_toml.prefixes.clone(),
-                rdnss: cfg.ra_toml.rdnss.clone(),
-                dnssl: cfg.ra_toml.dnssl.clone(),
-                deprecate_on_renumber: ra_cfg.deprecate_on_renumber,
-            };
-            patch = patch.with_ra_server(ra_srv);
+            patch = patch.with_ra_server(cfg.effective_ra());
         }
 
         #[cfg(feature = "dns")]
@@ -702,7 +683,7 @@ impl Bootstrapper {
         Self::migrate_dhcp_config(db, cfg)?;
 
         #[cfg(feature = "ra")]
-        Self::seed_ra_configs(db, cfg)?;
+        Self::migrate_ra_config(db, cfg)?;
 
         #[cfg(feature = "dns")]
         Self::load_dns_config(db, cfg)?;
@@ -795,32 +776,37 @@ impl Bootstrapper {
         }
     }
 
+    /// Moves the RA lists an older binary kept in redb (prefixes, RDNSS, DNSSL) into `[ra]`
+    /// (once); its other keys were already file-only. A key that is missing keeps what the
+    /// file has.
     #[cfg(feature = "ra")]
-    fn seed_ra_configs(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
-        if db.seed_ra_prefixes_if_empty(&cfg.ra_toml.prefixes)? {
-            info!(
-                "Seeded {} RA prefixes from TOML configuration into database",
-                cfg.ra_toml.prefixes.len()
-            );
-        }
-        cfg.ra_toml.prefixes = db.load_ra_prefixes()?;
+    fn migrate_ra_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+        use lanforge_db::config_keys::{RA_DNSSL, RA_PREFIXES, RA_RDNSS};
 
-        if db.seed_ra_rdnss_if_empty(&cfg.ra_toml.rdnss)? {
-            info!(
-                "Seeded {} RA RDNSS options from TOML configuration into database",
-                cfg.ra_toml.rdnss.len()
-            );
+        let prefixes = db.get(RA_PREFIXES)?;
+        let rdnss = db.get(RA_RDNSS)?;
+        let dnssl = db.get(RA_DNSSL)?;
+        if prefixes.is_none() && rdnss.is_none() && dnssl.is_none() {
+            return Ok(());
         }
-        cfg.ra_toml.rdnss = db.load_ra_rdnss()?;
-
-        if db.seed_ra_dnssl_if_empty(&cfg.ra_toml.dnssl)? {
-            info!(
-                "Seeded {} RA DNSSL options from TOML configuration into database",
-                cfg.ra_toml.dnssl.len()
-            );
+        if let Some(prefixes) = prefixes {
+            cfg.ra.prefixes = prefixes;
         }
-        cfg.ra_toml.dnssl = db.load_ra_dnssl()?;
-        Ok(())
+        if let Some(rdnss) = rdnss {
+            cfg.ra.rdnss = rdnss;
+        }
+        if let Some(dnssl) = dnssl {
+            cfg.ra.dnssl = dnssl;
+        }
+        let stored = cfg.ra.clone();
+        Self::move_section_to_file(
+            db,
+            cfg,
+            "RA",
+            &[RA_PREFIXES.name(), RA_RDNSS.name(), RA_DNSSL.name()],
+            lanforge_api::config_file::SectionSet::RA,
+            |file| file.ra = lanforge_api::config_file::RaFile::from_config(&stored),
+        )
     }
 
     /// Config-storage cut-over for a file-owned section (`SectionSet::FILE_OWNED`), whose only
@@ -1693,6 +1679,71 @@ mod tests {
         let (dhcp, _) = ConfigFile::parse(&text).unwrap().dhcp_settings();
         assert_eq!(dhcp.options.v4.router, Some(v4.ip()));
         assert_eq!(dhcp.v4_pools, owner_stored_dhcp().v4_pools);
+    }
+
+    /// RA cut-over on the owner's data: the redb lists (ULA first) land in `[ra]` exactly, with
+    /// the scalars the file already had; the file's comment stays and the keys are gone.
+    #[cfg(feature = "ra")]
+    #[test]
+    fn ra_lists_move_from_the_database_to_the_file_once() {
+        use lanforge_api::config_file::ConfigFile;
+        use lanforge_types::network::ra::{
+            DnsslConfig, PrefixLifetime, PrefixSource, RAPrefix, RdnssConfig,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        std::fs::write(
+            &path,
+            "# box\n[ra]\nenabled = true\nmanaged = true\nother_config = true\n\
+             max_interval = \"200s\"\nlifetime = \"10m\"\nmtu = 1500\n\n\
+             [ra.prefixes.auto_gua]\nsource = \"auto_gua\"\nvalid_lifetime = \"30d\"\n\
+             preferred_lifetime = \"7d\"\n",
+        )
+        .unwrap();
+        let mut cfg = config_with_db(&dir.path().join("config.redb"));
+        cfg.config_path = path.display().to_string();
+        cfg.config_writable = true;
+        cfg.ra = ConfigFile::parse(&std::fs::read_to_string(&path).unwrap())
+            .unwrap()
+            .ra
+            .to_config()
+            .0;
+        let db = LanforgeDb::open_in_memory().unwrap();
+        let prefixes = vec![
+            RAPrefix::ula("fd97:f00d:cafe:3731::/64"),
+            RAPrefix {
+                source: PrefixSource::AutoGua,
+                valid_lifetime: PrefixLifetime::Secs(2_592_000),
+                preferred_lifetime: PrefixLifetime::Secs(604_800),
+                ..RAPrefix::gua_dynamic()
+            },
+        ];
+        let rdnss = vec![RdnssConfig::new(vec![
+            "fd97:f00d:cafe:3731::1".parse().unwrap(),
+        ])];
+        let dnssl = vec![DnsslConfig {
+            domains: vec!["lan".into()],
+            lifetime: None,
+        }];
+        db.save_ra_prefixes(&prefixes).unwrap();
+        db.save_ra_rdnss(&rdnss).unwrap();
+        db.save_ra_dnssl(&dnssl).unwrap();
+
+        Bootstrapper::migrate_ra_config(&db, &mut cfg).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        let (from_file, issues) = ConfigFile::parse(&text).unwrap().ra.to_config();
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(from_file, cfg.ra, "{text}");
+        assert_eq!(from_file.prefixes, prefixes, "ULA stays first");
+        assert_eq!((from_file.rdnss, from_file.dnssl), (rdnss, dnssl));
+        assert_eq!(from_file.lifetime_secs, Some(600), "file scalars kept");
+        assert_eq!(from_file.mtu, Some(1500));
+        assert!(text.starts_with("# box"));
+        assert_eq!(db.load_ra_prefixes().unwrap(), Vec::new(), "keys removed");
+        assert_eq!(db.load_ra_rdnss().unwrap(), Vec::new());
+        assert_eq!(db.load_ra_dnssl().unwrap(), Vec::new());
     }
 
     /// A file that cannot take the config keeps it in the database, in use.

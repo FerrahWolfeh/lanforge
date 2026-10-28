@@ -11,10 +11,10 @@ use lanforge_dns::config::DnsConfig;
 use lanforge_http::config::HttpConfig;
 #[cfg(feature = "pppoe")]
 use lanforge_pppoe::config::PppoeConfig;
-#[cfg(feature = "ra")]
-use lanforge_ra::RaServiceConfig;
 #[cfg(feature = "tftp")]
 use lanforge_tftp::config::TftpConfig;
+#[cfg(feature = "ra")]
+use lanforge_types::network::ra::RaServerConfig;
 #[cfg(feature = "uds")]
 use lanforge_uds::config::ApiConfig;
 use serde::{Deserialize, Serialize};
@@ -29,7 +29,7 @@ pub struct TomlConfig {
     pub system: SystemCfg,
     pub database: DatabaseConfig,
     #[cfg(feature = "ra")]
-    pub ra: RaServiceConfig,
+    pub ra: RaServerConfig,
     #[cfg(feature = "dhcp")]
     pub dhcp: DhcpCfg,
     #[cfg(feature = "dns")]
@@ -200,29 +200,10 @@ impl From<&lanforge_api::config_file::ConfigFile> for TomlConfig {
             cfg.dhcp.settings = settings;
         }
 
+        // Entries the file gets wrong are left out (reported by `load_toml`).
         #[cfg(feature = "ra")]
         {
-            cfg.ra.enabled = fc.ra.enabled;
-            cfg.ra.managed = Some(fc.ra.managed);
-            cfg.ra.other_config = Some(fc.ra.other_config);
-            if let Some(mi) = fc.ra.max_interval {
-                cfg.ra.max_interval = mi.0;
-            }
-            if let Some(lt) = fc.ra.lifetime {
-                cfg.ra.lifetime = Some(lt.0);
-            }
-            if let Some(mtu) = fc.ra.mtu {
-                cfg.ra.mtu = Some(u32::from(mtu));
-            }
-            if let Some(prefixes) = export.ra_prefixes {
-                cfg.ra.prefixes = prefixes;
-            }
-            if let Some(rdnss) = export.ra_rdnss {
-                cfg.ra.rdnss = rdnss;
-            }
-            if let Some(dnssl) = export.ra_dnssl {
-                cfg.ra.dnssl = dnssl;
-            }
+            cfg.ra = fc.ra.to_config().0;
         }
 
         #[cfg(feature = "dns")]
@@ -298,6 +279,9 @@ pub fn load_toml(path: &str) -> TomlConfig {
             #[cfg(feature = "dhcp")]
             cfg.config_issues
                 .extend(log_issues(file_cfg.dhcp.to_config().1));
+            #[cfg(feature = "ra")]
+            cfg.config_issues
+                .extend(log_issues(file_cfg.ra.to_config().1));
             cfg
         }
         Err(e) => {
@@ -316,7 +300,7 @@ mod tests {
         let default_cfg = TomlConfig::default();
         assert_eq!(default_cfg.system.iface, "");
         #[cfg(feature = "ra")]
-        assert!(!default_cfg.ra.enabled);
+        assert_eq!(default_cfg.ra, RaServerConfig::default());
         #[cfg(feature = "dns")]
         assert_eq!(default_cfg.dns.listen.to_string(), "[::]:53");
     }
@@ -343,11 +327,11 @@ source = "broken" # Invalid variant
 
         let system: SystemCfg = load_section(&value, "system");
         #[cfg(feature = "ra")]
-        let ra: RaServiceConfig = load_section(&value, "ra");
+        let ra: RaServerConfig = load_section(&value, "ra");
 
         assert_eq!(system.iface, "eth42");
         #[cfg(feature = "ra")]
-        assert!(!ra.enabled); // Should be default
+        assert_eq!(ra, RaServerConfig::default()); // Should be default
     }
 
     #[test]
@@ -370,7 +354,7 @@ source = "broken" # Invalid variant
             .unwrap_or_else(|e| panic!("ConfigFile::parse failed on contrib/lanforge.toml: {e}"));
         assert_eq!(file_cfg.system.iface, "end0");
         assert!(file_cfg.system.ula_prefix.is_none());
-        assert!(file_cfg.ra.prefixes.is_empty());
+        assert_eq!(file_cfg.ra.prefixes, Vec::new());
         assert!(file_cfg.dhcp.v4.pools.iter().any(|(name, _)| name == "lan"));
         assert!(file_cfg.hosts.contains_key("nas"));
     }

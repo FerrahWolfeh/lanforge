@@ -18,7 +18,8 @@ use lanforge_types::network::firewall::{
     L4Protocol, PortForwardRule, ZoneForwarding,
 };
 use lanforge_types::network::ra::{
-    DnsslConfig, PrefixLifetime, PrefixSource, RAPrefix, RdnssConfig,
+    DnsslConfig, PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RdnssConfig,
+    RouterPriority,
 };
 use lanforge_types::network::{DnsRecordType, IpSubnet, Ipv6AddrOrSuffix};
 
@@ -32,8 +33,8 @@ use super::duration::HumanDuration;
 use super::sections::{
     AdblockFile, AdblockRuleFile, AdblockSourceFile, DhcpFile, Dhcpv4File, Dhcpv4PoolFile,
     Dhcpv6File, Dhcpv6PoolFile, DnsFile, DnsRewriteFile, DnsUpstreamFile, FirewallFile,
-    FirewallZoneFile, HostFileEntry, OpenPortFile, PortForwardFile, RaDnsslFile, RaFile,
-    RaPrefixFile, RaRdnssFile, TftpFile, ZoneForwardingFile,
+    FirewallZoneFile, HostFileEntry, LifetimeFile, OpenPortFile, PortForwardFile, RaDnsslFile,
+    RaFile, RaPrefixFile, RaRdnssFile, TftpFile, ZoneForwardingFile,
 };
 
 fn policy_to_str(p: FirewallPolicy) -> &'static str {
@@ -330,6 +331,256 @@ impl FirewallFile {
             default_input_policy,
             default_forward_policy,
             on_stop,
+        };
+        (config, issues)
+    }
+}
+
+fn source_to_str(source: &PrefixSource) -> &'static str {
+    match source {
+        PrefixSource::Static => "static",
+        PrefixSource::Ula => "ula",
+        PrefixSource::AutoUla => "auto_ula",
+        PrefixSource::AutoGua => "auto_gua",
+    }
+}
+
+fn parse_source(s: &str) -> Option<PrefixSource> {
+    match s.trim().to_lowercase().as_str() {
+        "static" => Some(PrefixSource::Static),
+        "ula" => Some(PrefixSource::Ula),
+        "auto_ula" => Some(PrefixSource::AutoUla),
+        "auto_gua" => Some(PrefixSource::AutoGua),
+        _ => None,
+    }
+}
+
+fn priority_to_str(p: RouterPriority) -> &'static str {
+    match p {
+        RouterPriority::Low => "low",
+        RouterPriority::Medium => "medium",
+        RouterPriority::High => "high",
+    }
+}
+
+/// An RDNSS/DNSSL lifetime in seconds, saturated (with an issue) past 32 bits.
+fn option_lifetime_secs(lifetime: HumanDuration, at: &str, issues: &mut Vec<String>) -> u32 {
+    u32::try_from(lifetime.0).unwrap_or_else(|_| {
+        issues.push(format!(
+            "{at} lifetime = {}s is longer than RA allows; using {}s",
+            lifetime.0,
+            u32::MAX
+        ));
+        u32::MAX
+    })
+}
+
+/// Names the entries of an RA list for the file: `name(idx, entry)`, made unique with `#2`.
+fn label_entries<T, F>(
+    entries: &[T],
+    name: impl Fn(usize, &T) -> String,
+    file: impl Fn(&T) -> F,
+) -> Vec<(String, F)> {
+    let mut out: Vec<(String, F)> = Vec::with_capacity(entries.len());
+    for (idx, entry) in entries.iter().enumerate() {
+        let label = unique_label(name(idx, entry), out.iter().map(|(n, _)| n));
+        out.push((label, file(entry)));
+    }
+    out
+}
+
+impl RaFile {
+    /// The file form of `ra`, losing nothing: lists keep their order, `infinity` lifetimes and
+    /// every flag. Entries are named by source (`ula`, `auto_gua`, ..., `prefix-N` for a static
+    /// one) and `lan`, `rdnss-N` / `dnssl-N`, made unique with a `#2` suffix.
+    #[must_use]
+    pub fn from_config(ra: &RaServerConfig) -> Self {
+        let default = RaServerConfig::default();
+        let prefixes = label_entries(
+            &ra.prefixes,
+            |idx, p| match p.source {
+                PrefixSource::Static => format!("prefix-{}", idx + 1),
+                ref source => source_to_str(source).to_string(),
+            },
+            |p| RaPrefixFile {
+                source: Some(source_to_str(&p.source).to_string()),
+                prefix: p.address.as_ref().map(|a| format!("{a}/{}", p.prefix_len)),
+                prefix_len: (p.address.is_none() && p.prefix_len != 64).then_some(p.prefix_len),
+                on_link: p.on_link,
+                autonomous: p.autonomous,
+                router_addr: p.router_addr,
+                valid_lifetime: Some(LifetimeFile(p.valid_lifetime)),
+                preferred_lifetime: Some(LifetimeFile(p.preferred_lifetime)),
+            },
+        );
+        let list_name = |kind: &str, idx: usize| {
+            if idx == 0 {
+                "lan".to_string()
+            } else {
+                format!("{kind}-{}", idx + 1)
+            }
+        };
+        let rdnss = label_entries(
+            &ra.rdnss,
+            |idx, _| list_name("rdnss", idx),
+            |r: &RdnssConfig| RaRdnssFile {
+                servers: r.servers.clone(),
+                lifetime: r.lifetime.map(HumanDuration::from),
+            },
+        );
+        let dnssl = label_entries(
+            &ra.dnssl,
+            |idx, _| list_name("dnssl", idx),
+            |d: &DnsslConfig| RaDnsslFile {
+                domains: d.domains.clone(),
+                lifetime: d.lifetime.map(HumanDuration::from),
+            },
+        );
+        Self {
+            enabled: ra.enabled,
+            iface: ra.iface.clone(),
+            managed: ra.managed,
+            other_config: ra.other_config,
+            hop_limit: (ra.hop_limit != default.hop_limit).then_some(ra.hop_limit),
+            priority: (ra.priority != default.priority)
+                .then(|| priority_to_str(ra.priority).to_string()),
+            max_interval: Some(HumanDuration(ra.max_interval_secs)),
+            min_interval: ra.min_interval_secs.map(HumanDuration),
+            lifetime: ra.lifetime_secs.map(HumanDuration),
+            reachable_time: (ra.reachable_time_ms != 0).then_some(ra.reachable_time_ms),
+            retrans_timer: (ra.retrans_timer_ms != 0).then_some(ra.retrans_timer_ms),
+            mtu: ra.mtu,
+            deprecate_on_renumber: ra.deprecate_on_renumber,
+            prefixes,
+            rdnss,
+            dnssl,
+        }
+    }
+
+    /// The RA configuration this file describes, as written (nothing derived), plus one message
+    /// per value it gets wrong. A prefix whose address or source cannot be read is left out
+    /// (nothing is advertised from a guess); a wrong lifetime or priority takes its default.
+    #[must_use]
+    pub fn to_config(&self) -> (RaServerConfig, Vec<String>) {
+        let mut issues = Vec::new();
+        let default = RaServerConfig::default();
+
+        let mut prefixes = Vec::with_capacity(self.prefixes.len());
+        for (name, p) in &self.prefixes {
+            let at = format!("[ra.prefixes.\"{name}\"]");
+            let address = match p.prefix.as_deref() {
+                None => Ok(None),
+                Some(text) => {
+                    let (addr, len) = match text.split_once('/') {
+                        Some((addr, len)) => (addr.trim(), len.trim().parse::<u8>().ok()),
+                        None => (text.trim(), Some(64)),
+                    };
+                    match (addr.parse::<Ipv6Addr>(), len.filter(|l| *l <= 128)) {
+                        (Ok(addr), Some(len)) => Ok(Some((addr.to_string(), len))),
+                        _ => Err(format!(
+                            "{at} prefix = \"{text}\" is not \"address/len\" (e.g. \"fd00:1::/64\"); not advertised"
+                        )),
+                    }
+                }
+            };
+            let address = match address {
+                Ok(a) => a,
+                Err(e) => {
+                    issues.push(e);
+                    continue;
+                }
+            };
+            let source = match p.source.as_deref() {
+                Some(text) => match parse_source(text) {
+                    Some(source) => source,
+                    None => {
+                        issues.push(format!(
+                            "{at} source = \"{text}\" is not static, ula, auto_ula or auto_gua; not advertised"
+                        ));
+                        continue;
+                    }
+                },
+                None => match &address {
+                    Some((addr, _)) if addr.starts_with("fd") || addr.starts_with("fc") => {
+                        PrefixSource::Ula
+                    }
+                    Some(_) => PrefixSource::Static,
+                    None => PrefixSource::AutoGua,
+                },
+            };
+            let (address, prefix_len) = match address {
+                Some((addr, len)) => (Some(addr), len),
+                None => (None, p.prefix_len.unwrap_or(64)),
+            };
+            prefixes.push(RAPrefix {
+                source,
+                address,
+                prefix_len,
+                on_link: p.on_link,
+                autonomous: p.autonomous,
+                router_addr: p.router_addr,
+                valid_lifetime: p
+                    .valid_lifetime
+                    .map_or(PrefixLifetime::Secs(86400), |l| l.0),
+                preferred_lifetime: p
+                    .preferred_lifetime
+                    .map_or(PrefixLifetime::Secs(14400), |l| l.0),
+            });
+        }
+
+        let mut rdnss = Vec::with_capacity(self.rdnss.len());
+        for (name, r) in &self.rdnss {
+            let at = format!("[ra.rdnss.\"{name}\"]");
+            rdnss.push(RdnssConfig {
+                servers: r.servers.clone(),
+                lifetime: r
+                    .lifetime
+                    .map(|l| option_lifetime_secs(l, &at, &mut issues)),
+            });
+        }
+        let mut dnssl = Vec::with_capacity(self.dnssl.len());
+        for (name, d) in &self.dnssl {
+            let at = format!("[ra.dnssl.\"{name}\"]");
+            dnssl.push(DnsslConfig {
+                domains: d.domains.clone(),
+                lifetime: d
+                    .lifetime
+                    .map(|l| option_lifetime_secs(l, &at, &mut issues)),
+            });
+        }
+
+        let priority = match self.priority.as_deref() {
+            None => default.priority,
+            Some(text) => match text.trim().to_lowercase().as_str() {
+                "low" => RouterPriority::Low,
+                "medium" => RouterPriority::Medium,
+                "high" => RouterPriority::High,
+                _ => {
+                    issues.push(format!(
+                        "[ra] priority = \"{text}\" is not low, medium or high; using medium"
+                    ));
+                    RouterPriority::Medium
+                }
+            },
+        };
+
+        let config = RaServerConfig {
+            enabled: self.enabled,
+            iface: self.iface.clone(),
+            managed: self.managed,
+            other_config: self.other_config,
+            hop_limit: self.hop_limit.unwrap_or(default.hop_limit),
+            priority,
+            max_interval_secs: self.max_interval.map_or(default.max_interval_secs, |d| d.0),
+            min_interval_secs: self.min_interval.map(|d| d.0),
+            lifetime_secs: self.lifetime.map(|d| d.0),
+            reachable_time_ms: self.reachable_time.unwrap_or(0),
+            retrans_timer_ms: self.retrans_timer.unwrap_or(0),
+            mtu: self.mtu,
+            prefixes,
+            rdnss,
+            dnssl,
+            deprecate_on_renumber: self.deprecate_on_renumber,
         };
         (config, issues)
     }
@@ -685,77 +936,14 @@ impl From<&SystemConfigExport> for ConfigFile {
             });
         }
 
-        // 3. Router Advertisement
-        let mut ra = RaFile::default();
-        if let Some(ref prefixes) = export.ra_prefixes {
-            for (idx, p) in prefixes.iter().enumerate() {
-                let name = match p.source {
-                    PrefixSource::Ula => "ula".to_string(),
-                    PrefixSource::AutoUla => "auto_ula".to_string(),
-                    PrefixSource::AutoGua => "auto_gua".to_string(),
-                    PrefixSource::Static => format!("prefix-{}", idx + 1),
-                };
-                let src_str = match p.source {
-                    PrefixSource::Ula => "ula",
-                    PrefixSource::AutoUla => "auto_ula",
-                    PrefixSource::AutoGua => "auto_gua",
-                    PrefixSource::Static => "static",
-                };
-                let prefix_str = p.address.as_ref().map(|a| format!("{a}/{}", p.prefix_len));
-                ra.prefixes.insert(
-                    name,
-                    RaPrefixFile {
-                        source: Some(src_str.to_string()),
-                        prefix: prefix_str,
-                        on_link: p.on_link,
-                        autonomous: p.autonomous,
-                        valid_lifetime: match p.valid_lifetime {
-                            PrefixLifetime::Secs(s) => Some(HumanDuration(u64::from(s))),
-                            PrefixLifetime::Infinity => None,
-                        },
-                        preferred_lifetime: match p.preferred_lifetime {
-                            PrefixLifetime::Secs(s) => Some(HumanDuration(u64::from(s))),
-                            PrefixLifetime::Infinity => None,
-                        },
-                    },
-                );
-            }
+        // 3. Router Advertisement (the export carries only the lists)
+        if export.ra_prefixes.is_some() || export.ra_rdnss.is_some() || export.ra_dnssl.is_some() {
+            let mut ra = RaFile::default().to_config().0;
+            ra.prefixes = export.ra_prefixes.clone().unwrap_or_default();
+            ra.rdnss = export.ra_rdnss.clone().unwrap_or_default();
+            ra.dnssl = export.ra_dnssl.clone().unwrap_or_default();
+            cfg.ra = RaFile::from_config(&ra);
         }
-
-        if let Some(ref rdnss_list) = export.ra_rdnss {
-            for (idx, r) in rdnss_list.iter().enumerate() {
-                let name = if idx == 0 {
-                    "lan".to_string()
-                } else {
-                    format!("rdnss-{}", idx + 1)
-                };
-                ra.rdnss.insert(
-                    name,
-                    RaRdnssFile {
-                        servers: r.servers.clone(),
-                        lifetime: r.lifetime.map(|l| HumanDuration(u64::from(l))),
-                    },
-                );
-            }
-        }
-
-        if let Some(ref dnssl_list) = export.ra_dnssl {
-            for (idx, d) in dnssl_list.iter().enumerate() {
-                let name = if idx == 0 {
-                    "lan".to_string()
-                } else {
-                    format!("dnssl-{}", idx + 1)
-                };
-                ra.dnssl.insert(
-                    name,
-                    RaDnsslFile {
-                        domains: d.domains.clone(),
-                        lifetime: d.lifetime.map(|l| HumanDuration(u64::from(l))),
-                    },
-                );
-            }
-        }
-        cfg.ra = ra;
 
         // 4. DNS Upstreams & Rewrites
         let mut dns = DnsFile::default();
@@ -919,86 +1107,10 @@ impl From<&ConfigFile> for SystemConfigExport {
         let dhcp_v6_pools = dhcp.v6_pools;
         let dhcp_options = Some(Box::new(dhcp.options));
 
-        // 3. Router Advertisement
-        let mut ra_prefixes = Vec::new();
-        for p in cfg.ra.prefixes.values() {
-            let source = match p.source.as_deref() {
-                Some("ula") => PrefixSource::Ula,
-                Some("auto_ula") => PrefixSource::AutoUla,
-                Some("auto_gua") => PrefixSource::AutoGua,
-                _ => {
-                    if let Some(ref addr) = p.prefix {
-                        if addr.starts_with("fd") || addr.starts_with("fc") {
-                            PrefixSource::Ula
-                        } else {
-                            PrefixSource::Static
-                        }
-                    } else {
-                        PrefixSource::AutoGua
-                    }
-                }
-            };
-
-            let inherited_ula = (source == PrefixSource::Ula)
-                .then_some(cfg.system.ula_prefix.as_deref())
-                .flatten();
-            let configured_prefix = p.prefix.as_deref().or(inherited_ula);
-            let (address, prefix_len) = if let Some(pfx) = configured_prefix {
-                if let Some((addr, len_str)) = pfx.split_once('/') {
-                    let len = len_str.parse::<u8>().unwrap_or(64);
-                    (Some(addr.to_string()), len)
-                } else {
-                    (Some(pfx.to_string()), 64)
-                }
-            } else {
-                (None, 64)
-            };
-
-            ra_prefixes.push(RAPrefix {
-                source,
-                address,
-                prefix_len,
-                on_link: p.on_link,
-                autonomous: p.autonomous,
-                router_addr: true,
-                valid_lifetime: p.valid_lifetime.map_or(PrefixLifetime::Secs(86400), |l| {
-                    PrefixLifetime::Secs(l.as_secs() as u32)
-                }),
-                preferred_lifetime: p
-                    .preferred_lifetime
-                    .map_or(PrefixLifetime::Secs(14400), |l| {
-                        PrefixLifetime::Secs(l.as_secs() as u32)
-                    }),
-            });
-        }
-
-        let mut ra_rdnss = Vec::new();
-        for r in cfg.ra.rdnss.values() {
-            ra_rdnss.push(RdnssConfig {
-                servers: r.servers.clone(),
-                lifetime: r.lifetime.map(|l| l.as_secs() as u32),
-            });
-        }
-        if ra_rdnss.is_empty() && !cfg.dhcp.v6.dns.is_empty() {
-            ra_rdnss.push(RdnssConfig {
-                servers: cfg.dhcp.v6.dns.clone(),
-                lifetime: None,
-            });
-        }
-
-        let mut ra_dnssl = Vec::new();
-        for d in cfg.ra.dnssl.values() {
-            ra_dnssl.push(DnsslConfig {
-                domains: d.domains.clone(),
-                lifetime: d.lifetime.map(|l| l.as_secs() as u32),
-            });
-        }
-        if ra_dnssl.is_empty() && !cfg.system.search_domains.is_empty() {
-            ra_dnssl.push(DnsslConfig {
-                domains: cfg.system.search_domains.clone(),
-                lifetime: None,
-            });
-        }
+        // 3. Router Advertisement, as written (entries the file gets wrong are left out; see
+        // `RaFile::to_config`)
+        let ra = cfg.ra.to_config().0;
+        let (ra_prefixes, ra_rdnss, ra_dnssl) = (ra.prefixes, ra.rdnss, ra.dnssl);
 
         // 4. DNS Upstreams & Rewrites
         let mut dns_upstreams = Vec::new();
@@ -1434,25 +1546,5 @@ mod tests {
             }
         }
         assert!(mismatches.is_empty(), "\n{}", mismatches.join("\n"));
-    }
-
-    #[test]
-    fn ra_ula_prefix_inherits_system_ula_prefix() {
-        let cfg = ConfigFile::parse(
-            r#"
-[system]
-ula_prefix = "fd12:3456:789a::/64"
-
-[ra.prefixes.home]
-source = "ula"
-"#,
-        )
-        .unwrap();
-
-        let export = SystemConfigExport::from(&cfg);
-        let prefix = &export.ra_prefixes.as_ref().unwrap()[0];
-        assert_eq!(prefix.source, PrefixSource::Ula);
-        assert_eq!(prefix.address, Some("fd12:3456:789a::".parse().unwrap()));
-        assert_eq!(prefix.prefix_len, 64);
     }
 }

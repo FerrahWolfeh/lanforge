@@ -867,3 +867,50 @@ async fn a_dhcp_pool_the_file_cannot_hold_is_refused_and_not_applied() {
     assert_eq!(client_ctx.ctx.get_dhcp_v4_pools(), before);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "[system]\n");
 }
+
+#[tokio::test]
+async fn ra_update_is_written_to_the_config_file_without_the_lan_interface() {
+    use lanforge_types::network::ra::{PrefixLifetime, RAPrefix};
+
+    let client_ctx = init_test_context().await;
+    client_ctx.ctx.set_target_interface_name("lan0".into());
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    std::fs::write(&path, "# mine\n[system]\niface = \"lan0\"\n").unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(true);
+
+    let mut cfg = client_ctx.ctx.get_ra_server_config();
+    cfg.iface = Some("lan0".into());
+    cfg.hop_limit = 128;
+    let mut ula = RAPrefix::ula("fd00:1::/64");
+    ula.valid_lifetime = PrefixLifetime::Infinity;
+    ula.router_addr = false;
+    cfg.prefixes = vec![ula, RAPrefix::gua_dynamic()];
+    let res = client_ctx.handle_update_ra_config(cfg.clone()).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    let file = lanforge_api::config_file::ConfigFile::parse(&text).unwrap();
+    assert_eq!(file.ra.iface, None, "follows [system] iface");
+    let (from_file, issues) = file.ra.to_config();
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(
+        from_file.prefixes, cfg.prefixes,
+        "infinity and the R flag reach the file"
+    );
+    assert_eq!(from_file.hop_limit, 128);
+    assert!(text.contains("# mine"));
+    assert_eq!(
+        client_ctx.ctx.get_ra_server_config(),
+        cfg,
+        "applied as sent"
+    );
+
+    // A prefix the file cannot hold is refused, nothing applied.
+    let mut bad = cfg.clone();
+    bad.prefixes[0].address = Some("not-ipv6".into());
+    let res = client_ctx.handle_update_ra_config(bad).await;
+    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert_eq!(client_ctx.ctx.get_ra_server_config(), cfg);
+}

@@ -265,15 +265,24 @@ impl ClientContext {
         patch = patch
             .with_ra_prefixes(prefixes.clone())
             .with_ra_dnssl(dnssl.clone());
-
-        let p_clone = prefixes.clone();
-        let _ = storage
-            .call(move |s: &Stores| s.db().save_ra_prefixes(&p_clone))
-            .await;
-        let d_clone = dnssl.clone();
-        let _ = storage
-            .call(move |s: &Stores| s.db().save_ra_dnssl(&d_clone))
-            .await;
+        // File-owned: written with the rest of the setup TOML below.
+        let (ra_enabled, managed, other_config) = payload
+            .ra
+            .as_ref()
+            .map_or((true, payload.dhcp_v6_enabled, true), |ra| {
+                (ra.enabled, ra.managed, ra.other_config)
+            });
+        let ra = lanforge_types::network::ra::RaServerConfig {
+            enabled: ra_enabled,
+            managed,
+            other_config,
+            max_interval_secs: 100,
+            lifetime_secs: Some(300),
+            mtu: Some(1492),
+            prefixes,
+            dnssl,
+            ..Default::default()
+        };
 
         // 5. Configure Upstream DNS & Adblock
         let mut upstreams = Vec::new();
@@ -456,7 +465,7 @@ impl ClientContext {
         });
 
         let (cfg_file, toml_content) =
-            generate_setup_toml(&payload, &initial_firewall, &dhcp, &adblock_sources);
+            generate_setup_toml(&payload, &initial_firewall, &dhcp, &ra, &adblock_sources);
 
         if let Err(e) =
             lanforge_api::config_file::write_toml_atomically(&target_path, &toml_content)
@@ -553,6 +562,7 @@ fn generate_setup_toml(
     payload: &SetupPayload,
     firewall: &FirewallConfig,
     dhcp: &lanforge_api::config_file::DhcpSettings,
+    ra: &lanforge_types::network::ra::RaServerConfig,
     adblock_sources: &[lanforge_types::network::dns::AdblockUrlEntry],
 ) -> (lanforge_api::config_file::ConfigFile, String) {
     let mut cfg = lanforge_api::config_file::ConfigFile::default();
@@ -564,94 +574,8 @@ fn generate_setup_toml(
     // DHCP and TFTP: what setup applies.
     cfg.set_dhcp_settings(dhcp);
 
-    // RA
-    let (ra_enabled, managed, other_config) = if let Some(ref ra) = payload.ra {
-        (ra.enabled, ra.managed, ra.other_config)
-    } else {
-        (true, payload.dhcp_v6_enabled, true)
-    };
-
-    cfg.ra.enabled = ra_enabled;
-    cfg.ra.managed = managed;
-    cfg.ra.other_config = other_config;
-    cfg.ra.max_interval = Some(lanforge_api::config_file::HumanDuration(100));
-    cfg.ra.lifetime = Some(lanforge_api::config_file::HumanDuration(300));
-    cfg.ra.mtu = Some(1492);
-
-    if let Some(ref ra) = payload.ra {
-        if ra.auto_ula {
-            cfg.ra.prefixes.insert(
-                "auto_ula".to_string(),
-                lanforge_api::config_file::RaPrefixFile {
-                    source: Some("auto_ula".to_string()),
-                    prefix: None,
-                    on_link: true,
-                    autonomous: true,
-                    valid_lifetime: None,
-                    preferred_lifetime: None,
-                },
-            );
-        } else if ra.ula_enabled
-            && let Some(ref ula) = ra.ula_prefix
-        {
-            cfg.ra.prefixes.insert(
-                "ula".to_string(),
-                lanforge_api::config_file::RaPrefixFile {
-                    source: Some("ula".to_string()),
-                    prefix: Some(ula.clone()),
-                    on_link: true,
-                    autonomous: true,
-                    valid_lifetime: None,
-                    preferred_lifetime: None,
-                },
-            );
-        }
-
-        if ra.auto_gua {
-            cfg.ra.prefixes.insert(
-                "auto_gua".to_string(),
-                lanforge_api::config_file::RaPrefixFile {
-                    source: Some("auto_gua".to_string()),
-                    prefix: None,
-                    on_link: true,
-                    autonomous: true,
-                    valid_lifetime: None,
-                    preferred_lifetime: None,
-                },
-            );
-        }
-    } else {
-        cfg.ra.prefixes.insert(
-            "auto_ula".to_string(),
-            lanforge_api::config_file::RaPrefixFile {
-                source: Some("auto_ula".to_string()),
-                prefix: None,
-                on_link: true,
-                autonomous: true,
-                valid_lifetime: None,
-                preferred_lifetime: None,
-            },
-        );
-        cfg.ra.prefixes.insert(
-            "auto_gua".to_string(),
-            lanforge_api::config_file::RaPrefixFile {
-                source: Some("auto_gua".to_string()),
-                prefix: None,
-                on_link: true,
-                autonomous: true,
-                valid_lifetime: None,
-                preferred_lifetime: None,
-            },
-        );
-    }
-
-    cfg.ra.dnssl.insert(
-        "lan".to_string(),
-        lanforge_api::config_file::RaDnsslFile {
-            domains: vec![payload.domain_name.clone()],
-            lifetime: Some(lanforge_api::config_file::HumanDuration(600)),
-        },
-    );
+    // RA: what setup applies.
+    cfg.ra = lanforge_api::config_file::RaFile::from_config(ra);
 
     // DNS Upstreams
     if !payload.upstream_dns.is_empty() {

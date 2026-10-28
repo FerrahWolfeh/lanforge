@@ -24,12 +24,12 @@ use lanforge_dns::config::DnsConfig;
 #[cfg(feature = "http")]
 use lanforge_http::config::HttpConfig;
 #[cfg(feature = "ra")]
-use lanforge_ra::{RaConfig, RaServiceConfig};
+use lanforge_ra::RaConfig;
 #[cfg(feature = "tftp")]
 use lanforge_tftp::config::TftpConfig;
 use lanforge_types::device::Ipv6AddrOrSuffix;
 #[cfg(feature = "ra")]
-use lanforge_types::network::ra::{DnsslConfig, PrefixSource, RAPrefix};
+use lanforge_types::network::ra::{PrefixSource, RAPrefix, RaServerConfig};
 use lanforge_types::system::SystemStatus;
 #[cfg(feature = "uds")]
 use lanforge_uds::config::ApiConfig;
@@ -51,8 +51,9 @@ pub struct Config {
     // RA
     #[cfg(feature = "ra")]
     pub ra_enabled: bool,
+    /// `[ra]` as written; see `effective_ra` for what the daemon runs.
     #[cfg(feature = "ra")]
-    pub ra_toml: RaServiceConfig,
+    pub ra: RaServerConfig,
 
     // DHCPv4
     #[cfg(feature = "dhcp")]
@@ -200,7 +201,7 @@ impl Config {
             #[cfg(feature = "ra")]
             ra_enabled: toml_cfg.ra.enabled,
             #[cfg(feature = "ra")]
-            ra_toml: toml_cfg.ra,
+            ra: toml_cfg.ra,
             #[cfg(feature = "dhcp")]
             dhcpv4_enabled: toml_cfg.dhcp.v4.enabled,
             #[cfg(feature = "dhcp")]
@@ -310,42 +311,33 @@ impl Config {
             .join("api_password.hash")
     }
 
+    /// What `[ra]` falls back on (see `ra::effective_ra`).
+    #[cfg(feature = "ra")]
+    #[must_use]
+    pub fn ra_inputs(&self) -> lanforge_api::config_file::RaInputs {
+        lanforge_api::config_file::RaInputs {
+            lan_iface: self.system.iface.clone(),
+            ula: self.resolve_ula_prefix(),
+            search_domains: self.search_domains.clone(),
+            #[cfg(feature = "dhcp")]
+            dhcpv6_dns: self.dhcp.options.v6.dns_servers.clone(),
+            #[cfg(not(feature = "dhcp"))]
+            dhcpv6_dns: Vec::new(),
+        }
+    }
+
+    /// The RA configuration the daemon runs: `[ra]` plus what it derives (in memory only).
+    #[cfg(feature = "ra")]
+    #[must_use]
+    pub fn effective_ra(&self) -> RaServerConfig {
+        lanforge_api::config_file::effective_ra(self.ra.clone(), &self.ra_inputs())
+    }
+
     /// Builds an `RaConfig` from the merged configuration.
     #[cfg(feature = "ra")]
     #[must_use]
     pub fn to_ra_config(&self) -> RaConfig {
-        let mut cfg = self.ra_toml.to_ra_config(self.system.iface.clone());
-
-        // Intelligent Defaults for RA flags:
-        // If managed/other are not explicitly configured, derive from DHCPv6 presence
-        let has_v6_pools = {
-            #[cfg(feature = "dhcp")]
-            {
-                !self.dhcpv6_toml.pools.is_empty()
-            }
-            #[cfg(not(feature = "dhcp"))]
-            {
-                false
-            }
-        };
-
-        cfg.managed = self.ra_toml.managed.unwrap_or(has_v6_pools);
-        cfg.other_config = self.ra_toml.other_config.unwrap_or(has_v6_pools);
-
-        // Ensure at least one prefix exists if none configured
-        if cfg.prefixes.is_empty() {
-            add_default_ra_prefixes(&mut cfg.prefixes, self.resolve_ula_prefix());
-        }
-
-        // Add default search domains if none in RA config
-        if cfg.dnssl.is_empty() && !self.search_domains.is_empty() {
-            cfg.dnssl.push(DnsslConfig {
-                domains: self.search_domains.clone(),
-                lifetime: None,
-            });
-        }
-
-        cfg
+        RaConfig::from(self.effective_ra())
     }
 
     /// Builds a `Dhcpv4Config` from the merged configuration.
@@ -382,7 +374,7 @@ impl Config {
         let mut prefix_detected = None;
         #[cfg(feature = "ra")]
         {
-            if let Some(p) = self.ra_toml.prefixes.iter().find(|p| {
+            if let Some(p) = self.effective_ra().prefixes.iter().find(|p| {
                 p.source == PrefixSource::AutoGua
                     || p.source == PrefixSource::Static
                     || p.source == PrefixSource::Ula
@@ -456,7 +448,7 @@ impl Config {
             #[cfg(feature = "ra")]
             {
                 cfg.ula_prefix = self
-                    .ra_toml
+                    .effective_ra()
                     .prefixes
                     .iter()
                     .find_map(RAPrefix::resolved_address);
@@ -633,21 +625,6 @@ impl Config {
 }
 
 #[cfg(feature = "ra")]
-fn add_default_ra_prefixes(
-    prefixes: &mut Vec<RAPrefix>,
-    ula: Option<lanforge_types::network::Ipv6Prefix>,
-) {
-    if !prefixes.is_empty() {
-        return;
-    }
-    if let Some(ula) = ula {
-        prefixes.push(RAPrefix::ula(&ula.to_addr().to_string()));
-    } else {
-        prefixes.push(RAPrefix::ula_dynamic());
-    }
-    prefixes.push(RAPrefix::gua_dynamic());
-}
-
 fn parse_ula_prefix(raw: &str) -> Option<lanforge_types::network::Ipv6Prefix> {
     let raw = raw.split('/').next()?;
     let addr = raw.parse::<std::net::Ipv6Addr>().ok()?;
@@ -655,9 +632,31 @@ fn parse_ula_prefix(raw: &str) -> Option<lanforge_types::network::Ipv6Prefix> {
         .then(|| lanforge_types::network::Ipv6Prefix::from_addr(addr))
 }
 
+/// `lanforge reload` resolves the search domains from the file (`ConfigFile::search_domains`),
+/// the boot from its start-up config: both must agree, or a reload changes the DNSSL.
+#[cfg(test)]
+mod search_domain_tests {
+    use super::*;
+
+    #[test]
+    fn reload_and_boot_resolve_the_same_search_domains() {
+        for text in [
+            "",
+            "[system]\nsearch_domains = [\"home.arpa\", \"lan\"]\n",
+            "[system]\nsearch_domains = [\"home.arpa\"]\n\n[dhcp.v4]\ndomain_name = \"corp\"\n",
+            "[dhcp.v4]\ndomain_name = \"lan\"\n",
+        ] {
+            let file = lanforge_api::config_file::ConfigFile::parse(text).unwrap();
+            let boot = Config::resolve_search_domains(&toml::TomlConfig::from(&file));
+            assert_eq!(file.search_domains(), boot, "{text:?}");
+        }
+    }
+}
+
 #[cfg(all(test, feature = "ra"))]
 mod config_default_tests {
     use super::*;
+    use lanforge_api::config_file::add_default_ra_prefixes;
 
     #[test]
     fn default_ra_announces_valid_ula_and_dynamic_gua() {
@@ -702,7 +701,7 @@ impl Default for Config {
             #[cfg(feature = "ra")]
             ra_enabled: true,
             #[cfg(feature = "ra")]
-            ra_toml: RaServiceConfig::default(),
+            ra: RaServerConfig::default(),
             #[cfg(feature = "dhcp")]
             dhcpv4_enabled: true,
             #[cfg(feature = "dhcp")]

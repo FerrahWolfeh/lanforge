@@ -8,7 +8,7 @@
 
 use lanforge_api::api::{Response, SimpleSuccess, SystemConfigExport};
 use lanforge_api::config_file::{
-    ConfigFile, Section, effective_firewall, log_issues, set_aside_issues,
+    ConfigFile, RaInputs, Section, effective_firewall, effective_ra, log_issues, set_aside_issues,
 };
 use tracing::info;
 
@@ -49,6 +49,9 @@ impl ClientContext {
         export.dhcp_options = None;
         export.dhcp_v4_pools = None;
         export.dhcp_v6_pools = None;
+        export.ra_prefixes = None;
+        export.ra_rdnss = None;
+        export.ra_dnssl = None;
         match self.handle_system_config_import(export).await {
             Response::SystemConfigImport(import_res) => {
                 if import_res.total_success {
@@ -100,6 +103,22 @@ impl ClientContext {
             if ctx.get_firewall_config().as_ref() != Some(&effective) {
                 info!("Reload: [firewall] changed; applying");
                 ctx.update_firewall_config(effective);
+            }
+        }
+        if applies(Section::Ra) {
+            let (configured, ra_issues) = file.ra.to_config();
+            issues.extend(log_issues(ra_issues));
+            let inputs = RaInputs {
+                lan_iface: ctx.target_interface_name().unwrap_or_default(),
+                // The ULA the boot resolved: it may have been generated, not read from the file.
+                ula: ctx.get_status().and_then(|s| s.ula_prefix),
+                search_domains: file.search_domains(),
+                dhcpv6_dns: file.dhcp.v6.dns.clone(),
+            };
+            let effective = effective_ra(configured, &inputs);
+            if ctx.get_ra_server_config() != effective {
+                info!("Reload: [ra] changed; applying");
+                ctx.update_ra_server_config(effective);
             }
         }
         if applies(Section::Dhcp) {
