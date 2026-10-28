@@ -403,12 +403,25 @@ async fn show_status(client: &LanforgeClient, printer: &Printer) -> Result<()> {
     let adblock_res = client.dns_adblock_status().await;
     let upstreams_res = client.dns_upstreams().await;
 
+    // A failed call is reported in its place, never as a `null` that reads like "not configured".
     if printer.json {
+        let report = |res: Result<serde_json::Value>| {
+            res.unwrap_or_else(|e| serde_json::json!({ "error": e.to_string() }))
+        };
         return printer.print_json(&serde_json::json!({
-            "stats": stats_res.ok(),
-            "adblock": adblock_res.ok(),
-            "upstreams": upstreams_res.ok().map(|u| u.upstreams),
+            "stats": report(stats_res.map(|s| serde_json::json!(s))),
+            "adblock": report(adblock_res.map(|a| serde_json::json!(a))),
+            "upstreams": report(upstreams_res.map(|u| serde_json::json!(u.upstreams))),
         }));
+    }
+    for (section, res) in [
+        ("stats", stats_res.as_ref().err()),
+        ("adblock", adblock_res.as_ref().err()),
+        ("upstreams", upstreams_res.as_ref().err()),
+    ] {
+        if let Some(e) = res {
+            printer.warning(&format!("DNS {section} unavailable: {e}"));
+        }
     }
 
     println!();

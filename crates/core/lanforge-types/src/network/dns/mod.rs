@@ -219,7 +219,7 @@ pub struct UpstreamHealthSnapshot {
     pub total_failures: u64,
     pub status: UpstreamStatus,
     pub last_success_secs_ago: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub domain: Option<String>,
 }
 
@@ -758,11 +758,11 @@ impl AdblockUrlEntry {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AdblockSourceStatus {
     pub id: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub name: Option<String>,
     pub url: String,
     pub format: AdblockSourceFormat,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub format_detected: Option<AdblockSourceFormat>,
     pub blocks: usize,
     pub exceptions: usize,
@@ -787,7 +787,7 @@ pub struct AdblockSourceMatch {
     pub source_id: i64,
     pub url: String,
     pub action: FilterAction,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub rule: Option<String>,
     #[serde(default)]
     pub important: bool,
@@ -798,7 +798,7 @@ pub struct AdblockSourceMatch {
 pub struct AdblockCheckResponse {
     pub domain: String,
     pub matched: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub filter: Option<FilterMatch>,
     #[serde(default)]
     pub source_matches: Vec<AdblockSourceMatch>,

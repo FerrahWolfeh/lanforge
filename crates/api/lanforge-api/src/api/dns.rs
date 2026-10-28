@@ -50,9 +50,9 @@ pub struct QueryRateEntry {
     pub local: u64,
     #[serde(default)]
     pub rewritten: u64,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(default)]
     pub record_types: HashMap<String, u32>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[serde(default)]
     pub outcome_types: HashMap<String, HashMap<String, u32>>,
 }
 
@@ -119,9 +119,9 @@ pub struct DnsQueryLogEntry {
     pub cached: bool,
     pub qtype: DnsRecordType,
     pub upstream_us: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub filter: Option<Box<FilterMatch>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub coalesce_id: Option<u64>,
 }
 
@@ -166,7 +166,7 @@ pub struct DnsAdblockRulesResponse {
 /// A configured DNS upstream entry.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct DnsUpstreamConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub name: Option<String>,
     pub addr: SocketAddr,
     pub protocol: UpstreamProtocol,
