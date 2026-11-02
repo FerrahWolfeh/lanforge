@@ -239,7 +239,9 @@ impl AsyncService for Dhcpv6Service {
             let pools = ctx.get_dhcp_v6_pools();
 
             if pools.is_empty() {
+                // Settled, not starting: system readiness must not wait for a pool.
                 warn!("Service enabled but no pools configured — server idle");
+                h.dormant(DormantReason::not_applicable("no address pools configured"));
                 match self.wait_for_config_change_or_shutdown(h).await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,

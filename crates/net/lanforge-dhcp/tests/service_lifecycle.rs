@@ -1102,3 +1102,55 @@ async fn test_dhcpv6_dynamic_lease_follows_renumbered_gua() -> Result<(), Box<dy
     let _ = timeout(TEST_TIMEOUT, serve_handle).await?;
     Ok(())
 }
+
+async fn wait_for_state(
+    ctx: &LanforgeContext,
+    service_id: ServiceId,
+    state: ServiceState,
+) -> Result<(), Box<dyn Error>> {
+    for _ in 0..100 {
+        if ctx.get_service_state(service_id) == state {
+            return Ok(());
+        }
+        tokio::task::yield_now().await;
+    }
+    Err(format!(
+        "{service_id:?} is {:?}, expected {state:?}",
+        ctx.get_service_state(service_id)
+    )
+    .into())
+}
+
+/// Enabled with no pool, a DHCP server has nothing to serve: it settles as dormant (system
+/// readiness must not wait on it) and serves once a pool is added. It used to stay `Starting`.
+#[tokio::test]
+async fn dhcp_without_pools_settles_dormant_and_serves_once_a_pool_appears()
+-> Result<(), Box<dyn Error>> {
+    let (ctx, _bus) = init_test_context_with_interface(1, "lan0", MacAddr([0xAA; 6]));
+    let (v4_cfg, v6_cfg) = (create_test_v4_config(), create_test_v6_config());
+    let (_h4, t4) = Dhcpv4Transport::inert();
+    let (_h6, t6) = Dhcpv6Transport::inert();
+    let mut v4 = Dhcpv4Service::with_transport(v4_cfg.clone(), ctx.clone(), t4);
+    let mut v6 = Dhcpv6Service::with_transport(v6_cfg.clone(), ctx.clone(), t6);
+    let (c4, c6) = (ctx.clone(), ctx.clone());
+    let s4 = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp4, c4.clone());
+        v4.serve(&c4, &h).await
+    });
+    let s6 = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp6, c6.clone());
+        v6.serve(&c6, &h).await
+    });
+
+    wait_for_state(&ctx, ServiceId::Dhcp4, ServiceState::Inactive).await?;
+    wait_for_state(&ctx, ServiceId::Dhcp6, ServiceState::Inactive).await?;
+
+    ctx.update_dhcp_v4_pools(v4_cfg.pools.clone());
+    ctx.update_dhcp_v6_pools(v6_cfg.pools.clone());
+    wait_for_service_online(&ctx, ServiceId::Dhcp4).await?;
+    wait_for_service_online(&ctx, ServiceId::Dhcp6).await?;
+
+    s4.abort();
+    s6.abort();
+    Ok(())
+}
