@@ -7,7 +7,6 @@
 
 import type {
 	AdblockRuleEntry,
-	AllowlistEntry,
 	AuthStatusResponse,
 	AuthToken,
 	BlockingMode,
@@ -552,12 +551,8 @@ export const dnsAdblockStatus = () => get<DnsAdblockStatusResponse>('/dns/adbloc
 export const dnsAdblockSet = (enabled: boolean, duration_secs?: number) =>
 	put<void>('/dns/adblock', { enabled, duration_secs: duration_secs ?? null });
 export const dnsAdblockReload = () => post<void>('/dns/adblock/reload');
-export const dnsAdblockAllowlist = async (): Promise<AllowlistEntry[]> =>
-	extractList<AllowlistEntry>(await get<any>('/dns/adblock/allowlist'), 'allowlist');
 export const dnsBlock = (domain: string) => post<void>('/dns/adblock/block', { domain });
 export const dnsAllow = (domain: string) => post<void>('/dns/adblock/allow', { domain });
-export const dnsUnallow = (target: string) =>
-	del<void>(`/dns/adblock/allow/${encodeURIComponent(target)}`);
 export const dnsAdblockUrls = async (): Promise<DnsAdblockUrlEntry[]> =>
 	extractList<DnsAdblockUrlEntry>(await get<any>('/dns/adblock/urls'), 'urls');
 export const dnsAdblockSources = () => get<DnsAdblockSourcesResponse>('/dns/adblock/sources');
