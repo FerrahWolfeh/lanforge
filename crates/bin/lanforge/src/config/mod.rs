@@ -118,6 +118,8 @@ pub struct Config {
     pub config_issues: Vec<String>,
     /// `[hosts]` (`None`: not read, the table's static hosts stay as they are).
     pub static_hosts: Option<Vec<lanforge_types::device::StaticHost>>,
+    /// `[dhcp]` was set aside: the defaults that run are never written over it.
+    pub dhcp_set_aside: bool,
 }
 
 impl Config {
@@ -258,6 +260,7 @@ impl Config {
             traffic_toml: toml_cfg.traffic,
             config_issues: toml_cfg.config_issues,
             static_hosts: toml_cfg.static_hosts,
+            dhcp_set_aside: toml_cfg.dhcp_set_aside,
             config_path: cli.resolved_config_path().to_string_lossy().to_string(),
             config_writable: if cli.dev {
                 false
@@ -792,6 +795,7 @@ impl Default for Config {
             config_writable: true,
             config_issues: Vec::new(),
             static_hosts: None,
+            dhcp_set_aside: false,
         }
     }
 }

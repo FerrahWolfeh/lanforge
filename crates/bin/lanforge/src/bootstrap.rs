@@ -632,6 +632,14 @@ impl Bootstrapper {
         use lanforge_api::config_file::{ConfigFile, SectionSet, persist_sections};
 
         let path = std::path::Path::new(&cfg.config_path);
+        if cfg.dhcp_set_aside {
+            warn!(
+                "DHCPv4 Startup Sanity: [dhcp] in '{}' is unreadable (see the config issues); \
+                 the correction applies to this run only, the section is left as written",
+                path.display()
+            );
+            return;
+        }
         if !cfg.config_writable || !path.exists() {
             warn!(
                 "DHCPv4 Startup Sanity: '{}' is read-only; the correction applies to this run only",
@@ -2321,5 +2329,28 @@ mod tests {
         assert!(db.is_provisioned().is_err() && db.count_users().is_err());
 
         assert!(Bootstrapper::check_provisioning_mode(&mut cfg, &db));
+    }
+
+    /// An unreadable `[dhcp]` runs on defaults; a startup correction of those defaults must not
+    /// be written over the section (it deleted the owner's pools: a v6 pool key the file form
+    /// no longer has made `[dhcp]` unreadable, the sanity check then saved default pools).
+    #[cfg(feature = "dhcp")]
+    #[test]
+    fn dhcp_heal_never_overwrites_an_unreadable_dhcp_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        let text = "[dhcp.v4.pools.lan]\nrange = \"192.168.1.100-192.168.1.200\"\n\n\
+                    [dhcp.v6.pools.main]\nrange = \"::100-::1fff\"\ndns = [\"fd00::1\"]\n";
+        std::fs::write(&path, text).unwrap();
+        let toml = crate::config::toml::load_toml(&path.display().to_string());
+        assert!(toml.dhcp_set_aside, "{:?}", toml.config_issues);
+
+        let cfg = Config {
+            config_path: path.display().to_string(),
+            dhcp_set_aside: toml.dhcp_set_aside,
+            ..Config::default()
+        };
+        Bootstrapper::persist_dhcp_heal(&cfg);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
     }
 }
