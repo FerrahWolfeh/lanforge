@@ -181,12 +181,6 @@ impl Config {
                 domains.push(dom.clone());
             }
         }
-        #[cfg(feature = "dhcp")]
-        if let Some(ref d) = toml_cfg.dhcp.v4.domain_name
-            && !domains.contains(d)
-        {
-            domains.push(d.clone());
-        }
         if domains.is_empty() {
             domains.push("lan".to_string());
         }
@@ -401,9 +395,9 @@ impl Config {
 
         // No `dns_servers`: the server announces this router's own LAN address per reply (the
         // interface's live ULA/GUA), never a guessed address nor an upstream.
-        if cfg.search_domains.is_empty() {
-            cfg.search_domains.clone_from(&self.search_domains);
-        }
+        // The base the live `[dhcp.v6]` options go over (`Dhcpv6Config::with_options`): the
+        // site's search domains, used when the options name none (as DHCPv4 does).
+        cfg.search_domains.clone_from(&self.search_domains);
 
         cfg
     }
@@ -429,6 +423,8 @@ impl Config {
             cfg.tls_key.clone_from(&self.system.tls_key);
         }
 
+        // The site's domains: local names, PTR answers and the SOA zone (the first one).
+        cfg.search_domains.clone_from(&self.search_domains);
         cfg.multi_search_labels = self
             .search_domains
             .iter()
@@ -641,6 +637,62 @@ mod search_domain_tests {
             let boot = Config::resolve_search_domains(&toml::TomlConfig::from(&file));
             assert_eq!(file.search_domains(), boot, "{text:?}");
         }
+    }
+}
+
+/// One search-domain rule for every consumer: a section's own list, else the site's
+/// (`[system] search_domains`, else `lan`).
+#[cfg(all(test, feature = "dns", feature = "dhcp"))]
+mod site_domain_tests {
+    use super::*;
+    use clap::Parser;
+
+    fn config(text: &str) -> (Config, lanforge_api::config_file::ConfigFile) {
+        let file = lanforge_api::config_file::ConfigFile::parse(text).unwrap();
+        let toml = toml::TomlConfig::from(&file);
+        let site = Config::resolve_search_domains(&toml);
+        let cli = args::CliArgs::parse_from(["lanforge"]);
+        (Config::apply_cli_overrides(toml, &cli, site), file)
+    }
+
+    /// PTR answers and the SOA zone are named after the site's first domain, the same names
+    /// the local resolver answers (they were always `lan`).
+    #[test]
+    fn dns_names_its_zone_after_the_site_domain() {
+        let (cfg, _) = config("[system]\nsearch_domains = [\"home.arpa\"]\n");
+        assert_eq!(cfg.to_dns_config().search_domains, ["home.arpa", "lan"]);
+        let (cfg, _) = config("");
+        assert_eq!(cfg.to_dns_config().search_domains, ["lan"]);
+    }
+
+    /// `[dhcp.v6] search_domains` empty = the site's, at start and after a live options
+    /// change; a list of its own wins. (A live change used to send none.)
+    #[test]
+    fn dhcpv6_search_domains_fall_back_to_the_site() {
+        let (cfg, file) = config("[system]\nsearch_domains = [\"home.arpa\"]\n");
+        let mut opts = file.dhcp_settings().0.options.v6;
+        assert_eq!(opts.search_domains, Vec::<String>::new());
+        let base = cfg.to_dhcpv6_config();
+        assert_eq!(
+            base.with_options(&opts).search_domains,
+            ["home.arpa", "lan"]
+        );
+
+        opts.search_domains = vec!["v6.example".into()];
+        assert_eq!(base.with_options(&opts).search_domains, ["v6.example"]);
+
+        let (cfg, file) = config("[dhcp.v6]\nsearch_domains = [\"v6.example\"]\n");
+        let started = cfg
+            .to_dhcpv6_config()
+            .with_options(&file.dhcp_settings().0.options.v6);
+        assert_eq!(started.search_domains, ["v6.example"], "own list at start");
+    }
+
+    /// `[dhcp.v4] domain_name` is option 15 only: it does not add a site domain.
+    #[test]
+    fn dhcpv4_domain_name_is_not_a_site_domain() {
+        let (cfg, _) = config("[dhcp.v4]\ndomain_name = \"corp\"\n");
+        assert_eq!(cfg.search_domains, ["lan"]);
     }
 }
 

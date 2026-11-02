@@ -382,7 +382,7 @@ impl Dhcpv6Service {
         pools: Vec<Dhcpv6Pool>,
         h: &ServiceHandle,
     ) -> Result<RunResult, CoreError> {
-        let mut current_cfg = self.config.clone();
+        let mut current_cfg = self.config.with_options(&self.ctx.get_dhcp_options().v6);
         current_cfg.pools = pools;
 
         let target_ifindex = self.ctx.target_ifindex().ok_or_else(|| {
@@ -467,15 +467,11 @@ impl Dhcpv6Service {
                                 if !delta.new.enabled {
                                     return Ok(RunResult::ConfigChanged);
                                 }
-                                current_cfg.dns_servers.clone_from(&delta.new.dns_servers);
-                                current_cfg.search_domains.clone_from(&delta.new.search_domains);
-                                current_cfg.ntp_servers.clone_from(&delta.new.ntp_servers);
-                                current_cfg.boot_file.clone_from(&delta.new.boot_file);
-                                current_cfg.options.clone_from(&delta.new.raw_options);
-                                if delta.new.lease_time > 0 {
-                                    current_cfg.lease_time = delta.new.lease_time;
-                                }
+                                let pools = std::mem::take(&mut current_cfg.pools);
+                                current_cfg = self.config.with_options(&delta.new);
+                                current_cfg.pools = pools;
                                 server.cfg = current_cfg.clone();
+                                server.recompile_options();
                                 self.publish_pool_stats(&server);
                             }
                         }

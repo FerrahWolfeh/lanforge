@@ -3,7 +3,7 @@
 //! Supports multi-prefix operation (`ULA` + `GUA`) with flexible pool definitions:
 //! fixed ranges, floating suffix ranges, or single static addresses.
 
-use lanforge_types::network::dhcp::Dhcpv6Pool;
+use lanforge_types::network::dhcp::{Dhcpv6Options, Dhcpv6Pool};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::Ipv6Addr;
@@ -44,6 +44,28 @@ pub struct Dhcpv6Config {
     pub options: HashMap<u16, String>,
     /// NTP servers to announce to clients (Option 56).
     pub ntp_servers: Vec<String>,
+}
+
+impl Dhcpv6Config {
+    /// This start-up configuration with the live `[dhcp.v6]` options over it, at every start
+    /// and on every live change (a restart must not fall back to the boot values). `self`'s
+    /// search domains are the site's (`[system] search_domains`, else `lan`): they apply when
+    /// the options name none. No DNS server = this router, decided per reply.
+    #[must_use]
+    pub fn with_options(&self, opts: &Dhcpv6Options) -> Self {
+        let mut cfg = self.clone();
+        cfg.dns_servers.clone_from(&opts.dns_servers);
+        if !opts.search_domains.is_empty() {
+            cfg.search_domains.clone_from(&opts.search_domains);
+        }
+        cfg.ntp_servers.clone_from(&opts.ntp_servers);
+        cfg.boot_file.clone_from(&opts.boot_file);
+        cfg.options.clone_from(&opts.raw_options);
+        if opts.lease_time > 0 {
+            cfg.lease_time = opts.lease_time;
+        }
+        cfg
+    }
 }
 
 impl Default for Dhcpv6Config {
