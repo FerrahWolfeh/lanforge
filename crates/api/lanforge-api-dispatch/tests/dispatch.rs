@@ -1005,7 +1005,7 @@ async fn host_changes_are_written_to_the_config_file() {
     let res = client_ctx
         .handle_host_set(mac, "v6".into(), "::zz".into())
         .await;
-    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
 
     // Removing it empties `[hosts]`; the device stays.
@@ -1497,7 +1497,6 @@ async fn a_refused_adblock_change_writes_and_applies_nothing() {
         client_ctx
             .handle_dns_adblock_rule_add("||x.example^$client=10.0.0.1".into(), "block".into())
             .await,
-        client_ctx.handle_dns_adblock_rule_remove(42).await,
         client_ctx
             .handle_dns_adblock_url_add(
                 None,
@@ -1507,8 +1506,10 @@ async fn a_refused_adblock_change_writes_and_applies_nothing() {
             )
             .await,
     ] {
-        assert!(matches!(res, Response::Error { .. }), "{res:?}");
+        assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     }
+    let res = client_ctx.handle_dns_adblock_rule_remove(42).await;
+    assert!(matches!(res, Response::NotFound { .. }), "{res:?}");
     let (_, rules, text) = adblock_in_files(&dir);
     assert_eq!(rules, OWNER_RULES);
     assert_eq!(text, OWNER_ADBLOCK);
