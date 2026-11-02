@@ -309,6 +309,49 @@ async fn reload_applies_a_dns_edit_and_leaves_out_a_wrong_answer() {
     );
 }
 
+/// `[dns] listen` and `enabled` apply on reload only when they changed (the DNS service alone
+/// restarts or goes dormant); `DoT`/`DoQ`, not in `[dns]`, stay as they run.
+#[tokio::test]
+async fn reload_applies_the_dns_listener_only_when_it_changed() {
+    use lanforge_types::config::DnsListenConfig;
+    use std::time::Duration;
+
+    let (client, _dir, path) = with_file(
+        "[dns]
+listen = \"127.0.0.1:5353\"\n",
+    );
+    let ctx = &client.ctx;
+    let dot: std::net::SocketAddr = "[::]:853".parse().unwrap();
+    ctx.update_dns_listen(DnsListenConfig {
+        dot_listen: Some(dot),
+        dot_enabled: true,
+        ..DnsListenConfig::default()
+    });
+    reload(&client).await;
+    let live = ctx.get_dns_listen();
+    assert_eq!(live.listen.to_string(), "127.0.0.1:5353");
+    assert!(live.enabled);
+    assert_eq!(live.dot_listen, Some(dot), "DoT is not in [dns]: kept");
+
+    // Unchanged: the listener is not touched (no DNS restart).
+    let mut sub = ctx.config_subscription::<DnsListenConfig>();
+    reload(&client).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), sub.next())
+            .await
+            .is_err(),
+        "an unchanged listener must not restart DNS"
+    );
+
+    std::fs::write(
+        &path,
+        "[dns]\nenabled = false\nlisten = \"127.0.0.1:5353\"\n",
+    )
+    .unwrap();
+    reload(&client).await;
+    assert!(!ctx.get_dns_listen().enabled, "disabled by the file");
+}
+
 /// A `[dns]` that does not fit its type is set aside: the running DNS keeps working.
 #[tokio::test]
 async fn an_unreadable_dns_section_keeps_the_running_dns() {

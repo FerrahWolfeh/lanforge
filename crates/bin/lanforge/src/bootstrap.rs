@@ -330,6 +330,7 @@ impl Bootstrapper {
             // The DNS service binds from the live listeners; the file is their source.
             let dns = cfg.to_dns_config();
             patch = patch.with_dns_listen(DnsListenConfig {
+                enabled: dns.enabled,
                 listen: dns.listen,
                 dot_listen: dns.dot_listen,
                 dot_enabled: dns.dot_listen.is_some(),

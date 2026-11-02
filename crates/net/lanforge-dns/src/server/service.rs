@@ -222,12 +222,17 @@ impl lanforge_core::service::LanforgeService for DnsService {
             condition: lanforge_core::service::Condition {
                 sections: &[lanforge_types::config::ConfigDomain::DnsListen],
                 eval: |ctx| {
-                    if !ctx.get_dns_listen().listen.as_slice().is_empty() {
-                        lanforge_core::service::Activation::Active
-                    } else {
+                    let live = ctx.get_dns_listen();
+                    if !live.enabled {
+                        lanforge_core::service::Activation::Dormant(
+                            lanforge_types::system::DormantReason::disabled("dns.enabled"),
+                        )
+                    } else if live.listen.as_slice().is_empty() {
                         lanforge_core::service::Activation::Dormant(
                             lanforge_types::system::DormantReason::disabled("dns.listen"),
                         )
+                    } else {
+                        lanforge_core::service::Activation::Active
                     }
                 },
             },
@@ -344,15 +349,15 @@ impl AsyncService for DnsService {
     }
 
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        // Listeners and `enabled` come from the live config (seeded from `[dns]` at boot, changed
+        // by a reload); every reader below (TCP worker, DoT, DoQ, status) sees them through
+        // `self.cfg`.
+        self.cfg = Arc::new(with_live_listeners(&self.cfg, &ctx.get_dns_listen()));
         if !self.cfg.enabled {
             info!("DNS Service disabled in config");
             h.dormant(DormantReason::disabled("dns.enabled"));
             return Ok(());
         }
-
-        // Listeners come from the live config (seeded from `[dns]` at boot); every reader below
-        // (TCP worker, DoT, DoQ, status) sees them through `self.cfg`.
-        self.cfg = Arc::new(with_live_listeners(&self.cfg, &ctx.get_dns_listen()));
 
         let dns_ctx = self.init_dns_context().await?;
         ctx.provide_shared(Arc::clone(&dns_ctx));
@@ -704,6 +709,7 @@ async fn build_upstreams(
 /// `cfg` with its listener fields taken from the live `DnsListenConfig`.
 fn with_live_listeners(cfg: &DnsConfig, live: &DnsListenConfig) -> DnsConfig {
     DnsConfig {
+        enabled: live.enabled,
         listen: live.listen.clone(),
         dot_listen: live.dot_listen.filter(|_| live.dot_enabled),
         doq_listen: live.doq_listen.filter(|_| live.doq_enabled),

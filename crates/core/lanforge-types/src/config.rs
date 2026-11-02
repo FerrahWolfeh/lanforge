@@ -221,9 +221,11 @@ pub trait ConfigSection: Clone + PartialEq + Send + Sync + 'static {
 // Section types and implementations
 // ---------------------------------------------------------------------------
 
-/// DNS listener configuration for UDP/TCP port 53, `DoT`, and `DoQ`.
+/// DNS listener configuration for UDP/TCP port 53, `DoT`, and `DoQ`, and whether the DNS
+/// service runs at all (`[dns] enabled`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DnsListenConfig {
+    pub enabled: bool,
     pub listen: ListenConfig,
     pub dot_listen: Option<SocketAddr>,
     pub dot_enabled: bool,
@@ -236,6 +238,7 @@ pub struct DnsListenConfig {
 impl Default for DnsListenConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             listen: ListenConfig::dual_stack(53),
             dot_listen: None,
             dot_enabled: false,

@@ -159,8 +159,15 @@ impl ClientContext {
                 dns.rewrites.clone(),
                 dns.reverse.clone(),
             );
+            // The listener and `enabled` only when they changed: the DNS service alone restarts
+            // (or goes dormant), nothing else is touched.
+            let listener = dns.listener(&ctx.get_dns_listen());
+            if listener != ctx.get_dns_listen() {
+                info!("Reload: [dns] listener or enabled changed; restarting the DNS service");
+                ctx.update_dns_listen(listener);
+            }
             if live != wanted {
-                info!("Reload: [dns] changed; applying (listen takes effect on restart)");
+                info!("Reload: [dns] changed; applying");
                 self.apply_dns_settings(dns);
             }
         }

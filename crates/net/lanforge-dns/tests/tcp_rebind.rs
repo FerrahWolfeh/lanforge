@@ -29,6 +29,7 @@ async fn stop_releases_tcp_listener_for_immediate_rebind() {
     let ctx = init_test_context();
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, free_port()));
     ctx.update_dns_listen(DnsListenConfig {
+        enabled: true,
         listen: ListenConfig::Single(addr),
         ..DnsListenConfig::default()
     });
@@ -76,6 +77,7 @@ async fn live_listen_change_restarts_dns_on_the_new_port() {
     let new_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, free_port()));
     let static_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, free_port()));
     ctx.update_dns_listen(DnsListenConfig {
+        enabled: true,
         listen: ListenConfig::Single(old_addr),
         ..DnsListenConfig::default()
     });
@@ -101,6 +103,7 @@ async fn live_listen_change_restarts_dns_on_the_new_port() {
     assert!(TcpListener::bind(static_addr).is_ok(), "static port is not");
 
     ctx.update_dns_listen(DnsListenConfig {
+        enabled: true,
         listen: ListenConfig::Single(new_addr),
         ..DnsListenConfig::default()
     });
@@ -133,6 +136,7 @@ async fn dns_requests_wait_through_a_restart() {
     let ctx = init_test_context();
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, free_port()));
     ctx.update_dns_listen(DnsListenConfig {
+        enabled: true,
         listen: ListenConfig::Single(addr),
         ..DnsListenConfig::default()
     });
@@ -210,6 +214,7 @@ async fn stop_releases_udp_socket_with_upstream_queries_in_flight() {
     let ctx = init_test_context();
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, free_port()));
     ctx.update_dns_listen(DnsListenConfig {
+        enabled: true,
         listen: ListenConfig::Single(addr),
         ..DnsListenConfig::default()
     });
@@ -259,6 +264,7 @@ async fn idle_tcp_connection_is_closed() {
     let ctx = init_test_context();
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, free_port()));
     ctx.update_dns_listen(DnsListenConfig {
+        enabled: true,
         listen: ListenConfig::Single(addr),
         ..DnsListenConfig::default()
     });
@@ -306,6 +312,7 @@ async fn slow_handle_request_does_not_block_others() {
     let ctx = init_test_context();
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, free_port()));
     ctx.update_dns_listen(DnsListenConfig {
+        enabled: true,
         listen: ListenConfig::Single(addr),
         ..DnsListenConfig::default()
     });
