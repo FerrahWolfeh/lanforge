@@ -109,6 +109,7 @@ async fn test_handle_login() {
 
     let res = handle_login(
         State(state_no_auth),
+        crate::throttle::ClientIp(None),
         Json(LoginRequest {
             username: None,
             password: Some("any_password".to_string()),
@@ -137,6 +138,7 @@ async fn test_handle_login() {
     // Correct password
     let res_correct = handle_login(
         State(state_with_auth.clone()),
+        crate::throttle::ClientIp(None),
         Json(LoginRequest {
             username: Some("admin".to_string()),
             password: Some(password.to_string()),
@@ -150,6 +152,7 @@ async fn test_handle_login() {
     // Incorrect password
     let res_incorrect = handle_login(
         State(state_with_auth),
+        crate::throttle::ClientIp(None),
         Json(LoginRequest {
             username: Some("admin".to_string()),
             password: Some("wrong_password".to_string()),

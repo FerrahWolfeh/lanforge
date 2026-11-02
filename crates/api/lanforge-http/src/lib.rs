@@ -19,6 +19,8 @@ pub mod remote;
 pub mod routes;
 #[cfg(feature = "server")]
 pub mod server;
+#[cfg(feature = "server")]
+pub mod throttle;
 
 #[cfg(feature = "client")]
 pub use remote::RemoteClient;

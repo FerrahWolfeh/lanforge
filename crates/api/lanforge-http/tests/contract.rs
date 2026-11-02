@@ -2193,3 +2193,37 @@ async fn test_admin_reset_and_delete_end_the_users_sessions() {
         "a deleted user is signed out"
     );
 }
+
+/// Password guessing is throttled per client: after its free failures a client gets 429 with
+/// `Retry-After` even for the right password, while another client still logs in.
+#[tokio::test]
+async fn test_login_guessing_is_throttled_per_client() {
+    use axum::extract::ConnectInfo;
+    use std::net::SocketAddr;
+
+    let router = build_router(make_state(true).await);
+    let login = |from: &str, password: &str| {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/api/auth/login")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({"password": password})).unwrap(),
+            ))
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(from.parse::<SocketAddr>().unwrap()));
+        router.clone().oneshot(req)
+    };
+
+    for _ in 0..6 {
+        let res = login("192.0.2.66:40000", "guess").await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+    let res = login("192.0.2.66:40001", "testpass").await.unwrap();
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(res.headers().contains_key(header::RETRY_AFTER));
+
+    let res = login("192.0.2.10:40000", "testpass").await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
