@@ -36,7 +36,6 @@ use lanforge_uds::config::ApiConfig;
 pub use toml::load_toml;
 
 use clap::Parser;
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use crate::config::toml::SystemCfg;
@@ -400,33 +399,8 @@ impl Config {
             cfg.ula_prefix_len = 64;
         }
 
-        if cfg.dns_servers.is_empty() {
-            cfg.dns_servers = {
-                #[cfg(feature = "dns")]
-                let dns_upstream = self.dns_toml.upstreams.first().map(|u| u.target.clone());
-                #[cfg(not(feature = "dns"))]
-                let dns_upstream = None;
-
-                dns_upstream.map_or_else(
-                    || {
-                        cfg.ula_prefix
-                            .map(|ip| {
-                                let mut octets = ip.octets();
-                                if octets[8..16].iter().all(|&b| b == 0) {
-                                    octets[15] = 1;
-                                }
-                                vec![std::net::Ipv6Addr::from(octets)]
-                            })
-                            .unwrap_or_default()
-                    },
-                    |u| match u.addr {
-                        SocketAddr::V6(v6) => vec![*v6.ip()],
-                        SocketAddr::V4(_) => vec![],
-                    },
-                )
-            };
-        }
-
+        // No `dns_servers`: the server announces this router's own LAN address per reply (the
+        // interface's live ULA/GUA), never a guessed address nor an upstream.
         if cfg.search_domains.is_empty() {
             cfg.search_domains.clone_from(&self.search_domains);
         }

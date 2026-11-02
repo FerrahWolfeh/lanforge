@@ -56,6 +56,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_types::device::Device;
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::Ipv6Prefix;
+use lanforge_types::system::ServiceId;
 use lanforge_types::utils::mac_from_eui64_link_local;
 use std::net::Ipv6Addr;
 use std::str::FromStr;
@@ -123,6 +124,9 @@ pub struct Dhcpv6Server {
     pub precompiled_custom_options: Vec<(u16, Vec<u8>)>,
     /// Recent IP assignments keyed by (DUID, IAID) to propagate to context state.
     pub last_assignments: std::collections::HashMap<(Duid, u32), Vec<Ipv6Addr>>,
+    /// Index of the LAN interface served: its own address is the DNS server announced when none
+    /// is configured.
+    pub served_ifindex: Option<u32>,
 }
 
 impl Dhcpv6Server {
@@ -138,6 +142,7 @@ impl Dhcpv6Server {
             ctx,
             precompiled_custom_options,
             last_assignments: std::collections::HashMap::new(),
+            served_ifindex: None,
         }
     }
 
@@ -1054,11 +1059,23 @@ impl Dhcpv6Server {
         )
     }
 
+    /// The configured DNS servers or, with none configured, this router while its DNS serves: the
+    /// address the admin gave the LAN interface (its ULA, stable when the delegated prefix
+    /// changes; else its GUA). Never an upstream: clients must reach the local names and filters.
     fn add_dns_options(&self, reply: &mut Message) {
         if !self.cfg.dns_servers.is_empty() {
             reply
                 .opts_mut()
                 .insert(DhcpOption::DomainNameServers(self.cfg.dns_servers.clone()));
+        } else if let Some(ifindex) = self.served_ifindex
+            && self.ctx.get_service_state(ServiceId::Dns).is_serving()
+        {
+            let lan = self.ctx.get_interface_state(ifindex);
+            if let Some(router) = lan.ula.or(lan.gua) {
+                reply
+                    .opts_mut()
+                    .insert(DhcpOption::DomainNameServers(vec![router]));
+            }
         }
         if !self.cfg.search_domains.is_empty() {
             let names: Vec<Name> = self
@@ -1206,6 +1223,7 @@ mod tests {
     use lanforge_types::{
         device::{Device, Ipv6AddrOrSuffix, Origin},
         network::{Ipv6Suffix, dhcp::Dhcpv6Pool},
+        system::ServiceState,
         update::{CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, V6LeaseUpdate},
     };
     use std::{collections::HashMap, time::Duration};
@@ -1263,6 +1281,77 @@ mod tests {
         Duid::new(vec![
             0x00, 0x03, 0x00, 0x01, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
         ])
+    }
+
+    /// The DNS servers `server` announces in a reply.
+    fn announced_dns(server: &Dhcpv6Server) -> Option<Vec<Ipv6Addr>> {
+        let mut reply = Message::new(MessageType::Reply);
+        server.add_dns_options(&mut reply);
+        match reply.opts().get(OptionCode::DomainNameServers) {
+            Some(DhcpOption::DomainNameServers(servers)) => Some(servers.clone()),
+            _ => None,
+        }
+    }
+
+    fn set_lan(server: &Dhcpv6Server, ula: Option<Ipv6Addr>, gua: Option<Ipv6Addr>) {
+        let _ = server.ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+            ifindex: 0,
+            state: Box::new(InterfaceState {
+                v4: None,
+                link_local: None,
+                gua,
+                ula,
+                gua_preferred: 3600,
+                gua_valid: 3600,
+                mac: None,
+            }),
+        });
+    }
+
+    /// With no `[dhcp.v6] dns` the clients get this router's own LAN address (ULA first, else
+    /// GUA) while its DNS serves, read per reply: a live options update that carries the empty
+    /// configured list cannot leave them without a DNS server, as it did when the address was
+    /// only filled in at boot.
+    #[test]
+    fn unconfigured_dns_announces_the_router_while_dns_serves() {
+        let mut server = dummy_server();
+        server.served_ifindex = Some(0);
+        let ula: Ipv6Addr = "fd97:f00d:cafe:3731::1".parse().unwrap();
+        let gua: Ipv6Addr = "2804:14c:1:2::1".parse().unwrap();
+        set_lan(&server, Some(ula), Some(gua));
+
+        server
+            .ctx
+            .set_service_state(ServiceId::Dns, ServiceState::Online);
+        assert_eq!(announced_dns(&server), Some(vec![ula]), "ULA first");
+
+        set_lan(&server, None, Some(gua));
+        assert_eq!(announced_dns(&server), Some(vec![gua]), "GUA without a ULA");
+
+        set_lan(&server, None, None);
+        assert_eq!(announced_dns(&server), None, "no address, no option");
+
+        set_lan(&server, Some(ula), Some(gua));
+        server
+            .ctx
+            .set_service_state(ServiceId::Dns, ServiceState::Degraded);
+        assert_eq!(
+            announced_dns(&server),
+            Some(vec![ula]),
+            "degraded still answers"
+        );
+        server
+            .ctx
+            .set_service_state(ServiceId::Dns, ServiceState::Inactive);
+        assert_eq!(announced_dns(&server), None, "DNS not serving");
+
+        let configured: Ipv6Addr = "2001:db8::53".parse().unwrap();
+        server.cfg.dns_servers = vec![configured];
+        assert_eq!(
+            announced_dns(&server),
+            Some(vec![configured]),
+            "configured wins"
+        );
     }
 
     fn dummy_mac() -> MacAddr {

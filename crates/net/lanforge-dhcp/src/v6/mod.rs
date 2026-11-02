@@ -402,6 +402,8 @@ impl Dhcpv6Service {
         );
 
         self.initialize_pool_reservations(&mut server, &current_cfg);
+        let served_ifindex = self.served_ifindex(&current_cfg.iface);
+        server.served_ifindex = served_ifindex;
 
         // Setup transport socket
         let transport = if let Some(ref t) = self.transport {
@@ -415,7 +417,6 @@ impl Dhcpv6Service {
 
         let mut buf = [0u8; 2048];
         let mut resp_vec = Vec::with_capacity(1024);
-        let served_ifindex = self.served_ifindex(&current_cfg.iface);
         // Topic-isolated: prefix changes (network) and lease/admin updates (device) only.
         let mut net_events = self.ctx.service_handle_network();
         let mut device_events = self.ctx.service_handle_device();

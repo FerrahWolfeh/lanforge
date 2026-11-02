@@ -60,7 +60,7 @@ use lanforge_types::network::ra::{
     ICMPV6_TYPE_RS, MAX_INITIAL_RTR_ADVERT_INTERVAL, MAX_INITIAL_RTR_ADVERTISEMENTS,
     MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS, PreviousLanPrefixes, RAPrefix, RaServerConfig,
 };
-use lanforge_types::system::{DormantReason, RaStatusResponse, RunResult, ServiceState};
+use lanforge_types::system::{DormantReason, RaStatusResponse, RunResult};
 
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
@@ -952,11 +952,7 @@ fn send_ra_internal(
     let gua_info = gua.as_ref().map(|g| (g, gua_pref, gua_val));
     // No RDNSS configured: clients use this router's DNS while it serves, at the address the
     // admin gave the LAN interface (its ULA: stable when the delegated prefix changes).
-    let dns_serving = matches!(
-        lctx.get_service_state(ServiceId::Dns),
-        ServiceState::Online | ServiceState::Active | ServiceState::Degraded
-    );
-    let router_dns = ula.filter(|_| dns_serving);
+    let router_dns = ula.filter(|_| lctx.get_service_state(ServiceId::Dns).is_serving());
     let mut pkt = build_ra_packet(
         cfg,
         mac,

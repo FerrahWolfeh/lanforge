@@ -263,6 +263,13 @@ pub enum ServiceState {
 }
 
 impl ServiceState {
+    /// The service is answering clients: online, active or degraded (a degraded DNS still answers
+    /// local names).
+    #[must_use]
+    pub const fn is_serving(self) -> bool {
+        matches!(self, Self::Online | Self::Active | Self::Degraded)
+    }
+
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
