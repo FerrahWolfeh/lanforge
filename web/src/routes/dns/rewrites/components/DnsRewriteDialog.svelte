@@ -3,38 +3,52 @@
 	import { Button } from "$lib/components/ui/button";
 	import { Input } from "$lib/components/ui/input";
 	import { Label } from "$lib/components/ui/label";
-	import { Badge } from "$lib/components/ui/badge";
 	import * as Select from "$lib/components/ui/select";
 	import * as Tabs from "$lib/components/ui/tabs";
 	import ArrowRightLeftIcon from "@lucide/svelte/icons/arrow-right-left";
 	import GlobeIcon from "@lucide/svelte/icons/globe";
 	import LaptopIcon from "@lucide/svelte/icons/laptop";
-	import ServerIcon from "@lucide/svelte/icons/server";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import { toast } from "svelte-sonner";
-	import { listDevices } from "$lib/api/client";
+	import {
+		dnsRewriteAdd,
+		dnsRewriteList,
+		dnsRewriteRemove,
+		listDevices,
+	} from "$lib/api/client";
 	import {
 		type RewriteRule,
 		type DnsRecordType,
 		type DeviceEntry,
 		formatRewriteAnswer,
+		splitDeviceAnswer,
 	} from "$lib/api/types";
 
 	import DeviceCombobox from "$lib/components/DeviceCombobox.svelte";
 
+	// `group` is the rule being edited: one static rule, or every rule of one device answer
+	// (a device keeps one rule per fallback). Empty when adding, optionally from `prefill`.
 	let {
 		open = $bindable(false),
-		rule = null,
-		onSave = async (rule: any) => {},
+		group = [],
+		prefill = null,
+		onSaved = async () => {},
 	}: {
 		open: boolean;
-		rule?: RewriteRule | null;
-		onSave?: (rule: any) => Promise<void>;
+		group?: RewriteRule[];
+		prefill?: { domain: string; answer: string } | null;
+		onSaved?: () => Promise<void>;
 	} = $props();
 
-	let mode = $state<"static" | "device" | "service">("static");
+	type DeviceRecords = "DEVICE" | "A" | "AAAA";
+	const DEVICE_RECORDS: { value: DeviceRecords; label: string }[] = [
+		{ value: "DEVICE", label: "IPv4 and IPv6" },
+		{ value: "A", label: "IPv4 only" },
+		{ value: "AAAA", label: "IPv6 only" },
+	];
+
+	let mode = $state<"static" | "device">("static");
 	let domain = $state("");
-	let rtype = $state<DnsRecordType>("A");
 	let saving = $state(false);
 
 	// Mode 1: Static Target
@@ -42,32 +56,22 @@
 
 	// Mode 2: Dynamic Device Target (dev:)
 	let knownDevices = $state<DeviceEntry[]>([]);
-	let loadingDevices = $state(false);
 	let selectedDeviceIdentifier = $state("");
-	let deviceFallbackIp = $state("");
+	let deviceRecords = $state<DeviceRecords>("DEVICE");
+	let fallbackV4 = $state("");
+	let fallbackV6 = $state("");
 
-	// Mode 3: Dynamic SRV Target (srv:)
-	let srvService = $state("_plex");
-	let srvProtocol = $state("_tcp");
-	let srvDeviceIdentifier = $state("");
-	let srvPort = $state<number>(32400);
+	const editing = $derived(group.length > 0);
+	const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
 
-	const RECORD_TYPES: DnsRecordType[] = [
-		"A",
-		"AAAA",
-		"CNAME",
-		"PTR",
-		"TXT",
-		"MX",
-		"NS",
-		"SOA",
-		"SRV",
-		"HTTPS",
-		"SVCB",
-	];
+	// A static answer gives its own type: an IPv4 address, an IPv6 address or a host name.
+	function staticType(answer: string): DnsRecordType {
+		if (answer.includes(":")) return "AAAA";
+		return IPV4.test(answer) ? "A" : "CNAME";
+	}
+	const staticRtype = $derived(staticType(staticAnswer.trim()));
 
 	async function fetchDevices() {
-		loadingDevices = true;
 		try {
 			const res = await listDevices();
 			if (res && res.devices) {
@@ -75,120 +79,86 @@
 			}
 		} catch {
 			// silent fallback
-		} finally {
-			loadingDevices = false;
 		}
 	}
 
 	$effect(() => {
-		if (open) {
-			fetchDevices();
-			if (rule) {
-				domain = rule.domain;
-				rtype = rule.rtype;
-				const ans = formatRewriteAnswer(rule.answer);
-				if (ans.startsWith("dev:") || rule.rtype === "DEVICE") {
-					mode = "device";
-					rtype = "DEVICE";
-					const content = ans.startsWith("dev:") ? ans.slice(4) : ans;
-					if (content.includes("|")) {
-						const [devId, fb] = content.split("|");
-						selectedDeviceIdentifier = devId;
-						deviceFallbackIp = fb;
-					} else {
-						selectedDeviceIdentifier = content;
-						deviceFallbackIp = "";
-					}
-				} else if (ans.startsWith("srv:") || rule.rtype === "SRV") {
-					mode = "service";
-					if (ans.startsWith("srv:")) {
-						const parts = ans.slice(4).split(":");
-						if (parts.length >= 4) {
-							srvService = parts[0];
-							srvProtocol = parts[1];
-							srvPort = Number(parts[parts.length - 1]) || 80;
-							srvDeviceIdentifier = parts
-								.slice(2, parts.length - 1)
-								.join(":");
-						}
-					}
-				} else {
-					mode = "static";
-					staticAnswer = ans;
-				}
-			} else {
-				// Reset form for new rule
-				domain = "";
-				rtype = "A";
-				staticAnswer = "";
-				mode = "static";
-				selectedDeviceIdentifier = "";
-				deviceFallbackIp = "";
-				srvService = "_http";
-				srvProtocol = "_tcp";
-				srvDeviceIdentifier = "";
-				srvPort = 80;
+		if (!open) return;
+		fetchDevices();
+		const first = group[0];
+		domain = first?.domain ?? prefill?.domain ?? "";
+		staticAnswer = "";
+		selectedDeviceIdentifier = "";
+		deviceRecords = "DEVICE";
+		fallbackV4 = "";
+		fallbackV6 = "";
+		const dev = first ? splitDeviceAnswer(first.answer) : null;
+		if (first && dev) {
+			mode = "device";
+			selectedDeviceIdentifier = dev.device;
+			deviceRecords = first.rtype === "A" || first.rtype === "AAAA" ? first.rtype : "DEVICE";
+			for (const r of group) {
+				const fb = splitDeviceAnswer(r.answer)?.fallback ?? "";
+				if (fb.includes(":")) fallbackV6 = fb;
+				else if (fb) fallbackV4 = fb;
 			}
+		} else {
+			mode = "static";
+			staticAnswer = first ? formatRewriteAnswer(first.answer) : (prefill?.answer ?? "");
 		}
 	});
 
-	function buildFinalAnswer(): { answer: string; type: DnsRecordType } {
-		if (mode === "device") {
-			const devId = selectedDeviceIdentifier.trim();
-			if (!devId) {
-				throw new Error("Please select or enter a device identifier");
-			}
-			const fallback = deviceFallbackIp.trim();
-			const ans = fallback ? `dev:${devId}|${fallback}` : `dev:${devId}`;
-			return { answer: ans, type: "DEVICE" };
+	// The rules the form stands for: a device gets one rule per fallback.
+	function wantedRules(dom: string): { domain: string; rtype: DnsRecordType; answer: string }[] {
+		if (mode === "static") {
+			const answer = staticAnswer.trim();
+			if (!answer) throw new Error("Please specify an IP address or CNAME target domain");
+			return [{ domain: dom, rtype: staticType(answer), answer }];
 		}
-
-		if (mode === "service") {
-			const svc = srvService.trim() || "_service";
-			const proto = srvProtocol.trim() || "_tcp";
-			const dev = srvDeviceIdentifier.trim();
-			if (!dev) {
-				throw new Error(
-					"Please specify a target device for SRV service",
-				);
-			}
-			const port = srvPort || 80;
-			return {
-				answer: `srv:${svc}:${proto}:${dev}:${port}`,
-				type: "SRV",
-			};
-		}
-
-		const ans = staticAnswer.trim();
-		if (!ans) {
-			throw new Error(
-				"Please specify an IP address or CNAME target domain",
-			);
-		}
-		return { answer: ans, type: rtype };
+		const device = selectedDeviceIdentifier.trim();
+		if (!device) throw new Error("Please select or enter a device identifier");
+		const fallbacks = [
+			deviceRecords !== "AAAA" ? fallbackV4.trim() : "",
+			deviceRecords !== "A" ? fallbackV6.trim() : "",
+		].filter(Boolean);
+		const answers = fallbacks.length
+			? fallbacks.map((fb) => `dev:${device}|${fb}`)
+			: [`dev:${device}`];
+		return answers.map((answer) => ({ domain: dom, rtype: deviceRecords, answer }));
 	}
 
+	const sameRule = (a: RewriteRule, b: { domain: string; rtype: DnsRecordType; answer: string }) =>
+		a.domain.toLowerCase() === b.domain.toLowerCase() &&
+		a.rtype === b.rtype &&
+		formatRewriteAnswer(a.answer) === b.answer;
+
 	async function handleSubmit() {
-		const domClean = domain.trim().replace(/\.$/, "");
-		if (!domClean) {
+		const dom = domain.trim().replace(/\.$/, "");
+		if (!dom) {
 			toast.error("Please specify a domain pattern");
 			return;
 		}
 
 		try {
-			const { answer, type } = buildFinalAnswer();
+			const wanted = wantedRules(dom);
 			saving = true;
-
-			const payload: RewriteRule = {
-				id: rule?.id ?? null,
-				domain: domClean,
-				rtype: type,
-				answer,
-				resolved_ips: rule?.resolved_ips ?? null,
-			};
-
-			await onSave(payload);
+			for (const rule of wanted) {
+				await dnsRewriteAdd(rule);
+			}
+			// Edited rules the new ones did not replace go away.
+			const stale = group.filter((old) => !wanted.some((w) => sameRule(old, w)));
+			if (stale.length) {
+				const live = await dnsRewriteList();
+				for (const old of stale) {
+					const kept = live.find((r) =>
+						sameRule(r, { domain: old.domain, rtype: old.rtype, answer: formatRewriteAnswer(old.answer) }),
+					);
+					if (kept) await dnsRewriteRemove(kept);
+				}
+			}
+			toast.success(editing ? "Updated DNS rewrite rule" : "Added DNS rewrite rule");
 			open = false;
+			await onSaved();
 		} catch (err: any) {
 			toast.error(err?.message ?? "Failed to save rewrite rule");
 		} finally {
@@ -206,7 +176,7 @@
 				class="text-base font-semibold flex items-center gap-2"
 			>
 				<ArrowRightLeftIcon class="h-5 w-5 text-primary" />
-				{rule ? "Edit DNS Rewrite Rule" : "Add DNS Rewrite Rule"}
+				{editing ? "Edit DNS Rewrite Rule" : "Add DNS Rewrite Rule"}
 			</Dialog.Title>
 			<Dialog.Description class="text-xs">
 				Override DNS responses for specific domains, wildcards, or local
@@ -235,7 +205,7 @@
 
 			<!-- Target Mode Selector Tabs -->
 			<Tabs.Root value={mode} onValueChange={(v) => (mode = v as any)}>
-				<Tabs.List class="grid grid-cols-3 w-full h-9">
+				<Tabs.List class="grid grid-cols-2 w-full h-9">
 					<Tabs.Trigger value="static" class="text-xs gap-1">
 						<GlobeIcon class="h-3.5 w-3.5" />
 						Static Target
@@ -244,53 +214,24 @@
 						<LaptopIcon class="h-3.5 w-3.5" />
 						Device (dev:)
 					</Tabs.Trigger>
-					<Tabs.Trigger value="service" class="text-xs gap-1">
-						<ServerIcon class="h-3.5 w-3.5" />
-						SRV Service
-					</Tabs.Trigger>
 				</Tabs.List>
 
 				<!-- Mode 1: Static Target -->
-				<Tabs.Content value="static" class="space-y-3 pt-3">
-					<div class="grid grid-cols-3 gap-2">
-						<div class="col-span-1 space-y-1.5">
-							<Label class="text-xs font-medium"
-								>Record Type</Label
-							>
-							<Select.Root
-								type="single"
-								value={rtype}
-								onValueChange={(val) =>
-									(rtype = (val as DnsRecordType) ?? "A")}
-							>
-								<Select.Trigger class="h-9 text-xs">
-									{rtype}
-								</Select.Trigger>
-								<Select.Content>
-									{#each RECORD_TYPES as t (t)}
-										<Select.Item value={t} class="text-xs"
-											>{t}</Select.Item
-										>
-									{/each}
-								</Select.Content>
-							</Select.Root>
-						</div>
-
-						<div class="col-span-2 space-y-1.5">
-							<Label
-								for="static-target"
-								class="text-xs font-medium"
-								>IP Address / CNAME Target</Label
-							>
-							<Input
-								id="static-target"
-								type="text"
-								placeholder="192.168.1.50, fd00::50, or alias.lan"
-								class="h-9 text-xs font-mono"
-								bind:value={staticAnswer}
-							/>
-						</div>
-					</div>
+				<Tabs.Content value="static" class="space-y-1.5 pt-3">
+					<Label for="static-target" class="text-xs font-medium"
+						>IP Address / CNAME Target</Label
+					>
+					<Input
+						id="static-target"
+						type="text"
+						placeholder="192.168.1.50, fd00::50, or alias.lan"
+						class="h-9 text-xs font-mono"
+						bind:value={staticAnswer}
+					/>
+					<p class="text-[11px] text-muted-foreground">
+						Answers <code class="font-mono text-primary font-semibold">{staticRtype}</code> queries
+						(the type follows the target).
+					</p>
 				</Tabs.Content>
 
 				<!-- Mode 2: Dynamic Device Target (dev:) -->
@@ -307,79 +248,60 @@
 					</div>
 
 					<div class="space-y-1.5">
-						<Label for="device-fallback" class="text-xs font-medium"
-							>Optional Fallback IP</Label
+						<Label class="text-xs font-medium">Answers</Label>
+						<Select.Root
+							type="single"
+							value={deviceRecords}
+							onValueChange={(val) => (deviceRecords = (val as DeviceRecords) ?? "DEVICE")}
 						>
-						<Input
-							id="device-fallback"
-							type="text"
-							placeholder="e.g. 192.168.1.100 (used if device is offline)"
-							class="h-9 text-xs font-mono"
-							bind:value={deviceFallbackIp}
-						/>
+							<Select.Trigger class="h-9 text-xs">
+								{DEVICE_RECORDS.find((r) => r.value === deviceRecords)?.label}
+							</Select.Trigger>
+							<Select.Content>
+								{#each DEVICE_RECORDS as r (r.value)}
+									<Select.Item value={r.value} class="text-xs">{r.label}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					</div>
+
+					<div class="grid grid-cols-2 gap-2">
+						{#if deviceRecords !== "AAAA"}
+							<div class="space-y-1.5">
+								<Label for="device-fallback-v4" class="text-xs font-medium"
+									>IPv4 Fallback</Label
+								>
+								<Input
+									id="device-fallback-v4"
+									type="text"
+									placeholder="e.g. 192.168.1.100"
+									class="h-9 text-xs font-mono"
+									bind:value={fallbackV4}
+								/>
+							</div>
+						{/if}
+						{#if deviceRecords !== "A"}
+							<div class="space-y-1.5">
+								<Label for="device-fallback-v6" class="text-xs font-medium"
+									>IPv6 Fallback</Label
+								>
+								<Input
+									id="device-fallback-v6"
+									type="text"
+									placeholder="e.g. fd00::100"
+									class="h-9 text-xs font-mono"
+									bind:value={fallbackV6}
+								/>
+							</div>
+						{/if}
 					</div>
 
 					<p class="text-[11px] text-muted-foreground">
-						Creates a <code class="font-mono text-primary font-semibold">DEVICE</code> rewrite record. Lanforge dynamically resolves incoming DNS queries to the device's live IPv4 (<code class="font-mono">A</code>) and IPv6 (<code class="font-mono">AAAA</code>) addresses without needing static CNAME redirection.
+						Answers with the device's live addresses; a fallback (optional) is used while
+						the device has no address of that family.
 					</p>
 				</Tabs.Content>
 
-				<!-- Mode 3: Dynamic SRV Service (srv:) -->
-				<Tabs.Content value="service" class="space-y-3 pt-3">
-					<div class="grid grid-cols-2 gap-2">
-						<div class="space-y-1.5">
-							<Label for="srv-name" class="text-xs font-medium"
-								>Service Name</Label
-							>
-							<Input
-								id="srv-name"
-								type="text"
-								placeholder="_plex, _http, _matrix"
-								class="h-9 text-xs font-mono"
-								bind:value={srvService}
-							/>
-						</div>
-
-						<div class="space-y-1.5">
-							<Label for="srv-proto" class="text-xs font-medium"
-								>Protocol</Label
-							>
-							<Input
-								id="srv-proto"
-								type="text"
-								placeholder="_tcp or _udp"
-								class="h-9 text-xs font-mono"
-								bind:value={srvProtocol}
-							/>
-						</div>
-					</div>
-
-					<div class="grid grid-cols-3 gap-2">
-						<div class="col-span-2 space-y-1.5">
-							<Label class="text-xs font-medium"
-								>Target Device</Label
-							>
-							<DeviceCombobox
-								bind:value={srvDeviceIdentifier}
-								devices={knownDevices}
-								placeholder="Select target device..."
-							/>
-						</div>
-
-						<div class="col-span-1 space-y-1.5">
-							<Label for="srv-port" class="text-xs font-medium"
-								>Port</Label
-							>
-							<Input
-								id="srv-port"
-								type="number"
-								placeholder="32400"
-								class="h-9 text-xs font-mono"
-								bind:value={srvPort}
-							/>
-						</div>
-					</div>
-				</Tabs.Content>
 			</Tabs.Root>
 		</div>
 
@@ -402,7 +324,7 @@
 					<RefreshCwIcon class="h-4 w-4 animate-spin" />
 					Saving...
 				{:else}
-					{rule ? "Update Rule" : "Create Rewrite Rule"}
+					{editing ? "Update Rule" : "Create Rewrite Rule"}
 				{/if}
 			</Button>
 		</Dialog.Footer>

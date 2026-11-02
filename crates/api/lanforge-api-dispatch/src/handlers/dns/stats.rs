@@ -1,9 +1,10 @@
+use super::rewrite::dns_reply;
 use crate::ClientContext;
 use lanforge_api::api::{
     DnsAnalyticsResponse, DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse,
-    ProtocolStatEntry, QueryRateEntry, QueryTypeEntry, Response, SimpleSuccess, TopClientEntry,
-    TopDomainEntry,
+    ProtocolStatEntry, QueryRateEntry, QueryTypeEntry, Response, TopClientEntry, TopDomainEntry,
 };
+use lanforge_api::config_file::NamedUpstream;
 use lanforge_types::network::dns::{
     DnsRecordType, DnsRequest, DnsResponse, UpstreamStatus,
     upstream::{UpstreamMode, UpstreamProtocol, UpstreamTarget},
@@ -88,22 +89,27 @@ impl ClientContext {
         protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> Response {
-        let mut upstreams = self.ctx.get_dns_upstreams();
-        if !upstreams
-            .iter()
-            .any(|u| u.addr == addr && u.protocol == protocol && u.domain == domain)
-        {
-            upstreams.push(UpstreamTarget {
-                addr,
-                protocol,
-                hostname: None,
-                domain,
-            });
-            self.ctx.update_dns_upstreams(upstreams);
-        }
-        Response::Success(SimpleSuccess {
-            message: "Upstream added successfully".into(),
-        })
+        dns_reply(
+            self.change_dns(|dns| {
+                let known = dns.upstreams.iter().any(|u| {
+                    u.target.addr == addr
+                        && u.target.protocol == protocol
+                        && u.target.domain == domain
+                });
+                if !known {
+                    dns.upstreams.push(NamedUpstream {
+                        name: domain.clone().unwrap_or_else(|| "default".to_string()),
+                        target: UpstreamTarget {
+                            addr,
+                            protocol,
+                            hostname: None,
+                            domain,
+                        },
+                    });
+                }
+            }),
+            "Upstream added successfully".into(),
+        )
     }
 
     pub async fn handle_dns_upstream_remove(
@@ -112,25 +118,24 @@ impl ClientContext {
         protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> Response {
-        let mut upstreams = self.ctx.get_dns_upstreams();
-        let len_before = upstreams.len();
-        upstreams.retain(|u| !(u.addr == addr && u.protocol == protocol && u.domain == domain));
-        if upstreams.len() == len_before {
+        let matches =
+            |t: &UpstreamTarget| t.addr == addr && t.protocol == protocol && t.domain == domain;
+        if !self.ctx.get_dns_upstreams().iter().any(matches) {
             return Response::Error {
                 error: "Upstream not found".into(),
             };
         }
-        self.ctx.update_dns_upstreams(upstreams);
-        Response::Success(SimpleSuccess {
-            message: "Upstream removed successfully".into(),
-        })
+        dns_reply(
+            self.change_dns(|dns| dns.upstreams.retain(|u| !matches(&u.target))),
+            "Upstream removed successfully".into(),
+        )
     }
 
     pub async fn handle_dns_upstream_clear(&self) -> Response {
-        self.ctx.update_dns_upstreams(Vec::new());
-        Response::Success(SimpleSuccess {
-            message: "All upstreams cleared successfully".into(),
-        })
+        dns_reply(
+            self.change_dns(|dns| dns.upstreams.clear()),
+            "All upstreams cleared successfully".into(),
+        )
     }
 
     pub async fn handle_dns_upstream_mode_get(&self) -> Response {
@@ -139,8 +144,10 @@ impl ClientContext {
     }
 
     pub async fn handle_dns_upstream_mode_set(&self, mode: UpstreamMode) -> Response {
-        self.ctx.update_dns_upstream_mode(mode);
-        Response::DnsUpstreamMode(DnsUpstreamModeResponse { mode })
+        match self.change_dns(|dns| dns.upstream_mode = mode) {
+            Ok(_) => Response::DnsUpstreamMode(DnsUpstreamModeResponse { mode }),
+            Err(error) => Response::Error { error },
+        }
     }
 
     pub async fn handle_dns_analytics(

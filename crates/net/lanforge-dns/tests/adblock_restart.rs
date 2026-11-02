@@ -88,16 +88,15 @@ async fn boot_and_check(cache_dir: &Path, port: u16, domain: &str, timeout: Dura
 }
 
 /// Reproduces the "adblock blocks nothing after restart" bug:
-/// the compiled cache on disk is older than the freshness threshold, so the manager skips the
-/// disk load, upstream answers 304, the source fingerprint is unchanged and the merge
-/// (the only place that loads the FST into memory) is skipped, leaving the blocklist empty.
+/// the compiled cache on disk is older than the freshness threshold and upstream answers 304,
+/// so nothing is recompiled: the compiled lists must still be loaded into memory.
 #[cfg(feature = "adblock")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_restart_with_stale_cache_and_304_still_blocks() {
     let port = spawn_conditional_server().await;
     let temp_dir = tempfile::tempdir().unwrap();
 
-    // Run 1: cold start. Download, compile, merge, load.
+    // Run 1: cold start. Download, compile, load.
     assert!(
         boot_and_check(
             temp_dir.path(),
@@ -108,14 +107,14 @@ async fn test_restart_with_stale_cache_and_304_still_blocks() {
         .await,
         "cold start should block ads.example.com"
     );
-    assert!(temp_dir.path().join("adblock/block.fst").exists());
+    assert!(temp_dir.path().join("adblock/sources/1.block.fst").exists());
 
-    // Age the merged cache beyond freshness threshold (simulates a daemon restarted later).
+    // Age the compiled cache beyond freshness threshold (simulates a daemon restarted later).
     let manifest_path = temp_dir.path().join("adblock/manifest.json");
     let mut manifest = AdblockManifest::load_or_default(&manifest_path);
     assert!(
         manifest.merged_blocks >= 3,
-        "manifest should record merged blocks"
+        "manifest should record the loaded blocks"
     );
     manifest.last_merge = 1;
     manifest.save_atomic(&manifest_path).unwrap();

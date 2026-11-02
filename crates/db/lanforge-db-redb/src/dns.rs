@@ -1,11 +1,12 @@
 //! DnsStore, AdblockStore, and DnsUpstreamStore implementations for `RedbDatabase`.
 
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use crate::RedbDatabase;
 use lanforge_db_core::{
-    AdblockStore, DbError, DnsStore, DnsUpstreamEntry, DnsUpstreamStore, config_keys::*,
+    AdblockStore, ConfigKey, DbError, DnsStore, DnsUpstreamEntry, DnsUpstreamStore, config_keys::*,
 };
+use lanforge_types::identifiers::DeviceIdentifier;
 use lanforge_types::network::dns::adblock::{
     AdblockDbConfig, AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, AdblockUrlKind,
     RewriteAnswer, RewriteRule,
@@ -14,9 +15,96 @@ use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamProtocol, Ups
 use lanforge_types::network::dns::{AdblockUrlEntry, DnsRecordType};
 use lanforge_types::network::{DnsReverseResolver, IpSubnet};
 
+/// `DNS_REWRITES` as stored before SRV rewrites were removed. postcard encodes enum variants by
+/// index, so one stored `Service` answer would make the whole list undecodable: rules are read in
+/// this shape and SRV answers are dropped. Goes away with the redb DNS keys (config-storage step 5).
+const STORED_DNS_REWRITES: ConfigKey<Vec<StoredRewriteRule>> = ConfigKey::new(DNS_REWRITES.name());
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredRewriteRule {
+    id: Option<i64>,
+    domain: String,
+    rtype: DnsRecordType,
+    answer: StoredRewriteAnswer,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+enum StoredRewriteAnswer {
+    A(Ipv4Addr),
+    Aaaa(Ipv6Addr),
+    Cname(String),
+    Device {
+        identifier: DeviceIdentifier,
+        fallback: Option<Box<Self>>,
+    },
+    Service {
+        service: StoredSrvService,
+        protocol: StoredSrvProtocol,
+        device: DeviceIdentifier,
+        port: u16,
+    },
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+enum StoredSrvService {
+    Http,
+    Https,
+    Ssh,
+    Ftp,
+    Minecraft,
+    Plex,
+    Jellyfin,
+    Ldap,
+    Custom(String),
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+enum StoredSrvProtocol {
+    Tcp,
+    Udp,
+}
+
+impl StoredRewriteAnswer {
+    /// The answer without SRV: `None` for an SRV answer, an SRV fallback is dropped.
+    fn into_answer(self) -> Option<RewriteAnswer> {
+        match self {
+            Self::A(ip) => Some(RewriteAnswer::A(ip)),
+            Self::Aaaa(ip) => Some(RewriteAnswer::Aaaa(ip)),
+            Self::Cname(host) => Some(RewriteAnswer::Cname(host)),
+            Self::Device {
+                identifier,
+                fallback,
+            } => Some(RewriteAnswer::Device {
+                identifier,
+                fallback: fallback.and_then(|fb| fb.into_answer()).map(Box::new),
+            }),
+            Self::Service { .. } => None,
+        }
+    }
+}
+
 impl DnsStore for RedbDatabase {
-    fn load_dns_rewrites(&self) -> Result<Vec<RewriteRule>, DbError> {
-        Ok(self.get(DNS_REWRITES)?.unwrap_or_default())
+    fn stored_dns_rewrites(&self) -> Result<Option<Vec<RewriteRule>>, DbError> {
+        let Some(stored) = self.get(STORED_DNS_REWRITES)? else {
+            return Ok(None);
+        };
+        Ok(Some(
+            stored
+            .into_iter()
+            .filter_map(|rule| {
+                let Some(answer) = rule.answer.into_answer() else {
+                    tracing::warn!(domain = %rule.domain, "dropping a stored SRV DNS rewrite: SRV rewrites are no longer supported");
+                    return None;
+                };
+                Some(RewriteRule {
+                    id: rule.id,
+                    domain: rule.domain,
+                    rtype: rule.rtype,
+                    answer,
+                })
+            })
+            .collect(),
+        ))
     }
 
     fn upsert_dns_rewrite(
@@ -345,5 +433,91 @@ impl DnsUpstreamStore for RedbDatabase {
 
     fn save_dns_upstream_mode(&self, mode: UpstreamMode) -> Result<(), DbError> {
         self.put(DNS_UPSTREAM_MODE, &mode)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A list stored by a binary that still had SRV rewrites decodes, minus the SRV entries.
+    #[test]
+    fn stored_srv_rewrites_are_dropped_not_fatal() {
+        let db = RedbDatabase::open_temp().unwrap();
+        let nas = || DeviceIdentifier::Name("nas".to_string());
+        let stored = vec![
+            StoredRewriteRule {
+                id: Some(1),
+                domain: "_http._tcp.nas.lan".to_string(),
+                rtype: DnsRecordType::SRV,
+                answer: StoredRewriteAnswer::Service {
+                    service: StoredSrvService::Custom("my-app".to_string()),
+                    protocol: StoredSrvProtocol::Udp,
+                    device: nas(),
+                    port: 5000,
+                },
+            },
+            StoredRewriteRule {
+                id: Some(2),
+                domain: "nas.lan".to_string(),
+                rtype: DnsRecordType::Device,
+                answer: StoredRewriteAnswer::Device {
+                    identifier: nas(),
+                    fallback: Some(Box::new(StoredRewriteAnswer::A(Ipv4Addr::new(
+                        192, 0, 2, 9,
+                    )))),
+                },
+            },
+            StoredRewriteRule {
+                id: Some(3),
+                domain: "alias.lan".to_string(),
+                rtype: DnsRecordType::CNAME,
+                answer: StoredRewriteAnswer::Cname("nas.lan".to_string()),
+            },
+        ];
+        db.put(STORED_DNS_REWRITES, &stored).unwrap();
+
+        let loaded = db.load_dns_rewrites().unwrap();
+        assert_eq!(
+            loaded,
+            vec![
+                RewriteRule {
+                    id: Some(2),
+                    domain: "nas.lan".to_string(),
+                    rtype: DnsRecordType::Device,
+                    answer: RewriteAnswer::Device {
+                        identifier: nas(),
+                        fallback: Some(Box::new(RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 9)))),
+                    },
+                },
+                RewriteRule {
+                    id: Some(3),
+                    domain: "alias.lan".to_string(),
+                    rtype: DnsRecordType::CNAME,
+                    answer: RewriteAnswer::Cname("nas.lan".to_string()),
+                },
+            ]
+        );
+    }
+
+    /// Today's `RewriteRule` still encodes the same bytes the stored shape reads.
+    #[test]
+    fn current_rewrites_roundtrip_through_the_stored_shape() {
+        let db = RedbDatabase::open_temp().unwrap();
+        db.upsert_dns_rewrite(
+            "nas.lan",
+            DnsRecordType::A,
+            &RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 1)),
+        )
+        .unwrap();
+        db.upsert_dns_rewrite(
+            "v6.lan",
+            DnsRecordType::AAAA,
+            &RewriteAnswer::Aaaa(Ipv6Addr::LOCALHOST),
+        )
+        .unwrap();
+        let loaded = db.load_dns_rewrites().unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[1].answer, RewriteAnswer::Aaaa(Ipv6Addr::LOCALHOST));
     }
 }

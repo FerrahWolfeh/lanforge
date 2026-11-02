@@ -360,15 +360,26 @@ const KNOWN_LOSSES: &[(&str, &[&str])] = &[
     ("dhcp_options", &[]),
     ("dhcp_v4_pools", &[]),
     ("dhcp_v6_pools", &[]),
+    // Migrated: `[adblock]` (`AdblockFile`), exact tests in `config_file::adblock`. Source ids
+    // are derived from the URL. The manual rules, the allowlist among them, live in the rules
+    // file (`adblock/global.rules`), not in `lanforge.toml`.
     ("dns_adblock_config", &[]),
-    ("dns_adblock_rules", &["/0/id", "/0/name"]),
-    ("dns_adblock_urls", &["/0/id"]),
-    ("dns_allowlist", &["/0/id"]),
-    // Not in the TOML at all.
     (
-        "dns_reverse_resolvers",
-        &["", "/0/resolver", "/0/subnet/addr", "/0/subnet/prefix_len"],
+        "dns_adblock_rules",
+        &[
+            "",
+            "/0/action",
+            "/0/domain",
+            "/0/enabled",
+            "/0/id",
+            "/0/name",
+        ],
     ),
+    ("dns_adblock_urls", &["/0/id"]),
+    ("dns_allowlist", &["", "/0/domain", "/0/id"]),
+    // Migrated: `[dns]` (`DnsFile`), exact tests in `config_file::dns`. Rule ids are derived
+    // from the rule, not written.
+    ("dns_reverse_resolvers", &[]),
     ("dns_rewrites", &["/0/id"]),
     ("dns_upstreams", &[]),
     // Kept as its own file form, now lossless (see the exact tests below).

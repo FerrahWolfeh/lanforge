@@ -987,6 +987,7 @@ export interface DnsAdblockStatusResponse {
 	blocking_mode: BlockingMode;
 	blocking_ip_v4?: string | null;
 	blocking_ip_v6?: string | null;
+	refresh_time: TimeOfDay;
 }
 
 export interface DnsAdblockUrlEntry {
@@ -1007,6 +1008,7 @@ export interface AllowlistEntry {
 // ---------------------------------------------------------------------------
 
 export interface RewriteRule {
+	/** 63-bit content hash, rounded by JSON.parse: display only, never send it back. */
 	id: number | null;
 	domain: string;
 	rtype: DnsRecordType;
@@ -1034,14 +1036,6 @@ export function formatRewriteAnswer(ans: unknown): string {
 			const fb = dev.fallback ? `|${formatRewriteAnswer(dev.fallback)}` : "";
 			return `dev:${id}${fb}`;
 		}
-		if (obj.service) {
-			const s = obj.service;
-			const svc = s.service ?? "_http";
-			const proto = s.protocol ?? "_tcp";
-			const dev = typeof s.device === "string" ? s.device : JSON.stringify(s.device ?? "");
-			const port = s.port ?? 80;
-			return `srv:${svc}:${proto}:${dev}:${port}`;
-		}
 		// Single key serde enum fallback e.g. { Cname: "dev:raspie" }
 		const keys = Object.keys(obj);
 		if (keys.length === 1) {
@@ -1051,6 +1045,14 @@ export function formatRewriteAnswer(ans: unknown): string {
 		}
 	}
 	return String(ans);
+}
+
+/** Splits a `dev:<device>|<fallback>` answer; `null` for a static answer. */
+export function splitDeviceAnswer(ans: unknown): { device: string; fallback: string } | null {
+	const text = formatRewriteAnswer(ans);
+	if (!text.startsWith("dev:")) return null;
+	const [device, fallback = ""] = text.slice(4).split("|");
+	return { device, fallback };
 }
 
 export interface EventDeviceInfo {
@@ -1342,13 +1344,6 @@ export interface DbMetrics {
 	last_error: boolean | number;
 }
 
-export interface DbEngineSwitchRequest {
-	engine?: 'redb' | 'memory' | string;
-	url?: string;
-	max_connections?: number;
-	min_connections?: number;
-}
-
 export interface ExportedApiToken {
 	token: string;
 	name: string;
@@ -1373,6 +1368,7 @@ export interface AdblockDbConfig {
 }
 
 export interface AdblockRuleEntry {
+	/** 63-bit content hash, rounded by JSON.parse: address a rule by its text (`domain`). */
 	id?: number;
 	domain: string;
 	action: 'block' | 'allow';

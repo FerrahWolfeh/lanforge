@@ -13,9 +13,7 @@
 //!
 //! All loggable events are immediately recorded in the in-memory `LogDb`.
 
-use lanforge_api::api::{
-    AllowlistEntry, DnsUpstreamConfig, ExportedApiToken, HostConfigEntry, SystemConfigExport,
-};
+use lanforge_api::api::{DnsUpstreamConfig, ExportedApiToken, HostConfigEntry, SystemConfigExport};
 use lanforge_api::config_file::{
     ConfigFile, Section, SectionSet, patch_sections, section_hashes, toml_edit::DocumentMut,
     write_toml_atomically,
@@ -23,9 +21,7 @@ use lanforge_api::config_file::{
 use lanforge_core::bus::{
     DeviceEvent, DnsEvent, LanforgeEvent, StorageEvent, SystemEvent, TimedEvent,
 };
-use lanforge_db_core::{
-    ApiTokenStore, DeviceStore, DnsUpstreamEntry, LogStore, RaConfigStore, config_keys::*,
-};
+use lanforge_db_core::{ApiTokenStore, DeviceStore, LogStore, RaConfigStore};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::QueryLogEntry;
 use lanforge_types::network::dns::{DnsRequest, DnsResponse};
@@ -176,47 +172,6 @@ impl DbWorker {
             error!("Failed to flush DNS lifetime stats: {e}");
         }
 
-        // Config events can arrive many times during one worker tick. Read the
-        // latest context snapshot and commit every dirty section in one txn.
-        if !self.dirty_sections.is_empty() {
-            let result = db.write(|tx| {
-                if self.dirty_sections.contains(SectionSet::DNS) {
-                    tx.set(DNS_REWRITES, &self.ctx.get_dns_rewrites())?;
-                    let upstreams: Vec<DnsUpstreamEntry> = self
-                        .ctx
-                        .get_dns_upstreams()
-                        .into_iter()
-                        .map(|target| {
-                            let mut entry = DnsUpstreamEntry {
-                                id: 0,
-                                name: target.domain.clone(),
-                                addr: target.addr,
-                                protocol: target.protocol,
-                                domain: target.domain,
-                            };
-                            entry.id = entry.deterministic_id();
-                            entry
-                        })
-                        .collect();
-                    tx.set(DNS_UPSTREAMS, &upstreams)?;
-                    tx.set(DNS_UPSTREAM_MODE, &self.ctx.get_dns_upstream_mode())?;
-                    tx.set(DNS_ALLOWLIST, &self.ctx.get_dns_allowlist())?;
-                    tx.set(ADBLOCK_CONFIG, &self.ctx.get_dns_adblock())?;
-                    tx.set(ADBLOCK_URLS, &self.ctx.get_dns_adblock_urls())?;
-                    tx.set(ADBLOCK_RULES, &self.ctx.get_dns_adblock_rules())?;
-                    tx.set(DNS_REVERSE_RESOLVERS, &self.ctx.all_reverse_resolvers())?;
-                }
-                Ok(())
-            });
-            match result {
-                Ok(()) => {}
-                Err(e) => {
-                    error!("Failed to flush config snapshot: {e}");
-                    had_error = true;
-                }
-            }
-        }
-
         // 3. Flush Main DB
         if !self.full_flush_requested && self.pending_devices.is_empty() {
             metrics.last_flush_ts.store(now, Ordering::Relaxed);
@@ -357,18 +312,9 @@ impl DbWorker {
 
         let dns_adblock_config = self.ctx.get_dns_adblock();
         let dns_adblock_urls = self.ctx.get_dns_adblock_urls();
-        let dns_allowlist = self
-            .ctx
-            .get_dns_allowlist()
-            .into_iter()
-            .enumerate()
-            .map(|(id, domain)| AllowlistEntry {
-                id: id as i64 + 1,
-                domain,
-            })
-            .collect();
-
-        let dns_adblock_rules = Some(self.ctx.get_dns_adblock_rules());
+        // The manual adblock rules live in their own file (`[adblock] rules`).
+        let dns_allowlist = Vec::new();
+        let dns_adblock_rules = None;
 
         let api_tokens = db.load_api_tokens().ok().map(|tokens| {
             tokens
@@ -805,17 +751,6 @@ impl AsyncService for DbWorker {
                                     self.dns_log_buffer.clear();
                                 }
                             }
-                        }
-                        LanforgeEvent::Dns(
-                            DnsEvent::ConfigRewritesChanged
-                            | DnsEvent::ConfigAllowlistChanged
-                            | DnsEvent::ConfigAdblockChanged
-                            | DnsEvent::ConfigAdblockRulesChanged
-                            | DnsEvent::ConfigUpstreamsChanged
-                            | DnsEvent::ConfigUpstreamModeChanged(_)
-                            | DnsEvent::ConfigReverseResolversChanged,
-                        ) => {
-                            self.dirty_sections |= SectionSet::DNS;
                         }
                         LanforgeEvent::System(SystemEvent::ConfigChanged { sections }) => {
                             // File-owned sections are written by the API before they apply.

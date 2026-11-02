@@ -412,7 +412,12 @@ impl<T: LogStore + ?Sized> TelemetryStore for T {}
 /// Handles local DNS rewrites, allowlists, and reverse resolvers.
 pub trait DnsStore: Send + Sync {
     /// Loads all configured custom DNS rewrite rules.
-    fn load_dns_rewrites(&self) -> Result<Vec<RewriteRule>, DbError>;
+    fn load_dns_rewrites(&self) -> Result<Vec<RewriteRule>, DbError> {
+        Ok(self.stored_dns_rewrites()?.unwrap_or_default())
+    }
+
+    /// The stored DNS rewrite rules, or `None` when the key is not stored at all.
+    fn stored_dns_rewrites(&self) -> Result<Option<Vec<RewriteRule>>, DbError>;
 
     /// Adds or updates a custom DNS rewrite rule.
     fn upsert_dns_rewrite(

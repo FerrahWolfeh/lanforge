@@ -96,7 +96,7 @@ pub fn requirement(method: &Method, path: &str) -> Requirement {
         (true, ["users", ..]) => Admin,
 
         (true, ["db", "stats"]) => Read,
-        (false, ["db"] | ["db", "engine"]) => return Requirement::sensitive(),
+        (false, ["db"]) => return Requirement::sensitive(),
         (_, ["db", ..]) => Admin,
 
         // Daemon lifecycle and internals.
@@ -340,7 +340,6 @@ mod tests {
             (Method::POST, "/api/v1/auth/tokens"),
             (Method::POST, "/api/v1/auth/tokens/3/renew"),
             (Method::DELETE, "/api/v1/db"),
-            (Method::POST, "/api/v1/db/engine"),
         ] {
             assert_eq!(
                 requirement(&method, path),

@@ -241,6 +241,17 @@ impl TestApp {
         self.call("DELETE", path, None, true).await
     }
 
+    #[cfg(feature = "adblock")]
+    async fn put<T: Serialize>(&self, path: &str, body: &T) -> (StatusCode, Value) {
+        self.call("PUT", path, Some(serde_json::to_vec(body).unwrap()), true)
+            .await
+    }
+
+    async fn delete_with<T: Serialize>(&self, path: &str, body: &T) -> (StatusCode, Value) {
+        self.call("DELETE", path, Some(serde_json::to_vec(body).unwrap()), true)
+            .await
+    }
+
     async fn patch<T: Serialize>(&self, path: &str, body: &T) -> (StatusCode, Value) {
         self.call("PATCH", path, Some(serde_json::to_vec(body).unwrap()), true)
             .await
@@ -781,11 +792,11 @@ async fn test_dns_rewrites_contract() {
         Some(0)
     );
 
-    // --- dev: dynamic rewrite ---
+    // --- dev: dynamic rewrite (the WebUI sends rtype DEVICE) ---
     let (status, _) = app
         .post(
             "/api/v1/dns/rewrites",
-            &json!({"domain": "dynamic.lan", "rtype": "CNAME", "answer": "dev:testhost"}),
+            &json!({"domain": "dynamic.lan", "rtype": "DEVICE", "answer": "dev:testhost"}),
         )
         .await;
     assert_eq!(
@@ -794,6 +805,24 @@ async fn test_dns_rewrites_contract() {
         "dev: rewrite should be accepted"
     );
     app.delete("/api/v1/dns/rewrites").await; // clean up
+
+    // A device answer is not a CNAME: refused (today a 500, like every refused change), not
+    // stored.
+    let (status, _) = app
+        .post(
+            "/api/v1/dns/rewrites",
+            &json!({"domain": "dynamic.lan", "rtype": "CNAME", "answer": "dev:testhost"}),
+        )
+        .await;
+    assert!(
+        status.is_client_error() || status.is_server_error(),
+        "CNAME rtype with a dev: answer must be refused, got {status}"
+    );
+    let (_, body) = app.get("/api/v1/dns/rewrites").await;
+    assert_eq!(
+        body["data"]["rewrites"].as_array().map(|a| a.len()),
+        Some(0)
+    );
 
     // --- Validation guardrails (negative grid) ---
     // (description, body, ideal_expected_status)
@@ -824,13 +853,97 @@ async fn test_dns_rewrites_contract() {
         assert_eq!(status, *expected, "DNS rewrites guardrail: {desc}");
     }
 
-    // Remove non-existent rule ID — dispatch silently no-ops
+    // Removing an unknown rule is an error, never a success that removed nothing.
     let (status, _) = app.delete("/api/v1/dns/rewrites/99999").await;
-    assert_eq!(
-        status,
-        StatusCode::NO_CONTENT,
-        "Remove non-existent rewrite ID should silently succeed"
+    assert!(
+        !status.is_success(),
+        "removing an unknown rewrite id must fail, got {status}"
     );
+}
+
+/// The WebUI reads JSON numbers as doubles: a 63-bit content-hash id comes back rounded, so it
+/// removes by the rule's content instead.
+#[tokio::test]
+async fn test_dns_rewrite_remove_works_for_a_javascript_client() {
+    let app = TestApp::no_auth().await;
+    for rule in [
+        json!({"domain": "nas.lan", "rtype": "A", "answer": "192.168.1.10"}),
+        json!({"domain": "tv.lan", "rtype": "DEVICE", "answer": "dev:tv|192.168.1.20"}),
+    ] {
+        let (status, _) = app.post("/api/v1/dns/rewrites", &rule).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+    }
+    let (_, body) = app.get("/api/v1/dns/rewrites").await;
+    let listed = body["data"]["rewrites"].as_array().unwrap().clone();
+    assert_eq!(listed.len(), 2);
+
+    // What a JavaScript client holds after `JSON.parse`.
+    let exact = listed[0]["id"].as_i64().unwrap();
+    let seen_by_js = listed[0]["id"].as_f64().unwrap();
+    assert_ne!(format!("{seen_by_js:.0}"), exact.to_string());
+    let (status, _) = app
+        .delete(&format!("/api/v1/dns/rewrites/{seen_by_js:.0}"))
+        .await;
+    assert!(
+        !status.is_success(),
+        "a rounded id must not report a removal, got {status}"
+    );
+
+    // By content, as listed (the `id` sent along is ignored).
+    for rule in &listed {
+        let (status, body) = app.delete_with("/api/v1/dns/rewrites/rule", rule).await;
+        assert_eq!(status, StatusCode::NO_CONTENT, "remove {rule}: {body}");
+    }
+    let (_, body) = app.get("/api/v1/dns/rewrites").await;
+    assert_eq!(body["data"]["rewrites"].as_array().map(Vec::len), Some(0));
+
+    let (status, _) = app.delete_with("/api/v1/dns/rewrites/rule", &listed[0]).await;
+    assert!(!status.is_success(), "removing it twice must fail, got {status}");
+}
+
+/// Manual adblock rules are disabled and removed by their text, as the listing gives it.
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn test_adblock_rule_by_text_works_for_a_javascript_client() {
+    let app = TestApp::no_auth().await;
+    let (status, body) = app
+        .post(
+            "/api/v1/dns/adblock/rules",
+            &json!({"domain": "track.example", "action": "block"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let listed = |body: &Value| body["data"]["rules"].as_array().unwrap().clone();
+    let (_, body) = app.get("/api/v1/dns/adblock/rules").await;
+    let rules = listed(&body);
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0]["domain"], "||track.example^");
+
+    let seen_by_js = rules[0]["id"].as_f64().unwrap();
+    let (status, _) = app
+        .delete(&format!("/api/v1/dns/adblock/rules/{seen_by_js:.0}"))
+        .await;
+    assert!(!status.is_success(), "a rounded id matches no rule, got {status}");
+
+    let (status, body) = app
+        .put(
+            "/api/v1/dns/adblock/rules/status",
+            &json!({"rule": "||track.example^", "enabled": false}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (_, body) = app.get("/api/v1/dns/adblock/rules").await;
+    assert_eq!(listed(&body)[0]["enabled"], false);
+
+    let (status, body) = app
+        .delete_with(
+            "/api/v1/dns/adblock/rules",
+            &json!({"rule": "||track.example^"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (_, body) = app.get("/api/v1/dns/adblock/rules").await;
+    assert!(listed(&body).is_empty());
 }
 
 // ---------------------------------------------------------------------------

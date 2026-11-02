@@ -23,11 +23,10 @@
 	];
 	import {
 		dnsRewriteList,
-		dnsRewriteAdd,
 		dnsRewriteClear,
 		dnsRewriteExport,
 	} from "$lib/api/client";
-	import type { RewriteRule } from "$lib/api/types";
+	import { type RewriteRule, splitDeviceAnswer } from "$lib/api/types";
 
 	// Child components
 	import DnsRewriteStatsCards from "./components/DnsRewriteStatsCards.svelte";
@@ -46,7 +45,7 @@
 
 	// Dialogs & Modals
 	let addEditModalOpen = $state(false);
-	let activeEditRule = $state<RewriteRule | null>(null);
+	let editGroup = $state<RewriteRule[]>([]);
 
 	let importModalOpen = $state(false);
 	let clearModalOpen = $state(false);
@@ -64,29 +63,22 @@
 	}
 
 	function handleOpenAdd() {
-		activeEditRule = null;
+		editGroup = [];
 		addEditModalOpen = true;
 	}
 
+	// A device answer is edited with its sibling rules (one per fallback).
 	function handleOpenEdit(rule: RewriteRule) {
-		activeEditRule = rule;
+		const device = splitDeviceAnswer(rule.answer)?.device;
+		editGroup = device === undefined
+			? [rule]
+			: rules.filter(
+					(r) =>
+						r.domain.toLowerCase() === rule.domain.toLowerCase() &&
+						r.rtype === rule.rtype &&
+						splitDeviceAnswer(r.answer)?.device === device,
+				);
 		addEditModalOpen = true;
-	}
-
-	async function handleSaveRule(
-		payload: Omit<RewriteRule, "id"> | RewriteRule,
-	) {
-		try {
-			await dnsRewriteAdd(payload);
-			const isEdit = "id" in payload && Boolean(payload.id);
-			toast.success(
-				isEdit ? "Updated DNS rewrite rule" : "Added DNS rewrite rule",
-			);
-			await loadRewrites();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to save DNS rewrite rule");
-			throw err;
-		}
 	}
 
 	async function handleExport() {
@@ -225,8 +217,8 @@
 <!-- Add/Edit Rewrite Rule Dialog -->
 <DnsRewriteDialog
 	bind:open={addEditModalOpen}
-	rule={activeEditRule}
-	onSave={handleSaveRule}
+	group={editGroup}
+	onSaved={loadRewrites}
 />
 
 <!-- Bulk Import Modal -->

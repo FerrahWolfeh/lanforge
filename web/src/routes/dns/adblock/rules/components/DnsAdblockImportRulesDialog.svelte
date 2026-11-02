@@ -23,8 +23,8 @@
 		e.preventDefault();
 		const lines = rawText
 			.split("\n")
-			.map((l) => l.trim().toLowerCase().replace(/\.$/, ""))
-			.filter((l) => l.length > 0 && !l.startsWith("#"));
+			.map((l) => l.trim())
+			.filter((l) => l.length > 0 && !l.startsWith("#") && !l.startsWith("!"));
 
 		if (lines.length === 0) {
 			toast.error("Please enter at least one valid domain");

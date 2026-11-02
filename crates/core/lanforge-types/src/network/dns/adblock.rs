@@ -1,129 +1,15 @@
-use crate::network::DnsRecordType;
+use crate::network::{DnsRecordType, IpSubnet};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
-    borrow::Cow,
     fmt::Display,
-    net::{Ipv4Addr, Ipv6Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     str::FromStr,
 };
 
 use crate::identifiers::DeviceIdentifier;
 
-/// DNS service protocols (tcp, udp) for SRV records.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DnsServiceProtocol {
-    Tcp,
-    Udp,
-}
-
-impl FromStr for DnsServiceProtocol {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim();
-        let cleaned = trimmed.strip_prefix('_').unwrap_or(trimmed);
-        match cleaned.to_ascii_lowercase().as_str() {
-            "tcp" => Ok(Self::Tcp),
-            "udp" => Ok(Self::Udp),
-            _ => Err(format!("Invalid DNS service protocol: {s}")),
-        }
-    }
-}
-
-impl Display for DnsServiceProtocol {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Tcp => write!(f, "tcp"),
-            Self::Udp => write!(f, "udp"),
-        }
-    }
-}
-
-impl DnsServiceProtocol {
-    #[must_use]
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::Tcp => "_tcp",
-            Self::Udp => "_udp",
-        }
-    }
-}
-
-/// Common homelab DNS services for SRV discovery.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DnsService {
-    Http,
-    Https,
-    Ssh,
-    Ftp,
-    Minecraft,
-    Plex,
-    Jellyfin,
-    Ldap,
-    Custom(String),
-}
-
-impl FromStr for DnsService {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim();
-        let cleaned = trimmed.strip_prefix('_').unwrap_or(trimmed);
-        let lower = cleaned.to_ascii_lowercase();
-        match lower.as_str() {
-            "http" => Ok(Self::Http),
-            "https" => Ok(Self::Https),
-            "ssh" => Ok(Self::Ssh),
-            "ftp" => Ok(Self::Ftp),
-            "minecraft" => Ok(Self::Minecraft),
-            "plex" => Ok(Self::Plex),
-            "jellyfin" => Ok(Self::Jellyfin),
-            "ldap" => Ok(Self::Ldap),
-            _ => {
-                if lower.is_empty() {
-                    Err("Empty DNS service name".to_string())
-                } else if !lower.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-                    Err("Invalid DNS service name characters".to_string())
-                } else {
-                    Ok(Self::Custom(lower))
-                }
-            }
-        }
-    }
-}
-
-impl Display for DnsService {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Http => write!(f, "http"),
-            Self::Https => write!(f, "https"),
-            Self::Ssh => write!(f, "ssh"),
-            Self::Ftp => write!(f, "ftp"),
-            Self::Minecraft => write!(f, "minecraft"),
-            Self::Plex => write!(f, "plex"),
-            Self::Jellyfin => write!(f, "jellyfin"),
-            Self::Ldap => write!(f, "ldap"),
-            Self::Custom(name) => write!(f, "{name}"),
-        }
-    }
-}
-
-impl DnsService {
-    #[must_use]
-    pub fn to_srv_name(&self) -> Cow<'_, str> {
-        match self {
-            Self::Http => Cow::Borrowed("_http"),
-            Self::Https => Cow::Borrowed("_https"),
-            Self::Ssh => Cow::Borrowed("_ssh"),
-            Self::Ftp => Cow::Borrowed("_ftp"),
-            Self::Minecraft => Cow::Borrowed("_minecraft"),
-            Self::Plex => Cow::Borrowed("_plex"),
-            Self::Jellyfin => Cow::Borrowed("_jellyfin"),
-            Self::Ldap => Cow::Borrowed("_ldap"),
-            Self::Custom(name) => Cow::Owned(format!("_{name}")),
-        }
-    }
-}
+pub mod rules_file;
+pub mod syntax;
 
 /// Represents a DNS rewrite rule (domain -> IP/Hostname).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
@@ -177,12 +63,36 @@ pub enum RewriteAnswer {
         identifier: DeviceIdentifier,
         fallback: Option<Box<Self>>,
     },
-    Service {
-        service: DnsService,
-        protocol: DnsServiceProtocol,
-        device: DeviceIdentifier,
-        port: u16,
-    },
+}
+
+impl RewriteAnswer {
+    /// The record type the answer gives on its own: `DEVICE` for a device (both families).
+    #[must_use]
+    pub const fn inferred_rtype(&self) -> DnsRecordType {
+        match self {
+            Self::A(_) => DnsRecordType::A,
+            Self::Aaaa(_) => DnsRecordType::AAAA,
+            Self::Cname(_) => DnsRecordType::CNAME,
+            Self::Device { .. } => DnsRecordType::Device,
+        }
+    }
+
+    /// A device answer's static fallback.
+    #[must_use]
+    pub fn fallback(&self) -> Option<&Self> {
+        match self {
+            Self::Device { fallback, .. } => fallback.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Whether two fallbacks of one device compete: a device holds one IPv4 and one IPv6
+    /// address, or one host name.
+    #[must_use]
+    pub fn competes_as_fallback(&self, other: &Self) -> bool {
+        let (a, b) = (self.inferred_rtype(), other.inferred_rtype());
+        a == b || a == DnsRecordType::CNAME || b == DnsRecordType::CNAME
+    }
 }
 
 impl FromStr for RewriteAnswer {
@@ -190,27 +100,8 @@ impl FromStr for RewriteAnswer {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let s = s.trim();
-        if let Some(srv_content) = s.strip_prefix("srv:") {
-            let parts: Vec<&str> = srv_content.split(':').collect();
-            if parts.len() < 4 {
-                return Err("Invalid SRV rewrite answer format, expected srv:<service>:<protocol>:<device>:<port>".to_string());
-            }
-            let service = parts[0].parse::<DnsService>()?;
-            let protocol = parts[1].parse::<DnsServiceProtocol>()?;
-            let port_str = parts
-                .last()
-                .ok_or_else(|| "Missing port in SRV rewrite answer".to_string())?;
-            let port = port_str
-                .parse::<u16>()
-                .map_err(|e| format!("Invalid port in SRV: {e}"))?;
-            let device_str = parts[2..parts.len() - 1].join(":");
-            let device = device_str.parse::<DeviceIdentifier>()?;
-            return Ok(Self::Service {
-                service,
-                protocol,
-                device,
-                port,
-            });
+        if s.starts_with("srv:") {
+            return Err("SRV rewrites are not supported".to_string());
         }
 
         s.parse::<Ipv4Addr>().map_or_else(
@@ -270,14 +161,6 @@ impl Display for RewriteAnswer {
                 } else {
                     write!(f, "dev:{identifier}")
                 }
-            }
-            Self::Service {
-                service,
-                protocol,
-                device,
-                port,
-            } => {
-                write!(f, "srv:{service}:{protocol}:{device}:{port}")
             }
         }
     }
@@ -697,12 +580,196 @@ impl AdblockRuleEntry {
     pub fn effective_id(&self) -> i64 {
         self.id.unwrap_or_else(|| self.deterministic_id())
     }
+
+    /// The rules-file line a stored rule means. The database kept a domain, whatever `@@`,
+    /// `||`, `|`, `*.`, `^` or `$modifiers` it was typed with, and matched it with every
+    /// subdomain: `||x^` (`@@||x^` for an allow), commented out when disabled. `None` when no
+    /// domain is left.
+    #[must_use]
+    pub fn to_rules_line(&self) -> Option<String> {
+        let domain = Self::stored_domain(&self.domain)?;
+        let allow = if self.is_allow() { "@@" } else { "" };
+        let off = if self.enabled { "" } else { "# " };
+        Some(format!("{off}{allow}||{domain}^"))
+    }
+
+    /// The rules-file line of a stored allowlist domain: `@@||x^` (the domain and every
+    /// subdomain, as the allowlist matched).
+    #[must_use]
+    pub fn allowlist_line(domain: &str) -> Option<String> {
+        Self::stored_domain(domain).map(|d| format!("@@||{d}^"))
+    }
+
+    /// The rules-file line of a rule given as a domain and an action (API, CLI, WebUI): a bare
+    /// domain covers itself and its subdomains (`||x^`), a rule written in list syntax is kept
+    /// as typed; `@@` follows the action.
+    #[must_use]
+    pub fn rule_line(text: &str, action: AdblockRuleAction) -> String {
+        let text = text.trim();
+        let rule = text.strip_prefix("@@").unwrap_or(text);
+        let syntax = rule.starts_with('|')
+            || rule.contains(['^', '$', '/'])
+            || rule.contains(char::is_whitespace);
+        let rule = if syntax {
+            rule.to_string()
+        } else {
+            format!("||{}^", rule.trim_end_matches('.').to_ascii_lowercase())
+        };
+        if action.is_allow() {
+            format!("@@{rule}")
+        } else {
+            rule
+        }
+    }
+
+    fn stored_domain(raw: &str) -> Option<String> {
+        let mut s = raw.trim();
+        s = s.strip_prefix("@@").unwrap_or(s);
+        s = s
+            .strip_prefix("||")
+            .or_else(|| s.strip_prefix("*."))
+            .or_else(|| s.strip_prefix('|'))
+            .unwrap_or(s);
+        if let Some((before_mod, _)) = s.split_once('$') {
+            s = before_mod;
+        }
+        s = s
+            .trim_end_matches('^')
+            .trim_end_matches('|')
+            .trim_end_matches('.');
+        (!s.is_empty()).then(|| s.to_ascii_lowercase())
+    }
+}
+
+/// The clients an adblock group or `bypass` applies to: a subnet (`192.168.1.64/28`, a bare
+/// address is one host) or a device (`dev:<name|mac>`, matched by its name whatever MAC it has).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ClientSelector {
+    Subnet(IpSubnet),
+    Device(DeviceIdentifier),
+}
+
+impl FromStr for ClientSelector {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        if let Some(device) = s.strip_prefix("dev:") {
+            return device.parse().map(Self::Device);
+        }
+        if let Ok(addr) = s.parse::<IpAddr>() {
+            let prefix_len = if addr.is_ipv4() { 32 } else { 128 };
+            return Ok(Self::Subnet(IpSubnet { addr, prefix_len }));
+        }
+        s.parse()
+            .map(Self::Subnet)
+            .map_err(|e| format!("not a subnet, an address or \"dev:<name|mac>\" ({e})"))
+    }
+}
+
+impl Display for ClientSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Subnet(s) if s.prefix_len == if s.addr.is_ipv4() { 32 } else { 128 } => {
+                write!(f, "{}", s.addr)
+            }
+            Self::Subnet(s) => write!(f, "{s}"),
+            Self::Device(device) => write!(f, "dev:{device}"),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    #[test]
+    fn api_rules_become_rules_file_lines() {
+        use AdblockRuleAction::{Allow, Block};
+        let cases = [
+            ("ads.com", Block, "||ads.com^"),
+            ("Ads.Com.", Block, "||ads.com^"),
+            ("ok.com", Allow, "@@||ok.com^"),
+            ("@@||ok.com^", Allow, "@@||ok.com^"),
+            // `@@` follows the action, not the text.
+            ("@@||x.com^", Block, "||x.com^"),
+            ("|exact.com^", Block, "|exact.com^"),
+            ("||imp.com^$important", Block, "||imp.com^$important"),
+            ("0.0.0.0 hosts.com", Block, "0.0.0.0 hosts.com"),
+        ];
+        for (text, action, line) in cases {
+            assert_eq!(AdblockRuleEntry::rule_line(text, action), line, "{text}");
+        }
+    }
+
+    #[test]
+    fn stored_rules_become_rules_file_lines() {
+        let entry = |domain: &str, action, enabled| AdblockRuleEntry {
+            id: Some(7),
+            name: Some("n".into()),
+            domain: domain.into(),
+            action,
+            enabled,
+        };
+        let cases = [
+            (
+                entry("ads.com", AdblockRuleAction::Block, true),
+                Some("||ads.com^"),
+            ),
+            (
+                entry("ok.com", AdblockRuleAction::Allow, true),
+                Some("@@||ok.com^"),
+            ),
+            (
+                entry("off.com", AdblockRuleAction::Block, false),
+                Some("# ||off.com^"),
+            ),
+            (
+                entry("|Pipe.com^", AdblockRuleAction::Block, true),
+                Some("||pipe.com^"),
+            ),
+            (
+                entry("x.com$client=1.2.3.4", AdblockRuleAction::Block, true),
+                Some("||x.com^"),
+            ),
+            (entry("@@||^", AdblockRuleAction::Allow, true), None),
+        ];
+        for (stored, line) in cases {
+            assert_eq!(stored.to_rules_line().as_deref(), line, "{stored:?}");
+        }
+        assert_eq!(
+            AdblockRuleEntry::allowlist_line("App-Measurement.com").as_deref(),
+            Some("@@||app-measurement.com^")
+        );
+    }
+
+    #[test]
+    fn client_selectors_parse_and_print_back() {
+        let cases = [
+            ("192.168.1.64/28", "192.168.1.64/28"),
+            ("192.168.1.9", "192.168.1.9"),
+            ("192.168.1.9/32", "192.168.1.9"),
+            ("fd00::/64", "fd00::/64"),
+            ("fd00::64", "fd00::64"),
+            ("dev:Pixel-Faiko", "dev:pixel-faiko"),
+            ("dev:AA:BB:CC:DD:EE:FF", "dev:aa:bb:cc:dd:ee:ff"),
+        ];
+        for (text, shown) in cases {
+            let selector = ClientSelector::from_str(text).unwrap();
+            assert_eq!(selector.to_string(), shown, "{text}");
+            assert_eq!(ClientSelector::from_str(shown).unwrap(), selector, "{text}");
+        }
+        assert_eq!(
+            ClientSelector::from_str("dev:aa:bb:cc:dd:ee:ff").unwrap(),
+            ClientSelector::Device(DeviceIdentifier::Mac(
+                crate::identifiers::MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap()
+            ))
+        );
+        for bad in ["", "dev:", "pixel", "10.0.0.0/33", "dev:galaxy tab"] {
+            assert!(ClientSelector::from_str(bad).is_err(), "{bad:?}");
+        }
+    }
 
     #[test]
     fn test_deterministic_ids() {
@@ -800,41 +867,8 @@ mod tests {
         }
         assert_eq!(dev_fb.to_string(), "dev:nas-box|192.168.1.1");
 
-        // Service Discovery
-        let srv_ans = RewriteAnswer::from_str("srv:http:tcp:nas-box:8096").unwrap();
-        if let RewriteAnswer::Service {
-            service,
-            protocol,
-            device,
-            port,
-        } = &srv_ans
-        {
-            assert_eq!(service, &DnsService::Http);
-            assert_eq!(protocol, &DnsServiceProtocol::Tcp);
-            assert_eq!(device, &DeviceIdentifier::Name("nas-box".to_string()));
-            assert_eq!(*port, 8096);
-        } else {
-            panic!("Expected Service answer");
-        }
-        assert_eq!(srv_ans.to_string(), "srv:http:tcp:nas-box:8096");
-
-        // Service with MAC and Custom Service name
-        let srv_mac = RewriteAnswer::from_str("srv:my-app:udp:e0:d5:5e:e2:d4:89:5000").unwrap();
-        if let RewriteAnswer::Service {
-            service,
-            protocol,
-            device,
-            port,
-        } = &srv_mac
-        {
-            assert_eq!(service, &DnsService::Custom("my-app".to_string()));
-            assert_eq!(protocol, &DnsServiceProtocol::Udp);
-            assert!(matches!(device, DeviceIdentifier::Mac(_)));
-            assert_eq!(*port, 5000);
-        } else {
-            panic!("Expected Service answer");
-        }
-        assert_eq!(srv_mac.to_string(), "srv:my-app:udp:e0:d5:5e:e2:d4:89:5000");
+        // SRV rewrites were removed: rejected, never read as a device or a CNAME.
+        assert!(RewriteAnswer::from_str("srv:http:tcp:nas-box:8096").is_err());
     }
 
     #[test]

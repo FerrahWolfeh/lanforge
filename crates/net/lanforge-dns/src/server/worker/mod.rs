@@ -19,7 +19,7 @@ use crate::resolver::filter::manifest::{AdblockManifest, SourceManifestEntry};
 #[cfg(feature = "adblock")]
 use crate::resolver::filter::source::{
     SourceFetchResult, build_adblock_http_client, compile_source_artifacts,
-    fetch_source_conditional, merge_all_sources,
+    fetch_source_conditional,
 };
 use crate::server::DnsContext;
 
@@ -30,12 +30,59 @@ use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::AdblockUrlEntry;
 #[cfg(feature = "adblock")]
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockSourceFormat, TimeOfDay};
+use lanforge_types::network::dns::adblock::syntax::ParseStats;
+#[cfg(feature = "adblock")]
+use lanforge_types::network::dns::adblock::{
+    AdblockDbConfig, AdblockSourceFormat, AdblockUrlKind, TimeOfDay,
+};
 #[cfg(feature = "adblock")]
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 #[cfg(feature = "adblock")]
 use tracing::{debug, error, info, warn};
+
+/// Configured lists that have compiled artifacts, in configuration order (= bit order).
+#[cfg(feature = "adblock")]
+fn compiled_lists(
+    sources_dir: &Path,
+    configured: &[AdblockUrlEntry],
+) -> Vec<(i64, AdblockUrlKind)> {
+    configured
+        .iter()
+        .filter(|e| {
+            sources_dir
+                .join(format!("{}.block.fst", e.source_id()))
+                .exists()
+        })
+        .map(|e| (e.source_id(), e.kind))
+        .collect()
+}
+
+/// Opens the compiled lists; the artifacts of an unreadable one are removed so it is fetched again.
+#[cfg(feature = "adblock")]
+async fn load_lists(
+    sources_dir: &Path,
+    lists: Vec<(i64, AdblockUrlKind)>,
+) -> Option<DiskBlocklist> {
+    let dir = sources_dir.to_path_buf();
+    let res = tokio::task::spawn_blocking(move || {
+        let (bl, failed) = DiskBlocklist::load(&dir, &lists);
+        for id in failed {
+            for ext in ["block.fst", "allow.fst", "bad"] {
+                let _ = std::fs::remove_file(dir.join(format!("{id}.{ext}")));
+            }
+        }
+        bl
+    })
+    .await;
+    match res {
+        Ok(bl) => Some(bl),
+        Err(e) => {
+            error!(error = %e, "Adblock: task failed loading compiled lists");
+            None
+        }
+    }
+}
 
 /// Spawns the adblock list refresh manager.
 #[cfg(feature = "adblock")]
@@ -50,12 +97,17 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
             let adblock_dir = Path::new(cache_dir).join("adblock");
             let sources_dir = adblock_dir.join("sources");
             let manifest_path = adblock_dir.join("manifest.json");
-            let target_block_path = adblock_dir.join("block.fst");
-            let target_allow_path = adblock_dir.join("allow.fst");
-            let legacy_path = Path::new(cache_dir).join("blocklist.fst");
-            let legacy_hash_path = Path::new(cache_dir).join("blocklist.hash");
 
             let _ = std::fs::create_dir_all(&sources_dir);
+            // Merged indexes of older versions: never read (other value encoding), only removed.
+            for old in [
+                adblock_dir.join("block.fst"),
+                adblock_dir.join("allow.fst"),
+                Path::new(cache_dir).join("blocklist.fst"),
+                Path::new(cache_dir).join("blocklist.hash"),
+            ] {
+                let _ = std::fs::remove_file(old);
+            }
 
             let mut manifest = AdblockManifest::load_or_default(&manifest_path);
             let mut rx = ctx.bus.subscribe_dns();
@@ -124,57 +176,33 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     info!("Adblock: re-enabled with recent lists, skipping download pass");
                 }
                 if !cache_loaded {
-                    if target_block_path.exists() {
-                        info!("Adblock: loading compiled blocklist from disk");
-                        let tb = target_block_path.clone();
-                        let load_res =
-                            tokio::task::spawn_blocking(move || DiskBlocklist::load(&tb, 50000))
-                                .await;
-                        match load_res {
-                            Ok(Ok(bl)) => {
-                                info!(domains = bl.len(), "Adblock: loaded domains from cache");
-                                filter.replace_blocklist(bl);
-                                ctx.cache.invalidate_all();
-
-                                let now = SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs();
-                                let elapsed = now.saturating_sub(manifest.last_merge);
-                                if elapsed < 20 * 3600 {
-                                    skip_download_pass = true;
-                                    info!(
-                                        fingerprint = format_args!("{:016x}", manifest.fingerprint),
-                                        "Adblock: cached blocklist is fresh, skipping startup download"
-                                    );
-                                } else {
-                                    info!(
-                                        "Adblock: cached blocklist is stale, scheduling background update"
-                                    );
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                error!(error = %e, "Adblock: cached FST file corrupted, forcing rebuild");
-                                let _ = std::fs::remove_file(&target_block_path);
-                                let _ = std::fs::remove_file(&target_allow_path);
-                            }
-                            Err(e) => {
-                                error!(error = %e, "Adblock: task failed loading cached FST");
-                            }
-                        }
-                    } else if legacy_path.exists() {
-                        info!("Adblock: loading legacy blocklist from disk");
-                        let lp = legacy_path.clone();
-                        if let Ok(Ok(bl)) =
-                            tokio::task::spawn_blocking(move || DiskBlocklist::load(&lp, 50000))
-                                .await
+                    let compiled = compiled_lists(&sources_dir, &ctx.ctx.get_dns_adblock_urls());
+                    if !compiled.is_empty() {
+                        info!("Adblock: loading compiled lists from disk");
+                        if let Some(bl) = load_lists(&sources_dir, compiled).await
+                            && !bl.is_empty()
                         {
+                            info!(domains = bl.len(), "Adblock: loaded domains from cache");
                             filter.replace_blocklist(bl);
                             ctx.cache.invalidate_all();
-                            let _ = std::fs::copy(&legacy_path, &target_block_path);
+
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+                            let elapsed = now.saturating_sub(manifest.last_merge);
+                            if elapsed < 20 * 3600 {
+                                skip_download_pass = true;
+                                info!(
+                                    fingerprint = format_args!("{:016x}", manifest.fingerprint),
+                                    "Adblock: cached lists are fresh, skipping startup download"
+                                );
+                            } else {
+                                info!(
+                                    "Adblock: cached lists are stale, scheduling background update"
+                                );
+                            }
                         }
-                        let _ = std::fs::remove_file(&legacy_path);
-                        let _ = std::fs::remove_file(&legacy_hash_path);
                     }
                     cache_loaded = true;
                 }
@@ -194,8 +222,6 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                     manifest.merged_blocks = 0;
                     manifest.merged_exceptions = 0;
                     let _ = manifest.save_atomic(&manifest_path);
-                    let _ = std::fs::remove_file(&target_block_path);
-                    let _ = std::fs::remove_file(&target_allow_path);
                 } else {
                     debug!(
                         sources = configured_sources.len(),
@@ -206,6 +232,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
 
                     let mut source_pairs = Vec::new();
                     let mut active_source_ids = Vec::new();
+                    let mut active_lists = Vec::new();
                     let mut updated_sources = 0usize;
                     let mut unchanged_sources = 0usize;
                     let mut failed_sources = 0usize;
@@ -280,27 +307,30 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                     Ok(Err(e)) => {
                                         failed_sources += 1;
                                         error!(url = %entry.url, error = %e, "Adblock: compilation error");
-                                        let m_entry = manifest.sources.entry(source_id).or_insert_with(|| {
-                                            let now = SystemTime::now()
-                                                .duration_since(UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_secs();
-                                            SourceManifestEntry {
-                                                id: source_id,
-                                                url: entry.url.clone(),
-                                                format_configured: entry.format,
-                                                format_detected: AdblockSourceFormat::Auto,
-                                                etag: None,
-                                                last_modified: None,
-                                                last_attempt: now,
-                                                last_success: 0,
-                                                consecutive_failures: 0,
-                                                last_error: None,
-                                                stats: crate::resolver::filter::parse::ParseStats::default(),
-                                                unsupported_samples: Vec::new(),
-                                                content_hash: 0,
-                                            }
-                                        });
+                                        let m_entry = manifest
+                                            .sources
+                                            .entry(source_id)
+                                            .or_insert_with(|| {
+                                                let now = SystemTime::now()
+                                                    .duration_since(UNIX_EPOCH)
+                                                    .unwrap_or_default()
+                                                    .as_secs();
+                                                SourceManifestEntry {
+                                                    id: source_id,
+                                                    url: entry.url.clone(),
+                                                    format_configured: entry.format,
+                                                    format_detected: AdblockSourceFormat::Auto,
+                                                    etag: None,
+                                                    last_modified: None,
+                                                    last_attempt: now,
+                                                    last_success: 0,
+                                                    consecutive_failures: 0,
+                                                    last_error: None,
+                                                    stats: ParseStats::default(),
+                                                    unsupported_samples: Vec::new(),
+                                                    content_hash: 0,
+                                                }
+                                            });
                                         m_entry.last_attempt = SystemTime::now()
                                             .duration_since(UNIX_EPOCH)
                                             .unwrap_or_default()
@@ -338,9 +368,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                             last_success: 0,
                                             consecutive_failures: 0,
                                             last_error: None,
-                                            stats:
-                                                crate::resolver::filter::parse::ParseStats::default(
-                                                ),
+                                            stats: ParseStats::default(),
                                             unsupported_samples: Vec::new(),
                                             content_hash: 0,
                                         }
@@ -361,6 +389,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                 .map_or(0, |m| m.content_hash);
                             source_pairs.push((source_id, hash));
                             active_source_ids.push(source_id);
+                            active_lists.push((source_id, entry.kind));
                         }
                     }
 
@@ -372,10 +401,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                         "Adblock source refresh completed"
                     );
 
-                    let was_forced = force_refresh;
                     force_refresh = false;
-
-                    // Check if fingerprint changed or target files missing
                     let new_fingerprint = AdblockManifest::compute_fingerprint(&source_pairs);
 
                     if active_source_ids.is_empty() && !configured_sources.is_empty() {
@@ -383,85 +409,30 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                             "Adblock: all configured sources failed to download and no cached artifacts exist; preserving existing blocklist"
                         );
                         let _ = manifest.save_atomic(&manifest_path);
-                    } else if was_forced
-                        || new_fingerprint != manifest.fingerprint
-                        || !target_block_path.exists()
-                    {
-                        debug!(
-                            sources = active_source_ids.len(),
-                            "Adblock: merging source FSTs"
-                        );
-                        let s_dir = sources_dir.clone();
-                        let a_ids = active_source_ids.clone();
-                        let tb_path = target_block_path.clone();
-                        let ta_path = target_allow_path.clone();
-
-                        let merge_res = tokio::task::spawn_blocking(move || {
-                            merge_all_sources(&s_dir, &a_ids, &tb_path, &ta_path)
-                        })
-                        .await;
-
-                        match merge_res {
-                            Ok(Ok((merged_blocks, merged_allows, pruned))) => {
-                                manifest.fingerprint = new_fingerprint;
-                                manifest.merged_blocks = merged_blocks;
-                                manifest.merged_exceptions = merged_allows;
-                                manifest.pruned_rules = pruned;
-                                manifest.last_merge = SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs();
-                                manifest.source_index = active_source_ids;
-                                let _ = manifest.save_atomic(&manifest_path);
-
-                                let tb = target_block_path.clone();
-                                match DiskBlocklist::load(&tb, 50000) {
-                                    Ok(bl) => {
-                                        filter.replace_blocklist(bl);
-                                        ctx.cache.invalidate_all();
-
-                                        info!(
-                                            blocks = merged_blocks,
-                                            exceptions = merged_allows,
-                                            pruned = pruned,
-                                            elapsed = ?start.elapsed(),
-                                            "Adblock: merged blocklist successfully updated"
-                                        );
-                                    }
-                                    Err(e) => {
-                                        error!(error = %e, "Adblock: failed to load newly merged FST");
-                                    }
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                error!(error = %e, "Adblock: merge failed");
-                            }
-                            Err(e) => {
-                                error!(error = %e, "Adblock: merge task panicked");
-                            }
-                        }
-                    } else {
-                        debug!("Adblock source fingerprint unchanged; skipping merge");
-                        if filter.blocklist_size() == 0 && target_block_path.exists() {
-                            debug!(
-                                "Adblock in-memory blocklist empty; loading compiled FST from disk"
-                            );
-                            let tb = target_block_path.clone();
-                            if let Ok(Ok(bl)) =
-                                tokio::task::spawn_blocking(move || DiskBlocklist::load(&tb, 50000))
-                                    .await
-                            {
-                                filter.replace_blocklist(bl);
-                                ctx.cache.invalidate_all();
-                            }
-                        }
+                    } else if let Some(bl) = load_lists(&sources_dir, active_lists).await {
+                        // Lists are queried in place: loading the refreshed set is a few mmaps.
+                        manifest.fingerprint = new_fingerprint;
+                        manifest.merged_blocks = bl.len();
+                        manifest.merged_exceptions = bl.exceptions_len();
+                        manifest.pruned_rules = 0;
+                        manifest.last_merge = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+                        manifest.source_index = active_source_ids;
                         let _ = manifest.save_atomic(&manifest_path);
+                        info!(
+                            blocks = manifest.merged_blocks,
+                            exceptions = manifest.merged_exceptions,
+                            elapsed = ?start.elapsed(),
+                            "Adblock: lists loaded"
+                        );
+                        filter.replace_blocklist(bl);
+                        ctx.cache.invalidate_all();
                     }
                 }
 
-                // Compile allowlist and custom manual blocklist
-                filter.sync_from_context(&ctx.ctx);
-                ctx.cache.invalidate_all();
+                // The manual rules are the DNS service's (`FilterSubscriptions`), not the lists'.
 
                 // Re-read the config: `db_cfg` dates from the top of this pass, and adblock may
                 // have been disabled while the lists were loading.
@@ -579,14 +550,7 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                         evt_res = rx.recv() => {
                             let evt = match evt_res {
                                 Ok(evt) => evt,
-                                // A missed block/allow: re-sync the manual rules from the context
-                                // in place. The lists themselves did not change.
-                                Err(RecvError::Lagged(_)) => {
-                                    info!("Adblock: event bus lagged, re-syncing manual rules");
-                                    filter.sync_from_context(&ctx.ctx);
-                                    ctx.cache.invalidate_all();
-                                    continue;
-                                }
+                                Err(RecvError::Lagged(_)) => continue,
                                 // Never `break` here: the reload would loop on a closed bus.
                                 Err(RecvError::Closed) => return,
                             };
@@ -596,19 +560,9 @@ pub fn spawn_adblock_manager(ctx: Arc<DnsContext>) -> JoinHandle<()> {
                                     force_refresh = true;
                                     break;
                                 }
-
-                                // The DNS service flips the filter; a disable is picked up at the
-                                // next pass (the worker idles while disabled).
-                                LanforgeEvent::Dns(DnsEvent::AdblockToggle { .. }) => continue,
-                                LanforgeEvent::Dns(DnsEvent::AdblockBlock(domain)) => {
-                                    filter.add_block(&domain);
-                                    ctx.cache.invalidate_all();
-                                }
-                                LanforgeEvent::Dns(DnsEvent::AdblockAllow(domain)) => {
-                                    filter.add_allow(&domain);
-                                    ctx.cache.invalidate_all();
-                                }
-                                _ => continue, // Ignore other events
+                                // The DNS service flips the filter on a toggle; a disable is picked
+                                // up at the next pass (the worker idles while disabled).
+                                _ => continue,
                             }
                         }
                     }
@@ -673,7 +627,7 @@ mod tests {
     #[test]
     fn auto_enable_never_overrides_a_temporary_pause() {
         let filter = AdBlocker::new(true);
-        filter.add_block("ads.example.com");
+        filter.replace_rules("||ads.example.com^\n");
 
         // Paused for 30 s by the toggle: config still says enabled.
         let until = SystemTime::now()

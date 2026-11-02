@@ -4,10 +4,10 @@ use std::path::Path;
 
 use fst::raw::{Fst, Output};
 use fst::{Map, MapBuilder};
+use lanforge_types::network::dns::adblock::syntax::MatchFlags;
 use memmap2::Mmap;
 
 use crate::error::DnsError;
-use crate::resolver::filter::parse::MatchFlags;
 
 pub const LABEL_SEPARATOR: u8 = b'\x01';
 
@@ -80,8 +80,13 @@ pub struct MatchCandidate {
 }
 
 /// Walks an FST Map checking for ancestor wildcards and exact match.
-/// Zero allocations, zero heap locks.
-pub fn match_reversed_key<D: AsRef<[u8]>>(fst: &Fst<D>, key: &[u8]) -> Option<MatchCandidate> {
+/// Zero allocations, zero heap locks. A level whose key prefix `skip` returns true for (a
+/// `$badfilter` from another list) does not match; the other levels still do.
+pub fn match_reversed_key<D: AsRef<[u8]>>(
+    fst: &Fst<D>,
+    key: &[u8],
+    skip: impl Fn(&[u8]) -> bool,
+) -> Option<MatchCandidate> {
     if fst.is_empty() {
         return None;
     }
@@ -90,13 +95,13 @@ pub fn match_reversed_key<D: AsRef<[u8]>>(fst: &Fst<D>, key: &[u8]) -> Option<Ma
     let mut output = Output::zero();
     let mut best_candidate: Option<MatchCandidate> = None;
 
-    for &b in key {
+    for (i, &b) in key.iter().enumerate() {
         // If we are at a separator boundary, check if the preceding node is a final state
         // with SUBDOMAINS wildcard flag set.
         if b == LABEL_SEPARATOR && node.is_final() {
             let val = output.cat(node.final_output()).value();
             let (flags, source_idx) = decode_val(val);
-            if flags.is_subdomains() {
+            if flags.is_subdomains() && !skip(&key[..i]) {
                 let candidate = MatchCandidate { flags, source_idx };
                 if flags.is_important() || best_candidate.is_none() {
                     best_candidate = Some(candidate);
@@ -116,7 +121,7 @@ pub fn match_reversed_key<D: AsRef<[u8]>>(fst: &Fst<D>, key: &[u8]) -> Option<Ma
     if node.is_final() {
         let val = output.cat(node.final_output()).value();
         let (flags, source_idx) = decode_val(val);
-        if flags.is_self() {
+        if flags.is_self() && !skip(key) {
             let candidate = MatchCandidate { flags, source_idx };
             if flags.is_important()
                 || best_candidate
@@ -161,12 +166,16 @@ impl DiskFilterMap {
     pub fn match_domain(&self, domain: &str) -> Option<MatchCandidate> {
         let mut key_buf = [0u8; 256];
         let len = encode_reversed_domain(domain, &mut key_buf)?;
-        self.match_reversed(&key_buf[..len])
+        self.match_reversed(&key_buf[..len], |_| false)
     }
 
     #[inline]
-    pub fn match_reversed(&self, rev_key: &[u8]) -> Option<MatchCandidate> {
-        match_reversed_key(self.map.as_fst(), rev_key)
+    pub fn match_reversed(
+        &self,
+        rev_key: &[u8],
+        skip: impl Fn(&[u8]) -> bool,
+    ) -> Option<MatchCandidate> {
+        match_reversed_key(self.map.as_fst(), rev_key, skip)
     }
 }
 

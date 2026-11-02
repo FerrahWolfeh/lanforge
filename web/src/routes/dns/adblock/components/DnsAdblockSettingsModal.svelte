@@ -16,8 +16,6 @@
 		dnsAdblockStatus,
 		dnsAdblockConfigSet,
 		dnsCacheFlush,
-		exportSystemConfig,
-		importSystemConfig,
 	} from "$lib/api/client";
 	import type { BlockingMode, TimeOfDay } from "$lib/api/types";
 
@@ -73,22 +71,15 @@
 	async function loadConfig() {
 		loading = true;
 		try {
-			const [status, sysCfg] = await Promise.all([
-				dnsAdblockStatus().catch(() => null),
-				exportSystemConfig().catch(() => null),
-			]);
+			const status = await dnsAdblockStatus().catch(() => null);
 			if (status) {
 				const mode = (status.blocking_mode as string) === "nx_domain" ? "nxdomain" : status.blocking_mode;
 				blockingMode = mode ?? "nxdomain";
 				customIpV4 = status.blocking_ip_v4 ?? "";
 				customIpV6 = status.blocking_ip_v6 ?? "";
 				nextUpdate = status.next_update ?? null;
-			}
-			if (sysCfg?.dns_adblock_config?.refresh_time) {
-				const rt = sysCfg.dns_adblock_config.refresh_time;
-				if (typeof rt.hour === "number" && typeof rt.minute === "number") {
-					refreshTime = `${String(rt.hour).padStart(2, "0")}:${String(rt.minute).padStart(2, "0")}`;
-				}
+				const rt = status.refresh_time;
+				refreshTime = `${String(rt.hour).padStart(2, "0")}:${String(rt.minute).padStart(2, "0")}`;
 			}
 		} catch {
 			toast.error("Failed to load adblock configuration");
@@ -117,14 +108,6 @@
 				blocking_ip_v6: customIpV6.trim() || null,
 				refresh_time: timeOfDay,
 			});
-			const sysCfg = await exportSystemConfig().catch(() => null);
-			if (sysCfg?.dns_adblock_config) {
-				sysCfg.dns_adblock_config.refresh_time = timeOfDay;
-				sysCfg.dns_adblock_config.blocking_mode = blockingMode;
-				sysCfg.dns_adblock_config.blocking_ip_v4 = customIpV4.trim() || null;
-				sysCfg.dns_adblock_config.blocking_ip_v6 = customIpV6.trim() || null;
-				await importSystemConfig(sysCfg);
-			}
 			toast.success("Adblock configuration saved successfully");
 			open = false;
 			onUpdated?.();

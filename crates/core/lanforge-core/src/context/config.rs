@@ -4,13 +4,13 @@ use std::sync::Arc;
 use tokio::sync::watch;
 
 use lanforge_types::config::{
-    ChangeImpact, ConfigSection, DnsAllowlist, DnsListenConfig, DomainSet,
+    AdblockRules, ChangeImpact, ConfigSection, DnsListenConfig, DomainSet,
 };
 use lanforge_types::network::dhcp::{
     DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, Dhcpv6Pool, TftpOptions,
 };
 use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
 use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamTarget};
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
@@ -112,10 +112,9 @@ impl_subscribable!(Vec<DnsslConfig>, ra_dnssl);
 impl_subscribable!(Vec<UpstreamTarget>, dns_upstreams);
 impl_subscribable!(UpstreamMode, dns_upstream_mode);
 impl_subscribable!(Vec<RewriteRule>, dns_rewrites);
-impl_subscribable!(DnsAllowlist, dns_allowlist);
 impl_subscribable!(AdblockDbConfig, dns_adblock);
 impl_subscribable!(Vec<AdblockUrlEntry>, dns_adblock_urls);
-impl_subscribable!(Vec<AdblockRuleEntry>, dns_adblock_rules);
+impl_subscribable!(AdblockRules, dns_adblock_rules);
 impl_subscribable!(Vec<DnsReverseResolver>, dns_reverse);
 impl_subscribable!(DnsListenConfig, dns_listen);
 
@@ -139,10 +138,9 @@ pub struct ConfigStore {
     pub dns_upstreams: WatchPair<Vec<UpstreamTarget>>,
     pub dns_upstream_mode: WatchPair<UpstreamMode>,
     pub dns_rewrites: WatchPair<Vec<RewriteRule>>,
-    pub dns_allowlist: WatchPair<DnsAllowlist>,
     pub dns_adblock: WatchPair<AdblockDbConfig>,
     pub dns_adblock_urls: WatchPair<Vec<AdblockUrlEntry>>,
-    pub dns_adblock_rules: WatchPair<Vec<AdblockRuleEntry>>,
+    pub dns_adblock_rules: WatchPair<AdblockRules>,
     pub dns_reverse: WatchPair<Vec<DnsReverseResolver>>,
     pub dns_listen: WatchPair<DnsListenConfig>,
 }
@@ -165,10 +163,9 @@ impl Default for ConfigStore {
             dns_upstreams: watch::channel(Arc::new(Vec::new())),
             dns_upstream_mode: watch::channel(Arc::new(UpstreamMode::default())),
             dns_rewrites: watch::channel(Arc::new(Vec::new())),
-            dns_allowlist: watch::channel(Arc::new(DnsAllowlist::default())),
             dns_adblock: watch::channel(Arc::new(AdblockDbConfig::default())),
             dns_adblock_urls: watch::channel(Arc::new(Vec::new())),
-            dns_adblock_rules: watch::channel(Arc::new(Vec::new())),
+            dns_adblock_rules: watch::channel(Arc::new(AdblockRules::default())),
             dns_reverse: watch::channel(Arc::new(Vec::new())),
             dns_listen: watch::channel(Arc::new(DnsListenConfig::default())),
         }
@@ -193,10 +190,9 @@ pub struct ConfigPatch {
     pub dns_upstreams: Option<Vec<UpstreamTarget>>,
     pub dns_upstream_mode: Option<UpstreamMode>,
     pub dns_rewrites: Option<Vec<RewriteRule>>,
-    pub dns_allowlist: Option<Vec<String>>,
     pub dns_adblock: Option<AdblockDbConfig>,
     pub dns_adblock_urls: Option<Vec<AdblockUrlEntry>>,
-    pub dns_adblock_rules: Option<Vec<AdblockRuleEntry>>,
+    pub dns_adblock_rules: Option<AdblockRules>,
     pub dns_reverse: Option<Vec<DnsReverseResolver>>,
     pub dns_listen: Option<DnsListenConfig>,
 }
@@ -224,7 +220,6 @@ impl ConfigPatch {
             && self.dns_upstreams.is_none()
             && self.dns_upstream_mode.is_none()
             && self.dns_rewrites.is_none()
-            && self.dns_allowlist.is_none()
             && self.dns_adblock.is_none()
             && self.dns_adblock_urls.is_none()
             && self.dns_adblock_rules.is_none()
@@ -331,12 +326,6 @@ impl ConfigPatch {
     }
 
     #[must_use]
-    pub fn with_dns_allowlist(mut self, allowlist: Vec<String>) -> Self {
-        self.dns_allowlist = Some(allowlist);
-        self
-    }
-
-    #[must_use]
     pub const fn with_dns_adblock(mut self, adblock: AdblockDbConfig) -> Self {
         self.dns_adblock = Some(adblock);
         self
@@ -349,8 +338,9 @@ impl ConfigPatch {
     }
 
     #[must_use]
-    pub fn with_dns_adblock_rules(mut self, rules: Vec<AdblockRuleEntry>) -> Self {
-        self.dns_adblock_rules = Some(rules);
+    /// The text of the global adblock rules file.
+    pub fn with_dns_adblock_rules(mut self, text: String) -> Self {
+        self.dns_adblock_rules = Some(AdblockRules(text));
         self
     }
 
@@ -413,9 +403,6 @@ impl ConfigPatch {
         if let Some(ref rewrites) = self.dns_rewrites {
             target.dns_rewrites.clone_from(rewrites);
         }
-        if let Some(ref allowlist) = self.dns_allowlist {
-            target.dns_allowlist.clone_from(allowlist);
-        }
         if let Some(ref adblock) = self.dns_adblock {
             target.dns_adblock.clone_from(adblock);
         }
@@ -454,14 +441,12 @@ pub struct DynamicConfig {
     pub dns_upstream_mode: UpstreamMode,
     /// Configured DNS rewrites.
     pub dns_rewrites: Vec<RewriteRule>,
-    /// Configured DNS allowlist.
-    pub dns_allowlist: Vec<String>,
     /// Configured DNS adblock config.
     pub dns_adblock: AdblockDbConfig,
     /// Configured DNS adblock source URLs.
     pub dns_adblock_urls: Vec<AdblockUrlEntry>,
-    /// Configured DNS custom adblock rules (allowlist & blocklist).
-    pub dns_adblock_rules: Vec<AdblockRuleEntry>,
+    /// The global adblock rules file's text (manual blocks and allows).
+    pub dns_adblock_rules: AdblockRules,
     /// Configured `PPPoE` client runtime configuration.
     pub pppoe: Option<PppoeConfig>,
     /// Configured firewall runtime configuration.
@@ -578,22 +563,6 @@ impl LanforgeContext {
             DNS_REWRITES
         );
 
-        if let Some(ref new_val) = patch.dns_allowlist {
-            let allowlist = DnsAllowlist(new_val.clone());
-            let current = self.inner.config_store.dns_allowlist.1.borrow().clone();
-            let impact = ConfigSection::classify(&*current, &allowlist);
-            if impact != ChangeImpact::None {
-                changed |= DomainSet::DNS_ALLOWLIST;
-                max_impact = max_impact.max(impact);
-                let _ = self
-                    .inner
-                    .config_store
-                    .dns_allowlist
-                    .0
-                    .send(Arc::new(allowlist));
-            }
-        }
-
         check_and_apply!(
             dns_adblock,
             self.inner.config_store.dns_adblock,
@@ -664,9 +633,6 @@ impl LanforgeContext {
             if changed.contains(DomainSet::DNS_REWRITES) {
                 let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
             }
-            if changed.contains(DomainSet::DNS_ALLOWLIST) {
-                let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigAllowlistChanged));
-            }
             if changed.intersects(DomainSet::DNS_ADBLOCK | DomainSet::DNS_ADBLOCK_URLS) {
                 let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
             }
@@ -719,14 +685,6 @@ impl LanforgeContext {
         hydrate_val!(dns_upstreams, self.inner.config_store.dns_upstreams);
         hydrate_val!(dns_upstream_mode, self.inner.config_store.dns_upstream_mode);
         hydrate_val!(dns_rewrites, self.inner.config_store.dns_rewrites);
-        if let Some(ref new_val) = patch.dns_allowlist {
-            let _ = self
-                .inner
-                .config_store
-                .dns_allowlist
-                .0
-                .send(Arc::new(DnsAllowlist(new_val.clone())));
-        }
         hydrate_val!(dns_adblock, self.inner.config_store.dns_adblock);
         hydrate_val!(dns_adblock_urls, self.inner.config_store.dns_adblock_urls);
         hydrate_val!(dns_adblock_rules, self.inner.config_store.dns_adblock_rules);
@@ -836,11 +794,6 @@ impl LanforgeContext {
     }
 
     #[must_use]
-    pub fn get_dns_allowlist(&self) -> Vec<String> {
-        self.with_config(|c| c.dns_allowlist.clone())
-    }
-
-    #[must_use]
     pub fn get_dns_adblock(&self) -> AdblockDbConfig {
         self.with_config(|c| c.dns_adblock.clone())
     }
@@ -851,8 +804,9 @@ impl LanforgeContext {
     }
 
     #[must_use]
-    pub fn get_dns_adblock_rules(&self) -> Vec<AdblockRuleEntry> {
-        self.with_config(|c| c.dns_adblock_rules.clone())
+    /// The global adblock rules file's text.
+    pub fn get_dns_adblock_rules(&self) -> String {
+        self.with_config(|c| c.dns_adblock_rules.0.clone())
     }
 
     #[must_use]
@@ -920,22 +874,22 @@ mod tests {
     async fn subscriber_never_reads_stale_getter() {
         let ctx = create_test_context();
         for round in 0..500_u32 {
-            let mut sub = ctx.config_subscription::<DnsAllowlist>();
+            let mut sub = ctx.config_subscription::<AdblockRules>();
             let reader = {
                 let ctx = ctx.clone();
                 tokio::spawn(async move {
                     let delta = sub.next().await.expect("config store alive");
-                    (delta.new.0.clone(), ctx.get_dns_allowlist())
+                    (delta.new.0.clone(), ctx.get_dns_adblock_rules())
                 })
             };
             tokio::task::yield_now().await;
             let _ = ctx.apply_config(
-                ConfigPatch::new().with_dns_allowlist(vec![format!("d{round}.example")]),
+                ConfigPatch::new().with_dns_adblock_rules(format!("||d{round}.example^\n")),
             );
             let (seen, getter) = reader.await.expect("reader task");
             assert_eq!(
                 seen, getter,
-                "round {round}: getter returned a stale allowlist"
+                "round {round}: getter returned stale adblock rules"
             );
         }
     }

@@ -4,7 +4,7 @@ use lanforge_types::DnsListenConfig;
 use lanforge_types::events::EventVec;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
+use lanforge_types::network::dns::adblock::{AdblockDbConfig, RewriteRule};
 use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamTarget};
 use lanforge_types::network::firewall::FirewallConfig;
 use lanforge_types::network::pppoe::PppoeConfig;
@@ -103,11 +103,6 @@ impl LanforgeContext {
         let _ = self.apply_config(ConfigPatch::new().with_dns_rewrites(rewrites));
     }
 
-    /// Updates the configured DNS allowlist and publishes the change event.
-    pub fn update_dns_allowlist(&self, allowlist: Vec<String>) {
-        let _ = self.apply_config(ConfigPatch::new().with_dns_allowlist(allowlist));
-    }
-
     /// Updates the configured DNS adblock config and publishes the change event.
     pub fn update_dns_adblock(&self, adblock: AdblockDbConfig) {
         let _ = self.apply_config(ConfigPatch::new().with_dns_adblock(adblock));
@@ -118,9 +113,9 @@ impl LanforgeContext {
         let _ = self.apply_config(ConfigPatch::new().with_dns_adblock_urls(urls));
     }
 
-    /// Updates the configured DNS custom adblock rules and publishes the change event.
-    pub fn update_dns_adblock_rules(&self, rules: Vec<AdblockRuleEntry>) {
-        let _ = self.apply_config(ConfigPatch::new().with_dns_adblock_rules(rules));
+    /// Updates the global adblock rules file's text and publishes the change event.
+    pub fn update_dns_adblock_rules(&self, text: String) {
+        let _ = self.apply_config(ConfigPatch::new().with_dns_adblock_rules(text));
     }
 
     /// Prunes stale discovery caches, transient hosts, and inactive zombie devices.

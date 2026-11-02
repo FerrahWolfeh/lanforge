@@ -257,14 +257,26 @@ async fn test_dispatch_system_config_import_export() {
             );
             assert_eq!(cfg.dns_adblock_urls[0].kind, AdblockUrlKind::Blocklist);
 
-            assert_eq!(cfg.dns_allowlist.len(), 1);
-            assert_eq!(cfg.dns_allowlist[0].domain, "allowed-import.lan");
-
+            // The allowlist of an (older) export becomes allow rules of the rules file; an
+            // export carries every manual rule as written there.
+            assert_eq!(cfg.dns_allowlist.len(), 0);
             let rules = cfg.dns_adblock_rules.as_ref().expect("rules present");
-            assert_eq!(rules.len(), 1);
-            assert_eq!(rules[0].domain, "custom-blocked.com");
-            assert_eq!(rules[0].action, AdblockRuleAction::Block);
-            assert!(rules[0].enabled);
+            let rules: Vec<_> = rules
+                .iter()
+                .map(|r| (r.domain.as_str(), r.action, r.enabled))
+                .collect();
+            assert_eq!(
+                rules,
+                [
+                    ("@@||allowed-import.lan^", AdblockRuleAction::Allow, true),
+                    ("||custom-blocked.com^", AdblockRuleAction::Block, true),
+                ]
+            );
+            let Response::DnsAllowlist(allowlist) = client_ctx.handle_dns_allowlist().await else {
+                panic!("Expected Response::DnsAllowlist");
+            };
+            assert_eq!(allowlist.allowlist.len(), 1);
+            assert_eq!(allowlist.allowlist[0].domain, "allowed-import.lan");
         } else {
             assert_eq!(cfg.dns_adblock_urls.len(), 0);
             assert_eq!(cfg.dns_allowlist.len(), 0);
@@ -279,21 +291,32 @@ async fn test_dns_rewrite_add_dynamic() {
     use std::str::FromStr;
 
     let client_ctx = init_test_context().await;
-    let rule = RewriteRule {
+    // A device answer is not a CNAME: refused, nothing applied.
+    let wrong = RewriteRule {
         id: None,
         domain: "*.eonteam.xyz".to_string(),
         rtype: DnsRecordType::CNAME,
         answer: RewriteAnswer::from_str("dev:raspie").unwrap(),
     };
+    let res = client_ctx.handle_dns_rewrite_add(wrong).await;
+    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert!(client_ctx.ctx.get_dns_rewrites().is_empty());
+
+    let rule = RewriteRule {
+        id: None,
+        domain: "*.eonteam.xyz".to_string(),
+        rtype: DnsRecordType::Device,
+        answer: RewriteAnswer::from_str("dev:raspie").unwrap(),
+    };
     let res = client_ctx.handle_dns_rewrite_add(rule).await;
-    assert!(matches!(res, Response::Success(_)));
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
 
     // Try loading rewrites back
     let load_res = client_ctx.handle_dns_rewrites().await;
     if let Response::DnsRewrites(r) = load_res {
         assert_eq!(r.rewrites.len(), 1);
         assert_eq!(r.rewrites[0].domain, "*.eonteam.xyz");
-        assert_eq!(r.rewrites[0].rtype, DnsRecordType::CNAME);
+        assert_eq!(r.rewrites[0].rtype, DnsRecordType::Device);
         assert_eq!(
             r.rewrites[0].answer,
             RewriteAnswer::from_str("dev:raspie").unwrap()
@@ -1015,4 +1038,467 @@ async fn a_host_update_without_a_boot_file_keeps_it() {
         client_ctx.ctx.static_hosts()[0].boot_file.as_deref(),
         Some("pxelinux.0")
     );
+}
+
+/// The owner's `[dns]` (approved file form, 2026-10-28), with a comment above it.
+const OWNER_DNS: &str = "[system]\niface = \"lan0\"\n\n# resolvers\n[dns]\nenabled = true\n\
+    listen = \"[::]:53\"\nupstream_mode = \"sequential\"\n\n[dns.upstreams.default]\n\
+    addresses = [\"udp://1.1.1.1:53\", \"udp://1.0.0.1:53\"]\n\n[dns.rewrites]\n\
+    \"*.eonteam.xyz\" = \"dev:pixie\"\n";
+
+/// A client whose live DNS settings are `OWNER_DNS`, as the boot applies them.
+async fn owner_dns_client(writable: bool) -> (ClientContext, tempfile::TempDir) {
+    let client_ctx = init_test_context().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    std::fs::write(&path, OWNER_DNS).unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(writable);
+    let (dns, issues) = lanforge_api::config_file::ConfigFile::parse(OWNER_DNS)
+        .unwrap()
+        .dns
+        .to_config();
+    assert!(issues.is_empty(), "{issues:?}");
+    client_ctx.apply_dns_settings(dns);
+    (client_ctx, dir)
+}
+
+fn dns_in_file(dir: &tempfile::TempDir) -> (lanforge_api::config_file::DnsSettings, String) {
+    let text = std::fs::read_to_string(dir.path().join("lanforge.toml")).unwrap();
+    let (dns, issues) = lanforge_api::config_file::ConfigFile::parse(&text)
+        .unwrap()
+        .dns
+        .to_config();
+    assert!(issues.is_empty(), "{issues:?}\n{text}");
+    (dns, text)
+}
+
+/// Every DNS change of the API reaches `[dns]` before it applies: the file keeps the group
+/// names, the listener and the comment, and holds exactly what runs.
+#[tokio::test]
+async fn dns_changes_are_written_to_the_config_file() {
+    use lanforge_types::network::dns::upstream::UpstreamMode;
+    use std::str::FromStr;
+
+    let (client_ctx, dir) = owner_dns_client(true).await;
+
+    let res = client_ctx
+        .handle_dns_rewrite_add(RewriteRule {
+            id: None,
+            domain: "nas.lan".into(),
+            rtype: DnsRecordType::A,
+            answer: RewriteAnswer::from_str("192.0.2.10").unwrap(),
+        })
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let res = client_ctx
+        .handle_dns_upstream_add("9.9.9.9:53".parse().unwrap(), UpstreamProtocol::Udp, None)
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let res = client_ctx
+        .handle_dns_upstream_mode_set(UpstreamMode::Parallel)
+        .await;
+    assert!(matches!(res, Response::DnsUpstreamMode(_)), "{res:?}");
+    let res = client_ctx
+        .handle_dns_reverse_resolver_add("10.8.0.0/24".into(), "udp://10.8.0.1:53".into())
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    let (dns, text) = dns_in_file(&dir);
+    assert!(text.contains("# resolvers"), "{text}");
+    assert!(text.contains("listen = \"[::]:53\""), "{text}");
+    assert_eq!(dns.upstream_mode, UpstreamMode::Parallel);
+    let names: Vec<_> = dns.upstreams.iter().map(|u| u.name.as_str()).collect();
+    assert_eq!(names, ["default", "default", "default"], "{text}");
+    assert_eq!(dns.reverse.len(), 1);
+    assert_eq!(
+        dns.rewrites
+            .iter()
+            .map(|r| r.domain.as_str())
+            .collect::<Vec<_>>(),
+        ["*.eonteam.xyz", "nas.lan"]
+    );
+    // What runs is what the file holds.
+    let ctx = &client_ctx.ctx;
+    assert_eq!(
+        ctx.get_dns_upstreams(),
+        dns.upstreams
+            .iter()
+            .map(|u| u.target.clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(ctx.get_dns_upstream_mode(), dns.upstream_mode);
+    assert_eq!(ctx.get_dns_rewrites(), dns.rewrites);
+    assert_eq!(ctx.all_reverse_resolvers(), dns.reverse);
+
+    // Removing through the ids the listing gives.
+    let Response::DnsRewrites(listed) = client_ctx.handle_dns_rewrites().await else {
+        panic!("listing");
+    };
+    let nas = listed
+        .rewrites
+        .iter()
+        .find(|r| r.domain == "nas.lan")
+        .unwrap();
+    let res = client_ctx.handle_dns_rewrite_remove(nas.id.unwrap()).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let res = client_ctx
+        .handle_dns_upstream_remove("9.9.9.9:53".parse().unwrap(), UpstreamProtocol::Udp, None)
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let res = client_ctx
+        .handle_dns_reverse_resolver_remove("10.8.0.0/24".into())
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let res = client_ctx
+        .handle_dns_upstream_mode_set(UpstreamMode::Sequential)
+        .await;
+    assert!(matches!(res, Response::DnsUpstreamMode(_)), "{res:?}");
+
+    let (back, text) = dns_in_file(&dir);
+    let owner = lanforge_api::config_file::ConfigFile::parse(OWNER_DNS)
+        .unwrap()
+        .dns
+        .to_config()
+        .0;
+    assert_eq!(back, owner, "back to the owner's settings\n{text}");
+}
+
+/// A device keeps one IPv4 and one IPv6 fallback, as the file's table form: adding the second
+/// family keeps the first, a new address of a family replaces that one, and a device rule
+/// without fallback replaces both.
+#[tokio::test]
+async fn device_rewrite_keeps_one_fallback_per_family() {
+    use std::str::FromStr;
+
+    let (client_ctx, dir) = owner_dns_client(true).await;
+    let add = |answer: &str| {
+        let rule = RewriteRule {
+            id: None,
+            domain: "tv.lan".into(),
+            rtype: DnsRecordType::Device,
+            answer: RewriteAnswer::from_str(answer).unwrap(),
+        };
+        let client_ctx = &client_ctx;
+        async move {
+            let res = client_ctx.handle_dns_rewrite_add(rule).await;
+            assert!(matches!(res, Response::Success(_)), "{res:?}");
+        }
+    };
+    let tv = |dir: &tempfile::TempDir| {
+        let (dns, text) = dns_in_file(dir);
+        let answers: Vec<String> = dns
+            .rewrites
+            .iter()
+            .filter(|r| r.domain == "tv.lan")
+            .map(|r| r.answer.to_string())
+            .collect();
+        (answers, text)
+    };
+
+    add("dev:tv|192.0.2.20").await;
+    add("dev:tv|2001:db8::20").await;
+    let (answers, text) = tv(&dir);
+    assert_eq!(answers, ["dev:tv|192.0.2.20", "dev:tv|2001:db8::20"], "{text}");
+    assert!(text.contains("fallback = ["), "one table item:\n{text}");
+
+    add("dev:tv|192.0.2.21").await;
+    assert_eq!(tv(&dir).0, ["dev:tv|192.0.2.21", "dev:tv|2001:db8::20"]);
+
+    add("dev:tv|tv.example").await;
+    assert_eq!(tv(&dir).0, ["dev:tv|tv.example"]);
+
+    add("dev:tv").await;
+    assert_eq!(tv(&dir).0, ["dev:tv"]);
+    assert_eq!(client_ctx.ctx.get_dns_rewrites(), dns_in_file(&dir).0.rewrites);
+}
+
+/// A change the file form cannot hold, or a file that cannot be written, changes nothing.
+#[tokio::test]
+async fn a_refused_dns_change_writes_and_applies_nothing() {
+    let (client_ctx, dir) = owner_dns_client(true).await;
+    let res = client_ctx
+        .handle_dns_rewrite_add(RewriteRule {
+            id: None,
+            domain: "mismatch.lan".into(),
+            rtype: DnsRecordType::AAAA,
+            answer: RewriteAnswer::A("192.0.2.1".parse().unwrap()),
+        })
+        .await;
+    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("lanforge.toml")).unwrap(),
+        OWNER_DNS
+    );
+    assert_eq!(client_ctx.ctx.get_dns_rewrites().len(), 1);
+
+    std::fs::write(dir.path().join("lanforge.toml"), "[system\nbroken").unwrap();
+    let res = client_ctx.handle_dns_upstream_clear().await;
+    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert_eq!(client_ctx.ctx.get_dns_upstreams().len(), 2, "not applied");
+}
+
+#[tokio::test]
+async fn dns_change_on_read_only_config_applies_in_memory_and_says_so() {
+    let (client_ctx, dir) = owner_dns_client(false).await;
+    let res = client_ctx.handle_dns_rewrite_clear().await;
+    let Response::Success(ok) = res else {
+        panic!("{res:?}");
+    };
+    assert!(ok.message.contains("not saved"), "{}", ok.message);
+    assert!(client_ctx.ctx.get_dns_rewrites().is_empty());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("lanforge.toml")).unwrap(),
+        OWNER_DNS
+    );
+}
+
+/// An overwriting import replaces the `[dns]` lists in one write; nothing goes to redb.
+#[tokio::test]
+async fn dns_import_overwrite_replaces_the_file_lists() {
+    let (client_ctx, dir) = owner_dns_client(true).await;
+    let export = SystemConfigExport {
+        dns_upstreams: vec![DnsUpstreamConfig {
+            name: Some("quad9".into()),
+            addr: "9.9.9.9:53".parse().unwrap(),
+            protocol: UpstreamProtocol::Udp,
+            domain: None,
+        }],
+        dns_rewrites: vec![RewriteRule {
+            id: None,
+            domain: "nas.lan".into(),
+            rtype: DnsRecordType::A,
+            answer: RewriteAnswer::A("192.0.2.10".parse().unwrap()),
+        }],
+        overwrite: true,
+        ..Default::default()
+    };
+    let res = client_ctx.handle_system_config_import(export).await;
+    let Response::SystemConfigImport(r) = res else {
+        panic!("{res:?}");
+    };
+    let dns_results: Vec<_> = r
+        .results
+        .iter()
+        .filter(|x| format!("{:?}", x.section).starts_with("Dns"))
+        .filter(|x| !format!("{:?}", x.section).starts_with("DnsAdblock"))
+        .filter(|x| !format!("{:?}", x.section).starts_with("DnsAllow"))
+        .collect();
+    assert!(dns_results.iter().all(|x| x.success), "{dns_results:?}");
+
+    let (dns, text) = dns_in_file(&dir);
+    assert_eq!(dns.upstreams.len(), 1, "{text}");
+    assert_eq!(dns.upstreams[0].name, "quad9");
+    assert_eq!(dns.rewrites.len(), 1);
+    assert_eq!(dns.rewrites[0].domain, "nas.lan");
+    assert_eq!(client_ctx.ctx.get_dns_rewrites(), dns.rewrites);
+}
+
+/// The owner's `[adblock]` and global rules (approved file form, 2026-10-28).
+#[cfg(feature = "adblock")]
+const OWNER_ADBLOCK: &str = "[system]\niface = \"lan0\"\n\n# filtering\n[adblock]\nenabled = true\n\
+    blocking_mode = \"nxdomain\"\nrefresh_time = \"03:00\"\nlists = [\"src-7cc6f305\"]\n\
+    rules = \"adblock/global.rules\"\n\n[adblock.sources.src-7cc6f305]\n\
+    url = \"https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts\"\nformat = \"hosts\"\n";
+
+#[cfg(feature = "adblock")]
+const OWNER_RULES: &str = "! Bradesco\n@@||app-measurement.com^\n@@||www.googletagmanager.com^\n\
+    @@||js-cdn.dynatrace.com^\n@@||analytics.google.com^\n";
+
+/// A client whose live adblock settings and rules are the owner's, as the boot applies them.
+#[cfg(feature = "adblock")]
+async fn owner_adblock_client(writable: bool) -> (ClientContext, tempfile::TempDir) {
+    let client_ctx = init_test_context().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    std::fs::write(&path, OWNER_ADBLOCK).unwrap();
+    std::fs::create_dir(dir.path().join("adblock")).unwrap();
+    std::fs::write(dir.path().join("adblock/global.rules"), OWNER_RULES).unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(writable);
+    let (adblock, issues) = lanforge_api::config_file::ConfigFile::parse(OWNER_ADBLOCK)
+        .unwrap()
+        .adblock
+        .to_config();
+    assert!(issues.is_empty(), "{issues:?}");
+    client_ctx.apply_adblock_settings(&adblock);
+    client_ctx
+        .ctx
+        .update_dns_adblock_rules(OWNER_RULES.to_string());
+    (client_ctx, dir)
+}
+
+/// `[adblock]` and the rules file as the boot reads them, plus the `lanforge.toml` text.
+#[cfg(feature = "adblock")]
+fn adblock_in_files(
+    dir: &tempfile::TempDir,
+) -> (lanforge_api::config_file::AdblockSettings, String, String) {
+    let text = std::fs::read_to_string(dir.path().join("lanforge.toml")).unwrap();
+    let (adblock, issues) = lanforge_api::config_file::ConfigFile::parse(&text)
+        .unwrap()
+        .adblock
+        .to_config();
+    assert!(issues.is_empty(), "{issues:?}\n{text}");
+    let (rules, rule_issues) = adblock.load_rules(&dir.path().join("lanforge.toml"));
+    assert!(rule_issues.is_empty(), "{rule_issues:?}");
+    (adblock, rules.unwrap(), text)
+}
+
+/// Every adblock change of the API reaches `[adblock]` or the rules file before it applies:
+/// what runs is what the files hold, the comment and the source name stay.
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn adblock_changes_are_written_to_the_files() {
+    use lanforge_types::network::dns::adblock::{BlockingMode, TimeOfDay};
+
+    let (client_ctx, dir) = owner_adblock_client(true).await;
+    let ok = |res: Response| assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    ok(client_ctx
+        .handle_dns_adblock_url_add(
+            Some("oisd".into()),
+            "https://small.oisd.nl".into(),
+            AdblockUrlKind::Blocklist,
+            None,
+        )
+        .await);
+    ok(client_ctx
+        .handle_dns_adblock_config_set(
+            Some(BlockingMode::NullIp),
+            None,
+            None,
+            Some(TimeOfDay::new(4, 30).unwrap()),
+        )
+        .await);
+    ok(client_ctx.handle_dns_block("ads.example".into()).await);
+    ok(client_ctx
+        .handle_dns_adblock_rule_add("||track.example^$important".into(), "block".into())
+        .await);
+    // Allowing a blocked domain replaces its block rule.
+    ok(client_ctx.handle_dns_allow("ads.example".into()).await);
+    ok(client_ctx
+        .handle_dns_unallow("analytics.google.com".into())
+        .await);
+
+    let (adblock, rules, text) = adblock_in_files(&dir);
+    assert!(text.contains("# filtering\n[adblock]"), "{text}");
+    assert_eq!(adblock.lists, ["src-7cc6f305", "oisd"], "{text}");
+    assert_eq!(adblock.config.blocking_mode, BlockingMode::NullIp);
+    assert_eq!(adblock.config.refresh_time, TimeOfDay::new(4, 30).unwrap());
+    assert_eq!(
+        rules,
+        "! Bradesco\n@@||app-measurement.com^\n@@||www.googletagmanager.com^\n\
+         @@||js-cdn.dynatrace.com^\n||track.example^$important\n@@||ads.example^\n"
+    );
+    assert_eq!(client_ctx.ctx.get_dns_adblock_rules(), rules);
+    assert_eq!(client_ctx.ctx.get_dns_adblock(), adblock.config);
+    assert_eq!(
+        client_ctx.ctx.get_dns_adblock_urls(),
+        adblock.global_sources().cloned().collect::<Vec<_>>()
+    );
+
+    // Disable, then remove, by the id the listing gives.
+    let Response::DnsAdblockRules(listed) = client_ctx.handle_dns_adblock_rules().await else {
+        panic!("Expected Response::DnsAdblockRules");
+    };
+    let track = listed
+        .rules
+        .iter()
+        .find(|r| r.domain == "||track.example^$important")
+        .and_then(|r| r.id)
+        .unwrap();
+    ok(client_ctx
+        .handle_dns_adblock_rule_status(track, false)
+        .await);
+    assert!(
+        adblock_in_files(&dir)
+            .1
+            .contains("# ||track.example^$important\n")
+    );
+    ok(client_ctx.handle_dns_adblock_rule_remove(track).await);
+    assert!(!adblock_in_files(&dir).1.contains("track.example"));
+
+    ok(client_ctx
+        .handle_dns_adblock_url_remove(
+            "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts".into(),
+        )
+        .await);
+    let (adblock, _, _) = adblock_in_files(&dir);
+    assert_eq!(adblock.lists, ["oisd"]);
+    assert_eq!(adblock.sources.len(), 1);
+}
+
+/// A rule the rules file refuses (a `$client` modifier is never widened to everyone) and an
+/// unknown id write and apply nothing.
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn a_refused_adblock_change_writes_and_applies_nothing() {
+    let (client_ctx, dir) = owner_adblock_client(true).await;
+    for res in [
+        client_ctx
+            .handle_dns_adblock_rule_add("||x.example^$client=10.0.0.1".into(), "block".into())
+            .await,
+        client_ctx.handle_dns_adblock_rule_remove(42).await,
+        client_ctx
+            .handle_dns_adblock_url_add(
+                None,
+                "ftp://example.com/list".into(),
+                AdblockUrlKind::Blocklist,
+                None,
+            )
+            .await,
+    ] {
+        assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    }
+    let (_, rules, text) = adblock_in_files(&dir);
+    assert_eq!(rules, OWNER_RULES);
+    assert_eq!(text, OWNER_ADBLOCK);
+    assert_eq!(client_ctx.ctx.get_dns_adblock_rules(), OWNER_RULES);
+    assert_eq!(client_ctx.ctx.get_dns_adblock_urls().len(), 1);
+}
+
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn adblock_change_on_read_only_config_applies_in_memory_and_says_so() {
+    let (client_ctx, dir) = owner_adblock_client(false).await;
+    let res = client_ctx.handle_dns_block("ads.example".into()).await;
+    let Response::Success(ok) = res else {
+        panic!("{res:?}");
+    };
+    assert!(ok.message.contains("not saved"), "{}", ok.message);
+    assert!(
+        client_ctx
+            .ctx
+            .get_dns_adblock_rules()
+            .ends_with("||ads.example^\n")
+    );
+    let (_, rules, text) = adblock_in_files(&dir);
+    assert_eq!(
+        (rules.as_str(), text.as_str()),
+        (OWNER_RULES, OWNER_ADBLOCK)
+    );
+}
+
+/// Without a rules file, the first manual rule creates `adblock/global.rules` and names it in
+/// `[adblock]`.
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn the_first_rule_creates_the_rules_file() {
+    let client_ctx = init_test_context().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    std::fs::write(&path, "[adblock]\nenabled = true\n").unwrap();
+    client_ctx.ctx.set_config_path(&path);
+    client_ctx.ctx.set_config_writable(true);
+
+    let res = client_ctx.handle_dns_allow("bank.example".into()).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    let (adblock, rules, _) = adblock_in_files(&dir);
+    assert_eq!(adblock.rules.as_deref(), Some("adblock/global.rules"));
+    assert_eq!(rules, "@@||bank.example^\n");
+    let Response::DnsAllowlist(list) = client_ctx.handle_dns_allowlist().await else {
+        panic!("Expected Response::DnsAllowlist");
+    };
+    assert_eq!(list.allowlist.len(), 1);
+    assert_eq!(list.allowlist[0].domain, "bank.example");
 }

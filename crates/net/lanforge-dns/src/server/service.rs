@@ -19,10 +19,8 @@ use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_transport::{TransportSnapshot, TransportStats};
 #[cfg(feature = "adblock")]
-use lanforge_types::config::DnsAllowlist;
+use lanforge_types::config::AdblockRules;
 use lanforge_types::config::DnsListenConfig;
-#[cfg(feature = "adblock")]
-use lanforge_types::network::dns::adblock::AdblockRuleEntry;
 use lanforge_types::network::dns::{
     AdblockCheckResponse, DnsAdblockSourcesResponse, DnsCacheEntry, DnsCacheResponse,
     DnsCacheStatsExtResponse, DnsClass, DnsLifetimeStats, DnsMessage, DnsQuestion, DnsRecordEntry,
@@ -149,8 +147,8 @@ impl DnsService {
         let soa_master_ns: Arc<str> = Arc::from(format!("ns.{domain_base}"));
         let soa_mailbox: Arc<str> = Arc::from(format!("hostmaster.{domain_base}"));
 
-        // The live config is the only source: `Sequential` is a valid choice, not "unset" (the
-        // bootstrap seeds it from `[dns] upstream_mode` when the database has none).
+        // The live config is the only source (`[dns] upstream_mode`): `Sequential` is a valid
+        // choice, not "unset".
         let mode = self.ctx.get_dns_upstream_mode();
         let recursive = Arc::new(UpstreamStrategy::new(mode, upstreams));
 
@@ -602,20 +600,6 @@ impl AsyncService for DnsService {
                                 info!("Cache flushed");
                             }
                             #[cfg(feature = "adblock")]
-                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::AdblockBlock(domain)) => {
-                                if let Some(filter) = &dns_ctx.filter {
-                                    filter.add_block(&domain);
-                                    dns_ctx.cache.invalidate_all();
-                                }
-                            }
-                            #[cfg(feature = "adblock")]
-                            lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::AdblockAllow(domain)) => {
-                                if let Some(filter) = &dns_ctx.filter {
-                                    filter.add_allow(&domain);
-                                    dns_ctx.cache.invalidate_all();
-                                }
-                            }
-                            #[cfg(feature = "adblock")]
                             lanforge_core::bus::LanforgeEvent::Dns(lanforge_core::bus::DnsEvent::AdblockToggle { enabled, duration_secs }) => {
                                 if let Some(filter) = &dns_ctx.filter {
                                     // Arm the pause deadline *before* disabling: the adblock worker
@@ -637,8 +621,8 @@ impl AsyncService for DnsService {
                             }
                             _ => {}
                         }
-                        // Toggles, blocks and allows are also config writes, re-applied by
-                        // `filter_subs`; only a temporary pause lives in the event alone.
+                        // Toggles are also config writes, re-applied by `filter_subs`; only a
+                        // temporary pause lives in the event alone.
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             tracing::warn!(lost = n, "DNS bus lagged; a temporary adblock pause may have been missed");
                         }
@@ -888,6 +872,7 @@ async fn handle_dns_request(req: DnsRequest, dns_ctx: Arc<DnsContext>) -> DnsRes
                             next_update,
                             sources_ok,
                             sources_failing,
+                            refresh_time: adblock_cfg.refresh_time,
                         },
                     )
                 } else {
@@ -1181,8 +1166,7 @@ enum FilterChange {
 /// `adblock` feature this type exists but never yields.
 #[cfg(feature = "adblock")]
 struct FilterSubscriptions {
-    allowlist: ConfigSubscription<DnsAllowlist>,
-    rules: ConfigSubscription<Vec<AdblockRuleEntry>>,
+    rules: ConfigSubscription<AdblockRules>,
     adblock: ConfigSubscription<AdblockDbConfig>,
 }
 
@@ -1190,7 +1174,6 @@ struct FilterSubscriptions {
 impl FilterSubscriptions {
     fn new(ctx: &LanforgeContext) -> Self {
         Self {
-            allowlist: ctx.config_subscription(),
             rules: ctx.config_subscription(),
             adblock: ctx.config_subscription(),
         }
@@ -1198,7 +1181,6 @@ impl FilterSubscriptions {
 
     async fn next(&mut self) -> FilterChange {
         tokio::select! {
-            Some(_) = self.allowlist.next() => FilterChange::Rules,
             Some(_) = self.rules.next() => FilterChange::Rules,
             Some(delta) = self.adblock.next() => FilterChange::Adblock(delta.new),
             else => std::future::pending().await,
@@ -1227,7 +1209,7 @@ fn apply_filter_change(dns_ctx: &DnsContext, ctx: &LanforgeContext, change: Filt
     };
     match change {
         FilterChange::Rules => {
-            info!("Reloading allowlist and custom adblock rules");
+            info!("Reloading manual adblock rules");
             filter.sync_from_context(ctx);
         }
         FilterChange::Adblock(cfg) => {

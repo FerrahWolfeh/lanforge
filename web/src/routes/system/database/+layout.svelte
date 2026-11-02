@@ -9,7 +9,6 @@
 	import AlertTriangleIcon from "@lucide/svelte/icons/triangle-alert";
 	import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 	import LayersIcon from "@lucide/svelte/icons/layers";
-	import SlidersIcon from "@lucide/svelte/icons/sliders";
 	import WrenchIcon from "@lucide/svelte/icons/wrench";
 	import FileDownIcon from "@lucide/svelte/icons/file-down";
 
@@ -23,7 +22,6 @@
 
 	const tabs: NavTabItem[] = [
 		{ label: "Inventory", href: "/system/database", icon: LayersIcon },
-		{ label: "Storage Settings", href: "/system/database/settings", icon: SlidersIcon },
 		{ label: "Maintenance", href: "/system/database/maintenance", icon: WrenchIcon },
 		{ label: "Backup & Restore", href: "/system/database/backup", icon: FileDownIcon },
 	];
@@ -62,12 +60,9 @@
 					{#snippet children()}
 						<div class="flex flex-col gap-2 text-xs">
 							<p class="text-muted-foreground leading-relaxed">
-								To persist leases, hosts, and DNS rules across restarts, switch to a permanent path (e.g. <code class="font-mono text-foreground font-semibold">/var/lib/lanforge/lanforge.redb</code>) in Storage Settings.
+								Configuration lives in <code class="font-mono text-foreground font-semibold">lanforge.toml</code> and survives, but user accounts, API tokens, devices and leases are lost at every restart. To keep them, set <code class="font-mono text-foreground font-semibold">[database] config_path</code> to a file (e.g. <code class="font-mono text-foreground font-semibold">/var/lib/lanforge/config.redb</code>) and restart Lanforge.
 							</p>
 							<div class="flex gap-2 pt-1">
-								<Button variant="outline" size="sm" class="flex-1 text-xs h-7" href="/system/database/settings">
-									Settings
-								</Button>
 								<Button variant="outline" size="sm" class="flex-1 text-xs h-7" href="/system/database/backup">
 									Backups
 								</Button>

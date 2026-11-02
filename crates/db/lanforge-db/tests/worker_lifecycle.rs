@@ -2,8 +2,8 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use lanforge_api::config_file::{ConfigFile, Section};
-use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent, StorageEvent, SystemEvent};
+use lanforge_api::config_file::Section;
+use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
@@ -597,7 +597,7 @@ async fn test_db_worker_service_control_and_restart_resilience() {
 }
 
 #[tokio::test]
-async fn api_storage_mutation_is_written_to_valid_toml_on_worker_shutdown() {
+async fn live_adblock_and_dns_changes_are_not_written_back_by_the_worker() {
     let (ctx, bus) = create_test_context();
     let dir = tempdir().unwrap();
     let config_path = dir.path().join("lanforge.toml");
@@ -624,22 +624,15 @@ async fn api_storage_mutation_is_written_to_valid_toml_on_worker_shutdown() {
         .call(|s: &Stores| s.db.is_provisioned())
         .await
         .unwrap();
-    storage
-        .call(|s: &Stores| {
-            s.db.upsert_dns_rewrite(
-                "router.lan",
-                DnsRecordType::A,
-                &RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 1)),
-            )
-        })
-        .await
-        .unwrap();
-    let rewrites = storage
-        .call(|s: &Stores| s.db.load_dns_rewrites())
-        .await
-        .unwrap();
-    ctx.update_dns_rewrites(rewrites);
-    let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
+    // `[adblock]` and `[dns]` are file-owned: the API writes them before they apply, never
+    // the worker (it used to rewrite `[adblock]` and the adblock keys from memory).
+    ctx.update_dns_adblock_rules("@@||bank.example^\n".to_string());
+    ctx.update_dns_rewrites(vec![lanforge_types::network::dns::adblock::RewriteRule {
+        id: None,
+        domain: "router.lan".into(),
+        rtype: DnsRecordType::A,
+        answer: RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 1)),
+    }]);
     sleep(Duration::from_millis(20)).await;
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -650,16 +643,18 @@ async fn api_storage_mutation_is_written_to_valid_toml_on_worker_shutdown() {
         .expect("worker failed");
 
     let written = std::fs::read_to_string(&config_path).unwrap();
-    assert!(written.contains("# Keep this operator comment"));
-    assert!(written.contains("iface = \"test0\""));
-    assert!(written.contains("enabled = false"));
-    let parsed = ConfigFile::parse(&written).expect("worker output must remain valid TOML config");
-    assert_eq!(parsed.dns.rewrites["router.lan"].target, "192.0.2.1");
-    let expected_dns_hash = lanforge_api::config_file::section_hashes(&parsed)[&Section::Dns];
-    assert_eq!(
-        db.get_config_section_hash(Section::Dns.name()).unwrap(),
-        Some(expected_dns_hash)
+    assert_eq!(written, original, "the worker wrote the config file");
+    use lanforge_db::config_keys::{
+        ADBLOCK_CONFIG, ADBLOCK_RULES, ADBLOCK_URLS, DNS_ALLOWLIST, DNS_REWRITES,
+    };
+    assert!(
+        db.get(DNS_ALLOWLIST).unwrap().is_none(),
+        "allowlist in redb"
     );
+    assert!(db.get(ADBLOCK_CONFIG).unwrap().is_none(), "adblock in redb");
+    assert!(db.get(ADBLOCK_URLS).unwrap().is_none(), "sources in redb");
+    assert!(db.get(ADBLOCK_RULES).unwrap().is_none(), "rules in redb");
+    assert!(db.get(DNS_REWRITES).unwrap().is_none(), "rewrites in redb");
 }
 
 #[tokio::test]
@@ -673,7 +668,8 @@ async fn failed_live_toml_write_preserves_file_and_does_not_advance_hash() {
     ctx.set_config_writable(true);
 
     let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
-    db.set_config_section_hash(Section::Dns.name(), 7).unwrap();
+    db.set_config_section_hash(Section::Adblock.name(), 7)
+        .unwrap();
     let log_db = Arc::new(LogDb::open_in_memory());
     let mut worker = DbWorker::new(DatabaseConfig::default(), ctx.clone(), db.clone(), log_db);
     worker.init(&ctx).await.unwrap();
@@ -686,22 +682,8 @@ async fn failed_live_toml_write_preserves_file_and_does_not_advance_hash() {
         .call(|s: &Stores| s.db.is_provisioned())
         .await
         .unwrap();
-    storage
-        .call(|s: &Stores| {
-            s.db.upsert_dns_rewrite(
-                "router.lan",
-                DnsRecordType::A,
-                &RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 1)),
-            )
-        })
-        .await
-        .unwrap();
-    let rewrites = storage
-        .call(|s: &Stores| s.db.load_dns_rewrites())
-        .await
-        .unwrap();
-    ctx.update_dns_rewrites(rewrites);
-    let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
+    // The worker still writes `[system]` back when the device table is reset.
+    let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
     sleep(Duration::from_millis(20)).await;
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -716,13 +698,13 @@ async fn failed_live_toml_write_preserves_file_and_does_not_advance_hash() {
         "original"
     );
     assert_eq!(
-        db.get_config_section_hash(Section::Dns.name()).unwrap(),
+        db.get_config_section_hash(Section::Adblock.name()).unwrap(),
         Some(7)
     );
 }
 
 #[tokio::test]
-async fn test_db_worker_write_behind_dns_config_and_flush_now() {
+async fn adblock_and_dns_changes_never_reach_redb_on_flush_now() {
     let (ctx, bus) = create_test_context();
 
     let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
@@ -746,7 +728,13 @@ async fn test_db_worker_write_behind_dns_config_and_flush_now() {
         .await
         .expect("worker ready");
 
-    // 1. Mutate ctx directly (write-behind memory model)
+    // 1. Mutate ctx directly: `[adblock]` (rules included) and `[dns]` are file-owned and
+    // never reach redb.
+    ctx.update_dns_adblock_rules("@@||bank.example^\n".to_string());
+    ctx.update_dns_adblock(lanforge_types::network::dns::adblock::AdblockDbConfig {
+        enabled: true,
+        ..Default::default()
+    });
     ctx.update_dns_rewrites(vec![lanforge_types::network::dns::adblock::RewriteRule {
         id: Some(1),
         domain: "gateway.lan".to_string(),
@@ -754,19 +742,25 @@ async fn test_db_worker_write_behind_dns_config_and_flush_now() {
         answer: RewriteAnswer::A(Ipv4Addr::new(192, 168, 1, 1)),
     }]);
 
-    // Give worker event loop a moment to absorb ConfigRewritesChanged
+    // Give worker event loop a moment to absorb the change events
     sleep(Duration::from_millis(20)).await;
 
     // 2. Call flush_now explicitly
     storage.flush_now().await.expect("flush_now should succeed");
 
-    // 3. Verify that redb TABLE_CONFIG contains the rewrite
-    let persisted_rewrites = storage
-        .call(|s: &Stores| s.db.load_dns_rewrites())
+    // 3. Verify what redb holds
+    use lanforge_db::config_keys::{ADBLOCK_CONFIG, ADBLOCK_RULES, DNS_ALLOWLIST};
+    assert!(
+        db.get(DNS_ALLOWLIST).unwrap().is_none(),
+        "allowlist in redb"
+    );
+    assert!(db.get(ADBLOCK_CONFIG).unwrap().is_none(), "adblock in redb");
+    assert!(db.get(ADBLOCK_RULES).unwrap().is_none(), "rules in redb");
+    let rewrites = storage
+        .call(|s: &Stores| s.db.stored_dns_rewrites())
         .await
         .unwrap();
-    assert_eq!(persisted_rewrites.len(), 1);
-    assert_eq!(persisted_rewrites[0].domain, "gateway.lan");
+    assert_eq!(rewrites, None, "no DNS key written back");
 
     // Clean exit
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));

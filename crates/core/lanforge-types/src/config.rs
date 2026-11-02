@@ -8,7 +8,7 @@ use crate::network::dhcp::{
     DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, Dhcpv6Pool, TftpOptions,
 };
 use crate::network::dns::AdblockUrlEntry;
-use crate::network::dns::adblock::{AdblockDbConfig, AdblockRuleEntry, RewriteRule};
+use crate::network::dns::adblock::{AdblockDbConfig, RewriteRule};
 use crate::network::dns::upstream::{UpstreamMode, UpstreamTarget};
 use crate::network::firewall::FirewallConfig;
 use crate::network::pppoe::PppoeConfig;
@@ -34,7 +34,6 @@ pub enum ConfigDomain {
     DnsUpstreams,
     DnsUpstreamMode,
     DnsRewrites,
-    DnsAllowlist,
     DnsAdblock,
     DnsAdblockUrls,
     DnsAdblockRules,
@@ -66,7 +65,6 @@ impl ConfigDomain {
             Self::DnsUpstreams => DomainSet::DNS_UPSTREAMS,
             Self::DnsUpstreamMode => DomainSet::DNS_UPSTREAM_MODE,
             Self::DnsRewrites => DomainSet::DNS_REWRITES,
-            Self::DnsAllowlist => DomainSet::DNS_ALLOWLIST,
             Self::DnsAdblock => DomainSet::DNS_ADBLOCK,
             Self::DnsAdblockUrls => DomainSet::DNS_ADBLOCK_URLS,
             Self::DnsAdblockRules => DomainSet::DNS_ADBLOCK_RULES,
@@ -98,7 +96,6 @@ impl ConfigDomain {
             Self::DnsUpstreams => "dns_upstreams",
             Self::DnsUpstreamMode => "dns_upstream_mode",
             Self::DnsRewrites => "dns_rewrites",
-            Self::DnsAllowlist => "dns_allowlist",
             Self::DnsAdblock => "dns_adblock",
             Self::DnsAdblockUrls => "dns_adblock_urls",
             Self::DnsAdblockRules => "dns_adblock_rules",
@@ -132,7 +129,7 @@ bitflags! {
         const DNS_UPSTREAMS      = 1 << 12;
         const DNS_UPSTREAM_MODE  = 1 << 13;
         const DNS_REWRITES       = 1 << 14;
-        const DNS_ALLOWLIST      = 1 << 15;
+        // 1 << 15 was the DNS allowlist, now rules of the adblock rules file.
         const DNS_ADBLOCK        = 1 << 16;
         const DNS_ADBLOCK_URLS   = 1 << 17;
         const DNS_ADBLOCK_RULES  = 1 << 18;
@@ -154,7 +151,7 @@ impl From<ConfigDomain> for DomainSet {
 impl DomainSet {
     /// Iterates over all active [`ConfigDomain`] elements in this set.
     pub fn domains(self) -> impl Iterator<Item = ConfigDomain> {
-        const ALL: [(ConfigDomain, DomainSet); 25] = [
+        const ALL: [(ConfigDomain, DomainSet); 24] = [
             (ConfigDomain::Pppoe, DomainSet::PPPOE),
             (ConfigDomain::Firewall, DomainSet::FIREWALL),
             (ConfigDomain::Traffic, DomainSet::TRAFFIC),
@@ -170,7 +167,6 @@ impl DomainSet {
             (ConfigDomain::DnsUpstreams, DomainSet::DNS_UPSTREAMS),
             (ConfigDomain::DnsUpstreamMode, DomainSet::DNS_UPSTREAM_MODE),
             (ConfigDomain::DnsRewrites, DomainSet::DNS_REWRITES),
-            (ConfigDomain::DnsAllowlist, DomainSet::DNS_ALLOWLIST),
             (ConfigDomain::DnsAdblock, DomainSet::DNS_ADBLOCK),
             (ConfigDomain::DnsAdblockUrls, DomainSet::DNS_ADBLOCK_URLS),
             (ConfigDomain::DnsAdblockRules, DomainSet::DNS_ADBLOCK_RULES),
@@ -251,28 +247,10 @@ impl Default for DnsListenConfig {
     }
 }
 
-/// DNS domain allowlist entries.
+/// The text of the global adblock rules file (`[adblock] rules`): manual block (`||x^`) and
+/// allow (`@@||x^`) rules, one per line, read with `RulesFile`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct DnsAllowlist(pub Vec<String>);
-
-impl std::ops::Deref for DnsAllowlist {
-    type Target = Vec<String>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl std::ops::DerefMut for DnsAllowlist {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl From<Vec<String>> for DnsAllowlist {
-    fn from(v: Vec<String>) -> Self {
-        Self(v)
-    }
-}
+pub struct AdblockRules(pub String);
 
 // 1. PPPoE
 impl ConfigSection for PppoeConfig {
@@ -489,18 +467,6 @@ impl ConfigSection for Vec<RewriteRule> {
     }
 }
 
-impl ConfigSection for DnsAllowlist {
-    const DOMAIN: ConfigDomain = ConfigDomain::DnsAllowlist;
-
-    fn classify(old: &Self, new: &Self) -> ChangeImpact {
-        if old == new {
-            ChangeImpact::None
-        } else {
-            ChangeImpact::Hot
-        }
-    }
-}
-
 impl ConfigSection for AdblockDbConfig {
     const DOMAIN: ConfigDomain = ConfigDomain::DnsAdblock;
 
@@ -525,7 +491,7 @@ impl ConfigSection for Vec<AdblockUrlEntry> {
     }
 }
 
-impl ConfigSection for Vec<AdblockRuleEntry> {
+impl ConfigSection for AdblockRules {
     const DOMAIN: ConfigDomain = ConfigDomain::DnsAdblockRules;
 
     fn classify(old: &Self, new: &Self) -> ChangeImpact {

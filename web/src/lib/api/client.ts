@@ -7,7 +7,6 @@
 
 import type {
 	AdblockRuleEntry,
-	AllowlistEntry,
 	AuthStatusResponse,
 	AuthToken,
 	BlockingMode,
@@ -39,6 +38,7 @@ import type {
 	LoginResponse,
 	ReverseResolverEntry,
 	RewriteRule,
+	DnsRecordType,
 	SetupPayload,
 	SetupResponse,
 	SetupStatusResponse,
@@ -54,7 +54,6 @@ import type {
 	DbMetrics,
 	SystemConfigExport,
 	SystemConfigImportResponse,
-	DbEngineSwitchRequest,
 	GenerateTokenRequest,
 	FirewallConfig,
 	FirewallStatus,
@@ -552,12 +551,8 @@ export const dnsAdblockStatus = () => get<DnsAdblockStatusResponse>('/dns/adbloc
 export const dnsAdblockSet = (enabled: boolean, duration_secs?: number) =>
 	put<void>('/dns/adblock', { enabled, duration_secs: duration_secs ?? null });
 export const dnsAdblockReload = () => post<void>('/dns/adblock/reload');
-export const dnsAdblockAllowlist = async (): Promise<AllowlistEntry[]> =>
-	extractList<AllowlistEntry>(await get<any>('/dns/adblock/allowlist'), 'allowlist');
 export const dnsBlock = (domain: string) => post<void>('/dns/adblock/block', { domain });
 export const dnsAllow = (domain: string) => post<void>('/dns/adblock/allow', { domain });
-export const dnsUnallow = (target: string) =>
-	del<void>(`/dns/adblock/allow/${encodeURIComponent(target)}`);
 export const dnsAdblockUrls = async (): Promise<DnsAdblockUrlEntry[]> =>
 	extractList<DnsAdblockUrlEntry>(await get<any>('/dns/adblock/urls'), 'urls');
 export const dnsAdblockSources = () => get<DnsAdblockSourcesResponse>('/dns/adblock/sources');
@@ -577,10 +572,11 @@ export const dnsAdblockRules = async (): Promise<AdblockRuleEntry[]> =>
 	extractList<AdblockRuleEntry>(await get<any>('/dns/adblock/rules'), 'rules');
 export const dnsAdblockRuleAdd = (domain: string, action: 'block' | 'allow') =>
 	post<void>('/dns/adblock/rules', { domain, action });
-export const dnsAdblockRuleRemove = (id: number) =>
-	del<void>(`/dns/adblock/rules/${id}`);
-export const dnsAdblockRuleStatus = (id: number, enabled: boolean) =>
-	put<void>(`/dns/adblock/rules/${id}/status`, { enabled });
+// Rules and rewrites are addressed by content: their ids are 63-bit hashes that JSON.parse rounds.
+export const dnsAdblockRuleRemove = (rule: string) =>
+	del<void>('/dns/adblock/rules', { rule });
+export const dnsAdblockRuleStatus = (rule: string, enabled: boolean) =>
+	put<void>('/dns/adblock/rules/status', { rule, enabled });
 
 // ---------------------------------------------------------------------------
 // DNS — rewrites
@@ -588,8 +584,10 @@ export const dnsAdblockRuleStatus = (id: number, enabled: boolean) =>
 
 export const dnsRewriteList = async (): Promise<RewriteRule[]> =>
 	extractList<RewriteRule>(await get<any>('/dns/rewrites'), 'rewrites');
-export const dnsRewriteAdd = (rule: Omit<RewriteRule, 'id'>) => post<void>('/dns/rewrites', rule);
-export const dnsRewriteRemove = (id: number) => del<void>(`/dns/rewrites/${id}`);
+export const dnsRewriteAdd = (rule: { domain: string; rtype: DnsRecordType; answer: string }) =>
+	post<void>('/dns/rewrites', rule);
+export const dnsRewriteRemove = (rule: RewriteRule) =>
+	del<void>('/dns/rewrites/rule', { domain: rule.domain, rtype: rule.rtype, answer: rule.answer });
 export const dnsRewriteClear = () => del<void>('/dns/rewrites');
 export const dnsRewriteExport = async (): Promise<RewriteRule[]> =>
 	extractList<RewriteRule>(await get<any>('/dns/rewrites/export'), 'rewrites');
@@ -676,8 +674,6 @@ export const exportSystemConfig = () => get<SystemConfigExport>('/system/config'
 export const exportSystemConfigToml = () => getText('/system/config', { format: 'toml' });
 export const importSystemConfig = (config: SystemConfigExport) =>
 	post<SystemConfigImportResponse>('/system/config', config);
-export const switchDbEngine = (req: DbEngineSwitchRequest) =>
-	post<void>('/db/engine', req);
 
 // ---------------------------------------------------------------------------
 // Users

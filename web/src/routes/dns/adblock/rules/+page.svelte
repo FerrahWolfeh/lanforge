@@ -18,23 +18,18 @@
 	import PowerIcon from "@lucide/svelte/icons/power";
 	import { toast } from "svelte-sonner";
 	import {
-		dnsAdblockAllowlist,
 		dnsAllow,
-		dnsUnallow,
 		dnsAdblockRules,
 		dnsAdblockRuleAdd,
 		dnsAdblockRuleRemove,
 		dnsAdblockRuleStatus,
 	} from "$lib/api/client";
 	import { page } from "$app/state";
-	import LockIcon from "@lucide/svelte/icons/lock";
-	import type { AllowlistEntry, AdblockRuleEntry } from "$lib/api/types";
+	import type { AdblockRuleEntry } from "$lib/api/types";
 	import DnsAdblockImportRulesDialog from "./components/DnsAdblockImportRulesDialog.svelte";
-	import DnsAdblockServicesTab from "./components/DnsAdblockServicesTab.svelte";
 
-	let activeTab = $state<"allow" | "block" | "services">("allow");
+	let activeTab = $state<"allow" | "block">("allow");
 	let loading = $state(true);
-	let allowlist = $state<AllowlistEntry[]>([]);
 	let customRules = $state<AdblockRuleEntry[]>([]);
 	let newDomain = $state("");
 	let searchQuery = $state("");
@@ -42,19 +37,11 @@
 	let importDialogOpen = $state(false);
 	let copiedDomain = $state<string | null>(null);
 
+	// Both tabs list the global rules file, disabled rules included; a rule is addressed by its text.
 	async function loadAll() {
 		loading = true;
 		try {
-			const [allowRes, rulesRes] = await Promise.allSettled([
-				dnsAdblockAllowlist(),
-				dnsAdblockRules(),
-			]);
-			if (allowRes.status === "fulfilled" && allowRes.value) {
-				allowlist = allowRes.value;
-			}
-			if (rulesRes.status === "fulfilled" && rulesRes.value) {
-				customRules = rulesRes.value;
-			}
+			customRules = (await dnsAdblockRules()) ?? [];
 		} catch {
 			toast.error("Failed to load DNS rules");
 		} finally {
@@ -64,7 +51,7 @@
 
 	async function handleAddDomain(e: Event) {
 		e.preventDefault();
-		const domain = newDomain.trim().toLowerCase().replace(/\.$/, "");
+		const domain = newDomain.trim();
 		if (!domain) {
 			toast.error("Please enter a domain name");
 			return;
@@ -88,21 +75,16 @@
 		}
 	}
 
-	async function handleRemoveAllow(target: string) {
-		try {
-			await dnsUnallow(target);
-			toast.success(`Removed "${target}" from allowlist`);
-			await loadAll();
-		} catch (err: any) {
-			toast.error(err?.message ?? "Failed to remove domain");
-		}
+	/** `||x^` / `@@||x^` shown as `x`; any other rule (regex, modifiers) as written. */
+	function ruleLabel(rule: AdblockRuleEntry): string {
+		const m = /^(?:@@)?\|\|([^\s^$|/*]+)\^$/.exec(rule.domain);
+		return m ? m[1] : rule.domain;
 	}
 
-	async function handleRemoveBlock(rule: AdblockRuleEntry) {
-		if (rule.id === undefined) return;
+	async function handleRemoveRule(rule: AdblockRuleEntry) {
 		try {
-			await dnsAdblockRuleRemove(rule.id);
-			toast.success(`Removed "${rule.domain}" from blacklist`);
+			await dnsAdblockRuleRemove(rule.domain);
+			toast.success(`Removed "${ruleLabel(rule)}" from ${rule.action === "allow" ? "allowlist" : "blacklist"}`);
 			await loadAll();
 		} catch (err: any) {
 			toast.error(err?.message ?? "Failed to remove domain");
@@ -110,11 +92,10 @@
 	}
 
 	async function handleToggleStatus(rule: AdblockRuleEntry) {
-		if (rule.id === undefined) return;
 		try {
-			await dnsAdblockRuleStatus(rule.id, !rule.enabled);
+			await dnsAdblockRuleStatus(rule.domain, !rule.enabled);
 			rule.enabled = !rule.enabled;
-			toast.success(`Rule "${rule.domain}" ${rule.enabled ? "enabled" : "disabled"}`);
+			toast.success(`Rule "${ruleLabel(rule)}" ${rule.enabled ? "enabled" : "disabled"}`);
 		} catch (err: any) {
 			toast.error(err?.message ?? "Failed to toggle rule status");
 		}
@@ -133,25 +114,20 @@
 		}
 	}
 
-	const filteredAllowlist = $derived.by(() => {
-		if (!searchQuery.trim()) return allowlist;
-		const q = searchQuery.toLowerCase();
-		return allowlist.filter((e) => e.domain.toLowerCase().includes(q));
-	});
+	const allowRules = $derived(customRules.filter((r) => r.action === "allow"));
+	const customBlocks = $derived(customRules.filter((r) => r.action === "block"));
 
-	const customBlocks = $derived.by(() => {
-		return customRules.filter((r) => r.action === "block");
-	});
+	function matching(rules: AdblockRuleEntry[]): AdblockRuleEntry[] {
+		const q = searchQuery.trim().toLowerCase();
+		return q ? rules.filter((r) => r.domain.toLowerCase().includes(q)) : rules;
+	}
 
-	const filteredCustomBlocks = $derived.by(() => {
-		if (!searchQuery.trim()) return customBlocks;
-		const q = searchQuery.toLowerCase();
-		return customBlocks.filter((e) => e.domain.toLowerCase().includes(q));
-	});
+	const filteredAllowlist = $derived(matching(allowRules));
+	const filteredCustomBlocks = $derived(matching(customBlocks));
 
 	onMount(() => {
 		const tabParam = page.url.searchParams.get("tab");
-		if (tabParam === "services" || tabParam === "block" || tabParam === "allow") {
+		if (tabParam === "block" || tabParam === "allow") {
 			activeTab = tabParam;
 		}
 		loadAll();
@@ -169,7 +145,7 @@
 						<span class="hidden sm:inline">Allowlist (Whitelist)</span>
 						<span class="sm:hidden">Allowlist</span>
 						<Badge variant="secondary" class="ml-1 px-1.5 py-0 text-[10px] font-mono">
-							{allowlist.length}
+							{allowRules.length}
 						</Badge>
 					</Tabs.Trigger>
 					<Tabs.Trigger value="block" class="gap-1.5 text-xs shrink-0">
@@ -180,65 +156,56 @@
 							{customBlocks.length}
 						</Badge>
 					</Tabs.Trigger>
-					<Tabs.Trigger value="services" class="gap-1.5 text-xs shrink-0">
-						<LockIcon class="size-3.5 text-primary" />
-						<span class="hidden sm:inline">Blocked Services & SafeSearch</span>
-						<span class="sm:hidden">Services</span>
-					</Tabs.Trigger>
 				</Tabs.List>
 			</div>
 
-			{#if activeTab !== "services"}
-				<div class="flex items-center gap-2 w-full sm:w-auto">
-					<div class="relative flex-1 sm:w-60 sm:flex-initial">
-						<SearchIcon class="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
-						<Input
-							type="text"
-							placeholder="Search rules..."
-							class="pl-8 h-8 text-xs font-mono w-full"
-							bind:value={searchQuery}
-						/>
-					</div>
-
-					<Button
-						variant="outline"
-						size="sm"
-						class="h-8 gap-1.5 text-xs shrink-0"
-						onclick={() => (importDialogOpen = true)}
-					>
-						<FileTextIcon class="size-3.5" />
-						<span>Bulk Import</span>
-					</Button>
+			<div class="flex items-center gap-2 w-full sm:w-auto">
+				<div class="relative flex-1 sm:w-60 sm:flex-initial">
+					<SearchIcon class="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
+					<Input
+						type="text"
+						placeholder="Search rules..."
+						class="pl-8 h-8 text-xs font-mono w-full"
+						bind:value={searchQuery}
+					/>
 				</div>
-			{/if}
+
+				<Button
+					variant="outline"
+					size="sm"
+					class="h-8 gap-1.5 text-xs shrink-0"
+					onclick={() => (importDialogOpen = true)}
+				>
+					<FileTextIcon class="size-3.5" />
+					<span>Bulk Import</span>
+				</Button>
+			</div>
 		</div>
 
 		<!-- Add Domain Inline Form -->
-		{#if activeTab !== "services"}
-			<Card.Root class="p-3">
-				<form onsubmit={handleAddDomain} class="flex items-center gap-2">
-					<Input
-						placeholder={activeTab === "allow"
-							? "Enter domain to always permit (e.g. tracking-exception.com)..."
-							: "Enter domain to block manually (e.g. bad-tracker.net)..."}
-						class="h-9 text-xs font-mono flex-1"
-						bind:value={newDomain}
-						required
-					/>
-					<Button type="submit" size="sm" class="h-9 gap-1.5 text-xs shrink-0" disabled={adding}>
-						<PlusIcon class="size-3.5" />
-						{activeTab === "allow" ? "Add to Allowlist" : "Add to Blocklist"}
-					</Button>
-				</form>
-			</Card.Root>
-		{/if}
+		<Card.Root class="p-3">
+			<form onsubmit={handleAddDomain} class="flex items-center gap-2">
+				<Input
+					placeholder={activeTab === "allow"
+						? "Enter domain to always permit (e.g. tracking-exception.com)..."
+						: "Enter domain to block manually (e.g. bad-tracker.net)..."}
+					class="h-9 text-xs font-mono flex-1"
+					bind:value={newDomain}
+					required
+				/>
+				<Button type="submit" size="sm" class="h-9 gap-1.5 text-xs shrink-0" disabled={adding}>
+					<PlusIcon class="size-3.5" />
+					{activeTab === "allow" ? "Add to Allowlist" : "Add to Blocklist"}
+				</Button>
+			</form>
+		</Card.Root>
 
 		<!-- Allowlist Tab Content -->
 		<Tabs.Content value="allow" class="m-0">
 			<Card.Root>
 				<Card.Header class="pb-3 border-b border-border/50">
 					<Card.Title class="text-sm font-semibold">
-						Explicit Whitelist Exceptions ({allowlist.length})
+						Explicit Whitelist Exceptions ({allowRules.length})
 					</Card.Title>
 					<Card.Description class="text-xs">
 						Domains on the allowlist always bypass blocklists, regex rules, and sinkhole policies.
@@ -250,13 +217,13 @@
 						<Table.Header>
 							<Table.Row class="hover:bg-transparent">
 								<Table.Head class="w-[70%]">Domain</Table.Head>
-								<Table.Head class="w-[15%]">Precedence</Table.Head>
+								<Table.Head class="w-[15%]">Status</Table.Head>
 								<Table.Head class="w-[15%] text-right">Action</Table.Head>
 							</Table.Row>
 						</Table.Header>
 
 						<Table.Body>
-							{#if loading && allowlist.length === 0}
+							{#if loading && allowRules.length === 0}
 								{#each Array(3) as _}
 									<Table.Row>
 										<Table.Cell><Skeleton class="h-4 w-60" /></Table.Cell>
@@ -275,18 +242,18 @@
 									</Table.Cell>
 								</Table.Row>
 							{:else}
-								{#each filteredAllowlist as entry (entry.id ?? entry.domain)}
+								{#each filteredAllowlist as entry, i (`${entry.domain}-${i}`)}
 									<Table.Row class="hover:bg-muted/40 transition-colors group">
 										<Table.Cell class="font-mono text-xs">
 											<div class="flex items-center gap-2">
-												<span class="font-medium text-foreground">{entry.domain}</span>
+												<span class="font-medium text-foreground" title={entry.domain}>{ruleLabel(entry)}</span>
 												<button
 													type="button"
-													onclick={() => copyText(entry.domain)}
+													onclick={() => copyText(ruleLabel(entry))}
 													class="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:text-primary rounded text-muted-foreground"
 													title="Copy domain"
 												>
-													{#if copiedDomain === entry.domain}
+													{#if copiedDomain === ruleLabel(entry)}
 														<CheckIcon class="size-3 text-emerald-500" />
 													{:else}
 														<CopyIcon class="size-3" />
@@ -296,16 +263,29 @@
 										</Table.Cell>
 
 										<Table.Cell>
-											<Badge variant="outline" class="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[10px] font-mono">
-												High Priority
-											</Badge>
+											<button
+												type="button"
+												onclick={() => handleToggleStatus(entry)}
+												class="transition-transform active:scale-95"
+												title="Click to toggle rule status"
+											>
+												{#if entry.enabled}
+													<Badge variant="outline" class="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[10px] font-mono cursor-pointer hover:bg-emerald-500/20">
+														Allowed
+													</Badge>
+												{:else}
+													<Badge variant="outline" class="bg-muted text-muted-foreground border-border text-[10px] font-mono cursor-pointer hover:bg-muted/80">
+														Disabled
+													</Badge>
+												{/if}
+											</button>
 										</Table.Cell>
 
 										<Table.Cell class="text-right">
 											<Button
 												variant="ghost"
 												size="sm"
-												onclick={() => handleRemoveAllow(entry.domain)}
+												onclick={() => handleRemoveRule(entry)}
 												class="size-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
 												title="Remove from allowlist"
 											>
@@ -355,18 +335,18 @@
 									</Table.Cell>
 								</Table.Row>
 							{:else}
-								{#each filteredCustomBlocks as entry (entry.id)}
+								{#each filteredCustomBlocks as entry, i (`${entry.domain}-${i}`)}
 									<Table.Row class="hover:bg-muted/40 transition-colors group">
 										<Table.Cell class="font-mono text-xs">
 											<div class="flex items-center gap-2">
-												<span class="font-medium text-foreground">{entry.domain}</span>
+												<span class="font-medium text-foreground" title={entry.domain}>{ruleLabel(entry)}</span>
 												<button
 													type="button"
-													onclick={() => copyText(entry.domain)}
+													onclick={() => copyText(ruleLabel(entry))}
 													class="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 hover:text-primary rounded text-muted-foreground"
 													title="Copy domain"
 												>
-													{#if copiedDomain === entry.domain}
+													{#if copiedDomain === ruleLabel(entry)}
 														<CheckIcon class="size-3 text-emerald-500" />
 													{:else}
 														<CopyIcon class="size-3" />
@@ -398,7 +378,7 @@
 											<Button
 												variant="ghost"
 												size="sm"
-												onclick={() => handleRemoveBlock(entry)}
+												onclick={() => handleRemoveRule(entry)}
 												class="size-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
 												title="Remove custom block"
 											>
@@ -412,9 +392,6 @@
 					</Table.Root>
 				</Card.Content>
 			</Card.Root>
-		</Tabs.Content>
-		<Tabs.Content value="services" class="m-0">
-			<DnsAdblockServicesTab />
 		</Tabs.Content>
 	</Tabs.Root>
 </div>

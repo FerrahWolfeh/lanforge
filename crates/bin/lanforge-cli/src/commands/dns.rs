@@ -47,7 +47,7 @@ pub enum DnsSubcommand {
     /// Manage multi-protocol upstream forwarding resolvers (UDP, TLS/DoT, QUIC/DoQ, HTTPS/DoH)
     #[command(alias = "upstream", alias = "resolvers")]
     Upstreams(DnsUpstreamsArgs),
-    /// Manage local DNS overrides, dynamic device tracking, and homelab SRV service discovery
+    /// Manage local DNS overrides and dynamic device tracking
     #[command(alias = "rewrite", alias = "records")]
     Rewrites(DnsRewritesArgs),
     /// Comprehensive adblocking, custom blocklists, allowlists, and filter source compilation
@@ -209,7 +209,7 @@ pub struct DnsRewritesArgs {
 pub enum DnsRewritesAction {
     /// List active DNS rewrite rules (default)
     List,
-    /// Add a DNS rewrite rule (supports IP, CNAME, `dev:<mac_or_host>`, `srv:<service>:<proto>:<dev>:<port>`)
+    /// Add a DNS rewrite rule (supports IP, CNAME, `dev:<mac_or_host>`)
     Add(DnsRewriteAddArgs),
     /// Remove a rewrite rule by numerical ID or domain name
     Remove {
@@ -239,7 +239,7 @@ pub struct DnsRewriteAddArgs {
     /// Fully qualified domain name to rewrite (e.g. nas.lan, _minecraft._tcp.lan)
     pub domain: Option<String>,
 
-    /// Answer target (e.g. `192.168.1.50`, `fd00::50`, `dev:00:11:22:33:44:55`, `srv:minecraft:tcp:nas:25565`, target.lan)
+    /// Answer target (e.g. `192.168.1.50`, `fd00::50`, `dev:00:11:22:33:44:55`, target.lan)
     pub answer: Option<String>,
 
     /// Explicit record type (A, AAAA, CNAME, Device, Service) - auto-inferred if omitted
@@ -1421,7 +1421,6 @@ pub fn infer_rewrite_type_and_answer(
         RewriteAnswer::Aaaa(_) => DnsRecordType::AAAA,
         RewriteAnswer::Cname(_) => DnsRecordType::CNAME,
         RewriteAnswer::Device { .. } => DnsRecordType::Device,
-        RewriteAnswer::Service { .. } => DnsRecordType::SRV,
     };
 
     let final_rtype = explicit_type.unwrap_or(inferred_rtype);
@@ -1491,9 +1490,7 @@ async fn add_rewrite(
 
     let answer_str = match args.answer.take() {
         Some(a) => a,
-        None => {
-            Text::new("Answer target (IP, CNAME, dev:MAC, srv:SVC:PROTO:DEV:PORT):").prompt()?
-        }
+        None => Text::new("Answer target (IP, CNAME, dev:MAC):").prompt()?,
     };
 
     let (rtype, answer) = infer_rewrite_type_and_answer(&domain, &answer_str, args.record_type)?;
@@ -2242,15 +2239,15 @@ mod tests {
         assert_eq!(rtype, DnsRecordType::Device);
         assert_eq!(ans.to_string(), "dev:00:11:22:33:44:55");
 
-        // SRV -> srv:...
-        let (rtype, ans) = infer_rewrite_type_and_answer(
-            "_minecraft._tcp.lan",
-            "srv:minecraft:tcp:nas:25565",
-            None,
-        )
-        .unwrap();
-        assert_eq!(rtype, DnsRecordType::SRV);
-        assert_eq!(ans.to_string(), "srv:minecraft:tcp:nas:25565");
+        // SRV rewrites were removed.
+        assert!(
+            infer_rewrite_type_and_answer(
+                "_minecraft._tcp.lan",
+                "srv:minecraft:tcp:nas:25565",
+                None
+            )
+            .is_err()
+        );
     }
 
     #[test]

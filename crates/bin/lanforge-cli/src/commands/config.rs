@@ -516,6 +516,8 @@ fn validate_config(printer: &Printer, file_path: &str) -> Result<()> {
 
     if !is_json {
         let cfg = ConfigFile::parse(&content).map_err(|e| eyre!("TOML validation failed: {e}"))?;
+        // Rules and addresses served (entries `[dns]` gets wrong are left out).
+        let dns = cfg.dns.to_config().0;
 
         if printer.json {
             let json_report = serde_json::json!({
@@ -524,8 +526,8 @@ fn validate_config(printer: &Printer, file_path: &str) -> Result<()> {
                 "hosts": cfg.hosts.len(),
                 "dhcp_v4_pools": cfg.dhcp.v4.pools.len(),
                 "dhcp_v6_pools": cfg.dhcp.v6.pools.len(),
-                "dns_rewrites": cfg.dns.rewrites.len(),
-                "dns_upstreams": cfg.dns.upstreams.len(),
+                "dns_rewrites": dns.rewrites.len(),
+                "dns_upstreams": dns.upstreams.len(),
                 "adblock_sources": cfg.adblock.sources.len(),
             });
             return printer.print_json(&json_report);
@@ -538,8 +540,8 @@ fn validate_config(printer: &Printer, file_path: &str) -> Result<()> {
         println!("  · Static hosts: {}", cfg.hosts.len());
         println!("  · DHCPv4 pools: {}", cfg.dhcp.v4.pools.len());
         println!("  · DHCPv6 pools: {}", cfg.dhcp.v6.pools.len());
-        println!("  · DNS rewrites: {}", cfg.dns.rewrites.len());
-        println!("  · DNS upstreams: {}", cfg.dns.upstreams.len());
+        println!("  · DNS rewrites: {}", dns.rewrites.len());
+        println!("  · DNS upstreams: {}", dns.upstreams.len());
         println!("  · Adblock source URLs: {}", cfg.adblock.sources.len());
         println!();
         return Ok(());

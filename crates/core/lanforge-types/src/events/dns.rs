@@ -28,8 +28,6 @@ pub enum DnsEvent {
     CacheFlush,
     /// DNS rewrite rules changed in the database.
     ConfigRewritesChanged,
-    /// DNS allowlist changed in the database.
-    ConfigAllowlistChanged,
     /// Adblock configuration changed in the database.
     ConfigAdblockChanged,
     /// Custom adblock rules (blacklist/whitelist) changed in the database.
@@ -62,7 +60,6 @@ impl DnsEvent {
             Self::QueryResolved(..) => "QueryResolved",
             Self::CacheFlush => "CacheFlush",
             Self::ConfigRewritesChanged => "ConfigRewritesChanged",
-            Self::ConfigAllowlistChanged => "ConfigAllowlistChanged",
             Self::ConfigAdblockChanged => "ConfigAdblockChanged",
             Self::ConfigAdblockRulesChanged => "ConfigAdblockRulesChanged",
             Self::ConfigUpstreamsChanged => "ConfigUpstreamsChanged",

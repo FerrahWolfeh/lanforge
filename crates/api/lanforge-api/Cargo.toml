@@ -28,3 +28,6 @@ futures.workspace = true
 [features]
 default = []
 adblock = []
+
+[dev-dependencies]
+tempfile.workspace = true
