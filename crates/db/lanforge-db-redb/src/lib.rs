@@ -116,6 +116,10 @@ impl fmt::Debug for RedbDatabase {
 impl RedbDatabase {
     /// Current database schema version.
     pub const CURRENT_SCHEMA_VERSION: u32 = 4;
+    /// Read cache of the runtime database (redb's default is 1 GiB). Its file is on tmpfs, so
+    /// cached pages were a second copy of RAM: at the 100k-query log cap the process held
+    /// ~40 MB of cache beside the ~33 MB file; with 4 MiB it holds ~14 MB, at the same speed.
+    pub const RUNTIME_CACHE_BYTES: usize = 4 << 20;
     /// Independent schema version for volatile runtime tables.
     pub const RUNTIME_SCHEMA_VERSION: u32 = 1;
 
@@ -133,7 +137,13 @@ impl RedbDatabase {
         if let Some(parent) = p.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
-        let db = Database::create(p).map_err(|e| DbError::Backend(e.to_string()))?;
+        let mut builder = Database::builder();
+        if volatile {
+            builder.set_cache_size(Self::RUNTIME_CACHE_BYTES);
+        }
+        let db = builder
+            .create(p)
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         tracing::debug!("Redb database opened at {}", p.display());
         let this = Self {
             db: Arc::new(db),
