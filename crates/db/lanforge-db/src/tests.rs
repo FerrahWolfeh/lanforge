@@ -19,3 +19,44 @@ async fn test_lanforge_db_schema_version() {
     let log_db = LogDb::open(":memory:").unwrap();
     assert_eq!(log_db.schema_version().unwrap(), 1);
 }
+
+/// The runtime database lives on tmpfs to be lost on reboot, but must survive a daemon restart,
+/// including one that never closes the database (crash, watchdog kill, exit with live `Arc`s):
+/// with `Durability::None` only a clean close wrote the last commits to the file. A child
+/// process writes and aborts; this test then reopens the same file.
+#[test]
+fn test_runtime_db_survives_a_daemon_crash() {
+    use lanforge_types::device::Device;
+    use lanforge_types::events::{LanforgeEvent, SystemEvent, TimedEvent};
+    use lanforge_types::identifiers::MacAddr;
+    use std::process::Command;
+    use std::sync::Arc;
+
+    const CHILD: &str = "LANFORGE_TEST_RUNTIME_DB_CHILD";
+    if let Ok(path) = std::env::var(CHILD) {
+        let log_db = LogDb::open(&path).unwrap();
+        assert_eq!(log_db.path(), Some(std::path::Path::new(&path)));
+        log_db
+            .record_log(&TimedEvent::new(LanforgeEvent::System(SystemEvent::SystemReady)))
+            .unwrap();
+        let device = Device::new(MacAddr([0x02, 0, 0, 0, 0, 0x42]));
+        log_db.sync_runtime_devices(&[Arc::new(device)], &[]).unwrap();
+        std::process::abort();
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("runtime.redb");
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "tests::test_runtime_db_survives_a_daemon_crash", "--nocapture"])
+        .env(CHILD, &path)
+        .status()
+        .unwrap();
+    assert!(!status.success(), "the child aborts after writing");
+
+    let path = path.to_str().unwrap();
+    let log_db = LogDb::open(path).unwrap();
+    assert_eq!(log_db.path(), Some(std::path::Path::new(path)), "reopened the same file");
+    assert_eq!(log_db.schema_version().unwrap(), 1);
+    assert_eq!(log_db.get_history(10).unwrap().len(), 1);
+    assert_eq!(log_db.load_runtime_devices().unwrap().len(), 1);
+}

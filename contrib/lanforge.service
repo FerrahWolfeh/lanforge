@@ -32,6 +32,9 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_BPF
 # Automatically provision /run/lanforge and /var/lib/lanforge with 0750 permissions (root:lanforge).
 RuntimeDirectory=lanforge
 RuntimeDirectoryMode=0750
+# /run/lanforge (runtime database: logs, DNS query history, device observations) is kept
+# across restarts and deploys; tmpfs still clears it on reboot.
+RuntimeDirectoryPreserve=yes
 StateDirectory=lanforge
 StateDirectoryMode=0750
 ConfigurationDirectory=lanforge

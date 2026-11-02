@@ -12,7 +12,7 @@ use lanforge_db_core::{DbError, DnsUpstreamEntry};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockRuleEntry, RewriteRule};
 pub use redb;
-use redb::{Database, Durability, ReadableDatabase, ReadableTable, WriteTransaction};
+use redb::{Database, ReadableDatabase, ReadableTable, WriteTransaction};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -121,15 +121,15 @@ impl RedbDatabase {
 
     /// Opens or creates the `redb` database at the specified file path.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
-        Self::open_with_durability(path.as_ref(), false)
+        Self::open_file(path.as_ref(), false)
     }
 
-    /// Opens a database whose writes are volatile and do not request a durable flush.
+    /// Opens the runtime database: its contents are recreated, not migrated, on a schema change.
     pub fn open_volatile(path: impl AsRef<Path>) -> Result<Self, DbError> {
-        Self::open_with_durability(path.as_ref(), true)
+        Self::open_file(path.as_ref(), true)
     }
 
-    fn open_with_durability(p: &Path, volatile: bool) -> Result<Self, DbError> {
+    fn open_file(p: &Path, volatile: bool) -> Result<Self, DbError> {
         if let Some(parent) = p.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
@@ -148,10 +148,10 @@ impl RedbDatabase {
 
     /// Opens an isolated in-memory temporary database (ideal for tests and recovery).
     pub fn open_temp() -> Result<Self, DbError> {
-        Self::open_temp_with_durability(false)
+        Self::open_temp_file(false)
     }
 
-    fn open_temp_with_durability(volatile: bool) -> Result<Self, DbError> {
+    fn open_temp_file(volatile: bool) -> Result<Self, DbError> {
         let temp = tempfile::NamedTempFile::new()?;
         let path = temp.path().to_path_buf();
         let db = Database::create(&path).map_err(|e| DbError::Backend(e.to_string()))?;
@@ -169,7 +169,7 @@ impl RedbDatabase {
     /// Opens an in-memory database without file persistence.
     #[must_use]
     pub fn open_in_memory() -> Self {
-        Self::open_temp_with_durability(true).expect("failed to open in-memory redb database")
+        Self::open_temp_file(true).expect("failed to open in-memory redb database")
     }
 
     /// Returns the database file path, if any.
@@ -212,12 +212,11 @@ impl RedbDatabase {
         Ok(self.read_table(table_def, f)?.unwrap_or_default())
     }
 
+    /// Every commit is durable, the runtime database's too: it lives on tmpfs, where a flush
+    /// costs nothing, and a `Durability::None` commit only reached the file on a clean close
+    /// (a crash or watchdog kill lost it). Its writes are already batched by the db worker.
     pub fn begin_write(&self) -> Result<WriteTransaction, DbError> {
-        let mut txn = self.db.begin_write()?;
-        if self.volatile {
-            txn.set_durability(Durability::None)?;
-        }
-        Ok(txn)
+        Ok(self.db.begin_write()?)
     }
 
     /// Runs related configuration writes in one atomic redb transaction.
