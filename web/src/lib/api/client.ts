@@ -504,7 +504,9 @@ export const dnsUpstreamRemove = (entry: { addr: string; protocol: string; domai
 		domain: entry.domain
 	});
 };
-export const dnsUpstreamClear = () => del<void>('/dns/upstreams/clear');
+/** Replaces the default (non domain-scoped) upstreams with plain-DNS servers in one change. */
+export const dnsUpstreamSetDefault = (addrs: string[]) =>
+	put<void>('/dns/upstreams', { upstreams: addrs.map(formatDnsAddr) });
 export const dnsUpstreamModeGet = () => get<{ mode: string }>('/dns/upstreams/mode');
 export const dnsUpstreamModeSet = (mode: string) => put<{ mode: string }>('/dns/upstreams/mode', { mode });
 export const dnsUpstreamTest = (entry: { addr: string; protocol?: string; domain?: string }) => {

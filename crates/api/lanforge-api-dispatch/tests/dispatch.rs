@@ -1199,7 +1199,11 @@ async fn device_rewrite_keeps_one_fallback_per_family() {
     add("dev:tv|192.0.2.20").await;
     add("dev:tv|2001:db8::20").await;
     let (answers, text) = tv(&dir);
-    assert_eq!(answers, ["dev:tv|192.0.2.20", "dev:tv|2001:db8::20"], "{text}");
+    assert_eq!(
+        answers,
+        ["dev:tv|192.0.2.20", "dev:tv|2001:db8::20"],
+        "{text}"
+    );
     assert!(text.contains("fallback = ["), "one table item:\n{text}");
 
     add("dev:tv|192.0.2.21").await;
@@ -1210,7 +1214,10 @@ async fn device_rewrite_keeps_one_fallback_per_family() {
 
     add("dev:tv").await;
     assert_eq!(tv(&dir).0, ["dev:tv"]);
-    assert_eq!(client_ctx.ctx.get_dns_rewrites(), dns_in_file(&dir).0.rewrites);
+    assert_eq!(
+        client_ctx.ctx.get_dns_rewrites(),
+        dns_in_file(&dir).0.rewrites
+    );
 }
 
 /// A change the file form cannot hold, or a file that cannot be written, changes nothing.
@@ -1233,9 +1240,61 @@ async fn a_refused_dns_change_writes_and_applies_nothing() {
     assert_eq!(client_ctx.ctx.get_dns_rewrites().len(), 1);
 
     std::fs::write(dir.path().join("lanforge.toml"), "[system\nbroken").unwrap();
-    let res = client_ctx.handle_dns_upstream_clear().await;
+    let res = client_ctx
+        .handle_dns_upstream_set_default(vec!["9.9.9.9:53".parse().unwrap()])
+        .await;
     assert!(matches!(res, Response::Error { .. }), "{res:?}");
     assert_eq!(client_ctx.ctx.get_dns_upstreams().len(), 2, "not applied");
+}
+
+/// A preset replaces the default upstreams in one change and keeps the domain-scoped ones; an
+/// empty preset is refused (a resolver without upstreams is set in the file).
+#[tokio::test]
+async fn dns_default_upstreams_are_replaced_in_one_change() {
+    let (client_ctx, dir) = owner_dns_client(true).await;
+    let res = client_ctx
+        .handle_dns_upstream_add(
+            "10.8.0.1:53".parse().unwrap(),
+            UpstreamProtocol::Udp,
+            Some("corp.lan".into()),
+        )
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    let quad9: Vec<std::net::SocketAddr> = vec![
+        "9.9.9.9:53".parse().unwrap(),
+        "[2620:fe::fe]:53".parse().unwrap(),
+    ];
+    let res = client_ctx
+        .handle_dns_upstream_set_default(quad9.clone())
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    let (dns, text) = dns_in_file(&dir);
+    let in_file: Vec<_> = dns
+        .upstreams
+        .iter()
+        .map(|u| (u.target.addr, u.target.domain.clone()))
+        .collect();
+    assert_eq!(
+        in_file,
+        vec![
+            ("10.8.0.1:53".parse().unwrap(), Some("corp.lan".to_string())),
+            (quad9[0], None),
+            (quad9[1], None),
+        ],
+        "{text}"
+    );
+    assert_eq!(client_ctx.ctx.get_dns_upstreams().len(), 3);
+
+    let res = client_ctx.handle_dns_upstream_set_default(Vec::new()).await;
+    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert_eq!(dns_in_file(&dir).0.upstreams.len(), 3, "file untouched");
+    assert_eq!(
+        client_ctx.ctx.get_dns_upstreams().len(),
+        3,
+        "memory untouched"
+    );
 }
 
 #[tokio::test]

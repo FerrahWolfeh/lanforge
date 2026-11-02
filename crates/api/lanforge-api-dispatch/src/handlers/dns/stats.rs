@@ -131,10 +131,35 @@ impl ClientContext {
         )
     }
 
-    pub async fn handle_dns_upstream_clear(&self) -> Response {
+    /// Replaces the default upstreams (those without a `domain`) with plain-DNS `addrs` in one
+    /// change; conditional upstreams stay. An empty list is refused: a resolver without upstreams
+    /// (local names only) is set in the configuration file.
+    pub async fn handle_dns_upstream_set_default(
+        &self,
+        addrs: Vec<std::net::SocketAddr>,
+    ) -> Response {
+        if addrs.is_empty() {
+            return Response::Error {
+                error: "At least one upstream is required; a resolver without upstreams \
+                        (local names only) is set in the configuration file"
+                    .into(),
+            };
+        }
         dns_reply(
-            self.change_dns(|dns| dns.upstreams.clear()),
-            "All upstreams cleared successfully".into(),
+            self.change_dns(|dns| {
+                dns.upstreams.retain(|u| u.target.domain.is_some());
+                dns.upstreams
+                    .extend(addrs.iter().map(|&addr| NamedUpstream {
+                        name: "default".to_string(),
+                        target: UpstreamTarget {
+                            addr,
+                            protocol: UpstreamProtocol::Udp,
+                            hostname: None,
+                            domain: None,
+                        },
+                    }));
+            }),
+            "Default upstreams replaced successfully".into(),
         )
     }
 

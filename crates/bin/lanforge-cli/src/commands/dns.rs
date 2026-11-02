@@ -163,12 +163,6 @@ pub enum DnsUpstreamsAction {
     Add(DnsUpstreamAddArgs),
     /// Remove an upstream forwarding resolver
     Remove(DnsUpstreamRemoveArgs),
-    /// Remove all configured upstream resolvers
-    Clear {
-        /// Bypass interactive confirmation prompt
-        #[arg(short = 'y', long)]
-        yes: bool,
-    },
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq, Default)]
@@ -1243,7 +1237,6 @@ async fn execute_upstreams(
         DnsUpstreamsAction::List => list_upstreams(client, printer).await,
         DnsUpstreamsAction::Add(add_args) => add_upstream(add_args, client, printer).await,
         DnsUpstreamsAction::Remove(rem_args) => remove_upstream(rem_args, client, printer).await,
-        DnsUpstreamsAction::Clear { yes } => clear_upstreams(yes, client, printer).await,
     }
 }
 
@@ -1380,26 +1373,6 @@ async fn remove_upstream(
     }
 
     printer.success(&format!("Removed DNS upstream {addr} ({proto})."));
-    Ok(())
-}
-
-async fn clear_upstreams(yes: bool, client: &LanforgeClient, printer: &Printer) -> Result<()> {
-    if !yes && !printer.yes {
-        let confirmed =
-            Confirm::new("Are you sure you want to remove ALL configured DNS upstreams?")
-                .with_default(false)
-                .prompt()?;
-        if !confirmed {
-            printer.info("Operation cancelled.");
-            return Ok(());
-        }
-    }
-
-    let resp = client.dns_upstream_clear().await?;
-    if printer.json {
-        return printer.print_json(&resp);
-    }
-    printer.success("All configured DNS upstreams cleared successfully.");
     Ok(())
 }
 
