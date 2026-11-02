@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
@@ -109,6 +110,17 @@ impl LanforgeService for WanService {
 }
 
 impl AsyncService for WanService {
+    fn stats(&self, ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
+        let wan = ctx.wan_snapshot();
+        vec![
+            (Cow::Borrowed("wan_state"), format!("{:?}", wan.state)),
+            (
+                Cow::Borrowed("interface"),
+                wan.ifname.unwrap_or_else(|| "-".to_string()),
+            ),
+        ]
+    }
+
     #[allow(clippy::too_many_lines)]
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         let mut generation = 1u64;
@@ -251,5 +263,39 @@ impl AsyncService for WanService {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use lanforge_core::bus::EventBus;
+    use lanforge_core::service::AsyncService;
+    use lanforge_core::context::state::State;
+
+    use super::*;
+
+    fn stat<'a>(stats: &'a [(Cow<'static, str>, String)], key: &str) -> Option<&'a str> {
+        stats.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
+    /// `lanforge status` builds the banner from the registration-time instance, so the
+    /// WAN state must come from the context the serving instance updates.
+    #[test]
+    fn banner_shows_the_live_wan_state() {
+        let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+        ctx.set_wan_snapshot(WanSnapshot {
+            state: WanState::Up,
+            ifindex: Some(7),
+            ifname: Some("ppp0".to_string()),
+            v4: None,
+            v6_prefixes: SmallVec::new(),
+            generation: 2,
+        });
+
+        let banner = WanService::new().banner(&ctx);
+        assert_eq!(stat(&banner.stats, "wan_state"), Some("Up"));
+        assert_eq!(stat(&banner.stats, "interface"), Some("ppp0"));
     }
 }

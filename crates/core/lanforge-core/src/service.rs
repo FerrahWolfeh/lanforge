@@ -286,11 +286,16 @@ pub trait LanforgeService: Send + Sync {
 /// A service that executes within a Tokio asynchronous task.
 pub trait AsyncService: LanforgeService {
     /// Returns service-specific key-value statistics and metrics for the status banner.
+    ///
+    /// Called on the instance registered for status, which is **not** the one that serves (the
+    /// runner builds a fresh instance per start): read live values through `ctx`, never from
+    /// fields `serve` updates.
     fn stats(&self, _ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
         Vec::new()
     }
 
-    /// Returns optional transport telemetry snapshot for the status banner.
+    /// Returns optional transport telemetry snapshot for the status banner. Same rule as
+    /// [`Self::stats`]: `self` is not the serving instance.
     fn transport_snapshot(
         &self,
         _ctx: &LanforgeContext,

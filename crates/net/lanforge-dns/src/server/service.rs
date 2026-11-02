@@ -254,7 +254,11 @@ impl AsyncService for DnsService {
     }
 
     fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let snap = self.stats.snapshot();
+        // The serving instance shares its counters through the context; `self` is the
+        // registration-time instance (see `AsyncService::stats`).
+        let snap = ctx
+            .get_shared::<DnsStats>()
+            .map_or_else(|| self.stats.snapshot(), |live| live.snapshot());
         let total = snap.requests_total;
         let hits = snap.cache_hits;
         let hit_rate = if total > 0 {

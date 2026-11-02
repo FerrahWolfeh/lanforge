@@ -281,7 +281,7 @@ fn format_service_summary(banner: &ServiceBanner) -> String {
         }
         ServiceId::Interfaces => {
             let links = stat("links_count").unwrap_or("0");
-            format!("{links} managed interface links")
+            format!("{links} interface links seen")
         }
         ServiceId::Wan => {
             let iface = stat("interface").unwrap_or("-");
