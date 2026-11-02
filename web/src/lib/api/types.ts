@@ -695,11 +695,6 @@ export interface Dhcpv6PoolConfig {
 	range_start?: string | null;
 	range_end?: string | null;
 	address?: string | null;
-	dns_servers?: string[];
-	search_domains?: string[];
-	ntp_servers?: string[];
-	lease_time?: number | null;
-	boot_file?: string | null;
 }
 
 export interface DhcpPoolsConfigResponse {

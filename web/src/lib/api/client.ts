@@ -647,8 +647,6 @@ export const dhcpPoolsConfigUpdate = (v4_pools: Dhcpv4PoolConfig[], v6_pools: Dh
 		...p,
 		name: p.name?.trim() || null,
 		address: p.address?.trim() || null,
-		boot_file: p.boot_file?.trim() || null,
-		lease_time: p.lease_time ? Number(p.lease_time) : null,
 	}));
 	return put<void>('/dhcp/pools/config', { v4_pools: sanitizedV4, v6_pools: sanitizedV6 });
 };

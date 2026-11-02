@@ -678,11 +678,6 @@ impl DhcpFile {
                 Dhcpv6PoolFile {
                     range,
                     address: p.address.clone(),
-                    lease: p.lease_time.map(HumanDuration::from),
-                    dns: p.dns_servers.clone(),
-                    search_domains: p.search_domains.clone(),
-                    ntp: p.ntp_servers.clone(),
-                    boot_file: p.boot_file.clone(),
                 },
             ));
         }
@@ -791,11 +786,6 @@ impl DhcpFile {
                 range_start,
                 range_end,
                 address: p.address.clone(),
-                dns_servers: p.dns.clone(),
-                search_domains: p.search_domains.clone(),
-                ntp_servers: p.ntp.clone(),
-                lease_time: p.lease.map(|l| lease_secs(l, &at, &mut issues)),
-                boot_file: p.boot_file.clone(),
             });
         }
 

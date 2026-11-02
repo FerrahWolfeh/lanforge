@@ -615,7 +615,6 @@ async fn test_static_host_creation_creates_all_leases_for_specific_mac() {
             address: Some("fd00::/64".to_string()),
             range_start: None,
             range_end: None,
-            lease_time: Some(Duration::from_hours(24).as_secs() as u32),
             ..Default::default()
         }],
         Some("fd00::".parse().unwrap()),

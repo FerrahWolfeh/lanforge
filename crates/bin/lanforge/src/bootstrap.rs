@@ -1727,7 +1727,6 @@ mod tests {
                 name: Some("Main Scope".into()),
                 range_start: "::100".parse().ok(),
                 range_end: "::1fff".parse().ok(),
-                lease_time: Some(86400),
                 ..Default::default()
             }],
         }

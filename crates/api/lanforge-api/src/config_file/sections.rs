@@ -423,16 +423,6 @@ pub struct Dhcpv6PoolFile {
     pub range: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lease: Option<HumanDuration>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dns: Vec<Ipv6Addr>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub search_domains: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ntp: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub boot_file: Option<String>,
 }
 
 /// IPv6 Router Advertisement (RFC 4861) configuration.
