@@ -12,12 +12,13 @@ use lanforge_types::network::dns::upstream::UpstreamTarget;
 
 use crate::handlers::dns::adblock::with_rule_only;
 use crate::handlers::dns::rewrite::upsert_rewrite;
+use crate::handlers::system::toml_sync::ChangeError;
 
 /// The import result of a section that `outcome` wrote (`count` entries) or refused.
 fn import_result(
     section: ImportSection,
     count: usize,
-    outcome: &Result<(), String>,
+    outcome: &Result<(), ChangeError>,
 ) -> ImportResult {
     match outcome {
         Ok(()) => ImportResult {
@@ -30,7 +31,7 @@ fn import_result(
             section,
             success: false,
             count: 0,
-            error: Some(e.clone()),
+            error: Some(e.to_string()),
         },
     }
 }
@@ -207,7 +208,7 @@ impl ClientContext {
                     section: ImportSection::Hosts,
                     success: false,
                     count: 0,
-                    error: Some(e),
+                    error: Some(e.to_string()),
                 },
             });
         }
@@ -280,7 +281,7 @@ impl ClientContext {
                     section,
                     success: false,
                     count: 0,
-                    error: Some(e.clone()),
+                    error: Some(e.to_string()),
                 },
             });
         }
@@ -461,7 +462,7 @@ impl ClientContext {
                         section,
                         success: false,
                         count: 0,
-                        error: Some(e.clone()),
+                        error: Some(e.to_string()),
                     },
                 });
             }
@@ -485,7 +486,7 @@ impl ClientContext {
                     section: ImportSection::PppoeConfig,
                     success: false,
                     count: 0,
-                    error: Some(e),
+                    error: Some(e.to_string()),
                 }),
             }
         }
@@ -530,7 +531,7 @@ impl ClientContext {
                         section,
                         success: false,
                         count: 0,
-                        error: Some(e.clone()),
+                        error: Some(e.to_string()),
                     },
                 });
             }
@@ -543,7 +544,7 @@ impl ClientContext {
                     section: ImportSection::FirewallConfig,
                     success: false,
                     count: 0,
-                    error: Some(e),
+                    error: Some(e.to_string()),
                 });
                 total_success = false;
             } else {
@@ -576,7 +577,7 @@ impl ClientContext {
                     section: ImportSection::TrafficConfig,
                     success: false,
                     count: 0,
-                    error: Some(e),
+                    error: Some(e.to_string()),
                 }),
             }
         }

@@ -145,6 +145,12 @@ pub enum RpcCallError {
     Internal(String),
     #[error("Invalid response type")]
     InvalidResponseType,
+    /// The request was refused; the reason is for the user.
+    #[error("{0}")]
+    Rejected(String),
+    /// The item the request names does not exist.
+    #[error("{0}")]
+    NotFound(String),
 }
 
 use lanforge_types::events::{

@@ -54,6 +54,23 @@ pub fn create_client_ctx(state: &AppState) -> ClientContext {
     }
 }
 
+/// The HTTP reply for a handler's failure `response`: 400 for a refusal, 404 for a missing item,
+/// a generic error by [`response_error_to_http`]; any other variant is not a failure here.
+#[must_use]
+pub fn failure_to_http(response: lanforge_api::api::Response) -> AxumResponse {
+    use lanforge_api::api::Response;
+    match response {
+        Response::Rejected { error } => {
+            (StatusCode::BAD_REQUEST, Json(HttpErrorResponse { error })).into_response()
+        }
+        Response::NotFound { error } => {
+            (StatusCode::NOT_FOUND, Json(HttpErrorResponse { error })).into_response()
+        }
+        Response::Error { error } => response_error_to_http(error),
+        _ => invalid_response_to_http(),
+    }
+}
+
 #[must_use]
 pub fn response_error_to_http(error: String) -> AxumResponse {
     let status = if error.contains("not found") {
@@ -83,10 +100,7 @@ macro_rules! http_response {
             lanforge_api::api::Response::Success(_) => {
                 axum::http::StatusCode::NO_CONTENT.into_response()
             }
-            lanforge_api::api::Response::Error { error } => {
-                $crate::routes::response_error_to_http(error)
-            }
-            _ => $crate::routes::invalid_response_to_http(),
+            other => $crate::routes::failure_to_http(other),
         }
     };
     // 2. Standard wrapper for any variant (e.g. Status, Success)
@@ -97,10 +111,7 @@ macro_rules! http_response {
                 axum::Json(lanforge_api::api::HttpWrappedResponse::wrap(res)),
             )
                 .into_response(),
-            lanforge_api::api::Response::Error { error } => {
-                $crate::routes::response_error_to_http(error)
-            }
-            _ => $crate::routes::invalid_response_to_http(),
+            other => $crate::routes::failure_to_http(other),
         }
     };
     // 3. Paginated wrapper (e.g. Devices, res => res.devices, res.meta)
@@ -114,10 +125,7 @@ macro_rules! http_response {
                 }),
             )
                 .into_response(),
-            lanforge_api::api::Response::Error { error } => {
-                $crate::routes::response_error_to_http(error)
-            }
-            _ => $crate::routes::invalid_response_to_http(),
+            other => $crate::routes::failure_to_http(other),
         }
     };
 }

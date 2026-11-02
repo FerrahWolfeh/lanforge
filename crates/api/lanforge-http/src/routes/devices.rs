@@ -9,7 +9,7 @@ use lanforge_api::api::{HttpPaginatedResponse, Response, group_devices};
 use lanforge_types::identifiers::MacAddr;
 use serde::Deserialize;
 
-use crate::routes::{create_client_ctx, invalid_response_to_http, response_error_to_http};
+use crate::routes::{create_client_ctx, failure_to_http};
 use crate::server::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -70,8 +70,7 @@ async fn handle_list_devices(
                     .into_response()
             }
         }
-        Response::Error { error } => response_error_to_http(error),
-        _ => invalid_response_to_http(),
+        other => failure_to_http(other),
     }
 }
 

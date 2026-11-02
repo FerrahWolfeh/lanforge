@@ -1,10 +1,10 @@
 use crate::ClientContext;
-use crate::handlers::system::toml_sync::Persisted;
+use crate::handlers::system::toml_sync::{ChangeError, Persisted};
 use lanforge_api::api::{DnsRewritesResponse, Response, SimpleSuccess};
 use lanforge_types::network::dns::adblock::RewriteRule;
 
 /// The reply to a DNS change that `[dns]` took (`what` done), kept in memory only, or refused.
-pub(crate) fn dns_reply(result: Result<Persisted, String>, what: String) -> Response {
+pub(crate) fn dns_reply(result: Result<Persisted, ChangeError>, what: String) -> Response {
     match result {
         Ok(Persisted::File) => Response::Success(SimpleSuccess { message: what }),
         Ok(Persisted::MemoryOnly) => Response::Success(SimpleSuccess {
@@ -12,7 +12,7 @@ pub(crate) fn dns_reply(result: Result<Persisted, String>, what: String) -> Resp
                 "{what} (in memory only, not saved: the configuration file is read-only or not set)"
             ),
         }),
-        Err(error) => Response::Error { error },
+        Err(e) => e.into(),
     }
 }
 
@@ -20,7 +20,8 @@ pub(crate) fn dns_reply(result: Result<Persisted, String>, what: String) -> Resp
 /// fallbacks compete as in the file's table form (one IPv4 and one IPv6 address, or one host
 /// name), so `dev:x|<v4>` and `dev:x|<v6>` stand side by side, kept next to each other.
 pub(crate) fn upsert_rewrite(rewrites: &mut Vec<RewriteRule>, rule: RewriteRule) {
-    let same = |r: &RewriteRule| r.domain.eq_ignore_ascii_case(&rule.domain) && r.rtype == rule.rtype;
+    let same =
+        |r: &RewriteRule| r.domain.eq_ignore_ascii_case(&rule.domain) && r.rtype == rule.rtype;
     let competes = |r: &RewriteRule| {
         same(r)
             && match (r.answer.fallback(), rule.answer.fallback()) {

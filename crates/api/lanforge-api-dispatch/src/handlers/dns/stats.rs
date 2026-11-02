@@ -139,7 +139,7 @@ impl ClientContext {
         addrs: Vec<std::net::SocketAddr>,
     ) -> Response {
         if addrs.is_empty() {
-            return Response::Error {
+            return Response::Rejected {
                 error: "At least one upstream is required; a resolver without upstreams \
                         (local names only) is set in the configuration file"
                     .into(),
@@ -171,7 +171,7 @@ impl ClientContext {
     pub async fn handle_dns_upstream_mode_set(&self, mode: UpstreamMode) -> Response {
         match self.change_dns(|dns| dns.upstream_mode = mode) {
             Ok(_) => Response::DnsUpstreamMode(DnsUpstreamModeResponse { mode }),
-            Err(error) => Response::Error { error },
+            Err(e) => e.into(),
         }
     }
 

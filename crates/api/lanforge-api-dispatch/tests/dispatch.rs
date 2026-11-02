@@ -299,7 +299,7 @@ async fn test_dns_rewrite_add_dynamic() {
         answer: RewriteAnswer::from_str("dev:raspie").unwrap(),
     };
     let res = client_ctx.handle_dns_rewrite_add(wrong).await;
-    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert!(client_ctx.ctx.get_dns_rewrites().is_empty());
 
     let rule = RewriteRule {
@@ -786,7 +786,7 @@ async fn firewall_with_a_zone_defined_twice_is_refused() {
 
     let res = client_ctx.handle_update_firewall_config(fw).await;
 
-    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert_eq!(client_ctx.ctx.get_firewall_config(), before);
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
@@ -905,7 +905,7 @@ async fn a_dhcp_pool_the_file_cannot_hold_is_refused_and_not_applied() {
     let res = client_ctx
         .handle_update_dhcp_pools_config(vec![reversed], Vec::new())
         .await;
-    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert_eq!(client_ctx.ctx.get_dhcp_v4_pools(), before);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "[system]\n");
 }
@@ -953,7 +953,7 @@ async fn ra_update_is_written_to_the_config_file_without_the_lan_interface() {
     let mut bad = cfg.clone();
     bad.prefixes[0].address = Some("not-ipv6".into());
     let res = client_ctx.handle_update_ra_config(bad).await;
-    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert_eq!(client_ctx.ctx.get_ra_server_config(), cfg);
 }
 
@@ -1232,7 +1232,7 @@ async fn a_refused_dns_change_writes_and_applies_nothing() {
             answer: RewriteAnswer::A("192.0.2.1".parse().unwrap()),
         })
         .await;
-    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert_eq!(
         std::fs::read_to_string(dir.path().join("lanforge.toml")).unwrap(),
         OWNER_DNS
@@ -1288,7 +1288,7 @@ async fn dns_default_upstreams_are_replaced_in_one_change() {
     assert_eq!(client_ctx.ctx.get_dns_upstreams().len(), 3);
 
     let res = client_ctx.handle_dns_upstream_set_default(Vec::new()).await;
-    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert_eq!(dns_in_file(&dir).0.upstreams.len(), 3, "file untouched");
     assert_eq!(
         client_ctx.ctx.get_dns_upstreams().len(),

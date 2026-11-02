@@ -1,4 +1,5 @@
 use crate::ClientContext;
+use crate::handlers::system::toml_sync::ChangeError;
 use lanforge_api::api::{HostConfigEntry, HostsResponse, Response, SimpleSuccess};
 use lanforge_types::{
     device::{Device, Hostname, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, StaticHost},
@@ -35,11 +36,8 @@ fn upsert(hosts: &mut Vec<StaticHost>, host: StaticHost) {
     }
 }
 
-fn not_saved(e: &str) -> Response {
-    tracing::error!("Host configuration not saved: {e}");
-    Response::Error {
-        error: format!("Host configuration not saved: {e}"),
-    }
+fn not_saved(e: ChangeError) -> Response {
+    e.response_in("Host configuration not saved")
 }
 
 impl ClientContext {
@@ -79,7 +77,7 @@ impl ClientContext {
         let host = static_host(&entry, self.ctx.get_device(&mac).as_deref());
         let persisted = match self.change_hosts(|hosts| upsert(hosts, host)) {
             Ok(p) => p,
-            Err(e) => return not_saved(&e),
+            Err(e) => return not_saved(e),
         };
         let _ = self.ctx.apply(DeviceUpdate::IgnoreDnsLogSet {
             mac,
@@ -122,7 +120,7 @@ impl ClientContext {
             dns_fallback: FieldUpdate::NoChange,
             origin: Origin::Static,
         };
-        let invalid = |what: &str| Response::Error {
+        let invalid = |what: &str| Response::Rejected {
             error: format!("'{value}' is not {what}"),
         };
 
@@ -211,7 +209,7 @@ impl ClientContext {
                 });
             }
             _ => {
-                return Response::Error {
+                return Response::Rejected {
                     error: format!("Unknown field: {field}"),
                 };
             }
@@ -219,7 +217,7 @@ impl ClientContext {
 
         let persisted = match self.change_hosts(|hosts| upsert(hosts, host)) {
             Ok(p) => p,
-            Err(e) => return not_saved(&e),
+            Err(e) => return not_saved(e),
         };
         let has_device_only = device_only.duid != FieldUpdate::NoChange
             || device_only.class != FieldUpdate::NoChange
@@ -246,7 +244,7 @@ impl ClientContext {
             Ok(persisted) => Response::Success(SimpleSuccess {
                 message: persisted.message("Host configuration"),
             }),
-            Err(e) => not_saved(&e),
+            Err(e) => not_saved(e),
         }
     }
 
@@ -255,7 +253,7 @@ impl ClientContext {
             Ok(count) => Response::Success(SimpleSuccess {
                 message: format!("Successfully imported {count} host configurations"),
             }),
-            Err(e) => not_saved(&e),
+            Err(e) => not_saved(e),
         }
     }
 
@@ -266,7 +264,7 @@ impl ClientContext {
         &self,
         hosts: Vec<HostConfigEntry>,
         replace: bool,
-    ) -> Result<usize, String> {
+    ) -> Result<usize, ChangeError> {
         let count = hosts.len();
         let devices: Vec<_> = hosts.iter().map(|h| self.ctx.get_device(&h.mac)).collect();
         let wanted: Vec<StaticHost> = hosts

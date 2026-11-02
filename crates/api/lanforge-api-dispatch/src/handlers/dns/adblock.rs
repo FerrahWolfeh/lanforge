@@ -12,6 +12,7 @@ use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 
 #[cfg(feature = "adblock")]
 use crate::handlers::dns::rewrite::dns_reply;
+use crate::handlers::system::toml_sync::ChangeError;
 use lanforge_types::network::dns::adblock::rules_file::RulesFile;
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::{AdblockRuleAction, AdblockRuleEntry};
@@ -22,7 +23,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 /// The rules text with `line` active and its opposite (the same rule with `@@` added or
 /// removed) gone: a domain is blocked or allowed, not both. `None` when nothing changes.
-pub(crate) fn with_rule_only(text: &str, line: &str) -> Result<Option<String>, String> {
+pub(crate) fn with_rule_only(text: &str, line: &str) -> Result<Option<String>, ChangeError> {
     let opposite = line
         .strip_prefix("@@")
         .map_or_else(|| format!("@@{line}"), str::to_string);
@@ -30,7 +31,7 @@ pub(crate) fn with_rule_only(text: &str, line: &str) -> Result<Option<String>, S
     match RulesFile::new(without.as_deref().unwrap_or(text)).with_rule(line) {
         Ok(Some(new)) => Ok(Some(new)),
         Ok(None) => Ok(without),
-        Err(issue) => Err(format!("\"{line}\": {issue}")),
+        Err(issue) => Err(ChangeError::Rejected(format!("\"{line}\": {issue}"))),
     }
 }
 
@@ -46,7 +47,7 @@ impl ClientContext {
         let persisted = if duration_secs.is_none() {
             match self.change_adblock(|a| a.config.enabled = enabled) {
                 Ok(p) => Some(p),
-                Err(error) => return Response::Error { error },
+                Err(e) => return e.into(),
             }
         } else {
             None
@@ -354,7 +355,7 @@ impl ClientContext {
     pub async fn handle_dns_adblock_rule_add(&self, domain: String, action: String) -> Response {
         let rule_action = match action.parse::<AdblockRuleAction>() {
             Ok(a) => a,
-            Err(e) => return Response::Error { error: e },
+            Err(error) => return Response::Rejected { error },
         };
         let line = AdblockRuleEntry::rule_line(&domain, rule_action);
         let id = RulesFile::rule_id(&line);
@@ -379,7 +380,9 @@ impl ClientContext {
                 RulesFile::new(text)
                     .without_rule(id)
                     .map(Some)
-                    .ok_or_else(|| format!("Adblock rule with ID {id} not found"))
+                    .ok_or_else(|| {
+                        ChangeError::NotFound(format!("Adblock rule with ID {id} not found"))
+                    })
             }),
             format!("Adblock rule {id} removed"),
         )
@@ -399,7 +402,9 @@ impl ClientContext {
             self.change_adblock_rules(|text| {
                 let file = RulesFile::new(text);
                 if !file.rule_entries().iter().any(|r| r.id == Some(id)) {
-                    return Err(format!("Adblock rule with ID {id} not found"));
+                    return Err(ChangeError::NotFound(format!(
+                        "Adblock rule with ID {id} not found"
+                    )));
                 }
                 Ok(file.with_rule_enabled(id, enabled))
             }),

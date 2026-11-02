@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::ClientContext;
-use lanforge_api::api::SystemConfigExport;
+use lanforge_api::api::{Response, SystemConfigExport};
 use lanforge_api::config_file::{
     AdblockFile, AdblockSettings, ConfigFile, SectionSet, patch_sections, persist_sections,
     toml_edit::DocumentMut, write_toml_atomically as api_write_toml_atomically,
@@ -34,6 +34,61 @@ pub fn generate_toml_from_export(
     cfg.render_full().unwrap_or_default()
 }
 
+/// Why a configuration change was not made: nothing was written nor applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangeError {
+    /// The value is refused (the file form cannot hold it, a conflict): the caller's to fix.
+    Rejected(String),
+    /// The item the change names does not exist.
+    NotFound(String),
+    /// The configuration file could not be written: the server's failure.
+    Failed(String),
+}
+
+impl ChangeError {
+    /// The reason, for the user.
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        match self {
+            Self::Rejected(e) | Self::NotFound(e) | Self::Failed(e) => e,
+        }
+    }
+
+    /// The API reply, its reason prefixed with `context` ("DNS configuration not saved", ...).
+    /// A failure to write is logged: it is the server's, not the user's.
+    #[must_use]
+    pub fn response_in(self, context: &str) -> Response {
+        let error = format!("{context}: {}", self.reason());
+        match self {
+            Self::Rejected(_) => Response::Rejected { error },
+            Self::NotFound(_) => Response::NotFound { error },
+            Self::Failed(_) => {
+                tracing::error!("{error}");
+                Response::Error { error }
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for ChangeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.reason())
+    }
+}
+
+impl From<ChangeError> for Response {
+    fn from(e: ChangeError) -> Self {
+        match e {
+            ChangeError::Rejected(error) => Self::Rejected { error },
+            ChangeError::NotFound(error) => Self::NotFound { error },
+            ChangeError::Failed(error) => {
+                tracing::error!("configuration not saved: {error}");
+                Self::Error { error }
+            }
+        }
+    }
+}
+
 /// Whether a config change reached the config file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Persisted {
@@ -64,7 +119,7 @@ impl ClientContext {
         &self,
         sections: SectionSet,
         fill: impl FnOnce(&mut ConfigFile),
-    ) -> Result<Persisted, String> {
+    ) -> Result<Persisted, ChangeError> {
         if !self.ctx.is_config_writable() {
             return Ok(Persisted::MemoryOnly);
         }
@@ -76,7 +131,7 @@ impl ClientContext {
         let _file_guard = self.ctx.config_file_lock();
         persist_sections(&path, &cfg, sections)
             .map(|()| Persisted::File)
-            .map_err(|e| format!("cannot write {}: {e}", path.display()))
+            .map_err(|e| ChangeError::Failed(format!("cannot write {}: {e}", path.display())))
     }
 
     /// Writes `fw` to `[firewall]` (see [`Self::persist_config_sections`]). Zones are keyed by
@@ -84,10 +139,13 @@ impl ClientContext {
     pub fn persist_firewall(
         &self,
         fw: &lanforge_types::network::firewall::FirewallConfig,
-    ) -> Result<Persisted, String> {
+    ) -> Result<Persisted, ChangeError> {
         let mut seen = std::collections::HashSet::new();
         if let Some(dup) = fw.zones.iter().find(|z| !seen.insert(z.name.as_str())) {
-            return Err(format!("zone '{}' is defined twice", dup.name));
+            return Err(ChangeError::Rejected(format!(
+                "zone '{}' is defined twice",
+                dup.name
+            )));
         }
         self.persist_config_sections(SectionSet::FIREWALL, |file| {
             file.firewall = lanforge_api::config_file::FirewallFile::from_config(fw);
@@ -102,7 +160,7 @@ impl ClientContext {
     pub fn change_dhcp(
         &self,
         change: impl FnOnce(&mut lanforge_api::config_file::DhcpSettings),
-    ) -> Result<Persisted, String> {
+    ) -> Result<Persisted, ChangeError> {
         let _serial = self.ctx.config_change_lock();
         let live = lanforge_api::config_file::DhcpSettings {
             options: self.ctx.get_dhcp_options(),
@@ -115,7 +173,7 @@ impl ClientContext {
         file.set_dhcp_settings(&wanted);
         let (dhcp, issues) = file.dhcp_settings();
         if !issues.is_empty() {
-            return Err(issues.join("; "));
+            return Err(ChangeError::Rejected(issues.join("; ")));
         }
         let persisted = self.persist_config_sections(SectionSet::DHCP | SectionSet::TFTP, |f| {
             f.dhcp = file.dhcp;
@@ -143,7 +201,7 @@ impl ClientContext {
     pub fn change_ra(
         &self,
         change: impl FnOnce(&mut lanforge_types::network::ra::RaServerConfig),
-    ) -> Result<Persisted, String> {
+    ) -> Result<Persisted, ChangeError> {
         let _serial = self.ctx.config_change_lock();
         let mut wanted = self.ctx.get_ra_server_config();
         change(&mut wanted);
@@ -154,7 +212,7 @@ impl ClientContext {
         let file = lanforge_api::config_file::RaFile::from_config(&wanted);
         let (mut ra, issues) = file.to_config();
         if !issues.is_empty() {
-            return Err(issues.join("; "));
+            return Err(ChangeError::Rejected(issues.join("; ")));
         }
         let persisted = self.persist_config_sections(SectionSet::RA, |f| f.ra = file)?;
         if ra.iface.is_none() {
@@ -172,7 +230,7 @@ impl ClientContext {
     pub fn change_hosts(
         &self,
         change: impl FnOnce(&mut Vec<lanforge_types::device::StaticHost>),
-    ) -> Result<Persisted, String> {
+    ) -> Result<Persisted, ChangeError> {
         let _serial = self.ctx.config_change_lock();
         let mut wanted = self.ctx.static_hosts();
         change(&mut wanted);
@@ -181,13 +239,16 @@ impl ClientContext {
                 .get_device(&h.mac)
                 .is_some_and(|d| d.origin == lanforge_types::device::Origin::System)
         }) {
-            return Err(format!("{} is this router; not a static host", router.mac));
+            return Err(ChangeError::Rejected(format!(
+                "{} is this router; not a static host",
+                router.mac
+            )));
         }
         let mut file = ConfigFile::default();
         file.set_static_hosts(&wanted);
         let (hosts, issues) = file.static_hosts();
         if !issues.is_empty() {
-            return Err(issues.join("; "));
+            return Err(ChangeError::Rejected(issues.join("; ")));
         }
         let persisted =
             self.persist_config_sections(SectionSet::HOSTS, |f| f.hosts = file.hosts)?;
@@ -241,14 +302,14 @@ impl ClientContext {
     pub fn change_dns(
         &self,
         change: impl FnOnce(&mut lanforge_api::config_file::DnsSettings),
-    ) -> Result<Persisted, String> {
+    ) -> Result<Persisted, ChangeError> {
         let _serial = self.ctx.config_change_lock();
         let mut wanted = self.live_dns_settings();
         change(&mut wanted);
         let file = lanforge_api::config_file::DnsFile::from_config(&wanted);
         let (dns, issues) = file.to_config();
         if !issues.is_empty() {
-            return Err(issues.join("; "));
+            return Err(ChangeError::Rejected(issues.join("; ")));
         }
         let persisted = self.persist_config_sections(SectionSet::DNS, |f| f.dns = file)?;
         self.apply_dns_settings(dns);
@@ -322,7 +383,7 @@ impl ClientContext {
     pub fn change_adblock(
         &self,
         change: impl FnOnce(&mut AdblockSettings),
-    ) -> Result<Persisted, String> {
+    ) -> Result<Persisted, ChangeError> {
         let _serial = self.ctx.config_change_lock();
         let live = self.live_adblock_settings();
         let (_, known) = AdblockFile::from_config(&live).to_config();
@@ -332,7 +393,7 @@ impl ClientContext {
         let (adblock, issues) = file.to_config();
         let new: Vec<String> = issues.into_iter().filter(|i| !known.contains(i)).collect();
         if !new.is_empty() {
-            return Err(new.join("; "));
+            return Err(ChangeError::Rejected(new.join("; ")));
         }
         let persisted = self.persist_config_sections(SectionSet::ADBLOCK, |f| f.adblock = file)?;
         self.apply_adblock_settings(&adblock);
@@ -359,8 +420,8 @@ impl ClientContext {
     /// `[adblock]`. A read-only config applies in memory only.
     pub fn change_adblock_rules(
         &self,
-        change: impl FnOnce(&str) -> Result<Option<String>, String>,
-    ) -> Result<Persisted, String> {
+        change: impl FnOnce(&str) -> Result<Option<String>, ChangeError>,
+    ) -> Result<Persisted, ChangeError> {
         let _serial = self.ctx.config_change_lock();
         let live = self.ctx.get_dns_adblock_rules();
         let Some(text) = change(&live)? else {
@@ -375,11 +436,13 @@ impl ClientContext {
                 }
                 let rules_path = adblock.rules_path(&path).unwrap_or_default();
                 if let Some(dir) = rules_path.parent() {
-                    std::fs::create_dir_all(dir)
-                        .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+                    std::fs::create_dir_all(dir).map_err(|e| {
+                        ChangeError::Failed(format!("cannot create {}: {e}", dir.display()))
+                    })?;
                 }
-                write_toml_atomically(&rules_path, &text)
-                    .map_err(|e| format!("cannot write {}: {e}", rules_path.display()))?;
+                write_toml_atomically(&rules_path, &text).map_err(|e| {
+                    ChangeError::Failed(format!("cannot write {}: {e}", rules_path.display()))
+                })?;
                 if !named {
                     let file = AdblockFile::from_config(&adblock);
                     self.persist_config_sections(SectionSet::ADBLOCK, |f| f.adblock = file)?;
