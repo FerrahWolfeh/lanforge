@@ -5,10 +5,7 @@ use futures::channel::mpsc::UnboundedReceiver;
 use lanforge_core::bus::EventBus;
 use lanforge_core::context::state::State;
 use lanforge_core::context::{ConfigPatch, LanforgeContext};
-use lanforge_db::{
-    DnsStore, FirewallConfigStore, LanforgeDb, LogDb, LogStore, PppoeConfigStore, RaConfigStore,
-    TrafficConfigStore, UserStore,
-};
+use lanforge_db::{LanforgeDb, LogDb, LogStore, PrefixStore, UserStore};
 #[cfg(feature = "dhcp")]
 use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
 use lanforge_discovery::refresh_interface;
@@ -19,10 +16,6 @@ use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
 #[cfg(feature = "dhcp")]
 use lanforge_types::network::dhcp::Dhcpv4Pool;
-#[cfg(feature = "dns")]
-use lanforge_types::network::dns::AdblockUrlEntry;
-#[cfg(feature = "dns")]
-use lanforge_types::network::dns::adblock::AdblockRuleEntry;
 use lanforge_types::network::ra::PreviousLanPrefixes;
 use lanforge_types::network::{
     IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, classify_ipv6, is_ula,
@@ -171,8 +164,7 @@ impl Bootstrapper {
         let host_ifaces = interfaces();
         let target_ifindex = Self::find_target_interface(&mut cfg, &host_ifaces)?;
         let (initial_table, db, log_db) = Self::init_device_table(&mut cfg, &host_ifaces)?;
-        // Logged here, after the cut-overs (`seed_provisioned_configs`): an old file form they
-        // replace is not a problem of the file that runs.
+        // Logged once, after the start-up configs are derived.
         cfg.config_issues =
             lanforge_api::config_file::log_issues(std::mem::take(&mut cfg.config_issues));
         let db = Arc::new(db);
@@ -395,8 +387,8 @@ impl Bootstrapper {
 
         if is_provisioned {
             let config_path = PathBuf::from(&cfg.config_path);
-            crate::config::sync::sync_boot_config(&config_path, &db, cfg.config_writable)?;
-            Self::seed_provisioned_configs(&db, cfg)?;
+            crate::config::boot_file::ensure_boot_config(&config_path, cfg.config_writable)?;
+            Self::prepare_provisioned_configs(&db, cfg);
         }
 
         let mut table = db.load_table().unwrap_or_else(|e| {
@@ -432,10 +424,6 @@ impl Bootstrapper {
                 }
             }
             Err(error) => warn!(%error, "Could not hydrate volatile device observations"),
-        }
-
-        if is_provisioned {
-            Self::migrate_hosts(&db, cfg, &table)?;
         }
 
         // 2c. Check/reconcile DHCPv4 topology sanity against physical interface and host identity
@@ -557,64 +545,27 @@ impl Bootstrapper {
         is_provisioned
     }
 
-    fn seed_provisioned_configs(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
+    /// Warns about configuration an older binary left in the database (nothing reads it any
+    /// more: the config files are the only source) and derives the start-up configs that
+    /// depend on several sections.
+    fn prepare_provisioned_configs(db: &LanforgeDb, cfg: &mut Config) {
+        match db.legacy_config_keys() {
+            Ok(keys) if !keys.is_empty() => warn!(
+                ?keys,
+                "Config: the database still holds settings of an older lanforge; they are \
+                 ignored (configuration lives in '{}'). Upgrade through a release that moves \
+                 them, or set them in the file",
+                cfg.config_path
+            ),
+            Ok(_) => {}
+            Err(e) => warn!("Config: could not check the database for old settings: {e}"),
+        }
+
         #[cfg(feature = "dhcp")]
-        Self::migrate_dhcp_config(db, cfg)?;
-
-        #[cfg(feature = "ra")]
-        Self::migrate_ra_config(db, cfg)?;
-
-        #[cfg(feature = "dns")]
-        Self::migrate_dns_config(db, cfg)?;
-
-        #[cfg(feature = "dns")]
-        Self::migrate_adblock_config(db, cfg)?;
-
-        #[cfg(feature = "pppoe")]
-        Self::migrate_pppoe_config(db, cfg)?;
-
-        #[cfg(feature = "traffic")]
-        Self::migrate_traffic_config(db, cfg)?;
+        Self::sync_dhcp_service_configs(cfg);
 
         #[cfg(feature = "nft")]
-        Self::migrate_firewall_config(db, cfg)?;
-
-        Ok(())
-    }
-
-    /// Moves the DHCP options and pools an older binary kept in redb (three keys, the TFTP
-    /// options inside the first) into `[dhcp]` and `[tftp]` (once). A key that is missing keeps
-    /// what the file has.
-    #[cfg(feature = "dhcp")]
-    fn migrate_dhcp_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
-        use lanforge_db::config_keys::{DHCP_OPTIONS, DHCP_V4_POOLS, DHCP_V6_POOLS};
-
-        let options = db.get(DHCP_OPTIONS)?;
-        let v4_pools = db.get(DHCP_V4_POOLS)?;
-        let v6_pools = db.get(DHCP_V6_POOLS)?;
-        if options.is_some() || v4_pools.is_some() || v6_pools.is_some() {
-            let stored = lanforge_api::config_file::DhcpSettings {
-                options: options.unwrap_or_else(|| cfg.dhcp.options.clone()),
-                v4_pools: v4_pools.unwrap_or_else(|| cfg.dhcp.v4_pools.clone()),
-                v6_pools: v6_pools.unwrap_or_else(|| cfg.dhcp.v6_pools.clone()),
-            };
-            cfg.dhcp = stored.clone();
-            Self::move_section_to_file(
-                db,
-                cfg,
-                "DHCP",
-                &[
-                    DHCP_OPTIONS.name(),
-                    DHCP_V4_POOLS.name(),
-                    DHCP_V6_POOLS.name(),
-                ],
-                lanforge_api::config_file::SectionSet::DHCP
-                    | lanforge_api::config_file::SectionSet::TFTP,
-                |file| file.set_dhcp_settings(&stored),
-            )?;
-        }
-        Self::sync_dhcp_service_configs(cfg);
-        Ok(())
+        Self::apply_effective_firewall(cfg);
     }
 
     /// Carries `cfg.dhcp` (what the daemon runs) into the services' start-up configs.
@@ -666,398 +617,10 @@ impl Bootstrapper {
         }
     }
 
-    /// Config-storage cut-over for `[hosts]`: static hosts lived in the device table, mirrored
-    /// into the file by the db worker; the file is now their only source. Once, the table's
-    /// static hosts (what the daemon ran with) are merged into `[hosts]` — a host only the file
-    /// lists is kept — with a backup of the file, and a marker is set. Until the file can take
-    /// them the merge is used for this run; an unreadable `[hosts]` waits for the next boot.
-    fn migrate_hosts(db: &LanforgeDb, cfg: &mut Config, table: &State) -> Result<()> {
-        use lanforge_db::ConfigStore;
-        const MARKER: &str = "config_storage:hosts_in_file";
-
-        if db.get_meta(MARKER)?.is_some() {
-            return Ok(());
-        }
-        let Some(file_hosts) = cfg.static_hosts.as_ref() else {
-            return Ok(());
-        };
-        let mut hosts: Vec<lanforge_types::device::StaticHost> = table
-            .devices
-            .values()
-            .filter_map(|dev| dev.static_host())
-            .collect();
-        hosts.sort_by(|a, b| {
-            (a.hostname.to_lowercase(), a.mac).cmp(&(b.hostname.to_lowercase(), b.mac))
-        });
-        for host in file_hosts {
-            if !hosts.iter().any(|h| h.mac == host.mac) {
-                hosts.push(host.clone());
-            }
-        }
-        let moved = Self::move_section_to_file(
-            db,
-            cfg,
-            "static hosts",
-            &[],
-            lanforge_api::config_file::SectionSet::HOSTS,
-            |file| file.set_static_hosts(&hosts),
-        )?;
-        cfg.static_hosts = Some(hosts);
-        if moved {
-            db.set_meta(MARKER, &[1])?;
-        }
-        Ok(())
-    }
-
-    /// Moves the RA lists an older binary kept in redb (prefixes, RDNSS, DNSSL) into `[ra]`
-    /// (once); its other keys were already file-only. A key that is missing keeps what the
-    /// file has.
-    #[cfg(feature = "ra")]
-    fn migrate_ra_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
-        use lanforge_db::config_keys::{RA_DNSSL, RA_PREFIXES, RA_RDNSS};
-
-        let prefixes = db.get(RA_PREFIXES)?;
-        let rdnss = db.get(RA_RDNSS)?;
-        let dnssl = db.get(RA_DNSSL)?;
-        if prefixes.is_none() && rdnss.is_none() && dnssl.is_none() {
-            return Ok(());
-        }
-        if let Some(prefixes) = prefixes {
-            cfg.ra.prefixes = prefixes;
-        }
-        if let Some(rdnss) = rdnss {
-            cfg.ra.rdnss = rdnss;
-        }
-        if let Some(dnssl) = dnssl {
-            cfg.ra.dnssl = dnssl;
-        }
-        let stored = cfg.ra.clone();
-        Self::move_section_to_file(
-            db,
-            cfg,
-            "RA",
-            &[RA_PREFIXES.name(), RA_RDNSS.name(), RA_DNSSL.name()],
-            lanforge_api::config_file::SectionSet::RA,
-            |file| file.ra = lanforge_api::config_file::RaFile::from_config(&stored),
-        )
-        .map(|_| ())
-    }
-
-    /// Moves the DNS settings an older binary kept in redb (upstreams, upstream mode, reverse
-    /// resolvers, rewrites) into `[dns]` (once), with the listener settings the file already
-    /// had. A key that is missing keeps what the file has. An upstream without a name is named
-    /// after the domain it forwards, else `default`, as the database showed it.
-    #[cfg(feature = "dns")]
-    fn migrate_dns_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
-        use lanforge_api::config_file::{DnsFile, NamedUpstream, SectionSet};
-        use lanforge_db::config_keys::{
-            DNS_REVERSE_RESOLVERS, DNS_REWRITES, DNS_UPSTREAM_MODE, DNS_UPSTREAMS,
-        };
-
-        let upstreams = db.get(DNS_UPSTREAMS)?;
-        let mode = db.get(DNS_UPSTREAM_MODE)?;
-        let reverse = db.get(DNS_REVERSE_RESOLVERS)?;
-        let rewrites = db.stored_dns_rewrites()?;
-        if upstreams.is_none() && mode.is_none() && reverse.is_none() && rewrites.is_none() {
-            return Ok(());
-        }
-        let mut stored = cfg.dns.clone();
-        if let Some(upstreams) = upstreams {
-            stored.upstreams = upstreams
-                .into_iter()
-                .map(|entry| NamedUpstream {
-                    name: entry
-                        .name
-                        .clone()
-                        .or_else(|| entry.domain.clone())
-                        .unwrap_or_else(|| "default".to_string()),
-                    target: entry.to_target(),
-                })
-                .collect();
-        }
-        if let Some(mode) = mode {
-            stored.upstream_mode = mode;
-        }
-        if let Some(reverse) = reverse {
-            stored.reverse = reverse;
-        }
-        if let Some(rewrites) = rewrites {
-            stored.rewrites = rewrites
-                .into_iter()
-                .map(|rule| lanforge_types::network::dns::adblock::RewriteRule { id: None, ..rule })
-                .collect();
-        }
-        // The old file form of `[dns]` (`[dns.rewrites."x"] target = ...`) read as wrong
-        // entries; what the database held replaces it, so its issues go with it.
-        let file = DnsFile::from_config(&stored);
-        let (stored, issues) = file.to_config();
-        let moved = Self::move_section_to_file(
-            db,
-            cfg,
-            "DNS",
-            &[
-                DNS_UPSTREAMS.name(),
-                DNS_UPSTREAM_MODE.name(),
-                DNS_REVERSE_RESOLVERS.name(),
-                DNS_REWRITES.name(),
-            ],
-            SectionSet::DNS,
-            |f| f.dns = file,
-        )?;
-        if moved {
-            info!("Config: [dns] written from the database (old file form replaced)");
-        }
-        cfg.config_issues.retain(|i| !i.starts_with("[dns"));
-        cfg.config_issues.extend(issues);
-        cfg.set_dns(stored);
-        Ok(())
-    }
-
-    /// `text` with the stored rules' `lines` active (`# rule`: present but disabled), each once.
-    #[cfg(feature = "dns")]
-    fn with_stored_rules(mut text: String, lines: &[String]) -> String {
-        use lanforge_types::network::dns::adblock::rules_file::RulesFile;
-
-        for line in lines {
-            let (rule, enabled) = line
-                .strip_prefix("# ")
-                .map_or((line.as_str(), true), |r| (r, false));
-            match RulesFile::new(&text).with_rule(rule) {
-                Ok(Some(new)) => text = new,
-                Ok(None) => {}
-                Err(issue) => {
-                    warn!("Config: stored adblock rule \"{rule}\" not moved: {issue}");
-                    continue;
-                }
-            }
-            if !enabled
-                && let Some(new) =
-                    RulesFile::new(&text).with_rule_enabled(RulesFile::rule_id(rule), false)
-            {
-                text = new;
-            }
-        }
-        text
-    }
-
-    /// Writes a rules file (and its directory) for the cut-over; a failure keeps the database.
-    #[cfg(feature = "dns")]
-    fn write_rules_file(path: &std::path::Path, text: &str) -> bool {
-        let written = path
-            .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| lanforge_api::config_file::write_toml_atomically(path, text));
-        if let Err(e) = &written {
-            warn!(
-                "Config: could not write '{}' ({e}); adblock settings stay in the database",
-                path.display()
-            );
-        }
-        written.is_ok()
-    }
-
-    /// Moves the adblock settings an older binary kept in redb (settings, sources, allowlist and
-    /// manual rules) into `[adblock]` and the global rules file, once. The allowlist becomes
-    /// `@@||x^` lines and a stored rule the line it meant (`||x^`, a disabled one commented
-    /// out), appended to what the rules file already holds; the rules file is written before
-    /// `[adblock]`, both before the keys go. Source names are the ones the old sync gave the
-    /// file; source ids stay derived from the URL, so the compiled lists on disk are kept.
-    #[cfg(feature = "dns")]
-    fn migrate_adblock_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
-        use lanforge_api::config_file::{AdblockFile, AdblockSettings, SectionSet};
-        use lanforge_db::config_keys::{
-            ADBLOCK_CONFIG, ADBLOCK_RULES, ADBLOCK_URLS, DNS_ALLOWLIST,
-        };
-        use lanforge_types::network::dns::adblock::rules_file::RulesFile;
-
-        let config = db.get(ADBLOCK_CONFIG)?;
-        let urls = db.get(ADBLOCK_URLS)?;
-        let allowlist = db.get(DNS_ALLOWLIST)?;
-        let rules = db.get(ADBLOCK_RULES)?;
-        if config.is_none() && urls.is_none() && allowlist.is_none() && rules.is_none() {
-            return Ok(());
-        }
-        // The file's `[adblock]` is the old form (set aside) or the defaults: the database
-        // holds what ran.
-        let mut stored = cfg.adblock.clone();
-        if let Some(config) = config {
-            stored.config = config;
-        }
-        if let Some(urls) = urls {
-            stored.sources = urls
-                .into_iter()
-                .map(|u| AdblockUrlEntry {
-                    id: None,
-                    name: Some(lanforge_crypto::stable_id_or_hash(
-                        u.name.as_deref(),
-                        u.url.as_bytes(),
-                        "src",
-                    )),
-                    ..u
-                })
-                .collect();
-            stored.lists = stored
-                .sources
-                .iter()
-                .filter_map(|s| s.name.clone())
-                .collect();
-        }
-        stored
-            .rules
-            .get_or_insert_with(|| AdblockSettings::DEFAULT_RULES.to_string());
-
-        let path = std::path::Path::new(&cfg.config_path);
-        let lines = allowlist
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|d| AdblockRuleEntry::allowlist_line(d))
-            .chain(
-                rules
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(AdblockRuleEntry::to_rules_line),
-            )
-            .collect::<Vec<_>>();
-        let text = Self::with_stored_rules(stored.load_rules(path).0.unwrap_or_default(), &lines);
-
-        let rules_written = cfg.config_writable
-            && path.exists()
-            && stored
-                .rules_path(path)
-                .is_some_and(|rules_path| Self::write_rules_file(&rules_path, &text));
-        if rules_written {
-            let file = AdblockFile::from_config(&stored);
-            let moved = Self::move_section_to_file(
-                db,
-                cfg,
-                "adblock",
-                &[
-                    ADBLOCK_CONFIG.name(),
-                    ADBLOCK_URLS.name(),
-                    DNS_ALLOWLIST.name(),
-                    ADBLOCK_RULES.name(),
-                ],
-                SectionSet::ADBLOCK,
-                |f| f.adblock = file,
-            )?;
-            if moved {
-                info!(
-                    rules = lines.len(),
-                    "Config: [adblock] and its rules file written from the database (old file form replaced)"
-                );
-            }
-        }
-        let (stored, mut issues) = AdblockFile::from_config(&stored).to_config();
-        issues.extend(RulesFile::new(&text).issues(&format!(
-            "[adblock] rules \"{}\"",
-            stored.rules.as_deref().unwrap_or_default()
-        )));
-        cfg.config_issues.retain(|i| !i.starts_with("[adblock"));
-        cfg.config_issues.extend(issues);
-        cfg.adblock = stored;
-        cfg.adblock_rules = text;
-        Ok(())
-    }
-
-    /// Config-storage cut-over for a file-owned section (`SectionSet::FILE_OWNED`), whose only
-    /// source is now its table in the config file. The redb key an older binary left holds the
-    /// full configuration the daemon ran with (the file kept only part of it): it is written to
-    /// the file once, with a backup of the file, and then removed. Until the file can take it
-    /// (read-only config, write error) the key is kept; the caller uses the stored value anyway.
-    /// Returns whether the file took it.
-    fn move_section_to_file(
-        db: &LanforgeDb,
-        cfg: &Config,
-        name: &str,
-        keys: &[&str],
-        section: lanforge_api::config_file::SectionSet,
-        fill: impl FnOnce(&mut lanforge_api::config_file::ConfigFile),
-    ) -> Result<bool> {
-        use lanforge_api::config_file::{ConfigFile, persist_sections};
-
-        let path = std::path::Path::new(&cfg.config_path);
-        if !cfg.config_writable || !path.exists() {
-            warn!(
-                "Config: {name} settings stay in the database until '{}' is writable",
-                path.display()
-            );
-            return Ok(false);
-        }
-        let backup = path.with_extension("toml.bak");
-        let mut section_cfg = ConfigFile::default();
-        fill(&mut section_cfg);
-        let moved = std::fs::copy(path, &backup)
-            .and_then(|_| persist_sections(path, &section_cfg, section));
-        if let Err(e) = moved {
-            warn!(
-                "Config: could not move {name} settings to '{}' ({e}); keeping them in the database",
-                path.display()
-            );
-            return Ok(false);
-        }
-        db.write(|tx| keys.iter().try_for_each(|key| tx.remove_config(key)))?;
-        info!(
-            "Config: moved {name} settings from the database to '{}' (previous file kept as '{}')",
-            path.display(),
-            backup.display()
-        );
-        Ok(true)
-    }
-
-    #[cfg(feature = "pppoe")]
-    fn migrate_pppoe_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
-        let Some(stored) = db.load_pppoe_config()? else {
-            return Ok(());
-        };
-        cfg.pppoe_enabled = stored.enabled;
-        cfg.pppoe_toml = stored.clone();
-        Self::move_section_to_file(
-            db,
-            cfg,
-            "PPPoE",
-            &[lanforge_db::config_keys::PPPOE.name()],
-            lanforge_api::config_file::SectionSet::PPPOE,
-            |file| file.pppoe = stored,
-        )
-        .map(|_| ())
-    }
-
-    #[cfg(feature = "traffic")]
-    fn migrate_traffic_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
-        let Some(stored) = db.load_traffic_config()? else {
-            return Ok(());
-        };
-        cfg.traffic_toml = stored.clone();
-        Self::move_section_to_file(
-            db,
-            cfg,
-            "traffic",
-            &[lanforge_db::config_keys::TRAFFIC.name()],
-            lanforge_api::config_file::SectionSet::TRAFFIC,
-            |file| file.traffic = stored,
-        )
-        .map(|_| ())
-    }
-
-    /// Moves a firewall an older binary kept in redb into `[firewall]` (once), then derives the
-    /// firewall the daemon runs (`effective_firewall`): in memory only, the file keeps what the
-    /// admin wrote.
+    /// Derives the firewall the daemon runs from `[firewall]` (`effective_firewall`): in memory
+    /// only, the file keeps what the admin wrote.
     #[cfg(feature = "nft")]
-    fn migrate_firewall_config(db: &LanforgeDb, cfg: &mut Config) -> Result<()> {
-        if let Some(stored) = db.load_firewall_config()? {
-            cfg.firewall_toml = stored.clone();
-            Self::move_section_to_file(
-                db,
-                cfg,
-                "firewall",
-                &[lanforge_db::config_keys::FIREWALL.name()],
-                lanforge_api::config_file::SectionSet::FIREWALL,
-                |file| {
-                    file.firewall = lanforge_api::config_file::FirewallFile::from_config(&stored);
-                },
-            )?;
-        }
-
+    fn apply_effective_firewall(cfg: &mut Config) {
         #[cfg(feature = "traffic")]
         let sqm_enabled = cfg.traffic_toml.sqm.enabled;
         #[cfg(not(feature = "traffic"))]
@@ -1079,7 +642,6 @@ impl Bootstrapper {
         }
         cfg.firewall_enabled = effective.enabled;
         cfg.firewall_toml = effective;
-        Ok(())
     }
 
     fn log_db_status(
@@ -1537,103 +1099,12 @@ mod tests {
         );
     }
 
-    /// The cut-over moves the full `PPPoE` config an older binary kept in redb into the file,
-    /// once: every field survives, the rest of the file (comments included) is untouched, the
-    /// previous file is backed up and the key is gone.
-    #[cfg(feature = "pppoe")]
-    #[test]
-    fn pppoe_config_moves_from_the_database_to_the_file_once() {
-        use lanforge_api::config_file::ConfigFile;
-        use lanforge_types::network::pppoe::{AuthMethod, PppoeConfig};
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lanforge.toml");
-        let old_file = "# home router\n[system]\niface = \"lan0\" # LAN port\n\n\
-                        [pppoe]\nenabled = true\nwan_iface = \"wan0\"\nusername = \"user\"\n";
-        std::fs::write(&path, old_file).unwrap();
-        let mut cfg = config_with_db(&dir.path().join("config.redb"));
-        cfg.config_path = path.display().to_string();
-        cfg.config_writable = true;
-
-        let db = LanforgeDb::open_in_memory().unwrap();
-        let mut stored = PppoeConfig {
-            enabled: true,
-            wan_iface: "wan0".into(),
-            username: "user".into(),
-            password: "secret".into(),
-            auth: AuthMethod::Pap,
-            service_name: Some("isp".into()),
-            lcp_echo_interval_secs: 30,
-            ..PppoeConfig::default()
-        };
-        stored.nftables.bypass_vowifi = false;
-        stored.nftables.lan_ifaces = vec!["lan0".into()];
-        stored.terminal_probe.enabled = true;
-        db.save_pppoe_config(&stored).unwrap();
-
-        Bootstrapper::migrate_pppoe_config(&db, &mut cfg).unwrap();
-
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(ConfigFile::parse(&text).unwrap().pppoe, stored, "{text}");
-        assert!(text.contains("# home router") && text.contains("# LAN port"));
-        assert_eq!(cfg.pppoe_toml, stored);
-        assert!(db.load_pppoe_config().unwrap().is_none(), "key removed");
-        assert_eq!(
-            std::fs::read_to_string(path.with_extension("toml.bak")).unwrap(),
-            old_file
-        );
-
-        // Second boot: the file is the source, nothing moves.
-        std::fs::remove_file(path.with_extension("toml.bak")).unwrap();
-        Bootstrapper::migrate_pppoe_config(&db, &mut cfg).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
-        assert!(!path.with_extension("toml.bak").exists());
-    }
-
-    /// Same cut-over for traffic/SQM: the six SQM fields the old `[traffic]` dropped survive.
-    #[cfg(feature = "traffic")]
-    #[test]
-    fn traffic_config_moves_from_the_database_to_the_file_once() {
-        use lanforge_api::config_file::ConfigFile;
-        use lanforge_types::network::traffic::TrafficConfig;
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lanforge.toml");
-        std::fs::write(
-            &path,
-            "# box\n[traffic.sqm]\nenabled = true\ndownload_mbps = 770\n",
-        )
-        .unwrap();
-        let mut cfg = config_with_db(&dir.path().join("config.redb"));
-        cfg.config_path = path.display().to_string();
-        cfg.config_writable = true;
-        let db = LanforgeDb::open_in_memory().unwrap();
-        let mut stored = TrafficConfig::default();
-        stored.sqm.enabled = true;
-        stored.sqm.download_mbps = 770;
-        stored.sqm.upload_mbps = 380;
-        stored.sqm.rtt_ms = Some(40);
-        stored.sqm.per_host_isolation = false;
-        stored.sqm.raw_cake_args = Some("ack-filter".into());
-        stored.tuning.interfaces = vec!["lan0".into(), "wan0".into()];
-        db.save_traffic_config(&stored).unwrap();
-
-        Bootstrapper::migrate_traffic_config(&db, &mut cfg).unwrap();
-
-        let text = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(ConfigFile::parse(&text).unwrap().traffic, stored, "{text}");
-        assert!(text.starts_with("# box"));
-        assert_eq!(cfg.traffic_toml, stored);
-        assert!(db.load_traffic_config().unwrap().is_none(), "key removed");
-    }
-
     /// The owner's real firewall (2026-10-27, internal addresses replaced by documentation
-    /// ones) through the cut-over: the file it had, the redb value the daemon ran with. The
-    /// firewall the daemon runs afterwards must be the same value, and so the very same nft
+    /// ones): the file it has yields the firewall the daemon ran with, and so the very same nft
     /// ruleset, byte for byte (`ppp0` up, as on the box).
     #[cfg(all(feature = "nft", feature = "pppoe", feature = "traffic"))]
     #[test]
-    fn owner_firewall_cut_over_keeps_the_same_ruleset() {
+    fn owner_firewall_file_keeps_the_same_ruleset() {
         use lanforge_api::config_file::ConfigFile;
         use lanforge_nft::{FirewallConfig, RulesetBuilder};
 
@@ -1663,28 +1134,20 @@ mod tests {
              "interfaces": ["tailscale0", "podman*"], "masquerade": false, "mtu_fix": false,
              "name": "trusted", "open_ports": []}]
         }"#;
-        const OLD_FILE: &str = "[system]\niface = \"lan0\"\n\n[firewall]\nenabled = true\nflow_offload = false\nbypass_dns = true\nbypass_vowifi = true\ndefault_input_policy = \"drop\"\ndefault_forward_policy = \"drop\"\n\n[firewall.zones.external]\ninterfaces = [\"wan0\"]\ninput = \"drop\"\nforward = \"drop\"\nmasquerade = true\nmtu_fix = true\n\n[firewall.zones.internal]\ninterfaces = [\"lan0\"]\ninput = \"accept\"\nforward = \"accept\"\nmasquerade = false\nmtu_fix = false\nopen_ports = [\"22/tcp\", \"53/udp\", \"53/tcp\", \"67/udp\", \"8088/tcp\", \"9090/tcp\"]\n\n[firewall.zones.trusted]\ninterfaces = [\"tailscale0\", \"podman*\"]\ninput = \"accept\"\nforward = \"accept\"\nmasquerade = false\nmtu_fix = false\n\n[firewall.port_forwards.qBittorrent]\nproto = \"tcp\"\nport = 6881\nto = \"192.0.2.128\"\nto_port = 6881\ndescription = \"qBittorrent\"\n\n[firewall.port_forwards.\"qBittorrent [IPv6]\"]\nproto = \"tcp\"\nport = 6881\nto = \"2001:db8:cafe:3731::501\"\nto_port = 6881\ndescription = \"qBittorrent [IPv6]\"\n";
+        const FILE: &str = "[system]\niface = \"lan0\"\n\n[firewall]\nenabled = true\nflow_offload = false\nbypass_dns = true\nbypass_vowifi = true\ndefault_input_policy = \"drop\"\ndefault_forward_policy = \"drop\"\n\n[firewall.zones.external]\ninterfaces = [\"wan0\"]\ninput = \"drop\"\nforward = \"drop\"\nmasquerade = true\nmtu_fix = true\n\n[firewall.zones.internal]\ninterfaces = [\"lan0\"]\ninput = \"accept\"\nforward = \"accept\"\nmasquerade = false\nmtu_fix = false\nopen_ports = [\"22/tcp\", \"53/udp\", \"53/tcp\", \"67/udp\", \"8088/tcp\", \"9090/tcp\"]\n\n[firewall.zones.trusted]\ninterfaces = [\"tailscale0\", \"podman*\"]\ninput = \"accept\"\nforward = \"accept\"\nmasquerade = false\nmtu_fix = false\n\n[firewall.port_forwards.qBittorrent]\nproto = \"tcp\"\nport = 6881\nto = \"192.0.2.128\"\nto_port = 6881\ndescription = \"qBittorrent\"\n\n[firewall.port_forwards.\"qBittorrent [IPv6]\"]\nproto = \"tcp\"\nport = 6881\nto = \"2001:db8:cafe:3731::501\"\nto_port = 6881\ndescription = \"qBittorrent [IPv6]\"\n";
 
         let live: FirewallConfig = serde_json::from_str(LIVE).unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lanforge.toml");
-        std::fs::write(&path, OLD_FILE).unwrap();
-        let mut cfg = config_with_db(&dir.path().join("config.redb"));
-        cfg.config_path = path.display().to_string();
-        cfg.config_writable = true;
-        cfg.system.iface = "lan0".into();
-        // As on the box: SQM on (CAKE 770/380), PPPoE dataplane defaults.
-        cfg.traffic_toml.sqm.enabled = true;
-        let db = LanforgeDb::open_in_memory().unwrap();
-        db.save_firewall_config(&live).unwrap();
-
-        Bootstrapper::migrate_firewall_config(&db, &mut cfg).unwrap();
-
-        assert!(db.load_firewall_config().unwrap().is_none(), "key removed");
-        let file = ConfigFile::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let file = ConfigFile::parse(FILE).unwrap();
         let (from_file, issues) = file.firewall.to_config();
         assert!(issues.is_empty(), "{issues:?}");
         assert_eq!(from_file, live, "the file holds the live firewall");
+
+        let mut cfg = config_with_db(std::path::Path::new("memory"));
+        cfg.system.iface = "lan0".into();
+        // As on the box: SQM on (CAKE 770/380), PPPoE dataplane defaults.
+        cfg.traffic_toml.sqm.enabled = true;
+        cfg.firewall_toml = from_file;
+        Bootstrapper::apply_effective_firewall(&mut cfg);
         assert_eq!(cfg.firewall_toml, live, "the daemon runs the live firewall");
 
         let ruleset = |fw: &FirewallConfig| {
@@ -1697,16 +1160,6 @@ mod tests {
             .unwrap()
         };
         assert_eq!(ruleset(&cfg.firewall_toml), ruleset(&live));
-
-        // Next boot: the file is the only source and yields the same firewall again.
-        let mut next = config_with_db(&dir.path().join("config.redb"));
-        next.config_path = cfg.config_path.clone();
-        next.config_writable = true;
-        next.system.iface = "lan0".into();
-        next.traffic_toml.sqm.enabled = true;
-        next.firewall_toml = from_file;
-        Bootstrapper::migrate_firewall_config(&db, &mut next).unwrap();
-        assert_eq!(next.firewall_toml, live);
     }
 
     /// The owner's DHCP as redb holds it (`lanforge dhcp --json`, 2026-10-28; the pools filled
@@ -1749,57 +1202,6 @@ mod tests {
         }
     }
 
-    /// DHCP cut-over on the owner's data: the three redb keys land in `[dhcp]`/`[tftp]`
-    /// exactly, the rest of the file is kept, and the keys are gone.
-    #[cfg(feature = "dhcp")]
-    #[test]
-    fn dhcp_config_moves_from_the_database_to_the_file_once() {
-        use lanforge_api::config_file::ConfigFile;
-        use lanforge_db::DhcpConfigStore;
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lanforge.toml");
-        std::fs::write(
-            &path,
-            "# box\n[system]\niface = \"lan0\"\n\n[dhcp.v4]\nenabled = true\nlease = \"1d\"\n\n\
-             [dhcp.v4.pools.\"Primary LAN\"]\nrange = \"192.168.1.2-192.168.1.240\"\n",
-        )
-        .unwrap();
-        let mut cfg = config_with_db(&dir.path().join("config.redb"));
-        cfg.config_path = path.display().to_string();
-        cfg.config_writable = true;
-        let db = LanforgeDb::open_in_memory().unwrap();
-        let stored = owner_stored_dhcp();
-        db.save_dhcp_options(&stored.options).unwrap();
-        db.save_dhcp_v4_pools(&stored.v4_pools).unwrap();
-        db.save_dhcp_v6_pools(&stored.v6_pools).unwrap();
-
-        Bootstrapper::migrate_dhcp_config(&db, &mut cfg).unwrap();
-
-        let text = std::fs::read_to_string(&path).unwrap();
-        let (from_file, issues) = ConfigFile::parse(&text).unwrap().dhcp_settings();
-        assert!(issues.is_empty(), "{issues:?}");
-        assert_eq!(from_file, stored, "{text}");
-        assert!(text.starts_with("# box"));
-        assert!(text.contains("iface = \"lan0\""));
-        assert_eq!(cfg.dhcp, stored);
-        assert_eq!(cfg.dhcpv4_toml.pools, stored.v4_pools);
-        assert_eq!(cfg.dhcpv6_toml.pools, stored.v6_pools);
-        assert!(db.load_dhcp_options().unwrap().is_none(), "keys removed");
-        assert_eq!(db.load_dhcp_v4_pools().unwrap(), Vec::new());
-        assert_eq!(db.load_dhcp_v6_pools().unwrap(), Vec::new());
-
-        // Second boot: nothing left to move, the file is the source.
-        let before = std::fs::read_to_string(&path).unwrap();
-        let mut cfg2 = config_with_db(&dir.path().join("config.redb"));
-        cfg2.config_path = cfg.config_path.clone();
-        cfg2.config_writable = true;
-        cfg2.dhcp = from_file;
-        Bootstrapper::migrate_dhcp_config(&db, &mut cfg2).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
-        assert_eq!(cfg2.dhcp, stored);
-    }
-
     /// The host moved to a new address: the gateway it advertised follows, and the correction
     /// is saved to the file — kept in memory only, the next boot (whose host record already
     /// has the new address) would advertise the old gateway again.
@@ -1835,488 +1237,6 @@ mod tests {
         let (dhcp, _) = ConfigFile::parse(&text).unwrap().dhcp_settings();
         assert_eq!(dhcp.options.v4.router, Some(v4.ip()));
         assert_eq!(dhcp.v4_pools, owner_stored_dhcp().v4_pools);
-    }
-
-    /// The owner's `[dns]` as the hash sync wrote it (2026-10-28): the old file form.
-    #[cfg(feature = "dns")]
-    const OWNER_OLD_DNS: &str = "# box\n[dns]\nenabled = true\nlisten = \"[::]:53\"\n\n\
-        [dns.upstreams.default]\naddresses = [\"udp://1.1.1.1:53\", \"udp://1.0.0.1:53\", \
-        \"udp://[2606:4700:4700::1111]:53\", \"udp://[2606:4700:4700::1001]:53\"]\n\n\
-        [dns.rewrites.\"*.eonteam.xyz\"]\ntarget = \"dev:pixie\"\nrtype = \"DEVICE\"\n\n\
-        [adblock]\nenabled = true\nblocking_mode = \"nxdomain\"\nrefresh_time = \"03:00\"\n";
-
-    /// DNS cut-over on the owner's data: what redb held (four Cloudflare upstreams without a
-    /// name, sequential, one device rewrite) lands in `[dns]` exactly, in the new form; the
-    /// old form's issues go, `[adblock]` and the comment stay, the keys are gone, and a second
-    /// boot changes nothing.
-    #[cfg(feature = "dns")]
-    #[test]
-    fn dns_settings_move_from_the_database_to_the_file_once() {
-        use lanforge_api::config_file::{ConfigFile, DnsSettings, NamedUpstream};
-        use lanforge_db::DnsUpstreamStore;
-        use lanforge_db::config_keys::{
-            DNS_REVERSE_RESOLVERS, DNS_REWRITES, DNS_UPSTREAM_MODE, DNS_UPSTREAMS,
-        };
-        use lanforge_types::network::DnsRecordType;
-        use lanforge_types::network::dns::adblock::{RewriteAnswer, RewriteRule};
-        use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamProtocol};
-        use std::str::FromStr;
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lanforge.toml");
-        std::fs::write(&path, OWNER_OLD_DNS).unwrap();
-        let mut cfg = config_with_db(&dir.path().join("config.redb"));
-        cfg.config_path = path.display().to_string();
-        cfg.config_writable = true;
-        let (from_old_file, old_issues) = ConfigFile::parse(OWNER_OLD_DNS).unwrap().dns.to_config();
-        assert_eq!(old_issues.len(), 1, "the old rewrite form reads as wrong");
-        cfg.config_issues = old_issues;
-        cfg.set_dns(from_old_file);
-
-        let db = LanforgeDb::open_in_memory().unwrap();
-        let cloudflare = [
-            "1.1.1.1:53",
-            "1.0.0.1:53",
-            "[2606:4700:4700::1111]:53",
-            "[2606:4700:4700::1001]:53",
-        ];
-        for addr in cloudflare {
-            db.add_dns_upstream(addr.parse().unwrap(), UpstreamProtocol::Udp, None)
-                .unwrap();
-        }
-        db.save_dns_upstream_mode(UpstreamMode::Sequential).unwrap();
-        db.upsert_dns_rewrite(
-            "*.eonteam.xyz",
-            DnsRecordType::Device,
-            &RewriteAnswer::from_str("dev:pixie").unwrap(),
-        )
-        .unwrap();
-        db.write(|tx| tx.set(DNS_REVERSE_RESOLVERS, &Vec::new()))
-            .unwrap();
-
-        Bootstrapper::migrate_dns_config(&db, &mut cfg).unwrap();
-
-        let expected = DnsSettings {
-            enabled: true,
-            listen: Some("[::]:53".parse().unwrap()),
-            upstream_mode: UpstreamMode::Sequential,
-            upstreams: cloudflare
-                .iter()
-                .map(|a| NamedUpstream {
-                    name: "default".into(),
-                    target: format!("udp://{a}").parse().unwrap(),
-                })
-                .collect(),
-            reverse: Vec::new(),
-            rewrites: vec![RewriteRule {
-                id: None,
-                domain: "*.eonteam.xyz".into(),
-                rtype: DnsRecordType::Device,
-                answer: RewriteAnswer::from_str("dev:pixie").unwrap(),
-            }],
-        };
-        let text = std::fs::read_to_string(&path).unwrap();
-        let (from_file, issues) = ConfigFile::parse(&text).unwrap().dns.to_config();
-        assert!(issues.is_empty(), "{issues:?}\n{text}");
-        assert_eq!(from_file, expected, "{text}");
-        assert_eq!(cfg.dns, expected);
-        assert!(cfg.config_issues.is_empty(), "{:?}", cfg.config_issues);
-        assert!(text.contains("\"*.eonteam.xyz\" = \"dev:pixie\""), "{text}");
-        assert!(text.starts_with("# box"), "{text}");
-        assert!(text.contains("[adblock]\nenabled = true"), "{text}");
-        assert!(db.get(DNS_UPSTREAMS).unwrap().is_none(), "keys removed");
-        assert_eq!(db.get(DNS_UPSTREAM_MODE).unwrap(), None);
-        assert_eq!(db.get(DNS_REWRITES).unwrap(), None);
-        assert_eq!(db.get(DNS_REVERSE_RESOLVERS).unwrap(), None);
-
-        Bootstrapper::migrate_dns_config(&db, &mut cfg).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            text,
-            "second boot: no-op"
-        );
-        assert_eq!(cfg.dns, expected);
-    }
-
-    /// The owner's file as the box runs it (2026-10-28, `4813e5cd`): `[dns]` in the new form,
-    /// `[adblock]` still in the form the hash sync wrote (per-source `enabled`).
-    #[cfg(feature = "dns")]
-    const OWNER_OLD_ADBLOCK: &str = "# box\n[dns]\nenabled = true\nlisten = \"[::]:53\"\n\n\
-        [dns.rewrites]\n\"*.eonteam.xyz\" = \"dev:pixie\"\n\n\
-        [adblock]\nenabled = true\nblocking_mode = \"nxdomain\"\nrefresh_time = \"03:00\"\n\n\
-        [adblock.sources.src-7cc6f305]\n\
-        url = \"https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts\"\n\
-        format = \"hosts\"\nkind = \"blocklist\"\nenabled = true\n";
-
-    /// Adblock cut-over on the owner's data, through the real loader (`load_toml`): what redb
-    /// held (adblock on, the `StevenBlack` list, the 4 Bradesco allowlist entries) lands in
-    /// `[adblock]` and `adblock/global.rules` exactly; the source keeps its name and the id of
-    /// the list compiled on the box; the old form's issue goes, `[dns]` and the comment stay,
-    /// the keys are gone, and a second boot changes nothing.
-    #[cfg(feature = "dns")]
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn adblock_settings_move_from_the_database_to_the_files_once() {
-        use lanforge_api::config_file::{AdblockSettings, ConfigFile};
-        use lanforge_db::config_keys::{
-            ADBLOCK_CONFIG, ADBLOCK_RULES, ADBLOCK_URLS, DNS_ALLOWLIST,
-        };
-        use lanforge_types::network::dns::adblock::{
-            AdblockDbConfig, AdblockSourceFormat, AdblockUrlKind,
-        };
-
-        const STEVENBLACK: &str =
-            "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts";
-        const BRADESCO: [&str; 4] = [
-            "app-measurement.com",
-            "www.googletagmanager.com",
-            "js-cdn.dynatrace.com",
-            "analytics.google.com",
-        ];
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lanforge.toml");
-        std::fs::write(&path, OWNER_OLD_ADBLOCK).unwrap();
-        let loaded = crate::config::load_toml(path.to_str().unwrap());
-        assert_eq!(loaded.config_issues.len(), 1, "{:?}", loaded.config_issues);
-        assert!(loaded.config_issues[0].starts_with("[adblock] is invalid"));
-        let mut cfg = config_with_db(&dir.path().join("config.redb"));
-        cfg.config_path = path.display().to_string();
-        cfg.config_writable = true;
-        cfg.config_issues = loaded.config_issues;
-        cfg.adblock = loaded.adblock;
-        cfg.adblock_rules = loaded.adblock_rules;
-
-        let db = LanforgeDb::open_in_memory().unwrap();
-        let live = AdblockDbConfig {
-            enabled: true,
-            ..AdblockDbConfig::default()
-        };
-        let source = AdblockUrlEntry {
-            id: Some(1_023_162_918_584_372_960),
-            name: None,
-            url: STEVENBLACK.into(),
-            kind: AdblockUrlKind::Blocklist,
-            format: AdblockSourceFormat::Hosts,
-        };
-        db.write(|tx| {
-            tx.set(ADBLOCK_CONFIG, &live)?;
-            tx.set(ADBLOCK_URLS, &vec![source.clone()])?;
-            tx.set(
-                DNS_ALLOWLIST,
-                &BRADESCO.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            )?;
-            tx.set(ADBLOCK_RULES, &Vec::new())
-        })
-        .unwrap();
-
-        Bootstrapper::migrate_adblock_config(&db, &mut cfg).unwrap();
-
-        let expected = AdblockSettings {
-            config: live,
-            sources: vec![AdblockUrlEntry {
-                id: None,
-                name: Some("src-7cc6f305".into()),
-                ..source.clone()
-            }],
-            lists: vec!["src-7cc6f305".into()],
-            rules: Some("adblock/global.rules".into()),
-            ..AdblockSettings::default()
-        };
-        let rules = "@@||app-measurement.com^\n@@||www.googletagmanager.com^\n\
-                     @@||js-cdn.dynatrace.com^\n@@||analytics.google.com^\n";
-        let text = std::fs::read_to_string(&path).unwrap();
-        let (from_file, issues) = ConfigFile::parse(&text).unwrap().adblock.to_config();
-        assert!(issues.is_empty(), "{issues:?}\n{text}");
-        assert_eq!(from_file, expected, "{text}");
-        assert_eq!(cfg.adblock, expected);
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("adblock/global.rules")).unwrap(),
-            rules
-        );
-        assert_eq!(cfg.adblock_rules, rules);
-        let ids: Vec<i64> = cfg
-            .adblock
-            .global_sources()
-            .map(AdblockUrlEntry::source_id)
-            .collect();
-        assert_eq!(ids, vec![source.source_id()], "compiled list kept");
-        assert!(cfg.config_issues.is_empty(), "{:?}", cfg.config_issues);
-        assert!(text.starts_with("# box"), "{text}");
-        assert!(text.contains("\"*.eonteam.xyz\" = \"dev:pixie\""), "{text}");
-        assert!(db.get(ADBLOCK_CONFIG).unwrap().is_none(), "keys removed");
-        assert!(db.get(ADBLOCK_URLS).unwrap().is_none());
-        assert!(db.get(DNS_ALLOWLIST).unwrap().is_none());
-        assert!(db.get(ADBLOCK_RULES).unwrap().is_none());
-
-        // Second boot, through the loader again: nothing left to move, the files are the source.
-        let loaded = crate::config::load_toml(path.to_str().unwrap());
-        assert!(
-            loaded.config_issues.is_empty(),
-            "{:?}",
-            loaded.config_issues
-        );
-        assert_eq!(loaded.adblock, expected);
-        assert_eq!(loaded.adblock_rules, rules);
-        let mut cfg2 = config_with_db(&dir.path().join("config.redb"));
-        cfg2.config_path = cfg.config_path.clone();
-        cfg2.config_writable = true;
-        cfg2.adblock = loaded.adblock;
-        cfg2.adblock_rules = loaded.adblock_rules;
-        Bootstrapper::migrate_adblock_config(&db, &mut cfg2).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            text,
-            "second boot: no-op"
-        );
-        assert_eq!(cfg2.adblock, expected);
-    }
-
-    /// A stored rule becomes the line it meant, appended to a rules file the admin already
-    /// wrote (kept as written); a disabled one is commented out. A read-only config keeps the
-    /// keys and runs what the database held.
-    #[cfg(feature = "dns")]
-    #[test]
-    fn stored_rules_are_appended_to_the_rules_file_and_kept_when_read_only() {
-        use lanforge_db::config_keys::{ADBLOCK_RULES, DNS_ALLOWLIST};
-        use lanforge_types::network::dns::adblock::AdblockRuleAction;
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lanforge.toml");
-        std::fs::write(&path, "[adblock]\nrules = \"mine.rules\"\n").unwrap();
-        std::fs::write(dir.path().join("mine.rules"), "! mine\n||ads.example^\n").unwrap();
-        let db = LanforgeDb::open_in_memory().unwrap();
-        let rule = |domain: &str, action, enabled| AdblockRuleEntry {
-            id: Some(1),
-            name: None,
-            domain: domain.into(),
-            action,
-            enabled,
-        };
-        db.write(|tx| {
-            tx.set(DNS_ALLOWLIST, &vec!["ok.example".to_string()])?;
-            tx.set(
-                ADBLOCK_RULES,
-                &vec![
-                    rule("ads.example", AdblockRuleAction::Block, true),
-                    rule("off.example", AdblockRuleAction::Block, false),
-                ],
-            )
-        })
-        .unwrap();
-        let load = |writable| {
-            let loaded = crate::config::load_toml(path.to_str().unwrap());
-            let mut cfg = config_with_db(&dir.path().join("config.redb"));
-            cfg.config_path = path.display().to_string();
-            cfg.config_writable = writable;
-            cfg.adblock = loaded.adblock;
-            cfg.adblock_rules = loaded.adblock_rules;
-            cfg
-        };
-        let expected = "! mine\n||ads.example^\n@@||ok.example^\n# ||off.example^\n";
-
-        let mut read_only = load(false);
-        Bootstrapper::migrate_adblock_config(&db, &mut read_only).unwrap();
-        assert_eq!(read_only.adblock_rules, expected, "runs what redb held");
-        assert!(db.get(DNS_ALLOWLIST).unwrap().is_some(), "keys kept");
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("mine.rules")).unwrap(),
-            "! mine\n||ads.example^\n"
-        );
-
-        let mut cfg = load(true);
-        Bootstrapper::migrate_adblock_config(&db, &mut cfg).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("mine.rules")).unwrap(),
-            expected
-        );
-        assert_eq!(cfg.adblock.rules.as_deref(), Some("mine.rules"));
-        assert!(db.get(DNS_ALLOWLIST).unwrap().is_none(), "keys removed");
-    }
-
-    /// RA cut-over on the owner's data: the redb lists (ULA first) land in `[ra]` exactly, with
-    /// the scalars the file already had; the file's comment stays and the keys are gone.
-    #[cfg(feature = "ra")]
-    #[test]
-    fn ra_lists_move_from_the_database_to_the_file_once() {
-        use lanforge_api::config_file::ConfigFile;
-        use lanforge_types::network::ra::{
-            DnsslConfig, PrefixLifetime, PrefixSource, RAPrefix, RdnssConfig,
-        };
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lanforge.toml");
-        std::fs::write(
-            &path,
-            "# box\n[ra]\nenabled = true\nmanaged = true\nother_config = true\n\
-             max_interval = \"200s\"\nlifetime = \"10m\"\nmtu = 1500\n\n\
-             [ra.prefixes.auto_gua]\nsource = \"auto_gua\"\nvalid_lifetime = \"30d\"\n\
-             preferred_lifetime = \"7d\"\n",
-        )
-        .unwrap();
-        let mut cfg = config_with_db(&dir.path().join("config.redb"));
-        cfg.config_path = path.display().to_string();
-        cfg.config_writable = true;
-        cfg.ra = ConfigFile::parse(&std::fs::read_to_string(&path).unwrap())
-            .unwrap()
-            .ra
-            .to_config()
-            .0;
-        let db = LanforgeDb::open_in_memory().unwrap();
-        let prefixes = vec![
-            RAPrefix::ula("fd97:f00d:cafe:3731::/64"),
-            RAPrefix {
-                source: PrefixSource::AutoGua,
-                valid_lifetime: PrefixLifetime::Secs(2_592_000),
-                preferred_lifetime: PrefixLifetime::Secs(604_800),
-                ..RAPrefix::gua_dynamic()
-            },
-        ];
-        let rdnss = vec![RdnssConfig::new(vec![
-            "fd97:f00d:cafe:3731::1".parse().unwrap(),
-        ])];
-        let dnssl = vec![DnsslConfig {
-            domains: vec!["lan".into()],
-            lifetime: None,
-        }];
-        db.save_ra_prefixes(&prefixes).unwrap();
-        db.save_ra_rdnss(&rdnss).unwrap();
-        db.save_ra_dnssl(&dnssl).unwrap();
-
-        Bootstrapper::migrate_ra_config(&db, &mut cfg).unwrap();
-
-        let text = std::fs::read_to_string(&path).unwrap();
-        let (from_file, issues) = ConfigFile::parse(&text).unwrap().ra.to_config();
-        assert!(issues.is_empty(), "{issues:?}");
-        assert_eq!(from_file, cfg.ra, "{text}");
-        assert_eq!(from_file.prefixes, prefixes, "ULA stays first");
-        assert_eq!((from_file.rdnss, from_file.dnssl), (rdnss, dnssl));
-        assert_eq!(from_file.lifetime_secs, Some(600), "file scalars kept");
-        assert_eq!(from_file.mtu, Some(1500));
-        assert!(text.starts_with("# box"));
-        assert_eq!(db.load_ra_prefixes().unwrap(), Vec::new(), "keys removed");
-        assert_eq!(db.load_ra_rdnss().unwrap(), Vec::new());
-        assert_eq!(db.load_ra_dnssl().unwrap(), Vec::new());
-    }
-
-    /// Hosts cut-over on the owner's data: the table's static hosts (incl. a boot file the old
-    /// `[hosts]` could not hold) land in the file, a host only the file listed is kept, the
-    /// marker is set and a second boot changes nothing.
-    #[test]
-    fn static_hosts_move_from_the_device_table_to_the_file_once() {
-        use lanforge_api::config_file::ConfigFile;
-        use lanforge_types::device::{Ipv6AddrOrSuffix, StaticHost};
-        use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lanforge.toml");
-        let old_file = "# box\n[hosts.media-container]\nmac = \"02:4d:45:44:49:41\"\n\
-                        v4 = \"192.168.2.9\"\nv6_suffix = \"fd97:f00d:cafe:3731::f00f\"\ndns = false\n\n\
-                        [hosts.handwritten]\nmac = \"aa:bb:cc:00:00:01\"\nv4 = \"192.168.0.50\"\n";
-        std::fs::write(&path, old_file).unwrap();
-        let mut cfg = config_with_db(&dir.path().join("config.redb"));
-        cfg.config_path = path.display().to_string();
-        cfg.config_writable = true;
-        cfg.static_hosts = Some(ConfigFile::parse(old_file).unwrap().static_hosts().0);
-        let db = LanforgeDb::open_in_memory().unwrap();
-
-        let table_hosts = [
-            (
-                "02:4d:45:44:49:41",
-                "media-container",
-                "192.168.2.9",
-                Some("fd97:f00d:cafe:3731::f00f"),
-                None,
-            ),
-            (
-                "04:d9:f5:0a:25:94",
-                "solarium",
-                "192.168.0.128",
-                Some("::501"),
-                Some("pxelinux.0"),
-            ),
-            (
-                "bc:fc:e7:8a:a9:73",
-                "archie",
-                "192.168.0.2",
-                Some("::1057:cafe"),
-                None,
-            ),
-        ];
-        let mut table = State::new();
-        for (mac, name, v4, v6, boot) in table_hosts {
-            let _ = table.apply_update(
-                DeviceUpdate::CliHostUpdated {
-                    mac: MacAddr::parse(mac).unwrap(),
-                    update: Box::new(CliHostUpdate {
-                        hostname: FieldUpdate::Set(name.into()),
-                        duid: FieldUpdate::NoChange,
-                        v4_static: FieldUpdate::Set(v4.parse().unwrap()),
-                        v6_suffix: v6.and_then(Ipv6AddrOrSuffix::parse).into(),
-                        boot_file: boot.map(String::from).into(),
-                        dns_fallback: FieldUpdate::NoChange,
-                        class: FieldUpdate::NoChange,
-                        origin: Origin::Static,
-                    }),
-                },
-                &lanforge_core::context::state::DiscoveryStore::default(),
-            );
-        }
-
-        Bootstrapper::migrate_hosts(&db, &mut cfg, &table).unwrap();
-
-        let text = std::fs::read_to_string(&path).unwrap();
-        let (from_file, issues) = ConfigFile::parse(&text).unwrap().static_hosts();
-        assert!(issues.is_empty(), "{issues:?}");
-        let names: Vec<_> = from_file.iter().map(|h| h.hostname.as_str()).collect();
-        assert_eq!(
-            names,
-            ["archie", "media-container", "solarium", "handwritten"],
-            "{text}"
-        );
-        let solarium: &StaticHost = &from_file[2];
-        assert_eq!(solarium.boot_file.as_deref(), Some("pxelinux.0"));
-        assert!(text.starts_with("# box"));
-        assert!(!text.contains("dns ="), "{text}");
-        assert_eq!(cfg.static_hosts.as_deref(), Some(from_file.as_slice()));
-
-        // Second boot: the marker is set, the file is the only source.
-        std::fs::write(&path, "[hosts.archie]\nmac = \"bc:fc:e7:8a:a9:73\"\n").unwrap();
-        let mut cfg2 = config_with_db(&dir.path().join("config.redb"));
-        cfg2.config_path = cfg.config_path.clone();
-        cfg2.config_writable = true;
-        cfg2.static_hosts = Some(Vec::new());
-        Bootstrapper::migrate_hosts(&db, &mut cfg2, &table).unwrap();
-        assert_eq!(cfg2.static_hosts, Some(Vec::new()), "not merged again");
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            "[hosts.archie]\nmac = \"bc:fc:e7:8a:a9:73\"\n"
-        );
-    }
-
-    /// A file that cannot take the config keeps it in the database, in use.
-    #[cfg(feature = "pppoe")]
-    #[test]
-    fn pppoe_config_stays_in_the_database_if_the_file_cannot_take_it() {
-        use lanforge_types::network::pppoe::PppoeConfig;
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lanforge.toml");
-        std::fs::write(&path, "[pppoe\nbroken").unwrap();
-        let mut cfg = config_with_db(&dir.path().join("config.redb"));
-        cfg.config_path = path.display().to_string();
-        cfg.config_writable = true;
-        let db = LanforgeDb::open_in_memory().unwrap();
-        let stored = PppoeConfig {
-            username: "kept".into(),
-            ..PppoeConfig::default()
-        };
-        db.save_pppoe_config(&stored).unwrap();
-
-        Bootstrapper::migrate_pppoe_config(&db, &mut cfg).unwrap();
-
-        assert_eq!(cfg.pppoe_toml, stored);
-        assert_eq!(db.load_pppoe_config().unwrap(), Some(stored));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[pppoe\nbroken");
     }
 
     #[test]

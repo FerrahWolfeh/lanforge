@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use crate::config::DnsConfig;
 use crate::error::DnsError;
-use crate::resolver::builder::ResponseBuilder;
 use crate::utils::{
     extract_local_hostname, extract_local_hostname_wire, fast_lowercase, parse_arpa,
     parse_arpa_wire,
@@ -421,42 +420,6 @@ impl LocalResolver {
             return true;
         }
         false
-    }
-
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub fn resolve_local_fallback(
-        &self,
-        rb: &ResponseBuilder,
-        qname: &str,
-        qtype: DnsRecordType,
-        resp: &mut Vec<u8>,
-    ) -> Result<bool, DnsError> {
-        if matches!(
-            qtype,
-            DnsRecordType::A | DnsRecordType::AAAA | DnsRecordType::ANY
-        ) {
-            let zone = self.zone();
-            if let Some(hostname_slice) = extract_local_hostname(qname, &zone.labels) {
-                let safe_hostname = fast_lowercase(hostname_slice);
-                let (ips, device_exists) = self.resolve_ip_status(&safe_hostname, qtype);
-                if let Some(ips) = ips {
-                    resp.clear();
-                    resp.extend_from_slice(&rb.success_ips(ips)?);
-                    return Ok(true);
-                } else if device_exists {
-                    resp.clear();
-                    resp.extend_from_slice(&rb.empty_noerror()?);
-                    return Ok(true);
-                }
-            }
-        } else if qtype == DnsRecordType::PTR
-            && let Some((host, domain)) = self.resolve_ptr(qname)?
-        {
-            resp.clear();
-            resp.extend_from_slice(&rb.success_ptr(&host, &domain)?);
-            return Ok(true);
-        }
-        Ok(false)
     }
 }
 

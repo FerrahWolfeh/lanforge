@@ -1,5 +1,5 @@
 use crate::ClientContext;
-use crate::handlers::system::toml_sync::ChangeError;
+use crate::handlers::system::config_write::ChangeError;
 use lanforge_api::api::{HostConfigEntry, HostsResponse, Response, SimpleSuccess};
 use lanforge_types::{
     device::{Device, Hostname, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, StaticHost},

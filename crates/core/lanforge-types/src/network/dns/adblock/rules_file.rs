@@ -430,7 +430,7 @@ mod tests {
         }
     }
 
-    /// The owner's 4 allowlist entries, as the cut-over writes them.
+    /// The owner's 4 allowlist entries, as the config cut-over wrote them.
     const OWNER_GLOBAL_RULES: &str = "\
 ! Global manual rules (Bradesco Android app)
 @@||app-measurement.com^

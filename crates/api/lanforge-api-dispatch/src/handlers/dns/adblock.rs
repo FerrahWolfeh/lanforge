@@ -12,9 +12,9 @@ use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 
 #[cfg(feature = "adblock")]
 use crate::handlers::dns::rewrite::dns_reply;
-use crate::handlers::system::toml_sync::ChangeError;
+use crate::handlers::system::config_write::ChangeError;
 #[cfg(feature = "adblock")]
-use crate::handlers::system::toml_sync::Persisted;
+use crate::handlers::system::config_write::Persisted;
 use lanforge_types::network::dns::adblock::rules_file::RulesFile;
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::rules_file::RulesImport;

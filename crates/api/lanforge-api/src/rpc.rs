@@ -381,4 +381,6 @@ pub trait LanforgeRpc {
     fn traffic_telemetry(
         &self,
     ) -> impl Future<Output = Result<Box<TrafficTelemetryResponse>, RpcCallError>> + Send;
+    /// The configuration file as it is on disk.
+    fn system_config_toml(&self) -> impl Future<Output = Result<String, RpcCallError>> + Send;
 }

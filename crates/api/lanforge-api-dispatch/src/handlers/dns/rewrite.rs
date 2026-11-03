@@ -1,5 +1,5 @@
 use crate::ClientContext;
-use crate::handlers::system::toml_sync::{ChangeError, Persisted};
+use crate::handlers::system::config_write::{ChangeError, Persisted};
 use lanforge_api::api::{DnsRewritesResponse, Response, SimpleSuccess};
 use lanforge_types::network::dns::adblock::RewriteRule;
 

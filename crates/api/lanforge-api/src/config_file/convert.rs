@@ -6,8 +6,6 @@ use lanforge_types::device::Origin;
 use lanforge_types::network::dhcp::{
     DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, Dhcpv6Pool, TftpOptions,
 };
-use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::firewall::{
     FirewallConfig, FirewallMode, FirewallPolicy, FirewallStopAction, FirewallZone, HostPortRule,
     L4Protocol, PortForwardRule, ZoneForwarding,
@@ -22,15 +20,13 @@ use crate::api::devices::HostConfigEntry;
 use crate::api::dns::DnsUpstreamConfig;
 use crate::api::system::SystemConfigExport;
 
-use super::adblock::{AdblockFile, AdblockSettings};
-use super::dns::{DnsFile, DnsSettings, NamedUpstream};
+use super::ConfigFile;
 use super::duration::HumanDuration;
 use super::sections::{
     DhcpFile, Dhcpv4File, Dhcpv4PoolFile, Dhcpv6File, Dhcpv6PoolFile, FirewallFile,
     FirewallZoneFile, LifetimeFile, OpenPortFile, PortForwardFile, RaDnsslFile, RaFile,
     RaPrefixFile, RaRdnssFile, TftpFile, ZoneForwardingFile,
 };
-use super::{ConfigFile, StaticHost};
 
 fn policy_to_str(p: FirewallPolicy) -> &'static str {
     match p {
@@ -877,108 +873,6 @@ impl ConfigFile {
     }
 }
 
-impl From<&SystemConfigExport> for ConfigFile {
-    fn from(export: &SystemConfigExport) -> Self {
-        let mut cfg = ConfigFile::default();
-
-        if let Some(ref iface) = export.system_iface {
-            cfg.system.iface = iface.clone();
-        }
-
-        // 1. Hosts (static ones only; the router itself is not a host)
-        let hosts: Vec<StaticHost> = export
-            .hosts
-            .iter()
-            .filter(|h| h.origin == Origin::Static)
-            .map(|h| StaticHost {
-                mac: h.mac,
-                hostname: h.hostname.clone(),
-                v4: h.v4_fixed,
-                v6: h.v6_suffix,
-                boot_file: h.boot_file.clone(),
-            })
-            .collect();
-        cfg.set_static_hosts(&hosts);
-
-        // 2. DHCP options & pools, TFTP
-        if export.dhcp_options.is_some()
-            || export.dhcp_v4_pools.is_some()
-            || export.dhcp_v6_pools.is_some()
-        {
-            let options = export.dhcp_options.as_deref().cloned().unwrap_or_default();
-            cfg.tftp = TftpFile::from_options(&options.tftp);
-            cfg.dhcp = DhcpFile::from_config(&DhcpSettings {
-                options,
-                v4_pools: export.dhcp_v4_pools.clone().unwrap_or_default(),
-                v6_pools: export.dhcp_v6_pools.clone().unwrap_or_default(),
-            });
-        }
-
-        // 3. Router Advertisement (the export carries only the lists)
-        if export.ra_prefixes.is_some() || export.ra_rdnss.is_some() || export.ra_dnssl.is_some() {
-            let mut ra = RaFile::default().to_config().0;
-            ra.prefixes = export.ra_prefixes.clone().unwrap_or_default();
-            ra.rdnss = export.ra_rdnss.clone().unwrap_or_default();
-            ra.dnssl = export.ra_dnssl.clone().unwrap_or_default();
-            cfg.ra = RaFile::from_config(&ra);
-        }
-
-        // 4. DNS upstreams, rewrites and reverse resolvers (the export carries no listen nor
-        // upstream mode: they keep their defaults)
-        cfg.dns = DnsFile::from_config(&DnsSettings {
-            upstreams: export.dns_upstreams.iter().map(named_upstream).collect(),
-            reverse: export.dns_reverse_resolvers.clone().unwrap_or_default(),
-            rewrites: export.dns_rewrites.clone(),
-            ..DnsSettings::default()
-        });
-
-        // 5. Adblock: every source in the global layer. The rules live in their own file, not
-        // in `lanforge.toml`.
-        let sources: Vec<AdblockUrlEntry> = export
-            .dns_adblock_urls
-            .iter()
-            .map(|u| AdblockUrlEntry {
-                id: None,
-                name: Some(lanforge_crypto::stable_id_or_hash(
-                    u.name.as_deref(),
-                    u.url.as_bytes(),
-                    "src",
-                )),
-                ..u.clone()
-            })
-            .collect();
-        cfg.adblock = AdblockFile::from_config(&AdblockSettings {
-            config: export.dns_adblock_config.clone(),
-            lists: sources.iter().filter_map(|s| s.name.clone()).collect(),
-            sources,
-            ..AdblockSettings::default()
-        });
-
-        // 6. Firewall
-        if let Some(ref fw) = export.firewall_config {
-            cfg.firewall = FirewallFile::from_config(fw);
-        }
-
-        // 7. PPPoE
-        if let Some(ref pppoe) = export.pppoe_config {
-            cfg.pppoe = (**pppoe).clone();
-        }
-
-        // 8. Traffic
-        if let Some(ref tr) = export.traffic_config {
-            cfg.traffic = (**tr).clone();
-        }
-
-        cfg
-    }
-}
-
-impl From<SystemConfigExport> for ConfigFile {
-    fn from(export: SystemConfigExport) -> Self {
-        Self::from(&export)
-    }
-}
-
 impl From<&ConfigFile> for SystemConfigExport {
     fn from(cfg: &ConfigFile) -> Self {
         // 1. Hosts (entries the file gets wrong are left out; see `ConfigFile::static_hosts`).
@@ -1077,34 +971,21 @@ impl From<ConfigFile> for SystemConfigExport {
     }
 }
 
-/// An export upstream under its name: the domain it forwards when it has none, else `default`
-/// (as the database named them).
-fn named_upstream(up: &DnsUpstreamConfig) -> NamedUpstream {
-    NamedUpstream {
-        name: up
-            .name
-            .clone()
-            .or_else(|| up.domain.clone())
-            .unwrap_or_else(|| "default".to_string()),
-        target: UpstreamTarget {
-            addr: up.addr,
-            protocol: up.protocol,
-            hostname: None,
-            domain: up.domain.clone(),
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use lanforge_types::identifiers::MacAddr;
     use lanforge_types::network::DnsRecordType;
     use lanforge_types::network::dns::adblock::{RewriteAnswer, RewriteRule};
-    use lanforge_types::network::dns::upstream::UpstreamProtocol;
+    use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 
+    use super::super::StaticHost;
+    use super::super::dns::{DnsFile, DnsSettings, NamedUpstream};
+
+    /// The file a backup import reads (`lanforge config import x.toml`) becomes the export it
+    /// sends.
     #[test]
-    fn test_export_to_config_file_and_back() {
+    fn config_file_to_export() {
         let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
         let export = SystemConfigExport {
             hosts: vec![HostConfigEntry {
@@ -1142,7 +1023,33 @@ mod tests {
             ..Default::default()
         };
 
-        let cfg = ConfigFile::from(&export);
+        let mut cfg = ConfigFile::default();
+        let host = &export.hosts[0];
+        cfg.set_static_hosts(&[StaticHost {
+            mac: host.mac,
+            hostname: host.hostname.clone(),
+            v4: host.v4_fixed,
+            v6: host.v6_suffix,
+            boot_file: None,
+        }]);
+        let up = &export.dns_upstreams[0];
+        cfg.dns = DnsFile::from_config(&DnsSettings {
+            upstreams: vec![NamedUpstream {
+                name: "cloudflare".to_string(),
+                target: UpstreamTarget {
+                    addr: up.addr,
+                    protocol: up.protocol,
+                    hostname: None,
+                    domain: up.domain.clone(),
+                },
+            }],
+            rewrites: export.dns_rewrites.clone(),
+            ..DnsSettings::default()
+        });
+        cfg.set_dhcp_settings(&DhcpSettings {
+            v4_pools: export.dhcp_v4_pools.clone().unwrap_or_default(),
+            ..DhcpSettings::default()
+        });
         assert_eq!(cfg.hosts.len(), 1);
         assert_eq!(cfg.hosts[0].0, "nas");
         assert_eq!(cfg.hosts[0].1.mac.as_deref(), Some("aa:bb:cc:dd:ee:ff"));
@@ -1192,12 +1099,13 @@ mod tests {
                 answer: RewriteAnswer::from_str(target).unwrap(),
             })
             .collect::<Vec<_>>();
-        let export = SystemConfigExport {
-            dns_rewrites: rewrites.clone(),
-            ..Default::default()
+        let file = ConfigFile {
+            dns: DnsFile::from_config(&DnsSettings {
+                rewrites: rewrites.clone(),
+                ..DnsSettings::default()
+            }),
+            ..ConfigFile::default()
         };
-
-        let file = ConfigFile::from(&export);
         let rendered = file.render_full().unwrap();
         let parsed = ConfigFile::parse(&rendered).unwrap();
         let roundtripped = SystemConfigExport::from(&parsed);
@@ -1219,11 +1127,11 @@ mod tests {
     }
 
     fn firewall_through_toml(fw: &FirewallConfig) -> FirewallConfig {
-        let export = SystemConfigExport {
-            firewall_config: Some(Box::new(fw.clone())),
-            ..Default::default()
+        let file = ConfigFile {
+            firewall: FirewallFile::from_config(fw),
+            ..ConfigFile::default()
         };
-        let rendered = ConfigFile::from(&export).render_full().unwrap();
+        let rendered = file.render_full().unwrap();
         let parsed = ConfigFile::parse(&rendered).unwrap();
         *SystemConfigExport::from(&parsed).firewall_config.unwrap()
     }

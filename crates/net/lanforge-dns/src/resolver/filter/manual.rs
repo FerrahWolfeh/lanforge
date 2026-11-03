@@ -195,7 +195,7 @@ mod tests {
         assert_eq!((rules.block_len(), rules.allow_len()), (1, 0));
     }
 
-    /// The owner's 4 Bradesco allows, written by the cut-over as `@@||x^`: the domains and
+    /// The owner's 4 Bradesco allows, written by the config cut-over as `@@||x^`: the domains and
     /// every subdomain are allowed, as the stored allowlist did.
     #[test]
     fn owner_bradesco_allows() {

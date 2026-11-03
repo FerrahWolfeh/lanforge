@@ -1068,6 +1068,33 @@ async fn test_dns_upstreams_contract() {
 // Group 5 — System Config import/export contract
 // ---------------------------------------------------------------------------
 
+/// The TOML export is the daemon's config file as it is on disk (comments included), through
+/// both routes; it used to be rendered from the live values, dropping what they do not carry.
+#[tokio::test]
+async fn toml_export_is_the_config_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("lanforge.toml");
+    let text = "# the admin's note\n[system]\niface = \"lan0\"\n";
+    std::fs::write(&path, text).unwrap();
+    let state = make_state(false).await;
+    state.ctx.set_config_path(&path);
+    let app = TestApp {
+        router: build_router(state),
+        token: None,
+        elevation: None,
+    };
+
+    for route in ["/api/v1/config?format=toml", "/api/v1/config/toml"] {
+        let (status, body, headers) = app.get_raw(route).await;
+        assert_eq!(status, StatusCode::OK, "{route}");
+        assert_eq!(
+            headers.get(header::CONTENT_TYPE).unwrap(),
+            "text/plain; charset=utf-8"
+        );
+        assert_eq!(body, text, "{route}");
+    }
+}
+
 #[tokio::test]
 async fn test_system_config_contract() {
     let app = TestApp::no_auth().await;
@@ -1199,25 +1226,9 @@ async fn test_system_config_contract() {
     );
     assert_eq!(body["data"]["hosts"][0]["hostname"], "only-host");
 
-    // Verify TOML export via query parameter and via direct /config/toml route
-    let (toml_status, toml_str, toml_headers) = app.get_raw("/api/v1/config?format=toml").await;
-    assert_eq!(toml_status, StatusCode::OK);
-    assert_eq!(
-        toml_headers.get(header::CONTENT_TYPE).unwrap(),
-        "text/plain; charset=utf-8"
-    );
-    assert!(
-        toml_str.contains("[hosts"),
-        "toml should contain [hosts] section"
-    );
-    assert!(
-        toml_str.contains("only-host"),
-        "toml should contain the imported hostname"
-    );
-
-    let (toml_status2, toml_str2, _) = app.get_raw("/api/v1/config/toml").await;
-    assert_eq!(toml_status2, StatusCode::OK);
-    assert!(toml_str2.contains("only-host"));
+    // No config file (memory only): the TOML export has nothing to hand out.
+    let (toml_status, _, _) = app.get_raw("/api/v1/config?format=toml").await;
+    assert_eq!(toml_status, StatusCode::NOT_FOUND);
 
     // --- Malformed import bodies (guardrails) ---
     let guardrail_cases: &[(&str, Value, StatusCode)] = &[

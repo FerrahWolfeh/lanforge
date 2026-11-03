@@ -10,9 +10,7 @@ pub use lanforge_db_redb::WriteTx;
 use lanforge_types::device::{Device, DeviceStatus};
 
 pub mod types {
-    pub use lanforge_db_core::{
-        ApiTokenEntry as ApiTokenRow, DnsUpstreamEntry as DnsUpstreamRow, UserEntry as UserRow,
-    };
+    pub use lanforge_db_core::{ApiTokenEntry as ApiTokenRow, UserEntry as UserRow};
 }
 
 /// True for `<scheme>:...` (RFC 3986 scheme syntax), i.e. a URL rather than a file path.
@@ -95,27 +93,9 @@ impl LanforgeDb {
         self.inner.write(operation)
     }
 
-    /// Retrieves a stored configuration section hash from the metadata table.
-    pub fn get_config_section_hash(&self, section: &str) -> Result<Option<u64>, DbError> {
-        self.inner.get_config_section_hash(section)
-    }
-
-    /// Stores a configuration section hash in the metadata table.
-    pub fn set_config_section_hash(&self, section: &str, hash: u64) -> Result<(), DbError> {
-        self.inner.set_config_section_hash(section, hash)
-    }
-
-    /// Stores multiple configuration section hashes in the metadata table atomically.
-    pub fn set_config_section_hashes(
-        &self,
-        hashes: &std::collections::BTreeMap<String, u64>,
-    ) -> Result<(), DbError> {
-        self.inner.set_config_section_hashes(hashes)
-    }
-
-    /// Checks if any configuration section hashes have been stored in the metadata table.
-    pub fn has_config_section_hashes(&self) -> Result<bool, DbError> {
-        self.inner.has_config_section_hashes()
+    /// Names of the config keys an older binary left (see [`RedbDatabase::legacy_config_keys`]).
+    pub fn legacy_config_keys(&self) -> Result<Vec<String>, DbError> {
+        self.inner.legacy_config_keys()
     }
 
     /// Returns a reference to the inner RedbDatabase.

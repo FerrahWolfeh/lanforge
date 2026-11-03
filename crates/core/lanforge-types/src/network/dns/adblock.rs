@@ -581,25 +581,6 @@ impl AdblockRuleEntry {
         self.id.unwrap_or_else(|| self.deterministic_id())
     }
 
-    /// The rules-file line a stored rule means. The database kept a domain, whatever `@@`,
-    /// `||`, `|`, `*.`, `^` or `$modifiers` it was typed with, and matched it with every
-    /// subdomain: `||x^` (`@@||x^` for an allow), commented out when disabled. `None` when no
-    /// domain is left.
-    #[must_use]
-    pub fn to_rules_line(&self) -> Option<String> {
-        let domain = Self::stored_domain(&self.domain)?;
-        let allow = if self.is_allow() { "@@" } else { "" };
-        let off = if self.enabled { "" } else { "# " };
-        Some(format!("{off}{allow}||{domain}^"))
-    }
-
-    /// The rules-file line of a stored allowlist domain: `@@||x^` (the domain and every
-    /// subdomain, as the allowlist matched).
-    #[must_use]
-    pub fn allowlist_line(domain: &str) -> Option<String> {
-        Self::stored_domain(domain).map(|d| format!("@@||{d}^"))
-    }
-
     /// The rules-file line of a rule given as a domain and an action (API, CLI, WebUI): a bare
     /// domain covers itself and its subdomains (`||x^`), a rule written in list syntax is kept
     /// as typed; `@@` follows the action.
@@ -620,24 +601,6 @@ impl AdblockRuleEntry {
         } else {
             rule
         }
-    }
-
-    fn stored_domain(raw: &str) -> Option<String> {
-        let mut s = raw.trim();
-        s = s.strip_prefix("@@").unwrap_or(s);
-        s = s
-            .strip_prefix("||")
-            .or_else(|| s.strip_prefix("*."))
-            .or_else(|| s.strip_prefix('|'))
-            .unwrap_or(s);
-        if let Some((before_mod, _)) = s.split_once('$') {
-            s = before_mod;
-        }
-        s = s
-            .trim_end_matches('^')
-            .trim_end_matches('|')
-            .trim_end_matches('.');
-        (!s.is_empty()).then(|| s.to_ascii_lowercase())
     }
 }
 
@@ -701,47 +664,6 @@ mod tests {
         for (text, action, line) in cases {
             assert_eq!(AdblockRuleEntry::rule_line(text, action), line, "{text}");
         }
-    }
-
-    #[test]
-    fn stored_rules_become_rules_file_lines() {
-        let entry = |domain: &str, action, enabled| AdblockRuleEntry {
-            id: Some(7),
-            name: Some("n".into()),
-            domain: domain.into(),
-            action,
-            enabled,
-        };
-        let cases = [
-            (
-                entry("ads.com", AdblockRuleAction::Block, true),
-                Some("||ads.com^"),
-            ),
-            (
-                entry("ok.com", AdblockRuleAction::Allow, true),
-                Some("@@||ok.com^"),
-            ),
-            (
-                entry("off.com", AdblockRuleAction::Block, false),
-                Some("# ||off.com^"),
-            ),
-            (
-                entry("|Pipe.com^", AdblockRuleAction::Block, true),
-                Some("||pipe.com^"),
-            ),
-            (
-                entry("x.com$client=1.2.3.4", AdblockRuleAction::Block, true),
-                Some("||x.com^"),
-            ),
-            (entry("@@||^", AdblockRuleAction::Allow, true), None),
-        ];
-        for (stored, line) in cases {
-            assert_eq!(stored.to_rules_line().as_deref(), line, "{stored:?}");
-        }
-        assert_eq!(
-            AdblockRuleEntry::allowlist_line("App-Measurement.com").as_deref(),
-            Some("@@||app-measurement.com^")
-        );
     }
 
     #[test]

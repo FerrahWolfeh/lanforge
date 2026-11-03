@@ -131,7 +131,6 @@ impl Default for SystemCfg {
 #[allow(clippy::too_many_lines)]
 impl From<&lanforge_api::config_file::ConfigFile> for TomlConfig {
     fn from(fc: &lanforge_api::config_file::ConfigFile) -> Self {
-        let export = lanforge_api::api::SystemConfigExport::from(fc);
         let mut cfg = Self {
             system: SystemCfg {
                 iface: fc.system.iface.clone(),
@@ -248,14 +247,15 @@ impl From<&lanforge_api::config_file::ConfigFile> for TomlConfig {
             cfg.pppoe = fc.pppoe.clone();
         }
 
+        // Entries the file gets wrong are left out (reported by `load_toml`).
         #[cfg(feature = "nft")]
-        if let Some(fw) = export.firewall_config {
-            cfg.firewall = *fw;
+        {
+            cfg.firewall = fc.firewall.to_config().0;
         }
 
         #[cfg(feature = "traffic")]
-        if let Some(tr) = export.traffic_config {
-            cfg.traffic = *tr;
+        {
+            cfg.traffic = fc.traffic.clone();
         }
 
         cfg
@@ -298,8 +298,7 @@ pub fn load_toml(path: &str) -> TomlConfig {
     match lanforge_api::config_file::ConfigFile::parse_lenient(&content) {
         Ok((file_cfg, set_aside)) => {
             info!("Config: Loaded from '{path}' using named-section schema");
-            // Logged once at boot, after the cut-overs: the one-time migration of a section from
-            // the database replaces its old file form, whose issues must not be reported.
+            // Logged once by the bootstrap, after the start-up configs are derived.
             let mut cfg = TomlConfig::from(&file_cfg);
             cfg.config_issues = set_aside_messages(&set_aside);
             cfg.dhcp_set_aside = set_aside

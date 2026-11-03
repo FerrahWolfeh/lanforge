@@ -301,7 +301,7 @@ impl LanforgeContext {
         self.inner.runtime.config_issues.read().clone()
     }
 
-    /// Sets whether live write-back to the TOML configuration file is enabled.
+    /// Sets whether the API may write configuration changes to the config file.
     pub fn set_config_writable(&self, writable: bool) {
         self.inner
             .runtime
@@ -309,7 +309,7 @@ impl LanforgeContext {
             .store(writable, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Returns whether live write-back to the TOML configuration file is enabled.
+    /// Returns whether the API may write configuration changes to the config file.
     #[must_use]
     pub fn is_config_writable(&self) -> bool {
         self.inner

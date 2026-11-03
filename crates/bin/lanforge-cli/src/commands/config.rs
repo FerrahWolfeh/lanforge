@@ -14,7 +14,7 @@ use lanforge_api::api::devices::HostConfigEntry;
 use lanforge_api::api::dns::{AllowlistEntry, DnsUpstreamConfig};
 use lanforge_api::api::system::ExportedApiToken;
 use lanforge_api::api::{ImportSection, SystemConfigExport, SystemConfigImportResponse};
-use lanforge_api::config_file::{ConfigFile, Section, section_hashes};
+use lanforge_api::config_file::ConfigFile;
 use lanforge_types::network::DnsReverseResolver;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
@@ -79,12 +79,6 @@ pub enum ConfigSubcommand {
         /// Input configuration file path (.toml or .json)
         #[arg(value_name = "FILE")]
         file: String,
-    },
-    /// Show differences between configuration file and live daemon database
-    Diff {
-        /// Configuration file path (defaults to /etc/lanforge/lanforge.toml or lanforge.toml)
-        #[arg(value_name = "FILE")]
-        file: Option<String>,
     },
     /// Edit configuration file in $EDITOR, validate, and optionally import
     Edit {
@@ -165,7 +159,6 @@ impl ConfigArgs {
                 import_config(client, printer, &target_file, overwrite, password).await
             }
             ConfigSubcommand::Validate { file } => validate_config(printer, &file),
-            ConfigSubcommand::Diff { file } => diff_config(client, printer, file).await,
             ConfigSubcommand::Edit { file, yes } => edit_config(client, printer, file, yes).await,
         }
     }
@@ -325,14 +318,10 @@ async fn export_config(
         })
     });
 
-    let config = client.system_config_export().await?;
-
     if resolved_format == ExportFormat::Toml {
-        let config_file = ConfigFile::from(&*config);
-        let rendered = config_file
-            .render_full()
-            .map_err(|e| eyre!("Failed to render configuration TOML: {e}"))?;
-
+        // The daemon's file itself: it holds the whole configuration (the adblock rules file
+        // and the redb state aside).
+        let rendered = client.system_config_toml().await?;
         if let Some(ref path) = output {
             std::fs::write(path, &rendered)?;
             printer.success(&format!("Exported system configuration to {path}"));
@@ -341,6 +330,8 @@ async fn export_config(
         }
         return Ok(());
     }
+
+    let config = client.system_config_export().await?;
 
     let api_tokens_section = if let Some(tokens) = config.api_tokens {
         if encrypt_secrets || password.is_some() {
@@ -605,117 +596,6 @@ fn validate_config(printer: &Printer, file_path: &str) -> Result<()> {
 }
 
 // ============================================================================
-// Diff Handler
-// ============================================================================
-
-async fn diff_config(
-    client: &LanforgeClient,
-    printer: &Printer,
-    file: Option<String>,
-) -> Result<()> {
-    let target_path = resolve_candidate_config_file(file.as_deref());
-    if !target_path.exists() {
-        bail!(
-            "Configuration file '{}' does not exist",
-            target_path.display()
-        );
-    }
-
-    let content = std::fs::read_to_string(&target_path)
-        .map_err(|e| eyre!("Failed to read '{}': {e}", target_path.display()))?;
-    let file_cfg = ConfigFile::parse(&content)
-        .map_err(|e| eyre!("Failed to parse '{}': {e}", target_path.display()))?;
-    let file_hashes = section_hashes(&file_cfg);
-
-    let live_export = client.system_config_export().await?;
-    let live_cfg = ConfigFile::from(&*live_export);
-    let live_hashes = section_hashes(&live_cfg);
-
-    if printer.json {
-        let mut diff_json = serde_json::Map::new();
-        for sec in Section::ALL {
-            let fh = file_hashes.get(&sec).copied();
-            let lh = live_hashes.get(&sec).copied();
-            let status = match (fh, lh) {
-                (Some(a), Some(b)) if a == b => "in_sync",
-                (Some(_), Some(_)) => "diverged",
-                (Some(_), None) => "only_in_file",
-                (None, Some(_)) => "only_in_db",
-                (None, None) => "absent",
-            };
-            diff_json.insert(
-                sec.name().to_string(),
-                serde_json::json!({
-                    "file_hash": fh,
-                    "db_hash": lh,
-                    "status": status,
-                }),
-            );
-        }
-        return printer.print_json(&serde_json::Value::Object(diff_json));
-    }
-
-    println!();
-    println!(
-        " {} {}",
-        "Configuration Diff:".bold().white(),
-        target_path.display().to_string().cyan()
-    );
-    println!(" ─────────────────────────────────────────────────────────────");
-
-    let mut in_sync_count = 0;
-    let mut diverged_count = 0;
-
-    for sec in Section::ALL {
-        let fh = file_hashes.get(&sec).copied();
-        let lh = live_hashes.get(&sec).copied();
-
-        let status_colored = match (fh, lh) {
-            (Some(a), Some(b)) if a == b => {
-                in_sync_count += 1;
-                "In Sync".green()
-            }
-            (Some(_), Some(_)) => {
-                diverged_count += 1;
-                "DIVERGED".yellow().bold()
-            }
-            (Some(_), None) => {
-                diverged_count += 1;
-                "File only".cyan()
-            }
-            (None, Some(_)) => {
-                diverged_count += 1;
-                "DB only".magenta()
-            }
-            (None, None) => "Default".bright_black(),
-        };
-
-        let dyn_marker = if sec.is_dynamic() { " (dynamic)" } else { "" };
-        println!(
-            "   {:<24} {:<15} {}",
-            format!("[{}]{dyn_marker}", sec.name()).bold(),
-            status_colored,
-            match (fh, lh) {
-                (Some(a), Some(b)) if a != b => format!("file:{a:016x} ≠ db:{b:016x}")
-                    .bright_black()
-                    .to_string(),
-                _ => String::new(),
-            }
-        );
-    }
-
-    println!(" ─────────────────────────────────────────────────────────────");
-    if diverged_count == 0 {
-        printer.success("All sections are completely in sync between file and live database.");
-    } else {
-        printer.warning(&format!("{diverged_count} section(s) differ between file and live database ({in_sync_count} in sync)."));
-    }
-    println!();
-
-    Ok(())
-}
-
-// ============================================================================
 // Edit Handler
 // ============================================================================
 
@@ -728,11 +608,11 @@ async fn edit_config(
     let target_path = resolve_candidate_config_file(file.as_deref());
 
     if !target_path.exists() {
-        let live_export = client.system_config_export().await?;
-        let live_cfg = ConfigFile::from(&*live_export);
-        let rendered = live_cfg
-            .render_full()
-            .map_err(|e| eyre!("Failed to render configuration: {e}"))?;
+        let rendered = client.system_config_toml().await.or_else(|_| {
+            ConfigFile::default()
+                .render_full()
+                .map_err(|e| eyre!("Failed to render configuration: {e}"))
+        })?;
         if let Some(parent) = target_path.parent() {
             std::fs::create_dir_all(parent)?;
         }

@@ -3,10 +3,11 @@
 //!
 //! File-owned sections (`SectionSet::FILE_OWNED`) have no other source: they are applied as the
 //! boot applies them — entries the file gets wrong left out, adjustments other settings force
-//! derived in memory — and the file is not rewritten. The other sections still go through the
-//! import. An unreadable or invalid file applies nothing.
+//! derived in memory — and the file is not rewritten. Of the other sections only the LAN
+//! interface name applies live; the rest take effect on the next start. An unreadable or
+//! invalid file applies nothing.
 
-use lanforge_api::api::{Response, SimpleSuccess, SystemConfigExport};
+use lanforge_api::api::{Response, SimpleSuccess};
 use lanforge_api::config_file::{
     ConfigFile, RaInputs, Section, effective_firewall, effective_ra, log_issues, set_aside_issues,
 };
@@ -43,42 +44,13 @@ impl ClientContext {
         self.reload_file_owned(&path, &file, &set_aside, &mut issues);
         self.ctx.set_config_issues(issues);
 
-        let mut export = SystemConfigExport::from(&file);
-        export.pppoe_config = None;
-        export.traffic_config = None;
-        export.firewall_config = None;
-        export.dhcp_options = None;
-        export.dhcp_v4_pools = None;
-        export.dhcp_v6_pools = None;
-        export.ra_prefixes = None;
-        export.ra_rdnss = None;
-        export.ra_dnssl = None;
-        export.dns_rewrites = Vec::new();
-        export.dns_upstreams = Vec::new();
-        export.dns_reverse_resolvers = None;
-        export.hosts = Vec::new();
-        // Applied above (`[adblock]` and its rules file): the live settings, nothing to import.
-        export.dns_adblock_config = self.ctx.get_dns_adblock();
-        export.dns_adblock_urls = Vec::new();
-        export.dns_allowlist = Vec::new();
-        export.dns_adblock_rules = None;
-        match self.handle_system_config_import(export).await {
-            Response::SystemConfigImport(import_res) => {
-                if import_res.total_success {
-                    Response::Success(SimpleSuccess {
-                        message: format!("Configuration reloaded from {}", path.display()),
-                    })
-                } else {
-                    Response::Error {
-                        error: format!(
-                            "Configuration reload completed with errors: {:?}",
-                            import_res.results
-                        ),
-                    }
-                }
-            }
-            other => other,
+        if !file.system.iface.is_empty() {
+            self.ctx
+                .set_target_interface_name(file.system.iface.clone());
         }
+        Response::Success(SimpleSuccess {
+            message: format!("Configuration reloaded from {}", path.display()),
+        })
     }
 
     /// Applies the file-owned sections of `file` that differ from the live ones. A set-aside

@@ -446,7 +446,7 @@ impl ClientContext {
             }
         });
 
-        let (cfg_file, toml_content) = generate_setup_toml(
+        let toml_content = generate_setup_toml(
             &payload,
             &initial_firewall,
             &dhcp,
@@ -469,16 +469,6 @@ impl ClientContext {
             );
             self.ctx.set_config_path(&target_path);
             self.ctx.set_config_writable(true);
-        }
-
-        let hashes = lanforge_api::config_file::section_hashes(&cfg_file);
-        for sec in lanforge_api::config_file::Section::ALL {
-            if let Some(&hash) = hashes.get(&sec) {
-                let sec_name = sec.name().to_string();
-                let _ = storage
-                    .call(move |s: &Stores| s.db().set_config_section_hash(&sec_name, hash))
-                    .await;
-            }
         }
 
         // 9. Permanently mark system as provisioned
@@ -553,7 +543,7 @@ fn generate_setup_toml(
     ra: &lanforge_types::network::ra::RaServerConfig,
     upstreams: &[UpstreamTarget],
     adblock: &lanforge_api::config_file::AdblockSettings,
-) -> (lanforge_api::config_file::ConfigFile, String) {
+) -> String {
     let mut cfg = lanforge_api::config_file::ConfigFile::default();
     cfg.system.iface = payload.lan_iface.clone();
     cfg.system.search_domains = vec![payload.domain_name.clone()];
@@ -590,8 +580,7 @@ fn generate_setup_toml(
         cfg.pppoe = pppoe;
     }
 
-    let rendered = cfg.render_full().unwrap_or_default();
-    (cfg, rendered)
+    cfg.render_full().unwrap_or_default()
 }
 
 fn detect_system_gateway() -> Option<Ipv4Addr> {

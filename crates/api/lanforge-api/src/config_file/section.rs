@@ -64,13 +64,6 @@ impl Section {
         }
     }
 
-    /// Whether this section is a dynamic section where `config.redb` is the primary source of truth.
-    /// Sections migrated to "files are config" (`SectionSet::FILE_OWNED`) are not: the file is their only source.
-    #[must_use]
-    pub const fn is_dynamic(&self) -> bool {
-        SectionSet::DYNAMIC.contains(self.as_bitflag())
-    }
-
     /// Returns the corresponding `SectionSet` bitflag.
     #[must_use]
     pub const fn as_bitflag(&self) -> SectionSet {
@@ -123,11 +116,8 @@ bitflags! {
         const STATIC   = Self::SYSTEM.bits() | Self::DATABASE.bits() | Self::API.bits()
                        | Self::HTTP.bits() | Self::MONITOR.bits() | Self::MDNS.bits() | Self::TFTP.bits();
 
-        /// Empty since `[adblock]` moved to the file: the hash sync has nothing left to sync.
-        const DYNAMIC  = 0;
-
-        /// Migrated to "files are config": the file is their only source, written by the API
-        /// before the change is applied; never synced with redb nor rewritten by the db worker.
+        /// The file is their only source, written by the API before the change is applied; a
+        /// broken one is set aside (`ConfigFile::parse_lenient`), never read as defaults.
         const FILE_OWNED = Self::PPPOE.bits() | Self::TRAFFIC.bits() | Self::FIREWALL.bits()
                          | Self::DHCP.bits() | Self::RA.bits() | Self::HOSTS.bits()
                          | Self::DNS.bits() | Self::ADBLOCK.bits();

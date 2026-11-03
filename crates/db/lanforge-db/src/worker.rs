@@ -13,15 +13,10 @@
 //!
 //! All loggable events are immediately recorded in the in-memory `LogDb`.
 
-use lanforge_api::api::{DnsUpstreamConfig, ExportedApiToken, HostConfigEntry, SystemConfigExport};
-use lanforge_api::config_file::{
-    ConfigFile, Section, SectionSet, patch_sections, section_hashes, toml_edit::DocumentMut,
-    write_toml_atomically,
-};
 use lanforge_core::bus::{
     DeviceEvent, DnsEvent, LanforgeEvent, StorageEvent, SystemEvent, TimedEvent,
 };
-use lanforge_db_core::{ApiTokenStore, DeviceStore, LogStore, RaConfigStore};
+use lanforge_db_core::{DeviceStore, LogStore, PrefixStore};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::QueryLogEntry;
 use lanforge_types::network::dns::{DnsRequest, DnsResponse};
@@ -77,9 +72,6 @@ pub struct DbWorker {
     dns_log_buffer: VecDeque<Arc<QueryLogEntry>>,
     bytes_buf: Vec<u8>,
     storage_rx: Option<mpsc::Receiver<StorageCommand>>,
-    dirty_sections: lanforge_api::config_file::SectionSet,
-    /// The config file could not be read or parsed at the last write-back (warned once).
-    config_file_unusable: bool,
     log_flush_failing: bool,
     dns_flush_failing: bool,
     device_flush_failing: bool,
@@ -107,8 +99,6 @@ impl DbWorker {
             dns_log_buffer: VecDeque::with_capacity(128),
             bytes_buf: Vec::with_capacity(4096),
             storage_rx: Some(rx),
-            dirty_sections: lanforge_api::config_file::SectionSet::empty(),
-            config_file_unusable: false,
             log_flush_failing: false,
             dns_flush_failing: false,
             device_flush_failing: false,
@@ -270,188 +260,6 @@ impl DbWorker {
         metrics.last_error.store(had_error, Ordering::Relaxed);
         self.ctx.record_db_flush();
     }
-
-    fn build_current_export(&self, db: &LanforgeDb) -> SystemConfigExport {
-        let hosts = self.ctx.with_state(|state| {
-            state
-                .devices
-                .values()
-                .filter(|dev| dev.origin == lanforge_types::device::Origin::Static)
-                .map(|dev| HostConfigEntry {
-                    mac: dev.mac,
-                    hostname: dev.hostname.name.clone(),
-                    v4_fixed: match &dev.v4 {
-                        lanforge_types::device::IPv4State::Static(ip) => Some(*ip),
-                        _ => None,
-                    },
-                    v6_suffix: dev.v6.iter().find_map(|s| match s {
-                        lanforge_types::device::IPv6State::Static(suf, _) => Some(*suf),
-                        _ => None,
-                    }),
-                    origin: dev.origin,
-                    ignore_dns_log: dev.ignore_dns_log,
-                    ignored_log_domains: dev.ignored_log_domains.clone(),
-                    boot_file: None,
-                })
-                .collect()
-        });
-
-        let dns_rewrites = self.ctx.get_dns_rewrites();
-
-        let dns_upstreams = self
-            .ctx
-            .get_dns_upstreams()
-            .into_iter()
-            .map(|row| DnsUpstreamConfig {
-                name: row.domain.clone(),
-                addr: row.addr,
-                protocol: row.protocol,
-                domain: row.domain,
-            })
-            .collect();
-
-        let dns_adblock_config = self.ctx.get_dns_adblock();
-        let dns_adblock_urls = self.ctx.get_dns_adblock_urls();
-        // The manual adblock rules live in their own file (`[adblock] rules`).
-        let dns_allowlist = Vec::new();
-        let dns_adblock_rules = None;
-
-        let api_tokens = db.load_api_tokens().ok().map(|tokens| {
-            tokens
-                .into_iter()
-                .map(|t| ExportedApiToken {
-                    token: t.token,
-                    name: t.name,
-                    created_at: t.created_at,
-                    last_used: t.last_used,
-                    scopes: t.scopes,
-                    expires_at: t.expires_at,
-                })
-                .collect()
-        });
-
-        let dhcp_v4_pools = Some(self.ctx.get_dhcp_v4_pools());
-        let dhcp_v6_pools = Some(self.ctx.get_dhcp_v6_pools());
-        let ra_prefixes = Some(self.ctx.get_ra_prefixes());
-        let ra_rdnss = Some(self.ctx.get_ra_rdnss());
-        let ra_dnssl = Some(self.ctx.get_ra_dnssl());
-        let pppoe_config = self.ctx.get_pppoe_config().map(Box::new);
-        let dhcp_options = Some(Box::new(self.ctx.get_dhcp_options()));
-        let dns_reverse_resolvers = Some(self.ctx.with_state(|s| s.reverse_resolvers.clone()));
-        let firewall_config = self.ctx.get_firewall_config().map(Box::new);
-        let traffic_config = self.ctx.get_traffic_config().map(Box::new);
-        let system_iface = self.ctx.target_interface_name();
-
-        SystemConfigExport {
-            hosts,
-            dns_rewrites,
-            dns_upstreams,
-            dns_adblock_config,
-            dns_adblock_urls,
-            dns_allowlist,
-            dns_adblock_rules,
-            api_tokens,
-            dhcp_v4_pools,
-            dhcp_v6_pools,
-            ra_prefixes,
-            ra_rdnss,
-            ra_dnssl,
-            pppoe_config,
-            dhcp_options,
-            dns_reverse_resolvers,
-            firewall_config,
-            traffic_config,
-            system_iface,
-            overwrite: false,
-        }
-    }
-
-    async fn flush_live_config_to_file(&mut self, db: &LanforgeDb) {
-        if self.dirty_sections.is_empty() {
-            return;
-        }
-
-        if !self.ctx.is_config_writable() {
-            debug!("Config directory/file is read-only; skipping live write-back");
-            self.dirty_sections = SectionSet::empty();
-            return;
-        }
-
-        let Some(path) = self.ctx.config_path() else {
-            return;
-        };
-        let ctx = self.ctx.clone();
-        let _file_guard = ctx.config_file_lock();
-
-        // Patch the file as it is: one that cannot be read or parsed (mid hand-edit) is left
-        // alone and the change stays pending. Starting from an empty document would write back
-        // only the dirty sections and erase the rest of the configuration.
-        let parsed = std::fs::read_to_string(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|text| text.parse::<DocumentMut>().map_err(|e| e.to_string()));
-        let mut doc = match parsed {
-            Ok(doc) => {
-                if self.config_file_unusable {
-                    info!(
-                        "Config file {} is valid again; resuming live write-back",
-                        path.display()
-                    );
-                    self.config_file_unusable = false;
-                }
-                doc
-            }
-            Err(e) => {
-                if !self.config_file_unusable {
-                    warn!(
-                        "Config file {} cannot be read or parsed ({e}); live write-back paused \
-                         until it is fixed, changes are kept in memory",
-                        path.display()
-                    );
-                    self.config_file_unusable = true;
-                }
-                return;
-            }
-        };
-
-        let export = self.build_current_export(db);
-        let config_file = ConfigFile::from(&export);
-
-        if let Err(e) = patch_sections(&mut doc, &config_file, self.dirty_sections) {
-            error!("Failed to patch TOML document: {e}");
-            return;
-        }
-
-        let rendered = doc.to_string();
-        if let Err(e) = write_toml_atomically(&path, &rendered) {
-            error!(
-                "Failed to write live config back to {}: {e}",
-                path.display()
-            );
-            return;
-        }
-
-        // Update hashes only after the file is safely replaced. If writing fails,
-        // the next boot must still see the old hash and reconcile the mismatch.
-        let hashes = section_hashes(&config_file);
-        for sec in Section::ALL {
-            if self.dirty_sections.contains(sec.as_bitflag())
-                && let Some(&hash) = hashes.get(&sec)
-                && let Err(e) = db.set_config_section_hash(sec.name(), hash)
-            {
-                warn!(
-                    "Failed to update config section hash for {}: {e}",
-                    sec.name()
-                );
-            }
-        }
-
-        debug!(
-            "Live config successfully written back to {} for dirty sections: {:?}",
-            path.display(),
-            self.dirty_sections
-        );
-        self.dirty_sections = SectionSet::empty();
-    }
 }
 
 impl AsyncService for DbWorker {
@@ -502,13 +310,11 @@ impl AsyncService for DbWorker {
                     match cmd {
                         ServiceCommand::Stop | ServiceCommand::Shutdown => {
                             self.flush_batch(&db, &log_db).await;
-                            self.flush_live_config_to_file(&db).await;
                             break;
                         }
                         ServiceCommand::Restart => {
                             h.request_restart();
                             self.flush_batch(&db, &log_db).await;
-                            self.flush_live_config_to_file(&db).await;
                             break;
                         }
                         _ => {}
@@ -523,7 +329,6 @@ impl AsyncService for DbWorker {
                         }
                         Some(StorageCommand::FlushNow(resp_tx)) => {
                             self.flush_batch(&db, &log_db).await;
-                            self.flush_live_config_to_file(&db).await;
                             let _ = resp_tx.send(Ok(()));
                         }
                         None => break,
@@ -638,10 +443,7 @@ impl AsyncService for DbWorker {
                         LanforgeEvent::Storage(StorageEvent::TableDirty) => {
                             self.full_flush_requested = true;
                             self.pending_devices.clear();
-                            self.dirty_sections |= lanforge_api::config_file::SectionSet::DYNAMIC
-                                | lanforge_api::config_file::SectionSet::SYSTEM;
                             self.flush_batch(&db, &log_db).await;
-                            self.flush_live_config_to_file(&db).await;
                         }
                         LanforgeEvent::Storage(StorageEvent::DbLogClean) => {
                             if let Err(e) = log_db.clear_logs() {
@@ -671,7 +473,6 @@ impl AsyncService for DbWorker {
                         LanforgeEvent::System(SystemEvent::Shutdown) => {
                             info!("Database worker shutting down...");
                             self.flush_batch(&db, &log_db).await;
-                            self.flush_live_config_to_file(&db).await;
                             if let Some(handle) = self.ctx.dns_handle()
                                 && let Ok(DnsResponse::LifetimeStats(stats)) = handle.send_request(DnsRequest::LifetimeStats).await
                             {
@@ -712,11 +513,6 @@ impl AsyncService for DbWorker {
                                 }
                             }
                         }
-                        LanforgeEvent::System(SystemEvent::ConfigChanged { sections }) => {
-                            // File-owned sections are written by the API before they apply.
-                            self.dirty_sections |=
-                                SectionSet::from(*sections).difference(SectionSet::FILE_OWNED);
-                        }
                     });
 
                     if break_loop {
@@ -727,7 +523,6 @@ impl AsyncService for DbWorker {
                 // Periodic flush
                 _ = flush_interval.tick() => {
                     self.flush_batch(&db, &log_db).await;
-                    self.flush_live_config_to_file(&db).await;
 
                     if last_prune.elapsed() >= Duration::from_secs(600) {
                         if let Err(e) = db.prune_zombies() {
@@ -747,7 +542,6 @@ impl AsyncService for DbWorker {
         let db = self.db.clone();
         let log_db = self.log_db.clone();
         self.flush_batch(&db, &log_db).await;
-        self.flush_live_config_to_file(&db).await;
         Ok(())
     }
 }
@@ -883,35 +677,5 @@ mod tests {
         // 4. Purge in same tick overrides to Delete
         pending.insert(mac, PendingDeviceOp::Delete);
         assert_eq!(pending.get(&mac), Some(&PendingDeviceOp::Delete));
-    }
-
-    /// The live write-back patches the dirty sections into the file as it is on disk. An
-    /// unreadable or invalid file (mid hand-edit) used to be replaced by an empty document,
-    /// so the write kept only the dirty sections and erased the rest of the configuration.
-    #[tokio::test]
-    async fn live_write_back_never_replaces_an_invalid_file() {
-        let (ctx, _bus) = create_test_context();
-        let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
-        let log_db = Arc::new(LogDb::open_in_memory());
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lanforge.toml");
-        let broken = "[system]\niface = \"lan0\"\n[firewall\nmode = \"full\"\n";
-        std::fs::write(&path, broken).unwrap();
-        ctx.set_config_path(&path);
-        ctx.set_config_writable(true);
-
-        let mut worker = DbWorker::new(DatabaseConfig::default(), ctx.clone(), db.clone(), log_db);
-        worker.dirty_sections = SectionSet::TRAFFIC;
-        worker.flush_live_config_to_file(&db).await;
-
-        assert_eq!(
-            std::fs::read_to_string(&path).unwrap(),
-            broken,
-            "an invalid file must be left alone, not rewritten from scratch"
-        );
-        assert!(
-            worker.dirty_sections.contains(SectionSet::TRAFFIC),
-            "the change stays pending for when the file is fixed"
-        );
     }
 }

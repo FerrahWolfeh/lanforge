@@ -633,6 +633,11 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
+    async fn system_config_toml(&self) -> Result<String, RpcCallError> {
+        self.export_system_config_toml()
+            .map_err(RpcCallError::NotFound)
+    }
+
     async fn system_config_import(
         &self,
         config: Box<SystemConfigExport>,

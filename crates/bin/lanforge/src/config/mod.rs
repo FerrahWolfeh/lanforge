@@ -8,7 +8,7 @@
 
 pub mod args;
 pub mod auto_detect;
-pub mod sync;
+pub mod boot_file;
 pub mod toml;
 
 pub use args::CliArgs;
