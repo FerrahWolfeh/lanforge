@@ -24,7 +24,6 @@ async fn dns_uds_simulation_basic() {
     let api_cfg = ApiConfig {
         enabled: true,
         socket_path: socket_path.to_string(),
-        tcp_port: None,
     };
     let cfg = Arc::new(api_cfg);
 

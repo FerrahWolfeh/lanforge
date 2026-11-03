@@ -6,9 +6,6 @@
 enabled = true
 socket_path = "/run/lanforge/control.sock"
 
-# Optional TCP port for the control API (debug).
-# tcp_port = 50051
-
 [http]
 # REST API and Prometheus metrics exporter.
 enabled = true
