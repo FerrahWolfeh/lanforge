@@ -111,6 +111,7 @@ pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContex
         ctx: ctx.clone(),
         query_log: Some(Arc::new(QueryRing::new(100))),
         pipeline,
+        streams: Arc::new(lanforge_transport::TransportMetrics::new()),
         local: LocalResolver::new(cfg_arc.clone(), ctx),
         recursive,
         cache,

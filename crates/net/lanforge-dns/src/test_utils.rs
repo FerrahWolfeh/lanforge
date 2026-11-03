@@ -108,6 +108,7 @@ pub fn create_test_dns_context(
         ctx: ctx.clone(),
         query_log: Some(Arc::new(crate::telemetry::QueryRing::new(100))),
         pipeline,
+        streams: Arc::new(lanforge_transport::TransportMetrics::new()),
         local: crate::resolver::LocalResolver::new(cfg_arc.clone(), ctx),
         recursive,
         cache,

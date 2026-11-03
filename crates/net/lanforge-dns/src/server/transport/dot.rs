@@ -80,6 +80,7 @@ async fn handle_dot_connection(
 
         let mut query_buf = vec![0u8; len];
         tls_stream.read_exact(&mut query_buf).await?;
+        dns_ctx.streams.record_rx(len);
 
         let header = match WireHeader::parse(&query_buf) {
             Some(h) => h,
@@ -110,6 +111,7 @@ async fn handle_dot_connection(
             let resp_len = u16::try_from(resp_buf.len())?.to_be_bytes();
             tls_stream.write_all(&resp_len).await?;
             tls_stream.write_all(&resp_buf).await?;
+            dns_ctx.streams.record_tx(resp_buf.len());
         }
     }
 

@@ -211,7 +211,10 @@ async fn adblock_status_reports_the_refresh_time() {
             lanforge_types::system::ServiceId::Dns,
             ctx_service.clone(),
         );
-        service.serve(&ctx_service, &h).await.expect("Service failed");
+        service
+            .serve(&ctx_service, &h)
+            .await
+            .expect("Service failed");
     });
     wait_for_service_online(&ctx, lanforge_types::system::ServiceId::Dns).await;
 

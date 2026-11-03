@@ -11,6 +11,7 @@ use crate::resolver::{LocalResolver, RewriteStore, recursive::UpstreamStrategy};
 use crate::telemetry::{DnsStats, QueryRing};
 use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
+use lanforge_transport::TransportMetrics;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::dns::{
@@ -29,6 +30,9 @@ pub struct DnsContext {
     pub ctx: LanforgeContext,
     pub query_log: Option<Arc<QueryRing>>,
     pub pipeline: Pipeline,
+    /// DNS messages over TCP, `DoT` and `DoQ` (one per query/answer, length prefix excluded):
+    /// their listeners keep no per-socket counters, so the banner shows this beside the UDP ones.
+    pub streams: Arc<TransportMetrics>,
 
     // Sub-components
     pub local: LocalResolver,

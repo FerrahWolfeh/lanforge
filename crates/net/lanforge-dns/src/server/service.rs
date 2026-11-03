@@ -17,6 +17,7 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
+use lanforge_transport::TransportMetrics;
 #[cfg(feature = "adblock")]
 use lanforge_types::config::AdblockRules;
 use lanforge_types::config::DnsListenConfig;
@@ -172,6 +173,7 @@ impl DnsService {
             ctx: self.ctx.clone(),
             query_log,
             pipeline,
+            streams: Arc::new(TransportMetrics::new()),
             local: LocalResolver::new(Arc::clone(&self.cfg), self.ctx.clone()),
             recursive,
             cache: Arc::clone(&cache),
@@ -288,8 +290,9 @@ impl AsyncService for DnsService {
                 ));
             }
 
-            // UDP carries nearly all queries; TCP/DoT/DoQ keep no counters in the banner.
-            let mut counters = Vec::with_capacity(addrs.len());
+            // One counter per UDP socket, plus the messages of TCP/DoT/DoQ together.
+            let mut counters = Vec::with_capacity(addrs.len() + 1);
+            counters.push(Arc::clone(&dns_ctx.streams));
             for addr in &addrs {
                 let transport =
                     crate::server::transport::net::bind_udp(*addr).map_err(CoreError::Io)?;

@@ -86,6 +86,7 @@ async fn handle_doq_connection(
                     if query_buf.is_empty() {
                         return;
                     }
+                    dns_ctx.streams.record_rx(query_buf.len());
 
                     let header = match WireHeader::parse(&query_buf) {
                         Some(h) => h,
@@ -114,8 +115,9 @@ async fn handle_doq_connection(
                     {
                         Ok(()) => {
                             if !resp_buf.is_empty() {
-                                if let Err(e) = send.write_all(&resp_buf).await {
-                                    debug!("DoQ stream write error: {e}");
+                                match send.write_all(&resp_buf).await {
+                                    Ok(()) => dns_ctx.streams.record_tx(resp_buf.len()),
+                                    Err(e) => debug!("DoQ stream write error: {e}"),
                                 }
                                 let _ = send.finish();
                             }

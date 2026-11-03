@@ -81,6 +81,7 @@ async fn handle_connection(mut stream: TcpStream, src: SocketAddr, task_ctx: Arc
         ) {
             break;
         }
+        task_ctx.streams.record_rx(len);
 
         let header = match WireHeader::parse(&data) {
             Some(h) => h,
@@ -112,16 +113,8 @@ async fn handle_connection(mut stream: TcpStream, src: SocketAddr, task_ctx: Arc
                 &mut resp_buf,
             );
 
-            if !resp_buf.is_empty() {
-                let resp_len = u16::try_from(resp_buf.len())
-                    .unwrap_or(u16::MAX)
-                    .to_be_bytes();
-                if stream.write_all(&resp_len).await.is_err() {
-                    break;
-                }
-                if stream.write_all(&resp_buf).await.is_err() {
-                    break;
-                }
+            if !send_framed(&mut stream, &resp_buf, &task_ctx).await {
+                break;
             }
             continue;
         }
@@ -155,16 +148,22 @@ async fn handle_connection(mut stream: TcpStream, src: SocketAddr, task_ctx: Arc
             );
         }
 
-        if !resp_buf.is_empty() {
-            let resp_len = u16::try_from(resp_buf.len())
-                .unwrap_or(u16::MAX)
-                .to_be_bytes();
-            if stream.write_all(&resp_len).await.is_err() {
-                break;
-            }
-            if stream.write_all(&resp_buf).await.is_err() {
-                break;
-            }
+        if !send_framed(&mut stream, &resp_buf, &task_ctx).await {
+            break;
         }
     }
+}
+
+/// Writes one length-prefixed answer and counts it; `false` once the connection is gone. An
+/// empty answer sends nothing.
+async fn send_framed(stream: &mut TcpStream, resp: &[u8], ctx: &DnsContext) -> bool {
+    if resp.is_empty() {
+        return true;
+    }
+    let len = u16::try_from(resp.len()).unwrap_or(u16::MAX).to_be_bytes();
+    if stream.write_all(&len).await.is_err() || stream.write_all(resp).await.is_err() {
+        return false;
+    }
+    ctx.streams.record_tx(resp.len());
+    true
 }
