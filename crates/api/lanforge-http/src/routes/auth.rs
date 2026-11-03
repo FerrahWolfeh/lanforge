@@ -526,7 +526,12 @@ async fn change_password(
             ));
         }
     };
-    if !state.auth.throttle.verify(&db_user.password_hash, current).await {
+    if !state
+        .auth
+        .throttle
+        .verify(&db_user.password_hash, current)
+        .await
+    {
         return Err(HttpError::Forbidden("Invalid current password".to_string()));
     }
     let new_hash = hash_password(&payload.new_password);

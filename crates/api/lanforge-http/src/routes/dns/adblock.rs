@@ -105,7 +105,10 @@ pub fn router() -> Router<AppState> {
                 .post(handle_adblock_rule_add)
                 .delete(handle_adblock_rule_remove_text),
         )
-        .route("/adblock/rules/status", put(handle_adblock_rule_status_text))
+        .route(
+            "/adblock/rules/status",
+            put(handle_adblock_rule_status_text),
+        )
         .route("/adblock/rules/{id}", delete(handle_adblock_rule_remove))
         .route(
             "/adblock/rules/{id}/status",

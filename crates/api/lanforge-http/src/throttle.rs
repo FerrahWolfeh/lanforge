@@ -233,7 +233,10 @@ mod tests {
         for n in 0..=GLOBAL_FREE {
             t.record(ip(u8::try_from(n).unwrap()), false);
         }
-        assert!(matches!(t.admit(ip(200)), Err(HttpError::TooManyRequests(_))));
+        assert!(matches!(
+            t.admit(ip(200)),
+            Err(HttpError::TooManyRequests(_))
+        ));
     }
 
     #[test]

@@ -37,17 +37,25 @@ fn test_runtime_db_survives_a_daemon_crash() {
         let log_db = LogDb::open(&path).unwrap();
         assert_eq!(log_db.path(), Some(std::path::Path::new(&path)));
         log_db
-            .record_log(&TimedEvent::new(LanforgeEvent::System(SystemEvent::SystemReady)))
+            .record_log(&TimedEvent::new(LanforgeEvent::System(
+                SystemEvent::SystemReady,
+            )))
             .unwrap();
         let device = Device::new(MacAddr([0x02, 0, 0, 0, 0, 0x42]));
-        log_db.sync_runtime_devices(&[Arc::new(device)], &[]).unwrap();
+        log_db
+            .sync_runtime_devices(&[Arc::new(device)], &[])
+            .unwrap();
         std::process::abort();
     }
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("runtime.redb");
     let status = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "tests::test_runtime_db_survives_a_daemon_crash", "--nocapture"])
+        .args([
+            "--exact",
+            "tests::test_runtime_db_survives_a_daemon_crash",
+            "--nocapture",
+        ])
         .env(CHILD, &path)
         .status()
         .unwrap();
@@ -55,7 +63,11 @@ fn test_runtime_db_survives_a_daemon_crash() {
 
     let path = path.to_str().unwrap();
     let log_db = LogDb::open(path).unwrap();
-    assert_eq!(log_db.path(), Some(std::path::Path::new(path)), "reopened the same file");
+    assert_eq!(
+        log_db.path(),
+        Some(std::path::Path::new(path)),
+        "reopened the same file"
+    );
     assert_eq!(log_db.schema_version().unwrap(), 1);
     assert_eq!(log_db.get_history(10).unwrap().len(), 1);
     assert_eq!(log_db.load_runtime_devices().unwrap().len(), 1);

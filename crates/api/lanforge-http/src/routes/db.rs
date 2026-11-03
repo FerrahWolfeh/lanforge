@@ -54,4 +54,3 @@ async fn handle_reset(State(state): State<AppState>, headers: HeaderMap) -> impl
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_db_reset().await, Success => NoContent)
 }
-

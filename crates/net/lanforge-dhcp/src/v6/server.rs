@@ -553,7 +553,11 @@ impl Dhcpv6Server {
                 .insert((client_duid.clone(), iana.id), ips.clone());
             let is_static = self.is_static_client(client_duid, identity);
             let mut ia_opts = DhcpOptions::new();
-            let ip_list = ips.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
+            let ip_list = ips
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
             let who = identity.map_or_else(|| "anonymous device".to_string(), ToString::to_string);
 
             // A Renew every T1 (≤ 5 min) that changes nothing is not news.
