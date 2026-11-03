@@ -18,9 +18,11 @@ use lanforge_types::events::LanforgeEvent;
 use lanforge_types::events::firewall::{FirewallAppliedSummary, FirewallEvent};
 use lanforge_types::events::pppoe::PppoeEvent;
 use lanforge_types::events::system::SystemEvent;
+use lanforge_types::network::TrafficConfig;
 use lanforge_types::network::firewall::{
     DynamicPortRequest, FirewallConfig, FirewallMode, FirewallStopAction,
 };
+use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::system::{DormantReason, ServiceId};
 use tracing::{debug, error, info, trace, warn};
 
@@ -39,6 +41,9 @@ pub struct NftService {
     active_wan: Option<String>,
     inert: bool,
     last_ruleset: std::sync::Arc<parking_lot::RwLock<Option<String>>>,
+    /// The running firewall ([`LanforgeContext::running_firewall_config`]) the last ruleset was
+    /// compiled from.
+    compiled: Option<FirewallConfig>,
 }
 
 impl NftService {
@@ -50,6 +55,7 @@ impl NftService {
             active_wan: None,
             inert: false,
             last_ruleset: std::sync::Arc::new(parking_lot::RwLock::new(None)),
+            compiled: None,
         }
     }
 
@@ -61,6 +67,7 @@ impl NftService {
             active_wan: None,
             inert: true,
             last_ruleset: std::sync::Arc::new(parking_lot::RwLock::new(None)),
+            compiled: None,
         }
     }
 
@@ -141,7 +148,7 @@ impl NftService {
     /// Only a full firewall locks down: `Minimal` is a policy-accept helper next to another
     /// firewall, and a disabled config is the admin explicitly handing the host over.
     async fn stop_firewall(&self, ctx: &LanforgeContext) {
-        let cfg = ctx.get_firewall_config().unwrap_or_default();
+        let cfg = ctx.running_firewall_config();
         let lockdown = cfg.enabled
             && cfg.mode == FirewallMode::Full
             && cfg.on_stop == FirewallStopAction::Lockdown;
@@ -194,11 +201,20 @@ impl NftService {
         );
     }
 
-    async fn reapply(&self, ctx: &LanforgeContext, reason: &'static str) {
-        let cfg = ctx.get_firewall_config().unwrap_or_default();
+    async fn reapply(&mut self, ctx: &LanforgeContext, reason: &'static str) {
+        let cfg = ctx.running_firewall_config();
         let dynamic_ports = ctx.registered_service_ports();
         self.apply_ruleset_internal(ctx, &cfg, &dynamic_ports, reason)
             .await;
+        self.compiled = Some(cfg);
+    }
+
+    /// Recompiles when another section changed what the firewall runs (SQM on/off turns the
+    /// flowtable off/on, the `PPPoE` dataplane flags): the firewall section itself is unchanged.
+    async fn reapply_if_changed(&mut self, ctx: &LanforgeContext, reason: &'static str) {
+        if self.compiled.as_ref() != Some(&ctx.running_firewall_config()) {
+            self.reapply(ctx, reason).await;
+        }
     }
 
     fn publish_ruleset_applied(
@@ -214,6 +230,7 @@ impl NftService {
             zones,
             port_rules = summary.rules_count,
             wan = ?summary.wan_iface,
+            flow_offload = summary.flow_offload,
             inert,
             "Firewall ruleset applied"
         );
@@ -414,6 +431,8 @@ impl AsyncService for NftService {
         let mut fw_rx = ctx.bus().subscribe_firewall();
         let mut sys_rx = ctx.bus().subscribe_system();
         let mut wan_rx = ctx.watch_wan();
+        let mut traffic_sub = ctx.config_subscription::<TrafficConfig>();
+        let mut pppoe_sub = ctx.config_subscription::<PppoeConfig>();
         let ctx = ctx.clone();
         let h = h.clone();
 
@@ -431,6 +450,9 @@ impl AsyncService for NftService {
                 self.reapply(&ctx, "wan_generation").await;
             } else if self.last_applied_payload().is_none() {
                 self.reapply(&ctx, "startup").await;
+            } else {
+                // SQM or the PPPoE dataplane may have changed since `init` compiled.
+                self.reapply_if_changed(&ctx, "config_changed").await;
             }
             h.ready();
 
@@ -461,6 +483,20 @@ impl AsyncService for NftService {
                             self.active_wan = snap.ifname;
                             self.reapply(&ctx, "wan_generation").await;
                         }
+                    }
+
+                    // Sections that change what the firewall runs without touching it.
+                    delta = traffic_sub.next() => {
+                        if delta.is_none() {
+                            break;
+                        }
+                        self.reapply_if_changed(&ctx, "sqm_changed").await;
+                    }
+                    delta = pppoe_sub.next() => {
+                        if delta.is_none() {
+                            break;
+                        }
+                        self.reapply_if_changed(&ctx, "pppoe_dataplane_changed").await;
                     }
 
                     // PPPoE WAN state updates

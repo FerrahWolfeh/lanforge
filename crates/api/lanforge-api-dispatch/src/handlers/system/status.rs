@@ -186,7 +186,8 @@ impl ClientContext {
     }
 
     pub async fn handle_firewall_status(&self) -> Response {
-        let cfg = self.ctx.get_firewall_config().unwrap_or_default();
+        let configured = self.ctx.get_firewall_config().unwrap_or_default();
+        let cfg = self.ctx.running_firewall_config();
         let dynamic_ports = self.ctx.registered_service_ports();
         let internal_zone = cfg.zones.iter().find(|z| z.name == "internal");
         let lan_ifaces = internal_zone.map_or_else(Vec::new, |z| z.interfaces.clone());
@@ -210,11 +211,7 @@ impl ClientContext {
         let rules_count =
             open_ports_count + (cfg.port_forwards.len() + cfg.forwardings.len()) as u32;
 
-        let sqm_enabled = self
-            .ctx
-            .get_traffic_config()
-            .map(|c| c.sqm.enabled)
-            .unwrap_or(false);
+        let sqm_enabled = self.ctx.get_traffic_config().is_some_and(|c| c.sqm.enabled);
 
         let status = FirewallStatus {
             mode: cfg.mode,
@@ -225,8 +222,9 @@ impl ClientContext {
             open_ports_count,
             rules_count,
             enabled: cfg.enabled,
-            flow_offload_active: cfg.flow_offload && !sqm_enabled,
-            flow_offload_suspended: cfg.flow_offload && sqm_enabled,
+            flow_offload_active: cfg.flow_offload,
+            // Asked for in `[firewall]` but turned off under SQM (CAKE must see every packet).
+            flow_offload_suspended: configured.flow_offload && !cfg.flow_offload && sqm_enabled,
             default_drop_active: cfg.default_input_policy == FirewallPolicy::Drop,
         };
 

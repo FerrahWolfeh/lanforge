@@ -148,20 +148,35 @@ async fn reload_applies_a_firewall_edit_and_leaves_out_a_wrong_entry() {
     assert!(issues[0].contains("typo"), "{issues:?}");
 }
 
-/// The firewall reloads as the boot runs it: with SQM on, flowtable offload stays off (CAKE
-/// must see every packet) and the LAN interface joins `internal`, though the file says
-/// otherwise; the file itself is not rewritten.
+/// `[firewall]` asks for offload while SQM is on: the daemon runs without it (CAKE must see
+/// every packet) and with the LAN interface in `internal`, while the config it serves and the
+/// file keep what the admin wrote — so switching SQM off brings the offload back. The status
+/// reports the offload as suspended, not disabled.
 #[tokio::test]
-async fn reload_runs_the_effective_firewall_and_leaves_the_file_alone() {
+async fn reload_keeps_the_admins_firewall_and_runs_the_effective_one() {
     let text = "# mine\n[traffic.sqm]\nenabled = true # keep\n\n\
                 [firewall]\nflow_offload = true # mine too\n";
     let (client, _dir, path) = with_file(text);
     client.ctx.set_target_interface_name("lan0".into());
     reload(&client).await;
-    let fw = client.ctx.get_firewall_config().unwrap();
-    assert!(!fw.flow_offload, "offload off under SQM");
-    let internal = fw.zones.iter().find(|z| z.name == "internal").unwrap();
+
+    let configured = client.ctx.get_firewall_config().unwrap();
+    assert!(configured.flow_offload, "the admin's setting is kept");
+    let Response::FirewallConfig(served) = client.handle_firewall_config().await else {
+        panic!("firewall config");
+    };
+    assert!(served.flow_offload, "the WebUI edits what the file says");
+
+    let running = client.ctx.running_firewall_config();
+    assert!(!running.flow_offload, "offload off under SQM");
+    let internal = running.zones.iter().find(|z| z.name == "internal").unwrap();
     assert!(internal.interfaces.iter().any(|i| i == "lan0"));
+
+    let Response::FirewallStatus(status) = client.handle_firewall_status().await else {
+        panic!("firewall status");
+    };
+    assert!(status.flow_offload_suspended, "suspended by SQM");
+    assert!(!status.flow_offload_active);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
 }
 

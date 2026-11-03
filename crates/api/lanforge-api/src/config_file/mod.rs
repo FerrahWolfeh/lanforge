@@ -20,8 +20,8 @@ pub use dns::{
 };
 pub use duration::HumanDuration;
 pub use effective::{
-    RaInputs, add_default_ra_prefixes, effective_firewall, effective_ra, log_issues,
-    set_aside_issues, set_aside_messages,
+    RaInputs, add_default_ra_prefixes, effective_ra, log_issues, set_aside_issues,
+    set_aside_messages,
 };
 pub use hosts::StaticHost;
 pub use patch::patch_sections;

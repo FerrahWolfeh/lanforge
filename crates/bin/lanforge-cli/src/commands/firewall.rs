@@ -1881,6 +1881,14 @@ async fn handle_offload(
         "Flowtable hardware & kernel bypass offload: {}",
         if state { "ENABLED" } else { "DISABLED" }
     ));
+    if state
+        && client
+            .firewall_status()
+            .await
+            .is_ok_and(|s| s.flow_offload_suspended)
+    {
+        printer.warning("Suspended while SQM is on: CAKE must see every packet");
+    }
     Ok(())
 }
 
