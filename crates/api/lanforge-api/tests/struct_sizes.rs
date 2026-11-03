@@ -20,11 +20,6 @@ fn test_print_api_struct_sizes() {
 
     println!("\n=== SYSTEM & STATUS ===");
     print_size::<StatusResponse>("StatusResponse");
-    print_size::<ServicesStatus>("ServicesStatus");
-    print_size::<ServiceStatusInfo>("ServiceStatusInfo");
-    print_size::<ServiceDot>("ServiceDot");
-    print_size::<ServiceDoh>("ServiceDoh");
-    print_size::<ServiceDoq>("ServiceDoq");
     print_size::<NetworkStatus>("NetworkStatus");
     print_size::<DevicesStats>("DevicesStats");
     print_size::<ResourcesStatus>("ResourcesStatus");

@@ -160,7 +160,6 @@ export interface StatusResponse {
 	resources: ResourceUsage;
 	capabilities?: CapabilitiesInfo | ServerCapabilities;
 	server_caps: ServerCapabilities;
-	services: Record<string, unknown>;
 	service_banners?: ServiceBanner[];
 }
 

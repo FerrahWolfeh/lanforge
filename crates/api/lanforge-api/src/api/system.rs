@@ -10,7 +10,6 @@ use lanforge_types::network::firewall::{
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RdnssConfig};
 use lanforge_types::network::traffic::TrafficConfig;
-use lanforge_types::system::ServiceState;
 use serde::{Deserialize, Serialize};
 
 /// Interface information.
@@ -27,8 +26,6 @@ pub struct StatusResponse {
     pub uptime_secs: u64,
     /// Current daemon version.
     pub version: String,
-    /// Detailed status of each sub-service.
-    pub services: ServicesStatus,
     /// Underlying database statistics.
     pub db: DbStatus,
     /// Local network interface and prefix status.
@@ -54,153 +51,6 @@ pub struct StatusResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServiceBannersResponse {
     pub banners: Vec<ServiceBanner>,
-}
-
-/// Aggregated status for all major daemon services.
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct ServicesStatus {
-    // --- Core Services ---
-    /// Database worker status.
-    pub db_worker: ServiceStatusInfo,
-    /// mDNS prober status.
-    pub mdns_prober: ServiceStatusInfo,
-    /// Interface monitoring service.
-    pub iface_monitor: ServiceStatusInfo,
-    /// NDP Monitor (neighbor discovery and address tracking).
-    pub ndp_monitor: ServiceNdp,
-    /// Control API (Unix Domain Socket).
-    pub control_api: ServiceStatusInfo,
-    /// Optional HTTP REST API.
-    pub http_api: Option<ServiceStatusInfo>,
-
-    // --- Protocol Services ---
-    /// Router Advertisement service (NDP).
-    pub ra: ServiceRa,
-    /// `DHCPv4` server.
-    pub dhcp_v4: ServiceDhcpV4,
-    /// `DHCPv6` server.
-    pub dhcp_v6: ServiceDhcpV6,
-    /// Authoritative/Caching `DNS` server.
-    pub dns: ServiceDns,
-}
-
-/// Status of the Router Advertisement (RA) service.
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct ServiceRa {
-    /// Current state (e.g., "online", "offline").
-    pub state: ServiceState,
-    /// Seconds since the RA service started.
-    pub uptime_secs: u64,
-    /// Current Global Unicast Address (GUA) prefix being announced.
-    pub gua: Option<Ipv6Addr>,
-    /// Unique Local Address (ULA) prefix being announced, if any.
-    pub ula: Option<Ipv6Addr>,
-}
-
-/// Status of the `DHCPv4` service.
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct ServiceDhcpV4 {
-    /// Current state (e.g., "online", "offline").
-    pub state: ServiceState,
-    /// Seconds since the `DHCPv4` service started.
-    pub uptime_secs: u64,
-    /// Number of active leases currently assigned.
-    pub leases_active: usize,
-    /// Number of available addresses in the pool.
-    pub pool_free: usize,
-}
-
-/// Status of the `DHCPv6` service.
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct ServiceDhcpV6 {
-    /// Current state (e.g., "online", "offline").
-    pub state: ServiceState,
-    /// Seconds since the `DHCPv6` service started.
-    pub uptime_secs: u64,
-    /// Number of active leases currently assigned.
-    pub leases_active: usize,
-    /// Number of available addresses in the pool.
-    pub pool_free: usize,
-    /// Current Global Unicast Address (GUA) prefix being managed.
-    pub gua: Option<Ipv6Addr>,
-    /// Unique Local Address (ULA) prefix being managed, if any.
-    pub ula: Option<Ipv6Addr>,
-}
-
-/// Status of the DNS service.
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct ServiceDns {
-    /// Current state (e.g., "online", "offline").
-    pub state: ServiceState,
-    /// Seconds since the DNS service started.
-    pub uptime_secs: u64,
-    /// Configured upstream resolver.
-    pub upstream: Option<String>,
-    /// Configured port.
-    pub port: u16,
-    /// DoT service status.
-    pub dot: Option<ServiceDot>,
-    /// DoH service status.
-    pub doh: Option<ServiceDoh>,
-    /// DoQ service status.
-    pub doq: Option<ServiceDoq>,
-    /// Cache size in bytes.
-    pub cache_size: u64,
-    /// Number of cached entries.
-    pub cache_entries: u16,
-}
-
-/// Status of the DNS DoT subservice
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct ServiceDot {
-    /// Current state (e.g., "online", "offline").
-    pub state: ServiceState,
-    /// Seconds since the DNS service started.
-    pub uptime_secs: u64,
-    /// Configured upstream resolver.
-    pub upstream: Option<String>,
-    /// Configured port.
-    pub port: u16,
-}
-
-/// Status of the DNS DoH subservice
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct ServiceDoh {
-    /// Current state (e.g., "online", "offline").
-    pub state: ServiceState,
-    /// Seconds since the DNS service started.
-    pub uptime_secs: u64,
-    /// Configured port.
-    pub port: u16,
-}
-
-/// Status of the DNS DoQ subservice
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct ServiceDoq {
-    /// Current state (e.g., "online", "offline").
-    pub state: ServiceState,
-    /// Seconds since the DNS service started.
-    pub uptime_secs: u64,
-    /// Configured port.
-    pub port: u16,
-}
-
-/// Generic status information for auxiliary services.
-#[derive(Debug, Serialize, Deserialize, Default, Clone)]
-pub struct ServiceStatusInfo {
-    /// Current state (e.g., "online", "ativo").
-    pub state: ServiceState,
-}
-
-/// Status of the NDP Monitor service.
-#[derive(Debug, Serialize, Deserialize, Default)]
-pub struct ServiceNdp {
-    /// Current state (e.g., "online", "offline").
-    pub state: ServiceState,
-    /// Seconds since the scanner service started.
-    pub uptime_secs: u64,
-    /// Total number of unique IPv6 addresses being tracked via neighbor discovery.
-    pub addrs_tracked: usize,
 }
 
 /// Statistics and path information for the persistent database.

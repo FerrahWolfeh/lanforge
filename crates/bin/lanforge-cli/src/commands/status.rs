@@ -185,7 +185,6 @@ mod tests {
         let status = StatusResponse {
             uptime_secs: 2733,
             version: "0.33.0".to_string(),
-            services: ServicesStatus::default(),
             db: DbStatus {
                 path: "/var/lib/lanforge/lanforge.redb".to_string(),
                 size_bytes: 131_072,
