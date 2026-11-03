@@ -910,3 +910,75 @@ prefix = "2001:db8:1::/64"
     );
     assert_eq!(issues.len(), 4, "{issues:#?}");
 }
+
+/// A file with its own zones and no `forwardings` key: the default matrix keeps only the rows
+/// between zones it has. Rows naming the missing `trusted` compiled to nothing and made every
+/// later CLI/WebUI change fail the pre-flight check ("zone 'trusted' does not exist").
+#[test]
+fn default_forwardings_only_link_zones_the_file_has() {
+    use lanforge_types::network::firewall::validate_firewall_candidate;
+
+    let text = r#"
+[firewall.zones.external]
+interfaces = ["wan0"]
+
+[firewall.zones.internal]
+interfaces = ["lan0"]
+input = "accept"
+forward = "accept"
+"#;
+    let (fw, issues) = ConfigFile::parse(text).unwrap().firewall.to_config();
+    assert!(
+        issues.is_empty(),
+        "nothing the admin wrote is wrong: {issues:?}"
+    );
+    let pairs: Vec<_> = fw
+        .forwardings
+        .iter()
+        .map(|f| (f.from.as_str(), f.to.as_str()))
+        .collect();
+    assert_eq!(pairs, vec![("internal", "external")]);
+
+    let mut candidate = fw.clone();
+    candidate.flow_offload = !candidate.flow_offload;
+    let report = validate_firewall_candidate(&candidate, &fw, &[], || "tx".into());
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+}
+
+/// A forwarding or port forward the admin wrote with a zone that does not exist is left out
+/// and reported; the rest of `[firewall]` applies.
+#[test]
+fn written_entries_naming_a_missing_zone_are_reported() {
+    let text = r#"
+forwardings = [
+    { from = "internal", to = "external" },
+    { from = "internal", to = "guest" },
+]
+
+[firewall.zones.external]
+interfaces = ["wan0"]
+
+[firewall.zones.internal]
+interfaces = ["lan0"]
+
+[firewall.port_forwards.nas]
+port = 445
+to = "192.0.2.10"
+zone = "extrenal"
+
+[firewall.port_forwards.web]
+port = 443
+to = "192.0.2.11"
+"#;
+    let text = text.replacen("forwardings", "[firewall]\nforwardings", 1);
+    let (fw, issues) = ConfigFile::parse(&text).unwrap().firewall.to_config();
+    assert_eq!(fw.forwardings.len(), 1);
+    assert_eq!(fw.port_forwards.len(), 1);
+    assert_eq!(fw.port_forwards[0].external_port, 443);
+    assert_eq!(issues.len(), 2, "{issues:#?}");
+    assert!(issues.iter().any(|i| i.contains("\"guest\"")), "{issues:?}");
+    assert!(
+        issues.iter().any(|i| i.contains("\"extrenal\"")),
+        "{issues:?}"
+    );
+}

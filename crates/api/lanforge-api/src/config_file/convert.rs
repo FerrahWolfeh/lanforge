@@ -167,14 +167,15 @@ impl FirewallFile {
             on_stop: fw.on_stop.as_str().to_string(),
             custom_rules_file: fw.custom_rules_file.clone(),
             zones,
-            forwardings: fw
-                .forwardings
-                .iter()
-                .map(|f| ZoneForwardingFile {
-                    from: f.from.clone(),
-                    to: f.to.clone(),
-                })
-                .collect(),
+            forwardings: Some(
+                fw.forwardings
+                    .iter()
+                    .map(|f| ZoneForwardingFile {
+                        from: f.from.clone(),
+                        to: f.to.clone(),
+                    })
+                    .collect(),
+            ),
             port_forwards,
         }
     }
@@ -270,6 +271,13 @@ impl FirewallFile {
 
         let mut port_forwards = Vec::new();
         for (label, pf) in &self.port_forwards {
+            if !zones.iter().any(|z| z.name == pf.zone) {
+                issues.push(format!(
+                    "[firewall.port_forwards.\"{label}\"] zone = \"{}\" does not exist; port not forwarded",
+                    pf.zone
+                ));
+                continue;
+            }
             let internal_ip = pf.to.parse::<IpAddr>();
             let protocol = parse_l4(&pf.proto);
             match (internal_ip, protocol) {
@@ -293,18 +301,41 @@ impl FirewallFile {
             }
         }
 
+        // A forwarding or port forward naming a zone the file lacks would compile to nothing and
+        // make every later change fail the pre-flight check: the default matrix keeps only rows
+        // between existing zones; a written entry is left out and reported (port forwards above).
+        let has_zone = |name: &str| zones.iter().any(|z: &FirewallZone| z.name == name);
+        let forwardings = match &self.forwardings {
+            None => super::sections::default_forwardings()
+                .into_iter()
+                .filter(|f| has_zone(&f.from) && has_zone(&f.to))
+                .map(|f| ZoneForwarding { from: f.from, to: f.to })
+                .collect(),
+            Some(written) => written
+                .iter()
+                .filter_map(|f| {
+                    let missing = [&f.from, &f.to].into_iter().find(|z| !has_zone(z));
+                    if let Some(zone) = missing {
+                        issues.push(format!(
+                            "[firewall] forwarding {} -> {}: zone \"{zone}\" does not exist; not routed",
+                            f.from, f.to
+                        ));
+                        None
+                    } else {
+                        Some(ZoneForwarding {
+                            from: f.from.clone(),
+                            to: f.to.clone(),
+                        })
+                    }
+                })
+                .collect(),
+        };
+
         let config = FirewallConfig {
             table_name: self.table_name.clone(),
             mode,
             zones,
-            forwardings: self
-                .forwardings
-                .iter()
-                .map(|f| ZoneForwarding {
-                    from: f.from.clone(),
-                    to: f.to.clone(),
-                })
-                .collect(),
+            forwardings,
             port_forwards,
             custom_rules_file: self.custom_rules_file.clone(),
             enabled: self.enabled,
