@@ -23,7 +23,8 @@ async fn test_lanforge_db_schema_version() {
 /// The runtime database lives on tmpfs to be lost on reboot, but must survive a daemon restart,
 /// including one that never closes the database (crash, watchdog kill, exit with live `Arc`s):
 /// with `Durability::None` only a clean close wrote the last commits to the file. A child
-/// process writes and aborts; this test then reopens the same file.
+/// process writes and exits without closing the database (`process::exit` runs no destructor,
+/// like a crash, but leaves no core dump behind); this test then reopens the same file.
 #[test]
 fn test_runtime_db_survives_a_daemon_crash() {
     use lanforge_types::device::Device;
@@ -33,6 +34,7 @@ fn test_runtime_db_survives_a_daemon_crash() {
     use std::sync::Arc;
 
     const CHILD: &str = "LANFORGE_TEST_RUNTIME_DB_CHILD";
+    const CHILD_EXIT: i32 = 42;
     if let Ok(path) = std::env::var(CHILD) {
         let log_db = LogDb::open(&path).unwrap();
         assert_eq!(log_db.path(), Some(std::path::Path::new(&path)));
@@ -45,7 +47,7 @@ fn test_runtime_db_survives_a_daemon_crash() {
         log_db
             .sync_runtime_devices(&[Arc::new(device)], &[])
             .unwrap();
-        std::process::abort();
+        std::process::exit(CHILD_EXIT);
     }
 
     let dir = tempfile::tempdir().unwrap();
@@ -59,7 +61,11 @@ fn test_runtime_db_survives_a_daemon_crash() {
         .env(CHILD, &path)
         .status()
         .unwrap();
-    assert!(!status.success(), "the child aborts after writing");
+    assert_eq!(
+        status.code(),
+        Some(CHILD_EXIT),
+        "the child exits after writing"
+    );
 
     let path = path.to_str().unwrap();
     let log_db = LogDb::open(path).unwrap();
