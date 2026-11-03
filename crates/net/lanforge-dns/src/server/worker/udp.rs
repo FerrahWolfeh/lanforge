@@ -38,34 +38,21 @@ pub fn spawn_udp_worker(ctx: Arc<DnsContext>, transport: UdpTransport) -> JoinHa
                         Some(h) => h,
                         None => continue,
                     };
+                    // A response is never answered (two servers would bounce it forever); a
+                    // query without exactly one question is malformed.
+                    if !header.is_query() {
+                        continue;
+                    }
+                    if header.qdcount() != 1 {
+                        WireResponseWriter::write_header_formerr(packet_data, &mut resp_buf);
+                        let _ = transport.send(&resp_buf, &src).await;
+                        continue;
+                    }
                     let question = match WireQuestion::parse(packet_data) {
                         Some(q) => q,
                         None => continue,
                     };
-
-                    // Noise filtering (e.g. malformed IoT queries like empty qname or ":0")
-                    let mut labels = question.labels();
-                    let is_noise = match labels.next() {
-                        None => true,                                             // Empty qname (.)
-                        Some(l) if l == b":0" && labels.next().is_none() => true, // Literally ":0"
-                        _ => false,
-                    };
-
                     let edns = WireOptScanner::scan(packet_data, &header, &question);
-
-                    if is_noise {
-                        resp_buf.clear();
-                        WireResponseWriter::write_error_response(
-                            packet_data,
-                            &question,
-                            1, // FORMERR
-                            edns,
-                            false,
-                            &mut resp_buf,
-                        );
-                        let _ = transport.send(&resp_buf, &src).await;
-                        continue;
-                    }
 
                     resp_buf.clear();
                     let mut req = DnsPipelineRequest::new(

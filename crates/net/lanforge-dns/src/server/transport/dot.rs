@@ -1,6 +1,6 @@
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_dns_wire::{WireHeader, WireQuestion};
+use lanforge_dns_wire::{WireHeader, WireQuestion, WireResponseWriter};
 use lanforge_types::network::dns::TransportProtocol;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -86,6 +86,20 @@ async fn handle_dot_connection(
             Some(h) => h,
             None => break,
         };
+        // A response is never answered; a query without exactly one question is malformed.
+        if !header.is_query() {
+            continue;
+        }
+        if header.qdcount() != 1 {
+            let mut resp_buf = Vec::with_capacity(12);
+            WireResponseWriter::write_header_formerr(&query_buf, &mut resp_buf);
+            tls_stream
+                .write_all(&u16::try_from(resp_buf.len())?.to_be_bytes())
+                .await?;
+            tls_stream.write_all(&resp_buf).await?;
+            dns_ctx.streams.record_tx(resp_buf.len());
+            continue;
+        }
         let question = match WireQuestion::parse(&query_buf) {
             Some(q) => q,
             None => break,

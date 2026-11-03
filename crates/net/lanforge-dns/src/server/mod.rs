@@ -141,11 +141,6 @@ impl DnsContext {
             return;
         }
 
-        // Noise filtering
-        if event.domain.is_empty() || event.domain == "." || event.domain == ":0" {
-            return;
-        }
-
         // Check if device is configured to suppress DNS logging or matches ignore_clients (zero Device clones)
         let (mac, should_ignore) = self.ctx.with_state(|state| {
             let mac = event.src_mac.or_else(|| state.get_mac_by_ip(event.src_ip));
@@ -187,7 +182,12 @@ impl DnsContext {
                     .unwrap_or_default()
                     .as_secs(),
                 src_ip: event.src_ip,
-                domain: Arc::from(event.domain),
+                // The root name has no labels; the log writes it as `.`, never blank.
+                domain: Arc::from(if event.domain.is_empty() {
+                    "."
+                } else {
+                    event.domain
+                }),
                 qtype: event.qtype,
                 result: event.result,
                 upstream_us: event.upstream_us,

@@ -1,6 +1,6 @@
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
-use lanforge_dns_wire::{WireHeader, WireQuestion};
+use lanforge_dns_wire::{WireHeader, WireQuestion, WireResponseWriter};
 use lanforge_types::network::dns::TransportProtocol;
 use quinn::{Connection, Endpoint, ServerConfig, TransportConfig};
 use std::net::SocketAddr;
@@ -92,6 +92,21 @@ async fn handle_doq_connection(
                         Some(h) => h,
                         None => return,
                     };
+                    // A response is never answered; a query without exactly one question
+                    // is malformed.
+                    if !header.is_query() {
+                        return;
+                    }
+                    if header.qdcount() != 1 {
+                        let mut resp_buf = Vec::with_capacity(12);
+                        WireResponseWriter::write_header_formerr(&query_buf, &mut resp_buf);
+                        match send.write_all(&resp_buf).await {
+                            Ok(()) => dns_ctx.streams.record_tx(resp_buf.len()),
+                            Err(e) => debug!("DoQ stream write error: {e}"),
+                        }
+                        let _ = send.finish();
+                        return;
+                    }
                     let question = match WireQuestion::parse(&query_buf) {
                         Some(q) => q,
                         None => return,

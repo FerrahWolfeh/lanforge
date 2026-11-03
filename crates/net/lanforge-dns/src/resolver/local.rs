@@ -392,6 +392,34 @@ impl LocalResolver {
             }
             _ => {}
         }
+
+        // A dotless name the LAN does not serve never leaves the router: the public DNS has no
+        // such host (dnsmasq's `domain-needed`). An IoT device looping on a junk name (`:0`) is
+        // answered here instead of reaching the upstreams. The root and TLD delegation lookups
+        // (NS/SOA/DS/DNSKEY, e.g. `. NS`, `com. DS`) are real queries and go on.
+        let mut labels = question.labels();
+        let delegation = matches!(
+            qtype,
+            DnsRecordType::NS
+                | DnsRecordType::SOA
+                | DnsRecordType::Unknown(43) // DS
+                | DnsRecordType::Unknown(48) // DNSKEY
+        );
+        if let (Some(label), None, false) = (labels.next(), labels.next(), delegation) {
+            let raw = String::from_utf8_lossy(label);
+            let host = fast_lowercase(&raw);
+            let (ips, device_exists) = self.resolve_ip_status(&host, DnsRecordType::A);
+            let rcode = if ips.is_some() || device_exists { 0 } else { 3 }; // NODATA / NXDOMAIN
+            WireResponseWriter::write_error_response(
+                data,
+                question,
+                rcode,
+                WireOptScanner::scan(data, header, question),
+                has_upstreams,
+                resp,
+            );
+            return true;
+        }
         false
     }
 

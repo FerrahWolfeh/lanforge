@@ -628,6 +628,16 @@ impl WireResponseWriter {
         }
     }
 
+    /// Writes a header-only FORMERR for a query whose question section cannot be answered
+    /// (RFC 9619: a query carries exactly one question). `query_data` holds at least a header.
+    pub fn write_header_formerr(query_data: &[u8], resp: &mut Vec<u8>) {
+        resp.clear();
+        resp.extend_from_slice(&query_data[..12]);
+        resp[2] = (resp[2] & 0x79) | 0x80; // QR = 1; keep opcode and RD; clear AA, TC
+        resp[3] = 0x01; // RA = 0, Z = 0, RCODE = FORMERR
+        resp[4..12].fill(0); // no sections
+    }
+
     /// Writes a minimal error response (REFUSED, FORMERR, etc) into the provided buffer.
     pub fn write_error_response(
         query_data: &[u8],
@@ -646,7 +656,11 @@ impl WireResponseWriter {
         let mut h = [0u8; 12];
         h.copy_from_slice(&query_data[0..12]);
         h[2] |= 0x80; // QR = 1 (Response)
-        h[2] |= 0x04; // AA = 1 (Authoritative Answer)
+        // AA only on a local answer (NODATA / NXDOMAIN): an error (SERVFAIL, REFUSED, FORMERR)
+        // carries no data, authoritative or not.
+        if matches!(rcode, 0 | 3) {
+            h[2] |= 0x04;
+        }
         if ra {
             h[3] |= 0x80; // RA = 1 (Recursion Available)
         }
@@ -1402,6 +1416,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn header_formerr_keeps_id_opcode_rd_and_drops_every_section() {
+        // ID 0xbeef, opcode 0, RD, AA and TC set by a confused client, QDCOUNT 2, ARCOUNT 1.
+        let query = b"\xbe\xef\x07\x00\x00\x02\x00\x00\x00\x00\x00\x01extra";
+        let mut resp = Vec::new();
+        WireResponseWriter::write_header_formerr(query, &mut resp);
+        assert_eq!(resp, b"\xbe\xef\x81\x01\0\0\0\0\0\0\0\0");
+    }
+
+    #[test]
     fn test_write_error_response_no_duplication() {
         // ID=0x1234, Flags=0x0100 (RD=1), QDCOUNT=1, ...
         // QNAME="\x04host\x03lan\x00", QTYPE=1 (A), QCLASS=1 (IN)
@@ -1422,10 +1445,21 @@ mod tests {
         );
         assert_eq!(&resp[0..2], b"\x12\x34", "ID should match");
         assert_eq!(
-            resp[2], 0x85,
-            "Flags byte 1 should have QR=1, AA=1 and RD=1"
+            resp[2], 0x81,
+            "Flags byte 1 should have QR=1 and RD=1; an error is not authoritative"
         );
         assert_eq!(resp[3] & 0x0F, 0x05, "RCODE should be 5 (REFUSED)");
+
+        // NXDOMAIN and NODATA are the router's own answers: authoritative.
+        for local in [0, 3] {
+            WireResponseWriter::write_error_response(
+                query_data, &question, local, None, true, &mut resp,
+            );
+            assert_eq!(resp[2], 0x85, "rcode {local}: QR, AA, RD");
+            assert_eq!(resp[3], 0x80 | local, "rcode {local}: RA");
+        }
+        WireResponseWriter::write_error_response(query_data, &question, 2, None, true, &mut resp);
+        assert_eq!(resp[2], 0x81, "SERVFAIL is not authoritative");
 
         // The question part MUST start immediately after the 12-byte header
         assert_eq!(

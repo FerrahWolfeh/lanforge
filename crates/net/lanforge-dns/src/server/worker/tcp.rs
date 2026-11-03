@@ -87,37 +87,22 @@ async fn handle_connection(mut stream: TcpStream, src: SocketAddr, task_ctx: Arc
             Some(h) => h,
             None => break,
         };
-        let question = match WireQuestion::parse(&data) {
-            Some(q) => q,
-            None => break,
-        };
-
-        // Noise filtering (e.g. malformed IoT queries like empty qname or ":0")
-        let mut labels = question.labels();
-        let is_noise = match labels.next() {
-            None => true,                                             // Empty qname (.)
-            Some(l) if l == b":0" && labels.next().is_none() => true, // Literally ":0"
-            _ => false,
-        };
-
-        let edns = WireOptScanner::scan(&data, &header, &question);
-
-        if is_noise {
-            let mut resp_buf = Vec::with_capacity(64);
-            WireResponseWriter::write_error_response(
-                &data,
-                &question,
-                1, // FORMERR
-                edns,
-                false,
-                &mut resp_buf,
-            );
-
+        // A response is never answered; a query without exactly one question is malformed.
+        if !header.is_query() {
+            continue;
+        }
+        if header.qdcount() != 1 {
+            let mut resp_buf = Vec::with_capacity(12);
+            WireResponseWriter::write_header_formerr(&data, &mut resp_buf);
             if !send_framed(&mut stream, &resp_buf, &task_ctx).await {
                 break;
             }
             continue;
         }
+        let question = match WireQuestion::parse(&data) {
+            Some(q) => q,
+            None => break,
+        };
 
         let mut resp_buf = Vec::with_capacity(len + 128);
         let run_res = task_ctx
@@ -142,7 +127,7 @@ async fn handle_connection(mut stream: TcpStream, src: SocketAddr, task_ctx: Arc
                 &data,
                 &question,
                 2, // SERVFAIL
-                edns,
+                WireOptScanner::scan(&data, &header, &question),
                 !task_ctx.recursive.is_empty(),
                 &mut resp_buf,
             );
