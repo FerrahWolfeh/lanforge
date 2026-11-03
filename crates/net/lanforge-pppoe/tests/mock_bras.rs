@@ -6,6 +6,7 @@ use lanforge_transport::PppoeInertHandle;
 use lanforge_types::identifiers::MacAddr;
 use smallvec::{SmallVec, smallvec};
 use std::net::Ipv4Addr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep_until};
@@ -25,6 +26,18 @@ pub struct MockBrasConfig {
     pub terminate_after: Option<Duration>,
     /// Send a PADT (discovery stage) this long after the session comes up (ISP-side hangup).
     pub padt_after: Option<Duration>,
+    /// Wait this long before answering a PADI (a slow concentrator).
+    pub pado_delay: Option<Duration>,
+    /// What the concentrator saw: CHAP names and PADTs from the client.
+    pub seen: Arc<Mutex<Seen>>,
+}
+
+#[derive(Debug, Default)]
+pub struct Seen {
+    /// The Name field of every CHAP Response (the PPPoE username), in order.
+    pub chap_names: Vec<String>,
+    /// PADTs sent by the client.
+    pub padts: usize,
 }
 
 impl Default for MockBrasConfig {
@@ -41,6 +54,8 @@ impl Default for MockBrasConfig {
             send_echo_replies: true,
             terminate_after: None,
             padt_after: None,
+            pado_delay: None,
+            seen: Arc::default(),
         }
     }
 }
@@ -85,6 +100,9 @@ pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHan
                             if cfg.fail_discovery {
                                 continue;
                             }
+                            if let Some(delay) = cfg.pado_delay {
+                                tokio::time::sleep(delay).await;
+                            }
                             let host_uniq = frame.tags.iter().find(|t| t.tag_type == TAG_HOST_UNIQ);
                             let mut tags: SmallVec<[Tag; 8]> = smallvec![
                                 Tag {
@@ -128,7 +146,7 @@ pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHan
                             };
                             handle.inject_discovery(pads.encode().to_vec()).await;
                         } else if frame.code == CODE_PADT {
-                            // Client disconnected
+                            cfg.seen.lock().unwrap().padts += 1;
                         }
                     }
                 }
@@ -210,6 +228,11 @@ pub fn spawn_mock_bras(handle: PppoeInertHandle, cfg: MockBrasConfig) -> JoinHan
                         }
                         0xc223 => { // CHAP
                             if code == 2 { // Response
+                                // Value-Size, Value, then the Name up to the packet's end.
+                                if let Some(&val_len) = bytes.get(6) {
+                                    let name = bytes.get(7 + usize::from(val_len)..).unwrap_or_default();
+                                    cfg.seen.lock().unwrap().chap_names.push(String::from_utf8_lossy(name).into_owned());
+                                }
                                 if cfg.auth_ok {
                                     let succ = vec![
                                         0xc2, 0x23,
