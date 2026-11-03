@@ -75,3 +75,23 @@ async fn summaries_show_live_data_and_nothing_else() {
     );
     assert_eq!(banners.len(), 4, "only registered services have a banner");
 }
+
+/// The PPPoE uptime is the session's: the service stays up (degraded) across reconnects, so its
+/// own uptime would keep counting from the first session.
+#[tokio::test]
+async fn pppoe_uptime_is_the_session_age() {
+    use lanforge_api::api::Response;
+
+    let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+    ctx.set_service_state(ServiceId::Pppoe, ServiceState::Online);
+    ctx.set_pppoe_status(Some(PppoeStatusResponse {
+        state: PppoeSessionState::Connected,
+        connected_at: std::time::Instant::now().checked_sub(Duration::from_secs(5)),
+        ..Default::default()
+    }));
+
+    let Response::PppoeStatus(status) = ClientContext::new(ctx).handle_pppoe_status().await else {
+        panic!("pppoe status");
+    };
+    assert_eq!(status.uptime_secs, Some(5));
+}

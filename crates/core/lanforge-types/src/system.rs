@@ -468,6 +468,10 @@ pub struct PppoeStatusResponse {
     pub terminal_reachable: Option<bool>,
     pub terminal_mac: Option<MacAddr>,
     pub terminal_rtt_us: Option<u32>,
+    /// When the session came up, on the monotonic clock (an SBC without RTC brings PPPoE up
+    /// before NTP fixes the wall clock). In-process only: the API turns it into `uptime_secs`.
+    #[serde(skip)]
+    pub connected_at: Option<std::time::Instant>,
 }
 
 /// Status response payload for Network Traffic & SQM.

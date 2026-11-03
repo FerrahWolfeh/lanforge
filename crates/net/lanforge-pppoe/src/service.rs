@@ -587,6 +587,7 @@ impl PppoeService {
             .terminal_status
             .map_or((None, None, None), |(r, m, rtt)| (Some(r), m, rtt));
 
+        let connected_at = Instant::now();
         let pppoe_status = PppoeStatusResponse {
             enabled: true,
             dataplane: Some(self.cfg.dataplane),
@@ -607,10 +608,11 @@ impl PppoeService {
             terminal_reachable,
             terminal_mac,
             terminal_rtt_us,
+            connected_at: Some(connected_at.into_std()),
         };
 
         self.ctx.set_pppoe_status(Some(pppoe_status));
-        self.connected_at = Some(Instant::now());
+        self.connected_at = Some(connected_at);
         self.announced = true;
 
         let session_up = lanforge_types::events::pppoe::PppoeSessionUp {
@@ -671,6 +673,7 @@ impl PppoeService {
             terminal_reachable,
             terminal_mac,
             terminal_rtt_us,
+            connected_at: None,
         };
 
         self.ctx.set_pppoe_status(Some(pppoe_status));

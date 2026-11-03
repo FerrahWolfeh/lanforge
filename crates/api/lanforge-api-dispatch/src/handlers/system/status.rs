@@ -81,9 +81,9 @@ impl ClientContext {
             status.auth = self.ctx.get_pppoe_config().map(|cfg| cfg.auth);
         }
 
+        // The session's own age: the service stays up (degraded) across reconnects.
         if status.state == lanforge_types::system::PppoeSessionState::Connected {
-            let uptime = self.ctx.get_service_uptime(ServiceId::Pppoe);
-            status.uptime_secs = Some(uptime);
+            status.uptime_secs = status.connected_at.map(|t| t.elapsed().as_secs());
         }
 
         Response::PppoeStatus(status)
