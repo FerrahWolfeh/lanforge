@@ -3,6 +3,7 @@ use lanforge_api::api::{DnsQueryLogEntry, DnsQueryLogResponse, DnsQueryResponse,
 use lanforge_types::network::QueryResult;
 use lanforge_types::network::dns::{DnsRecordEntry, DnsRecordType};
 use std::{collections::HashMap, net::IpAddr, time::Instant};
+use tracing::debug;
 
 impl ClientContext {
     pub async fn handle_dns_query(
@@ -65,6 +66,10 @@ impl ClientContext {
             };
         };
 
+        // The worker batches the query log; write that batch first so the log is current.
+        if let Err(e) = storage.flush_dns_log().await {
+            debug!("DNS log flush before read failed: {e}");
+        }
         match storage
             .call(move |s: &lanforge_db_core::Stores| {
                 s.log()

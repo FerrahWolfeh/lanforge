@@ -101,6 +101,9 @@ async fn test_uds_log_streaming_filter() {
                 lanforge_core::context::StorageCommand::FlushNow(resp_tx) => {
                     let _ = resp_tx.send(Ok(()));
                 }
+                lanforge_core::context::StorageCommand::FlushDnsLog(resp_tx) => {
+                    let _ = resp_tx.send(());
+                }
             }
         }
     });

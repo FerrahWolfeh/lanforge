@@ -1665,3 +1665,61 @@ async fn upstreams_without_dns_are_unmeasured() {
     assert_eq!(up.status.as_str(), "unknown");
     assert_eq!(up.last_success_secs_ago, None);
 }
+
+/// A query answered a moment ago is in the log at once: the DB worker batches the query log
+/// (60 s / 100 lines), so the log read writes that batch first.
+#[tokio::test]
+async fn a_fresh_query_is_in_the_log_at_once() {
+    use lanforge_types::network::dns::{QueryLogEntry, QueryResult, TransportProtocol};
+
+    let client = init_test_context().await;
+    let storage = loop {
+        if let Some(s) = client.ctx.storage_handle() {
+            break s;
+        }
+        tokio::task::yield_now().await;
+    };
+    // The worker answers storage calls only from `serve`, after it subscribed to the bus.
+    storage
+        .call(|s: &lanforge_db_core::Stores| s.db.is_provisioned())
+        .await
+        .unwrap();
+    // The periodic flush ticks once at start; let it pass so only the 60 s tick is left.
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let _ = client
+        .ctx
+        .bus()
+        .publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(Arc::new(
+            QueryLogEntry {
+                // Recent: the log store prunes lines older than a week.
+                timestamp: SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                src_ip: "192.168.1.20".parse().unwrap(),
+                domain: Arc::from("example.org"),
+                upstream_us: 0,
+                qtype: DnsRecordType::A,
+                result: QueryResult::Forwarded,
+                cached: false,
+                src_mac: None,
+                answer: None,
+                protocol: TransportProtocol::Udp,
+                filter: None,
+                coalesce_id: None,
+                repeats: 1,
+            },
+        ))));
+    // The query was answered before the admin opened the log.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let res = client
+        .handle_dns_query_log(None, None, None, None, None, false, None)
+        .await;
+    let Response::DnsQueryLog(log) = res else {
+        panic!("{res:?}");
+    };
+    assert_eq!(log.total, 1);
+    assert_eq!(&*log.entries[0].domain, "example.org");
+}
