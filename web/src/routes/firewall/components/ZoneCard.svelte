@@ -44,12 +44,12 @@
     availableInterfaces.filter((i) => !i.name.startsWith("ifb") && !zone.interfaces.includes(i.name))
   );
 
-  // Check if this is an external zone missing its active WAN
+  // The firewall binds the active WAN to the external zone by itself: shown, never saved.
   const isExternalZone = $derived(
     zone.name.toLowerCase() === "external" || zone.name.toLowerCase() === "wan"
   );
-  const activeWanMissing = $derived(
-    isExternalZone && activeWan && !zone.interfaces.includes(activeWan)
+  const autoWan = $derived(
+    isExternalZone && activeWan && !zone.interfaces.includes(activeWan) ? activeWan : null
   );
 
   // ── Zone-name → accent dot colour ────────────────────────────────────────
@@ -84,11 +84,6 @@
     newInterfaceValue = "";
     addingInterface = false;
     customInterfaceMode = false;
-  }
-
-  function bindActiveWan() {
-    if (!activeWan || zone.interfaces.includes(activeWan)) return;
-    onUpdate({ ...zone, interfaces: [...zone.interfaces, activeWan] });
   }
 
   function removeInterface(iface: string) {
@@ -157,20 +152,25 @@
         <span class="text-muted-foreground text-xs font-medium uppercase tracking-wide">
           Interfaces
         </span>
-        {#if activeWanMissing}
-          <button
-            type="button"
-            class="flex items-center gap-1 text-[11px] text-destructive hover:underline cursor-pointer"
-            onclick={bindActiveWan}
-          >
-            <GlobeIcon class="size-3" />
-            Attach WAN ({activeWan})
-          </button>
-        {/if}
       </div>
 
       <div class="flex flex-wrap items-center gap-1.5">
-        {#if zone.interfaces.length === 0 && !addingInterface}
+        {#if autoWan}
+          <Tooltip.Provider>
+            <Tooltip.Root>
+              <Tooltip.Trigger>
+                <Badge variant="outline" class="flex items-center gap-1 border-dashed">
+                  <GlobeIcon class="size-3" />
+                  {autoWan}
+                  <span class="text-muted-foreground">· auto</span>
+                </Badge>
+              </Tooltip.Trigger>
+              <Tooltip.Content>
+                Active WAN: the firewall binds it to this zone automatically. Not saved to the config file.
+              </Tooltip.Content>
+            </Tooltip.Root>
+          </Tooltip.Provider>
+        {:else if zone.interfaces.length === 0 && !addingInterface}
           <span class="text-xs text-muted-foreground italic">No interfaces attached</span>
         {/if}
 

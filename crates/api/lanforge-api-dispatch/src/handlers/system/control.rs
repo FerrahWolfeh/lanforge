@@ -145,27 +145,11 @@ impl ClientContext {
         })
     }
 
+    /// `[firewall]` as written. Nothing is filled in (an empty `external` zone stays empty):
+    /// what the client sends back is saved to the file, and the ruleset binds the active WAN
+    /// to `external` by itself.
     pub async fn handle_firewall_config(&self) -> Response {
-        let mut cfg = self.ctx.get_firewall_config().unwrap_or_default();
-
-        // If external zone exists but has no interfaces assigned, auto-populate with active or configured WAN
-        if let Some(ext) = cfg
-            .zones
-            .iter_mut()
-            .find(|z| z.name == "external" || z.name == "wan")
-            && ext.interfaces.is_empty()
-        {
-            let pppoe_wan = self
-                .ctx
-                .pppoe_status()
-                .as_ref()
-                .and_then(|p| p.interface.clone().or_else(|| p.wan_iface.clone()));
-            let wan = pppoe_wan.or_else(|| self.ctx.get_pppoe_config().map(|p| p.wan_iface));
-            if let Some(w) = wan {
-                ext.interfaces.push(w);
-            }
-        }
-
+        let cfg = self.ctx.get_firewall_config().unwrap_or_default();
         Response::FirewallConfig(Box::new(cfg))
     }
 

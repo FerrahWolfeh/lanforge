@@ -428,3 +428,20 @@ async fn reload_applies_the_site_search_domains() {
     reload(&client).await;
     assert_eq!(client.ctx.get_site_domains().0, ["home.arpa", "lan"]);
 }
+
+/// The WebUI loads the firewall, edits it and sends it back to be written to the file: the GET
+/// must not fill an empty `external` zone with the WAN interface (the ruleset binds the active
+/// WAN itself), or `wan0`/`ppp0` lands in the file as if the admin had written it.
+#[tokio::test]
+async fn firewall_get_serves_an_empty_external_zone_as_written() {
+    let text = "[pppoe]\nenabled = true\nwan_iface = \"wan0\"\n\n\
+                [firewall.zones.external]\ninput = \"drop\"\n\n\
+                [firewall.zones.internal]\ninterfaces = [\"lan0\"]\ninput = \"accept\"\n";
+    let (client, _dir, _path) = with_file(text);
+    reload(&client).await;
+    let Response::FirewallConfig(served) = client.handle_firewall_config().await else {
+        panic!("firewall config");
+    };
+    let external = served.zones.iter().find(|z| z.name == "external").unwrap();
+    assert!(external.interfaces.is_empty(), "{:?}", external.interfaces);
+}
