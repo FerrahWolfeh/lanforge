@@ -12,10 +12,11 @@ use runner::ServiceRunner;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{
-    AsyncService, LanforgeService, NodeStatus, RuntimeClass, ServiceSpec,
+    Activation, AsyncService, Condition, LanforgeService, NodeStatus, RuntimeClass, ServiceSpec,
 };
-use lanforge_types::config::DomainSet;
+use lanforge_types::config::{ConfigDomain, DomainSet};
 use lanforge_types::system::{ServiceAction, ServiceId, ServiceState};
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -141,11 +142,30 @@ struct ConditionWake {
     /// Config sections the node's `Condition` declares.
     sections: DomainSet,
     tx: watch::Sender<u64>,
+    condition: Condition,
+    /// The condition's result at the last link change (see [`Self::bump_if_changed`]).
+    last: Mutex<Activation>,
 }
 
 impl ConditionWake {
     fn bump(&self) {
         self.tx.send_modify(|epoch| *epoch += 1);
+    }
+
+    /// Bumps only when the condition's result changed. Links come and go on their own (a `PPPoE`
+    /// attempt creates and drops `ppp0`), and a bump cuts a failing service's backoff short: a
+    /// bump on every link change would make `PPPoE` hammer the ISP.
+    fn bump_if_changed(&self, ctx: &LanforgeContext) {
+        let now = self.condition.evaluate(ctx);
+        let changed = {
+            let mut last = self.last.lock();
+            let changed = *last != now;
+            *last = now;
+            changed
+        };
+        if changed {
+            self.bump();
+        }
     }
 }
 
@@ -155,6 +175,21 @@ fn wake_conditions(wakes: &[ConditionWake], changed: DomainSet) {
     for wake in wakes.iter().filter(|w| w.sections.intersects(changed)) {
         wake.bump();
     }
+}
+
+/// Link changes re-evaluate the conditions that read links (`ConfigDomain::Interfaces`), waking
+/// only the ones whose result changed (a link a service waits for appeared or left).
+fn spawn_link_wakes(ctx: &LanforgeContext, wakes: Arc<Vec<ConditionWake>>) {
+    let ctx = ctx.clone();
+    let mut links = ctx.watch_interfaces();
+    tokio::spawn(async move {
+        let reads_links = DomainSet::from(ConfigDomain::Interfaces);
+        while links.changed().await.is_ok() {
+            for wake in wakes.iter().filter(|w| w.sections.intersects(reads_links)) {
+                wake.bump_if_changed(&ctx);
+            }
+        }
+    });
 }
 
 /// Central orchestrator supervising all Lanforge services in a DAG.
@@ -196,15 +231,20 @@ impl GraphSupervisor {
                     .iter()
                     .fold(DomainSet::empty(), |set, &d| set | DomainSet::from(d)),
                 tx,
+                last: Mutex::new(spec.condition.evaluate(ctx)),
+                condition: spec.condition.clone(),
             });
             let (tx, rx) = mpsc::channel(8);
             control_txs.insert(spec.id, tx);
             pending_controls.insert(spec.id, rx);
         }
 
+        let condition_wakes = Arc::new(condition_wakes);
+
+        spawn_link_wakes(ctx, Arc::clone(&condition_wakes));
+
         // Routes config changes (D-3) and admin service control (D-20) into the graph.
         let mut sys_bus = ctx.bus().subscribe_system();
-        let condition_wakes = Arc::new(condition_wakes);
         let wakes = Arc::clone(&condition_wakes);
         tokio::spawn(async move {
             loop {

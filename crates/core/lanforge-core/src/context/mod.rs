@@ -344,6 +344,24 @@ impl LanforgeContext {
         *self.inner.target_ifname.write() = Some(name);
     }
 
+    /// Why a LAN service must wait: its interface is known to be absent (see
+    /// `InterfaceSnapshot::lacks_link`). For service conditions.
+    #[must_use]
+    pub fn lan_link_wait(&self) -> Option<lanforge_types::system::DormantReason> {
+        let name = self.inner.target_ifname.read().clone()?;
+        self.interfaces_snapshot()
+            .lacks_link(&name)
+            .then_some(lanforge_types::system::DormantReason::WaitingForLink(name))
+    }
+
+    /// Why the WAN service must wait: its link `iface` is known to be absent.
+    #[must_use]
+    pub fn wan_link_wait(&self, iface: &str) -> Option<lanforge_types::system::DormantReason> {
+        self.interfaces_snapshot()
+            .lacks_link(iface)
+            .then(|| lanforge_types::system::DormantReason::WaitingForWan(iface.to_string()))
+    }
+
     /// Returns the shared event bus for this instance.
     ///
     /// The bus can be used to subscribe to or publish events.

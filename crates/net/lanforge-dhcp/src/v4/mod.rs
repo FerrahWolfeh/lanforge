@@ -117,13 +117,16 @@ impl LanforgeService for Dhcpv4Service {
             shutdown_timeout: Duration::from_secs(3),
             deps: DHCPV4_DEPS,
             condition: Condition {
-                sections: &[lanforge_types::config::ConfigDomain::DhcpV4Options],
+                sections: &[
+                    lanforge_types::config::ConfigDomain::DhcpV4Options,
+                    lanforge_types::config::ConfigDomain::Interfaces,
+                ],
                 eval: |ctx| {
-                    if ctx.get_dhcp_options().v4.enabled {
-                        Activation::Active
-                    } else {
-                        Activation::Dormant(DormantReason::disabled("dhcp.v4.enabled"))
+                    if !ctx.get_dhcp_options().v4.enabled {
+                        return Activation::Dormant(DormantReason::disabled("dhcp.v4.enabled"));
                     }
+                    ctx.lan_link_wait()
+                        .map_or(Activation::Active, Activation::Dormant)
                 },
             },
         }

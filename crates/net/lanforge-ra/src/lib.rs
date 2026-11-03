@@ -658,15 +658,16 @@ impl LanforgeService for RaService {
             shutdown_timeout: Duration::from_secs(3),
             deps: RA_DEPS,
             condition: Condition {
-                sections: &[lanforge_types::config::ConfigDomain::RaServer],
+                sections: &[
+                    lanforge_types::config::ConfigDomain::RaServer,
+                    lanforge_types::config::ConfigDomain::Interfaces,
+                ],
                 eval: |ctx| {
-                    if ctx.get_ra_server_config().enabled {
-                        Activation::Active
-                    } else {
-                        Activation::Dormant(lanforge_types::system::DormantReason::disabled(
-                            "ra.enabled",
-                        ))
+                    if !ctx.get_ra_server_config().enabled {
+                        return Activation::Dormant(DormantReason::disabled("ra.enabled"));
                     }
+                    ctx.lan_link_wait()
+                        .map_or(Activation::Active, Activation::Dormant)
                 },
             },
         }

@@ -126,11 +126,12 @@ macro_rules! feat_flag {
     }};
 }
 
+const RTNLGRP_LINK: u32 = 1;
 const RTNLGRP_NEIGH: u32 = 3;
 const RTNLGRP_IPV4_IFADDR: u32 = 5;
 const RTNLGRP_IPV6_IFADDR: u32 = 9;
 
-type NetlinkRawMessage = (NetlinkMessage<RouteNetlinkMessage>, SocketAddr);
+pub type NetlinkRawMessage = (NetlinkMessage<RouteNetlinkMessage>, SocketAddr);
 type NetlinkMessages = broadcast::Sender<NetlinkRawMessage>;
 type NetlinkRawReceiver = UnboundedReceiver<NetlinkRawMessage>;
 
@@ -1413,6 +1414,10 @@ impl Bootstrapper {
             .socket_mut()
             .socket_mut()
             .add_membership(RTNLGRP_IPV4_IFADDR)?;
+        connection
+            .socket_mut()
+            .socket_mut()
+            .add_membership(RTNLGRP_LINK)?;
 
         tokio::spawn(connection);
         Ok((handle, messages))

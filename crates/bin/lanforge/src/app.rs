@@ -175,7 +175,7 @@ impl Daemon {
 
         crate::spawn_services!(self.registry, &self.ctx, {
             // 0. Synthetic Graph Nodes (Supervisor & Observer Managed)
-            async [cfg] => InterfacesService::new(cfg.system.iface.clone()),
+            async [cfg, messages] => InterfacesService::new(cfg.system.iface.clone(), messages.subscribe()),
             async [] => WanService::new(),
 
             async [ctx, cfg, db, log_db] => DbWorker::new(cfg.database.clone(), ctx, db, log_db),

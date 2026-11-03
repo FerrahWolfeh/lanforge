@@ -314,6 +314,11 @@ impl std::fmt::Display for ServiceState {
 pub enum DormantReason {
     Disabled(Cow<'static, str>),
     NotApplicable(Cow<'static, str>),
+    /// The WAN link (`PPPoE` `wan_iface`) does not exist yet: the daemon is not online, so
+    /// readiness waits for it (up to its deadline).
+    WaitingForWan(String),
+    /// A LAN link the service serves does not exist yet; readiness does not wait for it.
+    WaitingForLink(String),
 }
 
 impl DormantReason {
@@ -333,6 +338,8 @@ impl std::fmt::Display for DormantReason {
         match self {
             Self::Disabled(k) => write!(f, "disabled ({k})"),
             Self::NotApplicable(r) => write!(f, "not applicable ({r})"),
+            Self::WaitingForWan(iface) => write!(f, "waiting for WAN link {iface}"),
+            Self::WaitingForLink(iface) => write!(f, "waiting for link {iface}"),
         }
     }
 }
@@ -377,6 +384,15 @@ pub enum StateDetail {
     Failed { attempts: u32, last_error: String },
     Exited,
     AdminStopped,
+}
+
+impl StateDetail {
+    /// Whether this keeps the daemon from being ready: only waiting for the WAN link does (the
+    /// host is not online without it); every other reason is a settled state.
+    #[must_use]
+    pub const fn holds_readiness(&self) -> bool {
+        matches!(self, Self::Dormant(DormantReason::WaitingForWan(_)))
+    }
 }
 
 impl std::fmt::Display for StateDetail {

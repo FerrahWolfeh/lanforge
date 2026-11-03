@@ -1094,13 +1094,15 @@ impl LanforgeService for PppoeService {
             shutdown_timeout: Duration::from_secs(10),
             deps: PPPOE_DEPS,
             condition: Condition {
-                sections: &[lanforge_types::config::ConfigDomain::Pppoe],
-                eval: |ctx| {
-                    if ctx.get_pppoe_config().is_some_and(|c| c.enabled) {
-                        Activation::Active
-                    } else {
-                        Activation::Dormant(DormantReason::disabled("pppoe.enabled"))
-                    }
+                sections: &[
+                    lanforge_types::config::ConfigDomain::Pppoe,
+                    lanforge_types::config::ConfigDomain::Interfaces,
+                ],
+                eval: |ctx| match ctx.get_pppoe_config() {
+                    Some(cfg) if cfg.enabled => ctx
+                        .wan_link_wait(&cfg.wan_iface)
+                        .map_or(Activation::Active, Activation::Dormant),
+                    _ => Activation::Dormant(DormantReason::disabled("pppoe.enabled")),
                 },
             },
         }

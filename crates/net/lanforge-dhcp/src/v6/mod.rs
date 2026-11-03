@@ -147,13 +147,16 @@ impl LanforgeService for Dhcpv6Service {
             shutdown_timeout: Duration::from_secs(3),
             deps: DHCPV6_DEPS,
             condition: Condition {
-                sections: &[lanforge_types::config::ConfigDomain::DhcpV6Options],
+                sections: &[
+                    lanforge_types::config::ConfigDomain::DhcpV6Options,
+                    lanforge_types::config::ConfigDomain::Interfaces,
+                ],
                 eval: |ctx| {
-                    if ctx.get_dhcp_options().v6.enabled {
-                        Activation::Active
-                    } else {
-                        Activation::Dormant(DormantReason::disabled("dhcp.v6.enabled"))
+                    if !ctx.get_dhcp_options().v6.enabled {
+                        return Activation::Dormant(DormantReason::disabled("dhcp.v6.enabled"));
                     }
+                    ctx.lan_link_wait()
+                        .map_or(Activation::Active, Activation::Dormant)
                 },
             },
         }

@@ -186,3 +186,42 @@ async fn test_readiness_deadline_counts_from_process_start() {
     tracker.check_pending_at(now + Duration::from_secs(3));
     assert!(tracker.systemd_ready_sent(), "15 s since exec: READY=1");
 }
+
+/// Waiting for the WAN link keeps READY=1 (the host is not online yet, deadline-bound); waiting
+/// for a LAN link does not.
+#[tokio::test]
+async fn test_only_the_wan_link_wait_holds_readiness() {
+    use lanforge_types::system::{DormantReason, StateDetail};
+
+    let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+    for (id, reason) in [
+        (
+            ServiceId::Pppoe,
+            DormantReason::WaitingForWan("wan0".to_string()),
+        ),
+        (
+            ServiceId::Dhcp4,
+            DormantReason::WaitingForLink("lan0".to_string()),
+        ),
+    ] {
+        ctx.set_service_state(id, ServiceState::Inactive);
+        ctx.set_service_detail(id, Some(StateDetail::Dormant(reason)));
+    }
+    let mut sys_listener = ctx.bus().subscribe_system();
+    let start = tokio::time::Instant::now();
+    let mut tracker = ReadinessTracker::new(
+        &ctx,
+        HashSet::from([ServiceId::Pppoe, ServiceId::Dhcp4]),
+        start,
+    );
+    tracker.check_pending_at(start + Duration::from_secs(1));
+    assert!(sys_listener.try_recv().is_err(), "PPPoE waits for wan0");
+
+    ctx.set_service_state(ServiceId::Pppoe, ServiceState::Online);
+    ctx.set_service_detail(ServiceId::Pppoe, None);
+    tracker.check_pending_at(start + Duration::from_secs(2));
+    assert!(matches!(
+        sys_listener.try_recv().map(|e| e.event),
+        Ok(LanforgeEvent::System(SystemEvent::SystemReady))
+    ));
+}

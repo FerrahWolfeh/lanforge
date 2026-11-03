@@ -101,6 +101,13 @@ impl InterfaceSnapshot {
         self.links.iter().any(|l| l.name == name)
     }
 
+    /// Whether `name` is known to be absent: the links were scanned (generation > 0) and it is
+    /// not among them. An unscanned snapshot blocks nothing.
+    #[must_use]
+    pub fn lacks_link(&self, name: &str) -> bool {
+        self.generation > 0 && !name.is_empty() && !self.has_link(name)
+    }
+
     /// Finds link details by interface name.
     #[must_use]
     pub fn find_by_name(&self, name: &str) -> Option<&LinkInfo> {

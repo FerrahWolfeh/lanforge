@@ -2317,6 +2317,7 @@ dependencies = [
  "lanforge-uds",
  "libc",
  "netlink-sys",
+ "parking_lot",
  "pnet",
  "rtnetlink",
  "rustls",
