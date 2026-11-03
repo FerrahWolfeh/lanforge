@@ -471,6 +471,7 @@ impl AsyncService for DnsService {
                             lanforge_core::bus::LanforgeEvent::Pppoe(
                                 lanforge_core::bus::PppoeEvent::SessionUp(_)
                                     | lanforge_core::bus::PppoeEvent::SessionDown { .. }
+                                    | lanforge_core::bus::PppoeEvent::DnsServersChanged { .. }
                             )
                         ) {
                             resync_upstreams(ctx, &dns_ctx, false).await;
@@ -586,8 +587,9 @@ fn unix_now_secs() -> u64 {
 }
 
 /// Upstreams DNS forwards to: the configured ones or, when none is configured, the resolvers the
-/// ISP announced on the live PPPoE session. Derived from current state, never from an event
-/// payload, so a restart with the session up or a lagged bus cannot leave the LAN without one.
+/// ISP announced on the live PPPoE session (IPCP IPv4, then RA RDNSS IPv6). Derived from current
+/// state, never from an event payload, so a restart with the session up or a lagged bus cannot
+/// leave the LAN without one.
 fn effective_upstream_targets(ctx: &LanforgeContext) -> Vec<UpstreamTarget> {
     let configured = ctx.get_dns_upstreams();
     if !configured.is_empty() {

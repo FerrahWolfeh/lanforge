@@ -10,6 +10,7 @@ use crate::keepalive::{PadtWatch, run_keepalive};
 use crate::kernel::{configure_interface, deconfigure_interface, handoff_to_kernel};
 use crate::lcp::negotiate_lcp;
 use crate::session::PppoeSession;
+use crate::wan_dns::follow_wan_rdnss;
 use lanforge_core::bus::{LanforgeEvent, PppoeEvent, SystemEvent};
 use lanforge_core::context::{ConfigSubscription, LanforgeContext};
 use lanforge_core::error::CoreError;
@@ -17,7 +18,7 @@ use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
     ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::{ArpProber, PppoeTransport};
+use lanforge_transport::{ArpProber, Icmp6Transport, PppoeTransport};
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::pppoe::PppoeDataplane;
@@ -134,6 +135,9 @@ pub struct PppoeService {
     prober: Option<ArpProber>,
     terminal_status: Option<(bool, Option<MacAddr>, Option<u32>)>,
     config_sub: ConfigSubscription<PppoeConfig>,
+    /// Injected RA listener for the session link (tests); live sessions bind one on the PPP
+    /// interface once it exists.
+    wan_ra: Option<Icmp6Transport>,
 }
 
 impl PppoeService {
@@ -160,6 +164,7 @@ impl PppoeService {
             prober: None,
             terminal_status: None,
             config_sub,
+            wan_ra: None,
         }
     }
 
@@ -188,6 +193,7 @@ impl PppoeService {
             prober: None,
             terminal_status: None,
             config_sub,
+            wan_ra: None,
         }
     }
 
@@ -282,6 +288,29 @@ impl PppoeService {
     pub fn with_prober(mut self, prober: ArpProber) -> Self {
         self.prober = Some(prober);
         self
+    }
+
+    /// Injects the listener for the Router Advertisements on the session link (rootless tests).
+    #[must_use]
+    pub fn with_wan_ra_transport(mut self, ra: Icmp6Transport) -> Self {
+        self.wan_ra = Some(ra);
+        self
+    }
+
+    /// The RA listener for `interface` (the PPP link just brought up): the injected one, else a
+    /// passive raw socket. Without one the session runs on, with IPCP's IPv4 resolvers only.
+    fn wan_ra_listener(&self, interface: &str) -> Option<Icmp6Transport> {
+        if let Some(ra) = &self.wan_ra {
+            return Some(ra.clone());
+        }
+        if self.is_inert() {
+            return None;
+        }
+        Icmp6Transport::bind_ra_listener(interface)
+            .inspect_err(|e| {
+                warn!(interface, error = %e, "Cannot listen for the ISP's RAs; IPv6 resolvers not followed");
+            })
+            .ok()
     }
 
     #[must_use]
@@ -966,6 +995,7 @@ impl PppoeService {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn run_session_flow(&mut self) -> Result<Option<SystemInterrupt>, PppoeError> {
         self.last_uptime = None;
         self.wait_for_carrier().await?;
@@ -1038,7 +1068,9 @@ impl PppoeService {
                 "PPPoE session established, entering keepalive monitoring loop"
             );
 
-            run_keepalive(
+            // The ISP's IPv6 resolvers (RA RDNSS) are followed for as long as the session lives.
+            let wan_ra = self.wan_ra_listener(&interface_name);
+            let keepalive = run_keepalive(
                 &session,
                 &self.ctx,
                 lcp_res.local_magic,
@@ -1051,8 +1083,21 @@ impl PppoeService {
                     ac_mac: disc_res.ac_mac,
                     session_id: disc_res.session_id,
                 },
-            )
-            .await
+            );
+            tokio::pin!(keepalive);
+            let rdnss = async {
+                if let Some(ra) = &wan_ra {
+                    follow_wan_rdnss(&self.ctx, ra).await;
+                }
+            };
+            tokio::pin!(rdnss);
+            let mut following = true;
+            loop {
+                tokio::select! {
+                    res = &mut keepalive => break res,
+                    () = &mut rdnss, if following => following = false,
+                }
+            }
         }
         .await;
 

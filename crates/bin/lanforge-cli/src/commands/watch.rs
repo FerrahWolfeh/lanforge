@@ -436,6 +436,16 @@ fn render_pppoe_event(time_str: &str, evt: &PppoeEvent, printer: &Printer) {
                 printer,
             );
         }
+        PppoeEvent::DnsServersChanged { servers } => {
+            let list: Vec<String> = servers.iter().map(ToString::to_string).collect();
+            print_log(
+                time_str,
+                "PPPOE",
+                "DNS".cyan(),
+                format!("ISP resolvers: {}", list.join(", ")),
+                printer,
+            );
+        }
     }
 }
 

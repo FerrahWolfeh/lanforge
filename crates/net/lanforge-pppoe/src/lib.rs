@@ -19,6 +19,7 @@ pub mod kernel;
 pub mod lcp;
 pub mod service;
 pub mod session;
+mod wan_dns;
 
 pub use config::{AuthMethod, PppoeConfig, PppoeCredentials};
 pub use error::PppoeError;

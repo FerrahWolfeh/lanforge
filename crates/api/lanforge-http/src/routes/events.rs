@@ -338,6 +338,7 @@ const fn event_topic_and_kind(event: &LanforgeEvent) -> (&'static str, &'static 
                 PppoeEvent::AuthFailed { .. } => "AuthFailed",
                 PppoeEvent::KeepaliveWarning { .. } => "KeepaliveWarning",
                 PppoeEvent::KeepaliveRestored => "KeepaliveRestored",
+                PppoeEvent::DnsServersChanged { .. } => "DnsServersChanged",
             },
         ),
         LanforgeEvent::Firewall(f) => (

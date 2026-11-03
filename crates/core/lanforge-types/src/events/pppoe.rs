@@ -33,4 +33,10 @@ pub enum PppoeEvent {
         max_failures: u32,
     },
     KeepaliveRestored,
+    /// The live session's DNS servers changed after `SessionUp`: the ISP's IPv6 resolvers
+    /// (RDNSS in its Router Advertisements) came, were renewed with new ones, or expired.
+    /// `servers` is the whole new list (IPCP IPv4 first), as in the `PPPoE` status.
+    DnsServersChanged {
+        servers: Vec<IpAddr>,
+    },
 }

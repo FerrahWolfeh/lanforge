@@ -13,6 +13,7 @@ use tracing::info;
 const ALL_ROUTERS_MULTICAST: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 2);
 const ICMP6_FILTER: libc::c_int = 1;
 const ICMPV6_TYPE_RS: u8 = 133;
+const ICMPV6_TYPE_RA: u8 = 134;
 
 enum Icmp6Backend {
     Kernel(AsyncFd<Socket>),
@@ -50,12 +51,31 @@ impl Icmp6Transport {
         sock.join_multicast_v6(&ALL_ROUTERS_MULTICAST, iface_index)?;
 
         // Kernel-level filter: accept only Router Solicitations (133)
-        set_icmp6_filter_rs_only(&sock)?;
+        set_icmp6_filter_only(&sock, ICMPV6_TYPE_RS)?;
 
         sock.set_nonblocking(true)?;
         let async_fd = unsafe { AsyncFd::register(sock)? };
 
         info!("Raw socket bound on {iface} (index {iface_index}), listening for RS");
+        Ok(Self {
+            inner: Arc::new(Icmp6Inner {
+                backend: Icmp6Backend::Kernel(async_fd),
+                metrics: Arc::new(TransportMetrics::new()),
+            }),
+        })
+    }
+
+    /// A passive listener for the Router Advertisements another router sends on `iface` (an
+    /// ISP's on the PPPoE link): only type 134 passes the kernel filter; the all-nodes group the
+    /// RAs go to is joined by every IPv6 interface. Receives copies only: whoever configures
+    /// the link (the kernel, networkd) still gets its own.
+    pub fn bind_ra_listener(iface: &str) -> io::Result<Self> {
+        let sock = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))?;
+        sock.bind_device(Some(iface.as_bytes()))?;
+        set_icmp6_filter_only(&sock, ICMPV6_TYPE_RA)?;
+        sock.set_nonblocking(true)?;
+        let async_fd = unsafe { AsyncFd::register(sock)? };
+        info!("Raw socket bound on {iface}, listening for RA");
         Ok(Self {
             inner: Arc::new(Icmp6Inner {
                 backend: Icmp6Backend::Kernel(async_fd),
@@ -197,9 +217,10 @@ impl crate::metrics::TransportStats for Icmp6Transport {
     }
 }
 
-fn set_icmp6_filter_rs_only(sock: &Socket) -> io::Result<()> {
+/// Kernel `ICMP6_FILTER` passing only `icmp_type` (a set bit blocks that type).
+fn set_icmp6_filter_only(sock: &Socket, icmp_type: u8) -> io::Result<()> {
     let mut filter = [0xFFu8; 32];
-    let t = ICMPV6_TYPE_RS as usize;
+    let t = icmp_type as usize;
     filter[t / 8] &= !(1u8 << (t % 8));
 
     set_sockopt_raw(sock, libc::IPPROTO_ICMPV6, ICMP6_FILTER, &filter)
@@ -252,6 +273,34 @@ fn set_sockopt_raw(
 
 #[cfg(test)]
 mod tests {
+
+    /// Real sockets: needs `CAP_NET_RAW`, so it is ignored by default. Rootless run:
+    /// `unshare -rn sh -c 'ip link set lo up && cargo test -p lanforge-transport -- --ignored
+    /// ra_listener'` (the build must already be done outside the namespace).
+    #[tokio::test]
+    #[ignore = "needs CAP_NET_RAW (run inside `unshare -rn`)"]
+    async fn ra_listener_passes_ras_and_nothing_else() {
+        let listener = Icmp6Transport::bind_ra_listener("lo").expect("bind on lo");
+        let sender = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6)).unwrap();
+        let to = socket2::SockAddr::from(SocketAddr::V6("[::1]:0".parse().unwrap()));
+        let ns = [
+            135u8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let ra = [134u8, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        sender.send_to(&ns, &to).unwrap(); // filtered out by the kernel
+        sender.send_to(&ra, &to).unwrap();
+        let mut buf = [0u8; 64];
+        let (n, src) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), listener.recv(&mut buf))
+                .await
+                .expect("an RA arrives")
+                .expect("recv");
+        // The kernel fills the checksum (bytes 2..4) on send.
+        assert_eq!(n, ra.len());
+        assert_eq!(buf[0], 134, "the NS sent first never reached the listener");
+        assert_eq!(&buf[4..n], &ra[4..]);
+        assert_eq!(*src.ip(), Ipv6Addr::LOCALHOST);
+    }
     use super::*;
     use std::net::SocketAddrV6;
     use tokio::time::{Duration, timeout};
