@@ -30,6 +30,10 @@ use tracing::trace;
 
 #[cfg(feature = "dot")]
 const DOT_POOL_MAX: usize = 8;
+/// A UDP query nobody waits for any more (it lost a hedge or parallel race) and that got no
+/// answer within the normal upstream timeout counts as a failure: without it a mute upstream
+/// never degraded and kept costing every query the hedge delay.
+const ABANDONED_AFTER: Duration = Duration::from_secs(3);
 
 pub(crate) struct PendingQuery {
     pub sent_at: Instant,
@@ -200,6 +204,7 @@ impl UpstreamManager {
             loop {
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 if let Some(mgr_clone) = weak_mgr.upgrade() {
+                    mgr_clone.sweep_abandoned();
                     if mgr_clone.health.status() == UpstreamStatus::Degraded
                         && mgr_clone.health.is_eligible_for_probing()
                     {
@@ -213,6 +218,22 @@ impl UpstreamManager {
         *mgr.probe_handle.lock() = Some(probe_task);
 
         Ok(mgr)
+    }
+
+    /// Counts each abandoned UDP query that stayed unanswered past [`ABANDONED_AFTER`] as a
+    /// failure and forgets it. A late answer before that removes it from the map first (the
+    /// receiver counts it as an answer).
+    fn sweep_abandoned(&self) {
+        let now = Instant::now();
+        let mut unanswered = 0u32;
+        self.pending.lock().retain(|_, q| {
+            let expired = q.tx.is_none() && now.duration_since(q.sent_at) >= ABANDONED_AFTER;
+            unanswered += u32::from(expired);
+            !expired
+        });
+        for _ in 0..unanswered {
+            self.health.record_failure();
+        }
     }
 
     async fn send_query_wire(&self, data: &[u8]) -> Result<Vec<u8>, DnsError> {
@@ -326,13 +347,11 @@ impl UpstreamManager {
         let mut data_to_send = smallvec::SmallVec::<[u8; 512]>::from_slice(data);
         WireHeader::patch_id(&mut data_to_send, internal_id);
 
+        self.sweep_abandoned();
         let (tx, rx) = oneshot::channel();
         let now = Instant::now();
         {
             let mut map = self.pending.lock();
-            if map.len() > 64 {
-                map.retain(|_, v| now.duration_since(v.sent_at) < Duration::from_secs(5));
-            }
             map.insert(
                 internal_id,
                 PendingQuery {
