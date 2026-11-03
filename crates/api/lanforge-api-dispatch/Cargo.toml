@@ -1,6 +1,6 @@
 [package]
 name = "lanforge-api-dispatch"
-version = "0.34.0"
+version.workspace = true
 edition.workspace = true
 authors.workspace = true
 

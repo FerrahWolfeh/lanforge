@@ -9,8 +9,9 @@ use lanforge_db::{LanforgeDb, LogDb, LogStore, PrefixStore, UserStore};
 #[cfg(feature = "dhcp")]
 use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
 use lanforge_discovery::refresh_interface;
-#[cfg(feature = "dns")]
 use lanforge_types::DnsListenConfig;
+#[cfg(feature = "dns")]
+use lanforge_types::build::BuildInfo;
 use lanforge_types::config::SiteDomains;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
@@ -153,7 +154,8 @@ impl Bootstrapper {
         Self::check_privileges(&cfg)?;
 
         info!(
-            "Starting Lanforge (RA: {}, DHCPv4: {}, DHCPv6: {}, DNS: {})",
+            "Starting Lanforge {} (RA: {}, DHCPv4: {}, DHCPv6: {}, DNS: {})",
+            env!("LANFORGE_BUILD"),
             feat_flag!(ra, cfg.ra_enabled),
             feat_flag!(dhcp, cfg.dhcpv4_enabled),
             feat_flag!(dhcp, cfg.dhcpv6_enabled),
@@ -172,6 +174,9 @@ impl Bootstrapper {
         let cfg = Arc::new(cfg);
 
         let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
+        if let Some(build) = BuildInfo::parse(env!("LANFORGE_BUILD")) {
+            ctx.set_build(build);
+        }
         Self::populate_context(&ctx, &cfg, &db);
         // `[hosts]` is the static hosts' only source: the table follows it.
         if let Some(hosts) = cfg.static_hosts.as_ref() {

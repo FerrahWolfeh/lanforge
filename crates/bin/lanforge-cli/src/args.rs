@@ -8,7 +8,7 @@ use clap::{Parser, Subcommand};
 #[derive(Parser, Debug, Clone)]
 #[command(
     name = "lanforge",
-    version,
+    version = env!("LANFORGE_BUILD"),
     about = "Lanforge Router & Network Orchestration CLI",
     long_about = "Modern, high-performance command-line management client for the Lanforge router daemon."
 )]

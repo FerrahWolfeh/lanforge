@@ -321,7 +321,17 @@ pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {
     let mut response_variants = Vec::new();
     let mut dispatch_arms = Vec::new();
     let mut client_methods = Vec::new();
+    // The error type comes from any `Result` method; find it before generating the client
+    // methods, which all name it (a method before the first `Result` one included).
     let mut global_error_type = quote! { String };
+    for item in &input_trait.items {
+        if let syn::TraitItem::Fn(method) = item
+            && let syn::ReturnType::Type(_, ty) = &method.sig.output
+            && let (_, _, Some(e)) = extract_rpc_return_type(ty)
+        {
+            global_error_type = quote! { #e };
+        }
+    }
 
     for item in &input_trait.items {
         if let syn::TraitItem::Fn(method) = item {
@@ -351,12 +361,9 @@ pub fn lanforge_rpc(_args: TokenStream, input: TokenStream) -> TokenStream {
             match &method.sig.output {
                 syn::ReturnType::Default => {}
                 syn::ReturnType::Type(_, ty) => {
-                    let (is_res, inner, err) = extract_rpc_return_type(ty);
+                    let (is_res, inner, _) = extract_rpc_return_type(ty);
                     is_result = is_res;
                     inner_type = quote! { #inner };
-                    if let Some(e) = err {
-                        global_error_type = quote! { #e };
-                    }
                 }
             };
 

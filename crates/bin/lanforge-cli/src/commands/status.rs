@@ -2,8 +2,10 @@ use color_eyre::Result;
 use colored::Colorize;
 
 use crate::client::LanforgeClient;
+use crate::client::build_check::describe;
 use crate::output::{Printer, format_bytes, format_duration_secs};
 use lanforge_api::api::StatusResponse;
+use lanforge_types::build::BuildInfo;
 use lanforge_types::system::{ServiceBanner, ServiceId};
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq, Default)]
@@ -30,7 +32,10 @@ pub fn render_status_dashboard(status: &StatusResponse, printer: &Printer) {
         " {} {} v{}  {}",
         symbol.cyan().bold(),
         "LANFORGE GATEWAY".bold().white(),
-        status.version.bold().cyan(),
+        BuildInfo::parse(&status.version)
+            .map_or_else(|| status.version.clone(), |b| describe(&b))
+            .bold()
+            .cyan(),
         format!("(uptime: {})", format_duration_secs(status.uptime_secs)).dimmed()
     );
 

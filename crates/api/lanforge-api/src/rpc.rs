@@ -41,6 +41,11 @@ use std::{
 #[allow(clippy::too_many_arguments)]
 #[lanforge_rpc]
 pub trait LanforgeRpc {
+    /// The daemon's build token (`lanforge_types::build::BuildInfo`). **Must stay the first
+    /// method:** request and response variant 0 carrying a `String` is the one message every
+    /// lanforge build reads alike, so a CLI can tell which daemon it talks to even when the rest
+    /// of the protocol differs.
+    fn build(&self) -> impl Future<Output = String> + Send;
     fn status(&self) -> impl Future<Output = Result<Box<StatusResponse>, RpcCallError>> + Send;
     fn service_control(
         &self,

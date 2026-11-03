@@ -18,7 +18,7 @@ use lanforge_core::{
     service::AsyncService,
 };
 use lanforge_db::{UserStore, config::DatabaseConfig, engine::LanforgeDb, log_engine::LogDb, redb};
-use lanforge_http::{auth::AuthManager, config::HttpConfig, routes, server::AppState};
+use lanforge_http::{auth::AuthManager, config::HttpConfig, server::AppState};
 use lanforge_types::{
     auth::{ApiScope, ApiScopes, UserRole},
     network::firewall::FirewallConfig,
@@ -44,13 +44,7 @@ struct TestApp {
 /// `CompressionLayer`/`CorsLayer` (not needed in tests).
 fn build_router(state: AppState) -> Router {
     Router::new()
-        .nest(
-            "/api",
-            routes::router().layer(axum::middleware::from_fn_with_state(
-                state.clone(),
-                lanforge_http::auth::middleware,
-            )),
-        )
+        .nest("/api", lanforge_http::server::api_router(&state))
         .with_state(state)
 }
 
@@ -2237,4 +2231,27 @@ async fn test_login_guessing_is_throttled_per_client() {
 
     let res = login("192.0.2.10:40000", "testpass").await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+}
+
+/// Every API answer names the daemon's build, a refused one too: the CLI compares it with its
+/// own before it reads anything else.
+#[tokio::test]
+async fn every_answer_names_the_daemon_build() {
+    let open = TestApp::no_auth().await;
+    let (status, _, headers) = open.get_raw("/api/v1/status").await;
+    assert_eq!(status, StatusCode::OK);
+    let token = headers[lanforge_api::BUILD_HEADER].to_str().unwrap();
+    assert_eq!(
+        lanforge_types::build::BuildInfo::parse(token).map(|b| b.version),
+        Some(env!("CARGO_PKG_VERSION").to_string())
+    );
+
+    let locked = TestApp {
+        router: build_router(make_state(true).await),
+        token: None,
+        elevation: None,
+    };
+    let (status, _, headers) = locked.get_raw("/api/v1/status").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(headers.contains_key(lanforge_api::BUILD_HEADER));
 }

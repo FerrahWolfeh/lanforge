@@ -1,3 +1,5 @@
+pub mod build_check;
+
 use color_eyre::eyre::{Context, Result, eyre};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
@@ -230,7 +232,21 @@ impl LanforgeClient {
                 self.socket
             )
         })?;
-        Ok(LanforgeRpcClient::new(stream))
+        let mut rpc = LanforgeRpcClient::new(stream);
+        // A daemon from before the build check answers this with something else.
+        let daemon = rpc.build().await.ok();
+        build_check::check_daemon_build(daemon.as_deref());
+        Ok(rpc)
+    }
+
+    /// Compares the build an HTTP answer names with this CLI's (first answer only).
+    #[cfg(feature = "remote")]
+    fn check_daemon_build<B>(resp: &hyper::Response<B>) {
+        let daemon = resp
+            .headers()
+            .get(lanforge_api::BUILD_HEADER)
+            .and_then(|v| v.to_str().ok());
+        build_check::check_daemon_build(daemon);
     }
 
     #[cfg(feature = "remote")]
@@ -337,6 +353,7 @@ impl LanforgeClient {
             .request(req)
             .await
             .map_err(|e| eyre!("HTTP request failed: {e}"))?;
+        Self::check_daemon_build(&resp);
 
         let status = resp.status();
         let bytes = resp
@@ -498,6 +515,7 @@ impl LanforgeClient {
             .request(req)
             .await
             .map_err(|e| eyre!("HTTP stream request failed: {e}"))?;
+        Self::check_daemon_build(&resp);
 
         let body = resp.into_body();
         let stream = futures::stream::unfold(body, |mut body| async move {
