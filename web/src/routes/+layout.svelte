@@ -1,10 +1,11 @@
 <script lang="ts">
 	import "./layout.css";
 	import favicon from "$lib/assets/favicon.svg";
-	import { page } from "$app/state";
+	import { page, updated } from "$app/state";
 	import { onNavigate } from "$app/navigation";
 	import { ModeWatcher } from "mode-watcher";
 	import { Toaster } from "$lib/components/ui/sonner";
+	import { toast } from "svelte-sonner";
 	import { auth } from "$lib/stores/auth.svelte";
 	import { sidebarState } from "$lib/stores/sidebar.svelte";
 	import { capabilitiesState } from "$lib/stores/capabilities.svelte";
@@ -19,6 +20,18 @@
 	import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
 
 	let { children } = $props();
+
+	// The daemon now serves another WebUI build (lanforge was updated): this tab still runs
+	// the old code against the new API until it reloads.
+	$effect(() => {
+		if (updated.current) {
+			toast.info("Lanforge was updated", {
+				description: "Reload to use the new version of this interface.",
+				duration: Number.POSITIVE_INFINITY,
+				action: { label: "Reload", onClick: () => location.reload() }
+			});
+		}
+	});
 	let uptime = $state(0);
 	let configIssues = $state<string[]>([]);
 	let mainContentEl = $state<HTMLElement | null>(null);
