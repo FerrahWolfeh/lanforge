@@ -13,12 +13,12 @@ use lanforge_api::rpc::RpcResponse;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::events::{DnsEvent, LanforgeEvent};
 use lanforge_types::network::DnsRecordType;
-use lanforge_types::network::dns::QueryResult;
 use lanforge_types::network::dns::adblock::{
     AdblockSourceFormat, AdblockUrlKind, BlockingMode, FilterAction, FilterOrigin, RewriteAnswer,
     RewriteRule, TimeOfDay,
 };
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::network::dns::{QueryResult, UpstreamStatus};
 
 use crate::client::LanforgeClient;
 use crate::output::{Printer, format_duration_secs};
@@ -537,11 +537,7 @@ async fn show_status(client: &LanforgeClient, printer: &Printer) -> Result<()> {
             "Latency",
         ]);
         for u in &upstreams.upstreams {
-            let health_str = if u.status.is_healthy() {
-                "Healthy".green().to_string()
-            } else {
-                "Failing".red().to_string()
-            };
+            let health_str = health_cell(u.status);
             let latency_str = if u.rtt_ewma_us > 0 {
                 format!("{:.1}ms", f64::from(u.rtt_ewma_us) / 1000.0)
             } else {
@@ -1268,11 +1264,7 @@ async fn list_upstreams(client: &LanforgeClient, printer: &Printer) -> Result<()
         "Avg Latency",
     ]);
     for u in &resp.upstreams {
-        let health_str = if u.status.is_healthy() {
-            "Healthy".green().to_string()
-        } else {
-            "Failing".red().to_string()
-        };
+        let health_str = health_cell(u.status);
         let latency_str = if u.rtt_ewma_us > 0 {
             format!("{:.1}ms", f64::from(u.rtt_ewma_us) / 1000.0)
         } else {
@@ -2164,6 +2156,16 @@ async fn remove_reverse_resolver(
 // ---------------------------------------------------------------------------
 // Unit Tests
 // ---------------------------------------------------------------------------
+
+/// The upstream status as a table cell: unmeasured reads "—", not "Failing".
+fn health_cell(status: UpstreamStatus) -> String {
+    match status {
+        UpstreamStatus::Healthy => "Healthy".green().to_string(),
+        UpstreamStatus::Degraded => "Degraded".red().to_string(),
+        UpstreamStatus::Disabled => "Disabled".dimmed().to_string(),
+        UpstreamStatus::Unknown => "—".dimmed().to_string(),
+    }
+}
 
 #[cfg(test)]
 mod tests {

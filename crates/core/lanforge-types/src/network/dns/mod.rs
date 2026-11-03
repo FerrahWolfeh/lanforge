@@ -183,6 +183,8 @@ pub enum UpstreamStatus {
     Healthy,
     Degraded,
     Disabled,
+    /// No measurement: DNS is not serving, so the configured upstream was never tried.
+    Unknown,
 }
 
 impl UpstreamStatus {
@@ -197,6 +199,7 @@ impl UpstreamStatus {
             Self::Healthy => "healthy",
             Self::Degraded => "degraded",
             Self::Disabled => "disabled",
+            Self::Unknown => "unknown",
         }
     }
 }

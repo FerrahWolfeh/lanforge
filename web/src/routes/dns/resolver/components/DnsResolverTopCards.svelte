@@ -116,18 +116,16 @@
 				total: 0,
 			};
 		}
-		const healthy = list.filter(
-			(u) =>
-				!u.status ||
-				u.status.toLowerCase() === "healthy" ||
-				u.status.toLowerCase() === "ok",
-		).length;
+		const healthy = list.filter((u) => u.status === "healthy").length;
+		const degraded = list.filter((u) => u.status === "degraded").length;
+		const unmeasured = list.filter((u) => u.status === "unknown").length;
+		let subtitle = "All configured forwarders healthy";
+		if (unmeasured === total) subtitle = "Not measured (DNS is not serving)";
+		else if (degraded > 0) subtitle = `${degraded} of ${total} forwarders degraded`;
+		else if (healthy < total) subtitle = `${total - healthy} of ${total} forwarders not in use`;
 		return {
 			display: `${healthy} / ${total}`,
-			subtitle:
-				healthy === total
-					? "All configured forwarders healthy"
-					: `${total - healthy} of ${total} forwarders degraded`,
+			subtitle,
 			healthy,
 			total,
 		};

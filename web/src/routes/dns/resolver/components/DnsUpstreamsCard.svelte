@@ -90,12 +90,25 @@
 	}
 
 	function getUpstreamLatency(u: DnsUpstreamEntry): string {
-		if (u.rtt_ewma_us !== undefined && u.rtt_ewma_us !== null) {
+		// 0 = no sample yet (DNS not serving, or the upstream never answered).
+		if (u.rtt_ewma_us) {
 			const ms = (u.rtt_ewma_us / 1000).toFixed(1);
 			return `${ms} ms`;
 		}
 		if (u.latency_ms !== undefined) return `${u.latency_ms} ms`;
 		return "-";
+	}
+
+	// The daemon's own status; anything else (missing, unknown) is shown as unknown, never healthy.
+	function statusDot(status: string | undefined): string {
+		switch (status) {
+			case "healthy":
+				return "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]";
+			case "degraded":
+				return "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.8)]";
+			default:
+				return "bg-muted-foreground/50";
+		}
 	}
 
 	async function applyPreset(preset: typeof PRESETS[0]) {
@@ -238,11 +251,10 @@
 								</Table.Cell>
 								<Table.Cell class="font-sans">
 									<div class="flex items-center gap-1.5">
-										<span
-											class="size-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]"
+										<span class={["size-2 rounded-full", statusDot(item.status)].join(" ")}
 										></span>
 										<span class="text-[11px] font-medium capitalize">
-											{item.status || "Healthy"}
+											{item.status || "unknown"}
 										</span>
 									</div>
 								</Table.Cell>

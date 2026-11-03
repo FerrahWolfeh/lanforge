@@ -846,7 +846,7 @@ export interface DnsUpstreamEntry {
 	rtt_ms?: number | null;
 	latency_ms?: number | null;
 	success_rate_pct?: number;
-	status?: 'healthy' | 'degraded' | 'unreachable' | string;
+	status?: 'healthy' | 'degraded' | 'disabled' | 'unknown';
 }
 
 export interface DnsUpstreamsResponse {

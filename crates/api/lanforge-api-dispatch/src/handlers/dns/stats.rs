@@ -50,37 +50,33 @@ impl ClientContext {
     }
 
     pub async fn handle_dns_upstreams(&self) -> Response {
+        // The serving instance's view is the truth, even when empty.
         if let Some(handle) = self.ctx.dns_handle()
             && let Ok(DnsResponse::Upstreams(res)) =
                 handle.send_request(DnsRequest::Upstreams).await
-            && !res.is_empty()
         {
             return Response::DnsUpstreams(DnsUpstreamsResponse { upstreams: res });
         }
 
-        let configured = self.ctx.get_dns_upstreams();
-        if !configured.is_empty() {
-            let mapped: Vec<lanforge_types::network::dns::UpstreamHealthSnapshot> = configured
-                .into_iter()
-                .map(|r| lanforge_types::network::dns::UpstreamHealthSnapshot {
-                    target: r.addr,
-                    protocol: r.protocol,
-                    rtt_ewma_us: 1200,
-                    last_rtt_us: 1200,
-                    total_queries: 0,
-                    total_successes: 0,
-                    total_failures: 0,
-                    status: UpstreamStatus::Healthy,
-                    last_success_secs_ago: Some(0),
-                    domain: r.domain,
-                })
-                .collect();
-            return Response::DnsUpstreams(DnsUpstreamsResponse { upstreams: mapped });
-        }
-
-        Response::DnsUpstreams(DnsUpstreamsResponse {
-            upstreams: Vec::new(),
-        })
+        // DNS is not serving: the configured upstreams, unmeasured.
+        let upstreams = self
+            .ctx
+            .get_dns_upstreams()
+            .into_iter()
+            .map(|r| lanforge_types::network::dns::UpstreamHealthSnapshot {
+                target: r.addr,
+                protocol: r.protocol,
+                rtt_ewma_us: 0,
+                last_rtt_us: 0,
+                total_queries: 0,
+                total_successes: 0,
+                total_failures: 0,
+                status: UpstreamStatus::Unknown,
+                last_success_secs_ago: None,
+                domain: r.domain,
+            })
+            .collect();
+        Response::DnsUpstreams(DnsUpstreamsResponse { upstreams })
     }
 
     pub async fn handle_dns_upstream_add(

@@ -1561,3 +1561,24 @@ async fn the_first_rule_creates_the_rules_file() {
     assert_eq!(list.allowlist.len(), 1);
     assert_eq!(list.allowlist[0].domain, "bank.example");
 }
+
+/// With DNS not serving, the configured upstreams are listed unmeasured. They used to come back
+/// "healthy, 1.2 ms, last success 0 s ago" — numbers nobody measured.
+#[tokio::test]
+async fn upstreams_without_dns_are_unmeasured() {
+    use lanforge_types::network::dns::upstream::UpstreamTarget;
+
+    let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+    ctx.update_dns_upstreams(vec!["udp://9.9.9.9:53".parse::<UpstreamTarget>().unwrap()]);
+
+    let Response::DnsUpstreams(res) = ClientContext::new(ctx).handle_dns_upstreams().await else {
+        panic!("upstreams response");
+    };
+    let [up] = res.upstreams.as_slice() else {
+        panic!("one configured upstream: {:?}", res.upstreams);
+    };
+    assert_eq!(up.target.to_string(), "9.9.9.9:53");
+    assert_eq!((up.rtt_ewma_us, up.last_rtt_us), (0, 0));
+    assert_eq!(up.status.as_str(), "unknown");
+    assert_eq!(up.last_success_secs_ago, None);
+}
