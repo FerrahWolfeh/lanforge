@@ -10,6 +10,8 @@ pub enum StorageCommand {
     Call(StorageCallFn),
     /// Requests an immediate commit of pending batches and live config to disk.
     FlushNow(oneshot::Sender<Result<(), String>>),
+    /// Writes the batched DNS query log only, so a log read sees the queries answered so far.
+    FlushDnsLog(oneshot::Sender<()>),
 }
 
 /// A decoupled handle for communicating with the database and log worker over MPSC channels.
@@ -69,5 +71,20 @@ impl StorageHandle {
         resp_rx
             .await
             .map_err(|_| "Database worker failed to respond".to_string())?
+    }
+
+    /// Writes the batched DNS query log to the runtime database (the rest stays batched).
+    ///
+    /// # Errors
+    /// Returns an error if the worker channel is closed or the worker dropped the request.
+    pub async fn flush_dns_log(&self) -> Result<(), String> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.tx
+            .send(StorageCommand::FlushDnsLog(resp_tx))
+            .await
+            .map_err(|_| "Database worker channel closed".to_string())?;
+        resp_rx
+            .await
+            .map_err(|_| "Database worker failed to respond".to_string())
     }
 }

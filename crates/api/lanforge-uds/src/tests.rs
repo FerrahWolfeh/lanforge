@@ -101,6 +101,9 @@ async fn test_uds_log_streaming_filter() {
                 lanforge_core::context::StorageCommand::FlushNow(resp_tx) => {
                     let _ = resp_tx.send(Ok(()));
                 }
+                lanforge_core::context::StorageCommand::FlushDnsLog(resp_tx) => {
+                    let _ = resp_tx.send(());
+                }
             }
         }
     });
@@ -169,6 +172,40 @@ async fn test_uds_log_streaming_filter() {
     }
 
     // Close the connection (causing EOF in client reader)
+    drop(client);
+    handler_task.await.unwrap();
+}
+
+/// `build` is request and response variant 0 with a `String`: the one message every lanforge
+/// build reads alike. Its bytes are pinned here, so moving it or changing its type fails.
+#[tokio::test]
+async fn the_build_request_is_variant_zero_and_names_the_daemon_build() {
+    let client_ctx = init_test_context().await;
+    client_ctx.ctx.set_build(
+        lanforge_types::build::BuildInfo::parse("0.40.0+a1b2c3d4e5f6.1762160000").unwrap(),
+    );
+    let (mut client, server) = tokio::io::duplex(8192);
+    let handler_task = tokio::spawn(async move {
+        handle_client(server, client_ctx).await.unwrap();
+    });
+
+    // Variant 0, no fields: one zero byte.
+    let payload = postcard::to_stdvec(&RpcRequest::Build {}).unwrap();
+    assert_eq!(payload, [0]);
+    client.write_all(&1u32.to_be_bytes()).await.unwrap();
+    client.write_all(&payload).await.unwrap();
+    client.flush().await.unwrap();
+
+    let mut len_buf = [0u8; 4];
+    client.read_exact(&mut len_buf).await.unwrap();
+    let mut resp_buf = vec![0u8; u32::from_be_bytes(len_buf) as usize];
+    client.read_exact(&mut resp_buf).await.unwrap();
+    // Variant 0, then the token as a postcard string (length, bytes).
+    let token = "0.40.0+a1b2c3d4e5f6.1762160000";
+    assert_eq!(resp_buf[0], 0);
+    assert_eq!(usize::from(resp_buf[1]), token.len());
+    assert_eq!(&resp_buf[2..], token.as_bytes());
+
     drop(client);
     handler_task.await.unwrap();
 }

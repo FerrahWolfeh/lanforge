@@ -55,6 +55,7 @@
 
 use crate::bus::{EventBus, EventTopic, LanforgeEvent, SystemEvent, TimedEvent};
 use crate::context::state::State;
+use lanforge_types::build::BuildInfo;
 use lanforge_types::device::Device;
 use lanforge_types::identifiers::MacAddr;
 
@@ -261,6 +262,25 @@ impl LanforgeContext {
         let result = f(&mut new_state);
         self.inner.state.store(Arc::new(new_state));
         result
+    }
+
+    /// Records the daemon binary's build (startup only; a second call is ignored).
+    pub fn set_build(&self, build: BuildInfo) {
+        let _ = self.inner.runtime.build.set(build);
+    }
+
+    /// The daemon binary's build; the library's own version when the binary set none (tests).
+    #[must_use]
+    pub fn build(&self) -> BuildInfo {
+        self.inner
+            .runtime
+            .build
+            .get()
+            .cloned()
+            .unwrap_or_else(|| BuildInfo {
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                commit: None,
+            })
     }
 
     /// Sets the path to the active TOML configuration file.

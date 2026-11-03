@@ -105,10 +105,30 @@ impl DbWorker {
         }
     }
 
+    /// Writes the batched DNS query log; `false` when the write failed (the batch is kept).
+    fn flush_dns_log(&mut self, log_db: &LogDb) -> bool {
+        if self.dns_log_buffer.is_empty() {
+            return true;
+        }
+        let slice = self.dns_log_buffer.make_contiguous();
+        if let Err(e) = log_db.record_dns_queries_batch(slice) {
+            if !self.dns_flush_failing {
+                error!("Failed to flush DNS log batch: {e}");
+                self.dns_flush_failing = true;
+            }
+            return false;
+        }
+        if self.dns_flush_failing {
+            info!("DNS log batch flush recovered");
+            self.dns_flush_failing = false;
+        }
+        self.dns_log_buffer.clear();
+        true
+    }
+
     /// Flushes the current device table to the persistent database.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     async fn flush_batch(&mut self, db: &LanforgeDb, log_db: &LogDb) {
-        let metrics = self.ctx.db_metrics();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -135,21 +155,8 @@ impl DbWorker {
         }
 
         let had_dns_queries = !self.dns_log_buffer.is_empty();
-        if had_dns_queries {
-            let slice = self.dns_log_buffer.make_contiguous();
-            if let Err(e) = log_db.record_dns_queries_batch(slice) {
-                if !self.dns_flush_failing {
-                    error!("Failed to flush DNS log batch: {e}");
-                    self.dns_flush_failing = true;
-                }
-                had_error = true;
-            } else {
-                if self.dns_flush_failing {
-                    info!("DNS log batch flush recovered");
-                    self.dns_flush_failing = false;
-                }
-                self.dns_log_buffer.clear();
-            }
+        if !self.flush_dns_log(log_db) {
+            had_error = true;
         }
 
         // 2. Flush DNS Lifetime Stats (only when new queries were processed)
@@ -163,6 +170,7 @@ impl DbWorker {
         }
 
         // 3. Flush Main DB
+        let metrics = self.ctx.db_metrics();
         if !self.full_flush_requested && self.pending_devices.is_empty() {
             metrics.last_flush_ts.store(now, Ordering::Relaxed);
             metrics.flush_count.fetch_add(1, Ordering::Relaxed);
@@ -331,6 +339,10 @@ impl AsyncService for DbWorker {
                             self.flush_batch(&db, &log_db).await;
                             let _ = resp_tx.send(Ok(()));
                         }
+                        Some(StorageCommand::FlushDnsLog(resp_tx)) => {
+                            self.flush_dns_log(&log_db);
+                            let _ = resp_tx.send(());
+                        }
                         None => break,
                     }
                 }
@@ -498,19 +510,7 @@ impl AsyncService for DbWorker {
                             }
                             self.dns_log_buffer.push_back(entry.clone());
                             if self.dns_log_buffer.len() >= 100 {
-                                let slice = self.dns_log_buffer.make_contiguous();
-                                if let Err(e) = log_db.record_dns_queries_batch(slice) {
-                                    if !self.dns_flush_failing {
-                                        error!("Immediate DNS query log flush error: {e}");
-                                        self.dns_flush_failing = true;
-                                    }
-                                } else {
-                                    if self.dns_flush_failing {
-                                        info!("Immediate DNS query log flush recovered");
-                                        self.dns_flush_failing = false;
-                                    }
-                                    self.dns_log_buffer.clear();
-                                }
+                                self.flush_dns_log(&log_db);
                             }
                         }
                     });

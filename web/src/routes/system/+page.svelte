@@ -8,7 +8,7 @@
 	import { status, scan, reload, controlService } from "$lib/api/client";
 	import { normalizeServices, type StatusResponse } from "$lib/api/types";
 	import { getServiceMeta } from "$lib/services";
-	import { formatBytes, formatUptime, formatIpv6Prefix } from "$lib/utils";
+	import { formatBytes, formatBuild, formatUptime, formatIpv6Prefix } from "$lib/utils";
 	import InfoPopover from "$lib/components/InfoPopover.svelte";
 	import { toast } from "svelte-sonner";
 	import { onMount } from "svelte";
@@ -242,8 +242,8 @@
 					>{formatUptime(data.uptime_secs)}</span
 				>
 				{#if data.version}
-					<span class="text-muted-foreground text-xs"
-						>v{data.version}</span
+					<span class="text-muted-foreground text-xs" title={data.version}
+						>{formatBuild(data.version)}</span
 					>
 				{/if}
 			{/if}

@@ -11,11 +11,13 @@ use axum::{
     Router,
     body::Body,
     extract::{FromRef, State},
+    http::{HeaderName, HeaderValue},
     middleware::from_fn_with_state,
     response::IntoResponse,
     routing::get,
 };
 use axum_server::{Handle, tls_rustls::RustlsConfig};
+use lanforge_api::BUILD_HEADER;
 use lanforge_core::{
     bus::{LanforgeEvent, SystemEvent},
     context::LanforgeContext,
@@ -32,6 +34,7 @@ use tower_http::{
     compression::CompressionLayer,
     cors::CorsLayer,
     services::{ServeDir, ServeFile},
+    set_header::SetResponseHeaderLayer,
 };
 use tracing::{error, info, warn};
 
@@ -49,6 +52,21 @@ pub struct AppState {
     pub log_db: Arc<dyn LogStore>,
     pub auth: Arc<AuthManager>,
     pub start_time: Instant,
+}
+
+/// The `/api` routes with their layers. Every answer, errors and auth rejections included,
+/// names the daemon's build, so a client tells an older or newer daemon apart without asking.
+pub fn api_router(state: &AppState) -> Router<AppState> {
+    let build = HeaderValue::from_str(&state.ctx.build().to_string())
+        .unwrap_or_else(|_| HeaderValue::from_static("unknown"));
+    routes::router()
+        .layer(CompressionLayer::new())
+        .layer(from_fn_with_state(state.clone(), crate::auth::middleware))
+        .layer(CorsLayer::permissive())
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static(BUILD_HEADER),
+            build,
+        ))
 }
 
 impl FromRef<AppState> for AuthManager {
@@ -110,13 +128,7 @@ impl HttpService {
 
     fn build_router(state: AppState, cfg: &HttpConfig) -> Router {
         let mut app = Router::new()
-            .nest(
-                "/api",
-                routes::router()
-                    .layer(CompressionLayer::new())
-                    .layer(from_fn_with_state(state.clone(), crate::auth::middleware))
-                    .layer(CorsLayer::permissive()),
-            )
+            .nest("/api", api_router(&state))
             .route("/metrics", get(handle_metrics));
 
         if let Some(boot_dir) = &cfg.boot_dir {

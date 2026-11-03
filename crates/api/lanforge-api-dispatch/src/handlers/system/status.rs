@@ -42,7 +42,7 @@ impl ClientContext {
         });
         let status = StatusResponse {
             uptime_secs: self.uptime_secs,
-            version: env!("CARGO_PKG_VERSION").to_string(),
+            version: self.ctx.build().to_string(),
             db: self.gather_db_status(),
             network: self.gather_network_status().await,
             resources: Self::gather_resource_status(),

@@ -52,6 +52,10 @@ impl LanforgeRpc for ClientContext {
     // We will implement the LanforgeRpc trait methods by calling into the hand-written handlers
     // migrated from lanforge-uds.
 
+    async fn build(&self) -> String {
+        self.ctx.build().to_string()
+    }
+
     async fn status(&self) -> Result<Box<StatusResponse>, RpcCallError> {
         match self.handle_status().await {
             Response::Status(s) => Ok(s),

@@ -1,6 +1,7 @@
 [package]
 name = "lanforge-cli"
-version = "3.1.0"
+version.workspace = true
+build = "../build_id.rs"
 license.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -63,7 +64,7 @@ bytesize = { workspace = true }
 color-eyre = "0.6.5"
 colored = "3.1.1"
 inquire = "0.9.4"
-comfy-table = "7.1"
+comfy-table = { version = "7.1", features = ["custom_styling"] }
 duration-str = "0.21.0"
 tokio-tungstenite = { version = "0.30.0", features = [
     "rustls-tls-webpki-roots",

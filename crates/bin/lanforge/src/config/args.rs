@@ -2,7 +2,7 @@ use clap::Parser;
 
 /// Command-line arguments for the Lanforge daemon.
 #[derive(Parser, Debug)]
-#[command(name = "lanforge", version, about, long_about = None)]
+#[command(name = "lanforge", version = env!("LANFORGE_BUILD"), about, long_about = None)]
 pub struct CliArgs {
     /// Path to the TOML configuration file.
     #[arg(short, long, env = "LANFORGE_CONFIG", conflicts_with = "config_dir")]

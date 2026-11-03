@@ -131,3 +131,15 @@ export function formatIpv6Prefix(ip?: string | null, prefixLen = 64): string {
 
 	return `${clean}::/${prefixLen}`;
 }
+
+/**
+ * A lanforge build token (`0.40.0+74ea33b0e126.1793720666[.dirty]`) as
+ * `v0.40.0 · 74ea33b0e126` (`· local changes` for a dirty build).
+ */
+export function formatBuild(token: string | null | undefined): string {
+	if (!token) return "";
+	const [version, meta] = token.split("+", 2);
+	if (!meta) return `v${version}`;
+	const [hash, , dirty] = meta.split(".");
+	return `v${version} · ${hash}${dirty === "dirty" ? " · local changes" : ""}`;
+}

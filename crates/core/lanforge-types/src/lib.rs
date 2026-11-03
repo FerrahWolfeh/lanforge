@@ -1,6 +1,7 @@
 //! Core data structures and shared types for Lanforge.
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 pub mod auth;
+pub mod build;
 pub mod config;
 pub mod device;
 pub mod dhcp;

@@ -4,6 +4,7 @@ use crate::context::state::network::DhcpPoolStats;
 use crate::context::{DbWorkerMetrics, DnsHandle, DnsRequestRx, EventCounters, StorageHandle};
 use crate::error::CoreError;
 use arc_swap::ArcSwapOption;
+use lanforge_types::build::BuildInfo;
 use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
 use lanforge_types::network::firewall::{DynamicPortRequest, FirewallTransactionState};
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
@@ -16,8 +17,8 @@ use smallvec::SmallVec;
 use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Instant, SystemTime};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::watch;
@@ -99,6 +100,8 @@ pub struct ServiceRuntime {
     pub storage_handle: RwLock<Option<StorageHandle>>,
     pub config_path: RwLock<Option<PathBuf>>,
     pub config_writable: AtomicBool,
+    /// The daemon binary's build, set once at startup.
+    pub build: OnceLock<BuildInfo>,
     /// Serializes read-modify-write of the config file between its writers (API, db worker).
     pub config_file_lock: parking_lot::Mutex<()>,
     /// Serializes changes built from the live config, written to the file, then applied.
@@ -144,6 +147,7 @@ impl ServiceRuntime {
             storage_handle: RwLock::new(None),
             config_path: RwLock::new(None),
             config_writable: AtomicBool::new(true),
+            build: OnceLock::new(),
             config_file_lock: parking_lot::Mutex::new(()),
             config_change_lock: parking_lot::Mutex::new(()),
             config_issues: RwLock::new(Vec::new()),
