@@ -13,13 +13,13 @@
 
 	interface Props {
 		flowOffload: boolean;
-		sqmActive?: boolean;
+		sqmEnabled?: boolean;
 		onToggleFlowOffload: (val: boolean) => void;
 	}
 
-	let { flowOffload, sqmActive = false, onToggleFlowOffload }: Props = $props();
+	let { flowOffload, sqmEnabled = false, onToggleFlowOffload }: Props = $props();
 	// Only an offload that is switched on can be suspended by SQM.
-	let suspended = $derived(flowOffload && sqmActive);
+	let suspended = $derived(flowOffload && sqmEnabled);
 </script>
 
 <div class="flex flex-col gap-4">
