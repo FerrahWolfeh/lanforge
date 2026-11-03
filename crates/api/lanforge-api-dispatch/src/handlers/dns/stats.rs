@@ -71,6 +71,7 @@ impl ClientContext {
                 total_queries: 0,
                 total_successes: 0,
                 total_failures: 0,
+                total_wins: 0,
                 status: UpstreamStatus::Unknown,
                 last_success_secs_ago: None,
                 domain: r.domain,

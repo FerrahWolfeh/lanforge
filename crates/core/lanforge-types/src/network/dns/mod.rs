@@ -217,9 +217,15 @@ pub struct UpstreamHealthSnapshot {
     pub protocol: UpstreamProtocol,
     pub rtt_ewma_us: u32,
     pub last_rtt_us: u32,
+    /// Client queries sent (probes excluded).
     pub total_queries: u64,
+    /// Answers received, late ones included.
     pub total_successes: u64,
+    /// Errors, timeouts and abandoned attempts left unanswered.
     pub total_failures: u64,
+    /// Answers that resolved the client query. Lost races = queries − wins − failures.
+    #[serde(default)]
+    pub total_wins: u64,
     pub status: UpstreamStatus,
     pub last_success_secs_ago: Option<u64>,
     #[serde(default)]

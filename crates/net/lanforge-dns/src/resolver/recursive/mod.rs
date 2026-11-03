@@ -305,6 +305,7 @@ impl UpstreamManager {
         question: &WireQuestion<'_>,
     ) -> Result<(Vec<u8>, bool, bool), DnsError> {
         let orig_id = header.id();
+        self.health.record_sent();
         let mut final_bytes = self.send_query_wire(data).await?;
 
         if final_bytes.len() >= 2 {

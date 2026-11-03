@@ -1269,6 +1269,9 @@ async fn list_upstreams(client: &LanforgeClient, printer: &Printer) -> Result<()
         "Domain Scope",
         "Health",
         "Avg Latency",
+        "Sent",
+        "Won",
+        "Failed",
     ]);
     for u in &resp.upstreams {
         let health_str = health_cell(u.status);
@@ -1284,6 +1287,9 @@ async fn list_upstreams(client: &LanforgeClient, printer: &Printer) -> Result<()
             domain_str.to_string(),
             health_str,
             latency_str,
+            u.total_queries.to_string(),
+            u.total_wins.to_string(),
+            u.total_failures.to_string(),
         ]);
     }
     println!("{table}");

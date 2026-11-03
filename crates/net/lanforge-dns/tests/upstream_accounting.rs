@@ -95,3 +95,57 @@ async fn a_mute_first_upstream_degrades_and_stops_costing_the_hedge_delay() {
         "still waits for the mute upstream: {took:?}"
     );
 }
+
+/// Sent / won / failed per upstream, `n` distinct queries through `mode`.
+async fn counts(mode: UpstreamMode, delays: &[Option<Duration>], n: usize) -> Vec<(u64, u64, u64)> {
+    let mut mgrs = Vec::new();
+    for d in delays {
+        mgrs.push(upstream(*d).await);
+    }
+    let strategy = UpstreamStrategy::new(mode, mgrs.clone());
+    for i in 0..n {
+        strategy.resolve(&query(i)).await.unwrap();
+    }
+    // Late answers of the losers arrive after the winner.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let snaps = strategy.snapshots();
+    mgrs.iter()
+        .map(|m| {
+            let s = snaps.iter().find(|s| s.target == m.target.addr).unwrap();
+            (s.total_queries, s.total_wins, s.total_failures)
+        })
+        .collect()
+}
+
+/// Each resolved query has exactly one winner, and "queries" counts what was sent: a late
+/// answer from a race loser is an answer, not a query won. (Before, the counters only counted
+/// answers: in parallel mode every upstream showed every query, in sequential a slow first
+/// upstream looked like it answered them all.)
+#[tokio::test(flavor = "multi_thread")]
+async fn every_query_has_one_winner_and_queries_count_what_was_sent() {
+    let fast = Some(Duration::from_millis(5));
+    let slow = Some(Duration::from_millis(600));
+    let wins = |c: &[(u64, u64, u64)]| c.iter().map(|x| x.1).sum::<u64>();
+
+    let c = counts(UpstreamMode::Sequential, &[fast, fast, fast], 20).await;
+    assert_eq!(
+        c,
+        vec![(20, 20, 0), (0, 0, 0), (0, 0, 0)],
+        "sequential: all on the first"
+    );
+
+    // 600 ms > the first hedge delay (400 ms): the next upstream is asked too and wins until
+    // the first one's RTT stretches the delay.
+    let c = counts(UpstreamMode::Sequential, &[slow, fast], 6).await;
+    assert_eq!(wins(&c), 6, "{c:?}");
+    assert_eq!(c[0].0, 6, "every query was sent to the first: {c:?}");
+    assert!(c[0].1 < 6, "the first lost some races: {c:?}");
+    assert_eq!(
+        c[1].0, c[1].1,
+        "the second is only asked when it then wins: {c:?}"
+    );
+
+    let c = counts(UpstreamMode::Parallel, &[fast, fast, fast], 20).await;
+    assert!(c.iter().all(|x| x.0 == 20), "parallel sends to all: {c:?}");
+    assert_eq!(wins(&c), 20, "{c:?}");
+}
