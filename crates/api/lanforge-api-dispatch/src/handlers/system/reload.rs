@@ -10,6 +10,7 @@ use lanforge_api::api::{Response, SimpleSuccess, SystemConfigExport};
 use lanforge_api::config_file::{
     ConfigFile, RaInputs, Section, effective_firewall, effective_ra, log_issues, set_aside_issues,
 };
+use lanforge_types::config::SiteDomains;
 use tracing::info;
 
 use crate::ClientContext;
@@ -92,6 +93,14 @@ impl ClientContext {
     ) {
         let ctx = &self.ctx;
         let applies = |sec: Section| !set_aside.iter().any(|(s, _)| *s == sec);
+
+        if applies(Section::System) {
+            let domains = SiteDomains(file.search_domains());
+            if ctx.get_site_domains() != domains {
+                info!(domains = ?domains.0, "Reload: [system] search_domains changed; applying");
+                ctx.update_site_domains(domains);
+            }
+        }
 
         if applies(Section::Pppoe) && ctx.get_pppoe_config().as_ref() != Some(&file.pppoe) {
             info!("Reload: [pppoe] changed; applying");

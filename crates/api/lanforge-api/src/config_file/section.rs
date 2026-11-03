@@ -173,6 +173,8 @@ impl From<lanforge_types::config::ConfigDomain> for Section {
             | lanforge_types::config::ConfigDomain::DnsRewrites
             | lanforge_types::config::ConfigDomain::DnsReverse
             | lanforge_types::config::ConfigDomain::DnsListen => Self::Dns,
+            // `[system] search_domains`, but DNS is its consumer: file-owned, never synced.
+            lanforge_types::config::ConfigDomain::SiteDomains => Self::Dns,
             lanforge_types::config::ConfigDomain::DnsAdblock
             | lanforge_types::config::ConfigDomain::DnsAdblockUrls
             | lanforge_types::config::ConfigDomain::DnsAdblockRules => Self::Adblock,

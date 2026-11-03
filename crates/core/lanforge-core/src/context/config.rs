@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::watch;
 
 use lanforge_types::config::{
-    AdblockRules, ChangeImpact, ConfigSection, DnsListenConfig, DomainSet,
+    AdblockRules, ChangeImpact, ConfigSection, DnsListenConfig, DomainSet, SiteDomains,
 };
 use lanforge_types::network::dhcp::{
     DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, Dhcpv6Pool, TftpOptions,
@@ -117,6 +117,7 @@ impl_subscribable!(Vec<AdblockUrlEntry>, dns_adblock_urls);
 impl_subscribable!(AdblockRules, dns_adblock_rules);
 impl_subscribable!(Vec<DnsReverseResolver>, dns_reverse);
 impl_subscribable!(DnsListenConfig, dns_listen);
+impl_subscribable!(SiteDomains, site_domains);
 
 /// Type alias for a watch sender/receiver pair.
 pub type WatchPair<T> = (watch::Sender<Arc<T>>, watch::Receiver<Arc<T>>);
@@ -143,6 +144,7 @@ pub struct ConfigStore {
     pub dns_adblock_rules: WatchPair<AdblockRules>,
     pub dns_reverse: WatchPair<Vec<DnsReverseResolver>>,
     pub dns_listen: WatchPair<DnsListenConfig>,
+    pub site_domains: WatchPair<SiteDomains>,
 }
 
 impl Default for ConfigStore {
@@ -168,6 +170,7 @@ impl Default for ConfigStore {
             dns_adblock_rules: watch::channel(Arc::new(AdblockRules::default())),
             dns_reverse: watch::channel(Arc::new(Vec::new())),
             dns_listen: watch::channel(Arc::new(DnsListenConfig::default())),
+            site_domains: watch::channel(Arc::new(SiteDomains::default())),
         }
     }
 }
@@ -195,6 +198,7 @@ pub struct ConfigPatch {
     pub dns_adblock_rules: Option<AdblockRules>,
     pub dns_reverse: Option<Vec<DnsReverseResolver>>,
     pub dns_listen: Option<DnsListenConfig>,
+    pub site_domains: Option<SiteDomains>,
 }
 
 impl ConfigPatch {
@@ -225,6 +229,7 @@ impl ConfigPatch {
             && self.dns_adblock_rules.is_none()
             && self.dns_reverse.is_none()
             && self.dns_listen.is_none()
+            && self.site_domains.is_none()
     }
 
     #[must_use]
@@ -353,6 +358,12 @@ impl ConfigPatch {
     #[must_use]
     pub fn with_dns_listen(mut self, listen: DnsListenConfig) -> Self {
         self.dns_listen = Some(listen);
+        self
+    }
+
+    #[must_use]
+    pub fn with_site_domains(mut self, domains: SiteDomains) -> Self {
+        self.site_domains = Some(domains);
         self
     }
 
@@ -584,6 +595,11 @@ impl LanforgeContext {
             DNS_REVERSE
         );
         check_and_apply!(dns_listen, self.inner.config_store.dns_listen, DNS_LISTEN);
+        check_and_apply!(
+            site_domains,
+            self.inner.config_store.site_domains,
+            SITE_DOMAINS
+        );
 
         if !changed.is_empty() {
             // Derived notifications for legacy listeners & db worker
@@ -690,6 +706,7 @@ impl LanforgeContext {
         hydrate_val!(dns_adblock_rules, self.inner.config_store.dns_adblock_rules);
         hydrate_val!(dns_reverse, self.inner.config_store.dns_reverse);
         hydrate_val!(dns_listen, self.inner.config_store.dns_listen);
+        hydrate_val!(site_domains, self.inner.config_store.site_domains);
 
         let current_cfg = self.inner.config.load();
         let mut next_cfg = (**current_cfg).clone();
@@ -809,6 +826,19 @@ impl LanforgeContext {
         self.with_config(|c| c.dns_adblock_rules.0.clone())
     }
 
+    /// The site's search domains DNS answers for.
+    #[must_use]
+    pub fn get_site_domains(&self) -> SiteDomains {
+        self.inner
+            .config_store
+            .site_domains
+            .1
+            .borrow()
+            .as_ref()
+            .clone()
+    }
+
+    /// The live DNS listeners and whether DNS runs.
     #[must_use]
     pub fn get_dns_listen(&self) -> DnsListenConfig {
         self.inner

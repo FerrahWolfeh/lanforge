@@ -14,6 +14,7 @@ use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
 use lanforge_discovery::refresh_interface;
 #[cfg(feature = "dns")]
 use lanforge_types::DnsListenConfig;
+use lanforge_types::config::SiteDomains;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
 #[cfg(feature = "dhcp")]
@@ -356,6 +357,9 @@ impl Bootstrapper {
         {
             patch = patch.with_traffic(cfg.traffic_toml.clone());
         }
+
+        // The site's domains are live: a reload of `[system] search_domains` reaches DNS.
+        patch = patch.with_site_domains(SiteDomains(cfg.search_domains.clone()));
 
         ctx.hydrate_config(patch);
 

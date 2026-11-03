@@ -428,11 +428,6 @@ impl Config {
 
         // The site's domains: local names, PTR answers and the SOA zone (the first one).
         cfg.search_domains.clone_from(&self.search_domains);
-        cfg.multi_search_labels = self
-            .search_domains
-            .iter()
-            .map(|d| d.split('.').map(|s| s.as_bytes().to_vec()).collect())
-            .collect();
 
         if cfg.ula_prefix.is_none() {
             #[cfg(feature = "ra")]

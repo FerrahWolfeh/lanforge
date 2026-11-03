@@ -20,7 +20,7 @@ use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
 use lanforge_transport::TransportMetrics;
 #[cfg(feature = "adblock")]
 use lanforge_types::config::AdblockRules;
-use lanforge_types::config::DnsListenConfig;
+use lanforge_types::config::{DnsListenConfig, SiteDomains};
 use lanforge_types::network::dns::{
     AdblockCheckResponse, DnsAdblockSourcesResponse, DnsCacheEntry, DnsCacheResponse,
     DnsCacheStatsExtResponse, DnsClass, DnsLifetimeStats, DnsMessage, DnsQuestion, DnsRecordEntry,
@@ -138,15 +138,6 @@ impl DnsService {
             Some(Arc::new(blocker))
         };
 
-        let domain_base = self
-            .cfg
-            .search_domains
-            .first()
-            .map_or("lan", |d| d.as_str());
-        let soa_zone: Arc<str> = Arc::from(domain_base.to_string());
-        let soa_master_ns: Arc<str> = Arc::from(format!("ns.{domain_base}"));
-        let soa_mailbox: Arc<str> = Arc::from(format!("hostmaster.{domain_base}"));
-
         // The live config is the only source (`[dns] upstream_mode`): `Sequential` is a valid
         // choice, not "unset".
         let mode = self.ctx.get_dns_upstream_mode();
@@ -180,9 +171,6 @@ impl DnsService {
             rewrites,
             #[cfg(feature = "adblock")]
             filter,
-            soa_zone,
-            soa_master_ns,
-            soa_mailbox,
             reverse_managers: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             resolving_ips: Arc::new(parking_lot::Mutex::new(HashSet::new())),
             compiled_ignore_clients: CompiledIgnoreClients::compile(
@@ -250,7 +238,12 @@ impl AsyncService for DnsService {
         // Listeners and `enabled` come from the live config (seeded from `[dns]` at boot, changed
         // by a reload); every reader below (TCP worker, DoT, DoQ, status) sees them through
         // `self.cfg`.
-        self.cfg = Arc::new(with_live_listeners(&self.cfg, &ctx.get_dns_listen()));
+        self.cfg = Arc::new(DnsConfig {
+            // The site's domains are live too (`[system] search_domains`); a change is applied
+            // in place below.
+            search_domains: ctx.get_site_domains().0,
+            ..with_live_listeners(&self.cfg, &ctx.get_dns_listen())
+        });
         if !self.cfg.enabled {
             info!("DNS Service disabled in config");
             h.dormant(DormantReason::disabled("dns.enabled"));
@@ -388,6 +381,7 @@ impl AsyncService for DnsService {
         let mut mode_sub = ctx.config_subscription::<UpstreamMode>();
         let mut listen_sub = ctx.config_subscription::<DnsListenConfig>();
         let mut rewrites_sub = ctx.config_subscription::<Vec<RewriteRule>>();
+        let mut domains_sub = ctx.config_subscription::<SiteDomains>();
         let mut filter_subs = FilterSubscriptions::new(ctx);
 
         let (mpsc_stop_tx, mut mpsc_stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -492,6 +486,10 @@ impl AsyncService for DnsService {
                 Some(delta) = mode_sub.next() => {
                     info!(mode = ?*delta.new, "Upstream resolution mode changed");
                     dns_ctx.recursive.set_mode(*delta.new);
+                }
+                Some(delta) = domains_sub.next() => {
+                    info!(domains = ?delta.new.0, "Site search domains changed; applied in place");
+                    dns_ctx.local.set_domains(&delta.new.0);
                 }
                 Some(delta) = rewrites_sub.next() => {
                     info!("Reloading rewrites");

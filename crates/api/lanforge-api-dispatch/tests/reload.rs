@@ -404,3 +404,12 @@ async fn reload_applies_adblock_and_keeps_rules_it_cannot_read() {
         client.ctx.config_issues()
     );
 }
+
+/// `[system] search_domains` edited offline reaches the live site domains on reload (DNS reads
+/// them in place); the site rule appends `lan`.
+#[tokio::test]
+async fn reload_applies_the_site_search_domains() {
+    let (client, _dir, _) = with_file("[system]\nsearch_domains = [\"home.arpa\"]\n");
+    reload(&client).await;
+    assert_eq!(client.ctx.get_site_domains().0, ["home.arpa", "lan"]);
+}

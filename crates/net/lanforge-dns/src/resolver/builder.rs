@@ -117,14 +117,15 @@ impl<'a> ResponseBuilder<'a> {
     }
 
     pub fn add_soa(&self, resp: &mut DnsMessage) {
+        let zone = self.ctx.local.zone();
         resp.authorities.push(DnsRecord {
-            name: self.ctx.soa_zone.clone(),
+            name: zone.soa_zone.clone(),
             rtype: DnsRecordType::SOA,
             rclass: DnsClass::IN,
             ttl: 3600,
             rdata: DnsRData::SOA(Box::new(DnsSoaData {
-                mname: self.ctx.soa_master_ns.clone(),
-                rname: self.ctx.soa_mailbox.clone(),
+                mname: zone.soa_master_ns.clone(),
+                rname: zone.soa_mailbox.clone(),
                 serial: 1,
                 refresh: 7200,
                 retry: 3600,

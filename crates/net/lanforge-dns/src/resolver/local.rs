@@ -1,5 +1,6 @@
 //! Local DNS resolver backed by the `LanforgeContext`.
 
+use arc_swap::{ArcSwap, Guard};
 use lanforge_types::device::Device;
 use smallvec::SmallVec;
 use std::borrow::Cow;
@@ -20,16 +21,65 @@ use lanforge_dns_wire::{
 };
 use lanforge_types::network::dns::{DnsClass, DnsRData, DnsRecord, DnsRecordType};
 
+/// The site's domains as the hot path uses them: wire labels to match `host.<domain>`, and the
+/// SOA names of the first domain. Swapped whole when the site's domains change.
+#[derive(Debug)]
+pub struct LocalZone {
+    pub domains: Vec<String>,
+    pub labels: Vec<Vec<Vec<u8>>>,
+    pub soa_zone: Arc<str>,
+    pub soa_master_ns: Arc<str>,
+    pub soa_mailbox: Arc<str>,
+}
+
+impl LocalZone {
+    /// The zone of `domains`; none given means `lan`.
+    #[must_use]
+    pub fn new(domains: &[String]) -> Self {
+        let domains = if domains.is_empty() {
+            vec!["lan".to_string()]
+        } else {
+            domains.to_vec()
+        };
+        let labels = domains
+            .iter()
+            .map(|d| d.split('.').map(|l| l.as_bytes().to_vec()).collect())
+            .collect();
+        let base = &domains[0];
+        Self {
+            soa_zone: Arc::from(base.as_str()),
+            soa_master_ns: Arc::from(format!("ns.{base}")),
+            soa_mailbox: Arc::from(format!("hostmaster.{base}")),
+            labels,
+            domains,
+        }
+    }
+}
+
 /// Resolves local DNS queries (A/AAAA/PTR) using the `LanforgeContext`.
 pub struct LocalResolver {
     pub cfg: Arc<DnsConfig>,
     pub ctx: LanforgeContext,
+    zone: ArcSwap<LocalZone>,
 }
 
 impl LocalResolver {
+    /// A resolver for `cfg.search_domains`; [`Self::set_domains`] changes them in place.
     #[must_use]
     pub fn new(cfg: Arc<DnsConfig>, ctx: LanforgeContext) -> Self {
-        Self { cfg, ctx }
+        let zone = ArcSwap::from_pointee(LocalZone::new(&cfg.search_domains));
+        Self { cfg, ctx, zone }
+    }
+
+    /// The site's domains in use now.
+    #[must_use]
+    pub fn zone(&self) -> Guard<Arc<LocalZone>> {
+        self.zone.load()
+    }
+
+    /// Answers for `domains` from the next query on; queries in flight finish with the old ones.
+    pub fn set_domains(&self, domains: &[String]) {
+        self.zone.store(Arc::new(LocalZone::new(domains)));
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -155,12 +205,8 @@ impl LocalResolver {
             }
         };
 
-        let domain = self
-            .cfg
-            .search_domains
-            .first()
-            .map_or("lan", |d| d.as_str());
-        (host, Cow::Borrowed(domain))
+        let domain = self.zone().soa_zone.to_string();
+        (host, Cow::Owned(domain))
     }
 
     #[must_use]
@@ -188,7 +234,8 @@ impl LocalResolver {
 
     #[must_use]
     pub fn resolve_local(&self, qname: &str, qtype: DnsRecordType) -> Option<Vec<DnsRecord>> {
-        let hostname = extract_local_hostname(qname, &self.cfg.multi_search_labels)?;
+        let zone = self.zone();
+        let hostname = extract_local_hostname(qname, &zone.labels)?;
         self.ctx.with_state(|state| {
             let mac = state.indices.name_index.get(hostname)?;
             let device = state.devices.get(mac)?;
@@ -274,8 +321,8 @@ impl LocalResolver {
         match qtype {
             DnsRecordType::A | DnsRecordType::AAAA | DnsRecordType::ANY => {
                 let mut labels = question.labels();
-                if let Some(hostname_slice) =
-                    extract_local_hostname_wire(&mut labels, &self.cfg.multi_search_labels)
+                let zone = self.zone();
+                if let Some(hostname_slice) = extract_local_hostname_wire(&mut labels, &zone.labels)
                 {
                     let safe_hostname = fast_lowercase(hostname_slice);
                     let edns = WireOptScanner::scan(data, header, question);
@@ -360,9 +407,8 @@ impl LocalResolver {
             qtype,
             DnsRecordType::A | DnsRecordType::AAAA | DnsRecordType::ANY
         ) {
-            if let Some(hostname_slice) =
-                extract_local_hostname(qname, &self.cfg.multi_search_labels)
-            {
+            let zone = self.zone();
+            if let Some(hostname_slice) = extract_local_hostname(qname, &zone.labels) {
                 let safe_hostname = fast_lowercase(hostname_slice);
                 let (ips, device_exists) = self.resolve_ip_status(&safe_hostname, qtype);
                 if let Some(ips) = ips {
@@ -455,5 +501,23 @@ mod tests {
             .expect("Must resolve PTR");
         assert_eq!(host, "nas-box");
         assert_eq!(domain, "lan");
+    }
+
+    /// The site's domains change in place: SOA names and PTR domain follow the first one, and
+    /// an empty list falls back to `lan`.
+    #[test]
+    fn set_domains_swaps_the_zone() {
+        let resolver = LocalResolver::new(Arc::new(mock_config()), init_test_context());
+        assert_eq!(&*resolver.zone().soa_zone, "lan");
+
+        resolver.set_domains(&["home.arpa".to_string(), "lan".to_string()]);
+        let zone = resolver.zone();
+        assert_eq!(&*zone.soa_zone, "home.arpa");
+        assert_eq!(&*zone.soa_master_ns, "ns.home.arpa");
+        assert_eq!(&*zone.soa_mailbox, "hostmaster.home.arpa");
+        assert_eq!(zone.labels[0], [b"home".to_vec(), b"arpa".to_vec()]);
+
+        resolver.set_domains(&[]);
+        assert_eq!(resolver.zone().domains, ["lan"]);
     }
 }

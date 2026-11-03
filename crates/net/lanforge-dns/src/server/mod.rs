@@ -42,11 +42,6 @@ pub struct DnsContext {
     #[cfg(feature = "adblock")]
     pub filter: Option<Arc<AdBlocker>>,
 
-    // Pre-computed SOA names
-    pub soa_zone: Arc<str>,
-    pub soa_master_ns: Arc<str>,
-    pub soa_mailbox: Arc<str>,
-
     // Reverse DNS resolution managers and lock-free tracking
     pub reverse_managers: Arc<parking_lot::RwLock<HashMap<UpstreamTarget, Arc<UpstreamManager>>>>,
     pub resolving_ips: Arc<parking_lot::Mutex<HashSet<IpAddr>>>,

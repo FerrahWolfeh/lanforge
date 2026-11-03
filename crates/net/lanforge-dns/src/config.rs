@@ -76,12 +76,6 @@ pub struct DnsConfig {
     /// Default TTL (in seconds) for locally generated DNS records.
     pub ttl: u32,
 
-    // ------------------------------------------------------ INTERNAL CONFIG
-    /// Pre-parsed search domain labels for zero-allocation hostname matching.
-    /// Default: `[[b"lan"]]`.
-    #[serde(skip)]
-    pub multi_search_labels: Vec<Vec<Vec<u8>>>,
-
     /// Whether the micro-adblocker is enabled.
     pub adblock_enabled: bool,
     /// Directory to store adblock cache files.
@@ -153,7 +147,6 @@ impl Default for DnsConfig {
             ula_prefix: None,
             gua_prefix: None,
             ttl: 60,
-            multi_search_labels: vec![vec![b"lan".to_vec()]],
             adblock_enabled: false,
             adblock_cache_dir: None,
             adblock_urls: Vec::new(),

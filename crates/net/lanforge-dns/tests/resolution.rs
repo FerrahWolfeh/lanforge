@@ -122,7 +122,6 @@ async fn multi_search_domain_resolution() {
     let ctx = init_test_context();
     let mut cfg = mock_config();
     cfg.search_domains = vec!["lan".to_string(), "local".to_string()];
-    cfg.multi_search_labels = vec![vec![b"lan".to_vec()], vec![b"local".to_vec()]];
 
     let mac = MacAddr([1, 2, 3, 4, 5, 3]);
     register_test_device(&ctx, "workstation", mac, Ipv4Addr::new(192, 168, 1, 50));

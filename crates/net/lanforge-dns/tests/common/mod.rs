@@ -61,21 +61,11 @@ pub async fn wait_for_service_online(
 pub fn mock_config() -> DnsConfig {
     DnsConfig {
         search_domains: vec!["lan".to_string()],
-        multi_search_labels: vec![vec![b"lan".to_vec()]],
         ..Default::default()
     }
 }
 
 pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContext {
-    let domain_base = cfg
-        .search_domains
-        .first()
-        .map_or_else(|| "lan".to_string(), Clone::clone);
-
-    let soa_zone: Arc<str> = Arc::from(domain_base.as_str());
-    let soa_master_ns: Arc<str> = Arc::from(format!("ns.{domain_base}"));
-    let soa_mailbox: Arc<str> = Arc::from(format!("hostmaster.{domain_base}"));
-
     let cfg_arc = Arc::new(cfg);
     let cache = Arc::new(DnsCache::new(cfg_arc.cache_size, 30, None));
     let recursive = Arc::new(UpstreamStrategy::new(cfg_arc.upstream_mode, Vec::new()));
@@ -118,9 +108,6 @@ pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContex
         rewrites,
         #[cfg(feature = "adblock")]
         filter,
-        soa_zone,
-        soa_master_ns,
-        soa_mailbox,
         reverse_managers: Arc::new(RwLock::new(HashMap::new())),
         resolving_ips: Arc::new(Mutex::new(HashSet::new())),
         compiled_ignore_clients: CompiledIgnoreClients::compile(&cfg_arc.query_log.ignore_clients),
