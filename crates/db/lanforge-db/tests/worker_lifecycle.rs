@@ -2,25 +2,19 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use lanforge_api::config_file::Section;
 use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use lanforge_db::config::DatabaseConfig;
-use lanforge_db::{
-    DbWorker, DeviceStore, DhcpConfigStore, FirewallConfigStore, LanforgeDb, LogDb,
-    PppoeConfigStore, Stores,
-};
+use lanforge_db::{DbWorker, DeviceStore, LanforgeDb, LogDb, Stores};
 use lanforge_types::auth::{ApiScope, UserRole};
 use lanforge_types::device::{DeviceStatus, Origin};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
 use lanforge_types::network::dns::DnsRecordType;
 use lanforge_types::network::dns::adblock::RewriteAnswer;
-use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::firewall::FirewallConfig;
-use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::system::{ServiceId, ServiceState};
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, FieldUpdate};
 use smallvec::smallvec;
@@ -298,36 +292,6 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
         // Signal table dirty to persist both devices
         let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
 
-        // 2. Configure DHCPv4 Pool
-        let pool = Dhcpv4Pool {
-            name: Some("default_lan".into()),
-            range_start: Ipv4Addr::new(192, 168, 1, 100),
-            range_end: Ipv4Addr::new(192, 168, 1, 200),
-            subnet_mask: Some(Ipv4Addr::new(255, 255, 255, 0)),
-            router: Some(Ipv4Addr::new(192, 168, 1, 1)),
-            dns_servers: vec![Ipv4Addr::new(192, 168, 1, 1)],
-            lease_time: Some(43200),
-            ..Default::default()
-        };
-        ctx.update_dhcp_v4_pools(vec![pool]);
-
-        // 3. Configure Firewall
-        let fw_cfg = FirewallConfig {
-            enabled: true,
-            ..Default::default()
-        };
-        ctx.update_firewall_config(fw_cfg);
-
-        // 4. Configure PPPoE
-        let pppoe_cfg = PppoeConfig {
-            enabled: true,
-            wan_iface: "eth0".into(),
-            username: "persisted_pppoe_user".into(),
-            password: "secret_password".into(),
-            ..Default::default()
-        };
-        ctx.update_pppoe_config(pppoe_cfg);
-
         // Allow worker to process events
         sleep(Duration::from_millis(100)).await;
 
@@ -358,18 +322,6 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
         assert_eq!(dev2.display_hostname(), "printer.lan");
         assert_eq!(dev2.primary_v4(), Some(Ipv4Addr::new(192, 168, 1, 60)));
         assert_eq!(dev2.status, DeviceStatus::Offline);
-
-        // 2. DHCP is file-owned (config-storage step 2): the worker no longer copies pools
-        // into redb; the API writes them to `[dhcp]` in the config file.
-        assert!(db.load_dhcp_v4_pools().expect("load pools").is_empty());
-
-        // 3. Verify Firewall config survived
-        // Firewall is file-owned (config-storage step 2): not copied into redb by the worker.
-        assert!(db.load_firewall_config().expect("load fw").is_none());
-
-        // 4. PPPoE is file-owned (config-storage step 2): the worker no longer copies it into
-        // redb; the API writes it to `[pppoe]` in the config file.
-        assert!(db.load_pppoe_config().expect("load pppoe").is_none());
     }
 }
 
@@ -471,62 +423,6 @@ async fn test_db_worker_storage_query_dispatch() {
         .unwrap();
     assert!(tokens_res2.is_empty());
 
-    // 4. DNS rewrites queries
-    storage
-        .call(|s: &Stores| {
-            s.db.upsert_dns_rewrite(
-                "router.lan",
-                DnsRecordType::A,
-                &RewriteAnswer::A(Ipv4Addr::new(192, 168, 1, 1)),
-            )
-        })
-        .await
-        .unwrap();
-
-    let rewrites = storage
-        .call(|s: &Stores| s.db.load_dns_rewrites())
-        .await
-        .unwrap();
-    assert!(rewrites.iter().any(|r| r.domain == "router.lan"));
-
-    storage
-        .call(|s: &Stores| s.db.clear_dns_rewrites())
-        .await
-        .unwrap();
-    let rewrites_after = storage
-        .call(|s: &Stores| s.db.load_dns_rewrites())
-        .await
-        .unwrap();
-    assert!(rewrites_after.is_empty());
-
-    // 5. Upstream DNS queries
-    storage
-        .call(|s: &Stores| {
-            s.db.add_dns_upstream("9.9.9.9:53".parse().unwrap(), UpstreamProtocol::Udp, None)
-        })
-        .await
-        .unwrap();
-
-    let upstreams = storage
-        .call(|s: &Stores| s.db.load_dns_upstreams())
-        .await
-        .unwrap();
-    assert!(
-        upstreams
-            .iter()
-            .any(|u| u.addr == "9.9.9.9:53".parse().unwrap())
-    );
-
-    storage
-        .call(|s: &Stores| s.db.clear_dns_upstreams())
-        .await
-        .unwrap();
-    let upstreams_after = storage
-        .call(|s: &Stores| s.db.load_dns_upstreams())
-        .await
-        .unwrap();
-    assert!(upstreams_after.is_empty());
-
     // Clean exit
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = handle.await;
@@ -596,8 +492,11 @@ async fn test_db_worker_service_control_and_restart_resilience() {
     assert!(res.is_ok());
 }
 
+/// Configuration lives in the config files, written by the API before a change applies: the
+/// worker never writes the file (it used to render sections back from memory on every flush)
+/// nor keeps configuration in redb.
 #[tokio::test]
-async fn live_adblock_and_dns_changes_are_not_written_back_by_the_worker() {
+async fn the_worker_never_writes_configuration() {
     let (ctx, bus) = create_test_context();
     let dir = tempdir().unwrap();
     let config_path = dir.path().join("lanforge.toml");
@@ -624,8 +523,14 @@ async fn live_adblock_and_dns_changes_are_not_written_back_by_the_worker() {
         .call(|s: &Stores| s.db.is_provisioned())
         .await
         .unwrap();
-    // `[adblock]` and `[dns]` are file-owned: the API writes them before they apply, never
-    // the worker (it used to rewrite `[adblock]` and the adblock keys from memory).
+
+    ctx.update_dhcp_v4_pools(vec![Dhcpv4Pool {
+        range_start: Ipv4Addr::new(192, 168, 1, 100),
+        range_end: Ipv4Addr::new(192, 168, 1, 200),
+        ..Default::default()
+    }]);
+    ctx.update_dhcp_options(lanforge_types::network::dhcp::DhcpOptionsConfig::default());
+    ctx.update_firewall_config(FirewallConfig::default());
     ctx.update_dns_adblock_rules("@@||bank.example^\n".to_string());
     ctx.update_dns_rewrites(vec![lanforge_types::network::dns::adblock::RewriteRule {
         id: None,
@@ -633,7 +538,9 @@ async fn live_adblock_and_dns_changes_are_not_written_back_by_the_worker() {
         rtype: DnsRecordType::A,
         answer: RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 1)),
     }]);
+    let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
     sleep(Duration::from_millis(20)).await;
+    storage.flush_now().await.expect("flush_now");
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     timeout(Duration::from_secs(1), handle)
@@ -644,125 +551,5 @@ async fn live_adblock_and_dns_changes_are_not_written_back_by_the_worker() {
 
     let written = std::fs::read_to_string(&config_path).unwrap();
     assert_eq!(written, original, "the worker wrote the config file");
-    use lanforge_db::config_keys::{
-        ADBLOCK_CONFIG, ADBLOCK_RULES, ADBLOCK_URLS, DNS_ALLOWLIST, DNS_REWRITES,
-    };
-    assert!(
-        db.get(DNS_ALLOWLIST).unwrap().is_none(),
-        "allowlist in redb"
-    );
-    assert!(db.get(ADBLOCK_CONFIG).unwrap().is_none(), "adblock in redb");
-    assert!(db.get(ADBLOCK_URLS).unwrap().is_none(), "sources in redb");
-    assert!(db.get(ADBLOCK_RULES).unwrap().is_none(), "rules in redb");
-    assert!(db.get(DNS_REWRITES).unwrap().is_none(), "rewrites in redb");
-}
-
-#[tokio::test]
-async fn failed_live_toml_write_preserves_file_and_does_not_advance_hash() {
-    let (ctx, bus) = create_test_context();
-    let dir = tempdir().unwrap();
-    let config_path = dir.path().join("lanforge.toml");
-    std::fs::create_dir(&config_path).unwrap();
-    std::fs::write(config_path.join("keep"), "original").unwrap();
-    ctx.set_config_path(config_path.clone());
-    ctx.set_config_writable(true);
-
-    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
-    db.set_config_section_hash(Section::Adblock.name(), 7)
-        .unwrap();
-    let log_db = Arc::new(LogDb::open_in_memory());
-    let mut worker = DbWorker::new(DatabaseConfig::default(), ctx.clone(), db.clone(), log_db);
-    worker.init(&ctx).await.unwrap();
-
-    let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
-    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
-    let storage = ctx.storage_handle().expect("storage handle present");
-    let _ = storage
-        .call(|s: &Stores| s.db.is_provisioned())
-        .await
-        .unwrap();
-    // The worker still writes `[system]` back when the device table is reset.
-    let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
-    sleep(Duration::from_millis(20)).await;
-
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
-    timeout(Duration::from_secs(1), handle)
-        .await
-        .expect("worker shutdown timed out")
-        .expect("worker task panicked")
-        .expect("worker failed");
-
-    assert_eq!(
-        std::fs::read_to_string(config_path.join("keep")).unwrap(),
-        "original"
-    );
-    assert_eq!(
-        db.get_config_section_hash(Section::Adblock.name()).unwrap(),
-        Some(7)
-    );
-}
-
-#[tokio::test]
-async fn adblock_and_dns_changes_never_reach_redb_on_flush_now() {
-    let (ctx, bus) = create_test_context();
-
-    let db = Arc::new(LanforgeDb::open_in_memory().unwrap());
-    let log_db = Arc::new(LogDb::open_in_memory());
-
-    let cfg = DatabaseConfig {
-        flush_interval: 60,
-        ..DatabaseConfig::default()
-    };
-
-    let mut worker = DbWorker::new(cfg, ctx.clone(), db.clone(), log_db);
-    worker.init(&ctx).await.unwrap();
-
-    let ctx_clone = ctx.clone();
-    let h = ServiceHandle::new(ServiceId::Db, ctx_clone.clone());
-    let handle = tokio::spawn(async move { worker.serve(&ctx_clone, &h).await });
-
-    let storage = ctx.storage_handle().expect("storage handle present");
-    let _ = storage
-        .call(|s: &Stores| s.db.is_provisioned())
-        .await
-        .expect("worker ready");
-
-    // 1. Mutate ctx directly: `[adblock]` (rules included) and `[dns]` are file-owned and
-    // never reach redb.
-    ctx.update_dns_adblock_rules("@@||bank.example^\n".to_string());
-    ctx.update_dns_adblock(lanforge_types::network::dns::adblock::AdblockDbConfig {
-        enabled: true,
-        ..Default::default()
-    });
-    ctx.update_dns_rewrites(vec![lanforge_types::network::dns::adblock::RewriteRule {
-        id: Some(1),
-        domain: "gateway.lan".to_string(),
-        rtype: DnsRecordType::A,
-        answer: RewriteAnswer::A(Ipv4Addr::new(192, 168, 1, 1)),
-    }]);
-
-    // Give worker event loop a moment to absorb the change events
-    sleep(Duration::from_millis(20)).await;
-
-    // 2. Call flush_now explicitly
-    storage.flush_now().await.expect("flush_now should succeed");
-
-    // 3. Verify what redb holds
-    use lanforge_db::config_keys::{ADBLOCK_CONFIG, ADBLOCK_RULES, DNS_ALLOWLIST};
-    assert!(
-        db.get(DNS_ALLOWLIST).unwrap().is_none(),
-        "allowlist in redb"
-    );
-    assert!(db.get(ADBLOCK_CONFIG).unwrap().is_none(), "adblock in redb");
-    assert!(db.get(ADBLOCK_RULES).unwrap().is_none(), "rules in redb");
-    let rewrites = storage
-        .call(|s: &Stores| s.db.stored_dns_rewrites())
-        .await
-        .unwrap();
-    assert_eq!(rewrites, None, "no DNS key written back");
-
-    // Clean exit
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
-    let _ = handle.await;
+    assert_eq!(db.legacy_config_keys().unwrap(), Vec::<String>::new());
 }

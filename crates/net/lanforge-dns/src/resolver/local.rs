@@ -10,26 +10,20 @@ use std::time::Duration;
 
 use crate::config::DnsConfig;
 use crate::error::DnsError;
-use crate::resolver::builder::ResponseBuilder;
-use crate::utils::{
-    extract_local_hostname, extract_local_hostname_wire, fast_lowercase, parse_arpa,
-    parse_arpa_wire,
-};
+use crate::utils::{extract_local_hostname, fast_lowercase, parse_arpa, parse_arpa_wire};
 use lanforge_core::context::LanforgeContext;
 use lanforge_dns_wire::{
-    PtrResponseArgs, WireHeader, WireOptScanner, WireQuestion, WireResponseWriter,
+    PtrResponseArgs, WireHeader, WireLabelIter, WireOptScanner, WireQuestion, WireResponseWriter,
 };
 use lanforge_types::network::dns::{DnsClass, DnsRData, DnsRecord, DnsRecordType};
 
-/// The site's domains as the hot path uses them: wire labels to match `host.<domain>`, and the
-/// SOA names of the first domain. Swapped whole when the site's domains change.
+/// The site's domains as the hot path uses them: wire labels to match names under them, and the
+/// first one, which PTR answers name hosts in. Swapped whole when the site's domains change.
 #[derive(Debug)]
 pub struct LocalZone {
     pub domains: Vec<String>,
     pub labels: Vec<Vec<Vec<u8>>>,
-    pub soa_zone: Arc<str>,
-    pub soa_master_ns: Arc<str>,
-    pub soa_mailbox: Arc<str>,
+    pub primary: Arc<str>,
 }
 
 impl LocalZone {
@@ -45,14 +39,49 @@ impl LocalZone {
             .iter()
             .map(|d| d.split('.').map(|l| l.as_bytes().to_vec()).collect())
             .collect();
-        let base = &domains[0];
         Self {
-            soa_zone: Arc::from(base.as_str()),
-            soa_master_ns: Arc::from(format!("ns.{base}")),
-            soa_mailbox: Arc::from(format!("hostmaster.{base}")),
+            primary: Arc::from(domains[0].as_str()),
             labels,
             domains,
         }
+    }
+}
+
+/// Where a query name sits relative to the site's domains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SitePlace<'a> {
+    /// A site domain itself (`lan`).
+    Apex,
+    /// One label under a site domain (`archie.lan`): a LAN host name.
+    Host(&'a [u8]),
+    /// Deeper under a site domain (`x.archie.lan`): the LAN serves no such names.
+    Deeper,
+    /// Not under any site domain.
+    Outside,
+}
+
+impl LocalZone {
+    /// Where the name of `labels` sits relative to the site's domains.
+    #[must_use]
+    pub fn place<'a>(&self, labels: WireLabelIter<'a>) -> SitePlace<'a> {
+        let name: SmallVec<[&[u8]; 8]> = labels.collect();
+        for domain in &self.labels {
+            let Some(below) = name.len().checked_sub(domain.len()) else {
+                continue;
+            };
+            let under = name[below..]
+                .iter()
+                .zip(domain)
+                .all(|(a, b)| a.eq_ignore_ascii_case(b));
+            if under {
+                return match below {
+                    0 => SitePlace::Apex,
+                    1 => SitePlace::Host(name[0]),
+                    _ => SitePlace::Deeper,
+                };
+            }
+        }
+        SitePlace::Outside
     }
 }
 
@@ -205,7 +234,7 @@ impl LocalResolver {
             }
         };
 
-        let domain = self.zone().soa_zone.to_string();
+        let domain = self.zone().primary.to_string();
         (host, Cow::Owned(domain))
     }
 
@@ -307,6 +336,16 @@ impl LocalResolver {
         device.all_addresses_sorted(gua, ula)
     }
 
+    /// Answers what the router owns, whatever the type; `false` sends the query on.
+    ///
+    /// Names under the site's domains never leave the router (dnsmasq's `local=/lan/`): a host
+    /// the LAN knows answers its addresses, or NODATA for any other type; a host it does not
+    /// know, or a deeper name, is NXDOMAIN; the domain itself is NODATA (an NXDOMAIN there
+    /// would deny every name under it, RFC 8020). A dotless name is looked up as a LAN host and
+    /// never forwarded either (dnsmasq's `domain-needed`) — an IoT device looping on `:0` is
+    /// answered here — except the root and TLD delegation lookups (NS/SOA/DS/DNSKEY of a name
+    /// that is not a LAN host, e.g. `. NS`, `com. DS`). Reverse names (PTR) of LAN addresses
+    /// are answered when known, else forwarded.
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn resolve_local_wire(
         &self,
@@ -317,99 +356,7 @@ impl LocalResolver {
         resp: &mut Vec<u8>,
     ) -> bool {
         let qtype = DnsRecordType::from(question.qtype());
-
-        match qtype {
-            DnsRecordType::A | DnsRecordType::AAAA | DnsRecordType::ANY => {
-                let mut labels = question.labels();
-                let zone = self.zone();
-                if let Some(hostname_slice) = extract_local_hostname_wire(&mut labels, &zone.labels)
-                {
-                    let safe_hostname = fast_lowercase(hostname_slice);
-                    let edns = WireOptScanner::scan(data, header, question);
-
-                    let (ips, device_exists) = self.resolve_ip_status(&safe_hostname, qtype);
-                    if let Some(ips) = ips {
-                        WireResponseWriter::write_ip_response(
-                            data,
-                            question,
-                            &ips,
-                            self.cfg.ttl,
-                            edns,
-                            has_upstreams,
-                            resp,
-                        );
-                        return true;
-                    } else if device_exists {
-                        WireResponseWriter::write_error_response(
-                            data,
-                            question,
-                            0, // NOERROR (but no data)
-                            edns,
-                            has_upstreams,
-                            resp,
-                        );
-                        return true;
-                    } else {
-                        WireResponseWriter::write_error_response(
-                            data,
-                            question,
-                            3, // NXDOMAIN
-                            edns,
-                            has_upstreams,
-                            resp,
-                        );
-                        return true;
-                    }
-                }
-            }
-            DnsRecordType::PTR => {
-                if let Some(target_ip) = parse_arpa_wire(question.labels()) {
-                    let edns = WireOptScanner::scan(data, header, question);
-
-                    let ptr_res = self.ctx.with_state(|state| {
-                        let mac = state.get_mac_by_ip(target_ip)?;
-                        let device = state.devices.get(&mac)?;
-                        let (host, domain) = self.get_ptr_parts(device);
-                        Some((host.into_owned(), domain.into_owned()))
-                    });
-
-                    if let Some((host, domain)) = ptr_res {
-                        WireResponseWriter::write_ptr_response(
-                            PtrResponseArgs {
-                                query_data: data,
-                                question,
-                                host: &host,
-                                domain: &domain,
-                                ttl: self.cfg.ttl,
-                                edns,
-                                ra: has_upstreams,
-                            },
-                            resp,
-                        );
-                        return true;
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        // A dotless name the LAN does not serve never leaves the router: the public DNS has no
-        // such host (dnsmasq's `domain-needed`). An IoT device looping on a junk name (`:0`) is
-        // answered here instead of reaching the upstreams. The root and TLD delegation lookups
-        // (NS/SOA/DS/DNSKEY, e.g. `. NS`, `com. DS`) are real queries and go on.
-        let mut labels = question.labels();
-        let delegation = matches!(
-            qtype,
-            DnsRecordType::NS
-                | DnsRecordType::SOA
-                | DnsRecordType::Unknown(43) // DS
-                | DnsRecordType::Unknown(48) // DNSKEY
-        );
-        if let (Some(label), None, false) = (labels.next(), labels.next(), delegation) {
-            let raw = String::from_utf8_lossy(label);
-            let host = fast_lowercase(&raw);
-            let (ips, device_exists) = self.resolve_ip_status(&host, DnsRecordType::A);
-            let rcode = if ips.is_some() || device_exists { 0 } else { 3 }; // NODATA / NXDOMAIN
+        let reply = |rcode: u8, resp: &mut Vec<u8>| {
             WireResponseWriter::write_error_response(
                 data,
                 question,
@@ -418,45 +365,97 @@ impl LocalResolver {
                 has_upstreams,
                 resp,
             );
-            return true;
-        }
-        false
-    }
+            true
+        };
 
-    #[cfg_attr(feature = "hotpath", hotpath::measure)]
-    pub fn resolve_local_fallback(
-        &self,
-        rb: &ResponseBuilder,
-        qname: &str,
-        qtype: DnsRecordType,
-        resp: &mut Vec<u8>,
-    ) -> Result<bool, DnsError> {
+        let place = self.zone().place(question.labels());
+        let host = match place {
+            SitePlace::Apex => return reply(0, resp),
+            SitePlace::Deeper => return reply(3, resp),
+            SitePlace::Host(label) => label,
+            SitePlace::Outside => {
+                let mut labels = question.labels();
+                match (labels.next(), labels.next()) {
+                    (Some(label), None) => label,
+                    _ => {
+                        return qtype == DnsRecordType::PTR
+                            && self.reply_ptr(data, header, question, has_upstreams, resp);
+                    }
+                }
+            }
+        };
+        let raw = String::from_utf8_lossy(host);
+        let host = fast_lowercase(&raw);
+
         if matches!(
             qtype,
             DnsRecordType::A | DnsRecordType::AAAA | DnsRecordType::ANY
         ) {
-            let zone = self.zone();
-            if let Some(hostname_slice) = extract_local_hostname(qname, &zone.labels) {
-                let safe_hostname = fast_lowercase(hostname_slice);
-                let (ips, device_exists) = self.resolve_ip_status(&safe_hostname, qtype);
-                if let Some(ips) = ips {
-                    resp.clear();
-                    resp.extend_from_slice(&rb.success_ips(ips)?);
-                    return Ok(true);
-                } else if device_exists {
-                    resp.clear();
-                    resp.extend_from_slice(&rb.empty_noerror()?);
-                    return Ok(true);
-                }
+            let (ips, device_exists) = self.resolve_ip_status(&host, qtype);
+            if let Some(ips) = ips {
+                WireResponseWriter::write_ip_response(
+                    data,
+                    question,
+                    &ips,
+                    self.cfg.ttl,
+                    WireOptScanner::scan(data, header, question),
+                    has_upstreams,
+                    resp,
+                );
+                return true;
             }
-        } else if qtype == DnsRecordType::PTR
-            && let Some((host, domain)) = self.resolve_ptr(qname)?
-        {
-            resp.clear();
-            resp.extend_from_slice(&rb.success_ptr(&host, &domain)?);
-            return Ok(true);
+            return reply(if device_exists { 0 } else { 3 }, resp);
         }
-        Ok(false)
+
+        let (ips, device_exists) = self.resolve_ip_status(&host, DnsRecordType::A);
+        let known = ips.is_some() || device_exists;
+        let delegation = matches!(
+            qtype,
+            DnsRecordType::NS
+                | DnsRecordType::SOA
+                | DnsRecordType::Unknown(43) // DS
+                | DnsRecordType::Unknown(48) // DNSKEY
+        );
+        if place == SitePlace::Outside && delegation && !known {
+            return false;
+        }
+        reply(if known { 0 } else { 3 }, resp)
+    }
+
+    /// The PTR answer for a reverse name of a LAN address, when the router knows it.
+    fn reply_ptr(
+        &self,
+        data: &[u8],
+        header: &WireHeader,
+        question: &WireQuestion<'_>,
+        has_upstreams: bool,
+        resp: &mut Vec<u8>,
+    ) -> bool {
+        let Some(target_ip) = parse_arpa_wire(question.labels()) else {
+            return false;
+        };
+        let ptr_res = self.ctx.with_state(|state| {
+            let mac = state.get_mac_by_ip(target_ip)?;
+            let device = state.devices.get(&mac)?;
+            let (host, domain) = self.get_ptr_parts(device);
+            Some((host.into_owned(), domain.into_owned()))
+        });
+        let Some((host, domain)) = ptr_res else {
+            return false;
+        };
+        WireResponseWriter::write_ptr_response(
+            PtrResponseArgs {
+                query_data: data,
+                question,
+                host: &host,
+                domain: &domain,
+                ttl: self.cfg.ttl,
+                edns: WireOptScanner::scan(data, header, question),
+                ra: has_upstreams,
+            },
+            resp,
+        );
+        true
     }
 }
 
@@ -531,18 +530,16 @@ mod tests {
         assert_eq!(domain, "lan");
     }
 
-    /// The site's domains change in place: SOA names and PTR domain follow the first one, and
+    /// The site's domains change in place: the PTR domain follows the first one, and
     /// an empty list falls back to `lan`.
     #[test]
     fn set_domains_swaps_the_zone() {
         let resolver = LocalResolver::new(Arc::new(mock_config()), init_test_context());
-        assert_eq!(&*resolver.zone().soa_zone, "lan");
+        assert_eq!(&*resolver.zone().primary, "lan");
 
         resolver.set_domains(&["home.arpa".to_string(), "lan".to_string()]);
         let zone = resolver.zone();
-        assert_eq!(&*zone.soa_zone, "home.arpa");
-        assert_eq!(&*zone.soa_master_ns, "ns.home.arpa");
-        assert_eq!(&*zone.soa_mailbox, "hostmaster.home.arpa");
+        assert_eq!(&*zone.primary, "home.arpa");
         assert_eq!(zone.labels[0], [b"home".to_vec(), b"arpa".to_vec()]);
 
         resolver.set_domains(&[]);

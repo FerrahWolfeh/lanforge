@@ -1,4 +1,3 @@
-pub mod builder;
 pub mod local;
 pub mod recursive;
 pub mod rewrite;
@@ -6,7 +5,6 @@ pub mod rewrite;
 #[cfg(feature = "adblock")]
 pub mod filter;
 
-pub use builder::ResponseBuilder;
 pub use local::LocalResolver;
 pub use recursive::UpstreamManager;
 pub use rewrite::RewriteStore;

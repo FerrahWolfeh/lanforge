@@ -1,7 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr};
 
 use crate::ClientContext;
-use crate::handlers::system::toml_sync::ChangeError;
+use crate::handlers::system::config_write::ChangeError;
 use lanforge_api::api::{
     DhcpOptionsResponse, DhcpPoolsConfigResponse, DhcpReconcileResponse, InvalidatedLeaseInfo,
     Response, SimpleSuccess,

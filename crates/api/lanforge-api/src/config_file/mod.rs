@@ -7,7 +7,6 @@ pub mod convert;
 pub mod dns;
 pub mod duration;
 pub mod effective;
-pub mod hash;
 pub mod hosts;
 pub mod patch;
 pub mod section;
@@ -24,7 +23,6 @@ pub use effective::{
     RaInputs, add_default_ra_prefixes, effective_firewall, effective_ra, log_issues,
     set_aside_issues, set_aside_messages,
 };
-pub use hash::section_hashes;
 pub use hosts::StaticHost;
 pub use patch::patch_sections;
 pub use section::{Section, SectionSet};

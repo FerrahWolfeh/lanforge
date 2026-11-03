@@ -53,7 +53,7 @@ pub struct AdblockGroup {
 }
 
 impl AdblockSettings {
-    /// The default global rules file, as the cut-over and the API create it.
+    /// The default global rules file, as the API creates it.
     pub const DEFAULT_RULES: &str = "adblock/global.rules";
 
     /// The global rules file's path: `rules` taken from the directory of `lanforge.toml`.
@@ -749,8 +749,8 @@ clients = ["dev:galaxy tab"]
         );
     }
 
-    /// The form the hash sync wrote (`allowlist`, `[adblock.rules."<domain>"]`, per-source
-    /// `enabled`) is not this form: the cut-over must write `[adblock]` before it is read.
+    /// The old form (`allowlist`, `[adblock.rules."<domain>"]`, per-source `enabled`) is not
+    /// this form: such a file is set aside, never read as something else.
     #[test]
     fn the_old_file_form_does_not_parse() {
         for old in [

@@ -4,7 +4,7 @@ use lanforge_api::api::{AllowlistEntry, DnsAllowlistResponse, Response};
 #[cfg(feature = "adblock")]
 use crate::handlers::dns::rewrite::dns_reply;
 #[cfg(feature = "adblock")]
-use crate::handlers::system::toml_sync::ChangeError;
+use crate::handlers::system::config_write::ChangeError;
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::rules_file::RulesFile;
 #[cfg(feature = "adblock")]

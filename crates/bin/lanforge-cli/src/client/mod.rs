@@ -740,6 +740,23 @@ impl LanforgeClient {
         rpc.system_config_export().await.map_err(|e| eyre!("{e}"))
     }
 
+    /// The daemon's configuration file as it is on disk.
+    pub async fn system_config_toml(&self) -> Result<String> {
+        #[cfg(feature = "remote")]
+        if self.remote.is_some() {
+            let (status, bytes) = self
+                .send_request(Method::GET, "/system/config/toml", None)
+                .await?;
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            if !status.is_success() {
+                return Err(eyre!("{text}"));
+            }
+            return Ok(text);
+        }
+        let mut rpc = self.connect_rpc().await?;
+        rpc.system_config_toml().await.map_err(|e| eyre!("{e}"))
+    }
+
     pub async fn system_config_import(
         &self,
         config: SystemConfigExport,

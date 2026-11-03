@@ -628,6 +628,15 @@ impl WireResponseWriter {
         }
     }
 
+    /// The second flags byte of a reply the router writes itself, from the query's: RA as
+    /// given, CD copied (RFC 6840 §5.9), Z and AD clear — AD claims DNSSEC-validated data
+    /// (RFC 4035 §3.2.3), which local and synthesized answers never are.
+    #[must_use]
+    pub const fn answer_flags(query_flags: u8, ra: bool, rcode: u8) -> u8 {
+        let ra = if ra { 0x80 } else { 0 };
+        ra | (query_flags & 0x10) | (rcode & 0x0F)
+    }
+
     /// Writes a header-only FORMERR for a query whose question section cannot be answered
     /// (RFC 9619: a query carries exactly one question). `query_data` holds at least a header.
     pub fn write_header_formerr(query_data: &[u8], resp: &mut Vec<u8>) {
@@ -661,11 +670,7 @@ impl WireResponseWriter {
         if matches!(rcode, 0 | 3) {
             h[2] |= 0x04;
         }
-        if ra {
-            h[3] |= 0x80; // RA = 1 (Recursion Available)
-        }
-        h[3] &= 0xF0; // Clear RCODE
-        h[3] |= rcode & 0x0F;
+        h[3] = Self::answer_flags(h[3], ra, rcode);
         h[6..12].fill(0); // AN/NS/AR count reset
         if edns.is_some() {
             h[11] = 1; // ARCOUNT = 1
@@ -702,10 +707,7 @@ impl WireResponseWriter {
         h.copy_from_slice(&query_data[0..12]);
         h[2] |= 0x80; // QR = 1
         h[2] |= 0x04; // AA = 1
-        if ra {
-            h[3] |= 0x80;
-        }
-        h[3] &= 0xF0; // RCODE = 0 (NoError)
+        h[3] = Self::answer_flags(h[3], ra, 0);
 
         let ancount = u16::try_from(ips.len()).unwrap_or(u16::MAX);
         let an_bytes = ancount.to_be_bytes();
@@ -782,10 +784,7 @@ impl WireResponseWriter {
         h.copy_from_slice(&args.query_data[0..12]);
         h[2] |= 0x80; // QR = 1
         h[2] |= 0x04; // AA = 1
-        if args.ra {
-            h[3] |= 0x80;
-        }
-        h[3] &= 0xF0;
+        h[3] = Self::answer_flags(h[3], args.ra, 0);
         h[6] = 0;
         h[7] = 1; // ANCOUNT = 1
         h[8] = 0;
@@ -851,10 +850,7 @@ impl WireResponseWriter {
         h.copy_from_slice(&query_data[0..12]);
         h[2] |= 0x80; // QR = 1
         h[2] |= 0x04; // AA = 1
-        if ra {
-            h[3] |= 0x80;
-        }
-        h[3] &= 0xF0;
+        h[3] = Self::answer_flags(h[3], ra, 0);
         h[6] = 0;
         h[7] = 1; // ANCOUNT = 1
         h[11] = u8::from(edns.is_some());

@@ -1,8 +1,7 @@
 #![cfg(feature = "adblock")]
-//! The stored allowlist and rules, written as rules-file lines by the cut-over
-//! (`AdblockRuleEntry::to_rules_line` / `allowlist_line`), decide what the database sets decided
-//! (the expected table below passed on the engine before item f2a): same decisions, same
-//! attribution.
+//! The manual rules file decides what the old database allowlist and rules decided (the
+//! expected table below passed on the engine before item f2a; the file is what the config
+//! cut-over wrote from them): same decisions, same attribution.
 
 use std::sync::Arc;
 
@@ -10,17 +9,7 @@ use lanforge_core::bus::EventBus;
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_dns::resolver::filter::AdBlocker;
-use lanforge_types::network::dns::adblock::{AdblockRuleAction, AdblockRuleEntry, FilterAction};
-
-fn rule(domain: &str, action: AdblockRuleAction, enabled: bool) -> AdblockRuleEntry {
-    AdblockRuleEntry {
-        id: None,
-        name: None,
-        domain: domain.into(),
-        action,
-        enabled,
-    }
-}
+use lanforge_types::network::dns::adblock::FilterAction;
 
 /// Every decision as `name -> action (rule)`, one line per query.
 fn decisions(filter: &AdBlocker, queries: &[&str]) -> String {
@@ -45,40 +34,29 @@ fn decisions(filter: &AdBlocker, queries: &[&str]) -> String {
 
 #[test]
 fn stored_rules_decide_as_before() {
-    // The owner's 4 Bradesco allows, plus every stored spelling the WebUI/CLI could produce.
-    let allowlist: [&str; 6] = [
-        "app-measurement.com",
-        "www.googletagmanager.com",
-        "js-cdn.dynatrace.com",
-        "analytics.google.com",
-        "@@||allow-syntax.com^",
-        "Upper.Example.com",
-    ];
-    let rules = [
-        rule("ads.example.com", AdblockRuleAction::Block, true),
-        rule("||wild.example.com^", AdblockRuleAction::Block, true),
-        rule("|pipe.example.com^", AdblockRuleAction::Block, true),
-        rule("*.star.example.com", AdblockRuleAction::Block, true),
-        rule("mod.example.com$important", AdblockRuleAction::Block, true),
-        rule(
-            "client.example.com$client=10.0.0.1",
-            AdblockRuleAction::Block,
-            true,
-        ),
-        rule("off.example.com", AdblockRuleAction::Block, false),
-        rule("ok.ads.example.com", AdblockRuleAction::Allow, true),
-        rule("google.com", AdblockRuleAction::Block, true),
-        rule("trailing.example.com.", AdblockRuleAction::Block, true),
-    ];
-    let mut text = String::new();
-    for line in allowlist
-        .iter()
-        .filter_map(|d| AdblockRuleEntry::allowlist_line(d))
-        .chain(rules.iter().filter_map(AdblockRuleEntry::to_rules_line))
-    {
-        text.push_str(&line);
-        text.push('\n');
-    }
+    // The owner's 4 Bradesco allows, plus every stored spelling the WebUI/CLI could produce
+    // (`@@||allow-syntax.com^`, `Upper.Example.com`, `|pipe.example.com^`, `*.star.example.com`,
+    // `mod.example.com$important`, `client.example.com$client=10.0.0.1`, `trailing.example.com.`,
+    // a disabled `off.example.com`), as the cut-over wrote them.
+    let text = "\
+@@||app-measurement.com^
+@@||www.googletagmanager.com^
+@@||js-cdn.dynatrace.com^
+@@||analytics.google.com^
+@@||allow-syntax.com^
+@@||upper.example.com^
+||ads.example.com^
+||wild.example.com^
+||pipe.example.com^
+||star.example.com^
+||mod.example.com^
+||client.example.com^
+# ||off.example.com^
+@@||ok.ads.example.com^
+||google.com^
+||trailing.example.com^
+"
+    .to_string();
     // Through the context, as the daemon loads it.
     let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
     ctx.update_dns_adblock_rules(text);

@@ -12,7 +12,7 @@ use lanforge_types::network::dns::upstream::UpstreamTarget;
 
 use crate::handlers::dns::adblock::with_rule_only;
 use crate::handlers::dns::rewrite::upsert_rewrite;
-use crate::handlers::system::toml_sync::ChangeError;
+use crate::handlers::system::config_write::ChangeError;
 
 /// The import result of a section that `outcome` wrote (`count` entries) or refused.
 fn import_result(

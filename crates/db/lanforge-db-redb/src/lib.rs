@@ -1,16 +1,12 @@
 //! `lanforge-db-redb` — Embedded pure-Rust database backend for Lanforge using `redb`.
 
 pub mod device;
-pub mod dhcp;
-pub mod dns;
-pub mod firewall;
 pub mod log;
+pub mod prefix;
 pub mod tables;
 pub mod user;
 
-use lanforge_db_core::{DbError, DnsUpstreamEntry};
-use lanforge_types::network::dns::AdblockUrlEntry;
-use lanforge_types::network::dns::adblock::{AdblockRuleEntry, RewriteRule};
+use lanforge_db_core::DbError;
 pub use redb;
 use redb::{Database, ReadableDatabase, ReadableTable, WriteTransaction};
 use std::fmt;
@@ -412,98 +408,27 @@ impl RedbDatabase {
         Ok(())
     }
 
-    /// Retrieves a stored configuration section hash from the metadata table.
-    pub fn get_config_section_hash(&self, section: &str) -> Result<Option<u64>, DbError> {
+    /// Names of the config keys an older binary left (configuration now lives in the config
+    /// files; the only key still in use is `last_gua_prefix`).
+    pub fn legacy_config_keys(&self) -> Result<Vec<String>, DbError> {
         let read_txn = self
             .db
             .begin_read()
             .map_err(|e| DbError::Backend(e.to_string()))?;
-        let table = match read_txn.open_table(TABLE_META) {
+        let table = match read_txn.open_table(TABLE_CONFIG) {
             Ok(t) => t,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
             Err(e) => return Err(DbError::Backend(e.to_string())),
         };
-
-        let key = format!("config_hash:{section}");
-        match table
-            .get(key.as_str())
-            .map_err(|e| DbError::Backend(e.to_string()))?
-        {
-            Some(val) => {
-                let bytes = val.value();
-                if bytes.len() == 8 {
-                    let mut arr = [0u8; 8];
-                    arr.copy_from_slice(bytes);
-                    Ok(Some(u64::from_be_bytes(arr)))
-                } else {
-                    Ok(None)
-                }
-            }
-            None => Ok(None),
-        }
-    }
-
-    /// Stores a configuration section hash in the metadata table.
-    pub fn set_config_section_hash(&self, section: &str, hash: u64) -> Result<(), DbError> {
-        let write_txn = self
-            .begin_write()
-            .map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let mut table = write_txn
-                .open_table(TABLE_META)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-            let key = format!("config_hash:{section}");
-            table
-                .insert(key.as_str(), hash.to_be_bytes().as_slice())
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-        }
-        write_txn
-            .commit()
-            .map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
-    }
-
-    /// Stores multiple configuration section hashes in the metadata table atomically.
-    pub fn set_config_section_hashes(
-        &self,
-        hashes: &std::collections::BTreeMap<String, u64>,
-    ) -> Result<(), DbError> {
-        let write_txn = self
-            .begin_write()
-            .map_err(|e| DbError::Backend(e.to_string()))?;
-        {
-            let mut table = write_txn
-                .open_table(TABLE_META)
-                .map_err(|e| DbError::Backend(e.to_string()))?;
-            for (sec, hash) in hashes {
-                let key = format!("config_hash:{sec}");
-                table
-                    .insert(key.as_str(), hash.to_be_bytes().as_slice())
-                    .map_err(|e| DbError::Backend(e.to_string()))?;
+        let mut names = Vec::new();
+        for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
+            let (key, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+            let key = key.value();
+            if key != lanforge_db_core::config_keys::LAST_GUA_PREFIX.name() {
+                names.push(key.to_string());
             }
         }
-        write_txn
-            .commit()
-            .map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(())
-    }
-
-    /// Checks if any configuration section hashes have been stored in the metadata table.
-    pub fn has_config_section_hashes(&self) -> Result<bool, DbError> {
-        let read_txn = self
-            .db
-            .begin_read()
-            .map_err(|e| DbError::Backend(e.to_string()))?;
-        let table = match read_txn.open_table(TABLE_META) {
-            Ok(t) => t,
-            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(false),
-            Err(e) => return Err(DbError::Backend(e.to_string())),
-        };
-
-        let iter = table
-            .range("config_hash:".."config_hash:\u{ffff}")
-            .map_err(|e| DbError::Backend(e.to_string()))?;
-        Ok(iter.count() > 0)
+        Ok(names)
     }
 
     /// Checks if the database contains existing data from a legacy pre-versioned database.
@@ -555,7 +480,9 @@ impl RedbDatabase {
         }
 
         if effective_version == 3 && target_version == 4 {
-            tracing::info!("Migrating database schema v3 to v4 (list tables to config blobs)");
+            tracing::info!(
+                "Migrating database schema v3 to v4 (old DNS/adblock list tables dropped)"
+            );
             self.migrate_v3_to_v4()?;
             self.set_schema_version(target_version)?;
         } else if effective_version < target_version {
@@ -573,124 +500,15 @@ impl RedbDatabase {
         Ok(())
     }
 
+    /// The v3 DNS/adblock list tables held configuration that lives in the config files now:
+    /// nothing reads them any more.
     fn migrate_v3_to_v4(&self) -> Result<(), DbError> {
-        use lanforge_db_core::config_keys::*;
-        use lanforge_types::network::dns::adblock::{AdblockRuleAction, AdblockUrlKind};
         let write_txn = self.begin_write()?;
-
-        // 1. DNS Rewrites
-        if let Ok(table) = write_txn.open_table(TABLE_DNS_REWRITES) {
-            let mut rewrites = Vec::new();
-            for item in table.iter()? {
-                let (_, val) = item?;
-                if let Ok(rule) = decode::<RewriteRule>(val.value()) {
-                    rewrites.push(rule);
-                }
-            }
-            drop(table);
-            if !rewrites.is_empty() {
-                let bytes = encode(&rewrites)?;
-                write_txn
-                    .open_table(TABLE_CONFIG)?
-                    .insert(DNS_REWRITES.name(), bytes.as_slice())?;
-            }
-            let _ = write_txn.delete_table(TABLE_DNS_REWRITES);
-        }
-
-        // 2. DNS Allowlist
-        if let Ok(table) = write_txn.open_table(TABLE_DNS_ALLOWLIST) {
-            let mut allowlist = Vec::new();
-            for item in table.iter()? {
-                let (domain, _) = item?;
-                allowlist.push(domain.value().to_string());
-            }
-            drop(table);
-            if !allowlist.is_empty() {
-                let bytes = encode(&allowlist)?;
-                write_txn
-                    .open_table(TABLE_CONFIG)?
-                    .insert(DNS_ALLOWLIST.name(), bytes.as_slice())?;
-            }
-            let _ = write_txn.delete_table(TABLE_DNS_ALLOWLIST);
-        }
-
-        // 3. DNS Upstreams
-        if let Ok(table) = write_txn.open_table(TABLE_DNS_UPSTREAMS) {
-            let mut upstreams = Vec::new();
-            for item in table.iter()? {
-                let (_, val) = item?;
-                if let Ok(entry) = decode::<DnsUpstreamEntry>(val.value()) {
-                    upstreams.push(entry);
-                }
-            }
-            drop(table);
-            if !upstreams.is_empty() {
-                let bytes = encode(&upstreams)?;
-                write_txn
-                    .open_table(TABLE_CONFIG)?
-                    .insert(DNS_UPSTREAMS.name(), bytes.as_slice())?;
-            }
-            let _ = write_txn.delete_table(TABLE_DNS_UPSTREAMS);
-        }
-
-        // 4. Adblock URLs
-        if let Ok(table) = write_txn.open_table(TABLE_ADBLOCK_URLS) {
-            let mut urls = Vec::new();
-            for item in table.iter()? {
-                let (id, val) = item?;
-                if let Ok((url, kind, _enabled, format)) = decode::<(
-                    String,
-                    AdblockUrlKind,
-                    bool,
-                    lanforge_types::network::dns::adblock::AdblockSourceFormat,
-                )>(val.value())
-                {
-                    urls.push(AdblockUrlEntry {
-                        id: Some(id.value()),
-                        name: None,
-                        url,
-                        kind,
-                        format,
-                    });
-                }
-            }
-            drop(table);
-            if !urls.is_empty() {
-                let bytes = encode(&urls)?;
-                write_txn
-                    .open_table(TABLE_CONFIG)?
-                    .insert(ADBLOCK_URLS.name(), bytes.as_slice())?;
-            }
-            let _ = write_txn.delete_table(TABLE_ADBLOCK_URLS);
-        }
-
-        // 5. Adblock Rules
-        if let Ok(table) = write_txn.open_table(TABLE_ADBLOCK_RULES) {
-            let mut rules = Vec::new();
-            for item in table.iter()? {
-                let (id, val) = item?;
-                if let Ok((domain, action, enabled)) =
-                    decode::<(String, AdblockRuleAction, bool)>(val.value())
-                {
-                    rules.push(AdblockRuleEntry {
-                        id: Some(id.value()),
-                        name: None,
-                        domain,
-                        action,
-                        enabled,
-                    });
-                }
-            }
-            drop(table);
-            if !rules.is_empty() {
-                let bytes = encode(&rules)?;
-                write_txn
-                    .open_table(TABLE_CONFIG)?
-                    .insert(ADBLOCK_RULES.name(), bytes.as_slice())?;
-            }
-            let _ = write_txn.delete_table(TABLE_ADBLOCK_RULES);
-        }
-
+        let _ = write_txn.delete_table(TABLE_DNS_REWRITES);
+        let _ = write_txn.delete_table(TABLE_DNS_ALLOWLIST);
+        let _ = write_txn.delete_table(TABLE_DNS_UPSTREAMS);
+        let _ = write_txn.delete_table(TABLE_ADBLOCK_URLS);
+        let _ = write_txn.delete_table(TABLE_ADBLOCK_RULES);
         write_txn.commit()?;
         Ok(())
     }
@@ -731,7 +549,6 @@ impl RedbDatabase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lanforge_db_core::AdblockStore;
     use lanforge_db_core::{DeviceStore, UserStore};
     use lanforge_types::device::Device;
     use lanforge_types::identifiers::MacAddr;
@@ -794,127 +611,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_redb_dhcp_ra_pppoe_stores() {
-        use lanforge_db_core::{DhcpConfigStore, PppoeConfigStore, RaConfigStore};
-        use lanforge_types::network::dhcp::Dhcpv4Pool;
-        use lanforge_types::network::pppoe::PppoeConfig;
-        use lanforge_types::network::ra::RAPrefix;
-
-        let db = RedbDatabase::open_temp().unwrap();
-
-        // DHCP
-        let pools = vec![Dhcpv4Pool {
-            range_start: "192.168.1.10".parse().unwrap(),
-            range_end: "192.168.1.200".parse().unwrap(),
-            subnet_mask: Some("255.255.255.0".parse().unwrap()),
-            lease_time: Some(86400),
-            router: Some("192.168.1.1".parse().unwrap()),
-            dns_servers: vec!["192.168.1.1".parse().unwrap()],
-            ntp_servers: Vec::new(),
-            domain_name: Some("lan".to_string()),
-            ..Default::default()
-        }];
-        db.save_dhcp_v4_pools(&pools).unwrap();
-        let loaded_pools = db.load_dhcp_v4_pools().unwrap();
-        assert_eq!(loaded_pools.len(), 1);
-        assert_eq!(
-            loaded_pools[0].range_start,
-            "192.168.1.10".parse::<std::net::Ipv4Addr>().unwrap()
-        );
-
-        // RA
-        let prefixes = vec![
-            RAPrefix::ula("fd97:f00d:cafe:3731::"),
-            RAPrefix::gua_dynamic(),
-        ];
-        db.save_ra_prefixes(&prefixes).unwrap();
-        let loaded_prefixes = db.load_ra_prefixes().unwrap();
-        assert_eq!(loaded_prefixes.len(), 2);
-
-        // PPPoE
-        let pppoe = PppoeConfig {
-            enabled: true,
-            username: "user@isp".to_string(),
-            password: "password123".to_string(),
-            wan_iface: "eth0.10".to_string(),
-            ..Default::default()
-        };
-        db.save_pppoe_config(&pppoe).unwrap();
-        let loaded_pppoe = db.load_pppoe_config().unwrap().unwrap();
-        assert_eq!(loaded_pppoe.username, "user@isp");
-        assert_eq!(loaded_pppoe.wan_iface, "eth0.10");
-    }
-
-    #[tokio::test]
-    async fn test_redb_firewall_store() {
-        use lanforge_db_core::FirewallConfigStore;
-        use lanforge_types::network::firewall::{
-            FirewallConfig, FirewallZone, HostPortRule, L4Protocol,
-        };
-
-        let db = RedbDatabase::open_temp().unwrap();
-
-        // 1. Initial should be None
-        assert!(db.load_firewall_config().unwrap().is_none());
-
-        // 2. Seed default config
-        let seed = FirewallConfig::default();
-        let seeded = db.seed_firewall_if_empty(&seed).unwrap();
-        assert!(seeded);
-
-        // 3. Second seed should be no-op (returns false)
-        let seeded_again = db.seed_firewall_if_empty(&seed).unwrap();
-        assert!(!seeded_again);
-
-        // 4. Load config and verify content
-        let mut loaded = db.load_firewall_config().unwrap().unwrap();
-        assert_eq!(loaded.table_name, "lanforge");
-        assert!(loaded.enabled);
-
-        // 5. Mutate, save, and reload
-        loaded.zones.push(FirewallZone {
-            name: "dmz".into(),
-            interfaces: vec!["eth2".into()],
-            open_ports: vec![HostPortRule {
-                port: 8443,
-                protocol: L4Protocol::Tcp,
-                comment: Some("DMZ Gateway".into()),
-            }],
-            allowed_subnets: Vec::new(),
-            input_policy: lanforge_types::network::firewall::FirewallPolicy::Drop,
-            forward_policy: lanforge_types::network::firewall::FirewallPolicy::Drop,
-            masquerade: false,
-            mtu_fix: false,
-        });
-        db.save_firewall_config(&loaded).unwrap();
-
-        let reloaded = db.load_firewall_config().unwrap().unwrap();
-        assert_eq!(reloaded.zones.len(), loaded.zones.len());
-        assert!(reloaded.zones.iter().any(|z| z.name == "dmz"));
-    }
-
-    #[tokio::test]
-    async fn test_redb_dns_and_tokens() {
-        use lanforge_db_core::{ApiTokenStore, DnsStore};
+    async fn test_redb_tokens() {
+        use lanforge_db_core::ApiTokenStore;
         use lanforge_types::auth::{ApiScope, ApiScopes};
-        use lanforge_types::network::dns::DnsRecordType;
-        use lanforge_types::network::dns::adblock::RewriteAnswer;
 
         let db = RedbDatabase::open_temp().unwrap();
-
-        // DNS Rewrites
-        let ans = RewriteAnswer::A("192.168.1.1".parse().unwrap());
-        db.upsert_dns_rewrite("router.lan", DnsRecordType::A, &ans)
-            .unwrap();
-        let rewrites = db.load_dns_rewrites().unwrap();
-        assert_eq!(rewrites.len(), 1);
-        assert_eq!(rewrites[0].domain, "router.lan");
-
-        // Allowlist
-        db.add_dns_allowlist("example.com").unwrap();
-        let allowlist = db.load_dns_allowlist().unwrap();
-        assert_eq!(allowlist.len(), 1);
-        assert_eq!(allowlist[0].1, "example.com");
 
         // API Token
         let mut scopes = ApiScopes::new();
@@ -1207,46 +908,56 @@ mod tests {
             db.schema_version().unwrap(),
             RedbDatabase::CURRENT_SCHEMA_VERSION
         );
-        assert!(!db.load_adblock_config().unwrap().enabled);
+        assert!(
+            db.db
+                .begin_read()
+                .unwrap()
+                .open_table(TABLE_CONFIG)
+                .is_err()
+        );
         assert!(!temp_dir.path().join("test_v2_v3.redb.v2.bak").exists());
     }
 
+    /// Config keys an older binary left are reported by name (boot warns about them); the
+    /// last GUA prefix is state, not one of them.
+    #[test]
+    fn legacy_config_keys_are_listed_except_the_prefix_state() {
+        use lanforge_db_core::{ConfigKey, PrefixStore};
+
+        let db = RedbDatabase::open_temp().unwrap();
+        assert!(db.legacy_config_keys().unwrap().is_empty());
+        db.save_last_gua_prefix(Some(lanforge_types::network::Ipv6Prefix::from_addr(
+            "2001:db8::".parse().unwrap(),
+        )))
+        .unwrap();
+        assert!(db.legacy_config_keys().unwrap().is_empty());
+        db.put(ConfigKey::<u32>::new("dhcp_options"), &1).unwrap();
+        assert_eq!(db.legacy_config_keys().unwrap(), vec!["dhcp_options"]);
+    }
+
     #[tokio::test]
-    async fn test_v3_to_v4_migration_migrates_list_tables_to_blobs() {
-        use lanforge_db_core::config_keys::*;
-        use lanforge_types::network::dns::DnsRecordType;
-        use lanforge_types::network::dns::adblock::{RewriteAnswer, RewriteRule};
+    async fn test_v3_to_v4_migration_drops_the_list_tables() {
+        use lanforge_db_core::ConfigStore;
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("test_v3_v4.redb");
 
-        // 1. Create a schema v3 database with legacy list tables
         {
             let db = RedbDatabase::open(&db_path).unwrap();
             let write_txn = db.begin_write().unwrap();
-            let rewrite = RewriteRule {
-                id: Some(1),
-                domain: "local.dev".to_string(),
-                rtype: DnsRecordType::A,
-                answer: RewriteAnswer::A("192.168.1.10".parse().unwrap()),
-            };
-            let bytes = encode(&rewrite).unwrap();
             write_txn
                 .open_table(TABLE_DNS_REWRITES)
                 .unwrap()
-                .insert(1i64, bytes.as_slice())
+                .insert(1i64, [0u8].as_slice())
                 .unwrap();
             write_txn.commit().unwrap();
-
+            db.set_meta("kept", &[1]).unwrap();
             db.set_schema_version(3).unwrap();
         }
 
-        // 2. Reopen: should automatically migrate v3 to v4
         let db = RedbDatabase::open(&db_path).unwrap();
         assert_eq!(db.schema_version().unwrap(), 4);
-
-        // 3. Verify rewrites are in TABLE_CONFIG under DNS_REWRITES
-        let rewrites = db.get(DNS_REWRITES).unwrap().unwrap();
-        assert_eq!(rewrites.len(), 1);
-        assert_eq!(rewrites[0].domain, "local.dev");
+        let read = db.db.begin_read().unwrap();
+        assert!(read.open_table(TABLE_DNS_REWRITES).is_err());
+        assert_eq!(db.get_meta("kept").unwrap(), Some(vec![1]));
     }
 }
