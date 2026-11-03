@@ -2,7 +2,6 @@ use lanforge_types::device::Ipv6AddrOrSuffix;
 use std::array::from_fn;
 use std::borrow::Cow;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::str::from_utf8;
 
 use lanforge_dns_wire::WireLabelIter;
 
@@ -101,42 +100,6 @@ pub fn combine_prefix_suffix(prefix_segs: &[u16], suffix: &Ipv6AddrOrSuffix) -> 
                 0,
             );
             Some(s.resolve(prefix))
-        }
-    }
-}
-
-pub fn extract_local_hostname_wire<'a>(
-    labels: &mut WireLabelIter<'a>,
-    multi_search_labels: &[Vec<Vec<u8>>],
-) -> Option<&'a str> {
-    let host_bytes = labels.next()?;
-
-    match labels.next() {
-        None => from_utf8(host_bytes).ok(),
-        Some(first_actual) => {
-            for search_labels in multi_search_labels {
-                let mut current_labels = labels.clone();
-                let mut matched = true;
-
-                if !first_actual.eq_ignore_ascii_case(&search_labels[0]) {
-                    continue;
-                }
-
-                for expected in &search_labels[1..] {
-                    match current_labels.next() {
-                        Some(actual) if actual.eq_ignore_ascii_case(expected) => {}
-                        _ => {
-                            matched = false;
-                            break;
-                        }
-                    }
-                }
-
-                if matched && current_labels.next().is_none() {
-                    return from_utf8(host_bytes).ok();
-                }
-            }
-            None
         }
     }
 }

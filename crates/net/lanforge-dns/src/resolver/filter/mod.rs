@@ -13,8 +13,6 @@ use lanforge_types::network::dns::adblock::{
     BlockingMode, FilterAction, FilterMatch, FilterOrigin,
 };
 
-use crate::error::DnsError;
-use crate::resolver::builder::ResponseBuilder;
 use crate::server::DnsContext;
 
 pub mod blocklist;
@@ -283,56 +281,6 @@ impl AdBlocker {
                 WireResponseWriter::write_error_response(data, question, 5, edns, ra, resp);
             }
         }
-    }
-
-    pub fn apply_adblock_fallback(
-        &self,
-        _ctx: &DnsContext,
-        rb: &ResponseBuilder,
-        qname: &str,
-        qtype: DnsRecordType,
-        _src_addr: IpAddr,
-        resp: &mut Vec<u8>,
-    ) -> Result<bool, DnsError> {
-        if !self.is_enabled() {
-            return Ok(false);
-        }
-        let mut domain = qname.to_string();
-        if domain.ends_with('.') {
-            domain.pop();
-        }
-        domain.make_ascii_lowercase();
-
-        if self.should_block(&domain) {
-            resp.clear();
-            let config = *self.config.read();
-            match config.mode {
-                BlockingMode::NxDomain => {
-                    resp.extend_from_slice(&rb.nxdomain()?);
-                }
-                BlockingMode::NullIp => {
-                    let ips = if qtype == DnsRecordType::AAAA {
-                        vec![IpAddr::V6(Ipv6Addr::UNSPECIFIED)]
-                    } else {
-                        vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)]
-                    };
-                    resp.extend_from_slice(&rb.success_ips(ips)?);
-                }
-                BlockingMode::CustomIp => {
-                    let ips = if qtype == DnsRecordType::AAAA {
-                        vec![IpAddr::V6(config.ipv6.unwrap_or(Ipv6Addr::UNSPECIFIED))]
-                    } else {
-                        vec![IpAddr::V4(config.ipv4.unwrap_or(Ipv4Addr::UNSPECIFIED))]
-                    };
-                    resp.extend_from_slice(&rb.success_ips(ips)?);
-                }
-                BlockingMode::Refused => {
-                    resp.extend_from_slice(&rb.refused()?);
-                }
-            }
-            return Ok(true);
-        }
-        Ok(false)
     }
 }
 

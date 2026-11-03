@@ -151,6 +151,8 @@ pub async fn process_query_test(
 pub struct DnsPacketBuilder {
     id: u16,
     recursion_desired: bool,
+    authentic_data: bool,
+    checking_disabled: bool,
     questions: Vec<DnsQuestion>,
 }
 
@@ -161,6 +163,8 @@ impl DnsPacketBuilder {
         Self {
             id: 0x1234,
             recursion_desired: true,
+            authentic_data: false,
+            checking_disabled: false,
             questions: vec![DnsQuestion {
                 name: Arc::from(name),
                 qtype,
@@ -203,6 +207,20 @@ impl DnsPacketBuilder {
         self
     }
 
+    /// Sets the AD bit (as `dig` does by default: "I understand AD in the reply").
+    #[must_use]
+    pub const fn with_ad(mut self, ad: bool) -> Self {
+        self.authentic_data = ad;
+        self
+    }
+
+    /// Sets the CD (Checking Disabled) bit.
+    #[must_use]
+    pub const fn with_cd(mut self, cd: bool) -> Self {
+        self.checking_disabled = cd;
+        self
+    }
+
     /// Appends an additional question to the query.
     #[must_use]
     pub fn add_question(mut self, name: &str, qtype: DnsRecordType) -> Self {
@@ -220,6 +238,8 @@ impl DnsPacketBuilder {
         let mut msg = DnsMessage::new();
         msg.header.id = self.id;
         msg.header.rd = self.recursion_desired;
+        msg.header.ad = self.authentic_data;
+        msg.header.cd = self.checking_disabled;
         msg.header.qdcount = self.questions.len() as u16;
         msg.questions = self.questions.clone();
         msg
