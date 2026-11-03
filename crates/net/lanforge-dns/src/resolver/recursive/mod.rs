@@ -468,7 +468,13 @@ impl UpstreamManager {
             .await
             .map_err(|_| DnsError::UpstreamTimeout)??;
 
-        let tls_stream = connector.connect(server_name, tcp_stream).await?;
+        // A peer that accepts TCP but never finishes the handshake must not hang the query.
+        let tls_stream = timeout(
+            Duration::from_secs(5),
+            connector.connect(server_name, tcp_stream),
+        )
+        .await
+        .map_err(|_| DnsError::UpstreamTimeout)??;
         Ok(tls_stream)
     }
 
@@ -504,32 +510,26 @@ impl UpstreamManager {
         Err(DnsError::Tls("DoT feature not enabled".to_string()))
     }
 
+    /// Forwards over the cached QUIC connection, reconnecting once when it is gone. The lock
+    /// only guards the handle: queries run concurrently, one stream each (RFC 9250 §4.2).
     #[cfg(feature = "doq")]
     async fn forward_doq(&self, data: &[u8], target: &UpstreamTarget) -> Result<Vec<u8>, DnsError> {
-        let mut guard = self.quic_conn.lock().await;
-
-        // 1. Try existing connection
-        if let Some(conn) = guard.as_ref() {
-            if conn.close_reason().is_none() {
-                match Self::doq_exchange(conn, data).await {
-                    Ok(resp) => return Ok(resp),
-                    Err(_) => {
-                        trace!("Cached DoQ connection dead, reconnecting...");
-                        *guard = None;
-                    }
-                }
-            } else {
-                *guard = None;
+        let cached = self
+            .quic_conn
+            .lock()
+            .await
+            .clone()
+            .filter(|conn| conn.close_reason().is_none());
+        if let Some(conn) = cached {
+            match Self::doq_exchange(&conn, data).await {
+                Ok(resp) => return Ok(resp),
+                Err(e) => trace!("Cached DoQ connection failed ({e}), reconnecting..."),
             }
         }
 
-        // 2. Reconnect
         let conn = self.doq_connect(target).await?;
-        let resp = Self::doq_exchange(&conn, data).await?;
-
-        // 3. Store for reuse
-        *guard = Some(conn);
-        Ok(resp)
+        *self.quic_conn.lock().await = Some(conn.clone());
+        Self::doq_exchange(&conn, data).await
     }
 
     #[cfg(feature = "doq")]
@@ -552,23 +552,40 @@ impl UpstreamManager {
         Ok(conn)
     }
 
+    /// One query on its own stream (RFC 9250 §4.2): 2-byte length prefix, Message ID 0, FIN;
+    /// the answer comes back framed the same way and gets the client's ID back.
     #[cfg(feature = "doq")]
-    async fn doq_exchange(conn: &quinn::Connection, data: &[u8]) -> Result<Vec<u8>, DnsError> {
-        let (mut send, mut recv) = conn
-            .open_bi()
-            .await
-            .map_err(|e| DnsError::Tls(e.to_string()))?;
+    pub(crate) async fn doq_exchange(
+        conn: &quinn::Connection,
+        data: &[u8],
+    ) -> Result<Vec<u8>, DnsError> {
+        let original_id = WireHeader::parse(data)
+            .ok_or(DnsError::WireParseError)?
+            .id();
+        let len = u16::try_from(data.len()).map_err(|_| DnsError::WireParseError)?;
+        let mut framed = Vec::with_capacity(2 + data.len());
+        framed.extend_from_slice(&len.to_be_bytes());
+        framed.extend_from_slice(data);
+        WireHeader::patch_id(&mut framed[2..], 0);
 
-        send.write_all(data)
-            .await
-            .map_err(|e| DnsError::Io(std::io::Error::other(e)))?;
-        send.finish()
-            .map_err(|e| DnsError::Io(std::io::Error::other(e)))?;
+        let framed_resp = timeout(Duration::from_secs(5), async {
+            let (mut send, mut recv) = conn.open_bi().await.map_err(std::io::Error::other)?;
+            send.write_all(&framed)
+                .await
+                .map_err(std::io::Error::other)?;
+            send.finish().map_err(std::io::Error::other)?;
+            recv.read_to_end(2 + usize::from(u16::MAX))
+                .await
+                .map_err(std::io::Error::other)
+        })
+        .await
+        .map_err(|_| DnsError::UpstreamTimeout)?
+        .map_err(DnsError::Io)?;
 
-        let resp = recv
-            .read_to_end(4096)
-            .await
-            .map_err(|e| DnsError::Io(std::io::Error::other(e)))?;
+        let mut resp = crate::server::transport::doq::unframe(&framed_resp)
+            .ok_or(DnsError::WireParseError)?
+            .to_vec();
+        WireHeader::patch_id(&mut resp, original_id);
         Ok(resp)
     }
 
@@ -605,5 +622,92 @@ impl Drop for UpstreamManager {
         if let Some(h) = self.probe_handle.lock().take() {
             h.abort();
         }
+    }
+}
+
+#[cfg(all(test, feature = "doq"))]
+mod doq_tests {
+    use super::UpstreamManager;
+    use lanforge_dns_wire::WireHeader;
+    use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
+    use std::net::{Ipv4Addr, SocketAddr};
+    use std::sync::Arc;
+
+    /// A query for `example.com A` with Message ID `id`.
+    fn query(id: u16) -> Vec<u8> {
+        let mut q = vec![0u8; 12];
+        q[..2].copy_from_slice(&id.to_be_bytes());
+        q[2] = 0x01; // RD
+        q[5] = 1; // QDCOUNT
+        q.extend_from_slice(b"\x07example\x03com\x00\x00\x01\x00\x01");
+        q
+    }
+
+    /// An RFC 9250 upstream: accepts only a framed query with Message ID 0 and answers it framed
+    /// (QR set); anything else resets the stream.
+    async fn strict_upstream() -> (quinn::Endpoint, SocketAddr, rustls::RootCertStore) {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let certified =
+            rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert");
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(certified.cert.der().clone()).expect("root");
+        let mut tls = lanforge_crypto::tls::load_tls_config(
+            &certified.cert.pem(),
+            &certified.signing_key.serialize_pem(),
+        )
+        .expect("server tls");
+        tls.alpn_protocols = vec![b"doq".to_vec()];
+        let server = quinn::ServerConfig::with_crypto(Arc::new(
+            QuicServerConfig::try_from(tls).expect("quic server"),
+        ));
+        let endpoint =
+            quinn::Endpoint::server(server, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+                .expect("bind");
+        let addr = endpoint.local_addr().expect("addr");
+        let accept = endpoint.clone();
+        tokio::spawn(async move {
+            let conn = accept.accept().await.expect("incoming").await.expect("conn");
+            while let Ok((mut send, mut recv)) = conn.accept_bi().await {
+                let framed = recv.read_to_end(65_537).await.expect("read");
+                let well_formed = framed.len() > 2
+                    && usize::from(u16::from_be_bytes([framed[0], framed[1]])) == framed.len() - 2
+                    && WireHeader::parse(&framed[2..]).is_some_and(|h| h.id() == 0);
+                if !well_formed {
+                    let _ = send.reset(quinn::VarInt::from_u32(0x2));
+                    continue;
+                }
+                let mut answer = framed;
+                answer[4] |= 0x80; // QR
+                send.write_all(&answer).await.expect("write");
+                let _ = send.finish();
+            }
+        });
+        (endpoint, addr, roots)
+    }
+
+    #[tokio::test]
+    async fn doq_exchange_frames_queries_per_rfc_9250() {
+        let (_server, addr, roots) = strict_upstream().await;
+        let mut tls = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        tls.alpn_protocols = vec![b"doq".to_vec()];
+        let mut client =
+            quinn::Endpoint::client(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).expect("client");
+        client.set_default_client_config(quinn::ClientConfig::new(Arc::new(
+            QuicClientConfig::try_from(tls).expect("quic client"),
+        )));
+        let conn = client
+            .connect(addr, "localhost")
+            .expect("connect")
+            .await
+            .expect("handshake");
+
+        let resp = UpstreamManager::doq_exchange(&conn, &query(0xBEEF))
+            .await
+            .expect("a strict RFC 9250 upstream answers");
+        let header = WireHeader::parse(&resp).expect("answer");
+        assert!(!header.is_query(), "the upstream's answer, unframed");
+        assert_eq!(header.id(), 0xBEEF, "the client's Message ID is restored");
     }
 }

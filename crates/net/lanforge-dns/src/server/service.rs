@@ -331,7 +331,7 @@ impl AsyncService for DnsService {
             if let (Some(cert), Some(key)) = (&self.cfg.tls_cert, &self.cfg.tls_key) {
                 let cert = cert.clone();
                 let key = key.clone();
-                let ctx_dot = ctx.clone();
+                let ctx_dot = Arc::clone(&dns_ctx);
                 Some(tokio::spawn(async move {
                     if let Err(e) =
                         crate::server::transport::dot::run_dot_worker(addr, &cert, &key, ctx_dot)
@@ -351,15 +351,22 @@ impl AsyncService for DnsService {
         };
 
         #[cfg(feature = "doq")]
+        let (doq_stop, doq_stop_rx) = tokio::sync::oneshot::channel();
+        #[cfg(feature = "doq")]
         let doq_worker = if let Some(addr) = self.cfg.doq_listen {
             if let (Some(cert), Some(key)) = (&self.cfg.tls_cert, &self.cfg.tls_key) {
                 let cert = cert.clone();
                 let key = key.clone();
-                let ctx_doq = ctx.clone();
+                let ctx_doq = Arc::clone(&dns_ctx);
                 Some(tokio::spawn(async move {
-                    if let Err(e) =
-                        crate::server::transport::doq::run_doq_worker(addr, &cert, &key, ctx_doq)
-                            .await
+                    if let Err(e) = crate::server::transport::doq::run_doq_worker(
+                        addr,
+                        &cert,
+                        &key,
+                        ctx_doq,
+                        doq_stop_rx,
+                    )
+                    .await
                     {
                         tracing::error!("DoQ worker error: {e}");
                     }
@@ -556,14 +563,22 @@ impl AsyncService for DnsService {
         tasks.push(cache_worker);
         #[cfg(feature = "dot")]
         tasks.extend(dot_worker);
-        #[cfg(feature = "doq")]
-        tasks.extend(doq_worker);
         #[cfg(feature = "adblock")]
         tasks.extend(adblock_worker);
         for task in &tasks {
             task.abort();
         }
         join_all(tasks).await;
+        // DoQ stops cooperatively: its endpoint must close and drain to release the UDP port.
+        #[cfg(feature = "doq")]
+        if let Some(mut task) = doq_worker {
+            let _ = doq_stop.send(());
+            let drain = crate::server::transport::doq::DRAIN_TIMEOUT + Duration::from_millis(500);
+            if tokio::time::timeout(drain, &mut task).await.is_err() {
+                task.abort();
+                let _ = task.await;
+            }
+        }
         let _ = mpsc_stop_tx.send(());
         if let Ok(rx) = mpsc_worker.await {
             ctx.return_dns_requests(rx);
