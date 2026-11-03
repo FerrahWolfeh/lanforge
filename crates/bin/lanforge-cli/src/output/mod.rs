@@ -1,7 +1,7 @@
 use chrono::Utc;
 use color_eyre::Result;
 use colored::Colorize;
-use comfy_table::{Table, presets};
+use comfy_table::{ContentArrangement, Table, presets};
 use serde::Serialize;
 
 #[derive(Debug, Clone)]
@@ -46,6 +46,8 @@ impl Printer {
         } else {
             table.load_preset(presets::UTF8_FULL_CONDENSED);
         }
+        // Fit the terminal: long cells wrap inside their column instead of the whole line.
+        table.set_content_arrangement(ContentArrangement::Dynamic);
         table
     }
 
@@ -261,4 +263,47 @@ pub fn format_time_ago(timestamp_secs: i64) -> String {
         return format!("{}h ago", diff / 3600);
     }
     format!("{}d ago", diff / 86400)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Printer;
+    use colored::Colorize;
+
+    /// Display width of a line: ANSI escapes take no column, every other char one.
+    fn visible_width(line: &str) -> usize {
+        let mut width = 0;
+        let mut chars = line.chars();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' {
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                width += 1;
+            }
+        }
+        width
+    }
+
+    /// Coloured cells must not widen their column: the escape codes are not text.
+    #[test]
+    fn coloured_cells_keep_the_table_aligned() {
+        colored::control::set_override(true);
+        let mut table = Printer::new(false, false, false).new_table();
+        table.set_header(vec!["Outcome", "Latency"]);
+        table.add_row(vec![
+            "Coalesced".cyan().bold().to_string(),
+            "5.8ms".dimmed().to_string(),
+        ]);
+        table.add_row(vec![
+            "Forwarded".to_string(),
+            "158.4ms".yellow().to_string(),
+        ]);
+        let text = table.to_string();
+        let widths: Vec<usize> = text.lines().map(visible_width).collect();
+        assert!(widths.iter().all(|w| *w == widths[0]), "{widths:?}\n{text}");
+    }
 }
