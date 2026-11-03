@@ -685,66 +685,6 @@ impl TransportStats for RaService {
 }
 
 impl AsyncService for RaService {
-    fn transport_snapshot(&self, _ctx: &LanforgeContext) -> Option<TransportSnapshot> {
-        self.transport.as_ref().map(TransportStats::snapshot)
-    }
-
-    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let ra_status = ctx.ra_status();
-        let if_state = ctx.get_interface_state(ctx.target_ifindex().unwrap_or(0));
-        let prefixes = ctx.get_ra_prefixes();
-        let mut list = vec![
-            (std::borrow::Cow::Borrowed("iface"), self.cfg.iface.clone()),
-            (
-                std::borrow::Cow::Borrowed("max_interval_secs"),
-                self.cfg.max_interval.as_secs().to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("managed"),
-                self.cfg.managed.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("other_config"),
-                self.cfg.other_config.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("prefixes_count"),
-                prefixes.len().to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("gua_prefix"),
-                if_state
-                    .gua
-                    .map_or_else(|| "none".to_string(), |g| g.to_string()),
-            ),
-            (
-                std::borrow::Cow::Borrowed("ula_prefix"),
-                if_state
-                    .ula
-                    .map_or_else(|| "none".to_string(), |u| u.to_string()),
-            ),
-        ];
-        if let Some(ref st) = ra_status {
-            list.push((
-                std::borrow::Cow::Borrowed("sent_multicast"),
-                st.sent_multicast_ras.to_string(),
-            ));
-            list.push((
-                std::borrow::Cow::Borrowed("sent_unicast"),
-                st.sent_unicast_ras.to_string(),
-            ));
-            list.push((
-                std::borrow::Cow::Borrowed("received_rs"),
-                st.received_solicitations.to_string(),
-            ));
-            list.push((
-                std::borrow::Cow::Borrowed("ignored_rs"),
-                st.ignored_solicitations.to_string(),
-            ));
-        }
-        list
-    }
-
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         loop {
             let ra_server_cfg = ctx.get_ra_server_config();

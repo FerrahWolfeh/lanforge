@@ -455,46 +455,6 @@ impl DbWorker {
 }
 
 impl AsyncService for DbWorker {
-    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let metrics = ctx.db_metrics();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let last_flush_ts = metrics.last_flush_ts.load(Ordering::Relaxed);
-        let last_flush_ago = if last_flush_ts > 0 && now >= last_flush_ts {
-            format!("{}s ago", now - last_flush_ts)
-        } else {
-            "—".to_string()
-        };
-        let error_str = if metrics.last_error.load(Ordering::Relaxed) {
-            "error".to_string()
-        } else {
-            "ok".to_string()
-        };
-
-        vec![
-            (
-                std::borrow::Cow::Borrowed("flush_count"),
-                metrics.flush_count.load(Ordering::Relaxed).to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("devices_written"),
-                metrics.devices_written.load(Ordering::Relaxed).to_string(),
-            ),
-            (std::borrow::Cow::Borrowed("last_flush"), last_flush_ago),
-            (
-                std::borrow::Cow::Borrowed("log_buffer"),
-                self.log_buffer.len().to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("dns_log_buffer"),
-                self.dns_log_buffer.len().to_string(),
-            ),
-            (std::borrow::Cow::Borrowed("status"), error_str),
-        ]
-    }
-
     async fn init(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         let mode = if ctx.is_recovery_mode() {
             "RECOVERY MODE (in-memory)"

@@ -307,7 +307,6 @@ const fn event_topic_and_kind(event: &LanforgeEvent) -> (&'static str, &'static 
                 SystemEvent::SystemReady => "SystemReady",
                 SystemEvent::ReloadConfig => "ReloadConfig",
                 SystemEvent::ConfigUpdate { .. } => "ConfigUpdate",
-                SystemEvent::ServiceStatusBanner(..) => "ServiceStatusBanner",
                 SystemEvent::ServiceControl { .. } => "ServiceControl",
                 SystemEvent::ConfigDhcpV4Changed => "ConfigDhcpV4Changed",
                 SystemEvent::ConfigDhcpV6Changed => "ConfigDhcpV6Changed",

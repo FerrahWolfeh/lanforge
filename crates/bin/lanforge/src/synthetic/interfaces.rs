@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -96,13 +95,6 @@ impl LanforgeService for InterfacesService {
 }
 
 impl AsyncService for InterfacesService {
-    fn stats(&self, ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
-        vec![(
-            Cow::Borrowed("links_count"),
-            ctx.interfaces_snapshot().links.len().to_string(),
-        )]
-    }
-
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         let mut generation = 1u64;
         let mut snapshot = Self::scan_interfaces(generation);

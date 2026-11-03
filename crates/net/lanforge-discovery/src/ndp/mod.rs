@@ -287,56 +287,6 @@ impl LanforgeService for DiscoveryService {
 }
 
 impl AsyncService for DiscoveryService {
-    fn transport_snapshot(
-        &self,
-        _ctx: &LanforgeContext,
-    ) -> Option<lanforge_types::network::snapshot::TransportSnapshot> {
-        Some(self.snapshot())
-    }
-
-    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let (total_devices, active_devices) = ctx.with_state(|state| {
-            let total = state.devices.len();
-            let active = state
-                .devices
-                .values()
-                .filter(|d| d.status == lanforge_types::device::DeviceStatus::Online)
-                .count();
-            (total, active)
-        });
-        let snap = self.snapshot();
-        vec![
-            (
-                std::borrow::Cow::Borrowed("target_ifindexes"),
-                format!("{:?}", self.target_ifindexes),
-            ),
-            (
-                std::borrow::Cow::Borrowed("ping_enabled"),
-                self.cfg.ping_enabled.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("ping_interval_secs"),
-                self.cfg.ping_interval_secs.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("total_devices"),
-                total_devices.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("active_devices"),
-                active_devices.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("rx_packets"),
-                snap.rx_packets.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("tx_packets"),
-                snap.tx_packets.to_string(),
-            ),
-        ]
-    }
-
     async fn init(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         if !self.cfg.enabled {
             return Ok(());

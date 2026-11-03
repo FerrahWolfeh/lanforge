@@ -107,8 +107,12 @@ fn render_services_table(resp: &ServiceBannersResponse, printer: &Printer) {
                 format_bytes(t.tx_bytes)
             ));
         }
-        for (k, v) in banner.stats.iter().take(2) {
-            parts.push(format!("{k}: {v}"));
+        if let Some(line) = banner
+            .summary
+            .clone()
+            .or_else(|| banner.detail.as_ref().map(ToString::to_string))
+        {
+            parts.push(line);
         }
         let metrics_summary = if parts.is_empty() {
             "-".to_string()
@@ -190,13 +194,15 @@ async fn show_service(client: &LanforgeClient, printer: &Printer, id: &str) -> R
         );
     }
 
-    if banner.stats.is_empty() {
-        println!("    No metrics reported for this service.");
-    } else {
-        println!("\n  {}", "Metrics & State:".bold().cyan());
-        for (k, v) in &banner.stats {
-            println!("    {:<24} {}", format!("{k}:").dimmed(), v.white());
-        }
+    if let Some(summary) = &banner.summary {
+        println!("    {:<18} {}", "Now:".dimmed(), summary.white());
+    }
+    if let Some(detail) = &banner.detail {
+        println!(
+            "    {:<18} {}",
+            "Detail:".dimmed(),
+            detail.to_string().white()
+        );
     }
 
     if let Some(ref t) = banner.transport

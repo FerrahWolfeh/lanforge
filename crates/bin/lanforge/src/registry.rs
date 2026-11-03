@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use crate::supervisor::{GraphSupervisor, SpawnableRunner, TypedRunner, graph::GraphError};
 use lanforge_core::{
@@ -36,12 +35,11 @@ impl ServiceRegistry {
         S: AsyncService + LanforgeService + 'static,
         F: Fn() -> S + Send + Sync + 'static,
     {
-        let sample = factory();
-        let spec = sample.spec();
+        let spec = factory().spec();
         let id = spec.id;
         self.ids.insert(id);
 
-        ctx.register_status_provider(Arc::new(sample));
+        ctx.register_service(id, spec.display_name);
 
         self.specs.push(spec.clone());
         self.runners.insert(

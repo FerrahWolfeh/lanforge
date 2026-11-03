@@ -70,6 +70,12 @@ impl TftpService {
             transports: Arc::new(RwLock::new(transports)),
         }
     }
+
+    /// The address the serving instance bound (shared by its clones), once bound.
+    #[must_use]
+    pub fn bound_addr(&self) -> Option<String> {
+        self.bound_addr.read().clone()
+    }
 }
 
 impl TransportStats for TftpService {
@@ -130,41 +136,6 @@ impl LanforgeService for TftpService {
 }
 
 impl AsyncService for TftpService {
-    fn transport_snapshot(
-        &self,
-        _ctx: &LanforgeContext,
-    ) -> Option<lanforge_types::network::snapshot::TransportSnapshot> {
-        Some(self.snapshot())
-    }
-
-    fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let listen = self
-            .bound_addr
-            .read()
-            .clone()
-            .unwrap_or_else(|| self.cfg.listen.to_string());
-        let snap = self.snapshot();
-        vec![
-            (std::borrow::Cow::Borrowed("listen"), listen),
-            (
-                std::borrow::Cow::Borrowed("root_dir"),
-                self.cfg.root_dir.to_string_lossy().to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("block_size"),
-                self.cfg.block_size.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("rx_packets"),
-                snap.rx_packets.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("tx_packets"),
-                snap.tx_packets.to_string(),
-            ),
-        ]
-    }
-
     #[allow(clippy::too_many_lines)]
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         let mut tftp_sub = ctx.config_subscription::<TftpOptions>();

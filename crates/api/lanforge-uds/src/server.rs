@@ -97,25 +97,6 @@ impl ControlService {
 }
 
 impl AsyncService for ControlService {
-    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let mut stats = vec![
-            (
-                std::borrow::Cow::Borrowed("socket_path"),
-                self.cfg.socket_path.clone(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("active_clients"),
-                ctx.active_clients()
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                    .to_string(),
-            ),
-        ];
-        if let Some(p) = self.cfg.tcp_port {
-            stats.push((std::borrow::Cow::Borrowed("tcp_port"), p.to_string()));
-        }
-        stats
-    }
-
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
         if !cfg.enabled {

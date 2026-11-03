@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -312,24 +311,6 @@ impl LanforgeService for HttpService {
 }
 
 impl AsyncService for HttpService {
-    fn stats(&self, _ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
-        vec![
-            (Cow::Borrowed("listen"), self.cfg.listen.to_string()),
-            (
-                Cow::Borrowed("https_enabled"),
-                self.cfg.https_enabled.to_string(),
-            ),
-            (
-                Cow::Borrowed("doh_enabled"),
-                self.cfg.doh_enabled.to_string(),
-            ),
-            (
-                Cow::Borrowed("auth_enabled"),
-                self.cfg.auth_password_hash.is_some().to_string(),
-            ),
-        ]
-    }
-
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
         if !cfg.enabled {

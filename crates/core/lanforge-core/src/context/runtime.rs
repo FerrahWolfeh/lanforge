@@ -1,11 +1,8 @@
 use crate::bus::{EventBus, LanforgeEvent, SystemEvent};
 use crate::context::caps::CompiledCaps;
 use crate::context::state::network::DhcpPoolStats;
-use crate::context::{
-    DbWorkerMetrics, DnsHandle, DnsRequestRx, EventCounters, LanforgeContext, StorageHandle,
-};
+use crate::context::{DbWorkerMetrics, DnsHandle, DnsRequestRx, EventCounters, StorageHandle};
 use crate::error::CoreError;
-use crate::service::StatusProvider;
 use arc_swap::ArcSwapOption;
 use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
 use lanforge_types::network::firewall::{DynamicPortRequest, FirewallTransactionState};
@@ -28,12 +25,30 @@ use tokio::sync::watch;
 use lanforge_types::network::snapshot::{InterfaceSnapshot, WanSnapshot};
 use lanforge_types::system::StateDetail;
 
-/// Registered service runtime slot tracking state and status provider.
+/// Registered service runtime slot tracking its lifecycle.
 pub struct ServiceSlot {
     pub state_tx: watch::Sender<ServiceState>,
     pub detail: Option<StateDetail>,
     pub started_at: Option<Instant>,
-    pub provider: Option<Arc<dyn StatusProvider>>,
+    /// Display name, set when the service is registered: only named slots get a banner.
+    pub name: Option<&'static str>,
+}
+
+impl ServiceSlot {
+    fn new() -> Self {
+        let (state_tx, _) = watch::channel(ServiceState::Offline);
+        Self {
+            state_tx,
+            detail: None,
+            started_at: None,
+            name: None,
+        }
+    }
+
+    /// Seconds since the service started serving, 0 while it is not.
+    fn uptime_secs(&self) -> u64 {
+        self.started_at.map_or(0, |s| s.elapsed().as_secs())
+    }
 }
 
 /// Central service execution coordinator and status container.
@@ -199,15 +214,7 @@ impl ServiceRuntime {
         }
         let (is_online, rx) = {
             let mut services = self.services.write();
-            let slot = services.entry(id).or_insert_with(|| {
-                let (tx, _) = watch::channel(ServiceState::Offline);
-                ServiceSlot {
-                    state_tx: tx,
-                    detail: None,
-                    started_at: None,
-                    provider: None,
-                }
-            });
+            let slot = services.entry(id).or_insert_with(ServiceSlot::new);
             let online = *slot.state_tx.borrow() == ServiceState::Online;
             let rx = slot.state_tx.subscribe();
             drop(services);
@@ -249,36 +256,25 @@ impl ServiceRuntime {
         }
     }
 
+    /// Sets a service's state; entering a serving state starts its uptime, leaving one ends it.
+    /// (Nothing called the old `set_service_start`, so every uptime read 0.)
     pub fn set_service_state(&self, id: ServiceId, state: ServiceState) {
-        self.services
-            .write()
-            .entry(id)
-            .or_insert_with(|| {
-                let (tx, _) = watch::channel(ServiceState::Offline);
-                ServiceSlot {
-                    state_tx: tx,
-                    detail: None,
-                    started_at: None,
-                    provider: None,
-                }
-            })
-            .state_tx
-            .send_replace(state);
+        let mut services = self.services.write();
+        let slot = services.entry(id).or_insert_with(ServiceSlot::new);
+        let was_serving = slot.state_tx.send_replace(state).is_serving();
+        match (was_serving, state.is_serving()) {
+            (false, true) => slot.started_at = Some(Instant::now()),
+            (true, false) => slot.started_at = None,
+            _ => {}
+        }
+        drop(services);
     }
 
     pub fn set_service_detail(&self, id: ServiceId, detail: Option<StateDetail>) {
         self.services
             .write()
             .entry(id)
-            .or_insert_with(|| {
-                let (tx, _) = watch::channel(ServiceState::Offline);
-                ServiceSlot {
-                    state_tx: tx,
-                    detail: None,
-                    started_at: None,
-                    provider: None,
-                }
-            })
+            .or_insert_with(ServiceSlot::new)
             .detail = detail;
     }
 
@@ -298,79 +294,40 @@ impl ServiceRuntime {
             .map_or(ServiceState::Offline, |slot| *slot.state_tx.borrow())
     }
 
-    pub fn set_service_start(&self, id: ServiceId, start: Instant) {
+    #[must_use]
+    pub fn get_service_uptime(&self, id: ServiceId) -> u64 {
+        self.services
+            .read()
+            .get(&id)
+            .map_or(0, ServiceSlot::uptime_secs)
+    }
+
+    /// Names a registered service, so it appears in the banners.
+    pub fn register_service(&self, id: ServiceId, name: &'static str) {
         self.services
             .write()
             .entry(id)
-            .or_insert_with(|| {
-                let (tx, _) = watch::channel(ServiceState::Offline);
-                ServiceSlot {
-                    state_tx: tx,
-                    detail: None,
-                    started_at: None,
-                    provider: None,
-                }
-            })
-            .started_at = Some(start);
+            .or_insert_with(ServiceSlot::new)
+            .name = Some(name);
     }
 
-    pub fn clear_service_start(&self, id: ServiceId) {
-        if let Some(slot) = self.services.write().get_mut(&id) {
-            slot.started_at = None;
-        }
-    }
-
+    /// The lifecycle banner of every registered service (no summary: the API adds it).
     #[must_use]
-    pub fn get_service_uptime(&self, id: ServiceId) -> u64 {
-        let services = self.services.read();
-        services
-            .get(&id)
-            .and_then(|slot| {
-                if *slot.state_tx.borrow() == ServiceState::Online {
-                    slot.started_at.map(|s| s.elapsed().as_secs())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(0)
-    }
-
-    pub fn register_status_provider(
-        &self,
-        ctx: &LanforgeContext,
-        provider: Arc<dyn StatusProvider>,
-    ) {
-        let banner = provider.banner(ctx);
+    pub fn service_banners(&self) -> Vec<ServiceBanner> {
         self.services
-            .write()
-            .entry(banner.id)
-            .or_insert_with(|| {
-                let (tx, _) = watch::channel(ServiceState::Offline);
-                ServiceSlot {
-                    state_tx: tx,
-                    detail: None,
-                    started_at: None,
-                    provider: None,
-                }
+            .read()
+            .iter()
+            .filter_map(|(&id, slot)| {
+                slot.name.map(|name| ServiceBanner {
+                    id,
+                    name: name.to_string(),
+                    state: *slot.state_tx.borrow(),
+                    uptime_secs: slot.uptime_secs(),
+                    summary: None,
+                    detail: slot.detail.clone(),
+                    transport: None,
+                })
             })
-            .provider = Some(provider);
-    }
-
-    #[must_use]
-    pub fn service_banners(&self, ctx: &LanforgeContext) -> Vec<ServiceBanner> {
-        let services = self.services.read();
-        services
-            .values()
-            .filter_map(|slot| slot.provider.as_ref().map(|p| p.banner(ctx)))
-            .collect()
-    }
-
-    #[must_use]
-    pub fn status_providers(&self) -> Vec<Arc<dyn StatusProvider>> {
-        let services = self.services.read();
-        services
-            .values()
-            .filter_map(|slot| slot.provider.clone())
             .collect()
     }
 

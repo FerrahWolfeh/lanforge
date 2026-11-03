@@ -1,3 +1,4 @@
+pub mod banners;
 pub mod config;
 pub mod control;
 pub mod reload;

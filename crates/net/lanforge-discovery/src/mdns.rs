@@ -100,35 +100,6 @@ impl TransportStats for MdnsProber {
 }
 
 impl AsyncService for MdnsProber {
-    fn transport_snapshot(
-        &self,
-        _ctx: &LanforgeContext,
-    ) -> Option<lanforge_types::network::snapshot::TransportSnapshot> {
-        Some(self.snapshot())
-    }
-
-    fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let snap = self.snapshot();
-        vec![
-            (
-                std::borrow::Cow::Borrowed("enabled"),
-                self.cfg.enabled.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("probe_interval_secs"),
-                self.cfg.probe_interval.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("rx_packets"),
-                snap.rx_packets.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("tx_packets"),
-                snap.tx_packets.to_string(),
-            ),
-        ]
-    }
-
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         if !self.cfg.enabled {
             info!("mDNS prober is disabled in configuration.");

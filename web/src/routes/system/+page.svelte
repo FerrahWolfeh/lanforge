@@ -148,11 +148,6 @@
 		return "destructive";
 	}
 
-	function formatMetricKey(key: string): string {
-		return key
-			.replace(/_/g, " ")
-			.replace(/\b\w/g, (c) => c.toUpperCase());
-	}
 </script>
 
 <svelte:head>
@@ -556,15 +551,8 @@
 								</div>
 							</div>
 
-							{#if Object.keys(svc.stats).length > 0}
-								<div class="flex flex-wrap gap-1.5 pt-1">
-									{#each Object.entries(svc.stats) as [k, v] (k)}
-										<div class="bg-muted/40 border-border flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs">
-											<span class="text-muted-foreground text-[11px]">{formatMetricKey(k)}:</span>
-											<span class="font-mono text-[11px] font-medium text-foreground">{v}</span>
-										</div>
-									{/each}
-								</div>
+							{#if svc.summary}
+								<p class="font-mono text-[11px] text-foreground pt-1">{svc.summary}</p>
 							{/if}
 						</div>
 					{/each}

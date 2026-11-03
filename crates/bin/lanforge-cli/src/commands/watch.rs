@@ -618,15 +618,6 @@ fn render_system_event(time_str: &str, evt: &SystemEvent, printer: &Printer) {
                 printer,
             );
         }
-        SystemEvent::ServiceStatusBanner(banner) => {
-            print_log(
-                time_str,
-                "SERVICE",
-                printer.service_badge(banner.state.as_str()),
-                format!("{} ({})", banner.name, banner.id),
-                printer,
-            );
-        }
         SystemEvent::ServiceControl { id, action } => {
             print_log(
                 time_str,

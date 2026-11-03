@@ -134,7 +134,8 @@ export interface ServiceBanner {
 	name: string;
 	state: ServiceState;
 	uptime_secs: number;
-	stats: Record<string, string>;
+	/** One line of live data from the daemon; absent when the service has nothing live to say. */
+	summary?: string | null;
 	detail?: any;
 	transport?: TransportSnapshot;
 }
@@ -170,26 +171,6 @@ export function normalizeServices(status?: StatusResponse | null): ServiceBanner
 			...b,
 			id: b.id || b.name.toLowerCase().replace(/\s+/g, '_')
 		}));
-	}
-	if (status.services && typeof status.services === 'object') {
-		return Object.entries(status.services).map(([name, item]) => {
-			const svc = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
-			const state = String(svc.state ?? 'active');
-			const uptime_secs = typeof svc.uptime_secs === 'number' ? svc.uptime_secs : 0;
-			const stats: Record<string, string> = {};
-			for (const [k, v] of Object.entries(svc)) {
-				if (k !== 'state' && k !== 'uptime_secs' && v !== null && v !== undefined) {
-					stats[k] = typeof v === 'object' ? JSON.stringify(v) : String(v);
-				}
-			}
-			return {
-				id: typeof svc.id === 'string' && svc.id ? svc.id : name.toLowerCase().replace(/\s+/g, '_'),
-				name,
-				state,
-				uptime_secs,
-				stats
-			};
-		});
 	}
 	return [];
 }

@@ -296,3 +296,29 @@ async fn test_firewall_transaction_lifecycle() {
     assert!(cleared.is_some());
     assert!(ctx.get_staged_firewall_transaction().is_none());
 }
+
+/// A service's uptime runs while it serves (Online, Active, Degraded) and stops when it
+/// leaves; going Online → Degraded keeps counting. Nothing ever set the start before, so
+/// every banner showed uptime 0.
+#[test]
+fn service_uptime_follows_the_serving_states() {
+    use lanforge_types::system::ServiceId;
+
+    let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Starting);
+    assert_eq!(ctx.get_service_uptime(ServiceId::Dns), 0);
+
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Online);
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    assert_eq!(ctx.get_service_uptime(ServiceId::Dns), 1);
+
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Degraded);
+    assert_eq!(
+        ctx.get_service_uptime(ServiceId::Dns),
+        1,
+        "degraded still serves"
+    );
+
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Inactive);
+    assert_eq!(ctx.get_service_uptime(ServiceId::Dns), 0);
+}

@@ -25,7 +25,6 @@ use lanforge_types::system::{
     DegradedReason, DormantReason, PppoeSessionState, PppoeStatusResponse, ServiceId, ServiceState,
     StateDetail,
 };
-use std::borrow::Cow;
 use std::io::Read;
 use std::net::Ipv4Addr;
 use std::path::Path;
@@ -1120,64 +1119,6 @@ impl LanforgeService for PppoeService {
 }
 
 impl AsyncService for PppoeService {
-    fn transport_snapshot(
-        &self,
-        _ctx: &LanforgeContext,
-    ) -> Option<lanforge_types::network::snapshot::TransportSnapshot> {
-        Some(self.snapshot())
-    }
-
-    fn stats(&self, ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
-        let (state_str, local_ip, ppp_iface, term_str) = ctx.pppoe_status().map_or_else(
-            || {
-                (
-                    "disconnected".to_string(),
-                    "none".to_string(),
-                    "none".to_string(),
-                    "none".to_string(),
-                )
-            },
-            |p| {
-                (
-                    format!("{:?}", p.state),
-                    p.local_ip
-                        .map_or_else(|| "none".to_string(), |ip| ip.to_string()),
-                    p.interface.clone().unwrap_or_else(|| "none".to_string()),
-                    p.terminal_reachable.map_or_else(
-                        || "unprobed".to_string(),
-                        |r| {
-                            if r {
-                                "reachable".to_string()
-                            } else {
-                                "unreachable".to_string()
-                            }
-                        },
-                    ),
-                )
-            },
-        );
-        let snap = self.snapshot();
-        vec![
-            (Cow::Borrowed("wan_iface"), self.cfg.wan_iface.clone()),
-            (Cow::Borrowed("username"), self.cfg.username.clone()),
-            (Cow::Borrowed("state"), state_str),
-            (Cow::Borrowed("local_ip"), local_ip),
-            (Cow::Borrowed("ppp_interface"), ppp_iface),
-            (Cow::Borrowed("terminal"), term_str),
-            (
-                Cow::Borrowed("uptime_secs"),
-                self.connected_at
-                    .map_or_else(|| "0".to_string(), |t| t.elapsed().as_secs().to_string()),
-            ),
-            (
-                Cow::Borrowed("reconnect_attempts"),
-                self.backoff.failures().to_string(),
-            ),
-            (Cow::Borrowed("rx_packets"), snap.rx_packets.to_string()),
-            (Cow::Borrowed("tx_packets"), snap.tx_packets.to_string()),
-        ]
-    }
-
     #[allow(clippy::too_many_lines)]
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         self.handle = Some(h.clone());

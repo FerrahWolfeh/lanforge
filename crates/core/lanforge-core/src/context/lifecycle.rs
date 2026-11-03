@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
 
 use lanforge_types::network::snapshot::{InterfaceSnapshot, WanSnapshot};
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
@@ -16,7 +15,6 @@ use smallvec::SmallVec;
 use crate::context::state::network::DhcpPoolStats;
 use crate::context::{DnsHandle, DnsRequestRx, LanforgeContext, StorageHandle};
 use crate::error::CoreError;
-use crate::service::StatusProvider;
 
 impl LanforgeContext {
     /// Sets the global system status.
@@ -116,21 +114,15 @@ impl LanforgeContext {
         self.inner.runtime.traffic_telemetry()
     }
 
-    /// Registers a decoupled status provider.
-    pub fn register_status_provider(&self, provider: Arc<dyn StatusProvider>) {
-        self.inner.runtime.register_status_provider(self, provider);
+    /// Names a registered service, so it appears in the banners.
+    pub fn register_service(&self, id: ServiceId, name: &'static str) {
+        self.inner.runtime.register_service(id, name);
     }
 
-    /// Returns a list of all registered service status banners.
+    /// The lifecycle banner of every registered service.
     #[must_use]
     pub fn service_banners(&self) -> Vec<ServiceBanner> {
-        self.inner.runtime.service_banners(self)
-    }
-
-    /// Returns a list of all registered status providers.
-    #[must_use]
-    pub fn status_providers(&self) -> Vec<Arc<dyn StatusProvider>> {
-        self.inner.runtime.status_providers()
+        self.inner.runtime.service_banners()
     }
 
     /// Sets the decoupled DNS handle.
@@ -204,16 +196,6 @@ impl LanforgeContext {
     #[must_use]
     pub fn get_service_detail(&self, id: ServiceId) -> Option<lanforge_types::system::StateDetail> {
         self.inner.runtime.get_service_detail(id)
-    }
-
-    /// Sets the start time of a service.
-    pub fn set_service_start(&self, id: ServiceId, start: Instant) {
-        self.inner.runtime.set_service_start(id, start);
-    }
-
-    /// Clears the start time of a service.
-    pub fn clear_service_start(&self, id: ServiceId) {
-        self.inner.runtime.clear_service_start(id);
     }
 
     /// Returns the dynamic state of a service, defaulting to Offline.

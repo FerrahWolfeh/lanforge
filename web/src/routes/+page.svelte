@@ -458,12 +458,8 @@
 
 						<div class="flex items-center gap-3 shrink-0 font-mono text-[11px]">
 							<span class="text-muted-foreground text-[10px] hidden md:inline">
-								{#if banner?.stats?.leases_active}
-									{banner.stats.leases_active} leases
-								{:else if banner?.stats?.cache_hit_rate}
-									Hit: {banner.stats.cache_hit_rate}
-								{:else if banner?.stats?.state}
-									{banner.stats.state}
+								{#if banner?.summary}
+									{banner.summary}
 								{:else}
 									{svc.proto}
 								{/if}

@@ -59,7 +59,6 @@ use lanforge_types::update::{
 };
 use lanforge_types::utils::mac_from_eui64_link_local;
 use smallvec::SmallVec;
-use std::borrow::Cow;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
@@ -179,49 +178,6 @@ impl TransportStats for Dhcpv6Service {
 }
 
 impl AsyncService for Dhcpv6Service {
-    fn transport_snapshot(&self, _ctx: &LanforgeContext) -> Option<TransportSnapshot> {
-        self.transport.as_ref().map(TransportStats::snapshot)
-    }
-
-    fn stats(&self, ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
-        let active_leases = ctx.with_state(|state| {
-            u32::try_from(
-                state
-                    .devices
-                    .values()
-                    .filter(|dev| dev.v6.iter().any(|s| matches!(s, IPv6State::Dynamic(_))))
-                    .count(),
-            )
-            .unwrap_or(0)
-        });
-        let mut pool_total = 0;
-        let mut pool_available = 0;
-        for pool in ctx.dhcp_v6_pool_stats().values() {
-            pool_total += pool.total;
-            pool_available += pool.available;
-        }
-        let v6_stats = ctx.dhcpv6_stats().snapshot();
-        vec![
-            (Cow::Borrowed("iface"), self.config.iface.clone()),
-            (Cow::Borrowed("port"), self.config.port.to_string()),
-            (Cow::Borrowed("leases_active"), active_leases.to_string()),
-            (Cow::Borrowed("pool_total"), pool_total.to_string()),
-            (Cow::Borrowed("pool_available"), pool_available.to_string()),
-            (Cow::Borrowed("solicits"), v6_stats.solicits.to_string()),
-            (Cow::Borrowed("advertises"), v6_stats.advertises.to_string()),
-            (Cow::Borrowed("requests"), v6_stats.requests.to_string()),
-            (Cow::Borrowed("replies"), v6_stats.replies.to_string()),
-            (Cow::Borrowed("renews"), v6_stats.renews.to_string()),
-            (Cow::Borrowed("rebinds"), v6_stats.rebinds.to_string()),
-            (Cow::Borrowed("releases"), v6_stats.releases.to_string()),
-            (Cow::Borrowed("declines"), v6_stats.declines.to_string()),
-            (
-                Cow::Borrowed("info_requests"),
-                v6_stats.info_requests.to_string(),
-            ),
-        ]
-    }
-
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         loop {
             let options = ctx.get_dhcp_options();
@@ -906,8 +862,12 @@ mod tests {
         let ctx = init_test_context();
         let cfg = create_test_v6_config();
         let pool = pool::Ipv6Pool::new(&cfg.pools, cfg.ula_prefix, cfg.ula_prefix_len);
-        let mut server =
-            server::Dhcpv6Server::new(cfg.clone(), pool, Duid::new(vec![0, 3, 0, 1, 1]), ctx.clone());
+        let mut server = server::Dhcpv6Server::new(
+            cfg.clone(),
+            pool,
+            Duid::new(vec![0, 3, 0, 1, 1]),
+            ctx.clone(),
+        );
         let mac = MacAddr([0xc8, 0xbc, 0x9c, 0xf6, 0x6a, 0x28]);
         let duid = Duid::new(vec![0, 3, 0, 1, 0xc8, 0xbc, 0x9c, 0xf6, 0x6a, 0x28]);
         let ula: Ipv6Addr = "fd97:f00d:cafe:3731::8e7".parse().unwrap();
@@ -919,13 +879,17 @@ mod tests {
         };
         let none = server::AssignedIAs::default();
 
-        server.last_assignments.insert((duid.clone(), 1), vec![ula, gua]);
+        server
+            .last_assignments
+            .insert((duid.clone(), 1), vec![ula, gua]);
         apply_learned_state(&ctx, Some(mac), Some(&duid), &ias, &none, &server, &cfg);
         let mut got = leased(&ctx, mac);
         got.sort();
         assert_eq!(got, vec![gua, ula]);
 
-        server.last_assignments.insert((duid.clone(), 1), vec![ula, renumbered]);
+        server
+            .last_assignments
+            .insert((duid.clone(), 1), vec![ula, renumbered]);
         apply_learned_state(&ctx, Some(mac), Some(&duid), &ias, &none, &server, &cfg);
         let mut got = leased(&ctx, mac);
         got.sort();

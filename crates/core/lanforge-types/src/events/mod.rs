@@ -73,7 +73,6 @@ impl TimedEvent {
                     | SystemEvent::ReloadConfig
                     | SystemEvent::ConfigChanged { .. }
                     | SystemEvent::ConfigUpdate { .. }
-                    | SystemEvent::ServiceStatusBanner(..)
                     | SystemEvent::ServiceControl { .. }
                     | SystemEvent::ConfigDhcpV4Changed
                     | SystemEvent::ConfigDhcpV6Changed

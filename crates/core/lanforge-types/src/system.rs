@@ -308,44 +308,6 @@ impl std::fmt::Display for ServiceState {
     }
 }
 
-pub mod vec_as_map {
-    use serde::{Deserialize, Deserializer, Serializer, ser::SerializeMap};
-    use std::borrow::Cow;
-
-    /// Serializes a slice of key-value tuples as a JSON map.
-    ///
-    /// # Errors
-    /// Returns an error if map serialization fails.
-    pub fn serialize<S>(
-        stats: &[(Cow<'static, str>, String)],
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut map = serializer.serialize_map(Some(stats.len()))?;
-        for (k, v) in stats {
-            map.serialize_entry(k, v)?;
-        }
-        map.end()
-    }
-
-    /// Deserializes a JSON map into a vector of key-value tuples.
-    ///
-    /// # Errors
-    /// Returns an error if map deserialization fails.
-    pub fn deserialize<'de, D>(
-        deserializer: D,
-    ) -> Result<Vec<(Cow<'static, str>, String)>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let map: std::collections::HashMap<String, String> =
-            Deserialize::deserialize(deserializer)?;
-        Ok(map.into_iter().map(|(k, v)| (Cow::Owned(k), v)).collect())
-    }
-}
-
 /// Reason why a service is dormant (condition evaluated to false).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -437,15 +399,17 @@ impl std::fmt::Display for StateDetail {
     }
 }
 
-/// Banner representing the status and metrics of a decoupled service.
+/// A service's lifecycle as the supervisor sees it, plus a one-line summary of its live data.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ServiceBanner {
     pub id: ServiceId,
     pub name: String,
     pub state: ServiceState,
     pub uptime_secs: u64,
-    #[serde(with = "vec_as_map")]
-    pub stats: Vec<(Cow<'static, str>, String)>,
+    /// One line built by the API from live data (leases, session, cache…); `None` when the
+    /// service has nothing live to say. Never a placeholder value.
+    #[serde(default)]
+    pub summary: Option<String>,
     #[serde(default)]
     pub detail: Option<StateDetail>,
     #[serde(default)]
