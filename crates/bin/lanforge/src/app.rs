@@ -39,16 +39,24 @@ pub struct Daemon {
     bootstrap: BootstrapResult,
     registry: ServiceRegistry,
     ctx: LanforgeContext,
+    /// When the process started (systemd's start timeout runs from exec).
+    started: tokio::time::Instant,
 }
 
 impl Daemon {
-    /// Creates a new Daemon instance from a bootstrap result and context.
+    /// Creates a new Daemon instance from a bootstrap result and context; `started` is when the
+    /// process started, the origin of the readiness deadline.
     #[must_use]
-    pub fn new(bootstrap: BootstrapResult, ctx: LanforgeContext) -> Self {
+    pub fn new(
+        bootstrap: BootstrapResult,
+        ctx: LanforgeContext,
+        started: tokio::time::Instant,
+    ) -> Self {
         Self {
             bootstrap,
             registry: ServiceRegistry::new(),
             ctx,
+            started,
         }
     }
 
@@ -70,6 +78,7 @@ impl Daemon {
             net_rx,
             expected,
             &supervisor,
+            self.started,
         )
         .await?;
 

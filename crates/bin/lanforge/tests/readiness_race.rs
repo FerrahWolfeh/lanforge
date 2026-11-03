@@ -29,7 +29,7 @@ async fn test_event_loop_pre_seeded_readiness_reconciliation() {
     let mut sys_listener = bus.subscribe_system();
 
     // 1. Initialize tracker: pre-seeded services reconcile immediately
-    let mut tracker = ReadinessTracker::new(&ctx, expected_services);
+    let mut tracker = ReadinessTracker::new(&ctx, expected_services, tokio::time::Instant::now());
 
     // Verify that SystemReady is immediately published
     let event = timeout(Duration::from_millis(500), sys_listener.recv())
@@ -66,7 +66,7 @@ async fn test_event_loop_concurrent_broadcast_readiness() {
     }
 
     let mut sys_listener = bus.subscribe_system();
-    let mut tracker = ReadinessTracker::new(&ctx, expected_services);
+    let mut tracker = ReadinessTracker::new(&ctx, expected_services, tokio::time::Instant::now());
 
     // Progressively report services ready
     for id in &services[..services.len() - 1] {
@@ -102,7 +102,11 @@ async fn test_periodic_check_recovers_a_lost_service_ready() {
     ctx.set_service_state(ServiceId::Dns, ServiceState::Starting);
     let mut sys_listener = bus.subscribe_system();
 
-    let mut tracker = ReadinessTracker::new(&ctx, HashSet::from([ServiceId::Dns]));
+    let mut tracker = ReadinessTracker::new(
+        &ctx,
+        HashSet::from([ServiceId::Dns]),
+        tokio::time::Instant::now(),
+    );
     assert!(sys_listener.try_recv().is_err(), "not ready yet");
 
     // The service settles, but its ServiceReady never reaches the tracker.
@@ -129,8 +133,11 @@ async fn test_systemd_ready_is_not_held_hostage_by_one_service() {
     ctx.set_service_state(ServiceId::Pppoe, ServiceState::Starting);
     let mut sys_listener = bus.subscribe_system();
 
-    let mut tracker =
-        ReadinessTracker::new(&ctx, HashSet::from([ServiceId::Dns, ServiceId::Pppoe]));
+    let mut tracker = ReadinessTracker::new(
+        &ctx,
+        HashSet::from([ServiceId::Dns, ServiceId::Pppoe]),
+        tokio::time::Instant::now(),
+    );
     let start = tokio::time::Instant::now();
 
     tracker.check_pending_at(start + Duration::from_secs(5));
@@ -155,4 +162,27 @@ async fn test_systemd_ready_is_not_held_hostage_by_one_service() {
         event.event,
         LanforgeEvent::System(SystemEvent::SystemReady)
     ));
+}
+
+/// systemd's start timeout runs from exec, so the readiness deadline does too: a slow bootstrap
+/// (12 s here) leaves only 3 s before READY=1, it does not push the deadline 12 s further
+/// (that, plus the 10 s status tick, could reach the unit's 30 s TimeoutStartSec and get the
+/// daemon — and the LAN — killed while PPPoE waits on a slow ISP).
+#[tokio::test]
+async fn test_readiness_deadline_counts_from_process_start() {
+    let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+    ctx.set_service_state(ServiceId::Pppoe, ServiceState::Starting);
+    let now = tokio::time::Instant::now();
+    let process_start = now - Duration::from_secs(12);
+
+    let mut tracker = ReadinessTracker::new(&ctx, HashSet::from([ServiceId::Pppoe]), process_start);
+    assert_eq!(
+        tracker.ready_deadline(),
+        process_start + lanforge::event_loop::SYSTEMD_READY_DEADLINE
+    );
+
+    tracker.check_pending_at(now + Duration::from_secs(2));
+    assert!(!tracker.systemd_ready_sent(), "14 s since exec: too early");
+    tracker.check_pending_at(now + Duration::from_secs(3));
+    assert!(tracker.systemd_ready_sent(), "15 s since exec: READY=1");
 }
