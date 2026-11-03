@@ -9,7 +9,7 @@
 
 use lanforge_api::api::{Response, SimpleSuccess};
 use lanforge_api::config_file::{
-    ConfigFile, RaInputs, Section, effective_firewall, effective_ra, log_issues, set_aside_issues,
+    ConfigFile, RaInputs, Section, effective_ra, log_issues, set_aside_issues,
 };
 use lanforge_types::config::SiteDomains;
 use tracing::info;
@@ -85,15 +85,10 @@ impl ClientContext {
         if applies(Section::Firewall) {
             let (configured, fw_issues) = file.firewall.to_config();
             issues.extend(log_issues(fw_issues));
-            let effective = effective_firewall(
-                configured,
-                ctx.get_pppoe_config().as_ref(),
-                ctx.get_traffic_config().is_some_and(|t| t.sqm.enabled),
-                &ctx.target_interface_name().unwrap_or_default(),
-            );
-            if ctx.get_firewall_config().as_ref() != Some(&effective) {
+            // The firewall service derives what it runs (PPPoE/SQM/LAN) from this itself.
+            if ctx.get_firewall_config().as_ref() != Some(&configured) {
                 info!("Reload: [firewall] changed; applying");
-                ctx.update_firewall_config(effective);
+                ctx.update_firewall_config(configured);
             }
         }
         if applies(Section::Ra) {

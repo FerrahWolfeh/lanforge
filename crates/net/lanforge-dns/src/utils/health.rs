@@ -4,15 +4,24 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Exponential Moving Average alpha factor.
 const RTT_ALPHA: f32 = 0.3;
+/// Consecutive failures that degrade an upstream (it leaves the order until a probe answers).
+const DEGRADED_AFTER: u8 = 5;
+/// An answer older than this is no longer evidence that the upstream is healthy.
+const RECENT_SECS: u64 = 300;
 
 /// Atomic performance counters for a single upstream target.
 #[derive(Default)]
 pub struct UpstreamHealth {
     pub rtt_ewma_us: AtomicU32,
     pub last_rtt_us: AtomicU32,
+    /// Client queries sent to this upstream (probes excluded).
     pub total_queries: AtomicU64,
+    /// Answers received, late ones included (a race lost to another upstream).
     pub total_successes: AtomicU64,
+    /// Errors, timeouts, and abandoned attempts left unanswered.
     pub total_failures: AtomicU64,
+    /// Answers that resolved the client query (won the race).
+    pub total_wins: AtomicU64,
     pub consecutive_failures: AtomicU8,
     pub last_success_ts: AtomicU64,
     pub last_failure_ts: AtomicU64,
@@ -27,6 +36,7 @@ impl UpstreamHealth {
             total_queries: AtomicU64::new(0),
             total_successes: AtomicU64::new(0),
             total_failures: AtomicU64::new(0),
+            total_wins: AtomicU64::new(0),
             consecutive_failures: AtomicU8::new(0),
             last_success_ts: AtomicU64::new(0),
             last_failure_ts: AtomicU64::new(0),
@@ -38,8 +48,16 @@ impl UpstreamHealth {
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss
     )]
-    pub fn record_success(&self, rtt_us: u32) {
+    pub fn record_sent(&self) {
         self.total_queries.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// This upstream's answer resolved the client query.
+    pub fn record_win(&self) {
+        self.total_wins.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_success(&self, rtt_us: u32) {
         self.total_successes.fetch_add(1, Ordering::Relaxed);
         self.consecutive_failures.store(0, Ordering::Relaxed);
         self.last_rtt_us.store(rtt_us, Ordering::Relaxed);
@@ -63,7 +81,6 @@ impl UpstreamHealth {
     }
 
     pub fn record_failure(&self) {
-        self.total_queries.fetch_add(1, Ordering::Relaxed);
         self.total_failures.fetch_add(1, Ordering::Relaxed);
         let _ = self
             .consecutive_failures
@@ -78,15 +95,34 @@ impl UpstreamHealth {
         self.last_failure_ts.store(now, Ordering::Relaxed);
     }
 
+    /// For the query path: no clock read.
+    pub fn is_degraded(&self) -> bool {
+        self.consecutive_failures.load(Ordering::Relaxed) >= DEGRADED_AFTER
+    }
+
+    /// Healthy needs evidence: an answer in the last [`RECENT_SECS`].
     pub fn status(&self) -> UpstreamStatus {
-        if self.consecutive_failures.load(Ordering::Relaxed) >= 5 {
+        if self.is_degraded() {
             return UpstreamStatus::Degraded;
         }
-        UpstreamStatus::Healthy
+        match self.last_success_ts.load(Ordering::Relaxed) {
+            0 => UpstreamStatus::Untested,
+            last => {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                if now.saturating_sub(last) > RECENT_SECS {
+                    UpstreamStatus::Idle
+                } else {
+                    UpstreamStatus::Healthy
+                }
+            }
+        }
     }
 
     pub fn is_eligible_for_probing(&self) -> bool {
-        if self.consecutive_failures.load(Ordering::Relaxed) >= 5 {
+        if self.is_degraded() {
             let last_fail = self.last_failure_ts.load(Ordering::Relaxed);
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -112,6 +148,7 @@ impl UpstreamHealth {
             total_queries: self.total_queries.load(Ordering::Relaxed),
             total_successes: self.total_successes.load(Ordering::Relaxed),
             total_failures: self.total_failures.load(Ordering::Relaxed),
+            total_wins: self.total_wins.load(Ordering::Relaxed),
             status: self.status(),
             last_success_secs_ago: {
                 let ts = self.last_success_ts.load(Ordering::Relaxed);
@@ -137,7 +174,7 @@ mod tests {
     #[test]
     fn test_consecutive_failures_saturation_never_overflows() {
         let health = UpstreamHealth::new();
-        assert_eq!(health.status(), UpstreamStatus::Healthy);
+        assert_eq!(health.status(), UpstreamStatus::Untested);
 
         // Record 300 failures (greater than u8::MAX = 255)
         for _ in 0..300 {
@@ -152,5 +189,28 @@ mod tests {
         health.record_success(1500);
         assert_eq!(health.consecutive_failures.load(Ordering::Relaxed), 0);
         assert_eq!(health.status(), UpstreamStatus::Healthy);
+    }
+
+    /// "Healthy" needs a recent answer: none yet is Untested, an old one is Idle.
+    #[test]
+    fn healthy_needs_a_recent_answer() {
+        let health = UpstreamHealth::new();
+        assert_eq!(health.status(), UpstreamStatus::Untested);
+        health.record_failure();
+        assert_eq!(
+            health.status(),
+            UpstreamStatus::Untested,
+            "a failure is no answer"
+        );
+        health.record_success(1000);
+        assert_eq!(health.status(), UpstreamStatus::Healthy);
+        let old = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - RECENT_SECS
+            - 1;
+        health.last_success_ts.store(old, Ordering::Relaxed);
+        assert_eq!(health.status(), UpstreamStatus::Idle);
     }
 }

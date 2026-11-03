@@ -106,6 +106,10 @@
 				return "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]";
 			case "degraded":
 				return "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.8)]";
+			// Answered before, nothing recent.
+			case "idle":
+				return "bg-amber-500/70";
+			// "untested" (never answered yet) and anything unknown: grey.
 			default:
 				return "bg-muted-foreground/50";
 		}

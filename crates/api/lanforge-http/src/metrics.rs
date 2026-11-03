@@ -286,9 +286,13 @@ fn append_dns_metrics(out: &mut String, dns: &DnsMetrics) {
         out.push_str("# HELP lanforge_dns_upstream_rtt_us Round-trip time to upstream resolver in microseconds\n");
         out.push_str("# TYPE lanforge_dns_upstream_rtt_us gauge\n");
         out.push_str(
-            "# HELP lanforge_dns_upstream_queries_total Total successful queries to upstream\n",
+            "# HELP lanforge_dns_upstream_queries_total Client queries sent to the upstream\n",
         );
         out.push_str("# TYPE lanforge_dns_upstream_queries_total counter\n");
+        out.push_str(
+            "# HELP lanforge_dns_upstream_wins_total Answers from the upstream that resolved the query\n",
+        );
+        out.push_str("# TYPE lanforge_dns_upstream_wins_total counter\n");
         out.push_str(
             "# HELP lanforge_dns_upstream_failures_total Total failed queries to upstream\n",
         );
@@ -305,7 +309,12 @@ fn append_dns_metrics(out: &mut String, dns: &DnsMetrics) {
             let _ = writeln!(
                 out,
                 "lanforge_dns_upstream_queries_total{{target=\"{target}\",proto=\"{proto}\"}} {}",
-                up.total_successes
+                up.total_queries
+            );
+            let _ = writeln!(
+                out,
+                "lanforge_dns_upstream_wins_total{{target=\"{target}\",proto=\"{proto}\"}} {}",
+                up.total_wins
             );
             let _ = writeln!(
                 out,
@@ -408,6 +417,7 @@ mod tests {
                         total_queries: 10,
                         total_successes: 9,
                         total_failures: 1,
+                        total_wins: 8,
                         status: UpstreamStatus::Healthy,
                         last_success_secs_ago: Some(1),
                         domain: None,
@@ -424,6 +434,12 @@ mod tests {
         assert!(out.contains(
             "lanforge_dns_upstream_failures_total{target=\"9.9.9.9:53\",proto=\"udp\"} 1"
         ));
+        assert!(out.contains(
+            "lanforge_dns_upstream_queries_total{target=\"9.9.9.9:53\",proto=\"udp\"} 10"
+        ));
+        assert!(
+            out.contains("lanforge_dns_upstream_wins_total{target=\"9.9.9.9:53\",proto=\"udp\"} 8")
+        );
     }
 
     /// A DNS that does not answer leaves its section out instead of stalling the scrape.

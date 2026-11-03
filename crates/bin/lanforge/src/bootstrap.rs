@@ -568,9 +568,6 @@ impl Bootstrapper {
 
         #[cfg(feature = "dhcp")]
         Self::sync_dhcp_service_configs(cfg);
-
-        #[cfg(feature = "nft")]
-        Self::apply_effective_firewall(cfg);
     }
 
     /// Carries `cfg.dhcp` (what the daemon runs) into the services' start-up configs.
@@ -620,33 +617,6 @@ impl Bootstrapper {
                 path.display()
             ),
         }
-    }
-
-    /// Derives the firewall the daemon runs from `[firewall]` (`effective_firewall`): in memory
-    /// only, the file keeps what the admin wrote.
-    #[cfg(feature = "nft")]
-    fn apply_effective_firewall(cfg: &mut Config) {
-        #[cfg(feature = "traffic")]
-        let sqm_enabled = cfg.traffic_toml.sqm.enabled;
-        #[cfg(not(feature = "traffic"))]
-        let sqm_enabled = false;
-        #[cfg(feature = "pppoe")]
-        let pppoe = Some(&cfg.pppoe_toml);
-        #[cfg(not(feature = "pppoe"))]
-        let pppoe = None;
-        let effective = lanforge_api::config_file::effective_firewall(
-            cfg.firewall_toml.clone(),
-            pppoe,
-            sqm_enabled,
-            &cfg.system.iface,
-        );
-        if effective != cfg.firewall_toml {
-            info!(
-                "Firewall: adjusted for PPPoE/SQM/LAN settings (in memory, not written to the file)"
-            );
-        }
-        cfg.firewall_enabled = effective.enabled;
-        cfg.firewall_toml = effective;
     }
 
     fn log_db_status(
@@ -1128,14 +1098,14 @@ mod tests {
              "internal_ip": "2001:db8:cafe:3731::501", "internal_port": 6881, "protocol": "Tcp", "src_zone": "external"}],
           "table_name": "lanforge",
           "zones": [
-            {"allowed_subnets": [], "forward_policy": "Drop", "input_policy": "Drop", "interfaces": ["wan0"],
+            {"forward_policy": "Drop", "input_policy": "Drop", "interfaces": ["wan0"],
              "masquerade": true, "mtu_fix": true, "name": "external", "open_ports": []},
-            {"allowed_subnets": [], "forward_policy": "Accept", "input_policy": "Accept", "interfaces": ["lan0"],
+            {"forward_policy": "Accept", "input_policy": "Accept", "interfaces": ["lan0"],
              "masquerade": false, "mtu_fix": false, "name": "internal", "open_ports": [
                {"comment": null, "port": 22, "protocol": "Tcp"}, {"comment": null, "port": 53, "protocol": "Udp"},
                {"comment": null, "port": 53, "protocol": "Tcp"}, {"comment": null, "port": 67, "protocol": "Udp"},
                {"comment": null, "port": 8088, "protocol": "Tcp"}, {"comment": null, "port": 9090, "protocol": "Tcp"}]},
-            {"allowed_subnets": [], "forward_policy": "Accept", "input_policy": "Accept",
+            {"forward_policy": "Accept", "input_policy": "Accept",
              "interfaces": ["tailscale0", "podman*"], "masquerade": false, "mtu_fix": false,
              "name": "trusted", "open_ports": []}]
         }"#;
@@ -1150,9 +1120,7 @@ mod tests {
         let mut cfg = config_with_db(std::path::Path::new("memory"));
         cfg.system.iface = "lan0".into();
         // As on the box: SQM on (CAKE 770/380), PPPoE dataplane defaults.
-        cfg.traffic_toml.sqm.enabled = true;
-        cfg.firewall_toml = from_file;
-        Bootstrapper::apply_effective_firewall(&mut cfg);
+        cfg.firewall_toml = from_file.effective(Some(&cfg.pppoe_toml.nftables), true, "lan0");
         assert_eq!(cfg.firewall_toml, live, "the daemon runs the live firewall");
 
         let ruleset = |fw: &FirewallConfig| {

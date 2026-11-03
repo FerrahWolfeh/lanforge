@@ -107,7 +107,6 @@
       name: formName.trim().toLowerCase(),
       interfaces: [],
       open_ports: [],
-      allowed_subnets: [],
       input_policy: tpl.input_policy,
       forward_policy: tpl.forward_policy,
       masquerade: tpl.masquerade,

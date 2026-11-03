@@ -69,6 +69,7 @@ fn dns_dtos_with_empty_optional_fields_cross_the_socket() {
         total_queries: 0,
         total_successes: 0,
         total_failures: 0,
+        total_wins: 0,
         status: UpstreamStatus::Healthy,
         last_success_secs_ago: None,
         domain: None,

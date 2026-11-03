@@ -183,7 +183,6 @@ async fn test_firewall_reacts_to_ruleset_changed_in_place() {
         name: "dmz".into(),
         interfaces: vec!["eth2".into()],
         open_ports: Vec::new(),
-        allowed_subnets: Vec::new(),
         input_policy: FirewallPolicy::Drop,
         forward_policy: FirewallPolicy::Drop,
         masquerade: false,
@@ -822,4 +821,118 @@ async fn test_firewall_resyncs_after_a_lagged_bus() {
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_secs(1), serve_handle).await;
+}
+
+/// A firewall service up with ppp0 as WAN, `[firewall] flow_offload = true` and SQM as given.
+async fn serve_with_offload(
+    sqm: bool,
+) -> (LanforgeContext, NftService, broadcast::Receiver<TimedEvent>) {
+    let (ctx, bus) = create_test_context();
+    ctx.set_wan_snapshot(WanSnapshot {
+        state: WanState::Up,
+        ifname: Some("ppp0".into()),
+        generation: 1,
+        ..Default::default()
+    });
+    let mut cfg = ctx.get_firewall_config().unwrap();
+    cfg.flow_offload = true;
+    ctx.update_firewall_config(cfg);
+    set_sqm(&ctx, sqm);
+
+    let mut fw_sub = bus.subscribe_firewall();
+    let mut service = NftService::inert();
+    service.init(&ctx).await.expect("Init must succeed");
+    wait_for_ruleset_applied(&mut fw_sub).await;
+    let probe = service.clone();
+    let ctx_clone = ctx.clone();
+    tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    (ctx, probe, fw_sub)
+}
+
+fn set_sqm(ctx: &LanforgeContext, enabled: bool) {
+    let mut traffic = ctx.get_traffic_config().unwrap_or_default();
+    traffic.sqm.enabled = enabled;
+    ctx.update_traffic_config(traffic);
+}
+
+fn has_flowtable(service: &NftService) -> bool {
+    service
+        .last_applied_payload()
+        .unwrap()
+        .contains("\"flowtable\"")
+}
+
+/// SQM switched on while the daemon runs (WebUI/API): CAKE only shapes what it sees, so the
+/// flowtable must leave the ruleset at once — and come back when SQM is switched off. The
+/// firewall section itself does not change, only `[traffic]`.
+#[tokio::test]
+async fn sqm_switched_live_turns_the_flowtable_off_and_back_on() {
+    let (ctx, probe, mut fw_sub) = serve_with_offload(false).await;
+    assert!(has_flowtable(&probe), "offload on, no SQM: flowtable");
+
+    set_sqm(&ctx, true);
+    let summary = wait_for_ruleset_applied(&mut fw_sub).await;
+    assert!(!summary.flow_offload);
+    assert!(!has_flowtable(&probe), "SQM on: no flowtable");
+    assert!(
+        ctx.get_firewall_config().unwrap().flow_offload,
+        "the admin's setting is kept"
+    );
+
+    set_sqm(&ctx, false);
+    let summary = wait_for_ruleset_applied(&mut fw_sub).await;
+    assert!(summary.flow_offload);
+    assert!(has_flowtable(&probe), "SQM off: flowtable back");
+}
+
+/// The firewall saved (WebUI/API/reload) with `flow_offload = true` while SQM is on still runs
+/// without a flowtable; so does a firewall started with SQM already on.
+#[tokio::test]
+async fn a_firewall_change_under_sqm_keeps_the_flowtable_off() {
+    let (ctx, probe, mut fw_sub) = serve_with_offload(true).await;
+    assert!(!has_flowtable(&probe), "started under SQM: no flowtable");
+
+    let mut cfg = ctx.get_firewall_config().unwrap();
+    cfg.flow_offload = true;
+    cfg.port_forwards.push(PortForwardRule {
+        comment: Some("new".into()),
+        src_zone: "external".into(),
+        internal_ip: "192.168.1.77".parse().unwrap(),
+        external_port: 7777,
+        internal_port: 7777,
+        protocol: L4Protocol::Tcp,
+        enable_hairpin: false,
+    });
+    ctx.update_firewall_config(cfg);
+    wait_for_ruleset_applied(&mut fw_sub).await;
+    let payload = probe.last_applied_payload().unwrap();
+    assert!(payload.contains("7777"), "the change is applied");
+    assert!(!has_flowtable(&probe), "SQM on: still no flowtable");
+}
+
+/// A `[traffic]` change that leaves SQM as it was does not recompile the firewall.
+#[tokio::test]
+async fn a_traffic_change_without_sqm_change_leaves_the_firewall_alone() {
+    let (ctx, _probe, mut fw_sub) = serve_with_offload(true).await;
+    let mut traffic = ctx.get_traffic_config().unwrap();
+    traffic.sqm.download_mbps = 500;
+    ctx.update_traffic_config(traffic);
+    let got = timeout(Duration::from_millis(300), async {
+        loop {
+            if let Ok(evt) = fw_sub.recv().await
+                && matches!(
+                    evt.event,
+                    LanforgeEvent::Firewall(FirewallEvent::RulesetApplied(_))
+                )
+            {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(got.is_err(), "no recompile for a bandwidth change");
 }

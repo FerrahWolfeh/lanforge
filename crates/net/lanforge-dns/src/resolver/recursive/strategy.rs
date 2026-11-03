@@ -26,7 +26,7 @@ static COALESCE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 type InFlightTx = Sender<Result<(Vec<u8>, bool, bool, u64), String>>;
 type QueryResult = (
-    std::net::SocketAddr,
+    Arc<UpstreamManager>,
     Result<(Vec<u8>, bool, bool), DnsError>,
 );
 type QueryFuture<'a> =
@@ -232,9 +232,11 @@ impl UpstreamStrategy {
                 // Keep Healthy at top if possible
                 let status_rank = |s: UpstreamStatus| match s {
                     UpstreamStatus::Healthy => 0,
-                    UpstreamStatus::Degraded => 1,
-                    UpstreamStatus::Disabled => 2,
-                    UpstreamStatus::Unknown => 3,
+                    UpstreamStatus::Idle => 1,
+                    UpstreamStatus::Untested => 2,
+                    UpstreamStatus::Degraded => 3,
+                    UpstreamStatus::Disabled => 4,
+                    UpstreamStatus::Unknown => 5,
                 };
                 status_rank(a.status).cmp(&status_rank(b.status))
             })
@@ -433,10 +435,7 @@ impl UpstreamStrategy {
         header: &WireHeader<'_>,
         question: &WireQuestion<'_>,
     ) -> Result<Resolved, DnsError> {
-        let mut available: Vec<_> = tier
-            .iter()
-            .filter(|m| m.health.status() != UpstreamStatus::Degraded)
-            .collect();
+        let mut available: Vec<_> = tier.iter().filter(|m| !m.health.is_degraded()).collect();
         if available.is_empty() {
             available = tier.iter().collect();
         }
@@ -447,13 +446,16 @@ impl UpstreamStrategy {
         if available.len() == 1 {
             let mgr = available[0];
             return match mgr.forward_with_parsed(data, header, question).await {
-                Ok((data, cached, is_block)) => Ok(Resolved {
-                    data,
-                    cached,
-                    is_block,
-                    coalesced: false,
-                    coalesce_id: None,
-                }),
+                Ok((data, cached, is_block)) => {
+                    mgr.health.record_win();
+                    Ok(Resolved {
+                        data,
+                        cached,
+                        is_block,
+                        coalesced: false,
+                        coalesce_id: None,
+                    })
+                }
                 Err(e) => {
                     tracing::debug!(upstream = %mgr.target.addr, error = %e, "DNS upstream attempt failed");
                     Err(DnsError::Generic(format!("via {}: {e}", mgr.target.addr)))
@@ -462,9 +464,11 @@ impl UpstreamStrategy {
         }
 
         let run_query = |mgr: &Arc<UpstreamManager>| -> QueryFuture<'_> {
-            let addr = mgr.target.addr;
             let mgr = Arc::clone(mgr);
-            Box::pin(async move { (addr, mgr.forward_with_parsed(data, header, question).await) })
+            Box::pin(async move {
+                let res = mgr.forward_with_parsed(data, header, question).await;
+                (mgr, res)
+            })
         };
 
         let mut futs = FuturesUnordered::new();
@@ -481,7 +485,8 @@ impl UpstreamStrategy {
             tokio::select! {
                 res = futs.next(), if !futs.is_empty() => {
                     match res {
-                        Some((_addr, Ok((data, cached, is_block)))) => {
+                        Some((mgr, Ok((data, cached, is_block)))) => {
+                            mgr.health.record_win();
                             return Ok(Resolved {
                                 data,
                                 cached,
@@ -490,7 +495,8 @@ impl UpstreamStrategy {
                                 coalesce_id: None,
                             });
                         }
-                        Some((addr, Err(e))) => {
+                        Some((mgr, Err(e))) => {
+                            let addr = mgr.target.addr;
                             tracing::debug!(upstream = %addr, error = %e, "DNS upstream attempt failed");
                             last_err = DnsError::Generic(format!("via {addr}: {e}"));
                             if next_idx < available.len() {
@@ -528,10 +534,7 @@ impl UpstreamStrategy {
     ) -> Result<Resolved, DnsError> {
         let mut set = JoinSet::new();
 
-        let mut available: Vec<_> = tier
-            .iter()
-            .filter(|m| m.health.status() != UpstreamStatus::Degraded)
-            .collect();
+        let mut available: Vec<_> = tier.iter().filter(|m| !m.health.is_degraded()).collect();
         if available.is_empty() {
             available = tier.iter().collect();
         }
@@ -542,22 +545,30 @@ impl UpstreamStrategy {
             let shared_data = shared_data.clone();
             set.spawn(async move {
                 let addr = mgr.target.addr;
-                let header = WireHeader::parse(&shared_data).ok_or(DnsError::WireParseError)?;
-                let question = WireQuestion::parse(&shared_data).ok_or(DnsError::WireParseError)?;
-                match mgr.forward_with_parsed(&shared_data, &header, &question).await {
-                    Ok(resp) => Ok(resp),
-                    Err(e) => {
-                        tracing::debug!(upstream = %addr, error = %e, "DNS upstream attempt failed");
-                        Err(DnsError::Generic(format!("via {addr}: {e}")))
+                let res = match (
+                    WireHeader::parse(&shared_data),
+                    WireQuestion::parse(&shared_data),
+                ) {
+                    (Some(header), Some(question)) => {
+                        mgr.forward_with_parsed(&shared_data, &header, &question)
+                            .await
+                            .map_err(|e| {
+                                tracing::debug!(upstream = %addr, error = %e, "DNS upstream attempt failed");
+                                DnsError::Generic(format!("via {addr}: {e}"))
+                            })
                     }
-                }
+                    _ => Err(DnsError::WireParseError),
+                };
+                (mgr, res)
             });
         }
 
         let mut last_err = DnsError::UpstreamTimeout;
         while let Some(res) = set.join_next().await {
             match res {
-                Ok(Ok((data, cached, is_block))) => {
+                // Only the first answer is used (and counted as the win); the rest are aborted.
+                Ok((mgr, Ok((data, cached, is_block)))) => {
+                    mgr.health.record_win();
                     set.abort_all();
                     return Ok(Resolved {
                         data,
@@ -567,7 +578,7 @@ impl UpstreamStrategy {
                         coalesce_id: None,
                     });
                 }
-                Ok(Err(e)) => last_err = e,
+                Ok((_, Err(e))) => last_err = e,
                 Err(e) => {
                     last_err = DnsError::Generic(format!("Task panic: {e}"));
                 }
@@ -585,7 +596,7 @@ impl UpstreamStrategy {
     ) -> Result<Resolved, DnsError> {
         let mut available: Vec<_> = tier
             .iter()
-            .filter(|m| m.health.status() != UpstreamStatus::Degraded)
+            .filter(|m| !m.health.is_degraded())
             .cloned()
             .collect();
         if available.is_empty() {
@@ -600,6 +611,7 @@ impl UpstreamStrategy {
         for mgr in available {
             match mgr.forward_with_parsed(data, header, question).await {
                 Ok((data, cached, is_block)) => {
+                    mgr.health.record_win();
                     return Ok(Resolved {
                         data,
                         cached,
@@ -624,10 +636,7 @@ impl UpstreamStrategy {
         header: &WireHeader<'_>,
         question: &WireQuestion<'_>,
     ) -> Result<Resolved, DnsError> {
-        let mut available: Vec<_> = tier
-            .iter()
-            .filter(|m| m.health.status() != UpstreamStatus::Degraded)
-            .collect();
+        let mut available: Vec<_> = tier.iter().filter(|m| !m.health.is_degraded()).collect();
         if available.is_empty() {
             available = tier.iter().collect();
         }
@@ -641,6 +650,7 @@ impl UpstreamStrategy {
             let mgr = available[idx];
             match mgr.forward_with_parsed(data, header, question).await {
                 Ok((data, cached, is_block)) => {
+                    mgr.health.record_win();
                     return Ok(Resolved {
                         data,
                         cached,

@@ -1547,7 +1547,6 @@ async fn handle_zone(
                 name: add_args.name.clone(),
                 interfaces: add_args.interfaces,
                 open_ports: Vec::new(),
-                allowed_subnets: Vec::new(),
                 input_policy,
                 forward_policy,
                 masquerade: add_args.masquerade,
@@ -1881,6 +1880,14 @@ async fn handle_offload(
         "Flowtable hardware & kernel bypass offload: {}",
         if state { "ENABLED" } else { "DISABLED" }
     ));
+    if state
+        && client
+            .firewall_status()
+            .await
+            .is_ok_and(|s| s.flow_offload_suspended)
+    {
+        printer.warning("Suspended while SQM is on: CAKE must see every packet");
+    }
     Ok(())
 }
 

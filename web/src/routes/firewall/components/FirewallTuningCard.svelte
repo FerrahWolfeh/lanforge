@@ -13,11 +13,13 @@
 
 	interface Props {
 		flowOffload: boolean;
-		sqmActive?: boolean;
+		sqmEnabled?: boolean;
 		onToggleFlowOffload: (val: boolean) => void;
 	}
 
-	let { flowOffload, sqmActive = false, onToggleFlowOffload }: Props = $props();
+	let { flowOffload, sqmEnabled = false, onToggleFlowOffload }: Props = $props();
+	// Only an offload that is switched on can be suspended by SQM.
+	let suspended = $derived(flowOffload && sqmEnabled);
 </script>
 
 <div class="flex flex-col gap-4">
@@ -47,14 +49,14 @@
 								</p>
 							</div>
 						</HelpPopover>
-						<Badge variant={sqmActive ? "outline" : flowOffload ? "default" : "secondary"} class="text-[10px] {sqmActive ? 'border-amber-500/40 text-amber-600 dark:text-amber-400 font-medium' : ''}">
-							{sqmActive ? "Suspended by SQM" : flowOffload ? "Fast-Path Active" : "Disabled"}
+						<Badge variant={suspended ? "outline" : flowOffload ? "default" : "secondary"} class="text-[10px] {suspended ? 'border-amber-500/40 text-amber-600 dark:text-amber-400 font-medium' : ''}">
+							{suspended ? "Suspended by SQM" : flowOffload ? "Fast-Path Active" : "Disabled"}
 						</Badge>
 					</div>
 					<p class="text-xs text-muted-foreground leading-relaxed max-w-2xl">
 						Bypasses standard routing lookups for established flows, processing packets at wire speed directly in the kernel dataplane.
 					</p>
-					{#if sqmActive}
+					{#if suspended}
 						<div class="mt-2 flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-400">
 							<AlertTriangleIcon class="size-4 shrink-0" />
 							<span>

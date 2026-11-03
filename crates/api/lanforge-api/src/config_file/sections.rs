@@ -85,7 +85,7 @@ fn default_zone_external() -> String {
 }
 
 /// A file without the key keeps the default matrix; `forwardings = []` means no routing.
-fn default_forwardings() -> Vec<ZoneForwardingFile> {
+pub(super) fn default_forwardings() -> Vec<ZoneForwardingFile> {
     [
         ("internal", "external"),
         ("trusted", "external"),
@@ -605,10 +605,10 @@ pub struct FirewallFile {
     /// ruleset is built zone by zone.
     #[serde(default = "default_firewall_zones", with = "named_tables")]
     pub zones: Vec<(String, FirewallZoneFile)>,
-    /// Routed traffic allowed between zones. Always written, even empty: an absent key means
-    /// the default matrix.
-    #[serde(default = "default_forwardings")]
-    pub forwardings: Vec<ZoneForwardingFile>,
+    /// Routed traffic allowed between zones. Always written, even empty: an absent key (`None`)
+    /// means the default matrix, between the zones the file has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forwardings: Option<Vec<ZoneForwardingFile>>,
     /// In file order. Keys are labels only (unique per file); the rule's comment is
     /// `description`.
     #[serde(default, skip_serializing_if = "Vec::is_empty", with = "named_tables")]
@@ -730,7 +730,7 @@ impl Default for FirewallFile {
             on_stop: default_on_stop(),
             custom_rules_file: None,
             zones: default_firewall_zones(),
-            forwardings: default_forwardings(),
+            forwardings: None,
             port_forwards: Vec::new(),
         }
     }
@@ -769,7 +769,9 @@ pub struct FirewallZoneFile {
     pub mtu_fix: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub open_ports: Vec<OpenPortFile>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Never enforced by any lanforge release and no longer supported: still read, so a file
+    /// that has it keeps its firewall, and reported as an issue; never written.
+    #[serde(default, skip_serializing)]
     pub allowed_subnets: Vec<String>,
 }
 

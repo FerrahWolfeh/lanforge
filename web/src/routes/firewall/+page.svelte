@@ -64,7 +64,8 @@
 	let serverConfig = $state<FirewallConfig | null>(null);
 	let draft = $state<FirewallConfig | null>(null);
 	let availableInterfaces = $state<NetworkInterfaceInfo[]>([]);
-	let sqmActive = $state(false);
+	// SQM switched on in `[traffic]`: the firewall then runs without the flowtable, WAN up or not.
+	let sqmEnabled = $state(false);
 
 	let loading = $state(true);
 	let proposing = $state(false);
@@ -119,7 +120,7 @@
 				trafficStatus().catch(() => null),
 			]);
 			fwStatus = s;
-			sqmActive = tStatus?.sqm_active ?? false;
+			sqmEnabled = tStatus?.flow_offload_suppressed ?? false;
 			if (setupRes?.interfaces) {
 				availableInterfaces = setupRes.interfaces;
 			}
@@ -466,7 +467,7 @@
 				<Tabs.Content value="tuning">
 					<FirewallTuningCard
 						flowOffload={draft.flow_offload}
-						{sqmActive}
+						{sqmEnabled}
 						onToggleFlowOffload={(v) => handleGlobalToggle("flow_offload", v)}
 					/>
 				</Tabs.Content>
@@ -495,7 +496,7 @@
 
 				<FirewallTuningCard
 					flowOffload={draft.flow_offload}
-					{sqmActive}
+					{sqmEnabled}
 					onToggleFlowOffload={(v) => handleGlobalToggle("flow_offload", v)}
 				/>
 			</div>

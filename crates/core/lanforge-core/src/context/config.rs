@@ -794,6 +794,21 @@ impl LanforgeContext {
         self.with_config(|c| c.firewall.clone())
     }
 
+    /// The firewall the daemon runs: `[firewall]` as the admin wrote it plus what the `PPPoE`
+    /// dataplane, SQM and the LAN interface force on it ([`FirewallConfig::effective`]).
+    #[must_use]
+    pub fn running_firewall_config(&self) -> FirewallConfig {
+        let lan = self.target_interface_name().unwrap_or_default();
+        self.with_config(|c| {
+            let sqm = c.traffic.as_ref().is_some_and(|t| t.sqm.enabled);
+            let pppoe = c.pppoe.as_ref().map(|p| &p.nftables);
+            c.firewall.as_ref().map_or_else(
+                || FirewallConfig::default().effective(pppoe, sqm, &lan),
+                |fw| fw.effective(pppoe, sqm, &lan),
+            )
+        })
+    }
+
     /// Returns the current dynamic traffic and SQM configuration, if configured.
     #[must_use]
     pub fn get_traffic_config(&self) -> Option<TrafficConfig> {

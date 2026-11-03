@@ -848,7 +848,7 @@ export interface DnsUpstreamEntry {
 	rtt_ms?: number | null;
 	latency_ms?: number | null;
 	success_rate_pct?: number;
-	status?: 'healthy' | 'degraded' | 'disabled' | 'unknown';
+	status?: 'healthy' | 'degraded' | 'disabled' | 'unknown' | 'untested' | 'idle';
 }
 
 export interface DnsUpstreamsResponse {
@@ -1421,7 +1421,6 @@ export interface FirewallZone {
 	name: string;
 	interfaces: string[];
 	open_ports: HostPortRule[];
-	allowed_subnets: string[];
 	input_policy: FirewallPolicy;
 	forward_policy: FirewallPolicy;
 	masquerade: boolean;
