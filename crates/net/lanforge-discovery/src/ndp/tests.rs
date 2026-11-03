@@ -497,3 +497,60 @@ fn test_ifname_cache() {
     // Non-existent interface index returns None
     assert_eq!(cache.get(999_999), None);
 }
+
+/// The ping sweep belongs to the serving instance. It was a detached task: a stopped Discovery
+/// kept pinging (and holding its raw sockets), and every restart added one more sweep.
+#[tokio::test]
+async fn stop_ends_the_ping_sweep() {
+    use crate::ping::IcmpPinger;
+    use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
+    use lanforge_types::system::ServiceId;
+    use std::time::Duration;
+
+    let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+    let _ = ctx.apply(DeviceUpdate::ArpSeen {
+        mac: MacAddr([0x02, 0, 0, 0, 0, 0x42]),
+        ip: Ipv4Addr::new(10, 0, 0, 42),
+        is_active: true,
+    });
+    assert_eq!(ctx.with_state(|s| s.devices.len()), 1);
+
+    let (conn, handle, _) = rtnetlink::new_connection().unwrap();
+    tokio::spawn(conn);
+    let (_netlink_tx, messages) = tokio::sync::broadcast::channel(16);
+    let cfg = MonitorConfig {
+        enabled: true,
+        ping_enabled: true,
+        ping_interval_secs: 1,
+        batch_interval_ms: 50,
+        ..Default::default()
+    };
+    let (wire, pinger) = IcmpPinger::inert();
+    let mut service = DiscoveryService::new(cfg, handle, messages, vec![], ctx.clone())
+        .with_pinger(Arc::new(pinger));
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(4);
+    let h = ServiceHandle::with_command_channel(ServiceId::Discovery, ctx.clone(), cmd_rx);
+    let ctx_serve = ctx.clone();
+    let serve = tokio::spawn(async move { service.serve(&ctx_serve, &h).await });
+
+    // The device goes unseen for a sweep interval, so the sweep pings it.
+    tokio::time::timeout(Duration::from_secs(3), wire.recv_reply())
+        .await
+        .expect("the sweep pings the stale device")
+        .expect("ping on the wire");
+
+    cmd_tx.send(ServiceCommand::Stop).await.expect("alive");
+    tokio::time::timeout(Duration::from_secs(2), serve)
+        .await
+        .expect("serve returns on Stop")
+        .expect("join")
+        .expect("serve ok");
+    while wire.try_recv_reply().is_some() {}
+
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert!(
+        wire.try_recv_reply().is_none(),
+        "a stopped Discovery still pings"
+    );
+}
