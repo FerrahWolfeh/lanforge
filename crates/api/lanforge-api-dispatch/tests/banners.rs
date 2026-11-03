@@ -95,3 +95,22 @@ async fn pppoe_uptime_is_the_session_age() {
     };
     assert_eq!(status.uptime_secs, Some(5));
 }
+
+/// A PPPoE session that is not up reads in words ("WaitingForCarrier" was the Debug output).
+#[tokio::test]
+async fn pppoe_summary_names_the_state_in_words() {
+    let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+    ctx.register_service(ServiceId::Pppoe, "PPPoE Client");
+    ctx.set_service_state(ServiceId::Pppoe, ServiceState::Online);
+    ctx.set_pppoe_status(Some(PppoeStatusResponse {
+        state: PppoeSessionState::WaitingForCarrier,
+        reconnect_attempts: 3,
+        ..Default::default()
+    }));
+
+    let banners = ClientContext::new(ctx).service_banners().await;
+    assert_eq!(
+        banners[0].summary.as_deref(),
+        Some("waiting for carrier · 3 retries so far")
+    );
+}

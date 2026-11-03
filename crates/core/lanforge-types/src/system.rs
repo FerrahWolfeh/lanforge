@@ -462,6 +462,22 @@ pub enum PppoeSessionState {
     Reconnecting,
 }
 
+impl PppoeSessionState {
+    /// The state in words, for summaries and logs.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Disconnected => "disconnected",
+            Self::WaitingForCarrier => "waiting for carrier",
+            Self::WaitingForTerminal => "waiting for terminal",
+            Self::Discovering => "discovering",
+            Self::Authenticating => "authenticating",
+            Self::Connected => "connected",
+            Self::Reconnecting => "reconnecting",
+        }
+    }
+}
+
 /// Status response payload for `PPPoE`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PppoeStatusResponse {

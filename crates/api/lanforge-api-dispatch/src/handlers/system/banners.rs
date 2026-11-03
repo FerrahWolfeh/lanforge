@@ -71,9 +71,13 @@ impl ClientContext {
                         format!("{ip} on {iface}")
                     }
                     (state, ..) if pppoe.reconnect_attempts > 0 => {
-                        format!("{state:?} · {} retries so far", pppoe.reconnect_attempts)
+                        format!(
+                            "{} · {} retries so far",
+                            state.label(),
+                            pppoe.reconnect_attempts
+                        )
                     }
-                    (state, ..) => format!("{state:?}"),
+                    (state, ..) => state.label().to_string(),
                 })
             }
             ServiceId::Ra => {
