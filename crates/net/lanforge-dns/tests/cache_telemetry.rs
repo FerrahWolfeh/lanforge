@@ -119,6 +119,7 @@ async fn query_logging_ring_buffer() {
             protocol: TransportProtocol::Udp,
             filter: None,
             coalesce_id: None,
+            repeats: 1,
         });
     }
 

@@ -938,6 +938,65 @@ mod tests {
         );
     }
 
+    /// Rows written before `repeats` existed (postcard is positional: they lack the last field)
+    /// still read, as one query each, in every reader of the query table.
+    #[test]
+    fn query_rows_from_before_repeats_still_read() {
+        use lanforge_db_core::LogStore;
+        use lanforge_types::network::dns::{DnsRecordType, TransportProtocol};
+        use lanforge_types::network::{QueryLogEntry, QueryResult};
+
+        let db = RedbDatabase::open_in_memory();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let entry = QueryLogEntry {
+            timestamp: now,
+            src_ip: "192.168.1.60".parse().unwrap(),
+            domain: Arc::from("old.example"),
+            upstream_us: 0,
+            qtype: DnsRecordType::A,
+            result: QueryResult::Forwarded,
+            cached: false,
+            src_mac: Some("aa:bb:cc:dd:ee:01".parse().unwrap()),
+            answer: None,
+            protocol: TransportProtocol::Udp,
+            filter: None,
+            coalesce_id: None,
+            repeats: 1,
+        };
+        let mut old_row = encode(&entry).unwrap();
+        assert_eq!(
+            old_row.pop(),
+            Some(1),
+            "repeats = 1 is the trailing varint byte"
+        );
+        let txn = db.db.begin_write().unwrap();
+        {
+            let mut table = txn.open_table(crate::tables::TABLE_DNS_QUERIES).unwrap();
+            table.insert((now, 0), old_row.as_slice()).unwrap();
+        }
+        txn.commit().unwrap();
+
+        let (rows, total) = db
+            .get_dns_query_history(10, None, None, None, None, None)
+            .unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(rows[0].domain.as_ref(), "old.example");
+        assert_eq!(rows[0].repeats, 1);
+        assert_eq!(
+            // A MAC client is counted from the table itself (an IP one from the hourly stats).
+            db.get_dns_top_domains_for_client("aa:bb:cc:dd:ee:01", 5)
+                .unwrap(),
+            vec![("old.example".to_string(), 1)]
+        );
+        let rate = db.get_dns_query_rate(now - 60).unwrap();
+        assert_eq!(rate.iter().map(|(_, n)| n).sum::<u64>(), 1);
+        let detailed = db.get_dns_query_rate_detailed(now - 60, 30).unwrap();
+        assert_eq!(detailed.iter().map(|b| b.total).sum::<u64>(), 1);
+    }
+
     #[tokio::test]
     async fn test_redb_log_store() {
         use lanforge_core::bus::{LanforgeEvent, SystemEvent, TimedEvent};
@@ -978,6 +1037,8 @@ mod tests {
             protocol: TransportProtocol::Udp,
             filter: None,
             coalesce_id: None,
+            // A folded line: it stands for three identical queries.
+            repeats: 3,
         };
         let query2 = QueryLogEntry {
             timestamp: bucket_base + 20,
@@ -992,6 +1053,7 @@ mod tests {
             protocol: TransportProtocol::Udp,
             filter: None,
             coalesce_id: None,
+            repeats: 1,
         };
         db.record_dns_queries_batch(&[std::sync::Arc::new(query1), std::sync::Arc::new(query2)])
             .unwrap();
@@ -1028,15 +1090,21 @@ mod tests {
 
         let top_clients = db.get_dns_top_clients(5).unwrap();
         assert_eq!(top_clients.len(), 1);
-        assert_eq!(top_clients[0], ("192.168.1.50".to_string(), 2, 1));
+        // Counts are queries, not lines: the folded line weighs 3.
+        assert_eq!(top_clients[0], ("192.168.1.50".to_string(), 4, 1));
+        assert_eq!(
+            db.get_dns_top_domains_for_client("192.168.1.50", 5)
+                .unwrap(),
+            vec![("example.com".to_string(), 3)]
+        );
 
         let query_rate = db.get_dns_query_rate(since_secs).unwrap();
-        assert!(!query_rate.is_empty());
+        assert_eq!(query_rate.iter().map(|(_, n)| n).sum::<u64>(), 4);
 
         let detailed_rates = db.get_dns_query_rate_detailed(since_secs, 900).unwrap();
         assert_eq!(detailed_rates.len(), 1);
-        assert_eq!(detailed_rates[0].total, 2);
-        assert_eq!(detailed_rates[0].forwarded, 1);
+        assert_eq!(detailed_rates[0].total, 4);
+        assert_eq!(detailed_rates[0].forwarded, 3);
         assert_eq!(detailed_rates[0].blocked, 1);
 
         // Test Lifetime Stats

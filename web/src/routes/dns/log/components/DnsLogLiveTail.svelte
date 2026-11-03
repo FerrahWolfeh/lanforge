@@ -418,6 +418,14 @@
 									<span class="truncate max-w-[220px] font-mono text-foreground font-medium" title={domainClean}>
 										{domainClean}
 									</span>
+									{#if entry.repeats > 1}
+										<span
+											class="shrink-0 rounded border border-border bg-muted px-1 font-mono text-[10px] text-muted-foreground"
+											title={`${entry.repeats} identical queries from this client, folded into one line`}
+										>
+											×{entry.repeats}
+										</span>
+									{/if}
 									<button
 										type="button"
 										onclick={(e) => {

@@ -123,6 +123,8 @@ pub struct DnsQueryLogEntry {
     pub filter: Option<Box<FilterMatch>>,
     #[serde(default)]
     pub coalesce_id: Option<u64>,
+    /// Identical queries this line stands for (`1` = a single query).
+    pub repeats: u32,
 }
 
 /// A response containing recent DNS query logs.

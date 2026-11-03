@@ -197,12 +197,36 @@ impl DnsContext {
                 protocol: event.protocol,
                 filter: event.filter,
                 coalesce_id: event.coalesce_id,
+                repeats: 1,
             };
-            log.push(entry.clone());
-
-            let _ = self.bus.publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(
-                std::sync::Arc::new(entry),
-            )));
+            if let Some(entry) = log.admit(entry) {
+                self.emit_log(log, entry);
+            }
         }
+    }
+
+    /// Writes the folded-repeat lines whose window ended by `now` (see [`QueryRing::admit`]).
+    pub fn flush_log_repeats(&self, now: u64) {
+        if let Some(log) = &self.query_log {
+            for entry in log.flush_repeats(now) {
+                self.emit_log(log, entry);
+            }
+        }
+    }
+
+    /// Writes every folded-repeat line still open: called when the service stops.
+    pub fn drain_log_repeats(&self) {
+        if let Some(log) = &self.query_log {
+            for entry in log.drain_repeats() {
+                self.emit_log(log, entry);
+            }
+        }
+    }
+
+    fn emit_log(&self, log: &QueryRing, entry: QueryLogEntry) {
+        log.push(entry.clone());
+        let _ = self
+            .bus
+            .publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(Arc::new(entry))));
     }
 }

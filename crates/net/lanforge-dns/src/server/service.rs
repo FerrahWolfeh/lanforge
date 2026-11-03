@@ -37,6 +37,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast::error::RecvError;
 #[cfg(feature = "adblock")]
 use tracing::debug;
@@ -414,6 +415,10 @@ impl AsyncService for DnsService {
             })
         };
 
+        // Closes the query log's repeat windows (see `QueryRing::admit`).
+        let mut repeat_tick = tokio::time::interval(LOG_REPEAT_TICK);
+        repeat_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
         h.ready();
 
         loop {
@@ -421,6 +426,9 @@ impl AsyncService for DnsService {
                 break;
             }
             tokio::select! {
+                _ = repeat_tick.tick(), if dns_ctx.query_log.is_some() => {
+                    dns_ctx.flush_log_repeats(unix_now_secs());
+                }
                 Ok(()) = wan_rx.changed() => {
                     let snap = wan_rx.borrow().clone();
                     if snap.is_up() {
@@ -559,10 +567,22 @@ impl AsyncService for DnsService {
         if let Ok(rx) = mpsc_worker.await {
             ctx.return_dns_requests(rx);
         }
+        // The workers are gone: write the repeat counts still open, none is lost on a stop.
+        dns_ctx.drain_log_repeats();
         ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
 
         Ok(())
     }
+}
+
+/// How often the query log's repeat windows are checked: a folded line is written at most this
+/// long after its window ends.
+const LOG_REPEAT_TICK: Duration = Duration::from_secs(10);
+
+fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Upstreams DNS forwards to: the configured ones or, when none is configured, the resolvers the

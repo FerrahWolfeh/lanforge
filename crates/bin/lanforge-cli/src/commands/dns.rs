@@ -837,6 +837,11 @@ fn format_log_entry(
         .unwrap_or(&client_ip);
 
     let answer_display = entry.answer.as_deref().unwrap_or("—");
+    let domain_display = if entry.repeats > 1 {
+        format!("{} ×{}", entry.domain, entry.repeats)
+    } else {
+        entry.domain.to_string()
+    };
 
     if printer.no_color {
         let latency_str = if entry.upstream_us == 0 {
@@ -849,7 +854,7 @@ fn format_log_entry(
             time_str,
             client_display.to_string(),
             entry.qtype.to_string(),
-            entry.domain.to_string(),
+            domain_display,
             entry.result.to_string(),
             answer_display.to_string(),
             latency_str,
@@ -882,7 +887,7 @@ fn format_log_entry(
             time_str.dimmed().to_string(),
             client_display.bright_blue().to_string(),
             entry.qtype.to_string().cyan().to_string(),
-            entry.domain.to_string(),
+            domain_display,
             outcome_str,
             answer_display.to_string(),
             latency_str,
@@ -1010,6 +1015,7 @@ async fn follow_dns_logs(
                             upstream_us: q.upstream_us,
                             filter: None,
                             coalesce_id: q.coalesce_id,
+                            repeats: q.repeats,
                         };
                         let cols = format_log_entry(&entry, &ip_to_host, printer);
                         println!("{}", cols.join(" │ "));
@@ -1068,6 +1074,7 @@ async fn follow_dns_logs(
                         upstream_us: q.upstream_us,
                         filter: None,
                         coalesce_id: q.coalesce_id,
+                        repeats: q.repeats,
                     };
                     let cols = format_log_entry(&entry, &ip_to_host, printer);
                     println!("{}", cols.join(" │ "));
@@ -2260,6 +2267,7 @@ mod tests {
             upstream_us: 15_400,
             filter: None,
             coalesce_id: None,
+            repeats: 1,
         };
         let host_map = HashMap::new();
         let printer = Printer::new(false, true, false);
@@ -2270,6 +2278,14 @@ mod tests {
         assert_eq!(cols[4], "Forwarded");
         assert_eq!(cols[5], "93.184.216.34");
         assert_eq!(cols[6], "15.4ms");
+
+        // A folded burst of repeats reads as one line with its count.
+        let grouped = DnsQueryLogEntry {
+            repeats: 340,
+            ..entry
+        };
+        let cols = format_log_entry(&grouped, &host_map, &printer);
+        assert_eq!(cols[3], "example.com ×340");
     }
 
     #[test]

@@ -809,6 +809,7 @@ mod tests {
             protocol: TransportProtocol::Udp,
             filter: None,
             coalesce_id: None,
+            repeats: 1,
         });
 
         for _ in 0..MAX_DNS_LOG_BUFFER + 5 {

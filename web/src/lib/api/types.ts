@@ -833,6 +833,8 @@ export interface DnsQueryLogEntry {
 	answer?: string | null;
 	filter?: FilterMatch | null;
 	coalesce_id?: number | null;
+	/** Identical queries (same client, name, type, outcome) this line stands for; 1 = one query. */
+	repeats: number;
 }
 
 export interface DnsUpstreamEntry {

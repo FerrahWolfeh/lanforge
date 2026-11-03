@@ -9,7 +9,9 @@ use lanforge_core::bus::TimedEvent;
 use lanforge_db_core::{DbError, DnsQueryRateBucket, LogStore};
 use lanforge_types::device::{Device, Origin};
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType};
+use lanforge_types::network::dns::{
+    DnsLifetimeStats, DnsRecordType, FilterMatch, TransportProtocol,
+};
 use lanforge_types::network::{QueryLogEntry, QueryResult, TrafficHistorySample};
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata};
 use std::collections::BTreeMap;
@@ -47,24 +49,71 @@ struct HourlyDnsStats {
     other_client_domains: u64,
 }
 
-fn bump_capped(map: &mut BTreeMap<String, u64>, key: String, other: &mut u64) {
+fn bump_capped(map: &mut BTreeMap<String, u64>, key: String, n: u64, other: &mut u64) {
     if let Some(count) = map.get_mut(&key) {
-        *count += 1;
+        *count += n;
     } else if map.len() < MAX_HOURLY_CARDINALITY {
-        map.insert(key, 1);
+        map.insert(key, n);
     } else {
-        *other += 1;
+        *other += n;
     }
 }
 
-fn bump_capped_qtype(map: &mut BTreeMap<u16, u64>, key: u16, other: &mut u64) {
+fn bump_capped_qtype(map: &mut BTreeMap<u16, u64>, key: u16, n: u64, other: &mut u64) {
     if let Some(count) = map.get_mut(&key) {
-        *count += 1;
+        *count += n;
     } else if map.len() < MAX_HOURLY_CARDINALITY {
-        map.insert(key, 1);
+        map.insert(key, n);
     } else {
-        *other += 1;
+        *other += n;
     }
+}
+
+/// A `QueryLogEntry` as stored before `repeats` existed: one line was one query. Postcard is
+/// positional, so those rows fail to decode as the current struct and are read through this.
+#[derive(serde::Deserialize)]
+struct QueryLogEntryV1 {
+    timestamp: u64,
+    src_ip: IpAddr,
+    domain: std::sync::Arc<str>,
+    upstream_us: u32,
+    qtype: DnsRecordType,
+    result: QueryResult,
+    cached: bool,
+    src_mac: Option<MacAddr>,
+    answer: Option<String>,
+    protocol: TransportProtocol,
+    filter: Option<Box<FilterMatch>>,
+    coalesce_id: Option<u64>,
+}
+
+impl From<QueryLogEntryV1> for QueryLogEntry {
+    fn from(v1: QueryLogEntryV1) -> Self {
+        Self {
+            timestamp: v1.timestamp,
+            src_ip: v1.src_ip,
+            domain: v1.domain,
+            upstream_us: v1.upstream_us,
+            qtype: v1.qtype,
+            result: v1.result,
+            cached: v1.cached,
+            src_mac: v1.src_mac,
+            answer: v1.answer,
+            protocol: v1.protocol,
+            filter: v1.filter,
+            coalesce_id: v1.coalesce_id,
+            repeats: 1,
+        }
+    }
+}
+
+/// Decodes a stored query-log row, current or pre-`repeats`.
+fn decode_query(bytes: &[u8]) -> Result<QueryLogEntry, DbError> {
+    decode::<QueryLogEntry>(bytes).or_else(|err| {
+        decode::<QueryLogEntryV1>(bytes)
+            .map(QueryLogEntry::from)
+            .map_err(|_| err)
+    })
 }
 
 fn load_recent_hourly_stats(db: &RedbDatabase) -> Result<Vec<HourlyDnsStats>, DbError> {
@@ -407,57 +456,7 @@ impl LogStore for RedbDatabase {
                         }
                     };
 
-                    bucket.total += 1;
-                    let outcome_key = match entry.result {
-                        QueryResult::Blocked | QueryResult::CachedBlock => {
-                            bucket.blocked += 1;
-                            "blocked"
-                        }
-                        QueryResult::Cached | QueryResult::Coalesced => {
-                            bucket.cached += 1;
-                            "cached"
-                        }
-                        QueryResult::Local => {
-                            bucket.local += 1;
-                            "local"
-                        }
-                        QueryResult::Rewritten => {
-                            bucket.rewritten += 1;
-                            "rewritten"
-                        }
-                        _ => {
-                            bucket.forwarded += 1;
-                            "forwarded"
-                        }
-                    };
-
-                    let static_qtype = entry.qtype.as_static_str();
-                    let qtype_str: std::borrow::Cow<'_, str> = match static_qtype {
-                        Some(s) => std::borrow::Cow::Borrowed(s),
-                        None => std::borrow::Cow::Owned(entry.qtype.to_string()),
-                    };
-
-                    if let Some(count) = bucket.record_types.get_mut(qtype_str.as_ref()) {
-                        *count += 1;
-                    } else {
-                        bucket
-                            .record_types
-                            .insert(qtype_str.clone().into_owned(), 1);
-                    }
-
-                    let submap = if let Some(m) = bucket.outcome_types.get_mut(outcome_key) {
-                        m
-                    } else {
-                        bucket
-                            .outcome_types
-                            .entry(outcome_key.to_string())
-                            .or_default()
-                    };
-                    if let Some(count) = submap.get_mut(qtype_str.as_ref()) {
-                        *count += 1;
-                    } else {
-                        submap.insert(qtype_str.into_owned(), 1);
-                    }
+                    bucket.add(entry);
                 }
 
                 for (bucket_ts, bucket) in cached_buckets {
@@ -488,41 +487,58 @@ impl LogStore for RedbDatabase {
                         row.insert(existing)
                     }
                 };
-                stats.total += 1;
+                // One line stands for `repeats` queries.
+                let n = u64::from(entry.repeats);
+                stats.total += n;
                 let client = entry.src_ip.to_string();
-                bump_capped(&mut stats.clients, client.clone(), &mut stats.other_clients);
+                bump_capped(
+                    &mut stats.clients,
+                    client.clone(),
+                    n,
+                    &mut stats.other_clients,
+                );
                 bump_capped_qtype(
                     &mut stats.qtypes,
                     u16::from(entry.qtype),
+                    n,
                     &mut stats.other_qtypes,
                 );
                 let protocol = entry.protocol.to_string().to_ascii_lowercase();
-                bump_capped(&mut stats.protocols, protocol, &mut stats.other_protocols);
+                bump_capped(
+                    &mut stats.protocols,
+                    protocol,
+                    n,
+                    &mut stats.other_protocols,
+                );
                 let is_blocked = matches!(
                     entry.result,
                     QueryResult::Blocked | QueryResult::CachedBlock
                 );
                 if is_blocked {
-                    stats.blocked += 1;
+                    stats.blocked += n;
                     bump_capped(
                         &mut stats.blocked_domains,
                         entry.domain.to_string(),
+                        n,
                         &mut stats.other_blocked_domains,
                     );
                     bump_capped(
                         &mut stats.blocked_clients,
                         client,
+                        n,
                         &mut stats.other_blocked_clients,
                     );
                 } else {
                     bump_capped(
                         &mut stats.domains,
                         entry.domain.to_string(),
+                        n,
                         &mut stats.other_domains,
                     );
                     bump_capped(
                         &mut stats.client_domains,
                         format!("{}|{}", entry.src_ip, entry.domain),
+                        n,
                         &mut stats.other_client_domains,
                     );
                 }
@@ -823,7 +839,7 @@ impl LogStore for RedbDatabase {
             {
                 let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
                 let bytes = val.value();
-                let entry: QueryLogEntry = match decode(bytes) {
+                let entry = match decode_query(bytes) {
                     Ok(e) => e,
                     Err(e) => {
                         tracing::warn!(
@@ -863,7 +879,7 @@ impl LogStore for RedbDatabase {
                     break;
                 }
                 let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-                match decode(val.value()) {
+                match decode_query(val.value()) {
                     Ok(entry) => entries.push(entry),
                     Err(e) => {
                         tracing::warn!("Skipping unreadable DNS query log entry: {e}");
@@ -944,8 +960,7 @@ impl LogStore for RedbDatabase {
         let mut counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
         for item in table.iter().map_err(|e| DbError::Backend(e.to_string()))? {
             let (_, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
-            let entry: QueryLogEntry = decode(val.value())
-                .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
+            let entry = decode_query(val.value())?;
             if matches!(
                 entry.result,
                 QueryResult::Blocked | QueryResult::CachedBlock
@@ -955,10 +970,11 @@ impl LogStore for RedbDatabase {
             let matches = (client_ip.is_some() && client_ip == Some(entry.src_ip))
                 || (client_mac.is_some() && client_mac == entry.src_mac);
             if matches {
+                let n = u64::from(entry.repeats);
                 if let Some(count) = counts.get_mut(entry.domain.as_ref()) {
-                    *count += 1;
+                    *count += n;
                 } else {
-                    counts.insert(entry.domain.to_string(), 1);
+                    counts.insert(entry.domain.to_string(), n);
                 }
             }
         }
@@ -995,10 +1011,11 @@ impl LogStore for RedbDatabase {
             .range((since_secs, 0)..)
             .map_err(|e| DbError::Backend(e.to_string()))?
         {
-            let (k, _) = item.map_err(|e| DbError::Backend(e.to_string()))?;
+            let (k, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
             let (timestamp, _) = k.value();
             let bucket = (timestamp / 30) * 30;
-            *buckets.entry(bucket).or_insert(0) += 1;
+            let n = u64::from(decode_query(val.value())?.repeats);
+            *buckets.entry(bucket).or_insert(0) += n;
         }
 
         let mut vec: Vec<(u64, u64)> = buckets.into_iter().collect();
@@ -1085,8 +1102,7 @@ impl LogStore for RedbDatabase {
         {
             let (k, val) = item.map_err(|e| DbError::Backend(e.to_string()))?;
             let (ts, _) = k.value();
-            let entry: QueryLogEntry = decode(val.value())
-                .map_err(|e| DbError::Backend(format!("Deserialization error: {e}")))?;
+            let entry = decode_query(val.value())?;
             let bucket_ts = (ts / bsize) * bsize;
             let bucket = buckets
                 .entry(bucket_ts)
@@ -1094,56 +1110,7 @@ impl LogStore for RedbDatabase {
                     timestamp: bucket_ts,
                     ..Default::default()
                 });
-            bucket.total += 1;
-
-            let outcome_key = match entry.result {
-                QueryResult::Blocked | QueryResult::CachedBlock => {
-                    bucket.blocked += 1;
-                    "blocked"
-                }
-                QueryResult::Cached | QueryResult::Coalesced => {
-                    bucket.cached += 1;
-                    "cached"
-                }
-                QueryResult::Local => {
-                    bucket.local += 1;
-                    "local"
-                }
-                QueryResult::Rewritten => {
-                    bucket.rewritten += 1;
-                    "rewritten"
-                }
-                _ => {
-                    bucket.forwarded += 1;
-                    "forwarded"
-                }
-            };
-
-            if let Some(s) = entry.qtype.as_static_str() {
-                if let Some(cnt) = bucket.record_types.get_mut(s) {
-                    *cnt += 1;
-                } else {
-                    bucket.record_types.insert(s.to_string(), 1);
-                }
-                let out_map = bucket
-                    .outcome_types
-                    .entry(outcome_key.to_string())
-                    .or_default();
-                if let Some(cnt) = out_map.get_mut(s) {
-                    *cnt += 1;
-                } else {
-                    out_map.insert(s.to_string(), 1);
-                }
-            } else {
-                let qtype_str = entry.qtype.to_string();
-                *bucket.record_types.entry(qtype_str.clone()).or_insert(0) += 1;
-                *bucket
-                    .outcome_types
-                    .entry(outcome_key.to_string())
-                    .or_default()
-                    .entry(qtype_str)
-                    .or_insert(0) += 1;
-            }
+            bucket.add(&entry);
         }
 
         let mut vec: Vec<DnsQueryRateBucket> = buckets.into_values().collect();

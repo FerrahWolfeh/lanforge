@@ -147,6 +147,7 @@
 									: typeof parsed.coalesce_id === "number"
 										? parsed.coalesce_id
 										: null,
+							repeats: typeof dnsEv.repeats === "number" ? dnsEv.repeats : 1,
 						};
 
 						liveEntries = [newEntry, ...liveEntries.slice(0, bufferLimit - 1)];
