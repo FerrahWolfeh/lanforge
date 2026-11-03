@@ -1,11 +1,11 @@
 <script lang="ts">
 	let {
-		data = [10, 12, 11, 14, 13, 16, 15, 18, 17, 20],
+		data,
 		color = "#38bdf8",
 		height = 36,
 		class: className = "",
 	}: {
-		data?: number[];
+		data: number[];
 		color?: string;
 		height?: number;
 		class?: string;
@@ -15,7 +15,8 @@
 	const gradId = `sparkline-grad-${uid.replace(/:/g, "")}`;
 
 	const normalized = $derived.by(() => {
-		const pts = data.length > 0 ? data : [10, 12, 14, 13, 15, 16];
+		const pts = data;
+		if (pts.length === 0) return null;
 		const min = Math.min(...pts);
 		const max = Math.max(...pts);
 		const range = max - min || 1;
@@ -47,6 +48,7 @@
 	});
 </script>
 
+{#if normalized}
 <div class={["w-full overflow-hidden flex items-end", className].join(" ")}>
 	<svg
 		viewBox="0 0 {normalized.width} {normalized.height}"
@@ -71,3 +73,4 @@
 		/>
 	</svg>
 </div>
+{/if}
