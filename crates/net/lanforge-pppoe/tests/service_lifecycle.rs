@@ -7,6 +7,7 @@ use std::time::Duration;
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
+use lanforge_core::error::CoreError;
 use lanforge_core::service::{
     AsyncService, LossPolicy, ServiceCommand, ServiceHandle, StatusReport,
 };
@@ -1072,4 +1073,168 @@ async fn test_pppoe_follows_the_isp_ipv6_resolvers_from_ra() {
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     wait_for_session_down(&mut pppoe_sub).await;
     let _ = timeout(Duration::from_secs(2), serve).await;
+}
+
+/// What the concentrator saw, plus the serve task as the supervisor's runner holds it.
+type Served = tokio::task::JoinHandle<(PppoeService, Result<(), CoreError>)>;
+
+/// Starts the service against a mock concentrator.
+fn start_with_bras(
+    ctx: &LanforgeContext,
+    cfg: PppoeConfig,
+    bras: MockBrasConfig,
+) -> (
+    Arc<std::sync::Mutex<mock_bras::Seen>>,
+    mpsc::Sender<ServiceCommand>,
+    Served,
+) {
+    ctx.update_pppoe_config(cfg.clone());
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let seen = bras.seen.clone();
+    let _bras = spawn_mock_bras(handle_inert, bras);
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let (h, cmd_tx) = controlled_handle(ctx);
+    let handle = tokio::spawn(async move {
+        let res = service.serve(&ctx_clone, &h).await;
+        (service, res)
+    });
+    (seen, cmd_tx, handle)
+}
+
+/// New credentials end the session and the next one must log in with them. The service went
+/// back to discovery with the configuration it held before the change (the keepalive saw the
+/// change, the service never did): the ISP got the old username again.
+#[tokio::test]
+async fn test_pppoe_reconnects_with_the_new_credentials() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "old_user".into(),
+        reconnect_delay_secs: 1,
+        ..Default::default()
+    };
+    let (seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg.clone(), MockBrasConfig::default());
+    wait_for_session_up(&mut pppoe_sub).await;
+
+    ctx.update_pppoe_config(PppoeConfig {
+        username: "new_user".into(),
+        ..cfg
+    });
+    wait_for_session_down(&mut pppoe_sub).await;
+    wait_for_session_up(&mut pppoe_sub).await;
+
+    assert_eq!(seen.lock().unwrap().chap_names, ["old_user", "new_user"]);
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}
+
+/// Runtime-only settings (LCP echo, reconnect pacing, PADT on stop) apply to the live session:
+/// no reconnect, and the session ends by the new rules.
+#[tokio::test]
+async fn test_pppoe_runtime_settings_apply_without_reconnect() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        ..Default::default()
+    };
+    let (seen, cmd_tx, handle) = start_with_bras(&ctx, cfg.clone(), MockBrasConfig::default());
+    wait_for_session_up(&mut pppoe_sub).await;
+
+    ctx.update_pppoe_config(PppoeConfig {
+        lcp_echo_interval_secs: 7,
+        lcp_echo_max_failures: 9,
+        reconnect_delay_secs: 30,
+        discovery_padi_retries: 2,
+        send_padt_on_shutdown: false,
+        ..cfg
+    });
+    // Nothing may happen to the session: no SessionDown, no new login.
+    let quiet = timeout(Duration::from_millis(500), async {
+        loop {
+            if let Ok(evt) = pppoe_sub.recv().await
+                && let LanforgeEvent::Pppoe(PppoeEvent::SessionDown { reason }) = evt.event
+            {
+                return reason;
+            }
+        }
+    })
+    .await;
+    assert!(quiet.is_err(), "session dropped: {quiet:?}");
+    assert_eq!(seen.lock().unwrap().chap_names, ["client1"]);
+
+    cmd_tx
+        .send(ServiceCommand::Stop)
+        .await
+        .expect("service alive");
+    let (_, res) = timeout(Duration::from_secs(2), handle)
+        .await
+        .expect("serve returns on Stop")
+        .expect("join");
+    assert!(res.is_ok());
+    assert_eq!(
+        seen.lock().unwrap().padts,
+        0,
+        "PADT sent although switched off"
+    );
+}
+
+/// A change that lands while the session is still being negotiated (discovery, LCP, auth) is not
+/// lost: the keepalive used to open a fresh subscription, already "up to date", and the session
+/// stayed on the old credentials until the next drop.
+#[tokio::test]
+async fn test_pppoe_change_during_negotiation_is_not_lost() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "old_user".into(),
+        reconnect_delay_secs: 1,
+        ..Default::default()
+    };
+    let bras = MockBrasConfig {
+        pado_delay: Some(Duration::from_millis(300)),
+        ..Default::default()
+    };
+    let (seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg.clone(), bras);
+    timeout(Duration::from_secs(2), async {
+        while ctx
+            .pppoe_status()
+            .is_none_or(|s| s.state != PppoeSessionState::Discovering)
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("discovery starts");
+    ctx.update_pppoe_config(PppoeConfig {
+        username: "new_user".into(),
+        ..cfg
+    });
+
+    let names = timeout(Duration::from_secs(5), async {
+        loop {
+            wait_for_session_up(&mut pppoe_sub).await;
+            let names = seen.lock().unwrap().chap_names.clone();
+            if names.last().is_some_and(|n| n == "new_user") {
+                return names;
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "never logged in with the new user: {:?}",
+            seen.lock().unwrap().chap_names
+        )
+    });
+    assert!(names.len() <= 2, "{names:?}");
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
 }

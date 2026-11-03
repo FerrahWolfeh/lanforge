@@ -326,7 +326,11 @@ impl PppoeService {
 
     /// Idempotent: PADT once per negotiated session, `SessionDown` once per `SessionUp`.
     /// `notify_peer` is false when the concentrator already ended the session.
+    /// Runtime settings changed during the session (PADT on stop, reconnect pacing) rule its end;
+    /// the identity fields are left alone, the session's link is still the one to deconfigure.
     async fn teardown_session(&mut self, reason: String, notify_peer: bool) {
+        let latest = self.config_sub.current();
+        self.apply_hot_config(&latest);
         let had_session = std::mem::take(&mut self.announced);
         let session_meta = self.active_session.take();
         self.connected_at = None;
@@ -1075,8 +1079,7 @@ impl PppoeService {
                 &self.ctx,
                 lcp_res.local_magic,
                 lcp_res.peer_magic,
-                self.cfg.lcp_echo_interval_secs,
-                self.cfg.lcp_echo_max_failures,
+                &mut self.config_sub,
                 keepalive_prober,
                 PadtWatch {
                     transport: &transport,
@@ -1119,6 +1122,8 @@ impl PppoeService {
         self.last_uptime = self.connected_at.map(|t| t.elapsed());
         let peer_ended = matches!(flow_res, Err(PppoeError::PadtReceived));
         self.teardown_session(reason, !peer_ended).await;
+        // The next session runs on everything seen so far, identity fields included.
+        self.cfg = (*self.config_sub.current()).clone();
 
         flow_res
     }

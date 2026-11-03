@@ -5,14 +5,14 @@ use crate::lcp::{LCP_CONF_REQ, LCP_ECHO_REP, LCP_ECHO_REQ, LCP_TERM_ACK, LCP_TER
 use crate::service::SystemInterrupt;
 use crate::session::PppoeSession;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
-use lanforge_core::context::LanforgeContext;
+use lanforge_core::context::{ConfigSubscription, LanforgeContext};
 use lanforge_transport::{ArpProber, PppoeTransport};
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::identifiers::MacAddr;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
-use tokio::time::interval;
+use tokio::time::{Instant, Interval, interval_at};
 use tracing::{debug, info, warn};
 
 pub const PPP_IP: u16 = 0x0021;
@@ -34,14 +34,23 @@ impl PadtWatch<'_> {
     }
 }
 
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+/// The LCP echo timer: first tick one period from now (an immediate tick would count a missed
+/// echo before the peer could answer). `0` (echo off) still ticks every second, sending nothing.
+fn echo_timer(interval_secs: u64) -> Interval {
+    let period = Duration::from_secs(interval_secs.max(1));
+    interval_at(Instant::now() + period, period)
+}
+
+/// Watches the live session. `config_sub` is the service's own subscription: a change seen here
+/// counts as applied for the service too, and a change that arrived while the session was being
+/// negotiated is still pending here (a fresh subscription would have missed it).
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn run_keepalive(
     session: &PppoeSession,
     ctx: &LanforgeContext,
     local_magic: u32,
     peer_magic: u32,
-    mut interval_secs: u64,
-    mut max_failures: u32,
+    config_sub: &mut ConfigSubscription<PppoeConfig>,
     prober: Option<(&ArpProber, Ipv4Addr, Option<Ipv4Addr>, Duration)>,
     padt: PadtWatch<'_>,
 ) -> Result<Option<SystemInterrupt>, PppoeError> {
@@ -50,11 +59,12 @@ pub(crate) async fn run_keepalive(
     let mut watch_padt = true;
     let mut failed_echoes: u32 = 0;
 
-    let check_interval = Duration::from_secs(interval_secs.max(1));
-    let mut interval_timer = interval(check_interval);
+    let applied = config_sub.current();
+    let mut interval_secs = applied.lcp_echo_interval_secs;
+    let mut max_failures = applied.lcp_echo_max_failures;
+    let mut interval_timer = echo_timer(interval_secs);
 
     let mut bus_rx = ctx.bus().subscribe_system();
-    let mut config_sub = ctx.config_subscription::<PppoeConfig>();
     let mut read_buf = [0u8; 1500];
 
     loop {
@@ -74,10 +84,14 @@ pub(crate) async fn run_keepalive(
                 match delta.impact {
                     ChangeImpact::None => {}
                     ChangeImpact::Hot => {
-                        info!("PPPoE keepalive updated timers in-place");
-                        interval_secs = delta.new.lcp_echo_interval_secs;
-                        max_failures = delta.new.lcp_echo_max_failures;
-                        interval_timer = interval(Duration::from_secs(interval_secs.max(1)));
+                        if delta.new.lcp_echo_interval_secs != interval_secs
+                            || delta.new.lcp_echo_max_failures != max_failures
+                        {
+                            interval_secs = delta.new.lcp_echo_interval_secs;
+                            max_failures = delta.new.lcp_echo_max_failures;
+                            interval_timer = echo_timer(interval_secs);
+                            info!(interval_secs, max_failures, "PPPoE LCP echo timers updated in place");
+                        }
                     }
                     ChangeImpact::Reconnect | ChangeImpact::Rebind => {
                         info!("PPPoE keepalive received config change requiring reconnect; terminating session to reconnect");
