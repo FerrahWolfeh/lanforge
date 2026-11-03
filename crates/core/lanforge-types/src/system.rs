@@ -406,8 +406,9 @@ pub struct ServiceBanner {
     pub name: String,
     pub state: ServiceState,
     pub uptime_secs: u64,
-    /// One line built by the API from live data (leases, session, cache…); `None` when the
-    /// service has nothing live to say. Never a placeholder value.
+    /// One line built by the API: live data while the service serves (leases, session,
+    /// cache…), else why it does not (dormant, failed…). `None` when there is nothing to say,
+    /// never a placeholder value.
     #[serde(default)]
     pub summary: Option<String>,
     #[serde(default)]

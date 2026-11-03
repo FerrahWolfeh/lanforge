@@ -9,13 +9,14 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::snapshot::{WanSnapshot, WanState};
-use lanforge_types::system::{PppoeSessionState, PppoeStatusResponse, ServiceId, ServiceState};
+use lanforge_types::system::{
+    DormantReason, PppoeSessionState, PppoeStatusResponse, ServiceId, ServiceState, StateDetail,
+};
 use lanforge_types::update::DeviceUpdate;
 
 /// The summaries read what the serving instances publish now (the old banners read a
 /// registration-time instance: "0 cache entries", WAN "Down (-)" on a live box), and a service
-/// with nothing live to report, or not serving (TFTP here), gets no summary instead of a
-/// made-up default or stale numbers.
+/// that is not serving (TFTP here) shows why instead of a made-up default or stale numbers.
 #[tokio::test]
 async fn summaries_show_live_data_and_nothing_else() {
     let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
@@ -29,6 +30,12 @@ async fn summaries_show_live_data_and_nothing_else() {
         ctx.set_service_state(id, ServiceState::Online);
     }
     ctx.set_service_state(ServiceId::Tftp, ServiceState::Inactive);
+    ctx.set_service_detail(
+        ServiceId::Tftp,
+        Some(StateDetail::Dormant(DormantReason::disabled(
+            "tftp.enabled",
+        ))),
+    );
     let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
         mac: MacAddr([2, 0, 0, 0, 0, 1]),
         ip: "192.168.1.20".parse().unwrap(),
@@ -61,6 +68,10 @@ async fn summaries_show_live_data_and_nothing_else() {
         Some("203.0.113.7 on ppp0")
     );
     assert_eq!(summary(ServiceId::Wan).as_deref(), Some("up on ppp0"));
-    assert_eq!(summary(ServiceId::Tftp), None);
+    assert_eq!(
+        summary(ServiceId::Tftp).as_deref(),
+        Some("dormant: disabled (tftp.enabled)"),
+        "not serving: the reason, not stale numbers"
+    );
     assert_eq!(banners.len(), 4, "only registered services have a banner");
 }

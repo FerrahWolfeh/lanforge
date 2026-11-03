@@ -9,16 +9,18 @@ use lanforge_types::system::{PppoeSessionState, ServiceBanner, ServiceId};
 use crate::ClientContext;
 
 impl ClientContext {
-    /// Every service's lifecycle banner with a one-line summary of its live data. The summary
-    /// is built here, from what the serving instances publish through the context; a service
-    /// with nothing live to report gets `None`, never a placeholder.
+    /// Every service's lifecycle banner with its one line: live data while it serves (built
+    /// here, from what the serving instances publish through the context), the reason it does
+    /// not otherwise (dormant, failed…). Nothing to say = `None`, never a placeholder.
     pub async fn service_banners(&self) -> Vec<ServiceBanner> {
         let mut banners = self.ctx.service_banners();
         for banner in &mut banners {
-            // A stopped, dormant or failed service shows why (`detail`), not its last numbers.
-            if banner.state.is_serving() {
-                banner.summary = self.service_summary(banner.id).await;
-            }
+            // A stopped, dormant or failed service shows why, not its last numbers.
+            banner.summary = if banner.state.is_serving() {
+                self.service_summary(banner.id).await
+            } else {
+                banner.detail.as_ref().map(ToString::to_string)
+            };
         }
         banners
     }

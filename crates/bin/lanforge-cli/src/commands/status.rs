@@ -165,13 +165,9 @@ fn resolve_wan_info(status: &StatusResponse) -> (String, String) {
     ("Offline".to_string(), "No active WAN gateway".to_string())
 }
 
-/// The banner's live summary, else why it is not running, else a dash.
+/// The banner's line (live data, or why the service is not running), else a dash.
 fn banner_line(banner: &ServiceBanner) -> String {
-    banner
-        .summary
-        .clone()
-        .or_else(|| banner.detail.as_ref().map(ToString::to_string))
-        .unwrap_or_else(|| "—".to_string())
+    banner.summary.clone().unwrap_or_else(|| "—".to_string())
 }
 
 #[cfg(test)]

@@ -107,12 +107,8 @@ fn render_services_table(resp: &ServiceBannersResponse, printer: &Printer) {
                 format_bytes(t.tx_bytes)
             ));
         }
-        if let Some(line) = banner
-            .summary
-            .clone()
-            .or_else(|| banner.detail.as_ref().map(ToString::to_string))
-        {
-            parts.push(line);
+        if let Some(summary) = &banner.summary {
+            parts.push(summary.clone());
         }
         let metrics_summary = if parts.is_empty() {
             "-".to_string()
@@ -197,7 +193,10 @@ async fn show_service(client: &LanforgeClient, printer: &Printer, id: &str) -> R
     if let Some(summary) = &banner.summary {
         println!("    {:<18} {}", "Now:".dimmed(), summary.white());
     }
-    if let Some(detail) = &banner.detail {
+    // A degraded service still serves: its line has the data, the detail says why it degraded.
+    if banner.state.is_serving()
+        && let Some(detail) = &banner.detail
+    {
         println!(
             "    {:<18} {}",
             "Detail:".dimmed(),
