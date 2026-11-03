@@ -292,15 +292,6 @@
 											</button>
 										</div>
 									{/if}
-
-									{#if rule.resolved_ips && rule.resolved_ips.length > 0}
-										<span
-											class="inline-flex items-center gap-1 text-[11px] text-emerald-500 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded font-mono font-medium"
-											title={rule.resolved_ips.join(", ")}
-										>
-											● {rule.resolved_ips[0]}
-										</span>
-									{/if}
 								</div>
 							</Table.Cell>
 

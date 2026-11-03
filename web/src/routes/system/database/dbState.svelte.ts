@@ -60,7 +60,9 @@ class DbStateManager {
 		const dnsUpstreams = cfg?.dns_upstreams?.length ?? 0;
 		const dnsReverseResolvers = cfg?.dns_reverse_resolvers?.length ?? 0;
 		const adblockSources = cfg?.dns_adblock_urls?.length ?? 0;
-		const allowlistRules = cfg?.dns_allowlist?.length ?? 0;
+		const manualRules = cfg?.dns_adblock_rules ?? [];
+		const blockRules = manualRules.filter((r) => r.action === "block").length;
+		const allowRules = manualRules.length - blockRules;
 		const apiTokens = cfg?.api_tokens?.length ?? 0;
 
 		return [
@@ -105,7 +107,7 @@ class DbStateManager {
 				unit: "records",
 				route: "/dns/rewrites",
 				description:
-					"Authoritative A, AAAA, CNAME, and TXT internal domain overrides",
+					"Authoritative A, AAAA, CNAME, and device internal domain overrides",
 			},
 			{
 				id: "dns_upstreams",
@@ -122,10 +124,10 @@ class DbStateManager {
 				title: "Adblock Sources & Rules",
 				category: "Content Filtering",
 				icon: ShieldCheckIcon,
-				count: adblockSources + allowlistRules,
+				count: adblockSources + manualRules.length,
 				unit: "sources & rules",
 				route: "/dns/adblock",
-				description: `Filter feeds (${adblockSources} blocklists, ${allowlistRules} allowlist exceptions)`,
+				description: `Filter feeds and manual rules (${adblockSources} blocklists, ${blockRules} block rules, ${allowRules} allow rules)`,
 			},
 			{
 				id: "api_tokens",

@@ -31,7 +31,9 @@ pub fn set_aside_issues(set_aside: &[(super::Section, String)]) -> Vec<String> {
 pub fn set_aside_messages(set_aside: &[(super::Section, String)]) -> Vec<String> {
     set_aside
         .iter()
-        .map(|(sec, err)| format!("[{sec}] is invalid and was not applied (defaults in use): {err}"))
+        .map(|(sec, err)| {
+            format!("[{sec}] is invalid and was not applied (defaults in use): {err}")
+        })
         .collect()
 }
 

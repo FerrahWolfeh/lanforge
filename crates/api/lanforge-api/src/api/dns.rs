@@ -6,6 +6,7 @@ use super::common::{
     CacheMeta, HttpDataResponse, HttpPaginatedResponse, HttpWrappedResponse, LogMeta,
 };
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dns::adblock::rules_file::RulesImport;
 pub use lanforge_types::network::dns::adblock::{
     AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, FilterAction, FilterMatch,
     FilterOrigin,
@@ -277,6 +278,18 @@ impl HttpWrappedResponse for DnsAdblockStatusResponse {
 
 impl HttpWrappedResponse for DnsAdblockUrlsResponse {
     type Wrapper = HttpDataResponse<DnsAdblockUrlsResponse>;
+
+    fn wrap(self) -> Self::Wrapper {
+        HttpDataResponse { data: self }
+    }
+
+    fn unwrap(wrapper: Self::Wrapper) -> Self {
+        wrapper.data
+    }
+}
+
+impl HttpWrappedResponse for RulesImport {
+    type Wrapper = HttpDataResponse<RulesImport>;
 
     fn wrap(self) -> Self::Wrapper {
         HttpDataResponse { data: self }

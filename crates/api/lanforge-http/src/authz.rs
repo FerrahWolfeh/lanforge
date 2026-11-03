@@ -236,7 +236,7 @@ mod tests {
         ));
         for (method, path) in [
             (Method::POST, "/api/v1/devices/aa:bb:cc:dd:ee:ff/wol"),
-            (Method::POST, "/api/v1/dns/adblock/block"),
+            (Method::POST, "/api/v1/dns/adblock/rules"),
             (Method::POST, "/api/v1/firewall/config"),
             (Method::POST, "/api/v1/users"),
             (Method::PUT, "/api/v1/users/admin/password"),
@@ -262,7 +262,7 @@ mod tests {
                 "/api/v1/dhcp/leases/aa:bb:cc:dd:ee:ff/release",
             ),
             (Method::PATCH, "/api/v1/hosts/aa:bb:cc:dd:ee:ff"),
-            (Method::POST, "/api/v1/dns/adblock/allow"),
+            (Method::DELETE, "/api/v1/dns/adblock/rules"),
             (Method::DELETE, "/api/v1/dns/cache"),
             (Method::POST, "/api/v1/dns/rewrites"),
         ] {
@@ -311,13 +311,13 @@ mod tests {
         assert!(!allowed(
             &upstream,
             &Method::POST,
-            "/api/v1/dns/adblock/block"
+            "/api/v1/dns/adblock/rules"
         ));
 
         let config = token(&[ApiScope::ConfigWrite]);
         assert!(allowed(&config, &Method::POST, "/api/v1/firewall/config"));
         assert!(allowed(&config, &Method::POST, "/api/v1/dns/upstreams"));
-        assert!(allowed(&config, &Method::POST, "/api/v1/dns/adblock/block"));
+        assert!(allowed(&config, &Method::POST, "/api/v1/dns/adblock/rules"));
         assert!(!allowed(&config, &Method::POST, "/api/v1/devices/x/wol"));
         assert!(!allowed(&config, &Method::POST, "/api/v1/system/shutdown"));
 

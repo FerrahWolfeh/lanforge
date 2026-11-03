@@ -2,7 +2,7 @@ use lanforge_api::api::{
     AllowlistEntry, DnsUpstreamConfig, HostConfigEntry, Response, SystemConfigExport,
 };
 use lanforge_api_dispatch::ClientContext;
-use lanforge_core::bus::{EventBus, LanforgeEvent, NetworkEvent};
+use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent, NetworkEvent, TimedEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceHandle};
@@ -1536,6 +1536,89 @@ async fn adblock_change_on_read_only_config_applies_in_memory_and_says_so() {
         (rules.as_str(), text.as_str()),
         (OWNER_RULES, OWNER_ADBLOCK)
     );
+}
+
+/// Blocking through the rules endpoint is the same write as `dns_block`: watchers hear
+/// `AdblockBlock` either way (the rules endpoint used to block silently).
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn every_block_path_announces_the_block() {
+    let (client_ctx, _dir) = owner_adblock_client(true).await;
+    let mut rx = client_ctx.ctx.bus().subscribe_dns();
+    let blocked = |rx: &mut tokio::sync::broadcast::Receiver<_>| {
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|e: TimedEvent| match e.event {
+                LanforgeEvent::Dns(DnsEvent::AdblockBlock(d)) => Some(d),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let res = client_ctx
+        .handle_dns_adblock_rule_add("ads.example".into(), "block".into())
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    assert_eq!(blocked(&mut rx), ["ads.example"]);
+
+    let res = client_ctx.handle_dns_block("track.example".into()).await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    assert_eq!(blocked(&mut rx), ["track.example"]);
+
+    let res = client_ctx
+        .handle_dns_adblock_rule_add("bank.example".into(), "allow".into())
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+    assert!(blocked(&mut rx).is_empty());
+}
+
+/// A pasted list lands in the rules file in one change: every rule appended after the owner's,
+/// the junk reported with its line, the TOML untouched. The owner's Bradesco allow survives a
+/// list that blocks the same domain.
+#[cfg(feature = "adblock")]
+#[tokio::test]
+async fn a_pasted_list_is_imported_in_one_write() {
+    let (client_ctx, dir) = owner_adblock_client(true).await;
+    let pasted = "# copied from a forum\nads.example\n0.0.0.0 pixel.example\n\
+                  analytics.google.com\nnot a rule\n";
+    let res = client_ctx
+        .handle_dns_adblock_rules_import(pasted.into(), "block".into())
+        .await;
+    let Response::DnsAdblockRulesImport(report) = res else {
+        panic!("{res:?}");
+    };
+    assert_eq!(
+        (report.added, report.conflicts, report.rejected_total),
+        (2, 1, 1)
+    );
+    assert_eq!(report.rejected[0].line, 5);
+    assert!(report.saved);
+    let expected = format!("{OWNER_RULES}||ads.example^\n0.0.0.0 pixel.example\n");
+    let (_, rules, text) = adblock_in_files(&dir);
+    assert_eq!(rules, expected);
+    assert_eq!(text, OWNER_ADBLOCK);
+    assert_eq!(client_ctx.ctx.get_dns_adblock_rules(), expected);
+
+    let res = client_ctx
+        .handle_dns_adblock_rules_import("x.example".into(), "drop".into())
+        .await;
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
+
+    // A read-only configuration takes the list in memory and says it is not saved.
+    let (client_ctx, dir) = owner_adblock_client(false).await;
+    let res = client_ctx
+        .handle_dns_adblock_rules_import("ads.example".into(), "block".into())
+        .await;
+    let Response::DnsAdblockRulesImport(report) = res else {
+        panic!("{res:?}");
+    };
+    assert!(!report.saved);
+    assert!(
+        client_ctx
+            .ctx
+            .get_dns_adblock_rules()
+            .ends_with("||ads.example^\n")
+    );
+    assert_eq!(adblock_in_files(&dir).1, OWNER_RULES);
 }
 
 /// Without a rules file, the first manual rule creates `adblock/global.rules` and names it in

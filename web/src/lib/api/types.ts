@@ -990,7 +990,6 @@ export interface RewriteRule {
 	domain: string;
 	rtype: DnsRecordType;
 	answer: string | Record<string, unknown>;
-	resolved_ips: string[] | null;
 }
 
 export function formatRewriteAnswer(ans: unknown): string {
@@ -1350,6 +1349,19 @@ export interface AdblockRuleEntry {
 	domain: string;
 	action: 'block' | 'allow';
 	enabled: boolean;
+}
+
+/** What a bulk rules import did. */
+export interface AdblockRulesImport {
+	added: number;
+	unchanged: number;
+	/** Skipped: the opposite rule already exists and is kept. */
+	conflicts: number;
+	rejected_total: number;
+	/** The first rejected lines only (`rejected_total` counts them all). */
+	rejected: { line: number; text: string; reason: string }[];
+	/** False when applied in memory only (configuration read-only or not set). */
+	saved: boolean;
 }
 
 export interface SystemConfigExport {

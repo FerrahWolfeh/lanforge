@@ -44,26 +44,15 @@
 
 	const queryTypesList = $derived.by(() => {
 		const raw = analyticsData?.query_types ?? [];
-		if (raw.length > 0) {
-			const total = raw.reduce((sum, item) => sum + item.count, 0) || 1;
-			return raw
-				.map((item) => ({
-					qtype: item.qtype,
-					count: item.count,
-					pct: Math.round((item.count / total) * 100),
-					color: typeColors[item.qtype] || "#64748b",
-				}))
-				.sort((a, b) => b.count - a.count);
-		}
-
-		// Fallback Pi-hole standard distribution mock
-		return [
-			{ qtype: "A", count: 1842, pct: 57, color: typeColors.A },
-			{ qtype: "AAAA", count: 760, pct: 23, color: typeColors.AAAA },
-			{ qtype: "HTTPS", count: 395, pct: 12, color: typeColors.HTTPS },
-			{ qtype: "PTR", count: 198, pct: 6, color: typeColors.PTR },
-			{ qtype: "TXT", count: 48, pct: 2, color: typeColors.TXT },
-		];
+		const total = raw.reduce((sum, item) => sum + item.count, 0) || 1;
+		return raw
+			.map((item) => ({
+				qtype: item.qtype,
+				count: item.count,
+				pct: Math.round((item.count / total) * 100),
+				color: typeColors[item.qtype] || "#64748b",
+			}))
+			.sort((a, b) => b.count - a.count);
 	});
 
 	const totalQueries = $derived.by(() => {
@@ -94,6 +83,11 @@
 				<Skeleton class="h-4 w-full" />
 				<Skeleton class="h-4 w-full" />
 				<Skeleton class="h-4 w-full" />
+			</div>
+		{:else if queryTypesList.length === 0}
+			<div class="flex flex-1 flex-col items-center justify-center gap-2 py-10 text-center">
+				<ChartPieIcon class="size-8 text-muted-foreground/40" />
+				<p class="text-sm text-muted-foreground">No queries recorded yet</p>
 			</div>
 		{:else}
 			<!-- Donut Chart with Centered Total -->

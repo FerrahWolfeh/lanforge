@@ -2,6 +2,7 @@ use lanforge_types::{
     events::TimedEvent,
     network::{
         TrafficConfig,
+        dns::adblock::rules_file::RulesImport,
         firewall::{
             FirewallCommitResponse, FirewallConfig, FirewallStatus, FirewallValidationReport,
         },
@@ -146,4 +147,6 @@ pub enum Response {
     TrafficConfig(Box<TrafficConfig>),
     /// Traffic telemetry response containing instantaneous rates, conntrack, and SQM stats.
     TrafficTelemetry(Box<TrafficTelemetryResponse>),
+    /// What a bulk import of adblock rules did.
+    DnsAdblockRulesImport(Box<RulesImport>),
 }

@@ -13,7 +13,11 @@ use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 #[cfg(feature = "adblock")]
 use crate::handlers::dns::rewrite::dns_reply;
 use crate::handlers::system::toml_sync::ChangeError;
+#[cfg(feature = "adblock")]
+use crate::handlers::system::toml_sync::Persisted;
 use lanforge_types::network::dns::adblock::rules_file::RulesFile;
+#[cfg(feature = "adblock")]
+use lanforge_types::network::dns::adblock::rules_file::RulesImport;
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::{AdblockRuleAction, AdblockRuleEntry};
 use lanforge_types::network::dns::adblock::{
@@ -353,16 +357,66 @@ impl ClientContext {
 
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_adblock_rule_add(&self, domain: String, action: String) -> Response {
-        let rule_action = match action.parse::<AdblockRuleAction>() {
+        match action.parse::<AdblockRuleAction>() {
+            Ok(action) => self.add_adblock_rule(&domain, action),
+            Err(error) => Response::Rejected { error },
+        }
+    }
+
+    /// Blocks or allows `domain` (a bare name or a rule as written) in the rules file, replacing
+    /// its opposite rule. The one write path of the block/allow/rule-add calls; a block announces
+    /// `AdblockBlock` to watchers.
+    #[cfg(feature = "adblock")]
+    pub(crate) fn add_adblock_rule(&self, domain: &str, action: AdblockRuleAction) -> Response {
+        let line = AdblockRuleEntry::rule_line(domain, action);
+        let reply = dns_reply(
+            self.change_adblock_rules(|text| with_rule_only(text, &line)),
+            format!("Adblock rule added: {line}"),
+        );
+        if matches!(reply, Response::Success(_)) && !action.is_allow() {
+            let _ = self
+                .ctx
+                .bus()
+                .publish(LanforgeEvent::Dns(DnsEvent::AdblockBlock(
+                    domain.to_string(),
+                )));
+        }
+        reply
+    }
+
+    /// Adds every rule of a pasted list (`action` for bare names) in one rules-file write and one
+    /// engine reload; rejected lines are reported, never fatal.
+    #[cfg(feature = "adblock")]
+    pub async fn handle_dns_adblock_rules_import(&self, text: String, action: String) -> Response {
+        let action = match action.parse::<AdblockRuleAction>() {
             Ok(a) => a,
             Err(error) => return Response::Rejected { error },
         };
-        let line = AdblockRuleEntry::rule_line(&domain, rule_action);
-        let id = RulesFile::rule_id(&line);
-        dns_reply(
-            self.change_adblock_rules(|text| with_rule_only(text, &line)),
-            format!("Adblock rule added: {line} (id: {id})"),
-        )
+        let mut report = RulesImport::default();
+        let persisted = self.change_adblock_rules(|live| {
+            let (new, outcome) = RulesFile::new(live).with_rules_imported(&text, action);
+            report = outcome;
+            Ok(new)
+        });
+        match persisted {
+            Ok(persisted) => {
+                report.saved = matches!(persisted, Persisted::File);
+                Response::DnsAdblockRulesImport(Box::new(report))
+            }
+            Err(e) => e.into(),
+        }
+    }
+
+    #[cfg(not(feature = "adblock"))]
+    pub async fn handle_dns_adblock_rules_import(
+        &self,
+        _text: String,
+        _action: String,
+    ) -> Response {
+        Response::Error {
+            error: "Adblock support not enabled in this build. Recompile with --features adblock."
+                .to_string(),
+        }
     }
 
     #[cfg(not(feature = "adblock"))]

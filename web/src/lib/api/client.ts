@@ -7,6 +7,7 @@
 
 import type {
 	AdblockRuleEntry,
+	AdblockRulesImport,
 	AuthStatusResponse,
 	AuthToken,
 	BlockingMode,
@@ -553,8 +554,8 @@ export const dnsAdblockStatus = () => get<DnsAdblockStatusResponse>('/dns/adbloc
 export const dnsAdblockSet = (enabled: boolean, duration_secs?: number) =>
 	put<void>('/dns/adblock', { enabled, duration_secs: duration_secs ?? null });
 export const dnsAdblockReload = () => post<void>('/dns/adblock/reload');
-export const dnsBlock = (domain: string) => post<void>('/dns/adblock/block', { domain });
-export const dnsAllow = (domain: string) => post<void>('/dns/adblock/allow', { domain });
+export const dnsBlock = (domain: string) => dnsAdblockRuleAdd(domain, 'block');
+export const dnsAllow = (domain: string) => dnsAdblockRuleAdd(domain, 'allow');
 export const dnsAdblockUrls = async (): Promise<DnsAdblockUrlEntry[]> =>
 	extractList<DnsAdblockUrlEntry>(await get<any>('/dns/adblock/urls'), 'urls');
 export const dnsAdblockSources = () => get<DnsAdblockSourcesResponse>('/dns/adblock/sources');
@@ -579,6 +580,9 @@ export const dnsAdblockRuleRemove = (rule: string) =>
 	del<void>('/dns/adblock/rules', { rule });
 export const dnsAdblockRuleStatus = (rule: string, enabled: boolean) =>
 	put<void>('/dns/adblock/rules/status', { rule, enabled });
+/** A pasted list in one call: one rules-file write, one engine reload. */
+export const dnsAdblockRulesImport = (text: string, action: 'block' | 'allow') =>
+	post<AdblockRulesImport>('/dns/adblock/rules/import', { text, action });
 
 // ---------------------------------------------------------------------------
 // DNS — rewrites

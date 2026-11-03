@@ -18,7 +18,8 @@ use lanforge_types::auth::ApiScopes;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::adblock::{
-    AdblockSourceFormat, AdblockUrlKind, BlockingMode, RewriteRule, TimeOfDay,
+    AdblockRuleAction, AdblockRuleEntry, AdblockSourceFormat, AdblockUrlKind, BlockingMode,
+    RewriteRule, TimeOfDay,
 };
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
 use lanforge_types::network::dns::{
@@ -1167,8 +1168,8 @@ impl LanforgeClient {
         if self.remote.is_some() {
             return self
                 .http_post(
-                    "/dns/adblock/block",
-                    &serde_json::json!({ "domain": domain }),
+                    "/dns/adblock/rules",
+                    &serde_json::json!({ "domain": domain, "action": "block" }),
                 )
                 .await;
         }
@@ -1181,8 +1182,8 @@ impl LanforgeClient {
         if self.remote.is_some() {
             return self
                 .http_post(
-                    "/dns/adblock/allow",
-                    &serde_json::json!({ "domain": domain }),
+                    "/dns/adblock/rules",
+                    &serde_json::json!({ "domain": domain, "action": "allow" }),
                 )
                 .await;
         }
@@ -1194,7 +1195,12 @@ impl LanforgeClient {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
             return self
-                .http_delete(&format!("/dns/adblock/allow/{}", urlencoding(&domain)))
+                .http_delete_with_body(
+                    "/dns/adblock/rules",
+                    &serde_json::json!({
+                        "rule": AdblockRuleEntry::rule_line(&domain, AdblockRuleAction::Allow)
+                    }),
+                )
                 .await;
         }
         let mut rpc = self.connect_rpc().await?;

@@ -2,7 +2,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     response::IntoResponse,
     routing::{delete, get, post, put},
 };
@@ -51,13 +51,15 @@ pub struct AdblockUrlDeleteRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct DomainRequest {
-    pub domain: String,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct AdblockRuleAddRequest {
     pub domain: String,
+    pub action: String,
+}
+
+/// A pasted list: one rule or bare domain per line; `action` applies to bare domains.
+#[derive(Debug, Deserialize)]
+pub struct AdblockRulesImportRequest {
+    pub text: String,
     pub action: String,
 }
 
@@ -79,6 +81,9 @@ pub struct AdblockRuleTextStatusRequest {
     pub enabled: bool,
 }
 
+/// A pasted list can be a whole public blocklist (a few MB); the default body limit is 2 MB.
+const RULES_IMPORT_MAX_BYTES: usize = 16 * 1024 * 1024;
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
@@ -96,14 +101,15 @@ pub fn router() -> Router<AppState> {
         .route("/adblock/urls", get(handle_adblock_urls))
         .route("/adblock/check", get(handle_adblock_check))
         .route("/adblock/allowlist", get(handle_allowlist))
-        .route("/adblock/allow", post(handle_allow))
-        .route("/adblock/allow/{target}", delete(handle_unallow))
-        .route("/adblock/block", post(handle_block))
         .route(
             "/adblock/rules",
             get(handle_adblock_rules)
                 .post(handle_adblock_rule_add)
                 .delete(handle_adblock_rule_remove_text),
+        )
+        .route(
+            "/adblock/rules/import",
+            post(handle_adblock_rules_import).layer(DefaultBodyLimit::max(RULES_IMPORT_MAX_BYTES)),
         )
         .route(
             "/adblock/rules/status",
@@ -202,30 +208,6 @@ async fn handle_allowlist(State(state): State<AppState>) -> impl IntoResponse {
     crate::http_response!(ctx.handle_dns_allowlist().await, DnsAllowlist)
 }
 
-async fn handle_allow(
-    State(state): State<AppState>,
-    Json(payload): Json<DomainRequest>,
-) -> impl IntoResponse {
-    let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dns_allow(payload.domain).await, Success => NoContent)
-}
-
-async fn handle_unallow(
-    State(state): State<AppState>,
-    Path(target): Path<String>,
-) -> impl IntoResponse {
-    let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dns_unallow(target).await, Success => NoContent)
-}
-
-async fn handle_block(
-    State(state): State<AppState>,
-    Json(payload): Json<DomainRequest>,
-) -> impl IntoResponse {
-    let ctx = create_client_ctx(&state);
-    crate::http_response!(ctx.handle_dns_block(payload.domain).await, Success => NoContent)
-}
-
 async fn handle_adblock_rules(State(state): State<AppState>) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(ctx.handle_dns_adblock_rules().await, DnsAdblockRules)
@@ -239,6 +221,18 @@ async fn handle_adblock_rule_add(
     crate::http_response!(
         ctx.handle_dns_adblock_rule_add(payload.domain, payload.action).await,
         Success => NoContent
+    )
+}
+
+async fn handle_adblock_rules_import(
+    State(state): State<AppState>,
+    Json(payload): Json<AdblockRulesImportRequest>,
+) -> impl IntoResponse {
+    let ctx = create_client_ctx(&state);
+    crate::http_response!(
+        ctx.handle_dns_adblock_rules_import(payload.text, payload.action)
+            .await,
+        DnsAdblockRulesImport
     )
 }
 

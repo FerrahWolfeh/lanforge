@@ -2,12 +2,9 @@ use crate::ClientContext;
 use lanforge_api::api::{AllowlistEntry, DnsAllowlistResponse, Response};
 
 #[cfg(feature = "adblock")]
-use crate::handlers::dns::adblock::with_rule_only;
-#[cfg(feature = "adblock")]
 use crate::handlers::dns::rewrite::dns_reply;
-use crate::handlers::system::toml_sync::ChangeError;
 #[cfg(feature = "adblock")]
-use lanforge_core::bus::{DnsEvent, LanforgeEvent};
+use crate::handlers::system::toml_sync::ChangeError;
 #[cfg(feature = "adblock")]
 use lanforge_types::network::dns::adblock::rules_file::RulesFile;
 #[cfg(feature = "adblock")]
@@ -18,18 +15,7 @@ use lanforge_types::network::dns::adblock::{AdblockRuleAction, AdblockRuleEntry}
 impl ClientContext {
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_block(&self, domain: String) -> Response {
-        let line = AdblockRuleEntry::rule_line(&domain, AdblockRuleAction::Block);
-        let reply = dns_reply(
-            self.change_adblock_rules(|text| with_rule_only(text, &line)),
-            format!("Domain '{domain}' blocked in adblock rules"),
-        );
-        if matches!(reply, Response::Success(_)) {
-            let _ = self
-                .ctx
-                .bus()
-                .publish(LanforgeEvent::Dns(DnsEvent::AdblockBlock(domain)));
-        }
-        reply
+        self.add_adblock_rule(&domain, AdblockRuleAction::Block)
     }
 
     #[cfg(not(feature = "adblock"))]
@@ -42,11 +28,7 @@ impl ClientContext {
 
     #[cfg(feature = "adblock")]
     pub async fn handle_dns_allow(&self, domain: String) -> Response {
-        let line = AdblockRuleEntry::rule_line(&domain, AdblockRuleAction::Allow);
-        dns_reply(
-            self.change_adblock_rules(|text| with_rule_only(text, &line)),
-            format!("Domain '{domain}' added to DNS allowlist"),
-        )
+        self.add_adblock_rule(&domain, AdblockRuleAction::Allow)
     }
 
     #[cfg(not(feature = "adblock"))]

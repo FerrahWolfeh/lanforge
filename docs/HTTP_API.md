@@ -246,9 +246,11 @@ When `follow=true`: upgrades to SSE. Server emits `limit` historical entries (ol
 | `PUT` | `/api/v1/dns/adblock` | `dns_adblock_set` | Enable or disable adblocking |
 | `POST` | `/api/v1/dns/adblock/reload` | `dns_adblock_reload` | Re-download and reload all lists |
 | `GET` | `/api/v1/dns/adblock/allowlist` | `dns_adblock_allowlist` | Entries in the allowlist |
-| `POST` | `/api/v1/dns/adblock/block` | `dns_block` | Force-block a domain |
-| `POST` | `/api/v1/dns/adblock/allow` | `dns_allow` | Add a domain to the allowlist |
-| `DELETE` | `/api/v1/dns/adblock/allow/{target}` | `dns_unallow` | Remove from allowlist. `{target}` = domain or entry ID |
+| `GET` | `/api/v1/dns/adblock/rules` | — | Manual rules (block and allow) of the rules file |
+| `POST` | `/api/v1/dns/adblock/rules` | `dns_block` / `dns_allow` | Block or allow a domain (replaces its opposite rule) |
+| `DELETE` | `/api/v1/dns/adblock/rules` | `dns_unallow` | Remove a rule by its text |
+| `PUT` | `/api/v1/dns/adblock/rules/status` | — | Enable or disable a rule by its text |
+| `POST` | `/api/v1/dns/adblock/rules/import` | — | Add a pasted list in one write (body up to 16 MB) |
 | `GET` | `/api/v1/dns/adblock/sources` | `dns_adblock_urls` | Configured blocklist/allowlist source URLs |
 | `POST` | `/api/v1/dns/adblock/sources` | `dns_adblock_url_add` | Add a source URL |
 | `DELETE` | `/api/v1/dns/adblock/sources` | `dns_adblock_url_remove` | Remove a source URL |
@@ -261,11 +263,41 @@ When `follow=true`: upgrades to SSE. Server emits `limit` historical entries (ol
 
 `duration_secs` is optional. Absent or `null` means permanent when disabling. Timer semantics match the RPC definition.
 
-#### `POST /api/v1/dns/adblock/block` and `/allow` — Body
+#### `POST /api/v1/dns/adblock/rules` — Body
 
 ```json
-{ "domain": "tracker.example.com" }
+{ "domain": "tracker.example.com", "action": "block" }
 ```
+
+`action` is `block` or `allow`. `domain` is a bare name (`||name^` is written) or a rule as
+written (`||x^$important`, `/regex/`).
+
+#### `DELETE /api/v1/dns/adblock/rules` and `PUT /api/v1/dns/adblock/rules/status` — Body
+
+```json
+{ "rule": "@@||bank.example^" }
+{ "rule": "||tracker.example.com^", "enabled": false }
+```
+
+The rule is addressed by its text, as the listing returns it in `domain`.
+
+#### `POST /api/v1/dns/adblock/rules/import` — Body and response
+
+```json
+{ "text": "! pasted list\nads.example\n0.0.0.0 pixel.example\n@@||cdn.example^\n", "action": "block" }
+```
+
+One line per domain, rule or hosts line; `action` applies to bare domains, a `@@` line always
+allows; `#`/`!` lines and blanks are skipped. A rule whose opposite already exists is skipped
+(`conflicts`), so a pasted list never undoes an exception. The rules file is written once.
+
+```json
+{ "data": { "added": 2, "unchanged": 0, "conflicts": 0, "rejected_total": 1,
+  "rejected": [{ "line": 3, "text": "/re/", "reason": "unsupported syntax ..." }], "saved": true } }
+```
+
+Only the first 50 rejected lines are listed. `saved` is `false` when the change applies in memory
+only (configuration read-only or not set).
 
 #### `DELETE /api/v1/dns/adblock/sources` — Body
 

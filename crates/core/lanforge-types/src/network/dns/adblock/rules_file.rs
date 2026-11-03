@@ -4,7 +4,10 @@
 //! new text, and comments, order and line endings are kept. A rule is disabled by commenting it out
 //! (`# ||x^`).
 
+use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
+
+use serde::{Deserialize, Serialize};
 
 use super::syntax::{ParseStats, ParsedRule, RuleAction};
 use super::{AdblockRuleAction, AdblockRuleEntry};
@@ -52,6 +55,48 @@ pub struct RulesLine<'a> {
     /// The rule text without the disabling `#`; the trimmed line for other kinds.
     pub rule: &'a str,
     pub kind: RulesLineKind,
+}
+
+/// What a bulk import did: the file is written once with every accepted line.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RulesImport {
+    /// Rules appended, or re-enabled where they were commented out.
+    pub added: usize,
+    /// Rules already active, or repeated in the pasted text.
+    pub unchanged: usize,
+    /// Rules skipped because their opposite is already there (a pasted block never undoes an
+    /// allow, nor the reverse): the existing rule is kept.
+    pub conflicts: usize,
+    /// Every rejected line; only the first [`RulesImport::REJECTED_SHOWN`] are listed.
+    pub rejected_total: usize,
+    pub rejected: Vec<RejectedRuleLine>,
+    /// `false` when the change applies in memory only (the configuration is read-only or not
+    /// set); set by the caller that writes the file.
+    pub saved: bool,
+}
+
+/// A pasted line that is not a rule the DNS can apply.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RejectedRuleLine {
+    /// 1-based line of the pasted text.
+    pub line: usize,
+    pub text: String,
+    pub reason: String,
+}
+
+impl RulesImport {
+    pub const REJECTED_SHOWN: usize = 50;
+
+    fn reject(&mut self, line: usize, text: &str, issue: RulesLineIssue) {
+        self.rejected_total += 1;
+        if self.rejected.len() < Self::REJECTED_SHOWN {
+            self.rejected.push(RejectedRuleLine {
+                line,
+                text: text.to_string(),
+                reason: issue.to_string(),
+            });
+        }
+    }
 }
 
 /// A rules file's text.
@@ -203,6 +248,13 @@ impl<'a> RulesFile<'a> {
     /// Rebuilds the text with every line of rule `id` set to `target` (`None` drops it).
     /// Returns `None` when no line changed.
     fn rewrite(&self, id: i64, target: Option<bool>) -> Option<String> {
+        self.rewrite_each(|line_id| (line_id == id).then_some(target))
+    }
+
+    /// Rebuilds the text with each rule line set to `target(id)`: `None` keeps the line,
+    /// `Some(None)` drops it, `Some(Some(enabled))` enables or comments it out.
+    /// Returns `None` when no line changed.
+    fn rewrite_each(&self, target: impl Fn(i64) -> Option<Option<bool>>) -> Option<String> {
         let mut out = String::with_capacity(self.text.len());
         let mut changed = false;
         let mut raw_lines = self.text.split_inclusive('\n');
@@ -216,10 +268,10 @@ impl<'a> RulesFile<'a> {
                 out.push_str(raw);
                 return;
             };
-            if line_id != id || target == Some(enabled) {
+            let Some(target) = target(line_id).filter(|t| *t != Some(enabled)) else {
                 out.push_str(raw);
                 return;
-            }
+            };
             changed = true;
             if let Some(enable) = target {
                 if !enable {
@@ -230,6 +282,85 @@ impl<'a> RulesFile<'a> {
             }
         });
         changed.then_some(out)
+    }
+
+    /// The text with every rule of `pasted` active: a bare domain becomes `||d^` (`@@||d^` when
+    /// `action` allows) and a line starting with `@@` always allows. Unlike a single add, a rule
+    /// whose opposite is already there (in the file or earlier in the paste) is skipped as a
+    /// conflict: a pasted list never undoes an exception. Blank and comment lines are skipped;
+    /// lines that are not clean rules are rejected and reported. One pass over the file, one
+    /// rewrite.
+    #[must_use]
+    pub fn with_rules_imported(
+        &self,
+        pasted: &str,
+        action: AdblockRuleAction,
+    ) -> (Option<String>, RulesImport) {
+        // Rule id -> enabled, of the file's rules and the ones the paste adds.
+        let mut present: HashMap<i64, bool> = HashMap::new();
+        self.for_each_line(|line, _| {
+            if let RulesLineKind::Rule { id, enabled } = line.kind {
+                *present.entry(id).or_default() |= enabled;
+            }
+        });
+        let mut enable = HashSet::new();
+        let mut appended = String::new();
+        let mut report = RulesImport::default();
+        let (mut rules, mut stats, mut samples) = (Vec::new(), ParseStats::default(), Vec::new());
+
+        for (idx, raw) in pasted.lines().enumerate() {
+            let text = raw.trim();
+            if text.is_empty() || text.starts_with(['#', '!', '[']) {
+                continue;
+            }
+            let line_action = if text.starts_with("@@") {
+                AdblockRuleAction::Allow
+            } else {
+                action
+            };
+            let line = AdblockRuleEntry::rule_line(text, line_action);
+            if let Some(issue) = Self::parse(&line, &mut rules, &mut stats, &mut samples) {
+                report.reject(idx + 1, text, issue);
+                continue;
+            }
+            let opposite = Self::rule_id(
+                &line
+                    .strip_prefix("@@")
+                    .map_or_else(|| format!("@@{line}"), str::to_string),
+            );
+            if present.get(&opposite) == Some(&true) {
+                report.conflicts += 1;
+                continue;
+            }
+            let id = Self::rule_id(&line);
+            match present.insert(id, true) {
+                Some(true) => report.unchanged += 1,
+                Some(false) => {
+                    enable.insert(id);
+                    report.added += 1;
+                }
+                None => {
+                    appended.push_str(&line);
+                    appended.push('\n');
+                    report.added += 1;
+                }
+            }
+        }
+
+        if report.added == 0 {
+            return (None, report);
+        }
+        let mut out = if enable.is_empty() {
+            None
+        } else {
+            self.rewrite_each(|id| enable.contains(&id).then_some(Some(true)))
+        }
+        .unwrap_or_else(|| self.text.to_string());
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&appended);
+        (Some(out), report)
     }
 
     /// The rules, enabled or not, in file order as the API lists them: the id, the rule text as
@@ -522,5 +653,74 @@ site.com##.banner\n\
             RulesFile::new(&out).without_rule(RulesFile::rule_id("||a.com^")),
             None
         );
+    }
+
+    /// A pasted list: comments and blanks skipped, bare names and hosts lines kept as rules,
+    /// `@@` lines allow, junk rejected with its line number, repeats counted once.
+    #[test]
+    fn importing_a_pasted_list_writes_every_rule_once() {
+        let file = "! mine\n||old.com^\n# ||off.com^\n";
+        let pasted = "# Title: some list\n\n! comment\nads.example\n||track.example^\n\
+                      0.0.0.0 pixel.example\n@@||cdn.example^\nADS.example.\n/re/\n\
+                      ||old.com^\noff.com\n1.2.3.4 x.com\n";
+        let (text, report) =
+            RulesFile::new(file).with_rules_imported(pasted, AdblockRuleAction::Block);
+        assert_eq!(
+            text.as_deref(),
+            Some(
+                "! mine\n||old.com^\n||off.com^\n||ads.example^\n||track.example^\n\
+                 0.0.0.0 pixel.example\n@@||cdn.example^\n"
+            )
+        );
+        assert_eq!((report.added, report.unchanged), (5, 2));
+        assert_eq!(report.rejected_total, 2);
+        assert_eq!(
+            report
+                .rejected
+                .iter()
+                .map(|r| (r.line, r.text.as_str()))
+                .collect::<Vec<_>>(),
+            [(9, "/re/"), (12, "1.2.3.4 x.com")]
+        );
+    }
+
+    /// A paste never undoes the opposite rule, in the file or earlier in the paste: the
+    /// owner's Bradesco allow survives a blocklist that names the same domain.
+    #[test]
+    fn importing_keeps_the_opposite_rule() {
+        let file = "@@||bank.example^\n# ||off.example^\n";
+        let pasted = "bank.example\nshop.example\n@@shop.example\n@@off.example\n";
+        let (text, report) =
+            RulesFile::new(file).with_rules_imported(pasted, AdblockRuleAction::Block);
+        assert_eq!(
+            text.as_deref(),
+            Some("@@||bank.example^\n# ||off.example^\n||shop.example^\n@@||off.example^\n")
+        );
+        assert_eq!(
+            (report.added, report.unchanged, report.conflicts),
+            (2, 0, 2)
+        );
+    }
+
+    #[test]
+    fn importing_what_is_already_there_changes_nothing() {
+        let file = "||a.com^\n@@||b.com^";
+        let (text, report) = RulesFile::new(file)
+            .with_rules_imported("a.com\n@@b.com\n# x\n", AdblockRuleAction::Block);
+        assert_eq!(text, None);
+        assert_eq!(
+            (report.added, report.unchanged, report.rejected_total),
+            (0, 2, 0)
+        );
+    }
+
+    #[test]
+    fn importing_lists_only_the_first_rejected_lines() {
+        let pasted = "bad!x\n".repeat(RulesImport::REJECTED_SHOWN + 10);
+        let (text, report) =
+            RulesFile::new("").with_rules_imported(&pasted, AdblockRuleAction::Block);
+        assert_eq!(text, None);
+        assert_eq!(report.rejected_total, RulesImport::REJECTED_SHOWN + 10);
+        assert_eq!(report.rejected.len(), RulesImport::REJECTED_SHOWN);
     }
 }
