@@ -2177,6 +2177,8 @@ fn health_cell(status: UpstreamStatus) -> String {
         UpstreamStatus::Degraded => "Degraded".red().to_string(),
         UpstreamStatus::Disabled => "Disabled".dimmed().to_string(),
         UpstreamStatus::Unknown => "—".dimmed().to_string(),
+        UpstreamStatus::Untested => "Untested".dimmed().to_string(),
+        UpstreamStatus::Idle => "Idle".yellow().to_string(),
     }
 }
 

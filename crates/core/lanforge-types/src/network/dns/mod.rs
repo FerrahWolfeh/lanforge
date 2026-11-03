@@ -179,12 +179,17 @@ impl Display for DnsRecordType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum UpstreamStatus {
+    /// Answered in the last few minutes.
     #[default]
     Healthy,
     Degraded,
     Disabled,
     /// No measurement: DNS is not serving, so the configured upstream was never tried.
     Unknown,
+    /// Never answered yet (a backup the sequential order has not needed, or still failing).
+    Untested,
+    /// Answered before, but not in the last few minutes: no recent evidence either way.
+    Idle,
 }
 
 impl UpstreamStatus {
@@ -200,6 +205,8 @@ impl UpstreamStatus {
             Self::Degraded => "degraded",
             Self::Disabled => "disabled",
             Self::Unknown => "unknown",
+            Self::Untested => "untested",
+            Self::Idle => "idle",
         }
     }
 }

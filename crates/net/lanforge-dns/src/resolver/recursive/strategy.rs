@@ -232,9 +232,11 @@ impl UpstreamStrategy {
                 // Keep Healthy at top if possible
                 let status_rank = |s: UpstreamStatus| match s {
                     UpstreamStatus::Healthy => 0,
-                    UpstreamStatus::Degraded => 1,
-                    UpstreamStatus::Disabled => 2,
-                    UpstreamStatus::Unknown => 3,
+                    UpstreamStatus::Idle => 1,
+                    UpstreamStatus::Untested => 2,
+                    UpstreamStatus::Degraded => 3,
+                    UpstreamStatus::Disabled => 4,
+                    UpstreamStatus::Unknown => 5,
                 };
                 status_rank(a.status).cmp(&status_rank(b.status))
             })
@@ -433,10 +435,7 @@ impl UpstreamStrategy {
         header: &WireHeader<'_>,
         question: &WireQuestion<'_>,
     ) -> Result<Resolved, DnsError> {
-        let mut available: Vec<_> = tier
-            .iter()
-            .filter(|m| m.health.status() != UpstreamStatus::Degraded)
-            .collect();
+        let mut available: Vec<_> = tier.iter().filter(|m| !m.health.is_degraded()).collect();
         if available.is_empty() {
             available = tier.iter().collect();
         }
@@ -535,10 +534,7 @@ impl UpstreamStrategy {
     ) -> Result<Resolved, DnsError> {
         let mut set = JoinSet::new();
 
-        let mut available: Vec<_> = tier
-            .iter()
-            .filter(|m| m.health.status() != UpstreamStatus::Degraded)
-            .collect();
+        let mut available: Vec<_> = tier.iter().filter(|m| !m.health.is_degraded()).collect();
         if available.is_empty() {
             available = tier.iter().collect();
         }
@@ -600,7 +596,7 @@ impl UpstreamStrategy {
     ) -> Result<Resolved, DnsError> {
         let mut available: Vec<_> = tier
             .iter()
-            .filter(|m| m.health.status() != UpstreamStatus::Degraded)
+            .filter(|m| !m.health.is_degraded())
             .cloned()
             .collect();
         if available.is_empty() {
@@ -640,10 +636,7 @@ impl UpstreamStrategy {
         header: &WireHeader<'_>,
         question: &WireQuestion<'_>,
     ) -> Result<Resolved, DnsError> {
-        let mut available: Vec<_> = tier
-            .iter()
-            .filter(|m| m.health.status() != UpstreamStatus::Degraded)
-            .collect();
+        let mut available: Vec<_> = tier.iter().filter(|m| !m.health.is_degraded()).collect();
         if available.is_empty() {
             available = tier.iter().collect();
         }

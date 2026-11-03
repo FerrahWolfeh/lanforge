@@ -149,3 +149,26 @@ async fn every_query_has_one_winner_and_queries_count_what_was_sent() {
     assert!(c.iter().all(|x| x.0 == 20), "parallel sends to all: {c:?}");
     assert_eq!(wins(&c), 20, "{c:?}");
 }
+
+/// A backup the sequential order never needed has no evidence: "untested", not "healthy"
+/// (the owner's ::1001 showed 0 queries and "healthy").
+#[tokio::test(flavor = "multi_thread")]
+async fn an_upstream_never_asked_is_untested_not_healthy() {
+    let first = upstream(Some(Duration::from_millis(5))).await;
+    let backup = upstream(Some(Duration::from_millis(5))).await;
+    let strategy = UpstreamStrategy::new(
+        UpstreamMode::Sequential,
+        vec![Arc::clone(&first), Arc::clone(&backup)],
+    );
+    strategy.resolve(&query(0)).await.unwrap();
+    let snaps = strategy.snapshots();
+    let status = |m: &Arc<UpstreamManager>| {
+        snaps
+            .iter()
+            .find(|s| s.target == m.target.addr)
+            .unwrap()
+            .status
+    };
+    assert_eq!(status(&first), UpstreamStatus::Healthy);
+    assert_eq!(status(&backup), UpstreamStatus::Untested);
+}

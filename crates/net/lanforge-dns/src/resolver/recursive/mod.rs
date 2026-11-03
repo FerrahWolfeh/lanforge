@@ -13,7 +13,7 @@ use tokio_rustls::client::TlsStream;
 
 use crate::error::DnsError;
 use crate::resolver::recursive::cache::CacheKey;
-use crate::utils::health::{UpstreamHealth, UpstreamStatus};
+use crate::utils::health::UpstreamHealth;
 use lanforge_dns_wire::{WireHeader, WireQuestion, WireResponseScanner};
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -205,8 +205,7 @@ impl UpstreamManager {
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 if let Some(mgr_clone) = weak_mgr.upgrade() {
                     mgr_clone.sweep_abandoned();
-                    if mgr_clone.health.status() == UpstreamStatus::Degraded
-                        && mgr_clone.health.is_eligible_for_probing()
+                    if mgr_clone.health.is_degraded() && mgr_clone.health.is_eligible_for_probing()
                     {
                         let _ = mgr_clone.probe().await;
                     }

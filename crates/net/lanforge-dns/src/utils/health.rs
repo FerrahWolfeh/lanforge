@@ -4,6 +4,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Exponential Moving Average alpha factor.
 const RTT_ALPHA: f32 = 0.3;
+/// Consecutive failures that degrade an upstream (it leaves the order until a probe answers).
+const DEGRADED_AFTER: u8 = 5;
+/// An answer older than this is no longer evidence that the upstream is healthy.
+const RECENT_SECS: u64 = 300;
 
 /// Atomic performance counters for a single upstream target.
 #[derive(Default)]
@@ -91,15 +95,34 @@ impl UpstreamHealth {
         self.last_failure_ts.store(now, Ordering::Relaxed);
     }
 
+    /// For the query path: no clock read.
+    pub fn is_degraded(&self) -> bool {
+        self.consecutive_failures.load(Ordering::Relaxed) >= DEGRADED_AFTER
+    }
+
+    /// Healthy needs evidence: an answer in the last [`RECENT_SECS`].
     pub fn status(&self) -> UpstreamStatus {
-        if self.consecutive_failures.load(Ordering::Relaxed) >= 5 {
+        if self.is_degraded() {
             return UpstreamStatus::Degraded;
         }
-        UpstreamStatus::Healthy
+        match self.last_success_ts.load(Ordering::Relaxed) {
+            0 => UpstreamStatus::Untested,
+            last => {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                if now.saturating_sub(last) > RECENT_SECS {
+                    UpstreamStatus::Idle
+                } else {
+                    UpstreamStatus::Healthy
+                }
+            }
+        }
     }
 
     pub fn is_eligible_for_probing(&self) -> bool {
-        if self.consecutive_failures.load(Ordering::Relaxed) >= 5 {
+        if self.is_degraded() {
             let last_fail = self.last_failure_ts.load(Ordering::Relaxed);
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -151,7 +174,7 @@ mod tests {
     #[test]
     fn test_consecutive_failures_saturation_never_overflows() {
         let health = UpstreamHealth::new();
-        assert_eq!(health.status(), UpstreamStatus::Healthy);
+        assert_eq!(health.status(), UpstreamStatus::Untested);
 
         // Record 300 failures (greater than u8::MAX = 255)
         for _ in 0..300 {
@@ -166,5 +189,28 @@ mod tests {
         health.record_success(1500);
         assert_eq!(health.consecutive_failures.load(Ordering::Relaxed), 0);
         assert_eq!(health.status(), UpstreamStatus::Healthy);
+    }
+
+    /// "Healthy" needs a recent answer: none yet is Untested, an old one is Idle.
+    #[test]
+    fn healthy_needs_a_recent_answer() {
+        let health = UpstreamHealth::new();
+        assert_eq!(health.status(), UpstreamStatus::Untested);
+        health.record_failure();
+        assert_eq!(
+            health.status(),
+            UpstreamStatus::Untested,
+            "a failure is no answer"
+        );
+        health.record_success(1000);
+        assert_eq!(health.status(), UpstreamStatus::Healthy);
+        let old = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - RECENT_SECS
+            - 1;
+        health.last_success_ts.store(old, Ordering::Relaxed);
+        assert_eq!(health.status(), UpstreamStatus::Idle);
     }
 }
