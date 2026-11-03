@@ -7,6 +7,12 @@ use lanforge_cli::output::Printer;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Rust ignores SIGPIPE, so printing into a closed pipe (`lanforge status | head`) panicked,
+    // and with `panic = "abort"` that dumped core. Die quietly like any Unix tool instead.
+    // SAFETY: restores the default disposition of one signal before any thread prints.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     color_eyre::install()?;
 
     let cli = Cli::parse();

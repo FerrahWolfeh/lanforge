@@ -2411,6 +2411,7 @@ dependencies = [
  "lanforge-macros",
  "lanforge-types",
  "lanforge-uds",
+ "libc",
  "postcard",
  "rand 0.10.3",
  "rustls",
