@@ -1421,7 +1421,6 @@ export interface FirewallZone {
 	name: string;
 	interfaces: string[];
 	open_ports: HostPortRule[];
-	allowed_subnets: string[];
 	input_policy: FirewallPolicy;
 	forward_policy: FirewallPolicy;
 	masquerade: boolean;

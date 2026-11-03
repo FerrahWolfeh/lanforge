@@ -769,7 +769,9 @@ pub struct FirewallZoneFile {
     pub mtu_fix: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub open_ports: Vec<OpenPortFile>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Never enforced by any lanforge release and no longer supported: still read, so a file
+    /// that has it keeps its firewall, and reported as an issue; never written.
+    #[serde(default, skip_serializing)]
     pub allowed_subnets: Vec<String>,
 }
 

@@ -1098,14 +1098,14 @@ mod tests {
              "internal_ip": "2001:db8:cafe:3731::501", "internal_port": 6881, "protocol": "Tcp", "src_zone": "external"}],
           "table_name": "lanforge",
           "zones": [
-            {"allowed_subnets": [], "forward_policy": "Drop", "input_policy": "Drop", "interfaces": ["wan0"],
+            {"forward_policy": "Drop", "input_policy": "Drop", "interfaces": ["wan0"],
              "masquerade": true, "mtu_fix": true, "name": "external", "open_ports": []},
-            {"allowed_subnets": [], "forward_policy": "Accept", "input_policy": "Accept", "interfaces": ["lan0"],
+            {"forward_policy": "Accept", "input_policy": "Accept", "interfaces": ["lan0"],
              "masquerade": false, "mtu_fix": false, "name": "internal", "open_ports": [
                {"comment": null, "port": 22, "protocol": "Tcp"}, {"comment": null, "port": 53, "protocol": "Udp"},
                {"comment": null, "port": 53, "protocol": "Tcp"}, {"comment": null, "port": 67, "protocol": "Udp"},
                {"comment": null, "port": 8088, "protocol": "Tcp"}, {"comment": null, "port": 9090, "protocol": "Tcp"}]},
-            {"allowed_subnets": [], "forward_policy": "Accept", "input_policy": "Accept",
+            {"forward_policy": "Accept", "input_policy": "Accept",
              "interfaces": ["tailscale0", "podman*"], "masquerade": false, "mtu_fix": false,
              "name": "trusted", "open_ports": []}]
         }"#;

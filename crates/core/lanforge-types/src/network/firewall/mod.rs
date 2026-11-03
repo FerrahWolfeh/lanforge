@@ -4,7 +4,6 @@ pub mod validation;
 pub use transaction::FirewallTransactionState;
 pub use validation::validate_firewall_candidate;
 
-use crate::network::IpSubnet;
 use crate::network::pppoe::PppoeNftablesConfig;
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
@@ -64,7 +63,6 @@ pub struct FirewallZone {
     pub name: String,
     pub interfaces: Vec<String>,
     pub open_ports: Vec<HostPortRule>,
-    pub allowed_subnets: Vec<IpSubnet>,
     pub input_policy: FirewallPolicy,
     pub forward_policy: FirewallPolicy,
     pub masquerade: bool,
@@ -198,7 +196,6 @@ impl Default for FirewallConfig {
                             comment: Some("Fedora Cockpit".into()),
                         },
                     ],
-                    allowed_subnets: Vec::new(),
                     input_policy: FirewallPolicy::Accept,
                     forward_policy: FirewallPolicy::Accept,
                     masquerade: false,
@@ -208,7 +205,6 @@ impl Default for FirewallConfig {
                     name: "external".into(),
                     interfaces: Vec::new(),
                     open_ports: Vec::new(),
-                    allowed_subnets: Vec::new(),
                     input_policy: FirewallPolicy::Drop,
                     forward_policy: FirewallPolicy::Drop,
                     masquerade: true,
@@ -218,7 +214,6 @@ impl Default for FirewallConfig {
                     name: "trusted".into(),
                     interfaces: vec!["tailscale0".into(), "podman*".into()],
                     open_ports: Vec::new(),
-                    allowed_subnets: Vec::new(),
                     input_policy: FirewallPolicy::Accept,
                     forward_policy: FirewallPolicy::Accept,
                     masquerade: false,

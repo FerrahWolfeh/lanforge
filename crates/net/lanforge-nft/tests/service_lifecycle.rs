@@ -183,7 +183,6 @@ async fn test_firewall_reacts_to_ruleset_changed_in_place() {
         name: "dmz".into(),
         interfaces: vec!["eth2".into()],
         open_ports: Vec::new(),
-        allowed_subnets: Vec::new(),
         input_policy: FirewallPolicy::Drop,
         forward_policy: FirewallPolicy::Drop,
         masquerade: false,

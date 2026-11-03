@@ -3,6 +3,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 use lanforge_types::device::Origin;
+use lanforge_types::network::Ipv6AddrOrSuffix;
 use lanforge_types::network::dhcp::{
     DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, Dhcpv6Pool, TftpOptions,
 };
@@ -14,7 +15,6 @@ use lanforge_types::network::ra::{
     DnsslConfig, PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RdnssConfig,
     RouterPriority,
 };
-use lanforge_types::network::{IpSubnet, Ipv6AddrOrSuffix};
 
 use crate::api::devices::HostConfigEntry;
 use crate::api::dns::DnsUpstreamConfig;
@@ -123,11 +123,7 @@ impl FirewallFile {
                     masquerade: zone.masquerade,
                     mtu_fix: zone.mtu_fix,
                     open_ports,
-                    allowed_subnets: zone
-                        .allowed_subnets
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect(),
+                    allowed_subnets: Vec::new(),
                 };
                 (zone.name.clone(), file_zone)
             })
@@ -255,20 +251,16 @@ impl FirewallFile {
                     )),
                 }
             }
-            let mut allowed_subnets = Vec::new();
-            for text in &z.allowed_subnets {
-                match text.parse::<IpSubnet>() {
-                    Ok(subnet) => allowed_subnets.push(subnet),
-                    Err(_) => issues.push(format!(
-                        "[firewall.zones.{name}] allowed subnet \"{text}\" is not valid; left out"
-                    )),
-                }
+            if !z.allowed_subnets.is_empty() {
+                issues.push(format!(
+                    "[firewall.zones.{name}] allowed_subnets is not supported (it never restricted \
+                     anything) and is ignored; remove it"
+                ));
             }
             zones.push(FirewallZone {
                 name: name.clone(),
                 interfaces: z.interfaces.clone(),
                 open_ports,
-                allowed_subnets,
                 input_policy,
                 forward_policy,
                 masquerade: z.masquerade,

@@ -1547,7 +1547,6 @@ async fn handle_zone(
                 name: add_args.name.clone(),
                 interfaces: add_args.interfaces,
                 open_ports: Vec::new(),
-                allowed_subnets: Vec::new(),
                 input_policy,
                 forward_policy,
                 masquerade: add_args.masquerade,

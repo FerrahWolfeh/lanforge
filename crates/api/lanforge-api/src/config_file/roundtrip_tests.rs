@@ -322,14 +322,14 @@ const OWNER_LIVE_FIREWALL: &str = r#"{
   ],
   "table_name": "lanforge",
   "zones": [
-    {"allowed_subnets": [], "forward_policy": "Drop", "input_policy": "Drop", "interfaces": ["wan0"],
+    {"forward_policy": "Drop", "input_policy": "Drop", "interfaces": ["wan0"],
      "masquerade": true, "mtu_fix": true, "name": "external", "open_ports": []},
-    {"allowed_subnets": [], "forward_policy": "Accept", "input_policy": "Accept", "interfaces": ["lan0"],
+    {"forward_policy": "Accept", "input_policy": "Accept", "interfaces": ["lan0"],
      "masquerade": false, "mtu_fix": false, "name": "internal", "open_ports": [
        {"comment": null, "port": 22, "protocol": "Tcp"}, {"comment": null, "port": 53, "protocol": "Udp"},
        {"comment": null, "port": 53, "protocol": "Tcp"}, {"comment": null, "port": 67, "protocol": "Udp"},
        {"comment": null, "port": 8088, "protocol": "Tcp"}, {"comment": null, "port": 9090, "protocol": "Tcp"}]},
-    {"allowed_subnets": [], "forward_policy": "Accept", "input_policy": "Accept",
+    {"forward_policy": "Accept", "input_policy": "Accept",
      "interfaces": ["tailscale0", "podman*"], "masquerade": false, "mtu_fix": false,
      "name": "trusted", "open_ports": []}
   ]
@@ -491,10 +491,30 @@ to = "192.0.2.8"
         fw.zones[0].open_ports.is_empty(),
         "nothing opened for bad ports"
     );
-    assert!(fw.zones[0].allowed_subnets.is_empty());
+    assert!(issues.iter().any(|i| i.contains("allowed_subnets")));
     assert_eq!(fw.port_forwards.len(), 1, "only the valid forward");
     assert_eq!(fw.port_forwards[0].external_port, 8080);
     assert_eq!(issues.len(), 9, "{issues:#?}");
+}
+
+/// `allowed_subnets` never restricted anything and is gone: a file that still has it keeps
+/// its firewall (the zone is not set aside), gets an issue, and loses the key when written.
+#[test]
+fn allowed_subnets_is_reported_and_not_written_back() {
+    let text = r#"
+[firewall.zones.internal]
+interfaces = ["lan0"]
+input = "accept"
+allowed_subnets = ["192.168.1.0/24"]
+"#;
+    let file = ConfigFile::parse(text).unwrap();
+    let (fw, issues) = file.firewall.to_config();
+    let internal = fw.zones.iter().find(|z| z.name == "internal").unwrap();
+    assert_eq!(internal.interfaces, vec!["lan0".to_string()]);
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert!(issues[0].contains("allowed_subnets"), "{issues:?}");
+    let written = toml::to_string(&super::FirewallFile::from_config(&fw)).unwrap();
+    assert!(!written.contains("allowed_subnets"), "{written}");
 }
 
 // ---------------------------------------------------------------------------
