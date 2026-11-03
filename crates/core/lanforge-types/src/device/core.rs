@@ -226,6 +226,10 @@ impl Device {
         }
     }
 
+    /// Applies one leased address. An IA holds one address per served prefix (a ULA and a GUA
+    /// at once), so this replaces the IAID's lease on the same /64 (a renew, or a new address in
+    /// that prefix) and adds it otherwise. Replacing any lease of the IAID dropped the other
+    /// prefix's address from the state, where the allocator could hand it to another client.
     pub fn apply_v6_lease(
         &mut self,
         duid: &Duid,
@@ -242,21 +246,17 @@ impl Device {
 
         let now = SystemTime::now();
         let new_lease = V6Lease::dynamic(ip, iaid, expires, now);
-        let existing = self
-            .v6
-            .iter_mut()
-            .find(|s| matches!(s, IPv6State::Dynamic(l) if l.iaid == iaid));
+        let existing = self.v6.iter_mut().find(|s| {
+            matches!(s, IPv6State::Dynamic(l)
+                if l.iaid == iaid && l.ip.segments()[..4] == ip.segments()[..4])
+        });
 
         if let Some(IPv6State::Dynamic(lease)) = existing {
             if **lease != new_lease {
                 **lease = new_lease;
                 changed = true;
             }
-        } else if !self
-            .v6
-            .iter()
-            .any(|s| matches!(s, IPv6State::Dynamic(l) if l.ip == ip && l.iaid == iaid))
-        {
+        } else {
             self.v6.push(IPv6State::Dynamic(Box::new(new_lease)));
             changed = true;
         }
@@ -266,6 +266,35 @@ impl Device {
             return Some(NetworkChange::V6Assigned { ip, iaid });
         }
         None
+    }
+
+    /// Applies a `DHCPv6` server binding: the IA's addresses are exactly `ips`, so a lease of
+    /// this IAID outside them (a withdrawn prefix after a renumber) goes now, not at expiry.
+    pub fn apply_v6_binding(
+        &mut self,
+        duid: &Duid,
+        iaid: u32,
+        ips: &[Ipv6Addr],
+        expires: SystemTime,
+    ) -> Option<NetworkChange> {
+        let before = self.v6.len();
+        self.v6.retain(
+            |s| !matches!(s, IPv6State::Dynamic(l) if l.iaid == iaid && !ips.contains(&l.ip)),
+        );
+        let removed = self.v6.len() != before;
+        let mut change = None;
+        for &ip in ips {
+            if let Some(c) = self.apply_v6_lease(duid, iaid, ip, expires) {
+                change.get_or_insert(c);
+            }
+        }
+        if removed && change.is_none() {
+            self.last_seen = SystemTime::now();
+            change = ips
+                .first()
+                .map(|&ip| NetworkChange::V6Assigned { ip, iaid });
+        }
+        change
     }
 
     pub fn apply_v6_prefix(

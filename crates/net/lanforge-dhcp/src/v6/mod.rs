@@ -812,30 +812,21 @@ fn apply_learned_state(
                 });
             }
         } else {
-            // One or more IPs assigned
-            for ip in assigned_ip_addrs {
-                if let Some(duid) = learned_duid {
-                    updates.push(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
-                        mac: opt_mac,
-                        duid: duid.clone(),
-                        iaid,
-                        ip,
-                        expires,
-                    })));
-                } else if let Some(mac) = opt_mac {
-                    // Search for DUID in our table if not provided in packet
-                    let found_duid = ctx
-                        .with_state(|state| state.devices.get(&mac).and_then(|d| d.duid.clone()));
-                    if let Some(duid) = found_duid {
-                        updates.push(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
-                            mac: Some(mac),
-                            duid,
-                            iaid,
-                            ip,
-                            expires,
-                        })));
-                    }
-                }
+            // The IA's whole binding in one update: its addresses replace the previous set.
+            let duid = learned_duid.cloned().or_else(|| {
+                // Search for DUID in our table if not provided in packet
+                opt_mac.and_then(|mac| {
+                    ctx.with_state(|state| state.devices.get(&mac).and_then(|d| d.duid.clone()))
+                })
+            });
+            if let Some(duid) = duid {
+                updates.push(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
+                    mac: opt_mac,
+                    duid,
+                    iaid,
+                    ips: assigned_ip_addrs.into_iter().collect(),
+                    expires,
+                })));
             }
         }
 
@@ -885,5 +876,59 @@ fn apply_learned_state(
 
     if !updates.is_empty() {
         let _ = ctx.apply_batch(updates);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{create_test_v6_config, init_test_context};
+    use lanforge_types::device::IPv6State;
+
+    fn leased(ctx: &LanforgeContext, mac: MacAddr) -> Vec<Ipv6Addr> {
+        ctx.with_state(|s| {
+            s.devices[&mac]
+                .v6
+                .iter()
+                .filter_map(|v| match v {
+                    IPv6State::Dynamic(l) => Some(l.ip),
+                    _ => None,
+                })
+                .collect()
+        })
+    }
+
+    /// An IA bound to a ULA and a GUA keeps both in the state (one lease per IAID kept only
+    /// the last: the other address was free for the allocator to hand out again), and a
+    /// renumber replaces the GUA at once.
+    #[test]
+    fn a_binding_keeps_every_address_of_the_ia() {
+        let ctx = init_test_context();
+        let cfg = create_test_v6_config();
+        let pool = pool::Ipv6Pool::new(&cfg.pools, cfg.ula_prefix, cfg.ula_prefix_len);
+        let mut server =
+            server::Dhcpv6Server::new(cfg.clone(), pool, Duid::new(vec![0, 3, 0, 1, 1]), ctx.clone());
+        let mac = MacAddr([0xc8, 0xbc, 0x9c, 0xf6, 0x6a, 0x28]);
+        let duid = Duid::new(vec![0, 3, 0, 1, 0xc8, 0xbc, 0x9c, 0xf6, 0x6a, 0x28]);
+        let ula: Ipv6Addr = "fd97:f00d:cafe:3731::8e7".parse().unwrap();
+        let gua: Ipv6Addr = "2001:db8:a200::1449".parse().unwrap();
+        let renumbered: Ipv6Addr = "2001:db8:b300::1449".parse().unwrap();
+        let ias = server::AssignedIAs {
+            na: vec![1],
+            pd: Vec::new(),
+        };
+        let none = server::AssignedIAs::default();
+
+        server.last_assignments.insert((duid.clone(), 1), vec![ula, gua]);
+        apply_learned_state(&ctx, Some(mac), Some(&duid), &ias, &none, &server, &cfg);
+        let mut got = leased(&ctx, mac);
+        got.sort();
+        assert_eq!(got, vec![gua, ula]);
+
+        server.last_assignments.insert((duid.clone(), 1), vec![ula, renumbered]);
+        apply_learned_state(&ctx, Some(mac), Some(&duid), &ias, &none, &server, &cfg);
+        let mut got = leased(&ctx, mac);
+        got.sort();
+        assert_eq!(got, vec![renumbered, ula]);
     }
 }

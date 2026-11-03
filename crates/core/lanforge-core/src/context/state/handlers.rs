@@ -14,6 +14,7 @@ use lanforge_types::device::{
 };
 use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::Ipv6AddrOrSuffix;
+use lanforge_types::update::V6LeaseUpdate;
 
 type ProcessedNeighbor = (
     IpAddr,
@@ -36,23 +37,28 @@ impl State {
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub(crate) fn handle_v6_lease_granted(
         &mut self,
-        mac: Option<MacAddr>,
-        duid: Duid,
-        iaid: u32,
-        ip: Ipv6Addr,
-        expires: SystemTime,
+        update: V6LeaseUpdate,
         discovery: &DiscoveryStore,
     ) -> EventVec {
+        let V6LeaseUpdate {
+            mac,
+            duid,
+            iaid,
+            ips,
+            expires,
+        } = update;
         let m = if let Some(m) = mac {
             m
         } else if let Some(m) = self.indices.duid_index.get(&duid) {
             *m
         } else {
-            discovery.insert_orphan(ip, duid, iaid, expires);
+            for ip in ips {
+                discovery.insert_orphan(ip, duid.clone(), iaid, expires);
+            }
             return EventVec::new();
         };
 
-        self.mutate_device(m, |dev| dev.apply_v6_lease(&duid, iaid, ip, expires))
+        self.mutate_device(m, |dev| dev.apply_v6_binding(&duid, iaid, &ips, expires))
     }
 
     #[allow(clippy::needless_pass_by_value)]

@@ -428,7 +428,7 @@ impl Ipv6Pool {
             .collect();
 
         // 3. Fresh dynamic allocation for every served prefix the IAID has no address on.
-        for prefix in prefixes {
+        for &prefix in &prefixes {
             if assigned.iter().any(|ip| Self::is_on_prefix(ip, &prefix)) {
                 continue;
             }
@@ -438,6 +438,8 @@ impl Ipv6Pool {
             }
         }
 
+        // Prefix order, not the order the leases happen to be stored in.
+        assigned.sort_by_key(|ip| prefixes.iter().position(|p| Self::is_on_prefix(ip, p)));
         assigned
     }
 
@@ -865,7 +867,7 @@ mod tests {
             mac,
             duid: Duid::new(duid.to_vec()),
             iaid,
-            ip,
+            ips: std::iter::once(ip).collect(),
             expires: SystemTime::now() + Duration::from_hours(1),
         })));
     }
@@ -966,6 +968,31 @@ mod tests {
             ips.iter().any(|ip| ip.segments()[0] == 0x2001),
             "Missing GUA"
         );
+    }
+
+    /// A renewing IAID gets its addresses in prefix order, not in the order the leases happen to
+    /// be stored (that order flipped on every renew: the log alternated ULA/GUA).
+    #[test]
+    fn sticky_addresses_come_back_in_prefix_order() {
+        let ctx = init_test_context();
+        let ula = "fd00::".parse::<Ipv6Addr>().ok();
+        let gua = "2001:db8::".parse::<Ipv6Addr>().unwrap();
+        let mut pool = Ipv6Pool::new(&Vec::new(), ula, 64);
+        pool.set_gua_prefix(Ipv6Prefix::from_addr(gua));
+
+        let gua_ip: Ipv6Addr = "2001:db8::1449".parse().unwrap();
+        let ula_ip: Ipv6Addr = "fd00::8e7".parse().unwrap();
+        // Stored GUA first: the binding as the server commits it, both addresses of the IA.
+        let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
+            mac: Some(mac(1)),
+            duid: Duid::new(duid(1)),
+            iaid: 1,
+            ips: [gua_ip, ula_ip].into_iter().collect(),
+            expires: SystemTime::now() + Duration::from_hours(1),
+        })));
+
+        let ips = pool.allocate(&ctx, &Duid::new(duid(1)), 1, Some(mac(1)), None);
+        assert_eq!(ips, vec![ula_ip, gua_ip]);
     }
 
     #[test]

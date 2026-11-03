@@ -265,7 +265,7 @@ fn test_dhcpv6_sarr_lifecycle_simulation() {
             mac: Some(client_mac),
             duid: client_duid.clone(),
             iaid: 1,
-            ip: offered_ip,
+            ips: std::iter::once(offered_ip).collect(),
             expires: SystemTime::now() + Duration::from_secs(86400),
         },
     )));

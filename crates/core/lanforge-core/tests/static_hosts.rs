@@ -61,7 +61,7 @@ fn a_host_left_out_becomes_a_discovered_device_again() {
         mac: Some(solarium.mac),
         duid: lanforge_types::identifiers::Duid::new(vec![1, 2, 3]),
         iaid: 7,
-        ip: "fd97:f00d:cafe:3731::77".parse().unwrap(),
+        ips: std::iter::once("fd97:f00d:cafe:3731::77".parse().unwrap()).collect(),
         expires: SystemTime::now() + Duration::from_hours(1),
     })));
 

@@ -548,16 +548,19 @@ impl Dhcpv6Server {
             .allocate(&self.ctx, client_duid, iana.id, mac, requested_ip);
 
         if !ips.is_empty() {
-            self.last_assignments
+            let previous = self
+                .last_assignments
                 .insert((client_duid.clone(), iana.id), ips.clone());
             let is_static = self.is_static_client(client_duid, identity);
             let mut ia_opts = DhcpOptions::new();
-            let ip_list: Vec<String> = ips.iter().map(ToString::to_string).collect();
+            let ip_list = ips.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
+            let who = identity.map_or_else(|| "anonymous device".to_string(), ToString::to_string);
 
-            if let Some(id) = identity {
-                info!("Assigning [{}] to {id}", ip_list.join(", "));
+            // A Renew every T1 (≤ 5 min) that changes nothing is not news.
+            if previous.as_ref() == Some(&ips) {
+                debug!("Renewed [{ip_list}] for {who}");
             } else {
-                info!("Assigning [{}] to anonymous device", ip_list.join(", "));
+                info!("Assigning [{ip_list}] to {who}");
             }
 
             let mut shortest_pref = u32::MAX;
@@ -1763,7 +1766,7 @@ mod tests {
             mac: Some(dummy_mac()),
             duid: duid_legit,
             iaid,
-            ip,
+            ips: std::iter::once(ip).collect(),
             expires: SystemTime::now() + Duration::from_hours(1),
         })));
 
@@ -1816,7 +1819,7 @@ mod tests {
             mac: Some(dummy_mac()),
             duid: duid_legit,
             iaid,
-            ip,
+            ips: std::iter::once(ip).collect(),
             expires: SystemTime::now() + Duration::from_hours(1),
         })));
 
