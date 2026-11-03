@@ -13,15 +13,19 @@ async fn main() -> Result<()> {
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
-    color_eyre::install()?;
-
     let cli = Cli::parse();
 
-    if cli.no_color {
+    let no_color = cli.colors_off();
+    if no_color {
         colored::control::set_override(false);
+        color_eyre::config::HookBuilder::new()
+            .theme(color_eyre::config::Theme::new())
+            .install()?;
+    } else {
+        color_eyre::install()?;
     }
 
-    let printer = Printer::new(cli.json, cli.no_color, cli.ascii).with_yes(cli.yes);
+    let printer = Printer::new(cli.json, no_color, cli.ascii).with_yes(cli.yes);
 
     #[cfg(feature = "remote")]
     let client = LanforgeClient::new(cli.socket, cli.remote, cli.token)?;

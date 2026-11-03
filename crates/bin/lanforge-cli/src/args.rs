@@ -41,8 +41,8 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
-    /// Disable ANSI colors.
-    #[arg(long, env = "NO_COLOR", global = true)]
+    /// Disable ANSI colors (also when `NO_COLOR` is set to any non-empty value).
+    #[arg(long, global = true)]
     pub no_color: bool,
 
     /// Replace Unicode box-drawing with ASCII equivalents.
@@ -52,6 +52,15 @@ pub struct Cli {
     /// Skip all interactive confirmation prompts.
     #[arg(short, long, global = true)]
     pub yes: bool,
+}
+
+impl Cli {
+    /// `--no-color`, or `NO_COLOR` set to any non-empty value (<https://no-color.org>): a clap
+    /// `bool` env would refuse the usual `NO_COLOR=1` and stop every command.
+    #[must_use]
+    pub fn colors_off(&self) -> bool {
+        self.no_color || std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
+    }
 }
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
