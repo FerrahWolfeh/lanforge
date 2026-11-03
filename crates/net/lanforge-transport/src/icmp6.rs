@@ -22,7 +22,7 @@ enum Icmp6Backend {
 
 struct Icmp6Inner {
     backend: Icmp6Backend,
-    metrics: TransportMetrics,
+    metrics: Arc<TransportMetrics>,
 }
 
 /// Specialized asynchronous ICMPv6 raw transport for Router Advertisements and NDP.
@@ -59,7 +59,7 @@ impl Icmp6Transport {
         Ok(Self {
             inner: Arc::new(Icmp6Inner {
                 backend: Icmp6Backend::Kernel(async_fd),
-                metrics: TransportMetrics::new(),
+                metrics: Arc::new(TransportMetrics::new()),
             }),
         })
     }
@@ -72,7 +72,7 @@ impl Icmp6Transport {
         let transport = Self {
             inner: Arc::new(Icmp6Inner {
                 backend: Icmp6Backend::Inert(port),
-                metrics: TransportMetrics::new(),
+                metrics: Arc::new(TransportMetrics::new()),
             }),
         };
         (handle, transport)
@@ -92,6 +92,12 @@ impl Icmp6Transport {
     #[must_use]
     pub fn metrics(&self) -> &TransportMetrics {
         &self.inner.metrics
+    }
+
+    /// A handle on the traffic counters alone (no socket): what a status view may keep.
+    #[must_use]
+    pub fn metrics_handle(&self) -> Arc<TransportMetrics> {
+        Arc::clone(&self.inner.metrics)
     }
 
     /// Receives an ICMPv6 datagram into the provided buffer.

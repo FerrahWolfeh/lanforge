@@ -114,6 +114,16 @@ impl LanforgeContext {
         self.inner.runtime.traffic_telemetry()
     }
 
+    /// Sets the traffic counters of the sockets a service holds now: call it on every (re)bind
+    /// from the serving instance. Cleared when the service stops, goes dormant or fails.
+    pub fn set_service_transports(
+        &self,
+        id: ServiceId,
+        transports: Vec<Arc<lanforge_types::network::snapshot::TransportMetrics>>,
+    ) {
+        self.inner.runtime.set_service_transports(id, transports);
+    }
+
     /// Names a registered service, so it appears in the banners.
     pub fn register_service(&self, id: ServiceId, name: &'static str) {
         self.inner.runtime.register_service(id, name);

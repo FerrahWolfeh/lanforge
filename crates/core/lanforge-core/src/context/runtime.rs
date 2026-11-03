@@ -22,7 +22,9 @@ use std::time::{Instant, SystemTime};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::watch;
 
-use lanforge_types::network::snapshot::{InterfaceSnapshot, WanSnapshot};
+use lanforge_types::network::snapshot::{
+    InterfaceSnapshot, TransportMetrics, TransportSnapshot, WanSnapshot,
+};
 use lanforge_types::system::StateDetail;
 
 /// Registered service runtime slot tracking its lifecycle.
@@ -32,6 +34,8 @@ pub struct ServiceSlot {
     pub started_at: Option<Instant>,
     /// Display name, set when the service is registered: only named slots get a banner.
     pub name: Option<&'static str>,
+    /// Traffic counters of the sockets the serving instance holds (never the sockets).
+    pub transports: Vec<Arc<TransportMetrics>>,
 }
 
 impl ServiceSlot {
@@ -42,7 +46,18 @@ impl ServiceSlot {
             detail: None,
             started_at: None,
             name: None,
+            transports: Vec::new(),
         }
+    }
+
+    /// The summed counters of the service's sockets, if it registered any.
+    fn transport(&self) -> Option<TransportSnapshot> {
+        let (first, rest) = self.transports.split_first()?;
+        let mut sum = first.snapshot();
+        for metrics in rest {
+            sum.absorb(&metrics.snapshot());
+        }
+        Some(sum)
     }
 
     /// Seconds since the service started serving, 0 while it is not.
@@ -267,6 +282,13 @@ impl ServiceRuntime {
             (true, false) => slot.started_at = None,
             _ => {}
         }
+        // Stopped, dormant or failed: its sockets are gone (a restart registers new ones).
+        if matches!(
+            state,
+            ServiceState::Offline | ServiceState::Inactive | ServiceState::Error
+        ) {
+            slot.transports.clear();
+        }
         drop(services);
     }
 
@@ -302,6 +324,15 @@ impl ServiceRuntime {
             .map_or(0, ServiceSlot::uptime_secs)
     }
 
+    /// Sets the traffic counters of the sockets a service holds now (on every (re)bind).
+    pub fn set_service_transports(&self, id: ServiceId, transports: Vec<Arc<TransportMetrics>>) {
+        self.services
+            .write()
+            .entry(id)
+            .or_insert_with(ServiceSlot::new)
+            .transports = transports;
+    }
+
     /// Names a registered service, so it appears in the banners.
     pub fn register_service(&self, id: ServiceId, name: &'static str) {
         self.services
@@ -325,7 +356,7 @@ impl ServiceRuntime {
                     uptime_secs: slot.uptime_secs(),
                     summary: None,
                     detail: slot.detail.clone(),
-                    transport: None,
+                    transport: slot.transport(),
                 })
             })
             .collect()

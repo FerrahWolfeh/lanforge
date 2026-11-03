@@ -25,7 +25,7 @@ use lanforge_types::device::{DeviceClass, TransientOrigin};
 use lanforge_types::network::{
     DnsClass, DnsMessage, DnsQuestion, DnsRData, DnsRecordType, Hostname, HostnameOrigin,
 };
-use lanforge_types::system::DormantReason;
+use lanforge_types::system::{DormantReason, ServiceId};
 use lanforge_types::update::{DeviceUpdate, TransientHostUpdate};
 use serde::{Deserialize, Serialize};
 
@@ -43,7 +43,7 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tracing::{debug, error, info, warn};
 
 use lanforge_dns_wire::{WireDecoder, WireEncoder};
-use lanforge_transport::{TransportMetrics, TransportStats};
+use lanforge_transport::TransportMetrics;
 
 use crate::error::NetworkError;
 
@@ -93,12 +93,6 @@ pub struct MdnsProber {
     _ctx: LanforgeContext,
 }
 
-impl TransportStats for MdnsProber {
-    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
-        self.metrics.snapshot()
-    }
-}
-
 impl AsyncService for MdnsProber {
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         if !self.cfg.enabled {
@@ -109,6 +103,7 @@ impl AsyncService for MdnsProber {
 
         let (tx, rx) = mpsc::channel(32);
         self.tx = tx.clone();
+        ctx.set_service_transports(ServiceId::Mdns, vec![Arc::clone(&self.metrics)]);
 
         if let Err(e) = run_mdns_worker(
             self.cfg.clone(),

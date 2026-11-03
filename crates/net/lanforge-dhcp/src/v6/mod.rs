@@ -80,7 +80,6 @@ use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
     ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::{TransportSnapshot, TransportStats};
 use lanforge_types::system::{DormantReason, ServiceId};
 
 /// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
@@ -165,15 +164,6 @@ impl LanforgeService for Dhcpv6Service {
             "DHCPv6 on [{}]:{} (iface: {})",
             ALL_DHCP_RELAY_AGENTS_AND_SERVERS, self.config.port, self.config.iface
         )
-    }
-}
-
-impl TransportStats for Dhcpv6Service {
-    fn snapshot(&self) -> TransportSnapshot {
-        self.transport
-            .as_ref()
-            .map(TransportStats::snapshot)
-            .unwrap_or_default()
     }
 }
 
@@ -371,6 +361,8 @@ impl Dhcpv6Service {
             self.transport = Some(t.clone());
             t
         };
+        self.ctx
+            .set_service_transports(ServiceId::Dhcp6, vec![transport.metrics_handle()]);
         self.publish_pool_stats(&server);
 
         let mut buf = [0u8; 2048];

@@ -8,7 +8,7 @@ use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
     ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::{TransportStats, UdpTransport};
+use lanforge_transport::UdpTransport;
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::network::dhcp::TftpOptions;
 use lanforge_types::system::{DormantReason, ServiceId};
@@ -75,31 +75,6 @@ impl TftpService {
     #[must_use]
     pub fn bound_addr(&self) -> Option<String> {
         self.bound_addr.read().clone()
-    }
-}
-
-impl TransportStats for TftpService {
-    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
-        let transports = self.transports.read();
-        let mut snap = lanforge_types::network::snapshot::TransportSnapshot::default();
-        for t in transports.iter() {
-            let s = t.snapshot();
-            snap.rx_packets += s.rx_packets;
-            snap.rx_bytes += s.rx_bytes;
-            snap.tx_packets += s.tx_packets;
-            snap.tx_bytes += s.tx_bytes;
-            snap.dropped += s.dropped;
-            snap.rate_limited += s.rate_limited;
-            snap.errors += s.errors;
-            if s.last_error_age_secs.is_some()
-                && (snap.last_error_age_secs.is_none()
-                    || s.last_error_age_secs < snap.last_error_age_secs)
-            {
-                snap.last_error_age_secs = s.last_error_age_secs;
-            }
-        }
-        drop(transports);
-        snap
     }
 }
 
@@ -215,6 +190,13 @@ impl AsyncService for TftpService {
             let bound_str = actual_bound.join(", ");
             *self.bound_addr.write() = Some(bound_str.clone());
             (*self.transports.write()).clone_from(&transports);
+            ctx.set_service_transports(
+                Self::SERVICE_ID,
+                transports
+                    .iter()
+                    .map(UdpTransport::metrics_handle)
+                    .collect(),
+            );
             info!(addr = %bound_str, "TFTP: Server listening");
             h.ready();
 

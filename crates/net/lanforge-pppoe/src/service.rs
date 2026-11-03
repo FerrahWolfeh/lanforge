@@ -17,7 +17,7 @@ use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
     ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::{ArpProber, PppoeTransport, TransportStats};
+use lanforge_transport::{ArpProber, PppoeTransport};
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::pppoe::PppoeDataplane;
@@ -980,6 +980,8 @@ impl PppoeService {
             self.transport = Some(t.clone());
             t
         };
+        self.ctx
+            .set_service_transports(ServiceId::Pppoe, vec![transport.metrics_handle()]);
 
         info!(
             wan_iface = %self.cfg.wan_iface,
@@ -1071,15 +1073,6 @@ impl PppoeService {
         self.teardown_session(reason, !peer_ended).await;
 
         flow_res
-    }
-}
-
-impl TransportStats for PppoeService {
-    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
-        self.transport
-            .as_ref()
-            .map(TransportStats::snapshot)
-            .unwrap_or_default()
     }
 }
 

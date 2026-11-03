@@ -56,6 +56,12 @@ impl Dhcpv6Transport {
         (handle, Self { inner })
     }
 
+    /// The traffic counters alone (no socket), for the service banner.
+    #[must_use]
+    pub fn metrics_handle(&self) -> std::sync::Arc<lanforge_transport::TransportMetrics> {
+        self.inner.metrics_handle()
+    }
+
     /// Returns `true` if operating in inert testing mode.
     #[must_use]
     pub fn is_inert(&self) -> bool {

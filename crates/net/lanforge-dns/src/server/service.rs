@@ -17,7 +17,6 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
-use lanforge_transport::{TransportSnapshot, TransportStats};
 #[cfg(feature = "adblock")]
 use lanforge_types::config::AdblockRules;
 use lanforge_types::config::DnsListenConfig;
@@ -244,15 +243,6 @@ impl lanforge_core::service::LanforgeService for DnsService {
     }
 }
 
-impl TransportStats for DnsService {
-    fn snapshot(&self) -> TransportSnapshot {
-        self.custom_transport
-            .as_ref()
-            .map(TransportStats::snapshot)
-            .unwrap_or_default()
-    }
-}
-
 impl AsyncService for DnsService {
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         // Listeners and `enabled` come from the live config (seeded from `[dns]` at boot, changed
@@ -283,6 +273,7 @@ impl AsyncService for DnsService {
         let mut workers = Vec::new();
         if let Some(ref transport) = self.custom_transport {
             info!("Custom/inert UDP transport active");
+            ctx.set_service_transports(Self::SERVICE_ID, vec![transport.metrics_handle()]);
             for _ in 0..parallelism {
                 workers.push(crate::server::worker::udp::spawn_udp_worker(
                     Arc::clone(&dns_ctx),
@@ -297,12 +288,12 @@ impl AsyncService for DnsService {
                 ));
             }
 
+            // UDP carries nearly all queries; TCP/DoT/DoQ keep no counters in the banner.
+            let mut counters = Vec::with_capacity(addrs.len());
             for addr in &addrs {
                 let transport =
                     crate::server::transport::net::bind_udp(*addr).map_err(CoreError::Io)?;
-                if self.custom_transport.is_none() {
-                    self.custom_transport = Some(transport.clone());
-                }
+                counters.push(transport.metrics_handle());
                 info!(%addr, "UDP listening");
                 for _ in 0..parallelism {
                     workers.push(crate::server::worker::udp::spawn_udp_worker(
@@ -311,6 +302,7 @@ impl AsyncService for DnsService {
                     ));
                 }
             }
+            ctx.set_service_transports(Self::SERVICE_ID, counters);
         }
 
         let tcp_worker = if !is_inert {

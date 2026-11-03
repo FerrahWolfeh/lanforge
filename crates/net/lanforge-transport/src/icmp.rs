@@ -365,6 +365,14 @@ impl IcmpPinger {
     }
 }
 
+impl IcmpPinger {
+    /// A handle on the traffic counters alone (no socket): what a status view may keep.
+    #[must_use]
+    pub fn metrics_handle(&self) -> Arc<TransportMetrics> {
+        Arc::clone(&self.metrics)
+    }
+}
+
 impl TransportStats for IcmpPinger {
     fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
         self.metrics.snapshot()

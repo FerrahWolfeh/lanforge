@@ -71,7 +71,7 @@ use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
     ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::{Icmp6Transport, TransportSnapshot, TransportStats};
+use lanforge_transport::Icmp6Transport;
 use rand::RngExt;
 use std::collections::HashMap;
 use std::io;
@@ -474,6 +474,8 @@ impl RaService {
             self.transport = Some(t.clone());
             (mac, t)
         };
+        self.ctx
+            .set_service_transports(ServiceId::Ra, vec![transport.metrics_handle()]);
 
         let mut state = RaState::new();
         // Seed the advertised prefixes from the LAN interface, so a renumbering after startup
@@ -672,15 +674,6 @@ impl LanforgeService for RaService {
 
     fn describe(&self) -> String {
         format!("RA Server on {}", self.cfg.iface)
-    }
-}
-
-impl TransportStats for RaService {
-    fn snapshot(&self) -> TransportSnapshot {
-        self.transport
-            .as_ref()
-            .map(TransportStats::snapshot)
-            .unwrap_or_default()
     }
 }
 

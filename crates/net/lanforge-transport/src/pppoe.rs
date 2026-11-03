@@ -54,7 +54,7 @@ enum PppoeSessionBackend {
 struct PppoeTransportInner {
     discovery: parking_lot::RwLock<Option<PppoeDiscoveryBackend>>,
     session: parking_lot::RwLock<Option<PppoeSessionBackend>>,
-    metrics: TransportMetrics,
+    metrics: Arc<TransportMetrics>,
 }
 
 /// Test handle for rootless PPPoE simulation and verification.
@@ -103,7 +103,7 @@ impl PppoeTransport {
                     async_fd,
                 )))),
                 session: parking_lot::RwLock::new(None),
-                metrics: TransportMetrics::new(),
+                metrics: Arc::new(TransportMetrics::new()),
             }),
         })
     }
@@ -175,7 +175,7 @@ impl PppoeTransport {
             inner: Arc::new(PppoeTransportInner {
                 discovery: parking_lot::RwLock::new(Some(PppoeDiscoveryBackend::Inert(disc_port))),
                 session: parking_lot::RwLock::new(Some(PppoeSessionBackend::Inert(sess_port))),
-                metrics: TransportMetrics::new(),
+                metrics: Arc::new(TransportMetrics::new()),
             }),
         };
 
@@ -523,6 +523,12 @@ impl PppoeTransport {
     pub fn metrics(&self) -> &TransportMetrics {
         &self.inner.metrics
     }
+
+    /// A handle on the traffic counters alone (no socket): what a status view may keep.
+    #[must_use]
+    pub fn metrics_handle(&self) -> Arc<TransportMetrics> {
+        Arc::clone(&self.inner.metrics)
+    }
 }
 
 impl TransportStats for PppoeTransport {
@@ -611,7 +617,7 @@ mod tests {
                     io_fd: Arc::new(async_pppox),
                     _pppox_fd: None,
                 })),
-                metrics: TransportMetrics::new(),
+                metrics: Arc::new(TransportMetrics::new()),
             }),
         };
 

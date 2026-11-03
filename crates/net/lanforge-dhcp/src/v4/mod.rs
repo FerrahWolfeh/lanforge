@@ -61,7 +61,6 @@ use crate::traits::DhcpPool;
 pub use config::Dhcpv4Config;
 pub use io::{Dhcpv4InertChannels, Dhcpv4InertHandle, Dhcpv4InertReply, Dhcpv4Transport};
 use lanforge_core::context::LanforgeContext;
-use lanforge_transport::{TransportSnapshot, TransportStats};
 
 const DHCPV4_DEPS: &[Edge] = &[Edge::requires(
     ServiceId::Interfaces,
@@ -132,15 +131,6 @@ impl LanforgeService for Dhcpv4Service {
 
     fn describe(&self) -> String {
         format!("DHCPv4 on {}", self.cfg.iface)
-    }
-}
-
-impl TransportStats for Dhcpv4Service {
-    fn snapshot(&self) -> TransportSnapshot {
-        self.transport
-            .as_ref()
-            .map(TransportStats::snapshot)
-            .unwrap_or_default()
     }
 }
 
@@ -312,6 +302,8 @@ impl Dhcpv4Service {
             self.transport = Some(t.clone());
             t
         };
+        self.ctx
+            .set_service_transports(ServiceId::Dhcp4, vec![transport.metrics_handle()]);
 
         // Pre-allocate static reservations to avoid collisions with dynamic pool
         let registry = self.ctx.get_static_registry();

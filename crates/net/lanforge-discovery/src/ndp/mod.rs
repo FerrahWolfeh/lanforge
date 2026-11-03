@@ -45,7 +45,7 @@ use lanforge_core::service::{
     AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass, ServiceCommand,
     ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::{ArpProber, TransportStats};
+use lanforge_transport::ArpProber;
 use lanforge_types::device::{IPv4State, IPv6State, Origin};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::NeighborEvent;
@@ -129,35 +129,6 @@ pub struct DiscoveryService {
     ctx: LanforgeContext,
     pinger: Option<Arc<IcmpPinger>>,
     prober_cache: Arc<Mutex<HashMap<String, ArpProber>>>,
-}
-
-impl TransportStats for DiscoveryService {
-    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
-        let mut snap = self
-            .pinger
-            .as_ref()
-            .map(|p| p.snapshot())
-            .unwrap_or_default();
-        let probers = self.prober_cache.lock();
-        for p in probers.values() {
-            let s = p.snapshot();
-            snap.rx_packets += s.rx_packets;
-            snap.rx_bytes += s.rx_bytes;
-            snap.tx_packets += s.tx_packets;
-            snap.tx_bytes += s.tx_bytes;
-            snap.dropped += s.dropped;
-            snap.rate_limited += s.rate_limited;
-            snap.errors += s.errors;
-            if s.last_error_age_secs.is_some()
-                && (snap.last_error_age_secs.is_none()
-                    || s.last_error_age_secs < snap.last_error_age_secs)
-            {
-                snap.last_error_age_secs = s.last_error_age_secs;
-            }
-        }
-        drop(probers);
-        snap
-    }
 }
 
 impl DiscoveryService {
@@ -346,6 +317,7 @@ impl AsyncService for DiscoveryService {
         if self.cfg.ping_enabled {
             if let Some(ref pinger) = self.pinger {
                 info!("Active ICMP ping probe initialized");
+                ctx.set_service_transports(Self::SERVICE_ID, vec![pinger.metrics_handle()]);
                 spawn_sweep_task(pinger.clone(), ctx.clone(), self.cfg.ping_interval_secs);
                 spawn_jit_offline_task(pinger.clone(), self.prober_cache.clone(), ctx.clone());
             } else {
