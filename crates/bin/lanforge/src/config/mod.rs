@@ -36,7 +36,6 @@ use lanforge_uds::config::ApiConfig;
 pub use toml::load_toml;
 
 use clap::Parser;
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use crate::config::toml::SystemCfg;
@@ -119,6 +118,8 @@ pub struct Config {
     pub config_issues: Vec<String>,
     /// `[hosts]` (`None`: not read, the table's static hosts stay as they are).
     pub static_hosts: Option<Vec<lanforge_types::device::StaticHost>>,
+    /// `[dhcp]` was set aside: the defaults that run are never written over it.
+    pub dhcp_set_aside: bool,
 }
 
 impl Config {
@@ -181,12 +182,6 @@ impl Config {
             if !domains.contains(dom) {
                 domains.push(dom.clone());
             }
-        }
-        #[cfg(feature = "dhcp")]
-        if let Some(ref d) = toml_cfg.dhcp.v4.domain_name
-            && !domains.contains(d)
-        {
-            domains.push(d.clone());
         }
         if domains.is_empty() {
             domains.push("lan".to_string());
@@ -265,6 +260,7 @@ impl Config {
             traffic_toml: toml_cfg.traffic,
             config_issues: toml_cfg.config_issues,
             static_hosts: toml_cfg.static_hosts,
+            dhcp_set_aside: toml_cfg.dhcp_set_aside,
             config_path: cli.resolved_config_path().to_string_lossy().to_string(),
             config_writable: if cli.dev {
                 false
@@ -400,36 +396,11 @@ impl Config {
             cfg.ula_prefix_len = 64;
         }
 
-        if cfg.dns_servers.is_empty() {
-            cfg.dns_servers = {
-                #[cfg(feature = "dns")]
-                let dns_upstream = self.dns_toml.upstreams.first().map(|u| u.target.clone());
-                #[cfg(not(feature = "dns"))]
-                let dns_upstream = None;
-
-                dns_upstream.map_or_else(
-                    || {
-                        cfg.ula_prefix
-                            .map(|ip| {
-                                let mut octets = ip.octets();
-                                if octets[8..16].iter().all(|&b| b == 0) {
-                                    octets[15] = 1;
-                                }
-                                vec![std::net::Ipv6Addr::from(octets)]
-                            })
-                            .unwrap_or_default()
-                    },
-                    |u| match u.addr {
-                        SocketAddr::V6(v6) => vec![*v6.ip()],
-                        SocketAddr::V4(_) => vec![],
-                    },
-                )
-            };
-        }
-
-        if cfg.search_domains.is_empty() {
-            cfg.search_domains.clone_from(&self.search_domains);
-        }
+        // No `dns_servers`: the server announces this router's own LAN address per reply (the
+        // interface's live ULA/GUA), never a guessed address nor an upstream.
+        // The base the live `[dhcp.v6]` options go over (`Dhcpv6Config::with_options`): the
+        // site's search domains, used when the options name none (as DHCPv4 does).
+        cfg.search_domains.clone_from(&self.search_domains);
 
         cfg
     }
@@ -455,11 +426,8 @@ impl Config {
             cfg.tls_key.clone_from(&self.system.tls_key);
         }
 
-        cfg.multi_search_labels = self
-            .search_domains
-            .iter()
-            .map(|d| d.split('.').map(|s| s.as_bytes().to_vec()).collect())
-            .collect();
+        // The site's domains: local names, PTR answers and the SOA zone (the first one).
+        cfg.search_domains.clone_from(&self.search_domains);
 
         if cfg.ula_prefix.is_none() {
             #[cfg(feature = "ra")]
@@ -670,6 +638,62 @@ mod search_domain_tests {
     }
 }
 
+/// One search-domain rule for every consumer: a section's own list, else the site's
+/// (`[system] search_domains`, else `lan`).
+#[cfg(all(test, feature = "dns", feature = "dhcp"))]
+mod site_domain_tests {
+    use super::*;
+    use clap::Parser;
+
+    fn config(text: &str) -> (Config, lanforge_api::config_file::ConfigFile) {
+        let file = lanforge_api::config_file::ConfigFile::parse(text).unwrap();
+        let toml = toml::TomlConfig::from(&file);
+        let site = Config::resolve_search_domains(&toml);
+        let cli = args::CliArgs::parse_from(["lanforge"]);
+        (Config::apply_cli_overrides(toml, &cli, site), file)
+    }
+
+    /// PTR answers and the SOA zone are named after the site's first domain, the same names
+    /// the local resolver answers (they were always `lan`).
+    #[test]
+    fn dns_names_its_zone_after_the_site_domain() {
+        let (cfg, _) = config("[system]\nsearch_domains = [\"home.arpa\"]\n");
+        assert_eq!(cfg.to_dns_config().search_domains, ["home.arpa", "lan"]);
+        let (cfg, _) = config("");
+        assert_eq!(cfg.to_dns_config().search_domains, ["lan"]);
+    }
+
+    /// `[dhcp.v6] search_domains` empty = the site's, at start and after a live options
+    /// change; a list of its own wins. (A live change used to send none.)
+    #[test]
+    fn dhcpv6_search_domains_fall_back_to_the_site() {
+        let (cfg, file) = config("[system]\nsearch_domains = [\"home.arpa\"]\n");
+        let mut opts = file.dhcp_settings().0.options.v6;
+        assert_eq!(opts.search_domains, Vec::<String>::new());
+        let base = cfg.to_dhcpv6_config();
+        assert_eq!(
+            base.with_options(&opts).search_domains,
+            ["home.arpa", "lan"]
+        );
+
+        opts.search_domains = vec!["v6.example".into()];
+        assert_eq!(base.with_options(&opts).search_domains, ["v6.example"]);
+
+        let (cfg, file) = config("[dhcp.v6]\nsearch_domains = [\"v6.example\"]\n");
+        let started = cfg
+            .to_dhcpv6_config()
+            .with_options(&file.dhcp_settings().0.options.v6);
+        assert_eq!(started.search_domains, ["v6.example"], "own list at start");
+    }
+
+    /// `[dhcp.v4] domain_name` is option 15 only: it does not add a site domain.
+    #[test]
+    fn dhcpv4_domain_name_is_not_a_site_domain() {
+        let (cfg, _) = config("[dhcp.v4]\ndomain_name = \"corp\"\n");
+        assert_eq!(cfg.search_domains, ["lan"]);
+    }
+}
+
 #[cfg(all(test, feature = "ra"))]
 mod config_default_tests {
     use super::*;
@@ -766,6 +790,7 @@ impl Default for Config {
             config_writable: true,
             config_issues: Vec::new(),
             static_hosts: None,
+            dhcp_set_aside: false,
         }
     }
 }

@@ -39,6 +39,7 @@ pub enum ConfigDomain {
     DnsAdblockRules,
     DnsReverse,
     DnsListen,
+    SiteDomains,
     Discovery,
     Interfaces,
     Http,
@@ -70,6 +71,7 @@ impl ConfigDomain {
             Self::DnsAdblockRules => DomainSet::DNS_ADBLOCK_RULES,
             Self::DnsReverse => DomainSet::DNS_REVERSE,
             Self::DnsListen => DomainSet::DNS_LISTEN,
+            Self::SiteDomains => DomainSet::SITE_DOMAINS,
             Self::Discovery => DomainSet::DISCOVERY,
             Self::Interfaces => DomainSet::INTERFACES,
             Self::Http => DomainSet::HTTP,
@@ -101,6 +103,7 @@ impl ConfigDomain {
             Self::DnsAdblockRules => "dns_adblock_rules",
             Self::DnsReverse => "dns_reverse",
             Self::DnsListen => "dns_listen",
+            Self::SiteDomains => "site_domains",
             Self::Discovery => "discovery",
             Self::Interfaces => "interfaces",
             Self::Http => "http",
@@ -139,6 +142,7 @@ bitflags! {
         const INTERFACES         = 1 << 22;
         const HTTP               = 1 << 23;
         const AUTH               = 1 << 24;
+        const SITE_DOMAINS       = 1 << 25;
     }
 }
 
@@ -151,7 +155,7 @@ impl From<ConfigDomain> for DomainSet {
 impl DomainSet {
     /// Iterates over all active [`ConfigDomain`] elements in this set.
     pub fn domains(self) -> impl Iterator<Item = ConfigDomain> {
-        const ALL: [(ConfigDomain, DomainSet); 24] = [
+        const ALL: [(ConfigDomain, DomainSet); 25] = [
             (ConfigDomain::Pppoe, DomainSet::PPPOE),
             (ConfigDomain::Firewall, DomainSet::FIREWALL),
             (ConfigDomain::Traffic, DomainSet::TRAFFIC),
@@ -176,6 +180,7 @@ impl DomainSet {
             (ConfigDomain::Interfaces, DomainSet::INTERFACES),
             (ConfigDomain::Http, DomainSet::HTTP),
             (ConfigDomain::Auth, DomainSet::AUTH),
+            (ConfigDomain::SiteDomains, DomainSet::SITE_DOMAINS),
         ];
         ALL.into_iter().filter_map(move |(domain, flag)| {
             if self.contains(flag) {
@@ -221,9 +226,11 @@ pub trait ConfigSection: Clone + PartialEq + Send + Sync + 'static {
 // Section types and implementations
 // ---------------------------------------------------------------------------
 
-/// DNS listener configuration for UDP/TCP port 53, `DoT`, and `DoQ`.
+/// DNS listener configuration for UDP/TCP port 53, `DoT`, and `DoQ`, and whether the DNS
+/// service runs at all (`[dns] enabled`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DnsListenConfig {
+    pub enabled: bool,
     pub listen: ListenConfig,
     pub dot_listen: Option<SocketAddr>,
     pub dot_enabled: bool,
@@ -236,6 +243,7 @@ pub struct DnsListenConfig {
 impl Default for DnsListenConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             listen: ListenConfig::dual_stack(53),
             dot_listen: None,
             dot_enabled: false,
@@ -505,6 +513,29 @@ impl ConfigSection for AdblockRules {
 
 impl ConfigSection for Vec<DnsReverseResolver> {
     const DOMAIN: ConfigDomain = ConfigDomain::DnsReverse;
+
+    fn classify(old: &Self, new: &Self) -> ChangeImpact {
+        if old == new {
+            ChangeImpact::None
+        } else {
+            ChangeImpact::Hot
+        }
+    }
+}
+
+/// The site's search domains (`[system] search_domains`, then `lan`): the names DNS answers for
+/// (`host.<domain>`, PTR) and its SOA zone (the first one).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SiteDomains(pub Vec<String>);
+
+impl Default for SiteDomains {
+    fn default() -> Self {
+        Self(vec!["lan".to_string()])
+    }
+}
+
+impl ConfigSection for SiteDomains {
+    const DOMAIN: ConfigDomain = ConfigDomain::SiteDomains;
 
     fn classify(old: &Self, new: &Self) -> ChangeImpact {
         if old == new {

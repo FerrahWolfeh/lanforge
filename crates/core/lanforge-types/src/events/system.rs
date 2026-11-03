@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::config::DomainSet;
-use crate::system::{ServiceAction, ServiceBanner, ServiceId};
+use crate::system::{ServiceAction, ServiceId};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SystemEvent {
@@ -17,7 +17,6 @@ pub enum SystemEvent {
     ConfigUpdate {
         password_hash: String,
     },
-    ServiceStatusBanner(Box<ServiceBanner>),
     ServiceControl {
         id: ServiceId,
         action: ServiceAction,

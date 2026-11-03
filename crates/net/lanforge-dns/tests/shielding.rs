@@ -67,7 +67,6 @@ async fn test_dns_local_shielding_anti_poisoning() {
     let ctx_instance = init_test_context();
     let mut cfg = mock_config();
     cfg.search_domains = vec!["lan".to_string()];
-    cfg.multi_search_labels = vec![vec![b"lan".to_vec()]];
 
     let mut dns_ctx = mock_dns_context(ctx_instance, cfg).await;
 

@@ -24,6 +24,7 @@ use tracing::error;
 use crate::authz;
 use crate::config::HttpConfig;
 use crate::error::{HttpError, Result as HttpResult};
+use crate::throttle::LoginThrottle;
 
 /// JWT Claims.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -67,6 +68,8 @@ pub struct AuthManager {
     encoding_key: EncodingKey,
     decoding_key: DecodingKey,
     has_users: Arc<AtomicBool>,
+    /// Password-guess throttling, shared by every clone.
+    pub throttle: Arc<LoginThrottle>,
 }
 
 impl AuthManager {
@@ -82,6 +85,7 @@ impl AuthManager {
             encoding_key: EncodingKey::from_secret(secret),
             decoding_key: DecodingKey::from_secret(secret),
             has_users: Arc::new(AtomicBool::new(false)),
+            throttle: Arc::new(LoginThrottle::default()),
         }
     }
 

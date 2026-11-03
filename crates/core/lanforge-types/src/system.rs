@@ -263,6 +263,13 @@ pub enum ServiceState {
 }
 
 impl ServiceState {
+    /// The service is answering clients: online, active or degraded (a degraded DNS still answers
+    /// local names).
+    #[must_use]
+    pub const fn is_serving(self) -> bool {
+        matches!(self, Self::Online | Self::Active | Self::Degraded)
+    }
+
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -301,50 +308,17 @@ impl std::fmt::Display for ServiceState {
     }
 }
 
-pub mod vec_as_map {
-    use serde::{Deserialize, Deserializer, Serializer, ser::SerializeMap};
-    use std::borrow::Cow;
-
-    /// Serializes a slice of key-value tuples as a JSON map.
-    ///
-    /// # Errors
-    /// Returns an error if map serialization fails.
-    pub fn serialize<S>(
-        stats: &[(Cow<'static, str>, String)],
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut map = serializer.serialize_map(Some(stats.len()))?;
-        for (k, v) in stats {
-            map.serialize_entry(k, v)?;
-        }
-        map.end()
-    }
-
-    /// Deserializes a JSON map into a vector of key-value tuples.
-    ///
-    /// # Errors
-    /// Returns an error if map deserialization fails.
-    pub fn deserialize<'de, D>(
-        deserializer: D,
-    ) -> Result<Vec<(Cow<'static, str>, String)>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let map: std::collections::HashMap<String, String> =
-            Deserialize::deserialize(deserializer)?;
-        Ok(map.into_iter().map(|(k, v)| (Cow::Owned(k), v)).collect())
-    }
-}
-
 /// Reason why a service is dormant (condition evaluated to false).
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DormantReason {
     Disabled(Cow<'static, str>),
     NotApplicable(Cow<'static, str>),
+    /// The WAN link (`PPPoE` `wan_iface`) does not exist yet: the daemon is not online, so
+    /// readiness waits for it (up to its deadline).
+    WaitingForWan(String),
+    /// A LAN link the service serves does not exist yet; readiness does not wait for it.
+    WaitingForLink(String),
 }
 
 impl DormantReason {
@@ -364,6 +338,8 @@ impl std::fmt::Display for DormantReason {
         match self {
             Self::Disabled(k) => write!(f, "disabled ({k})"),
             Self::NotApplicable(r) => write!(f, "not applicable ({r})"),
+            Self::WaitingForWan(iface) => write!(f, "waiting for WAN link {iface}"),
+            Self::WaitingForLink(iface) => write!(f, "waiting for link {iface}"),
         }
     }
 }
@@ -410,6 +386,15 @@ pub enum StateDetail {
     AdminStopped,
 }
 
+impl StateDetail {
+    /// Whether this keeps the daemon from being ready: only waiting for the WAN link does (the
+    /// host is not online without it); every other reason is a settled state.
+    #[must_use]
+    pub const fn holds_readiness(&self) -> bool {
+        matches!(self, Self::Dormant(DormantReason::WaitingForWan(_)))
+    }
+}
+
 impl std::fmt::Display for StateDetail {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -430,15 +415,18 @@ impl std::fmt::Display for StateDetail {
     }
 }
 
-/// Banner representing the status and metrics of a decoupled service.
+/// A service's lifecycle as the supervisor sees it, plus a one-line summary of its live data.
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ServiceBanner {
     pub id: ServiceId,
     pub name: String,
     pub state: ServiceState,
     pub uptime_secs: u64,
-    #[serde(with = "vec_as_map")]
-    pub stats: Vec<(Cow<'static, str>, String)>,
+    /// One line built by the API: live data while the service serves (leases, session,
+    /// cache…), else why it does not (dormant, failed…). `None` when there is nothing to say,
+    /// never a placeholder value.
+    #[serde(default)]
+    pub summary: Option<String>,
     #[serde(default)]
     pub detail: Option<StateDetail>,
     #[serde(default)]
@@ -474,6 +462,22 @@ pub enum PppoeSessionState {
     Reconnecting,
 }
 
+impl PppoeSessionState {
+    /// The state in words, for summaries and logs.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Disconnected => "disconnected",
+            Self::WaitingForCarrier => "waiting for carrier",
+            Self::WaitingForTerminal => "waiting for terminal",
+            Self::Discovering => "discovering",
+            Self::Authenticating => "authenticating",
+            Self::Connected => "connected",
+            Self::Reconnecting => "reconnecting",
+        }
+    }
+}
+
 /// Status response payload for `PPPoE`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PppoeStatusResponse {
@@ -496,6 +500,10 @@ pub struct PppoeStatusResponse {
     pub terminal_reachable: Option<bool>,
     pub terminal_mac: Option<MacAddr>,
     pub terminal_rtt_us: Option<u32>,
+    /// When the session came up, on the monotonic clock (an SBC without RTC brings `PPPoE` up
+    /// before NTP fixes the wall clock). In-process only: the API turns it into `uptime_secs`.
+    #[serde(skip)]
+    pub connected_at: Option<std::time::Instant>,
 }
 
 /// Status response payload for Network Traffic & SQM.

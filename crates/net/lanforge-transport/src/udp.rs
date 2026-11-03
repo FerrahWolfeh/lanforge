@@ -24,7 +24,7 @@ enum UdpBackend {
 
 struct UdpInner {
     backend: UdpBackend,
-    metrics: TransportMetrics,
+    metrics: Arc<TransportMetrics>,
     limiter: parking_lot::RwLock<Option<RateLimiter<IpAddr>>>,
 }
 
@@ -128,7 +128,7 @@ impl UdpTransport {
         Self {
             inner: Arc::new(UdpInner {
                 backend,
-                metrics: TransportMetrics::new(),
+                metrics: Arc::new(TransportMetrics::new()),
                 limiter: parking_lot::RwLock::new(None),
             }),
         }
@@ -151,6 +151,12 @@ impl UdpTransport {
     #[must_use]
     pub fn metrics(&self) -> &TransportMetrics {
         &self.inner.metrics
+    }
+
+    /// A handle on the traffic counters alone (no socket): what a status view may keep.
+    #[must_use]
+    pub fn metrics_handle(&self) -> Arc<TransportMetrics> {
+        Arc::clone(&self.inner.metrics)
     }
 
     /// Returns `true` if operating in inert testing mode.

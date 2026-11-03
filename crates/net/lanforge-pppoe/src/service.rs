@@ -10,6 +10,7 @@ use crate::keepalive::{PadtWatch, run_keepalive};
 use crate::kernel::{configure_interface, deconfigure_interface, handoff_to_kernel};
 use crate::lcp::negotiate_lcp;
 use crate::session::PppoeSession;
+use crate::wan_dns::follow_wan_rdnss;
 use lanforge_core::bus::{LanforgeEvent, PppoeEvent, SystemEvent};
 use lanforge_core::context::{ConfigSubscription, LanforgeContext};
 use lanforge_core::error::CoreError;
@@ -17,7 +18,7 @@ use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
     ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::{ArpProber, PppoeTransport, TransportStats};
+use lanforge_transport::{ArpProber, Icmp6Transport, PppoeTransport};
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::pppoe::PppoeDataplane;
@@ -25,7 +26,6 @@ use lanforge_types::system::{
     DegradedReason, DormantReason, PppoeSessionState, PppoeStatusResponse, ServiceId, ServiceState,
     StateDetail,
 };
-use std::borrow::Cow;
 use std::io::Read;
 use std::net::Ipv4Addr;
 use std::path::Path;
@@ -135,6 +135,9 @@ pub struct PppoeService {
     prober: Option<ArpProber>,
     terminal_status: Option<(bool, Option<MacAddr>, Option<u32>)>,
     config_sub: ConfigSubscription<PppoeConfig>,
+    /// Injected RA listener for the session link (tests); live sessions bind one on the PPP
+    /// interface once it exists.
+    wan_ra: Option<Icmp6Transport>,
 }
 
 impl PppoeService {
@@ -161,6 +164,7 @@ impl PppoeService {
             prober: None,
             terminal_status: None,
             config_sub,
+            wan_ra: None,
         }
     }
 
@@ -189,6 +193,7 @@ impl PppoeService {
             prober: None,
             terminal_status: None,
             config_sub,
+            wan_ra: None,
         }
     }
 
@@ -283,6 +288,29 @@ impl PppoeService {
     pub fn with_prober(mut self, prober: ArpProber) -> Self {
         self.prober = Some(prober);
         self
+    }
+
+    /// Injects the listener for the Router Advertisements on the session link (rootless tests).
+    #[must_use]
+    pub fn with_wan_ra_transport(mut self, ra: Icmp6Transport) -> Self {
+        self.wan_ra = Some(ra);
+        self
+    }
+
+    /// The RA listener for `interface` (the PPP link just brought up): the injected one, else a
+    /// passive raw socket. Without one the session runs on, with IPCP's IPv4 resolvers only.
+    fn wan_ra_listener(&self, interface: &str) -> Option<Icmp6Transport> {
+        if let Some(ra) = &self.wan_ra {
+            return Some(ra.clone());
+        }
+        if self.is_inert() {
+            return None;
+        }
+        Icmp6Transport::bind_ra_listener(interface)
+            .inspect_err(|e| {
+                warn!(interface, error = %e, "Cannot listen for the ISP's RAs; IPv6 resolvers not followed");
+            })
+            .ok()
     }
 
     #[must_use]
@@ -588,6 +616,7 @@ impl PppoeService {
             .terminal_status
             .map_or((None, None, None), |(r, m, rtt)| (Some(r), m, rtt));
 
+        let connected_at = Instant::now();
         let pppoe_status = PppoeStatusResponse {
             enabled: true,
             dataplane: Some(self.cfg.dataplane),
@@ -608,10 +637,11 @@ impl PppoeService {
             terminal_reachable,
             terminal_mac,
             terminal_rtt_us,
+            connected_at: Some(connected_at.into_std()),
         };
 
         self.ctx.set_pppoe_status(Some(pppoe_status));
-        self.connected_at = Some(Instant::now());
+        self.connected_at = Some(connected_at);
         self.announced = true;
 
         let session_up = lanforge_types::events::pppoe::PppoeSessionUp {
@@ -672,6 +702,7 @@ impl PppoeService {
             terminal_reachable,
             terminal_mac,
             terminal_rtt_us,
+            connected_at: None,
         };
 
         self.ctx.set_pppoe_status(Some(pppoe_status));
@@ -964,6 +995,7 @@ impl PppoeService {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn run_session_flow(&mut self) -> Result<Option<SystemInterrupt>, PppoeError> {
         self.last_uptime = None;
         self.wait_for_carrier().await?;
@@ -981,6 +1013,8 @@ impl PppoeService {
             self.transport = Some(t.clone());
             t
         };
+        self.ctx
+            .set_service_transports(ServiceId::Pppoe, vec![transport.metrics_handle()]);
 
         info!(
             wan_iface = %self.cfg.wan_iface,
@@ -1034,7 +1068,9 @@ impl PppoeService {
                 "PPPoE session established, entering keepalive monitoring loop"
             );
 
-            run_keepalive(
+            // The ISP's IPv6 resolvers (RA RDNSS) are followed for as long as the session lives.
+            let wan_ra = self.wan_ra_listener(&interface_name);
+            let keepalive = run_keepalive(
                 &session,
                 &self.ctx,
                 lcp_res.local_magic,
@@ -1047,8 +1083,21 @@ impl PppoeService {
                     ac_mac: disc_res.ac_mac,
                     session_id: disc_res.session_id,
                 },
-            )
-            .await
+            );
+            tokio::pin!(keepalive);
+            let rdnss = async {
+                if let Some(ra) = &wan_ra {
+                    follow_wan_rdnss(&self.ctx, ra).await;
+                }
+            };
+            tokio::pin!(rdnss);
+            let mut following = true;
+            loop {
+                tokio::select! {
+                    res = &mut keepalive => break res,
+                    () = &mut rdnss, if following => following = false,
+                }
+            }
         }
         .await;
 
@@ -1075,15 +1124,6 @@ impl PppoeService {
     }
 }
 
-impl TransportStats for PppoeService {
-    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
-        self.transport
-            .as_ref()
-            .map(TransportStats::snapshot)
-            .unwrap_or_default()
-    }
-}
-
 impl LanforgeService for PppoeService {
     fn spec(&self) -> ServiceSpec {
         ServiceSpec {
@@ -1099,13 +1139,15 @@ impl LanforgeService for PppoeService {
             shutdown_timeout: Duration::from_secs(10),
             deps: PPPOE_DEPS,
             condition: Condition {
-                sections: &[lanforge_types::config::ConfigDomain::Pppoe],
-                eval: |ctx| {
-                    if ctx.get_pppoe_config().is_some_and(|c| c.enabled) {
-                        Activation::Active
-                    } else {
-                        Activation::Dormant(DormantReason::disabled("pppoe.enabled"))
-                    }
+                sections: &[
+                    lanforge_types::config::ConfigDomain::Pppoe,
+                    lanforge_types::config::ConfigDomain::Interfaces,
+                ],
+                eval: |ctx| match ctx.get_pppoe_config() {
+                    Some(cfg) if cfg.enabled => ctx
+                        .wan_link_wait(&cfg.wan_iface)
+                        .map_or(Activation::Active, Activation::Dormant),
+                    _ => Activation::Dormant(DormantReason::disabled("pppoe.enabled")),
                 },
             },
         }
@@ -1120,64 +1162,6 @@ impl LanforgeService for PppoeService {
 }
 
 impl AsyncService for PppoeService {
-    fn transport_snapshot(
-        &self,
-        _ctx: &LanforgeContext,
-    ) -> Option<lanforge_types::network::snapshot::TransportSnapshot> {
-        Some(self.snapshot())
-    }
-
-    fn stats(&self, ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
-        let (state_str, local_ip, ppp_iface, term_str) = ctx.pppoe_status().map_or_else(
-            || {
-                (
-                    "disconnected".to_string(),
-                    "none".to_string(),
-                    "none".to_string(),
-                    "none".to_string(),
-                )
-            },
-            |p| {
-                (
-                    format!("{:?}", p.state),
-                    p.local_ip
-                        .map_or_else(|| "none".to_string(), |ip| ip.to_string()),
-                    p.interface.clone().unwrap_or_else(|| "none".to_string()),
-                    p.terminal_reachable.map_or_else(
-                        || "unprobed".to_string(),
-                        |r| {
-                            if r {
-                                "reachable".to_string()
-                            } else {
-                                "unreachable".to_string()
-                            }
-                        },
-                    ),
-                )
-            },
-        );
-        let snap = self.snapshot();
-        vec![
-            (Cow::Borrowed("wan_iface"), self.cfg.wan_iface.clone()),
-            (Cow::Borrowed("username"), self.cfg.username.clone()),
-            (Cow::Borrowed("state"), state_str),
-            (Cow::Borrowed("local_ip"), local_ip),
-            (Cow::Borrowed("ppp_interface"), ppp_iface),
-            (Cow::Borrowed("terminal"), term_str),
-            (
-                Cow::Borrowed("uptime_secs"),
-                self.connected_at
-                    .map_or_else(|| "0".to_string(), |t| t.elapsed().as_secs().to_string()),
-            ),
-            (
-                Cow::Borrowed("reconnect_attempts"),
-                self.backoff.failures().to_string(),
-            ),
-            (Cow::Borrowed("rx_packets"), snap.rx_packets.to_string()),
-            (Cow::Borrowed("tx_packets"), snap.tx_packets.to_string()),
-        ]
-    }
-
     #[allow(clippy::too_many_lines)]
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         self.handle = Some(h.clone());

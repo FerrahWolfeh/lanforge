@@ -11,6 +11,7 @@ use crate::resolver::{LocalResolver, RewriteStore, recursive::UpstreamStrategy};
 use crate::telemetry::{DnsStats, QueryRing};
 use lanforge_core::bus::{DnsEvent, EventBus, LanforgeEvent};
 use lanforge_core::context::LanforgeContext;
+use lanforge_transport::TransportMetrics;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dns::upstream::UpstreamTarget;
 use lanforge_types::network::dns::{
@@ -29,6 +30,9 @@ pub struct DnsContext {
     pub ctx: LanforgeContext,
     pub query_log: Option<Arc<QueryRing>>,
     pub pipeline: Pipeline,
+    /// DNS messages over TCP, `DoT` and `DoQ` (one per query/answer, length prefix excluded):
+    /// their listeners keep no per-socket counters, so the banner shows this beside the UDP ones.
+    pub streams: Arc<TransportMetrics>,
 
     // Sub-components
     pub local: LocalResolver,
@@ -37,11 +41,6 @@ pub struct DnsContext {
     pub rewrites: Arc<RewriteStore>,
     #[cfg(feature = "adblock")]
     pub filter: Option<Arc<AdBlocker>>,
-
-    // Pre-computed SOA names
-    pub soa_zone: Arc<str>,
-    pub soa_master_ns: Arc<str>,
-    pub soa_mailbox: Arc<str>,
 
     // Reverse DNS resolution managers and lock-free tracking
     pub reverse_managers: Arc<parking_lot::RwLock<HashMap<UpstreamTarget, Arc<UpstreamManager>>>>,
@@ -142,11 +141,6 @@ impl DnsContext {
             return;
         }
 
-        // Noise filtering
-        if event.domain.is_empty() || event.domain == "." || event.domain == ":0" {
-            return;
-        }
-
         // Check if device is configured to suppress DNS logging or matches ignore_clients (zero Device clones)
         let (mac, should_ignore) = self.ctx.with_state(|state| {
             let mac = event.src_mac.or_else(|| state.get_mac_by_ip(event.src_ip));
@@ -188,7 +182,12 @@ impl DnsContext {
                     .unwrap_or_default()
                     .as_secs(),
                 src_ip: event.src_ip,
-                domain: Arc::from(event.domain),
+                // The root name has no labels; the log writes it as `.`, never blank.
+                domain: Arc::from(if event.domain.is_empty() {
+                    "."
+                } else {
+                    event.domain
+                }),
                 qtype: event.qtype,
                 result: event.result,
                 upstream_us: event.upstream_us,
@@ -198,12 +197,36 @@ impl DnsContext {
                 protocol: event.protocol,
                 filter: event.filter,
                 coalesce_id: event.coalesce_id,
+                repeats: 1,
             };
-            log.push(entry.clone());
-
-            let _ = self.bus.publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(
-                std::sync::Arc::new(entry),
-            )));
+            if let Some(entry) = log.admit(entry) {
+                self.emit_log(log, entry);
+            }
         }
+    }
+
+    /// Writes the folded-repeat lines whose window ended by `now` (see [`QueryRing::admit`]).
+    pub fn flush_log_repeats(&self, now: u64) {
+        if let Some(log) = &self.query_log {
+            for entry in log.flush_repeats(now) {
+                self.emit_log(log, entry);
+            }
+        }
+    }
+
+    /// Writes every folded-repeat line still open: called when the service stops.
+    pub fn drain_log_repeats(&self) {
+        if let Some(log) = &self.query_log {
+            for entry in log.drain_repeats() {
+                self.emit_log(log, entry);
+            }
+        }
+    }
+
+    fn emit_log(&self, log: &QueryRing, entry: QueryLogEntry) {
+        log.push(entry.clone());
+        let _ = self
+            .bus
+            .publish(LanforgeEvent::Dns(DnsEvent::QueryResolved(Arc::new(entry))));
     }
 }

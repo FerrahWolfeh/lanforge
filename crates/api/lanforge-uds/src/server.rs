@@ -15,8 +15,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, split};
-use tokio::net::{TcpListener, UnixListener};
-use tracing::{debug, error, info, warn};
+use tokio::net::UnixListener;
+use tracing::{debug, info, warn};
 
 use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use lanforge_types::system::DormantReason;
@@ -56,24 +56,6 @@ impl ControlService {
         Ok(listener)
     }
 
-    async fn setup_tcp_listener(&self, port: Option<u16>) -> Option<TcpListener> {
-        if let Some(port) = port {
-            let addr = format!("0.0.0.0:{port}");
-            match TcpListener::bind(&addr).await {
-                Ok(l) => {
-                    info!("Control: TCP debug ready at {}", addr);
-                    Some(l)
-                }
-                Err(e) => {
-                    error!("Control: TCP bind failed at {addr}: {e}");
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    }
-
     fn spawn_client_handler<S>(
         &self,
         stream: S,
@@ -97,25 +79,6 @@ impl ControlService {
 }
 
 impl AsyncService for ControlService {
-    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let mut stats = vec![
-            (
-                std::borrow::Cow::Borrowed("socket_path"),
-                self.cfg.socket_path.clone(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("active_clients"),
-                ctx.active_clients()
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                    .to_string(),
-            ),
-        ];
-        if let Some(p) = self.cfg.tcp_port {
-            stats.push((std::borrow::Cow::Borrowed("tcp_port"), p.to_string()));
-        }
-        stats
-    }
-
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         let cfg = self.cfg.clone();
         if !cfg.enabled {
@@ -129,8 +92,6 @@ impl AsyncService for ControlService {
         let mut sys_rx = ctx.bus().subscribe_system();
         let mut current_gua: Option<Ipv6Addr> = None;
         let startup_time = Instant::now();
-
-        let tcp_listener = self.setup_tcp_listener(cfg.tcp_port).await;
 
         h.ready();
 
@@ -180,13 +141,6 @@ impl AsyncService for ControlService {
                 }
                 connection = listener.accept() => {
                     if let Ok((stream, _)) = connection {
-                        self.spawn_client_handler(stream, current_gua, startup_time);
-                    }
-                }
-                tcp_res = async {
-                    if let Some(ref l) = tcp_listener { l.accept().await.ok() } else { std::future::pending().await }
-                } => {
-                    if let Some((stream, _)) = tcp_res {
                         self.spawn_client_handler(stream, current_gua, startup_time);
                     }
                 }

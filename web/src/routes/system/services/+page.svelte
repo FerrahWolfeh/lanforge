@@ -157,12 +157,6 @@
 		return `Up ${m}m ${secs % 60}s`;
 	}
 
-	function formatMetricKey(key: string): string {
-		return key
-			.replace(/_/g, " ")
-			.replace(/\b\w/g, (c) => c.toUpperCase());
-	}
-
 	const totalCount = $derived(banners.length);
 	const onlineCount = $derived(banners.filter((b) => isOnline(b.state)).length);
 	const inactiveCount = $derived(banners.filter((b) => isInactive(b.state)).length);
@@ -481,16 +475,8 @@
 							</span>
 						</div>
 
-						<!-- Telemetry Stats Chips -->
-						{#if banner.stats && Object.keys(banner.stats).length > 0}
-							<div class="flex flex-wrap gap-1.5 pt-0.5">
-								{#each Object.entries(banner.stats) as [k, v] (k)}
-									<div class="bg-muted/40 border-border/70 flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px]">
-										<span class="text-muted-foreground text-[10px]">{formatMetricKey(k)}:</span>
-										<span class="font-mono text-[10px] font-medium text-foreground">{v}</span>
-									</div>
-								{/each}
-							</div>
+						{#if banner.summary}
+							<p class="font-mono text-[11px] text-foreground pt-0.5">{banner.summary}</p>
 						{/if}
 
 						<!-- Transport Telemetry -->

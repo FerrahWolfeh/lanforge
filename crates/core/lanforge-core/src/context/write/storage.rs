@@ -1,6 +1,7 @@
 //! Storage and lifecycle state management.
 
 use lanforge_types::DnsListenConfig;
+use lanforge_types::config::SiteDomains;
 use lanforge_types::events::EventVec;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::AdblockUrlEntry;
@@ -96,6 +97,11 @@ impl LanforgeContext {
     /// Updates the DNS listeners (UDP/TCP, `DoT`, `DoQ`, TLS identity): restarts the DNS service.
     pub fn update_dns_listen(&self, listen: DnsListenConfig) {
         let _ = self.apply_config(ConfigPatch::new().with_dns_listen(listen));
+    }
+
+    /// Updates the site's search domains (DNS applies them in place).
+    pub fn update_site_domains(&self, domains: SiteDomains) {
+        let _ = self.apply_config(ConfigPatch::new().with_site_domains(domains));
     }
 
     /// Updates the configured DNS rewrites and publishes the change event.

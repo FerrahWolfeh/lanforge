@@ -102,6 +102,14 @@ impl ArpProber {
         (handle, prober)
     }
 
+    /// Counts into `metrics` instead of its own counters: probers a service opens on demand
+    /// share one counter it registers once.
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: Arc<TransportMetrics>) -> Self {
+        self.metrics = metrics;
+        self
+    }
+
     /// Accesses transparent traffic metrics.
     #[must_use]
     pub fn metrics(&self) -> &TransportMetrics {

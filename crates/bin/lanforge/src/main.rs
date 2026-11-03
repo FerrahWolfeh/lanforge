@@ -20,12 +20,14 @@ use tracing_subscriber::EnvFilter;
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 fn main() -> Result<()> {
+    // systemd's start timeout runs from exec: the readiness deadline counts from here too.
+    let started = std::time::Instant::now();
     let rt = Builder::new_multi_thread()
         .enable_all()
         .thread_name("Async Worker")
         .build()?;
 
-    let res = rt.block_on(async_main());
+    let res = rt.block_on(async_main(started));
 
     if let Err(e) = res {
         eprintln!("❌ Fatal error: {e:#}");
@@ -34,7 +36,7 @@ fn main() -> Result<()> {
     std::process::exit(0);
 }
 
-async fn async_main() -> Result<()> {
+async fn async_main(started: std::time::Instant) -> Result<()> {
     // 0. Initialize Crypto Provider (Rustls 0.23+ requirement)
     #[cfg(feature = "ring")]
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -78,6 +80,6 @@ async fn async_main() -> Result<()> {
     let (bootstrap, ctx) = Bootstrapper::run().await?;
 
     // 3. Initialize and run Daemon
-    let daemon = Daemon::new(bootstrap, ctx);
+    let daemon = Daemon::new(bootstrap, ctx, started.into());
     daemon.run().await
 }

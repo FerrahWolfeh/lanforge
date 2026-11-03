@@ -131,3 +131,31 @@ async fn removing_custom_upstreams_falls_back_to_the_isp_resolvers() {
     ctx.update_dns_upstreams(Vec::new());
     wait_upstreams(&ctx, &[isp()]).await;
 }
+
+/// The ISP's IPv6 resolvers arrive after `SessionUp` (RA RDNSS): `DnsServersChanged` makes DNS
+/// re-derive its upstreams from the status, and their withdrawal takes them away again.
+#[tokio::test]
+async fn isp_ipv6_resolvers_learned_after_session_up_become_upstreams() {
+    let ctx = init_test_context();
+    ctx.set_pppoe_status(Some(connected_status()));
+    start_dns(&ctx).await;
+    wait_upstreams(&ctx, &[isp()]).await;
+
+    let v6: IpAddr = "2001:db8::53".parse().unwrap();
+    let announce = |servers: Vec<IpAddr>| {
+        ctx.set_pppoe_status(Some(PppoeStatusResponse {
+            dns_servers: servers.clone(),
+            ..connected_status()
+        }));
+        let _ = ctx
+            .bus()
+            .publish(LanforgeEvent::Pppoe(PppoeEvent::DnsServersChanged {
+                servers,
+            }));
+    };
+    announce(vec![ISP_DNS, v6]);
+    wait_upstreams(&ctx, &[isp(), SocketAddr::new(v6, 53)]).await;
+
+    announce(vec![ISP_DNS]);
+    wait_upstreams(&ctx, &[isp()]).await;
+}

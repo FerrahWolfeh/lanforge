@@ -11,10 +11,6 @@
 		v6Start = $bindable(""),
 		v6End = $bindable(""),
 		v6Addr = $bindable(""),
-		v6Dns = $bindable(""),
-		v6Lease = $bindable<number | "">(86400),
-		v6BootFile = $bindable(""),
-		globalV6LeaseTime = 86400,
 		onSubmit = () => {},
 	}: {
 		open?: boolean;
@@ -23,10 +19,6 @@
 		v6Start?: string;
 		v6End?: string;
 		v6Addr?: string;
-		v6Dns?: string;
-		v6Lease?: number | "";
-		v6BootFile?: string;
-		globalV6LeaseTime?: number;
 		onSubmit?: () => void;
 	} = $props();
 </script>
@@ -77,27 +69,6 @@
 					placeholder="fd00:abcd::/64 (leave empty to derive from interface)"
 					class="font-mono text-xs"
 				/>
-			</div>
-
-			<!-- Lease Duration & Custom DNS -->
-			<div class="grid grid-cols-2 gap-3">
-				<div class="flex flex-col gap-1.5">
-					<Label class="text-xs">Lease Duration (seconds)</Label>
-					<Input
-						type="number"
-						bind:value={v6Lease}
-						placeholder={String(globalV6LeaseTime)}
-						class="font-mono text-xs"
-					/>
-				</div>
-				<div class="flex flex-col gap-1.5">
-					<Label class="text-xs">Custom DNS (comma-sep)</Label>
-					<Input
-						bind:value={v6Dns}
-						placeholder="2606:4700:4700::1111"
-						class="font-mono text-xs"
-					/>
-				</div>
 			</div>
 		</div>
 

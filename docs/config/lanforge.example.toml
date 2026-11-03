@@ -30,8 +30,6 @@ flush_interval_secs = 5
 enabled = true
 # Path to the control socket.
 socket_path = "/run/lanforge/control.sock"
-# Optional TCP port for remote debugging (not recommended for production).
-# tcp_port = 50051
 
 [http]
 # Enable the REST API, Web Console, and Prometheus metrics exporter.

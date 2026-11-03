@@ -42,7 +42,7 @@ async fn test_tftp_path_traversal_prevention() {
     };
 
     let mut service = TftpService::new(ctx.clone(), cfg);
-    ctx.register_status_provider(Arc::new(service.clone()));
+    let probe = service.clone();
     let ctx_service = ctx.clone();
 
     tokio::spawn(async move {
@@ -55,18 +55,7 @@ async fn test_tftp_path_traversal_prevention() {
 
     // Wait for service to bind and register port
     tokio::time::sleep(Duration::from_millis(100)).await;
-    let banners = ctx.service_banners();
-    let banner = banners
-        .iter()
-        .find(|b| b.id == lanforge_types::system::ServiceId::Tftp)
-        .unwrap();
-    let listen = banner
-        .stats
-        .iter()
-        .find(|(k, _)| k == "listen")
-        .unwrap()
-        .1
-        .clone();
+    let listen = probe.bound_addr().expect("TFTP bound");
     let tftp_addr = listen.parse::<SocketAddr>().unwrap();
     println!("Bound TFTP address: {tftp_addr:?}");
 

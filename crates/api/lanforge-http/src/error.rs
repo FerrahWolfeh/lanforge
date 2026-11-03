@@ -78,6 +78,10 @@ pub enum HttpError {
     #[error("Validation error: {0}")]
     Validation(String),
 
+    /// Too many failed password attempts: retry after this many seconds.
+    #[error("Too many failed attempts, retry in {0} s")]
+    TooManyRequests(u64),
+
     /// Generic catch-all error.
     #[error("Error: {0}")]
     Generic(String),
@@ -89,6 +93,18 @@ pub type Result<T> = std::result::Result<T, HttpError>;
 #[cfg(feature = "server")]
 impl IntoResponse for HttpError {
     fn into_response(self) -> AxumResponse {
+        if let Self::TooManyRequests(secs) = self {
+            let body = Json(serde_json::json!({
+                "error": self.to_string(),
+                "status": StatusCode::TOO_MANY_REQUESTS.as_u16()
+            }));
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(axum::http::header::RETRY_AFTER, secs.to_string())],
+                body,
+            )
+                .into_response();
+        }
         let (status, message) = match self {
             Self::Auth(msg) => (StatusCode::UNAUTHORIZED, msg),
             Self::Rpc { status, message } => {

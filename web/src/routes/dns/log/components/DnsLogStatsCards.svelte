@@ -28,12 +28,17 @@
 		onSelectResult?: (res: string) => void;
 	} = $props();
 
+	// A log line can stand for several identical queries (`repeats`): count queries, not lines.
+	const countQueries = (list: DnsQueryLogEntry[]) =>
+		list.reduce((n, e) => n + (e.repeats ?? 1), 0);
+	const entryQueries = $derived(countQueries(entries));
+
 	const totalQueries = $derived.by(() => {
 		if (selectedResult && total > 0) return total;
 		if (stats && typeof stats.total_requests === "number" && stats.total_requests > 0) {
 			return stats.total_requests;
 		}
-		return total > 0 ? total : entries.length;
+		return total > 0 ? total : entryQueries;
 	});
 
 	const cacheHitPct = $derived.by(() => {
@@ -51,19 +56,21 @@
 		if (stats && typeof stats.blocked_queries === "number" && stats.total_requests > 0) {
 			return stats.blocked_queries;
 		}
-		return entries.filter(
-			(e) =>
-				e.result.toLowerCase().includes("block") ||
-				e.result.toLowerCase().includes("deny"),
-		).length;
+		return countQueries(
+			entries.filter(
+				(e) =>
+					e.result.toLowerCase().includes("block") ||
+					e.result.toLowerCase().includes("deny"),
+			),
+		);
 	});
 
 	const blockPct = $derived.by(() => {
 		if (stats && stats.total_requests > 0) {
 			return `${((stats.blocked_queries / stats.total_requests) * 100).toFixed(1)}%`;
 		}
-		return entries.length > 0
-			? `${((blockedCount / entries.length) * 100).toFixed(1)}%`
+		return entryQueries > 0
+			? `${((blockedCount / entryQueries) * 100).toFixed(1)}%`
 			: "0.0%";
 	});
 
@@ -76,7 +83,7 @@
 				return stats.failed_total;
 			}
 		}
-		return entries.filter((e) => e.result.toLowerCase().includes("error")).length;
+		return countQueries(entries.filter((e) => e.result.toLowerCase().includes("error")));
 	});
 
 	const validEntries = $derived(entries.filter((e) => e.upstream_us > 0));

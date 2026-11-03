@@ -61,7 +61,6 @@ use crate::traits::DhcpPool;
 pub use config::Dhcpv4Config;
 pub use io::{Dhcpv4InertChannels, Dhcpv4InertHandle, Dhcpv4InertReply, Dhcpv4Transport};
 use lanforge_core::context::LanforgeContext;
-use lanforge_transport::{TransportSnapshot, TransportStats};
 
 const DHCPV4_DEPS: &[Edge] = &[Edge::requires(
     ServiceId::Interfaces,
@@ -118,13 +117,16 @@ impl LanforgeService for Dhcpv4Service {
             shutdown_timeout: Duration::from_secs(3),
             deps: DHCPV4_DEPS,
             condition: Condition {
-                sections: &[lanforge_types::config::ConfigDomain::DhcpV4Options],
+                sections: &[
+                    lanforge_types::config::ConfigDomain::DhcpV4Options,
+                    lanforge_types::config::ConfigDomain::Interfaces,
+                ],
                 eval: |ctx| {
-                    if ctx.get_dhcp_options().v4.enabled {
-                        Activation::Active
-                    } else {
-                        Activation::Dormant(DormantReason::disabled("dhcp.v4.enabled"))
+                    if !ctx.get_dhcp_options().v4.enabled {
+                        return Activation::Dormant(DormantReason::disabled("dhcp.v4.enabled"));
                     }
+                    ctx.lan_link_wait()
+                        .map_or(Activation::Active, Activation::Dormant)
                 },
             },
         }
@@ -135,93 +137,7 @@ impl LanforgeService for Dhcpv4Service {
     }
 }
 
-impl TransportStats for Dhcpv4Service {
-    fn snapshot(&self) -> TransportSnapshot {
-        self.transport
-            .as_ref()
-            .map(TransportStats::snapshot)
-            .unwrap_or_default()
-    }
-}
-
 impl AsyncService for Dhcpv4Service {
-    fn transport_snapshot(&self, _ctx: &LanforgeContext) -> Option<TransportSnapshot> {
-        self.transport.as_ref().map(TransportStats::snapshot)
-    }
-
-    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let active_leases = ctx.with_state(|state| {
-            u32::try_from(
-                state
-                    .devices
-                    .values()
-                    .filter(|dev| matches!(dev.v4, IPv4State::Dynamic(_)))
-                    .count(),
-            )
-            .unwrap_or(0)
-        });
-        let (pool_total, pool_available) = ctx
-            .dhcp_v4_pool_stats()
-            .as_ref()
-            .map_or((0, 0), |p| (p.total, p.available));
-        let v4_stats = ctx.dhcpv4_stats().snapshot();
-        vec![
-            (std::borrow::Cow::Borrowed("iface"), self.cfg.iface.clone()),
-            (
-                std::borrow::Cow::Borrowed("lease_time"),
-                self.cfg.lease_time.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("port"),
-                self.cfg.port.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("leases_active"),
-                active_leases.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("pool_total"),
-                pool_total.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("pool_available"),
-                pool_available.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("discovers"),
-                v4_stats.discovers.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("offers"),
-                v4_stats.offers.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("requests"),
-                v4_stats.requests.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("acks"),
-                v4_stats.acks.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("naks"),
-                v4_stats.naks.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("releases"),
-                v4_stats.releases.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("declines"),
-                v4_stats.declines.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("informs"),
-                v4_stats.informs.to_string(),
-            ),
-        ]
-    }
-
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         loop {
             let options = ctx.get_dhcp_options();
@@ -239,7 +155,9 @@ impl AsyncService for Dhcpv4Service {
             let pools = ctx.get_dhcp_v4_pools();
 
             if pools.is_empty() {
+                // Settled, not starting: system readiness must not wait for a pool.
                 warn!("Service enabled but no pools configured — server idle");
+                h.dormant(DormantReason::not_applicable("no address pools configured"));
                 match self.wait_for_config_change_or_shutdown(h).await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,
@@ -387,6 +305,8 @@ impl Dhcpv4Service {
             self.transport = Some(t.clone());
             t
         };
+        self.ctx
+            .set_service_transports(ServiceId::Dhcp4, vec![transport.metrics_handle()]);
 
         // Pre-allocate static reservations to avoid collisions with dynamic pool
         let registry = self.ctx.get_static_registry();

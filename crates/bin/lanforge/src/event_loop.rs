@@ -32,14 +32,20 @@ pub struct ReadinessTracker<'a, S> {
 }
 
 impl<'a, S: BuildHasher + Clone> ReadinessTracker<'a, S> {
-    pub fn new(ctx: &'a LanforgeContext, expected_services: HashSet<ServiceId, S>) -> Self {
+    /// `started` is when the process started: systemd's start timeout runs from exec, so the
+    /// deadline must too (counting from here added the whole bootstrap on top of it).
+    pub fn new(
+        ctx: &'a LanforgeContext,
+        expected_services: HashSet<ServiceId, S>,
+        started: Instant,
+    ) -> Self {
         let mut tracker = Self {
             ctx,
             ready_services: HashSet::with_hasher(expected_services.hasher().clone()),
             expected_services,
             system_ready_sent: false,
             systemd_ready_sent: false,
-            started: Instant::now(),
+            started,
         };
 
         // Pre-seed any services that already settled before subscription
@@ -53,7 +59,12 @@ impl<'a, S: BuildHasher + Clone> ReadinessTracker<'a, S> {
     fn reconcile_settled(&mut self) {
         for s in &self.expected_services {
             let st = self.ctx.get_service_state(*s);
-            if is_settled_state(st) && self.ready_services.insert(*s) {
+            // Dormant waiting for the WAN link: not online yet, keep READY=1 (deadline-bound).
+            let held = self
+                .ctx
+                .get_service_detail(*s)
+                .is_some_and(|d| d.holds_readiness());
+            if is_settled_state(st) && !held && self.ready_services.insert(*s) {
                 debug!(
                     "Service '{}' settled ({:?}) ({}/{})",
                     s,
@@ -69,6 +80,12 @@ impl<'a, S: BuildHasher + Clone> ReadinessTracker<'a, S> {
     #[must_use]
     pub const fn systemd_ready_sent(&self) -> bool {
         self.systemd_ready_sent
+    }
+
+    /// When `READY=1` goes out at the latest, whoever is still starting.
+    #[must_use]
+    pub fn ready_deadline(&self) -> Instant {
+        self.started + SYSTEMD_READY_DEADLINE
     }
 
     pub fn on_service_ready(&mut self, id: ServiceId) {
@@ -166,6 +183,7 @@ pub async fn run_event_loop<S>(
     mut net_rx: Receiver<TimedEvent>,
     expected_services: HashSet<ServiceId, S>,
     supervisor: &GraphSupervisor,
+    started: Instant,
 ) -> Result<()>
 where
     S: BuildHasher + Clone + Send + 'static,
@@ -188,7 +206,8 @@ where
         expected_sorted
     );
 
-    let mut tracker = ReadinessTracker::new(&ctx, expected_services);
+    let mut tracker = ReadinessTracker::new(&ctx, expected_services, started);
+    let ready_deadline = tracker.ready_deadline();
 
     let mut status_timer = interval(Duration::from_secs(10));
     status_timer.tick().await;
@@ -212,6 +231,11 @@ where
                 break;
             }
             _ = status_timer.tick() => {
+                tracker.check_pending();
+            }
+            // Fires at the deadline itself (at once if the bootstrap already passed it): the
+            // 10 s status tick alone sent READY=1 up to 10 s late.
+            () = tokio::time::sleep_until(ready_deadline), if !tracker.systemd_ready_sent() => {
                 tracker.check_pending();
             }
             event = sys_rx.recv() => {

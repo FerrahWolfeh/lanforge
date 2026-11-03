@@ -43,6 +43,17 @@ pub enum Response {
         /// Human-readable error description.
         error: String,
     },
+    /// The request was refused (an invalid value, one the configuration cannot hold, a
+    /// conflict): the caller's to fix, nothing changed. HTTP 400.
+    Rejected {
+        /// Why, for the user.
+        error: String,
+    },
+    /// The item the request names does not exist; nothing changed. HTTP 404.
+    NotFound {
+        /// What was not found, for the user.
+        error: String,
+    },
     /// Generic success indicator.
     Success(SimpleSuccess),
     /// A live event from the internal bus (for 'watch' or 'log' commands).

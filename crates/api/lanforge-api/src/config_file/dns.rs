@@ -6,6 +6,7 @@ use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 
+use lanforge_types::config::DnsListenConfig;
 use lanforge_types::network::dns::adblock::{RewriteAnswer, RewriteRule};
 use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamTarget};
 use lanforge_types::network::{DnsRecordType, DnsReverseResolver, IpSubnet, ListenConfig};
@@ -35,6 +36,22 @@ pub struct DnsSettings {
     pub reverse: Vec<DnsReverseResolver>,
     /// In order: the first rule that answers a query wins.
     pub rewrites: Vec<RewriteRule>,
+}
+
+impl DnsSettings {
+    /// `live` with what `[dns]` sets of it: `enabled` and the plain DNS listener (`None` = the
+    /// built-in `[::]:53`). `DoT`/`DoQ` and the TLS identity are not in `[dns]` and stay.
+    #[must_use]
+    pub fn listener(&self, live: &DnsListenConfig) -> DnsListenConfig {
+        DnsListenConfig {
+            enabled: self.enabled,
+            listen: self
+                .listen
+                .clone()
+                .unwrap_or_else(|| ListenConfig::dual_stack(53)),
+            ..live.clone()
+        }
+    }
 }
 
 impl Default for DnsSettings {

@@ -8,8 +8,6 @@ pub struct ApiConfig {
     pub enabled: bool,
     /// Filesystem path to the Unix socket (e.g., "/run/lanforge/control.sock").
     pub socket_path: String,
-    /// Optional TCP port for the control API (debug).
-    pub tcp_port: Option<u16>,
 }
 
 impl Default for ApiConfig {
@@ -17,7 +15,6 @@ impl Default for ApiConfig {
         Self {
             enabled: true,
             socket_path: "/run/lanforge/control.sock".to_string(),
-            tcp_port: None,
         }
     }
 }
@@ -29,7 +26,6 @@ impl ApiConfig {
         Self {
             enabled: true,
             socket_path: "/tmp/lanforge_test.sock".to_string(),
-            tcp_port: None,
         }
     }
 }

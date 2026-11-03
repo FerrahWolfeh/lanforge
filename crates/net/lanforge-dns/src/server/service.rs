@@ -17,10 +17,10 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use lanforge_dns_wire::{WireDecoder, WireEncoder, WireHeader, WireQuestion};
-use lanforge_transport::{TransportSnapshot, TransportStats};
+use lanforge_transport::TransportMetrics;
 #[cfg(feature = "adblock")]
 use lanforge_types::config::AdblockRules;
-use lanforge_types::config::DnsListenConfig;
+use lanforge_types::config::{DnsListenConfig, SiteDomains};
 use lanforge_types::network::dns::{
     AdblockCheckResponse, DnsAdblockSourcesResponse, DnsCacheEntry, DnsCacheResponse,
     DnsCacheStatsExtResponse, DnsClass, DnsLifetimeStats, DnsMessage, DnsQuestion, DnsRecordEntry,
@@ -37,6 +37,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast::error::RecvError;
 #[cfg(feature = "adblock")]
 use tracing::debug;
@@ -138,15 +139,6 @@ impl DnsService {
             Some(Arc::new(blocker))
         };
 
-        let domain_base = self
-            .cfg
-            .search_domains
-            .first()
-            .map_or("lan", |d| d.as_str());
-        let soa_zone: Arc<str> = Arc::from(domain_base.to_string());
-        let soa_master_ns: Arc<str> = Arc::from(format!("ns.{domain_base}"));
-        let soa_mailbox: Arc<str> = Arc::from(format!("hostmaster.{domain_base}"));
-
         // The live config is the only source (`[dns] upstream_mode`): `Sequential` is a valid
         // choice, not "unset".
         let mode = self.ctx.get_dns_upstream_mode();
@@ -173,15 +165,13 @@ impl DnsService {
             ctx: self.ctx.clone(),
             query_log,
             pipeline,
+            streams: Arc::new(TransportMetrics::new()),
             local: LocalResolver::new(Arc::clone(&self.cfg), self.ctx.clone()),
             recursive,
             cache: Arc::clone(&cache),
             rewrites,
             #[cfg(feature = "adblock")]
             filter,
-            soa_zone,
-            soa_master_ns,
-            soa_mailbox,
             reverse_managers: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             resolving_ips: Arc::new(parking_lot::Mutex::new(HashSet::new())),
             compiled_ignore_clients: CompiledIgnoreClients::compile(
@@ -222,12 +212,17 @@ impl lanforge_core::service::LanforgeService for DnsService {
             condition: lanforge_core::service::Condition {
                 sections: &[lanforge_types::config::ConfigDomain::DnsListen],
                 eval: |ctx| {
-                    if !ctx.get_dns_listen().listen.as_slice().is_empty() {
-                        lanforge_core::service::Activation::Active
-                    } else {
+                    let live = ctx.get_dns_listen();
+                    if !live.enabled {
+                        lanforge_core::service::Activation::Dormant(
+                            lanforge_types::system::DormantReason::disabled("dns.enabled"),
+                        )
+                    } else if live.listen.as_slice().is_empty() {
                         lanforge_core::service::Activation::Dormant(
                             lanforge_types::system::DormantReason::disabled("dns.listen"),
                         )
+                    } else {
+                        lanforge_core::service::Activation::Active
                     }
                 },
             },
@@ -239,116 +234,22 @@ impl lanforge_core::service::LanforgeService for DnsService {
     }
 }
 
-impl TransportStats for DnsService {
-    fn snapshot(&self) -> TransportSnapshot {
-        self.custom_transport
-            .as_ref()
-            .map(TransportStats::snapshot)
-            .unwrap_or_default()
-    }
-}
-
 impl AsyncService for DnsService {
-    fn transport_snapshot(&self, _ctx: &LanforgeContext) -> Option<TransportSnapshot> {
-        self.custom_transport.as_ref().map(TransportStats::snapshot)
-    }
-
-    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let snap = self.stats.snapshot();
-        let total = snap.requests_total;
-        let hits = snap.cache_hits;
-        let hit_rate = if total > 0 {
-            (hits as f64 / total as f64) * 100.0
-        } else {
-            0.0
-        };
-        #[cfg(feature = "adblock")]
-        let blocked = snap.blocked_queries;
-        #[cfg(not(feature = "adblock"))]
-        let blocked = 0u64;
-
-        #[cfg_attr(not(any(feature = "dot", feature = "doq")), allow(unused_mut))]
-        let mut stats = vec![
-            (
-                std::borrow::Cow::Borrowed("listen"),
-                self.cfg.listen.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("upstream_mode"),
-                format!("{:?}", ctx.get_dns_upstream_mode()),
-            ),
-            (
-                std::borrow::Cow::Borrowed("requests_total"),
-                total.to_string(),
-            ),
-            (std::borrow::Cow::Borrowed("cache_hits"), hits.to_string()),
-            (
-                std::borrow::Cow::Borrowed("cache_misses"),
-                snap.cache_misses.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("blocked_queries"),
-                blocked.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("resolved_total"),
-                snap.resolved_total.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("upstream_errors"),
-                snap.upstream_errors.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("cache_entries"),
-                snap.cache_entries.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("cache_hit_rate"),
-                format!("{hit_rate:.1}%"),
-            ),
-        ];
-
-        #[cfg(feature = "dot")]
-        {
-            let status = if let Some(addr) = self.cfg.dot_listen {
-                if self.cfg.tls_cert.is_some() && self.cfg.tls_key.is_some() {
-                    format!("tls://{addr}")
-                } else {
-                    "dormant (tls cert missing)".to_string()
-                }
-            } else {
-                "disabled".to_string()
-            };
-            stats.push((std::borrow::Cow::Borrowed("dot"), status));
-        }
-
-        #[cfg(feature = "doq")]
-        {
-            let status = if let Some(addr) = self.cfg.doq_listen {
-                if self.cfg.tls_cert.is_some() && self.cfg.tls_key.is_some() {
-                    format!("quic://{addr}")
-                } else {
-                    "dormant (tls cert missing)".to_string()
-                }
-            } else {
-                "disabled".to_string()
-            };
-            stats.push((std::borrow::Cow::Borrowed("doq"), status));
-        }
-
-        stats
-    }
-
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
+        // Listeners and `enabled` come from the live config (seeded from `[dns]` at boot, changed
+        // by a reload); every reader below (TCP worker, DoT, DoQ, status) sees them through
+        // `self.cfg`.
+        self.cfg = Arc::new(DnsConfig {
+            // The site's domains are live too (`[system] search_domains`); a change is applied
+            // in place below.
+            search_domains: ctx.get_site_domains().0,
+            ..with_live_listeners(&self.cfg, &ctx.get_dns_listen())
+        });
         if !self.cfg.enabled {
             info!("DNS Service disabled in config");
             h.dormant(DormantReason::disabled("dns.enabled"));
             return Ok(());
         }
-
-        // Listeners come from the live config (seeded from `[dns]` at boot); every reader below
-        // (TCP worker, DoT, DoQ, status) sees them through `self.cfg`.
-        self.cfg = Arc::new(with_live_listeners(&self.cfg, &ctx.get_dns_listen()));
 
         let dns_ctx = self.init_dns_context().await?;
         ctx.provide_shared(Arc::clone(&dns_ctx));
@@ -368,6 +269,7 @@ impl AsyncService for DnsService {
         let mut workers = Vec::new();
         if let Some(ref transport) = self.custom_transport {
             info!("Custom/inert UDP transport active");
+            ctx.set_service_transports(Self::SERVICE_ID, vec![transport.metrics_handle()]);
             for _ in 0..parallelism {
                 workers.push(crate::server::worker::udp::spawn_udp_worker(
                     Arc::clone(&dns_ctx),
@@ -382,12 +284,13 @@ impl AsyncService for DnsService {
                 ));
             }
 
+            // One counter per UDP socket, plus the messages of TCP/DoT/DoQ together.
+            let mut counters = Vec::with_capacity(addrs.len() + 1);
+            counters.push(Arc::clone(&dns_ctx.streams));
             for addr in &addrs {
                 let transport =
                     crate::server::transport::net::bind_udp(*addr).map_err(CoreError::Io)?;
-                if self.custom_transport.is_none() {
-                    self.custom_transport = Some(transport.clone());
-                }
+                counters.push(transport.metrics_handle());
                 info!(%addr, "UDP listening");
                 for _ in 0..parallelism {
                     workers.push(crate::server::worker::udp::spawn_udp_worker(
@@ -396,6 +299,7 @@ impl AsyncService for DnsService {
                     ));
                 }
             }
+            ctx.set_service_transports(Self::SERVICE_ID, counters);
         }
 
         let tcp_worker = if !is_inert {
@@ -478,6 +382,7 @@ impl AsyncService for DnsService {
         let mut mode_sub = ctx.config_subscription::<UpstreamMode>();
         let mut listen_sub = ctx.config_subscription::<DnsListenConfig>();
         let mut rewrites_sub = ctx.config_subscription::<Vec<RewriteRule>>();
+        let mut domains_sub = ctx.config_subscription::<SiteDomains>();
         let mut filter_subs = FilterSubscriptions::new(ctx);
 
         let (mpsc_stop_tx, mut mpsc_stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -510,6 +415,10 @@ impl AsyncService for DnsService {
             })
         };
 
+        // Closes the query log's repeat windows (see `QueryRing::admit`).
+        let mut repeat_tick = tokio::time::interval(LOG_REPEAT_TICK);
+        repeat_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
         h.ready();
 
         loop {
@@ -517,6 +426,9 @@ impl AsyncService for DnsService {
                 break;
             }
             tokio::select! {
+                _ = repeat_tick.tick(), if dns_ctx.query_log.is_some() => {
+                    dns_ctx.flush_log_repeats(unix_now_secs());
+                }
                 Ok(()) = wan_rx.changed() => {
                     let snap = wan_rx.borrow().clone();
                     if snap.is_up() {
@@ -559,6 +471,7 @@ impl AsyncService for DnsService {
                             lanforge_core::bus::LanforgeEvent::Pppoe(
                                 lanforge_core::bus::PppoeEvent::SessionUp(_)
                                     | lanforge_core::bus::PppoeEvent::SessionDown { .. }
+                                    | lanforge_core::bus::PppoeEvent::DnsServersChanged { .. }
                             )
                         ) {
                             resync_upstreams(ctx, &dns_ctx, false).await;
@@ -582,6 +495,10 @@ impl AsyncService for DnsService {
                 Some(delta) = mode_sub.next() => {
                     info!(mode = ?*delta.new, "Upstream resolution mode changed");
                     dns_ctx.recursive.set_mode(*delta.new);
+                }
+                Some(delta) = domains_sub.next() => {
+                    info!(domains = ?delta.new.0, "Site search domains changed; applied in place");
+                    dns_ctx.local.set_domains(&delta.new.0);
                 }
                 Some(delta) = rewrites_sub.next() => {
                     info!("Reloading rewrites");
@@ -651,15 +568,28 @@ impl AsyncService for DnsService {
         if let Ok(rx) = mpsc_worker.await {
             ctx.return_dns_requests(rx);
         }
+        // The workers are gone: write the repeat counts still open, none is lost on a stop.
+        dns_ctx.drain_log_repeats();
         ctx.set_service_state(Self::SERVICE_ID, ServiceState::Inactive);
 
         Ok(())
     }
 }
 
+/// How often the query log's repeat windows are checked: a folded line is written at most this
+/// long after its window ends.
+const LOG_REPEAT_TICK: Duration = Duration::from_secs(10);
+
+fn unix_now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 /// Upstreams DNS forwards to: the configured ones or, when none is configured, the resolvers the
-/// ISP announced on the live PPPoE session. Derived from current state, never from an event
-/// payload, so a restart with the session up or a lagged bus cannot leave the LAN without one.
+/// ISP announced on the live PPPoE session (IPCP IPv4, then RA RDNSS IPv6). Derived from current
+/// state, never from an event payload, so a restart with the session up or a lagged bus cannot
+/// leave the LAN without one.
 fn effective_upstream_targets(ctx: &LanforgeContext) -> Vec<UpstreamTarget> {
     let configured = ctx.get_dns_upstreams();
     if !configured.is_empty() {
@@ -700,6 +630,7 @@ async fn build_upstreams(
 /// `cfg` with its listener fields taken from the live `DnsListenConfig`.
 fn with_live_listeners(cfg: &DnsConfig, live: &DnsListenConfig) -> DnsConfig {
     DnsConfig {
+        enabled: live.enabled,
         listen: live.listen.clone(),
         dot_listen: live.dot_listen.filter(|_| live.dot_enabled),
         doq_listen: live.doq_listen.filter(|_| live.doq_enabled),

@@ -45,7 +45,7 @@ use lanforge_core::service::{
     AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass, ServiceCommand,
     ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::{ArpProber, TransportStats};
+use lanforge_transport::{ArpProber, TransportMetrics};
 use lanforge_types::device::{IPv4State, IPv6State, Origin};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::NeighborEvent;
@@ -62,6 +62,7 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::broadcast;
+use tokio::task::JoinSet;
 use tokio::time::{interval, sleep};
 use tracing::{debug, error, info, warn};
 
@@ -128,36 +129,6 @@ pub struct DiscoveryService {
     target_ifindexes: Vec<u32>,
     ctx: LanforgeContext,
     pinger: Option<Arc<IcmpPinger>>,
-    prober_cache: Arc<Mutex<HashMap<String, ArpProber>>>,
-}
-
-impl TransportStats for DiscoveryService {
-    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
-        let mut snap = self
-            .pinger
-            .as_ref()
-            .map(|p| p.snapshot())
-            .unwrap_or_default();
-        let probers = self.prober_cache.lock();
-        for p in probers.values() {
-            let s = p.snapshot();
-            snap.rx_packets += s.rx_packets;
-            snap.rx_bytes += s.rx_bytes;
-            snap.tx_packets += s.tx_packets;
-            snap.tx_bytes += s.tx_bytes;
-            snap.dropped += s.dropped;
-            snap.rate_limited += s.rate_limited;
-            snap.errors += s.errors;
-            if s.last_error_age_secs.is_some()
-                && (snap.last_error_age_secs.is_none()
-                    || s.last_error_age_secs < snap.last_error_age_secs)
-            {
-                snap.last_error_age_secs = s.last_error_age_secs;
-            }
-        }
-        drop(probers);
-        snap
-    }
 }
 
 impl DiscoveryService {
@@ -185,8 +156,14 @@ impl DiscoveryService {
             target_ifindexes,
             ctx,
             pinger,
-            prober_cache: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Pings through `pinger` instead of the raw ICMP sockets `new` opens (inert tests).
+    #[must_use]
+    pub fn with_pinger(mut self, pinger: Arc<IcmpPinger>) -> Self {
+        self.pinger = Some(pinger);
+        self
     }
 
     #[cfg_attr(feature = "hotpath", hotpath::measure)]
@@ -287,56 +264,6 @@ impl LanforgeService for DiscoveryService {
 }
 
 impl AsyncService for DiscoveryService {
-    fn transport_snapshot(
-        &self,
-        _ctx: &LanforgeContext,
-    ) -> Option<lanforge_types::network::snapshot::TransportSnapshot> {
-        Some(self.snapshot())
-    }
-
-    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let (total_devices, active_devices) = ctx.with_state(|state| {
-            let total = state.devices.len();
-            let active = state
-                .devices
-                .values()
-                .filter(|d| d.status == lanforge_types::device::DeviceStatus::Online)
-                .count();
-            (total, active)
-        });
-        let snap = self.snapshot();
-        vec![
-            (
-                std::borrow::Cow::Borrowed("target_ifindexes"),
-                format!("{:?}", self.target_ifindexes),
-            ),
-            (
-                std::borrow::Cow::Borrowed("ping_enabled"),
-                self.cfg.ping_enabled.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("ping_interval_secs"),
-                self.cfg.ping_interval_secs.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("total_devices"),
-                total_devices.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("active_devices"),
-                active_devices.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("rx_packets"),
-                snap.rx_packets.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("tx_packets"),
-                snap.tx_packets.to_string(),
-            ),
-        ]
-    }
-
     async fn init(&mut self, ctx: &LanforgeContext) -> Result<(), CoreError> {
         if !self.cfg.enabled {
             return Ok(());
@@ -393,11 +320,23 @@ impl AsyncService for DiscoveryService {
             return Ok(());
         }
 
+        // The sweep and the offline checks are this instance's: a stop or restart ends them (and
+        // closes their sockets) instead of leaving one more pair running per restart.
+        let mut probes = JoinSet::new();
         if self.cfg.ping_enabled {
             if let Some(ref pinger) = self.pinger {
                 info!("Active ICMP ping probe initialized");
-                spawn_sweep_task(pinger.clone(), ctx.clone(), self.cfg.ping_interval_secs);
-                spawn_jit_offline_task(pinger.clone(), self.prober_cache.clone(), ctx.clone());
+                let arp_metrics = Arc::new(TransportMetrics::new());
+                ctx.set_service_transports(
+                    Self::SERVICE_ID,
+                    vec![pinger.metrics_handle(), Arc::clone(&arp_metrics)],
+                );
+                probes.spawn(sweep_pings(
+                    pinger.clone(),
+                    ctx.clone(),
+                    self.cfg.ping_interval_secs,
+                ));
+                probes.spawn(verify_offline(pinger.clone(), arp_metrics, ctx.clone()));
             } else {
                 warn!("Failed to initialize ICMP ping probe");
             }
@@ -499,104 +438,107 @@ impl AsyncService for DiscoveryService {
             }
         }
 
+        probes.shutdown().await;
         info!("Service stopped");
         Ok(())
     }
 }
 
-fn spawn_sweep_task(pinger: Arc<IcmpPinger>, ctx: LanforgeContext, ping_interval: u64) {
-    tokio::spawn(async move {
-        let mut sweep_timer = interval(Duration::from_secs(ping_interval));
-        let mut seq_counter = 0u16;
-        let sweep_threshold = Duration::from_secs(ping_interval);
-        loop {
-            if !ctx.is_running() {
-                break;
-            }
-            sweep_timer.tick().await;
+/// Pings every device not seen for a sweep interval. The pings are children of this task: they
+/// end with it.
+async fn sweep_pings(pinger: Arc<IcmpPinger>, ctx: LanforgeContext, ping_interval: u64) {
+    let mut sweep_timer = interval(Duration::from_secs(ping_interval));
+    let mut seq_counter = 0u16;
+    let sweep_threshold = Duration::from_secs(ping_interval);
+    let mut pings = JoinSet::new();
+    loop {
+        if !ctx.is_running() {
+            break;
+        }
+        sweep_timer.tick().await;
+        while pings.try_join_next().is_some() {}
 
-            let now = SystemTime::now();
-            let ips = ctx.with_state(|state| {
-                let mut all_ips = SmallVec::<[IpAddr; 32]>::new();
-                for dev in state.devices.values() {
-                    if dev.origin == Origin::System {
-                        continue;
+        let now = SystemTime::now();
+        let ips = ctx.with_state(|state| {
+            let mut all_ips = SmallVec::<[IpAddr; 32]>::new();
+            for dev in state.devices.values() {
+                if dev.origin == Origin::System {
+                    continue;
+                }
+                match &dev.v4 {
+                    IPv4State::Static(ip) => {
+                        let elapsed = now.duration_since(dev.last_seen).unwrap_or(Duration::MAX);
+                        if elapsed >= sweep_threshold {
+                            all_ips.push(IpAddr::V4(*ip));
+                        }
                     }
-                    match &dev.v4 {
-                        IPv4State::Static(ip) => {
-                            let elapsed =
-                                now.duration_since(dev.last_seen).unwrap_or(Duration::MAX);
-                            if elapsed >= sweep_threshold {
-                                all_ips.push(IpAddr::V4(*ip));
-                            }
+                    IPv4State::Dynamic(lease) => {
+                        let elapsed = now
+                            .duration_since(lease.last_seen_system_time())
+                            .unwrap_or(Duration::MAX);
+                        if elapsed >= sweep_threshold {
+                            all_ips.push(IpAddr::V4(lease.ip));
                         }
-                        IPv4State::Dynamic(lease) => {
-                            let elapsed = now
-                                .duration_since(lease.last_seen_system_time())
-                                .unwrap_or(Duration::MAX);
-                            if elapsed >= sweep_threshold {
-                                all_ips.push(IpAddr::V4(lease.ip));
-                            }
-                        }
-                        IPv4State::Discovery(ip, ts) => {
-                            let elapsed = now.duration_since(*ts).unwrap_or(Duration::MAX);
-                            if elapsed >= sweep_threshold {
-                                all_ips.push(IpAddr::V4(*ip));
-                            }
-                        }
-                        IPv4State::None => {}
                     }
-                    for v6_state in &dev.v6 {
-                        if let Some(v6_ip) = v6_state.ip() {
-                            let ts = match v6_state {
-                                IPv6State::Static(_, ts)
-                                | IPv6State::Slaac(_, ts)
-                                | IPv6State::Discovery(_, ts)
-                                | IPv6State::LinkLocal(_, ts) => *ts,
-                                IPv6State::Dynamic(lease) => lease.last_seen_system_time(),
-                            };
-                            let elapsed = now.duration_since(ts).unwrap_or(Duration::MAX);
-                            if elapsed >= sweep_threshold {
-                                all_ips.push(IpAddr::V6(v6_ip));
-                            }
+                    IPv4State::Discovery(ip, ts) => {
+                        let elapsed = now.duration_since(*ts).unwrap_or(Duration::MAX);
+                        if elapsed >= sweep_threshold {
+                            all_ips.push(IpAddr::V4(*ip));
+                        }
+                    }
+                    IPv4State::None => {}
+                }
+                for v6_state in &dev.v6 {
+                    if let Some(v6_ip) = v6_state.ip() {
+                        let ts = match v6_state {
+                            IPv6State::Static(_, ts)
+                            | IPv6State::Slaac(_, ts)
+                            | IPv6State::Discovery(_, ts)
+                            | IPv6State::LinkLocal(_, ts) => *ts,
+                            IPv6State::Dynamic(lease) => lease.last_seen_system_time(),
+                        };
+                        let elapsed = now.duration_since(ts).unwrap_or(Duration::MAX);
+                        if elapsed >= sweep_threshold {
+                            all_ips.push(IpAddr::V6(v6_ip));
                         }
                     }
                 }
-                all_ips
-            });
-
-            for ip in ips {
-                seq_counter = seq_counter.wrapping_add(1);
-                let pinger_c = pinger.clone();
-                let ctx_c = ctx.clone();
-                tokio::spawn(async move {
-                    if matches!(pinger_c.ping(ip, seq_counter).await, Ok(true))
-                        && let Some(mac) = ctx_c.get_mac_by_ip(ip)
-                    {
-                        let update = match ip {
-                            IpAddr::V4(v4) => DeviceUpdate::ArpSeen {
-                                mac,
-                                ip: v4,
-                                is_active: true,
-                            },
-                            IpAddr::V6(v6) => DeviceUpdate::NdpSeen {
-                                mac,
-                                ip: v6,
-                                is_active: true,
-                            },
-                        };
-                        let _ = ctx_c.apply(update);
-                    }
-                });
-                sleep(Duration::from_millis(10)).await;
             }
+            all_ips
+        });
+
+        for ip in ips {
+            seq_counter = seq_counter.wrapping_add(1);
+            let pinger_c = pinger.clone();
+            let ctx_c = ctx.clone();
+            pings.spawn(async move {
+                if matches!(pinger_c.ping(ip, seq_counter).await, Ok(true))
+                    && let Some(mac) = ctx_c.get_mac_by_ip(ip)
+                {
+                    let update = match ip {
+                        IpAddr::V4(v4) => DeviceUpdate::ArpSeen {
+                            mac,
+                            ip: v4,
+                            is_active: true,
+                        },
+                        IpAddr::V6(v6) => DeviceUpdate::NdpSeen {
+                            mac,
+                            ip: v6,
+                            is_active: true,
+                        },
+                    };
+                    let _ = ctx_c.apply(update);
+                }
+            });
+            sleep(Duration::from_millis(10)).await;
         }
-    });
+    }
 }
 
 fn get_or_create_arp_prober(
     cache: &Mutex<HashMap<String, ArpProber>>,
     iface_name: &str,
+    metrics: &Arc<TransportMetrics>,
 ) -> Option<ArpProber> {
     {
         let guard = cache.lock();
@@ -611,6 +553,7 @@ fn get_or_create_arp_prober(
             && let Some(mac) = iface.mac
             && let Ok(prober) = ArpProber::bind(iface.index, mac.octets())
         {
+            let prober = prober.with_metrics(Arc::clone(metrics));
             cache.lock().insert(iface_name.to_string(), prober.clone());
             return Some(prober);
         }
@@ -618,93 +561,97 @@ fn get_or_create_arp_prober(
     None
 }
 
-fn spawn_jit_offline_task(
+/// Re-checks a device reported offline: ping, then an ARP probe for hosts that drop ICMP. The
+/// probers (raw sockets, opened on demand) and the checks belong to this task and end with it.
+async fn verify_offline(
     pinger: Arc<IcmpPinger>,
-    prober_cache: Arc<Mutex<HashMap<String, ArpProber>>>,
+    arp_metrics: Arc<TransportMetrics>,
     ctx: LanforgeContext,
 ) {
-    tokio::spawn(async move {
-        let mut bus_rx = ctx.bus().subscribe_device();
-        let mut seq_counter = 0u16;
-        loop {
-            if !ctx.is_running() {
-                break;
-            }
-            match bus_rx.recv().await {
-                Ok(timed_event) => {
-                    if let LanforgeEvent::Device(DeviceEvent::NetworkActivity { change, .. }) =
-                        &timed_event.event
-                        && let NetworkChange::IpOffline { ip } = &**change
-                    {
-                        seq_counter = seq_counter.wrapping_add(1);
-                        let pinger_c = pinger.clone();
-                        let ctx_c = ctx.clone();
-                        let probers_c = prober_cache.clone();
-                        let target_ip = *ip;
-                        tokio::spawn(async move {
-                            debug!(
-                                "JIT verification ping triggered for offline transition of {target_ip}"
-                            );
-                            let ping_ok =
-                                matches!(pinger_c.ping(target_ip, seq_counter).await, Ok(true));
-                            if ping_ok && let Some(mac) = ctx_c.get_mac_by_ip(target_ip) {
-                                let update = match target_ip {
-                                    IpAddr::V4(v4) => DeviceUpdate::ArpSeen {
-                                        mac,
-                                        ip: v4,
-                                        is_active: true,
-                                    },
-                                    IpAddr::V6(v6) => DeviceUpdate::NdpSeen {
-                                        mac,
-                                        ip: v6,
-                                        is_active: true,
-                                    },
-                                };
-                                let _ = ctx_c.apply(update);
-                            } else if !ping_ok && let IpAddr::V4(v4) = target_ip {
-                                let dev_opt = ctx_c.with_state(|state| {
-                                    state.get_mac_by_ip(target_ip).and_then(|mac| {
-                                        state.devices.get(&mac).map(|d| (mac, d.iface.clone()))
-                                    })
-                                });
-                                if let Some((mac, Some(ref iface_name))) = dev_opt
-                                    && let Some(prober) =
-                                        get_or_create_arp_prober(&probers_c, iface_name)
+    let prober_cache: Arc<Mutex<HashMap<String, ArpProber>>> = Arc::default();
+    let mut checks = JoinSet::new();
+    let mut bus_rx = ctx.bus().subscribe_device();
+    let mut seq_counter = 0u16;
+    loop {
+        if !ctx.is_running() {
+            break;
+        }
+        while checks.try_join_next().is_some() {}
+        match bus_rx.recv().await {
+            Ok(timed_event) => {
+                if let LanforgeEvent::Device(DeviceEvent::NetworkActivity { change, .. }) =
+                    &timed_event.event
+                    && let NetworkChange::IpOffline { ip } = &**change
+                {
+                    seq_counter = seq_counter.wrapping_add(1);
+                    let pinger_c = pinger.clone();
+                    let ctx_c = ctx.clone();
+                    let probers_c = prober_cache.clone();
+                    let arp_metrics_c = Arc::clone(&arp_metrics);
+                    let target_ip = *ip;
+                    checks.spawn(async move {
+                        debug!(
+                            "JIT verification ping triggered for offline transition of {target_ip}"
+                        );
+                        let ping_ok =
+                            matches!(pinger_c.ping(target_ip, seq_counter).await, Ok(true));
+                        if ping_ok && let Some(mac) = ctx_c.get_mac_by_ip(target_ip) {
+                            let update = match target_ip {
+                                IpAddr::V4(v4) => DeviceUpdate::ArpSeen {
+                                    mac,
+                                    ip: v4,
+                                    is_active: true,
+                                },
+                                IpAddr::V6(v6) => DeviceUpdate::NdpSeen {
+                                    mac,
+                                    ip: v6,
+                                    is_active: true,
+                                },
+                            };
+                            let _ = ctx_c.apply(update);
+                        } else if !ping_ok && let IpAddr::V4(v4) = target_ip {
+                            let dev_opt = ctx_c.with_state(|state| {
+                                state.get_mac_by_ip(target_ip).and_then(|mac| {
+                                    state.devices.get(&mac).map(|d| (mac, d.iface.clone()))
+                                })
+                            });
+                            if let Some((mac, Some(ref iface_name))) = dev_opt
+                                && let Some(prober) =
+                                    get_or_create_arp_prober(&probers_c, iface_name, &arp_metrics_c)
+                            {
+                                debug!(
+                                    target_ip = %v4,
+                                    iface = %iface_name,
+                                    "ICMP ping failed, running fallback ARP probe to verify if device is firewalled..."
+                                );
+                                if let Ok(Some(reply)) =
+                                    prober.probe(v4, None, Duration::from_millis(500)).await
                                 {
                                     debug!(
                                         target_ip = %v4,
-                                        iface = %iface_name,
-                                        "ICMP ping failed, running fallback ARP probe to verify if device is firewalled..."
+                                        rtt_us = reply.rtt.as_micros(),
+                                        "Device responded to ARP probe; keeping device online (ICMP was dropped by host firewall)"
                                     );
-                                    if let Ok(Some(reply)) =
-                                        prober.probe(v4, None, Duration::from_millis(500)).await
-                                    {
-                                        debug!(
-                                            target_ip = %v4,
-                                            rtt_us = reply.rtt.as_micros(),
-                                            "Device responded to ARP probe; keeping device online (ICMP was dropped by host firewall)"
-                                        );
-                                        let update = DeviceUpdate::ArpSeen {
-                                            mac,
-                                            ip: v4,
-                                            is_active: true,
-                                        };
-                                        let _ = ctx_c.apply(update);
-                                    }
+                                    let update = DeviceUpdate::ArpSeen {
+                                        mac,
+                                        ip: v4,
+                                        is_active: true,
+                                    };
+                                    let _ = ctx_c.apply(update);
                                 }
                             }
-                        });
-                    }
+                        }
+                    });
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    warn!(
-                        service = "DiscoveryServicePinger",
-                        lost = n,
-                        "Event bus lagged"
-                    );
-                }
-                Err(_) => break,
             }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                warn!(
+                    service = "DiscoveryServicePinger",
+                    lost = n,
+                    "Event bus lagged"
+                );
+            }
+            Err(_) => break,
         }
-    });
+    }
 }

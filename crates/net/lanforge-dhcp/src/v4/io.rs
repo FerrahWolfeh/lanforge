@@ -224,6 +224,14 @@ impl Dhcpv4Transport {
     }
 }
 
+impl Dhcpv4Transport {
+    /// The traffic counters alone (no socket), for the service banner.
+    #[must_use]
+    pub fn metrics_handle(&self) -> Arc<TransportMetrics> {
+        Arc::clone(&self.metrics)
+    }
+}
+
 impl TransportStats for Dhcpv4Transport {
     fn snapshot(&self) -> TransportSnapshot {
         self.metrics.snapshot()

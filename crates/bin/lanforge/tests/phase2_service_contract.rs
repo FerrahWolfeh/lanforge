@@ -32,7 +32,7 @@ async fn test_acceptance_ready_is_truthful() {
     }
 
     let mut sys_listener = bus.subscribe_system();
-    let mut tracker = ReadinessTracker::new(&ctx, expected_services);
+    let mut tracker = ReadinessTracker::new(&ctx, expected_services, tokio::time::Instant::now());
 
     // Simulate DNS & DHCP becoming Online
     let h_dns = ServiceHandle::new(ServiceId::Dns, ctx.clone());

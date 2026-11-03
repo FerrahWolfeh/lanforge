@@ -299,7 +299,7 @@ async fn test_dns_rewrite_add_dynamic() {
         answer: RewriteAnswer::from_str("dev:raspie").unwrap(),
     };
     let res = client_ctx.handle_dns_rewrite_add(wrong).await;
-    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert!(client_ctx.ctx.get_dns_rewrites().is_empty());
 
     let rule = RewriteRule {
@@ -615,7 +615,6 @@ async fn test_static_host_creation_creates_all_leases_for_specific_mac() {
             address: Some("fd00::/64".to_string()),
             range_start: None,
             range_end: None,
-            lease_time: Some(Duration::from_hours(24).as_secs() as u32),
             ..Default::default()
         }],
         Some("fd00::".parse().unwrap()),
@@ -786,7 +785,7 @@ async fn firewall_with_a_zone_defined_twice_is_refused() {
 
     let res = client_ctx.handle_update_firewall_config(fw).await;
 
-    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert_eq!(client_ctx.ctx.get_firewall_config(), before);
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
@@ -905,7 +904,7 @@ async fn a_dhcp_pool_the_file_cannot_hold_is_refused_and_not_applied() {
     let res = client_ctx
         .handle_update_dhcp_pools_config(vec![reversed], Vec::new())
         .await;
-    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert_eq!(client_ctx.ctx.get_dhcp_v4_pools(), before);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "[system]\n");
 }
@@ -953,7 +952,7 @@ async fn ra_update_is_written_to_the_config_file_without_the_lan_interface() {
     let mut bad = cfg.clone();
     bad.prefixes[0].address = Some("not-ipv6".into());
     let res = client_ctx.handle_update_ra_config(bad).await;
-    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert_eq!(client_ctx.ctx.get_ra_server_config(), cfg);
 }
 
@@ -1005,7 +1004,7 @@ async fn host_changes_are_written_to_the_config_file() {
     let res = client_ctx
         .handle_host_set(mac, "v6".into(), "::zz".into())
         .await;
-    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
 
     // Removing it empties `[hosts]`; the device stays.
@@ -1199,7 +1198,11 @@ async fn device_rewrite_keeps_one_fallback_per_family() {
     add("dev:tv|192.0.2.20").await;
     add("dev:tv|2001:db8::20").await;
     let (answers, text) = tv(&dir);
-    assert_eq!(answers, ["dev:tv|192.0.2.20", "dev:tv|2001:db8::20"], "{text}");
+    assert_eq!(
+        answers,
+        ["dev:tv|192.0.2.20", "dev:tv|2001:db8::20"],
+        "{text}"
+    );
     assert!(text.contains("fallback = ["), "one table item:\n{text}");
 
     add("dev:tv|192.0.2.21").await;
@@ -1210,7 +1213,10 @@ async fn device_rewrite_keeps_one_fallback_per_family() {
 
     add("dev:tv").await;
     assert_eq!(tv(&dir).0, ["dev:tv"]);
-    assert_eq!(client_ctx.ctx.get_dns_rewrites(), dns_in_file(&dir).0.rewrites);
+    assert_eq!(
+        client_ctx.ctx.get_dns_rewrites(),
+        dns_in_file(&dir).0.rewrites
+    );
 }
 
 /// A change the file form cannot hold, or a file that cannot be written, changes nothing.
@@ -1225,7 +1231,7 @@ async fn a_refused_dns_change_writes_and_applies_nothing() {
             answer: RewriteAnswer::A("192.0.2.1".parse().unwrap()),
         })
         .await;
-    assert!(matches!(res, Response::Error { .. }), "{res:?}");
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     assert_eq!(
         std::fs::read_to_string(dir.path().join("lanforge.toml")).unwrap(),
         OWNER_DNS
@@ -1233,9 +1239,61 @@ async fn a_refused_dns_change_writes_and_applies_nothing() {
     assert_eq!(client_ctx.ctx.get_dns_rewrites().len(), 1);
 
     std::fs::write(dir.path().join("lanforge.toml"), "[system\nbroken").unwrap();
-    let res = client_ctx.handle_dns_upstream_clear().await;
+    let res = client_ctx
+        .handle_dns_upstream_set_default(vec!["9.9.9.9:53".parse().unwrap()])
+        .await;
     assert!(matches!(res, Response::Error { .. }), "{res:?}");
     assert_eq!(client_ctx.ctx.get_dns_upstreams().len(), 2, "not applied");
+}
+
+/// A preset replaces the default upstreams in one change and keeps the domain-scoped ones; an
+/// empty preset is refused (a resolver without upstreams is set in the file).
+#[tokio::test]
+async fn dns_default_upstreams_are_replaced_in_one_change() {
+    let (client_ctx, dir) = owner_dns_client(true).await;
+    let res = client_ctx
+        .handle_dns_upstream_add(
+            "10.8.0.1:53".parse().unwrap(),
+            UpstreamProtocol::Udp,
+            Some("corp.lan".into()),
+        )
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    let quad9: Vec<std::net::SocketAddr> = vec![
+        "9.9.9.9:53".parse().unwrap(),
+        "[2620:fe::fe]:53".parse().unwrap(),
+    ];
+    let res = client_ctx
+        .handle_dns_upstream_set_default(quad9.clone())
+        .await;
+    assert!(matches!(res, Response::Success(_)), "{res:?}");
+
+    let (dns, text) = dns_in_file(&dir);
+    let in_file: Vec<_> = dns
+        .upstreams
+        .iter()
+        .map(|u| (u.target.addr, u.target.domain.clone()))
+        .collect();
+    assert_eq!(
+        in_file,
+        vec![
+            ("10.8.0.1:53".parse().unwrap(), Some("corp.lan".to_string())),
+            (quad9[0], None),
+            (quad9[1], None),
+        ],
+        "{text}"
+    );
+    assert_eq!(client_ctx.ctx.get_dns_upstreams().len(), 3);
+
+    let res = client_ctx.handle_dns_upstream_set_default(Vec::new()).await;
+    assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
+    assert_eq!(dns_in_file(&dir).0.upstreams.len(), 3, "file untouched");
+    assert_eq!(
+        client_ctx.ctx.get_dns_upstreams().len(),
+        3,
+        "memory untouched"
+    );
 }
 
 #[tokio::test]
@@ -1438,7 +1496,6 @@ async fn a_refused_adblock_change_writes_and_applies_nothing() {
         client_ctx
             .handle_dns_adblock_rule_add("||x.example^$client=10.0.0.1".into(), "block".into())
             .await,
-        client_ctx.handle_dns_adblock_rule_remove(42).await,
         client_ctx
             .handle_dns_adblock_url_add(
                 None,
@@ -1448,8 +1505,10 @@ async fn a_refused_adblock_change_writes_and_applies_nothing() {
             )
             .await,
     ] {
-        assert!(matches!(res, Response::Error { .. }), "{res:?}");
+        assert!(matches!(res, Response::Rejected { .. }), "{res:?}");
     }
+    let res = client_ctx.handle_dns_adblock_rule_remove(42).await;
+    assert!(matches!(res, Response::NotFound { .. }), "{res:?}");
     let (_, rules, text) = adblock_in_files(&dir);
     assert_eq!(rules, OWNER_RULES);
     assert_eq!(text, OWNER_ADBLOCK);
@@ -1501,4 +1560,25 @@ async fn the_first_rule_creates_the_rules_file() {
     };
     assert_eq!(list.allowlist.len(), 1);
     assert_eq!(list.allowlist[0].domain, "bank.example");
+}
+
+/// With DNS not serving, the configured upstreams are listed unmeasured. They used to come back
+/// "healthy, 1.2 ms, last success 0 s ago" — numbers nobody measured.
+#[tokio::test]
+async fn upstreams_without_dns_are_unmeasured() {
+    use lanforge_types::network::dns::upstream::UpstreamTarget;
+
+    let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+    ctx.update_dns_upstreams(vec!["udp://9.9.9.9:53".parse::<UpstreamTarget>().unwrap()]);
+
+    let Response::DnsUpstreams(res) = ClientContext::new(ctx).handle_dns_upstreams().await else {
+        panic!("upstreams response");
+    };
+    let [up] = res.upstreams.as_slice() else {
+        panic!("one configured upstream: {:?}", res.upstreams);
+    };
+    assert_eq!(up.target.to_string(), "9.9.9.9:53");
+    assert_eq!((up.rtt_ewma_us, up.last_rtt_us), (0, 0));
+    assert_eq!(up.status.as_str(), "unknown");
+    assert_eq!(up.last_success_secs_ago, None);
 }

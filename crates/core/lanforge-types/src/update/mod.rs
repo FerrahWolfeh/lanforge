@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::SystemTime;
 
@@ -75,7 +76,8 @@ pub struct V6LeaseUpdate {
     pub mac: Option<MacAddr>,
     pub duid: Duid,
     pub iaid: u32,
-    pub ip: Ipv6Addr,
+    /// Every address the server bound to this IA (one per served prefix): the IA's whole set.
+    pub ips: SmallVec<[Ipv6Addr; 2]>,
     pub expires: SystemTime,
 }
 

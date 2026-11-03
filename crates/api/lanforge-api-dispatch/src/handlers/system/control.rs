@@ -92,12 +92,7 @@ impl ClientContext {
             .persist_config_sections(SectionSet::PPPOE, |file| file.pppoe = cfg.clone())
         {
             Ok(p) => p,
-            Err(e) => {
-                tracing::error!("PPPoE configuration not saved: {e}");
-                return Response::Error {
-                    error: format!("PPPoE configuration not saved: {e}"),
-                };
-            }
+            Err(e) => return e.response_in("PPPoE configuration not saved"),
         };
         self.ctx.update_pppoe_config(cfg);
 
@@ -116,12 +111,7 @@ impl ClientContext {
             Ok(persisted) => Response::Success(SimpleSuccess {
                 message: persisted.message("Router Advertisement configuration"),
             }),
-            Err(e) => {
-                tracing::error!("Router Advertisement configuration not saved: {e}");
-                Response::Error {
-                    error: format!("Router Advertisement configuration not saved: {e}"),
-                }
-            }
+            Err(e) => e.response_in("Router Advertisement configuration not saved"),
         }
     }
 
@@ -146,12 +136,7 @@ impl ClientContext {
             .persist_config_sections(SectionSet::TRAFFIC, |file| file.traffic = cfg.clone())
         {
             Ok(p) => p,
-            Err(e) => {
-                tracing::error!("Traffic configuration not saved: {e}");
-                return Response::Error {
-                    error: format!("Traffic configuration not saved: {e}"),
-                };
-            }
+            Err(e) => return e.response_in("Traffic configuration not saved"),
         };
         self.ctx.update_traffic_config(cfg);
 
@@ -187,12 +172,7 @@ impl ClientContext {
     pub async fn handle_update_firewall_config(&self, cfg: FirewallConfig) -> Response {
         let persisted = match self.persist_firewall(&cfg) {
             Ok(p) => p,
-            Err(e) => {
-                tracing::error!("Firewall configuration not saved: {e}");
-                return Response::Error {
-                    error: format!("Firewall configuration not saved: {e}"),
-                };
-            }
+            Err(e) => return e.response_in("Firewall configuration not saved"),
         };
         self.ctx.update_firewall_config(cfg);
 
@@ -285,11 +265,7 @@ impl ClientContext {
             // Permanent commit without rollback
             let persisted = match self.persist_firewall(&candidate) {
                 Ok(p) => p,
-                Err(e) => {
-                    return Response::Error {
-                        error: format!("Firewall configuration not saved: {e}"),
-                    };
-                }
+                Err(e) => return e.response_in("Firewall configuration not saved"),
             };
             self.ctx.update_firewall_config(candidate);
             let _ = self.ctx.clear_staged_firewall_transaction(Some(&req.tx_id));
@@ -316,11 +292,9 @@ impl ClientContext {
         // Saved before the transaction ends: if the file cannot take it, the trial stays
         // under its auto-rollback.
         if let Err(e) = self.persist_firewall(&staged.candidate_config) {
-            return Response::Error {
-                error: format!(
-                    "Firewall transaction '{tx_id}' not confirmed, configuration not saved: {e}"
-                ),
-            };
+            return e.response_in(&format!(
+                "Firewall transaction '{tx_id}' not confirmed, configuration not saved"
+            ));
         }
         let Some(staged) = self.ctx.clear_staged_firewall_transaction(Some(&tx_id)) else {
             return Response::Error {

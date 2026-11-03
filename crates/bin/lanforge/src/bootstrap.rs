@@ -14,6 +14,7 @@ use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
 use lanforge_discovery::refresh_interface;
 #[cfg(feature = "dns")]
 use lanforge_types::DnsListenConfig;
+use lanforge_types::config::SiteDomains;
 use lanforge_types::device::Origin;
 use lanforge_types::identifiers::MacAddr;
 #[cfg(feature = "dhcp")]
@@ -126,11 +127,12 @@ macro_rules! feat_flag {
     }};
 }
 
+const RTNLGRP_LINK: u32 = 1;
 const RTNLGRP_NEIGH: u32 = 3;
 const RTNLGRP_IPV4_IFADDR: u32 = 5;
 const RTNLGRP_IPV6_IFADDR: u32 = 9;
 
-type NetlinkRawMessage = (NetlinkMessage<RouteNetlinkMessage>, SocketAddr);
+pub type NetlinkRawMessage = (NetlinkMessage<RouteNetlinkMessage>, SocketAddr);
 type NetlinkMessages = broadcast::Sender<NetlinkRawMessage>;
 type NetlinkRawReceiver = UnboundedReceiver<NetlinkRawMessage>;
 
@@ -330,6 +332,7 @@ impl Bootstrapper {
             // The DNS service binds from the live listeners; the file is their source.
             let dns = cfg.to_dns_config();
             patch = patch.with_dns_listen(DnsListenConfig {
+                enabled: dns.enabled,
                 listen: dns.listen,
                 dot_listen: dns.dot_listen,
                 dot_enabled: dns.dot_listen.is_some(),
@@ -354,6 +357,9 @@ impl Bootstrapper {
         {
             patch = patch.with_traffic(cfg.traffic_toml.clone());
         }
+
+        // The site's domains are live: a reload of `[system] search_domains` reaches DNS.
+        patch = patch.with_site_domains(SiteDomains(cfg.search_domains.clone()));
 
         ctx.hydrate_config(patch);
 
@@ -631,6 +637,14 @@ impl Bootstrapper {
         use lanforge_api::config_file::{ConfigFile, SectionSet, persist_sections};
 
         let path = std::path::Path::new(&cfg.config_path);
+        if cfg.dhcp_set_aside {
+            warn!(
+                "DHCPv4 Startup Sanity: [dhcp] in '{}' is unreadable (see the config issues); \
+                 the correction applies to this run only, the section is left as written",
+                path.display()
+            );
+            return;
+        }
         if !cfg.config_writable || !path.exists() {
             warn!(
                 "DHCPv4 Startup Sanity: '{}' is read-only; the correction applies to this run only",
@@ -1404,6 +1418,10 @@ impl Bootstrapper {
             .socket_mut()
             .socket_mut()
             .add_membership(RTNLGRP_IPV4_IFADDR)?;
+        connection
+            .socket_mut()
+            .socket_mut()
+            .add_membership(RTNLGRP_LINK)?;
 
         tokio::spawn(connection);
         Ok((handle, messages))
@@ -1726,7 +1744,6 @@ mod tests {
                 name: Some("Main Scope".into()),
                 range_start: "::100".parse().ok(),
                 range_end: "::1fff".parse().ok(),
-                lease_time: Some(86400),
                 ..Default::default()
             }],
         }
@@ -2321,5 +2338,28 @@ mod tests {
         assert!(db.is_provisioned().is_err() && db.count_users().is_err());
 
         assert!(Bootstrapper::check_provisioning_mode(&mut cfg, &db));
+    }
+
+    /// An unreadable `[dhcp]` runs on defaults; a startup correction of those defaults must not
+    /// be written over the section (it deleted the owner's pools: a v6 pool key the file form
+    /// no longer has made `[dhcp]` unreadable, the sanity check then saved default pools).
+    #[cfg(feature = "dhcp")]
+    #[test]
+    fn dhcp_heal_never_overwrites_an_unreadable_dhcp_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lanforge.toml");
+        let text = "[dhcp.v4.pools.lan]\nrange = \"192.168.1.100-192.168.1.200\"\n\n\
+                    [dhcp.v6.pools.main]\nrange = \"::100-::1fff\"\ndns = [\"fd00::1\"]\n";
+        std::fs::write(&path, text).unwrap();
+        let toml = crate::config::toml::load_toml(&path.display().to_string());
+        assert!(toml.dhcp_set_aside, "{:?}", toml.config_issues);
+
+        let cfg = Config {
+            config_path: path.display().to_string(),
+            dhcp_set_aside: toml.dhcp_set_aside,
+            ..Config::default()
+        };
+        Bootstrapper::persist_dhcp_heal(&cfg);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
     }
 }

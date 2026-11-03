@@ -104,6 +104,7 @@ impl ClientContext {
                                 answer: q.answer,
                                 filter: q.filter,
                                 coalesce_id: q.coalesce_id,
+                                repeats: q.repeats,
                             }
                         })
                         .collect()

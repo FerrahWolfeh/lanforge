@@ -78,14 +78,9 @@ impl State {
             DeviceUpdate::V4LeaseGranted { mac, ip, expires } => {
                 self.handle_v4_lease_granted(mac, ip, expires)
             }
-            DeviceUpdate::V6LeaseGranted(update) => self.handle_v6_lease_granted(
-                update.mac,
-                update.duid,
-                update.iaid,
-                update.ip,
-                update.expires,
-                discovery,
-            ),
+            DeviceUpdate::V6LeaseGranted(update) => {
+                self.handle_v6_lease_granted(*update, discovery)
+            }
             DeviceUpdate::V6PrefixAssigned(update) => self.handle_v6_prefix_assigned(
                 update.mac,
                 update.duid,

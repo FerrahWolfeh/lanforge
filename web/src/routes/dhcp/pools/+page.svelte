@@ -48,7 +48,6 @@
 	let globalV4Router = $state("");
 	let globalV4SubnetMask = $state("255.255.255.0");
 	let globalV4LeaseTime = $state(86400);
-	let globalV6LeaseTime = $state(86400);
 
 	// Dialog States
 	let v4ModalOpen = $state(false);
@@ -69,9 +68,6 @@
 	let v6Start = $state("");
 	let v6End = $state("");
 	let v6Addr = $state("");
-	let v6Dns = $state("");
-	let v6Lease = $state<number | "">(86400);
-	let v6BootFile = $state("");
 
 	const isDirty = $derived.by(() => {
 		if (loading) return false;
@@ -129,7 +125,6 @@
 				globalV4Router = optsRes.value.v4?.router ?? "";
 				globalV4SubnetMask = optsRes.value.v4?.subnet_mask ?? "255.255.255.0";
 				globalV4LeaseTime = optsRes.value.v4?.lease_time ?? 86400;
-				globalV6LeaseTime = optsRes.value.v6?.lease_time ?? 86400;
 			}
 		} catch (err: any) {
 			toast.error(`Failed to load DHCP pools data: ${err.message}`);
@@ -261,9 +256,6 @@
 		v6Start = "::100";
 		v6End = "::1fff";
 		v6Addr = "";
-		v6Dns = "";
-		v6Lease = globalV6LeaseTime;
-		v6BootFile = "";
 		v6ModalOpen = true;
 	}
 
@@ -274,9 +266,6 @@
 		v6Start = p.range_start ?? "";
 		v6End = p.range_end ?? "";
 		v6Addr = p.address ?? "";
-		v6Dns = (p.dns_servers ?? []).join(", ");
-		v6Lease = p.lease_time ?? globalV6LeaseTime;
-		v6BootFile = p.boot_file ?? "";
 		v6ModalOpen = true;
 	}
 
@@ -290,9 +279,6 @@
 			range_start: v6Start.trim() || null,
 			range_end: v6End.trim() || null,
 			address: v6Addr.trim() || null,
-			dns_servers: parseList(v6Dns),
-			lease_time: v6Lease ? Number(v6Lease) : null,
-			boot_file: v6BootFile.trim() || null,
 		};
 
 		if (editingV6Index !== null) {
@@ -464,7 +450,6 @@
 		{v6Pools}
 		{poolStats}
 		{loading}
-		{globalV6LeaseTime}
 		{activeUlaPrefix}
 		onAdd={openAddV6}
 		onEdit={openEditV6}
@@ -499,9 +484,5 @@
 	bind:v6Start
 	bind:v6End
 	bind:v6Addr
-	bind:v6Dns
-	bind:v6Lease
-	bind:v6BootFile
-	{globalV6LeaseTime}
 	onSubmit={submitV6Modal}
 />

@@ -1006,3 +1006,70 @@ async fn test_pppoe_reports_its_state_through_the_handle() {
         .expect("service alive");
     let _ = timeout(Duration::from_secs(2), handle).await;
 }
+
+/// The ISP's IPv6 resolvers come in RAs on the session link (RDNSS) after the session is up:
+/// they join IPCP's IPv4 ones in the status and `DnsServersChanged` tells DNS; a zero lifetime
+/// withdraws them.
+#[tokio::test]
+async fn test_pppoe_follows_the_isp_ipv6_resolvers_from_ra() {
+    use lanforge_transport::Icmp6Transport;
+    use std::net::{IpAddr, Ipv6Addr, SocketAddrV6};
+
+    /// An RA from the ISP router with one RDNSS option.
+    fn ra(lifetime: u32, dns: Ipv6Addr) -> Vec<u8> {
+        let mut m = vec![134, 0, 0, 0, 64, 0, 0x07, 0x08, 0, 0, 0, 0, 0, 0, 0, 0];
+        m.extend_from_slice(&[25, 3, 0, 0]);
+        m.extend_from_slice(&lifetime.to_be_bytes());
+        m.extend_from_slice(&dns.octets());
+        m
+    }
+
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        reconnect_delay_secs: 1,
+        ..Default::default()
+    };
+    ctx.update_pppoe_config(cfg.clone());
+    let (handle_inert, transport) = PppoeTransport::inert();
+    let _bras = spawn_mock_bras(handle_inert, MockBrasConfig::default());
+    let (ra_handle, ra_transport) = Icmp6Transport::inert();
+    let mut service = PppoeService::with_transport(cfg, ctx.clone(), transport)
+        .with_wan_ra_transport(ra_transport);
+    let ctx_serve = ctx.clone();
+    let h = ServiceHandle::new(ServiceId::Pppoe, ctx_serve.clone());
+    let serve = tokio::spawn(async move { service.serve(&ctx_serve, &h).await });
+
+    let session = wait_for_session_up(&mut pppoe_sub).await;
+    let ipcp_dns = session.dns.clone();
+    assert_eq!(ipcp_dns.len(), 2);
+
+    let router: SocketAddrV6 = "[fe80::1]:0".parse().unwrap();
+    let isp_v6: Ipv6Addr = "2001:db8::53".parse().unwrap();
+    ra_handle.inject(ra(600, isp_v6), router).await;
+    let servers = wait_for_pppoe_event(&mut pppoe_sub, |evt| match evt {
+        PppoeEvent::DnsServersChanged { servers } => Some(servers.clone()),
+        _ => None,
+    })
+    .await;
+    let mut want = ipcp_dns.clone();
+    want.push(IpAddr::V6(isp_v6));
+    assert_eq!(servers, want, "IPCP IPv4 first, then the RA's IPv6");
+    assert_eq!(ctx.pppoe_status().expect("status").dns_servers, want);
+
+    ra_handle.inject(ra(0, isp_v6), router).await;
+    let servers = wait_for_pppoe_event(&mut pppoe_sub, |evt| match evt {
+        PppoeEvent::DnsServersChanged { servers } => Some(servers.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(servers, ipcp_dns, "lifetime 0 withdraws it");
+    assert_eq!(ctx.pppoe_status().expect("status").dns_servers, ipcp_dns);
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    wait_for_session_down(&mut pppoe_sub).await;
+    let _ = timeout(Duration::from_secs(2), serve).await;
+}

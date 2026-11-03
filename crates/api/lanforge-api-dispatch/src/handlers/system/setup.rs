@@ -223,9 +223,6 @@ impl ClientContext {
             name: Some("Primary LAN IPv6 Scope".to_string()),
             range_start: v6_start,
             range_end: v6_end,
-            lease_time: Some(86400),
-            dns_servers: Vec::new(),
-            search_domains: vec![payload.domain_name.clone()],
             ..Default::default()
         };
         opts.v6.enabled = payload.dhcp_v6_enabled;

@@ -50,37 +50,33 @@ impl ClientContext {
     }
 
     pub async fn handle_dns_upstreams(&self) -> Response {
+        // The serving instance's view is the truth, even when empty.
         if let Some(handle) = self.ctx.dns_handle()
             && let Ok(DnsResponse::Upstreams(res)) =
                 handle.send_request(DnsRequest::Upstreams).await
-            && !res.is_empty()
         {
             return Response::DnsUpstreams(DnsUpstreamsResponse { upstreams: res });
         }
 
-        let configured = self.ctx.get_dns_upstreams();
-        if !configured.is_empty() {
-            let mapped: Vec<lanforge_types::network::dns::UpstreamHealthSnapshot> = configured
-                .into_iter()
-                .map(|r| lanforge_types::network::dns::UpstreamHealthSnapshot {
-                    target: r.addr,
-                    protocol: r.protocol,
-                    rtt_ewma_us: 1200,
-                    last_rtt_us: 1200,
-                    total_queries: 0,
-                    total_successes: 0,
-                    total_failures: 0,
-                    status: UpstreamStatus::Healthy,
-                    last_success_secs_ago: Some(0),
-                    domain: r.domain,
-                })
-                .collect();
-            return Response::DnsUpstreams(DnsUpstreamsResponse { upstreams: mapped });
-        }
-
-        Response::DnsUpstreams(DnsUpstreamsResponse {
-            upstreams: Vec::new(),
-        })
+        // DNS is not serving: the configured upstreams, unmeasured.
+        let upstreams = self
+            .ctx
+            .get_dns_upstreams()
+            .into_iter()
+            .map(|r| lanforge_types::network::dns::UpstreamHealthSnapshot {
+                target: r.addr,
+                protocol: r.protocol,
+                rtt_ewma_us: 0,
+                last_rtt_us: 0,
+                total_queries: 0,
+                total_successes: 0,
+                total_failures: 0,
+                status: UpstreamStatus::Unknown,
+                last_success_secs_ago: None,
+                domain: r.domain,
+            })
+            .collect();
+        Response::DnsUpstreams(DnsUpstreamsResponse { upstreams })
     }
 
     pub async fn handle_dns_upstream_add(
@@ -131,10 +127,35 @@ impl ClientContext {
         )
     }
 
-    pub async fn handle_dns_upstream_clear(&self) -> Response {
+    /// Replaces the default upstreams (those without a `domain`) with plain-DNS `addrs` in one
+    /// change; conditional upstreams stay. An empty list is refused: a resolver without upstreams
+    /// (local names only) is set in the configuration file.
+    pub async fn handle_dns_upstream_set_default(
+        &self,
+        addrs: Vec<std::net::SocketAddr>,
+    ) -> Response {
+        if addrs.is_empty() {
+            return Response::Rejected {
+                error: "At least one upstream is required; a resolver without upstreams \
+                        (local names only) is set in the configuration file"
+                    .into(),
+            };
+        }
         dns_reply(
-            self.change_dns(|dns| dns.upstreams.clear()),
-            "All upstreams cleared successfully".into(),
+            self.change_dns(|dns| {
+                dns.upstreams.retain(|u| u.target.domain.is_some());
+                dns.upstreams
+                    .extend(addrs.iter().map(|&addr| NamedUpstream {
+                        name: "default".to_string(),
+                        target: UpstreamTarget {
+                            addr,
+                            protocol: UpstreamProtocol::Udp,
+                            hostname: None,
+                            domain: None,
+                        },
+                    }));
+            }),
+            "Default upstreams replaced successfully".into(),
         )
     }
 
@@ -146,7 +167,7 @@ impl ClientContext {
     pub async fn handle_dns_upstream_mode_set(&self, mode: UpstreamMode) -> Response {
         match self.change_dns(|dns| dns.upstream_mode = mode) {
             Ok(_) => Response::DnsUpstreamMode(DnsUpstreamModeResponse { mode }),
-            Err(error) => Response::Error { error },
+            Err(e) => e.into(),
         }
     }
 

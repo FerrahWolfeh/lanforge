@@ -234,6 +234,7 @@ impl UpstreamStrategy {
                     UpstreamStatus::Healthy => 0,
                     UpstreamStatus::Degraded => 1,
                     UpstreamStatus::Disabled => 2,
+                    UpstreamStatus::Unknown => 3,
                 };
                 status_rank(a.status).cmp(&status_rank(b.status))
             })

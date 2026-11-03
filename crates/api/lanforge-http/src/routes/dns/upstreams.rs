@@ -4,7 +4,7 @@ use axum::{
     Json, Router,
     extract::{Query, State},
     response::IntoResponse,
-    routing::{delete, get},
+    routing::get,
 };
 use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamProtocol};
 use serde::Deserialize;
@@ -41,6 +41,18 @@ pub struct UpstreamAddRequest {
     pub addr: SocketAddr,
     pub protocol: UpstreamProtocol,
     pub domain: Option<String>,
+}
+
+/// An upstream address as the web client sends it: `ip`, `[ip]` or `ip:port` (port 53 by default).
+#[derive(Debug, Deserialize)]
+pub struct FlexibleSocketAddr(
+    #[serde(deserialize_with = "deserialize_flexible_socket_addr")] pub SocketAddr,
+);
+
+/// The plain-DNS servers that replace the default upstreams.
+#[derive(Debug, Deserialize)]
+pub struct UpstreamSetDefaultRequest {
+    pub upstreams: Vec<FlexibleSocketAddr>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,13 +102,13 @@ pub fn router() -> Router<AppState> {
             "/upstreams",
             get(handle_dns_upstreams)
                 .post(handle_dns_upstream_add)
+                .put(handle_dns_upstream_set_default)
                 .delete(handle_dns_upstream_remove),
         )
         .route(
             "/upstreams/test",
             get(handle_dns_upstream_test).post(handle_dns_upstream_test),
         )
-        .route("/upstreams/clear", delete(handle_dns_upstream_clear))
         .route(
             "/upstreams/mode",
             get(handle_dns_upstream_mode_get)
@@ -154,10 +166,14 @@ async fn handle_dns_upstream_remove(
     )
 }
 
-async fn handle_dns_upstream_clear(State(state): State<AppState>) -> impl IntoResponse {
+async fn handle_dns_upstream_set_default(
+    State(state): State<AppState>,
+    Json(payload): Json<UpstreamSetDefaultRequest>,
+) -> impl IntoResponse {
     let ctx = create_client_ctx(&state);
     crate::http_response!(
-        ctx.handle_dns_upstream_clear().await,
+        ctx.handle_dns_upstream_set_default(payload.upstreams.into_iter().map(|a| a.0).collect())
+            .await,
         Success => NoContent
     )
 }

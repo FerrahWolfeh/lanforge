@@ -17,7 +17,7 @@ enum TcpBackend {
 
 struct TcpInner {
     backend: TcpBackend,
-    metrics: TransportMetrics,
+    metrics: Arc<TransportMetrics>,
 }
 
 /// Y-Shaped Dual-Stack asynchronous TCP listener.
@@ -77,7 +77,7 @@ impl DualTcpListener {
                 Ok(Self {
                     inner: Arc::new(TcpInner {
                         backend: TcpBackend::KernelDual { v4, v6 },
-                        metrics: TransportMetrics::new(),
+                        metrics: Arc::new(TransportMetrics::new()),
                     }),
                 })
             }
@@ -86,7 +86,7 @@ impl DualTcpListener {
                 Ok(Self {
                     inner: Arc::new(TcpInner {
                         backend: TcpBackend::KernelSingle(v4),
-                        metrics: TransportMetrics::new(),
+                        metrics: Arc::new(TransportMetrics::new()),
                     }),
                 })
             }
@@ -95,7 +95,7 @@ impl DualTcpListener {
                 Ok(Self {
                     inner: Arc::new(TcpInner {
                         backend: TcpBackend::KernelSingle(v6),
-                        metrics: TransportMetrics::new(),
+                        metrics: Arc::new(TransportMetrics::new()),
                     }),
                 })
             }
@@ -114,7 +114,7 @@ impl DualTcpListener {
         Ok(Self {
             inner: Arc::new(TcpInner {
                 backend: TcpBackend::KernelSingle(tokio_listener),
-                metrics: TransportMetrics::new(),
+                metrics: Arc::new(TransportMetrics::new()),
             }),
         })
     }
@@ -123,6 +123,12 @@ impl DualTcpListener {
     #[must_use]
     pub fn metrics(&self) -> &TransportMetrics {
         &self.inner.metrics
+    }
+
+    /// A handle on the traffic counters alone (no socket): what a status view may keep.
+    #[must_use]
+    pub fn metrics_handle(&self) -> Arc<TransportMetrics> {
+        Arc::clone(&self.inner.metrics)
     }
 
     /// Accepts the next incoming TCP connection from either the IPv4 or IPv6 arm.

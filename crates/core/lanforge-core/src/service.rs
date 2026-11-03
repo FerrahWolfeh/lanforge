@@ -56,9 +56,8 @@ use crate::context::LanforgeContext;
 use crate::error::CoreError;
 use lanforge_types::config::ConfigDomain;
 pub use lanforge_types::system::{
-    DegradedReason, DormantReason, ServiceBanner, ServiceId, ServiceState, StateDetail,
+    DegradedReason, DormantReason, ServiceId, ServiceState, StateDetail,
 };
-use std::borrow::Cow;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -285,33 +284,6 @@ pub trait LanforgeService: Send + Sync {
 
 /// A service that executes within a Tokio asynchronous task.
 pub trait AsyncService: LanforgeService {
-    /// Returns service-specific key-value statistics and metrics for the status banner.
-    fn stats(&self, _ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
-        Vec::new()
-    }
-
-    /// Returns optional transport telemetry snapshot for the status banner.
-    fn transport_snapshot(
-        &self,
-        _ctx: &LanforgeContext,
-    ) -> Option<lanforge_types::network::snapshot::TransportSnapshot> {
-        None
-    }
-
-    /// Generates the complete service status banner containing health, uptime, and metrics.
-    fn banner(&self, ctx: &LanforgeContext) -> ServiceBanner {
-        let spec = self.spec();
-        ServiceBanner {
-            id: spec.id,
-            name: spec.display_name.to_string(),
-            state: ctx.get_service_state(spec.id),
-            uptime_secs: ctx.get_service_uptime(spec.id),
-            stats: self.stats(ctx),
-            transport: self.transport_snapshot(ctx),
-            detail: ctx.get_service_detail(spec.id),
-        }
-    }
-
     /// Resource acquisition phase.
     fn init(
         &mut self,
@@ -493,17 +465,5 @@ impl ServiceHandle {
                 }
             }
         }
-    }
-}
-
-/// Trait implemented by decoupled services to provide dynamic status and metrics.
-pub trait StatusProvider: Send + Sync {
-    /// Returns the service's current banner containing health, uptime, and metrics.
-    fn banner(&self, ctx: &LanforgeContext) -> ServiceBanner;
-}
-
-impl<T: AsyncService> StatusProvider for T {
-    fn banner(&self, ctx: &LanforgeContext) -> ServiceBanner {
-        <T as AsyncService>::banner(self, ctx)
     }
 }

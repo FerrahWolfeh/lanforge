@@ -23,7 +23,6 @@
 		type ServiceBanner,
 		type TrafficTelemetryResponse,
 	} from "$lib/api/types";
-	import Sparkline from "$lib/components/ui/sparkline.svelte";
 	import TrafficActivityChart from "$lib/components/TrafficActivityChart.svelte";
 	import PageHeader from "$lib/components/PageHeader.svelte";
 	import StatCardGrid from "$lib/components/StatCardGrid.svelte";
@@ -135,38 +134,9 @@
 	});
 
 	const dnsSparkline = $derived.by(() => {
+		// Real query rate only: no history yet means no sparkline, never a made-up curve.
 		const points = analyticsData?.query_rate?.map((r) => r.count) ?? [];
-		if (points.length > 0) return points.slice(-16);
-		return [120, 140, 180, 220, 190, 260, 310, 290, 340, 380, 420, 390, 450, 480, 520, 500];
-	});
-
-	const devicesSparkline = $derived.by(() => {
-		const c = onlineDevicesCount;
-		if (c === 0) return [0, 0, 0, 0, 0, 0];
-		return [
-			Math.max(1, c - 2),
-			Math.max(1, c - 1),
-			Math.max(1, c - 1),
-			c,
-			Math.max(1, c - 1),
-			c,
-			c,
-			c,
-		];
-	});
-
-	const leasesSparkline = $derived.by(() => {
-		const c = leasesData?.length ?? 0;
-		if (c === 0) return [0, 0, 0, 0, 0, 0];
-		return [
-			Math.max(1, c - 3),
-			Math.max(1, c - 2),
-			Math.max(1, c - 1),
-			c,
-			Math.max(1, c - 1),
-			c,
-			c,
-		];
+		return points.length > 0 ? points.slice(-16) : undefined;
 	});
 
 	const gatewayTraffic = $derived.by(() => {
@@ -193,34 +163,6 @@
 	const totalTrafficBps = $derived(totalRxBps + totalTxBps);
 	const conntrack = $derived(telemetryData?.conntrack);
 
-	const trafficSparkline = $derived.by(() => {
-		const mbps = totalTrafficBps > 0 ? Math.round(totalTrafficBps / 1_000_000) : 12;
-		return [
-			Math.max(1, mbps * 0.6),
-			Math.max(1, mbps * 0.8),
-			Math.max(1, mbps * 0.7),
-			Math.max(1, mbps * 1.1),
-			Math.max(1, mbps * 0.9),
-			Math.max(1, mbps * 1.0),
-			Math.max(1, mbps * 1.2),
-			Math.max(1, mbps),
-		];
-	});
-
-	const conntrackSparkline = $derived.by(() => {
-		const c = conntrack?.active_connections ?? 42;
-		return [
-			Math.max(1, c - 10),
-			Math.max(1, c - 5),
-			Math.max(1, c - 8),
-			c,
-			Math.max(1, c - 4),
-			c,
-			c,
-			c,
-		];
-	});
-
 	const statCards = $derived([
 		{
 			label: "Active Devices",
@@ -232,8 +174,6 @@
 				: "LAN host activity",
 			icon: WifiIcon,
 			color: "emerald" as const,
-			sparklineData: devicesSparkline,
-			sparklineColor: "#10b981",
 			href: "/network/devices",
 		},
 		{
@@ -242,8 +182,6 @@
 			subtext: "Active IPv4/v6 leases",
 			icon: NetworkIcon,
 			color: "teal" as const,
-			sparklineData: leasesSparkline,
-			sparklineColor: "#14b8a6",
 			href: "/dhcp/leases",
 		},
 		{
@@ -268,8 +206,6 @@
 				: "Active stateful sessions",
 			icon: ShieldCheckIcon,
 			color: "violet" as const,
-			sparklineData: conntrackSparkline,
-			sparklineColor: "#8b5cf6",
 			href: "/firewall",
 		},
 	]);
@@ -397,7 +333,9 @@
 				icon={card.icon}
 				color={card.color}
 				href={card.href}
-				sparkline={{ data: card.sparklineData, color: card.sparklineColor, height: 28 }}
+				sparkline={card.sparklineData
+					? { data: card.sparklineData, color: card.sparklineColor, height: 28 }
+					: undefined}
 				loading={loadingData || card.value === null}
 			/>
 		{/each}
@@ -458,12 +396,8 @@
 
 						<div class="flex items-center gap-3 shrink-0 font-mono text-[11px]">
 							<span class="text-muted-foreground text-[10px] hidden md:inline">
-								{#if banner?.stats?.leases_active}
-									{banner.stats.leases_active} leases
-								{:else if banner?.stats?.cache_hit_rate}
-									Hit: {banner.stats.cache_hit_rate}
-								{:else if banner?.stats?.state}
-									{banner.stats.state}
+								{#if banner?.summary}
+									{banner.summary}
 								{:else}
 									{svc.proto}
 								{/if}

@@ -296,3 +296,65 @@ async fn test_firewall_transaction_lifecycle() {
     assert!(cleared.is_some());
     assert!(ctx.get_staged_firewall_transaction().is_none());
 }
+
+/// A service's uptime runs while it serves (Online, Active, Degraded) and stops when it
+/// leaves; going Online → Degraded keeps counting. Nothing ever set the start before, so
+/// every banner showed uptime 0.
+#[test]
+fn service_uptime_follows_the_serving_states() {
+    use lanforge_types::system::ServiceId;
+
+    let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Starting);
+    assert_eq!(ctx.get_service_uptime(ServiceId::Dns), 0);
+
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Online);
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    assert_eq!(ctx.get_service_uptime(ServiceId::Dns), 1);
+
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Degraded);
+    assert_eq!(
+        ctx.get_service_uptime(ServiceId::Dns),
+        1,
+        "degraded still serves"
+    );
+
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Inactive);
+    assert_eq!(ctx.get_service_uptime(ServiceId::Dns), 0);
+}
+
+/// A banner sums the counters of every socket its service registered; a stop, dormancy or
+/// failure drops them, a pause keeps them (the sockets survive a pause).
+#[test]
+fn banner_transport_sums_the_registered_counters() {
+    use lanforge_types::network::snapshot::TransportMetrics;
+    use lanforge_types::system::ServiceId;
+
+    let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+    ctx.register_service(ServiceId::Dns, "DNS Server");
+    let transport = |ctx: &LanforgeContext| ctx.service_banners()[0].transport;
+    assert_eq!(transport(&ctx), None, "nothing registered, nothing shown");
+
+    let (v4, v6) = (
+        Arc::new(TransportMetrics::new()),
+        Arc::new(TransportMetrics::new()),
+    );
+    v4.record_rx(100);
+    v6.record_rx(60);
+    v6.record_tx(80);
+    ctx.set_service_transports(ServiceId::Dns, vec![v4, Arc::clone(&v6)]);
+    let sum = transport(&ctx).unwrap();
+    assert_eq!((sum.rx_packets, sum.rx_bytes, sum.tx_bytes), (2, 160, 80));
+
+    v6.record_rx(40);
+    assert_eq!(
+        transport(&ctx).unwrap().rx_bytes,
+        200,
+        "live counters, not a copy"
+    );
+
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Paused);
+    assert!(transport(&ctx).is_some());
+    ctx.set_service_state(ServiceId::Dns, ServiceState::Error);
+    assert_eq!(transport(&ctx), None);
+}

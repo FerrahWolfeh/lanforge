@@ -5,6 +5,7 @@ use lanforge_api::api::{AllowlistEntry, DnsAllowlistResponse, Response};
 use crate::handlers::dns::adblock::with_rule_only;
 #[cfg(feature = "adblock")]
 use crate::handlers::dns::rewrite::dns_reply;
+use crate::handlers::system::toml_sync::ChangeError;
 #[cfg(feature = "adblock")]
 use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 #[cfg(feature = "adblock")]
@@ -67,7 +68,9 @@ impl ClientContext {
                 RulesFile::new(text)
                     .without_rule(id)
                     .map(Some)
-                    .ok_or_else(|| format!("Domain '{domain}' not found in allowlist"))
+                    .ok_or_else(|| {
+                        ChangeError::NotFound(format!("Domain '{domain}' not found in allowlist"))
+                    })
             }),
             format!("Domain '{domain}' removed from DNS allowlist"),
         )

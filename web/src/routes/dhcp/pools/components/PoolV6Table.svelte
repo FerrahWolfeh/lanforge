@@ -13,7 +13,6 @@
 		v6Pools = [],
 		poolStats = { v4_pools: [], v6_pools: [] },
 		loading = false,
-		globalV6LeaseTime = 86400,
 		activeUlaPrefix = null,
 		onAdd = () => {},
 		onEdit = (_idx: number) => {},
@@ -22,7 +21,6 @@
 		v6Pools?: Dhcpv6PoolConfig[];
 		poolStats?: DhcpPoolsResponse;
 		loading?: boolean;
-		globalV6LeaseTime?: number;
 		activeUlaPrefix?: string | null;
 		onAdd?: () => void;
 		onEdit?: (idx: number) => void;
@@ -109,7 +107,6 @@
 		<Table.Head class="w-[180px]">Scope Name</Table.Head>
 		<Table.Head>Delegated Range / Prefix</Table.Head>
 		<Table.Head class="w-[220px]">Live Capacity &amp; Utilization</Table.Head>
-		<Table.Head>Lease Time</Table.Head>
 		<Table.Head class="text-right w-[110px]">Actions</Table.Head>
 	{/snippet}
 
@@ -169,10 +166,6 @@
 						></div>
 					</div>
 				</div>
-			</Table.Cell>
-
-			<Table.Cell class="text-xs font-mono text-muted-foreground">
-				{pool.lease_time ? `${Math.round(pool.lease_time / 3600)}h` : `${Math.round(globalV6LeaseTime / 3600)}h (Default)`}
 			</Table.Cell>
 
 			<Table.Cell class="text-right">

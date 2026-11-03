@@ -156,17 +156,6 @@ pub struct Dhcpv6Pool {
     /// Static CIDR address or prefix (alternative to range-based pools).
     #[serde(default, deserialize_with = "empty_string_as_none_str")]
     pub address: Option<String>,
-    /// DNS recursive servers (Option 23) override for this pool.
-    pub dns_servers: Vec<std::net::Ipv6Addr>,
-    /// Domain search list (Option 24) override for this pool.
-    pub search_domains: Vec<String>,
-    /// NTP time servers (Option 56) override for this pool.
-    pub ntp_servers: Vec<String>,
-    /// Custom lease time for this pool in seconds.
-    pub lease_time: Option<u32>,
-    /// Boot file URL (Option 59) override.
-    #[serde(default, deserialize_with = "empty_string_as_none_str")]
-    pub boot_file: Option<String>,
 }
 
 /// Scope options and parameters for `DHCPv4` service.

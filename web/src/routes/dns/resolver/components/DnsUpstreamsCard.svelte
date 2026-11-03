@@ -20,7 +20,7 @@
 	import SparklesIcon from "@lucide/svelte/icons/sparkles";
 	import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
 
-	import { dnsUpstreamClear, dnsUpstreamAdd } from "$lib/api/client";
+	import { dnsUpstreamSetDefault } from "$lib/api/client";
 	import type { DnsUpstreamEntry } from "$lib/api/types";
 
 	let {
@@ -90,7 +90,8 @@
 	}
 
 	function getUpstreamLatency(u: DnsUpstreamEntry): string {
-		if (u.rtt_ewma_us !== undefined && u.rtt_ewma_us !== null) {
+		// 0 = no sample yet (DNS not serving, or the upstream never answered).
+		if (u.rtt_ewma_us) {
 			const ms = (u.rtt_ewma_us / 1000).toFixed(1);
 			return `${ms} ms`;
 		}
@@ -98,35 +99,29 @@
 		return "-";
 	}
 
+	// The daemon's own status; anything else (missing, unknown) is shown as unknown, never healthy.
+	function statusDot(status: string | undefined): string {
+		switch (status) {
+			case "healthy":
+				return "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]";
+			case "degraded":
+				return "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.8)]";
+			default:
+				return "bg-muted-foreground/50";
+		}
+	}
+
 	async function applyPreset(preset: typeof PRESETS[0]) {
 		applyingPreset = true;
 		try {
-			await dnsUpstreamClear();
-			for (const addr of [...preset.v4, ...preset.v6]) {
-				await dnsUpstreamAdd({ addr, protocol: "udp" });
-			}
-			toast.success(`Applied ${preset.name} preset with 4 dual-stack upstreams`);
+			// One change: replaces the default upstreams, keeps the domain-scoped ones.
+			await dnsUpstreamSetDefault([...preset.v4, ...preset.v6]);
+			toast.success(`Default upstreams replaced with the ${preset.name} preset`);
 			await onReloadAll();
 		} catch (err: any) {
 			toast.error(`Failed to apply preset: ${err.message || String(err)}`);
 		} finally {
 			applyingPreset = false;
-		}
-	}
-
-	async function clearAll() {
-		if (
-			!confirm(
-				"Are you sure you want to clear all upstream DNS servers? Non-local queries will return REFUSED.",
-			)
-		)
-			return;
-		try {
-			await dnsUpstreamClear();
-			toast.success("Cleared all upstream servers");
-			await onReloadAll();
-		} catch (err: any) {
-			toast.error(`Failed to clear upstreams: ${err.message || String(err)}`);
 		}
 	}
 
@@ -174,11 +169,6 @@
 								</DropdownMenu.Item>
 							{/each}
 						</DropdownMenu.Group>
-						<DropdownMenu.Separator />
-						<DropdownMenu.Item onclick={clearAll} class="text-rose-400 cursor-pointer">
-							<Trash2Icon class="size-3 mr-1.5" />
-							Clear All Upstreams
-						</DropdownMenu.Item>
 					</DropdownMenu.Content>
 				</DropdownMenu.Root>
 
@@ -261,11 +251,10 @@
 								</Table.Cell>
 								<Table.Cell class="font-sans">
 									<div class="flex items-center gap-1.5">
-										<span
-											class="size-2 rounded-full bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.8)]"
+										<span class={["size-2 rounded-full", statusDot(item.status)].join(" ")}
 										></span>
 										<span class="text-[11px] font-medium capitalize">
-											{item.status || "Healthy"}
+											{item.status || "unknown"}
 										</span>
 									</div>
 								</Table.Cell>

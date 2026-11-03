@@ -12,7 +12,7 @@ use lanforge_db_core::{DbError, DnsUpstreamEntry};
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockRuleEntry, RewriteRule};
 pub use redb;
-use redb::{Database, Durability, ReadableDatabase, ReadableTable, WriteTransaction};
+use redb::{Database, ReadableDatabase, ReadableTable, WriteTransaction};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -116,24 +116,34 @@ impl fmt::Debug for RedbDatabase {
 impl RedbDatabase {
     /// Current database schema version.
     pub const CURRENT_SCHEMA_VERSION: u32 = 4;
+    /// Read cache of the runtime database (redb's default is 1 GiB). Its file is on tmpfs, so
+    /// cached pages were a second copy of RAM: at the 100k-query log cap the process held
+    /// ~40 MB of cache beside the ~33 MB file; with 4 MiB it holds ~14 MB, at the same speed.
+    pub const RUNTIME_CACHE_BYTES: usize = 4 << 20;
     /// Independent schema version for volatile runtime tables.
     pub const RUNTIME_SCHEMA_VERSION: u32 = 1;
 
     /// Opens or creates the `redb` database at the specified file path.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, DbError> {
-        Self::open_with_durability(path.as_ref(), false)
+        Self::open_file(path.as_ref(), false)
     }
 
-    /// Opens a database whose writes are volatile and do not request a durable flush.
+    /// Opens the runtime database: its contents are recreated, not migrated, on a schema change.
     pub fn open_volatile(path: impl AsRef<Path>) -> Result<Self, DbError> {
-        Self::open_with_durability(path.as_ref(), true)
+        Self::open_file(path.as_ref(), true)
     }
 
-    fn open_with_durability(p: &Path, volatile: bool) -> Result<Self, DbError> {
+    fn open_file(p: &Path, volatile: bool) -> Result<Self, DbError> {
         if let Some(parent) = p.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
-        let db = Database::create(p).map_err(|e| DbError::Backend(e.to_string()))?;
+        let mut builder = Database::builder();
+        if volatile {
+            builder.set_cache_size(Self::RUNTIME_CACHE_BYTES);
+        }
+        let db = builder
+            .create(p)
+            .map_err(|e| DbError::Backend(e.to_string()))?;
         tracing::debug!("Redb database opened at {}", p.display());
         let this = Self {
             db: Arc::new(db),
@@ -148,10 +158,10 @@ impl RedbDatabase {
 
     /// Opens an isolated in-memory temporary database (ideal for tests and recovery).
     pub fn open_temp() -> Result<Self, DbError> {
-        Self::open_temp_with_durability(false)
+        Self::open_temp_file(false)
     }
 
-    fn open_temp_with_durability(volatile: bool) -> Result<Self, DbError> {
+    fn open_temp_file(volatile: bool) -> Result<Self, DbError> {
         let temp = tempfile::NamedTempFile::new()?;
         let path = temp.path().to_path_buf();
         let db = Database::create(&path).map_err(|e| DbError::Backend(e.to_string()))?;
@@ -169,7 +179,7 @@ impl RedbDatabase {
     /// Opens an in-memory database without file persistence.
     #[must_use]
     pub fn open_in_memory() -> Self {
-        Self::open_temp_with_durability(true).expect("failed to open in-memory redb database")
+        Self::open_temp_file(true).expect("failed to open in-memory redb database")
     }
 
     /// Returns the database file path, if any.
@@ -212,12 +222,11 @@ impl RedbDatabase {
         Ok(self.read_table(table_def, f)?.unwrap_or_default())
     }
 
+    /// Every commit is durable, the runtime database's too: it lives on tmpfs, where a flush
+    /// costs nothing, and a `Durability::None` commit only reached the file on a clean close
+    /// (a crash or watchdog kill lost it). Its writes are already batched by the db worker.
     pub fn begin_write(&self) -> Result<WriteTransaction, DbError> {
-        let mut txn = self.db.begin_write()?;
-        if self.volatile {
-            txn.set_durability(Durability::None)?;
-        }
-        Ok(txn)
+        Ok(self.db.begin_write()?)
     }
 
     /// Runs related configuration writes in one atomic redb transaction.
@@ -929,6 +938,65 @@ mod tests {
         );
     }
 
+    /// Rows written before `repeats` existed (postcard is positional: they lack the last field)
+    /// still read, as one query each, in every reader of the query table.
+    #[test]
+    fn query_rows_from_before_repeats_still_read() {
+        use lanforge_db_core::LogStore;
+        use lanforge_types::network::dns::{DnsRecordType, TransportProtocol};
+        use lanforge_types::network::{QueryLogEntry, QueryResult};
+
+        let db = RedbDatabase::open_in_memory();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let entry = QueryLogEntry {
+            timestamp: now,
+            src_ip: "192.168.1.60".parse().unwrap(),
+            domain: Arc::from("old.example"),
+            upstream_us: 0,
+            qtype: DnsRecordType::A,
+            result: QueryResult::Forwarded,
+            cached: false,
+            src_mac: Some("aa:bb:cc:dd:ee:01".parse().unwrap()),
+            answer: None,
+            protocol: TransportProtocol::Udp,
+            filter: None,
+            coalesce_id: None,
+            repeats: 1,
+        };
+        let mut old_row = encode(&entry).unwrap();
+        assert_eq!(
+            old_row.pop(),
+            Some(1),
+            "repeats = 1 is the trailing varint byte"
+        );
+        let txn = db.db.begin_write().unwrap();
+        {
+            let mut table = txn.open_table(crate::tables::TABLE_DNS_QUERIES).unwrap();
+            table.insert((now, 0), old_row.as_slice()).unwrap();
+        }
+        txn.commit().unwrap();
+
+        let (rows, total) = db
+            .get_dns_query_history(10, None, None, None, None, None)
+            .unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(rows[0].domain.as_ref(), "old.example");
+        assert_eq!(rows[0].repeats, 1);
+        assert_eq!(
+            // A MAC client is counted from the table itself (an IP one from the hourly stats).
+            db.get_dns_top_domains_for_client("aa:bb:cc:dd:ee:01", 5)
+                .unwrap(),
+            vec![("old.example".to_string(), 1)]
+        );
+        let rate = db.get_dns_query_rate(now - 60).unwrap();
+        assert_eq!(rate.iter().map(|(_, n)| n).sum::<u64>(), 1);
+        let detailed = db.get_dns_query_rate_detailed(now - 60, 30).unwrap();
+        assert_eq!(detailed.iter().map(|b| b.total).sum::<u64>(), 1);
+    }
+
     #[tokio::test]
     async fn test_redb_log_store() {
         use lanforge_core::bus::{LanforgeEvent, SystemEvent, TimedEvent};
@@ -969,6 +1037,8 @@ mod tests {
             protocol: TransportProtocol::Udp,
             filter: None,
             coalesce_id: None,
+            // A folded line: it stands for three identical queries.
+            repeats: 3,
         };
         let query2 = QueryLogEntry {
             timestamp: bucket_base + 20,
@@ -983,6 +1053,7 @@ mod tests {
             protocol: TransportProtocol::Udp,
             filter: None,
             coalesce_id: None,
+            repeats: 1,
         };
         db.record_dns_queries_batch(&[std::sync::Arc::new(query1), std::sync::Arc::new(query2)])
             .unwrap();
@@ -1019,15 +1090,21 @@ mod tests {
 
         let top_clients = db.get_dns_top_clients(5).unwrap();
         assert_eq!(top_clients.len(), 1);
-        assert_eq!(top_clients[0], ("192.168.1.50".to_string(), 2, 1));
+        // Counts are queries, not lines: the folded line weighs 3.
+        assert_eq!(top_clients[0], ("192.168.1.50".to_string(), 4, 1));
+        assert_eq!(
+            db.get_dns_top_domains_for_client("192.168.1.50", 5)
+                .unwrap(),
+            vec![("example.com".to_string(), 3)]
+        );
 
         let query_rate = db.get_dns_query_rate(since_secs).unwrap();
-        assert!(!query_rate.is_empty());
+        assert_eq!(query_rate.iter().map(|(_, n)| n).sum::<u64>(), 4);
 
         let detailed_rates = db.get_dns_query_rate_detailed(since_secs, 900).unwrap();
         assert_eq!(detailed_rates.len(), 1);
-        assert_eq!(detailed_rates[0].total, 2);
-        assert_eq!(detailed_rates[0].forwarded, 1);
+        assert_eq!(detailed_rates[0].total, 4);
+        assert_eq!(detailed_rates[0].forwarded, 3);
         assert_eq!(detailed_rates[0].blocked, 1);
 
         // Test Lifetime Stats

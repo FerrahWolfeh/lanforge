@@ -130,9 +130,7 @@ impl ClientContext {
             .get_device(&mac)
             .is_some_and(|d| d.origin == lanforge_types::device::Origin::Static);
         if is_static && let Err(e) = self.change_hosts(|hosts| hosts.retain(|h| h.mac != mac)) {
-            return Response::Error {
-                error: format!("Device {mac} not purged: {e}"),
-            };
+            return e.response_in(&format!("Device {mac} not purged"));
         }
         if !self.ctx.apply(DeviceUpdate::HostRemoved { mac }) {
             return Response::Error {

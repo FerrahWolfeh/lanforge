@@ -13,12 +13,12 @@ use lanforge_api::rpc::RpcResponse;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::events::{DnsEvent, LanforgeEvent};
 use lanforge_types::network::DnsRecordType;
-use lanforge_types::network::dns::QueryResult;
 use lanforge_types::network::dns::adblock::{
     AdblockSourceFormat, AdblockUrlKind, BlockingMode, FilterAction, FilterOrigin, RewriteAnswer,
     RewriteRule, TimeOfDay,
 };
 use lanforge_types::network::dns::upstream::UpstreamProtocol;
+use lanforge_types::network::dns::{QueryResult, UpstreamStatus};
 
 use crate::client::LanforgeClient;
 use crate::output::{Printer, format_duration_secs};
@@ -163,12 +163,6 @@ pub enum DnsUpstreamsAction {
     Add(DnsUpstreamAddArgs),
     /// Remove an upstream forwarding resolver
     Remove(DnsUpstreamRemoveArgs),
-    /// Remove all configured upstream resolvers
-    Clear {
-        /// Bypass interactive confirmation prompt
-        #[arg(short = 'y', long)]
-        yes: bool,
-    },
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq, Default)]
@@ -543,11 +537,7 @@ async fn show_status(client: &LanforgeClient, printer: &Printer) -> Result<()> {
             "Latency",
         ]);
         for u in &upstreams.upstreams {
-            let health_str = if u.status.is_healthy() {
-                "Healthy".green().to_string()
-            } else {
-                "Failing".red().to_string()
-            };
+            let health_str = health_cell(u.status);
             let latency_str = if u.rtt_ewma_us > 0 {
                 format!("{:.1}ms", f64::from(u.rtt_ewma_us) / 1000.0)
             } else {
@@ -847,6 +837,11 @@ fn format_log_entry(
         .unwrap_or(&client_ip);
 
     let answer_display = entry.answer.as_deref().unwrap_or("—");
+    let domain_display = if entry.repeats > 1 {
+        format!("{} ×{}", entry.domain, entry.repeats)
+    } else {
+        entry.domain.to_string()
+    };
 
     if printer.no_color {
         let latency_str = if entry.upstream_us == 0 {
@@ -859,7 +854,7 @@ fn format_log_entry(
             time_str,
             client_display.to_string(),
             entry.qtype.to_string(),
-            entry.domain.to_string(),
+            domain_display,
             entry.result.to_string(),
             answer_display.to_string(),
             latency_str,
@@ -892,7 +887,7 @@ fn format_log_entry(
             time_str.dimmed().to_string(),
             client_display.bright_blue().to_string(),
             entry.qtype.to_string().cyan().to_string(),
-            entry.domain.to_string(),
+            domain_display,
             outcome_str,
             answer_display.to_string(),
             latency_str,
@@ -1020,6 +1015,7 @@ async fn follow_dns_logs(
                             upstream_us: q.upstream_us,
                             filter: None,
                             coalesce_id: q.coalesce_id,
+                            repeats: q.repeats,
                         };
                         let cols = format_log_entry(&entry, &ip_to_host, printer);
                         println!("{}", cols.join(" │ "));
@@ -1078,6 +1074,7 @@ async fn follow_dns_logs(
                         upstream_us: q.upstream_us,
                         filter: None,
                         coalesce_id: q.coalesce_id,
+                        repeats: q.repeats,
                     };
                     let cols = format_log_entry(&entry, &ip_to_host, printer);
                     println!("{}", cols.join(" │ "));
@@ -1243,7 +1240,6 @@ async fn execute_upstreams(
         DnsUpstreamsAction::List => list_upstreams(client, printer).await,
         DnsUpstreamsAction::Add(add_args) => add_upstream(add_args, client, printer).await,
         DnsUpstreamsAction::Remove(rem_args) => remove_upstream(rem_args, client, printer).await,
-        DnsUpstreamsAction::Clear { yes } => clear_upstreams(yes, client, printer).await,
     }
 }
 
@@ -1275,11 +1271,7 @@ async fn list_upstreams(client: &LanforgeClient, printer: &Printer) -> Result<()
         "Avg Latency",
     ]);
     for u in &resp.upstreams {
-        let health_str = if u.status.is_healthy() {
-            "Healthy".green().to_string()
-        } else {
-            "Failing".red().to_string()
-        };
+        let health_str = health_cell(u.status);
         let latency_str = if u.rtt_ewma_us > 0 {
             format!("{:.1}ms", f64::from(u.rtt_ewma_us) / 1000.0)
         } else {
@@ -1380,26 +1372,6 @@ async fn remove_upstream(
     }
 
     printer.success(&format!("Removed DNS upstream {addr} ({proto})."));
-    Ok(())
-}
-
-async fn clear_upstreams(yes: bool, client: &LanforgeClient, printer: &Printer) -> Result<()> {
-    if !yes && !printer.yes {
-        let confirmed =
-            Confirm::new("Are you sure you want to remove ALL configured DNS upstreams?")
-                .with_default(false)
-                .prompt()?;
-        if !confirmed {
-            printer.info("Operation cancelled.");
-            return Ok(());
-        }
-    }
-
-    let resp = client.dns_upstream_clear().await?;
-    if printer.json {
-        return printer.print_json(&resp);
-    }
-    printer.success("All configured DNS upstreams cleared successfully.");
     Ok(())
 }
 
@@ -2192,6 +2164,16 @@ async fn remove_reverse_resolver(
 // Unit Tests
 // ---------------------------------------------------------------------------
 
+/// The upstream status as a table cell: unmeasured reads "—", not "Failing".
+fn health_cell(status: UpstreamStatus) -> String {
+    match status {
+        UpstreamStatus::Healthy => "Healthy".green().to_string(),
+        UpstreamStatus::Degraded => "Degraded".red().to_string(),
+        UpstreamStatus::Disabled => "Disabled".dimmed().to_string(),
+        UpstreamStatus::Unknown => "—".dimmed().to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2285,6 +2267,7 @@ mod tests {
             upstream_us: 15_400,
             filter: None,
             coalesce_id: None,
+            repeats: 1,
         };
         let host_map = HashMap::new();
         let printer = Printer::new(false, true, false);
@@ -2295,6 +2278,14 @@ mod tests {
         assert_eq!(cols[4], "Forwarded");
         assert_eq!(cols[5], "93.184.216.34");
         assert_eq!(cols[6], "15.4ms");
+
+        // A folded burst of repeats reads as one line with its count.
+        let grouped = DnsQueryLogEntry {
+            repeats: 340,
+            ..entry
+        };
+        let cols = format_log_entry(&grouped, &host_map, &printer);
+        assert_eq!(cols[3], "example.com ×340");
     }
 
     #[test]

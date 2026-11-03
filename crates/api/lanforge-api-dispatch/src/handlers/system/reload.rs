@@ -10,6 +10,7 @@ use lanforge_api::api::{Response, SimpleSuccess, SystemConfigExport};
 use lanforge_api::config_file::{
     ConfigFile, RaInputs, Section, effective_firewall, effective_ra, log_issues, set_aside_issues,
 };
+use lanforge_types::config::SiteDomains;
 use tracing::info;
 
 use crate::ClientContext;
@@ -93,6 +94,14 @@ impl ClientContext {
         let ctx = &self.ctx;
         let applies = |sec: Section| !set_aside.iter().any(|(s, _)| *s == sec);
 
+        if applies(Section::System) {
+            let domains = SiteDomains(file.search_domains());
+            if ctx.get_site_domains() != domains {
+                info!(domains = ?domains.0, "Reload: [system] search_domains changed; applying");
+                ctx.update_site_domains(domains);
+            }
+        }
+
         if applies(Section::Pppoe) && ctx.get_pppoe_config().as_ref() != Some(&file.pppoe) {
             info!("Reload: [pppoe] changed; applying");
             ctx.update_pppoe_config(file.pppoe.clone());
@@ -159,8 +168,15 @@ impl ClientContext {
                 dns.rewrites.clone(),
                 dns.reverse.clone(),
             );
+            // The listener and `enabled` only when they changed: the DNS service alone restarts
+            // (or goes dormant), nothing else is touched.
+            let listener = dns.listener(&ctx.get_dns_listen());
+            if listener != ctx.get_dns_listen() {
+                info!("Reload: [dns] listener or enabled changed; restarting the DNS service");
+                ctx.update_dns_listen(listener);
+            }
             if live != wanted {
-                info!("Reload: [dns] changed; applying (listen takes effect on restart)");
+                info!("Reload: [dns] changed; applying");
                 self.apply_dns_settings(dns);
             }
         }

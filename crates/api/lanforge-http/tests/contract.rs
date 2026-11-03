@@ -248,8 +248,13 @@ impl TestApp {
     }
 
     async fn delete_with<T: Serialize>(&self, path: &str, body: &T) -> (StatusCode, Value) {
-        self.call("DELETE", path, Some(serde_json::to_vec(body).unwrap()), true)
-            .await
+        self.call(
+            "DELETE",
+            path,
+            Some(serde_json::to_vec(body).unwrap()),
+            true,
+        )
+        .await
     }
 
     async fn patch<T: Serialize>(&self, path: &str, body: &T) -> (StatusCode, Value) {
@@ -702,12 +707,12 @@ async fn test_hosts_contract() {
         (
             "patch with invalid IP — refused (it used to be ignored and still pin the host)",
             json!({"field": "v4_static", "value": "not-an-ip"}),
-            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::BAD_REQUEST,
         ),
         (
-            "patch with unknown field — dispatch returns 500",
+            "patch with unknown field — refused",
             json!({"field": "nonexistent_field", "value": "anything"}),
-            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::BAD_REQUEST,
         ),
     ];
     for (desc, body, expected) in edge_cases {
@@ -844,7 +849,7 @@ async fn test_dns_rewrites_contract() {
         (
             "invalid answer string (ideal: 400 Bad Request)",
             json!({"domain": "bad.lan", "rtype": "A", "answer": ":::invalid:::"}),
-            StatusCode::BAD_REQUEST, // Ideal contract — current impl returns 500
+            StatusCode::BAD_REQUEST,
         ),
     ];
 
@@ -897,8 +902,13 @@ async fn test_dns_rewrite_remove_works_for_a_javascript_client() {
     let (_, body) = app.get("/api/v1/dns/rewrites").await;
     assert_eq!(body["data"]["rewrites"].as_array().map(Vec::len), Some(0));
 
-    let (status, _) = app.delete_with("/api/v1/dns/rewrites/rule", &listed[0]).await;
-    assert!(!status.is_success(), "removing it twice must fail, got {status}");
+    let (status, _) = app
+        .delete_with("/api/v1/dns/rewrites/rule", &listed[0])
+        .await;
+    assert!(
+        !status.is_success(),
+        "removing it twice must fail, got {status}"
+    );
 }
 
 /// Manual adblock rules are disabled and removed by their text, as the listing gives it.
@@ -923,7 +933,10 @@ async fn test_adblock_rule_by_text_works_for_a_javascript_client() {
     let (status, _) = app
         .delete(&format!("/api/v1/dns/adblock/rules/{seen_by_js:.0}"))
         .await;
-    assert!(!status.is_success(), "a rounded id matches no rule, got {status}");
+    assert!(
+        !status.is_success(),
+        "a rounded id matches no rule, got {status}"
+    );
 
     let (status, body) = app
         .put(
@@ -1011,6 +1024,44 @@ async fn test_dns_upstreams_contract() {
         let (status, _) = app.post(path, &json!({})).await;
         assert_eq!(status, *expected, "DNS upstreams guardrail: {desc}");
     }
+
+    // --- Preset: one PUT replaces the default upstreams ---
+    let (status, body) = app
+        .put(
+            "/api/v1/dns/upstreams",
+            &json!({"upstreams": ["9.9.9.9", "[2620:fe::fe]:53"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "preset: {body}");
+    let (_, body) = app.get("/api/v1/dns/upstreams").await;
+    assert_eq!(
+        body["data"]["upstreams"].as_array().map(|a| a.len()),
+        Some(2),
+        "{body}"
+    );
+
+    // A refused change is the caller's (400) and says why; nothing changes.
+    let (status, body) = app
+        .put("/api/v1/dns/upstreams", &json!({"upstreams": []}))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("configuration file")),
+        "{body}"
+    );
+    let (_, body) = app.get("/api/v1/dns/upstreams").await;
+    assert_eq!(
+        body["data"]["upstreams"].as_array().map(|a| a.len()),
+        Some(2)
+    );
+
+    // Removing an upstream that is not there: 404.
+    let (status, _) = app
+        .delete("/api/v1/dns/upstreams?addr=8.8.8.8%3A53&protocol=udp")
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 // ---------------------------------------------------------------------------
@@ -2141,4 +2192,38 @@ async fn test_admin_reset_and_delete_end_the_users_sessions() {
         StatusCode::UNAUTHORIZED,
         "a deleted user is signed out"
     );
+}
+
+/// Password guessing is throttled per client: after its free failures a client gets 429 with
+/// `Retry-After` even for the right password, while another client still logs in.
+#[tokio::test]
+async fn test_login_guessing_is_throttled_per_client() {
+    use axum::extract::ConnectInfo;
+    use std::net::SocketAddr;
+
+    let router = build_router(make_state(true).await);
+    let login = |from: &str, password: &str| {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/api/auth/login")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({"password": password})).unwrap(),
+            ))
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(from.parse::<SocketAddr>().unwrap()));
+        router.clone().oneshot(req)
+    };
+
+    for _ in 0..6 {
+        let res = login("192.0.2.66:40000", "guess").await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+    let res = login("192.0.2.66:40001", "testpass").await.unwrap();
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(res.headers().contains_key(header::RETRY_AFTER));
+
+    let res = login("192.0.2.10:40000", "testpass").await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
 }

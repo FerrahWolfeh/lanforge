@@ -60,7 +60,7 @@ use lanforge_types::network::ra::{
     ICMPV6_TYPE_RS, MAX_INITIAL_RTR_ADVERT_INTERVAL, MAX_INITIAL_RTR_ADVERTISEMENTS,
     MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS, PreviousLanPrefixes, RAPrefix, RaServerConfig,
 };
-use lanforge_types::system::{DormantReason, RaStatusResponse, RunResult, ServiceState};
+use lanforge_types::system::{DormantReason, RaStatusResponse, RunResult};
 
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
@@ -71,7 +71,7 @@ use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
     ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::{Icmp6Transport, TransportSnapshot, TransportStats};
+use lanforge_transport::Icmp6Transport;
 use rand::RngExt;
 use std::collections::HashMap;
 use std::io;
@@ -474,6 +474,8 @@ impl RaService {
             self.transport = Some(t.clone());
             (mac, t)
         };
+        self.ctx
+            .set_service_transports(ServiceId::Ra, vec![transport.metrics_handle()]);
 
         let mut state = RaState::new();
         // Seed the advertised prefixes from the LAN interface, so a renumbering after startup
@@ -656,15 +658,16 @@ impl LanforgeService for RaService {
             shutdown_timeout: Duration::from_secs(3),
             deps: RA_DEPS,
             condition: Condition {
-                sections: &[lanforge_types::config::ConfigDomain::RaServer],
+                sections: &[
+                    lanforge_types::config::ConfigDomain::RaServer,
+                    lanforge_types::config::ConfigDomain::Interfaces,
+                ],
                 eval: |ctx| {
-                    if ctx.get_ra_server_config().enabled {
-                        Activation::Active
-                    } else {
-                        Activation::Dormant(lanforge_types::system::DormantReason::disabled(
-                            "ra.enabled",
-                        ))
+                    if !ctx.get_ra_server_config().enabled {
+                        return Activation::Dormant(DormantReason::disabled("ra.enabled"));
                     }
+                    ctx.lan_link_wait()
+                        .map_or(Activation::Active, Activation::Dormant)
                 },
             },
         }
@@ -675,76 +678,7 @@ impl LanforgeService for RaService {
     }
 }
 
-impl TransportStats for RaService {
-    fn snapshot(&self) -> TransportSnapshot {
-        self.transport
-            .as_ref()
-            .map(TransportStats::snapshot)
-            .unwrap_or_default()
-    }
-}
-
 impl AsyncService for RaService {
-    fn transport_snapshot(&self, _ctx: &LanforgeContext) -> Option<TransportSnapshot> {
-        self.transport.as_ref().map(TransportStats::snapshot)
-    }
-
-    fn stats(&self, ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let ra_status = ctx.ra_status();
-        let if_state = ctx.get_interface_state(ctx.target_ifindex().unwrap_or(0));
-        let prefixes = ctx.get_ra_prefixes();
-        let mut list = vec![
-            (std::borrow::Cow::Borrowed("iface"), self.cfg.iface.clone()),
-            (
-                std::borrow::Cow::Borrowed("max_interval_secs"),
-                self.cfg.max_interval.as_secs().to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("managed"),
-                self.cfg.managed.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("other_config"),
-                self.cfg.other_config.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("prefixes_count"),
-                prefixes.len().to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("gua_prefix"),
-                if_state
-                    .gua
-                    .map_or_else(|| "none".to_string(), |g| g.to_string()),
-            ),
-            (
-                std::borrow::Cow::Borrowed("ula_prefix"),
-                if_state
-                    .ula
-                    .map_or_else(|| "none".to_string(), |u| u.to_string()),
-            ),
-        ];
-        if let Some(ref st) = ra_status {
-            list.push((
-                std::borrow::Cow::Borrowed("sent_multicast"),
-                st.sent_multicast_ras.to_string(),
-            ));
-            list.push((
-                std::borrow::Cow::Borrowed("sent_unicast"),
-                st.sent_unicast_ras.to_string(),
-            ));
-            list.push((
-                std::borrow::Cow::Borrowed("received_rs"),
-                st.received_solicitations.to_string(),
-            ));
-            list.push((
-                std::borrow::Cow::Borrowed("ignored_rs"),
-                st.ignored_solicitations.to_string(),
-            ));
-        }
-        list
-    }
-
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         loop {
             let ra_server_cfg = ctx.get_ra_server_config();
@@ -952,11 +886,7 @@ fn send_ra_internal(
     let gua_info = gua.as_ref().map(|g| (g, gua_pref, gua_val));
     // No RDNSS configured: clients use this router's DNS while it serves, at the address the
     // admin gave the LAN interface (its ULA: stable when the delegated prefix changes).
-    let dns_serving = matches!(
-        lctx.get_service_state(ServiceId::Dns),
-        ServiceState::Online | ServiceState::Active | ServiceState::Degraded
-    );
-    let router_dns = ula.filter(|_| dns_serving);
+    let router_dns = ula.filter(|_| lctx.get_service_state(ServiceId::Dns).is_serving());
     let mut pkt = build_ra_packet(
         cfg,
         mac,

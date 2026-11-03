@@ -132,7 +132,7 @@ fn apply_update_slaac_excludes_managed_addr() {
         mac: Some(mac),
         duid: Duid::new(vec![1, 2, 3]),
         iaid: 1,
-        ip,
+        ips: std::iter::once(ip).collect(),
         expires,
     })));
 
@@ -168,7 +168,7 @@ fn apply_update_lease_released() {
         mac: Some(mac),
         duid: Duid::new(vec![1]),
         iaid: 1,
-        ip: "fd97::1".parse().unwrap(),
+        ips: std::iter::once("fd97::1".parse().unwrap()).collect(),
         expires: now,
     })));
 
@@ -266,7 +266,7 @@ fn expire_stale_removes_old_v4_keeps_fresh_v6() {
         mac: Some(mac),
         duid: Duid::new(vec![1]),
         iaid: 1,
-        ip: "fd00::1".parse().unwrap(),
+        ips: std::iter::once("fd00::1".parse().unwrap()).collect(),
         expires: future,
     })));
 
@@ -321,7 +321,7 @@ fn test_orphaned_v6_promotion() {
         mac: None,
         duid: duid.clone(),
         iaid: 100,
-        ip,
+        ips: std::iter::once(ip).collect(),
         expires,
     })));
 
@@ -457,7 +457,7 @@ fn test_multiple_iaids_and_prefixes() {
         mac: Some(mac),
         duid: duid.clone(),
         iaid: 10,
-        ip: "fd00::10".parse().unwrap(),
+        ips: std::iter::once("fd00::10".parse().unwrap()).collect(),
         expires: future,
     })));
 
@@ -466,7 +466,7 @@ fn test_multiple_iaids_and_prefixes() {
         mac: Some(mac),
         duid: duid.clone(),
         iaid: 20,
-        ip: "fd00::20".parse().unwrap(),
+        ips: std::iter::once("fd00::20".parse().unwrap()).collect(),
         expires: future,
     })));
 
@@ -499,7 +499,7 @@ fn test_multiple_iaids_and_prefixes() {
         mac: Some(mac),
         duid: duid.clone(),
         iaid: 10,
-        ip: "fd00::11".parse().unwrap(),
+        ips: std::iter::once("fd00::11".parse().unwrap()).collect(),
         expires: future,
     })));
 
@@ -551,7 +551,7 @@ fn apply_update_duid_associated_resolves_orphan() {
         mac: None,
         duid: duid.clone(),
         iaid,
-        ip,
+        ips: std::iter::once(ip).collect(),
         expires,
     })));
 

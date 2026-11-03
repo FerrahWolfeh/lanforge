@@ -324,3 +324,69 @@ async fn dns_conditional_split_upstream_routing() {
 
     ctx.terminate();
 }
+
+/// `[system] search_domains` changed by a reload reaches the serving DNS in place: the new
+/// domain answers local names, without a restart. DNS used to keep the
+/// boot domains until the daemon restarted.
+#[tokio::test]
+async fn site_domains_change_applies_in_place() {
+    use common::register_test_device;
+    use lanforge_core::service::{ServiceCommand, ServiceHandle};
+    use lanforge_types::config::SiteDomains;
+    use lanforge_types::identifiers::MacAddr;
+    use lanforge_types::system::ServiceId;
+
+    let ctx = init_test_context();
+    register_test_device(
+        &ctx,
+        "printer",
+        MacAddr([2, 0, 0, 0, 0, 9]),
+        Ipv4Addr::new(192, 168, 1, 9),
+    );
+    let (handle, mut service) = DnsService::inert(
+        DnsConfig {
+            enabled: true,
+            ..mock_config()
+        },
+        ctx.clone(),
+    );
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(4);
+    let h = ServiceHandle::with_command_channel(ServiceId::Dns, ctx.clone(), cmd_rx);
+    let ctx_serve = ctx.clone();
+    let serve = tokio::spawn(async move { service.serve(&ctx_serve, &h).await });
+    wait_for_service_online(&ctx, ServiceId::Dns).await;
+
+    let client: SocketAddr = "192.168.1.100:5300".parse().unwrap();
+    let ask = |name: &'static str| {
+        let handle = &handle;
+        async move {
+            let query = DnsPacketBuilder::query(name, DnsRecordType::A).build_bytes();
+            handle.inject(query, client).await;
+            let (reply, _) = tokio::time::timeout(Duration::from_secs(2), handle.recv_reply())
+                .await
+                .expect("answered")
+                .expect("reply");
+            parse_response(&reply).expect("valid DNS message")
+        }
+    };
+
+    let before = ask("printer.home.arpa").await;
+    assert!(extract_a(&before).is_empty(), "not a site domain yet");
+
+    ctx.update_site_domains(SiteDomains(vec![
+        "home.arpa".to_string(),
+        "lan".to_string(),
+    ]));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let after = ask("printer.home.arpa").await;
+    assert_eq!(extract_a(&after), vec![Ipv4Addr::new(192, 168, 1, 9)]);
+    assert_eq!(
+        extract_a(&ask("printer.lan").await),
+        vec![Ipv4Addr::new(192, 168, 1, 9)],
+        "every site domain answers"
+    );
+    assert!(!serve.is_finished(), "applied in place, no restart");
+    cmd_tx.send(ServiceCommand::Stop).await.expect("alive");
+    let _ = tokio::time::timeout(Duration::from_secs(2), serve).await;
+}

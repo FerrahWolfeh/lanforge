@@ -436,6 +436,16 @@ fn render_pppoe_event(time_str: &str, evt: &PppoeEvent, printer: &Printer) {
                 printer,
             );
         }
+        PppoeEvent::DnsServersChanged { servers } => {
+            let list: Vec<String> = servers.iter().map(ToString::to_string).collect();
+            print_log(
+                time_str,
+                "PPPOE",
+                "DNS".cyan(),
+                format!("ISP resolvers: {}", list.join(", ")),
+                printer,
+            );
+        }
     }
 }
 
@@ -615,15 +625,6 @@ fn render_system_event(time_str: &str, evt: &SystemEvent, printer: &Printer) {
                 "SYSTEM",
                 "SHUTDOWN".red().bold(),
                 "Daemon shutdown initiated".to_string(),
-                printer,
-            );
-        }
-        SystemEvent::ServiceStatusBanner(banner) => {
-            print_log(
-                time_str,
-                "SERVICE",
-                printer.service_badge(banner.state.as_str()),
-                format!("{} ({})", banner.name, banner.id),
                 printer,
             );
         }

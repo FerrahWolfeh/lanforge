@@ -1,6 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr};
 
 use crate::ClientContext;
+use crate::handlers::system::toml_sync::ChangeError;
 use lanforge_api::api::{
     DhcpOptionsResponse, DhcpPoolsConfigResponse, DhcpReconcileResponse, InvalidatedLeaseInfo,
     Response, SimpleSuccess,
@@ -10,11 +11,8 @@ use lanforge_types::device::IPv4State;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
 
-fn not_saved(what: &str, e: &str) -> Response {
-    tracing::error!("{what} not saved: {e}");
-    Response::Error {
-        error: format!("{what} not saved: {e}"),
-    }
+fn not_saved(what: &str, e: ChangeError) -> Response {
+    e.response_in(&format!("{what} not saved"))
 }
 
 impl ClientContext {
@@ -28,7 +26,7 @@ impl ClientContext {
             Ok(persisted) => Response::Success(SimpleSuccess {
                 message: persisted.message("DHCP & TFTP options"),
             }),
-            Err(e) => not_saved("DHCP & TFTP options", &e),
+            Err(e) => not_saved("DHCP & TFTP options", e),
         }
     }
 
@@ -73,7 +71,7 @@ impl ClientContext {
             Ok(persisted) => Response::Success(SimpleSuccess {
                 message: persisted.message("DHCP pools configuration"),
             }),
-            Err(e) => not_saved("DHCP pools", &e),
+            Err(e) => not_saved("DHCP pools", e),
         }
     }
 

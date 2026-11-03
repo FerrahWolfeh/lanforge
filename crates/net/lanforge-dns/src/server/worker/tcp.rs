@@ -81,50 +81,28 @@ async fn handle_connection(mut stream: TcpStream, src: SocketAddr, task_ctx: Arc
         ) {
             break;
         }
+        task_ctx.streams.record_rx(len);
 
         let header = match WireHeader::parse(&data) {
             Some(h) => h,
             None => break,
         };
+        // A response is never answered; a query without exactly one question is malformed.
+        if !header.is_query() {
+            continue;
+        }
+        if header.qdcount() != 1 {
+            let mut resp_buf = Vec::with_capacity(12);
+            WireResponseWriter::write_header_formerr(&data, &mut resp_buf);
+            if !send_framed(&mut stream, &resp_buf, &task_ctx).await {
+                break;
+            }
+            continue;
+        }
         let question = match WireQuestion::parse(&data) {
             Some(q) => q,
             None => break,
         };
-
-        // Noise filtering (e.g. malformed IoT queries like empty qname or ":0")
-        let mut labels = question.labels();
-        let is_noise = match labels.next() {
-            None => true,                                             // Empty qname (.)
-            Some(l) if l == b":0" && labels.next().is_none() => true, // Literally ":0"
-            _ => false,
-        };
-
-        let edns = WireOptScanner::scan(&data, &header, &question);
-
-        if is_noise {
-            let mut resp_buf = Vec::with_capacity(64);
-            WireResponseWriter::write_error_response(
-                &data,
-                &question,
-                1, // FORMERR
-                edns,
-                false,
-                &mut resp_buf,
-            );
-
-            if !resp_buf.is_empty() {
-                let resp_len = u16::try_from(resp_buf.len())
-                    .unwrap_or(u16::MAX)
-                    .to_be_bytes();
-                if stream.write_all(&resp_len).await.is_err() {
-                    break;
-                }
-                if stream.write_all(&resp_buf).await.is_err() {
-                    break;
-                }
-            }
-            continue;
-        }
 
         let mut resp_buf = Vec::with_capacity(len + 128);
         let run_res = task_ctx
@@ -149,22 +127,28 @@ async fn handle_connection(mut stream: TcpStream, src: SocketAddr, task_ctx: Arc
                 &data,
                 &question,
                 2, // SERVFAIL
-                edns,
+                WireOptScanner::scan(&data, &header, &question),
                 !task_ctx.recursive.is_empty(),
                 &mut resp_buf,
             );
         }
 
-        if !resp_buf.is_empty() {
-            let resp_len = u16::try_from(resp_buf.len())
-                .unwrap_or(u16::MAX)
-                .to_be_bytes();
-            if stream.write_all(&resp_len).await.is_err() {
-                break;
-            }
-            if stream.write_all(&resp_buf).await.is_err() {
-                break;
-            }
+        if !send_framed(&mut stream, &resp_buf, &task_ctx).await {
+            break;
         }
     }
+}
+
+/// Writes one length-prefixed answer and counts it; `false` once the connection is gone. An
+/// empty answer sends nothing.
+async fn send_framed(stream: &mut TcpStream, resp: &[u8], ctx: &DnsContext) -> bool {
+    if resp.is_empty() {
+        return true;
+    }
+    let len = u16::try_from(resp.len()).unwrap_or(u16::MAX).to_be_bytes();
+    if stream.write_all(&len).await.is_err() || stream.write_all(resp).await.is_err() {
+        return false;
+    }
+    ctx.streams.record_tx(resp.len());
+    true
 }

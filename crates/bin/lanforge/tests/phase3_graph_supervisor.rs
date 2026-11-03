@@ -1298,3 +1298,128 @@ async fn self_reported_state_reaches_the_node_every_time() {
 
     supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
 }
+
+// ---------------------------------------------------------------------------
+// 6. Link conditions (wait-for-iface)
+// ---------------------------------------------------------------------------
+
+fn links(generation: u64, names: &[&str]) -> lanforge_types::network::snapshot::InterfaceSnapshot {
+    lanforge_types::network::snapshot::InterfaceSnapshot {
+        links: names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| lanforge_types::network::snapshot::LinkInfo {
+                ifindex: u32::try_from(i).unwrap() + 1,
+                name: (*name).to_string(),
+                carrier: true,
+                addrs: smallvec::SmallVec::new(),
+            })
+            .collect(),
+        generation,
+    }
+}
+
+const WAITS_FOR_WAN0: Condition = Condition {
+    sections: &[ConfigDomain::Interfaces],
+    eval: |ctx| {
+        ctx.wan_link_wait("wan0")
+            .map_or(Activation::Active, Activation::Dormant)
+    },
+};
+
+/// A service whose link is missing waits dormant (no attempts burnt) and starts as soon as the
+/// link shows up: what the unit's `Wants=…wan0.device` did, without systemd.
+#[tokio::test]
+async fn link_condition_waits_then_starts_when_the_link_appears() {
+    static NO_DEPS: &[Edge] = &[];
+    let ctx = init_test_ctx();
+    ctx.set_interfaces_snapshot(links(1, &["lo", "lan0"]));
+    let runs = Arc::new(AtomicU32::new(0));
+    let mut registry = ServiceRegistry::new();
+    registry.register(
+        &ctx,
+        counted(ServiceId::Pppoe, NO_DEPS, WAITS_FOR_WAN0, &runs),
+    );
+    let supervisor = registry.start(&ctx).expect("start supervisor");
+
+    wait_status(
+        &ctx,
+        ServiceId::Pppoe,
+        ServiceState::Inactive,
+        Some(StateDetail::Dormant(DormantReason::WaitingForWan(
+            "wan0".to_string(),
+        ))),
+    )
+    .await;
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        0,
+        "no attempt without the link"
+    );
+
+    ctx.set_interfaces_snapshot(links(2, &["lo", "lan0", "wan0"]));
+    wait_status(&ctx, ServiceId::Pppoe, ServiceState::Online, None).await;
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+
+    supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
+}
+
+/// Failing service in backoff (an ISP refusing the login): links coming and going that do not
+/// change its condition (`ppp0` created and dropped by its own attempts) must not cut the
+/// backoff, or it would hammer the ISP.
+#[tokio::test]
+async fn unrelated_link_changes_do_not_cut_a_backoff() {
+    static NO_DEPS: &[Edge] = &[];
+    struct Refused(Arc<AtomicU32>);
+    impl LanforgeService for Refused {
+        fn spec(&self) -> ServiceSpec {
+            let mut spec = dummy_spec(ServiceId::Pppoe, NO_DEPS, WAITS_FOR_WAN0);
+            spec.restart.base_backoff = Duration::from_secs(5);
+            spec.restart.max_backoff = Duration::from_secs(5);
+            spec.restart.max_retries = 0;
+            spec
+        }
+    }
+    impl AsyncService for Refused {
+        async fn serve(
+            &mut self,
+            _ctx: &LanforgeContext,
+            _h: &ServiceHandle,
+        ) -> Result<(), CoreError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(CoreError::Generic("authentication failed".to_string()))
+        }
+    }
+
+    let ctx = init_test_ctx();
+    ctx.set_interfaces_snapshot(links(1, &["lo", "wan0"]));
+    let attempts = Arc::new(AtomicU32::new(0));
+    let factory_attempts = Arc::clone(&attempts);
+    let mut registry = ServiceRegistry::new();
+    registry.register(&ctx, move || Refused(Arc::clone(&factory_attempts)));
+    let supervisor = registry.start(&ctx).expect("start supervisor");
+
+    timeout(Duration::from_secs(1), async {
+        while attempts.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("first attempt");
+    for generation in 2..12 {
+        let names: &[&str] = if generation % 2 == 0 {
+            &["lo", "wan0", "ppp0"]
+        } else {
+            &["lo", "wan0"]
+        };
+        ctx.set_interfaces_snapshot(links(generation, names));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        1,
+        "still waiting out the 5 s backoff"
+    );
+
+    supervisor.shutdown(&ctx, Duration::from_millis(200)).await;
+}

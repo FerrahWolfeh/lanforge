@@ -59,7 +59,6 @@ use lanforge_types::update::{
 };
 use lanforge_types::utils::mac_from_eui64_link_local;
 use smallvec::SmallVec;
-use std::borrow::Cow;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
@@ -81,7 +80,6 @@ use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
     ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::{TransportSnapshot, TransportStats};
 use lanforge_types::system::{DormantReason, ServiceId};
 
 /// `DHCPv6` service wrapper — manages `IA_NA` and `IA_PD` address assignment.
@@ -149,13 +147,16 @@ impl LanforgeService for Dhcpv6Service {
             shutdown_timeout: Duration::from_secs(3),
             deps: DHCPV6_DEPS,
             condition: Condition {
-                sections: &[lanforge_types::config::ConfigDomain::DhcpV6Options],
+                sections: &[
+                    lanforge_types::config::ConfigDomain::DhcpV6Options,
+                    lanforge_types::config::ConfigDomain::Interfaces,
+                ],
                 eval: |ctx| {
-                    if ctx.get_dhcp_options().v6.enabled {
-                        Activation::Active
-                    } else {
-                        Activation::Dormant(DormantReason::disabled("dhcp.v6.enabled"))
+                    if !ctx.get_dhcp_options().v6.enabled {
+                        return Activation::Dormant(DormantReason::disabled("dhcp.v6.enabled"));
                     }
+                    ctx.lan_link_wait()
+                        .map_or(Activation::Active, Activation::Dormant)
                 },
             },
         }
@@ -169,59 +170,7 @@ impl LanforgeService for Dhcpv6Service {
     }
 }
 
-impl TransportStats for Dhcpv6Service {
-    fn snapshot(&self) -> TransportSnapshot {
-        self.transport
-            .as_ref()
-            .map(TransportStats::snapshot)
-            .unwrap_or_default()
-    }
-}
-
 impl AsyncService for Dhcpv6Service {
-    fn transport_snapshot(&self, _ctx: &LanforgeContext) -> Option<TransportSnapshot> {
-        self.transport.as_ref().map(TransportStats::snapshot)
-    }
-
-    fn stats(&self, ctx: &LanforgeContext) -> Vec<(Cow<'static, str>, String)> {
-        let active_leases = ctx.with_state(|state| {
-            u32::try_from(
-                state
-                    .devices
-                    .values()
-                    .filter(|dev| dev.v6.iter().any(|s| matches!(s, IPv6State::Dynamic(_))))
-                    .count(),
-            )
-            .unwrap_or(0)
-        });
-        let mut pool_total = 0;
-        let mut pool_available = 0;
-        for pool in ctx.dhcp_v6_pool_stats().values() {
-            pool_total += pool.total;
-            pool_available += pool.available;
-        }
-        let v6_stats = ctx.dhcpv6_stats().snapshot();
-        vec![
-            (Cow::Borrowed("iface"), self.config.iface.clone()),
-            (Cow::Borrowed("port"), self.config.port.to_string()),
-            (Cow::Borrowed("leases_active"), active_leases.to_string()),
-            (Cow::Borrowed("pool_total"), pool_total.to_string()),
-            (Cow::Borrowed("pool_available"), pool_available.to_string()),
-            (Cow::Borrowed("solicits"), v6_stats.solicits.to_string()),
-            (Cow::Borrowed("advertises"), v6_stats.advertises.to_string()),
-            (Cow::Borrowed("requests"), v6_stats.requests.to_string()),
-            (Cow::Borrowed("replies"), v6_stats.replies.to_string()),
-            (Cow::Borrowed("renews"), v6_stats.renews.to_string()),
-            (Cow::Borrowed("rebinds"), v6_stats.rebinds.to_string()),
-            (Cow::Borrowed("releases"), v6_stats.releases.to_string()),
-            (Cow::Borrowed("declines"), v6_stats.declines.to_string()),
-            (
-                Cow::Borrowed("info_requests"),
-                v6_stats.info_requests.to_string(),
-            ),
-        ]
-    }
-
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         loop {
             let options = ctx.get_dhcp_options();
@@ -239,7 +188,9 @@ impl AsyncService for Dhcpv6Service {
             let pools = ctx.get_dhcp_v6_pools();
 
             if pools.is_empty() {
+                // Settled, not starting: system readiness must not wait for a pool.
                 warn!("Service enabled but no pools configured — server idle");
+                h.dormant(DormantReason::not_applicable("no address pools configured"));
                 match self.wait_for_config_change_or_shutdown(h).await? {
                     RunResult::Shutdown => break,
                     RunResult::ConfigChanged => continue,
@@ -382,7 +333,7 @@ impl Dhcpv6Service {
         pools: Vec<Dhcpv6Pool>,
         h: &ServiceHandle,
     ) -> Result<RunResult, CoreError> {
-        let mut current_cfg = self.config.clone();
+        let mut current_cfg = self.config.with_options(&self.ctx.get_dhcp_options().v6);
         current_cfg.pools = pools;
 
         let target_ifindex = self.ctx.target_ifindex().ok_or_else(|| {
@@ -402,6 +353,8 @@ impl Dhcpv6Service {
         );
 
         self.initialize_pool_reservations(&mut server, &current_cfg);
+        let served_ifindex = self.served_ifindex(&current_cfg.iface);
+        server.served_ifindex = served_ifindex;
 
         // Setup transport socket
         let transport = if let Some(ref t) = self.transport {
@@ -411,11 +364,12 @@ impl Dhcpv6Service {
             self.transport = Some(t.clone());
             t
         };
+        self.ctx
+            .set_service_transports(ServiceId::Dhcp6, vec![transport.metrics_handle()]);
         self.publish_pool_stats(&server);
 
         let mut buf = [0u8; 2048];
         let mut resp_vec = Vec::with_capacity(1024);
-        let served_ifindex = self.served_ifindex(&current_cfg.iface);
         // Topic-isolated: prefix changes (network) and lease/admin updates (device) only.
         let mut net_events = self.ctx.service_handle_network();
         let mut device_events = self.ctx.service_handle_device();
@@ -466,15 +420,11 @@ impl Dhcpv6Service {
                                 if !delta.new.enabled {
                                     return Ok(RunResult::ConfigChanged);
                                 }
-                                current_cfg.dns_servers.clone_from(&delta.new.dns_servers);
-                                current_cfg.search_domains.clone_from(&delta.new.search_domains);
-                                current_cfg.ntp_servers.clone_from(&delta.new.ntp_servers);
-                                current_cfg.boot_file.clone_from(&delta.new.boot_file);
-                                current_cfg.options.clone_from(&delta.new.raw_options);
-                                if delta.new.lease_time > 0 {
-                                    current_cfg.lease_time = delta.new.lease_time;
-                                }
+                                let pools = std::mem::take(&mut current_cfg.pools);
+                                current_cfg = self.config.with_options(&delta.new);
+                                current_cfg.pools = pools;
                                 server.cfg = current_cfg.clone();
+                                server.recompile_options();
                                 self.publish_pool_stats(&server);
                             }
                         }
@@ -813,30 +763,21 @@ fn apply_learned_state(
                 });
             }
         } else {
-            // One or more IPs assigned
-            for ip in assigned_ip_addrs {
-                if let Some(duid) = learned_duid {
-                    updates.push(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
-                        mac: opt_mac,
-                        duid: duid.clone(),
-                        iaid,
-                        ip,
-                        expires,
-                    })));
-                } else if let Some(mac) = opt_mac {
-                    // Search for DUID in our table if not provided in packet
-                    let found_duid = ctx
-                        .with_state(|state| state.devices.get(&mac).and_then(|d| d.duid.clone()));
-                    if let Some(duid) = found_duid {
-                        updates.push(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
-                            mac: Some(mac),
-                            duid,
-                            iaid,
-                            ip,
-                            expires,
-                        })));
-                    }
-                }
+            // The IA's whole binding in one update: its addresses replace the previous set.
+            let duid = learned_duid.cloned().or_else(|| {
+                // Search for DUID in our table if not provided in packet
+                opt_mac.and_then(|mac| {
+                    ctx.with_state(|state| state.devices.get(&mac).and_then(|d| d.duid.clone()))
+                })
+            });
+            if let Some(duid) = duid {
+                updates.push(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
+                    mac: opt_mac,
+                    duid,
+                    iaid,
+                    ips: assigned_ip_addrs.into_iter().collect(),
+                    expires,
+                })));
             }
         }
 
@@ -886,5 +827,67 @@ fn apply_learned_state(
 
     if !updates.is_empty() {
         let _ = ctx.apply_batch(updates);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{create_test_v6_config, init_test_context};
+    use lanforge_types::device::IPv6State;
+
+    fn leased(ctx: &LanforgeContext, mac: MacAddr) -> Vec<Ipv6Addr> {
+        ctx.with_state(|s| {
+            s.devices[&mac]
+                .v6
+                .iter()
+                .filter_map(|v| match v {
+                    IPv6State::Dynamic(l) => Some(l.ip),
+                    _ => None,
+                })
+                .collect()
+        })
+    }
+
+    /// An IA bound to a ULA and a GUA keeps both in the state (one lease per IAID kept only
+    /// the last: the other address was free for the allocator to hand out again), and a
+    /// renumber replaces the GUA at once.
+    #[test]
+    fn a_binding_keeps_every_address_of_the_ia() {
+        let ctx = init_test_context();
+        let cfg = create_test_v6_config();
+        let pool = pool::Ipv6Pool::new(&cfg.pools, cfg.ula_prefix, cfg.ula_prefix_len);
+        let mut server = server::Dhcpv6Server::new(
+            cfg.clone(),
+            pool,
+            Duid::new(vec![0, 3, 0, 1, 1]),
+            ctx.clone(),
+        );
+        let mac = MacAddr([0xc8, 0xbc, 0x9c, 0xf6, 0x6a, 0x28]);
+        let duid = Duid::new(vec![0, 3, 0, 1, 0xc8, 0xbc, 0x9c, 0xf6, 0x6a, 0x28]);
+        let ula: Ipv6Addr = "fd97:f00d:cafe:3731::8e7".parse().unwrap();
+        let gua: Ipv6Addr = "2001:db8:a200::1449".parse().unwrap();
+        let renumbered: Ipv6Addr = "2001:db8:b300::1449".parse().unwrap();
+        let ias = server::AssignedIAs {
+            na: vec![1],
+            pd: Vec::new(),
+        };
+        let none = server::AssignedIAs::default();
+
+        server
+            .last_assignments
+            .insert((duid.clone(), 1), vec![ula, gua]);
+        apply_learned_state(&ctx, Some(mac), Some(&duid), &ias, &none, &server, &cfg);
+        let mut got = leased(&ctx, mac);
+        got.sort();
+        assert_eq!(got, vec![gua, ula]);
+
+        server
+            .last_assignments
+            .insert((duid.clone(), 1), vec![ula, renumbered]);
+        apply_learned_state(&ctx, Some(mac), Some(&duid), &ias, &none, &server, &cfg);
+        let mut got = leased(&ctx, mac);
+        got.sort();
+        assert_eq!(got, vec![renumbered, ula]);
     }
 }

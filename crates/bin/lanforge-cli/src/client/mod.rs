@@ -1013,22 +1013,6 @@ impl LanforgeClient {
             .map_err(|e| eyre!("{e}"))
     }
 
-    pub async fn dns_upstream_clear(&self) -> Result<SimpleSuccess> {
-        #[cfg(feature = "remote")]
-        if self.remote.is_some() {
-            return self.http_delete("/dns/upstreams/clear").await;
-        }
-        let upstreams = self.dns_upstreams().await?;
-        for u in upstreams.upstreams {
-            let _ = self
-                .dns_upstream_remove(u.target, u.protocol, u.domain)
-                .await;
-        }
-        Ok(SimpleSuccess {
-            message: "All DNS upstreams cleared successfully".to_string(),
-        })
-    }
-
     pub async fn dns_query(
         &self,
         name: String,

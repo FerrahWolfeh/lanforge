@@ -183,6 +183,8 @@ pub enum UpstreamStatus {
     Healthy,
     Degraded,
     Disabled,
+    /// No measurement: DNS is not serving, so the configured upstream was never tried.
+    Unknown,
 }
 
 impl UpstreamStatus {
@@ -197,6 +199,7 @@ impl UpstreamStatus {
             Self::Healthy => "healthy",
             Self::Degraded => "degraded",
             Self::Disabled => "disabled",
+            Self::Unknown => "unknown",
         }
     }
 }
@@ -224,7 +227,7 @@ pub struct UpstreamHealthSnapshot {
 }
 
 /// The result of a DNS query resolution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[repr(u8)]
 pub enum QueryResult {
@@ -316,6 +319,9 @@ pub struct QueryLogEntry {
     /// In-flight batch correlation ID when query was coalesced or was a coalesce leader.
     #[serde(default)]
     pub coalesce_id: Option<u64>,
+    /// Identical queries (same client, name, type and outcome) this line stands for: the DNS
+    /// folds a burst of repeats into one line per window. `1` = a single query.
+    pub repeats: u32,
 }
 
 /// A single DNS record entry.

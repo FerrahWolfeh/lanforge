@@ -7,7 +7,7 @@ use axum::{
     response::IntoResponse,
     routing::{delete, get, post},
 };
-use lanforge_crypto::{hash_password, verify_password};
+use lanforge_crypto::hash_password;
 use lanforge_db_core::UserEntry;
 use lanforge_types::auth::UserRole;
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,7 @@ use crate::auth::{
 use crate::error::{HttpError, Result as HttpResult};
 use crate::routes::create_client_ctx;
 use crate::server::AppState;
+use crate::throttle::ClientIp;
 
 /// Session lifetime (24 h), and with "remember me" (30 days).
 pub(crate) const SESSION_TTL_SECS: u64 = 86_400;
@@ -275,7 +276,7 @@ pub(crate) fn issue_session(
     )
 }
 
-fn authenticate_via_password(
+async fn authenticate_via_password(
     state: &AppState,
     username: &str,
     password: &str,
@@ -293,7 +294,12 @@ fn authenticate_via_password(
 
     match state.db.get_user_by_username(username) {
         Ok(Some(db_user)) => {
-            if verify_password(&db_user.password_hash, password) {
+            if state
+                .auth
+                .throttle
+                .verify(&db_user.password_hash, password)
+                .await
+            {
                 let _ = state.db.update_user_last_login(&db_user.username, now);
                 let session_token = issue_session(state, &db_user, ttl_secs)?;
                 return Ok((session_token, db_user.username, "password"));
@@ -321,7 +327,7 @@ fn authenticate_via_password(
     };
     if user_count == 0
         && let Some(hash) = &state.cfg.auth_password_hash
-        && verify_password(hash, password)
+        && state.auth.throttle.verify(hash, password).await
     {
         let admin = state
             .db
@@ -347,8 +353,14 @@ fn authenticate_via_password(
 
 pub async fn handle_login(
     State(state): State<AppState>,
+    client: ClientIp,
     Json(payload): Json<LoginRequest>,
 ) -> HttpResult<impl IntoResponse> {
+    let throttle = state.auth.throttle.clone();
+    throttle.guard(client, login(state, payload)).await
+}
+
+async fn login(state: AppState, payload: LoginRequest) -> HttpResult<impl IntoResponse> {
     let auth_required = check_auth_required(&state);
     let username = payload
         .username
@@ -375,7 +387,7 @@ pub async fn handle_login(
 
     let password = payload.password.as_deref().unwrap_or_default();
     let (session_token, authed_user, method) =
-        authenticate_via_password(&state, &username, password, ttl_secs)?;
+        authenticate_via_password(&state, &username, password, ttl_secs).await?;
 
     Ok(build_login_response(
         session_token,
@@ -414,8 +426,18 @@ async fn handle_me(Extension(user): Extension<AuthenticatedUser>) -> impl IntoRe
 /// actions (users, token creation, database reset) take in the `X-Lanforge-Elevation` header.
 async fn handle_elevate(
     State(state): State<AppState>,
+    client: ClientIp,
     Extension(user): Extension<AuthenticatedUser>,
     Json(payload): Json<ElevateRequest>,
+) -> HttpResult<impl IntoResponse> {
+    let throttle = state.auth.throttle.clone();
+    throttle.guard(client, elevate(state, user, payload)).await
+}
+
+async fn elevate(
+    state: AppState,
+    user: AuthenticatedUser,
+    payload: ElevateRequest,
 ) -> HttpResult<impl IntoResponse> {
     if !matches!(user.method, AuthMethod::Jwt) {
         return Err(HttpError::Forbidden(
@@ -432,7 +454,12 @@ async fn handle_elevate(
             ));
         }
     };
-    if !verify_password(&db_user.password_hash, &payload.password) {
+    if !state
+        .auth
+        .throttle
+        .verify(&db_user.password_hash, &payload.password)
+        .await
+    {
         return Err(HttpError::Forbidden("Invalid password".to_string()));
     }
     let token = state
@@ -448,8 +475,20 @@ async fn handle_elevate(
 /// account over. A wrong current password is 403, not 401: a 401 logs the `WebUI` out.
 async fn handle_change_password(
     State(state): State<AppState>,
+    client: ClientIp,
     Extension(user): Extension<AuthenticatedUser>,
     Json(payload): Json<ChangePasswordRequest>,
+) -> HttpResult<impl IntoResponse> {
+    let throttle = state.auth.throttle.clone();
+    throttle
+        .guard(client, change_password(state, user, payload))
+        .await
+}
+
+async fn change_password(
+    state: AppState,
+    user: AuthenticatedUser,
+    payload: ChangePasswordRequest,
 ) -> HttpResult<impl IntoResponse> {
     if !matches!(user.method, AuthMethod::Jwt) {
         return Err(HttpError::Forbidden(
@@ -487,7 +526,12 @@ async fn handle_change_password(
             ));
         }
     };
-    if !verify_password(&db_user.password_hash, current) {
+    if !state
+        .auth
+        .throttle
+        .verify(&db_user.password_hash, current)
+        .await
+    {
         return Err(HttpError::Forbidden("Invalid current password".to_string()));
     }
     let new_hash = hash_password(&payload.new_password);

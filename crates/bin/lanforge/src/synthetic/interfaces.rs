@@ -10,6 +10,11 @@ use lanforge_core::service::{
 use lanforge_types::network::snapshot::{InterfaceSnapshot, LinkInfo};
 use lanforge_types::network::subnet::IpSubnet;
 use lanforge_types::system::{DegradedReason, ServiceId};
+use rtnetlink::packet_core::NetlinkPayload;
+use rtnetlink::packet_route::RouteNetlinkMessage;
+use tokio::sync::broadcast::{self, error::RecvError};
+
+use crate::bootstrap::NetlinkRawMessage;
 use smallvec::SmallVec;
 use tracing::{debug, info, warn};
 
@@ -18,16 +23,31 @@ use tracing::{debug, info, warn};
 /// Discovers link states and addresses, publishes `InterfaceSnapshot`,
 /// and reports `Online` once all configured links (LAN, WAN, traffic)
 /// exist by name in the OS network stack.
-#[derive(Clone)]
 pub struct InterfacesService {
     lan_iface: String,
+    /// Kernel link and address notifications: a rescan runs on each, instead of polling.
+    netlink: broadcast::Receiver<NetlinkRawMessage>,
 }
 
 impl InterfacesService {
-    /// Creates a new `InterfacesService` instance.
+    /// Creates a new `InterfacesService` instance fed by the netlink dispatcher.
     #[must_use]
-    pub const fn new(lan_iface: String) -> Self {
-        Self { lan_iface }
+    pub const fn new(lan_iface: String, netlink: broadcast::Receiver<NetlinkRawMessage>) -> Self {
+        Self { lan_iface, netlink }
+    }
+
+    /// Whether a netlink message can change the snapshot (a link or an address came or went);
+    /// neighbour churn, the bulk of the traffic, cannot.
+    const fn touches_links(msg: &NetlinkRawMessage) -> bool {
+        matches!(
+            msg.0.payload,
+            NetlinkPayload::InnerMessage(
+                RouteNetlinkMessage::NewLink(_)
+                    | RouteNetlinkMessage::DelLink(_)
+                    | RouteNetlinkMessage::NewAddress(_)
+                    | RouteNetlinkMessage::DelAddress(_)
+            )
+        )
     }
 
     /// Scans the host network stack for all network interfaces and IP addresses.
@@ -101,7 +121,7 @@ impl AsyncService for InterfacesService {
         ctx.set_interfaces_snapshot(snapshot.clone());
 
         let required = self.required_ifaces(ctx);
-        let mut missing: Vec<_> = required
+        let missing: Vec<_> = required
             .iter()
             .filter(|name| !snapshot.has_link(name))
             .cloned()
@@ -118,9 +138,6 @@ impl AsyncService for InterfacesService {
             h.degraded(DegradedReason::custom("waiting for configured links"));
         }
 
-        let mut ticker = tokio::time::interval(Duration::from_millis(500));
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
         loop {
             tokio::select! {
                 cmd = h.next_command() => {
@@ -132,7 +149,17 @@ impl AsyncService for InterfacesService {
                         _ => {}
                     }
                 }
-                _ = ticker.tick() => {
+                msg = self.netlink.recv() => {
+                    match msg {
+                        Ok(msg) if Self::touches_links(&msg) => {}
+                        Ok(_) => continue,
+                        // Missed notifications: the rescan below catches up.
+                        Err(RecvError::Lagged(_)) => {}
+                        Err(RecvError::Closed) => {
+                            warn!("Netlink dispatcher closed; interfaces observer stops");
+                            break;
+                        }
+                    }
                     let new_snapshot = Self::scan_interfaces(generation + 1);
                     if new_snapshot.links != snapshot.links {
                         generation += 1;
@@ -140,14 +167,8 @@ impl AsyncService for InterfacesService {
                         snapshot.generation = generation;
                         ctx.set_interfaces_snapshot(snapshot.clone());
 
-                        let current_required = self.required_ifaces(ctx);
-                        missing = current_required
-                            .iter()
-                            .filter(|name| !snapshot.has_link(name))
-                            .cloned()
-                            .collect();
-
-                        if missing.is_empty() {
+                        let required = self.required_ifaces(ctx);
+                        if required.iter().all(|name| snapshot.has_link(name)) {
                             h.ready();
                         } else {
                             h.degraded(DegradedReason::custom("waiting for configured links"));

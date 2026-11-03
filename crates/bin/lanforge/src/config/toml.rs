@@ -69,6 +69,10 @@ pub struct TomlConfig {
     /// device table's static hosts as they are: an unread `[hosts]` is not an empty one.
     #[serde(skip)]
     pub static_hosts: Option<Vec<lanforge_types::device::StaticHost>>,
+    /// `[dhcp]` was in the file but set aside (unreadable): what runs are defaults, which must
+    /// never be written over it.
+    #[serde(skip)]
+    pub dhcp_set_aside: bool,
 }
 
 #[cfg(feature = "dhcp")]
@@ -298,6 +302,9 @@ pub fn load_toml(path: &str) -> TomlConfig {
             // the database replaces its old file form, whose issues must not be reported.
             let mut cfg = TomlConfig::from(&file_cfg);
             cfg.config_issues = set_aside_messages(&set_aside);
+            cfg.dhcp_set_aside = set_aside
+                .iter()
+                .any(|(sec, _)| *sec == lanforge_api::config_file::Section::Dhcp);
             #[cfg(feature = "nft")]
             cfg.config_issues.extend(file_cfg.firewall.to_config().1);
             #[cfg(feature = "dhcp")]

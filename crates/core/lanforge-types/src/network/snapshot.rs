@@ -2,6 +2,8 @@ use crate::network::subnet::IpSubnet;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// L3 WAN operational state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -99,6 +101,13 @@ impl InterfaceSnapshot {
         self.links.iter().any(|l| l.name == name)
     }
 
+    /// Whether `name` is known to be absent: the links were scanned (generation > 0) and it is
+    /// not among them. An unscanned snapshot blocks nothing.
+    #[must_use]
+    pub fn lacks_link(&self, name: &str) -> bool {
+        self.generation > 0 && !name.is_empty() && !self.has_link(name)
+    }
+
     /// Finds link details by interface name.
     #[must_use]
     pub fn find_by_name(&self, name: &str) -> Option<&LinkInfo> {
@@ -123,4 +132,157 @@ pub struct TransportSnapshot {
     pub rate_limited: u64,
     pub errors: u64,
     pub last_error_age_secs: Option<u64>,
+}
+
+impl TransportSnapshot {
+    /// Adds `other`'s counters (a service with several sockets shows their sum); the most
+    /// recent error wins.
+    pub fn absorb(&mut self, other: &Self) {
+        self.rx_packets += other.rx_packets;
+        self.rx_bytes += other.rx_bytes;
+        self.tx_packets += other.tx_packets;
+        self.tx_bytes += other.tx_bytes;
+        self.dropped += other.dropped;
+        self.rate_limited += other.rate_limited;
+        self.errors += other.errors;
+        self.last_error_age_secs = match (self.last_error_age_secs, other.last_error_age_secs) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+    }
+}
+
+/// Transparent, lock-free traffic counters for network transports.
+#[derive(Debug, Default)]
+pub struct TransportMetrics {
+    rx_packets: AtomicU64,
+    rx_bytes: AtomicU64,
+    tx_packets: AtomicU64,
+    tx_bytes: AtomicU64,
+    dropped_packets: AtomicU64,
+    rate_limited_packets: AtomicU64,
+    errors: AtomicU64,
+    last_error_timestamp: AtomicU64,
+}
+
+impl TransportMetrics {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            rx_packets: AtomicU64::new(0),
+            rx_bytes: AtomicU64::new(0),
+            tx_packets: AtomicU64::new(0),
+            tx_bytes: AtomicU64::new(0),
+            dropped_packets: AtomicU64::new(0),
+            rate_limited_packets: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+            last_error_timestamp: AtomicU64::new(0),
+        }
+    }
+
+    #[inline]
+    pub fn record_rx(&self, bytes: usize) {
+        self.rx_packets.fetch_add(1, Ordering::Relaxed);
+        self.rx_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_tx(&self, bytes: usize) {
+        self.tx_packets.fetch_add(1, Ordering::Relaxed);
+        self.tx_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_drop(&self) {
+        self.dropped_packets.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_rate_limited(&self) {
+        self.rate_limited_packets.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_error(&self) {
+        self.errors.fetch_add(1, Ordering::Relaxed);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.last_error_timestamp.store(now, Ordering::Relaxed);
+    }
+
+    #[must_use]
+    pub fn rx_packets(&self) -> u64 {
+        self.rx_packets.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn rx_bytes(&self) -> u64 {
+        self.rx_bytes.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn tx_packets(&self) -> u64 {
+        self.tx_packets.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn tx_bytes(&self) -> u64 {
+        self.tx_bytes.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn dropped_packets(&self) -> u64 {
+        self.dropped_packets.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn rate_limited_packets(&self) -> u64 {
+        self.rate_limited_packets.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn errors(&self) -> u64 {
+        self.errors.load(Ordering::Relaxed)
+    }
+
+    #[must_use]
+    pub fn last_error_age_secs(&self) -> Option<u64> {
+        let ts = self.last_error_timestamp.load(Ordering::Relaxed);
+        if ts == 0 {
+            None
+        } else {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            Some(now.saturating_sub(ts))
+        }
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> TransportSnapshot {
+        TransportSnapshot {
+            rx_packets: self.rx_packets(),
+            rx_bytes: self.rx_bytes(),
+            tx_packets: self.tx_packets(),
+            tx_bytes: self.tx_bytes(),
+            dropped: self.dropped_packets(),
+            rate_limited: self.rate_limited_packets(),
+            errors: self.errors(),
+            last_error_age_secs: self.last_error_age_secs(),
+        }
+    }
+
+    pub fn reset(&self) {
+        self.rx_packets.store(0, Ordering::Relaxed);
+        self.rx_bytes.store(0, Ordering::Relaxed);
+        self.tx_packets.store(0, Ordering::Relaxed);
+        self.tx_bytes.store(0, Ordering::Relaxed);
+        self.dropped_packets.store(0, Ordering::Relaxed);
+        self.rate_limited_packets.store(0, Ordering::Relaxed);
+        self.errors.store(0, Ordering::Relaxed);
+        self.last_error_timestamp.store(0, Ordering::Relaxed);
+    }
 }

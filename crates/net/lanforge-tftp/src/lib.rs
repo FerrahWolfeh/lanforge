@@ -8,7 +8,7 @@ use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
     ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::{TransportStats, UdpTransport};
+use lanforge_transport::UdpTransport;
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::network::dhcp::TftpOptions;
 use lanforge_types::system::{DormantReason, ServiceId};
@@ -19,6 +19,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
+use tokio::task::JoinSet;
 use tokio::time::{Duration, timeout};
 use tracing::{debug, error, info};
 
@@ -40,7 +41,6 @@ pub struct TftpService {
     _ctx: LanforgeContext,
     cfg: TftpConfig,
     bound_addr: Arc<RwLock<Option<String>>>,
-    transports: Arc<RwLock<Vec<UdpTransport>>>,
 }
 
 impl TftpService {
@@ -53,47 +53,13 @@ impl TftpService {
             _ctx: ctx,
             cfg,
             bound_addr: Arc::new(RwLock::new(None)),
-            transports: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
+    /// The address the serving instance bound (shared by its clones), once bound.
     #[must_use]
-    pub fn with_transports(
-        ctx: LanforgeContext,
-        cfg: TftpConfig,
-        transports: Vec<UdpTransport>,
-    ) -> Self {
-        Self {
-            _ctx: ctx,
-            cfg,
-            bound_addr: Arc::new(RwLock::new(None)),
-            transports: Arc::new(RwLock::new(transports)),
-        }
-    }
-}
-
-impl TransportStats for TftpService {
-    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
-        let transports = self.transports.read();
-        let mut snap = lanforge_types::network::snapshot::TransportSnapshot::default();
-        for t in transports.iter() {
-            let s = t.snapshot();
-            snap.rx_packets += s.rx_packets;
-            snap.rx_bytes += s.rx_bytes;
-            snap.tx_packets += s.tx_packets;
-            snap.tx_bytes += s.tx_bytes;
-            snap.dropped += s.dropped;
-            snap.rate_limited += s.rate_limited;
-            snap.errors += s.errors;
-            if s.last_error_age_secs.is_some()
-                && (snap.last_error_age_secs.is_none()
-                    || s.last_error_age_secs < snap.last_error_age_secs)
-            {
-                snap.last_error_age_secs = s.last_error_age_secs;
-            }
-        }
-        drop(transports);
-        snap
+    pub fn bound_addr(&self) -> Option<String> {
+        self.bound_addr.read().clone()
     }
 }
 
@@ -130,41 +96,6 @@ impl LanforgeService for TftpService {
 }
 
 impl AsyncService for TftpService {
-    fn transport_snapshot(
-        &self,
-        _ctx: &LanforgeContext,
-    ) -> Option<lanforge_types::network::snapshot::TransportSnapshot> {
-        Some(self.snapshot())
-    }
-
-    fn stats(&self, _ctx: &LanforgeContext) -> Vec<(std::borrow::Cow<'static, str>, String)> {
-        let listen = self
-            .bound_addr
-            .read()
-            .clone()
-            .unwrap_or_else(|| self.cfg.listen.to_string());
-        let snap = self.snapshot();
-        vec![
-            (std::borrow::Cow::Borrowed("listen"), listen),
-            (
-                std::borrow::Cow::Borrowed("root_dir"),
-                self.cfg.root_dir.to_string_lossy().to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("block_size"),
-                self.cfg.block_size.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("rx_packets"),
-                snap.rx_packets.to_string(),
-            ),
-            (
-                std::borrow::Cow::Borrowed("tx_packets"),
-                snap.tx_packets.to_string(),
-            ),
-        ]
-    }
-
     #[allow(clippy::too_many_lines)]
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         let mut tftp_sub = ctx.config_subscription::<TftpOptions>();
@@ -243,7 +174,13 @@ impl AsyncService for TftpService {
 
             let bound_str = actual_bound.join(", ");
             *self.bound_addr.write() = Some(bound_str.clone());
-            (*self.transports.write()).clone_from(&transports);
+            ctx.set_service_transports(
+                Self::SERVICE_ID,
+                transports
+                    .iter()
+                    .map(UdpTransport::metrics_handle)
+                    .collect(),
+            );
             info!(addr = %bound_str, "TFTP: Server listening");
             h.ready();
 
@@ -258,6 +195,9 @@ impl AsyncService for TftpService {
                 let mut shutdown_rx = shutdown_tx.subscribe();
                 reader_handles.push(tokio::spawn(async move {
                     let mut buf = [0u8; 1024];
+                    // Transfers hold the listening socket: they are this reader's children and
+                    // end with it, so a stop releases the port at once.
+                    let mut requests = JoinSet::new();
                     loop {
                         tokio::select! {
                             res = transport.recv(&mut buf) => {
@@ -266,7 +206,7 @@ impl AsyncService for TftpService {
                                         let data = SmallVec::<[u8; 512]>::from_slice(&buf[..size]);
                                         let trans_clone = transport.clone();
                                         let cfg_clone = Arc::clone(&cfg);
-                                        tokio::spawn(async move {
+                                        requests.spawn(async move {
                                              if let Err(e) = handle_packet(&trans_clone, src, &data, &cfg_clone).await {
                                                 debug!("TFTP error handling request from {src}: {e}");
                                             }
@@ -280,6 +220,7 @@ impl AsyncService for TftpService {
                             _ = shutdown_rx.changed() => {
                                 break;
                             }
+                            Some(_) = requests.join_next(), if !requests.is_empty() => {}
                         }
                     }
                 }));
@@ -353,7 +294,6 @@ impl AsyncService for TftpService {
             }
 
             *self.bound_addr.write() = None;
-            self.transports.write().clear();
 
             if !should_rebind || !ctx.is_running() {
                 break;
@@ -366,7 +306,6 @@ impl AsyncService for TftpService {
     #[allow(clippy::unused_async_trait_impl)]
     async fn cleanup(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
         *self.bound_addr.write() = None;
-        self.transports.write().clear();
         Ok(())
     }
 }
