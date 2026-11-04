@@ -321,6 +321,9 @@ pub(crate) struct PrefixMemory {
     pub(crate) last_ula: Option<Ipv6Prefix>,
     /// Withdrawn prefixes still advertised with preferred lifetime 0: (prefix, end of validity).
     pub(crate) deprecated: Vec<(Ipv6Addr, Instant)>,
+    /// When the valid lifetime last advertised for `last_gua` runs out (`None`: infinite or
+    /// unknown).
+    pub(crate) gua_valid_end: Option<Instant>,
 }
 
 impl PrefixMemory {
@@ -352,9 +355,11 @@ impl PrefixMemory {
                 && deprecate_on_renumber
             {
                 let now = Instant::now();
-                // RFC 4862 §5.5.3e:
-                // Deprecate old prefix with preferred_lifetime = 0 and valid_lifetime = min(remaining, 7200) (2 hours).
-                let valid_end = now + Duration::from_secs(7200);
+                // RFC 9096 L-13: the old prefix goes out with preferred lifetime 0 and valid
+                // lifetime min(what remains of the one advertised, 2 h), counting down.
+                let two_hours = now + Duration::from_secs(7200);
+                let remaining = if is_gua { self.gua_valid_end } else { None };
+                let valid_end = remaining.map_or(two_hours, |end| end.min(two_hours));
                 let old_addr = old.to_addr();
                 if !self.deprecated.iter().any(|(ip, _)| *ip == old_addr) {
                     self.deprecated.push((old_addr, valid_end));
@@ -927,20 +932,6 @@ fn send_ra_internal(
 
     let gua_prefix = gua.map(lanforge_types::network::Ipv6Prefix::from_addr);
     let ula_prefix = ula.map(lanforge_types::network::Ipv6Prefix::from_addr);
-    let deprecated_list = {
-        let mut prefixes = state.prefixes.lock();
-        prefixes.update_prefix_and_deprecate(gua_prefix, true, cfg.deprecate_on_renumber);
-        prefixes.update_prefix_and_deprecate(ula_prefix, false, cfg.deprecate_on_renumber);
-        // Clean up expired deprecated prefixes
-        prefixes
-            .deprecated
-            .retain(|(_, valid_end)| *valid_end > now);
-        prefixes.deprecated_list(now)
-    };
-
-    let dst_ip: Ipv6Addr = unicast_dst.unwrap_or(ALL_NODES_MULTICAST);
-    let dst_sa = SocketAddrV6::new(dst_ip, 0, 0, iface_index);
-
     let gua_pref = if if_ips.gua_preferred > 0 {
         if_ips.gua_preferred
     } else {
@@ -951,6 +942,23 @@ fn send_ra_internal(
     } else {
         7200
     };
+    let deprecated_list = {
+        let mut prefixes = state.prefixes.lock();
+        prefixes.update_prefix_and_deprecate(gua_prefix, true, cfg.deprecate_on_renumber);
+        prefixes.update_prefix_and_deprecate(ula_prefix, false, cfg.deprecate_on_renumber);
+        prefixes.gua_valid_end = gua
+            .filter(|_| gua_val != u32::MAX)
+            .map(|_| now + Duration::from_secs(u64::from(gua_val)));
+        // Clean up expired deprecated prefixes
+        prefixes
+            .deprecated
+            .retain(|(_, valid_end)| *valid_end > now);
+        prefixes.deprecated_list(now)
+    };
+
+    let dst_ip: Ipv6Addr = unicast_dst.unwrap_or(ALL_NODES_MULTICAST);
+    let dst_sa = SocketAddrV6::new(dst_ip, 0, 0, iface_index);
+
     let gua_info = gua.as_ref().map(|g| (g, gua_pref, gua_val));
     // No RDNSS configured: clients use this router's DNS while it serves, at the address the
     // admin gave the LAN interface (its ULA: stable when the delegated prefix changes).

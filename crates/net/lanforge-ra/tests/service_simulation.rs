@@ -608,3 +608,69 @@ async fn test_ra_deprecation_survives_a_service_restart() {
     );
     task.abort();
 }
+
+/// RFC 9096 L-13: a withdrawn prefix is advertised with preferred lifetime 0 and valid lifetime
+/// min(what remains of the one advertised, 2 h). A prefix with 10 min left must not be
+/// stretched to 2 h.
+#[tokio::test]
+async fn test_ra_deprecated_valid_lifetime_is_capped_by_what_remains() {
+    let (ctx, bus) = create_test_context();
+    let lan = |gua: &str, valid: u32| DeviceUpdate::InterfaceIpsChanged {
+        ifindex: LAN,
+        state: Box::new(InterfaceState {
+            v4: None,
+            link_local: Some("fe80::1".parse().unwrap()),
+            gua: Some(gua.parse().unwrap()),
+            ula: None,
+            gua_preferred: valid / 2,
+            gua_valid: valid,
+            mac: Some(MacAddr([0x02, 0, 0, 0, 0, 0x01])),
+        }),
+    };
+    ctx.update_ra_server_config(RaServerConfig {
+        enabled: true,
+        iface: Some("lan0".into()),
+        prefixes: vec![RAPrefix::gua_dynamic()],
+        deprecate_on_renumber: true,
+        ..RaServerConfig::default()
+    });
+    let _ = ctx.apply(lan("2001:db8:1::1", 600));
+
+    let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
+    let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let task = tokio::spawn(async move {
+        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    let next_ra = || async {
+        timeout(Duration::from_millis(1000), handle.recv_payload())
+            .await
+            .expect("Timeout waiting for RA")
+            .expect("RA channel closed")
+    };
+    let old: Ipv6Addr = "2001:db8:1::".parse().unwrap();
+    let ra = next_ra().await;
+    assert_eq!(
+        ra_prefixes(&ra)
+            .into_iter()
+            .find(|(a, _, _)| *a == old)
+            .map(|(_, v, _)| v),
+        Some(600)
+    );
+
+    let _ = ctx.apply(lan("2001:db8:2::1", 86_400));
+    let ra = next_ra().await;
+    let (_, valid, preferred) = ra_prefixes(&ra)
+        .into_iter()
+        .find(|(a, _, _)| *a == old)
+        .expect("old prefix deprecated");
+    assert_eq!(preferred, 0);
+    assert!(
+        valid > 0 && valid <= 600,
+        "valid lifetime = what remains (600 s), not 2 h: {valid}"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    assert!(timeout(Duration::from_millis(500), task).await.is_ok());
+}
