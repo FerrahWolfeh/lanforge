@@ -455,7 +455,10 @@ impl RaService {
             "Server active"
         );
 
-        let iface_index = self.ctx.target_ifindex().unwrap_or(1);
+        // Never fall back to a guessed index: 1 is the loopback, and the RA would go nowhere.
+        let iface_index = self.ctx.target_ifindex().ok_or_else(|| {
+            CoreError::Generic("Target interface index is not configured in context".to_string())
+        })?;
 
         let (mac, transport) = if let Some(ref t) = self.transport {
             let mac = self

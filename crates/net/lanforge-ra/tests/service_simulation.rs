@@ -15,10 +15,13 @@ use lanforge_types::system::ServiceState;
 use lanforge_types::update::{DeviceUpdate, InterfaceState};
 use tokio::time::timeout;
 
+/// Interface index of the LAN the RA serves in these tests.
+const LAN: u32 = 2;
+
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(bus.clone(), state, Some(LAN));
 
     ctx.set_target_interface_name("lan0".to_string());
     (ctx, bus)
@@ -194,8 +197,7 @@ fn set_iface_gua(ctx: &LanforgeContext, ifindex: u32, gua: Option<Ipv6Addr>) {
 /// reconnect `ppp0` gets its own /64 while the LAN keeps or changes its delegated prefix.
 #[tokio::test]
 async fn test_ra_prefix_deprecation_on_renumber() {
-    // No LAN ifindex in this context: RA serves interface 1. `ppp0` is interface 10.
-    const LAN: u32 = 1;
+    // `ppp0` is interface 10.
     const PPP0: u32 = 10;
     let (ctx, bus) = create_test_context();
 
@@ -320,7 +322,7 @@ async fn test_ra_deprecates_prefix_from_before_restart() {
     ctx.provide_shared(Arc::new(PreviousLanPrefixes(vec![
         lanforge_types::network::Ipv6Prefix::from_addr(old),
     ])));
-    set_iface_gua(&ctx, 1, Some("2804:bdc:509d:4500::1".parse().unwrap()));
+    set_iface_gua(&ctx, LAN, Some("2804:bdc:509d:4500::1".parse().unwrap()));
 
     let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
     let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
@@ -371,7 +373,7 @@ async fn test_ra_deprecates_boot_prefix_withdrawn_before_start() {
     ctx.provide_shared(Arc::new(PreviousLanPrefixes(vec![
         lanforge_types::network::Ipv6Prefix::from_addr(boot),
     ])));
-    set_iface_gua(&ctx, 1, None);
+    set_iface_gua(&ctx, LAN, None);
 
     let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
     let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
@@ -400,7 +402,7 @@ async fn test_ra_deprecates_boot_prefix_withdrawn_before_start() {
         "boot prefix deprecated at startup"
     );
 
-    set_iface_gua(&ctx, 1, Some("2804:bdc:50a9:f300::1".parse().unwrap()));
+    set_iface_gua(&ctx, LAN, Some("2804:bdc:50a9:f300::1".parse().unwrap()));
     let ra = next_ra().await;
     assert!(
         pref_of(&ra, new).is_some_and(|p| p > 0),
@@ -413,5 +415,35 @@ async fn test_ra_deprecates_boot_prefix_withdrawn_before_start() {
         timeout(Duration::from_millis(500), serve_handle)
             .await
             .is_ok()
+    );
+}
+
+/// Without a LAN interface index the RA must refuse to serve, never fall back to interface 1
+/// (the loopback) and advertise there.
+#[tokio::test]
+async fn test_ra_refuses_to_serve_without_lan_ifindex() {
+    let bus = Arc::new(EventBus::new());
+    let ctx = LanforgeContext::new(bus, State::new(), None);
+    ctx.set_target_interface_name("lan0".to_string());
+    ctx.update_ra_server_config(RaServerConfig {
+        enabled: true,
+        iface: Some("lan0".into()),
+        prefixes: vec![RAPrefix::gua_dynamic()],
+        ..RaServerConfig::default()
+    });
+    set_iface_gua(&ctx, 1, Some("2001:db8:1::1".parse().unwrap()));
+
+    let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
+    let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
+    let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx.clone());
+    let res = timeout(Duration::from_millis(500), service.serve(&ctx, &h))
+        .await
+        .expect("serve must return, not run on a guessed interface");
+    assert!(res.is_err(), "serve must fail without a LAN ifindex");
+    assert!(
+        timeout(Duration::from_millis(50), handle.recv_payload())
+            .await
+            .is_err(),
+        "no RA may be sent"
     );
 }

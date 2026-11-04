@@ -35,7 +35,7 @@ use tokio::time::timeout;
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(bus.clone(), state, Some(2));
 
     ctx.update_firewall_config(FirewallConfig {
         enabled: true,
@@ -372,8 +372,8 @@ async fn test_ra_eventbus_reactivity() {
     let new_gua: Ipv6Addr = "2001:db8:20::".parse().unwrap();
     let _ = bus.publish(LanforgeEvent::Network(NetworkEvent::PrefixChanged(
         Box::new(PrefixChangeDetails {
-            // The RA target interface (no LAN ifindex configured in this context falls back to 1).
-            ifindex: 1,
+            // The RA target interface (the context's LAN ifindex).
+            ifindex: 2,
             gua: Some(lanforge_types::network::Ipv6Prefix::from_addr(new_gua)),
             ula: None,
             preferred: 14400,
