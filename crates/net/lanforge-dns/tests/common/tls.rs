@@ -35,7 +35,10 @@ pub struct SelfSigned {
 
 #[must_use]
 pub fn self_signed() -> SelfSigned {
+    #[cfg(feature = "ring")]
     let _ = rustls::crypto::ring::default_provider().install_default();
+    #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
         .expect("self-signed certificate");
     SelfSigned {

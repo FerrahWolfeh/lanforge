@@ -646,7 +646,7 @@ mod doq_tests {
     /// An RFC 9250 upstream: accepts only a framed query with Message ID 0 and answers it framed
     /// (QR set); anything else resets the stream.
     async fn strict_upstream() -> (quinn::Endpoint, SocketAddr, rustls::RootCertStore) {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        // `load_tls_config` below installs the compiled-in crypto provider.
         let certified =
             rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert");
         let mut roots = rustls::RootCertStore::empty();
