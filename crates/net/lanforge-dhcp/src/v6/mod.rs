@@ -593,6 +593,7 @@ impl Dhcpv6Service {
                     &released_ias,
                     server,
                     &self.config,
+                    msg_type == MessageType::Reply,
                 );
             }
         }
@@ -734,6 +735,13 @@ impl Dhcpv6Service {
 ///
 /// Separated from the main loop for clarity — all logic regarding "what we
 /// learned from this packet" lives here, without mixing with network I/O.
+///
+/// `binding` is false for an Advertise: it binds nothing (RFC 8415 §18.3.1), so only the
+/// client's identity is learned, never a lease.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call site; a struct for these borrows would only move the list"
+)]
 fn apply_learned_state(
     ctx: &LanforgeContext,
     opt_mac: Option<MacAddr>,
@@ -742,6 +750,7 @@ fn apply_learned_state(
     released_ias: &server::AssignedIAs,
     server: &Dhcpv6Server,
     config: &Dhcpv6Config,
+    binding: bool,
 ) {
     // The lease lasts as long as the client was told (RFC 8415 valid lifetime), not the configured
     // lease time: the delegated prefix can cap it, a static ULA can make it infinite.
@@ -751,10 +760,14 @@ fn apply_learned_state(
 
     // 1. Process IA_NA (Non-temporary Addresses)
     for &iaid in &assigned_ias.na {
-        let assigned_ip_addrs = learned_duid.map_or_else(
-            || opt_mac.map_or_else(Vec::new, |mac| server.pool.lookup_by_mac_legacy(ctx, mac)),
-            |duid| server.last_assignment_for(duid, iaid),
-        );
+        let assigned_ip_addrs = if binding {
+            learned_duid.map_or_else(
+                || opt_mac.map_or_else(Vec::new, |mac| server.pool.lookup_by_mac_legacy(ctx, mac)),
+                |duid| server.last_assignment_for(duid, iaid),
+            )
+        } else {
+            Vec::new()
+        };
 
         if assigned_ip_addrs.is_empty() {
             if let Some(duid) = learned_duid {
@@ -801,7 +814,7 @@ fn apply_learned_state(
     }
 
     // 2. Process IA_PD (Prefix Delegation)
-    for &iaid in &assigned_ias.pd {
+    for &iaid in assigned_ias.pd.iter().filter(|_| binding) {
         let assigned_prefix = learned_duid
             .as_ref()
             .and_then(|duid| server.pool.lookup_prefix(ctx, duid, iaid));
@@ -886,7 +899,16 @@ mod tests {
         server
             .last_assignments
             .insert((duid.clone(), 1), vec![ula, gua]);
-        apply_learned_state(&ctx, Some(mac), Some(&duid), &ias, &none, &server, &cfg);
+        apply_learned_state(
+            &ctx,
+            Some(mac),
+            Some(&duid),
+            &ias,
+            &none,
+            &server,
+            &cfg,
+            true,
+        );
         let mut got = leased(&ctx, mac);
         got.sort();
         assert_eq!(got, vec![gua, ula]);
@@ -894,7 +916,16 @@ mod tests {
         server
             .last_assignments
             .insert((duid.clone(), 1), vec![ula, renumbered]);
-        apply_learned_state(&ctx, Some(mac), Some(&duid), &ias, &none, &server, &cfg);
+        apply_learned_state(
+            &ctx,
+            Some(mac),
+            Some(&duid),
+            &ias,
+            &none,
+            &server,
+            &cfg,
+            true,
+        );
         let mut got = leased(&ctx, mac);
         got.sort();
         assert_eq!(got, vec![renumbered, ula]);

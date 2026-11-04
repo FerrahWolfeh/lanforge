@@ -1278,3 +1278,85 @@ async fn test_dhcpv6_records_the_lifetime_the_client_received() -> Result<(), Bo
     let _ = timeout(TEST_TIMEOUT, task).await?;
     Ok(())
 }
+
+/// RFC 8415 §18.3.1: an Advertise binds nothing; the binding exists once the server answers a
+/// Request (or a Rapid Commit Solicit) with a Reply. The service recorded the IA's last binding
+/// on every Advertise: a client that released its address and solicited again (and may take
+/// another server's offer) got the released lease back in the state, with a fresh expiry.
+#[tokio::test]
+async fn test_dhcpv6_advertise_is_not_a_lease() -> Result<(), Box<dyn Error>> {
+    const LAN: u32 = 1;
+    let server_mac = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+    let client_mac = MacAddr([0x54, 0x44, 0xa3, 0x46, 0xc2, 0x94]);
+    let (ctx, bus) = init_test_context_with_interface(LAN, "lan0", server_mac);
+    let (handle, task) = start_v6_gua(&ctx, LAN, server_mac).await?;
+    let duid = Duid::new(vec![
+        0x00, 0x03, 0x00, 0x01, 0x54, 0x44, 0xa3, 0x46, 0xc2, 0x94,
+    ]);
+    const IAID: u32 = 7;
+    let solicit = || {
+        Dhcpv6PacketBuilder::solicit(duid.clone())
+            .with_ia_na(IAID, None)
+            .build()
+    };
+
+    // A client that never bound gets no lease from an Advertise.
+    let adv = v6_exchange(&handle, solicit())
+        .await
+        .ok_or("no Advertise")?;
+    assert_eq!(adv.msg_type(), MessageTypeV6::Advertise);
+    let server_duid = match adv.opts().get(OptionCodeV6::ServerId) {
+        Some(Dhcpv6Option::ServerId(d)) => Duid::new(d.clone()),
+        _ => return Err("Expected ServerId in Advertise".into()),
+    };
+    let (ip, _, _) = *ia_na_addrs(&adv).first().ok_or("addresses offered")?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(recorded_v6_lease_secs(&ctx, &client_mac, ip), None);
+
+    // Bound by Request/Reply, then released.
+    v6_exchange(
+        &handle,
+        Dhcpv6PacketBuilder::request(duid.clone(), server_duid.clone())
+            .with_ia_na(IAID, Some(ip))
+            .build(),
+    )
+    .await
+    .ok_or("no Reply to Request")?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        recorded_v6_lease_secs(&ctx, &client_mac, ip).is_some(),
+        "bound"
+    );
+    v6_exchange(
+        &handle,
+        Dhcpv6PacketBuilder::release(duid.clone(), server_duid)
+            .with_ia_na(IAID, Some(ip))
+            .build(),
+    )
+    .await
+    .ok_or("no Reply to Release")?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        recorded_v6_lease_secs(&ctx, &client_mac, ip),
+        None,
+        "released"
+    );
+
+    // Soliciting again only gets an offer: the released lease must not come back.
+    let adv = v6_exchange(&handle, solicit())
+        .await
+        .ok_or("no Advertise")?;
+    assert_eq!(adv.msg_type(), MessageTypeV6::Advertise);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    for (offered, _, _) in ia_na_addrs(&adv) {
+        assert_eq!(
+            recorded_v6_lease_secs(&ctx, &client_mac, offered),
+            None,
+            "an Advertise must not record a lease for {offered}"
+        );
+    }
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, task).await?;
+    Ok(())
+}
