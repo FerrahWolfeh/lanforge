@@ -153,6 +153,7 @@ pub enum RpcCallError {
     NotFound(String),
 }
 
+use lanforge_types::config::DomainSet;
 use lanforge_types::events::{
     AdminChange, DeviceEvent, DnsEvent, LanforgeEvent, NetworkChange, SystemEvent,
 };
@@ -236,9 +237,11 @@ impl EventKind {
                 LanforgeEvent::Dns(DnsEvent::AdblockBlock(_)) => true,
                 _ => false,
             },
-            Self::DnsRewriteUpdated => {
-                matches!(event, LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged))
-            }
+            Self::DnsRewriteUpdated => matches!(
+                event,
+                LanforgeEvent::System(SystemEvent::ConfigChanged { sections })
+                    if sections.contains(DomainSet::DNS_REWRITES)
+            ),
             Self::AdblockToggled => {
                 #[cfg(feature = "adblock")]
                 {
@@ -257,7 +260,9 @@ impl EventKind {
             }
             Self::ConfigReloaded => matches!(
                 event,
-                LanforgeEvent::System(SystemEvent::ReloadConfig | SystemEvent::ConfigUpdate { .. },)
+                LanforgeEvent::System(
+                    SystemEvent::ConfigChanged { .. } | SystemEvent::ConfigUpdate { .. }
+                )
             ),
         }
     }

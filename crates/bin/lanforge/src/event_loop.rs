@@ -245,10 +245,6 @@ where
                             LanforgeEvent::System(SystemEvent::ServiceReady { id }) => {
                                 tracker.on_service_ready(id);
                             }
-                            LanforgeEvent::System(SystemEvent::ReloadConfig) => {
-                                // `lanforge reload` applies the file in place (API `handle_reload`).
-                                supervisor.reevaluate_conditions();
-                            }
                             LanforgeEvent::System(SystemEvent::ConfigUpdate { password_hash }) => {
                                 let hash_path = cfg.get_password_hash_path();
                                 info!("ConfigUpdate: Saving new API password hash to {:?}...", hash_path);

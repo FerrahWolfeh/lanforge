@@ -17,7 +17,7 @@ use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RaServerConfig, RdnssConfig};
 use lanforge_types::network::{DnsReverseResolver, TrafficConfig};
 
-use crate::bus::{DnsEvent, FirewallEvent, LanforgeEvent, SystemEvent, TrafficEvent};
+use crate::bus::{FirewallEvent, LanforgeEvent, SystemEvent, TrafficEvent};
 use crate::context::LanforgeContext;
 
 /// Operational delta for a configuration subscription.
@@ -478,7 +478,8 @@ impl LanforgeContext {
     ///
     /// Diffs each section against the currently stored configuration.
     /// Broadcasts on watch channels ONLY for sections that changed.
-    /// Emits derived legacy events and exactly one [`SystemEvent::ConfigChanged`].
+    /// Emits exactly one [`SystemEvent::ConfigChanged`] (plus the firewall/traffic ruleset
+    /// triggers when their sections changed).
     #[must_use]
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
     pub fn apply_config(&self, patch: ConfigPatch) -> ApplyReport {
@@ -602,11 +603,8 @@ impl LanforgeContext {
         );
 
         if !changed.is_empty() {
-            // Derived notifications for legacy listeners & db worker
+            // The firewall and traffic shaper recompile on these (their ruleset inputs).
             let bus = self.bus_ref();
-            if changed.contains(DomainSet::PPPOE) {
-                let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigPppoeChanged));
-            }
             if changed.contains(DomainSet::FIREWALL) {
                 let _ = bus.publish(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));
             }
@@ -614,49 +612,6 @@ impl LanforgeContext {
                 let _ = bus.publish(LanforgeEvent::Traffic(Box::new(
                     TrafficEvent::RulesetChanged,
                 )));
-            }
-            if changed.contains(DomainSet::DHCP_V4_POOLS) {
-                let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed));
-            }
-            if changed.contains(DomainSet::DHCP_V6_POOLS) {
-                let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV6Changed));
-            }
-            if changed.contains(DomainSet::DHCP_V4_OPTIONS)
-                || changed.contains(DomainSet::DHCP_V6_OPTIONS)
-            {
-                let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigDhcpOptionsChanged));
-            }
-            if changed.contains(DomainSet::TFTP) {
-                let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigTftpChanged));
-            }
-            if changed.intersects(
-                DomainSet::RA_SERVER
-                    | DomainSet::RA_PREFIXES
-                    | DomainSet::RA_RDNSS
-                    | DomainSet::RA_DNSSL,
-            ) {
-                let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigRaChanged));
-            }
-            if changed.contains(DomainSet::DNS_UPSTREAMS) {
-                let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamsChanged));
-            }
-            if changed.contains(DomainSet::DNS_UPSTREAM_MODE) {
-                let mode = **self.inner.config_store.dns_upstream_mode.1.borrow();
-                let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamModeChanged(
-                    mode,
-                )));
-            }
-            if changed.contains(DomainSet::DNS_REWRITES) {
-                let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
-            }
-            if changed.intersects(DomainSet::DNS_ADBLOCK | DomainSet::DNS_ADBLOCK_URLS) {
-                let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
-            }
-            if changed.contains(DomainSet::DNS_ADBLOCK_RULES) {
-                let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockRulesChanged));
-            }
-            if changed.contains(DomainSet::DNS_REVERSE) {
-                let _ = bus.publish(LanforgeEvent::Dns(DnsEvent::ConfigReverseResolversChanged));
             }
 
             // Exactly ONE ConfigChanged event for UI/CLI observers

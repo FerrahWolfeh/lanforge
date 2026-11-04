@@ -162,18 +162,6 @@ impl EventBus {
                     self.send_topic(topic, &event);
                 }
             }
-            LanforgeEvent::System(SystemEvent::ConfigRaChanged) => {
-                self.send_topic(EventTopic::System, &event);
-                self.send_topic(EventTopic::Network, &event);
-            }
-            LanforgeEvent::System(
-                SystemEvent::ConfigDhcpV4Changed
-                | SystemEvent::ConfigDhcpV6Changed
-                | SystemEvent::ConfigDhcpOptionsChanged,
-            ) => {
-                self.send_topic(EventTopic::System, &event);
-                self.send_topic(EventTopic::Device, &event);
-            }
             LanforgeEvent::System(_) => {
                 self.send_topic(EventTopic::System, &event);
             }

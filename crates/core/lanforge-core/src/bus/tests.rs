@@ -249,30 +249,18 @@ async fn topic_routing_matrix() {
     let mut trf_rx = bus.subscribe_traffic();
     let mut stg_rx = bus.subscribe_storage();
 
-    // 1. ConfigRaChanged -> system and network
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigRaChanged));
+    // 1. ConfigChanged -> system only: config is read through subscriptions, so a change wakes
+    // no network/device/dns worker.
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigChanged {
+        sections: lanforge_types::config::DomainSet::DHCP_V4_POOLS
+            | lanforge_types::config::DomainSet::RA_SERVER,
+    }));
     assert!(matches!(
         sys_rx.try_recv().unwrap().event,
-        LanforgeEvent::System(SystemEvent::ConfigRaChanged)
-    ));
-    assert!(matches!(
-        net_rx.try_recv().unwrap().event,
-        LanforgeEvent::System(SystemEvent::ConfigRaChanged)
-    ));
-    assert!(dev_rx.try_recv().is_err());
-    assert!(dns_rx.try_recv().is_err());
-
-    // 2. ConfigDhcpV4Changed -> system and device
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed));
-    assert!(matches!(
-        sys_rx.try_recv().unwrap().event,
-        LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed)
-    ));
-    assert!(matches!(
-        dev_rx.try_recv().unwrap().event,
-        LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed)
+        LanforgeEvent::System(SystemEvent::ConfigChanged { .. })
     ));
     assert!(net_rx.try_recv().is_err());
+    assert!(dev_rx.try_recv().is_err());
     assert!(dns_rx.try_recv().is_err());
 
     // 3. PPPoE SessionUp -> pppoe AND dns (for upstream resolver updates)

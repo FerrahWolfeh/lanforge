@@ -163,24 +163,6 @@ async fn test_firewall_eventbus_reactivity() {
     .expect("Timeout waiting for RulesetApplied on RulesetChanged");
     assert!(recompile_applied);
 
-    // 4. SystemEvent::ReloadConfig: Full reload trigger
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
-    let reload_applied = timeout(Duration::from_millis(500), async {
-        loop {
-            if let Ok(evt) = fw_sub.recv().await
-                && matches!(
-                    evt.event,
-                    LanforgeEvent::Firewall(FirewallEvent::RulesetApplied(_))
-                )
-            {
-                return true;
-            }
-        }
-    })
-    .await
-    .expect("Timeout waiting for RulesetApplied on ReloadConfig");
-    assert!(reload_applied);
-
     // Clean shutdown
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_millis(500), handle).await;
@@ -403,10 +385,6 @@ async fn test_ra_eventbus_reactivity() {
         .expect("RA channel closed");
     assert_eq!(manual_burst_ra[0], 134);
 
-    // 3. SystemEvent::ConfigRaChanged: In-place parameters reload
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigRaChanged));
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
     // Clean shutdown
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(Duration::from_millis(500), handle).await;
@@ -548,10 +526,6 @@ async fn test_dhcp_eventbus_reactivity() {
             ip: IpAddr::V4(static_ip),
         }),
     }));
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    // 5. SystemEvent::ConfigDhcpOptionsChanged: Absorbed in-place
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigDhcpOptionsChanged));
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Clean shutdown

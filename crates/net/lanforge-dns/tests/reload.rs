@@ -5,7 +5,6 @@ use common::{
     DnsPacketBuilder, MockUpstreamServer, extract_a, init_test_context, mock_config,
     parse_response, wait_for_service_online,
 };
-use lanforge_core::bus::{DnsEvent, LanforgeEvent};
 use lanforge_core::service::AsyncService;
 use lanforge_dns::config::DnsConfig;
 use lanforge_dns::server::service::DnsService;
@@ -102,9 +101,6 @@ async fn dns_reload_causes_full_cache_refresh_if_enabled() {
     let new_target = mock_upstream2.target();
 
     ctx.update_dns_upstreams(vec![new_target.clone()]);
-    let _ = ctx
-        .bus()
-        .publish(LanforgeEvent::Dns(DnsEvent::ConfigUpstreamsChanged));
 
     // Wait a brief moment for cache invalidation to process
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -176,10 +172,6 @@ async fn dns_reload_rewrites_on_the_fly() {
         rtype: DnsRecordType::A,
         answer: RewriteAnswer::A(Ipv4Addr::new(1, 2, 3, 4)),
     }]);
-
-    let _ = ctx
-        .bus()
-        .publish(LanforgeEvent::Dns(DnsEvent::ConfigRewritesChanged));
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 

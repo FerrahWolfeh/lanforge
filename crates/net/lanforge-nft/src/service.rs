@@ -570,23 +570,16 @@ impl AsyncService for NftService {
                         }
                     }
 
-                    // System events: config reloads or shutdown
+                    // System events: shutdown
                     event_res = sys_rx.recv() => {
                         let event = match event_res {
                             Ok(event) => event,
                             Err(RecvError::Lagged(_)) => continue,
                             Err(RecvError::Closed) => break,
                         };
-                        match event.event {
-                            LanforgeEvent::System(SystemEvent::ReloadConfig) => {
-                                debug!("Firewall configuration reload requested");
-                                self.reapply(&ctx, "config_reload").await;
-                            }
-                            LanforgeEvent::System(SystemEvent::Shutdown) => {
-                                info!("Firewall service received shutdown signal, terminating event loop");
-                                break;
-                            }
-                            _ => {}
+                        if matches!(event.event, LanforgeEvent::System(SystemEvent::Shutdown)) {
+                            info!("Firewall service received shutdown signal, terminating event loop");
+                            break;
                         }
                     }
                 }

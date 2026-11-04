@@ -6,7 +6,6 @@ use lanforge_api::api::{
     DhcpOptionsResponse, DhcpPoolsConfigResponse, DhcpReconcileResponse, InvalidatedLeaseInfo,
     Response, SimpleSuccess,
 };
-use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_types::device::IPv4State;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::update::{DeviceUpdate, LeaseTarget};
@@ -153,12 +152,6 @@ impl ClientContext {
                 reason,
             });
         }
-
-        // Notify DHCP service to reload and ensure transports/pools are fully synced
-        let _ = self
-            .ctx
-            .bus()
-            .publish(LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed));
 
         Response::DhcpReconcile(DhcpReconcileResponse {
             invalidated_v4_leases: invalidated,

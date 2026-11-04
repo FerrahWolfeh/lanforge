@@ -358,36 +358,6 @@ async fn test_firewall_reacts_to_pppoe_wan_reconnect_and_interface_swap() {
 }
 
 #[tokio::test]
-async fn test_firewall_reacts_to_system_reload_config() {
-    let (ctx, bus) = create_test_context();
-    let mut fw_sub = bus.subscribe_firewall();
-
-    let mut service = NftService::inert();
-    service.init(&ctx).await.expect("Init must succeed");
-    let _ = wait_for_ruleset_applied(&mut fw_sub).await;
-
-    let service_clone = service.clone();
-    let ctx_clone = ctx.clone();
-    let serve_handle = tokio::spawn(async move {
-        let mut s = service_clone;
-        let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
-        s.serve(&ctx_clone, &h).await
-    });
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    // Send SystemEvent::ReloadConfig
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
-
-    let summary = wait_for_ruleset_applied(&mut fw_sub).await;
-    assert_eq!(summary.table, "lanforge");
-
-    // Cleanup
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
-    let _ = serve_handle.await;
-    service.cleanup(&ctx).await.expect("Cleanup must succeed");
-}
-
-#[tokio::test]
 async fn test_firewall_concurrent_dynamic_port_burst() {
     let (ctx, bus) = create_test_context();
     let mut fw_sub = bus.subscribe_firewall();

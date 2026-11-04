@@ -373,10 +373,6 @@ impl AsyncService for DbWorker {
                             if topic != lanforge_core::bus::EventTopic::System
                     ) || matches!(
                         (&timed_event.event, topic),
-                        (LanforgeEvent::System(SystemEvent::ConfigRaChanged), lanforge_core::bus::EventTopic::System)
-                            | (LanforgeEvent::System(SystemEvent::ConfigDhcpV4Changed | SystemEvent::ConfigDhcpV6Changed | SystemEvent::ConfigDhcpOptionsChanged), lanforge_core::bus::EventTopic::System)
-                    ) || matches!(
-                        (&timed_event.event, topic),
                         (LanforgeEvent::Pppoe(_), lanforge_core::bus::EventTopic::Dns)
                     );
                     if mirrored { continue; }

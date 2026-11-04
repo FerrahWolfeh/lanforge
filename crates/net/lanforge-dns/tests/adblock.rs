@@ -101,9 +101,6 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     // Trigger toggle and config changed signals
     let _ = ctx
         .bus()
-        .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
-    let _ = ctx
-        .bus()
         .publish(LanforgeEvent::Dns(DnsEvent::AdblockToggle {
             enabled: true,
             duration_secs: None,
@@ -145,9 +142,6 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
         blocking_mode: BlockingMode::Refused,
         ..Default::default()
     });
-    let _ = ctx
-        .bus()
-        .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
     let _ = ctx.bus().publish(LanforgeEvent::Dns(DnsEvent::CacheFlush));
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -162,9 +156,6 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
         enabled: false,
         ..Default::default()
     });
-    let _ = ctx
-        .bus()
-        .publish(LanforgeEvent::Dns(DnsEvent::ConfigAdblockChanged));
     let _ = ctx
         .bus()
         .publish(LanforgeEvent::Dns(DnsEvent::AdblockToggle {

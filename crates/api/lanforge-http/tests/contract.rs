@@ -1498,7 +1498,7 @@ async fn test_traffic_telemetry_contract() {
 async fn test_events_contract() {
     let state = make_state(false).await;
     let ev1 = lanforge_types::events::TimedEvent::new(lanforge_core::bus::LanforgeEvent::System(
-        lanforge_types::events::SystemEvent::ReloadConfig,
+        lanforge_types::events::SystemEvent::SystemReady,
     ));
     let ev2 = lanforge_types::events::TimedEvent::new(lanforge_core::bus::LanforgeEvent::Firewall(
         lanforge_types::events::FirewallEvent::RulesetFlushed,

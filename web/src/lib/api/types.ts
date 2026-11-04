@@ -463,8 +463,15 @@ export function formatEventPayload(
 	}
 
 	// 8. System Lifecycle & Services
-	if (kind === 'ReloadConfig' || kind === 'ConfigReloaded') {
-		return 'Daemon configuration reloaded';
+	if (kind === 'ConfigChanged') {
+		// `sections` arrives as bitflags text, e.g. "DHCP_V4_POOLS | RA_SERVER".
+		const sections = String(data?.sections ?? '')
+			.split('|')
+			.map((s) => s.trim().toLowerCase().replaceAll('_', ' '))
+			.filter(Boolean);
+		return sections.length > 0
+			? `Configuration changed: ${sections.join(', ')}`
+			: 'Configuration changed';
 	}
 	if (kind === 'Shutdown') {
 		return 'System daemon shutdown initiated';
@@ -479,21 +486,6 @@ export function formatEventPayload(
 		const svcName = serviceInfo?.id || (data?.id as string) || 'service';
 		const svcState = serviceInfo?.state ? ` [${serviceInfo.state}]` : '';
 		return `Service control command: ${data?.action || 'signal'} -> ${svcName}${svcState}`;
-	}
-	if (kind === 'ConfigDhcpV4Changed') {
-		return 'DHCPv4 service configuration updated in-place';
-	}
-	if (kind === 'ConfigDhcpV6Changed') {
-		return 'DHCPv6 service configuration updated in-place';
-	}
-	if (kind === 'ConfigRaChanged') {
-		return 'IPv6 Router Advertisement configuration updated in-place';
-	}
-	if (kind === 'ConfigTftpChanged') {
-		return 'TFTP service configuration updated in-place';
-	}
-	if (kind === 'ConfigDhcpOptionsChanged') {
-		return 'DHCP custom options updated in-place';
 	}
 
 	// 9. Traffic & SQM Events

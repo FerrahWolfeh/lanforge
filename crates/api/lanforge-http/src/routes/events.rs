@@ -15,6 +15,7 @@ use futures::stream::Stream;
 use lanforge_api::api::{HttpPaginatedResponse, LogMeta};
 use lanforge_core::bus::LanforgeEvent;
 use lanforge_core::context::LanforgeContext;
+use lanforge_types::config::DomainSet;
 use lanforge_types::events::{
     DeviceEvent, FirewallEvent, NetworkEvent, PppoeEvent, StorageEvent, SystemEvent, TimedEvent,
     TrafficEvent,
@@ -103,6 +104,12 @@ fn handle_events_history_inner(state: &AppState, params: &EventsQuery) -> Respon
         .into_response()
 }
 
+/// The DHCP sections: a change to any of them is news for the `dhcp` stream.
+const DHCP_SECTIONS: DomainSet = DomainSet::DHCP_V4_POOLS
+    .union(DomainSet::DHCP_V6_POOLS)
+    .union(DomainSet::DHCP_V4_OPTIONS)
+    .union(DomainSet::DHCP_V6_OPTIONS);
+
 const fn matches_filter(event: &LanforgeEvent, filter: Option<&str>) -> bool {
     let Some(f) = filter else { return true };
     match event {
@@ -129,9 +136,7 @@ const fn matches_filter(event: &LanforgeEvent, filter: Option<&str>) -> bool {
                 || (f.eq_ignore_ascii_case("dhcp")
                     && matches!(
                         sys_ev,
-                        SystemEvent::ConfigDhcpV4Changed
-                            | SystemEvent::ConfigDhcpV6Changed
-                            | SystemEvent::ConfigDhcpOptionsChanged
+                        SystemEvent::ConfigChanged { sections } if sections.intersects(DHCP_SECTIONS)
                     ))
         }
         LanforgeEvent::Storage(_) => {
@@ -305,15 +310,8 @@ const fn event_topic_and_kind(event: &LanforgeEvent) -> (&'static str, &'static 
                 SystemEvent::Shutdown => "Shutdown",
                 SystemEvent::ServiceReady { .. } => "ServiceReady",
                 SystemEvent::SystemReady => "SystemReady",
-                SystemEvent::ReloadConfig => "ReloadConfig",
                 SystemEvent::ConfigUpdate { .. } => "ConfigUpdate",
                 SystemEvent::ServiceControl { .. } => "ServiceControl",
-                SystemEvent::ConfigDhcpV4Changed => "ConfigDhcpV4Changed",
-                SystemEvent::ConfigDhcpV6Changed => "ConfigDhcpV6Changed",
-                SystemEvent::ConfigRaChanged => "ConfigRaChanged",
-                SystemEvent::ConfigTftpChanged => "ConfigTftpChanged",
-                SystemEvent::ConfigDhcpOptionsChanged => "ConfigDhcpOptionsChanged",
-                SystemEvent::ConfigPppoeChanged => "ConfigPppoeChanged",
                 SystemEvent::ConfigChanged { .. } => "ConfigChanged",
             },
         ),
