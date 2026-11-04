@@ -56,11 +56,14 @@ pub mod packet;
 pub use config::*;
 use lanforge_core::context::LanforgeContext;
 use lanforge_types::config::ChangeImpact;
+use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::network::ra::{
     ICMPV6_TYPE_RS, MAX_INITIAL_RTR_ADVERT_INTERVAL, MAX_INITIAL_RTR_ADVERTISEMENTS,
     MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS, PreviousLanPrefixes, RAPrefix, RaServerConfig,
 };
 use lanforge_types::system::{DormantReason, RaStatusResponse, RunResult};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
@@ -107,12 +110,8 @@ pub struct RaState {
     unicast_rl: HashMap<Ipv6Addr, Instant>,
     /// Unicast answers to Router Solicitations, due at their deadline (RFC 4861 §6.2.6 delay).
     pending_unicast: Vec<(Ipv6Addr, Instant)>,
-    /// Last detected GUA — used to publish `PrefixChanged` only when a change occurs.
-    last_gua: Option<lanforge_types::network::Ipv6Prefix>,
-    /// Last detected ULA
-    last_ula: Option<lanforge_types::network::Ipv6Prefix>,
-    /// Deprecated prefixes: (Prefix, `deprecation_end`, `valid_end`)
-    pub(crate) deprecated_prefixes: Vec<(Ipv6Addr, Instant, Instant)>,
+    /// Prefixes advertised on the LAN, shared through the context (see [`AdvertisedPrefixes`]).
+    pub(crate) prefixes: Arc<AdvertisedPrefixes>,
     /// Total multicast RAs sent to `ff02::1`
     pub(crate) sent_multicast_ras: u64,
 
@@ -137,9 +136,7 @@ impl RaState {
             last_multicast_ra: None,
             unicast_rl: HashMap::new(),
             pending_unicast: Vec::new(),
-            last_gua: None,
-            last_ula: None,
-            deprecated_prefixes: Vec::new(),
+            prefixes: Arc::default(),
             sent_multicast_ras: 0,
             sent_unicast_ras: 0,
             received_solicitations: 0,
@@ -234,23 +231,6 @@ impl RaState {
         self.ignored_solicitations = self.ignored_solicitations.saturating_add(1);
     }
 
-    pub(crate) fn deprecated_list(&self, now: Instant) -> Vec<(Ipv6Addr, u32)> {
-        if self.deprecated_prefixes.is_empty() {
-            return Vec::new();
-        }
-        self.deprecated_prefixes
-            .iter()
-            .map(|&(ip, _, valid_end)| {
-                let remaining = if valid_end > now {
-                    u32::try_from((valid_end - now).as_secs()).unwrap_or(u32::MAX)
-                } else {
-                    0
-                };
-                (ip, remaining)
-            })
-            .collect()
-    }
-
     pub(crate) fn build_status(
         &self,
         cfg: &RaConfig,
@@ -260,7 +240,7 @@ impl RaState {
         let target_ifindex = ctx.target_ifindex().unwrap_or(0);
         let if_ips = ctx.get_interface_state(target_ifindex);
         let now = Instant::now();
-        let deprecated_list = self.deprecated_list(now);
+        let deprecated_list = self.prefixes.lock().deprecated_list(now);
 
         RaStatusResponse {
             enabled: true,
@@ -290,10 +270,77 @@ impl RaState {
             uptime_secs: Some(self.start_time.elapsed().as_secs()),
         }
     }
+}
+
+/// The prefixes the RA has advertised on the LAN.
+///
+/// Lives in the context (`provide_shared`), not in one serving instance: a rebind or a
+/// supervisor restart builds a new run (or a new instance), and a prefix withdrawn before it
+/// must still be deprecated after it.
+#[derive(Default)]
+pub(crate) struct AdvertisedPrefixes(Mutex<PrefixMemory>);
+
+impl AdvertisedPrefixes {
+    pub(crate) fn lock(&self) -> parking_lot::MutexGuard<'_, PrefixMemory> {
+        self.0.lock()
+    }
+
+    /// The context's memory; created on first use from the LAN as found now, deprecating the
+    /// prefixes advertised before the daemon started (`PreviousLanPrefixes`) that are gone.
+    fn get_or_seed(
+        ctx: &LanforgeContext,
+        iface_index: u32,
+        deprecate_on_renumber: bool,
+    ) -> Arc<Self> {
+        if let Some(shared) = ctx.get_shared::<Self>() {
+            return shared;
+        }
+        let lan_ips = ctx.get_interface_state(iface_index);
+        let current_gua = lan_ips.gua.map(Ipv6Prefix::from_addr);
+        let mut memory = PrefixMemory {
+            last_ula: lan_ips.ula.map(Ipv6Prefix::from_addr),
+            ..PrefixMemory::default()
+        };
+        let previous = ctx.get_shared::<PreviousLanPrefixes>();
+        for prev in previous.iter().flat_map(|p| p.0.iter().copied()) {
+            memory.last_gua = Some(prev);
+            memory.update_prefix_and_deprecate(current_gua, true, deprecate_on_renumber);
+        }
+        memory.last_gua = current_gua;
+        let shared = Arc::new(Self(Mutex::new(memory)));
+        ctx.provide_shared(shared.clone());
+        shared
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct PrefixMemory {
+    /// Last advertised GUA prefix.
+    pub(crate) last_gua: Option<Ipv6Prefix>,
+    /// Last advertised ULA prefix.
+    pub(crate) last_ula: Option<Ipv6Prefix>,
+    /// Withdrawn prefixes still advertised with preferred lifetime 0: (prefix, end of validity).
+    pub(crate) deprecated: Vec<(Ipv6Addr, Instant)>,
+}
+
+impl PrefixMemory {
+    pub(crate) fn deprecated_list(&self, now: Instant) -> Vec<(Ipv6Addr, u32)> {
+        self.deprecated
+            .iter()
+            .map(|&(ip, valid_end)| {
+                let remaining = if valid_end > now {
+                    u32::try_from((valid_end - now).as_secs()).unwrap_or(u32::MAX)
+                } else {
+                    0
+                };
+                (ip, remaining)
+            })
+            .collect()
+    }
 
     pub(crate) fn update_prefix_and_deprecate(
         &mut self,
-        current: Option<lanforge_types::network::Ipv6Prefix>,
+        current: Option<Ipv6Prefix>,
         is_gua: bool,
         deprecate_on_renumber: bool,
     ) -> bool {
@@ -307,25 +354,17 @@ impl RaState {
                 let now = Instant::now();
                 // RFC 4862 §5.5.3e:
                 // Deprecate old prefix with preferred_lifetime = 0 and valid_lifetime = min(remaining, 7200) (2 hours).
-                let valid_duration = Duration::from_secs(7200);
-                let valid_end = now + valid_duration;
-                let deprecation_end = valid_end;
+                let valid_end = now + Duration::from_secs(7200);
                 let old_addr = old.to_addr();
-                if !self
-                    .deprecated_prefixes
-                    .iter()
-                    .any(|(ip, _, _)| *ip == old_addr)
-                {
-                    self.deprecated_prefixes
-                        .push((old_addr, deprecation_end, valid_end));
+                if !self.deprecated.iter().any(|(ip, _)| *ip == old_addr) {
+                    self.deprecated.push((old_addr, valid_end));
                 }
             }
             // A prefix that comes back (address flap) is live again: never advertise it twice,
             // once valid and once deprecated.
             if let Some(cur) = current {
                 let cur_addr = cur.to_addr();
-                self.deprecated_prefixes
-                    .retain(|(ip, _, _)| *ip != cur_addr);
+                self.deprecated.retain(|(ip, _)| *ip != cur_addr);
             }
             let prefix_type = if is_gua { "GUA" } else { "ULA" };
             debug!("Internal {prefix_type} prefix state updated: {current:?}");
@@ -513,23 +552,15 @@ impl RaService {
             .set_service_transports(ServiceId::Ra, vec![transport.metrics_handle()]);
 
         let mut state = RaState::new();
-        // Seed the advertised prefixes from the LAN interface, so a renumbering after startup
-        // deprecates the prefix clients already hold. A prefix advertised before the daemon
-        // restarted that is no longer delegated is the starting point instead, so the first RA
-        // already deprecates it.
-        let lan_ips = self.ctx.get_interface_state(iface_index);
-        let current_gua = lan_ips
-            .gua
-            .map(lanforge_types::network::Ipv6Prefix::from_addr);
-        state.last_ula = lan_ips
-            .ula
-            .map(lanforge_types::network::Ipv6Prefix::from_addr);
-        let previous = self.ctx.get_shared::<PreviousLanPrefixes>();
-        for prev in previous.iter().flat_map(|p| p.0.iter().copied()) {
-            state.last_gua = Some(prev);
-            state.update_prefix_and_deprecate(current_gua, true, current_cfg.deprecate_on_renumber);
-        }
-        state.last_gua = current_gua;
+        // The advertised prefixes outlive this run (see `AdvertisedPrefixes`): on the first run
+        // they are seeded from the LAN, so a renumbering after startup deprecates the prefix
+        // clients already hold, and a prefix advertised before the daemon restarted that is no
+        // longer delegated is deprecated by the first RA.
+        state.prefixes = AdvertisedPrefixes::get_or_seed(
+            &self.ctx,
+            iface_index,
+            current_cfg.deprecate_on_renumber,
+        );
 
         // Immediate RA on startup
         send_ra_internal(
@@ -539,7 +570,7 @@ impl RaService {
             mac,
             iface_index,
             None,
-            &mut state,
+            &state,
         )
         .map_err(|e| CoreError::Generic(e.to_string()))?;
         state.record_multicast();
@@ -658,15 +689,16 @@ impl RaService {
                         // OS DHCPv6-PD client); `ppp0`'s own prefix must never be advertised. A lost
                         // prefix is deprecated right away, a new one is advertised with a burst.
                         LanforgeEvent::Network(NetworkEvent::PrefixChanged(details)) => {
-                            if details.ifindex == iface_index && details.gua != state.last_gua {
-                                let old_str = state.last_gua.map_or_else(|| "None".to_string(), |p| p.to_string());
+                            let last_gua = state.prefixes.lock().last_gua;
+                            if details.ifindex == iface_index && details.gua != last_gua {
+                                let old_str = last_gua.map_or_else(|| "None".to_string(), |p| p.to_string());
                                 let new_str = details.gua.map_or_else(|| "None".to_string(), |p| p.to_string());
                                 info!(
                                     old_prefix = %old_str,
                                     new_prefix = %new_str,
                                     "LAN GUA prefix changed — sending immediate RA burst"
                                 );
-                                state.update_prefix_and_deprecate(details.gua, true, current_cfg.deprecate_on_renumber);
+                                state.prefixes.lock().update_prefix_and_deprecate(details.gua, true, current_cfg.deprecate_on_renumber);
                                 state.initial_sent = 0;
                                 next_ra_at = Instant::now();
                             }
@@ -877,7 +909,7 @@ fn send_ra_internal(
     mac: [u8; 6],
     iface_index: u32,
     unicast_dst: Option<Ipv6Addr>,
-    state: &mut RaState,
+    state: &RaState,
 ) -> Result<(), NetworkError> {
     let if_ips = lctx.get_interface_state(iface_index);
 
@@ -895,15 +927,16 @@ fn send_ra_internal(
 
     let gua_prefix = gua.map(lanforge_types::network::Ipv6Prefix::from_addr);
     let ula_prefix = ula.map(lanforge_types::network::Ipv6Prefix::from_addr);
-    state.update_prefix_and_deprecate(gua_prefix, true, cfg.deprecate_on_renumber);
-    state.update_prefix_and_deprecate(ula_prefix, false, cfg.deprecate_on_renumber);
-
-    // Clean up expired deprecated prefixes
-    state
-        .deprecated_prefixes
-        .retain(|(_, deprecation_end, _)| *deprecation_end > now);
-
-    let deprecated_list = state.deprecated_list(now);
+    let deprecated_list = {
+        let mut prefixes = state.prefixes.lock();
+        prefixes.update_prefix_and_deprecate(gua_prefix, true, cfg.deprecate_on_renumber);
+        prefixes.update_prefix_and_deprecate(ula_prefix, false, cfg.deprecate_on_renumber);
+        // Clean up expired deprecated prefixes
+        prefixes
+            .deprecated
+            .retain(|(_, valid_end)| *valid_end > now);
+        prefixes.deprecated_list(now)
+    };
 
     let dst_ip: Ipv6Addr = unicast_dst.unwrap_or(ALL_NODES_MULTICAST);
     let dst_sa = SocketAddrV6::new(dst_ip, 0, 0, iface_index);
@@ -1037,14 +1070,14 @@ mod tests {
         });
 
         // 3. Initialize RaState and run the check
-        let mut state = RaState::new();
+        let state = RaState::new();
 
         // Perform first send (mocked or just executing the internal logic)
         let if_ips = ctx.get_interface_state(1);
         assert_eq!(if_ips.gua, Some(old_gua));
 
         // First transition: last_gua becomes Some(old_gua)
-        state.last_gua = if_ips
+        state.prefixes.lock().last_gua = if_ips
             .gua
             .map(lanforge_types::network::Ipv6Prefix::from_addr);
 
@@ -1069,7 +1102,7 @@ mod tests {
         assert_eq!(if_ips.gua, Some(new_gua));
 
         // 5. Simulate send_ra_internal transition for rotation:
-        state.update_prefix_and_deprecate(
+        state.prefixes.lock().update_prefix_and_deprecate(
             if_ips
                 .gua
                 .map(lanforge_types::network::Ipv6Prefix::from_addr),
@@ -1078,10 +1111,12 @@ mod tests {
         );
 
         // Verify that old_gua is now deprecated in state with RFC 4862 §5.5.3e valid lifetime (2 hours = 7200s)
-        assert_eq!(state.deprecated_prefixes.len(), 1);
+        let prefixes = state.prefixes.lock();
+        assert_eq!(prefixes.deprecated.len(), 1);
         let expected_prefix = lanforge_types::network::Ipv6Prefix::from_addr(old_gua).to_addr();
-        assert_eq!(state.deprecated_prefixes[0].0, expected_prefix);
-        let deprecated_list = state.deprecated_list(std::time::Instant::now());
+        assert_eq!(prefixes.deprecated[0].0, expected_prefix);
+        let deprecated_list = prefixes.deprecated_list(std::time::Instant::now());
+        drop(prefixes);
         assert_eq!(deprecated_list.len(), 1);
         assert_eq!(deprecated_list[0].0, expected_prefix);
         assert!(deprecated_list[0].1 >= 7199 && deprecated_list[0].1 <= 7200);

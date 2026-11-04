@@ -558,3 +558,53 @@ async fn test_ra_answers_unspecified_source_rs_after_min_delay() {
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     assert!(timeout(Duration::from_millis(500), task).await.is_ok());
 }
+
+/// The LAN is renumbered, then the RA restarts (rebind, admin restart, or the supervisor
+/// building a new instance after a failure): the first RA of the new run must still deprecate
+/// the withdrawn prefix, or clients keep preferring it until it expires.
+#[tokio::test]
+async fn test_ra_deprecation_survives_a_service_restart() {
+    let (ctx, bus) = create_test_context();
+    let old: Ipv6Addr = "2001:db8:1::".parse().unwrap();
+    let new: Ipv6Addr = "2001:db8:2::".parse().unwrap();
+    let pref_of = |ra: &[u8], p: Ipv6Addr| {
+        ra_prefixes(ra)
+            .into_iter()
+            .find(|(a, _, _)| *a == p)
+            .map(|(_, _, pref)| pref)
+    };
+
+    // First instance: advertises the old prefix, then sees the renumbering.
+    let (handle, task) = start_ra(&ctx).await;
+    set_iface_gua(&ctx, LAN, Some("2001:db8:2::1".parse().unwrap()));
+    let ra = timeout(Duration::from_millis(1000), handle.recv_payload())
+        .await
+        .expect("burst RA after renumbering")
+        .expect("RA channel closed");
+    assert_eq!(pref_of(&ra, old), Some(0), "old prefix deprecated");
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    assert!(timeout(Duration::from_millis(500), task).await.is_ok());
+
+    // A new instance on the same daemon context (what the supervisor builds on a restart).
+    let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
+    let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let task = tokio::spawn(async move {
+        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    let ra = timeout(Duration::from_millis(1000), handle.recv_payload())
+        .await
+        .expect("startup RA")
+        .expect("RA channel closed");
+    assert!(
+        pref_of(&ra, new).is_some_and(|p| p > 0),
+        "new prefix advertised"
+    );
+    assert_eq!(
+        pref_of(&ra, old),
+        Some(0),
+        "withdrawn prefix still deprecated after the restart"
+    );
+    task.abort();
+}

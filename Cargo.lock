@@ -2850,6 +2850,7 @@ dependencies = [
  "lanforge-transport",
  "lanforge-types",
  "libc",
+ "parking_lot",
  "rand 0.10.3",
  "serde",
  "socket2",
