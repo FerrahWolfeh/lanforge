@@ -32,6 +32,9 @@ jobs:
       - name: DNS feature matrix
         run: ./scripts/check-dns-features.sh
 
+      - name: Daemon feature matrix
+        run: ./scripts/check-daemon-features.sh
+
   web:
     name: WebUI Build & Check
     runs-on: ubuntu-latest

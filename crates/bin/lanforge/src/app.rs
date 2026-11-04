@@ -2,6 +2,7 @@ use anyhow::Result;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use sd_notify::{NotifyState, notify};
+#[cfg(any(feature = "uds", feature = "http"))]
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
@@ -10,6 +11,7 @@ use crate::bootstrap::BootstrapResult;
 use crate::event_loop::run_event_loop;
 use crate::registry::ServiceRegistry;
 use crate::synthetic::{InterfacesService, WanService};
+#[cfg(feature = "traffic")]
 use lanforge_db::LogStore;
 use lanforge_db::worker::DbWorker;
 #[cfg(feature = "dhcp")]
@@ -24,6 +26,7 @@ use lanforge_dns::server::service::DnsService;
 use lanforge_http::HttpService;
 #[cfg(feature = "nft")]
 use lanforge_nft::NftService;
+#[cfg(feature = "pppoe")]
 use lanforge_pppoe::PppoeService;
 #[cfg(feature = "ra")]
 use lanforge_ra::RaService;
@@ -117,13 +120,6 @@ impl Daemon {
             }
         }
 
-        #[cfg(not(feature = "http"))]
-        if cfg.http_toml.enabled {
-            tracing::error!(
-                "Feature 'http' (REST API / Metrics) is enabled in configuration but not compiled in binary"
-            );
-        }
-
         // Database checks
         if cfg.database.config_path.starts_with("sqlite")
             || cfg.database.config_path.starts_with("postgres")
@@ -137,13 +133,16 @@ impl Daemon {
 
     fn spawn_services(&mut self) {
         let cfg = self.bootstrap.cfg.clone();
+        #[cfg(feature = "discovery")]
         let target_ifindex = self.bootstrap.target_ifindex;
+        #[cfg(feature = "discovery")]
         let rt_handle = self.bootstrap.rt_handle.clone();
         let messages = self.bootstrap.messages.clone();
         let db = self.bootstrap.db.clone();
         let log_db = self.bootstrap.log_db.clone();
         let ctx = self.ctx.clone();
 
+        #[cfg(feature = "discovery")]
         let monitored_ifindexes = if cfg.monitor_toml.ifaces.is_empty() {
             vec![target_ifindex]
         } else {
@@ -232,6 +231,7 @@ impl Daemon {
     async fn shutdown(self) -> Result<()> {
         sd_notify_stopping();
         info!("Starting shutdown sequence...");
+        #[cfg(feature = "traffic")]
         let log_db = self.bootstrap.log_db.clone();
         self.ctx.terminate();
         let _ = self

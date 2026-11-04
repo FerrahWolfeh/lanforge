@@ -133,6 +133,8 @@ Inter-service communication is powered by a multi-topic broadcast bus:
 - `cargo add -p <crate> <dependency>` - Add dependencies to a specific workspace crate.
 - `cargo fmt --all` - Format before every commit.
 - `./scripts/check-dns-features.sh` - Feature matrix for `lanforge-dns` (CI runs it; run it when touching DNS features/cfgs).
+- `./scripts/check-daemon-features.sh` - Feature matrix for the daemon (`lanforge`): each service alone, the profiles,
+  no services (CI runs it; run it when touching `#[cfg(feature = ...)]` in `crates/bin/lanforge`).
 - Iterate with `cargo check --all-targets -p <crate>`; run the full `cargo test` once at the end. Feature-matrix
   runs produce many large test binaries, so prefer `-p <crate>` over `--workspace` while iterating.
 - Tests that execute the CLI binary must set `HOME`/`XDG_DATA_HOME` to a nonexistent directory and drop
