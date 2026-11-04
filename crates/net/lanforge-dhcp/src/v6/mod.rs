@@ -743,7 +743,10 @@ fn apply_learned_state(
     server: &Dhcpv6Server,
     config: &Dhcpv6Config,
 ) {
-    let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
+    // The lease lasts as long as the client was told (RFC 8415 valid lifetime), not the configured
+    // lease time: the delegated prefix can cap it, a static ULA can make it infinite.
+    let now = SystemTime::now();
+    let expires_after = |valid: u32| now + Duration::from_secs(u64::from(valid));
     let mut updates = SmallVec::<[DeviceUpdate; 4]>::new();
 
     // 1. Process IA_NA (Non-temporary Addresses)
@@ -771,12 +774,18 @@ fn apply_learned_state(
                 })
             });
             if let Some(duid) = duid {
+                // The binding lives until its longest-lived address expires.
+                let valid = assigned_ip_addrs
+                    .iter()
+                    .map(|ip| server.valid_lifetime_for(*ip, &duid, opt_mac))
+                    .max()
+                    .unwrap_or(0);
                 updates.push(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
                     mac: opt_mac,
+                    expires: expires_after(valid),
                     duid,
                     iaid,
                     ips: assigned_ip_addrs.into_iter().collect(),
-                    expires,
                 })));
             }
         }
@@ -804,7 +813,7 @@ fn apply_learned_state(
                 iaid,
                 prefix,
                 len,
-                expires,
+                expires: expires_after(server.valid_lifetime_for(prefix, duid, opt_mac)),
             })));
         }
     }

@@ -1154,3 +1154,127 @@ async fn dhcp_without_pools_settles_dormant_and_serves_once_a_pool_appears()
     s6.abort();
     Ok(())
 }
+
+/// Starts DHCPv6 on a LAN with a GUA pool (the delegated prefix has 7200 s of validity left,
+/// the configured lease time is 86400 s); returns the exchange handle and the server DUID.
+async fn start_v6_gua(
+    ctx: &LanforgeContext,
+    lan: u32,
+    server_mac: MacAddr,
+) -> Result<(Dhcpv6InertHandle, tokio::task::JoinHandle<()>), Box<dyn Error>> {
+    let mut cfg = create_test_v6_config();
+    assert_eq!(cfg.lease_time, 86_400);
+    cfg.pools = vec![lanforge_types::network::dhcp::Dhcpv6Pool {
+        range_start: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix(
+            "::200".parse()?,
+        )),
+        range_end: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix(
+            "::2ff".parse()?,
+        )),
+        ..Default::default()
+    }];
+    ctx.update_dhcp_v6_pools(cfg.pools.clone());
+    set_lan_gua(ctx, lan, server_mac, "2804:bdc:5090:5600::1");
+    let (handle, transport) = Dhcpv6Transport::inert();
+    let mut service = Dhcpv6Service::with_transport(cfg, ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let task = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Dhcp6, ctx_clone.clone());
+        let _ = service.serve(&ctx_clone, &h).await;
+    });
+    wait_for_service_online(ctx, ServiceId::Dhcp6).await?;
+    Ok((handle, task))
+}
+
+type Dhcpv6InertHandle = lanforge_transport::InertHandle<SocketAddr>;
+
+/// Sends `bytes` from the test client and returns the server's answer (skipping Reconfigure).
+async fn v6_exchange(handle: &Dhcpv6InertHandle, bytes: Vec<u8>) -> Option<MessageV6> {
+    let client_src: SocketAddr = "[fe80::5644:a3ff:fe46:c294]:546".parse().ok()?;
+    handle.inject(bytes, client_src).await;
+    loop {
+        let reply = timeout(TEST_TIMEOUT, handle.recv_payload()).await.ok()??;
+        let msg = MessageV6::decode(&mut Decoder::new(&reply)).ok()?;
+        if msg.msg_type() != MessageTypeV6::Reconfigure {
+            return Some(msg);
+        }
+    }
+}
+
+/// Seconds until the recorded dynamic v6 lease of `mac` on `ip` expires.
+fn recorded_v6_lease_secs(ctx: &LanforgeContext, mac: &MacAddr, ip: Ipv6Addr) -> Option<u64> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let dev = ctx.get_device(mac)?;
+    dev.v6.iter().find_map(|s| match s {
+        lanforge_types::device::IPv6State::Dynamic(l) if l.ip == ip => {
+            Some(u64::from(l.expires).saturating_sub(now))
+        }
+        _ => None,
+    })
+}
+
+/// The lease the daemon records must be the one the client was given (RFC 8415 valid lifetime),
+/// like DHCPv4 `a378eed3`: the GUA lease is capped by the delegated prefix (7200 s), so
+/// recording the configured 86400 s kept the address taken long after the client let it go.
+#[tokio::test]
+async fn test_dhcpv6_records_the_lifetime_the_client_received() -> Result<(), Box<dyn Error>> {
+    const LAN: u32 = 1;
+    let server_mac = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+    let client_mac = MacAddr([0x54, 0x44, 0xa3, 0x46, 0xc2, 0x94]);
+    let (ctx, bus) = init_test_context_with_interface(LAN, "lan0", server_mac);
+    let (handle, task) = start_v6_gua(&ctx, LAN, server_mac).await?;
+    let duid = Duid::new(vec![
+        0x00, 0x03, 0x00, 0x01, 0x54, 0x44, 0xa3, 0x46, 0xc2, 0x94,
+    ]);
+    const IAID: u32 = 7;
+    let gua_prefix =
+        lanforge_types::network::Ipv6Prefix::from_addr("2804:bdc:5090:5600::".parse()?);
+
+    let adv = v6_exchange(
+        &handle,
+        Dhcpv6PacketBuilder::solicit(duid.clone())
+            .with_ia_na(IAID, None)
+            .build(),
+    )
+    .await
+    .ok_or("no Advertise")?;
+    let server_duid = match adv.opts().get(OptionCodeV6::ServerId) {
+        Some(Dhcpv6Option::ServerId(d)) => Duid::new(d.clone()),
+        _ => return Err("Expected ServerId in Advertise".into()),
+    };
+    let (gua, _, offered_valid) = ia_na_addrs(&adv)
+        .into_iter()
+        .find(|(a, _, _)| gua_prefix.matches(a))
+        .ok_or("no GUA offered")?;
+    let reply = v6_exchange(
+        &handle,
+        Dhcpv6PacketBuilder::request(duid, server_duid)
+            .with_ia_na(IAID, Some(gua))
+            .build(),
+    )
+    .await
+    .ok_or("no Reply to Request")?;
+    let (_, _, given) = ia_na_addrs(&reply)
+        .into_iter()
+        .find(|(a, _, _)| *a == gua)
+        .ok_or("GUA bound")?;
+    assert_eq!(given, offered_valid);
+    assert!(
+        given < 86_400,
+        "the delegated prefix caps the lease: {given}"
+    );
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let recorded = recorded_v6_lease_secs(&ctx, &client_mac, gua).ok_or("lease recorded")?;
+    assert!(
+        recorded <= u64::from(given) && recorded + 10 >= u64::from(given),
+        "state records a {recorded}s lease, the client was given {given}s"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, task).await?;
+    Ok(())
+}
