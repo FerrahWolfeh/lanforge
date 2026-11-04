@@ -660,13 +660,17 @@ mod doq_tests {
         let server = quinn::ServerConfig::with_crypto(Arc::new(
             QuicServerConfig::try_from(tls).expect("quic server"),
         ));
-        let endpoint =
-            quinn::Endpoint::server(server, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
-                .expect("bind");
+        let endpoint = quinn::Endpoint::server(server, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .expect("bind");
         let addr = endpoint.local_addr().expect("addr");
         let accept = endpoint.clone();
         tokio::spawn(async move {
-            let conn = accept.accept().await.expect("incoming").await.expect("conn");
+            let conn = accept
+                .accept()
+                .await
+                .expect("incoming")
+                .await
+                .expect("conn");
             while let Ok((mut send, mut recv)) = conn.accept_bi().await {
                 let framed = recv.read_to_end(65_537).await.expect("read");
                 let well_formed = framed.len() > 2
