@@ -81,6 +81,9 @@ use tracing::{debug, info, warn};
 
 const ALL_NODES_MULTICAST: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1);
 
+/// Bound on queued unicast answers (a solicitation burst from many hosts at once).
+const MAX_PENDING_UNICAST: usize = 32;
+
 // ---------------------------------------------------------------------------
 // Runtime State — Handles RFC-compliant timing
 // ---------------------------------------------------------------------------
@@ -102,6 +105,8 @@ pub struct RaState {
     last_multicast_ra: Option<Instant>,
     /// Unicast rate limiting: tracks the last RA sent per destination IP.
     unicast_rl: HashMap<Ipv6Addr, Instant>,
+    /// Unicast answers to Router Solicitations, due at their deadline (RFC 4861 §6.2.6 delay).
+    pending_unicast: Vec<(Ipv6Addr, Instant)>,
     /// Last detected GUA — used to publish `PrefixChanged` only when a change occurs.
     last_gua: Option<lanforge_types::network::Ipv6Prefix>,
     /// Last detected ULA
@@ -131,6 +136,7 @@ impl RaState {
             initial_sent: 0,
             last_multicast_ra: None,
             unicast_rl: HashMap::new(),
+            pending_unicast: Vec::new(),
             last_gua: None,
             last_ula: None,
             deprecated_prefixes: Vec::new(),
@@ -163,9 +169,35 @@ impl RaState {
         }
     }
 
-    pub(crate) fn can_multicast_now(&self) -> bool {
+    /// When a multicast answer to a Router Solicitation may go out (RFC 4861 §6.2.6): after the
+    /// random `delay`, and no sooner than `MIN_DELAY_BETWEEN_RAS` (plus that delay) after the
+    /// previous multicast RA.
+    pub(crate) fn multicast_response_at(&self, now: Instant, delay: Duration) -> Instant {
         self.last_multicast_ra
-            .is_none_or(|t| t.elapsed() >= MIN_DELAY_BETWEEN_RAS)
+            .map(|t| t + MIN_DELAY_BETWEEN_RAS)
+            .filter(|earliest| *earliest > now)
+            .map_or(now + delay, |earliest| earliest + delay)
+    }
+
+    /// Queues a unicast answer for `dst` at `due`; a destination already queued keeps its slot.
+    /// Returns `false` when the answer is dropped (rate limited, or too many pending).
+    pub(crate) fn schedule_unicast(&mut self, dst: Ipv6Addr, due: Instant) -> bool {
+        if !self.can_unicast_now(&dst) {
+            return false;
+        }
+        if self.pending_unicast.iter().any(|(ip, _)| *ip == dst) {
+            return true;
+        }
+        if self.pending_unicast.len() >= MAX_PENDING_UNICAST {
+            return false;
+        }
+        self.pending_unicast.push((dst, due));
+        true
+    }
+
+    /// The earliest pending unicast deadline.
+    pub(crate) fn next_unicast_due(&self) -> Option<Instant> {
+        self.pending_unicast.iter().map(|(_, due)| *due).min()
     }
 
     pub(crate) fn can_unicast_now(&self, dst: &Ipv6Addr) -> bool {
@@ -526,11 +558,10 @@ impl RaService {
 
         loop {
             let now = Instant::now();
-            let sleep_duration = if next_ra_at > now {
-                next_ra_at - now
-            } else {
-                Duration::ZERO
-            };
+            let wake_at = state
+                .next_unicast_due()
+                .map_or(next_ra_at, |due| due.min(next_ra_at));
+            let sleep_duration = wake_at.saturating_duration_since(now);
 
             let ctx = RaContext {
                 transport: &transport,
@@ -551,9 +582,15 @@ impl RaService {
                     }
                 }
 
-                // 1. Periodic Advertisement & Timers
+                // 1. Timers: due unicast answers, periodic (or solicited multicast) advertisement
                 () = tokio::time::sleep(sleep_duration) => {
-                    Self::perform_periodic_ra(ctx, &current_cfg, &mut state, &mut next_ra_at);
+                    if Self::send_due_unicasts(ctx, &current_cfg, &mut state) {
+                        let status = state.build_status(&current_cfg, &self.ctx, Some(next_ra_at));
+                        self.ctx.set_ra_status(Some(status));
+                    }
+                    if Instant::now() >= next_ra_at {
+                        Self::perform_periodic_ra(ctx, &current_cfg, &mut state, &mut next_ra_at);
+                    }
                 }
 
                 // 2. Packet processing (RS)
@@ -565,7 +602,7 @@ impl RaService {
                             } else {
                                 Some(*src_sa.ip())
                             };
-                            self.process_rs_packet(&buf[..n], rs_src, &current_cfg, ctx, &mut state, next_ra_at).await;
+                            Self::process_rs_packet(&buf[..n], rs_src, &current_cfg, ctx, &mut state, &mut next_ra_at);
                         }
                         Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
                         Err(e) => warn!("RA transport error: {e}"),
@@ -755,65 +792,62 @@ impl RaService {
         }
     }
 
-    async fn process_rs_packet(
-        &self,
+    /// Sends the unicast RS answers whose deadline has passed; `true` if any was due.
+    fn send_due_unicasts(ctx: RaContext<'_>, cfg: &RaConfig, state: &mut RaState) -> bool {
+        let now = Instant::now();
+        let before = state.pending_unicast.len();
+        let mut i = 0;
+        while i < state.pending_unicast.len() {
+            if state.pending_unicast[i].1 > now {
+                i += 1;
+                continue;
+            }
+            let (dst, _) = state.pending_unicast.swap_remove(i);
+            if let Err(e) = send_ra_internal(
+                ctx.lctx,
+                ctx.transport,
+                cfg,
+                ctx.mac,
+                ctx.iface_index,
+                Some(dst),
+                state,
+            ) {
+                warn!("RA unicast error: {e:?}");
+            } else {
+                debug!("RA unicast -> {dst}");
+                state.record_unicast(dst);
+            }
+        }
+        state.pending_unicast.len() != before
+    }
+
+    /// Answers a Router Solicitation (RFC 4861 §6.2.6) by scheduling the advertisement, never
+    /// by waiting here: the random delay must not stall the loop (commands, other RS, events).
+    /// A host with an address gets a unicast answer; an RS from `::` pulls the next multicast
+    /// RA forward.
+    fn process_rs_packet(
         data: &[u8],
         rs_src: Option<Ipv6Addr>,
         cfg: &RaConfig,
         ctx: RaContext<'_>,
         state: &mut RaState,
-        next_ra_at: Instant,
+        next_ra_at: &mut Instant,
     ) {
         if data.first() == Some(&ICMPV6_TYPE_RS) {
             state.record_solicitation_received();
             debug!("RS received from {rs_src:?}");
 
-            let delay_ms = if ctx.transport.is_inert() {
-                0
-            } else {
-                rand::rng().random_range(0..MAX_RA_DELAY_TIME_MS)
-            };
-            if delay_ms > 0 {
-                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-            }
-
-            let dst = rs_src.filter(|ip| !ip.is_unspecified());
-            match dst {
-                Some(unicast_dst) if state.can_unicast_now(&unicast_dst) => {
-                    if let Err(e) = send_ra_internal(
-                        ctx.lctx,
-                        ctx.transport,
-                        cfg,
-                        ctx.mac,
-                        ctx.iface_index,
-                        Some(unicast_dst),
-                        state,
-                    ) {
-                        warn!("RA unicast error: {e:?}");
-                    } else {
-                        debug!("RA unicast -> {unicast_dst}");
-                        state.record_unicast(unicast_dst);
-                    }
-                }
-                None if state.can_multicast_now() => {
-                    if let Err(e) = send_ra_internal(
-                        ctx.lctx,
-                        ctx.transport,
-                        cfg,
-                        ctx.mac,
-                        ctx.iface_index,
-                        None,
-                        state,
-                    ) {
-                        warn!("RA multicast error: {e:?}");
-                    } else {
-                        debug!("RA multicast -> ff02::1");
-                        state.record_multicast();
-                    }
-                }
-                _ => {
+            let now = Instant::now();
+            let delay = Duration::from_millis(rand::rng().random_range(0..MAX_RA_DELAY_TIME_MS));
+            if let Some(dst) = rs_src {
+                if !state.schedule_unicast(dst, now + delay) {
                     debug!("RS discarded: rate limit active");
                     state.record_solicitation_ignored();
+                }
+            } else {
+                let at = state.multicast_response_at(now, delay);
+                if at < *next_ra_at {
+                    *next_ra_at = at;
                 }
             }
 
@@ -829,7 +863,7 @@ impl RaService {
                     .publish(LanforgeEvent::Network(NetworkEvent::RsReceived { mac }));
             }
 
-            let status = state.build_status(cfg, ctx.lctx, Some(next_ra_at));
+            let status = state.build_status(cfg, ctx.lctx, Some(*next_ra_at));
             ctx.lctx.set_ra_status(Some(status));
         }
     }
@@ -847,10 +881,8 @@ fn send_ra_internal(
 ) -> Result<(), NetworkError> {
     let if_ips = lctx.get_interface_state(iface_index);
 
-    let src_ll = match if_ips.link_local {
-        Some(ll) => ll,
-        None if transport.is_inert() => Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0200, 0, 0, 1),
-        None => return Err(NetworkError::NoLinkLocal(iface_index)),
+    let Some(src_ll) = if_ips.link_local else {
+        return Err(NetworkError::NoLinkLocal(iface_index));
     };
     // Only the LAN interface's own GUA (e.g. delegated by the OS DHCPv6-PD client) is
     // advertised. Never fall back to the WAN link prefix: it is not routed to the LAN, and
@@ -928,15 +960,18 @@ mod tests {
         let mut state = RaState::new();
         let ip: Ipv6Addr = "fe80::1".parse().unwrap();
 
-        // Inicialmente, tudo liberado
-        assert!(state.can_multicast_now());
+        // No multicast RA yet: the answer goes out after the random delay only.
+        let now = Instant::now();
+        let delay = Duration::from_millis(200);
+        assert_eq!(state.multicast_response_at(now, delay), now + delay);
         assert!(state.can_unicast_now(&ip));
 
-        // Após registrar um envio, deve bloquear pelo MIN_DELAY_BETWEEN_RAS (3s)
+        // Right after a multicast RA: MIN_DELAY_BETWEEN_RAS (3s) after it, plus the delay.
         state.record_multicast();
-        assert!(
-            !state.can_multicast_now(),
-            "Multicast deve sofrer rate limit"
+        let last = state.last_multicast_ra.unwrap();
+        assert_eq!(
+            state.multicast_response_at(Instant::now(), delay),
+            last + MIN_DELAY_BETWEEN_RAS + delay
         );
 
         state.record_unicast(ip);

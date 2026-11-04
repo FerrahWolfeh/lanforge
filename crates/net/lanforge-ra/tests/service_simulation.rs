@@ -64,6 +64,7 @@ async fn test_ra_inert_full_lifecycle() {
     });
 
     let cfg = RaConfig::default();
+    set_iface_gua(&ctx, LAN, None);
 
     // 2. Initialize service with inert transport
     let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
@@ -122,7 +123,8 @@ async fn test_ra_inert_full_lifecycle() {
     handle.inject(rs_packet, client_src).await;
 
     // 7. Verify unicast RA response is received by client
-    let unicast_ra = timeout(Duration::from_millis(500), handle.recv_payload())
+    // RFC 4861 §6.2.6: answered after a random delay of up to 500 ms.
+    let unicast_ra = timeout(Duration::from_millis(1000), handle.recv_payload())
         .await
         .expect("Timeout waiting for unicast inert RA response")
         .expect("RA channel closed unexpectedly");
@@ -144,8 +146,19 @@ async fn test_ra_inert_full_lifecycle() {
 
     assert_eq!(rs_evt, client_mac);
 
-    // 9. Verify live status reflects the solicitation and response
-    let updated_status = ctx.ra_status().unwrap();
+    // 9. Verify live status reflects the solicitation and response (published right after
+    // the unicast send).
+    let updated_status = timeout(Duration::from_millis(200), async {
+        loop {
+            let st = ctx.ra_status().unwrap();
+            if st.sent_unicast_ras > 0 {
+                return st;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("status shows the unicast answer");
     assert_eq!(updated_status.sent_multicast_ras, 1);
     assert_eq!(updated_status.sent_unicast_ras, 1);
     assert_eq!(updated_status.received_solicitations, 1);
@@ -446,4 +459,102 @@ async fn test_ra_refuses_to_serve_without_lan_ifindex() {
             .is_err(),
         "no RA may be sent"
     );
+}
+
+/// Starts the RA on the LAN with one dynamic GUA prefix; returns the inert handle and the task.
+async fn start_ra(
+    ctx: &LanforgeContext,
+) -> (
+    lanforge_transport::InertHandle<SocketAddrV6>,
+    tokio::task::JoinHandle<Result<(), lanforge_core::error::CoreError>>,
+) {
+    ctx.update_ra_server_config(RaServerConfig {
+        enabled: true,
+        iface: Some("lan0".into()),
+        prefixes: vec![RAPrefix::gua_dynamic()],
+        ..RaServerConfig::default()
+    });
+    set_iface_gua(ctx, LAN, Some("2001:db8:1::1".parse().unwrap()));
+    let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
+    let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let task = tokio::spawn(async move {
+        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    let (_, dst) = timeout(Duration::from_millis(1000), handle.recv_reply())
+        .await
+        .expect("startup RA")
+        .expect("RA channel closed");
+    assert!(dst.ip().is_multicast(), "startup RA is multicast");
+    (handle, task)
+}
+
+const RS: [u8; 8] = [133, 0, 0, 0, 0, 0, 0, 0];
+
+/// RFC 4861 §6.2.6: the answer to each RS is delayed by up to `MAX_RA_DELAY_TIME` (500 ms), but
+/// solicitations are answered concurrently: a burst from many hosts (Wi-Fi coming back) must
+/// not be served one delay after the other, stalling the loop for seconds.
+#[tokio::test]
+async fn test_ra_answers_a_solicitation_burst_concurrently() {
+    const HOSTS: u16 = 12;
+    let (ctx, bus) = create_test_context();
+    let (handle, task) = start_ra(&ctx).await;
+
+    let started = std::time::Instant::now();
+    for i in 1..=HOSTS {
+        let src = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, i);
+        handle
+            .inject(RS.to_vec(), SocketAddrV6::new(src, 0, 0, 0))
+            .await;
+    }
+    let mut answered = std::collections::HashSet::new();
+    while answered.len() < usize::from(HOSTS) {
+        let (pkt, dst) = timeout(Duration::from_millis(2000), handle.recv_reply())
+            .await
+            .expect("every RS answered")
+            .expect("RA channel closed");
+        assert_eq!(pkt[0], 134);
+        if !dst.ip().is_multicast() {
+            answered.insert(*dst.ip());
+        }
+    }
+    // Twelve delays in a row average 3 s; concurrent answers all fit in one delay.
+    assert!(
+        started.elapsed() < Duration::from_millis(800),
+        "burst answered in {:?}",
+        started.elapsed()
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    assert!(timeout(Duration::from_millis(500), task).await.is_ok());
+}
+
+/// RFC 4861 §6.2.6: an RS from the unspecified address (a host without an address yet) right
+/// after a multicast RA is answered with a multicast RA `MIN_DELAY_BETWEEN_RAS` (3 s) plus the
+/// random delay after the previous one, never dropped.
+#[tokio::test]
+async fn test_ra_answers_unspecified_source_rs_after_min_delay() {
+    let (ctx, bus) = create_test_context();
+    let (handle, task) = start_ra(&ctx).await;
+    let startup = std::time::Instant::now();
+
+    handle
+        .inject(
+            RS.to_vec(),
+            SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0),
+        )
+        .await;
+    // A periodic RA of the startup burst may come first; the answer must arrive within
+    // MIN_DELAY_BETWEEN_RAS + MAX_RA_DELAY_TIME of the startup RA either way.
+    let (_, dst) = timeout(Duration::from_millis(3700), handle.recv_reply())
+        .await
+        .expect("RS from :: must be answered, not dropped")
+        .expect("RA channel closed");
+    assert!(dst.ip().is_multicast());
+    assert!(ctx.ra_status().unwrap().ignored_solicitations == 0);
+    assert!(startup.elapsed() < Duration::from_millis(3700));
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    assert!(timeout(Duration::from_millis(500), task).await.is_ok());
 }
