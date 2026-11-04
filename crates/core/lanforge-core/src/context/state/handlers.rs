@@ -107,7 +107,6 @@ impl State {
         discovery.insert_ndp(ip, mac);
 
         let orphaned = discovery.remove_orphan(&ip);
-        let orphaned_info = orphaned.clone();
         let origin = if self.is_managed_slaac_prefix(&ip) {
             V6ObservationOrigin::SlaacTracker
         } else {
@@ -158,32 +157,6 @@ impl State {
             }
             change
         });
-
-        // Safety check: if we just linked an orphaned dynamic lease to a static device,
-        // and the assigned IP is NOT the static one, trigger a RECONFIGURE.
-        if let Some((duid, iaid, _)) = orphaned_info
-            && let Some(dev) = self.devices.get(&mac)
-            && dev.is_static()
-            && dev.duid.as_ref() == Some(&duid)
-        {
-            let has_static_match = dev.v6.iter().any(|s| match s {
-                IPv6State::Static(s, _) => s.matches(ip),
-                _ => false,
-            });
-
-            if !has_static_match {
-                tracing::info!(
-                    "📡 Triggering DHCPv6 Reconfigure for {} ({}) to move from temporary {} to static assignment.",
-                    dev.display_hostname(),
-                    mac,
-                    ip
-                );
-                events.push(LanforgeEvent::Device(DeviceEvent::LeaseRenew {
-                    mac,
-                    target: LeaseTarget::V6 { iaid },
-                }));
-            }
-        }
 
         let transient_name = self
             .transient_hosts

@@ -418,8 +418,9 @@ async fn test_dhcpv6_pool_ignores_wan_prefix_changes() -> Result<(), Box<dyn Err
 
 /// Static host with a fixed suffix: the ULA lease is infinite (our own prefix), the GUA lease is
 /// bounded by the delegated prefix, and T1 stays finite so the client renews and follows a
-/// renumbered GUA (clients ignore Reconfigure in practice). On the renewal after a renumbering
-/// the old GUA address comes back with zero lifetimes and the new one keeps the same suffix.
+/// renumbered GUA (no Reconfigure: clients drop it unauthenticated). On the renewal after a
+/// renumbering the old GUA address comes back with zero lifetimes and the new one keeps the
+/// same suffix.
 #[tokio::test]
 async fn test_dhcpv6_static_suffix_follows_renumbered_gua() -> Result<(), Box<dyn Error>> {
     const LAN: u32 = 1;
@@ -914,14 +915,8 @@ async fn test_dhcpv6_rapid_commit_reply_is_a_binding() -> Result<(), Box<dyn Err
         let handle = &handle;
         async move {
             handle.inject(bytes, client_src).await;
-            // Skip the Reconfigure the server multicasts on a renumber.
-            loop {
-                let reply = timeout(TEST_TIMEOUT, handle.recv_payload()).await.ok()??;
-                let msg = MessageV6::decode(&mut Decoder::new(&reply)).ok()?;
-                if msg.msg_type() != MessageTypeV6::Reconfigure {
-                    return Some(msg);
-                }
-            }
+            let reply = timeout(TEST_TIMEOUT, handle.recv_payload()).await.ok()??;
+            MessageV6::decode(&mut Decoder::new(&reply)).ok()
         }
     };
 
@@ -1034,14 +1029,8 @@ async fn test_dhcpv6_dynamic_lease_follows_renumbered_gua() -> Result<(), Box<dy
         let handle = &handle;
         async move {
             handle.inject(bytes, client_src).await;
-            // Skip the Reconfigure the server multicasts on a renumber.
-            loop {
-                let reply = timeout(TEST_TIMEOUT, handle.recv_payload()).await.ok()??;
-                let msg = MessageV6::decode(&mut Decoder::new(&reply)).ok()?;
-                if msg.msg_type() != MessageTypeV6::Reconfigure {
-                    return Some(msg);
-                }
-            }
+            let reply = timeout(TEST_TIMEOUT, handle.recv_payload()).await.ok()??;
+            MessageV6::decode(&mut Decoder::new(&reply)).ok()
         }
     };
     let old_prefix =
@@ -1188,17 +1177,12 @@ async fn start_v6_gua(
 
 type Dhcpv6InertHandle = lanforge_transport::InertHandle<SocketAddr>;
 
-/// Sends `bytes` from the test client and returns the server's answer (skipping Reconfigure).
+/// Sends `bytes` from the test client and returns the server's answer.
 async fn v6_exchange(handle: &Dhcpv6InertHandle, bytes: Vec<u8>) -> Option<MessageV6> {
     let client_src: SocketAddr = "[fe80::5644:a3ff:fe46:c294]:546".parse().ok()?;
     handle.inject(bytes, client_src).await;
-    loop {
-        let reply = timeout(TEST_TIMEOUT, handle.recv_payload()).await.ok()??;
-        let msg = MessageV6::decode(&mut Decoder::new(&reply)).ok()?;
-        if msg.msg_type() != MessageTypeV6::Reconfigure {
-            return Some(msg);
-        }
-    }
+    let reply = timeout(TEST_TIMEOUT, handle.recv_payload()).await.ok()??;
+    MessageV6::decode(&mut Decoder::new(&reply)).ok()
 }
 
 /// Seconds until the recorded dynamic v6 lease of `mac` on `ip` expires.
@@ -1355,6 +1339,58 @@ async fn test_dhcpv6_advertise_is_not_a_lease() -> Result<(), Box<dyn Error>> {
             "an Advertise must not record a lease for {offered}"
         );
     }
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(TEST_TIMEOUT, task).await?;
+    Ok(())
+}
+
+/// No Reconfigure on a renumbering: RFC 8415 §18.2.11 makes clients discard a Reconfigure
+/// without authentication, and the clients seen (`NetworkManager`) never send Reconfigure
+/// Accept (option 20), so it was noise on the LAN. Clients move to the new prefix on their
+/// Renew (T1 capped at 300 s).
+#[tokio::test]
+async fn test_dhcpv6_renumbering_sends_nothing_unsolicited() -> Result<(), Box<dyn Error>> {
+    const LAN: u32 = 1;
+    let server_mac = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+    let client_mac = MacAddr([0x54, 0x44, 0xa3, 0x46, 0xc2, 0x94]);
+    let (ctx, bus) = init_test_context_with_interface(LAN, "lan0", server_mac);
+    let (handle, task) = start_v6_gua(&ctx, LAN, server_mac).await?;
+    let duid = Duid::new(vec![
+        0x00, 0x03, 0x00, 0x01, 0x54, 0x44, 0xa3, 0x46, 0xc2, 0x94,
+    ]);
+    const IAID: u32 = 7;
+
+    let reply = v6_exchange(
+        &handle,
+        Dhcpv6PacketBuilder::solicit(duid)
+            .with_ia_na(IAID, None)
+            .with_rapid_commit(true)
+            .build(),
+    )
+    .await
+    .ok_or("no Reply")?;
+    assert_eq!(reply.msg_type(), MessageTypeV6::Reply);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let bound = ctx.get_device(&client_mac).ok_or("client known")?;
+    assert!(bound.v6.iter().any(|s| matches!(
+        s,
+        lanforge_types::device::IPv6State::Dynamic(l) if l.ip.segments()[0] == 0x2804
+    )));
+
+    // Neighbour discovery knows the client's link-local, as on a real LAN.
+    let _ = ctx.apply(DeviceUpdate::NdpSeen {
+        mac: client_mac,
+        ip: "fe80::5644:a3ff:fe46:c294".parse()?,
+        is_active: true,
+    });
+
+    set_lan_gua(&ctx, LAN, server_mac, "2804:bdc:5071:9400::1");
+    let unsolicited = timeout(Duration::from_millis(300), handle.recv_payload()).await;
+    assert!(
+        unsolicited.is_err(),
+        "the server must not send anything on a renumbering"
+    );
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     let _ = timeout(TEST_TIMEOUT, task).await?;

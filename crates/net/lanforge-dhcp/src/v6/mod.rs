@@ -87,8 +87,8 @@ use lanforge_types::system::{DormantReason, ServiceId};
 /// Wraps the `Dhcpv6Server` state machine with bus event handling for:
 /// - `LeaseRelease` (`v4` and `v6-prefix`)
 /// - `DeviceUpdated` (`V6` suffix changes)
-/// - `PrefixChanged` (`GUA` updates → client `RECONFIGURE`)
-/// - `LeaseRenew` (manual RECONFIGURE send)
+/// - `PrefixChanged` (`GUA` updates: pools and static reservations follow the new prefix;
+///   clients move on their next Renew, no Reconfigure is sent)
 const DHCPV6_DEPS: &[Edge] = &[
     Edge::requires(
         ServiceId::Interfaces,
@@ -444,13 +444,13 @@ impl Dhcpv6Service {
                     let Some(timed_event) = event else {
                         return Ok(RunResult::Shutdown);
                     };
-                    self.handle_bus_event(&timed_event, &mut server, &transport, served_ifindex);
+                    self.handle_bus_event(&timed_event, &mut server, served_ifindex);
                 }
                 event = device_events.next_event() => {
                     let Some(timed_event) = event else {
                         return Ok(RunResult::Shutdown);
                     };
-                    self.handle_bus_event(&timed_event, &mut server, &transport, served_ifindex);
+                    self.handle_bus_event(&timed_event, &mut server, served_ifindex);
                 }
                 _ = stats_timer.tick() => {
                     self.publish_pool_stats(&server);
@@ -603,7 +603,6 @@ impl Dhcpv6Service {
         &self,
         event: &TimedEvent,
         server: &mut Dhcpv6Server,
-        transport: &io::Dhcpv6Transport,
         served_ifindex: Option<u32>,
     ) {
         match_event!(event, {
@@ -635,33 +634,7 @@ impl Dhcpv6Service {
             // prefix); `ppp0`'s own prefix changes must never rebase them.
             LanforgeEvent::Network(NetworkEvent::PrefixChanged(details)) => {
                 if served_ifindex == Some(details.ifindex) {
-                    self.handle_prefix_change(server, transport, details.gua, details.preferred, details.valid);
-                }
-            }
-            LanforgeEvent::Device(DeviceEvent::LeaseRenew {
-                mac,
-                target: LeaseTarget::V6 { .. } | LeaseTarget::V6Prefix { .. },
-            }) => {
-                let (duid, target_ip) = {
-                    let device = self.ctx.get_device(mac);
-                    let duid = device.as_ref().and_then(|d| d.duid.clone());
-                    let ll_ip = device.as_ref().and_then(|d| {
-                        d.v6.iter()
-                            .find_map(|s| s.ip().filter(|ip| (ip.segments()[0] & 0xffc0) == 0xfe80))
-                    });
-                    (duid, ll_ip)
-                };
-
-                if let (Some(duid), Some(ip)) = (duid, target_ip) {
-                    info!("Sending manual RECONFIGURE to {} ({})", ip, mac);
-                    let packet = server.build_reconfigure(&duid, MessageType::Renew);
-                    let client_port = if self.config.port == 547 {
-                        546
-                    } else {
-                        self.config.port - 1
-                    };
-                    let dest_addr = SocketAddrV6::new(ip, client_port, 0, 0);
-                    let _ = transport.send_reply(&packet, dest_addr.into());
+                    self.handle_prefix_change(server, details.gua, details.preferred, details.valid);
                 }
             }
         });
@@ -670,7 +643,6 @@ impl Dhcpv6Service {
     fn handle_prefix_change(
         &self,
         server: &mut Dhcpv6Server,
-        transport: &io::Dhcpv6Transport,
         gua: Option<Ipv6Prefix>,
         preferred: u32,
         valid: u32,
@@ -682,7 +654,7 @@ impl Dhcpv6Service {
 
             if old_gua != Some(g) {
                 let old_str = old_gua.map_or_else(|| "None".to_string(), |p| p.to_string());
-                info!("GUA prefix changed ({old_str} -> {g}), notifying clients");
+                info!("GUA prefix changed ({old_str} -> {g})");
 
                 // Update static reservations for the new GUA prefix
                 let registry = self.ctx.get_static_registry();
@@ -691,41 +663,6 @@ impl Dhcpv6Service {
                     .map(|s| server.pool.construct_addr_prefix(g, &s))
                     .collect();
                 server.pool.reserve_statics(gua_ips);
-
-                let reconfigs = self.ctx.with_state(|state| {
-                    let mut list = Vec::new();
-                    for dev in state.devices.values() {
-                        if let Some(duid) = &dev.duid {
-                            let has_gua_lease = dev.v6.iter().any(|s| {
-                                if let IPv6State::Dynamic(lease) = s {
-                                    let o = lease.ip.octets();
-                                    (0x20..=0x3F).contains(&o[0])
-                                } else {
-                                    false
-                                }
-                            });
-                            if has_gua_lease
-                                && let Some(ll_ip) = dev.v6.iter().find_map(|s| {
-                                    s.ip().filter(|ip| (ip.segments()[0] & 0xffc0) == 0xfe80)
-                                })
-                            {
-                                list.push((duid.clone(), ll_ip));
-                            }
-                        }
-                    }
-                    list
-                });
-
-                for (duid, ll_ip) in reconfigs {
-                    let packet = server.build_reconfigure(&duid, MessageType::Renew);
-                    let client_port = if self.config.port == 547 {
-                        546
-                    } else {
-                        self.config.port - 1
-                    };
-                    let dest_addr = std::net::SocketAddrV6::new(ll_ip, client_port, 0, 0);
-                    let _ = transport.send_reply(&packet, dest_addr.into());
-                }
             }
         }
     }
