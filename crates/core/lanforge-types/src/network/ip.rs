@@ -8,7 +8,7 @@ use std::str::FromStr;
 pub struct Ipv6Suffix(pub [u8; 8]);
 
 impl Ipv6Suffix {
-    /// Combina com um prefixo /64 para produzir um endereço completo.
+    /// Combines with a /64 prefix into a full address.
     #[must_use]
     pub fn resolve(&self, prefix: Ipv6Addr) -> Ipv6Addr {
         let mut bytes = prefix.octets();
@@ -16,7 +16,7 @@ impl Ipv6Suffix {
         Ipv6Addr::from(bytes)
     }
 
-    /// Extrai o sufixo de um endereço completo (os últimos 64 bits).
+    /// Extracts the suffix of a full address (its last 64 bits).
     #[must_use]
     pub fn from_addr(addr: Ipv6Addr) -> Self {
         let oct = addr.octets();
@@ -25,7 +25,7 @@ impl Ipv6Suffix {
         Self(s)
     }
 
-    /// Compara o sufixo com os últimos 64 bits de um endereço.
+    /// Compares the suffix with the last 64 bits of an address.
     #[must_use]
     pub fn matches(&self, addr: Ipv6Addr) -> bool {
         addr.octets()[8..16] == self.0

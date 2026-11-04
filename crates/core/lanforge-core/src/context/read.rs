@@ -132,7 +132,7 @@ impl LanforgeContext {
         self.inner.discovery.get_mac(ip)
     }
 
-    /// Produz um registro validado das configurações estáticas.
+    /// Builds a validated registry of the static configuration.
     #[must_use]
     pub fn get_static_registry(&self) -> Arc<StaticRegistry> {
         self.read().get_static_registry()

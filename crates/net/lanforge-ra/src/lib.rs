@@ -888,12 +888,12 @@ impl RaService {
                 }
             }
 
-            // Passive discovery: se conseguirmos o MAC do cara que pediu o RA,
-            // avisamos o sistema para tentar o prober de SLAAC.
+            // Passive discovery: when the soliciting host's MAC is known, tell the system so the
+            // SLAAC prober can try it.
             if let Some(src) = rs_src
                 && let Some(mac) = ctx.lctx.get_mac_by_ip(IpAddr::V6(src))
             {
-                tracing::event!(target:(module_path!()),tracing::Level::DEBUG,"RS trigger: emitindo RsReceived para {}",mac);
+                tracing::event!(target:(module_path!()),tracing::Level::DEBUG,"RS trigger: publishing RsReceived for {}",mac);
                 let _ = ctx
                     .lctx
                     .bus()
@@ -1016,12 +1016,9 @@ mod tests {
         );
 
         state.record_unicast(ip);
-        assert!(
-            !state.can_unicast_now(&ip),
-            "Unicast deve sofrer rate limit"
-        );
+        assert!(!state.can_unicast_now(&ip), "unicast must be rate limited");
 
-        // Um IP diferente não deve ser afetado pelo rate limit do primeiro
+        // Another IP is not affected by the first one's rate limit
         let ip2: Ipv6Addr = "fe80::2".parse().unwrap();
         assert!(state.can_unicast_now(&ip2));
     }
@@ -1034,23 +1031,23 @@ mod tests {
         };
         let mut state = RaState::new();
 
-        // Os 3 primeiros RAs devem ter um intervalo curto (<= 16s)
+        // The first 3 RAs use a short interval (<= 16 s)
         for _ in 0..3 {
             let interval = state.next_interval(&cfg);
             assert!(
                 interval <= MAX_INITIAL_RTR_ADVERT_INTERVAL,
-                "Intervalo de startup muito longo: {interval:?}"
+                "startup interval too long: {interval:?}"
             );
             state.record_multicast();
         }
 
-        // Do 4º em diante, deve entrar no regime normal [Min, Max]
+        // From the 4th on, the normal [Min, Max] regime applies
         // Min = 0.33 * Max = 33s. Max = 100s.
         let normal_interval = state.next_interval(&cfg);
         assert!(
             normal_interval >= Duration::from_secs(33)
                 && normal_interval <= Duration::from_secs(100),
-            "Intervalo normal fora dos limites: {normal_interval:?}",
+            "normal interval out of bounds: {normal_interval:?}",
         );
     }
 

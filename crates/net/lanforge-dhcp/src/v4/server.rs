@@ -765,7 +765,7 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     // -----------------------------------------------------------------------
-    // Helpers e Factories para os Testes
+    // Test helpers and factories
     // -----------------------------------------------------------------------
 
     fn dummy_config() -> Dhcpv4Config {
@@ -837,7 +837,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Suíte de Testes da Máquina de Estados (DORA)
+    // State machine (DORA) test suite
     // -----------------------------------------------------------------------
 
     /// RFC 2131 §4.3.5 and table 3: a DHCPACK to DHCPINFORM carries configuration only — no
@@ -899,7 +899,7 @@ mod tests {
                     Some(&DhcpOption::MessageType(MessageType::Offer))
                 );
 
-                // O IP ofertado deve vir no yiaddr (Your IP Address)
+                // The offered IP comes in yiaddr (Your IP Address)
                 assert_eq!(reply.yiaddr(), dest_ip);
                 assert!(dest_ip >= Ipv4Addr::new(192, 168, 1, 100));
             }
@@ -930,7 +930,7 @@ mod tests {
                 assert_eq!(dest_ip, requested_ip);
                 assert_eq!(reply.yiaddr(), requested_ip);
 
-                // O lease deve ter sido gravado internamente no servidor
+                // The lease was recorded inside the server
                 assert_eq!(srv.last_assignment_for(), Some(requested_ip));
             }
             HandleResult::Ignore | HandleResult::Release { .. } => {
@@ -944,7 +944,7 @@ mod tests {
         let (mut srv, _ctx) = dummy_server();
         let mac = dummy_mac();
 
-        // Simula o cliente escolhendo um servidor concorrente (ServerID = 10.0.0.1)
+        // The client picks a competing server (Server ID = 10.0.0.1)
         let alien_server = Ipv4Addr::new(10, 0, 0, 1);
         let raw_msg = build_raw_msg(
             MessageType::Request,
@@ -954,7 +954,7 @@ mod tests {
             Some(alien_server),
         );
 
-        // Como o ServerID não é o nosso, devemos ignorar silenciosamente
+        // The Server ID is not ours: ignore it silently
         let res = srv.handle_packet(&raw_msg, None);
         assert!(matches!(res, HandleResult::Ignore));
     }
@@ -966,14 +966,14 @@ mod tests {
         let mac2 = MacAddr([0x22, 0x22, 0x22, 0x22, 0x22, 0x22]);
         let contested_ip = Ipv4Addr::new(192, 168, 1, 105);
 
-        // 1. MAC1 aloca o IP primeiro
+        // 1. MAC1 takes the IP first
         let _ = ctx.apply(DeviceUpdate::V4LeaseGranted {
             mac: mac1,
             ip: contested_ip,
             expires: SystemTime::now() + Duration::from_hours(1),
         });
 
-        // 2. MAC2 tenta pedir o IP que já é do MAC1
+        // 2. MAC2 asks for the IP MAC1 already holds
         let raw_msg = build_raw_msg(MessageType::Request, mac2, Some(contested_ip), None, None);
         let res = srv.handle_packet(&raw_msg, None);
 
@@ -1076,12 +1076,12 @@ mod tests {
 
         assert!(
             matches!(res, HandleResult::Release { .. }),
-            "RELEASE deve retornar HandleResult::Release"
+            "RELEASE must return HandleResult::Release"
         );
         assert_eq!(
             srv.last_assignment_for(),
             None,
-            "IP deve ter sido liberado no pool interno"
+            "the IP must be back in the pool"
         );
     }
 
@@ -1106,7 +1106,7 @@ mod tests {
         assert_eq!(
             srv.last_assignment_for(),
             None,
-            "DECLINE deve revogar a associação do MAC"
+            "DECLINE must revoke the MAC association"
         );
     }
 
@@ -1114,7 +1114,7 @@ mod tests {
     fn inform_yields_ack_without_allocating_ip() {
         let (mut srv, _ctx) = dummy_server();
         let mac = dummy_mac();
-        let client_static_ip = Ipv4Addr::new(192, 168, 1, 50); // Fora do range dinâmico
+        let client_static_ip = Ipv4Addr::new(192, 168, 1, 50); // Outside the dynamic range
 
         let raw_msg = build_raw_msg(MessageType::Inform, mac, None, Some(client_static_ip), None);
         let res = srv.handle_packet(&raw_msg, None);
@@ -1129,10 +1129,10 @@ mod tests {
                     Some(&DhcpOption::MessageType(MessageType::Ack))
                 );
 
-                // Em um INFORM, o yiaddr (Your IP) deve vir ZERADO, pois o servidor não está alocando IP.
+                // An INFORM reply leaves yiaddr (Your IP) zero: the server allocates nothing.
                 assert_eq!(reply.yiaddr(), Ipv4Addr::UNSPECIFIED);
 
-                // Mas a resposta é direcionada para o ciaddr (o IP que o cliente disse já possuir)
+                // The reply goes to ciaddr (the IP the client says it already has)
                 assert_eq!(dest_ip, client_static_ip);
             }
             HandleResult::Ignore | HandleResult::Release { .. } => {

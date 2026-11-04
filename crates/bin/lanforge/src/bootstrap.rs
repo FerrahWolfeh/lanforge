@@ -399,7 +399,7 @@ impl Bootstrapper {
         }
 
         let mut table = db.load_table().unwrap_or_else(|e| {
-            warn!("Falha ao carregar DB ({e}), iniciando do zero");
+            warn!("Failed to load the DB ({e}); starting empty");
             State::new()
         });
 
