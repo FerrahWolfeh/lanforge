@@ -1,3 +1,4 @@
+use lanforge_types::network::ra::PrefixLifetime;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
@@ -502,11 +503,10 @@ impl Default for RaFile {
 /// A prefix lifetime: a duration (`"30d"`, `"4h"`, seconds) or `"infinity"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(transparent)]
-pub struct LifetimeFile(pub lanforge_types::network::ra::PrefixLifetime);
+pub struct LifetimeFile(pub PrefixLifetime);
 
 impl Serialize for LifetimeFile {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use lanforge_types::network::ra::PrefixLifetime;
         match self.0 {
             PrefixLifetime::Infinity => serializer.serialize_str("infinity"),
             PrefixLifetime::Secs(s) => HumanDuration(u64::from(s)).serialize(serializer),

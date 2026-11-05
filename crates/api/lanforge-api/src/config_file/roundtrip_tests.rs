@@ -6,9 +6,12 @@
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use super::ConfigFile;
 use crate::api::SystemConfigExport;
+use lanforge_types::network::firewall::FirewallConfig;
+use lanforge_types::network::ra::{PrefixSource, RaServerConfig, RouterPriority};
 
 /// Candidate replacements for a leaf: the first one the type accepts is kept.
 fn candidates(leaf: &Value) -> Vec<Value> {
@@ -25,25 +28,17 @@ fn candidates(leaf: &Value) -> Vec<Value> {
         }
         Value::String(s) => {
             let mut out = Vec::new();
-            if let Ok(ip) = s.parse::<std::net::Ipv4Addr>() {
+            if let Ok(ip) = s.parse::<Ipv4Addr>() {
                 let o = ip.octets();
-                out.push(
-                    std::net::Ipv4Addr::new(o[0], o[1], o[2], o[3] ^ 1)
-                        .to_string()
-                        .into(),
-                );
+                out.push(Ipv4Addr::new(o[0], o[1], o[2], o[3] ^ 1).to_string().into());
             }
-            if let Ok(ip) = s.parse::<std::net::Ipv6Addr>() {
+            if let Ok(ip) = s.parse::<Ipv6Addr>() {
                 let mut seg = ip.segments();
                 seg[7] ^= 1;
-                out.push(std::net::Ipv6Addr::from(seg).to_string().into());
+                out.push(Ipv6Addr::from(seg).to_string().into());
             }
-            if let Ok(sa) = s.parse::<std::net::SocketAddr>() {
-                out.push(
-                    std::net::SocketAddr::new(sa.ip(), sa.port() ^ 1)
-                        .to_string()
-                        .into(),
-                );
+            if let Ok(sa) = s.parse::<SocketAddr>() {
+                out.push(SocketAddr::new(sa.ip(), sa.port() ^ 1).to_string().into());
             }
             out.push(format!("{s}x").into());
             // URLs and other strings ending in a number (`udp://host:53`).
@@ -382,12 +377,7 @@ to_port = 6881
 description = "qBittorrent [IPv6]"
 "#;
 
-fn firewall_through_file(
-    fw: &lanforge_types::network::firewall::FirewallConfig,
-) -> (
-    lanforge_types::network::firewall::FirewallConfig,
-    Vec<String>,
-) {
+fn firewall_through_file(fw: &FirewallConfig) -> (FirewallConfig, Vec<String>) {
     let file = ConfigFile {
         firewall: super::FirewallFile::from_config(fw),
         ..ConfigFile::default()
@@ -401,8 +391,7 @@ fn firewall_through_file(
 
 #[test]
 fn owner_file_reads_as_the_live_firewall() {
-    let live: lanforge_types::network::firewall::FirewallConfig =
-        serde_json::from_str(OWNER_LIVE_FIREWALL).unwrap();
+    let live: FirewallConfig = serde_json::from_str(OWNER_LIVE_FIREWALL).unwrap();
     let (from_file, issues) = ConfigFile::parse(OWNER_FILE_FIREWALL)
         .unwrap()
         .firewall
@@ -413,8 +402,7 @@ fn owner_file_reads_as_the_live_firewall() {
 
 #[test]
 fn owner_live_firewall_survives_the_cut_over_exactly() {
-    let live: lanforge_types::network::firewall::FirewallConfig =
-        serde_json::from_str(OWNER_LIVE_FIREWALL).unwrap();
+    let live: FirewallConfig = serde_json::from_str(OWNER_LIVE_FIREWALL).unwrap();
     let (back, issues) = firewall_through_file(&live);
     assert!(issues.is_empty(), "{issues:?}");
     assert_eq!(back, live);
@@ -657,7 +645,7 @@ fn dhcp_pool_order_and_names_survive() {
     let pool = |name: &str, last: u8| Dhcpv4Pool {
         name: Some(name.into()),
         range_start: "192.168.2.1".parse().unwrap(),
-        range_end: std::net::Ipv4Addr::new(192, 168, 2, last),
+        range_end: Ipv4Addr::new(192, 168, 2, last),
         ..Default::default()
     };
     // Out of name order, and an empty NTP list (advertise none) unlike an absent one.
@@ -759,7 +747,7 @@ domains = ["lan"]
 
 /// The owner's live RA (`lanforge ra --json`, 2026-10-28): the lists as redb holds them
 /// (ULA first), the rest as the file sets it.
-fn owner_live_ra() -> lanforge_types::network::ra::RaServerConfig {
+fn owner_live_ra() -> RaServerConfig {
     use lanforge_types::network::ra::{
         DnsslConfig, PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RdnssConfig,
     };
@@ -803,9 +791,7 @@ fn owner_live_ra() -> lanforge_types::network::ra::RaServerConfig {
     }
 }
 
-fn ra_through_file(
-    ra: &lanforge_types::network::ra::RaServerConfig,
-) -> (lanforge_types::network::ra::RaServerConfig, Vec<String>) {
+fn ra_through_file(ra: &RaServerConfig) -> (RaServerConfig, Vec<String>) {
     let file = ConfigFile {
         ra: super::RaFile::from_config(ra),
         ..ConfigFile::default()
@@ -900,14 +886,8 @@ prefix = "2001:db8:1::/64"
 "#;
     let (ra, issues) = ConfigFile::parse(text).unwrap().ra.to_config();
     assert_eq!(ra.prefixes.len(), 1, "nothing advertised from a guess");
-    assert_eq!(
-        ra.prefixes[0].source,
-        lanforge_types::network::ra::PrefixSource::Static
-    );
-    assert_eq!(
-        ra.priority,
-        lanforge_types::network::ra::RouterPriority::Medium
-    );
+    assert_eq!(ra.prefixes[0].source, PrefixSource::Static);
+    assert_eq!(ra.priority, RouterPriority::Medium);
     assert_eq!(issues.len(), 4, "{issues:#?}");
 }
 

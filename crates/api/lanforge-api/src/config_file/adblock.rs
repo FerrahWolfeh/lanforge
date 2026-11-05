@@ -3,6 +3,7 @@
 //! `bypass`). A source is active by being named in `lists` or in a group; there is no
 //! per-source `enabled`. Manual rules live in line files (`adblock/*.rules`), not here.
 
+use std::fs;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
@@ -73,7 +74,7 @@ impl AdblockSettings {
             return (Some(String::new()), Vec::new());
         };
         let at = format!("[adblock] rules \"{rules}\"");
-        match std::fs::read_to_string(&path) {
+        match fs::read_to_string(&path) {
             Ok(text) => {
                 let issues = RulesFile::new(&text).issues(&at);
                 (Some(text), issues)
@@ -576,8 +577,8 @@ format = "hosts"
     fn the_rules_file_is_read_next_to_the_config_file() {
         let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join("lanforge.toml");
-        std::fs::create_dir(dir.path().join("adblock")).unwrap();
-        std::fs::write(
+        fs::create_dir(dir.path().join("adblock")).unwrap();
+        fs::write(
             dir.path().join("adblock/global.rules"),
             "@@||ok.com^\n||client.com^$client=10.0.0.1\n",
         )

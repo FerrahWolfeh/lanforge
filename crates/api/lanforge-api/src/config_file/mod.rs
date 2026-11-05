@@ -1,6 +1,11 @@
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::traffic::TrafficConfig;
 use serde::{Deserialize, Serialize};
+use std::fs::{self, File};
+use std::io::{self, Error, ErrorKind, Write};
+use std::path::Path;
+use std::process;
+use toml::{de, ser};
 
 pub mod adblock;
 pub mod convert;
@@ -77,7 +82,7 @@ pub struct ConfigFile {
 
 impl ConfigFile {
     /// Parses a TOML configuration string into a strongly-typed `ConfigFile`.
-    pub fn parse(content: &str) -> Result<Self, toml::de::Error> {
+    pub fn parse(content: &str) -> Result<Self, de::Error> {
         toml::from_str(content)
     }
 
@@ -85,7 +90,7 @@ impl ConfigFile {
     /// not fit its type is set aside instead of failing the whole file: it takes its default and
     /// is returned with the error. One wrong value in `[firewall]` must not take DHCP and DNS down
     /// with it. A file that is not TOML at all, or a wrong value elsewhere, is still an error.
-    pub fn parse_lenient(content: &str) -> Result<(Self, Vec<(Section, String)>), toml::de::Error> {
+    pub fn parse_lenient(content: &str) -> Result<(Self, Vec<(Section, String)>), de::Error> {
         let first_error = match Self::parse(content) {
             Ok(cfg) => return Ok((cfg, Vec::new())),
             Err(e) => e,
@@ -115,7 +120,7 @@ impl ConfigFile {
     }
 
     /// Renders the complete configuration as a well-formatted TOML string.
-    pub fn render_full(&self) -> Result<String, toml::ser::Error> {
+    pub fn render_full(&self) -> Result<String, ser::Error> {
         let mut out = String::from(
             "# Lanforge Configuration File\n# Automatically synchronized by Lanforge\n\n",
         );
@@ -129,12 +134,11 @@ impl ConfigFile {
 /// file (other sections, comments, formatting). A file that cannot be read or parsed is an
 /// error, never replaced: the caller must not apply a change it could not persist.
 pub fn persist_sections(
-    path: &std::path::Path,
+    path: &Path,
     cfg: &ConfigFile,
     sections: SectionSet,
-) -> Result<(), std::io::Error> {
-    use std::io::{Error, ErrorKind};
-    let text = std::fs::read_to_string(path)?;
+) -> Result<(), io::Error> {
+    let text = fs::read_to_string(path)?;
     let mut doc = text
         .parse::<toml_edit::DocumentMut>()
         .map_err(|e| Error::new(ErrorKind::InvalidData, format!("invalid TOML: {e}")))?;
@@ -143,11 +147,10 @@ pub fn persist_sections(
 }
 
 /// Atomically writes content to a file using a temporary file in the same directory.
-pub fn write_toml_atomically(path: &std::path::Path, content: &str) -> Result<(), std::io::Error> {
-    use std::io::Write;
-    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+pub fn write_toml_atomically(path: &Path, content: &str) -> Result<(), io::Error> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
     if !parent.as_os_str().is_empty() && !parent.exists() {
-        std::fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent)?;
     }
 
     let tmp_path = parent.join(format!(
@@ -155,16 +158,16 @@ pub fn write_toml_atomically(path: &std::path::Path, content: &str) -> Result<()
         path.file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("lanforge.toml"),
-        std::process::id()
+        process::id()
     ));
 
     {
-        let mut file = std::fs::File::create(&tmp_path)?;
+        let mut file = File::create(&tmp_path)?;
         file.write_all(content.as_bytes())?;
         file.sync_all()?;
     }
 
-    std::fs::rename(&tmp_path, path)?;
+    fs::rename(&tmp_path, path)?;
     Ok(())
 }
 
