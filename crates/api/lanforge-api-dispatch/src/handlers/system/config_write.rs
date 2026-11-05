@@ -5,6 +5,8 @@ use lanforge_api::api::Response;
 use lanforge_api::config_file::{
     AdblockFile, AdblockSettings, ConfigFile, SectionSet, persist_sections, write_toml_atomically,
 };
+use lanforge_core::context::ConfigPatch;
+use lanforge_types::network::DnsReverseResolver;
 
 /// Why a configuration change was not made: nothing was written nor applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,7 +192,7 @@ impl ClientContext {
         if ra.iface.is_none() {
             ra.iface = lan_iface;
         }
-        self.ctx.update_ra_server_config(ra);
+        let _ = self.ctx.apply_config(ConfigPatch::new().with_ra(ra));
         Ok(persisted)
     }
 
@@ -291,8 +293,21 @@ impl ClientContext {
     /// Applies the parts of `dns` that differ from the live settings. The listener is bound at
     /// start-up and is not changed here.
     pub fn apply_dns_settings(&self, dns: lanforge_api::config_file::DnsSettings) {
+        let reverse = dns.reverse.clone();
+        let _ = self
+            .ctx
+            .apply_config(self.dns_settings_patch(ConfigPatch::new(), dns));
+        self.sync_reverse_resolvers(reverse);
+    }
+
+    /// `patch` plus the upstreams, mode and rewrites of `dns` that differ from the live ones.
+    /// The reverse resolvers are not part of it: see [`Self::sync_reverse_resolvers`].
+    pub(crate) fn dns_settings_patch(
+        &self,
+        mut patch: ConfigPatch,
+        dns: lanforge_api::config_file::DnsSettings,
+    ) -> ConfigPatch {
         let upstreams: Vec<_> = dns.upstreams.into_iter().map(|u| u.target).collect();
-        let mut patch = lanforge_core::context::ConfigPatch::new();
         if self.ctx.get_dns_upstreams() != upstreams {
             patch = patch.with_dns_upstreams(upstreams);
         }
@@ -302,9 +317,14 @@ impl ClientContext {
         if self.ctx.get_dns_rewrites() != dns.rewrites {
             patch = patch.with_dns_rewrites(dns.rewrites);
         }
-        let _ = self.ctx.apply_config(patch);
-        if self.ctx.all_reverse_resolvers() != dns.reverse {
-            self.ctx.set_reverse_resolvers(dns.reverse);
+        patch
+    }
+
+    /// The reverse resolvers live in the device state and the config store at once;
+    /// `set_reverse_resolvers` keeps both.
+    pub(crate) fn sync_reverse_resolvers(&self, reverse: Vec<DnsReverseResolver>) {
+        if self.ctx.all_reverse_resolvers() != reverse {
+            self.ctx.set_reverse_resolvers(reverse);
         }
     }
 
@@ -375,15 +395,26 @@ impl ClientContext {
     /// Applies the filter settings and the global layer's sources of `adblock` that differ from
     /// the live ones. The rules file is applied by [`Self::change_adblock_rules`] / the reload.
     pub fn apply_adblock_settings(&self, adblock: &AdblockSettings) {
+        let _ = self
+            .ctx
+            .apply_config(self.adblock_settings_patch(ConfigPatch::new(), adblock));
+    }
+
+    /// `patch` plus the filter settings and global sources of `adblock` that differ from the
+    /// live ones.
+    pub(crate) fn adblock_settings_patch(
+        &self,
+        mut patch: ConfigPatch,
+        adblock: &AdblockSettings,
+    ) -> ConfigPatch {
         let sources: Vec<_> = adblock.global_sources().cloned().collect();
-        let mut patch = lanforge_core::context::ConfigPatch::new();
         if self.ctx.get_dns_adblock() != adblock.config {
             patch = patch.with_dns_adblock(adblock.config.clone());
         }
         if self.ctx.get_dns_adblock_urls() != sources {
             patch = patch.with_dns_adblock_urls(sources);
         }
-        let _ = self.ctx.apply_config(patch);
+        patch
     }
 
     /// Changes the global adblock rules file: `change` gets the live text and returns the new
@@ -423,7 +454,9 @@ impl ClientContext {
             }
             _ => Persisted::MemoryOnly,
         };
-        self.ctx.update_dns_adblock_rules(text);
+        let _ = self
+            .ctx
+            .apply_config(ConfigPatch::new().with_dns_adblock_rules(text));
         Ok(persisted)
     }
 

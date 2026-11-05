@@ -285,16 +285,10 @@ username = ""
         other => panic!("Unexpected reload response: {other:?}"),
     }
 
-    // Unchanged config must emit ZERO ConfigChanged and ZERO ReloadConfig events
+    // Unchanged config must emit ZERO ConfigChanged events
     while let Ok(Ok(timed)) = timeout(Duration::from_millis(50), sys_rx.recv()).await {
-        match timed.event {
-            LanforgeEvent::System(SystemEvent::ConfigChanged { sections }) => {
-                panic!("No ConfigChanged event expected on no-op reload, got: {sections:?}");
-            }
-            LanforgeEvent::System(SystemEvent::ReloadConfig) => {
-                panic!("ReloadConfig event must never be broadcast by handle_reload");
-            }
-            _ => {}
+        if let LanforgeEvent::System(SystemEvent::ConfigChanged { sections }) = timed.event {
+            panic!("No ConfigChanged event expected on no-op reload, got: {sections:?}");
         }
     }
 }

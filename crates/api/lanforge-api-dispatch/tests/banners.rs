@@ -114,3 +114,33 @@ async fn pppoe_summary_names_the_state_in_words() {
         Some("waiting for carrier · 3 retries so far")
     );
 }
+
+/// A stopped firewall says what it left in the kernel: "stopped by admin" alone does not tell
+/// a closed WAN (lockdown) from no lanforge table at all.
+#[tokio::test]
+async fn stopped_firewall_says_what_it_left() {
+    use lanforge_types::network::firewall::FirewallStopAction;
+
+    let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+    ctx.register_service(ServiceId::Nft, "Firewall");
+    ctx.set_service_state(ServiceId::Nft, ServiceState::Inactive);
+    ctx.set_service_detail(ServiceId::Nft, Some(StateDetail::AdminStopped));
+    let client = ClientContext::new(ctx.clone());
+    let summary = |banners: Vec<lanforge_types::system::ServiceBanner>| {
+        banners
+            .into_iter()
+            .find(|b| b.id == ServiceId::Nft)
+            .and_then(|b| b.summary)
+    };
+
+    ctx.set_firewall_left(Some(FirewallStopAction::Lockdown));
+    assert_eq!(
+        summary(client.service_banners().await).as_deref(),
+        Some("stopped by admin · WAN locked down")
+    );
+    ctx.set_firewall_left(Some(FirewallStopAction::Remove));
+    assert_eq!(
+        summary(client.service_banners().await).as_deref(),
+        Some("stopped by admin · table removed, WAN not filtered by lanforge")
+    );
+}

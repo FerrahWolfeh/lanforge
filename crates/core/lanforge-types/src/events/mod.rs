@@ -70,16 +70,9 @@ impl TimedEvent {
                 SystemEvent::Shutdown
                     | SystemEvent::ServiceReady { .. }
                     | SystemEvent::SystemReady
-                    | SystemEvent::ReloadConfig
                     | SystemEvent::ConfigChanged { .. }
                     | SystemEvent::ConfigUpdate { .. }
                     | SystemEvent::ServiceControl { .. }
-                    | SystemEvent::ConfigDhcpV4Changed
-                    | SystemEvent::ConfigDhcpV6Changed
-                    | SystemEvent::ConfigRaChanged
-                    | SystemEvent::ConfigTftpChanged
-                    | SystemEvent::ConfigDhcpOptionsChanged
-                    | SystemEvent::ConfigPppoeChanged
             ),
             LanforgeEvent::Storage(e) => matches!(
                 e,

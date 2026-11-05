@@ -48,6 +48,8 @@
 	let internalIpv6 = $state("");
 	let ipMode = $state<"v4" | "v6" | "dual">("v4");
 	let selectedDevice = $state<DeviceEntry | null>(null);
+	/** `dev:<name|mac>` when the rule targets a device (follows its addresses), else null. */
+	let deviceTarget = $state<string | null>(null);
 	let enableHairpin = $state(false);
 	let devicePickerSearch = $state("");
 	let prevOpen = $state(false);
@@ -91,6 +93,7 @@
 				errors = {};
 				devicePickerSearch = "";
 				selectedDevice = null;
+				deviceTarget = null;
 				if (rule) {
 					comment = rule.comment ?? "";
 					protocol = rule.protocol;
@@ -98,7 +101,12 @@
 					externalPort = rule.external_port;
 					internalPort = rule.internal_port;
 					enableHairpin = rule.enable_hairpin;
-					if (rule.internal_ip.includes(":")) {
+					if (rule.internal_ip.startsWith("dev:")) {
+						deviceTarget = rule.internal_ip;
+						ipMode = rule.family === "ipv4" ? "v4" : rule.family === "ipv6" ? "v6" : "dual";
+						internalIp = "";
+						internalIpv6 = "";
+					} else if (rule.internal_ip.includes(":")) {
 						ipMode = "v6";
 						internalIpv6 = cleanIp(rule.internal_ip);
 						internalIp = "";
@@ -131,26 +139,17 @@
 	}
 
 	// ── DeviceCombobox callback ───────────────────────────────────────────────
+	// A picked device is targeted by name (MAC when nameless): the forward follows its
+	// addresses (IPv4 reservation/lease, IPv6 on the current prefix), no IP typed or kept.
 	function handleDeviceSelect(dev: DeviceEntry) {
 		selectedDevice = dev;
-		const v4 = cleanIp(dev.v4?.ip || dev.primary_v4);
-		if (v4 && v4 !== "—") internalIp = v4;
-
-		// Extract GUA or ULA or primary primary_v6
-		const v6Gua = dev.ipv6_addrs?.find((a) => a.kind.toLowerCase() === "gua")?.addr;
-		const v6Ula = dev.ipv6_addrs?.find((a) => a.kind.toLowerCase() === "ula")?.addr;
-		const primaryV6 = cleanIp(v6Gua || dev.primary_v6 || v6Ula);
-		if (primaryV6 && primaryV6 !== "—") internalIpv6 = primaryV6;
-
-		// Auto-switch mode based on available addresses
-		if (internalIp && internalIpv6 && !rule) {
-			ipMode = "dual";
-		} else if (internalIpv6 && !internalIp) {
-			ipMode = "v6";
-		} else {
-			ipMode = "v4";
-		}
-
+		// `dev:<name>` takes letters, digits and hyphens; other names go by MAC.
+		const name = (dev.hostname || "").toLowerCase();
+		const usable = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(name);
+		deviceTarget = `dev:${usable ? name : dev.mac.toLowerCase()}`;
+		internalIp = "";
+		internalIpv6 = "";
+		if (!rule) ipMode = "dual";
 		errors = {};
 		devicePickerSearch = "";
 	}
@@ -178,6 +177,33 @@
 
 	// ── Submit ────────────────────────────────────────────────────────────────
 	function handleSave() {
+		if (deviceTarget) {
+			const validation = validateForm(portForwardBaseSchema, {
+				srcZone,
+				externalPort: externalPort === "" ? NaN : externalPort,
+				internalPort: internalPort === "" ? NaN : internalPort,
+				comment: comment.trim() || undefined,
+			});
+			if (!validation.success) {
+				errors = validation.errors as Record<string, string>;
+				toast.error("Please correct the invalid fields highlighted below");
+				return;
+			}
+			errors = {};
+			onSave({
+				comment: comment.trim() || null,
+				src_zone: srcZone,
+				internal_ip: deviceTarget,
+				external_port: Number(externalPort),
+				// An IPv6 pinhole is routed: it keeps the external port.
+				internal_port: ipMode === "v4" ? Number(internalPort) : Number(externalPort),
+				protocol,
+				enable_hairpin: ipMode === "v6" ? false : enableHairpin,
+				family: ipMode === "dual" ? null : ipMode === "v4" ? "ipv4" : "ipv6",
+			});
+			return;
+		}
+
 		const cleanV4 = cleanIp(internalIp);
 		const cleanV6 = cleanIp(internalIpv6);
 
@@ -204,6 +230,18 @@
 			toast.error("Please correct the invalid fields highlighted below");
 			return;
 		}
+		// A ULA is not routed on the internet: a pinhole to it never receives anything.
+		if ((ipMode === "v6" || ipMode === "dual") && /^f[cd]/i.test(cleanV6)) {
+			errors = { internalIpv6: "A ULA is not reachable from the internet: pick the device or use its GUA" };
+			toast.error("IPv6 pinholes need a GUA, not a ULA");
+			return;
+		}
+		// An IPv6 pinhole is routed, not NATed: the host gets the port the WAN asked for.
+		if (ipMode === "v6" && Number(internalPort) !== Number(externalPort)) {
+			errors = { externalPort: "IPv6 pinholes cannot change the port: the host gets this port" };
+			toast.error("IPv6 pinholes cannot change the port");
+			return;
+		}
 
 		errors = {};
 
@@ -222,7 +260,8 @@
 				src_zone: srcZone,
 				internal_ip: cleanV6,
 				external_port: Number(externalPort),
-				internal_port: Number(internalPort),
+				// Routed, not NATed: the pinhole keeps the external port.
+				internal_port: Number(externalPort),
 				protocol,
 				enable_hairpin: false,
 			};
@@ -348,7 +387,7 @@
 						variant="outline"
 						class="w-full"
 					>
-						<ToggleGroup.Item value="dual" class="flex-1 text-xs gap-1.5" disabled={!!rule}>
+						<ToggleGroup.Item value="dual" class="flex-1 text-xs gap-1.5" disabled={!!rule && !deviceTarget}>
 							<NetworkIcon class="size-3.5 text-primary" />
 							Dual-Stack (v4 + v6)
 						</ToggleGroup.Item>
@@ -364,8 +403,29 @@
 				</Field.Content>
 			</Field.Field>
 
-			<!-- Target IP Inputs based on Mode -->
-			{#if ipMode === "v4" || ipMode === "dual"}
+			<!-- Target: a device (follows its addresses) or fixed IPs -->
+			{#if deviceTarget}
+				<div class="flex flex-col gap-1.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 text-[11px]">
+					<div class="flex items-center justify-between gap-2">
+						<span class="font-mono font-semibold text-foreground">{deviceTarget}</span>
+						<Button
+							size="sm"
+							variant="ghost"
+							class="h-6 text-[11px]"
+							onclick={() => {
+								deviceTarget = null;
+								selectedDevice = null;
+							}}
+						>
+							Use fixed addresses instead
+						</Button>
+					</div>
+					<span class="text-muted-foreground">
+						Follows the device: IPv4 goes to its reservation or lease; the IPv6 pinhole opens on its fixed
+						suffix or DHCPv6 lease on the current delegated prefix, and moves when the ISP renumbers it.
+					</span>
+				</div>
+			{:else if ipMode === "v4" || ipMode === "dual"}
 				<Field.Field data-invalid={!!errors.internalIp || undefined}>
 					<Field.Label class="text-xs flex items-center justify-between">
 						<span>Internal IPv4 Address</span>
@@ -392,11 +452,11 @@
 				</Field.Field>
 			{/if}
 
-			{#if ipMode === "v6" || ipMode === "dual"}
+			{#if !deviceTarget && (ipMode === "v6" || ipMode === "dual")}
 				<Field.Field data-invalid={!!errors.internalIpv6 || undefined}>
 					<Field.Label class="text-xs flex items-center justify-between">
 						<span>Target IPv6 Address</span>
-						<span class="text-[10px] text-purple-400">Routed Global GUA / ULA</span>
+						<span class="text-[10px] text-purple-400">Routed global address (GUA)</span>
 					</Field.Label>
 					<Field.Content>
 						<Input

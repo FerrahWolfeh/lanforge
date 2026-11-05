@@ -15,10 +15,13 @@ use lanforge_types::system::ServiceState;
 use lanforge_types::update::{DeviceUpdate, InterfaceState};
 use tokio::time::timeout;
 
+/// Interface index of the LAN the RA serves in these tests.
+const LAN: u32 = 2;
+
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(bus.clone(), state, Some(LAN));
 
     ctx.set_target_interface_name("lan0".to_string());
     (ctx, bus)
@@ -61,6 +64,7 @@ async fn test_ra_inert_full_lifecycle() {
     });
 
     let cfg = RaConfig::default();
+    set_iface_gua(&ctx, LAN, None);
 
     // 2. Initialize service with inert transport
     let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
@@ -119,7 +123,8 @@ async fn test_ra_inert_full_lifecycle() {
     handle.inject(rs_packet, client_src).await;
 
     // 7. Verify unicast RA response is received by client
-    let unicast_ra = timeout(Duration::from_millis(500), handle.recv_payload())
+    // RFC 4861 §6.2.6: answered after a random delay of up to 500 ms.
+    let unicast_ra = timeout(Duration::from_millis(1000), handle.recv_payload())
         .await
         .expect("Timeout waiting for unicast inert RA response")
         .expect("RA channel closed unexpectedly");
@@ -141,8 +146,19 @@ async fn test_ra_inert_full_lifecycle() {
 
     assert_eq!(rs_evt, client_mac);
 
-    // 9. Verify live status reflects the solicitation and response
-    let updated_status = ctx.ra_status().unwrap();
+    // 9. Verify live status reflects the solicitation and response (published right after
+    // the unicast send).
+    let updated_status = timeout(Duration::from_millis(200), async {
+        loop {
+            let st = ctx.ra_status().unwrap();
+            if st.sent_unicast_ras > 0 {
+                return st;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("status shows the unicast answer");
     assert_eq!(updated_status.sent_multicast_ras, 1);
     assert_eq!(updated_status.sent_unicast_ras, 1);
     assert_eq!(updated_status.received_solicitations, 1);
@@ -194,8 +210,7 @@ fn set_iface_gua(ctx: &LanforgeContext, ifindex: u32, gua: Option<Ipv6Addr>) {
 /// reconnect `ppp0` gets its own /64 while the LAN keeps or changes its delegated prefix.
 #[tokio::test]
 async fn test_ra_prefix_deprecation_on_renumber() {
-    // No LAN ifindex in this context: RA serves interface 1. `ppp0` is interface 10.
-    const LAN: u32 = 1;
+    // `ppp0` is interface 10.
     const PPP0: u32 = 10;
     let (ctx, bus) = create_test_context();
 
@@ -320,7 +335,7 @@ async fn test_ra_deprecates_prefix_from_before_restart() {
     ctx.provide_shared(Arc::new(PreviousLanPrefixes(vec![
         lanforge_types::network::Ipv6Prefix::from_addr(old),
     ])));
-    set_iface_gua(&ctx, 1, Some("2804:bdc:509d:4500::1".parse().unwrap()));
+    set_iface_gua(&ctx, LAN, Some("2804:bdc:509d:4500::1".parse().unwrap()));
 
     let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
     let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
@@ -371,7 +386,7 @@ async fn test_ra_deprecates_boot_prefix_withdrawn_before_start() {
     ctx.provide_shared(Arc::new(PreviousLanPrefixes(vec![
         lanforge_types::network::Ipv6Prefix::from_addr(boot),
     ])));
-    set_iface_gua(&ctx, 1, None);
+    set_iface_gua(&ctx, LAN, None);
 
     let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
     let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
@@ -400,7 +415,7 @@ async fn test_ra_deprecates_boot_prefix_withdrawn_before_start() {
         "boot prefix deprecated at startup"
     );
 
-    set_iface_gua(&ctx, 1, Some("2804:bdc:50a9:f300::1".parse().unwrap()));
+    set_iface_gua(&ctx, LAN, Some("2804:bdc:50a9:f300::1".parse().unwrap()));
     let ra = next_ra().await;
     assert!(
         pref_of(&ra, new).is_some_and(|p| p > 0),
@@ -414,4 +429,248 @@ async fn test_ra_deprecates_boot_prefix_withdrawn_before_start() {
             .await
             .is_ok()
     );
+}
+
+/// Without a LAN interface index the RA must refuse to serve, never fall back to interface 1
+/// (the loopback) and advertise there.
+#[tokio::test]
+async fn test_ra_refuses_to_serve_without_lan_ifindex() {
+    let bus = Arc::new(EventBus::new());
+    let ctx = LanforgeContext::new(bus, State::new(), None);
+    ctx.set_target_interface_name("lan0".to_string());
+    ctx.update_ra_server_config(RaServerConfig {
+        enabled: true,
+        iface: Some("lan0".into()),
+        prefixes: vec![RAPrefix::gua_dynamic()],
+        ..RaServerConfig::default()
+    });
+    set_iface_gua(&ctx, 1, Some("2001:db8:1::1".parse().unwrap()));
+
+    let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
+    let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
+    let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx.clone());
+    let res = timeout(Duration::from_millis(500), service.serve(&ctx, &h))
+        .await
+        .expect("serve must return, not run on a guessed interface");
+    assert!(res.is_err(), "serve must fail without a LAN ifindex");
+    assert!(
+        timeout(Duration::from_millis(50), handle.recv_payload())
+            .await
+            .is_err(),
+        "no RA may be sent"
+    );
+}
+
+/// Starts the RA on the LAN with one dynamic GUA prefix; returns the inert handle and the task.
+async fn start_ra(
+    ctx: &LanforgeContext,
+) -> (
+    lanforge_transport::InertHandle<SocketAddrV6>,
+    tokio::task::JoinHandle<Result<(), lanforge_core::error::CoreError>>,
+) {
+    ctx.update_ra_server_config(RaServerConfig {
+        enabled: true,
+        iface: Some("lan0".into()),
+        prefixes: vec![RAPrefix::gua_dynamic()],
+        ..RaServerConfig::default()
+    });
+    set_iface_gua(ctx, LAN, Some("2001:db8:1::1".parse().unwrap()));
+    let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
+    let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let task = tokio::spawn(async move {
+        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    let (_, dst) = timeout(Duration::from_millis(1000), handle.recv_reply())
+        .await
+        .expect("startup RA")
+        .expect("RA channel closed");
+    assert!(dst.ip().is_multicast(), "startup RA is multicast");
+    (handle, task)
+}
+
+const RS: [u8; 8] = [133, 0, 0, 0, 0, 0, 0, 0];
+
+/// RFC 4861 §6.2.6: the answer to each RS is delayed by up to `MAX_RA_DELAY_TIME` (500 ms), but
+/// solicitations are answered concurrently: a burst from many hosts (Wi-Fi coming back) must
+/// not be served one delay after the other, stalling the loop for seconds.
+#[tokio::test]
+async fn test_ra_answers_a_solicitation_burst_concurrently() {
+    const HOSTS: u16 = 12;
+    let (ctx, bus) = create_test_context();
+    let (handle, task) = start_ra(&ctx).await;
+
+    let started = std::time::Instant::now();
+    for i in 1..=HOSTS {
+        let src = Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, i);
+        handle
+            .inject(RS.to_vec(), SocketAddrV6::new(src, 0, 0, 0))
+            .await;
+    }
+    let mut answered = std::collections::HashSet::new();
+    while answered.len() < usize::from(HOSTS) {
+        let (pkt, dst) = timeout(Duration::from_millis(2000), handle.recv_reply())
+            .await
+            .expect("every RS answered")
+            .expect("RA channel closed");
+        assert_eq!(pkt[0], 134);
+        if !dst.ip().is_multicast() {
+            answered.insert(*dst.ip());
+        }
+    }
+    // Twelve delays in a row average 3 s; concurrent answers all fit in one delay.
+    assert!(
+        started.elapsed() < Duration::from_millis(800),
+        "burst answered in {:?}",
+        started.elapsed()
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    assert!(timeout(Duration::from_millis(500), task).await.is_ok());
+}
+
+/// RFC 4861 §6.2.6: an RS from the unspecified address (a host without an address yet) right
+/// after a multicast RA is answered with a multicast RA `MIN_DELAY_BETWEEN_RAS` (3 s) plus the
+/// random delay after the previous one, never dropped.
+#[tokio::test]
+async fn test_ra_answers_unspecified_source_rs_after_min_delay() {
+    let (ctx, bus) = create_test_context();
+    let (handle, task) = start_ra(&ctx).await;
+    let startup = std::time::Instant::now();
+
+    handle
+        .inject(
+            RS.to_vec(),
+            SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0),
+        )
+        .await;
+    // A periodic RA of the startup burst may come first; the answer must arrive within
+    // MIN_DELAY_BETWEEN_RAS + MAX_RA_DELAY_TIME of the startup RA either way.
+    let (_, dst) = timeout(Duration::from_millis(3700), handle.recv_reply())
+        .await
+        .expect("RS from :: must be answered, not dropped")
+        .expect("RA channel closed");
+    assert!(dst.ip().is_multicast());
+    assert!(ctx.ra_status().unwrap().ignored_solicitations == 0);
+    assert!(startup.elapsed() < Duration::from_millis(3700));
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    assert!(timeout(Duration::from_millis(500), task).await.is_ok());
+}
+
+/// The LAN is renumbered, then the RA restarts (rebind, admin restart, or the supervisor
+/// building a new instance after a failure): the first RA of the new run must still deprecate
+/// the withdrawn prefix, or clients keep preferring it until it expires.
+#[tokio::test]
+async fn test_ra_deprecation_survives_a_service_restart() {
+    let (ctx, bus) = create_test_context();
+    let old: Ipv6Addr = "2001:db8:1::".parse().unwrap();
+    let new: Ipv6Addr = "2001:db8:2::".parse().unwrap();
+    let pref_of = |ra: &[u8], p: Ipv6Addr| {
+        ra_prefixes(ra)
+            .into_iter()
+            .find(|(a, _, _)| *a == p)
+            .map(|(_, _, pref)| pref)
+    };
+
+    // First instance: advertises the old prefix, then sees the renumbering.
+    let (handle, task) = start_ra(&ctx).await;
+    set_iface_gua(&ctx, LAN, Some("2001:db8:2::1".parse().unwrap()));
+    let ra = timeout(Duration::from_millis(1000), handle.recv_payload())
+        .await
+        .expect("burst RA after renumbering")
+        .expect("RA channel closed");
+    assert_eq!(pref_of(&ra, old), Some(0), "old prefix deprecated");
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    assert!(timeout(Duration::from_millis(500), task).await.is_ok());
+
+    // A new instance on the same daemon context (what the supervisor builds on a restart).
+    let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
+    let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let task = tokio::spawn(async move {
+        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    let ra = timeout(Duration::from_millis(1000), handle.recv_payload())
+        .await
+        .expect("startup RA")
+        .expect("RA channel closed");
+    assert!(
+        pref_of(&ra, new).is_some_and(|p| p > 0),
+        "new prefix advertised"
+    );
+    assert_eq!(
+        pref_of(&ra, old),
+        Some(0),
+        "withdrawn prefix still deprecated after the restart"
+    );
+    task.abort();
+}
+
+/// RFC 9096 L-13: a withdrawn prefix is advertised with preferred lifetime 0 and valid lifetime
+/// min(what remains of the one advertised, 2 h). A prefix with 10 min left must not be
+/// stretched to 2 h.
+#[tokio::test]
+async fn test_ra_deprecated_valid_lifetime_is_capped_by_what_remains() {
+    let (ctx, bus) = create_test_context();
+    let lan = |gua: &str, valid: u32| DeviceUpdate::InterfaceIpsChanged {
+        ifindex: LAN,
+        state: Box::new(InterfaceState {
+            v4: None,
+            link_local: Some("fe80::1".parse().unwrap()),
+            gua: Some(gua.parse().unwrap()),
+            ula: None,
+            gua_preferred: valid / 2,
+            gua_valid: valid,
+            mac: Some(MacAddr([0x02, 0, 0, 0, 0, 0x01])),
+        }),
+    };
+    ctx.update_ra_server_config(RaServerConfig {
+        enabled: true,
+        iface: Some("lan0".into()),
+        prefixes: vec![RAPrefix::gua_dynamic()],
+        deprecate_on_renumber: true,
+        ..RaServerConfig::default()
+    });
+    let _ = ctx.apply(lan("2001:db8:1::1", 600));
+
+    let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
+    let mut service = RaService::with_transport(RaConfig::default(), ctx.clone(), transport);
+    let ctx_clone = ctx.clone();
+    let task = tokio::spawn(async move {
+        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx_clone.clone());
+        service.serve(&ctx_clone, &h).await
+    });
+    let next_ra = || async {
+        timeout(Duration::from_millis(1000), handle.recv_payload())
+            .await
+            .expect("Timeout waiting for RA")
+            .expect("RA channel closed")
+    };
+    let old: Ipv6Addr = "2001:db8:1::".parse().unwrap();
+    let ra = next_ra().await;
+    assert_eq!(
+        ra_prefixes(&ra)
+            .into_iter()
+            .find(|(a, _, _)| *a == old)
+            .map(|(_, v, _)| v),
+        Some(600)
+    );
+
+    let _ = ctx.apply(lan("2001:db8:2::1", 86_400));
+    let ra = next_ra().await;
+    let (_, valid, preferred) = ra_prefixes(&ra)
+        .into_iter()
+        .find(|(a, _, _)| *a == old)
+        .expect("old prefix deprecated");
+    assert_eq!(preferred, 0);
+    assert!(
+        valid > 0 && valid <= 600,
+        "valid lifetime = what remains (600 s), not 2 h: {valid}"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    assert!(timeout(Duration::from_millis(500), task).await.is_ok());
 }

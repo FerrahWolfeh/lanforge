@@ -577,25 +577,7 @@ fn render_dns_event(time_str: &str, evt: &DnsEvent, printer: &Printer) {
                 printer,
             );
         }
-        DnsEvent::ConfigRewritesChanged => {
-            print_log(
-                time_str,
-                "DNS",
-                "REWRITE".cyan(),
-                "DNS rewrite rules updated".to_string(),
-                printer,
-            );
-        }
-        DnsEvent::ConfigUpstreamsChanged => {
-            print_log(
-                time_str,
-                "DNS",
-                "UPSTREAM".cyan(),
-                "DNS upstream resolvers updated".to_string(),
-                printer,
-            );
-        }
-        _ => {}
+        DnsEvent::QueryResolved(_) => {}
     }
 }
 
@@ -610,12 +592,13 @@ fn render_system_event(time_str: &str, evt: &SystemEvent, printer: &Printer) {
                 printer,
             );
         }
-        SystemEvent::ReloadConfig => {
+        SystemEvent::ConfigChanged { sections } => {
+            let names: Vec<&str> = sections.iter_names().map(|(name, _)| name).collect();
             print_log(
                 time_str,
                 "SYSTEM",
-                "RELOAD".yellow().bold(),
-                "Configuration reload signal absorbed".to_string(),
+                "CONFIG".yellow().bold(),
+                format!("Configuration changed: {}", names.join(", ").to_lowercase()),
                 printer,
             );
         }

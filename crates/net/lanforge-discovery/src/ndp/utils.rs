@@ -52,7 +52,7 @@ pub async fn lookup_mac_for_ipv6(handle: &Handle, ip: &Ipv6Addr) -> Option<MacAd
 
         for attr in &msg.attributes {
             match attr {
-                // OPTIMIZATION: Comparação direta de structs, zero alocação de string!
+                // OPTIMIZATION: compare the structs directly, no string allocation.
                 NeighbourAttribute::Destination(NeighbourAddress::Inet6(addr)) if addr == ip => {
                     found_ip = true;
                 }
@@ -99,7 +99,7 @@ pub fn parse_neighbor_msg(msg: NeighbourMessage) -> Option<NeighborEvent> {
         }
     }
 
-    // CLEANUP: let-else para early returns mais legíveis
+    // let-else keeps the early returns readable
     let (Some(ip), Some(mac)) = (ip, mac) else {
         return None;
     };

@@ -56,11 +56,14 @@ pub mod packet;
 pub use config::*;
 use lanforge_core::context::LanforgeContext;
 use lanforge_types::config::ChangeImpact;
+use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::network::ra::{
     ICMPV6_TYPE_RS, MAX_INITIAL_RTR_ADVERT_INTERVAL, MAX_INITIAL_RTR_ADVERTISEMENTS,
     MAX_RA_DELAY_TIME_MS, MIN_DELAY_BETWEEN_RAS, PreviousLanPrefixes, RAPrefix, RaServerConfig,
 };
 use lanforge_types::system::{DormantReason, RaStatusResponse, RunResult};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 pub use packet::{build_ra_packet, icmpv6_checksum};
 
@@ -80,6 +83,9 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 const ALL_NODES_MULTICAST: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 1);
+
+/// Bound on queued unicast answers (a solicitation burst from many hosts at once).
+const MAX_PENDING_UNICAST: usize = 32;
 
 // ---------------------------------------------------------------------------
 // Runtime State — Handles RFC-compliant timing
@@ -102,12 +108,10 @@ pub struct RaState {
     last_multicast_ra: Option<Instant>,
     /// Unicast rate limiting: tracks the last RA sent per destination IP.
     unicast_rl: HashMap<Ipv6Addr, Instant>,
-    /// Last detected GUA — used to publish `PrefixChanged` only when a change occurs.
-    last_gua: Option<lanforge_types::network::Ipv6Prefix>,
-    /// Last detected ULA
-    last_ula: Option<lanforge_types::network::Ipv6Prefix>,
-    /// Deprecated prefixes: (Prefix, `deprecation_end`, `valid_end`)
-    pub(crate) deprecated_prefixes: Vec<(Ipv6Addr, Instant, Instant)>,
+    /// Unicast answers to Router Solicitations, due at their deadline (RFC 4861 §6.2.6 delay).
+    pending_unicast: Vec<(Ipv6Addr, Instant)>,
+    /// Prefixes advertised on the LAN, shared through the context (see [`AdvertisedPrefixes`]).
+    pub(crate) prefixes: Arc<AdvertisedPrefixes>,
     /// Total multicast RAs sent to `ff02::1`
     pub(crate) sent_multicast_ras: u64,
 
@@ -131,9 +135,8 @@ impl RaState {
             initial_sent: 0,
             last_multicast_ra: None,
             unicast_rl: HashMap::new(),
-            last_gua: None,
-            last_ula: None,
-            deprecated_prefixes: Vec::new(),
+            pending_unicast: Vec::new(),
+            prefixes: Arc::default(),
             sent_multicast_ras: 0,
             sent_unicast_ras: 0,
             received_solicitations: 0,
@@ -163,9 +166,35 @@ impl RaState {
         }
     }
 
-    pub(crate) fn can_multicast_now(&self) -> bool {
+    /// When a multicast answer to a Router Solicitation may go out (RFC 4861 §6.2.6): after the
+    /// random `delay`, and no sooner than `MIN_DELAY_BETWEEN_RAS` (plus that delay) after the
+    /// previous multicast RA.
+    pub(crate) fn multicast_response_at(&self, now: Instant, delay: Duration) -> Instant {
         self.last_multicast_ra
-            .is_none_or(|t| t.elapsed() >= MIN_DELAY_BETWEEN_RAS)
+            .map(|t| t + MIN_DELAY_BETWEEN_RAS)
+            .filter(|earliest| *earliest > now)
+            .map_or(now + delay, |earliest| earliest + delay)
+    }
+
+    /// Queues a unicast answer for `dst` at `due`; a destination already queued keeps its slot.
+    /// Returns `false` when the answer is dropped (rate limited, or too many pending).
+    pub(crate) fn schedule_unicast(&mut self, dst: Ipv6Addr, due: Instant) -> bool {
+        if !self.can_unicast_now(&dst) {
+            return false;
+        }
+        if self.pending_unicast.iter().any(|(ip, _)| *ip == dst) {
+            return true;
+        }
+        if self.pending_unicast.len() >= MAX_PENDING_UNICAST {
+            return false;
+        }
+        self.pending_unicast.push((dst, due));
+        true
+    }
+
+    /// The earliest pending unicast deadline.
+    pub(crate) fn next_unicast_due(&self) -> Option<Instant> {
+        self.pending_unicast.iter().map(|(_, due)| *due).min()
     }
 
     pub(crate) fn can_unicast_now(&self, dst: &Ipv6Addr) -> bool {
@@ -202,23 +231,6 @@ impl RaState {
         self.ignored_solicitations = self.ignored_solicitations.saturating_add(1);
     }
 
-    pub(crate) fn deprecated_list(&self, now: Instant) -> Vec<(Ipv6Addr, u32)> {
-        if self.deprecated_prefixes.is_empty() {
-            return Vec::new();
-        }
-        self.deprecated_prefixes
-            .iter()
-            .map(|&(ip, _, valid_end)| {
-                let remaining = if valid_end > now {
-                    u32::try_from((valid_end - now).as_secs()).unwrap_or(u32::MAX)
-                } else {
-                    0
-                };
-                (ip, remaining)
-            })
-            .collect()
-    }
-
     pub(crate) fn build_status(
         &self,
         cfg: &RaConfig,
@@ -228,7 +240,7 @@ impl RaState {
         let target_ifindex = ctx.target_ifindex().unwrap_or(0);
         let if_ips = ctx.get_interface_state(target_ifindex);
         let now = Instant::now();
-        let deprecated_list = self.deprecated_list(now);
+        let deprecated_list = self.prefixes.lock().deprecated_list(now);
 
         RaStatusResponse {
             enabled: true,
@@ -258,10 +270,80 @@ impl RaState {
             uptime_secs: Some(self.start_time.elapsed().as_secs()),
         }
     }
+}
+
+/// The prefixes the RA has advertised on the LAN.
+///
+/// Lives in the context (`provide_shared`), not in one serving instance: a rebind or a
+/// supervisor restart builds a new run (or a new instance), and a prefix withdrawn before it
+/// must still be deprecated after it.
+#[derive(Default)]
+pub(crate) struct AdvertisedPrefixes(Mutex<PrefixMemory>);
+
+impl AdvertisedPrefixes {
+    pub(crate) fn lock(&self) -> parking_lot::MutexGuard<'_, PrefixMemory> {
+        self.0.lock()
+    }
+
+    /// The context's memory; created on first use from the LAN as found now, deprecating the
+    /// prefixes advertised before the daemon started (`PreviousLanPrefixes`) that are gone.
+    fn get_or_seed(
+        ctx: &LanforgeContext,
+        iface_index: u32,
+        deprecate_on_renumber: bool,
+    ) -> Arc<Self> {
+        if let Some(shared) = ctx.get_shared::<Self>() {
+            return shared;
+        }
+        let lan_ips = ctx.get_interface_state(iface_index);
+        let current_gua = lan_ips.gua.map(Ipv6Prefix::from_addr);
+        let mut memory = PrefixMemory {
+            last_ula: lan_ips.ula.map(Ipv6Prefix::from_addr),
+            ..PrefixMemory::default()
+        };
+        let previous = ctx.get_shared::<PreviousLanPrefixes>();
+        for prev in previous.iter().flat_map(|p| p.0.iter().copied()) {
+            memory.last_gua = Some(prev);
+            memory.update_prefix_and_deprecate(current_gua, true, deprecate_on_renumber);
+        }
+        memory.last_gua = current_gua;
+        let shared = Arc::new(Self(Mutex::new(memory)));
+        ctx.provide_shared(shared.clone());
+        shared
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct PrefixMemory {
+    /// Last advertised GUA prefix.
+    pub(crate) last_gua: Option<Ipv6Prefix>,
+    /// Last advertised ULA prefix.
+    pub(crate) last_ula: Option<Ipv6Prefix>,
+    /// Withdrawn prefixes still advertised with preferred lifetime 0: (prefix, end of validity).
+    pub(crate) deprecated: Vec<(Ipv6Addr, Instant)>,
+    /// When the valid lifetime last advertised for `last_gua` runs out (`None`: infinite or
+    /// unknown).
+    pub(crate) gua_valid_end: Option<Instant>,
+}
+
+impl PrefixMemory {
+    pub(crate) fn deprecated_list(&self, now: Instant) -> Vec<(Ipv6Addr, u32)> {
+        self.deprecated
+            .iter()
+            .map(|&(ip, valid_end)| {
+                let remaining = if valid_end > now {
+                    u32::try_from((valid_end - now).as_secs()).unwrap_or(u32::MAX)
+                } else {
+                    0
+                };
+                (ip, remaining)
+            })
+            .collect()
+    }
 
     pub(crate) fn update_prefix_and_deprecate(
         &mut self,
-        current: Option<lanforge_types::network::Ipv6Prefix>,
+        current: Option<Ipv6Prefix>,
         is_gua: bool,
         deprecate_on_renumber: bool,
     ) -> bool {
@@ -273,27 +355,21 @@ impl RaState {
                 && deprecate_on_renumber
             {
                 let now = Instant::now();
-                // RFC 4862 §5.5.3e:
-                // Deprecate old prefix with preferred_lifetime = 0 and valid_lifetime = min(remaining, 7200) (2 hours).
-                let valid_duration = Duration::from_secs(7200);
-                let valid_end = now + valid_duration;
-                let deprecation_end = valid_end;
+                // RFC 9096 L-13: the old prefix goes out with preferred lifetime 0 and valid
+                // lifetime min(what remains of the one advertised, 2 h), counting down.
+                let two_hours = now + Duration::from_secs(7200);
+                let remaining = if is_gua { self.gua_valid_end } else { None };
+                let valid_end = remaining.map_or(two_hours, |end| end.min(two_hours));
                 let old_addr = old.to_addr();
-                if !self
-                    .deprecated_prefixes
-                    .iter()
-                    .any(|(ip, _, _)| *ip == old_addr)
-                {
-                    self.deprecated_prefixes
-                        .push((old_addr, deprecation_end, valid_end));
+                if !self.deprecated.iter().any(|(ip, _)| *ip == old_addr) {
+                    self.deprecated.push((old_addr, valid_end));
                 }
             }
             // A prefix that comes back (address flap) is live again: never advertise it twice,
             // once valid and once deprecated.
             if let Some(cur) = current {
                 let cur_addr = cur.to_addr();
-                self.deprecated_prefixes
-                    .retain(|(ip, _, _)| *ip != cur_addr);
+                self.deprecated.retain(|(ip, _)| *ip != cur_addr);
             }
             let prefix_type = if is_gua { "GUA" } else { "ULA" };
             debug!("Internal {prefix_type} prefix state updated: {current:?}");
@@ -455,7 +531,10 @@ impl RaService {
             "Server active"
         );
 
-        let iface_index = self.ctx.target_ifindex().unwrap_or(1);
+        // Never fall back to a guessed index: 1 is the loopback, and the RA would go nowhere.
+        let iface_index = self.ctx.target_ifindex().ok_or_else(|| {
+            CoreError::Generic("Target interface index is not configured in context".to_string())
+        })?;
 
         let (mac, transport) = if let Some(ref t) = self.transport {
             let mac = self
@@ -478,23 +557,15 @@ impl RaService {
             .set_service_transports(ServiceId::Ra, vec![transport.metrics_handle()]);
 
         let mut state = RaState::new();
-        // Seed the advertised prefixes from the LAN interface, so a renumbering after startup
-        // deprecates the prefix clients already hold. A prefix advertised before the daemon
-        // restarted that is no longer delegated is the starting point instead, so the first RA
-        // already deprecates it.
-        let lan_ips = self.ctx.get_interface_state(iface_index);
-        let current_gua = lan_ips
-            .gua
-            .map(lanforge_types::network::Ipv6Prefix::from_addr);
-        state.last_ula = lan_ips
-            .ula
-            .map(lanforge_types::network::Ipv6Prefix::from_addr);
-        let previous = self.ctx.get_shared::<PreviousLanPrefixes>();
-        for prev in previous.iter().flat_map(|p| p.0.iter().copied()) {
-            state.last_gua = Some(prev);
-            state.update_prefix_and_deprecate(current_gua, true, current_cfg.deprecate_on_renumber);
-        }
-        state.last_gua = current_gua;
+        // The advertised prefixes outlive this run (see `AdvertisedPrefixes`): on the first run
+        // they are seeded from the LAN, so a renumbering after startup deprecates the prefix
+        // clients already hold, and a prefix advertised before the daemon restarted that is no
+        // longer delegated is deprecated by the first RA.
+        state.prefixes = AdvertisedPrefixes::get_or_seed(
+            &self.ctx,
+            iface_index,
+            current_cfg.deprecate_on_renumber,
+        );
 
         // Immediate RA on startup
         send_ra_internal(
@@ -504,7 +575,7 @@ impl RaService {
             mac,
             iface_index,
             None,
-            &mut state,
+            &state,
         )
         .map_err(|e| CoreError::Generic(e.to_string()))?;
         state.record_multicast();
@@ -523,11 +594,10 @@ impl RaService {
 
         loop {
             let now = Instant::now();
-            let sleep_duration = if next_ra_at > now {
-                next_ra_at - now
-            } else {
-                Duration::ZERO
-            };
+            let wake_at = state
+                .next_unicast_due()
+                .map_or(next_ra_at, |due| due.min(next_ra_at));
+            let sleep_duration = wake_at.saturating_duration_since(now);
 
             let ctx = RaContext {
                 transport: &transport,
@@ -548,9 +618,15 @@ impl RaService {
                     }
                 }
 
-                // 1. Periodic Advertisement & Timers
+                // 1. Timers: due unicast answers, periodic (or solicited multicast) advertisement
                 () = tokio::time::sleep(sleep_duration) => {
-                    Self::perform_periodic_ra(ctx, &current_cfg, &mut state, &mut next_ra_at);
+                    if Self::send_due_unicasts(ctx, &current_cfg, &mut state) {
+                        let status = state.build_status(&current_cfg, &self.ctx, Some(next_ra_at));
+                        self.ctx.set_ra_status(Some(status));
+                    }
+                    if Instant::now() >= next_ra_at {
+                        Self::perform_periodic_ra(ctx, &current_cfg, &mut state, &mut next_ra_at);
+                    }
                 }
 
                 // 2. Packet processing (RS)
@@ -562,7 +638,7 @@ impl RaService {
                             } else {
                                 Some(*src_sa.ip())
                             };
-                            self.process_rs_packet(&buf[..n], rs_src, &current_cfg, ctx, &mut state, next_ra_at).await;
+                            Self::process_rs_packet(&buf[..n], rs_src, &current_cfg, ctx, &mut state, &mut next_ra_at);
                         }
                         Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
                         Err(e) => warn!("RA transport error: {e}"),
@@ -618,15 +694,16 @@ impl RaService {
                         // OS DHCPv6-PD client); `ppp0`'s own prefix must never be advertised. A lost
                         // prefix is deprecated right away, a new one is advertised with a burst.
                         LanforgeEvent::Network(NetworkEvent::PrefixChanged(details)) => {
-                            if details.ifindex == iface_index && details.gua != state.last_gua {
-                                let old_str = state.last_gua.map_or_else(|| "None".to_string(), |p| p.to_string());
+                            let last_gua = state.prefixes.lock().last_gua;
+                            if details.ifindex == iface_index && details.gua != last_gua {
+                                let old_str = last_gua.map_or_else(|| "None".to_string(), |p| p.to_string());
                                 let new_str = details.gua.map_or_else(|| "None".to_string(), |p| p.to_string());
                                 info!(
                                     old_prefix = %old_str,
                                     new_prefix = %new_str,
                                     "LAN GUA prefix changed — sending immediate RA burst"
                                 );
-                                state.update_prefix_and_deprecate(details.gua, true, current_cfg.deprecate_on_renumber);
+                                state.prefixes.lock().update_prefix_and_deprecate(details.gua, true, current_cfg.deprecate_on_renumber);
                                 state.initial_sent = 0;
                                 next_ra_at = Instant::now();
                             }
@@ -752,81 +829,78 @@ impl RaService {
         }
     }
 
-    async fn process_rs_packet(
-        &self,
+    /// Sends the unicast RS answers whose deadline has passed; `true` if any was due.
+    fn send_due_unicasts(ctx: RaContext<'_>, cfg: &RaConfig, state: &mut RaState) -> bool {
+        let now = Instant::now();
+        let before = state.pending_unicast.len();
+        let mut i = 0;
+        while i < state.pending_unicast.len() {
+            if state.pending_unicast[i].1 > now {
+                i += 1;
+                continue;
+            }
+            let (dst, _) = state.pending_unicast.swap_remove(i);
+            if let Err(e) = send_ra_internal(
+                ctx.lctx,
+                ctx.transport,
+                cfg,
+                ctx.mac,
+                ctx.iface_index,
+                Some(dst),
+                state,
+            ) {
+                warn!("RA unicast error: {e:?}");
+            } else {
+                debug!("RA unicast -> {dst}");
+                state.record_unicast(dst);
+            }
+        }
+        state.pending_unicast.len() != before
+    }
+
+    /// Answers a Router Solicitation (RFC 4861 §6.2.6) by scheduling the advertisement, never
+    /// by waiting here: the random delay must not stall the loop (commands, other RS, events).
+    /// A host with an address gets a unicast answer; an RS from `::` pulls the next multicast
+    /// RA forward.
+    fn process_rs_packet(
         data: &[u8],
         rs_src: Option<Ipv6Addr>,
         cfg: &RaConfig,
         ctx: RaContext<'_>,
         state: &mut RaState,
-        next_ra_at: Instant,
+        next_ra_at: &mut Instant,
     ) {
         if data.first() == Some(&ICMPV6_TYPE_RS) {
             state.record_solicitation_received();
             debug!("RS received from {rs_src:?}");
 
-            let delay_ms = if ctx.transport.is_inert() {
-                0
-            } else {
-                rand::rng().random_range(0..MAX_RA_DELAY_TIME_MS)
-            };
-            if delay_ms > 0 {
-                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-            }
-
-            let dst = rs_src.filter(|ip| !ip.is_unspecified());
-            match dst {
-                Some(unicast_dst) if state.can_unicast_now(&unicast_dst) => {
-                    if let Err(e) = send_ra_internal(
-                        ctx.lctx,
-                        ctx.transport,
-                        cfg,
-                        ctx.mac,
-                        ctx.iface_index,
-                        Some(unicast_dst),
-                        state,
-                    ) {
-                        warn!("RA unicast error: {e:?}");
-                    } else {
-                        debug!("RA unicast -> {unicast_dst}");
-                        state.record_unicast(unicast_dst);
-                    }
-                }
-                None if state.can_multicast_now() => {
-                    if let Err(e) = send_ra_internal(
-                        ctx.lctx,
-                        ctx.transport,
-                        cfg,
-                        ctx.mac,
-                        ctx.iface_index,
-                        None,
-                        state,
-                    ) {
-                        warn!("RA multicast error: {e:?}");
-                    } else {
-                        debug!("RA multicast -> ff02::1");
-                        state.record_multicast();
-                    }
-                }
-                _ => {
+            let now = Instant::now();
+            let delay = Duration::from_millis(rand::rng().random_range(0..MAX_RA_DELAY_TIME_MS));
+            if let Some(dst) = rs_src {
+                if !state.schedule_unicast(dst, now + delay) {
                     debug!("RS discarded: rate limit active");
                     state.record_solicitation_ignored();
                 }
+            } else {
+                let at = state.multicast_response_at(now, delay);
+                if at < *next_ra_at {
+                    *next_ra_at = at;
+                }
             }
 
-            // Passive discovery: se conseguirmos o MAC do cara que pediu o RA,
-            // avisamos o sistema para tentar o prober de SLAAC.
+            // Passive discovery: when the soliciting host's MAC is known, tell the system so the
+            // SLAAC prober can try it.
             if let Some(src) = rs_src
                 && let Some(mac) = ctx.lctx.get_mac_by_ip(IpAddr::V6(src))
             {
-                tracing::event!(target:(module_path!()),tracing::Level::DEBUG,"RS trigger: emitindo RsReceived para {}",mac);
+                tracing::event!(target:(module_path!()),tracing::Level::DEBUG,"RS trigger: publishing RsReceived for {}",mac);
                 let _ = ctx
                     .lctx
                     .bus()
                     .publish(LanforgeEvent::Network(NetworkEvent::RsReceived { mac }));
             }
 
-            let status = state.build_status(cfg, ctx.lctx, Some(next_ra_at));
+            let status = state.build_status(cfg, ctx.lctx, Some(*next_ra_at));
             ctx.lctx.set_ra_status(Some(status));
         }
     }
@@ -840,14 +914,12 @@ fn send_ra_internal(
     mac: [u8; 6],
     iface_index: u32,
     unicast_dst: Option<Ipv6Addr>,
-    state: &mut RaState,
+    state: &RaState,
 ) -> Result<(), NetworkError> {
     let if_ips = lctx.get_interface_state(iface_index);
 
-    let src_ll = match if_ips.link_local {
-        Some(ll) => ll,
-        None if transport.is_inert() => Ipv6Addr::new(0xfe80, 0, 0, 0, 0x0200, 0, 0, 1),
-        None => return Err(NetworkError::NoLinkLocal(iface_index)),
+    let Some(src_ll) = if_ips.link_local else {
+        return Err(NetworkError::NoLinkLocal(iface_index));
     };
     // Only the LAN interface's own GUA (e.g. delegated by the OS DHCPv6-PD client) is
     // advertised. Never fall back to the WAN link prefix: it is not routed to the LAN, and
@@ -860,19 +932,6 @@ fn send_ra_internal(
 
     let gua_prefix = gua.map(lanforge_types::network::Ipv6Prefix::from_addr);
     let ula_prefix = ula.map(lanforge_types::network::Ipv6Prefix::from_addr);
-    state.update_prefix_and_deprecate(gua_prefix, true, cfg.deprecate_on_renumber);
-    state.update_prefix_and_deprecate(ula_prefix, false, cfg.deprecate_on_renumber);
-
-    // Clean up expired deprecated prefixes
-    state
-        .deprecated_prefixes
-        .retain(|(_, deprecation_end, _)| *deprecation_end > now);
-
-    let deprecated_list = state.deprecated_list(now);
-
-    let dst_ip: Ipv6Addr = unicast_dst.unwrap_or(ALL_NODES_MULTICAST);
-    let dst_sa = SocketAddrV6::new(dst_ip, 0, 0, iface_index);
-
     let gua_pref = if if_ips.gua_preferred > 0 {
         if_ips.gua_preferred
     } else {
@@ -883,6 +942,23 @@ fn send_ra_internal(
     } else {
         7200
     };
+    let deprecated_list = {
+        let mut prefixes = state.prefixes.lock();
+        prefixes.update_prefix_and_deprecate(gua_prefix, true, cfg.deprecate_on_renumber);
+        prefixes.update_prefix_and_deprecate(ula_prefix, false, cfg.deprecate_on_renumber);
+        prefixes.gua_valid_end = gua
+            .filter(|_| gua_val != u32::MAX)
+            .map(|_| now + Duration::from_secs(u64::from(gua_val)));
+        // Clean up expired deprecated prefixes
+        prefixes
+            .deprecated
+            .retain(|(_, valid_end)| *valid_end > now);
+        prefixes.deprecated_list(now)
+    };
+
+    let dst_ip: Ipv6Addr = unicast_dst.unwrap_or(ALL_NODES_MULTICAST);
+    let dst_sa = SocketAddrV6::new(dst_ip, 0, 0, iface_index);
+
     let gua_info = gua.as_ref().map(|g| (g, gua_pref, gua_val));
     // No RDNSS configured: clients use this router's DNS while it serves, at the address the
     // admin gave the LAN interface (its ULA: stable when the delegated prefix changes).
@@ -925,24 +1001,24 @@ mod tests {
         let mut state = RaState::new();
         let ip: Ipv6Addr = "fe80::1".parse().unwrap();
 
-        // Inicialmente, tudo liberado
-        assert!(state.can_multicast_now());
+        // No multicast RA yet: the answer goes out after the random delay only.
+        let now = Instant::now();
+        let delay = Duration::from_millis(200);
+        assert_eq!(state.multicast_response_at(now, delay), now + delay);
         assert!(state.can_unicast_now(&ip));
 
-        // Após registrar um envio, deve bloquear pelo MIN_DELAY_BETWEEN_RAS (3s)
+        // Right after a multicast RA: MIN_DELAY_BETWEEN_RAS (3s) after it, plus the delay.
         state.record_multicast();
-        assert!(
-            !state.can_multicast_now(),
-            "Multicast deve sofrer rate limit"
+        let last = state.last_multicast_ra.unwrap();
+        assert_eq!(
+            state.multicast_response_at(Instant::now(), delay),
+            last + MIN_DELAY_BETWEEN_RAS + delay
         );
 
         state.record_unicast(ip);
-        assert!(
-            !state.can_unicast_now(&ip),
-            "Unicast deve sofrer rate limit"
-        );
+        assert!(!state.can_unicast_now(&ip), "unicast must be rate limited");
 
-        // Um IP diferente não deve ser afetado pelo rate limit do primeiro
+        // Another IP is not affected by the first one's rate limit
         let ip2: Ipv6Addr = "fe80::2".parse().unwrap();
         assert!(state.can_unicast_now(&ip2));
     }
@@ -955,23 +1031,23 @@ mod tests {
         };
         let mut state = RaState::new();
 
-        // Os 3 primeiros RAs devem ter um intervalo curto (<= 16s)
+        // The first 3 RAs use a short interval (<= 16 s)
         for _ in 0..3 {
             let interval = state.next_interval(&cfg);
             assert!(
                 interval <= MAX_INITIAL_RTR_ADVERT_INTERVAL,
-                "Intervalo de startup muito longo: {interval:?}"
+                "startup interval too long: {interval:?}"
             );
             state.record_multicast();
         }
 
-        // Do 4º em diante, deve entrar no regime normal [Min, Max]
+        // From the 4th on, the normal [Min, Max] regime applies
         // Min = 0.33 * Max = 33s. Max = 100s.
         let normal_interval = state.next_interval(&cfg);
         assert!(
             normal_interval >= Duration::from_secs(33)
                 && normal_interval <= Duration::from_secs(100),
-            "Intervalo normal fora dos limites: {normal_interval:?}",
+            "normal interval out of bounds: {normal_interval:?}",
         );
     }
 
@@ -999,14 +1075,14 @@ mod tests {
         });
 
         // 3. Initialize RaState and run the check
-        let mut state = RaState::new();
+        let state = RaState::new();
 
         // Perform first send (mocked or just executing the internal logic)
         let if_ips = ctx.get_interface_state(1);
         assert_eq!(if_ips.gua, Some(old_gua));
 
         // First transition: last_gua becomes Some(old_gua)
-        state.last_gua = if_ips
+        state.prefixes.lock().last_gua = if_ips
             .gua
             .map(lanforge_types::network::Ipv6Prefix::from_addr);
 
@@ -1031,7 +1107,7 @@ mod tests {
         assert_eq!(if_ips.gua, Some(new_gua));
 
         // 5. Simulate send_ra_internal transition for rotation:
-        state.update_prefix_and_deprecate(
+        state.prefixes.lock().update_prefix_and_deprecate(
             if_ips
                 .gua
                 .map(lanforge_types::network::Ipv6Prefix::from_addr),
@@ -1040,10 +1116,12 @@ mod tests {
         );
 
         // Verify that old_gua is now deprecated in state with RFC 4862 §5.5.3e valid lifetime (2 hours = 7200s)
-        assert_eq!(state.deprecated_prefixes.len(), 1);
+        let prefixes = state.prefixes.lock();
+        assert_eq!(prefixes.deprecated.len(), 1);
         let expected_prefix = lanforge_types::network::Ipv6Prefix::from_addr(old_gua).to_addr();
-        assert_eq!(state.deprecated_prefixes[0].0, expected_prefix);
-        let deprecated_list = state.deprecated_list(std::time::Instant::now());
+        assert_eq!(prefixes.deprecated[0].0, expected_prefix);
+        let deprecated_list = prefixes.deprecated_list(std::time::Instant::now());
+        drop(prefixes);
         assert_eq!(deprecated_list.len(), 1);
         assert_eq!(deprecated_list[0].0, expected_prefix);
         assert!(deprecated_list[0].1 >= 7199 && deprecated_list[0].1 <= 7200);

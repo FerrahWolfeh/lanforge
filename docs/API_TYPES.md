@@ -305,26 +305,47 @@ Both responses include `entries` (the list of items) and `total` (usize, represe
 Supported DNS record types: `A`, `AAAA`, `CNAME`, `NS`, `PTR`, `MX`, `TXT`, `SOA`, `SRV`, `HTTPS`, `SVCB`, `ANY`.
 
 ### EventKind
-Used as the `filter` parameter in the `log` HybridStream endpoint. Represents the category of a system event.
+Used as the `filter` parameter in the `log` HybridStream endpoint. Represents the category of a system event. Wire values are snake_case:
 
-Examples (non-exhaustive — extend as new subsystems are added):
-`DeviceOnline`, `DeviceOffline`, `DeviceUpdated`, `DevicePurged`, `DhcpLeaseGranted`, `DhcpLeaseReleased`, `DnsQuery`, `DnsBlocked`, `DnsRewriteUpdated`, `AdblockToggled`, `ScanCompleted`, `ConfigReloaded`.
+`device_online`, `device_offline`, `device_updated`, `device_purged`, `dhcp_lease_granted`, `dhcp_lease_released`, `dns_query`, `dns_blocked`, `dns_rewrite_updated`, `adblock_toggled`, `scan_completed`, `config_reloaded`.
+
+`dns_rewrite_updated` matches a `ConfigChanged` whose sections include the DNS rewrites; `config_reloaded` matches any `ConfigChanged` and the password-hash `ConfigUpdate`.
+
+### Events (`LanforgeEvent`)
+Events travel on topics (`system`, `network`, `device`, `dns`, `storage`, `pppoe`, `firewall`, `traffic`). Over UDS (`lanforge watch`, `log`) they are postcard-encoded, so CLI and daemon must come from the same build; over HTTP (SSE `/api/v1/events`) they are JSON, `{"<Category>": {"<Variant>": {...}}}`.
+
+- **`SystemEvent::ConfigChanged { sections }`**: the only configuration notification, published once per applied change. `sections` is a `DomainSet` bitset; in JSON it is the flag names joined by ` | `, e.g. `"DHCP_V4_POOLS | RA_SERVER"`. Services never react to it for their own config (they use config subscriptions); it is for logs and observers.
+- **`NetworkEvent::PrefixChanged(PrefixChangeDetails)`**: an interface's IPv6 prefixes changed. Emitted for every interface (LAN, `ppp0`, ...); consumers filter on `ifindex`.
+
+```json
+{
+  "ifindex": 3,
+  "gua": { "segments": [8193, 3512, 1, 0], "group": "Gua" },
+  "ula": { "segments": [64768, 1, 0, 0], "group": "Ula" },
+  "preferred": 3600,
+  "valid": 7200
+}
+```
+
+`Ipv6Prefix` is a /64: its first four segments plus the classification (`Ula`, `Gua`, ...).
 
 ### ServerCapabilities & Cap
 Represents the compiled feature flags and runtime enabled capabilities of the daemon.
 
 ```json
 {
-  "compiled": ["dns", "upstream_udp_tcp", "upstream_dot", "upstream_doq", "upstream_doh", "doh_downstream", "dhcp_v4", "dhcp_v6", "ra", "ndp_discovery", "mdns_probe", "lldp_probe", "uds", "http", "zstd", "redb", "pppoe"],
-  "enabled": ["dns", "upstream_dot", "dhcp_v4", "ra", "uds", "http", "redb"]
+  "compiled": ["dns", "upstream_udp_tcp", "upstream_do_t", "upstream_do_h", "doh_downstream", "dhcp_v4", "dhcp_v6", "ra", "ndp_discovery", "mdns_probe", "uds", "http", "storage", "pppoe", "tftp", "firewall", "traffic", "adblock", "webui"],
+  "enabled": ["dns", "upstream_do_t", "dhcp_v4", "ra", "uds", "http", "storage"]
 }
 ```
 
-- **Cap Enum:** `dns`, `upstream_udp_tcp`, `upstream_dot`, `upstream_doq`, `upstream_doh`, `doh_downstream`, `dhcp_v4`, `dhcp_v6`, `ra`, `ndp_discovery`, `mdns_probe`, `lldp_probe`, `uds`, `http`, `zstd`, `redb`, `pppoe`.
+- **Cap Enum:** `dns`, `upstream_udp_tcp`, `upstream_do_t`, `upstream_do_q`, `upstream_do_h`, `doh_downstream`, `dhcp_v4`, `dhcp_v6`, `ra`, `ndp_discovery`, `mdns_probe`, `uds`, `http`, `zstd`, `storage` (alias `redb`), `pppoe`, `tftp`, `firewall` (alias `nft`), `traffic` (alias `sqm`), `adblock`, `ebpf`, `webui`. (The DoT/DoQ/DoH names come from serde's snake_case of `UpstreamDoT` etc.)
 
 ### ServiceState
 Represents the operating state of a managed background service:
-`offline`, `starting`, `online`, `active`, `inactive`, `degraded`, `error` (wire `"failed"`), `waiting`, `paused`.
+`offline`, `starting`, `online`, `active`, `inactive`, `degraded`, `error`, `waiting`, `paused`.
+
+`inactive` is a settled, intentional state (disabled, not applicable, waiting for a link, stopped by the admin; see `StateDetail`): it never counts as a failure and never blocks readiness.
 
 ### StateDetail
 Optional human- and machine-readable details attached to a `ServiceBanner`:
@@ -354,12 +375,12 @@ Model for decoupled system monitoring. Each service implements `StatusProvider` 
 }
 ```
 
-### AuthToken
-Representations of API authentication tokens.
+### AuthTokenResponse & AuthTokenEntry
+API authentication tokens. `AuthTokenResponse` is returned once, at creation, and is the only place the secret `token` appears; listings return `AuthTokenEntry` (no secret).
 
 ```json
 {
-  "token": "ak_1234567890abcdef",
+  "id": 7,
   "name": "cli-admin",
   "created_at": 1715000000,
   "last_used": 1715003600,
@@ -367,6 +388,8 @@ Representations of API authentication tokens.
   "expires_at": 1746536000
 }
 ```
+
+- **`ApiScope`**: `admin`, `monitoring`, `upstream_write`, `dns_query`, `device_write`, `config_write`.
 
 ### User Accounts & Auth Types
 Representations of database-backed user accounts and authorization roles.
@@ -387,11 +410,12 @@ Representations of database-backed user accounts and authorization roles.
 ```
 
 
-### UpstreamConfigPayload
-Payload for adding runtime DNS upstreams to the database.
+### DnsUpstreamConfig
+A configured DNS upstream (persisted in `lanforge.toml`, `[dns]`).
 
 ```json
 {
+  "name": "Google",
   "addr": "8.8.8.8:853",
   "protocol": "tls",
   "domain": "dns.google"
@@ -399,7 +423,7 @@ Payload for adding runtime DNS upstreams to the database.
 ```
 
 ### SystemConfigExport
-Aggregated backup configuration containing all database tables and settings.
+Aggregated backup of the configuration and the exportable state (configuration itself lives in `lanforge.toml`).
 
 - `hosts`: List of `HostConfigEntry` objects.
 - `dns_rewrites`: List of `RewriteRule` objects.
@@ -407,12 +431,19 @@ Aggregated backup configuration containing all database tables and settings.
 - `dns_adblock_config`: `AdblockDbConfig` object.
 - `dns_adblock_urls`: List of `AdblockUrlEntry` objects.
 - `dns_allowlist`: List of `AllowlistEntry` objects.
+- `dns_adblock_rules`: Optional list of `AdblockRuleEntry` objects.
 - `api_tokens`: Optional list of `ExportedApiToken` objects.
 - `dhcp_v4_pools`: Optional list of `Dhcpv4Pool` objects.
 - `dhcp_v6_pools`: Optional list of `Dhcpv6Pool` objects.
 - `ra_prefixes`: Optional list of `RAPrefix` objects.
 - `ra_rdnss`: Optional list of `RdnssConfig` objects.
 - `ra_dnssl`: Optional list of `DnsslConfig` objects.
+- `pppoe_config`: Optional `PppoeConfig` object.
+- `dhcp_options`: Optional `DhcpOptionsConfig` object.
+- `dns_reverse_resolvers`: Optional list of `DnsReverseResolver` objects.
+- `firewall_config`: Optional `FirewallConfig` object.
+- `traffic_config`: Optional `TrafficConfig` object.
+- `system_iface`: Optional LAN interface name.
 - `overwrite`: Boolean to indicate whether to overwrite existing database configurations.
 
 

@@ -27,9 +27,14 @@ use lanforge_http::config::HttpConfig;
 use lanforge_ra::RaConfig;
 #[cfg(feature = "tftp")]
 use lanforge_tftp::config::TftpConfig;
+#[cfg(feature = "dhcp")]
 use lanforge_types::device::Ipv6AddrOrSuffix;
+#[cfg(all(feature = "ra", any(feature = "dhcp", test)))]
+use lanforge_types::network::ra::PrefixSource;
+#[cfg(all(feature = "ra", any(feature = "dns", test)))]
+use lanforge_types::network::ra::RAPrefix;
 #[cfg(feature = "ra")]
-use lanforge_types::network::ra::{PrefixSource, RAPrefix, RaServerConfig};
+use lanforge_types::network::ra::RaServerConfig;
 use lanforge_types::system::SystemStatus;
 #[cfg(feature = "uds")]
 use lanforge_uds::config::ApiConfig;
@@ -171,20 +176,19 @@ impl Config {
     }
 
     fn resolve_search_domains(toml_cfg: &toml::TomlConfig) -> Vec<String> {
-        let mut domains = Vec::with_capacity(4);
-        for dom in &toml_cfg.system.search_domains {
-            if !domains.contains(dom) {
-                domains.push(dom.clone());
+        // Same rule as `ConfigFile::search_domains` (what a reload resolves): `[system]`'s list,
+        // then `lan`. It must not depend on which services are compiled in.
+        let mut domains: Vec<String> = Vec::with_capacity(4);
+        for dom in toml_cfg
+            .system
+            .search_domains
+            .iter()
+            .cloned()
+            .chain(["lan".to_string()])
+        {
+            if !domains.contains(&dom) {
+                domains.push(dom);
             }
-        }
-        #[cfg(feature = "dns")]
-        for dom in &toml_cfg.dns.search_domains {
-            if !domains.contains(dom) {
-                domains.push(dom.clone());
-            }
-        }
-        if domains.is_empty() {
-            domains.push("lan".to_string());
         }
         domains
     }
@@ -378,17 +382,19 @@ impl Config {
             cfg.iface.clone_from(&self.system.iface);
         }
 
-        let mut prefix_detected = None;
         #[cfg(feature = "ra")]
-        {
-            if let Some(p) = self.effective_ra().prefixes.iter().find(|p| {
+        let prefix_detected = self
+            .effective_ra()
+            .prefixes
+            .iter()
+            .find(|p| {
                 p.source == PrefixSource::AutoGua
                     || p.source == PrefixSource::Static
                     || p.source == PrefixSource::Ula
-            }) {
-                prefix_detected = Some((p.resolved_address(), p.prefix_len));
-            }
-        }
+            })
+            .map(|p| (p.resolved_address(), p.prefix_len));
+        #[cfg(not(feature = "ra"))]
+        let prefix_detected: Option<(Option<std::net::Ipv6Addr>, u8)> = None;
         if let Some((addr, len)) = prefix_detected {
             cfg.ula_prefix = addr;
             cfg.ula_prefix_len = len;
@@ -609,7 +615,6 @@ impl Config {
     }
 }
 
-#[cfg(feature = "ra")]
 fn parse_ula_prefix(raw: &str) -> Option<lanforge_types::network::Ipv6Prefix> {
     let raw = raw.split('/').next()?;
     let addr = raw.parse::<std::net::Ipv6Addr>().ok()?;

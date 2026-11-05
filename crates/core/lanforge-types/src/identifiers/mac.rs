@@ -162,7 +162,7 @@ impl MacAddr {
             return *self == parsed;
         }
 
-        // Fast-path para string de 12 caracteres hexadecimais sem ':'
+        // Fast path for a 12-character hex string without ':'
         if s.len() == 12 && !s.as_bytes().contains(&b':') {
             let mut bytes = [0u8; 6];
             for (i, b) in bytes.iter_mut().enumerate() {

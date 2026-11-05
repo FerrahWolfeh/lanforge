@@ -87,8 +87,8 @@ use lanforge_types::system::{DormantReason, ServiceId};
 /// Wraps the `Dhcpv6Server` state machine with bus event handling for:
 /// - `LeaseRelease` (`v4` and `v6-prefix`)
 /// - `DeviceUpdated` (`V6` suffix changes)
-/// - `PrefixChanged` (`GUA` updates → client `RECONFIGURE`)
-/// - `LeaseRenew` (manual RECONFIGURE send)
+/// - `PrefixChanged` (`GUA` updates: pools and static reservations follow the new prefix;
+///   clients move on their next Renew, no Reconfigure is sent)
 const DHCPV6_DEPS: &[Edge] = &[
     Edge::requires(
         ServiceId::Interfaces,
@@ -444,13 +444,13 @@ impl Dhcpv6Service {
                     let Some(timed_event) = event else {
                         return Ok(RunResult::Shutdown);
                     };
-                    self.handle_bus_event(&timed_event, &mut server, &transport, served_ifindex);
+                    self.handle_bus_event(&timed_event, &mut server, served_ifindex);
                 }
                 event = device_events.next_event() => {
                     let Some(timed_event) = event else {
                         return Ok(RunResult::Shutdown);
                     };
-                    self.handle_bus_event(&timed_event, &mut server, &transport, served_ifindex);
+                    self.handle_bus_event(&timed_event, &mut server, served_ifindex);
                 }
                 _ = stats_timer.tick() => {
                     self.publish_pool_stats(&server);
@@ -593,6 +593,7 @@ impl Dhcpv6Service {
                     &released_ias,
                     server,
                     &self.config,
+                    msg_type == MessageType::Reply,
                 );
             }
         }
@@ -602,7 +603,6 @@ impl Dhcpv6Service {
         &self,
         event: &TimedEvent,
         server: &mut Dhcpv6Server,
-        transport: &io::Dhcpv6Transport,
         served_ifindex: Option<u32>,
     ) {
         match_event!(event, {
@@ -634,33 +634,7 @@ impl Dhcpv6Service {
             // prefix); `ppp0`'s own prefix changes must never rebase them.
             LanforgeEvent::Network(NetworkEvent::PrefixChanged(details)) => {
                 if served_ifindex == Some(details.ifindex) {
-                    self.handle_prefix_change(server, transport, details.gua, details.preferred, details.valid);
-                }
-            }
-            LanforgeEvent::Device(DeviceEvent::LeaseRenew {
-                mac,
-                target: LeaseTarget::V6 { .. } | LeaseTarget::V6Prefix { .. },
-            }) => {
-                let (duid, target_ip) = {
-                    let device = self.ctx.get_device(mac);
-                    let duid = device.as_ref().and_then(|d| d.duid.clone());
-                    let ll_ip = device.as_ref().and_then(|d| {
-                        d.v6.iter()
-                            .find_map(|s| s.ip().filter(|ip| (ip.segments()[0] & 0xffc0) == 0xfe80))
-                    });
-                    (duid, ll_ip)
-                };
-
-                if let (Some(duid), Some(ip)) = (duid, target_ip) {
-                    info!("Sending manual RECONFIGURE to {} ({})", ip, mac);
-                    let packet = server.build_reconfigure(&duid, MessageType::Renew);
-                    let client_port = if self.config.port == 547 {
-                        546
-                    } else {
-                        self.config.port - 1
-                    };
-                    let dest_addr = SocketAddrV6::new(ip, client_port, 0, 0);
-                    let _ = transport.send_reply(&packet, dest_addr.into());
+                    self.handle_prefix_change(server, details.gua, details.preferred, details.valid);
                 }
             }
         });
@@ -669,7 +643,6 @@ impl Dhcpv6Service {
     fn handle_prefix_change(
         &self,
         server: &mut Dhcpv6Server,
-        transport: &io::Dhcpv6Transport,
         gua: Option<Ipv6Prefix>,
         preferred: u32,
         valid: u32,
@@ -681,7 +654,7 @@ impl Dhcpv6Service {
 
             if old_gua != Some(g) {
                 let old_str = old_gua.map_or_else(|| "None".to_string(), |p| p.to_string());
-                info!("GUA prefix changed ({old_str} -> {g}), notifying clients");
+                info!("GUA prefix changed ({old_str} -> {g})");
 
                 // Update static reservations for the new GUA prefix
                 let registry = self.ctx.get_static_registry();
@@ -690,41 +663,6 @@ impl Dhcpv6Service {
                     .map(|s| server.pool.construct_addr_prefix(g, &s))
                     .collect();
                 server.pool.reserve_statics(gua_ips);
-
-                let reconfigs = self.ctx.with_state(|state| {
-                    let mut list = Vec::new();
-                    for dev in state.devices.values() {
-                        if let Some(duid) = &dev.duid {
-                            let has_gua_lease = dev.v6.iter().any(|s| {
-                                if let IPv6State::Dynamic(lease) = s {
-                                    let o = lease.ip.octets();
-                                    (0x20..=0x3F).contains(&o[0])
-                                } else {
-                                    false
-                                }
-                            });
-                            if has_gua_lease
-                                && let Some(ll_ip) = dev.v6.iter().find_map(|s| {
-                                    s.ip().filter(|ip| (ip.segments()[0] & 0xffc0) == 0xfe80)
-                                })
-                            {
-                                list.push((duid.clone(), ll_ip));
-                            }
-                        }
-                    }
-                    list
-                });
-
-                for (duid, ll_ip) in reconfigs {
-                    let packet = server.build_reconfigure(&duid, MessageType::Renew);
-                    let client_port = if self.config.port == 547 {
-                        546
-                    } else {
-                        self.config.port - 1
-                    };
-                    let dest_addr = std::net::SocketAddrV6::new(ll_ip, client_port, 0, 0);
-                    let _ = transport.send_reply(&packet, dest_addr.into());
-                }
             }
         }
     }
@@ -734,6 +672,13 @@ impl Dhcpv6Service {
 ///
 /// Separated from the main loop for clarity — all logic regarding "what we
 /// learned from this packet" lives here, without mixing with network I/O.
+///
+/// `binding` is false for an Advertise: it binds nothing (RFC 8415 §18.3.1), so only the
+/// client's identity is learned, never a lease.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call site; a struct for these borrows would only move the list"
+)]
 fn apply_learned_state(
     ctx: &LanforgeContext,
     opt_mac: Option<MacAddr>,
@@ -742,16 +687,24 @@ fn apply_learned_state(
     released_ias: &server::AssignedIAs,
     server: &Dhcpv6Server,
     config: &Dhcpv6Config,
+    binding: bool,
 ) {
-    let expires = SystemTime::now() + Duration::from_secs(u64::from(config.lease_time));
+    // The lease lasts as long as the client was told (RFC 8415 valid lifetime), not the configured
+    // lease time: the delegated prefix can cap it, a static ULA can make it infinite.
+    let now = SystemTime::now();
+    let expires_after = |valid: u32| now + Duration::from_secs(u64::from(valid));
     let mut updates = SmallVec::<[DeviceUpdate; 4]>::new();
 
     // 1. Process IA_NA (Non-temporary Addresses)
     for &iaid in &assigned_ias.na {
-        let assigned_ip_addrs = learned_duid.map_or_else(
-            || opt_mac.map_or_else(Vec::new, |mac| server.pool.lookup_by_mac_legacy(ctx, mac)),
-            |duid| server.last_assignment_for(duid, iaid),
-        );
+        let assigned_ip_addrs = if binding {
+            learned_duid.map_or_else(
+                || opt_mac.map_or_else(Vec::new, |mac| server.pool.lookup_by_mac_legacy(ctx, mac)),
+                |duid| server.last_assignment_for(duid, iaid),
+            )
+        } else {
+            Vec::new()
+        };
 
         if assigned_ip_addrs.is_empty() {
             if let Some(duid) = learned_duid {
@@ -771,12 +724,18 @@ fn apply_learned_state(
                 })
             });
             if let Some(duid) = duid {
+                // The binding lives until its longest-lived address expires.
+                let valid = assigned_ip_addrs
+                    .iter()
+                    .map(|ip| server.valid_lifetime_for(*ip, &duid, opt_mac))
+                    .max()
+                    .unwrap_or(0);
                 updates.push(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
                     mac: opt_mac,
+                    expires: expires_after(valid),
                     duid,
                     iaid,
                     ips: assigned_ip_addrs.into_iter().collect(),
-                    expires,
                 })));
             }
         }
@@ -792,7 +751,7 @@ fn apply_learned_state(
     }
 
     // 2. Process IA_PD (Prefix Delegation)
-    for &iaid in &assigned_ias.pd {
+    for &iaid in assigned_ias.pd.iter().filter(|_| binding) {
         let assigned_prefix = learned_duid
             .as_ref()
             .and_then(|duid| server.pool.lookup_prefix(ctx, duid, iaid));
@@ -804,7 +763,7 @@ fn apply_learned_state(
                 iaid,
                 prefix,
                 len,
-                expires,
+                expires: expires_after(server.valid_lifetime_for(prefix, duid, opt_mac)),
             })));
         }
     }
@@ -877,7 +836,16 @@ mod tests {
         server
             .last_assignments
             .insert((duid.clone(), 1), vec![ula, gua]);
-        apply_learned_state(&ctx, Some(mac), Some(&duid), &ias, &none, &server, &cfg);
+        apply_learned_state(
+            &ctx,
+            Some(mac),
+            Some(&duid),
+            &ias,
+            &none,
+            &server,
+            &cfg,
+            true,
+        );
         let mut got = leased(&ctx, mac);
         got.sort();
         assert_eq!(got, vec![gua, ula]);
@@ -885,7 +853,16 @@ mod tests {
         server
             .last_assignments
             .insert((duid.clone(), 1), vec![ula, renumbered]);
-        apply_learned_state(&ctx, Some(mac), Some(&duid), &ias, &none, &server, &cfg);
+        apply_learned_state(
+            &ctx,
+            Some(mac),
+            Some(&duid),
+            &ias,
+            &none,
+            &server,
+            &cfg,
+            true,
+        );
         let mut got = leased(&ctx, mac);
         got.sort();
         assert_eq!(got, vec![renumbered, ula]);

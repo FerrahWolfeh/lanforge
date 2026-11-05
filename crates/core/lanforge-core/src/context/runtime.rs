@@ -6,7 +6,9 @@ use crate::error::CoreError;
 use arc_swap::ArcSwapOption;
 use lanforge_types::build::BuildInfo;
 use lanforge_types::dhcp::{Dhcpv4Stats, Dhcpv6Stats};
-use lanforge_types::network::firewall::{DynamicPortRequest, FirewallTransactionState};
+use lanforge_types::network::firewall::{
+    DynamicPortRequest, FirewallStopAction, FirewallTransactionState,
+};
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
 use lanforge_types::system::{
     Cap, PppoeStatusResponse, RaStatusResponse, ServiceBanner, ServiceId, ServiceState,
@@ -91,6 +93,8 @@ pub struct ServiceRuntime {
     pub active_clients: Arc<AtomicUsize>,
     pub firewall_ports: RwLock<Vec<DynamicPortRequest>>,
     pub firewall_tx: RwLock<Option<FirewallTransactionState>>,
+    /// What a firewall that is not serving left in the kernel (`None` while a ruleset runs).
+    pub firewall_left: RwLock<Option<FirewallStopAction>>,
     pub status: RwLock<Option<SystemStatus>>,
     pub last_db_flush: RwLock<Option<SystemTime>>,
     pub start_time: Instant,
@@ -139,6 +143,7 @@ impl ServiceRuntime {
             active_clients: Arc::new(AtomicUsize::new(0)),
             firewall_ports: RwLock::new(Vec::new()),
             firewall_tx: RwLock::new(None),
+            firewall_left: RwLock::new(None),
             status: RwLock::new(None),
             last_db_flush: RwLock::new(None),
             start_time: Instant::now(),

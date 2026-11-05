@@ -22,13 +22,13 @@ use lanforge_types::network::ra::{
 };
 use lanforge_types::network::traffic::{NicTuningConfig, SqmConfig, SqmDiffserv, TrafficConfig};
 use lanforge_types::system::{ServiceId, ServiceState};
-use lanforge_types::update::DeviceUpdate;
+use lanforge_types::update::{DeviceUpdate, InterfaceState};
 use tokio::time::timeout;
 
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(bus.clone(), state, Some(2));
 
     ctx.update_firewall_config(lanforge_types::network::firewall::FirewallConfig {
         enabled: true,
@@ -36,6 +36,14 @@ fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
         ..Default::default()
     });
     ctx.set_target_interface_name("lan0".to_string());
+    // The LAN (ifindex 2) has its link-local, the RA source address.
+    let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+        ifindex: 2,
+        state: Box::new(InterfaceState {
+            link_local: Some("fe80::1".parse().unwrap()),
+            ..InterfaceState::default()
+        }),
+    });
     (ctx, bus)
 }
 

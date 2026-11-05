@@ -51,7 +51,7 @@ pub fn compute_eui64_ip(prefix: &Ipv6Addr, mac: &MacAddr) -> Ipv6Addr {
 pub const fn mac_from_eui64_link_local(ip: &Ipv6Addr) -> Option<MacAddr> {
     let o = ip.octets();
     if o[0] != 0xfe || (o[1] & 0xc0) != 0x80 {
-        return None; // não é fe80::/10
+        return None; // not fe80::/10
     }
     if o[11] != 0xff || o[12] != 0xfe {
         return None; // Marker FF:FE not found

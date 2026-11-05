@@ -27,6 +27,7 @@ socket2 = { workspace = true }
 rand = { workspace = true }
 libc = { workspace = true }
 hotpath = { workspace = true, optional = true }
+parking_lot.workspace = true
 
 [features]
 hotpath = ["dep:hotpath", "lanforge-core/hotpath"]

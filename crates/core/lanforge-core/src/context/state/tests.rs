@@ -276,9 +276,13 @@ fn expire_stale_removes_old_v4_keeps_fresh_v6() {
     let dev_after = ctx.read().devices().next().unwrap();
     assert!(
         matches!(dev_after.v4, IPv4State::None),
-        "V4 expirado deve ser removido"
+        "expired V4 must be removed"
     );
-    assert_eq!(dev_after.v6.len(), 1, "V6 no futuro deve ser mantido");
+    assert_eq!(
+        dev_after.v6.len(),
+        1,
+        "V6 expiring in the future must be kept"
+    );
 }
 
 #[test]
@@ -316,7 +320,7 @@ fn test_orphaned_v6_promotion() {
     let duid = Duid::new(vec![0xaa, 0xbb]);
     let expires = SystemTime::now() + Duration::from_hours(1);
 
-    // 1. Lease concedido sem MAC (órfão)
+    // 1. Lease granted without a MAC (orphan)
     let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
         mac: None,
         duid: duid.clone(),
@@ -325,11 +329,11 @@ fn test_orphaned_v6_promotion() {
         expires,
     })));
 
-    // Não deve existir device ainda
+    // No device yet
     assert!(ctx.get_device(&mac).is_none());
     assert!(!ctx.discovery().orphaned_v6.is_empty());
 
-    // 2. NDP visto para o mesmo IP -> Promove
+    // 2. NDP sees the same IP -> promoted
     let changed = ctx.apply(DeviceUpdate::NdpSeen {
         mac,
         ip,
@@ -337,8 +341,8 @@ fn test_orphaned_v6_promotion() {
     });
     assert!(changed);
 
-    // Agora deve existir o device com o DUID e IP corretos
-    let dev = ctx.get_device(&mac).expect("Device deve existir");
+    // Now the device exists with the right DUID and IP
+    let dev = ctx.get_device(&mac).expect("device must exist");
     assert_eq!(dev.duid.as_ref(), Some(&duid));
     assert_eq!(dev.v6[0].ip().unwrap(), ip);
     assert!(ctx.discovery().orphaned_v6.is_empty());
@@ -452,7 +456,7 @@ fn test_multiple_iaids_and_prefixes() {
     let now = SystemTime::now();
     let future = now + Duration::from_hours(1);
 
-    // 1. Atribui primeiro IP (IAID 10)
+    // 1. Assign the first IP (IAID 10)
     let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
         mac: Some(mac),
         duid: duid.clone(),
@@ -470,7 +474,7 @@ fn test_multiple_iaids_and_prefixes() {
         expires: future,
     })));
 
-    // 3. Atribui primeiro prefixo (IAID 100)
+    // 3. Assign the first prefix (IAID 100)
     let _ = ctx.apply(DeviceUpdate::V6PrefixAssigned(Box::new(V6PrefixUpdate {
         mac: Some(mac),
         duid: duid.clone(),
@@ -491,10 +495,10 @@ fn test_multiple_iaids_and_prefixes() {
     })));
 
     let dev = ctx.get_device(&mac).unwrap();
-    assert_eq!(dev.v6.len(), 2, "Deve ter 2 endereços dinâmicos");
-    assert_eq!(dev.v6_prefixes.len(), 2, "Deve ter 2 prefixos");
+    assert_eq!(dev.v6.len(), 2, "must hold 2 dynamic addresses");
+    assert_eq!(dev.v6_prefixes.len(), 2, "must hold 2 prefixes");
 
-    // 5. Atualiza um deles (mesmo IAID, novo IP) -> Deve substituir
+    // 5. Update one of them (same IAID, new IP) -> replaced
     let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
         mac: Some(mac),
         duid: duid.clone(),
@@ -504,11 +508,7 @@ fn test_multiple_iaids_and_prefixes() {
     })));
 
     let dev = ctx.get_device(&mac).unwrap();
-    assert_eq!(
-        dev.v6.len(),
-        2,
-        "Ainda deve ter 2 endereços (um foi substituído)"
-    );
+    assert_eq!(dev.v6.len(), 2, "still 2 addresses (one was replaced)");
     assert!(dev.v6.iter().any(
         |s| matches!(s, IPv6State::Dynamic(l) if l.ip == "fd00::11".parse::<Ipv6Addr>().unwrap())
     ));
@@ -516,7 +516,7 @@ fn test_multiple_iaids_and_prefixes() {
         |s| matches!(s, IPv6State::Dynamic(l) if l.ip == "fd00::10".parse::<Ipv6Addr>().unwrap())
     ));
 
-    // 6. Expiração parcial
+    // 6. Partial expiry
     let past = now - Duration::from_secs(10);
     let _ = ctx.apply(DeviceUpdate::V6PrefixAssigned(Box::new(V6PrefixUpdate {
         mac: Some(mac),
@@ -532,7 +532,7 @@ fn test_multiple_iaids_and_prefixes() {
     assert_eq!(
         dev.v6_prefixes.len(),
         1,
-        "Somente o prefixo IAID 200 deve restar"
+        "only the IAID 200 prefix must remain"
     );
     assert_eq!(dev.v6_prefixes[0].iaid, 200);
 }
@@ -546,7 +546,7 @@ fn apply_update_duid_associated_resolves_orphan() {
     let ip: Ipv6Addr = "fd00::dead:beef".parse().unwrap();
     let expires = SystemTime::now() + Duration::from_hours(1);
 
-    // 1. Recebe um lease sem MAC (órfão)
+    // 1. A lease arrives without a MAC (orphan)
     let _ = ctx.apply(DeviceUpdate::V6LeaseGranted(Box::new(V6LeaseUpdate {
         mac: None,
         duid: duid.clone(),
@@ -558,7 +558,7 @@ fn apply_update_duid_associated_resolves_orphan() {
     assert!(ctx.discovery().orphaned_v6.contains_key(&ip));
     assert!(ctx.get_device(&mac).is_none());
 
-    // 2. Recebe associação DUID+IAID+MAC (ex: via Solicit que precedeu o Request, ou via DB)
+    // 2. The DUID+IAID+MAC association arrives (e.g. from the Solicit before the Request, or the DB)
     let changed = ctx.apply(DeviceUpdate::DuidAssociated {
         mac: Some(mac),
         duid: duid.clone(),
@@ -656,7 +656,7 @@ fn test_filtering_ndp_seen_worthy() {
     let ll_ip: Ipv6Addr = "fe80::1".parse().unwrap();
     let ula_ip: Ipv6Addr = "fd00::1".parse().unwrap();
 
-    // 1. NDP Seen com Link-Local em novo MAC -> Não registra
+    // 1. NDP sees a link-local on a new MAC -> not registered
     assert!(!ctx.apply(DeviceUpdate::NdpSeen {
         mac,
         ip: ll_ip,
@@ -664,7 +664,7 @@ fn test_filtering_ndp_seen_worthy() {
     }));
     assert!(ctx.get_device(&mac).is_none());
 
-    // 2. SLAAC Observed com ULA -> Registra
+    // 2. SLAAC observed on the ULA -> registered
     assert!(ctx.apply(DeviceUpdate::SlaacObserved {
         mac,
         addr: ula_ip,
@@ -672,7 +672,7 @@ fn test_filtering_ndp_seen_worthy() {
     }));
     assert!(ctx.get_device(&mac).is_some());
 
-    // 3. Agora que existe, NDP Seen com Link-Local não deve marcar dirty imediatamente (throttle de 300s)
+    // 3. Now that it exists, a link-local NDP sighting must not mark it dirty right away (300 s throttle)
     assert!(!ctx.apply(DeviceUpdate::NdpSeen {
         mac,
         ip: ll_ip,
@@ -779,20 +779,20 @@ fn test_primary_v6_priority() {
         Some(static_ula)
     );
 
-    // Teste de Suffix
+    // Suffix test
     let mut dev_suffix = Device::new(mac);
     dev_suffix.v6.push(IPv6State::Static(
         Ipv6AddrOrSuffix::parse("::42").unwrap(),
         SystemTime::now(),
     ));
-    // Sem prefixo -> None
+    // No prefix -> None
     assert_eq!(dev_suffix.primary_v6(None, None), None);
-    // Com GUA prefix -> Gera GUA (Priority 2)
+    // With a GUA prefix -> GUA (priority 2)
     assert_eq!(
         dev_suffix.primary_v6(Some(gua_prefix), None).unwrap(),
         "2001:db8::42".parse::<Ipv6Addr>().unwrap()
     );
-    // Com ULA prefix -> Gera ULA (Priority 1)
+    // With a ULA prefix -> ULA (priority 1)
     assert_eq!(
         dev_suffix.primary_v6(None, Some(ula_prefix)).unwrap(),
         "fd00::42".parse::<Ipv6Addr>().unwrap()

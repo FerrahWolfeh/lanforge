@@ -270,7 +270,7 @@ impl State {
                 for (dst, &src) in buf[..bytes.len()].iter_mut().zip(bytes) {
                     *dst = src.to_ascii_lowercase();
                 }
-                // SAFETY: `hostname` é UTF-8 válido e `to_ascii_lowercase` preserva UTF-8 válido.
+                // SAFETY: `hostname` is valid UTF-8 and `to_ascii_lowercase` keeps it valid UTF-8.
                 let lower = std::str::from_utf8(&buf[..bytes.len()]).ok()?;
                 self.indices.name_index.get(lower)?
             } else {

@@ -26,18 +26,6 @@ pub enum DnsEvent {
     /// Flush the DNS cache.
     #[default]
     CacheFlush,
-    /// DNS rewrite rules changed in the database.
-    ConfigRewritesChanged,
-    /// Adblock configuration changed in the database.
-    ConfigAdblockChanged,
-    /// Custom adblock rules (blacklist/whitelist) changed in the database.
-    ConfigAdblockRulesChanged,
-    /// DNS upstreams changed in the database.
-    ConfigUpstreamsChanged,
-    /// DNS upstream resolution mode changed.
-    ConfigUpstreamModeChanged(crate::network::dns::UpstreamMode),
-    /// DNS reverse resolvers changed.
-    ConfigReverseResolversChanged,
 }
 
 impl DnsEvent {
@@ -59,12 +47,6 @@ impl DnsEvent {
             Self::QueryBlocked { .. } => "QueryBlocked",
             Self::QueryResolved(..) => "QueryResolved",
             Self::CacheFlush => "CacheFlush",
-            Self::ConfigRewritesChanged => "ConfigRewritesChanged",
-            Self::ConfigAdblockChanged => "ConfigAdblockChanged",
-            Self::ConfigAdblockRulesChanged => "ConfigAdblockRulesChanged",
-            Self::ConfigUpstreamsChanged => "ConfigUpstreamsChanged",
-            Self::ConfigUpstreamModeChanged(_) => "ConfigUpstreamModeChanged",
-            Self::ConfigReverseResolversChanged => "ConfigReverseResolversChanged",
         }
     }
 }

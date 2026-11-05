@@ -85,7 +85,9 @@ async fn test_uds_log_streaming_filter() {
         .ctx
         .set_storage_handle(StorageHandle::new(storage_tx));
 
-    let log1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::ReloadConfig)); // matches ConfigReloaded
+    let log1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::ConfigChanged {
+        sections: lanforge_types::config::DomainSet::DNS_REWRITES,
+    })); // matches ConfigReloaded
     let log2 = TimedEvent::new(LanforgeEvent::Storage(StorageEvent::DbLogClean)); // filtered out
 
     let log_db = Arc::new(lanforge_db::LogDb::open_in_memory());
@@ -143,14 +145,16 @@ async fn test_uds_log_streaming_filter() {
     if let RpcResponse::Event(e) = resp {
         assert!(matches!(
             e.event,
-            LanforgeEvent::System(SystemEvent::ReloadConfig)
+            LanforgeEvent::System(SystemEvent::ConfigChanged { .. })
         ));
     } else {
         panic!("Expected RpcResponse::Event, got {:?}", resp);
     }
 
     // 3. Publish dynamic live events to the bus
-    let live1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::ReloadConfig)); // matches filter
+    let live1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::ConfigChanged {
+        sections: lanforge_types::config::DomainSet::DNS_REWRITES,
+    })); // matches filter
     let live2 = TimedEvent::new(LanforgeEvent::Storage(StorageEvent::DbLogClean)); // filtered out
 
     let _ = client_ctx.ctx.bus().publish(live1.event.clone());
@@ -165,7 +169,7 @@ async fn test_uds_log_streaming_filter() {
     if let RpcResponse::Event(e) = resp {
         assert!(matches!(
             e.event,
-            LanforgeEvent::System(SystemEvent::ReloadConfig)
+            LanforgeEvent::System(SystemEvent::ConfigChanged { .. })
         ));
     } else {
         panic!("Expected RpcResponse::Event, got {:?}", resp);

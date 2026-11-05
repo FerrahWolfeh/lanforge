@@ -122,11 +122,12 @@ fn test_sanity_port_forwarding_and_hairpin_nat() {
     cfg.port_forwards.push(PortForwardRule {
         comment: Some("Web server".into()),
         src_zone: "external".into(),
-        internal_ip: "192.168.1.100".parse::<IpAddr>().unwrap(),
+        internal_ip: "192.168.1.100".parse::<IpAddr>().unwrap().into(),
         external_port: 8080,
         internal_port: 80,
         protocol: L4Protocol::Tcp,
         enable_hairpin: true,
+        family: None,
     });
 
     let ruleset = RulesetBuilder::new(&cfg)
@@ -298,6 +299,7 @@ fn test_sanity_port_forwarding_crud() {
         internal_port: 80,
         protocol: L4Protocol::Tcp,
         enable_hairpin: true,
+        family: None,
     });
     let json1 = serde_json::to_string(
         &RulesetBuilder::new(&cfg)
@@ -437,18 +439,20 @@ fn test_sanity_dnat_restricted_to_internal_and_explicit_port_forwards() {
         src_zone: "external".into(),
         protocol: L4Protocol::Tcp,
         external_port: 6881,
-        internal_ip: "2804:cafe::1".parse::<IpAddr>().unwrap(),
+        internal_ip: "2804:cafe::1".parse::<IpAddr>().unwrap().into(),
         internal_port: 6881,
         enable_hairpin: false,
+        family: None,
     });
     cfg.port_forwards.push(PortForwardRule {
         comment: Some("Web port forward".into()),
         src_zone: "external".into(),
         protocol: L4Protocol::Tcp,
         external_port: 8080,
-        internal_ip: "192.168.0.128".parse::<IpAddr>().unwrap(),
+        internal_ip: "192.168.0.128".parse::<IpAddr>().unwrap().into(),
         internal_port: 80,
         enable_hairpin: true,
+        family: None,
     });
 
     let ruleset = RulesetBuilder::new(&cfg)
@@ -555,11 +559,12 @@ fn test_sanity_hairpin_nat_multizone_reflection() {
     cfg.port_forwards.push(PortForwardRule {
         comment: Some("Home Assistant".into()),
         src_zone: "external".into(),
-        internal_ip: "192.168.1.10".parse::<IpAddr>().unwrap(),
+        internal_ip: "192.168.1.10".parse::<IpAddr>().unwrap().into(),
         external_port: 8123,
         internal_port: 8123,
         protocol: L4Protocol::Tcp,
         enable_hairpin: true,
+        family: None,
     });
 
     let ruleset = RulesetBuilder::new(&cfg)
@@ -585,11 +590,12 @@ fn test_sanity_ipv6_pinhole_native_forwarding_and_no_masquerade() {
     cfg.port_forwards.push(PortForwardRule {
         comment: Some("IPv6 Matrix Synapse Pinhole".into()),
         src_zone: "external".into(),
-        internal_ip: "2001:db8:beef::50".parse::<IpAddr>().unwrap(),
+        internal_ip: "2001:db8:beef::50".parse::<IpAddr>().unwrap().into(),
         external_port: 8448,
         internal_port: 8448,
         protocol: L4Protocol::Tcp,
         enable_hairpin: false,
+        family: None,
     });
 
     let ruleset = RulesetBuilder::new(&cfg)
@@ -699,5 +705,70 @@ fn test_sanity_no_interface_less_accept_reaches_wan() {
         offenders.is_empty(),
         "accept rules open to the WAN:\n{}",
         offenders.join("\n")
+    );
+}
+
+/// The owner's two forwards (IPv4 DNAT to the NAS, IPv6 pinhole to it), hairpin on as the file
+/// defaults it.
+fn nas_forwards_config() -> FirewallConfig {
+    let mut cfg = FirewallConfig::default();
+    for to in ["192.168.0.128", "2001:db8:cafe:3731::501"] {
+        cfg.port_forwards.push(PortForwardRule {
+            comment: Some("qBittorrent".into()),
+            src_zone: "external".into(),
+            internal_ip: to.parse().unwrap(),
+            external_port: 6881,
+            internal_port: 6881,
+            protocol: L4Protocol::Tcp,
+            enable_hairpin: true,
+            family: None,
+        });
+    }
+    cfg
+}
+
+/// Every DNAT rule of the built ruleset, as JSON text.
+fn dnat_rules(cfg: &FirewallConfig) -> Vec<String> {
+    let ruleset = RulesetBuilder::new(cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+    let v = serde_json::to_value(&ruleset).unwrap();
+    v["nftables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|cmd| cmd.get("add").and_then(|a| a.get("rule")))
+        .map(|rule| rule["expr"].to_string())
+        // The DNAT statement, not a `ct status dnat` match.
+        .filter(|expr| expr.contains("{\"dnat\":{"))
+        .collect()
+}
+
+/// An IPv6 pinhole is routed (AGENTS.md §4): no NAT. A DNAT for it matched the port on every
+/// address of the LAN prefix and rewrote it to the target, so any LAN address "answered" on
+/// that port from the WAN (seen on the box: a SYN to the desktop's GUA got a SYN-ACK from the
+/// NAS), and a ULA target looked reachable.
+#[test]
+fn test_ipv6_pinhole_is_routed_never_nat66() {
+    let rules = dnat_rules(&nas_forwards_config());
+    assert!(!rules.is_empty(), "the IPv4 forward still DNATs");
+    let nat66: Vec<_> = rules.iter().filter(|r| r.contains("\"ip6\"")).collect();
+    assert!(nat66.is_empty(), "IPv6 forwards must not DNAT: {nat66:#?}");
+}
+
+/// A DNAT only rewrites traffic for this router's own addresses (`fib daddr type local`). Without
+/// it the hairpin rule on the LAN rewrote every LAN connection to port 6881 of any internet host
+/// to the NAS, and the WAN rule rewrote traffic routed to other addresses.
+#[test]
+fn test_dnat_only_for_the_routers_own_addresses() {
+    let rules = dnat_rules(&nas_forwards_config());
+    let open: Vec<_> = rules
+        .iter()
+        .filter(|r| !(r.contains("\"fib\"") && r.contains("\"daddr\"") && r.contains("\"local\"")))
+        .collect();
+    assert!(
+        open.is_empty(),
+        "DNAT without a local-destination match: {open:#?}"
     );
 }

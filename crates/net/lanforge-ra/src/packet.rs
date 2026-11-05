@@ -318,7 +318,7 @@ pub fn icmpv6_checksum(src: &Ipv6Addr, dst: &Ipv6Addr, payload: &[u8]) -> u16 {
 }
 
 // ---------------------------------------------------------------------------
-// Testes unitários
+// Unit tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn checksum_self_validates() {
-        // Recalcular o checksum sobre um pacote com checksum preenchido deve dar 0
+        // Recomputing the checksum over a packet that carries it must give 0
         let src: Ipv6Addr = "fe80::1".parse().unwrap();
         let dst: Ipv6Addr = "ff02::1".parse().unwrap();
         let mut pkt = vec![
@@ -339,19 +339,19 @@ mod tests {
             0, 0, 0, 0, // retrans_timer
         ];
         let csum = icmpv6_checksum(&src, &dst, &pkt);
-        assert_ne!(csum, 0, "checksum não pode ser zero em pacote não-trivial");
+        assert_ne!(csum, 0, "checksum cannot be zero on a non-trivial packet");
         pkt[2] = (csum >> 8) as u8;
         pkt[3] = (csum & 0xFF) as u8;
         assert_eq!(
             icmpv6_checksum(&src, &dst, &pkt),
             0,
-            "checksum preenchido deve verificar a zero"
+            "a filled-in checksum must verify to zero"
         );
     }
 
     #[test]
     fn checksum_odd_length_payload() {
-        // Pacotes com número ímpar de bytes devem ter padding correto
+        // Packets with an odd byte count must be padded correctly
         let src: Ipv6Addr = "fe80::1".parse().unwrap();
         let dst: Ipv6Addr = "ff02::1".parse().unwrap();
         let mut pkt = vec![134u8, 0, 0, 0, 64, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF];
@@ -405,7 +405,7 @@ mod tests {
 
         let mut p = Vec::new();
         push_prefix_option(&mut p, &addr, &RAPrefix::gua_dynamic());
-        // bytes 16..32 = prefixo mascarado na opção (offset 4 = type+len+plen+flags)
+        // bytes 16..32 = masked prefix in the option (offset 4 = type+len+plen+flags)
         let prefix_bytes: [u8; 16] = p[16..32].try_into().unwrap();
         assert_eq!(Ipv6Addr::from(prefix_bytes), expected);
     }
@@ -437,10 +437,10 @@ mod tests {
         let mac = [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66];
         let pkt = build_ra_packet(&cfg, mac, None, None, &[], None);
 
-        assert_eq!(pkt[0], ICMPV6_TYPE_RA, "tipo ICMPv6 deve ser 134");
-        assert_eq!(pkt[1], 0, "code deve ser 0");
+        assert_eq!(pkt[0], ICMPV6_TYPE_RA, "ICMPv6 type must be 134");
+        assert_eq!(pkt[1], 0, "code must be 0");
         assert_eq!(pkt[5], 0b_1100_0000, "flags M=1, O=1");
-        // Tamanho mínimo: 4+12 (hdr+fixo) + 8 (SLLA) + 32 (prefix) + 24 (RDNSS 1 srv) = 80
+        // Minimum size: 4+12 (header+fixed) + 8 (SLLA) + 32 (prefix) + 24 (RDNSS, 1 server) = 80
         assert!(
             pkt.len() >= 80,
             "pacote menor que esperado: {} bytes",
@@ -452,30 +452,30 @@ mod tests {
     fn mtu_option_included_when_configured() {
         let mac = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
 
-        // Sem MTU configurado
+        // No MTU configured
         let cfg_no_mtu = RaConfig::default();
         let pkt_no_mtu = build_ra_packet(&cfg_no_mtu, mac, None, None, &[], None);
-        // Não deve conter o byte de type '5' (MTU option) após o Source Link-Layer (type 1)
+        // Must not carry type 5 (MTU option) after the Source Link-Layer option (type 1)
         assert!(!pkt_no_mtu.windows(2).any(|w| w[0] == 5 && w[1] == 1));
 
-        // Com MTU (ex: 1492 para PPPoE)
+        // With an MTU (e.g. 1492 for PPPoE)
         let cfg_with_mtu = RaConfig {
             mtu: Some(1492),
             ..Default::default()
         };
         let pkt_with_mtu = build_ra_packet(&cfg_with_mtu, mac, None, None, &[], None);
 
-        // Deve conter Type 5, Length 1, Reservado (2 bytes), MTU 1492 (0x05D4)
+        // Must carry type 5, length 1, reserved (2 bytes), MTU 1492 (0x05D4)
         let expected_mtu_block = [5u8, 1, 0, 0, 0, 0, 0x05, 0xD4];
         assert!(
             pkt_with_mtu.windows(8).any(|w| w == expected_mtu_block),
-            "Opção de MTU não foi encodada corretamente"
+            "MTU option not encoded correctly"
         );
     }
 
     #[test]
     fn empty_dns_lists_omit_options() {
-        // Se RDNSS ou DNSSL estiverem vazios, não devem sujar o pacote com opções Type 25 ou 31
+        // Empty RDNSS/DNSSL lists must not add option type 25 or 31
         let cfg = RaConfig {
             rdnss: vec![],
             dnssl: vec![],
@@ -484,8 +484,11 @@ mod tests {
         let mac = [0x11; 6];
         let pkt = build_ra_packet(&cfg, mac, None, None, &[], None);
 
-        assert!(!pkt.contains(&25u8), "Pacote não deve conter option RDNSS");
-        assert!(!pkt.contains(&31u8), "Pacote não deve conter option DNSSL");
+        assert!(
+            !pkt.contains(&25u8),
+            "packet must not carry an RDNSS option"
+        );
+        assert!(!pkt.contains(&31u8), "packet must not carry a DNSSL option");
     }
 
     /// Without configured RDNSS servers the router's own address is advertised (while DNS
@@ -545,7 +548,7 @@ mod tests {
 
         let pkt = build_ra_packet(&cfg, mac, Some((&gua, 1800, 3600)), None, &[], None);
 
-        // Opção de prefixo (Type 3) deve aparecer exatamente duas vezes
+        // The prefix option (type 3) must appear exactly twice
         let prefix_count = pkt.windows(2).filter(|w| w[0] == 3 && w[1] == 4).count();
         assert_eq!(
             prefix_count, 2,

@@ -982,3 +982,52 @@ to = "192.0.2.11"
         "{issues:?}"
     );
 }
+
+/// A pinhole is routed, not NATed: an IPv6 forward asking for another port is left out and
+/// reported; the IPv4 forward next to it is kept.
+#[test]
+fn an_ipv6_forward_that_changes_the_port_is_left_out() {
+    let text = "[firewall.port_forwards.web]\nport = 8080\nto = \"192.168.1.20\"\nto_port = 80\n\n\
+                [firewall.port_forwards.web6]\nport = 8080\nto = \"2001:db8::20\"\nto_port = 80\n";
+    let file = ConfigFile::parse(text).unwrap();
+    let (fw, issues) = file.firewall.to_config();
+    assert_eq!(fw.port_forwards.len(), 1, "{:?}", fw.port_forwards);
+    assert_eq!(fw.port_forwards[0].families(), (true, false));
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert!(issues[0].contains("cannot change the port"), "{issues:?}");
+}
+
+/// `to = "dev:<name|mac>"` targets a device (both families unless `family` limits it) and
+/// survives the round trip; a ULA pinhole, a bad family and a `dev:` IPv6 pinhole changing the
+/// port are left out and reported.
+#[test]
+fn device_port_forwards_parse_and_bad_ones_are_reported() {
+    use lanforge_types::network::firewall::{ForwardFamily, ForwardTarget};
+
+    let text = "[firewall.port_forwards.qbt]\nport = 6881\nto = \"dev:nas\"\n\n\
+                [firewall.port_forwards.ssh6]\nport = 2222\nto = \"dev:aa:bb:cc:dd:ee:ff\"\nfamily = \"ipv6\"\n\n\
+                [firewall.port_forwards.ula]\nport = 80\nto = \"fd97::501\"\n\n\
+                [firewall.port_forwards.bad-family]\nport = 81\nto = \"dev:nas\"\nfamily = \"ipx\"\n\n\
+                [firewall.port_forwards.remap]\nport = 8080\nto = \"dev:nas\"\nto_port = 80\n";
+    let file = ConfigFile::parse(text).unwrap();
+    let (fw, issues) = file.firewall.to_config();
+    assert_eq!(fw.port_forwards.len(), 2, "{:?}", fw.port_forwards);
+    assert_eq!(
+        fw.port_forwards[0].internal_ip,
+        ForwardTarget::Device("nas".parse().unwrap())
+    );
+    assert_eq!(fw.port_forwards[0].families(), (true, true));
+    assert_eq!(fw.port_forwards[1].family, Some(ForwardFamily::Ipv6));
+    assert_eq!(fw.port_forwards[1].families(), (false, true));
+    assert_eq!(issues.len(), 3, "{issues:?}");
+    assert!(issues.iter().any(|i| i.contains("is a ULA")), "{issues:?}");
+    assert!(issues.iter().any(|i| i.contains("\"ipx\"")), "{issues:?}");
+    assert!(
+        issues.iter().any(|i| i.contains("cannot change the port")),
+        "{issues:?}"
+    );
+
+    let back = super::sections::FirewallFile::from_config(&fw);
+    let (again, _) = back.to_config();
+    assert_eq!(again.port_forwards, fw.port_forwards, "round trip");
+}

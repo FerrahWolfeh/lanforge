@@ -716,7 +716,7 @@ mod tests {
         let since_secs = bucket_base.saturating_sub(600);
 
         // 1. Record system logs
-        let event1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::ReloadConfig));
+        let event1 = TimedEvent::new(LanforgeEvent::System(SystemEvent::SystemReady));
         let event2 = TimedEvent::new(LanforgeEvent::System(SystemEvent::Shutdown));
         db.record_log(&event1).unwrap();
         db.record_log(&event2).unwrap();

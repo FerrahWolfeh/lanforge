@@ -235,7 +235,6 @@ impl TestApp {
         self.call("DELETE", path, None, true).await
     }
 
-    #[cfg(feature = "adblock")]
     async fn put<T: Serialize>(&self, path: &str, body: &T) -> (StatusCode, Value) {
         self.call("PUT", path, Some(serde_json::to_vec(body).unwrap()), true)
             .await
@@ -1368,6 +1367,7 @@ async fn test_firewall_transactional_handshake_contract() {
         internal_port: 8443,
         protocol: L4Protocol::Tcp,
         enable_hairpin: true,
+        family: None,
     });
     invalid_candidate.port_forwards.push(PortForwardRule {
         comment: Some("Rule 2 colliding".into()),
@@ -1377,6 +1377,7 @@ async fn test_firewall_transactional_handshake_contract() {
         internal_port: 8443,
         protocol: L4Protocol::Tcp,
         enable_hairpin: true,
+        family: None,
     });
 
     let (status, body) = app
@@ -1397,6 +1398,7 @@ async fn test_firewall_transactional_handshake_contract() {
         internal_port: 32400,
         protocol: L4Protocol::Tcp,
         enable_hairpin: true,
+        family: None,
     });
 
     let (status, body) = app.post("/api/v1/firewall/propose", &candidate).await;
@@ -1499,7 +1501,7 @@ async fn test_traffic_telemetry_contract() {
 async fn test_events_contract() {
     let state = make_state(false).await;
     let ev1 = lanforge_types::events::TimedEvent::new(lanforge_core::bus::LanforgeEvent::System(
-        lanforge_types::events::SystemEvent::ReloadConfig,
+        lanforge_types::events::SystemEvent::SystemReady,
     ));
     let ev2 = lanforge_types::events::TimedEvent::new(lanforge_core::bus::LanforgeEvent::Firewall(
         lanforge_types::events::FirewallEvent::RulesetFlushed,

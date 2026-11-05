@@ -29,13 +29,13 @@ use lanforge_types::network::ra::{
 };
 use lanforge_types::network::traffic::{NicTuningConfig, SqmConfig, SqmDiffserv, TrafficConfig};
 use lanforge_types::system::ServiceId;
-use lanforge_types::update::LeaseTarget;
+use lanforge_types::update::{DeviceUpdate, InterfaceState, LeaseTarget};
 use tokio::time::timeout;
 
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(bus.clone(), state, Some(2));
 
     ctx.update_firewall_config(FirewallConfig {
         enabled: true,
@@ -43,6 +43,14 @@ fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
         ..Default::default()
     });
     ctx.set_target_interface_name("lan0".to_string());
+    // The LAN (ifindex 2) has its link-local, the RA source address.
+    let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+        ifindex: 2,
+        state: Box::new(InterfaceState {
+            link_local: Some("fe80::1".parse().unwrap()),
+            ..InterfaceState::default()
+        }),
+    });
     (ctx, bus)
 }
 
@@ -154,24 +162,6 @@ async fn test_firewall_eventbus_reactivity() {
     .await
     .expect("Timeout waiting for RulesetApplied on RulesetChanged");
     assert!(recompile_applied);
-
-    // 4. SystemEvent::ReloadConfig: Full reload trigger
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ReloadConfig));
-    let reload_applied = timeout(Duration::from_millis(500), async {
-        loop {
-            if let Ok(evt) = fw_sub.recv().await
-                && matches!(
-                    evt.event,
-                    LanforgeEvent::Firewall(FirewallEvent::RulesetApplied(_))
-                )
-            {
-                return true;
-            }
-        }
-    })
-    .await
-    .expect("Timeout waiting for RulesetApplied on ReloadConfig");
-    assert!(reload_applied);
 
     // Clean shutdown
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -372,8 +362,8 @@ async fn test_ra_eventbus_reactivity() {
     let new_gua: Ipv6Addr = "2001:db8:20::".parse().unwrap();
     let _ = bus.publish(LanforgeEvent::Network(NetworkEvent::PrefixChanged(
         Box::new(PrefixChangeDetails {
-            // The RA target interface (no LAN ifindex configured in this context falls back to 1).
-            ifindex: 1,
+            // The RA target interface (the context's LAN ifindex).
+            ifindex: 2,
             gua: Some(lanforge_types::network::Ipv6Prefix::from_addr(new_gua)),
             ula: None,
             preferred: 14400,
@@ -394,10 +384,6 @@ async fn test_ra_eventbus_reactivity() {
         .expect("Timeout waiting for manual burst RA")
         .expect("RA channel closed");
     assert_eq!(manual_burst_ra[0], 134);
-
-    // 3. SystemEvent::ConfigRaChanged: In-place parameters reload
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigRaChanged));
-    tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Clean shutdown
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -540,10 +526,6 @@ async fn test_dhcp_eventbus_reactivity() {
             ip: IpAddr::V4(static_ip),
         }),
     }));
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    // 5. SystemEvent::ConfigDhcpOptionsChanged: Absorbed in-place
-    let _ = bus.publish(LanforgeEvent::System(SystemEvent::ConfigDhcpOptionsChanged));
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Clean shutdown

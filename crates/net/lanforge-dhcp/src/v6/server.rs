@@ -166,13 +166,25 @@ impl Dhcpv6Server {
         (preferred, valid)
     }
 
-    fn is_static_client(&self, client_duid: &Duid, identity: Option<&DeviceIdentity>) -> bool {
-        identity
-            .map(|i| i.mac)
-            .or_else(|| self.ctx.get_mac_by_duid(client_duid))
+    fn is_static_client(&self, client_duid: &Duid, mac: Option<MacAddr>) -> bool {
+        mac.or_else(|| self.ctx.get_mac_by_duid(client_duid))
             .and_then(|m| self.ctx.get_device(&m))
             .as_deref()
             .is_some_and(Device::is_static)
+    }
+
+    /// Valid lifetime (seconds) of `addr` (a leased address or a delegated prefix) as given to
+    /// the client `client_duid`/`mac`: the single source for the IA options and the expiry the
+    /// service records. `u32::MAX` is infinite.
+    #[must_use]
+    pub fn valid_lifetime_for(
+        &self,
+        addr: Ipv6Addr,
+        client_duid: &Duid,
+        mac: Option<MacAddr>,
+    ) -> u32 {
+        self.addr_lifetimes(addr, self.is_static_client(client_duid, mac))
+            .1
     }
 
     /// Lifetimes for one leased address or delegated prefix.
@@ -449,7 +461,7 @@ impl Dhcpv6Server {
             self.last_assignments
                 .insert((client_duid.clone(), iana.id), ips.clone());
         }
-        let is_static = self.is_static_client(client_duid, identity);
+        let is_static = self.is_static_client(client_duid, identity.map(|i| i.mac));
         let action = if is_rapid_commit {
             "REPLY (RC)"
         } else {
@@ -497,7 +509,7 @@ impl Dhcpv6Server {
             self.pool
                 .allocate_prefix(&self.ctx, client_duid, iapd.id, None)
         {
-            let is_static = self.is_static_client(client_duid, identity);
+            let is_static = self.is_static_client(client_duid, identity.map(|i| i.mac));
             let (pref, valid) = self.addr_lifetimes(prefix, is_static);
             info!("Delegating prefix {prefix}/{len} to {identity:?}");
 
@@ -551,7 +563,7 @@ impl Dhcpv6Server {
             let previous = self
                 .last_assignments
                 .insert((client_duid.clone(), iana.id), ips.clone());
-            let is_static = self.is_static_client(client_duid, identity);
+            let is_static = self.is_static_client(client_duid, identity.map(|i| i.mac));
             let mut ia_opts = DhcpOptions::new();
             let ip_list = ips
                 .iter()
@@ -614,7 +626,7 @@ impl Dhcpv6Server {
             self.pool
                 .allocate_prefix(&self.ctx, client_duid, iapd.id, None)
         {
-            let is_static = self.is_static_client(client_duid, identity);
+            let is_static = self.is_static_client(client_duid, identity.map(|i| i.mac));
             let (pref, valid) = self.addr_lifetimes(prefix, is_static);
             let mut ia_opts = DhcpOptions::new();
             ia_opts.insert(DhcpOption::IAPrefix(IAPrefix {
@@ -1153,27 +1165,6 @@ impl Dhcpv6Server {
         self.pool.lookup(&self.ctx, duid, iaid)
     }
 
-    /// Constructs a `RECONFIGURE` (RFC 3315/8415) message.
-    ///
-    /// This tells the client to initiate a `Renew` or `Information-Request`
-    /// to synchronization its state with the server.
-    #[must_use]
-    pub fn build_reconfigure(&self, client_duid: &Duid, reconf_msg_type: MessageType) -> Vec<u8> {
-        let mut msg = Message::new(MessageType::Reconfigure);
-        msg.set_xid(rand::random::<[u8; 3]>());
-
-        let opts = msg.opts_mut();
-        opts.insert(DhcpOption::ClientId(client_duid.bytes.to_vec()));
-        opts.insert(DhcpOption::ServerId(self.server_duid.bytes.to_vec()));
-        opts.insert(DhcpOption::ReconfMsg(reconf_msg_type));
-
-        let mut buf = Vec::with_capacity(512);
-        let mut enc = Encoder::new(&mut buf);
-        msg.encode(&mut enc)
-            .expect("RECONFIGURE encoding should not fail");
-        buf
-    }
-
     fn get_vendor_class(msg: &Message) -> Option<String> {
         match msg.opts().get(OptionCode::VendorClass) {
             Some(DhcpOption::VendorClass(v)) => {
@@ -1683,31 +1674,6 @@ mod tests {
             }
             HandleResult::Ignore => panic!("Expected Reply with IA_PD"),
         }
-    }
-
-    #[tokio::test]
-    async fn test_build_reconfigure() {
-        let srv = dummy_server();
-        let duid = dummy_client_duid();
-
-        let packet = srv.build_reconfigure(&duid, MessageType::Renew);
-        let msg = Message::decode(&mut Decoder::new(&packet)).expect("Failed to decode packet");
-
-        assert_eq!(msg.msg_type(), MessageType::Reconfigure);
-
-        let opts = msg.opts();
-        assert_eq!(
-            opts.get(OptionCode::ClientId),
-            Some(&DhcpOption::ClientId(duid.bytes.to_vec()))
-        );
-        assert_eq!(
-            opts.get(OptionCode::ServerId),
-            Some(&DhcpOption::ServerId(srv.server_duid.bytes.to_vec()))
-        );
-        assert_eq!(
-            opts.get(OptionCode::ReconfMsg),
-            Some(&DhcpOption::ReconfMsg(MessageType::Renew))
-        );
     }
 
     #[test]

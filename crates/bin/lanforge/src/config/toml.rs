@@ -131,6 +131,7 @@ impl Default for SystemCfg {
 #[allow(clippy::too_many_lines)]
 impl From<&lanforge_api::config_file::ConfigFile> for TomlConfig {
     fn from(fc: &lanforge_api::config_file::ConfigFile) -> Self {
+        #[allow(unused_mut, reason = "only the compiled-in sections below fill it")]
         let mut cfg = Self {
             system: SystemCfg {
                 iface: fc.system.iface.clone(),

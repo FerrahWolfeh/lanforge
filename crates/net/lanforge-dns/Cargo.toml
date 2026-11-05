@@ -118,6 +118,7 @@ rkyv = ["dep:rkyv"]
 
 
 [dev-dependencies]
+rcgen = "0.14.10"
 tokio = { workspace = true, features = [
     "io-util",
     "net",

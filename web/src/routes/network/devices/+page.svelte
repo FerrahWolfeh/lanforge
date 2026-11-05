@@ -145,8 +145,7 @@
 						Boolean(
 							eventObj?.Device ||
 								eventObj?.Network ||
-								eventObj?.System?.ConfigDhcpV4Changed ||
-								eventObj?.System?.ConfigDhcpV6Changed
+								String(eventObj?.System?.ConfigChanged?.sections ?? '').includes('DHCP')
 						);
 					if (isDeviceUpdate) {
 						debouncedLoad();

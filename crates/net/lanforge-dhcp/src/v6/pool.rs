@@ -847,7 +847,7 @@ mod tests {
     use super::*;
     use std::time::{Duration, SystemTime};
 
-    // Função auxiliar para gerar MACs nos testes
+    // Helper building MACs for the tests
     fn mac(last_byte: u8) -> MacAddr {
         MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, last_byte])
     }

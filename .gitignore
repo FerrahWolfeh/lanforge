@@ -28,3 +28,4 @@ crates/net/lanforge-pppoe/bpf/*.o
 
 # Local planning docs
 docs/plans/
+AGENTS.local.md

@@ -10,7 +10,8 @@ pub enum SystemEvent {
         id: ServiceId,
     },
     SystemReady,
-    ReloadConfig,
+    /// Configuration sections changed (the only config notification: services read config
+    /// through their subscriptions; this is for logs and observers).
     ConfigChanged {
         sections: DomainSet,
     },
@@ -21,10 +22,4 @@ pub enum SystemEvent {
         id: ServiceId,
         action: ServiceAction,
     },
-    ConfigDhcpV4Changed,
-    ConfigDhcpV6Changed,
-    ConfigRaChanged,
-    ConfigTftpChanged,
-    ConfigDhcpOptionsChanged,
-    ConfigPppoeChanged,
 }

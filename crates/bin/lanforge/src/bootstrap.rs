@@ -9,8 +9,8 @@ use lanforge_db::{LanforgeDb, LogDb, LogStore, PrefixStore, UserStore};
 #[cfg(feature = "dhcp")]
 use lanforge_dhcp::v4::sanity::derive_dhcp_defaults_from_v4;
 use lanforge_discovery::refresh_interface;
-use lanforge_types::DnsListenConfig;
 #[cfg(feature = "dns")]
+use lanforge_types::DnsListenConfig;
 use lanforge_types::build::BuildInfo;
 use lanforge_types::config::SiteDomains;
 use lanforge_types::device::Origin;
@@ -24,7 +24,9 @@ use lanforge_types::network::{
 use lanforge_types::update::InterfaceState;
 use netlink_sys::SocketAddr;
 use pnet::datalink::interfaces;
-use pnet::ipnetwork::{IpNetwork, Ipv4Network};
+use pnet::ipnetwork::IpNetwork;
+#[cfg(feature = "dhcp")]
+use pnet::ipnetwork::Ipv4Network;
 use rtnetlink::new_connection;
 use rtnetlink::packet_core::NetlinkMessage;
 use rtnetlink::packet_route::RouteNetlinkMessage;
@@ -397,7 +399,7 @@ impl Bootstrapper {
         }
 
         let mut table = db.load_table().unwrap_or_else(|e| {
-            warn!("Falha ao carregar DB ({e}), iniciando do zero");
+            warn!("Failed to load the DB ({e}); starting empty");
             State::new()
         });
 

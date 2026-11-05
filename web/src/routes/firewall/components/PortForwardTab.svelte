@@ -124,13 +124,18 @@
 	{/snippet}
 
 	{#each rules as rule, index (index)}
-		{@const isV6 = rule.internal_ip.includes(":")}
+		{@const isDevice = rule.internal_ip.startsWith("dev:")}
+		{@const isV6 = !isDevice && rule.internal_ip.includes(":")}
 		<Table.Row class="text-xs hover:bg-muted/40 transition-colors">
 			<Table.Cell class="font-medium text-foreground">
 				{rule.comment || "—"}
 			</Table.Cell>
 			<Table.Cell>
-				{#if isV6}
+				{#if isDevice}
+					<Badge variant="outline" class="border-emerald-500/30 text-emerald-400 bg-emerald-500/10 font-mono text-[10px]">
+						{rule.family === "ipv4" ? "Device · IPv4" : rule.family === "ipv6" ? "Device · IPv6" : "Device · v4 + v6"}
+					</Badge>
+				{:else if isV6}
 					<Badge variant="outline" class="border-purple-500/30 text-purple-400 bg-purple-500/10 font-mono text-[10px]">
 						IPv6 Pinhole
 					</Badge>
