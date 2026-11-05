@@ -3,8 +3,12 @@ use color_eyre::eyre::{bail, eyre};
 #[cfg(feature = "remote")]
 use directories::ProjectDirs;
 use inquire::{Password, Text};
+#[cfg(feature = "remote")]
+use std::fs;
 
 use crate::client::LanforgeClient;
+#[cfg(feature = "remote")]
+use crate::client::create_http_client;
 use crate::output::Printer;
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq, Default)]
@@ -52,7 +56,7 @@ impl LoginArgs {
                 socket: client.socket.clone(),
                 remote: Some(trimmed_url.clone()),
                 token: Some(token.clone()),
-                http_client: crate::client::create_http_client(),
+                http_client: create_http_client(),
             };
 
             // Test connectivity and token
@@ -70,13 +74,13 @@ impl LoginArgs {
             let proj_dirs = ProjectDirs::from("", "lanforge", "lanforge")
                 .ok_or_else(|| eyre!("Failed to resolve standard user data directory"))?;
             let data_dir = proj_dirs.data_dir();
-            std::fs::create_dir_all(data_dir)?;
+            fs::create_dir_all(data_dir)?;
             let login_path = data_dir.join("login.json");
 
             let mut servers = serde_json::Map::new();
             let mut default_url = Some(trimmed_url.clone());
 
-            if let Ok(content) = std::fs::read_to_string(&login_path)
+            if let Ok(content) = fs::read_to_string(&login_path)
                 && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content)
             {
                 if let Some(s) = val.get("servers").and_then(|v| v.as_object()) {
@@ -94,7 +98,7 @@ impl LoginArgs {
                 "servers": servers,
             });
 
-            std::fs::write(&login_path, serde_json::to_string_pretty(&creds)?)?;
+            fs::write(&login_path, serde_json::to_string_pretty(&creds)?)?;
             printer.success(&format!(
                 "Credentials saved successfully to {}",
                 login_path.display()

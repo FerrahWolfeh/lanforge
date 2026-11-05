@@ -1,6 +1,8 @@
 use std::collections::HashSet;
-use std::io::IsTerminal;
+use std::io::{self, IsTerminal};
+use std::mem;
 use std::net::IpAddr;
+use tokio::fs;
 
 use color_eyre::Result;
 use color_eyre::eyre::{bail, eyre};
@@ -511,7 +513,7 @@ pub fn parse_port_specs(
             let proto = parse_l4_proto(proto_str.trim())?;
             let ports = parse_port_numbers_or_range(ports_part.trim())?;
             pending_ports.extend(ports);
-            for p in std::mem::take(&mut pending_ports) {
+            for p in mem::take(&mut pending_ports) {
                 results.push((p, proto));
             }
         } else {
@@ -872,7 +874,7 @@ async fn handle_allow(
     let spec = if let Some(s) = args.spec {
         s
     } else {
-        if !std::io::stdin().is_terminal() {
+        if !io::stdin().is_terminal() {
             bail!("Missing required port specification. Example: 'lanforge firewall allow 22/tcp'");
         }
         let zone_names: Vec<String> = config.zones.iter().map(|z| z.name.clone()).collect();
@@ -981,7 +983,7 @@ async fn handle_deny(
     let spec = if let Some(s) = args.spec {
         s
     } else {
-        if !std::io::stdin().is_terminal() {
+        if !io::stdin().is_terminal() {
             bail!(
                 "Missing required port specification to close. Example: 'lanforge firewall deny 22/tcp'"
             );
@@ -1193,7 +1195,7 @@ async fn handle_forward_add(
     let ext_port = if let Some(p) = args.external_port {
         p
     } else {
-        if !std::io::stdin().is_terminal() {
+        if !io::stdin().is_terminal() {
             bail!("Missing external listening port for forward rule");
         }
         let input = Text::new("External listening port:")
@@ -1211,7 +1213,7 @@ async fn handle_forward_add(
     let target_ip = if let Some(ip) = args.internal_ip {
         ip
     } else {
-        if !std::io::stdin().is_terminal() {
+        if !io::stdin().is_terminal() {
             bail!("Missing target internal IP address");
         }
         select_or_enter_device_ip(client).await?
@@ -1219,7 +1221,7 @@ async fn handle_forward_add(
 
     let int_port = if let Some(p) = args.internal_port {
         p
-    } else if std::io::stdin().is_terminal() {
+    } else if io::stdin().is_terminal() {
         let input = Text::new(&format!("Target internal port (default {ext_port}):"))
             .with_placeholder(&ext_port.to_string())
             .prompt()?;
@@ -1238,7 +1240,7 @@ async fn handle_forward_add(
 
     let comment = if args.comment.is_some() {
         args.comment
-    } else if std::io::stdin().is_terminal() {
+    } else if io::stdin().is_terminal() {
         let input = Text::new("Comment / description (optional):").prompt()?;
         if input.trim().is_empty() {
             None
@@ -1309,7 +1311,7 @@ async fn handle_forward_remove(
     let target = if let Some(t) = args.target {
         t
     } else {
-        if !std::io::stdin().is_terminal() {
+        if !io::stdin().is_terminal() {
             bail!("Missing target rule index (#) or external port to remove");
         }
         let options: Vec<String> = config
@@ -1572,7 +1574,7 @@ async fn handle_zone(
                 bail!("Cannot delete built-in system zone '{name}'");
             }
 
-            if !yes && !printer.yes && std::io::stdin().is_terminal() {
+            if !yes && !printer.yes && io::stdin().is_terminal() {
                 let confirmed =
                     Confirm::new(&format!("Are you sure you want to delete zone '{name}'?"))
                         .with_default(false)
@@ -1952,7 +1954,7 @@ async fn handle_check(
     args: FirewallCheckArgs,
 ) -> Result<()> {
     let candidate = if let Some(path) = args.file {
-        let content = tokio::fs::read_to_string(&path).await?;
+        let content = fs::read_to_string(&path).await?;
         serde_json::from_str::<FirewallConfig>(&content)?
     } else {
         *client.firewall_config().await?
@@ -2116,7 +2118,7 @@ async fn apply_firewall_candidate(
             "⏰".yellow()
         );
 
-        if std::io::stdin().is_terminal() {
+        if io::stdin().is_terminal() {
             let keep = Confirm::new("Keep changes? [Auto-rollback active in 30s]")
                 .with_default(true)
                 .prompt()?;

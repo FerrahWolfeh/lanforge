@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use std::io::IsTerminal;
+use std::collections::{HashMap, HashSet};
+use std::io::{self, IsTerminal};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
@@ -599,12 +599,12 @@ async fn resolve_or_prompt_mac(
         bail!("Could not resolve device '{t}' to an active DHCP lease.");
     }
 
-    if std::io::stdout().is_terminal() && !printer.yes {
+    if io::stdout().is_terminal() && !printer.yes {
         let leases = client.leases(false).await?;
         if leases.leases.is_empty() {
             bail!("No active DHCP leases found.");
         }
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         let items: Vec<String> = leases
             .leases
             .into_iter()
@@ -641,7 +641,7 @@ async fn release_lease(
     )
     .await?;
 
-    if std::io::stdout().is_terminal() && !printer.yes {
+    if io::stdout().is_terminal() && !printer.yes {
         let confirmed = Confirm::new(&format!("Release active DHCP lease for MAC {mac}?"))
             .with_default(false)
             .prompt()?;

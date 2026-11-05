@@ -1,5 +1,6 @@
-use std::io::IsTerminal;
+use std::io::{self, IsTerminal};
 use std::time::Duration;
+use tokio::time::sleep;
 
 use color_eyre::Result;
 use color_eyre::eyre::bail;
@@ -8,7 +9,7 @@ use colored::Colorize;
 use lanforge_types::network::traffic::{
     CakeQdiscStats, ConntrackStats, SqmDiffserv, SqmOverhead, TrafficTelemetryResponse,
 };
-use lanforge_types::system::TrafficStatusResponse;
+use lanforge_types::system::{ServiceState, TrafficStatusResponse};
 
 use crate::client::LanforgeClient;
 use crate::output::Printer;
@@ -152,10 +153,9 @@ async fn show_status(client: &LanforgeClient, printer: &Printer) -> Result<()> {
     println!();
     let state_badge = format!("[{}]", status.service_state);
     let colored_badge = match status.service_state {
-        lanforge_types::system::ServiceState::Online
-        | lanforge_types::system::ServiceState::Active => state_badge.green().bold(),
-        lanforge_types::system::ServiceState::Degraded => state_badge.yellow().bold(),
-        lanforge_types::system::ServiceState::Inactive => state_badge.dimmed(),
+        ServiceState::Online | ServiceState::Active => state_badge.green().bold(),
+        ServiceState::Degraded => state_badge.yellow().bold(),
+        ServiceState::Inactive => state_badge.dimmed(),
         _ => state_badge.red().bold(),
     };
 
@@ -300,7 +300,7 @@ async fn show_rates(
     }
 
     // Watch loop
-    let is_tty = std::io::stdout().is_terminal();
+    let is_tty = io::stdout().is_terminal();
     loop {
         let telemetry = client.traffic_telemetry().await?;
         if printer.json {
@@ -311,7 +311,7 @@ async fn show_rates(
             }
             render_rates_snapshot(&telemetry, printer);
         }
-        tokio::time::sleep(Duration::from_secs(args.interval.max(1))).await;
+        sleep(Duration::from_secs(args.interval.max(1))).await;
     }
 }
 

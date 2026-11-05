@@ -269,6 +269,7 @@ pub fn format_time_ago(timestamp_secs: i64) -> String {
 mod tests {
     use super::Printer;
     use colored::Colorize;
+    use colored::control;
 
     /// Display width of a line: ANSI escapes take no column, every other char one.
     fn visible_width(line: &str) -> usize {
@@ -291,7 +292,7 @@ mod tests {
     /// Coloured cells must not widen their column: the escape codes are not text.
     #[test]
     fn coloured_cells_keep_the_table_aligned() {
-        colored::control::set_override(true);
+        control::set_override(true);
         let mut table = Printer::new(false, false, false).new_table();
         table.set_header(vec!["Outcome", "Latency"]);
         table.add_row(vec![

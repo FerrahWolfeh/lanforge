@@ -45,6 +45,8 @@ use bytes::Bytes;
 #[cfg(feature = "remote")]
 use directories::ProjectDirs;
 #[cfg(feature = "remote")]
+use futures::stream::{self, BoxStream};
+#[cfg(feature = "remote")]
 use http_body_util::{BodyExt, Full};
 #[cfg(feature = "remote")]
 use hyper::{Method, Request, StatusCode, Uri};
@@ -56,6 +58,11 @@ use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 #[cfg(feature = "remote")]
 use hyper_util::rt::TokioExecutor;
+#[cfg(feature = "remote")]
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+#[cfg(feature = "ring")]
+use rustls::crypto::ring;
+use url::form_urlencoded;
 
 /// Error text of a 403 that asks the session to re-enter its password.
 #[cfg(feature = "remote")]
@@ -69,7 +76,7 @@ pub type HttpClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<B
 struct NoCertificateVerification;
 
 #[cfg(feature = "remote")]
-impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
+impl ServerCertVerifier for NoCertificateVerification {
     fn verify_server_cert(
         &self,
         _end_entity: &rustls_pki_types::CertificateDer<'_>,
@@ -77,8 +84,8 @@ impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
         _server_name: &rustls_pki_types::ServerName<'_>,
         _ocsp_response: &[u8],
         _now: rustls_pki_types::UnixTime,
-    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
     }
 
     fn verify_tls12_signature(
@@ -86,8 +93,8 @@ impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
         _message: &[u8],
         _cert: &rustls_pki_types::CertificateDer<'_>,
         _dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
     }
 
     fn verify_tls13_signature(
@@ -95,13 +102,13 @@ impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
         _message: &[u8],
         _cert: &rustls_pki_types::CertificateDer<'_>,
         _dss: &rustls::DigitallySignedStruct,
-    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
         #[cfg(feature = "ring")]
-        return rustls::crypto::ring::default_provider()
+        return ring::default_provider()
             .signature_verification_algorithms
             .supported_schemes();
         #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
@@ -116,7 +123,7 @@ impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
 #[inline]
 pub fn init_crypto() {
     #[cfg(feature = "ring")]
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = ring::default_provider().install_default();
     #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 }
@@ -496,8 +503,7 @@ impl LanforgeClient {
     pub async fn http_stream_url(
         &self,
         full_url: &str,
-    ) -> Result<futures::stream::BoxStream<'static, std::result::Result<Bytes, color_eyre::Report>>>
-    {
+    ) -> Result<BoxStream<'static, color_eyre::Result<Bytes>>> {
         use futures::StreamExt;
         let uri: Uri = full_url
             .parse()
@@ -518,7 +524,7 @@ impl LanforgeClient {
         Self::check_daemon_build(&resp);
 
         let body = resp.into_body();
-        let stream = futures::stream::unfold(body, |mut body| async move {
+        let stream = stream::unfold(body, |mut body| async move {
             match body.frame().await {
                 Some(Ok(frame)) => {
                     if let Ok(data) = frame.into_data() {
@@ -878,11 +884,9 @@ impl LanforgeClient {
     ) -> Result<Box<AuthTokenResponse>> {
         #[cfg(feature = "remote")]
         if self.remote.is_some() {
-            let scopes_payload = scopes.as_ref().map(|s| {
-                s.iter()
-                    .map(std::string::ToString::to_string)
-                    .collect::<Vec<_>>()
-            });
+            let scopes_payload = scopes
+                .as_ref()
+                .map(|s| s.iter().map(ToString::to_string).collect::<Vec<_>>());
             return Ok(Box::new(
                 self.http_post(
                     "/auth/tokens",
@@ -1794,5 +1798,5 @@ impl LanforgeClient {
 }
 
 fn urlencoding(s: &str) -> String {
-    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+    form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }

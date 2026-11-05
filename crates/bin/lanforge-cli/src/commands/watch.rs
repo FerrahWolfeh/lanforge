@@ -1,5 +1,7 @@
+use std::fmt::Display;
 use std::io::ErrorKind;
 use std::time::SystemTime;
+use tokio::signal;
 
 use chrono::{DateTime, Local};
 use color_eyre::eyre::Result;
@@ -53,7 +55,7 @@ async fn stream_uds_events(
 
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
+            _ = signal::ctrl_c() => {
                 if !printer.json {
                     println!("\nStopped watching events.");
                 }
@@ -122,7 +124,7 @@ async fn stream_remote_events(
 
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
+            _ = signal::ctrl_c() => {
                 if !printer.json {
                     println!("\nStopped watching events.");
                 }
@@ -696,8 +698,8 @@ fn render_storage_event(time_str: &str, evt: &StorageEvent, printer: &Printer) {
 fn print_log(
     time_str: &str,
     domain: &str,
-    tag: impl std::fmt::Display,
-    msg: impl std::fmt::Display,
+    tag: impl Display,
+    msg: impl Display,
     printer: &Printer,
 ) {
     if printer.no_color {

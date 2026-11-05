@@ -4,6 +4,7 @@ use crate::commands::{
     TrafficArgs, UserArgs, WatchArgs, WolArgs,
 };
 use clap::{Parser, Subcommand};
+use std::env;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -59,7 +60,7 @@ impl Cli {
     /// `bool` env would refuse the usual `NO_COLOR=1` and stop every command.
     #[must_use]
     pub fn colors_off(&self) -> bool {
-        self.no_color || std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
+        self.no_color || env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
     }
 }
 

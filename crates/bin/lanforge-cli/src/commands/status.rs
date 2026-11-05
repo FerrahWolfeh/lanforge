@@ -1,5 +1,6 @@
 use color_eyre::Result;
 use colored::Colorize;
+use std::fmt::Display;
 
 use crate::client::LanforgeClient;
 use crate::client::build_check::describe;
@@ -137,7 +138,7 @@ fn print_section_title(title: &str, printer: &Printer) {
     }
 }
 
-fn print_kv(key: &str, value: impl std::fmt::Display, details: Option<impl std::fmt::Display>) {
+fn print_kv(key: &str, value: impl Display, details: Option<impl Display>) {
     match details {
         Some(det) => {
             println!(

@@ -1,5 +1,6 @@
 use color_eyre::Result;
 use colored::Colorize;
+use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::str::FromStr;
 
@@ -134,8 +135,8 @@ fn sort_devices(devices: &mut [DeviceEntry], sort_key: &str) {
                 .to_ascii_lowercase()
                 .cmp(&b.hostname.to_ascii_lowercase())
         }),
-        "online" => devices.sort_by_key(|a| std::cmp::Reverse(a.online)),
-        _ => devices.sort_by_key(|a| std::cmp::Reverse(a.last_seen)),
+        "online" => devices.sort_by_key(|a| Reverse(a.online)),
+        _ => devices.sort_by_key(|a| Reverse(a.last_seen)),
     }
 }
 

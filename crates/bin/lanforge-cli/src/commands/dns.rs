@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::fs;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 
@@ -1564,7 +1565,7 @@ async fn clear_rewrites(yes: bool, client: &LanforgeClient, printer: &Printer) -
 async fn export_rewrites(file: String, client: &LanforgeClient, printer: &Printer) -> Result<()> {
     let resp = client.dns_rewrites().await?;
     let json = serde_json::to_string_pretty(&resp.rewrites)?;
-    std::fs::write(&file, json)?;
+    fs::write(&file, json)?;
     if printer.json {
         return printer.print_json(&resp);
     }
@@ -1577,7 +1578,7 @@ async fn export_rewrites(file: String, client: &LanforgeClient, printer: &Printe
 }
 
 async fn import_rewrites(file: String, client: &LanforgeClient, printer: &Printer) -> Result<()> {
-    let content = std::fs::read_to_string(&file)?;
+    let content = fs::read_to_string(&file)?;
     let rules: Vec<RewriteRule> = serde_json::from_str(&content)?;
     let count = rules.len();
     let resp = client.dns_rewrite_import(rules).await?;

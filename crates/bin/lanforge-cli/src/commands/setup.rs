@@ -1,3 +1,4 @@
+use std::fs;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 
@@ -10,6 +11,8 @@ use inquire::{Confirm, Password, PasswordDisplayMode, Select, Text};
 use lanforge_api::api::{
     NetworkInterfaceInfo, SetupPayload, SetupRaConfig, SetupStatusResponse, SetupWanConfig,
 };
+use lanforge_types::network::dns::AdblockUrlEntry;
+use lanforge_types::network::dns::adblock::{AdblockSourceFormat, AdblockUrlKind};
 
 use crate::client::LanforgeClient;
 use crate::output::Printer;
@@ -401,20 +404,20 @@ async fn run_wizard(client: &LanforgeClient, printer: &Printer) -> Result<()> {
                 .prompt()?;
         if install_presets {
             vec![
-                lanforge_types::network::dns::AdblockUrlEntry {
+                AdblockUrlEntry {
                     id: None,
                     name: Some("StevenBlack Unified".to_string()),
                     url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
                         .to_string(),
-                    kind: lanforge_types::network::dns::adblock::AdblockUrlKind::Blocklist,
-                    format: lanforge_types::network::dns::adblock::AdblockSourceFormat::Hosts,
+                    kind: AdblockUrlKind::Blocklist,
+                    format: AdblockSourceFormat::Hosts,
                 },
-                lanforge_types::network::dns::AdblockUrlEntry {
+                AdblockUrlEntry {
                     id: None,
                     name: Some("OISD Basic".to_string()),
                     url: "https://big.oisd.nl/domainswg".to_string(),
-                    kind: lanforge_types::network::dns::adblock::AdblockUrlKind::Blocklist,
-                    format: lanforge_types::network::dns::adblock::AdblockSourceFormat::Domains,
+                    kind: AdblockUrlKind::Blocklist,
+                    format: AdblockSourceFormat::Domains,
                 },
             ]
         } else {
@@ -556,7 +559,7 @@ async fn apply_setup(
     args: SetupApplyArgs,
 ) -> Result<()> {
     let payload = if let Some(ref path) = args.file {
-        let content = std::fs::read_to_string(path)
+        let content = fs::read_to_string(path)
             .map_err(|e| eyre!("Failed to read configuration file '{path}': {e}"))?;
         serde_json::from_str::<SetupPayload>(&content)
             .map_err(|e| eyre!("Failed to parse configuration file '{path}': {e}"))?
