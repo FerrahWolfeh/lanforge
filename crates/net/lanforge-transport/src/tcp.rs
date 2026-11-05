@@ -1,4 +1,5 @@
-use crate::metrics::TransportMetrics;
+use crate::metrics::{TransportMetrics, TransportStats};
+use lanforge_types::network::snapshot::TransportSnapshot;
 use std::io;
 use std::net::{
     Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, TcpListener as StdTcpListener,
@@ -163,8 +164,8 @@ impl DualTcpListener {
     }
 }
 
-impl crate::metrics::TransportStats for DualTcpListener {
-    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+impl TransportStats for DualTcpListener {
+    fn snapshot(&self) -> TransportSnapshot {
         self.inner.metrics.snapshot()
     }
 }

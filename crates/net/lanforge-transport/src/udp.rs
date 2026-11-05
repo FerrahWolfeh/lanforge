@@ -1,6 +1,7 @@
 use crate::inert::{InertHandle, InertPort};
 use crate::limiter::RateLimiter;
-use crate::metrics::TransportMetrics;
+use crate::metrics::{TransportMetrics, TransportStats};
+use lanforge_types::network::snapshot::TransportSnapshot;
 use std::io;
 use std::net::{
     IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket as StdUdpSocket,
@@ -307,8 +308,8 @@ impl UdpTransport {
     }
 }
 
-impl crate::metrics::TransportStats for UdpTransport {
-    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+impl TransportStats for UdpTransport {
+    fn snapshot(&self) -> TransportSnapshot {
         self.inner.metrics.snapshot()
     }
 }

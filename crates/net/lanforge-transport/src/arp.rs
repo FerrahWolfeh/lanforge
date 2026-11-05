@@ -1,12 +1,14 @@
 use crate::inert::{InertHandle, InertPort};
-use crate::metrics::TransportMetrics;
+use crate::metrics::{TransportMetrics, TransportStats};
 use crate::sys;
+use lanforge_types::network::snapshot::TransportSnapshot;
 use std::io;
 use std::net::Ipv4Addr;
 use std::os::fd::{AsFd, OwnedFd};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::unix::AsyncFd;
+use tokio::time::{self, sleep};
 
 const ETH_P_ARP: u16 = 0x0806;
 const ARP_HTYPE_ETHERNET: u16 = 1;
@@ -116,7 +118,7 @@ impl ArpProber {
                     }
                     let remaining = deadline - now;
 
-                    let mut guard = match tokio::time::timeout(remaining, fd.readable()).await {
+                    let mut guard = match time::timeout(remaining, fd.readable()).await {
                         Ok(Ok(g)) => g,
                         _ => return Ok(None),
                     };
@@ -143,7 +145,7 @@ impl ArpProber {
                 let _ = port.out_tx.send((frame.to_vec(), ())).await;
 
                 let mut rx = port.in_rx.lock().await;
-                let deadline = tokio::time::sleep(timeout);
+                let deadline = sleep(timeout);
                 tokio::pin!(deadline);
 
                 loop {
@@ -171,8 +173,8 @@ impl ArpProber {
     }
 }
 
-impl crate::metrics::TransportStats for ArpProber {
-    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+impl TransportStats for ArpProber {
+    fn snapshot(&self) -> TransportSnapshot {
         self.metrics.snapshot()
     }
 }

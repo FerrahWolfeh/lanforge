@@ -1,7 +1,9 @@
 use crate::inert::{InertHandle, InertPort};
 use crate::metrics::{TransportMetrics, TransportStats};
 use crate::sys;
+use lanforge_types::network::snapshot::TransportSnapshot;
 use std::io;
+use std::mem::size_of;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::sync::Arc;
 use tokio::io::unix::AsyncFd;
@@ -197,7 +199,7 @@ impl PppoeTransport {
             libc::connect(
                 fd.as_raw_fd(),
                 std::ptr::addr_of!(addr).cast::<libc::sockaddr>(),
-                std::mem::size_of::<SockAddrPppox>() as libc::socklen_t,
+                size_of::<SockAddrPppox>() as libc::socklen_t,
             )
         };
         if res < 0 {
@@ -466,7 +468,7 @@ impl PppoeTransport {
 }
 
 impl TransportStats for PppoeTransport {
-    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+    fn snapshot(&self) -> TransportSnapshot {
         self.inner.metrics.snapshot()
     }
 }

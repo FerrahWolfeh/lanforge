@@ -1,6 +1,7 @@
 use crate::inert::{InertHandle, InertPort};
-use crate::metrics::TransportMetrics;
+use crate::metrics::{TransportMetrics, TransportStats};
 use crate::sys;
+use lanforge_types::network::snapshot::TransportSnapshot;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::io;
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
@@ -183,8 +184,8 @@ impl Icmp6Transport {
     }
 }
 
-impl crate::metrics::TransportStats for Icmp6Transport {
-    fn snapshot(&self) -> lanforge_types::network::snapshot::TransportSnapshot {
+impl TransportStats for Icmp6Transport {
+    fn snapshot(&self) -> TransportSnapshot {
         self.inner.metrics.snapshot()
     }
 }
@@ -200,6 +201,10 @@ fn set_icmp6_filter_only(sock: &Socket, icmp_type: u8) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::net::SocketAddrV6;
+    use std::time::Duration;
+    use tokio::time::timeout;
 
     /// Real sockets: needs `CAP_NET_RAW`, so it is ignored by default. Rootless run:
     /// `unshare -rn sh -c 'ip link set lo up && cargo test -p lanforge-transport -- --ignored
@@ -217,20 +222,16 @@ mod tests {
         sender.send_to(&ns, &to).unwrap(); // filtered out by the kernel
         sender.send_to(&ra, &to).unwrap();
         let mut buf = [0u8; 64];
-        let (n, src) =
-            tokio::time::timeout(std::time::Duration::from_secs(2), listener.recv(&mut buf))
-                .await
-                .expect("an RA arrives")
-                .expect("recv");
+        let (n, src) = timeout(Duration::from_secs(2), listener.recv(&mut buf))
+            .await
+            .expect("an RA arrives")
+            .expect("recv");
         // The kernel fills the checksum (bytes 2..4) on send.
         assert_eq!(n, ra.len());
         assert_eq!(buf[0], 134, "the NS sent first never reached the listener");
         assert_eq!(&buf[4..n], &ra[4..]);
         assert_eq!(*src.ip(), Ipv6Addr::LOCALHOST);
     }
-    use super::*;
-    use std::net::SocketAddrV6;
-    use tokio::time::{Duration, timeout};
 
     #[test]
     fn should_report_inert_status() {
