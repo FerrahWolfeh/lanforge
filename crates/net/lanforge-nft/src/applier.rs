@@ -1,7 +1,7 @@
 //! Where compiled rulesets go: the kernel ([`KernelNft`]) in production, an in-memory recorder
 //! ([`RecordingNft`]) in rootless tests. The firewall service holds no simulation branches.
 
-use nftables::helper::NftablesError;
+use nftables::helper::{self, NftablesError};
 use nftables::schema::Nftables;
 
 /// Applies an nftables batch atomically. Runs on a blocking thread.
@@ -19,7 +19,7 @@ pub struct KernelNft;
 
 impl NftApplier for KernelNft {
     fn apply(&self, ruleset: &Nftables<'static>) -> Result<(), NftablesError> {
-        nftables::helper::apply_ruleset(ruleset)
+        helper::apply_ruleset(ruleset)
     }
 }
 

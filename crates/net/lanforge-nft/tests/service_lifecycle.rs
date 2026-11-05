@@ -7,6 +7,8 @@
     unused_crate_dependencies,
     reason = "integration test crates see every dev-dependency"
 )]
+use std::net::IpAddr;
+use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,9 +26,9 @@ use lanforge_types::network::firewall::{
 };
 use lanforge_types::network::snapshot::{WanSnapshot, WanState};
 use lanforge_types::system::{ServiceId, ServiceState};
-use std::net::IpAddr;
+use lanforge_types::update::{DeviceUpdate, InterfaceState};
 use tokio::sync::{broadcast, mpsc};
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
@@ -92,7 +94,7 @@ async fn test_nft_service_inert_full_lifecycle() {
     });
 
     // Yield to let the spawned task initialize its subscriptions
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // 4. Test Dynamic Port Open Request (via context helper)
     let port_req = DynamicPortRequest {
@@ -182,7 +184,7 @@ async fn test_firewall_reacts_to_ruleset_changed_in_place() {
         let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
         s.serve(&ctx_clone, &h).await
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // 1. Update config: change to Minimal mode and add dmz zone
     let mut cfg = ctx.get_firewall_config().unwrap();
@@ -253,7 +255,7 @@ async fn test_firewall_disabled_state_lifecycle_transitions() {
         let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
         s.serve(&ctx_clone, &h).await
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     assert_eq!(ctx.get_service_state(ServiceId::Nft), ServiceState::Online);
 
@@ -263,7 +265,7 @@ async fn test_firewall_disabled_state_lifecycle_transitions() {
     ctx.update_firewall_config(cfg);
 
     // Allow event to process
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(100)).await;
 
     // Service state must transition to Inactive
     assert_eq!(
@@ -307,7 +309,7 @@ async fn test_firewall_reacts_to_pppoe_wan_reconnect_and_interface_swap() {
         let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
         s.serve(&ctx_clone, &h).await
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // 1. Session Up on ppp0
     let _ = bus.publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(
@@ -382,7 +384,7 @@ async fn test_firewall_concurrent_dynamic_port_burst() {
         let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
         s.serve(&ctx_clone, &h).await
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // Spawn 8 concurrent tasks registering dynamic ports
     let mut handles = Vec::new();
@@ -406,7 +408,7 @@ async fn test_firewall_concurrent_dynamic_port_burst() {
     }
 
     // Wait for the final burst to settle
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     // Drain firewall events until we get the latest
     let mut last_summary = None;
@@ -442,7 +444,7 @@ async fn test_firewall_concurrent_dynamic_port_burst() {
         h.await.unwrap();
     }
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    sleep(Duration::from_millis(200)).await;
 
     let released_payload = service.last_applied_payload().unwrap();
     for i in 0..8 {
@@ -501,7 +503,7 @@ async fn test_firewall_service_control_stop_and_restart() {
         .send(ServiceCommand::Stop)
         .await
         .expect("service alive");
-    let res = tokio::time::timeout(Duration::from_secs(1), serve_handle)
+    let res = timeout(Duration::from_secs(1), serve_handle)
         .await
         .expect("serve must return on Stop")
         .expect("join error");
@@ -585,7 +587,7 @@ async fn test_firewall_stop_locks_down_wan_instead_of_removing_table() {
         let res = service.serve(&ctx_clone, &h).await;
         (service, res)
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     let _ = bus.publish(LanforgeEvent::Pppoe(PppoeEvent::SessionUp(Box::new(
         PppoeSessionUp {
@@ -758,7 +760,7 @@ async fn test_firewall_resyncs_after_a_lagged_bus() {
         let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
         service.serve(&ctx_clone, &h).await
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // The config change is announced, then buried under a burst the receiver cannot keep up with.
     let mut cfg = ctx.get_firewall_config().unwrap();
@@ -792,7 +794,7 @@ async fn test_firewall_resyncs_after_a_lagged_bus() {
             {
                 return;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await;
@@ -835,7 +837,7 @@ async fn serve_with_offload(
         let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
         service.serve(&ctx_clone, &h).await
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     (ctx, probe, fw_sub)
 }
 
@@ -953,9 +955,9 @@ async fn test_firewall_records_what_it_left_in_the_kernel() {
 /// Sets the LAN interface (index 2) addresses the way netlink does: its GUA is the delegated
 /// prefix `dev:` pinholes are built on.
 fn set_lan_gua(ctx: &LanforgeContext, gua: &str) {
-    let _ = ctx.apply(lanforge_types::update::DeviceUpdate::InterfaceIpsChanged {
+    let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
         ifindex: 2,
-        state: Box::new(lanforge_types::update::InterfaceState {
+        state: Box::new(InterfaceState {
             link_local: Some("fe80::1".parse().unwrap()),
             gua: Some(gua.parse().unwrap()),
             ula: Some("fd97:f00d:cafe:3731::1".parse().unwrap()),
@@ -1034,7 +1036,7 @@ async fn test_dev_port_forward_follows_the_device_and_the_lan_prefix() {
         let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
         serving.serve(&ctx_clone, &h).await
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     set_lan_gua(&ctx, "2804:bdc:50a1:e200::1");
     let _ = wait_for_ruleset_applied(&mut fw_sub).await;
     let payload = service.last_applied_payload().expect("applied");
@@ -1052,7 +1054,7 @@ async fn test_dev_port_forward_follows_the_device_and_the_lan_prefix() {
 }
 
 fn kernel_has_table(table: &str) -> bool {
-    std::process::Command::new("nft")
+    Command::new("nft")
         .args(["list", "table", "inet", table])
         .output()
         .is_ok_and(|out| out.status.success())
