@@ -1,3 +1,6 @@
+use std::io;
+use std::result;
+
 use thiserror::Error;
 
 /// Errors that can occur during API operations.
@@ -5,7 +8,7 @@ use thiserror::Error;
 pub enum UdsError {
     /// Standard I/O error (e.g., socket communication issues).
     #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     /// Error during data encoding.
     #[error("Encoding error: {0}")]
@@ -17,4 +20,4 @@ pub enum UdsError {
 }
 
 /// A specialized Result type for API operations.
-pub type Result<T> = std::result::Result<T, UdsError>;
+pub type Result<T> = result::Result<T, UdsError>;

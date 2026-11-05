@@ -7,14 +7,18 @@
     unused_crate_dependencies,
     reason = "integration test crates see every dev-dependency"
 )]
+#[cfg(unix)]
+use std::fs::metadata;
+use std::sync::Arc;
+
 use lanforge_api::rpc::{RpcRequest, RpcResponse};
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceHandle};
+use lanforge_types::system::ServiceId;
 use lanforge_uds::config::ApiConfig;
 use lanforge_uds::server::ControlService;
-use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
@@ -38,7 +42,7 @@ async fn dns_uds_simulation_basic() {
 
     // 2. Spawn UDS server control service
     let mut service = ControlService::new(cfg, ctx.clone());
-    let ctrl = ServiceHandle::new(lanforge_types::system::ServiceId::Uds, ctx.clone());
+    let ctrl = ServiceHandle::new(ServiceId::Uds, ctx.clone());
     let ctx_service = ctx.clone();
 
     let mut rx = ctx.bus().subscribe();
@@ -54,7 +58,7 @@ async fn dns_uds_simulation_basic() {
     loop {
         let event = rx.recv().await.expect("Bus closed");
         if let LanforgeEvent::System(SystemEvent::ServiceReady { id }) = event.event
-            && id == lanforge_types::system::ServiceId::Uds
+            && id == ServiceId::Uds
         {
             break;
         }
@@ -64,8 +68,8 @@ async fn dns_uds_simulation_basic() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let metadata = std::fs::metadata(socket_path).expect("Socket file should exist");
-        let mode = metadata.permissions().mode();
+        let md = metadata(socket_path).expect("Socket file should exist");
+        let mode = md.permissions().mode();
         assert_eq!(mode & 0o777, 0o660);
     }
 
