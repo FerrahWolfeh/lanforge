@@ -845,6 +845,7 @@ mod tests {
     use crate::test_utils::init_test_context;
 
     use super::*;
+    use std::iter;
     use std::time::{Duration, SystemTime};
 
     // Helper building MACs for the tests
@@ -867,7 +868,7 @@ mod tests {
             mac,
             duid: Duid::new(duid.to_vec()),
             iaid,
-            ips: std::iter::once(ip).collect(),
+            ips: iter::once(ip).collect(),
             expires: SystemTime::now() + Duration::from_hours(1),
         })));
     }

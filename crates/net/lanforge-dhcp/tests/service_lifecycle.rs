@@ -13,7 +13,10 @@ use common::{
     Dhcpv4PacketBuilder, Dhcpv6PacketBuilder, create_test_v4_config, create_test_v6_config,
     init_test_context, init_test_context_with_interface,
 };
-use dhcproto::v4::MessageType as MessageTypeV4;
+use dhcproto::v4::{
+    DhcpOption as DhcpOptionV4, Message as MessageV4, MessageType as MessageTypeV4,
+    OptionCode as OptionCodeV4,
+};
 use dhcproto::v6::{
     DhcpOption as Dhcpv6Option, Message as MessageV6, MessageType as MessageTypeV6,
     OptionCode as OptionCodeV6,
@@ -22,16 +25,20 @@ use dhcproto::{Decodable, Decoder};
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::service::{AsyncService, ServiceHandle};
+use lanforge_dhcp::v4::io::Dhcpv4InertHandle;
 use lanforge_dhcp::{Dhcpv4Service, Dhcpv4Transport, Dhcpv6Service, Dhcpv6Transport};
-use lanforge_types::device::{IPv4State, Origin};
+use lanforge_types::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin};
 use lanforge_types::identifiers::{Duid, MacAddr};
+use lanforge_types::network::dhcp::Dhcpv6Pool;
+use lanforge_types::network::{Ipv6Prefix, Ipv6Suffix};
 use lanforge_types::system::{ServiceId, ServiceState};
 use lanforge_types::update::{CliHostUpdate, DeviceUpdate, InterfaceState};
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::Ordering;
-use std::time::Duration;
-use tokio::time::timeout;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::task;
+use tokio::time::{sleep, timeout};
 
 const TEST_TIMEOUT: Duration = Duration::from_millis(1000);
 
@@ -43,7 +50,7 @@ async fn wait_for_service_online(
         if ctx.get_service_state(service_id) == ServiceState::Online {
             return Ok(());
         }
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
     Err(format!("Service '{service_id:?}' did not transition to Online in time").into())
 }
@@ -88,8 +95,8 @@ async fn test_dhcpv4_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
 
     let offer_msg = offer_reply.message()?;
     assert_eq!(
-        offer_msg.opts().get(dhcproto::v4::OptionCode::MessageType),
-        Some(&dhcproto::v4::DhcpOption::MessageType(MessageTypeV4::Offer))
+        offer_msg.opts().get(OptionCodeV4::MessageType),
+        Some(&DhcpOptionV4::MessageType(MessageTypeV4::Offer))
     );
     let offered_ip = offer_msg.yiaddr();
     assert!(
@@ -110,8 +117,8 @@ async fn test_dhcpv4_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
 
     let ack_msg = ack_reply.message()?;
     assert_eq!(
-        ack_msg.opts().get(dhcproto::v4::OptionCode::MessageType),
-        Some(&dhcproto::v4::DhcpOption::MessageType(MessageTypeV4::Ack))
+        ack_msg.opts().get(OptionCodeV4::MessageType),
+        Some(&DhcpOptionV4::MessageType(MessageTypeV4::Ack))
     );
     assert_eq!(ack_msg.yiaddr(), offered_ip);
 
@@ -262,7 +269,7 @@ async fn test_dhcpv6_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
         .ok_or("Device with DUID should be registered in context state")?;
 
     let has_dynamic_lease = dev.v6.iter().any(|v6| match v6 {
-        lanforge_types::device::IPv6State::Dynamic(lease) => lease.ip == offered_v6,
+        IPv6State::Dynamic(lease) => lease.ip == offered_v6,
         _ => false,
     });
     assert!(
@@ -280,7 +287,7 @@ async fn test_dhcpv6_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
     let static_duid = Duid::new(vec![
         0x00, 0x03, 0x00, 0x01, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
     ]);
-    let pinned_suffix: lanforge_types::network::Ipv6Suffix = "::50".parse()?;
+    let pinned_suffix: Ipv6Suffix = "::50".parse()?;
     let dummy_static_mac = MacAddr([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
 
     let _ = ctx.apply(DeviceUpdate::CliHostUpdated {
@@ -289,10 +296,7 @@ async fn test_dhcpv6_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
             hostname: Some("static-v6-server".to_string()).into(),
             duid: Some(static_duid.clone()).into(),
             v4_static: None.into(),
-            v6_suffix: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix(
-                pinned_suffix,
-            ))
-            .into(),
+            v6_suffix: Some(Ipv6AddrOrSuffix::Suffix(pinned_suffix)).into(),
             boot_file: None.into(),
             dns_fallback: None.into(),
             class: None.into(),
@@ -403,7 +407,7 @@ async fn test_dhcpv6_pool_ignores_wan_prefix_changes() -> Result<(), Box<dyn Err
 
     // `ppp0` renumbers: no lease may come from its prefix.
     set_gua(PPP0, "2804:bdc:1f38:c8e4::1");
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     let addrs = solicit(1).await;
     assert!(
         !addrs.iter().any(|a| in_prefix(a, "2804:bdc:1f38:c8e4::")),
@@ -412,7 +416,7 @@ async fn test_dhcpv6_pool_ignores_wan_prefix_changes() -> Result<(), Box<dyn Err
 
     // The LAN gets a delegated prefix: leases follow it.
     set_gua(LAN, "2804:bdc:508e:db00::1");
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     let addrs = solicit(2).await;
     assert!(
         addrs.iter().any(|a| in_prefix(a, "2804:bdc:508e:db00::")),
@@ -464,10 +468,7 @@ async fn test_dhcpv6_static_suffix_follows_renumbered_gua() -> Result<(), Box<dy
             hostname: Some("desktop".to_string()).into(),
             duid: Some(duid.clone()).into(),
             v4_static: None.into(),
-            v6_suffix: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix(
-                "::1057:cafe".parse()?,
-            ))
-            .into(),
+            v6_suffix: Some(Ipv6AddrOrSuffix::Suffix("::1057:cafe".parse()?)).into(),
             boot_file: None.into(),
             dns_fallback: None.into(),
             class: None.into(),
@@ -555,7 +556,7 @@ async fn test_dhcpv6_static_suffix_follows_renumbered_gua() -> Result<(), Box<dy
 
     // The ISP delegates a new prefix; at T1 the client renews the address it holds.
     set_lan_gua("2804:bdc:50a9:f300::1");
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     let reply = exchange(
         Dhcpv6PacketBuilder::renew(duid, server_duid)
             .with_ia_na(1, Some(old_gua))
@@ -581,10 +582,10 @@ async fn test_dhcpv6_static_suffix_follows_renumbered_gua() -> Result<(), Box<dy
 
 /// Runs DISCOVER → OFFER → REQUEST → ACK for `mac` and returns the ACK.
 async fn dhcpv4_acquire(
-    handle: &lanforge_dhcp::v4::io::Dhcpv4InertHandle,
+    handle: &Dhcpv4InertHandle,
     mac: MacAddr,
     server_id: Ipv4Addr,
-) -> Result<dhcproto::v4::Message, Box<dyn Error>> {
+) -> Result<MessageV4, Box<dyn Error>> {
     let src = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68);
     handle
         .inject(Dhcpv4PacketBuilder::discover(mac).build(), src)
@@ -629,13 +630,11 @@ async fn test_dhcpv4_records_the_pool_lease_the_client_received() -> Result<(), 
     let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x66]);
     let ack = dhcpv4_acquire(&handle, mac, cfg.server_id).await?;
     assert_eq!(
-        ack.opts().get(dhcproto::v4::OptionCode::AddressLeaseTime),
-        Some(&dhcproto::v4::DhcpOption::AddressLeaseTime(86_400))
+        ack.opts().get(OptionCodeV4::AddressLeaseTime),
+        Some(&DhcpOptionV4::AddressLeaseTime(86_400))
     );
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let dev = ctx.get_device(&mac).ok_or("device registered")?;
     let IPv4State::Dynamic(ref lease) = dev.v4 else {
         return Err("expected a dynamic lease".into());
@@ -735,7 +734,7 @@ async fn test_dhcpv4_pool_rename_keeps_leases() -> Result<(), Box<dyn Error>> {
     renamed[0].name = Some("Renamed scope".into());
     renamed[0].dns_servers = vec![Ipv4Addr::new(1, 1, 1, 1)];
     ctx.update_dhcp_v4_pools(renamed);
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     let src = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68);
     handle
@@ -749,8 +748,8 @@ async fn test_dhcpv4_pool_rename_keeps_leases() -> Result<(), Box<dyn Error>> {
         .ok_or("reply channel closed")?
         .message()?;
     assert_eq!(
-        ack.opts().get(dhcproto::v4::OptionCode::MessageType),
-        Some(&dhcproto::v4::DhcpOption::MessageType(MessageTypeV4::Ack))
+        ack.opts().get(OptionCodeV4::MessageType),
+        Some(&DhcpOptionV4::MessageType(MessageTypeV4::Ack))
     );
     assert_eq!(
         ack.yiaddr(),
@@ -813,8 +812,8 @@ async fn test_dhcpv4_static_reservation_beats_a_dynamic_request() -> Result<(), 
         .ok_or("reply channel closed")?
         .message()?;
     assert_eq!(
-        reply.opts().get(dhcproto::v4::OptionCode::MessageType),
-        Some(&dhcproto::v4::DhcpOption::MessageType(MessageTypeV4::Nak)),
+        reply.opts().get(OptionCodeV4::MessageType),
+        Some(&DhcpOptionV4::MessageType(MessageTypeV4::Nak)),
         "a reserved address must not be leased to another client"
     );
 
@@ -885,10 +884,7 @@ async fn test_dhcpv6_rapid_commit_reply_is_a_binding() -> Result<(), Box<dyn Err
             hostname: Some("archie".to_string()).into(),
             duid: None.into(),
             v4_static: None.into(),
-            v6_suffix: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix(
-                "::1057:cafe".parse()?,
-            ))
-            .into(),
+            v6_suffix: Some(Ipv6AddrOrSuffix::Suffix("::1057:cafe".parse()?)).into(),
             boot_file: None.into(),
             dns_fallback: None.into(),
             class: None.into(),
@@ -951,7 +947,7 @@ async fn test_dhcpv6_rapid_commit_reply_is_a_binding() -> Result<(), Box<dyn Err
         granted.contains(&ula) && granted.contains(&old_gua),
         "{granted:?}"
     );
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // T1, same prefix: the server must know the binding it just granted.
     let renew = exchange(
@@ -976,7 +972,7 @@ async fn test_dhcpv6_rapid_commit_reply_is_a_binding() -> Result<(), Box<dyn Err
 
     // The ISP renumbers; past T2 the client rebinds (multicast, no Server ID).
     set_lan_gua(&ctx, LAN, server_mac, "2804:bdc:5071:9400::1");
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     let rebind = exchange(
         Dhcpv6PacketBuilder::rebind(duid)
             .with_ia_na(IAID, Some(old_gua))
@@ -1008,13 +1004,9 @@ async fn test_dhcpv6_dynamic_lease_follows_renumbered_gua() -> Result<(), Box<dy
     let (ctx, bus) = init_test_context_with_interface(LAN, "lan0", server_mac);
     let mut cfg = create_test_v6_config();
     // A GUA pool by suffix, like the owner's `::100`-`::fff` scope.
-    cfg.pools = vec![lanforge_types::network::dhcp::Dhcpv6Pool {
-        range_start: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix(
-            "::200".parse()?,
-        )),
-        range_end: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix(
-            "::2ff".parse()?,
-        )),
+    cfg.pools = vec![Dhcpv6Pool {
+        range_start: Some(Ipv6AddrOrSuffix::Suffix("::200".parse()?)),
+        range_end: Some(Ipv6AddrOrSuffix::Suffix("::2ff".parse()?)),
         ..Default::default()
     }];
     ctx.update_dhcp_v6_pools(cfg.pools.clone());
@@ -1042,10 +1034,8 @@ async fn test_dhcpv6_dynamic_lease_follows_renumbered_gua() -> Result<(), Box<dy
             MessageV6::decode(&mut Decoder::new(&reply)).ok()
         }
     };
-    let old_prefix =
-        lanforge_types::network::Ipv6Prefix::from_addr("2804:bdc:5090:5600::".parse()?);
-    let new_prefix =
-        lanforge_types::network::Ipv6Prefix::from_addr("2804:bdc:5071:9400::".parse()?);
+    let old_prefix = Ipv6Prefix::from_addr("2804:bdc:5090:5600::".parse()?);
+    let new_prefix = Ipv6Prefix::from_addr("2804:bdc:5071:9400::".parse()?);
 
     let adv = exchange(
         Dhcpv6PacketBuilder::solicit(duid.clone())
@@ -1071,10 +1061,10 @@ async fn test_dhcpv6_dynamic_lease_follows_renumbered_gua() -> Result<(), Box<dy
     .await
     .ok_or("no Reply to Request")?;
     assert!(ia_na_addrs(&bound).iter().any(|(a, _, _)| *a == old_gua));
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     set_lan_gua(&ctx, LAN, server_mac, "2804:bdc:5071:9400::1");
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     let reply = exchange(
         Dhcpv6PacketBuilder::renew(duid, server_duid)
             .with_ia_na(IAID, Some(old_gua))
@@ -1110,7 +1100,7 @@ async fn wait_for_state(
         if ctx.get_service_state(service_id) == state {
             return Ok(());
         }
-        tokio::task::yield_now().await;
+        task::yield_now().await;
     }
     Err(format!(
         "{service_id:?} is {:?}, expected {state:?}",
@@ -1159,16 +1149,12 @@ async fn start_v6_gua(
     ctx: &LanforgeContext,
     lan: u32,
     server_mac: MacAddr,
-) -> Result<(Dhcpv6InertHandle, tokio::task::JoinHandle<()>), Box<dyn Error>> {
+) -> Result<(Dhcpv6InertHandle, task::JoinHandle<()>), Box<dyn Error>> {
     let mut cfg = create_test_v6_config();
     assert_eq!(cfg.lease_time, 86_400);
-    cfg.pools = vec![lanforge_types::network::dhcp::Dhcpv6Pool {
-        range_start: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix(
-            "::200".parse()?,
-        )),
-        range_end: Some(lanforge_types::device::Ipv6AddrOrSuffix::Suffix(
-            "::2ff".parse()?,
-        )),
+    cfg.pools = vec![Dhcpv6Pool {
+        range_start: Some(Ipv6AddrOrSuffix::Suffix("::200".parse()?)),
+        range_end: Some(Ipv6AddrOrSuffix::Suffix("::2ff".parse()?)),
         ..Default::default()
     }];
     ctx.update_dhcp_v6_pools(cfg.pools.clone());
@@ -1196,15 +1182,10 @@ async fn v6_exchange(handle: &Dhcpv6InertHandle, bytes: Vec<u8>) -> Option<Messa
 
 /// Seconds until the recorded dynamic v6 lease of `mac` on `ip` expires.
 fn recorded_v6_lease_secs(ctx: &LanforgeContext, mac: &MacAddr, ip: Ipv6Addr) -> Option<u64> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
     let dev = ctx.get_device(mac)?;
     dev.v6.iter().find_map(|s| match s {
-        lanforge_types::device::IPv6State::Dynamic(l) if l.ip == ip => {
-            Some(u64::from(l.expires).saturating_sub(now))
-        }
+        IPv6State::Dynamic(l) if l.ip == ip => Some(u64::from(l.expires).saturating_sub(now)),
         _ => None,
     })
 }
@@ -1223,8 +1204,7 @@ async fn test_dhcpv6_records_the_lifetime_the_client_received() -> Result<(), Bo
         0x00, 0x03, 0x00, 0x01, 0x54, 0x44, 0xa3, 0x46, 0xc2, 0x94,
     ]);
     const IAID: u32 = 7;
-    let gua_prefix =
-        lanforge_types::network::Ipv6Prefix::from_addr("2804:bdc:5090:5600::".parse()?);
+    let gua_prefix = Ipv6Prefix::from_addr("2804:bdc:5090:5600::".parse()?);
 
     let adv = v6_exchange(
         &handle,
@@ -1260,7 +1240,7 @@ async fn test_dhcpv6_records_the_lifetime_the_client_received() -> Result<(), Bo
         "the delegated prefix caps the lease: {given}"
     );
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     let recorded = recorded_v6_lease_secs(&ctx, &client_mac, gua).ok_or("lease recorded")?;
     assert!(
         recorded <= u64::from(given) && recorded + 10 >= u64::from(given),
@@ -1303,7 +1283,7 @@ async fn test_dhcpv6_advertise_is_not_a_lease() -> Result<(), Box<dyn Error>> {
         _ => return Err("Expected ServerId in Advertise".into()),
     };
     let (ip, _, _) = *ia_na_addrs(&adv).first().ok_or("addresses offered")?;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     assert_eq!(recorded_v6_lease_secs(&ctx, &client_mac, ip), None);
 
     // Bound by Request/Reply, then released.
@@ -1315,7 +1295,7 @@ async fn test_dhcpv6_advertise_is_not_a_lease() -> Result<(), Box<dyn Error>> {
     )
     .await
     .ok_or("no Reply to Request")?;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     assert!(
         recorded_v6_lease_secs(&ctx, &client_mac, ip).is_some(),
         "bound"
@@ -1328,7 +1308,7 @@ async fn test_dhcpv6_advertise_is_not_a_lease() -> Result<(), Box<dyn Error>> {
     )
     .await
     .ok_or("no Reply to Release")?;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     assert_eq!(
         recorded_v6_lease_secs(&ctx, &client_mac, ip),
         None,
@@ -1340,7 +1320,7 @@ async fn test_dhcpv6_advertise_is_not_a_lease() -> Result<(), Box<dyn Error>> {
         .await
         .ok_or("no Advertise")?;
     assert_eq!(adv.msg_type(), MessageTypeV6::Advertise);
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     for (offered, _, _) in ia_na_addrs(&adv) {
         assert_eq!(
             recorded_v6_lease_secs(&ctx, &client_mac, offered),
@@ -1380,11 +1360,11 @@ async fn test_dhcpv6_renumbering_sends_nothing_unsolicited() -> Result<(), Box<d
     .await
     .ok_or("no Reply")?;
     assert_eq!(reply.msg_type(), MessageTypeV6::Reply);
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     let bound = ctx.get_device(&client_mac).ok_or("client known")?;
     assert!(bound.v6.iter().any(|s| matches!(
         s,
-        lanforge_types::device::IPv6State::Dynamic(l) if l.ip.segments()[0] == 0x2804
+        IPv6State::Dynamic(l) if l.ip.segments()[0] == 0x2804
     )));
 
     // Neighbour discovery knows the client's link-local, as on a real LAN.

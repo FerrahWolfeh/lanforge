@@ -1,7 +1,8 @@
 use lanforge_core::error::CoreError;
-use lanforge_transport::{InertHandle, UdpTransport, sys};
+use lanforge_transport::{InertHandle, TransportMetrics, UdpTransport, sys};
 use std::io;
 use std::net::{Ipv6Addr, SocketAddr, UdpSocket};
+use std::sync::Arc;
 use tokio::net::UdpSocket as TokioUdpSocket;
 
 const ALL_DHCP_RELAY_AGENTS_AND_SERVERS: Ipv6Addr = Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 1, 2);
@@ -48,7 +49,7 @@ impl Dhcpv6Transport {
 
     /// The traffic counters alone (no socket), for the service banner.
     #[must_use]
-    pub fn metrics_handle(&self) -> std::sync::Arc<lanforge_transport::TransportMetrics> {
+    pub fn metrics_handle(&self) -> Arc<TransportMetrics> {
         self.inner.metrics_handle()
     }
 

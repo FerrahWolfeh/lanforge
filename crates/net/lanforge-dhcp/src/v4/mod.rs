@@ -40,10 +40,10 @@ use lanforge_core::bus::{
 };
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
-    ServiceCommand, ServiceHandle, ServiceSpec,
+    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_types::config::ChangeImpact;
+use lanforge_types::config::{ChangeImpact, ConfigDomain};
 use lanforge_types::device::IPv4State;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
@@ -53,8 +53,10 @@ use lanforge_types::update::{DeviceUpdate, DhcpV4PoolUpdate, LeaseTarget};
 use server::{DhcpServer, HandleResult};
 use smallvec::SmallVec;
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime};
+use tokio::time::interval;
 use tracing::{debug, info, warn};
 
 use crate::traits::DhcpPool;
@@ -62,10 +64,7 @@ pub use config::Dhcpv4Config;
 pub use io::{Dhcpv4InertChannels, Dhcpv4InertHandle, Dhcpv4InertReply, Dhcpv4Transport};
 use lanforge_core::context::LanforgeContext;
 
-const DHCPV4_DEPS: &[Edge] = &[Edge::requires(
-    ServiceId::Interfaces,
-    lanforge_core::service::LossPolicy::Degrade,
-)];
+const DHCPV4_DEPS: &[Edge] = &[Edge::requires(ServiceId::Interfaces, LossPolicy::Degrade)];
 
 /// `DHCPv4` Server Service.
 #[derive(Clone)]
@@ -117,10 +116,7 @@ impl LanforgeService for Dhcpv4Service {
             shutdown_timeout: Duration::from_secs(3),
             deps: DHCPV4_DEPS,
             condition: Condition {
-                sections: &[
-                    lanforge_types::config::ConfigDomain::DhcpV4Options,
-                    lanforge_types::config::ConfigDomain::Interfaces,
-                ],
+                sections: &[ConfigDomain::DhcpV4Options, ConfigDomain::Interfaces],
                 eval: |ctx| {
                     if !ctx.get_dhcp_options().v4.enabled {
                         return Activation::Dormant(DormantReason::disabled("dhcp.v4.enabled"));
@@ -322,7 +318,7 @@ impl Dhcpv4Service {
         let mut handle = self.ctx.service_handle_network();
         let mut pools_sub = self.ctx.config_subscription::<Vec<Dhcpv4Pool>>();
         let mut options_sub = self.ctx.config_subscription::<Dhcpv4Options>();
-        let mut cleanup_timer = tokio::time::interval(Duration::from_mins(1));
+        let mut cleanup_timer = interval(Duration::from_mins(1));
 
         loop {
             tokio::select! {
@@ -513,7 +509,7 @@ impl Dhcpv4Service {
                 self.record_incoming_transaction(&msg, mac);
 
                 let handle_res = self.ctx.with_state(|state| {
-                    let device = state.devices.get(&mac).map(std::sync::Arc::as_ref);
+                    let device = state.devices.get(&mac).map(Arc::as_ref);
                     server.handle_message(&msg, device)
                 });
 

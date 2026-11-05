@@ -58,6 +58,7 @@ use lanforge_types::identifiers::{Duid, MacAddr};
 use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::system::ServiceId;
 use lanforge_types::utils::mac_from_eui64_link_local;
+use std::collections::HashMap;
 use std::net::Ipv6Addr;
 use std::str::FromStr;
 use std::string::ToString;
@@ -124,7 +125,7 @@ pub struct Dhcpv6Server {
     /// Precompiled custom options to avoid runtime string decoding on the packet hot-path.
     pub precompiled_custom_options: Vec<(u16, Vec<u8>)>,
     /// Recent IP assignments keyed by (DUID, IAID) to propagate to context state.
-    pub last_assignments: std::collections::HashMap<(Duid, u32), Vec<Ipv6Addr>>,
+    pub last_assignments: HashMap<(Duid, u32), Vec<Ipv6Addr>>,
     /// Index of the LAN interface served: its own address is the DNS server announced when none
     /// is configured.
     pub served_ifindex: Option<u32>,
@@ -142,7 +143,7 @@ impl Dhcpv6Server {
             prefix_lifetimes: None,
             ctx,
             precompiled_custom_options,
-            last_assignments: std::collections::HashMap::new(),
+            last_assignments: HashMap::new(),
             served_ifindex: None,
         }
     }
@@ -1225,6 +1226,7 @@ mod tests {
         system::ServiceState,
         update::{CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, V6LeaseUpdate},
     };
+    use std::iter;
     use std::{collections::HashMap, time::Duration};
     use std::{net::Ipv6Addr, time::SystemTime};
 
@@ -1737,7 +1739,7 @@ mod tests {
             mac: Some(dummy_mac()),
             duid: duid_legit,
             iaid,
-            ips: std::iter::once(ip).collect(),
+            ips: iter::once(ip).collect(),
             expires: SystemTime::now() + Duration::from_hours(1),
         })));
 
@@ -1790,7 +1792,7 @@ mod tests {
             mac: Some(dummy_mac()),
             duid: duid_legit,
             iaid,
-            ips: std::iter::once(ip).collect(),
+            ips: iter::once(ip).collect(),
             expires: SystemTime::now() + Duration::from_hours(1),
         })));
 

@@ -40,8 +40,12 @@ use dhcproto::{Decodable, Decoder, Encodable, Encoder, Name};
 use lanforge_core::context::LanforgeContext;
 use lanforge_types::device::{Device, IPv4State};
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::dhcp::Dhcpv4Pool;
+use std::cmp;
+use std::fs::File;
+use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr};
-use std::str::FromStr;
+use std::str::{self, FromStr};
 use tracing::{debug, info, warn};
 
 use crate::traits::DhcpPool;
@@ -213,7 +217,7 @@ impl DhcpServer {
     /// the same finite lease: a fixed address must not stop the client from renewing.
     #[must_use]
     pub fn lease_time_for(&self, ip: Ipv4Addr) -> u32 {
-        std::cmp::min(
+        cmp::min(
             self.pool
                 .pool_for_ip(ip)
                 .and_then(|p| p.lease_time)
@@ -611,7 +615,7 @@ impl DhcpServer {
         &self,
         request: &Message,
         opts: &mut v4::DhcpOptions,
-        pool_opt: Option<&lanforge_types::network::dhcp::Dhcpv4Pool>,
+        pool_opt: Option<&Dhcpv4Pool>,
         device: Option<&Device>,
     ) {
         let vendor_class = Self::get_vendor_class(request);
@@ -739,16 +743,11 @@ impl DhcpServer {
 }
 
 fn get_interface_mtu(iface: &str) -> Option<u16> {
-    use std::io::Read;
     let path = format!("/sys/class/net/{iface}/mtu");
-    let mut file = std::fs::File::open(path).ok()?;
+    let mut file = File::open(path).ok()?;
     let mut buf = [0u8; 16];
     let n = file.read(&mut buf).ok()?;
-    std::str::from_utf8(&buf[..n])
-        .ok()?
-        .trim()
-        .parse::<u16>()
-        .ok()
+    str::from_utf8(&buf[..n]).ok()?.trim().parse::<u16>().ok()
 }
 
 #[cfg(test)]
