@@ -68,8 +68,8 @@ pub fn encode_reversed_domain(domain: &str, out: &mut [u8; 256]) -> Option<usize
 pub fn reverse_domain_key(domain: &str) -> Option<String> {
     let mut buf = [0u8; 256];
     let len = encode_reversed_domain(domain, &mut buf)?;
-    // Input is ASCII only + 0x01 separator, thus valid UTF-8
-    Some(String::from_utf8(buf[..len].to_vec()).unwrap())
+    // Whole labels (split at the ASCII '.') plus 0x01 separators: always valid UTF-8.
+    String::from_utf8(buf[..len].to_vec()).ok()
 }
 
 /// A matched rule result from the FST engine.

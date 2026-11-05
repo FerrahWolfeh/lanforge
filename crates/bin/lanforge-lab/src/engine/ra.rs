@@ -51,7 +51,7 @@ impl RaEngine {
         // Build RS packet (Type: 133, Code: 0, Checksum: 0 (kernel calculates), Reserved: 0)
         let rs_packet = [ICMPV6_TYPE_RS, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         let dst_sa = socket2::SockAddr::from(std::net::SocketAddrV6::new(
-            "ff02::2".parse().unwrap(),
+            Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 2),
             0,
             0,
             0,

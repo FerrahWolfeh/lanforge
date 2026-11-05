@@ -245,36 +245,16 @@ impl IpPool {
         }
 
         // 3. Fallback: Pick from available pool (O(log n))
-        while !self.available.is_empty() {
-            let rank =
-                rand::random_range(0..u32::try_from(self.available.len()).unwrap_or(u32::MAX));
-            let ip_u32 = self.available.select(rank).unwrap(); // Safe due to rank check
-            let ip = Ipv4Addr::from(ip_u32);
-
-            self.remove_from_available(ip);
-            if ctx.get_mac_by_ip(IpAddr::V4(ip)).is_none()
-                && !ctx.get_static_registry().v4.contains_key(&ip)
-            {
-                return Some(ip);
-            }
+        if let Some(ip) = self.take_random_free(ctx) {
+            return Some(ip);
         }
 
         // 3.5. Garbage Collection: If pool is empty, scan for naturally expired leases
         self.reconcile_active(ctx);
 
         // Second pass after GC
-        while !self.available.is_empty() {
-            let rank =
-                rand::random_range(0..u32::try_from(self.available.len()).unwrap_or(u32::MAX));
-            let ip_u32 = self.available.select(rank).unwrap();
-            let ip = Ipv4Addr::from(ip_u32);
-
-            self.remove_from_available(ip);
-            if ctx.get_mac_by_ip(IpAddr::V4(ip)).is_none()
-                && !ctx.get_static_registry().v4.contains_key(&ip)
-            {
-                return Some(ip);
-            }
+        if let Some(ip) = self.take_random_free(ctx) {
+            return Some(ip);
         }
 
         // 4. Emergency fallback: DECLINEs
@@ -288,22 +268,30 @@ impl IpPool {
                 }
             }
 
-            while !self.available.is_empty() {
-                let rank =
-                    rand::random_range(0..u32::try_from(self.available.len()).unwrap_or(u32::MAX));
-                let ip_u32 = self.available.select(rank).unwrap();
-                let ip = Ipv4Addr::from(ip_u32);
-
-                self.remove_from_available(ip);
-                if ctx.get_mac_by_ip(IpAddr::V4(ip)).is_none()
-                    && !ctx.get_static_registry().v4.contains_key(&ip)
-                {
-                    return Some(ip);
-                }
+            if let Some(ip) = self.take_random_free(ctx) {
+                return Some(ip);
             }
         }
 
         None
+    }
+
+    /// Draws random addresses from `available` (removing each) until one is neither leased
+    /// nor statically reserved. Returns `None` once `available` is empty.
+    fn take_random_free(&mut self, ctx: &LanforgeContext) -> Option<Ipv4Addr> {
+        loop {
+            let len = u32::try_from(self.available.len()).unwrap_or(u32::MAX);
+            if len == 0 {
+                return None;
+            }
+            let ip = Ipv4Addr::from(self.available.select(rand::random_range(0..len))?);
+            self.remove_from_available(ip);
+            if ctx.get_mac_by_ip(IpAddr::V4(ip)).is_none()
+                && !ctx.get_static_registry().v4.contains_key(&ip)
+            {
+                return Some(ip);
+            }
+        }
     }
 
     fn add_to_available(&mut self, ip: Ipv4Addr) {

@@ -97,13 +97,15 @@ impl RawSender {
         let frame_buf = &mut buf[..eth_len];
 
         // 1. Assemble Ethernet Header
-        let mut eth = MutableEthernetPacket::new(frame_buf).unwrap();
+        let mut eth = MutableEthernetPacket::new(frame_buf)
+            .expect("frame_buf is eth_len bytes, longer than an Ethernet header");
         eth.set_destination(dst_mac);
         eth.set_source(self.src_mac);
         eth.set_ethertype(EtherTypes::Ipv4);
 
         // 2. Assemble IPv4 Header
-        let mut ip = MutableIpv4Packet::new(eth.payload_mut()).unwrap();
+        let mut ip = MutableIpv4Packet::new(eth.payload_mut())
+            .expect("Ethernet payload is ipv4_len bytes, longer than an IPv4 header");
         ip.set_version(4);
         ip.set_header_length(5);
         ip.set_total_length(u16::try_from(ipv4_len).unwrap_or(u16::MAX));
@@ -117,7 +119,8 @@ impl RawSender {
         ip.set_checksum(ip_checksum);
 
         // 3. Assemble UDP Header
-        let mut udp = MutableUdpPacket::new(ip.payload_mut()).unwrap();
+        let mut udp = MutableUdpPacket::new(ip.payload_mut())
+            .expect("IPv4 payload is udp_len bytes, longer than a UDP header");
         udp.set_source(67);
         udp.set_destination(68);
         udp.set_length(u16::try_from(udp_len).unwrap_or(u16::MAX));

@@ -48,11 +48,11 @@ fn try_compile_bpf(bpf_c: &Path, bpf_o: &Path) -> Result<(), String> {
             "-Wno-missing-declarations",
             &format!("-I{vmlinux_inc}"),
             &format!("-I{libbpf_inc}"),
-            "-c",
-            bpf_c.to_str().unwrap(),
-            "-o",
-            bpf_o.to_str().unwrap(),
         ])
+        .arg("-c")
+        .arg(bpf_c)
+        .arg("-o")
+        .arg(bpf_o)
         .status();
 
     match status {
@@ -67,14 +67,15 @@ fn main() {
         return;
     }
 
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let manifest_dir =
+        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
     let bpf_c = manifest_dir.join("bpf/pppoe_fastpath.bpf.c");
     let bundled_bpf_o = manifest_dir.join("bpf/pppoe_fastpath.bpf.o");
 
     println!("cargo:rerun-if-changed={}", bpf_c.display());
     println!("cargo:rerun-if-changed={}", bundled_bpf_o.display());
 
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
     let bpf_o = out_dir.join("pppoe_fastpath.bpf.o");
 
     match try_compile_bpf(&bpf_c, &bpf_o) {
