@@ -1,9 +1,10 @@
 use crate::config::DnsConfig;
 use crate::pipeline::DnsPipelineRequest;
 use crate::pipeline::Pipeline;
+#[cfg(feature = "adblock")]
+use crate::pipeline::middleware::AdblockMiddleware;
 use crate::pipeline::middleware::{
-    AdblockMiddleware, CacheMiddleware, LocalResolverMiddleware, RewriteMiddleware,
-    UpstreamMiddleware,
+    CacheMiddleware, LocalResolverMiddleware, RewriteMiddleware, UpstreamMiddleware,
 };
 #[cfg(feature = "adblock")]
 use crate::resolver::AdBlocker;
