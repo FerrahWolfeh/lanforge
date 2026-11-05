@@ -5,18 +5,27 @@ pub use lanforge_types::auth::{ApiScopes, ApiTokenEntry, UserEntry, UserInfo, Us
 use lanforge_types::device::{Device, Origin};
 use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::network::dns::{DnsLifetimeStats, DnsRecordType};
 use lanforge_types::network::{
     Hostname, Ipv6AddrOrSuffix, QueryLogEntry, QueryResult, TrafficHistorySample,
 };
 use lanforge_types::storage::DnsAnalyticsData;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use std::fmt::{self, Debug, Display, Formatter};
+use std::io;
+use std::marker::PhantomData;
+use std::net::{IpAddr, Ipv4Addr};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Database error enum encapsulating all database failures.
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
     /// File access or other I/O errors.
     #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     /// A specific database engine backend failure.
     #[error("Database backend failure: {0}")]
@@ -129,11 +138,11 @@ impl From<redb::Error> for DbError {
 }
 
 /// A strong newtype wrapper for a logical device identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 pub struct DeviceId(pub uuid::Uuid);
 
-impl std::fmt::Display for DeviceId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for DeviceId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
@@ -182,8 +191,8 @@ pub trait DeviceStore: Send + Sync {
     /// Synchronizes a batch of device updates (full, base-only, and deletions) atomically.
     fn batch_sync_devices(
         &self,
-        full_upserts: &[std::sync::Arc<Device>],
-        base_upserts: &[std::sync::Arc<Device>],
+        full_upserts: &[Arc<Device>],
+        base_upserts: &[Arc<Device>],
         deletes: &[MacAddr],
     ) -> Result<(), DbError> {
         if !deletes.is_empty() {
@@ -200,12 +209,12 @@ pub trait DeviceStore: Send + Sync {
 }
 
 /// A user-managed host record stored separately from runtime observations.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
 pub struct StaticHostEntry {
     pub mac: MacAddr,
     pub hostname: Hostname,
     pub origin: Origin,
-    pub v4_fixed: Option<std::net::Ipv4Addr>,
+    pub v4_fixed: Option<Ipv4Addr>,
     pub v6_suffix: Option<Ipv6AddrOrSuffix>,
     pub ignore_dns_log: bool,
     pub ignored_log_domains: Vec<String>,
@@ -214,7 +223,7 @@ pub struct StaticHostEntry {
 /// Strongly typed configuration key representing a distinct persistent section or item.
 pub struct ConfigKey<T: ?Sized> {
     name: &'static str,
-    _marker: std::marker::PhantomData<fn() -> T>,
+    _marker: PhantomData<fn() -> T>,
 }
 
 impl<T: ?Sized> ConfigKey<T> {
@@ -222,7 +231,7 @@ impl<T: ?Sized> ConfigKey<T> {
     pub const fn new(name: &'static str) -> Self {
         Self {
             name,
-            _marker: std::marker::PhantomData,
+            _marker: PhantomData,
         }
     }
 
@@ -241,31 +250,31 @@ impl<T: ?Sized> Clone for ConfigKey<T> {
 
 impl<T: ?Sized> Copy for ConfigKey<T> {}
 
-impl<T: ?Sized> std::fmt::Debug for ConfigKey<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T: ?Sized> Debug for ConfigKey<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "ConfigKey({})", self.name)
     }
 }
 
 pub mod config_keys {
     use super::ConfigKey;
+    use lanforge_types::network::Ipv6Prefix;
 
-    pub const LAST_GUA_PREFIX: ConfigKey<lanforge_types::network::Ipv6Prefix> =
-        ConfigKey::new("last_gua_prefix");
+    pub const LAST_GUA_PREFIX: ConfigKey<Ipv6Prefix> = ConfigKey::new("last_gua_prefix");
 }
 
 pub use config_keys::*;
 
 /// Configuration, metadata, and static host persistence contract.
 pub trait ConfigStore: PrefixStore + Send + Sync {
-    fn get<T: serde::de::DeserializeOwned>(&self, key: ConfigKey<T>) -> Result<Option<T>, DbError>
+    fn get<T: DeserializeOwned>(&self, key: ConfigKey<T>) -> Result<Option<T>, DbError>
     where
         Self: Sized;
-    fn put<T: serde::Serialize>(&self, key: ConfigKey<T>, val: &T) -> Result<(), DbError>
+    fn put<T: Serialize>(&self, key: ConfigKey<T>, val: &T) -> Result<(), DbError>
     where
         Self: Sized;
 
-    fn put_if_absent<T: serde::Serialize + serde::de::DeserializeOwned>(
+    fn put_if_absent<T: Serialize + DeserializeOwned>(
         &self,
         key: ConfigKey<T>,
         val: &T,
@@ -340,13 +349,10 @@ pub trait ApiTokenStore: Send + Sync {
 /// The last LAN GUA prefix seen (state, kept across restarts).
 pub trait PrefixStore: Send + Sync {
     /// Loads the last active GUA prefix from state.
-    fn load_last_gua_prefix(&self) -> Result<Option<lanforge_types::network::Ipv6Prefix>, DbError>;
+    fn load_last_gua_prefix(&self) -> Result<Option<Ipv6Prefix>, DbError>;
 
     /// Saves the last active GUA prefix to state.
-    fn save_last_gua_prefix(
-        &self,
-        prefix: Option<lanforge_types::network::Ipv6Prefix>,
-    ) -> Result<(), DbError>;
+    fn save_last_gua_prefix(&self, prefix: Option<Ipv6Prefix>) -> Result<(), DbError>;
 }
 
 /// Handles storage and administration of user accounts.
@@ -399,7 +405,7 @@ pub trait LogStore: Send + Sync {
     /// Atomically writes a runtime device batch and removes deleted MACs.
     fn sync_runtime_devices(
         &self,
-        upserts: &[std::sync::Arc<Device>],
+        upserts: &[Arc<Device>],
         deletes: &[MacAddr],
     ) -> Result<(), DbError> {
         let _ = (upserts, deletes);
@@ -407,7 +413,7 @@ pub trait LogStore: Send + Sync {
     }
 
     /// Replaces the volatile device snapshot atomically.
-    fn replace_runtime_devices(&self, upserts: &[std::sync::Arc<Device>]) -> Result<(), DbError> {
+    fn replace_runtime_devices(&self, upserts: &[Arc<Device>]) -> Result<(), DbError> {
         self.sync_runtime_devices(upserts, &[])
     }
 
@@ -425,16 +431,13 @@ pub trait LogStore: Send + Sync {
     fn record_dns_block(
         &self,
         timed_event: &TimedEvent,
-        src_ip: std::net::IpAddr,
+        src_ip: IpAddr,
         domain: &str,
         src_mac: Option<String>,
     ) -> Result<(), DbError>;
 
     /// Records a batch of resolved DNS queries.
-    fn record_dns_queries_batch(
-        &self,
-        entries: &[std::sync::Arc<QueryLogEntry>],
-    ) -> Result<(), DbError>;
+    fn record_dns_queries_batch(&self, entries: &[Arc<QueryLogEntry>]) -> Result<(), DbError>;
 
     /// Records a single resolved DNS query.
     fn record_dns_query(&self, entry: &QueryLogEntry) -> Result<(), DbError>;
@@ -530,8 +533,8 @@ pub trait LogStore: Send + Sync {
             self.get_dns_top_domains(limit).unwrap_or_default()
         };
         let query_types = self.get_dns_query_types().unwrap_or_default();
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
         let since_secs = now_secs.saturating_sub(86400);
@@ -567,13 +570,13 @@ impl<T> DatabaseStore for T where T: ConfigStore + StateStore + AuthStore + Send
 /// Unified facade exposing all storage domains for closure execution.
 #[derive(Clone)]
 pub struct Stores {
-    pub db: std::sync::Arc<dyn DatabaseStore>,
-    pub log: std::sync::Arc<dyn LogStore>,
+    pub db: Arc<dyn DatabaseStore>,
+    pub log: Arc<dyn LogStore>,
 }
 
 impl Stores {
     #[must_use]
-    pub fn new(db: std::sync::Arc<dyn DatabaseStore>, log: std::sync::Arc<dyn LogStore>) -> Self {
+    pub fn new(db: Arc<dyn DatabaseStore>, log: Arc<dyn LogStore>) -> Self {
         Self { db, log }
     }
 
