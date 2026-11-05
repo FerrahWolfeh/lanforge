@@ -11,6 +11,7 @@ use std::time::Instant;
 pub struct UpstreamMiddleware;
 
 impl UpstreamMiddleware {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

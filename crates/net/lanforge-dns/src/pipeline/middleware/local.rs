@@ -10,6 +10,7 @@ use crate::utils::extract_first_answer_summary;
 pub struct LocalResolverMiddleware;
 
 impl LocalResolverMiddleware {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

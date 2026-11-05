@@ -9,6 +9,7 @@ use crate::utils::extract_first_answer_summary;
 pub struct RewriteMiddleware;
 
 impl RewriteMiddleware {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

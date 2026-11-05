@@ -79,6 +79,7 @@ pub struct DbWorker {
 
 impl DbWorker {
     /// Creates a new `DbWorker` for the specified databases.
+    #[must_use]
     pub fn new(
         cfg: DatabaseConfig,
         ctx: LanforgeContext,

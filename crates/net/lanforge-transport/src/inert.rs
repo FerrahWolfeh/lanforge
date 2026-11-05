@@ -35,6 +35,7 @@ impl<A: Clone + Send + 'static> InertHandle<A> {
     }
 
     /// Attempts to receive a reply immediately without waiting.
+    #[must_use]
     pub fn try_recv_reply(&self) -> Option<(Vec<u8>, A)> {
         self.out_rx.try_lock().ok()?.try_recv().ok()
     }

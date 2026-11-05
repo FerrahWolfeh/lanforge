@@ -940,6 +940,7 @@ impl ClientContext {
 
     /// The RPC error for a handler's failure `response`: a refusal and a missing item keep their
     /// kind and message; a generic error is classified by [`Self::map_error`].
+    #[must_use]
     pub fn map_failure(response: Response) -> RpcCallError {
         match response {
             Response::Rejected { error } => RpcCallError::Rejected(error),
@@ -949,6 +950,7 @@ impl ClientContext {
         }
     }
 
+    #[must_use]
     pub fn map_error(err: String) -> RpcCallError {
         if err.contains("Invalid MAC") {
             RpcCallError::InvalidMac(err)

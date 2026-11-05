@@ -533,6 +533,7 @@ impl ClientContext {
     }
 
     /// Resolves the candidate configuration file path for writes.
+    #[must_use]
     pub fn resolve_config_path(&self) -> Option<PathBuf> {
         if let Some(p) = self.ctx.config_path() {
             if let Some(parent) = p.parent() {

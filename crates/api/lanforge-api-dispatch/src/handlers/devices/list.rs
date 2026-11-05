@@ -96,6 +96,7 @@ impl ClientContext {
         true
     }
 
+    #[must_use]
     pub fn map_device(
         &self,
         dev: &Device,

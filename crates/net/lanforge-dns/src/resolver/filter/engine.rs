@@ -14,11 +14,13 @@ pub const LABEL_SEPARATOR: u8 = b'\x01';
 const SOURCE_IDX_SHIFT: u32 = 16;
 
 #[inline]
+#[must_use]
 pub fn encode_val(flags: MatchFlags, source_idx: u16) -> u64 {
     (flags.0 as u64) | ((source_idx as u64) << SOURCE_IDX_SHIFT)
 }
 
 #[inline]
+#[must_use]
 pub fn decode_val(val: u64) -> (MatchFlags, u16) {
     let flags = MatchFlags((val & 0xFF) as u8);
     let source_idx = ((val >> SOURCE_IDX_SHIFT) & 0xFFFF) as u16;
@@ -166,6 +168,7 @@ impl DiskFilterMap {
     }
 
     #[inline]
+    #[must_use]
     pub fn match_domain(&self, domain: &str) -> Option<MatchCandidate> {
         let mut key_buf = [0u8; 256];
         let len = encode_reversed_domain(domain, &mut key_buf)?;
