@@ -80,7 +80,8 @@ where
     F: Fn(&PppoeEvent) -> Option<T>,
 {
     loop {
-        let evt = timeout(Duration::from_secs(3), sub.recv())
+        // Longer than the release wait after a PADT (6 s), during which no event is published.
+        let evt = timeout(Duration::from_secs(10), sub.recv())
             .await
             .expect("Timeout waiting for PPPoE event")
             .expect("Recv error");
@@ -165,7 +166,7 @@ async fn test_pppoe_inert_session_up_and_shutdown() {
     assert!(res.is_ok());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_pppoe_reacts_to_config_change_in_place() {
     let (ctx, bus) = create_test_context();
     let mut pppoe_sub = bus.subscribe_pppoe();
@@ -238,7 +239,7 @@ async fn test_pppoe_reacts_to_config_change_in_place() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_pppoe_reacts_to_service_control_restart() {
     let (ctx, bus) = create_test_context();
     let mut pppoe_sub = bus.subscribe_pppoe();
@@ -1144,7 +1145,7 @@ fn start_with_bras(
 /// New credentials end the session and the next one must log in with them. The service went
 /// back to discovery with the configuration it held before the change (the keepalive saw the
 /// change, the service never did): the ISP got the old username again.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_pppoe_reconnects_with_the_new_credentials() {
     let (ctx, bus) = create_test_context();
     let mut pppoe_sub = bus.subscribe_pppoe();
@@ -1226,7 +1227,7 @@ async fn test_pppoe_runtime_settings_apply_without_reconnect() {
 /// A change that lands while the session is still being negotiated (discovery, LCP, auth) is not
 /// lost: the keepalive used to open a fresh subscription, already "up to date", and the session
 /// stayed on the old credentials until the next drop.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn test_pppoe_change_during_negotiation_is_not_lost() {
     let (ctx, bus) = create_test_context();
     let mut pppoe_sub = bus.subscribe_pppoe();
@@ -1257,7 +1258,8 @@ async fn test_pppoe_change_during_negotiation_is_not_lost() {
         ..cfg
     });
 
-    let names = timeout(Duration::from_secs(5), async {
+    // Budget: the reconnect waits the 6 s release after its own PADT.
+    let names = timeout(Duration::from_secs(15), async {
         loop {
             wait_for_session_up(&mut pppoe_sub).await;
             let names = seen.lock().unwrap().chap_names.clone();
@@ -1325,7 +1327,8 @@ async fn a_half_open_session_after_restart_is_retried_within_seconds() {
         up.session_id, 0x0042,
         "the fresh session, not the half-open one"
     );
-    assert!(took <= Duration::from_secs(11), "WAN down for {took:?}");
+    // Old code: 14.8 s. Now: 5 s Challenge window + 6 s release wait + reconnect.
+    assert!(took <= Duration::from_secs(12), "WAN down for {took:?}");
     let (half_open, padts) = {
         let seen = seen.lock().unwrap();
         (seen.half_open_sessions, seen.padts)
@@ -1340,10 +1343,47 @@ async fn a_half_open_session_after_restart_is_retried_within_seconds() {
     let _ = timeout(Duration::from_secs(2), handle).await;
 }
 
-/// The concentrator holds the ID longer than the first short retry: the next PADS with the same
-/// ID is terminated on sight instead of waiting another 5 s for a Challenge.
+/// The concentrator holds the ID longer than the release wait: the next PADS with the same ID is
+/// terminated on sight instead of waiting another 5 s for a Challenge.
 #[tokio::test(start_paused = true)]
 async fn the_same_half_open_session_is_not_negotiated_twice() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        reconnect_delay_secs: 10,
+        ..Default::default()
+    };
+    let bras = MockBrasConfig {
+        session_id: 0x0042,
+        half_open: Some((0x1222, Duration::from_secs(8))),
+        ..Default::default()
+    };
+    let (seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg, bras);
+
+    let up = session_up_within(&mut pppoe_sub, Duration::from_secs(120)).await;
+    assert_eq!(up.session_id, 0x0042);
+    let (half_open, padts) = {
+        let seen = seen.lock().unwrap();
+        (seen.half_open_sessions, seen.padts)
+    };
+    assert!(half_open >= 2, "{half_open} half-open sessions");
+    assert!(
+        padts >= half_open,
+        "every half-open one is terminated ({padts} PADTs for {half_open})"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}
+
+/// Box logs (MX204): the ID was still handed out 2.9 s after a PADT and released by 6 s. After
+/// its own PADT the client waits that long before discovering again, so a concentrator holding
+/// the ID for 5 s gives out a half-open session once (the restart) and not a second time.
+#[tokio::test(start_paused = true)]
+async fn discovery_waits_for_the_concentrator_to_release_a_terminated_session() {
     let (ctx, bus) = create_test_context();
     let mut pppoe_sub = bus.subscribe_pppoe();
     let cfg = PppoeConfig {
@@ -1360,16 +1400,50 @@ async fn the_same_half_open_session_is_not_negotiated_twice() {
     };
     let (seen, _cmd_tx, handle) = start_with_bras(&ctx, cfg, bras);
 
+    let up = session_up_within(&mut pppoe_sub, Duration::from_secs(60)).await;
+    assert_eq!(up.session_id, 0x0042);
+    let half_open = seen.lock().unwrap().half_open_sessions;
+    assert_eq!(
+        half_open, 1,
+        "the retry came before the concentrator let go"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_secs(2), handle).await;
+}
+
+/// Some concentrators always hand the same session ID to the same MAC. A refused half-open ID
+/// is negotiated on the next attempt (not refused forever), and an admin reconnect (`Restart`)
+/// waits for the release instead of rediscovering straight after its own PADT.
+#[tokio::test(start_paused = true)]
+async fn a_concentrator_reusing_one_session_id_still_connects_and_reconnects() {
+    let (ctx, bus) = create_test_context();
+    let mut pppoe_sub = bus.subscribe_pppoe();
+    let cfg = PppoeConfig {
+        enabled: true,
+        wan_iface: "eth1".into(),
+        username: "client1".into(),
+        reconnect_delay_secs: 10,
+        ..Default::default()
+    };
+    let bras = MockBrasConfig {
+        session_id: 0x0042,
+        half_open: Some((0x0042, Duration::from_secs(2))),
+        ..Default::default()
+    };
+    let (seen, cmd_tx, handle) = start_with_bras(&ctx, cfg, bras);
+
     let up = session_up_within(&mut pppoe_sub, Duration::from_secs(120)).await;
     assert_eq!(up.session_id, 0x0042);
-    let (half_open, padts) = {
-        let seen = seen.lock().unwrap();
-        (seen.half_open_sessions, seen.padts)
-    };
-    assert!(half_open >= 2, "{half_open} half-open sessions");
-    assert!(
-        padts >= half_open,
-        "every half-open one is terminated ({padts} PADTs for {half_open})"
+    let before = seen.lock().unwrap().half_open_sessions;
+
+    cmd_tx.send(ServiceCommand::Restart).await.unwrap();
+    let up = session_up_within(&mut pppoe_sub, Duration::from_secs(60)).await;
+    assert_eq!(up.session_id, 0x0042);
+    let after = seen.lock().unwrap().half_open_sessions;
+    assert_eq!(
+        after, before,
+        "the reconnect hit the session its own PADT ended"
     );
 
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));

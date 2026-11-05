@@ -59,6 +59,11 @@ fn reconnect_jitter() -> f64 {
     0.4f64.mul_add(rand::random::<f64>(), 0.8)
 }
 
+/// How long the concentrator may keep a session after our PADT and hand its ID out again: the
+/// owner's MX204 BNG released it between 2.9 s and 6.0 s after the PADT (box logs). No discovery
+/// starts sooner than this after a PADT.
+const PADT_RELEASE: Duration = Duration::from_secs(6);
+
 const PPPOE_DEPS: &[Edge] = &[Edge::requires(
     ServiceId::Interfaces,
     lanforge_core::service::LossPolicy::Continue,
@@ -89,6 +94,8 @@ pub struct PppoeService<H: PppoeHost = KernelHost> {
     /// (AC MAC, session ID) the concentrator left half-open: LCP opened, no CHAP Challenge.
     /// Handed out again by the next discovery, it is terminated instead of negotiated.
     stale_session: Option<(MacAddr, u16)>,
+    /// When this process last sent a PADT ([`PADT_RELEASE`]).
+    last_padt: Option<Instant>,
 }
 
 impl PppoeService<KernelHost> {
@@ -116,6 +123,7 @@ impl PppoeService<KernelHost> {
             wan_ra: None,
             host: KernelHost,
             stale_session: None,
+            last_padt: None,
         }
     }
 }
@@ -153,6 +161,7 @@ impl<H: PppoeHost> PppoeService<H> {
             wan_ra: None,
             host,
             stale_session: None,
+            last_padt: None,
         }
     }
 
@@ -297,6 +306,7 @@ impl<H: PppoeHost> PppoeService<H> {
                 meta.session_id,
             )
             .await;
+            self.last_padt = Some(Instant::now());
         }
 
         self.ctx.set_pppoe_status(None);
@@ -815,6 +825,16 @@ impl<H: PppoeHost> PppoeService<H> {
         self.ctx
             .set_service_transports(ServiceId::Pppoe, vec![transport.metrics_handle()]);
 
+        if let Some(padt) = self.last_padt {
+            let release = padt + PADT_RELEASE;
+            if Instant::now() < release {
+                info!(
+                    wait_ms = (release - Instant::now()).as_millis(),
+                    "Waiting for the concentrator to release the session it was sent a PADT for"
+                );
+                sleep_until(release).await;
+            }
+        }
         info!(
             wan_iface = %self.cfg.wan_iface,
             ifindex,
@@ -842,7 +862,9 @@ impl<H: PppoeHost> PppoeService<H> {
         let flow_res = async {
             if self.stale_session == Some((disc_res.ac_mac, disc_res.session_id)) {
                 // Still the half-open session: negotiating it would only wait for a Challenge
-                // that never comes. The teardown below sends its PADT.
+                // that never comes. The teardown below sends its PADT. Refused once only: a
+                // concentrator that always hands out the same ID is negotiated next time.
+                self.stale_session = None;
                 warn!(
                     ac_mac = %disc_res.ac_mac,
                     session_id = disc_res.session_id,
