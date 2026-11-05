@@ -59,8 +59,8 @@
 	function formatOverheadLabel(oh: SqmOverhead): string {
 		switch (oh) {
 			case "auto": return "Auto-detect (Recommended)";
-			case "pppoe": return "PPPoE (+34 bytes · FTTH / DSL)";
-			case "ethernet": return "Ethernet (+14 bytes · DHCP / IPoE)";
+			case "pppoe": return "PPPoE (+46 bytes · FTTH / DSL)";
+			case "ethernet": return "Ethernet (+38 bytes · DHCP / IPoE)";
 			case "docsis": return "DOCSIS (+18 bytes · Cable)";
 			case "none": return "None (0 bytes)";
 			default: return oh;
@@ -482,8 +482,8 @@
 								description="Compensates for layer 2 encapsulation headers added by your ISP."
 							>
 								<div class="flex flex-col gap-1 text-xs text-muted-foreground">
-									<p><strong>PPPoE:</strong> +34 bytes (PPP and PPPoE headers + FCS).</p>
-									<p><strong>Ethernet:</strong> +14 bytes (standard MAC header + CRC).</p>
+									<p><strong>PPPoE:</strong> +46 bytes (Ethernet framing, FCS, preamble and gap + PPPoE and PPP headers).</p>
+									<p><strong>Ethernet:</strong> +38 bytes (MAC header, FCS, preamble and inter-frame gap).</p>
 									<p><strong>DOCSIS:</strong> +18 bytes (Cable modem encapsulation).</p>
 								</div>
 							</InfoPopover>
@@ -497,8 +497,8 @@
 							</Select.Trigger>
 							<Select.Content>
 								<Select.Item value="auto" class="text-xs">Auto-detect (Recommended)</Select.Item>
-								<Select.Item value="pppoe" class="text-xs">PPPoE (+34 bytes · FTTH / DSL)</Select.Item>
-								<Select.Item value="ethernet" class="text-xs">Ethernet (+14 bytes · DHCP / IPoE)</Select.Item>
+								<Select.Item value="pppoe" class="text-xs">PPPoE (+46 bytes · FTTH / DSL)</Select.Item>
+								<Select.Item value="ethernet" class="text-xs">Ethernet (+38 bytes · DHCP / IPoE)</Select.Item>
 								<Select.Item value="docsis" class="text-xs">DOCSIS (+18 bytes · Cable)</Select.Item>
 								<Select.Item value="none" class="text-xs">None (0 bytes)</Select.Item>
 							</Select.Content>

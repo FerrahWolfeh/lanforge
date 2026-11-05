@@ -54,15 +54,16 @@ pub fn build_cake_args(
         other => other,
     };
 
+    // tc's `overhead N` sets the value and keywords such as `ethernet` add to it: the old
+    // `overhead 34 ethernet` became 72 on the owner's box. Spell the totals out instead.
     match effective_overhead {
+        // CAKE on the PPP link sees bare IP packets: Ethernet on the wire (preamble 8 + header
+        // 14 + FCS 4 + inter-frame gap 12 = 38) plus PPPoE 6 + PPP protocol 2.
         SqmOverhead::Pppoe => {
-            args.push("overhead".to_string());
-            args.push("34".to_string());
-            args.push("ethernet".to_string());
+            args.extend(["overhead", "46", "mpu", "84", "noatm"].map(String::from));
         }
+        // An Ethernet WAN: `ethernet` is overhead 38 mpu 84 noatm.
         SqmOverhead::Ethernet => {
-            args.push("overhead".to_string());
-            args.push("18".to_string());
             args.push("ethernet".to_string());
         }
         SqmOverhead::Docsis => {
@@ -109,8 +110,10 @@ mod tests {
                 "diffserv4",
                 "nat",
                 "overhead",
-                "34",
-                "ethernet"
+                "46",
+                "mpu",
+                "84",
+                "noatm"
             ]
         );
     }
@@ -135,7 +138,10 @@ mod tests {
         assert!(args.contains(&"ingress".to_string()));
         assert!(args.contains(&"rtt".to_string()));
         assert!(args.contains(&"20ms".to_string()));
-        assert!(args.contains(&"overhead".to_string()));
-        assert!(args.contains(&"18".to_string()));
+        assert!(args.contains(&"ethernet".to_string()));
+        assert!(
+            !args.contains(&"overhead".to_string()),
+            "`overhead N ethernet` adds the two: {args:?}"
+        );
     }
 }
