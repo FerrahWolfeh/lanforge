@@ -3,14 +3,19 @@
 pub(crate) mod device;
 pub(crate) mod storage;
 
+use crate::context::LanforgeContext;
+use crate::context::state::State;
+use lanforge_types::identifiers::MacAddr;
 use lanforge_types::{
     device::{Device, IPv4State, IPv6State},
     events::EventVec,
     update::DeviceUpdate,
 };
-use std::{net::IpAddr, sync::Arc, sync::atomic::Ordering};
-
-use crate::context::LanforgeContext;
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    sync::Arc,
+    sync::atomic::Ordering,
+};
 
 impl LanforgeContext {
     /// Applies a state mutation to the context.
@@ -225,12 +230,7 @@ fn is_recently_seen(dev: &Device) -> bool {
     dev.last_seen.elapsed().unwrap_or_default() < Device::ACTIVITY_DEBOUNCE
 }
 
-fn should_debounce_arp(
-    state: &crate::context::state::State,
-    mac: lanforge_types::identifiers::MacAddr,
-    ip: std::net::Ipv4Addr,
-    is_active: bool,
-) -> bool {
+fn should_debounce_arp(state: &State, mac: MacAddr, ip: Ipv4Addr, is_active: bool) -> bool {
     state.devices.get(&mac).is_some_and(|dev| {
         if is_active {
             is_recently_seen(dev) && dev.v4.ip() == Some(ip)
@@ -240,12 +240,7 @@ fn should_debounce_arp(
     })
 }
 
-fn should_debounce_ndp(
-    state: &crate::context::state::State,
-    mac: lanforge_types::identifiers::MacAddr,
-    ip: std::net::Ipv6Addr,
-    is_active: bool,
-) -> bool {
+fn should_debounce_ndp(state: &State, mac: MacAddr, ip: Ipv6Addr, is_active: bool) -> bool {
     state.devices.get(&mac).is_some_and(|dev| {
         let has_ip = dev.v6.iter().any(|s| match s {
             IPv6State::Static(s, _) => s.matches(ip),
@@ -259,12 +254,7 @@ fn should_debounce_ndp(
     })
 }
 
-fn should_debounce_slaac(
-    state: &crate::context::state::State,
-    mac: lanforge_types::identifiers::MacAddr,
-    addr: std::net::Ipv6Addr,
-    is_active: bool,
-) -> bool {
+fn should_debounce_slaac(state: &State, mac: MacAddr, addr: Ipv6Addr, is_active: bool) -> bool {
     state.devices.get(&mac).is_some_and(|dev| {
         let has_slaac = dev.v6.iter().any(|s| match s {
             IPv6State::Slaac(a, _) => *a == addr,
@@ -280,10 +270,7 @@ fn should_debounce_slaac(
     })
 }
 
-fn debounce_neighbor_entries(
-    state: &crate::context::state::State,
-    entries: &mut Vec<(lanforge_types::identifiers::MacAddr, IpAddr, bool)>,
-) {
+fn debounce_neighbor_entries(state: &State, entries: &mut Vec<(MacAddr, IpAddr, bool)>) {
     entries.retain(|(mac, ip, is_active)| {
         let Some(dev) = state.devices.get(mac) else {
             return true;

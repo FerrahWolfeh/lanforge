@@ -16,13 +16,15 @@ use lanforge_types::device::{
 };
 use lanforge_types::events::EventVec;
 use lanforge_types::identifiers::{Duid, MacAddr};
-use lanforge_types::network::{DnsReverseResolver, IpSubnet};
+use lanforge_types::network::{DnsReverseResolver, IpSubnet, Ipv6Prefix};
 use lanforge_types::update::{
     CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, LeaseTarget,
 };
+use lanforge_types::utils::network::ip_matches_prefix;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::str;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -271,7 +273,7 @@ impl State {
                     *dst = src.to_ascii_lowercase();
                 }
                 // SAFETY: `hostname` is valid UTF-8 and `to_ascii_lowercase` keeps it valid UTF-8.
-                let lower = std::str::from_utf8(&buf[..bytes.len()]).ok()?;
+                let lower = str::from_utf8(&buf[..bytes.len()]).ok()?;
                 self.indices.name_index.get(lower)?
             } else {
                 self.indices
@@ -387,23 +389,23 @@ impl State {
     pub fn is_managed_slaac_prefix(&self, ip: &Ipv6Addr) -> bool {
         for state in self.interfaces.interface_ips.values() {
             if let Some(gua) = &state.gua
-                && lanforge_types::utils::network::ip_matches_prefix(ip, gua)
+                && ip_matches_prefix(ip, gua)
             {
                 return true;
             }
             if let Some(ula) = &state.ula
-                && lanforge_types::utils::network::ip_matches_prefix(ip, ula)
+                && ip_matches_prefix(ip, ula)
             {
                 return true;
             }
         }
         if let Some(gua) = &self.interfaces.ra_gua_fallback
-            && lanforge_types::utils::network::ip_matches_prefix(ip, gua)
+            && ip_matches_prefix(ip, gua)
         {
             return true;
         }
         if let Some(ula) = &self.interfaces.ra_ula_fallback
-            && lanforge_types::utils::network::ip_matches_prefix(ip, ula)
+            && ip_matches_prefix(ip, ula)
         {
             return true;
         }
@@ -419,14 +421,11 @@ impl State {
     }
 
     #[must_use]
-    pub fn get_interface_gua_prefix_at(
-        &self,
-        ifindex: u32,
-    ) -> Option<(lanforge_types::network::Ipv6Prefix, u32, u32)> {
+    pub fn get_interface_gua_prefix_at(&self, ifindex: u32) -> Option<(Ipv6Prefix, u32, u32)> {
         let state = self.interfaces.interface_ips.get(&ifindex)?;
         state
             .gua
-            .map(lanforge_types::network::Ipv6Prefix::from_addr)
+            .map(Ipv6Prefix::from_addr)
             .map(|prefix| (prefix, state.gua_preferred, state.gua_valid))
     }
 

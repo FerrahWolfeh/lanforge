@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use lanforge_types::network::dns::{DnsRequest, DnsResponse};
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::timeout;
 
 /// Requests queued for the DNS service, with the channel each answer goes back on.
 pub type DnsRequestRx = mpsc::Receiver<(DnsRequest, oneshot::Sender<DnsResponse>)>;
@@ -37,7 +38,7 @@ impl DnsHandle {
                 .await
                 .map_err(|_| "DNS service failed to respond".to_string())
         };
-        tokio::time::timeout(REQUEST_TIMEOUT, exchange)
+        timeout(REQUEST_TIMEOUT, exchange)
             .await
             .map_err(|_| "DNS service unavailable".to_string())?
     }

@@ -1,15 +1,20 @@
 #![cfg(test)]
 
-use crate::bus::EventBus;
+use crate::bus::{EventBus, NetworkEvent};
 use crate::context::LanforgeContext;
 use crate::context::state::State;
-use lanforge_types::device::Device;
-use lanforge_types::device::{IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease};
+use lanforge_types::device::{
+    Device, DeviceStatus, IPv4State, IPv6State, Ipv6AddrOrSuffix, Origin, V6Lease,
+};
 use lanforge_types::events::{DeviceEvent, LanforgeEvent, NetworkChange};
 use lanforge_types::identifiers::{Duid, MacAddr};
+use lanforge_types::network::Ipv6Suffix;
 use lanforge_types::update::{
-    CliHostUpdate, DeviceUpdate, FieldUpdate, LeaseTarget, V6LeaseUpdate, V6PrefixUpdate,
+    CliHostUpdate, DeviceUpdate, FieldUpdate, InterfaceState, LeaseTarget, V6LeaseUpdate,
+    V6PrefixUpdate,
 };
+use std::cmp::Ordering;
+use std::iter;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -132,7 +137,7 @@ fn apply_update_slaac_excludes_managed_addr() {
         mac: Some(mac),
         duid: Duid::new(vec![1, 2, 3]),
         iaid: 1,
-        ips: std::iter::once(ip).collect(),
+        ips: iter::once(ip).collect(),
         expires,
     })));
 
@@ -168,7 +173,7 @@ fn apply_update_lease_released() {
         mac: Some(mac),
         duid: Duid::new(vec![1]),
         iaid: 1,
-        ips: std::iter::once("fd97::1".parse().unwrap()).collect(),
+        ips: iter::once("fd97::1".parse().unwrap()).collect(),
         expires: now,
     })));
 
@@ -266,7 +271,7 @@ fn expire_stale_removes_old_v4_keeps_fresh_v6() {
         mac: Some(mac),
         duid: Duid::new(vec![1]),
         iaid: 1,
-        ips: std::iter::once("fd00::1".parse().unwrap()).collect(),
+        ips: iter::once("fd00::1".parse().unwrap()).collect(),
         expires: future,
     })));
 
@@ -325,7 +330,7 @@ fn test_orphaned_v6_promotion() {
         mac: None,
         duid: duid.clone(),
         iaid: 100,
-        ips: std::iter::once(ip).collect(),
+        ips: iter::once(ip).collect(),
         expires,
     })));
 
@@ -381,7 +386,7 @@ fn test_cli_host_updated_sync() {
     assert!(
         matches!(dev.v4, IPv4State::Static(ip) if ip == "192.168.1.10".parse::<Ipv4Addr>().unwrap())
     );
-    assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Static(Ipv6AddrOrSuffix::Suffix(b), _) if *b == lanforge_types::network::Ipv6Suffix([0,0,0,0,0,0,0,0x10]))));
+    assert!(dev.v6.iter().any(|s| matches!(s, IPv6State::Static(Ipv6AddrOrSuffix::Suffix(b), _) if *b == Ipv6Suffix([0,0,0,0,0,0,0,0x10]))));
     assert!(dev.is_static());
 
     // 3. Verify device state
@@ -389,7 +394,7 @@ fn test_cli_host_updated_sync() {
     assert_eq!(dev.hostname.name, "cli-host");
     assert_eq!(dev.v4.ip(), Some("192.168.1.10".parse().unwrap()));
     assert!(
-        dev.v6.iter().any(|s| matches!(s, IPv6State::Static(Ipv6AddrOrSuffix::Suffix(b), _) if *b == lanforge_types::network::Ipv6Suffix([0,0,0,0,0,0,0,0x10])))
+        dev.v6.iter().any(|s| matches!(s, IPv6State::Static(Ipv6AddrOrSuffix::Suffix(b), _) if *b == Ipv6Suffix([0,0,0,0,0,0,0,0x10])))
     );
 
     // 4. Partial update (Only hostname)
@@ -461,7 +466,7 @@ fn test_multiple_iaids_and_prefixes() {
         mac: Some(mac),
         duid: duid.clone(),
         iaid: 10,
-        ips: std::iter::once("fd00::10".parse().unwrap()).collect(),
+        ips: iter::once("fd00::10".parse().unwrap()).collect(),
         expires: future,
     })));
 
@@ -470,7 +475,7 @@ fn test_multiple_iaids_and_prefixes() {
         mac: Some(mac),
         duid: duid.clone(),
         iaid: 20,
-        ips: std::iter::once("fd00::20".parse().unwrap()).collect(),
+        ips: iter::once("fd00::20".parse().unwrap()).collect(),
         expires: future,
     })));
 
@@ -503,7 +508,7 @@ fn test_multiple_iaids_and_prefixes() {
         mac: Some(mac),
         duid: duid.clone(),
         iaid: 10,
-        ips: std::iter::once("fd00::11".parse().unwrap()).collect(),
+        ips: iter::once("fd00::11".parse().unwrap()).collect(),
         expires: future,
     })));
 
@@ -551,7 +556,7 @@ fn apply_update_duid_associated_resolves_orphan() {
         mac: None,
         duid: duid.clone(),
         iaid,
-        ips: std::iter::once(ip).collect(),
+        ips: iter::once(ip).collect(),
         expires,
     })));
 
@@ -884,7 +889,7 @@ fn test_handle_ip_offline_slaac_removal() {
     let dev = ctx
         .get_device(&mac)
         .expect("Device should still exist as offline/stale");
-    assert_eq!(dev.status, lanforge_types::device::DeviceStatus::Offline);
+    assert_eq!(dev.status, DeviceStatus::Offline);
 
     // 4. Run expire_stale (should prune offline SLAAC IPs and drop unworthy device)
     ctx.expire_stale(Duration::from_secs(10));
@@ -1084,7 +1089,7 @@ fn test_hostname_origin_priority() {
     assert!(HostnameOrigin::Static > HostnameOrigin::Dhcp);
     assert_eq!(
         HostnameOrigin::Mdns.cmp(&HostnameOrigin::Dhcp),
-        std::cmp::Ordering::Equal
+        Ordering::Equal
     );
 
     let ctx = setup();
@@ -1201,7 +1206,7 @@ fn test_get_mac_by_ip_ula_and_suffix_resolution() {
 
     // 2. Set interface ULA prefix
     let ula_prefix: Ipv6Addr = "fd12:3456:789a:1::".parse().unwrap();
-    let if_state = lanforge_types::update::InterfaceState {
+    let if_state = InterfaceState {
         ula: Some(ula_prefix),
         ..Default::default()
     };
@@ -1353,7 +1358,7 @@ fn test_interface_prefix_renumbering_and_system_host() {
     // 1. Initial interface configuration
     let ula1: Ipv6Addr = "fd00:1::".parse().unwrap();
     let gua1: Ipv6Addr = "2001:db8:1::".parse().unwrap();
-    let if_state1 = lanforge_types::update::InterfaceState {
+    let if_state1 = InterfaceState {
         v4: Some(("192.168.1.1".parse().unwrap(), 24)),
         link_local: Some("fe80::1".parse().unwrap()),
         ula: Some(ula1),
@@ -1372,7 +1377,7 @@ fn test_interface_prefix_renumbering_and_system_host() {
     while let Ok(ev) = net_rx.try_recv() {
         if matches!(
             ev.event,
-            LanforgeEvent::Network(crate::bus::NetworkEvent::PrefixChanged(_))
+            LanforgeEvent::Network(NetworkEvent::PrefixChanged(_))
         ) {
             prefix_changed = true;
         }
@@ -1398,7 +1403,7 @@ fn test_interface_prefix_renumbering_and_system_host() {
     // 2. Renumber interface prefix
     let ula2: Ipv6Addr = "fd00:2::".parse().unwrap();
     let gua2: Ipv6Addr = "2001:db8:2::".parse().unwrap();
-    let if_state2 = lanforge_types::update::InterfaceState {
+    let if_state2 = InterfaceState {
         ula: Some(ula2),
         gua: Some(gua2),
         ..Default::default()
@@ -1432,7 +1437,7 @@ fn test_system_host_ipv6_precedence_ula_over_gua_no_link_local() {
     ctx.insert_device(sys_mac, sys_dev);
 
     // 1. Only Link-Local on interface: System device must NOT announce Link-Local
-    let if_ll_only = lanforge_types::update::InterfaceState {
+    let if_ll_only = InterfaceState {
         v4: Some(("10.0.0.1".parse().unwrap(), 24)),
         link_local: Some("fe80::1".parse().unwrap()),
         ..Default::default()
@@ -1449,7 +1454,7 @@ fn test_system_host_ipv6_precedence_ula_over_gua_no_link_local() {
 
     // 2. Add GUA: System host should announce GUA
     let gua: Ipv6Addr = "2001:db8:acad::1".parse().unwrap();
-    let if_gua = lanforge_types::update::InterfaceState {
+    let if_gua = InterfaceState {
         gua: Some(gua),
         ..Default::default()
     };
@@ -1463,7 +1468,7 @@ fn test_system_host_ipv6_precedence_ula_over_gua_no_link_local() {
 
     // 3. Add ULA: System host must prefer ULA over GUA
     let ula: Ipv6Addr = "fd00:dead:beef::1".parse().unwrap();
-    let if_ula = lanforge_types::update::InterfaceState {
+    let if_ula = InterfaceState {
         ula: Some(ula),
         ..Default::default()
     };
@@ -1480,7 +1485,7 @@ fn test_system_host_ipv6_precedence_ula_over_gua_no_link_local() {
     assert!(matches!(&dev.v6[0], IPv6State::Static(Ipv6AddrOrSuffix::Full(ip), _) if *ip == ula));
 
     // 4. Clear ULA: Falls back to GUA
-    let if_no_ula = lanforge_types::update::InterfaceState {
+    let if_no_ula = InterfaceState {
         gua: Some(gua),
         ..Default::default()
     };

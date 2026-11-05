@@ -14,10 +14,12 @@ use lanforge_types::system::{
     Cap, PppoeStatusResponse, RaStatusResponse, ServiceBanner, ServiceId, ServiceState,
     SystemStatus, TrafficStatusResponse,
 };
+use lanforge_types::update::{DhcpV4PoolUpdate, DhcpV6PoolUpdate};
 use parking_lot::RwLock;
 use smallvec::SmallVec;
 use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, HashMap};
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -426,10 +428,10 @@ impl ServiceRuntime {
         self.v4_pool_stats.store(stats.map(Arc::new));
     }
 
-    pub fn set_dhcp_v4_pool_update(&self, update: &lanforge_types::update::DhcpV4PoolUpdate) {
+    pub fn set_dhcp_v4_pool_update(&self, update: &DhcpV4PoolUpdate) {
         self.v4_pool_stats.store(Some(Arc::new(DhcpPoolStats {
-            range_start: Some(std::net::IpAddr::V4(update.range_start)),
-            range_end: Some(std::net::IpAddr::V4(update.range_end)),
+            range_start: Some(IpAddr::V4(update.range_start)),
+            range_end: Some(IpAddr::V4(update.range_end)),
             prefix: None,
             prefix_len: None,
             total: update.total,
@@ -448,13 +450,13 @@ impl ServiceRuntime {
         self.v6_pool_stats.write().insert(iaid, stats);
     }
 
-    pub fn set_dhcp_v6_pool_update(&self, update: &lanforge_types::update::DhcpV6PoolUpdate) {
+    pub fn set_dhcp_v6_pool_update(&self, update: &DhcpV6PoolUpdate) {
         self.v6_pool_stats.write().insert(
             update.pool_id,
             DhcpPoolStats {
                 range_start: None,
                 range_end: None,
-                prefix: Some(std::net::IpAddr::V6(update.prefix)),
+                prefix: Some(IpAddr::V6(update.prefix)),
                 prefix_len: Some(update.prefix_len),
                 total: update.total,
                 used: update.used,

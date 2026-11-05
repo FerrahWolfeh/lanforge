@@ -1,6 +1,6 @@
 //! Firewall dynamic ports and transaction staging/rollback coordination.
 
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use lanforge_types::events::FirewallEvent;
 use lanforge_types::network::firewall::{
@@ -102,7 +102,7 @@ impl LanforgeContext {
                 candidate_config: candidate,
                 previous_config: Some(current),
                 created_at: now,
-                expires_at: now + std::time::Duration::from_secs(300),
+                expires_at: now + Duration::from_secs(300),
                 auto_rollback_deadline: None,
             });
         }

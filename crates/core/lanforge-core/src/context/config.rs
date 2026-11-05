@@ -873,6 +873,9 @@ mod tests {
     use super::*;
     use crate::bus::EventBus;
     use crate::context::state::State;
+    use std::time::Duration;
+    use tokio::task::yield_now;
+    use tokio::time::{sleep, timeout};
 
     fn create_test_context() -> LanforgeContext {
         let bus = Arc::new(EventBus::new());
@@ -893,7 +896,7 @@ mod tests {
                     (delta.new.0.clone(), ctx.get_dns_adblock_rules())
                 })
             };
-            tokio::task::yield_now().await;
+            yield_now().await;
             let _ = ctx.apply_config(
                 ConfigPatch::new().with_dns_adblock_rules(format!("||d{round}.example^\n")),
             );
@@ -921,7 +924,7 @@ mod tests {
         // Ensure subscription is not woken
         tokio::select! {
             _ = sub.next() => panic!("Subscription must not wake on noop"),
-            () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+            () = sleep(Duration::from_millis(50)) => {}
         }
     }
 
@@ -942,7 +945,7 @@ mod tests {
         assert_eq!(report.max_impact, ChangeImpact::Hot);
 
         // RA subscription must wake with Hot impact
-        let delta = tokio::time::timeout(std::time::Duration::from_millis(200), ra_sub.next())
+        let delta = timeout(Duration::from_millis(200), ra_sub.next())
             .await
             .expect("RA sub timed out")
             .expect("RA sub closed");
@@ -952,7 +955,7 @@ mod tests {
         // PPPoE subscription must NOT wake up
         tokio::select! {
             _ = pppoe_sub.next() => panic!("PPPoE subscription must not wake on RA change"),
-            () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+            () = sleep(Duration::from_millis(50)) => {}
         }
     }
 
@@ -975,7 +978,7 @@ mod tests {
         let _ = ctx.apply_config(ConfigPatch::new().with_pppoe(cfg2));
 
         // Sub should receive the latest state with Reconnect impact
-        let delta = tokio::time::timeout(std::time::Duration::from_millis(200), sub.next())
+        let delta = timeout(Duration::from_millis(200), sub.next())
             .await
             .expect("timed out")
             .expect("closed");
@@ -1001,7 +1004,7 @@ mod tests {
         // And no event is triggered
         tokio::select! {
             _ = sub.next() => panic!("Sub must not wake after hydration"),
-            () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+            () = sleep(Duration::from_millis(50)) => {}
         }
     }
 

@@ -14,6 +14,8 @@
 //! }
 //! ```
 
+use std::io;
+
 use thiserror::Error;
 
 /// Central error type for the `lanforge-core` crate.
@@ -37,7 +39,7 @@ pub enum CoreError {
 
     /// Wraps standard I/O errors (e.g., file access, network).
     #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
 
     /// Indicates an internal invariant was violated.
     #[error("Internal error: {0}")]

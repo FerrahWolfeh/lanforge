@@ -51,17 +51,22 @@
 //! }
 //! ```
 
-use crate::bus::{LanforgeEvent, SystemEvent};
-use crate::context::LanforgeContext;
-use crate::error::CoreError;
-use lanforge_types::config::ConfigDomain;
-pub use lanforge_types::system::{
-    DegradedReason, DormantReason, ServiceId, ServiceState, StateDetail,
-};
+use std::cmp::Eq;
+use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+
+use lanforge_types::config::ConfigDomain;
+pub use lanforge_types::system::{
+    DegradedReason, DormantReason, ServiceId, ServiceState, StateDetail,
+};
+use tokio::sync::{Mutex, mpsc, watch};
+
+use crate::bus::{LanforgeEvent, SystemEvent};
+use crate::context::LanforgeContext;
+use crate::error::CoreError;
 
 /// Execution runtime environment class for a service.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,8 +228,8 @@ impl Condition {
     }
 }
 
-impl std::fmt::Debug for Condition {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Condition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Condition")
             .field("sections", &self.sections)
             .finish_non_exhaustive()
@@ -237,7 +242,7 @@ impl PartialEq for Condition {
     }
 }
 
-impl std::cmp::Eq for Condition {}
+impl Eq for Condition {}
 
 /// Declarative service specification.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -318,25 +323,25 @@ pub struct ServiceHandle {
     ctx: LanforgeContext,
     /// Carries every self-reported state to the supervisor runner, which publishes it on the
     /// node watch that dependents follow. A `watch`: the latest report is never lost.
-    status_tx: Option<Arc<tokio::sync::watch::Sender<StatusReport>>>,
+    status_tx: Option<Arc<watch::Sender<StatusReport>>>,
     signaled: Arc<AtomicBool>,
     restart_requested: Arc<AtomicBool>,
-    cmd_rx: Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<ServiceCommand>>>,
-    _keepalive_tx: Option<tokio::sync::mpsc::Sender<ServiceCommand>>,
+    cmd_rx: Arc<Mutex<mpsc::Receiver<ServiceCommand>>>,
+    _keepalive_tx: Option<mpsc::Sender<ServiceCommand>>,
 }
 
 impl ServiceHandle {
     /// Creates a new service handle.
     #[must_use]
     pub fn new(id: ServiceId, ctx: LanforgeContext) -> Self {
-        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        let (tx, rx) = mpsc::channel(16);
         Self {
             id,
             ctx,
             status_tx: None,
             signaled: Arc::new(AtomicBool::new(false)),
             restart_requested: Arc::new(AtomicBool::new(false)),
-            cmd_rx: Arc::new(tokio::sync::Mutex::new(rx)),
+            cmd_rx: Arc::new(Mutex::new(rx)),
             _keepalive_tx: Some(tx),
         }
     }
@@ -346,7 +351,7 @@ impl ServiceHandle {
     pub fn with_command_channel(
         id: ServiceId,
         ctx: LanforgeContext,
-        cmd_rx: tokio::sync::mpsc::Receiver<ServiceCommand>,
+        cmd_rx: mpsc::Receiver<ServiceCommand>,
     ) -> Self {
         Self {
             id,
@@ -354,14 +359,14 @@ impl ServiceHandle {
             status_tx: None,
             signaled: Arc::new(AtomicBool::new(false)),
             restart_requested: Arc::new(AtomicBool::new(false)),
-            cmd_rx: Arc::new(tokio::sync::Mutex::new(cmd_rx)),
+            cmd_rx: Arc::new(Mutex::new(cmd_rx)),
             _keepalive_tx: None,
         }
     }
 
     /// Routes every self-reported state to the supervisor (see [`StatusReport`]).
     #[must_use]
-    pub fn with_status_reporter(mut self, tx: tokio::sync::watch::Sender<StatusReport>) -> Self {
+    pub fn with_status_reporter(mut self, tx: watch::Sender<StatusReport>) -> Self {
         self.status_tx = Some(Arc::new(tx));
         self
     }
