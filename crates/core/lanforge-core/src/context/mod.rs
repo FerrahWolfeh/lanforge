@@ -225,7 +225,7 @@ impl LanforgeContext {
     #[must_use]
     pub fn new(bus: Arc<EventBus>, state: State, target_ifindex: Option<u32>) -> Self {
         let inner = Arc::new(LanforgeContextInner {
-            bus: bus.clone(),
+            bus: Arc::clone(&bus),
             state: ArcSwap::from_pointee(state),
             writer_mutex: Mutex::new(()),
             discovery: Arc::new(state::cache::DiscoveryStore::default()),
@@ -387,7 +387,7 @@ impl LanforgeContext {
     /// The bus can be used to subscribe to or publish events.
     #[must_use]
     pub fn bus(&self) -> Arc<EventBus> {
-        self.inner.bus.clone()
+        Arc::clone(&self.inner.bus)
     }
 
     /// Returns a reference to the shared event bus.
@@ -416,7 +416,7 @@ impl LanforgeContext {
     /// Access the global active API clients counter.
     #[must_use]
     pub fn active_clients(&self) -> Arc<AtomicUsize> {
-        self.inner.runtime.active_clients.clone()
+        Arc::clone(&self.inner.runtime.active_clients)
     }
 
     /// Returns the internal event counters.

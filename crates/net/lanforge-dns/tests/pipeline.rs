@@ -203,7 +203,7 @@ async fn pipeline_transient_ip_reverse_dns_cached() {
     resp_msg.header.ancount = 1;
     resp_msg.questions.push(query.questions[0].clone());
     resp_msg.answers.push(DnsRecord {
-        name: query.questions[0].name.clone(),
+        name: Arc::clone(&query.questions[0].name),
         rtype: DnsRecordType::PTR,
         rclass: DnsClass::IN,
         ttl: 30,

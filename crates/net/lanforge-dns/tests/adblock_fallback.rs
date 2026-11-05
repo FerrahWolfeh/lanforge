@@ -61,7 +61,7 @@ async fn test_dns_adblock_update_failure_and_fallback() {
     let filter = dns_ctx_arc.filter.as_ref().unwrap();
 
     // 4. Start the adblock manager worker in the background
-    let manager_handle = spawn_adblock_manager(dns_ctx_arc.clone());
+    let manager_handle = spawn_adblock_manager(Arc::clone(&dns_ctx_arc));
 
     // Wait a short duration to let it run the first download pass, which will FAIL
     tokio::time::sleep(Duration::from_millis(200)).await;

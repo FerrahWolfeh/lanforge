@@ -125,7 +125,7 @@ impl IcmpPinger {
         else {
             return;
         };
-        let registry = self.registry.clone();
+        let registry = Arc::clone(&self.registry);
         let s_v4 = socket_v4.clone();
         let s_v6 = socket_v6.clone();
 
@@ -222,7 +222,7 @@ impl IcmpPinger {
         port: InertPort<IpAddr>,
         mut shutdown_rx: watch::Receiver<bool>,
     ) {
-        let registry = self.registry.clone();
+        let registry = Arc::clone(&self.registry);
         tokio::spawn(async move {
             loop {
                 if *shutdown_rx.borrow() {

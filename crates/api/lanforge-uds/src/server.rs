@@ -80,7 +80,7 @@ impl ControlService {
 
 impl AsyncService for ControlService {
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
-        let cfg = self.cfg.clone();
+        let cfg = Arc::clone(&self.cfg);
         if !cfg.enabled {
             info!("Control API: Service disabled in configuration.");
             h.dormant(DormantReason::disabled("control.enabled"));

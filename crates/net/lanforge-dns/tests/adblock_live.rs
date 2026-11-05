@@ -142,7 +142,7 @@ async fn test_adblock_live_comprehensive_battery() {
     };
 
     let dns_ctx = Arc::new(mock_dns_context(ctx_instance.clone(), cfg).await);
-    let manager_handle = spawn_adblock_manager(dns_ctx.clone());
+    let manager_handle = spawn_adblock_manager(Arc::clone(&dns_ctx));
 
     let filter = dns_ctx
         .filter

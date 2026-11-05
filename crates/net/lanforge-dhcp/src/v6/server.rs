@@ -61,6 +61,7 @@ use lanforge_types::utils::mac_from_eui64_link_local;
 use std::net::Ipv6Addr;
 use std::str::FromStr;
 use std::string::ToString;
+use std::sync::Arc;
 use tracing::{debug, info};
 
 use super::config::Dhcpv6Config;
@@ -300,7 +301,7 @@ impl Dhcpv6Server {
                                 );
                                 return None;
                             }
-                            dev = Some(device.clone());
+                            dev = Some(Arc::clone(device));
                         }
                         Some(m)
                     })

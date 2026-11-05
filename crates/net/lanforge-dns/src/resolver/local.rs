@@ -294,7 +294,7 @@ impl LocalResolver {
             match ip {
                 IpAddr::V4(v4) if matches!(qtype, DnsRecordType::A | DnsRecordType::ANY) => {
                     records.push(DnsRecord {
-                        name: qname_arc.clone(),
+                        name: Arc::clone(&qname_arc),
                         rtype: DnsRecordType::A,
                         rclass: DnsClass::IN,
                         ttl: self.cfg.ttl,
@@ -303,7 +303,7 @@ impl LocalResolver {
                 }
                 IpAddr::V6(v6) if matches!(qtype, DnsRecordType::AAAA | DnsRecordType::ANY) => {
                     records.push(DnsRecord {
-                        name: qname_arc.clone(),
+                        name: Arc::clone(&qname_arc),
                         rtype: DnsRecordType::AAAA,
                         rclass: DnsClass::IN,
                         ttl: self.cfg.ttl,

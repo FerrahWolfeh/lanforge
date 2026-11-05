@@ -143,7 +143,7 @@ impl App {
 
         self.is_busy = true;
         self.status_message = format!("Running {}...", action.title());
-        let logs = self.logs.clone();
+        let logs = Arc::clone(&self.logs);
 
         tokio::spawn(async move {
             match action {

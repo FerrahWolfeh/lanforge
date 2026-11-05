@@ -71,7 +71,7 @@ fn controlled_handle(ctx: &LanforgeContext) -> (ServiceHandle, mpsc::Sender<Serv
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
     (ctx, bus)
 }
 
@@ -1130,7 +1130,7 @@ fn start_with_bras(
 ) {
     ctx.update_pppoe_config(cfg.clone());
     let (handle_inert, transport) = PppoeTransport::inert();
-    let seen = bras.seen.clone();
+    let seen = Arc::clone(&bras.seen);
     let _bras = spawn_mock_bras(handle_inert, bras);
     let mut service = PppoeService::with_host(cfg, ctx.clone(), transport, TestHost);
     let ctx_clone = ctx.clone();

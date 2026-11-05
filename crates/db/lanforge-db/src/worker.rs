@@ -285,8 +285,8 @@ impl AsyncService for DbWorker {
     }
 
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
-        let db = self.db.clone();
-        let log_db = self.log_db.clone();
+        let db = Arc::clone(&self.db);
+        let log_db = Arc::clone(&self.log_db);
 
         if ctx.is_recovery_mode() {
             h.degraded(lanforge_types::system::DegradedReason::custom(
@@ -311,7 +311,7 @@ impl AsyncService for DbWorker {
         let mut traffic_rx = ctx.bus().subscribe_traffic();
         let mut flush_interval: Interval = interval(Duration::from_secs(self.cfg.flush_interval));
         let mut last_prune = tokio::time::Instant::now();
-        let stores = db.stores(log_db.clone());
+        let stores = db.stores(Arc::clone(&log_db) as _);
 
         loop {
             tokio::select! {
@@ -505,7 +505,7 @@ impl AsyncService for DbWorker {
                                 self.dns_log_buffer.pop_front();
                                 self.ctx.db_metrics().dropped_logs.fetch_add(1, Ordering::Relaxed);
                             }
-                            self.dns_log_buffer.push_back(entry.clone());
+                            self.dns_log_buffer.push_back(Arc::clone(entry));
                             if self.dns_log_buffer.len() >= 100 {
                                 self.flush_dns_log(&log_db);
                             }
@@ -536,8 +536,8 @@ impl AsyncService for DbWorker {
 
     async fn cleanup(&mut self, _ctx: &LanforgeContext) -> Result<(), CoreError> {
         info!("Database worker flushing pending state and logs on cleanup...");
-        let db = self.db.clone();
-        let log_db = self.log_db.clone();
+        let db = Arc::clone(&self.db);
+        let log_db = Arc::clone(&self.log_db);
         self.flush_batch(&db, &log_db).await;
         Ok(())
     }
@@ -555,7 +555,7 @@ mod tests {
     fn create_test_context() -> (LanforgeContext, Arc<lanforge_core::bus::EventBus>) {
         let bus = Arc::new(lanforge_core::bus::EventBus::new());
         let state = State::new();
-        let ctx = LanforgeContext::new(bus.clone(), state, None);
+        let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
         (ctx, bus)
     }
 
@@ -612,7 +612,7 @@ mod tests {
                     .dropped_logs
                     .fetch_add(1, Ordering::Relaxed);
             }
-            worker.dns_log_buffer.push_back(query_entry.clone());
+            worker.dns_log_buffer.push_back(Arc::clone(&query_entry));
         }
 
         assert_eq!(worker.dns_log_buffer.len(), MAX_DNS_LOG_BUFFER);
@@ -630,8 +630,8 @@ mod tests {
         let mut worker = DbWorker::new(
             DatabaseConfig::default(),
             ctx.clone(),
-            db.clone(),
-            log_db.clone(),
+            Arc::clone(&db),
+            Arc::clone(&log_db),
         );
 
         let mac = MacAddr([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);

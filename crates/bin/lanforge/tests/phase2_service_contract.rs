@@ -23,7 +23,7 @@ use tokio::time::timeout;
 #[tokio::test]
 async fn test_acceptance_ready_is_truthful() {
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
 
     let services = [ServiceId::Dns, ServiceId::Dhcp4, ServiceId::Pppoe];
     let mut expected_services = HashSet::new();
@@ -81,7 +81,7 @@ async fn test_acceptance_ready_is_truthful() {
 #[tokio::test]
 async fn test_acceptance_ready_idempotent_and_reset() {
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     let mut sub = bus.subscribe_system();
 
     // First generation
@@ -126,13 +126,13 @@ async fn test_acceptance_ready_idempotent_and_reset() {
 #[tokio::test]
 async fn test_acceptance_clean_exit_resettable() {
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     let attempts = Arc::new(AtomicU32::new(0));
-    let attempts_clone = attempts.clone();
+    let attempts_clone = Arc::clone(&attempts);
 
     let mut registry = ServiceRegistry::new();
     registry.register(&ctx, move || {
-        let a = attempts_clone.clone();
+        let a = Arc::clone(&attempts_clone);
         CleanExitService { attempts: a }
     });
 
@@ -186,13 +186,13 @@ impl AsyncService for CleanExitService {
 #[tokio::test]
 async fn test_acceptance_retry_exhausted_keeps_daemon() {
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     let attempts = Arc::new(AtomicU32::new(0));
-    let attempts_clone = attempts.clone();
+    let attempts_clone = Arc::clone(&attempts);
 
     let mut registry = ServiceRegistry::new();
     registry.register(&ctx, move || {
-        let a = attempts_clone.clone();
+        let a = Arc::clone(&attempts_clone);
         FailingService { attempts: a }
     });
 

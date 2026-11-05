@@ -2,7 +2,6 @@ use anyhow::Result;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use sd_notify::{NotifyState, notify};
-#[cfg(any(feature = "uds", feature = "http"))]
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
@@ -132,14 +131,14 @@ impl Daemon {
     }
 
     fn spawn_services(&mut self) {
-        let cfg = self.bootstrap.cfg.clone();
+        let cfg = Arc::clone(&self.bootstrap.cfg);
         #[cfg(feature = "discovery")]
         let target_ifindex = self.bootstrap.target_ifindex;
         #[cfg(feature = "discovery")]
         let rt_handle = self.bootstrap.rt_handle.clone();
         let messages = self.bootstrap.messages.clone();
-        let db = self.bootstrap.db.clone();
-        let log_db = self.bootstrap.log_db.clone();
+        let db = Arc::clone(&self.bootstrap.db);
+        let log_db = Arc::clone(&self.bootstrap.log_db);
         let ctx = self.ctx.clone();
 
         #[cfg(feature = "discovery")]
@@ -232,7 +231,7 @@ impl Daemon {
         sd_notify_stopping();
         info!("Starting shutdown sequence...");
         #[cfg(feature = "traffic")]
-        let log_db = self.bootstrap.log_db.clone();
+        let log_db = Arc::clone(&self.bootstrap.log_db);
         self.ctx.terminate();
         let _ = self
             .ctx

@@ -95,14 +95,14 @@ pub async fn mock_dns_context(ctx: LanforgeContext, cfg: DnsConfig) -> DnsContex
     pipeline.push(UpstreamMiddleware::new());
 
     DnsContext {
-        cfg: cfg_arc.clone(),
+        cfg: Arc::clone(&cfg_arc),
         stats: Arc::new(DnsStats::new()),
         bus: ctx.bus(),
         ctx: ctx.clone(),
         query_log: Some(Arc::new(QueryRing::new(100))),
         pipeline,
         streams: Arc::new(lanforge_transport::TransportMetrics::new()),
-        local: LocalResolver::new(cfg_arc.clone(), ctx),
+        local: LocalResolver::new(Arc::clone(&cfg_arc), ctx),
         recursive,
         cache,
         rewrites,
@@ -345,7 +345,7 @@ impl MockUpstreamServer {
                                     IpAddr::V4(v4) => {
                                         if q.qtype == DnsRecordType::A {
                                             resp.answers.push(DnsRecord {
-                                                name: q.name.clone(),
+                                                name: Arc::clone(&q.name),
                                                 rtype: DnsRecordType::A,
                                                 rclass: DnsClass::IN,
                                                 ttl: 300,
@@ -356,7 +356,7 @@ impl MockUpstreamServer {
                                     IpAddr::V6(v6) => {
                                         if q.qtype == DnsRecordType::AAAA {
                                             resp.answers.push(DnsRecord {
-                                                name: q.name.clone(),
+                                                name: Arc::clone(&q.name),
                                                 rtype: DnsRecordType::AAAA,
                                                 rclass: DnsClass::IN,
                                                 ttl: 300,

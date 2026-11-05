@@ -92,14 +92,14 @@ pub fn create_test_dns_context(
     pipeline.push(crate::pipeline::middleware::UpstreamMiddleware::new());
 
     Arc::new(crate::server::DnsContext {
-        cfg: cfg_arc.clone(),
+        cfg: Arc::clone(&cfg_arc),
         stats: Arc::new(crate::telemetry::stats::DnsStats::new()),
         bus: ctx.bus(),
         ctx: ctx.clone(),
         query_log: Some(Arc::new(crate::telemetry::QueryRing::new(100))),
         pipeline,
         streams: Arc::new(lanforge_transport::TransportMetrics::new()),
-        local: crate::resolver::LocalResolver::new(cfg_arc.clone(), ctx),
+        local: crate::resolver::LocalResolver::new(Arc::clone(&cfg_arc), ctx),
         recursive,
         cache,
         rewrites,
@@ -292,7 +292,7 @@ impl MockUpstreamServer {
                                     IpAddr::V4(v4) => {
                                         if q.qtype == DnsRecordType::A {
                                             resp.answers.push(DnsRecord {
-                                                name: q.name.clone(),
+                                                name: Arc::clone(&q.name),
                                                 rtype: DnsRecordType::A,
                                                 rclass: DnsClass::IN,
                                                 ttl: 300,
@@ -303,7 +303,7 @@ impl MockUpstreamServer {
                                     IpAddr::V6(v6) => {
                                         if q.qtype == DnsRecordType::AAAA {
                                             resp.answers.push(DnsRecord {
-                                                name: q.name.clone(),
+                                                name: Arc::clone(&q.name),
                                                 rtype: DnsRecordType::AAAA,
                                                 rclass: DnsClass::IN,
                                                 ttl: 300,

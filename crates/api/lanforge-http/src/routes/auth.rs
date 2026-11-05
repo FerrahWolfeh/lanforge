@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
@@ -356,7 +357,7 @@ pub async fn handle_login(
     client: ClientIp,
     Json(payload): Json<LoginRequest>,
 ) -> HttpResult<impl IntoResponse> {
-    let throttle = state.auth.throttle.clone();
+    let throttle = Arc::clone(&state.auth.throttle);
     throttle.guard(client, login(state, payload)).await
 }
 
@@ -430,7 +431,7 @@ async fn handle_elevate(
     Extension(user): Extension<AuthenticatedUser>,
     Json(payload): Json<ElevateRequest>,
 ) -> HttpResult<impl IntoResponse> {
-    let throttle = state.auth.throttle.clone();
+    let throttle = Arc::clone(&state.auth.throttle);
     throttle.guard(client, elevate(state, user, payload)).await
 }
 
@@ -479,7 +480,7 @@ async fn handle_change_password(
     Extension(user): Extension<AuthenticatedUser>,
     Json(payload): Json<ChangePasswordRequest>,
 ) -> HttpResult<impl IntoResponse> {
-    let throttle = state.auth.throttle.clone();
+    let throttle = Arc::clone(&state.auth.throttle);
     throttle
         .guard(client, change_password(state, user, payload))
         .await

@@ -320,7 +320,7 @@ impl DhcpEngine {
         let mut handles = Vec::with_capacity(total_clients);
 
         for i in 0..total_clients {
-            let permit = semaphore.clone().acquire_owned().await.map_err(|e| {
+            let permit = Arc::clone(&semaphore).acquire_owned().await.map_err(|e| {
                 LabError::Protocol(format!("Failed to acquire semaphore permit: {e}"))
             })?;
             let sock = Arc::clone(&sock);

@@ -48,7 +48,7 @@ impl<T: ConfigSection> ConfigSubscription<T> {
     /// Returns the most recently applied configuration value.
     #[must_use]
     pub fn current(&self) -> Arc<T> {
-        self.applied.clone()
+        Arc::clone(&self.applied)
     }
 
     /// Manually marks a configuration value as applied.
@@ -70,8 +70,8 @@ impl<T: ConfigSection> ConfigSubscription<T> {
             if impact == ChangeImpact::None {
                 continue;
             }
-            let old = self.applied.clone();
-            self.applied = candidate.clone();
+            let old = Arc::clone(&self.applied);
+            self.applied = Arc::clone(&candidate);
             return Some(ConfigDelta {
                 old,
                 new: candidate,

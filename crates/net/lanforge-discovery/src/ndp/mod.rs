@@ -319,11 +319,11 @@ impl AsyncService for DiscoveryService {
                     vec![pinger.metrics_handle(), Arc::clone(&arp_metrics)],
                 );
                 probes.spawn(sweep_pings(
-                    pinger.clone(),
+                    Arc::clone(pinger),
                     ctx.clone(),
                     self.cfg.ping_interval_secs,
                 ));
-                probes.spawn(verify_offline(pinger.clone(), arp_metrics, ctx.clone()));
+                probes.spawn(verify_offline(Arc::clone(pinger), arp_metrics, ctx.clone()));
             } else {
                 warn!("Failed to initialize ICMP ping probe");
             }
@@ -496,7 +496,7 @@ async fn sweep_pings(pinger: Arc<IcmpPinger>, ctx: LanforgeContext, ping_interva
 
         for ip in ips {
             seq_counter = seq_counter.wrapping_add(1);
-            let pinger_c = pinger.clone();
+            let pinger_c = Arc::clone(&pinger);
             let ctx_c = ctx.clone();
             pings.spawn(async move {
                 if matches!(pinger_c.ping(ip, seq_counter).await, Ok(true))
@@ -571,9 +571,9 @@ async fn verify_offline(
                     && let NetworkChange::IpOffline { ip } = &**change
                 {
                     seq_counter = seq_counter.wrapping_add(1);
-                    let pinger_c = pinger.clone();
+                    let pinger_c = Arc::clone(&pinger);
                     let ctx_c = ctx.clone();
-                    let probers_c = prober_cache.clone();
+                    let probers_c = Arc::clone(&prober_cache);
                     let arp_metrics_c = Arc::clone(&arp_metrics);
                     let target_ip = *ip;
                     checks.spawn(async move {

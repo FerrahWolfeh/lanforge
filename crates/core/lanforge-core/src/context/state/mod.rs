@@ -373,7 +373,7 @@ impl State {
 
     #[must_use]
     pub fn get_static_registry(&self) -> Arc<StaticRegistry> {
-        self.static_registry.clone()
+        Arc::clone(&self.static_registry)
     }
 
     #[must_use]

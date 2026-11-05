@@ -25,7 +25,7 @@ use lanforge_types::update::{DeviceUpdate, InterfaceState};
 pub fn init_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let table = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), table, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), table, None);
     (ctx, bus)
 }
 
@@ -38,7 +38,7 @@ pub fn init_test_context_with_interface(
 ) -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let table = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), table, Some(ifindex));
+    let ctx = LanforgeContext::new(Arc::clone(&bus), table, Some(ifindex));
     ctx.set_target_interface_name(iface_name.to_string());
 
     let ula = "fd97:f00d:cafe:3731::".parse::<Ipv6Addr>().unwrap();

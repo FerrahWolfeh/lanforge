@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::Arc;
 
 use color_eyre::Result;
 use color_eyre::eyre::{bail, eyre};
@@ -1005,7 +1006,7 @@ async fn follow_dns_logs(
                         let entry = DnsQueryLogEntry {
                             timestamp: q.timestamp,
                             src_ip: q.src_ip,
-                            domain: q.domain.clone(),
+                            domain: Arc::clone(&q.domain),
                             src_hostname: None,
                             answer: q.answer.clone(),
                             src_mac: q.src_mac,
@@ -1064,7 +1065,7 @@ async fn follow_dns_logs(
                     let entry = DnsQueryLogEntry {
                         timestamp: q.timestamp,
                         src_ip: q.src_ip,
-                        domain: q.domain.clone(),
+                        domain: Arc::clone(&q.domain),
                         src_hostname: None,
                         answer: q.answer.clone(),
                         src_mac: q.src_mac,

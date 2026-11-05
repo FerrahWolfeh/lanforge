@@ -10,7 +10,7 @@ use tokio::time::{Duration, timeout};
 #[tokio::test]
 async fn test_event_loop_pre_seeded_readiness_reconciliation() {
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
 
     // Simulate 5 services that have already transitioned to Online in Context
     // BEFORE the event loop even starts.
@@ -51,7 +51,7 @@ async fn test_event_loop_pre_seeded_readiness_reconciliation() {
 #[tokio::test]
 async fn test_event_loop_concurrent_broadcast_readiness() {
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
 
     let services = [
         ServiceId::Uds,
@@ -98,7 +98,7 @@ async fn test_event_loop_concurrent_broadcast_readiness() {
 #[tokio::test]
 async fn test_periodic_check_recovers_a_lost_service_ready() {
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     ctx.set_service_state(ServiceId::Dns, ServiceState::Starting);
     let mut sys_listener = bus.subscribe_system();
 
@@ -128,7 +128,7 @@ async fn test_periodic_check_recovers_a_lost_service_ready() {
 #[tokio::test]
 async fn test_systemd_ready_is_not_held_hostage_by_one_service() {
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     ctx.set_service_state(ServiceId::Dns, ServiceState::Online);
     ctx.set_service_state(ServiceId::Pppoe, ServiceState::Starting);
     let mut sys_listener = bus.subscribe_system();

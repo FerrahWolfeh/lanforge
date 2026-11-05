@@ -22,7 +22,7 @@ use tokio::time::timeout;
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
 
     // Seed default enabled firewall config
     ctx.update_firewall_config(FirewallConfig {
@@ -966,7 +966,7 @@ async fn test_dev_port_forward_follows_the_device_and_the_lan_prefix() {
     use lanforge_types::identifiers::MacAddr;
 
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), Some(2));
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), Some(2));
     ctx.set_target_interface_name("lan0".to_string());
     let issues = ctx.apply_static_hosts(&[StaticHost {
         mac: MacAddr([0x02, 0, 0, 0, 0x05, 0x01]),

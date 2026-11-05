@@ -152,7 +152,7 @@ impl DnsEngine {
         let mut handles = Vec::with_capacity(total_queries);
 
         for i in 0..total_queries {
-            let permit = semaphore.clone().acquire_owned().await.map_err(|e| {
+            let permit = Arc::clone(&semaphore).acquire_owned().await.map_err(|e| {
                 LabError::Protocol(format!("Failed to acquire semaphore permit: {e}"))
             })?;
             let domain = domain_list[i % domain_list.len()].clone();

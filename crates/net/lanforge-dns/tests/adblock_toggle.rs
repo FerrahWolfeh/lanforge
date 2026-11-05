@@ -24,13 +24,13 @@ async fn spawn_counting_server() -> (u16, Arc<AtomicUsize>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let hits = Arc::new(AtomicUsize::new(0));
-    let counter = hits.clone();
+    let counter = Arc::clone(&hits);
     tokio::spawn(async move {
         loop {
             let Ok((mut socket, _)) = listener.accept().await else {
                 continue;
             };
-            let counter = counter.clone();
+            let counter = Arc::clone(&counter);
             tokio::spawn(async move {
                 let mut buf = [0u8; 2048];
                 let _ = socket.read(&mut buf).await;
@@ -69,7 +69,7 @@ async fn adblock_toggle_and_pause_do_not_refetch_lists() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     ctx.update_dns_adblock_urls(vec![source(1, port, "a.txt")]);
     let enabled_cfg = AdblockDbConfig {
         enabled: true,
@@ -85,7 +85,7 @@ async fn adblock_toggle_and_pause_do_not_refetch_lists() {
     };
     let dns_ctx = Arc::new(mock_dns_context(ctx.clone(), cfg).await);
     let filter = dns_ctx.filter.clone().expect("adblock filter");
-    let manager = spawn_adblock_manager(dns_ctx.clone());
+    let manager = spawn_adblock_manager(Arc::clone(&dns_ctx));
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while filter.blocklist_size() == 0 && tokio::time::Instant::now() < deadline {
@@ -202,7 +202,7 @@ async fn adblock_lists_refresh_during_a_pause() {
     filter.timer.disabled_until.store(until, Ordering::SeqCst);
     filter.set_enabled(false);
 
-    let manager = spawn_adblock_manager(dns_ctx.clone());
+    let manager = spawn_adblock_manager(Arc::clone(&dns_ctx));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while hits.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;

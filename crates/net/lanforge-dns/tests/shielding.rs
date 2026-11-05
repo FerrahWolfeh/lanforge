@@ -34,7 +34,7 @@ async fn test_dns_local_shielding_anti_poisoning() {
 
                         // Decode query
                         let query_msg = WireDecoder::new(&query_data).decode_message().unwrap();
-                        let qname = query_msg.questions[0].name.clone();
+                        let qname = Arc::clone(&query_msg.questions[0].name);
 
                         // Construct spoofed response
                         let mut resp = DnsMessage::new();
@@ -77,7 +77,7 @@ async fn test_dns_local_shielding_anti_poisoning() {
         hostname: None,
         domain: None,
     };
-    let mgr = UpstreamManager::new(&target, dns_ctx.cache.clone())
+    let mgr = UpstreamManager::new(&target, Arc::clone(&dns_ctx.cache))
         .await
         .unwrap();
     let recursive_strategy = UpstreamStrategy::new(UpstreamMode::Sequential, vec![mgr]);

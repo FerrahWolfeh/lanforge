@@ -382,7 +382,7 @@ impl ServiceRuntime {
         self.shared_by_type
             .read()
             .get(&TypeId::of::<T>())
-            .and_then(|any| any.clone().downcast::<T>().ok())
+            .and_then(|any| Arc::clone(any).downcast::<T>().ok())
     }
 
     // Telemetry getters / setters

@@ -190,9 +190,9 @@ fn handle_reverse_dns_trigger(ctx: &DnsContext, client_ip: IpAddr) {
 
         if should_resolve {
             let ctx_core = ctx.local.ctx.clone();
-            let reverse_managers = ctx.reverse_managers.clone();
-            let resolving_ips = ctx.resolving_ips.clone();
-            let cache = ctx.cache.clone();
+            let reverse_managers = Arc::clone(&ctx.reverse_managers);
+            let resolving_ips = Arc::clone(&ctx.resolving_ips);
+            let cache = Arc::clone(&ctx.cache);
 
             tokio::spawn(async move {
                 resolve_reverse_ptr_background(
@@ -247,9 +247,9 @@ async fn resolve_reverse_ptr_background(
             };
             let mut write_guard = reverse_managers.write();
             if let Some(m) = write_guard.get(&resolver) {
-                m.clone()
+                Arc::clone(m)
             } else {
-                write_guard.insert(resolver.clone(), new_mgr.clone());
+                write_guard.insert(resolver.clone(), Arc::clone(&new_mgr));
                 new_mgr
             }
         }

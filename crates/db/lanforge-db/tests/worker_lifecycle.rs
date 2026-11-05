@@ -26,7 +26,7 @@ use tokio::time::{sleep, timeout};
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
     (ctx, bus)
 }
 
@@ -90,7 +90,7 @@ async fn test_db_worker_batches_and_flushes_devices() {
         ..DatabaseConfig::default()
     };
 
-    let mut worker = DbWorker::new(cfg, ctx.clone(), db.clone(), log_db);
+    let mut worker = DbWorker::new(cfg, ctx.clone(), Arc::clone(&db), log_db);
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
@@ -179,7 +179,7 @@ async fn test_db_worker_purges_device_immediately() {
         ..DatabaseConfig::default()
     };
 
-    let mut worker = DbWorker::new(cfg, ctx.clone(), db.clone(), log_db);
+    let mut worker = DbWorker::new(cfg, ctx.clone(), Arc::clone(&db), log_db);
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
@@ -247,7 +247,7 @@ async fn test_db_worker_full_persistence_and_bootstrap_roundtrip() {
         let db = Arc::new(LanforgeDb::open(&cfg).expect("open redb"));
         let log_db = Arc::new(LogDb::open(&cfg.runtime_path).expect("open logdb"));
 
-        let mut worker = DbWorker::new(cfg.clone(), ctx.clone(), db.clone(), log_db);
+        let mut worker = DbWorker::new(cfg.clone(), ctx.clone(), Arc::clone(&db), log_db);
         worker.init(&ctx).await.unwrap();
 
         let ctx_clone = ctx.clone();
@@ -338,7 +338,7 @@ async fn test_db_worker_storage_query_dispatch() {
         ..DatabaseConfig::default()
     };
 
-    let mut worker = DbWorker::new(cfg, ctx.clone(), db.clone(), log_db);
+    let mut worker = DbWorker::new(cfg, ctx.clone(), Arc::clone(&db), log_db);
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
@@ -441,7 +441,7 @@ async fn test_db_worker_service_control_and_restart_resilience() {
         ..DatabaseConfig::default()
     };
 
-    let mut worker = DbWorker::new(cfg, ctx.clone(), db.clone(), log_db);
+    let mut worker = DbWorker::new(cfg, ctx.clone(), Arc::clone(&db), log_db);
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();
@@ -513,7 +513,7 @@ async fn the_worker_never_writes_configuration() {
         flush_interval: 60,
         ..DatabaseConfig::default()
     };
-    let mut worker = DbWorker::new(cfg, ctx.clone(), db.clone(), log_db);
+    let mut worker = DbWorker::new(cfg, ctx.clone(), Arc::clone(&db), log_db);
     worker.init(&ctx).await.unwrap();
 
     let ctx_clone = ctx.clone();

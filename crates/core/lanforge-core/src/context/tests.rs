@@ -63,7 +63,7 @@ async fn test_core_state_concurrency_stress() {
 async fn test_wait_for_service_dependency() {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
 
     // 1. When already online, wait_for_service returns Ok(()) immediately
     ctx.set_service_state(lanforge_types::system::ServiceId::Dns, ServiceState::Online);
@@ -95,7 +95,7 @@ async fn test_wait_for_service_dependency() {
 async fn test_wait_for_condition_shutdown_aborts() {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
 
     // 1. If context is already terminated, wait_for_service immediately fails with Shutdown
     ctx.terminate();
@@ -118,7 +118,7 @@ async fn test_wait_for_condition_shutdown_aborts() {
 async fn test_service_handle_stream() {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
 
     let mut handle = ctx.service_handle();
 
@@ -140,7 +140,7 @@ async fn test_service_handle_stream() {
 async fn test_service_control_idempotency() {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
     let mut rx = bus.subscribe_system();
 
     let ctrl = ServiceHandle::new(ServiceId::Dns, ctx.clone());
@@ -227,7 +227,7 @@ async fn test_server_capabilities_matrix() {
 async fn test_dynamic_port_registration() {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
     let mut rx = bus.subscribe_firewall();
 
     // Register HTTP port 80

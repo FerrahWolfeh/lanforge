@@ -54,7 +54,7 @@ async fn new_device_publishes_discovered_and_updated() {
 #[tokio::test]
 async fn known_device_does_not_publish_discovered() {
     let bus = make_bus();
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
     let expires = SystemTime::now() + Duration::from_hours(1);
 
@@ -89,7 +89,7 @@ async fn known_device_does_not_publish_discovered() {
 #[tokio::test]
 async fn ndp_seen_publishes_nothing() {
     let bus = make_bus();
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     let mut rx = bus.subscribe();
 
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();
@@ -114,7 +114,7 @@ async fn ndp_seen_publishes_nothing() {
 #[tokio::test]
 async fn cli_host_update_publishes_events() {
     let bus = make_bus();
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
     let mut rx = bus.subscribe();
 
     let mac = MacAddr::parse("aa:bb:cc:dd:ee:ff").unwrap();

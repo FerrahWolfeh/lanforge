@@ -40,7 +40,7 @@ fn add_static_device(
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
     (ctx, bus)
 }
 

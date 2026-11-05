@@ -21,7 +21,7 @@ const LAN: u32 = 2;
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, Some(LAN));
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, Some(LAN));
 
     ctx.set_target_interface_name("lan0".to_string());
     (ctx, bus)

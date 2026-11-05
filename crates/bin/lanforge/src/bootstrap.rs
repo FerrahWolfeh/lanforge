@@ -175,7 +175,7 @@ impl Bootstrapper {
         let log_db = Arc::new(log_db);
         let cfg = Arc::new(cfg);
 
-        let ctx = LanforgeContext::new(bus.clone(), initial_table, Some(target_ifindex));
+        let ctx = LanforgeContext::new(Arc::clone(&bus), initial_table, Some(target_ifindex));
         if let Some(build) = BuildInfo::parse(env!("LANFORGE_BUILD")) {
             ctx.set_build(build);
         }
@@ -406,7 +406,7 @@ impl Bootstrapper {
                 for mut runtime in runtime_devices {
                     if let Some(persisted) = table.devices.get(&runtime.mac) {
                         let persistent = persisted.as_ref();
-                        runtime.identity = persistent.identity.clone();
+                        runtime.identity = Arc::clone(&persistent.identity);
                         if matches!(persistent.v4, lanforge_types::device::IPv4State::Dynamic(_)) {
                             runtime.v4 = persistent.v4.clone();
                         }

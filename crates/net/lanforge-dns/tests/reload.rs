@@ -18,6 +18,7 @@ use lanforge_types::network::dns::{
 use lanforge_types::network::dns::{DnsRequest, DnsResponse};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket as TokioUdpSocket;
 
@@ -210,7 +211,7 @@ async fn dns_conditional_split_upstream_routing() {
                 resp.questions = req.questions.clone();
                 if let Some(q) = req.questions.first() {
                     resp.answers.push(lanforge_types::network::dns::DnsRecord {
-                        name: q.name.clone(),
+                        name: Arc::clone(&q.name),
                         rtype: DnsRecordType::A,
                         rclass: DnsClass::IN,
                         ttl: 300,
@@ -239,7 +240,7 @@ async fn dns_conditional_split_upstream_routing() {
                 resp.questions = req.questions.clone();
                 if let Some(q) = req.questions.first() {
                     resp.answers.push(lanforge_types::network::dns::DnsRecord {
-                        name: q.name.clone(),
+                        name: Arc::clone(&q.name),
                         rtype: DnsRecordType::A,
                         rclass: DnsClass::IN,
                         ttl: 300,

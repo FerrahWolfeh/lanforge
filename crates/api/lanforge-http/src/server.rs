@@ -77,13 +77,13 @@ impl FromRef<AppState> for AuthManager {
 
 impl FromRef<AppState> for Arc<HttpConfig> {
     fn from_ref(state: &AppState) -> Self {
-        state.cfg.clone()
+        Self::clone(&state.cfg)
     }
 }
 
 impl FromRef<AppState> for Arc<dyn DatabaseStore> {
     fn from_ref(state: &AppState) -> Self {
-        state.db.clone()
+        Self::clone(&state.db)
     }
 }
 
@@ -324,7 +324,7 @@ impl LanforgeService for HttpService {
 
 impl AsyncService for HttpService {
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
-        let cfg = self.cfg.clone();
+        let cfg = Arc::clone(&self.cfg);
         if !cfg.enabled {
             info!("Service disabled in configuration.");
             h.dormant(DormantReason::disabled("http.enabled"));
@@ -332,10 +332,10 @@ impl AsyncService for HttpService {
         }
 
         let state = AppState {
-            cfg: cfg.clone(),
+            cfg: Arc::clone(&cfg),
             ctx: self.ctx.clone(),
-            db: self.db.clone(),
-            log_db: self.log_db.clone(),
+            db: Arc::clone(&self.db),
+            log_db: Arc::clone(&self.log_db),
             auth: Arc::new(AuthManager::new()),
             start_time: Instant::now(),
         };

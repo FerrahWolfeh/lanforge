@@ -44,7 +44,7 @@ async fn test_full_db_reset_chain() {
     });
 
     let bus = Arc::new(EventBus::new());
-    let ctx = LanforgeContext::new(bus.clone(), State::new(), None);
+    let ctx = LanforgeContext::new(Arc::clone(&bus), State::new(), None);
 
     // 2. Add some initial state (dynamic and static)
     let _ = ctx.apply(DeviceUpdate::ArpSeen {
@@ -74,8 +74,8 @@ async fn test_full_db_reset_chain() {
     let mut db_worker = DbWorker::new(
         cfg.database.clone(),
         ctx_db.clone(),
-        db.clone(),
-        log_db.clone(),
+        Arc::clone(&db),
+        Arc::clone(&log_db),
     );
     let ctrl = ServiceHandle::new(ServiceId::Db, ctx.clone());
     tokio::spawn(async move {

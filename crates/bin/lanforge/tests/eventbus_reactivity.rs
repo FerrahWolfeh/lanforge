@@ -35,7 +35,7 @@ use tokio::time::timeout;
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
     let state = State::new();
-    let ctx = LanforgeContext::new(bus.clone(), state, Some(2));
+    let ctx = LanforgeContext::new(Arc::clone(&bus), state, Some(2));
 
     ctx.update_firewall_config(FirewallConfig {
         enabled: true,

@@ -308,7 +308,7 @@ impl AdvertisedPrefixes {
         }
         memory.last_gua = current_gua;
         let shared = Arc::new(Self(Mutex::new(memory)));
-        ctx.provide_shared(shared.clone());
+        ctx.provide_shared(Arc::clone(&shared));
         shared
     }
 }

@@ -157,7 +157,7 @@ fn cache_expiration() {
 #[test]
 fn cache_eviction_tracking() {
     let stats = Arc::new(DnsStats::new());
-    let cache = DnsCache::new(2, 30, Some(stats.clone()));
+    let cache = DnsCache::new(2, 30, Some(Arc::clone(&stats)));
 
     // Insert 3 unique entries. Since capacity is 2, inserting the 3rd one should trigger an eviction.
     for i in 1..=3 {

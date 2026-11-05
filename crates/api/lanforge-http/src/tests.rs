@@ -101,8 +101,8 @@ async fn test_handle_login() {
             ..Default::default()
         }),
         ctx: ctx.clone(),
-        db: db.clone(),
-        log_db: log_db.clone(),
+        db: Arc::clone(&db) as _,
+        log_db: Arc::clone(&log_db) as _,
         auth: Arc::new(AuthManager::new()),
         start_time: Instant::now(),
     };

@@ -65,8 +65,8 @@ async fn make_state(with_auth: bool) -> AppState {
     let mut worker = lanforge_db::worker::DbWorker::new(
         DatabaseConfig::default(),
         ctx.clone(),
-        db.clone(),
-        log_db.clone(),
+        Arc::clone(&db),
+        Arc::clone(&log_db),
     );
     let ctx_worker = ctx.clone();
     tokio::spawn(async move {

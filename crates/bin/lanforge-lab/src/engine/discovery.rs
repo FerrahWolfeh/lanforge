@@ -23,7 +23,7 @@ impl DiscoveryEngine {
         _mac: MacAddr,
     ) -> Result<Arc<AtomicBool>, LabError> {
         let running = Arc::new(AtomicBool::new(true));
-        let running_clone = running.clone();
+        let running_clone = Arc::clone(&running);
         let host_str = hostname.to_string();
 
         let socket = UdpSocket::bind("0.0.0.0:0")
@@ -50,7 +50,7 @@ impl DiscoveryEngine {
 
                     for q in &msg.questions {
                         resp.answers.push(DnsRecord {
-                            name: q.name.clone(),
+                            name: Arc::clone(&q.name),
                             rtype: DnsRecordType::A,
                             rclass: DnsClass::IN,
                             ttl: 120,

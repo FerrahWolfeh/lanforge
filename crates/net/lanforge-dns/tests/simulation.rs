@@ -366,7 +366,7 @@ async fn dns_simulation_transient_ip_reverse_dns() {
                     resp_msg.header.ancount = 1;
                     resp_msg.questions.push(msg.questions[0].clone());
                     resp_msg.answers.push(DnsRecord {
-                        name: msg.questions[0].name.clone(),
+                        name: Arc::clone(&msg.questions[0].name),
                         rtype: DnsRecordType::PTR,
                         rclass: DnsClass::IN,
                         ttl: 30,

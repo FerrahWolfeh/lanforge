@@ -110,7 +110,7 @@ impl AsyncService for MdnsProber {
             ctx.clone(),
             rx,
             tx,
-            self.metrics.clone(),
+            Arc::clone(&self.metrics),
             h,
         )
         .await
@@ -173,7 +173,7 @@ async fn run_mdns_worker(
     let resp_tx_v4 = resp_tx.clone();
 
     let ctx_v4 = ctx.clone();
-    let metrics_v4 = metrics.clone();
+    let metrics_v4 = Arc::clone(&metrics);
     tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
         while ctx_v4.is_running() {
@@ -202,7 +202,7 @@ async fn run_mdns_worker(
     let resp_tx_v6 = resp_tx.clone();
 
     let ctx_v6 = ctx.clone();
-    let metrics_v6 = metrics.clone();
+    let metrics_v6 = Arc::clone(&metrics);
     tokio::task::spawn_blocking(move || {
         let mut buf = [0u8; 4096];
         while ctx_v6.is_running() {

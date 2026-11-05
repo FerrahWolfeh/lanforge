@@ -233,7 +233,7 @@ impl PppoeTransport {
                     io_fd, _pppox_fd, ..
                 }) => {
                     if let Some(existing) = _pppox_fd {
-                        Some(existing.clone())
+                        Some(Arc::clone(existing))
                     } else {
                         Some(Arc::new(io_fd.get_ref().try_clone()?))
                     }

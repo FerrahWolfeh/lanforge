@@ -71,7 +71,7 @@ async fn boot_and_check(cache_dir: &Path, port: u16, domain: &str, timeout: Dura
         ..mock_config()
     };
     let dns_ctx = Arc::new(mock_dns_context(ctx_instance, cfg).await);
-    let handle = spawn_adblock_manager(dns_ctx.clone());
+    let handle = spawn_adblock_manager(Arc::clone(&dns_ctx));
 
     let filter = dns_ctx.filter.as_ref().unwrap();
     let deadline = tokio::time::Instant::now() + timeout;
