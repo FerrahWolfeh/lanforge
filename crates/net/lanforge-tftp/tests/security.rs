@@ -13,10 +13,13 @@ use lanforge_core::context::state::State;
 use lanforge_core::service::{AsyncService, ServiceHandle};
 use lanforge_tftp::TftpService;
 use lanforge_tftp::config::TftpConfig;
+use lanforge_types::system::ServiceId;
+use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
+use tokio::time::{sleep, timeout};
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -27,15 +30,15 @@ async fn test_tftp_path_traversal_prevention() {
 
     // Create a subdirectory to be the TFTP root so we can traverse up out of it
     let tftp_root = root_path.join("tftp");
-    std::fs::create_dir(&tftp_root).unwrap();
+    fs::create_dir(&tftp_root).unwrap();
 
     // Create a valid file inside the root
     let valid_file_path = tftp_root.join("valid.txt");
-    std::fs::write(&valid_file_path, b"Hello Inside TFTP!").unwrap();
+    fs::write(&valid_file_path, b"Hello Inside TFTP!").unwrap();
 
     // Create a file outside the TFTP root (in the parent temp directory)
     let outside_file_path = root_path.join("outside.txt");
-    std::fs::write(&outside_file_path, b"Secret Outside Info!").unwrap();
+    fs::write(&outside_file_path, b"Secret Outside Info!").unwrap();
 
     // 2. Start the service
     let bus = Arc::new(EventBus::new());
@@ -55,7 +58,7 @@ async fn test_tftp_path_traversal_prevention() {
     let ctx_service = ctx.clone();
 
     tokio::spawn(async move {
-        let h = ServiceHandle::new(lanforge_types::system::ServiceId::Tftp, ctx_service.clone());
+        let h = ServiceHandle::new(ServiceId::Tftp, ctx_service.clone());
         service
             .serve(&ctx_service, &h)
             .await
@@ -63,7 +66,7 @@ async fn test_tftp_path_traversal_prevention() {
     });
 
     // Wait for service to bind and register port
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(100)).await;
     let listen = probe.bound_addr().expect("TFTP bound");
     let tftp_addr = listen.parse::<SocketAddr>().unwrap();
     println!("Bound TFTP address: {tftp_addr:?}");
@@ -78,11 +81,10 @@ async fn test_tftp_path_traversal_prevention() {
     client.send_to(&rrq_packet, tftp_addr).await.unwrap();
 
     let mut buf = [0u8; 1024];
-    let (n, server_session_addr) =
-        tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
-            .await
-            .expect("Timeout waiting for TFTP response")
-            .unwrap();
+    let (n, server_session_addr) = timeout(Duration::from_secs(2), client.recv_from(&mut buf))
+        .await
+        .expect("Timeout waiting for TFTP response")
+        .unwrap();
 
     let opcode = u16::from_be_bytes([buf[0], buf[1]]);
     assert_eq!(opcode, 3, "Expected DATA opcode (3) for valid file");
@@ -106,7 +108,7 @@ async fn test_tftp_path_traversal_prevention() {
     traversal_packet.extend_from_slice(b"../outside.txt\0octet\0");
     client.send_to(&traversal_packet, tftp_addr).await.unwrap();
 
-    let (_n2, _) = tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
+    let (_n2, _) = timeout(Duration::from_secs(2), client.recv_from(&mut buf))
         .await
         .expect("Timeout waiting for TFTP traversal response")
         .unwrap();
@@ -122,11 +124,10 @@ async fn test_tftp_path_traversal_prevention() {
     opt_packet.extend_from_slice(b"valid.txt\0octet\0blksize\x001024\0tsize\x00\0");
     client.send_to(&opt_packet, tftp_addr).await.unwrap();
 
-    let (n3, server_session_addr3) =
-        tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
-            .await
-            .expect("Timeout waiting for TFTP OACK")
-            .unwrap();
+    let (n3, server_session_addr3) = timeout(Duration::from_secs(2), client.recv_from(&mut buf))
+        .await
+        .expect("Timeout waiting for TFTP OACK")
+        .unwrap();
 
     let opcode = u16::from_be_bytes([buf[0], buf[1]]);
     assert_eq!(opcode, 6, "Expected OACK opcode (6)");
@@ -141,7 +142,7 @@ async fn test_tftp_path_traversal_prevention() {
     client.send_to(&ack0, server_session_addr3).await.unwrap();
 
     // Now server should send DATA block 1
-    let (n4, _) = tokio::time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
+    let (n4, _) = timeout(Duration::from_secs(2), client.recv_from(&mut buf))
         .await
         .expect("Timeout waiting for DATA block 1 after OACK")
         .unwrap();

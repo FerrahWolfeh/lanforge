@@ -9,20 +9,24 @@ use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
 use lanforge_core::error::CoreError;
 use lanforge_core::service::{
-    Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
-    ServiceCommand, ServiceHandle, ServiceSpec,
+    Activation, AsyncService, Condition, Edge, LanforgeService, LossPolicy, RestartPolicy,
+    RuntimeClass, ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_transport::UdpTransport;
-use lanforge_types::config::ChangeImpact;
+use lanforge_types::config::{ChangeImpact, ConfigDomain};
 use lanforge_types::network::dhcp::TftpOptions;
 use lanforge_types::system::{DormantReason, ServiceId};
 use parking_lot::RwLock;
 use smallvec::SmallVec;
+use std::io;
 use std::net::SocketAddr;
+use std::path::{Component, Path, PathBuf};
+use std::str;
 use std::sync::Arc;
 use thiserror::Error;
-use tokio::fs::File;
+use tokio::fs::{self, File};
 use tokio::io::AsyncReadExt;
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio::time::{Duration, timeout};
 use tracing::{debug, error, info};
@@ -30,15 +34,12 @@ use tracing::{debug, error, info};
 #[derive(Error, Debug)]
 pub enum TftpError {
     #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(#[from] io::Error),
     #[error("Protocol error: {0}")]
     Protocol(String),
 }
 
-const TFTP_DEPS: &[Edge] = &[Edge::requires(
-    ServiceId::Interfaces,
-    lanforge_core::service::LossPolicy::Degrade,
-)];
+const TFTP_DEPS: &[Edge] = &[Edge::requires(ServiceId::Interfaces, LossPolicy::Degrade)];
 
 #[derive(Clone)]
 pub struct TftpService {
@@ -82,7 +83,7 @@ impl LanforgeService for TftpService {
             shutdown_timeout: Duration::from_secs(3),
             deps: TFTP_DEPS,
             condition: Condition {
-                sections: &[lanforge_types::config::ConfigDomain::Tftp],
+                sections: &[ConfigDomain::Tftp],
                 eval: |ctx| {
                     if ctx.get_dhcp_options().tftp.enabled {
                         Activation::Active
@@ -188,7 +189,7 @@ impl AsyncService for TftpService {
             info!(addr = %bound_str, "TFTP: Server listening");
             h.ready();
 
-            let (shutdown_tx, _) = tokio::sync::watch::channel(());
+            let (shutdown_tx, _) = watch::channel(());
             let shutdown_tx_clone = shutdown_tx.clone();
             let mut bus_rx = ctx.bus().subscribe_system();
 
@@ -356,8 +357,8 @@ pub fn parse_rrq_options<'a>(
             break;
         };
         if let (Ok(name), Ok(val)) = (
-            std::str::from_utf8(opt_name_bytes),
-            std::str::from_utf8(opt_val_bytes),
+            str::from_utf8(opt_name_bytes),
+            str::from_utf8(opt_val_bytes),
         ) {
             if name.eq_ignore_ascii_case("blksize") {
                 if let Ok(bs) = val.parse::<u16>() {
@@ -382,19 +383,17 @@ pub fn parse_rrq_options<'a>(
 /// Returns an error if the filename is invalid UTF-8 or violates path containment.
 pub fn sanitize_rrq_path(
     filename_bytes: &[u8],
-    root_dir: &std::path::Path,
-) -> Result<(std::path::PathBuf, String), &'static str> {
-    let Ok(filename) = std::str::from_utf8(filename_bytes) else {
+    root_dir: &Path,
+) -> Result<(PathBuf, String), &'static str> {
+    let Ok(filename) = str::from_utf8(filename_bytes) else {
         return Err("Invalid UTF-8 filename");
     };
 
-    let rel_path = std::path::Path::new(filename);
+    let rel_path = Path::new(filename);
     if rel_path.components().any(|c| {
         matches!(
             c,
-            std::path::Component::ParentDir
-                | std::path::Component::RootDir
-                | std::path::Component::Prefix(_)
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
         )
     }) {
         return Err("Access violation");
@@ -412,8 +411,8 @@ async fn validate_rrq_path(
     transport: &UdpTransport,
     src: SocketAddr,
     filename_bytes: &[u8],
-    root_dir: &std::path::Path,
-) -> Result<Option<(std::path::PathBuf, u64, String)>, TftpError> {
+    root_dir: &Path,
+) -> Result<Option<(PathBuf, u64, String)>, TftpError> {
     let (path, filename) = match sanitize_rrq_path(filename_bytes, root_dir) {
         Ok(res) => res,
         Err(err) => {
@@ -423,7 +422,7 @@ async fn validate_rrq_path(
         }
     };
 
-    let meta = match tokio::fs::metadata(&path).await {
+    let meta = match fs::metadata(&path).await {
         Ok(m) if m.is_file() => m,
         _ => {
             send_error(transport, src, 1, "File not found").await?;
@@ -476,7 +475,7 @@ async fn send_block_with_retries(
 }
 
 async fn transfer_file(
-    file_path: std::path::PathBuf,
+    file_path: PathBuf,
     block_size: usize,
     session_transport: &UdpTransport,
     target_addr: SocketAddr,
@@ -612,7 +611,6 @@ mod tests {
     use lanforge_core::{bus::EventBus, context::state::State};
 
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_tftp_service_new() {

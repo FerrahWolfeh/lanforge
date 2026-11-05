@@ -16,11 +16,13 @@ use lanforge_core::service::{AsyncService, ServiceCommand, ServiceHandle};
 use lanforge_tftp::TftpService;
 use lanforge_tftp::config::TftpConfig;
 use lanforge_types::system::ServiceId;
-use std::net::SocketAddr;
+use std::fs;
+use std::net::{SocketAddr, UdpSocket as StdUdpSocket};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
-use tokio::time::timeout;
+use tokio::sync::mpsc;
+use tokio::time::{sleep, timeout};
 
 /// Each request ran in a detached task holding a clone of the listening socket for the whole
 /// transfer (retries included): after a stop the port stayed bound, and the restart failed with
@@ -28,7 +30,7 @@ use tokio::time::timeout;
 #[tokio::test]
 async fn stop_releases_the_port_with_a_transfer_in_flight() {
     let root = tempfile::tempdir().unwrap();
-    std::fs::write(root.path().join("boot.bin"), vec![0xAB; 4096]).unwrap();
+    fs::write(root.path().join("boot.bin"), vec![0xAB; 4096]).unwrap();
     let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
     let cfg = TftpConfig {
         enabled: true,
@@ -40,7 +42,7 @@ async fn stop_releases_the_port_with_a_transfer_in_flight() {
     };
     let mut service = TftpService::new(ctx.clone(), cfg);
     let probe = service.clone();
-    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(4);
+    let (cmd_tx, cmd_rx) = mpsc::channel(4);
     let h = ServiceHandle::with_command_channel(ServiceId::Tftp, ctx.clone(), cmd_rx);
     let serving = ctx.clone();
     let serve = tokio::spawn(async move { service.serve(&serving, &h).await });
@@ -51,7 +53,7 @@ async fn stop_releases_the_port_with_a_transfer_in_flight() {
         if bound.is_some() {
             break;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        sleep(Duration::from_millis(20)).await;
     }
     let server: SocketAddr = bound.expect("TFTP bound").parse().unwrap();
 
@@ -75,6 +77,6 @@ async fn stop_releases_the_port_with_a_transfer_in_flight() {
         .expect("join")
         .expect("serve ok");
 
-    let rebind = std::net::UdpSocket::bind(server);
+    let rebind = StdUdpSocket::bind(server);
     assert!(rebind.is_ok(), "{server} still held: {:?}", rebind.err());
 }
