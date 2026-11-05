@@ -18,10 +18,11 @@ use lanforge_traffic::TrafficService;
 use lanforge_types::events::TimedEvent;
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
 use lanforge_types::events::traffic::TrafficEvent;
+use lanforge_types::network::snapshot::{InterfaceSnapshot, LinkInfo};
 use lanforge_types::network::traffic::{NicTuningConfig, SqmConfig, SqmDiffserv, TrafficConfig};
 use lanforge_types::system::{ServiceId, ServiceState};
 use tokio::sync::broadcast;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
@@ -96,7 +97,7 @@ async fn test_traffic_service_inert_full_lifecycle() {
     let serve_handle = tokio::spawn(async move { service_clone.serve(&ctx_clone, &h).await });
 
     // Allow task to initialize and subscribe
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // Verify initial startup events (TuningApplied + initial fallback SqmApplied on lan0)
     let tuning_evt = timeout(Duration::from_millis(500), traffic_sub.recv())
@@ -211,7 +212,7 @@ async fn test_traffic_reacts_to_config_change_in_place() {
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Traffic, ctx_clone.clone());
     let serve_handle = tokio::spawn(async move { service_clone.serve(&ctx_clone, &h).await });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // Drain initial startup events
     while traffic_sub.try_recv().is_ok() {}
@@ -309,7 +310,7 @@ async fn test_traffic_reacts_to_interface_ready() {
     let ctx_clone = ctx.clone();
     let h = ServiceHandle::new(ServiceId::Traffic, ctx_clone.clone());
     let serve_handle = tokio::spawn(async move { service_clone.serve(&ctx_clone, &h).await });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // Drain initial startup event
     let _ = timeout(Duration::from_millis(500), traffic_sub.recv())
@@ -319,8 +320,8 @@ async fn test_traffic_reacts_to_interface_ready() {
 
     // Change target interface to lan1 and notify via interfaces snapshot
     ctx.set_target_interface_name("lan1".to_string());
-    ctx.set_interfaces_snapshot(lanforge_types::network::snapshot::InterfaceSnapshot {
-        links: vec![lanforge_types::network::snapshot::LinkInfo {
+    ctx.set_interfaces_snapshot(InterfaceSnapshot {
+        links: vec![LinkInfo {
             ifindex: 2,
             name: "lan1".to_string(),
             carrier: true,
@@ -331,7 +332,7 @@ async fn test_traffic_reacts_to_interface_ready() {
     });
 
     // Allow event to process
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    sleep(Duration::from_millis(100)).await;
 
     let status = ctx.traffic_status().unwrap();
     assert!(status.tuned_interfaces.contains(&"lan1".to_string()));

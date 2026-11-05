@@ -1,3 +1,4 @@
+use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::OnceLock;
 use tokio::process::Command;
@@ -171,7 +172,7 @@ async fn run_ethtool_ring(iface: &str, rx: u32, tx: u32) -> bool {
     match res {
         Ok(out) => out.status.success(),
         Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound {
+            if e.kind() == ErrorKind::NotFound {
                 warn!(
                     "ethtool binary not found. Please install ethtool ('sudo dnf install -y ethtool' on Fedora)"
                 );
@@ -250,7 +251,7 @@ pub async fn disable_eee(iface: &str) {
             }
         }
         Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound {
+            if e.kind() == ErrorKind::NotFound {
                 warn!(
                     "ethtool binary not found. Please install ethtool ('sudo dnf install -y ethtool' on Fedora)"
                 );

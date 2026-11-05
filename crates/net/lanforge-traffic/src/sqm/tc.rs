@@ -1,6 +1,7 @@
 use super::cake::build_cake_args;
 use super::ifb::{resolve_ifb_name, setup_ifb, teardown_ifb};
 use lanforge_types::network::SqmConfig;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::OnceLock;
 use tokio::process::Command;
@@ -35,7 +36,7 @@ async fn run_tc(args: &[&str]) -> bool {
             }
         }
         Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound {
+            if e.kind() == ErrorKind::NotFound {
                 warn!(
                     args = ?args,
                     "Traffic Control binary 'tc' not found. If running Fedora/RHEL, please install it via: 'sudo dnf install -y iproute-tc'. On Debian/Ubuntu: 'sudo apt install -y iproute2'."

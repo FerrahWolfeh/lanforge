@@ -1,9 +1,10 @@
+use std::io;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{debug, info};
 
 /// Writes a string value to a procfs/sysfs path asynchronously.
-async fn write_sysfs_value(path: &Path, value: &str) -> std::io::Result<()> {
+async fn write_sysfs_value(path: &Path, value: &str) -> io::Result<()> {
     fs::write(path, value.as_bytes()).await
 }
 
