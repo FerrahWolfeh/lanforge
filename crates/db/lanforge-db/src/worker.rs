@@ -14,19 +14,21 @@
 //! All loggable events are immediately recorded in the in-memory `LogDb`.
 
 use lanforge_core::bus::{
-    DeviceEvent, DnsEvent, LanforgeEvent, StorageEvent, SystemEvent, TimedEvent,
+    DeviceEvent, DnsEvent, EventTopic, LanforgeEvent, NetworkEvent, StorageEvent, SystemEvent,
+    TimedEvent,
 };
 use lanforge_db_core::{DeviceStore, LogStore, PrefixStore};
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::QueryLogEntry;
 use lanforge_types::network::dns::{DnsRequest, DnsResponse};
+use lanforge_types::system::DegradedReason;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
-use tokio::time::{Interval, interval};
+use tokio::time::{Instant, Interval, interval};
 use tracing::{debug, error, info, warn};
 
 use lanforge_core::context::{LanforgeContext, StorageCommand, StorageHandle};
@@ -289,9 +291,7 @@ impl AsyncService for DbWorker {
         let log_db = Arc::clone(&self.log_db);
 
         if ctx.is_recovery_mode() {
-            h.degraded(lanforge_types::system::DegradedReason::custom(
-                "no persistence",
-            ));
+            h.degraded(DegradedReason::custom("no persistence"));
         } else {
             h.ready();
         }
@@ -310,7 +310,7 @@ impl AsyncService for DbWorker {
         let mut firewall_rx = ctx.bus().subscribe_firewall();
         let mut traffic_rx = ctx.bus().subscribe_traffic();
         let mut flush_interval: Interval = interval(Duration::from_secs(self.cfg.flush_interval));
-        let mut last_prune = tokio::time::Instant::now();
+        let mut last_prune = Instant::now();
         let stores = db.stores(Arc::clone(&log_db) as _);
 
         loop {
@@ -351,14 +351,14 @@ impl AsyncService for DbWorker {
                 // Event handling
                 (topic, res) = async {
                     tokio::select! {
-                        res = system_rx.recv() => (lanforge_core::bus::EventTopic::System, res),
-                        res = network_rx.recv() => (lanforge_core::bus::EventTopic::Network, res),
-                        res = device_rx.recv() => (lanforge_core::bus::EventTopic::Device, res),
-                        res = dns_rx.recv() => (lanforge_core::bus::EventTopic::Dns, res),
-                        res = storage_rx_events.recv() => (lanforge_core::bus::EventTopic::Storage, res),
-                        res = pppoe_rx.recv() => (lanforge_core::bus::EventTopic::Pppoe, res),
-                        res = firewall_rx.recv() => (lanforge_core::bus::EventTopic::Firewall, res),
-                        res = traffic_rx.recv() => (lanforge_core::bus::EventTopic::Traffic, res),
+                        res = system_rx.recv() => (EventTopic::System, res),
+                        res = network_rx.recv() => (EventTopic::Network, res),
+                        res = device_rx.recv() => (EventTopic::Device, res),
+                        res = dns_rx.recv() => (EventTopic::Dns, res),
+                        res = storage_rx_events.recv() => (EventTopic::Storage, res),
+                        res = pppoe_rx.recv() => (EventTopic::Pppoe, res),
+                        res = firewall_rx.recv() => (EventTopic::Firewall, res),
+                        res = traffic_rx.recv() => (EventTopic::Traffic, res),
                     }
                 } => {
                     let Ok(timed_event) = res else {
@@ -371,10 +371,10 @@ impl AsyncService for DbWorker {
                     let mirrored = matches!(
                         (&timed_event.event, topic),
                         (LanforgeEvent::System(SystemEvent::Shutdown), topic)
-                            if topic != lanforge_core::bus::EventTopic::System
+                            if topic != EventTopic::System
                     ) || matches!(
                         (&timed_event.event, topic),
-                        (LanforgeEvent::Pppoe(_), lanforge_core::bus::EventTopic::Dns)
+                        (LanforgeEvent::Pppoe(_), EventTopic::Dns)
                     );
                     if mirrored { continue; }
                     // 1. Record in log database if loggable
@@ -406,7 +406,7 @@ impl AsyncService for DbWorker {
                     lanforge_core::match_event!(timed_event, {
                         // Remember the LAN's delegated prefix only (not `ppp0`'s own), and keep the
                         // last known one while it is briefly withdrawn during a reconnect.
-                        LanforgeEvent::Network(lanforge_core::bus::NetworkEvent::PrefixChanged(details)) => {
+                        LanforgeEvent::Network(NetworkEvent::PrefixChanged(details)) => {
                             if Some(details.ifindex) == ctx.target_ifindex()
                                 && let Some(gua) = details.gua
                             {
@@ -525,7 +525,7 @@ impl AsyncService for DbWorker {
                         if let Err(e) = db.prune_zombies() {
                             error!("Background db prune failed: {e}");
                         }
-                        last_prune = tokio::time::Instant::now();
+                        last_prune = Instant::now();
                     }
                 }
             }
@@ -546,14 +546,15 @@ impl AsyncService for DbWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lanforge_core::bus::EventBus;
     use lanforge_core::context::state::State;
     use lanforge_types::network::dns::{
         DnsRecordType, QueryLogEntry, QueryResult, TransportProtocol,
     };
     use std::sync::atomic::Ordering;
 
-    fn create_test_context() -> (LanforgeContext, Arc<lanforge_core::bus::EventBus>) {
-        let bus = Arc::new(lanforge_core::bus::EventBus::new());
+    fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
+        let bus = Arc::new(EventBus::new());
         let state = State::new();
         let ctx = LanforgeContext::new(Arc::clone(&bus), state, None);
         (ctx, bus)

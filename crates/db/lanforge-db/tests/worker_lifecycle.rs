@@ -8,8 +8,12 @@
     reason = "integration test crates see every dev-dependency"
 )]
 use lanforge_core::context::ConfigPatch;
+use lanforge_types::network::dhcp::DhcpOptionsConfig;
+use lanforge_types::network::dns::adblock::RewriteRule;
+use std::fs;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use lanforge_core::bus::{EventBus, LanforgeEvent, StorageEvent, SystemEvent};
@@ -134,12 +138,7 @@ async fn test_db_worker_batches_and_flushes_devices() {
     assert_eq!(ctx.with_state(|s| s.devices.len()), 3);
 
     timeout(Duration::from_secs(3), async {
-        while ctx
-            .db_metrics()
-            .devices_written
-            .load(std::sync::atomic::Ordering::Relaxed)
-            < 3
-        {
+        while ctx.db_metrics().devices_written.load(Ordering::Relaxed) < 3 {
             sleep(Duration::from_millis(10)).await;
         }
     })
@@ -156,12 +155,7 @@ async fn test_db_worker_batches_and_flushes_devices() {
 
     // Verify atomic metrics
     let metrics = ctx.db_metrics();
-    assert!(
-        metrics
-            .devices_written
-            .load(std::sync::atomic::Ordering::Relaxed)
-            >= 3
-    );
+    assert!(metrics.devices_written.load(Ordering::Relaxed) >= 3);
 
     // Verify devices exist in redb
     let saved_devices = db.load_all_devices().expect("load devices");
@@ -512,7 +506,7 @@ async fn the_worker_never_writes_configuration() {
     let config_path = dir.path().join("lanforge.toml");
     let original =
         "# Keep this operator comment\n[system]\niface = \"test0\"\n\n[http]\nenabled = false\n";
-    std::fs::write(&config_path, original).unwrap();
+    fs::write(&config_path, original).unwrap();
     ctx.set_config_path(config_path.clone());
     ctx.set_config_writable(true);
 
@@ -539,20 +533,15 @@ async fn the_worker_never_writes_configuration() {
         range_end: Ipv4Addr::new(192, 168, 1, 200),
         ..Default::default()
     }]);
-    let _ = ctx.apply_config(
-        ConfigPatch::new()
-            .with_dhcp_options(lanforge_types::network::dhcp::DhcpOptionsConfig::default()),
-    );
+    let _ = ctx.apply_config(ConfigPatch::new().with_dhcp_options(DhcpOptionsConfig::default()));
     ctx.update_firewall_config(FirewallConfig::default());
     ctx.update_dns_adblock_rules("@@||bank.example^\n".to_string());
-    let _ = ctx.apply_config(ConfigPatch::new().with_dns_rewrites(vec![
-        lanforge_types::network::dns::adblock::RewriteRule {
-            id: None,
-            domain: "router.lan".into(),
-            rtype: DnsRecordType::A,
-            answer: RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 1)),
-        },
-    ]));
+    let _ = ctx.apply_config(ConfigPatch::new().with_dns_rewrites(vec![RewriteRule {
+        id: None,
+        domain: "router.lan".into(),
+        rtype: DnsRecordType::A,
+        answer: RewriteAnswer::A(Ipv4Addr::new(192, 0, 2, 1)),
+    }]));
     let _ = bus.publish(LanforgeEvent::Storage(StorageEvent::TableDirty));
     sleep(Duration::from_millis(20)).await;
     storage.flush_now().await.expect("flush_now");
@@ -564,7 +553,7 @@ async fn the_worker_never_writes_configuration() {
         .expect("worker task panicked")
         .expect("worker failed");
 
-    let written = std::fs::read_to_string(&config_path).unwrap();
+    let written = fs::read_to_string(&config_path).unwrap();
     assert_eq!(written, original, "the worker wrote the config file");
     assert_eq!(db.legacy_config_keys().unwrap(), Vec::<String>::new());
 }

@@ -1,6 +1,7 @@
 //! Configuration for the Lanforge database engine.
 
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::path::PathBuf;
 
 /// Configuration for the database persistence layer.
@@ -107,13 +108,13 @@ impl DatabaseConfig {
 
 impl Default for DatabaseConfig {
     fn default() -> Self {
-        let config_path = std::env::var("LANFORGE_CONFIG_DB_PATH")
-            .or_else(|_| std::env::var("LANFORGE_DB_PATH"))
-            .or_else(|_| std::env::var("DATABASE_URL"))
+        let config_path = env::var("LANFORGE_CONFIG_DB_PATH")
+            .or_else(|_| env::var("LANFORGE_DB_PATH"))
+            .or_else(|_| env::var("DATABASE_URL"))
             .unwrap_or_else(|_| "/var/lib/lanforge/config.redb".to_string());
-        let runtime_path = std::env::var("LANFORGE_RUNTIME_DB_PATH")
-            .or_else(|_| std::env::var("LANFORGE_LOG_PATH"))
-            .or_else(|_| std::env::var("LANFORGE_LOG_DB_URL"))
+        let runtime_path = env::var("LANFORGE_RUNTIME_DB_PATH")
+            .or_else(|_| env::var("LANFORGE_LOG_PATH"))
+            .or_else(|_| env::var("LANFORGE_LOG_DB_URL"))
             .unwrap_or_else(|_| "/run/lanforge/runtime.redb".to_string());
 
         Self {
