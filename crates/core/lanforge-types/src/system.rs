@@ -82,8 +82,12 @@ impl std::fmt::Display for StorageMode {
 pub enum Cap {
     Dns,
     UpstreamUdpTcp,
+    // snake_case would print `upstream_do_t`; the old spelling is still read.
+    #[serde(rename = "upstream_dot", alias = "upstream_do_t")]
     UpstreamDoT,
+    #[serde(rename = "upstream_doq", alias = "upstream_do_q")]
     UpstreamDoQ,
+    #[serde(rename = "upstream_doh", alias = "upstream_do_h")]
     UpstreamDoH,
     DohDownstream,
     DhcpV4,
@@ -738,4 +742,26 @@ pub struct RaStatusResponse {
     pub mtu: Option<u32>,
     /// Service uptime in seconds.
     pub uptime_secs: Option<u64>,
+}
+
+#[cfg(test)]
+mod cap_tests {
+    use super::Cap;
+
+    /// The DoT/DoQ/DoH capabilities are spelled like the features (`upstream_dot`), not as
+    /// `snake_case` made them (`upstream_do_t`); the old spelling still reads.
+    #[test]
+    fn upstream_tls_caps_have_readable_names() {
+        for (cap, name, old) in [
+            (Cap::UpstreamDoT, "upstream_dot", "upstream_do_t"),
+            (Cap::UpstreamDoQ, "upstream_doq", "upstream_do_q"),
+            (Cap::UpstreamDoH, "upstream_doh", "upstream_do_h"),
+        ] {
+            assert_eq!(serde_json::to_string(&cap).unwrap(), format!("\"{name}\""));
+            assert_eq!(
+                serde_json::from_str::<Cap>(&format!("\"{old}\"")).unwrap(),
+                cap
+            );
+        }
+    }
 }

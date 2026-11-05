@@ -426,23 +426,10 @@ impl RaService {
         }
     }
 
-    async fn resolve_interface_resources(
-        &self,
-        iface_index: u32,
-    ) -> Result<([u8; 6], Icmp6Transport), CoreError> {
-        // Parallel optimization: Wait for interface data ONLY if not already present
-        if self
-            .ctx
-            .get_interface_state(iface_index)
-            .link_local
-            .is_none()
-        {
-            info!("Waiting for interface discovery on '{}'...", self.cfg.iface);
-            self.ctx.wait_for_interfaces().await?;
-        }
-
-        let mac = self
-            .ctx
+    /// The LAN interface's MAC, advertised as the RA source link-layer address: the interface
+    /// state, else sysfs, else the EUI-64 link-local. Never made up: clients would send to it.
+    fn resolve_mac(&self, iface_index: u32) -> Result<[u8; 6], CoreError> {
+        self.ctx
             .with_state(|state| {
                 state
                     .interfaces
@@ -461,12 +448,30 @@ impl RaService {
                     .link_local
                     .and_then(|ll| lanforge_types::utils::mac_from_eui64_link_local(&ll))
             })
+            .map(|mac| mac.0)
             .ok_or_else(|| {
                 CoreError::Generic(format!(
                     "MAC address for interface index {iface_index} is not resolved"
                 ))
-            })?
-            .0;
+            })
+    }
+
+    async fn resolve_interface_resources(
+        &self,
+        iface_index: u32,
+    ) -> Result<([u8; 6], Icmp6Transport), CoreError> {
+        // Parallel optimization: Wait for interface data ONLY if not already present
+        if self
+            .ctx
+            .get_interface_state(iface_index)
+            .link_local
+            .is_none()
+        {
+            info!("Waiting for interface discovery on '{}'...", self.cfg.iface);
+            self.ctx.wait_for_interfaces().await?;
+        }
+
+        let mac = self.resolve_mac(iface_index)?;
 
         let transport = Icmp6Transport::bind(&self.cfg.iface, iface_index)
             .map_err(|e| CoreError::Generic(e.to_string()))?;
@@ -536,18 +541,9 @@ impl RaService {
             CoreError::Generic("Target interface index is not configured in context".to_string())
         })?;
 
+        // A rebind or restart reuses the bound transport; the MAC is resolved the same way.
         let (mac, transport) = if let Some(ref t) = self.transport {
-            let mac = self
-                .ctx
-                .with_state(|state| {
-                    state
-                        .interfaces
-                        .interface_ips
-                        .get(&iface_index)
-                        .and_then(|i| i.mac)
-                })
-                .map_or([0x02, 0x11, 0x22, 0x33, 0x44, 0x55], |m| m.0);
-            (mac, t.clone())
+            (self.resolve_mac(iface_index)?, t.clone())
         } else {
             let (mac, t) = self.resolve_interface_resources(iface_index).await?;
             self.transport = Some(t.clone());

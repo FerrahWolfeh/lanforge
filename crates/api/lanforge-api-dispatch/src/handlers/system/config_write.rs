@@ -6,7 +6,10 @@ use lanforge_api::config_file::{
     AdblockFile, AdblockSettings, ConfigFile, SectionSet, persist_sections, write_toml_atomically,
 };
 use lanforge_core::context::ConfigPatch;
+use lanforge_types::identifiers::DeviceIdentifier;
 use lanforge_types::network::DnsReverseResolver;
+use lanforge_types::network::dns::adblock::{ClientSelector, RewriteAnswer};
+use lanforge_types::network::firewall::ForwardTarget;
 
 /// Why a configuration change was not made: nothing was written nor applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,9 +227,69 @@ impl ClientContext {
         if !issues.is_empty() {
             return Err(ChangeError::Rejected(issues.join("; ")));
         }
-        let persisted =
-            self.persist_config_sections(SectionSet::HOSTS, |f| f.hosts = file.hosts)?;
+
+        // A renamed host keeps what names it: `dev:<old name>` in port forwards, DNS rewrites
+        // and adblock selectors becomes `dev:<new name>`, written with the hosts and applied
+        // with them.
+        let renames = renamed_hosts(&self.ctx.static_hosts(), &hosts);
+        let mut sections = SectionSet::HOSTS;
+        let mut firewall = self.ctx.get_firewall_config();
+        let mut dns = None;
+        let mut adblock = None;
+        if !renames.is_empty() {
+            if let Some(fw) = firewall.as_mut()
+                && rename_all(
+                    &renames,
+                    fw.port_forwards.iter_mut().map(|pf| &mut pf.internal_ip),
+                    ForwardTarget::rename_device,
+                )
+            {
+                sections |= SectionSet::FIREWALL;
+            }
+            let mut live_dns = self.live_dns_settings();
+            if rename_all(
+                &renames,
+                live_dns.rewrites.iter_mut().map(|r| &mut r.answer),
+                RewriteAnswer::rename_device,
+            ) {
+                sections |= SectionSet::DNS;
+                dns = Some(live_dns);
+            }
+            let mut live_adblock = self.live_adblock_settings();
+            let selectors = live_adblock.bypass.iter_mut().chain(
+                live_adblock
+                    .groups
+                    .iter_mut()
+                    .flat_map(|g| g.clients.iter_mut()),
+            );
+            if rename_all(&renames, selectors, ClientSelector::rename_device) {
+                sections |= SectionSet::ADBLOCK;
+                adblock = Some(live_adblock);
+            }
+        }
+        let firewall = firewall.filter(|_| sections.contains(SectionSet::FIREWALL));
+
+        let persisted = self.persist_config_sections(sections, |f| {
+            f.hosts = file.hosts;
+            if let Some(fw) = &firewall {
+                f.firewall = lanforge_api::config_file::FirewallFile::from_config(fw);
+            }
+            if let Some(dns) = &dns {
+                f.dns = lanforge_api::config_file::DnsFile::from_config(dns);
+            }
+            if let Some(adblock) = &adblock {
+                f.adblock = AdblockFile::from_config(adblock);
+            }
+        })?;
         let _ = self.ctx.apply_static_hosts(&hosts);
+        let mut patch = ConfigPatch::new();
+        if let Some(fw) = firewall {
+            patch = patch.with_firewall(fw);
+        }
+        if let Some(dns) = dns {
+            patch = self.dns_settings_patch(patch, dns);
+        }
+        let _ = self.ctx.apply_config(patch);
         Ok(persisted)
     }
 
@@ -490,4 +553,40 @@ impl ClientContext {
         }
         None
     }
+}
+
+/// `(old name, new name)` of every static host whose name changed (same MAC) to one a `dev:`
+/// reference can hold.
+fn renamed_hosts(
+    before: &[lanforge_types::device::StaticHost],
+    after: &[lanforge_types::device::StaticHost],
+) -> Vec<(String, DeviceIdentifier)> {
+    before
+        .iter()
+        .filter_map(|old| {
+            let new = after.iter().find(|h| h.mac == old.mac)?;
+            if old.hostname.is_empty() || new.hostname.eq_ignore_ascii_case(&old.hostname) {
+                return None;
+            }
+            match new.hostname.parse::<DeviceIdentifier>() {
+                Ok(id @ DeviceIdentifier::Name(_)) => Some((old.hostname.clone(), id)),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// Applies every rename to every reference; whether any changed.
+fn rename_all<'a, T: 'a>(
+    renames: &[(String, DeviceIdentifier)],
+    refs: impl Iterator<Item = &'a mut T>,
+    rename: impl Fn(&mut T, &str, &DeviceIdentifier) -> bool,
+) -> bool {
+    let mut changed = false;
+    for item in refs {
+        for (old, new) in renames {
+            changed |= rename(item, old, new);
+        }
+    }
+    changed
 }

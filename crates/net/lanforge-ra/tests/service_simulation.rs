@@ -674,3 +674,44 @@ async fn test_ra_deprecated_valid_lifetime_is_capped_by_what_remains() {
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
     assert!(timeout(Duration::from_millis(500), task).await.is_ok());
 }
+
+/// The RA source link-layer option carries the LAN's MAC, which clients use to reach the
+/// router. With no MAC known (not in the interface state, no sysfs entry, a non-EUI-64
+/// link-local) the RA must not go out with a made-up one (it used `02:11:22:33:44:55`).
+#[tokio::test]
+async fn test_ra_never_advertises_a_made_up_mac() {
+    let (ctx, bus) = create_test_context();
+    ctx.update_ra_server_config(RaServerConfig {
+        enabled: true,
+        iface: Some("lf-no-such-iface".into()),
+        prefixes: vec![RAPrefix::gua_dynamic()],
+        ..RaServerConfig::default()
+    });
+    let _ = ctx.apply(DeviceUpdate::InterfaceIpsChanged {
+        ifindex: LAN,
+        state: Box::new(InterfaceState {
+            link_local: Some("fe80::1".parse().unwrap()),
+            gua: Some("2001:db8:1::1".parse().unwrap()),
+            mac: None,
+            ..InterfaceState::default()
+        }),
+    });
+    let cfg = RaConfig {
+        iface: "lf-no-such-iface".into(),
+        ..RaConfig::default()
+    };
+    let (handle, transport) = lanforge_transport::Icmp6Transport::inert();
+    let mut service = RaService::with_transport(cfg, ctx.clone(), transport);
+    let h = ServiceHandle::new(lanforge_types::system::ServiceId::Ra, ctx.clone());
+    let res = timeout(Duration::from_millis(500), service.serve(&ctx, &h))
+        .await
+        .expect("serve must return");
+    assert!(res.is_err(), "no MAC, no RA");
+    assert!(
+        timeout(Duration::from_millis(50), handle.recv_payload())
+            .await
+            .is_err(),
+        "nothing sent"
+    );
+    drop(bus);
+}
