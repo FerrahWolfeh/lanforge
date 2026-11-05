@@ -281,6 +281,15 @@ impl FirewallFile {
             let internal_ip = pf.to.parse::<IpAddr>();
             let protocol = parse_l4(&pf.proto);
             match (internal_ip, protocol) {
+                // A pinhole is routed, not NATed: the port the WAN asks for is the one the host
+                // gets.
+                (Ok(IpAddr::V6(_)), Some(_)) if pf.to_port.is_some_and(|p| p != pf.port) => {
+                    issues.push(format!(
+                        "[firewall.port_forwards.\"{label}\"] an IPv6 pinhole cannot change the port (to_port = {} differs from port = {}); port not forwarded",
+                        pf.to_port.unwrap_or(pf.port),
+                        pf.port
+                    ));
+                }
                 (Ok(internal_ip), Some(protocol)) => port_forwards.push(PortForwardRule {
                     src_zone: pf.zone.clone(),
                     external_port: pf.port,
@@ -1190,8 +1199,9 @@ mod tests {
                 comment: Some("nas".into()),
                 src_zone: "external".into(),
                 internal_ip: "fd97:f00d:cafe:3731::501".parse().unwrap(),
+                // A pinhole keeps its port (routed, not NATed).
                 external_port: 8443,
-                internal_port: 443,
+                internal_port: 8443,
                 protocol: L4Protocol::Tcp,
                 enable_hairpin: true,
             },

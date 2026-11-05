@@ -701,3 +701,67 @@ fn test_sanity_no_interface_less_accept_reaches_wan() {
         offenders.join("\n")
     );
 }
+
+/// The owner's two forwards (IPv4 DNAT to the NAS, IPv6 pinhole to it), hairpin on as the file
+/// defaults it.
+fn nas_forwards_config() -> FirewallConfig {
+    let mut cfg = FirewallConfig::default();
+    for to in ["192.168.0.128", "2001:db8:cafe:3731::501"] {
+        cfg.port_forwards.push(PortForwardRule {
+            comment: Some("qBittorrent".into()),
+            src_zone: "external".into(),
+            internal_ip: to.parse().unwrap(),
+            external_port: 6881,
+            internal_port: 6881,
+            protocol: L4Protocol::Tcp,
+            enable_hairpin: true,
+        });
+    }
+    cfg
+}
+
+/// Every DNAT rule of the built ruleset, as JSON text.
+fn dnat_rules(cfg: &FirewallConfig) -> Vec<String> {
+    let ruleset = RulesetBuilder::new(cfg)
+        .with_active_wan(Some("ppp0"))
+        .with_primary_lan(Some("lan0"))
+        .build();
+    let v = serde_json::to_value(&ruleset).unwrap();
+    v["nftables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|cmd| cmd.get("add").and_then(|a| a.get("rule")))
+        .map(|rule| rule["expr"].to_string())
+        // The DNAT statement, not a `ct status dnat` match.
+        .filter(|expr| expr.contains("{\"dnat\":{"))
+        .collect()
+}
+
+/// An IPv6 pinhole is routed (AGENTS.md §4): no NAT. A DNAT for it matched the port on every
+/// address of the LAN prefix and rewrote it to the target, so any LAN address "answered" on
+/// that port from the WAN (seen on the box: a SYN to the desktop's GUA got a SYN-ACK from the
+/// NAS), and a ULA target looked reachable.
+#[test]
+fn test_ipv6_pinhole_is_routed_never_nat66() {
+    let rules = dnat_rules(&nas_forwards_config());
+    assert!(!rules.is_empty(), "the IPv4 forward still DNATs");
+    let nat66: Vec<_> = rules.iter().filter(|r| r.contains("\"ip6\"")).collect();
+    assert!(nat66.is_empty(), "IPv6 forwards must not DNAT: {nat66:#?}");
+}
+
+/// A DNAT only rewrites traffic for this router's own addresses (`fib daddr type local`). Without
+/// it the hairpin rule on the LAN rewrote every LAN connection to port 6881 of any internet host
+/// to the NAS, and the WAN rule rewrote traffic routed to other addresses.
+#[test]
+fn test_dnat_only_for_the_routers_own_addresses() {
+    let rules = dnat_rules(&nas_forwards_config());
+    let open: Vec<_> = rules
+        .iter()
+        .filter(|r| !(r.contains("\"fib\"") && r.contains("\"daddr\"") && r.contains("\"local\"")))
+        .collect();
+    assert!(
+        open.is_empty(),
+        "DNAT without a local-destination match: {open:#?}"
+    );
+}

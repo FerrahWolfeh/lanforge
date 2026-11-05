@@ -123,6 +123,15 @@ fn validate_port_forwards(
             ));
         }
 
+        if rule.internal_ip.is_ipv6() && rule.internal_port != rule.external_port {
+            errors.push(format!(
+                "Port forward #{}: an IPv6 pinhole is routed, not NATed, so it cannot change the port ({} -> {})",
+                idx + 1,
+                rule.external_port,
+                rule.internal_port
+            ));
+        }
+
         if rule.internal_ip.is_unspecified() {
             errors.push(format!(
                 "Port forward #{} has unspecified target IP ({})",
@@ -425,6 +434,31 @@ mod tests {
                 .errors
                 .iter()
                 .any(|e| e.contains("Port forward collision"))
+        );
+    }
+
+    /// An IPv6 pinhole is routed: the port cannot change on the way, so a rule asking for it
+    /// is refused instead of compiling into one that never matches.
+    #[test]
+    fn test_validation_refuses_an_ipv6_pinhole_that_changes_the_port() {
+        let current = FirewallConfig::default();
+        let mut candidate = current.clone();
+        candidate.port_forwards.push(PortForwardRule {
+            comment: None,
+            src_zone: "external".into(),
+            internal_ip: "2001:db8::100".parse::<std::net::IpAddr>().unwrap(),
+            external_port: 8080,
+            internal_port: 80,
+            protocol: L4Protocol::Tcp,
+            enable_hairpin: false,
+        });
+        let report = validate_firewall_candidate(&candidate, &current, &[], || "tx".into());
+        assert!(!report.valid);
+        assert!(
+            report
+                .errors
+                .iter()
+                .any(|e| e.contains("cannot change the port"))
         );
     }
 

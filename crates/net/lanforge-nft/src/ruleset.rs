@@ -3,7 +3,8 @@ use lanforge_types::network::firewall::{
 };
 use nftables::batch::Batch;
 use nftables::expr::{
-    CT, Expression, Meta, MetaKey, NamedExpression, Payload, PayloadField, TcpOption,
+    CT, Expression, Fib, FibFlag, FibResult, Meta, MetaKey, NamedExpression, Payload, PayloadField,
+    TcpOption,
 };
 use nftables::schema::{Chain, FlowTable, FlushObject, NfCmd, NfListObject, Nftables, Rule, Table};
 use nftables::stmt::{Flow, Limit, Mangle, Match, NAT, NATFamily, Operator, SetOp, Statement};
@@ -1005,7 +1006,13 @@ impl<'a> RulesetBuilder<'a> {
         table: &Cow<'static, str>,
         internal_ifaces: &[String],
     ) {
-        if self.cfg.port_forwards.is_empty() {
+        // Only IPv4 forwards are NATed; an IPv6 pinhole is routed (forward chain only).
+        if !self
+            .cfg
+            .port_forwards
+            .iter()
+            .any(|pf| pf.internal_ip.is_ipv4())
+        {
             return;
         }
 
@@ -1022,7 +1029,12 @@ impl<'a> RulesetBuilder<'a> {
             policy: Some(NfChainPolicy::Accept),
         }));
 
-        for pf in &self.cfg.port_forwards {
+        for pf in self
+            .cfg
+            .port_forwards
+            .iter()
+            .filter(|pf| pf.internal_ip.is_ipv4())
+        {
             let src_ifaces = self.resolve_zone_interfaces(&pf.src_zone);
             let protos = protocol_l4_names(pf.protocol);
 
@@ -1351,6 +1363,10 @@ impl<'a> RulesetBuilder<'a> {
         }
     }
 
+    /// One IPv4 port forward on `iface`: only traffic addressed to this router itself
+    /// (`fib daddr type local`) is rewritten. Without it the WAN rule caught traffic routed to
+    /// other addresses and the hairpin rule caught every LAN connection to that port of any
+    /// internet host.
     #[allow(clippy::ptr_arg)]
     fn add_dnat_rule(
         batch: &mut Batch<'static>,
@@ -1369,6 +1385,14 @@ impl<'a> RulesetBuilder<'a> {
                         key: MetaKey::Iifname,
                     })),
                     right: Expression::String(iface.to_string().into()),
+                    op: Operator::EQ,
+                }),
+                Statement::Match(Match {
+                    left: Expression::Named(NamedExpression::Fib(Fib {
+                        result: FibResult::Type,
+                        flags: std::iter::once(FibFlag::Daddr).collect(),
+                    })),
+                    right: Expression::String("local".into()),
                     op: Operator::EQ,
                 }),
                 Statement::Match(Match {

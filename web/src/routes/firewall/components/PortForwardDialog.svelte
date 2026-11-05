@@ -204,6 +204,12 @@
 			toast.error("Please correct the invalid fields highlighted below");
 			return;
 		}
+		// An IPv6 pinhole is routed, not NATed: the host gets the port the WAN asked for.
+		if (ipMode === "v6" && Number(internalPort) !== Number(externalPort)) {
+			errors = { externalPort: "IPv6 pinholes cannot change the port: the host gets this port" };
+			toast.error("IPv6 pinholes cannot change the port");
+			return;
+		}
 
 		errors = {};
 
@@ -222,7 +228,8 @@
 				src_zone: srcZone,
 				internal_ip: cleanV6,
 				external_port: Number(externalPort),
-				internal_port: Number(internalPort),
+				// Routed, not NATed: the pinhole keeps the external port.
+				internal_port: Number(externalPort),
 				protocol,
 				enable_hairpin: false,
 			};
