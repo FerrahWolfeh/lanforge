@@ -18,11 +18,15 @@ use lanforge_types::config::{ConfigDomain, DomainSet};
 use lanforge_types::system::{ServiceAction, ServiceId, ServiceState};
 use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::sync::Arc;
+use std::thread::{self, JoinHandle as ThreadJoinHandle};
 use std::time::Duration;
 use tokio::runtime::Builder;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle as TaskJoinHandle;
+use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
 /// Channels wiring one runner to the rest of the graph.
@@ -39,8 +43,8 @@ pub struct RunnerLinks {
 
 /// Result of spawning a supervised service.
 pub enum SpawnedService {
-    Shared(tokio::task::JoinHandle<()>),
-    Dedicated(std::thread::JoinHandle<()>),
+    Shared(TaskJoinHandle<()>),
+    Dedicated(ThreadJoinHandle<()>),
 }
 
 /// Abstract runner factory decoupled from concrete service types.
@@ -58,7 +62,7 @@ where
 {
     pub spec: ServiceSpec,
     pub factory: F,
-    _marker: std::marker::PhantomData<S>,
+    _marker: PhantomData<S>,
 }
 
 impl<S, F> TypedRunner<S, F>
@@ -71,7 +75,7 @@ where
         Self {
             spec,
             factory,
-            _marker: std::marker::PhantomData,
+            _marker: PhantomData,
         }
     }
 }
@@ -106,7 +110,7 @@ where
                 let thread_name = format!("{display_name} worker");
                 debug!(service = %spec.id, thread = %thread_name, "Spawning dedicated service runtime");
 
-                let handle = std::thread::Builder::new()
+                let handle = thread::Builder::new()
                     .name(thread_name.clone())
                     .spawn(move || {
                         let mut builder = if multi_thread {
@@ -197,8 +201,8 @@ pub struct GraphSupervisor {
     graph: Arc<DependencyGraph>,
     nodes: HashMap<ServiceId, Arc<NodeHandle>>,
     condition_wakes: Arc<Vec<ConditionWake>>,
-    shared_tasks: Vec<tokio::task::JoinHandle<()>>,
-    dedicated_threads: Vec<std::thread::JoinHandle<()>>,
+    shared_tasks: Vec<TaskJoinHandle<()>>,
+    dedicated_threads: Vec<ThreadJoinHandle<()>>,
 }
 
 impl GraphSupervisor {
@@ -351,14 +355,14 @@ impl GraphSupervisor {
     }
 
     /// Performs graceful reverse-topological shutdown of all services.
-    pub async fn shutdown(self, ctx: &LanforgeContext, timeout: Duration) {
+    pub async fn shutdown(self, ctx: &LanforgeContext, timeout_dur: Duration) {
         info!("GraphSupervisor: Initiating graceful reverse-topological shutdown");
 
         // 1. Calling ctx.terminate() BEFORE broadcasting shutdown (Supervisor Rule)
         ctx.terminate();
 
         let num_nodes = self.graph.reverse_topological_order().len().max(1);
-        let per_node_timeout = timeout / u32::try_from(num_nodes).unwrap_or(1);
+        let per_node_timeout = timeout_dur / u32::try_from(num_nodes).unwrap_or(1);
 
         // 2. Shut down nodes in reverse topological order (dependents first)
         for id in self.graph.reverse_topological_order() {
@@ -376,7 +380,7 @@ impl GraphSupervisor {
                     }
                 };
 
-                let _ = tokio::time::timeout(per_node_timeout, wait_fut).await;
+                let _ = timeout(per_node_timeout, wait_fut).await;
             }
         }
 
@@ -390,10 +394,10 @@ impl GraphSupervisor {
             }
         };
 
-        if tokio::time::timeout(timeout, join_fut).await.is_err() {
+        if timeout(timeout_dur, join_fut).await.is_err() {
             warn!(
                 "GraphSupervisor: Shutdown timed out after {}s; forcing exit",
-                timeout.as_secs()
+                timeout_dur.as_secs()
             );
         } else {
             info!("GraphSupervisor: All services terminated cleanly");

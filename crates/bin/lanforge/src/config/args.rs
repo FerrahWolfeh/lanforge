@@ -1,4 +1,8 @@
 use clap::Parser;
+use std::fs::{self, OpenOptions};
+use std::path::{Path, PathBuf};
+use std::process;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Command-line arguments for the Lanforge daemon.
 #[derive(Parser, Debug)]
@@ -74,26 +78,24 @@ pub struct CliArgs {
 impl CliArgs {
     /// Resolves the absolute path to the main TOML configuration file.
     #[must_use]
-    pub fn resolved_config_path(&self) -> std::path::PathBuf {
+    pub fn resolved_config_path(&self) -> PathBuf {
         match (&self.config, &self.config_dir) {
-            (Some(c), _) => std::path::PathBuf::from(c),
-            (None, Some(d)) => std::path::Path::new(d).join("lanforge.toml"),
-            (None, None) => std::path::PathBuf::from("/etc/lanforge/lanforge.toml"),
+            (Some(c), _) => PathBuf::from(c),
+            (None, Some(d)) => Path::new(d).join("lanforge.toml"),
+            (None, None) => PathBuf::from("/etc/lanforge/lanforge.toml"),
         }
     }
 
     /// Resolves the configuration directory (e.g. `/etc/lanforge`).
     #[must_use]
-    pub fn resolved_config_dir(&self) -> std::path::PathBuf {
+    pub fn resolved_config_dir(&self) -> PathBuf {
         match (&self.config_dir, &self.config) {
-            (Some(d), _) => std::path::PathBuf::from(d),
+            (Some(d), _) => PathBuf::from(d),
             (None, Some(c)) => {
-                let p = std::path::Path::new(c);
-                p.parent()
-                    .unwrap_or_else(|| std::path::Path::new("."))
-                    .to_path_buf()
+                let p = Path::new(c);
+                p.parent().unwrap_or_else(|| Path::new(".")).to_path_buf()
             }
-            (None, None) => std::path::PathBuf::from("/etc/lanforge"),
+            (None, None) => PathBuf::from("/etc/lanforge"),
         }
     }
 
@@ -101,14 +103,14 @@ impl CliArgs {
     #[must_use]
     pub fn is_config_dir_writable(&self) -> bool {
         let dir = self.resolved_config_dir();
-        if !dir.exists() && std::fs::create_dir_all(&dir).is_err() {
+        if !dir.exists() && fs::create_dir_all(&dir).is_err() {
             return false;
         }
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .map_or(0, |duration| duration.as_nanos());
-        let probe_file = dir.join(format!(".lanforge_probe_{}_{}", std::process::id(), nonce));
-        let Ok(file) = std::fs::OpenOptions::new()
+        let probe_file = dir.join(format!(".lanforge_probe_{}_{}", process::id(), nonce));
+        let Ok(file) = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&probe_file)
@@ -116,6 +118,6 @@ impl CliArgs {
             return false;
         };
         drop(file);
-        std::fs::remove_file(probe_file).is_ok()
+        fs::remove_file(probe_file).is_ok()
     }
 }

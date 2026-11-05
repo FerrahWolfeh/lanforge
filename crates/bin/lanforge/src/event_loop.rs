@@ -8,10 +8,11 @@ use lanforge_core::context::LanforgeContext;
 use lanforge_types::system::{ServiceId, ServiceState};
 
 use std::collections::HashSet;
+use std::fs;
 use std::hash::BuildHasher;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::broadcast::{Receiver, error::RecvError};
-use tokio::time::{Duration, Instant, interval};
+use tokio::time::{Duration, Instant, interval, sleep_until};
 use tracing::{debug, error, info, warn};
 
 /// How long systemd waits for `READY=1` before it is sent anyway.
@@ -235,7 +236,7 @@ where
             }
             // Fires at the deadline itself (at once if the bootstrap already passed it): the
             // 10 s status tick alone sent READY=1 up to 10 s late.
-            () = tokio::time::sleep_until(ready_deadline), if !tracker.systemd_ready_sent() => {
+            () = sleep_until(ready_deadline), if !tracker.systemd_ready_sent() => {
                 tracker.check_pending();
             }
             event = sys_rx.recv() => {
@@ -248,7 +249,7 @@ where
                             LanforgeEvent::System(SystemEvent::ConfigUpdate { password_hash }) => {
                                 let hash_path = cfg.get_password_hash_path();
                                 info!("ConfigUpdate: Saving new API password hash to {:?}...", hash_path);
-                                if let Err(e) = std::fs::write(&hash_path, password_hash) {
+                                if let Err(e) = fs::write(&hash_path, password_hash) {
                                     error!("Failed to save password hash: {e}");
                                 } else {
                                     info!("Configuration updated and saved to {:?}", hash_path);

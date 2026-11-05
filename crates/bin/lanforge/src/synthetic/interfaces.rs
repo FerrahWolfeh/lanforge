@@ -10,6 +10,7 @@ use lanforge_core::service::{
 use lanforge_types::network::snapshot::{InterfaceSnapshot, LinkInfo};
 use lanforge_types::network::subnet::IpSubnet;
 use lanforge_types::system::{DegradedReason, ServiceId};
+use pnet::datalink;
 use rtnetlink::packet_core::NetlinkPayload;
 use rtnetlink::packet_route::RouteNetlinkMessage;
 use tokio::sync::broadcast::{self, error::RecvError};
@@ -54,7 +55,7 @@ impl InterfacesService {
     #[must_use]
     pub fn scan_interfaces(generation: u64) -> InterfaceSnapshot {
         let mut links = SmallVec::new();
-        for iface in pnet::datalink::interfaces() {
+        for iface in datalink::interfaces() {
             let mut addrs = SmallVec::new();
             for ipnet in &iface.ips {
                 addrs.push(IpSubnet {

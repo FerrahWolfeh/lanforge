@@ -26,7 +26,7 @@ use lanforge_core::service::{
 use lanforge_types::network::snapshot::{InterfaceSnapshot, LinkInfo, WanSnapshot, WanState};
 use lanforge_types::system::{DegradedReason, ServiceId, ServiceState};
 use smallvec::smallvec;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 fn init_test_ctx() -> LanforgeContext {
     let bus = Arc::new(EventBus::new());
@@ -97,7 +97,7 @@ async fn test_wan_flap_isolated() {
             h: &ServiceHandle,
         ) -> Result<(), CoreError> {
             h.ready();
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(10)).await;
             Ok(())
         }
     }
@@ -119,7 +119,7 @@ async fn test_wan_flap_isolated() {
         ) -> Result<(), CoreError> {
             self.starts.fetch_add(1, Ordering::SeqCst);
             h.ready();
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(10)).await;
             Ok(())
         }
     }
@@ -146,7 +146,7 @@ async fn test_wan_flap_isolated() {
                 generation: 1,
             });
             h.ready();
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(10)).await;
             Ok(())
         }
     }
@@ -170,7 +170,7 @@ async fn test_wan_flap_isolated() {
         ) -> Result<(), CoreError> {
             self.starts.fetch_add(1, Ordering::SeqCst);
             h.ready();
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(10)).await;
             Ok(())
         }
     }
@@ -227,7 +227,7 @@ async fn test_wan_flap_isolated() {
             {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -249,7 +249,7 @@ async fn test_wan_flap_isolated() {
         v6_prefixes: smallvec![],
         generation: 2,
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     ctx.set_wan_snapshot(WanSnapshot {
         state: WanState::Up,
@@ -259,7 +259,7 @@ async fn test_wan_flap_isolated() {
         v6_prefixes: smallvec![],
         generation: 3,
     });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // Golden Rule of Isolation assertion:
     // None of the peripheral daemons were restarted or had their sockets closed!
@@ -378,7 +378,7 @@ async fn test_wan_firewall_recompile_on_generation() {
             v6_prefixes: smallvec![],
             generation: generation_idx,
         });
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        sleep(Duration::from_millis(20)).await;
     }
 
     assert_eq!(recompiles.load(Ordering::SeqCst), 3);
@@ -440,7 +440,7 @@ async fn test_boot_without_db() {
             h: &ServiceHandle,
         ) -> Result<(), CoreError> {
             h.degraded(DegradedReason::custom("database unavailable"));
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(10)).await;
             Ok(())
         }
     }
@@ -459,7 +459,7 @@ async fn test_boot_without_db() {
             h: &ServiceHandle,
         ) -> Result<(), CoreError> {
             h.ready();
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(10)).await;
             Ok(())
         }
     }
@@ -478,7 +478,7 @@ async fn test_boot_without_db() {
             h: &ServiceHandle,
         ) -> Result<(), CoreError> {
             h.ready();
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(10)).await;
             Ok(())
         }
     }
@@ -502,7 +502,7 @@ async fn test_boot_without_db() {
             {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await

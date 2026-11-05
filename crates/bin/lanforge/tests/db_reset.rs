@@ -30,10 +30,11 @@ use std::sync::atomic::AtomicUsize;
 use tempfile::tempdir;
 use tokio::io::duplex;
 use tokio::time::{Duration, sleep};
+use tracing_subscriber::fmt;
 
 #[tokio::test]
 async fn test_full_db_reset_chain() {
-    let _ = tracing_subscriber::fmt::try_init();
+    let _ = fmt::try_init();
 
     // 1. Setup temporary environment
     let dir = tempdir().expect("Failed to create temp dir");

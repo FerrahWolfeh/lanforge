@@ -13,9 +13,13 @@
 use anyhow::Result;
 use lanforge::app::Daemon;
 use lanforge::bootstrap::Bootstrapper;
+#[cfg(feature = "ring")]
+use rustls::crypto::ring;
 use sd_notify::{NotifyState, notify};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use std::{env, process};
 use tokio::runtime::Builder;
+use tokio::time::interval;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -25,7 +29,7 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 fn main() -> Result<()> {
     // systemd's start timeout runs from exec: the readiness deadline counts from here too.
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let rt = Builder::new_multi_thread()
         .enable_all()
         .thread_name("Async Worker")
@@ -35,15 +39,15 @@ fn main() -> Result<()> {
 
     if let Err(e) = res {
         eprintln!("❌ Fatal error: {e:#}");
-        std::process::exit(1);
+        process::exit(1);
     }
-    std::process::exit(0);
+    process::exit(0);
 }
 
-async fn async_main(started: std::time::Instant) -> Result<()> {
+async fn async_main(started: Instant) -> Result<()> {
     // 0. Initialize Crypto Provider (Rustls 0.23+ requirement)
     #[cfg(feature = "ring")]
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = ring::default_provider().install_default();
     #[cfg(all(feature = "aws-lc", not(feature = "ring")))]
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
@@ -64,13 +68,13 @@ async fn async_main(started: std::time::Instant) -> Result<()> {
     };
 
     // 1.2 Setup Systemd Watchdog ping
-    if let Ok(usec_str) = std::env::var("WATCHDOG_USEC")
+    if let Ok(usec_str) = env::var("WATCHDOG_USEC")
         && let Ok(usec) = usec_str.parse::<u64>()
     {
         let interval_ms = (usec / 1000) / 2;
         if interval_ms > 0 {
             tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_millis(interval_ms));
+                let mut interval = interval(Duration::from_millis(interval_ms));
                 loop {
                     interval.tick().await;
                     let _ = notify(&[NotifyState::Watchdog]);

@@ -1,9 +1,13 @@
 use anyhow::Result;
 use lanforge_core::bus::{LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;
+#[cfg(feature = "discovery")]
+use pnet::datalink;
 use sd_notify::{NotifyState, notify};
+use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::time::Instant;
 use tracing::{debug, info};
 
 use crate::bootstrap::BootstrapResult;
@@ -42,18 +46,14 @@ pub struct Daemon {
     registry: ServiceRegistry,
     ctx: LanforgeContext,
     /// When the process started (systemd's start timeout runs from exec).
-    started: tokio::time::Instant,
+    started: Instant,
 }
 
 impl Daemon {
     /// Creates a new Daemon instance from a bootstrap result and context; `started` is when the
     /// process started, the origin of the readiness deadline.
     #[must_use]
-    pub fn new(
-        bootstrap: BootstrapResult,
-        ctx: LanforgeContext,
-        started: tokio::time::Instant,
-    ) -> Self {
+    pub fn new(bootstrap: BootstrapResult, ctx: LanforgeContext, started: Instant) -> Self {
         Self {
             bootstrap,
             registry: ServiceRegistry::new(),
@@ -70,7 +70,7 @@ impl Daemon {
         self.validate_features();
         self.spawn_services();
         let expected = self.registry.registered_ids();
-        let registry = std::mem::take(&mut self.registry);
+        let registry = mem::take(&mut self.registry);
         let supervisor = registry.start(&self.ctx)?;
 
         run_event_loop(
@@ -145,7 +145,7 @@ impl Daemon {
         let monitored_ifindexes = if cfg.monitor_toml.ifaces.is_empty() {
             vec![target_ifindex]
         } else {
-            let host_ifaces = pnet::datalink::interfaces();
+            let host_ifaces = datalink::interfaces();
             let mut indexes: Vec<u32> = cfg
                 .monitor_toml
                 .ifaces

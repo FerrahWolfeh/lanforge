@@ -13,14 +13,26 @@ use lanforge_http::config::HttpConfig;
 use lanforge_pppoe::config::PppoeConfig;
 #[cfg(feature = "tftp")]
 use lanforge_tftp::config::TftpConfig;
+#[cfg(feature = "tftp")]
+use lanforge_types::network::dhcp::TftpOptions;
 #[cfg(feature = "ra")]
 use lanforge_types::network::ra::RaServerConfig;
 #[cfg(feature = "uds")]
 use lanforge_uds::config::ApiConfig;
+#[cfg(test)]
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use tracing::{info, warn};
+
+#[cfg(feature = "dhcp")]
+use lanforge_api::config_file::DhcpSettings;
+#[cfg(feature = "dns")]
+use lanforge_api::config_file::{AdblockSettings, DnsSettings};
+use lanforge_api::config_file::{ConfigFile, Section};
+use lanforge_types::device::StaticHost;
 
 /// Root structure of the TOML file.
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
@@ -37,11 +49,11 @@ pub struct TomlConfig {
     /// `[dns]` as the settings the daemon runs (its only source).
     #[cfg(feature = "dns")]
     #[serde(skip)]
-    pub dns_settings: lanforge_api::config_file::DnsSettings,
+    pub dns_settings: DnsSettings,
     /// `[adblock]` as the settings the daemon runs (its only source).
     #[cfg(feature = "dns")]
     #[serde(skip)]
-    pub adblock: lanforge_api::config_file::AdblockSettings,
+    pub adblock: AdblockSettings,
     /// The text of the global rules file `[adblock] rules` names.
     #[cfg(feature = "dns")]
     #[serde(skip)]
@@ -68,7 +80,7 @@ pub struct TomlConfig {
     /// `[hosts]`, when the file was read and the section not set aside. `None` leaves the
     /// device table's static hosts as they are: an unread `[hosts]` is not an empty one.
     #[serde(skip)]
-    pub static_hosts: Option<Vec<lanforge_types::device::StaticHost>>,
+    pub static_hosts: Option<Vec<StaticHost>>,
     /// `[dhcp]` was in the file but set aside (unreadable): what runs are defaults, which must
     /// never be written over it.
     #[serde(skip)]
@@ -83,7 +95,7 @@ pub struct DhcpCfg {
     pub v6: Dhcpv6Config,
     /// `[dhcp]` + `[tftp]` as the options and pools the daemon runs (their only source).
     #[serde(skip)]
-    pub settings: lanforge_api::config_file::DhcpSettings,
+    pub settings: DhcpSettings,
 }
 
 /// System-wide global configuration.
@@ -129,8 +141,8 @@ impl Default for SystemCfg {
 
 /// Load and parse the TOML config file, or return defaults if missing.
 #[allow(clippy::too_many_lines)]
-impl From<&lanforge_api::config_file::ConfigFile> for TomlConfig {
-    fn from(fc: &lanforge_api::config_file::ConfigFile) -> Self {
+impl From<&ConfigFile> for TomlConfig {
+    fn from(fc: &ConfigFile) -> Self {
         #[allow(unused_mut, reason = "only the compiled-in sections below fill it")]
         let mut cfg = Self {
             system: SystemCfg {
@@ -265,12 +277,12 @@ impl From<&lanforge_api::config_file::ConfigFile> for TomlConfig {
 
 /// Sets the TFTP service's start-up config from `[tftp]` (the same values the DHCP options carry).
 #[cfg(feature = "tftp")]
-pub fn apply_tftp_options(cfg: &mut TftpConfig, tftp: &lanforge_types::network::dhcp::TftpOptions) {
+pub fn apply_tftp_options(cfg: &mut TftpConfig, tftp: &TftpOptions) {
     cfg.enabled = tftp.enabled;
     if let Ok(l) = tftp.listen_addr.parse() {
         cfg.listen = l;
     }
-    cfg.root_dir = std::path::PathBuf::from(&tftp.root_dir);
+    cfg.root_dir = PathBuf::from(&tftp.root_dir);
     cfg.block_size = tftp.block_size;
     cfg.timeout = tftp.timeout;
     cfg.max_retries = tftp.max_retries;
@@ -288,7 +300,7 @@ pub fn load_toml(path: &str) -> TomlConfig {
         return TomlConfig::default();
     }
 
-    let content = match std::fs::read_to_string(path) {
+    let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
             warn!("[config] Failed to read '{path}': {e} — using defaults");
@@ -296,15 +308,13 @@ pub fn load_toml(path: &str) -> TomlConfig {
         }
     };
 
-    match lanforge_api::config_file::ConfigFile::parse_lenient(&content) {
+    match ConfigFile::parse_lenient(&content) {
         Ok((file_cfg, set_aside)) => {
             info!("Config: Loaded from '{path}' using named-section schema");
             // Logged once by the bootstrap, after the start-up configs are derived.
             let mut cfg = TomlConfig::from(&file_cfg);
             cfg.config_issues = set_aside_messages(&set_aside);
-            cfg.dhcp_set_aside = set_aside
-                .iter()
-                .any(|(sec, _)| *sec == lanforge_api::config_file::Section::Dhcp);
+            cfg.dhcp_set_aside = set_aside.iter().any(|(sec, _)| *sec == Section::Dhcp);
             #[cfg(feature = "nft")]
             cfg.config_issues.extend(file_cfg.firewall.to_config().1);
             #[cfg(feature = "dhcp")]
@@ -319,10 +329,7 @@ pub fn load_toml(path: &str) -> TomlConfig {
                 cfg.adblock_rules = rules.unwrap_or_default();
                 cfg.config_issues.extend(issues);
             }
-            if !set_aside
-                .iter()
-                .any(|(sec, _)| *sec == lanforge_api::config_file::Section::Hosts)
-            {
+            if !set_aside.iter().any(|(sec, _)| *sec == Section::Hosts) {
                 let (hosts, issues) = file_cfg.static_hosts();
                 cfg.config_issues.extend(issues);
                 cfg.static_hosts = Some(hosts);
@@ -385,7 +392,7 @@ source = "broken" # Invalid variant
             env!("CARGO_MANIFEST_DIR"),
             "/../../../contrib/lanforge.toml"
         );
-        let content = std::fs::read_to_string(path)
+        let content = fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("Failed to read contrib/lanforge.toml at {path}: {e}"));
         let cfg = load_toml(path);
 
@@ -395,7 +402,7 @@ source = "broken" # Invalid variant
         assert_eq!(cfg.http.listen.port(), 8088);
         assert!(!cfg.database.config_path.contains("sqlite"));
 
-        let file_cfg = lanforge_api::config_file::ConfigFile::parse(&content)
+        let file_cfg = ConfigFile::parse(&content)
             .unwrap_or_else(|e| panic!("ConfigFile::parse failed on contrib/lanforge.toml: {e}"));
         assert_eq!(file_cfg.system.iface, "end0");
         assert!(file_cfg.system.ula_prefix.is_none());
@@ -440,7 +447,7 @@ source = "broken" # Invalid variant
     fn a_broken_hosts_section_is_not_an_empty_one() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("lanforge.toml");
-        std::fs::write(&path, "[hosts.archie]\nmac = 7\n").unwrap();
+        fs::write(&path, "[hosts.archie]\nmac = 7\n").unwrap();
         let cfg = load_toml(path.to_str().unwrap());
         assert_eq!(cfg.static_hosts, None);
         assert!(
@@ -449,7 +456,7 @@ source = "broken" # Invalid variant
             cfg.config_issues
         );
 
-        std::fs::write(&path, "[hosts.archie]\nmac = \"bc:fc:e7:8a:a9:73\"\n").unwrap();
+        fs::write(&path, "[hosts.archie]\nmac = \"bc:fc:e7:8a:a9:73\"\n").unwrap();
         assert_eq!(
             load_toml(path.to_str().unwrap())
                 .static_hosts
@@ -469,7 +476,7 @@ source = "broken" # Invalid variant
             env!("CARGO_MANIFEST_DIR"),
             "/../../../docs/config/lanforge.example.toml"
         );
-        let content = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        let content = fs::read_to_string(path).unwrap_or_else(|e| {
             panic!("Failed to read docs/config/lanforge.example.toml at {path}: {e}")
         });
         let cfg: TomlConfig = toml::from_str(&content)
@@ -481,7 +488,7 @@ source = "broken" # Invalid variant
         assert!(!cfg.database.config_path.contains("sqlite"));
     }
 
-    fn load_section<T: serde::de::DeserializeOwned + Default>(v: &toml::Value, key: &str) -> T {
+    fn load_section<T: DeserializeOwned + Default>(v: &toml::Value, key: &str) -> T {
         v.get(key).map_or_else(T::default, |sec_val| {
             T::deserialize(sec_val.clone()).unwrap_or_default()
         })

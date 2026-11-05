@@ -11,7 +11,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use dhcproto::v4::{DhcpOption, Message, MessageType};
+use dhcproto::v4::{DhcpOption, Message, MessageType, OptionCode};
 use dhcproto::{Encodable, Encoder};
 use lanforge_core::bus::{
     AdminChange, DeviceEvent, EventBus, FirewallEvent, LanforgeEvent, NetworkChange, NetworkEvent,
@@ -29,6 +29,7 @@ use lanforge_types::events::network::PrefixChangeDetails;
 use lanforge_types::events::pppoe::{PppoeEvent, PppoeSessionUp};
 use lanforge_types::events::traffic::TrafficEvent;
 use lanforge_types::identifiers::MacAddr;
+use lanforge_types::network::Ipv6Prefix;
 use lanforge_types::network::dhcp::Dhcpv4Pool;
 use lanforge_types::network::firewall::{
     DynamicPortRequest, FirewallConfig, FirewallMode, L4Protocol,
@@ -37,9 +38,9 @@ use lanforge_types::network::ra::{
     PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RouterPriority,
 };
 use lanforge_types::network::traffic::{NicTuningConfig, SqmConfig, SqmDiffserv, TrafficConfig};
-use lanforge_types::system::ServiceId;
+use lanforge_types::system::{ServiceId, ServiceState};
 use lanforge_types::update::{DeviceUpdate, InterfaceState, LeaseTarget};
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 fn create_test_context() -> (LanforgeContext, Arc<EventBus>) {
     let bus = Arc::new(EventBus::new());
@@ -114,7 +115,7 @@ async fn test_firewall_eventbus_reactivity() {
     });
 
     // Allow service to initialize
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     while fw_sub.try_recv().is_ok() {}
 
     // 1. PortOpenRequested: Register dynamic port requirement (e.g. WebUI port 8080)
@@ -211,7 +212,7 @@ async fn test_traffic_eventbus_reactivity() {
     });
 
     // Allow service to initialize and emit startup events
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // 1. PppoeEvent::SessionUp -> Re-binds SQM to ppp0
     let session_up = PppoeSessionUp {
@@ -374,7 +375,7 @@ async fn test_ra_eventbus_reactivity() {
         Box::new(PrefixChangeDetails {
             // The RA target interface (the context's LAN ifindex).
             ifindex: 2,
-            gua: Some(lanforge_types::network::Ipv6Prefix::from_addr(new_gua)),
+            gua: Some(Ipv6Prefix::from_addr(new_gua)),
             ula: None,
             preferred: 14400,
             valid: 86400,
@@ -442,7 +443,7 @@ async fn test_dhcp_eventbus_reactivity() {
     });
 
     // Allow service to initialize
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     let client_mac = MacAddr([0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE]);
     let client_src = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 68);
@@ -496,9 +497,7 @@ async fn test_dhcp_eventbus_reactivity() {
         .expect("Channel closed");
     let forcerenew_msg = forcerenew_reply.message().expect("Decode FORCERENEW");
     assert_eq!(
-        forcerenew_msg
-            .opts()
-            .get(dhcproto::v4::OptionCode::MessageType),
+        forcerenew_msg.opts().get(OptionCode::MessageType),
         Some(&DhcpOption::MessageType(MessageType::ForceRenew))
     );
 
@@ -511,7 +510,7 @@ async fn test_dhcp_eventbus_reactivity() {
     ));
 
     // Allow event processing
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
     let dev_after_release = ctx
         .get_device(&client_mac)
         .expect("Device still in registry");
@@ -526,7 +525,7 @@ async fn test_dhcp_eventbus_reactivity() {
             ip: Some(static_ip),
         }),
     }));
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // 4. DeviceEvent::NetworkUpdate (NetworkChange::IpDeleted) -> Releases IP in pool
     let _ = bus.publish(LanforgeEvent::Device(DeviceEvent::NetworkUpdate {
@@ -536,7 +535,7 @@ async fn test_dhcp_eventbus_reactivity() {
             ip: IpAddr::V4(static_ip),
         }),
     }));
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // Clean shutdown
     let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
@@ -629,7 +628,7 @@ async fn test_cross_domain_wan_transition_cascade() {
     });
 
     // Allow services to initialize
-    tokio::time::sleep(Duration::from_millis(60)).await;
+    sleep(Duration::from_millis(60)).await;
 
     // Trigger PPPoE WAN Session Up
     let session_up = PppoeSessionUp {
@@ -679,13 +678,10 @@ async fn test_cross_domain_wan_transition_cascade() {
     assert!(fw_bound);
 
     // 3. Verify Golden Rule of Isolation: RA and DHCP remain Online and unaffected
-    assert_eq!(
-        ctx.get_service_state(ServiceId::Ra),
-        lanforge_types::system::ServiceState::Online
-    );
+    assert_eq!(ctx.get_service_state(ServiceId::Ra), ServiceState::Online);
     assert_eq!(
         ctx.get_service_state(ServiceId::Dhcp4),
-        lanforge_types::system::ServiceState::Online
+        ServiceState::Online
     );
 
     // 4. Clean Shutdown across all 4 services

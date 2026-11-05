@@ -14,10 +14,10 @@ use lanforge_core::service::{
 use lanforge_types::system::{ServiceAction, ServiceId, ServiceState, StateDetail};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::future;
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::{mpsc, watch};
-use tokio::time::sleep_until;
+use tokio::time::{Instant, sleep, sleep_until};
 use tracing::{debug, error, info, warn};
 
 /// Outcome of a wait that can be interrupted by shutdown or an admin request.
@@ -170,7 +170,7 @@ where
             // Last state the service reported; restored when a dependency loss clears.
             let mut reported: (ServiceState, Option<StateDetail>) = (ServiceState::Online, None);
             let mut stop_cause: Option<StopCause> = None;
-            let mut stop_deadline: Option<tokio::time::Instant> = None;
+            let mut stop_deadline: Option<Instant> = None;
             let serve_res = loop {
                 tokio::select! {
                     biased;
@@ -184,7 +184,7 @@ where
                     }
 
                     // A service that ignores Stop is cancelled after its shutdown timeout.
-                    () = sleep_until(stop_deadline.unwrap_or_else(tokio::time::Instant::now)), if stop_deadline.is_some() => {
+                    () = sleep_until(stop_deadline.unwrap_or_else(Instant::now)), if stop_deadline.is_some() => {
                         warn!(service = %self.spec.id, "Service did not stop within its shutdown timeout; cancelling");
                         break None;
                     }
@@ -195,7 +195,7 @@ where
                                 info!(service = %self.spec.id, "Admin stop requested");
                                 self.admin_stopped = true;
                                 stop_cause = Some(StopCause::Admin);
-                                stop_deadline.get_or_insert_with(|| tokio::time::Instant::now() + self.spec.shutdown_timeout);
+                                stop_deadline.get_or_insert_with(|| Instant::now() + self.spec.shutdown_timeout);
                                 let _ = cmd_tx.send(ServiceCommand::Stop).await;
                             }
                             ServiceAction::Restart => {
@@ -215,7 +215,7 @@ where
                         if let Activation::Dormant(reason) = self.spec.condition.evaluate(&self.ctx) {
                             info!(service = %self.spec.id, ?reason, "Condition became dormant; stopping service");
                             stop_cause = Some(StopCause::Dormant);
-                            stop_deadline.get_or_insert_with(|| tokio::time::Instant::now() + self.spec.shutdown_timeout);
+                            stop_deadline.get_or_insert_with(|| Instant::now() + self.spec.shutdown_timeout);
                             let _ = cmd_tx.send(ServiceCommand::Stop).await;
                         }
                     }
@@ -466,11 +466,11 @@ where
                 .map(|mut rx| Box::pin(async move { rx.changed().await }))
                 .collect();
             if waiters.is_empty() {
-                return std::future::pending().await;
+                return future::pending().await;
             }
             // A closed sender means the dependency's node is gone; nothing more to observe.
             if select_all(waiters).await.0.is_err() {
-                return std::future::pending().await;
+                return future::pending().await;
             }
         }
     }
@@ -545,8 +545,8 @@ where
 
         let backoff = async {
             match delay {
-                Some(delay) => tokio::time::sleep(delay).await,
-                None => std::future::pending().await,
+                Some(delay) => sleep(delay).await,
+                None => future::pending().await,
             }
         };
         tokio::pin!(backoff);

@@ -9,11 +9,13 @@
 )]
 //! Phase 3 Acceptance Tests — Graph Supervisor, DAG Validation, and Lifecycle Policies.
 
+use std::future::pending;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lanforge::registry::ServiceRegistry;
+use lanforge::supervisor::GraphSupervisor;
 use lanforge::supervisor::graph::{DependencyGraph, GraphError};
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::state::State;
@@ -25,9 +27,10 @@ use lanforge_core::service::{
 };
 use lanforge_types::config::ConfigDomain;
 use lanforge_types::network::firewall::FirewallConfig;
+use lanforge_types::network::snapshot::{InterfaceSnapshot, LinkInfo};
 use lanforge_types::system::{ServiceAction, ServiceId, ServiceState, StateDetail};
 use tokio::sync::Notify;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -201,7 +204,7 @@ async fn test_requires_blocks_until_online() {
         ) -> Result<(), CoreError> {
             self.gate.notified().await;
             h.ready();
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            sleep(Duration::from_millis(50)).await;
             Ok(())
         }
     }
@@ -222,7 +225,7 @@ async fn test_requires_blocks_until_online() {
         ) -> Result<(), CoreError> {
             self.started.store(true, Ordering::SeqCst);
             h.ready();
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            sleep(Duration::from_millis(50)).await;
             Ok(())
         }
     }
@@ -240,7 +243,7 @@ async fn test_requires_blocks_until_online() {
     let supervisor = registry.start(&ctx).expect("start supervisor");
 
     // SvcB must NOT have started because SvcA has not signaled ready yet
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    sleep(Duration::from_millis(30)).await;
     assert!(
         !b_started.load(Ordering::SeqCst),
         "SvcB must be blocked waiting for SvcA to be Online"
@@ -252,7 +255,7 @@ async fn test_requires_blocks_until_online() {
     // Now SvcB starts and runs
     timeout(Duration::from_millis(500), async {
         while !b_started.load(Ordering::SeqCst) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -282,7 +285,7 @@ async fn test_wants_does_not_block() {
             _h: &ServiceHandle,
         ) -> Result<(), CoreError> {
             // SvcA stays starting / never calls ready()
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            sleep(Duration::from_millis(200)).await;
             Ok(())
         }
     }
@@ -319,7 +322,7 @@ async fn test_wants_does_not_block() {
     // SvcB starts immediately regardless of SvcA
     timeout(Duration::from_millis(200), async {
         while !b_started.load(Ordering::SeqCst) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -346,12 +349,12 @@ impl AsyncService for FlappingDb {
     async fn serve(&mut self, _ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         if self.runs.fetch_add(1, Ordering::SeqCst) == 0 {
             h.ready();
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            sleep(Duration::from_millis(50)).await;
             return Err(CoreError::Generic("flapped".into()));
         }
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        sleep(Duration::from_millis(150)).await;
         h.ready();
-        h.run_until_stopped(std::future::pending::<Result<(), CoreError>>())
+        h.run_until_stopped(pending::<Result<(), CoreError>>())
             .await
             .map(|_| ())
     }
@@ -417,7 +420,7 @@ async fn assert_loss_policy_never_restarts(
                 }
             )
         }) {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            sleep(Duration::from_millis(5)).await;
         }
     })
     .await
@@ -442,7 +445,7 @@ async fn assert_loss_policy_never_restarts(
 
     timeout(Duration::from_secs(1), async {
         while !has(|c| matches!(c, ServiceCommand::DependencyRestored { id: ServiceId::Db })) {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            sleep(Duration::from_millis(5)).await;
         }
     })
     .await
@@ -508,7 +511,7 @@ async fn shutdown_completes_while_paused() {
             h: &ServiceHandle,
         ) -> Result<(), CoreError> {
             h.ready();
-            tokio::time::sleep(Duration::from_millis(30)).await;
+            sleep(Duration::from_millis(30)).await;
             Err(CoreError::Generic("gone".into()))
         }
     }
@@ -528,7 +531,7 @@ async fn shutdown_completes_while_paused() {
 
     timeout(Duration::from_secs(1), async {
         while ctx.get_service_detail(ServiceId::Http) != Some(StateDetail::Paused(ServiceId::Db)) {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            sleep(Duration::from_millis(5)).await;
         }
     })
     .await
@@ -606,7 +609,7 @@ async fn test_dormant_requires_propagates() {
                     break;
                 }
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -646,7 +649,7 @@ async fn test_shutdown_reverse_order() {
             h: &ServiceHandle,
         ) -> Result<(), CoreError> {
             h.ready();
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(10)).await;
             Ok(())
         }
     }
@@ -670,7 +673,7 @@ async fn test_shutdown_reverse_order() {
             h: &ServiceHandle,
         ) -> Result<(), CoreError> {
             h.ready();
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(10)).await;
             Ok(())
         }
     }
@@ -692,7 +695,7 @@ async fn test_shutdown_reverse_order() {
         while ctx.get_service_state(ServiceId::Db) != ServiceState::Online
             || ctx.get_service_state(ServiceId::Http) != ServiceState::Online
         {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -753,7 +756,7 @@ async fn test_after_waits_for_settled() {
         ) -> Result<(), CoreError> {
             self.started.store(true, Ordering::SeqCst);
             h.ready();
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            sleep(Duration::from_millis(50)).await;
             Ok(())
         }
     }
@@ -771,7 +774,7 @@ async fn test_after_waits_for_settled() {
     let supervisor = registry.start(&ctx).expect("start supervisor");
 
     // SvcB does not start while SvcA is in Starting
-    tokio::time::sleep(Duration::from_millis(20)).await;
+    sleep(Duration::from_millis(20)).await;
     assert!(
         !b_started.load(Ordering::SeqCst),
         "SvcB must wait until SvcA settles"
@@ -783,7 +786,7 @@ async fn test_after_waits_for_settled() {
     // SvcB proceeds once SvcA settles
     timeout(Duration::from_millis(500), async {
         while !b_started.load(Ordering::SeqCst) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -825,7 +828,7 @@ async fn test_condition_toggle_isolated() {
             h: &ServiceHandle,
         ) -> Result<(), CoreError> {
             h.ready();
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            sleep(Duration::from_secs(10)).await;
             Ok(())
         }
     }
@@ -838,7 +841,7 @@ async fn test_condition_toggle_isolated() {
     // Wait until Online
     timeout(Duration::from_millis(300), async {
         while ctx.get_service_state(ServiceId::Tftp) != ServiceState::Online {
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await
@@ -877,7 +880,7 @@ impl AsyncService for Counted {
     async fn serve(&mut self, _ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         self.runs.fetch_add(1, Ordering::SeqCst);
         h.ready();
-        h.run_until_stopped(std::future::pending::<Result<(), CoreError>>())
+        h.run_until_stopped(pending::<Result<(), CoreError>>())
             .await
             .map(|_| ())
     }
@@ -906,7 +909,7 @@ async fn wait_status(
 ) {
     timeout(Duration::from_secs(1), async {
         while ctx.get_service_state(id) != state || ctx.get_service_detail(id) != detail {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            sleep(Duration::from_millis(5)).await;
         }
     })
     .await
@@ -950,7 +953,7 @@ async fn admin_stop_start_restart_via_service_control() {
 
     // Stays stopped across config changes until an explicit start.
     supervisor.reevaluate_conditions();
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    sleep(Duration::from_millis(30)).await;
     assert_eq!(
         ctx.get_service_detail(ServiceId::Dns),
         Some(StateDetail::AdminStopped)
@@ -963,7 +966,7 @@ async fn admin_stop_start_restart_via_service_control() {
     control(&ctx, ServiceId::Dns, ServiceAction::Restart);
     timeout(Duration::from_secs(1), async {
         while runs.load(Ordering::SeqCst) < 3 {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            sleep(Duration::from_millis(5)).await;
         }
     })
     .await
@@ -1088,9 +1091,9 @@ async fn waiting_node_reports_its_blocker() {
             _ctx: &LanforgeContext,
             h: &ServiceHandle,
         ) -> Result<(), CoreError> {
-            tokio::time::sleep(Duration::from_millis(150)).await;
+            sleep(Duration::from_millis(150)).await;
             h.ready();
-            h.run_until_stopped(std::future::pending::<Result<(), CoreError>>())
+            h.run_until_stopped(pending::<Result<(), CoreError>>())
                 .await
                 .map(|_| ())
         }
@@ -1134,7 +1137,7 @@ async fn unresponsive_service_is_cancelled_on_stop() {
             h: &ServiceHandle,
         ) -> Result<(), CoreError> {
             h.ready();
-            std::future::pending().await
+            pending().await
         }
     }
     let ctx = init_test_ctx();
@@ -1199,7 +1202,7 @@ async fn unrelated_config_changes_do_not_cut_a_backoff_short() {
 
     timeout(Duration::from_millis(500), async {
         while runs.load(Ordering::SeqCst) < 1 {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            sleep(Duration::from_millis(5)).await;
         }
     })
     .await
@@ -1212,7 +1215,7 @@ async fn unrelated_config_changes_do_not_cut_a_backoff_short() {
             .publish(LanforgeEvent::System(SystemEvent::ConfigChanged {
                 sections: ConfigDomain::DnsAdblock.into(),
             }));
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        sleep(Duration::from_millis(20)).await;
     }
     assert_eq!(
         runs.load(Ordering::SeqCst),
@@ -1228,7 +1231,7 @@ async fn unrelated_config_changes_do_not_cut_a_backoff_short() {
         }));
     timeout(Duration::from_millis(300), async {
         while runs.load(Ordering::SeqCst) < 2 {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            sleep(Duration::from_millis(5)).await;
         }
     })
     .await
@@ -1253,20 +1256,16 @@ impl AsyncService for Flapping {
         h.degraded(DegradedReason::custom("upstream down"));
         self.step.notified().await;
         h.ready();
-        h.run_until_stopped(std::future::pending::<Result<(), CoreError>>())
+        h.run_until_stopped(pending::<Result<(), CoreError>>())
             .await
             .map(|_| ())
     }
 }
 
-async fn wait_node_state(
-    supervisor: &lanforge::supervisor::GraphSupervisor,
-    id: ServiceId,
-    state: ServiceState,
-) {
+async fn wait_node_state(supervisor: &GraphSupervisor, id: ServiceId, state: ServiceState) {
     timeout(Duration::from_secs(1), async {
         while supervisor.status_of(id).map(|s| s.state) != Some(state) {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            sleep(Duration::from_millis(5)).await;
         }
     })
     .await
@@ -1312,12 +1311,12 @@ async fn self_reported_state_reaches_the_node_every_time() {
 // 6. Link conditions (wait-for-iface)
 // ---------------------------------------------------------------------------
 
-fn links(generation: u64, names: &[&str]) -> lanforge_types::network::snapshot::InterfaceSnapshot {
-    lanforge_types::network::snapshot::InterfaceSnapshot {
+fn links(generation: u64, names: &[&str]) -> InterfaceSnapshot {
+    InterfaceSnapshot {
         links: names
             .iter()
             .enumerate()
-            .map(|(i, name)| lanforge_types::network::snapshot::LinkInfo {
+            .map(|(i, name)| LinkInfo {
                 ifindex: u32::try_from(i).unwrap() + 1,
                 name: (*name).to_string(),
                 carrier: true,
@@ -1410,7 +1409,7 @@ async fn unrelated_link_changes_do_not_cut_a_backoff() {
 
     timeout(Duration::from_secs(1), async {
         while attempts.load(Ordering::SeqCst) == 0 {
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            sleep(Duration::from_millis(5)).await;
         }
     })
     .await
@@ -1422,7 +1421,7 @@ async fn unrelated_link_changes_do_not_cut_a_backoff() {
             &["lo", "wan0"]
         };
         ctx.set_interfaces_snapshot(links(generation, names));
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        sleep(Duration::from_millis(20)).await;
     }
     assert_eq!(
         attempts.load(Ordering::SeqCst),

@@ -23,7 +23,7 @@ use lanforge_core::service::{
     ServiceSpec,
 };
 use lanforge_types::system::{DegradedReason, ServiceId, ServiceState, StateDetail};
-use tokio::time::timeout;
+use tokio::time::{Instant, sleep, timeout};
 
 // ---------------------------------------------------------------------------
 // 1. Acceptance Test: ready_is_truthful
@@ -41,7 +41,7 @@ async fn test_acceptance_ready_is_truthful() {
     }
 
     let mut sys_listener = bus.subscribe_system();
-    let mut tracker = ReadinessTracker::new(&ctx, expected_services, tokio::time::Instant::now());
+    let mut tracker = ReadinessTracker::new(&ctx, expected_services, Instant::now());
 
     // Simulate DNS & DHCP becoming Online
     let h_dns = ServiceHandle::new(ServiceId::Dns, ctx.clone());
@@ -148,7 +148,7 @@ async fn test_acceptance_clean_exit_resettable() {
     let supervisor = registry.start(&ctx).expect("start supervisor");
 
     // Give time for clean exit
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    sleep(Duration::from_millis(50)).await;
 
     // Must execute once and settle in Inactive
     assert_eq!(attempts.load(Ordering::Relaxed), 1);
@@ -216,7 +216,7 @@ async fn test_acceptance_retry_exhausted_keeps_daemon() {
                     break;
                 }
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            sleep(Duration::from_millis(10)).await;
         }
     })
     .await
