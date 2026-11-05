@@ -205,11 +205,12 @@ async fn test_firewall_reacts_to_ruleset_changed_in_place() {
     cfg.port_forwards.push(PortForwardRule {
         comment: Some("Plex Media Server".into()),
         src_zone: "external".into(),
-        internal_ip: "192.168.1.55".parse::<IpAddr>().unwrap(),
+        internal_ip: "192.168.1.55".parse::<IpAddr>().unwrap().into(),
         external_port: 32400,
         internal_port: 32400,
         protocol: L4Protocol::Tcp,
         enable_hairpin: true,
+        family: None,
     });
     ctx.update_firewall_config(cfg);
 
@@ -541,6 +542,7 @@ async fn test_firewall_stop_locks_down_wan_instead_of_removing_table() {
             internal_port: 443,
             protocol: L4Protocol::Tcp,
             enable_hairpin: true,
+            family: None,
         },
         PortForwardRule {
             comment: Some("v6 pinhole".into()),
@@ -550,6 +552,7 @@ async fn test_firewall_stop_locks_down_wan_instead_of_removing_table() {
             internal_port: 2200,
             protocol: L4Protocol::Tcp,
             enable_hairpin: false,
+            family: None,
         },
     ];
     let ext = cfg.zones.iter_mut().find(|z| z.name == "external").unwrap();
@@ -759,6 +762,7 @@ async fn test_firewall_resyncs_after_a_lagged_bus() {
         internal_port: 7777,
         protocol: L4Protocol::Tcp,
         enable_hairpin: false,
+        family: None,
     });
     ctx.update_firewall_config(cfg);
     for _ in 0..1000 {
@@ -876,6 +880,7 @@ async fn a_firewall_change_under_sqm_keeps_the_flowtable_off() {
         internal_port: 7777,
         protocol: L4Protocol::Tcp,
         enable_hairpin: false,
+        family: None,
     });
     ctx.update_firewall_config(cfg);
     wait_for_ruleset_applied(&mut fw_sub).await;
@@ -931,4 +936,105 @@ async fn test_firewall_records_what_it_left_in_the_kernel() {
     ctx.update_firewall_config(cfg);
     service.cleanup(&ctx).await.expect("Cleanup must succeed");
     assert_eq!(ctx.firewall_left(), Some(FirewallStopAction::Remove));
+}
+
+/// Sets the LAN interface (index 2) addresses the way netlink does: its GUA is the delegated
+/// prefix `dev:` pinholes are built on.
+fn set_lan_gua(ctx: &LanforgeContext, gua: &str) {
+    let _ = ctx.apply(lanforge_types::update::DeviceUpdate::InterfaceIpsChanged {
+        ifindex: 2,
+        state: Box::new(lanforge_types::update::InterfaceState {
+            link_local: Some("fe80::1".parse().unwrap()),
+            gua: Some(gua.parse().unwrap()),
+            ula: Some("fd97:f00d:cafe:3731::1".parse().unwrap()),
+            gua_preferred: 3600,
+            gua_valid: 7200,
+            ..Default::default()
+        }),
+    });
+}
+
+/// A port forward to `dev:nas` (a static host: IPv4 reservation, fixed suffix `::501`) DNATs
+/// IPv4 to the reservation and opens the IPv6 pinhole on the LAN's current GUA plus the suffix,
+/// never the ULA. When the ISP renumbers the delegated prefix, the pinhole follows by itself.
+#[tokio::test]
+async fn test_dev_port_forward_follows_the_device_and_the_lan_prefix() {
+    use lanforge_types::device::{Ipv6AddrOrSuffix, StaticHost};
+    use lanforge_types::identifiers::MacAddr;
+
+    let bus = Arc::new(EventBus::new());
+    let ctx = LanforgeContext::new(bus.clone(), State::new(), Some(2));
+    ctx.set_target_interface_name("lan0".to_string());
+    let issues = ctx.apply_static_hosts(&[StaticHost {
+        mac: MacAddr([0x02, 0, 0, 0, 0x05, 0x01]),
+        hostname: "nas".to_string(),
+        v4: Some("192.168.0.128".parse().unwrap()),
+        v6: Some(Ipv6AddrOrSuffix::parse("::501").unwrap()),
+        boot_file: None,
+    }]);
+    assert!(issues.is_empty(), "{issues:?}");
+    set_lan_gua(&ctx, "2804:bdc:5086:e600::1");
+    ctx.set_wan_snapshot(WanSnapshot {
+        state: WanState::Up,
+        ifname: Some("ppp0".into()),
+        generation: 1,
+        ..Default::default()
+    });
+    let mut cfg = FirewallConfig {
+        enabled: true,
+        mode: FirewallMode::Full,
+        ..Default::default()
+    };
+    cfg.port_forwards.push(PortForwardRule {
+        comment: Some("qBittorrent".into()),
+        src_zone: "external".into(),
+        internal_ip: "dev:nas".parse().unwrap(),
+        external_port: 6881,
+        internal_port: 6881,
+        protocol: L4Protocol::Tcp,
+        enable_hairpin: true,
+        family: None,
+    });
+    ctx.update_firewall_config(cfg);
+
+    let mut fw_sub = bus.subscribe_firewall();
+    let mut service = NftService::inert();
+    service.init(&ctx).await.expect("Init must succeed");
+    let _ = wait_for_ruleset_applied(&mut fw_sub).await;
+    let payload = service.last_applied_payload().expect("applied");
+    assert!(
+        payload.contains("192.168.0.128"),
+        "IPv4 DNAT to the reservation"
+    );
+    assert!(
+        payload.contains("2804:bdc:5086:e600::501"),
+        "IPv6 pinhole on the current GUA + suffix"
+    );
+    assert!(
+        !payload.contains("fd97:f00d:cafe:3731::501"),
+        "never the ULA"
+    );
+
+    // Serving: the ISP hands out a new prefix, the LAN interface follows.
+    let ctx_clone = ctx.clone();
+    let mut serving = service.clone();
+    let serve = tokio::spawn(async move {
+        let h = ServiceHandle::new(ServiceId::Nft, ctx_clone.clone());
+        serving.serve(&ctx_clone, &h).await
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    set_lan_gua(&ctx, "2804:bdc:50a1:e200::1");
+    let _ = wait_for_ruleset_applied(&mut fw_sub).await;
+    let payload = service.last_applied_payload().expect("applied");
+    assert!(
+        payload.contains("2804:bdc:50a1:e200::501"),
+        "the pinhole moved to the new prefix"
+    );
+    assert!(
+        !payload.contains("2804:bdc:5086:e600::501"),
+        "nothing left open on the withdrawn prefix"
+    );
+
+    let _ = bus.publish(LanforgeEvent::System(SystemEvent::Shutdown));
+    let _ = timeout(Duration::from_millis(500), serve).await;
 }

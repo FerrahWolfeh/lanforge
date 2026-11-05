@@ -194,6 +194,7 @@ async fn unreadable_firewall_section_keeps_the_running_firewall() {
         internal_port: 9999,
         protocol: L4Protocol::Tcp,
         enable_hairpin: true,
+        family: None,
     });
     client.ctx.update_firewall_config(running.clone());
     reload(&client).await;

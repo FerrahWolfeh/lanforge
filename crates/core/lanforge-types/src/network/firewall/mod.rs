@@ -4,9 +4,12 @@ pub mod validation;
 pub use transaction::FirewallTransactionState;
 pub use validation::validate_firewall_candidate;
 
+use crate::identifiers::DeviceIdentifier;
 use crate::network::pppoe::PppoeNftablesConfig;
 use serde::{Deserialize, Serialize};
-use std::net::IpAddr;
+use std::fmt;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::str::FromStr;
 
 /// Traffic disposition policy for a zone or chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -81,11 +84,143 @@ pub struct ZoneForwarding {
 pub struct PortForwardRule {
     pub comment: Option<String>,
     pub src_zone: String,
-    pub internal_ip: IpAddr,
+    /// Where the traffic goes: an address, or a device (`dev:<name|mac>`) resolved to its
+    /// current addresses whenever the ruleset compiles.
+    pub internal_ip: ForwardTarget,
     pub external_port: u16,
     pub internal_port: u16,
     pub protocol: L4Protocol,
     pub enable_hairpin: bool,
+    /// Limits a device target to one family; `None` forwards both. An address target is its
+    /// own family.
+    #[serde(default)]
+    pub family: Option<ForwardFamily>,
+}
+
+impl PortForwardRule {
+    /// Whether the rule forwards IPv4 and IPv6, given its target and `family`.
+    #[must_use]
+    pub const fn families(&self) -> (bool, bool) {
+        match self.internal_ip {
+            ForwardTarget::Ip(IpAddr::V4(_)) => (true, false),
+            ForwardTarget::Ip(IpAddr::V6(_)) => (false, true),
+            ForwardTarget::Device(_) => match self.family {
+                None => (true, true),
+                Some(ForwardFamily::Ipv4) => (true, false),
+                Some(ForwardFamily::Ipv6) => (false, true),
+            },
+        }
+    }
+}
+
+/// The target of a port forward: a fixed address or a device by name or MAC.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ForwardTarget {
+    Ip(IpAddr),
+    Device(DeviceIdentifier),
+}
+
+impl ForwardTarget {
+    /// The fixed address, if the target is one.
+    #[must_use]
+    pub const fn ip(&self) -> Option<IpAddr> {
+        match self {
+            Self::Ip(ip) => Some(*ip),
+            Self::Device(_) => None,
+        }
+    }
+}
+
+impl From<IpAddr> for ForwardTarget {
+    fn from(ip: IpAddr) -> Self {
+        Self::Ip(ip)
+    }
+}
+
+impl From<Ipv4Addr> for ForwardTarget {
+    fn from(ip: Ipv4Addr) -> Self {
+        Self::Ip(ip.into())
+    }
+}
+
+impl From<Ipv6Addr> for ForwardTarget {
+    fn from(ip: Ipv6Addr) -> Self {
+        Self::Ip(ip.into())
+    }
+}
+
+impl FromStr for ForwardTarget {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        if let Some(device) = s.strip_prefix("dev:") {
+            return device.parse().map(Self::Device);
+        }
+        s.parse()
+            .map(Self::Ip)
+            .map_err(|_| format!("\"{s}\" is not an IP address or \"dev:<name|mac>\""))
+    }
+}
+
+impl fmt::Display for ForwardTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ip(ip) => write!(f, "{ip}"),
+            Self::Device(device) => write!(f, "dev:{device}"),
+        }
+    }
+}
+
+impl Serialize for ForwardTarget {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for ForwardTarget {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+/// The address family a device port forward is limited to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ForwardFamily {
+    Ipv4,
+    Ipv6,
+}
+
+impl ForwardFamily {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ipv4 => "ipv4",
+            Self::Ipv6 => "ipv6",
+        }
+    }
+}
+
+impl FromStr for ForwardFamily {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "ipv4" => Ok(Self::Ipv4),
+            "ipv6" => Ok(Self::Ipv6),
+            other => Err(format!("\"{other}\" is not ipv4 or ipv6")),
+        }
+    }
+}
+
+/// Where a device port forward goes now: its predictable IPv4 and GUAs (see
+/// `Device::forward_addresses`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ForwardAddrs {
+    pub v4: Option<Ipv4Addr>,
+    pub v6: Vec<Ipv6Addr>,
 }
 
 /// Operational mode of the Lanforge firewall.

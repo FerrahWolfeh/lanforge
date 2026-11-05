@@ -10,8 +10,8 @@ use lanforge_api::api::DeviceListQuery;
 
 use lanforge_types::network::firewall::{
     FirewallCommitRequest, FirewallConfig, FirewallMode, FirewallPolicy, FirewallStatus,
-    FirewallValidationReport, FirewallZone, HostPortRule, L4Protocol, PortForwardRule,
-    ZoneForwarding,
+    FirewallValidationReport, FirewallZone, ForwardFamily, ForwardTarget, HostPortRule, L4Protocol,
+    PortForwardRule, ZoneForwarding,
 };
 
 use crate::client::LanforgeClient;
@@ -179,9 +179,13 @@ pub struct FirewallForwardAddArgs {
     #[arg(short = 'z', long = "src-zone", default_value = "external")]
     pub src_zone: String,
 
-    /// Target internal IP address
+    /// Target: an IP address, or a device as `dev:<name|mac>` (follows its current addresses)
     #[arg(short = 'i', long = "to-ip")]
-    pub internal_ip: Option<IpAddr>,
+    pub internal_ip: Option<ForwardTarget>,
+
+    /// Limit a device target to one family: ipv4 or ipv6 (default: both)
+    #[arg(long = "family")]
+    pub family: Option<ForwardFamily>,
 
     /// Target internal port (defaults to external port if omitted)
     #[arg(short = 'p', long = "to-port")]
@@ -1093,6 +1097,7 @@ async fn handle_forward(
             spec: None,
             src_zone: args.src_zone,
             internal_ip: Some(target_ip),
+            family: None,
             internal_port: Some(int_port),
             external_port: Some(ext_port),
             proto: args.proto,
@@ -1265,7 +1270,10 @@ async fn handle_forward_add(
     let rule = PortForwardRule {
         comment,
         src_zone: args.src_zone.clone(),
-        internal_ip: target_ip,
+        family: args
+            .family
+            .filter(|_| matches!(target_ip, ForwardTarget::Device(_))),
+        internal_ip: target_ip.clone(),
         external_port: ext_port,
         internal_port: int_port,
         protocol: proto,
@@ -1378,78 +1386,75 @@ async fn handle_forward_remove(
 }
 
 /// Resolves a target hostname or IP string to an `IpAddr`.
-async fn resolve_target_ip(client: &LanforgeClient, target: &str) -> Result<IpAddr> {
-    if let Ok(ip) = target.parse::<IpAddr>() {
-        return Ok(ip);
+/// A forward target from the command line: an address or `dev:<name|mac>` as is; a bare name of a
+/// known device becomes `dev:<name>`, so the forward follows the device's addresses.
+async fn resolve_target_ip(client: &LanforgeClient, target: &str) -> Result<ForwardTarget> {
+    if let Ok(parsed) = target.parse::<ForwardTarget>() {
+        return Ok(parsed);
     }
-
-    // Try resolving against active DHCP devices
     let devices = client
         .list_devices(DeviceListQuery {
             filter: Some(target.to_string()),
             ..Default::default()
         })
         .await?;
-
-    for dev in devices.devices {
-        if dev.hostname.eq_ignore_ascii_case(target) {
-            if let Some(ref v4) = dev.v4 {
-                return Ok(v4.ip);
-            }
-            if let Some(ip) = dev.primary_v4 {
-                return Ok(IpAddr::V4(ip));
-            }
-            if let Some(ref v6) = dev.v6 {
-                return Ok(v6.ip);
-            }
-        }
+    if devices
+        .devices
+        .iter()
+        .any(|dev| dev.hostname.eq_ignore_ascii_case(target))
+    {
+        return format!("dev:{target}")
+            .parse()
+            .map_err(|e: String| eyre!(e));
     }
-
-    bail!(
-        "Could not resolve '{target}' to an active device IP address. Please enter a valid IPv4/IPv6 address."
-    );
+    bail!("'{target}' is not an IP address, \"dev:<name|mac>\" or a known device name.");
 }
 
-/// Prompts user to select from active LAN devices or enter a custom IP.
-async fn select_or_enter_device_ip(client: &LanforgeClient) -> Result<IpAddr> {
+/// Prompts the user to pick a LAN device (forwarded as `dev:<name|mac>`, following its
+/// addresses) or enter an address.
+async fn select_or_enter_device_ip(client: &LanforgeClient) -> Result<ForwardTarget> {
+    const CUSTOM: &str = "<Enter custom IP address>";
     let devices_resp = client.list_devices(DeviceListQuery::default()).await;
     let mut options = Vec::new();
+    let mut targets = Vec::new();
 
     if let Ok(resp) = devices_resp {
         for dev in resp.devices {
-            let name = if dev.hostname.is_empty() {
+            let id = if dev.hostname.is_empty() {
                 dev.mac.to_string()
             } else {
-                dev.hostname
+                dev.hostname.clone()
             };
-            if let Some(ref v4) = dev.v4 {
-                options.push(format!("{} - {name} ({})", v4.ip, dev.mac));
-            } else if let Some(ip) = dev.primary_v4 {
-                options.push(format!("{ip} - {name} ({})", dev.mac));
-            }
+            let Ok(target) = format!("dev:{id}").parse::<ForwardTarget>() else {
+                continue;
+            };
+            let addr = dev
+                .v4
+                .as_ref()
+                .map(|v4| v4.ip.to_string())
+                .or_else(|| dev.primary_v4.map(|ip| ip.to_string()))
+                .unwrap_or_default();
+            options.push(format!("{target}  {addr} ({})", dev.mac));
+            targets.push(target);
         }
     }
+    options.push(CUSTOM.to_string());
 
-    options.push("<Enter custom IP address>".to_string());
-
-    let selected = Select::new("Select target device or enter custom IP:", options).prompt()?;
-
-    if selected == "<Enter custom IP address>" {
-        let input = Text::new("Enter target IP address:")
-            .with_placeholder("192.168.1.50")
-            .prompt()?;
-        let ip: IpAddr = input
-            .trim()
-            .parse()
-            .map_err(|_| eyre!("Invalid IP address"))?;
-        Ok(ip)
-    } else {
-        let ip_str = selected.split_whitespace().next().unwrap_or("");
-        let ip: IpAddr = ip_str
-            .parse()
-            .map_err(|_| eyre!("Invalid parsed IP address"))?;
-        Ok(ip)
+    let selected =
+        Select::new("Select target device or enter custom IP:", options.clone()).prompt()?;
+    if let Some(i) = options.iter().position(|o| *o == selected)
+        && let Some(target) = targets.get(i)
+    {
+        return Ok(target.clone());
     }
+    let input = Text::new("Enter target IP address:")
+        .with_placeholder("192.168.1.50")
+        .prompt()?;
+    input
+        .trim()
+        .parse::<IpAddr>()
+        .map(ForwardTarget::Ip)
+        .map_err(|_| eyre!("Invalid IP address"))
 }
 
 // ============================================================================

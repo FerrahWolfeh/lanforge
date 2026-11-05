@@ -806,6 +806,9 @@ pub struct PortForwardFile {
     pub to_port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// `"ipv4"` or `"ipv6"`: limits a `dev:` target to one family (default: both).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
 }
 
 /// A static host in `[hosts.<name>]` (`ConfigFile::static_hosts` / `set_static_hosts`): only

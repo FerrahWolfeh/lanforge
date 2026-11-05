@@ -1367,6 +1367,7 @@ async fn test_firewall_transactional_handshake_contract() {
         internal_port: 8443,
         protocol: L4Protocol::Tcp,
         enable_hairpin: true,
+        family: None,
     });
     invalid_candidate.port_forwards.push(PortForwardRule {
         comment: Some("Rule 2 colliding".into()),
@@ -1376,6 +1377,7 @@ async fn test_firewall_transactional_handshake_contract() {
         internal_port: 8443,
         protocol: L4Protocol::Tcp,
         enable_hairpin: true,
+        family: None,
     });
 
     let (status, body) = app
@@ -1396,6 +1398,7 @@ async fn test_firewall_transactional_handshake_contract() {
         internal_port: 32400,
         protocol: L4Protocol::Tcp,
         enable_hairpin: true,
+        family: None,
     });
 
     let (status, body) = app.post("/api/v1/firewall/propose", &candidate).await;

@@ -8,8 +8,8 @@ use lanforge_types::network::dhcp::{
     DhcpOptionsConfig, Dhcpv4Options, Dhcpv4Pool, Dhcpv6Options, Dhcpv6Pool, TftpOptions,
 };
 use lanforge_types::network::firewall::{
-    FirewallConfig, FirewallMode, FirewallPolicy, FirewallStopAction, FirewallZone, HostPortRule,
-    L4Protocol, PortForwardRule, ZoneForwarding,
+    FirewallConfig, FirewallMode, FirewallPolicy, FirewallStopAction, FirewallZone, ForwardFamily,
+    ForwardTarget, HostPortRule, L4Protocol, PortForwardRule, ZoneForwarding,
 };
 use lanforge_types::network::ra::{
     DnsslConfig, PrefixLifetime, PrefixSource, RAPrefix, RaServerConfig, RdnssConfig,
@@ -151,6 +151,7 @@ impl FirewallFile {
                     to: pf.internal_ip.to_string(),
                     to_port: Some(pf.internal_port),
                     description: pf.comment.clone(),
+                    family: pf.family.map(|f| f.as_str().to_string()),
                 },
             ));
         }
@@ -278,36 +279,66 @@ impl FirewallFile {
                 ));
                 continue;
             }
-            let internal_ip = pf.to.parse::<IpAddr>();
-            let protocol = parse_l4(&pf.proto);
-            match (internal_ip, protocol) {
-                // A pinhole is routed, not NATed: the port the WAN asks for is the one the host
-                // gets.
-                (Ok(IpAddr::V6(_)), Some(_)) if pf.to_port.is_some_and(|p| p != pf.port) => {
-                    issues.push(format!(
-                        "[firewall.port_forwards.\"{label}\"] an IPv6 pinhole cannot change the port (to_port = {} differs from port = {}); port not forwarded",
-                        pf.to_port.unwrap_or(pf.port),
-                        pf.port
-                    ));
+            let at = format!("[firewall.port_forwards.\"{label}\"]");
+            let target = match pf.to.parse::<ForwardTarget>() {
+                Ok(target) => target,
+                Err(e) => {
+                    issues.push(format!("{at} to: {e}; port not forwarded"));
+                    continue;
                 }
-                (Ok(internal_ip), Some(protocol)) => port_forwards.push(PortForwardRule {
-                    src_zone: pf.zone.clone(),
-                    external_port: pf.port,
-                    internal_ip,
-                    internal_port: pf.to_port.unwrap_or(pf.port),
-                    protocol,
-                    comment: pf.description.clone(),
-                    enable_hairpin: pf.hairpin,
-                }),
-                (Err(_), _) => issues.push(format!(
-                    "[firewall.port_forwards.\"{label}\"] to = \"{}\" is not an IP address; port not forwarded",
-                    pf.to
-                )),
-                (_, None) => issues.push(format!(
-                    "[firewall.port_forwards.\"{label}\"] proto = \"{}\" is not tcp, udp or tcp/udp; port not forwarded",
+            };
+            let Some(protocol) = parse_l4(&pf.proto) else {
+                issues.push(format!(
+                    "{at} proto = \"{}\" is not tcp, udp or tcp/udp; port not forwarded",
                     pf.proto
-                )),
+                ));
+                continue;
+            };
+            let family = match pf.family.as_deref().map(str::parse::<ForwardFamily>) {
+                None => None,
+                Some(Ok(family)) => Some(family),
+                Some(Err(e)) => {
+                    issues.push(format!("{at} family: {e}; port not forwarded"));
+                    continue;
+                }
+            };
+            // `family` limits a device; an address is its own family.
+            if let (ForwardTarget::Ip(ip), Some(family)) = (&target, family)
+                && ip.is_ipv4() != (family == ForwardFamily::Ipv4)
+            {
+                issues.push(format!(
+                    "{at} family = \"{}\" does not match to = \"{ip}\"; port not forwarded",
+                    family.as_str()
+                ));
+                continue;
             }
+            if let ForwardTarget::Ip(IpAddr::V6(v6)) = target
+                && lanforge_types::network::is_ula(&v6)
+            {
+                issues.push(format!(
+                    "{at} to = \"{v6}\" is a ULA, not reachable from the WAN (use the host's GUA or \"dev:<name>\"); port not forwarded"
+                ));
+                continue;
+            }
+            let rule = PortForwardRule {
+                src_zone: pf.zone.clone(),
+                external_port: pf.port,
+                family: family.filter(|_| matches!(target, ForwardTarget::Device(_))),
+                internal_ip: target,
+                internal_port: pf.to_port.unwrap_or(pf.port),
+                protocol,
+                comment: pf.description.clone(),
+                enable_hairpin: pf.hairpin,
+            };
+            // A pinhole is routed, not NATed: the port the WAN asks for is the one the host gets.
+            if rule.families().1 && rule.internal_port != rule.external_port {
+                issues.push(format!(
+                    "{at} an IPv6 pinhole cannot change the port (to_port = {} differs from port = {}; limit it with family = \"ipv4\"); port not forwarded",
+                    rule.internal_port, rule.external_port
+                ));
+                continue;
+            }
+            port_forwards.push(rule);
         }
 
         // A forwarding or port forward naming a zone the file lacks would compile to nothing and
@@ -1194,16 +1225,19 @@ mod tests {
                 internal_port: 6881,
                 protocol: L4Protocol::Both,
                 enable_hairpin: false,
+                family: None,
             },
             PortForwardRule {
                 comment: Some("nas".into()),
                 src_zone: "external".into(),
-                internal_ip: "fd97:f00d:cafe:3731::501".parse().unwrap(),
-                // A pinhole keeps its port (routed, not NATed).
+                // A pinhole targets a GUA (a ULA is unreachable from the WAN) and keeps its
+                // port (routed, not NATed).
+                internal_ip: "2001:db8:cafe:3731::501".parse().unwrap(),
                 external_port: 8443,
                 internal_port: 8443,
                 protocol: L4Protocol::Tcp,
                 enable_hairpin: true,
+                family: None,
             },
         ];
         custom.zones[0].open_ports.push(HostPortRule {

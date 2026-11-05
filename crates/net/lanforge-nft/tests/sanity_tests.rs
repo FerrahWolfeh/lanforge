@@ -122,11 +122,12 @@ fn test_sanity_port_forwarding_and_hairpin_nat() {
     cfg.port_forwards.push(PortForwardRule {
         comment: Some("Web server".into()),
         src_zone: "external".into(),
-        internal_ip: "192.168.1.100".parse::<IpAddr>().unwrap(),
+        internal_ip: "192.168.1.100".parse::<IpAddr>().unwrap().into(),
         external_port: 8080,
         internal_port: 80,
         protocol: L4Protocol::Tcp,
         enable_hairpin: true,
+        family: None,
     });
 
     let ruleset = RulesetBuilder::new(&cfg)
@@ -298,6 +299,7 @@ fn test_sanity_port_forwarding_crud() {
         internal_port: 80,
         protocol: L4Protocol::Tcp,
         enable_hairpin: true,
+        family: None,
     });
     let json1 = serde_json::to_string(
         &RulesetBuilder::new(&cfg)
@@ -437,18 +439,20 @@ fn test_sanity_dnat_restricted_to_internal_and_explicit_port_forwards() {
         src_zone: "external".into(),
         protocol: L4Protocol::Tcp,
         external_port: 6881,
-        internal_ip: "2804:cafe::1".parse::<IpAddr>().unwrap(),
+        internal_ip: "2804:cafe::1".parse::<IpAddr>().unwrap().into(),
         internal_port: 6881,
         enable_hairpin: false,
+        family: None,
     });
     cfg.port_forwards.push(PortForwardRule {
         comment: Some("Web port forward".into()),
         src_zone: "external".into(),
         protocol: L4Protocol::Tcp,
         external_port: 8080,
-        internal_ip: "192.168.0.128".parse::<IpAddr>().unwrap(),
+        internal_ip: "192.168.0.128".parse::<IpAddr>().unwrap().into(),
         internal_port: 80,
         enable_hairpin: true,
+        family: None,
     });
 
     let ruleset = RulesetBuilder::new(&cfg)
@@ -555,11 +559,12 @@ fn test_sanity_hairpin_nat_multizone_reflection() {
     cfg.port_forwards.push(PortForwardRule {
         comment: Some("Home Assistant".into()),
         src_zone: "external".into(),
-        internal_ip: "192.168.1.10".parse::<IpAddr>().unwrap(),
+        internal_ip: "192.168.1.10".parse::<IpAddr>().unwrap().into(),
         external_port: 8123,
         internal_port: 8123,
         protocol: L4Protocol::Tcp,
         enable_hairpin: true,
+        family: None,
     });
 
     let ruleset = RulesetBuilder::new(&cfg)
@@ -585,11 +590,12 @@ fn test_sanity_ipv6_pinhole_native_forwarding_and_no_masquerade() {
     cfg.port_forwards.push(PortForwardRule {
         comment: Some("IPv6 Matrix Synapse Pinhole".into()),
         src_zone: "external".into(),
-        internal_ip: "2001:db8:beef::50".parse::<IpAddr>().unwrap(),
+        internal_ip: "2001:db8:beef::50".parse::<IpAddr>().unwrap().into(),
         external_port: 8448,
         internal_port: 8448,
         protocol: L4Protocol::Tcp,
         enable_hairpin: false,
+        family: None,
     });
 
     let ruleset = RulesetBuilder::new(&cfg)
@@ -715,6 +721,7 @@ fn nas_forwards_config() -> FirewallConfig {
             internal_port: 6881,
             protocol: L4Protocol::Tcp,
             enable_hairpin: true,
+            family: None,
         });
     }
     cfg

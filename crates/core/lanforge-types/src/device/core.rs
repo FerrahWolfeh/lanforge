@@ -13,8 +13,9 @@ use crate::device::state::{
 
 use crate::events::{AdminChange, NetworkChange};
 use crate::identifiers::{Duid, MacAddr};
+use crate::network::firewall::ForwardAddrs;
 use crate::network::{
-    Hostname, HostnameOrigin, IpClassification, Ipv6AddrOrSuffix, classify_ipv6, is_ula,
+    Hostname, HostnameOrigin, IpClassification, Ipv6AddrOrSuffix, Ipv6Prefix, classify_ipv6, is_ula,
 };
 use crate::update::{CliHostUpdate, FieldUpdate, LeaseTarget};
 use crate::utils::serde::{deserialize_time, serialize_time};
@@ -730,6 +731,38 @@ impl Device {
         self.v4.ip()
     }
 
+    /// Where a port forward to this device goes now: its IPv4 reservation or lease, and its
+    /// predictable GUAs on the LAN's current prefix (`lan_gua`): a fixed suffix on it, a fixed
+    /// address in it, a `DHCPv6` lease in it. Never a ULA (unreachable from the WAN), a SLAAC
+    /// address (privacy addresses rotate) or an address of a withdrawn prefix.
+    #[must_use]
+    pub fn forward_addresses(&self, lan_gua: Option<Ipv6Addr>) -> ForwardAddrs {
+        let v4 = match &self.v4 {
+            IPv4State::Static(ip) => Some(*ip),
+            IPv4State::Dynamic(lease) => Some(lease.ip),
+            _ => None,
+        };
+        let mut v6 = Vec::new();
+        if let Some(gua) = lan_gua {
+            let prefix = Ipv6Prefix::from_addr(gua);
+            for state in &self.v6 {
+                let ip = match state {
+                    IPv6State::Static(..) | IPv6State::Dynamic(_) => {
+                        state.ip_with_prefix(Some(gua))
+                    }
+                    _ => None,
+                };
+                if let Some(ip) = ip
+                    && Ipv6Prefix::from_addr(ip) == prefix
+                    && !v6.contains(&ip)
+                {
+                    v6.push(ip);
+                }
+            }
+        }
+        ForwardAddrs { v4, v6 }
+    }
+
     #[must_use]
     pub fn primary_v6(
         &self,
@@ -1094,5 +1127,59 @@ impl std::fmt::Display for LearningMethod {
             Self::NdpArp => write!(f, "NDP/ARP"),
             Self::Unknown => write!(f, "Unknown"),
         }
+    }
+}
+
+#[cfg(test)]
+mod forward_tests {
+    use super::*;
+    use crate::device::state::V6Lease;
+
+    /// A port forward goes only to predictable addresses on the LAN's current prefix: the fixed
+    /// suffix and a lease there; never a ULA, a SLAAC address or a lease of a withdrawn prefix.
+    #[test]
+    fn forward_addresses_are_predictable_guas_on_the_current_prefix() {
+        let now = SystemTime::now();
+        let mut dev = Device::new(MacAddr([2, 0, 0, 0, 0, 1]));
+        dev.v4 = IPv4State::Static("192.168.0.128".parse().unwrap());
+        dev.v6 = vec![
+            IPv6State::Static(Ipv6AddrOrSuffix::parse("::501").unwrap(), now),
+            IPv6State::Dynamic(Box::new(V6Lease::dynamic(
+                "2804:bdc:50a1:e200::77".parse().unwrap(),
+                1,
+                now,
+                now,
+            ))),
+            IPv6State::Dynamic(Box::new(V6Lease::dynamic(
+                "2804:bdc:5086:e600::77".parse().unwrap(),
+                1,
+                now,
+                now,
+            ))),
+            IPv6State::Dynamic(Box::new(V6Lease::dynamic(
+                "fd97:f00d:cafe:3731::77".parse().unwrap(),
+                2,
+                now,
+                now,
+            ))),
+            IPv6State::Slaac(
+                "2804:bdc:50a1:e200:aaaa:bbbb:cccc:dddd".parse().unwrap(),
+                now,
+            ),
+        ];
+
+        let addrs = dev.forward_addresses(Some("2804:bdc:50a1:e200::1".parse().unwrap()));
+        assert_eq!(addrs.v4, Some("192.168.0.128".parse().unwrap()));
+        assert_eq!(
+            addrs.v6,
+            vec![
+                "2804:bdc:50a1:e200::501".parse::<Ipv6Addr>().unwrap(),
+                "2804:bdc:50a1:e200::77".parse().unwrap(),
+            ]
+        );
+        assert!(
+            dev.forward_addresses(None).v6.is_empty(),
+            "no LAN GUA, no pinhole"
+        );
     }
 }

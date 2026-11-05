@@ -123,7 +123,8 @@ fn validate_port_forwards(
             ));
         }
 
-        if rule.internal_ip.is_ipv6() && rule.internal_port != rule.external_port {
+        let (v4, v6) = rule.families();
+        if v6 && rule.internal_port != rule.external_port {
             errors.push(format!(
                 "Port forward #{}: an IPv6 pinhole is routed, not NATed, so it cannot change the port ({} -> {})",
                 idx + 1,
@@ -132,7 +133,7 @@ fn validate_port_forwards(
             ));
         }
 
-        if rule.internal_ip.is_unspecified() {
+        if rule.internal_ip.ip().is_some_and(|ip| ip.is_unspecified()) {
             errors.push(format!(
                 "Port forward #{} has unspecified target IP ({})",
                 idx + 1,
@@ -140,22 +141,25 @@ fn validate_port_forwards(
             ));
         }
 
+        // IPv4 forwards share the router's one address: a port goes to one host. IPv6 pinholes
+        // are per host (routed to each GUA), so only the same target twice collides.
         for other in &port_forwards[idx + 1..] {
-            let same_family = (rule.internal_ip.is_ipv4() && other.internal_ip.is_ipv4())
-                || (rule.internal_ip.is_ipv6() && other.internal_ip.is_ipv6());
-            if same_family
+            let (other_v4, other_v6) = other.families();
+            let family = if v4 && other_v4 {
+                Some("IPv4")
+            } else if v6 && other_v6 && rule.internal_ip == other.internal_ip {
+                Some("IPv6")
+            } else {
+                None
+            };
+            if let Some(family) = family
                 && rule.external_port == other.external_port
                 && protocols_overlap(rule.protocol, other.protocol)
             {
                 errors.push(format!(
-                    "Port forward collision: external port {} ({}) is mapped multiple times for {}",
+                    "Port forward collision: external port {} ({}) is mapped multiple times for {family}",
                     rule.external_port,
                     rule.protocol.as_str(),
-                    if rule.internal_ip.is_ipv4() {
-                        "IPv4"
-                    } else {
-                        "IPv6"
-                    }
                 ));
             }
         }
@@ -414,6 +418,7 @@ mod tests {
             internal_port: 8443,
             protocol: L4Protocol::Tcp,
             enable_hairpin: true,
+            family: None,
         });
 
         candidate.port_forwards.push(PortForwardRule {
@@ -424,6 +429,7 @@ mod tests {
             internal_port: 8443,
             protocol: L4Protocol::Tcp,
             enable_hairpin: true,
+            family: None,
         });
 
         let report = validate_firewall_candidate(&candidate, &current, &[], || "tx-test".into());
@@ -446,11 +452,12 @@ mod tests {
         candidate.port_forwards.push(PortForwardRule {
             comment: None,
             src_zone: "external".into(),
-            internal_ip: "2001:db8::100".parse::<std::net::IpAddr>().unwrap(),
+            internal_ip: "2001:db8::100".parse::<std::net::IpAddr>().unwrap().into(),
             external_port: 8080,
             internal_port: 80,
             protocol: L4Protocol::Tcp,
             enable_hairpin: false,
+            family: None,
         });
         let report = validate_firewall_candidate(&candidate, &current, &[], || "tx".into());
         assert!(!report.valid);
@@ -475,16 +482,18 @@ mod tests {
             internal_port: 8080,
             protocol: L4Protocol::Tcp,
             enable_hairpin: true,
+            family: None,
         });
 
         candidate.port_forwards.push(PortForwardRule {
             comment: Some("Web IPv6 Pinhole".into()),
             src_zone: "external".into(),
-            internal_ip: "2001:db8::100".parse::<std::net::IpAddr>().unwrap(),
+            internal_ip: "2001:db8::100".parse::<std::net::IpAddr>().unwrap().into(),
             external_port: 8080,
             internal_port: 8080,
             protocol: L4Protocol::Tcp,
             enable_hairpin: false,
+            family: None,
         });
 
         let report = validate_firewall_candidate(&candidate, &current, &[], || "tx-test".into());
@@ -551,6 +560,7 @@ mod tests {
             internal_port: 32400,
             protocol: L4Protocol::Tcp,
             enable_hairpin: true,
+            family: None,
         });
 
         let report =

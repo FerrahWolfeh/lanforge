@@ -358,3 +358,33 @@ fn banner_transport_sums_the_registered_counters() {
     ctx.set_service_state(ServiceId::Dns, ServiceState::Error);
     assert_eq!(transport(&ctx), None);
 }
+
+/// `dev:<name>` names the static host the admin called that before any device that merely
+/// announces the hostname; a MAC names its device.
+#[test]
+fn resolve_device_prefers_the_static_hosts_name() {
+    use lanforge_types::device::StaticHost;
+    use lanforge_types::identifiers::DeviceIdentifier;
+
+    let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
+    let announcer = MacAddr([2, 0, 0, 0, 0, 9]);
+    let _ = ctx.apply(DeviceUpdate::DhcpHostnameHint {
+        mac: announcer,
+        hostname: "nas".to_string(),
+    });
+    let nas = MacAddr([2, 0, 0, 0, 5, 1]);
+    let issues = ctx.apply_static_hosts(&[StaticHost {
+        mac: nas,
+        hostname: "NAS".to_string(),
+        v4: None,
+        v6: None,
+        boot_file: None,
+    }]);
+    assert!(issues.is_empty(), "{issues:?}");
+
+    let by_name: DeviceIdentifier = "nas".parse().unwrap();
+    assert_eq!(ctx.resolve_device(&by_name), Some(nas));
+    assert_eq!(ctx.resolve_device(&DeviceIdentifier::Mac(nas)), Some(nas));
+    let unknown: DeviceIdentifier = "printer".parse().unwrap();
+    assert_eq!(ctx.resolve_device(&unknown), None);
+}

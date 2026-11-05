@@ -762,6 +762,7 @@ fn with_forward(port: u16) -> lanforge_types::network::firewall::FirewallConfig 
             internal_port: port,
             protocol: lanforge_types::network::firewall::L4Protocol::Udp,
             enable_hairpin: true,
+            family: None,
         });
     fw
 }

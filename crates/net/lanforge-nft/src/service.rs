@@ -15,15 +15,20 @@ use lanforge_core::service::{
     ServiceCommand, ServiceHandle, ServiceSpec,
 };
 use lanforge_types::events::LanforgeEvent;
+use lanforge_types::events::device::DeviceEvent;
 use lanforge_types::events::firewall::{FirewallAppliedSummary, FirewallEvent};
+use lanforge_types::events::network::NetworkEvent;
 use lanforge_types::events::pppoe::PppoeEvent;
 use lanforge_types::events::system::SystemEvent;
+use lanforge_types::identifiers::DeviceIdentifier;
 use lanforge_types::network::TrafficConfig;
 use lanforge_types::network::firewall::{
-    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallStopAction,
+    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallStopAction, ForwardAddrs,
+    ForwardTarget,
 };
 use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::system::{DormantReason, ServiceId};
+use std::collections::HashMap;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::ruleset::RulesetBuilder;
@@ -44,6 +49,8 @@ pub struct NftService {
     /// The running firewall ([`LanforgeContext::running_firewall_config`]) the last ruleset was
     /// compiled from.
     compiled: Option<FirewallConfig>,
+    /// The addresses `dev:` port forwards resolved to in the last ruleset.
+    compiled_addrs: HashMap<DeviceIdentifier, ForwardAddrs>,
 }
 
 impl NftService {
@@ -56,6 +63,7 @@ impl NftService {
             inert: false,
             last_ruleset: std::sync::Arc::new(parking_lot::RwLock::new(None)),
             compiled: None,
+            compiled_addrs: HashMap::new(),
         }
     }
 
@@ -68,6 +76,7 @@ impl NftService {
             inert: true,
             last_ruleset: std::sync::Arc::new(parking_lot::RwLock::new(None)),
             compiled: None,
+            compiled_addrs: HashMap::new(),
         }
     }
 
@@ -206,9 +215,66 @@ impl NftService {
     async fn reapply(&mut self, ctx: &LanforgeContext, reason: &'static str) {
         let cfg = ctx.running_firewall_config();
         let dynamic_ports = ctx.registered_service_ports();
-        self.apply_ruleset_internal(ctx, &cfg, &dynamic_ports, reason)
+        let addrs = Self::device_addrs(ctx, &cfg);
+        Self::log_unresolved(&cfg, &addrs);
+        self.apply_ruleset_internal(ctx, &cfg, &dynamic_ports, &addrs, reason)
             .await;
         self.compiled = Some(cfg);
+        self.compiled_addrs = addrs;
+    }
+
+    /// The current addresses of every device a port forward names (`dev:`); an unknown device
+    /// is left out.
+    fn device_addrs(
+        ctx: &LanforgeContext,
+        cfg: &FirewallConfig,
+    ) -> HashMap<DeviceIdentifier, ForwardAddrs> {
+        let mut addrs = HashMap::new();
+        for pf in &cfg.port_forwards {
+            if let ForwardTarget::Device(id) = &pf.internal_ip
+                && !addrs.contains_key(id)
+                && let Some(found) = ctx.forward_addresses(id)
+            {
+                addrs.insert(id.clone(), found);
+            }
+        }
+        addrs
+    }
+
+    /// Says which `dev:` forwards have nowhere to go for a family they forward: the rule is left
+    /// out for it until the device has a predictable address.
+    fn log_unresolved(cfg: &FirewallConfig, addrs: &HashMap<DeviceIdentifier, ForwardAddrs>) {
+        for pf in &cfg.port_forwards {
+            let ForwardTarget::Device(id) = &pf.internal_ip else {
+                continue;
+            };
+            let found = addrs.get(id);
+            let (v4, v6) = pf.families();
+            if v4 && found.and_then(|a| a.v4).is_none() {
+                warn!(target = %pf.internal_ip, port = pf.external_port, "Port forward: no IPv4 reservation or lease for the device; IPv4 not forwarded");
+            }
+            if v6 && found.is_none_or(|a| a.v6.is_empty()) {
+                warn!(target = %pf.internal_ip, port = pf.external_port, "Port forward: no predictable GUA for the device (fixed suffix or DHCPv6 lease); IPv6 pinhole not opened");
+            }
+        }
+    }
+
+    /// Recompiles when a `dev:` port forward now resolves to other addresses (renumbered LAN
+    /// prefix, new lease, a host coming or going).
+    async fn reapply_if_targets_moved(&mut self, ctx: &LanforgeContext) {
+        let Some(cfg) = self.compiled.as_ref() else {
+            return;
+        };
+        if !cfg
+            .port_forwards
+            .iter()
+            .any(|pf| matches!(pf.internal_ip, ForwardTarget::Device(_)))
+        {
+            return;
+        }
+        if Self::device_addrs(ctx, cfg) != self.compiled_addrs {
+            self.reapply(ctx, "forward_target_moved").await;
+        }
     }
 
     /// Recompiles when another section changed what the firewall runs (SQM on/off turns the
@@ -249,6 +315,7 @@ impl NftService {
         ctx: &LanforgeContext,
         cfg: &FirewallConfig,
         dynamic_ports: &[DynamicPortRequest],
+        device_addrs: &HashMap<DeviceIdentifier, ForwardAddrs>,
         reason: &'static str,
     ) {
         if !cfg.enabled || cfg.mode == FirewallMode::Disabled {
@@ -267,6 +334,7 @@ impl NftService {
             .with_active_wan(self.active_wan.as_deref())
             .with_primary_lan(primary_lan.as_deref())
             .with_dynamic_ports(dynamic_ports)
+            .with_device_addrs(device_addrs)
             .build();
 
         let should_serialize = self.inert || tracing::enabled!(tracing::Level::TRACE);
@@ -434,6 +502,9 @@ impl AsyncService for NftService {
         let mut pppoe_rx = ctx.bus().subscribe_pppoe();
         let mut fw_rx = ctx.bus().subscribe_firewall();
         let mut sys_rx = ctx.bus().subscribe_system();
+        // `dev:` port forwards follow their device's addresses and the LAN prefix.
+        let mut net_rx = ctx.bus().subscribe_network();
+        let mut dev_rx = ctx.bus().subscribe_device();
         let mut wan_rx = ctx.watch_wan();
         let mut traffic_sub = ctx.config_subscription::<TrafficConfig>();
         let mut pppoe_sub = ctx.config_subscription::<PppoeConfig>();
@@ -535,6 +606,35 @@ impl AsyncService for NftService {
                     }
 
                     // Firewall events: dynamic port open/release requests or config changes
+                    event_res = net_rx.recv() => {
+                        match event_res {
+                            Ok(ev) if matches!(ev.event, LanforgeEvent::Network(NetworkEvent::PrefixChanged(_))) => {
+                                self.reapply_if_targets_moved(&ctx).await;
+                            }
+                            Ok(_) | Err(RecvError::Lagged(_)) => {}
+                            Err(RecvError::Closed) => break,
+                        }
+                    }
+
+                    event_res = dev_rx.recv() => {
+                        match event_res {
+                            Ok(ev) if matches!(
+                                ev.event,
+                                LanforgeEvent::Device(
+                                    DeviceEvent::NetworkUpdate { .. }
+                                        | DeviceEvent::AdminUpdate { .. }
+                                        | DeviceEvent::Discovered { .. }
+                                        | DeviceEvent::Expired { .. }
+                                        | DeviceEvent::Purged { .. }
+                                )
+                            ) => {
+                                self.reapply_if_targets_moved(&ctx).await;
+                            }
+                            Ok(_) | Err(RecvError::Lagged(_)) => {}
+                            Err(RecvError::Closed) => break,
+                        }
+                    }
+
                     event_res = fw_rx.recv() => {
                         let event = match event_res {
                             Ok(event) => event,

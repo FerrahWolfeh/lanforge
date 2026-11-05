@@ -49,9 +49,10 @@ use arc_swap::Guard;
 use lanforge_types::{
     device::{Device, TransientHost},
     dhcp::{Dhcpv4Stats, Dhcpv6Stats},
-    identifiers::{Duid, MacAddr},
+    identifiers::{DeviceIdentifier, Duid, MacAddr},
     network::DnsReverseResolver,
     network::dns::upstream::UpstreamTarget,
+    network::firewall::ForwardAddrs,
     update::InterfaceState,
 };
 
@@ -89,6 +90,37 @@ impl LanforgeContext {
     #[must_use]
     pub fn get_by_hostname(&self, hostname: &str) -> Option<Arc<Device>> {
         self.read().get_by_hostname(hostname)
+    }
+
+    /// The device a `dev:<name|mac>` reference names. A name matches a static host's name first
+    /// (the admin's, stable), then the hostname a device announces.
+    #[must_use]
+    pub fn resolve_device(&self, id: &DeviceIdentifier) -> Option<MacAddr> {
+        match id {
+            DeviceIdentifier::Mac(mac) => self.read().devices.contains_key(mac).then_some(*mac),
+            DeviceIdentifier::Name(name) => self
+                .with_state(|state| {
+                    state
+                        .devices
+                        .values()
+                        .find(|d| d.is_static() && d.hostname.name.eq_ignore_ascii_case(name))
+                        .map(|d| d.mac)
+                        .or_else(|| state.get_by_hostname(name).map(|d| d.mac))
+                })
+                .or_else(|| self.find_mac_by_hostname_jit(name, None)),
+        }
+    }
+
+    /// Where port forwards to `id` go now (`Device::forward_addresses` on the LAN's current
+    /// GUA); `None` for an unknown device.
+    #[must_use]
+    pub fn forward_addresses(&self, id: &DeviceIdentifier) -> Option<ForwardAddrs> {
+        let mac = self.resolve_device(id)?;
+        let lan_gua = self
+            .target_ifindex()
+            .and_then(|idx| self.get_interface_state(idx).gua);
+        self.get_device(&mac)
+            .map(|device| device.forward_addresses(lan_gua))
     }
 
     /// Retrieves a device by any of its assigned IP addresses.

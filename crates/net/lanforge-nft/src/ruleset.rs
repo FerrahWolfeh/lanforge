@@ -1,5 +1,7 @@
+use lanforge_types::identifiers::DeviceIdentifier;
 use lanforge_types::network::firewall::{
-    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, L4Protocol, PortForwardRule,
+    DynamicPortRequest, FirewallConfig, FirewallMode, FirewallPolicy, ForwardAddrs, ForwardTarget,
+    L4Protocol, PortForwardRule,
 };
 use nftables::batch::Batch;
 use nftables::expr::{
@@ -10,7 +12,8 @@ use nftables::schema::{Chain, FlowTable, FlushObject, NfCmd, NfListObject, Nftab
 use nftables::stmt::{Flow, Limit, Mangle, Match, NAT, NATFamily, Operator, SetOp, Statement};
 use nftables::types::{NfChainPolicy, NfChainType, NfFamily, NfHook};
 use std::borrow::Cow;
-use std::net::IpAddr;
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr};
 
 fn is_external_zone(name: &str) -> bool {
     name == "external" || name == "wan"
@@ -30,6 +33,9 @@ pub struct RulesetBuilder<'a> {
     active_wan: Option<&'a str>,
     primary_lan: Option<&'a str>,
     dynamic_ports: &'a [DynamicPortRequest],
+    /// Current addresses of the devices port forwards name (`dev:`); a device missing here has
+    /// none to forward to.
+    device_addrs: Option<&'a HashMap<DeviceIdentifier, ForwardAddrs>>,
 }
 
 impl<'a> RulesetBuilder<'a> {
@@ -40,7 +46,42 @@ impl<'a> RulesetBuilder<'a> {
             active_wan: None,
             primary_lan: None,
             dynamic_ports: &[],
+            device_addrs: None,
         }
+    }
+
+    /// The addresses `dev:` port forward targets resolve to now.
+    #[must_use]
+    pub const fn with_device_addrs(
+        mut self,
+        addrs: &'a HashMap<DeviceIdentifier, ForwardAddrs>,
+    ) -> Self {
+        self.device_addrs = Some(addrs);
+        self
+    }
+
+    /// Every port forward with one concrete address: an address target as is, a device target
+    /// once per current address of the families the rule forwards.
+    fn concrete_forwards(&self) -> Vec<(&'a PortForwardRule, IpAddr)> {
+        let mut out = Vec::with_capacity(self.cfg.port_forwards.len());
+        for pf in &self.cfg.port_forwards {
+            match &pf.internal_ip {
+                ForwardTarget::Ip(ip) => out.push((pf, *ip)),
+                ForwardTarget::Device(id) => {
+                    let Some(addrs) = self.device_addrs.and_then(|m| m.get(id)) else {
+                        continue;
+                    };
+                    let (v4, v6) = pf.families();
+                    if v4 && let Some(ip) = addrs.v4 {
+                        out.push((pf, ip.into()));
+                    }
+                    if v6 {
+                        out.extend(addrs.v6.iter().map(|ip| (pf, IpAddr::from(*ip))));
+                    }
+                }
+            }
+        }
+        out
     }
 
     #[must_use]
@@ -644,7 +685,7 @@ impl<'a> RulesetBuilder<'a> {
         }
 
         // Rule: Accept DNAT / Pinholes from external/other zones ONLY when matching explicit Port Forward rules
-        for pf in &self.cfg.port_forwards {
+        for (pf, target) in self.concrete_forwards() {
             let src_ifaces = self.resolve_zone_interfaces(&pf.src_zone);
             let protos = protocol_l4_names(pf.protocol);
 
@@ -658,7 +699,7 @@ impl<'a> RulesetBuilder<'a> {
                         op: Operator::EQ,
                     })];
 
-                    match pf.internal_ip {
+                    match target {
                         IpAddr::V4(v4) => {
                             stmts.push(Statement::Match(Match {
                                 left: Expression::Named(NamedExpression::CT(CT {
@@ -1007,12 +1048,15 @@ impl<'a> RulesetBuilder<'a> {
         internal_ifaces: &[String],
     ) {
         // Only IPv4 forwards are NATed; an IPv6 pinhole is routed (forward chain only).
-        if !self
-            .cfg
-            .port_forwards
-            .iter()
-            .any(|pf| pf.internal_ip.is_ipv4())
-        {
+        let v4_forwards: Vec<_> = self
+            .concrete_forwards()
+            .into_iter()
+            .filter_map(|(pf, ip)| match ip {
+                IpAddr::V4(v4) => Some((pf, v4)),
+                IpAddr::V6(_) => None,
+            })
+            .collect();
+        if v4_forwards.is_empty() {
             return;
         }
 
@@ -1029,18 +1073,13 @@ impl<'a> RulesetBuilder<'a> {
             policy: Some(NfChainPolicy::Accept),
         }));
 
-        for pf in self
-            .cfg
-            .port_forwards
-            .iter()
-            .filter(|pf| pf.internal_ip.is_ipv4())
-        {
+        for (pf, target) in v4_forwards {
             let src_ifaces = self.resolve_zone_interfaces(&pf.src_zone);
             let protos = protocol_l4_names(pf.protocol);
 
             for iface in &src_ifaces {
                 for &proto in protos {
-                    Self::add_dnat_rule(batch, table, iface, proto, pf);
+                    Self::add_dnat_rule(batch, table, iface, proto, pf, target);
                 }
             }
 
@@ -1048,7 +1087,7 @@ impl<'a> RulesetBuilder<'a> {
             if pf.enable_hairpin {
                 for int_iface in internal_ifaces {
                     for &proto in protos {
-                        Self::add_dnat_rule(batch, table, int_iface, proto, pf);
+                        Self::add_dnat_rule(batch, table, int_iface, proto, pf, target);
                     }
                 }
             }
@@ -1374,6 +1413,7 @@ impl<'a> RulesetBuilder<'a> {
         iface: &str,
         proto: &'static str,
         rule: &PortForwardRule,
+        target: Ipv4Addr,
     ) {
         batch.add(NfListObject::Rule(Rule {
             family: NfFamily::INet,
@@ -1406,11 +1446,8 @@ impl<'a> RulesetBuilder<'a> {
                     op: Operator::EQ,
                 }),
                 Statement::DNAT(Some(NAT {
-                    addr: Some(Expression::String(rule.internal_ip.to_string().into())),
-                    family: match rule.internal_ip {
-                        IpAddr::V4(_) => Some(NATFamily::IP),
-                        IpAddr::V6(_) => Some(NATFamily::IP6),
-                    },
+                    addr: Some(Expression::String(target.to_string().into())),
+                    family: Some(NATFamily::IP),
                     port: Some(Expression::Number(u32::from(rule.internal_port))),
                     flags: None,
                 })),

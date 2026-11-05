@@ -1427,11 +1427,14 @@ export interface ZoneForwarding {
 export interface PortForwardRule {
 	comment: string | null;
 	src_zone: string;
+	/** An IP address, or a device as `dev:<name|mac>` (follows its current addresses). */
 	internal_ip: string;
 	external_port: number;
 	internal_port: number;
 	protocol: L4Protocol;
 	enable_hairpin: boolean;
+	/** Limits a `dev:` target to one family; null/absent = both. */
+	family?: "ipv4" | "ipv6" | null;
 }
 
 export type FirewallMode = "full" | "minimal" | "disabled";
