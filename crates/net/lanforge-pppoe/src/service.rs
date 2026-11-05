@@ -3,9 +3,9 @@ use crate::backoff::{ReconnectBackoff, SessionEnd};
 use crate::config::{PppoeConfig, PppoeCredentials};
 use crate::discovery::{PppoeDiscovery, send_padt};
 use crate::error::PppoeError;
+use crate::host::{KernelHost, PppoeHost, resolve_parent_iface};
 use crate::ipcp::negotiate_ipcp;
 use crate::keepalive::{PadtWatch, run_keepalive};
-use crate::kernel::{configure_interface, handoff_to_kernel};
 use crate::lcp::negotiate_lcp;
 use crate::session::PppoeSession;
 use crate::wan_dns::follow_wan_rdnss;
@@ -16,16 +16,14 @@ use lanforge_core::service::{
     Activation, AsyncService, Condition, Edge, LanforgeService, RestartPolicy, RuntimeClass,
     ServiceCommand, ServiceHandle, ServiceSpec,
 };
-use lanforge_transport::{ArpProber, Icmp6Transport, PppoeTransport, sys};
+use lanforge_transport::{ArpProber, Icmp6Transport, PppoeTransport};
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::system::{
     DegradedReason, DormantReason, PppoeSessionState, PppoeStatusResponse, ServiceId, ServiceState,
     StateDetail,
 };
-use std::io::Read;
 use std::net::Ipv4Addr;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
@@ -61,56 +59,12 @@ fn reconnect_jitter() -> f64 {
     0.4f64.mul_add(rand::random::<f64>(), 0.8)
 }
 
-/// Extracts the base physical device name from a potential VLAN interface (e.g. "eth0.10" -> "eth0").
-#[must_use]
-pub fn resolve_parent_iface(iface: &str) -> &str {
-    iface.split('.').next().unwrap_or(iface)
-}
-
-/// Reads the sysfs carrier status of the given network interface or its parent device.
-#[must_use]
-pub fn read_carrier(iface: &str) -> Option<bool> {
-    let check = |name: &str| -> Option<bool> {
-        let mut path_buf = [0u8; 64];
-        let prefix = b"/sys/class/net/";
-        let suffix = b"/carrier";
-        let name_bytes = name.as_bytes();
-        let total_len = prefix.len() + name_bytes.len() + suffix.len();
-        if total_len > path_buf.len() {
-            return None;
-        }
-        path_buf[..prefix.len()].copy_from_slice(prefix);
-        path_buf[prefix.len()..prefix.len() + name_bytes.len()].copy_from_slice(name_bytes);
-        path_buf[prefix.len() + name_bytes.len()..total_len].copy_from_slice(suffix);
-        let path = std::str::from_utf8(&path_buf[..total_len]).ok()?;
-
-        let mut buf = [0u8; 8];
-        let mut file = std::fs::File::open(path).ok()?;
-        let n = file.read(&mut buf).ok()?;
-        let s = std::str::from_utf8(&buf[..n]).ok()?.trim();
-        match s {
-            "1" => Some(true),
-            "0" => Some(false),
-            _ => None,
-        }
-    };
-
-    if let Some(c) = check(iface) {
-        return Some(c);
-    }
-    let parent = resolve_parent_iface(iface);
-    if parent != iface {
-        return check(parent);
-    }
-    None
-}
-
 const PPPOE_DEPS: &[Edge] = &[Edge::requires(
     ServiceId::Interfaces,
     lanforge_core::service::LossPolicy::Continue,
 )];
 
-pub struct PppoeService {
+pub struct PppoeService<H: PppoeHost = KernelHost> {
     cfg: PppoeConfig,
     transport: Option<PppoeTransport>,
     ctx: LanforgeContext,
@@ -130,12 +84,12 @@ pub struct PppoeService {
     /// Injected RA listener for the session link (tests); live sessions bind one on the PPP
     /// interface once it exists.
     wan_ra: Option<Icmp6Transport>,
+    /// Interface lookup, link state and the kernel side of the PPP link.
+    host: H,
 }
 
-impl PppoeService {
-    /// Static identifier for the service.
-    pub const SERVICE_ID: ServiceId = ServiceId::Pppoe;
-
+impl PppoeService<KernelHost> {
+    /// The production service: `PPPoE` over the kernel's `ppp_generic`.
     #[must_use]
     pub fn new(mut cfg: PppoeConfig, ctx: LanforgeContext) -> Self {
         if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
@@ -157,15 +111,22 @@ impl PppoeService {
             terminal_status: None,
             config_sub,
             wan_ra: None,
+            host: KernelHost,
         }
     }
+}
 
-    /// Creates an instance of `PppoeService` with an injected transport (e.g. for rootless tests).
+impl<H: PppoeHost> PppoeService<H> {
+    /// Static identifier for the service.
+    pub const SERVICE_ID: ServiceId = ServiceId::Pppoe;
+
+    /// A service on an injected transport and host (rootless tests use in-memory ones).
     #[must_use]
-    pub fn with_transport(
+    pub fn with_host(
         mut cfg: PppoeConfig,
         ctx: LanforgeContext,
         transport: PppoeTransport,
+        host: H,
     ) -> Self {
         if let Some(dynamic_cfg) = ctx.get_pppoe_config() {
             cfg = dynamic_cfg;
@@ -186,6 +147,7 @@ impl PppoeService {
             terminal_status: None,
             config_sub,
             wan_ra: None,
+            host,
         }
     }
 
@@ -295,21 +257,7 @@ impl PppoeService {
         if let Some(ra) = &self.wan_ra {
             return Some(ra.clone());
         }
-        if self.is_inert() {
-            return None;
-        }
-        Icmp6Transport::bind_ra_listener(interface)
-            .inspect_err(|e| {
-                warn!(interface, error = %e, "Cannot listen for the ISP's RAs; IPv6 resolvers not followed");
-            })
-            .ok()
-    }
-
-    #[must_use]
-    pub fn is_inert(&self) -> bool {
-        self.transport
-            .as_ref()
-            .is_some_and(PppoeTransport::is_inert)
+        self.host.ra_listener(interface)
     }
 
     async fn teardown_active_session(&mut self, reason: String) {
@@ -361,18 +309,9 @@ impl PppoeService {
         }
     }
 
-    fn find_interface_details(iface_name: &str) -> Option<(u32, MacAddr)> {
-        let ifindex = sys::if_name_to_index(iface_name)?;
-        let mac = sys::if_hwaddr(iface_name)?;
-        Some((ifindex, MacAddr(mac)))
-    }
-
     fn get_interface_details(&self) -> Result<(u32, MacAddr), PppoeError> {
-        if let Some(details) = Self::find_interface_details(&self.cfg.wan_iface) {
+        if let Some(details) = self.host.interface(&self.cfg.wan_iface) {
             return Ok(details);
-        }
-        if self.is_inert() {
-            return Ok((1, MacAddr([0x02, 0x00, 0x00, 0x00, 0x00, 0x02])));
         }
         Err(PppoeError::NegotiationFailed(format!(
             "Interface {} not found or has no MAC address",
@@ -469,34 +408,6 @@ impl PppoeService {
         );
 
         Ok((session, lcp_res, ipcp_res))
-    }
-
-    async fn setup_dataplane(
-        &self,
-        session: &PppoeSession,
-        lcp_res: &crate::lcp::LcpNegotiated,
-        ipcp_res: &crate::ipcp::IpcpNegotiated,
-    ) -> Result<(String, Option<crate::kernel::KernelSession>), PppoeError> {
-        if session.is_inert() {
-            return Ok(("ppp0".to_string(), None));
-        }
-
-        info!("Performing kernel ppp_generic handoff...");
-        let session_fd = session.try_clone_session_fd()?.ok_or_else(|| {
-            PppoeError::NegotiationFailed("No session fd available for kernel handoff".into())
-        })?;
-        let kernel_session = handoff_to_kernel(session_fd, lcp_res.mru)?;
-        session.attach_kernel_channel(kernel_session.ppp_chan_fd.try_clone()?)?;
-        configure_interface(
-            &kernel_session.interface_name,
-            ipcp_res.local_ip,
-            ipcp_res.peer_ip,
-            ipcp_res.local_v6_ll,
-            ipcp_res.peer_v6_ll,
-            lcp_res.mru,
-        )
-        .await?;
-        Ok((kernel_session.interface_name.clone(), Some(kernel_session)))
     }
 
     pub fn publish_connected_status(
@@ -601,15 +512,7 @@ impl PppoeService {
     }
 
     async fn wait_for_carrier(&mut self) -> Result<(), PppoeError> {
-        if self.is_inert() || !Path::new("/sys/class/net").exists() {
-            info!(
-                wan_iface = %self.cfg.wan_iface,
-                "Sysfs net class unavailable or inert mode, skipping physical carrier check"
-            );
-            return Ok(());
-        }
-
-        if read_carrier(&self.cfg.wan_iface) == Some(true) {
+        if self.host.carrier(&self.cfg.wan_iface) == Some(true) {
             info!(
                 wan_iface = %self.cfg.wan_iface,
                 "Physical carrier detected on WAN interface (link UP)"
@@ -660,7 +563,7 @@ impl PppoeService {
                 }
                 _ = check_timer.tick() => {
                     wait_ticks += 1;
-                    if read_carrier(&self.cfg.wan_iface) == Some(true) {
+                    if self.host.carrier(&self.cfg.wan_iface) == Some(true) {
                         info!(
                             wan_iface = %self.cfg.wan_iface,
                             waited_secs = wait_ticks,
@@ -711,8 +614,7 @@ impl PppoeService {
         let prober = if let Some(p) = self.prober.clone() {
             p
         } else {
-            let Some((probe_ifindex, probe_mac)) = Self::find_interface_details(probe_iface_name)
-            else {
+            let Some((probe_ifindex, probe_mac)) = self.host.interface(probe_iface_name) else {
                 warn!(
                     target_ip = %self.cfg.terminal_probe.target_ip,
                     probe_iface = %probe_iface_name,
@@ -946,7 +848,7 @@ impl PppoeService {
                 meta.peer_ip = ipcp_res.peer_ip;
             }
             let (interface_name, _kernel_session) =
-                self.setup_dataplane(&session, &lcp_res, &ipcp_res).await?;
+                self.host.bring_up(&session, &lcp_res, &ipcp_res).await?;
 
             self.publish_connected_status(&interface_name, &disc_res, &lcp_res, &ipcp_res);
 
@@ -1015,7 +917,7 @@ impl PppoeService {
     }
 }
 
-impl LanforgeService for PppoeService {
+impl<H: PppoeHost> LanforgeService for PppoeService<H> {
     fn spec(&self) -> ServiceSpec {
         ServiceSpec {
             id: Self::SERVICE_ID,
@@ -1052,7 +954,7 @@ impl LanforgeService for PppoeService {
     }
 }
 
-impl AsyncService for PppoeService {
+impl<H: PppoeHost> AsyncService for PppoeService<H> {
     #[allow(clippy::too_many_lines)]
     async fn serve(&mut self, ctx: &LanforgeContext, h: &ServiceHandle) -> Result<(), CoreError> {
         self.handle = Some(h.clone());
@@ -1066,7 +968,7 @@ impl AsyncService for PppoeService {
             return Ok(());
         }
 
-        if !self.is_inert() && !Path::new("/dev/ppp").exists() {
+        if !self.host.ppp_available() {
             warn!(
                 service = "PPPoE",
                 "/dev/ppp device unavailable (ppp_generic kernel module missing). Disabling PPPoE service."
@@ -1231,24 +1133,5 @@ impl AsyncService for PppoeService {
         self.teardown_active_session("Service stopped or shut down".to_string())
             .await;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_resolve_parent_iface() {
-        assert_eq!(resolve_parent_iface("eth0.10"), "eth0");
-        assert_eq!(resolve_parent_iface("wan0.35"), "wan0");
-        assert_eq!(resolve_parent_iface("eth0"), "eth0");
-        assert_eq!(resolve_parent_iface("wan0"), "wan0");
-        assert_eq!(resolve_parent_iface("enp1s0.100"), "enp1s0");
-    }
-
-    #[test]
-    fn test_read_carrier_nonexistent() {
-        assert_eq!(read_carrier("nonexistent_iface_xyz_123"), None);
     }
 }
