@@ -29,3 +29,7 @@ pub use server::HttpService;
 
 #[cfg(all(test, feature = "server"))]
 mod tests;
+#[cfg(test)]
+use tempfile as _;
+#[cfg(test)]
+use tower as _;

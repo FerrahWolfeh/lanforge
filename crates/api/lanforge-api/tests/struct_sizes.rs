@@ -1,3 +1,4 @@
+#![allow(unused_crate_dependencies, reason = "integration test crates see every dev-dependency")]
 use lanforge_api::api::*;
 use lanforge_api::rpc::*;
 use std::mem::{align_of, size_of};

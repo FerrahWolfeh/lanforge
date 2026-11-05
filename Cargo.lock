@@ -2403,8 +2403,6 @@ name = "lanforge-api"
 version = "0.43.0"
 dependencies = [
  "bitflags 2.13.0",
- "chrono",
- "futures",
  "lanforge-crypto",
  "lanforge-macros",
  "lanforge-types",
@@ -2424,7 +2422,6 @@ name = "lanforge-api-dispatch"
 version = "0.43.0"
 dependencies = [
  "chrono",
- "futures",
  "hex",
  "hotpath",
  "lanforge-api",
@@ -2433,16 +2430,13 @@ dependencies = [
  "lanforge-db",
  "lanforge-db-core",
  "lanforge-dhcp",
- "lanforge-macros",
  "lanforge-transport",
  "lanforge-types",
  "pnet",
  "rand 0.10.3",
- "serde",
  "serde_json",
  "tempfile",
  "tokio",
- "toml",
  "tracing",
 ]
 
@@ -2675,7 +2669,6 @@ dependencies = [
  "axum-server",
  "base64 0.23.1",
  "bytes",
- "chrono",
  "futures",
  "http-body-util",
  "hyper",
@@ -2688,10 +2681,8 @@ dependencies = [
  "lanforge-crypto",
  "lanforge-db",
  "lanforge-db-core",
- "lanforge-dhcp",
  "lanforge-dns",
  "lanforge-dns-wire",
- "lanforge-macros",
  "lanforge-types",
  "lanforge-webui",
  "libc",
@@ -2871,7 +2862,6 @@ dependencies = [
 name = "lanforge-uds"
 version = "0.43.0"
 dependencies = [
- "futures",
  "hotpath",
  "lanforge-api",
  "lanforge-api-dispatch",

@@ -1,5 +1,12 @@
 pub mod handlers;
 
+#[cfg(test)]
+use lanforge_db as _;
+#[cfg(test)]
+use lanforge_dhcp as _;
+#[cfg(test)]
+use tempfile as _;
+
 use lanforge_api::api::{
     AdblockCheckResponse, AuthTokenResponse, DevicesResponse, DhcpOptionsResponse,
     DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockSourcesResponse,

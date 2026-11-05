@@ -13,10 +13,8 @@ lanforge-api-dispatch = { workspace = true, optional = true }
 lanforge-db-core = { workspace = true, optional = true }
 lanforge-dns = { workspace = true, optional = true }
 lanforge-dns-wire = { workspace = true, optional = true }
-lanforge-macros = { workspace = true, optional = true }
 lanforge-types = { workspace = true }
 lanforge-crypto = { workspace = true, optional = true }
-lanforge-dhcp = { workspace = true, optional = true }
 
 # Workspace
 thiserror = { workspace = true }
@@ -25,7 +23,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 socket2 = { workspace = true }
-chrono = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
@@ -85,10 +82,7 @@ server = [
     "dep:rustls",
     "dep:lanforge-db-core",
     "dep:lanforge-api-dispatch",
-    "dep:lanforge-macros",
     "dep:lanforge-core",
-    "dep:lanforge-dhcp",
-    "dep:chrono",
     "dep:rand",
     "dep:async-stream",
     "dep:libc",
