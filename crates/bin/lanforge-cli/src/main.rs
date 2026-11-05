@@ -1,3 +1,8 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "binary target uses dependencies via library target"
+)]
+
 use clap::Parser;
 use color_eyre::Result;
 use lanforge_cli::args::{Cli, Command};

@@ -1,4 +1,8 @@
 //! `lanforge` — Central network identity manager (IPv6/IPv4).
+#![allow(
+    unused_crate_dependencies,
+    reason = "binary target uses dependencies via library target"
+)]
 #![warn(clippy::all, clippy::pedantic, clippy::nursery)]
 #![allow(
     clippy::missing_docs_in_private_items,

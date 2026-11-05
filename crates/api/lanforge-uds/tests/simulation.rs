@@ -1,4 +1,7 @@
-#![allow(unused_crate_dependencies, reason = "integration test crates see every dev-dependency")]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 use lanforge_api::rpc::{RpcRequest, RpcResponse};
 use lanforge_core::bus::{EventBus, LanforgeEvent, SystemEvent};
 use lanforge_core::context::LanforgeContext;

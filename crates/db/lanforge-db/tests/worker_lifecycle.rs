@@ -1,4 +1,7 @@
-#![allow(unused_crate_dependencies, reason = "integration test crates see every dev-dependency")]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 use lanforge_core::context::ConfigPatch;
 use std::net::Ipv4Addr;
 use std::sync::Arc;

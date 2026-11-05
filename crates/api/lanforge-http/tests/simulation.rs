@@ -1,4 +1,7 @@
-#![allow(unused_crate_dependencies, reason = "integration test crates see every dev-dependency")]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 // Drives the server with the crate's own remote client.
 #![cfg(all(feature = "server", feature = "client"))]
 

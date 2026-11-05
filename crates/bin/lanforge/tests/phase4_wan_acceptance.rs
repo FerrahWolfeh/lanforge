@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! Acceptance tests for Phase 4 — Synthetic Nodes (interfaces, wan) and WAN Transitions.
 
 use std::net::Ipv4Addr;

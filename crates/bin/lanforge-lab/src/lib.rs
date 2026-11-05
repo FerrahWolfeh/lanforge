@@ -21,6 +21,8 @@
     clippy::doc_markdown
 )]
 
+use color_eyre as _;
+
 pub mod cli;
 pub mod engine;
 pub mod error;

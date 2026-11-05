@@ -16,12 +16,7 @@ path = "src/main.rs"
 [dependencies]
 # Lanforge
 lanforge-types = { workspace = true, features = ["adblock"] }
-lanforge-core = { workspace = true, features = ["adblock"] }
 lanforge-dns-wire = { workspace = true }
-lanforge-dhcp = { workspace = true }
-lanforge-dns = { workspace = true, features = ["adblock", "dot", "doh-upstream", "ring"] }
-lanforge-ra = { workspace = true }
-lanforge-discovery = { workspace = true }
 
 # Workspace
 tokio = { workspace = true, features = ["full"] }
@@ -30,10 +25,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 socket2 = { workspace = true }
-pnet = { workspace = true }
-bytes = { workspace = true }
 rand = { workspace = true }
 parking_lot = { workspace = true }
 libc = { workspace = true }

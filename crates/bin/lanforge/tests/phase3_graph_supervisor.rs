@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 //! Phase 3 Acceptance Tests — Graph Supervisor, DAG Validation, and Lifecycle Policies.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};

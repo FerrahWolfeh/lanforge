@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 use std::sync::Arc;
 
 use lanforge_lab::cli::args::{ModeArg, ScenarioArg};

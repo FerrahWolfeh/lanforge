@@ -1,11 +1,13 @@
-#![allow(unused_crate_dependencies, reason = "integration test crates see every dev-dependency")]
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 // Entry-point contract tests for `lanforge-http`.
 //
 // Uses `tower::ServiceExt::oneshot` to drive the Axum router directly —
 // no TCP port is bound, so tests are hermetic and instantaneous.
 // Each test function covers a logical group of scenarios in a grid table,
 // reducing boilerplate while maximising coverage of the API contract.
-
 #![cfg(feature = "server")]
 use axum::{
     Router,

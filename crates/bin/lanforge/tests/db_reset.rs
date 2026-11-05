@@ -1,3 +1,7 @@
+#![allow(
+    unused_crate_dependencies,
+    reason = "integration test crates see every dev-dependency"
+)]
 use lanforge::config::Config;
 use lanforge_api::rpc::LanforgeRpcClient;
 use lanforge_api_dispatch::ClientContext;
