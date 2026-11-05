@@ -6,14 +6,14 @@ use std::os::fd::{AsFd, AsRawFd, OwnedFd, RawFd};
 use std::sync::Arc;
 use tokio::io::unix::AsyncFd;
 
-/// EtherType for PPPoE Active Discovery packets.
+/// `EtherType` for `PPPoE` Active Discovery packets.
 pub const ETH_P_PPP_DISC: u16 = 0x8863;
-/// EtherType for PPPoE Session packets.
+/// `EtherType` for `PPPoE` Session packets.
 pub const ETH_P_PPP_SES: u16 = 0x8864;
-/// Protocol constant for PPPoE over PPPOX.
+/// Protocol constant for `PPPoE` over PPPOX.
 pub const PX_PROTO_OE: u32 = 0;
 
-/// Linux PPPoE sockaddr structure for `AF_PPPOX`.
+/// Linux `PPPoE` sockaddr structure for `AF_PPPOX`.
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct PppoeAddr {
@@ -58,7 +58,7 @@ struct PppoeTransportInner {
     metrics: Arc<TransportMetrics>,
 }
 
-/// Test handle for rootless PPPoE simulation and verification.
+/// Test handle for rootless `PPPoE` simulation and verification.
 #[derive(Clone)]
 pub struct PppoeInertHandle {
     pub discovery: InertHandle<()>,
@@ -66,35 +66,35 @@ pub struct PppoeInertHandle {
 }
 
 impl PppoeInertHandle {
-    /// Injects a synthetic discovery frame (e.g. PADO, PADS) to the PPPoE client.
+    /// Injects a synthetic discovery frame (e.g. PADO, PADS) to the `PPPoE` client.
     pub async fn inject_discovery(&self, frame: Vec<u8>) {
         self.discovery.inject(frame, ()).await;
     }
 
-    /// Receives the next discovery frame sent by the PPPoE client (e.g. PADI, PADR, PADT).
+    /// Receives the next discovery frame sent by the `PPPoE` client (e.g. PADI, PADR, PADT).
     pub async fn recv_discovery(&self) -> Option<Vec<u8>> {
         self.discovery.recv_payload().await
     }
 
-    /// Injects a synthetic session frame (e.g. LCP, Auth, IPCP, Echo-Reply) to the PPPoE client.
+    /// Injects a synthetic session frame (e.g. LCP, Auth, IPCP, Echo-Reply) to the `PPPoE` client.
     pub async fn inject_session(&self, frame: Vec<u8>) {
         self.session.inject(frame, ()).await;
     }
 
-    /// Receives the next session frame sent by the PPPoE client.
+    /// Receives the next session frame sent by the `PPPoE` client.
     pub async fn recv_session(&self) -> Option<Vec<u8>> {
         self.session.recv_payload().await
     }
 }
 
-/// Asynchronous transport abstraction for PPPoE Discovery and Session frames.
+/// Asynchronous transport abstraction for `PPPoE` Discovery and Session frames.
 #[derive(Clone)]
 pub struct PppoeTransport {
     inner: Arc<PppoeTransportInner>,
 }
 
 impl PppoeTransport {
-    /// Binds an `AF_PACKET` raw socket to `ifindex` for PPPoE Active Discovery (`ETH_P_PPP_DISC`).
+    /// Binds an `AF_PACKET` raw socket to `ifindex` for `PPPoE` Active Discovery (`ETH_P_PPP_DISC`).
     pub fn bind(ifindex: u32) -> io::Result<Self> {
         let async_fd = Self::open_discovery_socket(ifindex)?;
 
@@ -153,7 +153,7 @@ impl PppoeTransport {
         (handle, transport)
     }
 
-    /// Connects the PPPoE session data path using `AF_PPPOX`.
+    /// Connects the `PPPoE` session data path using `AF_PPPOX`.
     pub fn connect_session(
         &self,
         ifname: &str,
@@ -219,7 +219,7 @@ impl PppoeTransport {
     /// (such as LCP echo requests and replies) are captured and routed by the kernel through
     /// the PPP generic channel rather than the raw `AF_PPPOX` socket. This method redirects
     /// session reads and writes to the channel descriptor while keeping the `AF_PPPOX` socket
-    /// alive so the kernel does not unbind the PPPoE channel.
+    /// alive so the kernel does not unbind the `PPPoE` channel.
     pub fn attach_kernel_channel(&self, chan_fd: OwnedFd) -> io::Result<()> {
         let is_inert = self.is_inert();
         if is_inert {

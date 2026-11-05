@@ -958,7 +958,7 @@ async fn ra_update_is_written_to_the_config_file_without_the_lan_interface() {
 }
 
 /// Host changes reach `[hosts]` before they apply: the reservation and the boot file are
-/// written (comments kept), the DNS log switch is not (a WebUI setting, kept on the device).
+/// written (comments kept), the DNS log switch is not (a `WebUI` setting, kept on the device).
 #[tokio::test]
 async fn host_changes_are_written_to_the_config_file() {
     let client_ctx = init_test_context().await;
@@ -1016,7 +1016,7 @@ async fn host_changes_are_written_to_the_config_file() {
     assert!(client_ctx.ctx.get_device(&mac).is_some());
 }
 
-/// An update without a boot file (the WebUI does not send one) keeps the host's.
+/// An update without a boot file (the `WebUI` does not send one) keeps the host's.
 #[tokio::test]
 async fn a_host_update_without_a_boot_file_keeps_it() {
     let client_ctx = init_test_context().await;

@@ -100,7 +100,7 @@ pub fn add_default_ra_prefixes(prefixes: &mut Vec<RAPrefix>, ula: Option<Ipv6Pre
 
 /// The site's search domains: `[system]`'s, then `lan` — the rule the start-up config applies.
 /// One source for DNS local names/PTR/SOA, the DHCPv4/v6 search lists and the RA DNSSL when
-/// their own sections name none. (`[dhcp.v4] domain_name` is DHCPv4 option 15 only.)
+/// their own sections name none. (`[dhcp.v4] domain_name` is `DHCPv4` option 15 only.)
 impl super::ConfigFile {
     #[must_use]
     pub fn search_domains(&self) -> Vec<String> {

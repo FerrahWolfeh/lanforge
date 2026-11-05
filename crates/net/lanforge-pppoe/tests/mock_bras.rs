@@ -38,7 +38,7 @@ pub struct MockBrasConfig {
 
 #[derive(Debug, Default)]
 pub struct Seen {
-    /// The Name field of every CHAP Response (the PPPoE username), in order.
+    /// The Name field of every CHAP Response (the `PPPoE` username), in order.
     pub chap_names: Vec<String>,
     /// PADTs sent by the client.
     pub padts: usize,

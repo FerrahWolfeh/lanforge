@@ -97,7 +97,7 @@ impl LogDb {
         self.inner.path()
     }
 
-    /// Direct access to inner RedbDatabase.
+    /// Direct access to inner `RedbDatabase`.
     #[must_use]
     pub fn inner(&self) -> &RedbDatabase {
         &self.inner

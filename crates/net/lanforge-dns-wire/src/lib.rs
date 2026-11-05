@@ -89,7 +89,7 @@ impl<'a> WireHeader<'a> {
         }
     }
 
-    /// Converts the wire header into an owned DnsHeader.
+    /// Converts the wire header into an owned `DnsHeader`.
     #[must_use]
     pub fn to_owned(&self) -> DnsHeader {
         DnsHeader {
@@ -244,7 +244,7 @@ impl<'a> WireQuestion<'a> {
         }
     }
 
-    /// Converts the wire question into an owned DnsQuestion.
+    /// Converts the wire question into an owned `DnsQuestion`.
     #[must_use]
     pub fn to_owned(&self) -> DnsQuestion {
         let mut decoder = WireDecoder::new(self.data);
@@ -490,7 +490,7 @@ impl<'a> WireResponseScanner<'a> {
     }
 
     /// Identifies all TTL field offsets in the response (Answers, Authorities, and Additionals).
-    /// Returns (offsets, min_ttl).
+    /// Returns (offsets, `min_ttl`).
     #[must_use]
     pub fn scan_ttls(&self) -> (SmallVec<[usize; 8]>, u32) {
         let Some(header) = WireHeader::parse(self.data) else {

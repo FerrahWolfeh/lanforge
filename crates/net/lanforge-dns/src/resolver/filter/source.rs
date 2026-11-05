@@ -67,7 +67,7 @@ pub enum SourceFetchResult {
     },
 }
 
-/// Performs a conditional HTTP GET request using ETag and If-Modified-Since headers.
+/// Performs a conditional HTTP GET request using `ETag` and If-Modified-Since headers.
 pub async fn fetch_source_conditional(
     client: &Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>,
     mut url: String,

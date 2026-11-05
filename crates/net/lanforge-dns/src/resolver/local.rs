@@ -342,7 +342,7 @@ impl LocalResolver {
     /// the LAN knows answers its addresses, or NODATA for any other type; a host it does not
     /// know, or a deeper name, is NXDOMAIN; the domain itself is NODATA (an NXDOMAIN there
     /// would deny every name under it, RFC 8020). A dotless name is looked up as a LAN host and
-    /// never forwarded either (dnsmasq's `domain-needed`) — an IoT device looping on `:0` is
+    /// never forwarded either (dnsmasq's `domain-needed`) — an `IoT` device looping on `:0` is
     /// answered here — except the root and TLD delegation lookups (NS/SOA/DS/DNSKEY of a name
     /// that is not a LAN host, e.g. `. NS`, `com. DS`). Reverse names (PTR) of LAN addresses
     /// are answered when known, else forwarded.

@@ -25,7 +25,7 @@ struct Icmp6Inner {
     metrics: Arc<TransportMetrics>,
 }
 
-/// Specialized asynchronous ICMPv6 raw transport for Router Advertisements and NDP.
+/// Specialized asynchronous `ICMPv6` raw transport for Router Advertisements and NDP.
 ///
 /// Configures kernel-level `ICMP6_FILTER` for zero-overhead filtering of non-RS packets,
 /// hop limit 255 validation, and provides an inert mode for rootless testing.
@@ -35,7 +35,7 @@ pub struct Icmp6Transport {
 }
 
 impl Icmp6Transport {
-    /// Creates and binds a raw ICMPv6 socket to `iface`, joining `ff02::2` and filtering for RS (133).
+    /// Creates and binds a raw `ICMPv6` socket to `iface`, joining `ff02::2` and filtering for RS (133).
     pub fn bind(iface: &str, iface_index: u32) -> io::Result<Self> {
         let sock = Socket::new(Domain::IPV6, Type::RAW, Some(Protocol::ICMPV6))?;
 
@@ -70,7 +70,7 @@ impl Icmp6Transport {
     }
 
     /// A passive listener for the Router Advertisements another router sends on `iface` (an
-    /// ISP's on the PPPoE link): only type 134 passes the kernel filter; the all-nodes group the
+    /// ISP's on the `PPPoE` link): only type 134 passes the kernel filter; the all-nodes group the
     /// RAs go to is joined by every IPv6 interface. Receives copies only: whoever configures
     /// the link (the kernel, networkd) still gets its own.
     pub fn bind_ra_listener(iface: &str) -> io::Result<Self> {
@@ -124,7 +124,7 @@ impl Icmp6Transport {
         Arc::clone(&self.inner.metrics)
     }
 
-    /// Receives an ICMPv6 datagram into the provided buffer.
+    /// Receives an `ICMPv6` datagram into the provided buffer.
     pub async fn recv(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddrV6)> {
         match &self.inner.backend {
             Icmp6Backend::Kernel(async_fd) => loop {
@@ -160,7 +160,7 @@ impl Icmp6Transport {
         }
     }
 
-    /// Sends an ICMPv6 packet to the specified destination address.
+    /// Sends an `ICMPv6` packet to the specified destination address.
     pub fn send(&self, payload: &[u8], target: &SocketAddrV6) -> io::Result<usize> {
         let res = match &self.inner.backend {
             Icmp6Backend::Kernel(async_fd) => {

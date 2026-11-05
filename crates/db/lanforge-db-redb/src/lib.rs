@@ -74,7 +74,7 @@ impl DbWriteTx<'_> {
         Ok(())
     }
 
-    /// Stores one typed configuration value under a typed ConfigKey.
+    /// Stores one typed configuration value under a typed `ConfigKey`.
     pub fn set<T: serde::Serialize + ?Sized>(
         &mut self,
         key: lanforge_db_core::ConfigKey<T>,
@@ -91,7 +91,7 @@ impl DbWriteTx<'_> {
         Ok(())
     }
 
-    /// Removes one configuration value for a typed ConfigKey within this transaction.
+    /// Removes one configuration value for a typed `ConfigKey` within this transaction.
     pub fn remove<T>(&mut self, key: lanforge_db_core::ConfigKey<T>) -> Result<(), DbError> {
         self.remove_config(key.name())
     }
@@ -241,7 +241,7 @@ impl RedbDatabase {
         Ok(result)
     }
 
-    /// Retrieves a typed configuration value by its ConfigKey.
+    /// Retrieves a typed configuration value by its `ConfigKey`.
     pub fn get<T: serde::de::DeserializeOwned>(
         &self,
         key: lanforge_db_core::ConfigKey<T>,
@@ -253,7 +253,7 @@ impl RedbDatabase {
         .map(|opt| opt.flatten())
     }
 
-    /// Stores a typed configuration value by its ConfigKey.
+    /// Stores a typed configuration value by its `ConfigKey`.
     pub fn put<T: serde::Serialize>(
         &self,
         key: lanforge_db_core::ConfigKey<T>,

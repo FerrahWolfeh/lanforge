@@ -130,7 +130,7 @@ impl AdBlocker {
             .and_then(|bl| Self::list_verdict(bl, bl.match_lists(qname)))
     }
 
-    /// The lists' verdict, AdGuard precedence: an important block wins unless an important allow
+    /// The lists' verdict, `AdGuard` precedence: an important block wins unless an important allow
     /// also matches; otherwise any allow wins over any block. Attributed to the first list.
     fn list_verdict(bl: &DiskBlocklist, m: ListMatches) -> Option<FilterMatch> {
         let (action, mask, important) = if m.block_important != 0 && m.allow_important == 0 {

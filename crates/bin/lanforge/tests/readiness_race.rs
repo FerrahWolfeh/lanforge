@@ -92,7 +92,7 @@ async fn test_event_loop_concurrent_broadcast_readiness() {
     );
 }
 
-/// A ServiceReady lost to a lagged bus (15 services starting at once) was never recovered: the
+/// A `ServiceReady` lost to a lagged bus (15 services starting at once) was never recovered: the
 /// periodic check only re-logged "still waiting", READY=1 never reached systemd and its start
 /// timeout killed the whole daemon. The periodic check must re-read the services' real state.
 #[tokio::test]
@@ -124,7 +124,7 @@ async fn test_periodic_check_recovers_a_lost_service_ready() {
 }
 
 /// One service stuck starting must not get the daemon killed by systemd's start timeout: past the
-/// deadline READY=1 goes out, while SystemReady still waits for every service.
+/// deadline READY=1 goes out, while `SystemReady` still waits for every service.
 #[tokio::test]
 async fn test_systemd_ready_is_not_held_hostage_by_one_service() {
     let bus = Arc::new(EventBus::new());
@@ -166,8 +166,8 @@ async fn test_systemd_ready_is_not_held_hostage_by_one_service() {
 
 /// systemd's start timeout runs from exec, so the readiness deadline does too: a slow bootstrap
 /// (12 s here) leaves only 3 s before READY=1, it does not push the deadline 12 s further
-/// (that, plus the 10 s status tick, could reach the unit's 30 s TimeoutStartSec and get the
-/// daemon — and the LAN — killed while PPPoE waits on a slow ISP).
+/// (that, plus the 10 s status tick, could reach the unit's 30 s `TimeoutStartSec` and get the
+/// daemon — and the LAN — killed while `PPPoE` waits on a slow ISP).
 #[tokio::test]
 async fn test_readiness_deadline_counts_from_process_start() {
     let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);

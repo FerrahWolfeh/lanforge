@@ -1,6 +1,6 @@
 //! `[hosts]`: the static hosts, the one file section kept in the device table rather than in a
 //! config key. The file holds the reservation (MAC, hostname, addresses, boot file); the device
-//! table keeps everything observed (leases, status, DUID...) and the WebUI settings (DNS log,
+//! table keeps everything observed (leases, status, DUID...) and the `WebUI` settings (DNS log,
 //! class). Boot and reload reconcile the table to the file.
 
 use std::str::FromStr;
@@ -148,7 +148,7 @@ mod tests {
         assert_eq!(back, owner_hosts());
     }
 
-    /// The owner's file as the old binaries wrote it: `dns` is read and ignored (a WebUI
+    /// The owner's file as the old binaries wrote it: `dns` is read and ignored (a `WebUI`
     /// setting now), a full address in `v6_suffix` stays full, a suffix stays a suffix.
     #[test]
     fn owner_file_reads_as_the_live_hosts() {

@@ -1,8 +1,8 @@
-//! Without configured upstreams, DNS forwards to the resolvers the ISP announced over PPPoE.
+//! Without configured upstreams, DNS forwards to the resolvers the ISP announced over `PPPoE`.
 //!
 //! They used to be learned only from the `SessionUp` event, so a DNS restart with the session
-//! already up, a lagged PPPoE topic, or removing the custom upstreams left the LAN with no
-//! upstream at all until the next PPPoE reconnect.
+//! already up, a lagged `PPPoE` topic, or removing the custom upstreams left the LAN with no
+//! upstream at all until the next `PPPoE` reconnect.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -71,7 +71,7 @@ fn isp() -> SocketAddr {
     SocketAddr::new(ISP_DNS, 53)
 }
 
-/// `lanforge service restart dns` (or a crash restart) while PPPoE is up gets no SessionUp.
+/// `lanforge service restart dns` (or a crash restart) while `PPPoE` is up gets no `SessionUp`.
 #[tokio::test]
 async fn dns_started_with_pppoe_up_uses_the_isp_resolvers() {
     let ctx = init_test_context();
@@ -80,7 +80,7 @@ async fn dns_started_with_pppoe_up_uses_the_isp_resolvers() {
     wait_upstreams(&ctx, &[isp()]).await;
 }
 
-/// A SessionUp lost to a lagged PPPoE topic must not leave DNS without upstreams.
+/// A `SessionUp` lost to a lagged `PPPoE` topic must not leave DNS without upstreams.
 #[tokio::test]
 async fn dns_resyncs_isp_resolvers_after_a_lagged_bus() {
     let ctx = init_test_context();

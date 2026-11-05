@@ -174,7 +174,7 @@ async fn test_adblock_service_lifecycle_and_rebuild() {
     ctx.terminate();
 }
 
-/// The status carries the configured refresh time: the WebUI settings dialog reads it there
+/// The status carries the configured refresh time: the `WebUI` settings dialog reads it there
 /// (it used to export the whole system configuration for it).
 #[tokio::test(flavor = "multi_thread")]
 async fn adblock_status_reports_the_refresh_time() {

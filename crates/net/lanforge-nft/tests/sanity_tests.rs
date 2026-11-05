@@ -665,7 +665,7 @@ fn test_sanity_dns_and_vowifi_bypass_toggles() {
 
 /// AGENTS.md §4: the WAN is a closed wall. In `input` and `forward`, an `accept` that does not
 /// match the ingress interface also matches the WAN, so it is only allowed for conntrack state,
-/// ICMP/ICMPv6 control messages and DHCPv6 client replies (PD renewal). Everything else must name
+/// ICMP/ICMPv6 control messages and `DHCPv6` client replies (PD renewal). Everything else must name
 /// the (internal) interface it comes from.
 #[test]
 fn test_sanity_no_interface_less_accept_reaches_wan() {

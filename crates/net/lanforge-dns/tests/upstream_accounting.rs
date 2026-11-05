@@ -151,7 +151,7 @@ async fn every_query_has_one_winner_and_queries_count_what_was_sent() {
 }
 
 /// A backup the sequential order never needed has no evidence: "untested", not "healthy"
-/// (the owner's ::1001 showed 0 queries and "healthy").
+/// (the owner's `::1001` showed 0 queries and "healthy").
 #[tokio::test(flavor = "multi_thread")]
 async fn an_upstream_never_asked_is_untested_not_healthy() {
     let first = upstream(Some(Duration::from_millis(5))).await;

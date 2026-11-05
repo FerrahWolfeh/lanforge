@@ -68,7 +68,7 @@ async fn stop_releases_tcp_listener_for_immediate_rebind() {
     }
 }
 
-/// A new listen port from the live config (WebUI) restarts the DNS service alone and binds the
+/// A new listen port from the live config (`WebUI`) restarts the DNS service alone and binds the
 /// new port; the old one is released. The static `[dns]` value is not what gets bound.
 #[tokio::test]
 async fn live_listen_change_restarts_dns_on_the_new_port() {
@@ -298,7 +298,7 @@ async fn idle_tcp_connection_is_closed() {
 
 /// `DnsHandle` requests were served one at a time: a diagnostic query stuck on a silent
 /// upstream held up every other request (stats, adblock toggles, cache) for its whole timeout,
-/// freezing the WebUI's DNS pages.
+/// freezing the `WebUI`'s DNS pages.
 #[tokio::test]
 async fn slow_handle_request_does_not_block_others() {
     use lanforge_types::network::dns::upstream::UpstreamTarget;

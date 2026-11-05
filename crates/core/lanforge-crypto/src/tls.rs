@@ -1,5 +1,5 @@
 //! TLS server configuration from a PEM certificate chain and private key, shared by every
-//! TLS listener (DoT, DoQ, HTTPS). Each input is either raw PEM text or a file path.
+//! TLS listener (`DoT`, `DoQ`, HTTPS). Each input is either raw PEM text or a file path.
 
 use std::io::Cursor;
 use std::path::Path;

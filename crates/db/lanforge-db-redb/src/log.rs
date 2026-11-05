@@ -1,4 +1,4 @@
-//! LogStore implementation for `RedbDatabase`.
+//! `LogStore` implementation for `RedbDatabase`.
 
 use crate::tables::{
     TABLE_CONFIG, TABLE_DNS_BLOCKED, TABLE_DNS_QUERIES, TABLE_DNS_STATS_HOURLY,

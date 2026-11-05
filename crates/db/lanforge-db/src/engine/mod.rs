@@ -98,7 +98,7 @@ impl LanforgeDb {
         self.inner.legacy_config_keys()
     }
 
-    /// Returns a reference to the inner RedbDatabase.
+    /// Returns a reference to the inner `RedbDatabase`.
     #[must_use]
     pub fn redb(&self) -> &RedbDatabase {
         &self.inner

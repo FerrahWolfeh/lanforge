@@ -297,7 +297,7 @@ pub struct DhcpFile {
     pub v6: Dhcpv6File,
 }
 
-/// DHCPv4 server configuration.
+/// `DHCPv4` server configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Dhcpv4File {
@@ -349,7 +349,7 @@ impl Default for Dhcpv4File {
     }
 }
 
-/// A named DHCPv4 dynamic address pool.
+/// A named `DHCPv4` dynamic address pool.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Dhcpv4PoolFile {
@@ -374,7 +374,7 @@ pub struct Dhcpv4PoolFile {
     pub boot_file: Option<String>,
 }
 
-/// DHCPv6 server configuration.
+/// `DHCPv6` server configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Dhcpv6File {
@@ -414,7 +414,7 @@ impl Default for Dhcpv6File {
     }
 }
 
-/// A named DHCPv6 dynamic address pool: a `range` (suffixes such as `"::100-::1fff"` follow the
+/// A named `DHCPv6` dynamic address pool: a `range` (suffixes such as `"::100-::1fff"` follow the
 /// LAN prefix, full addresses are fixed) and/or a static `address`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -429,7 +429,7 @@ pub struct Dhcpv6PoolFile {
 ///
 /// The file form of `RaServerConfig` (`RaFile::from_config` / `to_config`). What the daemon
 /// derives when a key is left out (interface, default prefixes, the ULA from `[system]`,
-/// RDNSS/DNSSL from DHCPv6 and the search domains) is applied in memory, never written here.
+/// RDNSS/DNSSL from `DHCPv6` and the search domains) is applied in memory, never written here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RaFile {
@@ -813,7 +813,7 @@ pub struct PortForwardFile {
 
 /// A static host in `[hosts.<name>]` (`ConfigFile::static_hosts` / `set_static_hosts`): only
 /// what a minimal router needs — the reservation and the boot file. The table name is the
-/// hostname. DNS log settings and the device class are WebUI settings kept with the device.
+/// hostname. DNS log settings and the device class are `WebUI` settings kept with the device.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct HostFileEntry {
@@ -832,7 +832,7 @@ pub struct HostFileEntry {
     pub v6: Option<Ipv6Addr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boot_file: Option<String>,
-    /// Older files: the DNS log switch, now a WebUI setting kept with the device. Read and
+    /// Older files: the DNS log switch, now a `WebUI` setting kept with the device. Read and
     /// ignored, never written.
     #[serde(default, skip_serializing)]
     pub dns: Option<bool>,

@@ -98,7 +98,7 @@ impl ManualRules {
         best
     }
 
-    /// The manual verdict, AdGuard precedence as for the lists: an important block wins unless
+    /// The manual verdict, `AdGuard` precedence as for the lists: an important block wins unless
     /// an important allow also matches; otherwise an allow wins over a block.
     #[must_use]
     pub fn verdict(&self, qname: &str) -> Option<ManualVerdict<'_>> {

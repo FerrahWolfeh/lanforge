@@ -859,7 +859,7 @@ async fn test_dns_rewrites_contract() {
     );
 }
 
-/// The WebUI reads JSON numbers as doubles: a 63-bit content-hash id comes back rounded, so it
+/// The `WebUI` reads JSON numbers as doubles: a 63-bit content-hash id comes back rounded, so it
 /// removes by the rule's content instead.
 #[tokio::test]
 async fn test_dns_rewrite_remove_works_for_a_javascript_client() {

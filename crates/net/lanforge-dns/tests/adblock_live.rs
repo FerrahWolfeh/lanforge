@@ -81,7 +81,7 @@ fn make_query(name: &str, qtype: DnsRecordType) -> Vec<u8> {
     WireEncoder::new().encode_message(&query)
 }
 
-/// Comprehensive battery of adblock test cases executed against live StevenBlack hosts
+/// Comprehensive battery of adblock test cases executed against live `StevenBlack` hosts
 /// combined with Adblock-syntax wildcards, exception rules, badfilters, user allowlist overrides,
 /// and dynamic runtime toggles in a single execution.
 ///

@@ -18,7 +18,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const HOSTS_BODY: &str = "# StevenBlack-style hosts\n127.0.0.1 localhost\n0.0.0.0 ads.example.com\n0.0.0.0 tracker.example.net # inline comment\n0.0.0.0 telemetry.example.org\n";
 
-/// Mock upstream: 200 + ETag on first fetch, 304 when the client sends `If-None-Match`.
+/// Mock upstream: 200 + `ETag` on first fetch, 304 when the client sends `If-None-Match`.
 async fn spawn_conditional_server() -> u16 {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();

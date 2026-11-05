@@ -1176,7 +1176,7 @@ impl AsyncService for AlwaysFails {
 
 /// A failing service waits out its backoff: config changes to sections its `Condition` does not
 /// declare must not wake it. Every `ConfigChanged` bumped one global epoch, so editing an unrelated
-/// setting (e.g. adblock in the WebUI) made every failing service retry immediately.
+/// setting (e.g. adblock in the `WebUI`) made every failing service retry immediately.
 #[tokio::test]
 async fn unrelated_config_changes_do_not_cut_a_backoff_short() {
     let ctx = init_test_ctx();
@@ -1270,7 +1270,7 @@ async fn wait_node_state(
 }
 
 /// Dependents follow the node watch, not the context. A service's own `degraded()` after its first
-/// `ready()` reached only the context (the runner synced the node on the first ServiceReady only),
+/// `ready()` reached only the context (the runner synced the node on the first `ServiceReady` only),
 /// and `ready()` after `degraded()` was a no-op: the node said Online while the service was
 /// degraded, and a recovered service stayed Degraded.
 #[tokio::test]

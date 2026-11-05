@@ -721,7 +721,7 @@ async fn test_pppoe_flapping_session_backs_off() {
 
 /// AGENTS.md async hygiene: a lagged broadcast receiver skips, only a closed one ends the loop.
 /// The keepalive treated any system-bus `recv` error as the end of the session, so a burst of
-/// system events (boot, many services reporting) tore down a healthy PPPoE session and the
+/// system events (boot, many services reporting) tore down a healthy `PPPoE` session and the
 /// household got a reconnect and a new delegated prefix for nothing.
 #[tokio::test]
 async fn test_pppoe_session_survives_a_lagged_system_bus() {
@@ -773,7 +773,7 @@ async fn test_pppoe_session_survives_a_lagged_system_bus() {
 /// D-1: losing a `Requires` dependency with `LossPolicy::Continue` must not touch the service. The
 /// serve loop raced commands against the session future, so *any* command — including the
 /// `DependencyLost` the supervisor sends when `interfaces` flaps — dropped the live session
-/// (no PADT, no SessionDown) and started a new discovery while the concentrator still held the old
+/// (no PADT, no `SessionDown`) and started a new discovery while the concentrator still held the old
 /// session.
 #[tokio::test]
 async fn test_pppoe_session_survives_dependency_notifications() {
@@ -828,9 +828,9 @@ async fn test_pppoe_session_survives_dependency_notifications() {
     let _ = timeout(Duration::from_secs(2), handle).await;
 }
 
-/// One SessionDown per SessionUp. An admin stop tears the session down in the serve loop and the
+/// One `SessionDown` per `SessionUp`. An admin stop tears the session down in the serve loop and the
 /// supervisor then calls `cleanup()`; the old heuristic also looked at the WAN snapshot, which the
-/// `wan` service updates asynchronously, so the second teardown published a second SessionDown and
+/// `wan` service updates asynchronously, so the second teardown published a second `SessionDown` and
 /// every consumer (firewall, traffic, DNS) reacted twice.
 #[tokio::test]
 async fn test_pppoe_stop_then_cleanup_publishes_one_session_down() {
@@ -942,7 +942,7 @@ async fn test_pppoe_reacts_to_padt_from_the_concentrator() {
 
 /// Daemon readiness (`READY=1` to systemd) waits for every service to settle. WAN readiness is the
 /// physical path to the modem/terminal, not the ISP session: a concentrator that does not answer
-/// must not keep PPPoE unsettled, or `TimeoutStartSec` kills the daemon and the LAN (DHCP, DNS,
+/// must not keep `PPPoE` unsettled, or `TimeoutStartSec` kills the daemon and the LAN (DHCP, DNS,
 /// firewall) restart-loops with it.
 #[tokio::test]
 async fn test_pppoe_settles_before_the_session_is_up() {
@@ -994,8 +994,8 @@ async fn test_pppoe_settles_before_the_session_is_up() {
 }
 
 /// The supervisor node (what dependents such as `wan` follow) only learns states reported through
-/// the handle. PPPoE wrote Online/Degraded straight into the context and relied on the
-/// once-per-start ServiceReady bridge, so its node could disagree with its real state.
+/// the handle. `PPPoE` wrote Online/Degraded straight into the context and relied on the
+/// once-per-start `ServiceReady` bridge, so its node could disagree with its real state.
 #[tokio::test]
 async fn test_pppoe_reports_its_state_through_the_handle() {
     let (ctx, bus) = create_test_context();

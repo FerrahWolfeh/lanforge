@@ -321,7 +321,7 @@ async fn test_dhcpv6_synthetic_full_lifecycle() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// All IA_NA addresses offered in an ADVERTISE.
+/// All `IA_NA` addresses offered in an ADVERTISE.
 fn advertised_addrs(adv: &MessageV6) -> Vec<Ipv6Addr> {
     adv.opts()
         .iter()
@@ -336,7 +336,7 @@ fn advertised_addrs(adv: &MessageV6) -> Vec<Ipv6Addr> {
         .collect()
 }
 
-/// Pools follow the prefix of the served LAN interface only. On a PPPoE reconnect `ppp0` gets
+/// Pools follow the prefix of the served LAN interface only. On a `PPPoE` reconnect `ppp0` gets
 /// its own /64; leasing addresses from it leaves clients with an unroutable IPv6 address.
 #[tokio::test]
 async fn test_dhcpv6_pool_ignores_wan_prefix_changes() -> Result<(), Box<dyn Error>> {
@@ -487,7 +487,7 @@ async fn test_dhcpv6_static_suffix_follows_renumbered_gua() -> Result<(), Box<dy
             MessageV6::decode(&mut Decoder::new(&reply)).expect("valid DHCPv6")
         }
     };
-    /// `(addr, preferred, valid)` of every IA_NA address, plus the IA's T1.
+    /// `(addr, preferred, valid)` of every `IA_NA` address, plus the IA's T1.
     fn ia_view(msg: &MessageV6) -> (Vec<(Ipv6Addr, u32, u32)>, u32) {
         let mut addrs = Vec::new();
         let mut t1 = 0;
@@ -814,7 +814,7 @@ async fn test_dhcpv4_static_reservation_beats_a_dynamic_request() -> Result<(), 
     Ok(())
 }
 
-/// `(addr, preferred, valid)` of every IA_NA address in `msg`.
+/// `(addr, preferred, valid)` of every `IA_NA` address in `msg`.
 fn ia_na_addrs(msg: &MessageV6) -> Vec<(Ipv6Addr, u32, u32)> {
     let mut addrs = Vec::new();
     for opt in msg.opts().iter() {
@@ -857,7 +857,7 @@ fn set_lan_gua(ctx: &LanforgeContext, ifindex: u32, server_mac: MacAddr, gua: &s
 
 /// Owner's desktop (`NetworkManager`): DUID-UUID (no MAC inside), a stable-privacy link-local
 /// (not EUI-64), a static host registered by MAC only, and a Rapid Commit Solicit. The Reply
-/// granted `::1057:cafe` but recorded no binding, so every Renew got NoBinding and every
+/// granted `::1057:cafe` but recorded no binding, so every Renew got `NoBinding` and every
 /// Rebind was ignored: the client stayed on a withdrawn GUA until its valid lifetime ran out.
 #[tokio::test]
 async fn test_dhcpv6_rapid_commit_reply_is_a_binding() -> Result<(), Box<dyn Error>> {
@@ -1144,7 +1144,7 @@ async fn dhcp_without_pools_settles_dormant_and_serves_once_a_pool_appears()
     Ok(())
 }
 
-/// Starts DHCPv6 on a LAN with a GUA pool (the delegated prefix has 7200 s of validity left,
+/// Starts `DHCPv6` on a LAN with a GUA pool (the delegated prefix has 7200 s of validity left,
 /// the configured lease time is 86400 s); returns the exchange handle and the server DUID.
 async fn start_v6_gua(
     ctx: &LanforgeContext,
@@ -1201,7 +1201,7 @@ fn recorded_v6_lease_secs(ctx: &LanforgeContext, mac: &MacAddr, ip: Ipv6Addr) ->
 }
 
 /// The lease the daemon records must be the one the client was given (RFC 8415 valid lifetime),
-/// like DHCPv4 `a378eed3`: the GUA lease is capped by the delegated prefix (7200 s), so
+/// like `DHCPv4` `a378eed3`: the GUA lease is capped by the delegated prefix (7200 s), so
 /// recording the configured 86400 s kept the address taken long after the client let it go.
 #[tokio::test]
 async fn test_dhcpv6_records_the_lifetime_the_client_received() -> Result<(), Box<dyn Error>> {

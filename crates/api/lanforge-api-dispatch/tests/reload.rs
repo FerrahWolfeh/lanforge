@@ -430,7 +430,7 @@ async fn reload_applies_the_site_search_domains() {
     assert_eq!(client.ctx.get_site_domains().0, ["home.arpa", "lan"]);
 }
 
-/// The WebUI loads the firewall, edits it and sends it back to be written to the file: the GET
+/// The `WebUI` loads the firewall, edits it and sends it back to be written to the file: the GET
 /// must not fill an empty `external` zone with the WAN interface (the ruleset binds the active
 /// WAN itself), or `wan0`/`ppp0` lands in the file as if the admin had written it.
 #[tokio::test]

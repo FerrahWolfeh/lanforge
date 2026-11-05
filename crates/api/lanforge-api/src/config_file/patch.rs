@@ -184,7 +184,7 @@ mod tests {
     use super::*;
 
     /// A comment written above a section's header belongs to the header in `toml_edit`: it
-    /// used to be dropped every time the section was rewritten (a WebUI change).
+    /// used to be dropped every time the section was rewritten (a `WebUI` change).
     #[test]
     fn comment_above_a_patched_section_is_kept() {
         let mut doc: DocumentMut = "[system]\niface = \"lan0\"\n\n# ISP login, ask before changing\n[pppoe]\nenabled = true\n\n# shaping\n[traffic.sqm]\nenabled = false\n"

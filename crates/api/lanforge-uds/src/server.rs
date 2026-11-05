@@ -331,7 +331,7 @@ where
     Ok(())
 }
 
-/// Handles the 'DnsQueryLog' command by streaming live DNS query events.
+/// Handles the '`DnsQueryLog`' command by streaming live DNS query events.
 async fn handle_dns_query_log_stream<W, R>(
     writer: &mut W,
     mut reader: R,

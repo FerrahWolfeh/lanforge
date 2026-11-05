@@ -206,7 +206,7 @@ fn set_iface_gua(ctx: &LanforgeContext, ifindex: u32, gua: Option<Ipv6Addr>) {
     });
 }
 
-/// RA follows the LAN prefix (delegated by the OS), never the WAN link prefix: on a PPPoE
+/// RA follows the LAN prefix (delegated by the OS), never the WAN link prefix: on a `PPPoE`
 /// reconnect `ppp0` gets its own /64 while the LAN keeps or changes its delegated prefix.
 #[tokio::test]
 async fn test_ra_prefix_deprecation_on_renumber() {
@@ -369,7 +369,7 @@ async fn test_ra_deprecates_prefix_from_before_restart() {
     );
 }
 
-/// The prefix found at boot is withdrawn before RA starts (NetworkManager during a reconnect):
+/// The prefix found at boot is withdrawn before RA starts (`NetworkManager` during a reconnect):
 /// RA starts with no LAN GUA, and when the new one arrives the boot prefix must be deprecated.
 #[tokio::test]
 async fn test_ra_deprecates_boot_prefix_withdrawn_before_start() {

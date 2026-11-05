@@ -1,4 +1,4 @@
-//! DeviceStore implementation for `RedbDatabase`.
+//! `DeviceStore` implementation for `RedbDatabase`.
 
 use crate::tables::{TABLE_DEVICES, TABLE_META, TABLE_STATIC_HOSTS};
 use crate::{RedbDatabase, decode, encode, encode_into};

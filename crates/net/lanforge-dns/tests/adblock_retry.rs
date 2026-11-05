@@ -52,7 +52,7 @@ async fn spawn_list_server(online: Arc<AtomicBool>) -> (u16, Arc<AtomicUsize>) {
     (port, hits)
 }
 
-/// Owner's boot log: the stale-list refresh ran before PPPoE was up, failed to resolve the list
+/// Owner's boot log: the stale-list refresh ran before `PPPoE` was up, failed to resolve the list
 /// host and slept a 5 min backoff although upstreams appeared seconds later. A failed pass must
 /// retry as soon as the DNS server gets upstreams.
 #[tokio::test(flavor = "multi_thread")]

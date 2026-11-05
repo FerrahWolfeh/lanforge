@@ -583,7 +583,7 @@ fn should_auto_enable(filter: &AdBlocker, config_enabled: bool) -> bool {
     config_enabled && !paused && !filter.is_enabled() && filter.blocklist_size() > 0
 }
 
-/// Computes the next local DateTime when the daily blocklist check should trigger.
+/// Computes the next local `DateTime` when the daily blocklist check should trigger.
 #[cfg(feature = "adblock")]
 #[must_use]
 pub fn compute_next_refresh_target(

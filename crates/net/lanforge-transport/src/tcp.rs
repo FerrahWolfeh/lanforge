@@ -30,7 +30,7 @@ pub struct DualTcpListener {
 }
 
 impl DualTcpListener {
-    /// Binds a dual-stack TCP listener to `0.0.0.0:port` and `[::]:port` (IPV6_V6ONLY=true).
+    /// Binds a dual-stack TCP listener to `0.0.0.0:port` and `[::]:port` (`IPV6_V6ONLY=true`).
     ///
     /// If IPv6 is unsupported on the host, it gracefully falls back to IPv4 single-listener.
     pub fn bind_dual_stack(port: u16) -> io::Result<Self> {

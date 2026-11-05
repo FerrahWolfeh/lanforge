@@ -983,7 +983,7 @@ to = "192.0.2.11"
     );
 }
 
-/// A pinhole is routed, not NATed: an IPv6 forward asking for another port is left out and
+/// A pinhole is routed, not `NATed`: an IPv6 forward asking for another port is left out and
 /// reported; the IPv4 forward next to it is kept.
 #[test]
 fn an_ipv6_forward_that_changes_the_port_is_left_out() {

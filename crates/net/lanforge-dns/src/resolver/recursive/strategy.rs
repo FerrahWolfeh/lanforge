@@ -119,7 +119,7 @@ impl UpstreamStrategy {
         strategy
     }
 
-    /// Changes on every upstream replacement (PPPoE up, config change, ...).
+    /// Changes on every upstream replacement (`PPPoE` up, config change, ...).
     pub fn watch_upstreams(&self) -> watch::Receiver<u64> {
         self.upstreams_epoch.subscribe()
     }

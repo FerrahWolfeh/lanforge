@@ -177,7 +177,7 @@ pub fn fast_lowercase(s: &str) -> Cow<'_, str> {
     }
 }
 
-/// Formats an IpAddr to its reverse ARPA DNS name (e.g. "2.1.64.100.in-addr.arpa.").
+/// Formats an `IpAddr` to its reverse ARPA DNS name (e.g. "2.1.64.100.in-addr.arpa.").
 #[must_use]
 pub fn ip_to_arpa(ip: IpAddr) -> String {
     match ip {

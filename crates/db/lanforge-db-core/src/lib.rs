@@ -481,7 +481,7 @@ pub trait LogStore: Send + Sync {
         bucket_secs: u64,
     ) -> Result<Vec<DnsQueryRateBucket>, DbError>;
 
-    /// Retrieves top clients by query count (ip, total_count, blocked_count).
+    /// Retrieves top clients by query count (ip, `total_count`, `blocked_count`).
     fn get_dns_top_clients(&self, limit: usize) -> Result<Vec<(String, u64, u64)>, DbError>;
 
     /// Retrieves query counts by protocol.

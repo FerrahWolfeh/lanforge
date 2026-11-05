@@ -503,7 +503,7 @@ fn parse_v6_pool_from_range(
     }
 }
 
-/// The PPPoE client configuration the setup wizard asks for, if the WAN is PPPoE.
+/// The `PPPoE` client configuration the setup wizard asks for, if the WAN is `PPPoE`.
 fn setup_pppoe_config(payload: &SetupPayload) -> Option<PppoeConfig> {
     let Some(SetupWanConfig::Pppoe {
         interface,

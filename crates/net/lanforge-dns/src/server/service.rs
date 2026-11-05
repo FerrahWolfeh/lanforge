@@ -599,7 +599,7 @@ fn unix_now_secs() -> u64 {
 }
 
 /// Upstreams DNS forwards to: the configured ones or, when none is configured, the resolvers the
-/// ISP announced on the live PPPoE session (IPCP IPv4, then RA RDNSS IPv6). Derived from current
+/// ISP announced on the live `PPPoE` session (IPCP IPv4, then RA RDNSS IPv6). Derived from current
 /// state, never from an event payload, so a restart with the session up or a lagged bus cannot
 /// leave the LAN without one.
 fn effective_upstream_targets(ctx: &LanforgeContext) -> Vec<UpstreamTarget> {

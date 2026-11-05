@@ -76,7 +76,7 @@ async fn summaries_show_live_data_and_nothing_else() {
     assert_eq!(banners.len(), 4, "only registered services have a banner");
 }
 
-/// The PPPoE uptime is the session's: the service stays up (degraded) across reconnects, so its
+/// The `PPPoE` uptime is the session's: the service stays up (degraded) across reconnects, so its
 /// own uptime would keep counting from the first session.
 #[tokio::test]
 async fn pppoe_uptime_is_the_session_age() {
@@ -96,7 +96,7 @@ async fn pppoe_uptime_is_the_session_age() {
     assert_eq!(status.uptime_secs, Some(5));
 }
 
-/// A PPPoE session that is not up reads in words ("WaitingForCarrier" was the Debug output).
+/// A `PPPoE` session that is not up reads in words ("`WaitingForCarrier`" was the Debug output).
 #[tokio::test]
 async fn pppoe_summary_names_the_state_in_words() {
     let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);

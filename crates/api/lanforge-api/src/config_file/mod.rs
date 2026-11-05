@@ -61,7 +61,7 @@ pub struct ConfigFile {
     #[serde(default)]
     pub firewall: FirewallFile,
     #[serde(default)]
-    /// The PPPoE client's own type: this file is its only source (config-storage step 2).
+    /// The `PPPoE` client's own type: this file is its only source (config-storage step 2).
     pub pppoe: PppoeConfig,
     #[serde(default)]
     /// NIC tuning and SQM: the traffic service's own type, file-owned like `pppoe`.

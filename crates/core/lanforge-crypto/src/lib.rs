@@ -1,7 +1,7 @@
 //! Cryptographic primitives, password hashing, and security helpers for Lanforge.
 //!
 //! Serves as a foundational L1 crate isolating cryptographic algorithms
-//! (e.g. Argon2id password hashing, and future TLS / DoT / DoQ primitives)
+//! (e.g. Argon2id password hashing, and future TLS / `DoT` / `DoQ` primitives)
 //! and deterministic content hashing from higher-level orchestration crates.
 
 // rustls needs a crypto provider: without one, building a TLS config panics at runtime.
