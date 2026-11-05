@@ -2,12 +2,10 @@ use crate::auth::authenticate;
 use crate::backoff::{ReconnectBackoff, SessionEnd};
 use crate::config::{PppoeConfig, PppoeCredentials};
 use crate::discovery::{PppoeDiscovery, send_padt};
-#[cfg(feature = "ebpf")]
-use crate::ebpf::EbpfSession;
 use crate::error::PppoeError;
 use crate::ipcp::negotiate_ipcp;
 use crate::keepalive::{PadtWatch, run_keepalive};
-use crate::kernel::{configure_interface, deconfigure_interface, handoff_to_kernel};
+use crate::kernel::{configure_interface, handoff_to_kernel};
 use crate::lcp::negotiate_lcp;
 use crate::session::PppoeSession;
 use crate::wan_dns::follow_wan_rdnss;
@@ -21,7 +19,6 @@ use lanforge_core::service::{
 use lanforge_transport::{ArpProber, Icmp6Transport, PppoeTransport, sys};
 use lanforge_types::config::ChangeImpact;
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::pppoe::PppoeDataplane;
 use lanforge_types::system::{
     DegradedReason, DormantReason, PppoeSessionState, PppoeStatusResponse, ServiceId, ServiceState,
     StateDetail,
@@ -107,11 +104,6 @@ pub fn read_carrier(iface: &str) -> Option<bool> {
     }
     None
 }
-
-#[cfg(feature = "ebpf")]
-type EbpfSessionHandle = Option<EbpfSession>;
-#[cfg(not(feature = "ebpf"))]
-type EbpfSessionHandle = Option<()>;
 
 const PPPOE_DEPS: &[Edge] = &[Edge::requires(
     ServiceId::Interfaces,
@@ -354,15 +346,6 @@ impl PppoeService {
             .await;
         }
 
-        if !self.is_inert() {
-            deconfigure_interface(
-                &self.cfg.wan_iface,
-                self.cfg.dataplane == PppoeDataplane::Ebpf,
-                session_meta.as_ref().and_then(|m| m.peer_ip),
-            )
-            .await;
-        }
-
         self.ctx.set_pppoe_status(None);
 
         if had_session {
@@ -491,87 +474,29 @@ impl PppoeService {
     async fn setup_dataplane(
         &self,
         session: &PppoeSession,
-        _disc_res: &crate::discovery::DiscoveryResult,
-        mac: MacAddr,
-        ifindex: u32,
         lcp_res: &crate::lcp::LcpNegotiated,
         ipcp_res: &crate::ipcp::IpcpNegotiated,
-    ) -> Result<
-        (
-            String,
-            EbpfSessionHandle,
-            Option<crate::kernel::KernelSession>,
-        ),
-        PppoeError,
-    > {
+    ) -> Result<(String, Option<crate::kernel::KernelSession>), PppoeError> {
         if session.is_inert() {
-            let interface_name = if self.cfg.dataplane == PppoeDataplane::Ebpf {
-                self.cfg.wan_iface.clone()
-            } else {
-                "ppp0".to_string()
-            };
-            return Ok((interface_name, None, None));
+            return Ok(("ppp0".to_string(), None));
         }
 
-        if self.cfg.dataplane == PppoeDataplane::Ebpf {
-            #[cfg(feature = "ebpf")]
-            {
-                info!(
-                    wan_iface = %self.cfg.wan_iface,
-                    "Attaching eBPF Generic XDP + TC fast-path data plane"
-                );
-                let ebpf_sess = EbpfSession::attach(
-                    ifindex,
-                    &self.cfg.wan_iface,
-                    _disc_res.session_id,
-                    _disc_res.ac_mac.0,
-                    mac.0,
-                    ipcp_res.local_ip,
-                    ipcp_res.peer_ip,
-                    lcp_res.mru,
-                )?;
-                configure_interface(
-                    &self.cfg.wan_iface,
-                    ipcp_res.local_ip,
-                    ipcp_res.peer_ip,
-                    Some(_disc_res.ac_mac.0),
-                    ipcp_res.local_v6_ll,
-                    ipcp_res.peer_v6_ll,
-                    lcp_res.mru,
-                )
-                .await?;
-                Ok((self.cfg.wan_iface.clone(), Some(ebpf_sess), None))
-            }
-            #[cfg(not(feature = "ebpf"))]
-            {
-                let _ = (ifindex, mac);
-                Err(PppoeError::NegotiationFailed(
-                    "eBPF dataplane support is not compiled into this binary (compile with --features ebpf)".into(),
-                ))
-            }
-        } else {
-            info!("Performing kernel ppp_generic handoff...");
-            let session_fd = session.try_clone_session_fd()?.ok_or_else(|| {
-                PppoeError::NegotiationFailed("No session fd available for kernel handoff".into())
-            })?;
-            let kernel_session = handoff_to_kernel(session_fd, lcp_res.mru)?;
-            session.attach_kernel_channel(kernel_session.ppp_chan_fd.try_clone()?)?;
-            configure_interface(
-                &kernel_session.interface_name,
-                ipcp_res.local_ip,
-                ipcp_res.peer_ip,
-                None,
-                ipcp_res.local_v6_ll,
-                ipcp_res.peer_v6_ll,
-                lcp_res.mru,
-            )
-            .await?;
-            Ok((
-                kernel_session.interface_name.clone(),
-                None,
-                Some(kernel_session),
-            ))
-        }
+        info!("Performing kernel ppp_generic handoff...");
+        let session_fd = session.try_clone_session_fd()?.ok_or_else(|| {
+            PppoeError::NegotiationFailed("No session fd available for kernel handoff".into())
+        })?;
+        let kernel_session = handoff_to_kernel(session_fd, lcp_res.mru)?;
+        session.attach_kernel_channel(kernel_session.ppp_chan_fd.try_clone()?)?;
+        configure_interface(
+            &kernel_session.interface_name,
+            ipcp_res.local_ip,
+            ipcp_res.peer_ip,
+            ipcp_res.local_v6_ll,
+            ipcp_res.peer_v6_ll,
+            lcp_res.mru,
+        )
+        .await?;
+        Ok((kernel_session.interface_name.clone(), Some(kernel_session)))
     }
 
     pub fn publish_connected_status(
@@ -588,7 +513,6 @@ impl PppoeService {
         let connected_at = Instant::now();
         let pppoe_status = PppoeStatusResponse {
             enabled: true,
-            dataplane: Some(self.cfg.dataplane),
             state: PppoeSessionState::Connected,
             interface: Some(interface_name.to_string()),
             wan_iface: Some(self.cfg.wan_iface.clone()),
@@ -653,7 +577,6 @@ impl PppoeService {
 
         let pppoe_status = PppoeStatusResponse {
             enabled: true,
-            dataplane: Some(self.cfg.dataplane),
             state,
             interface: None,
             wan_iface: Some(self.cfg.wan_iface.clone()),
@@ -1022,15 +945,13 @@ impl PppoeService {
             if let Some(ref mut meta) = self.active_session {
                 meta.peer_ip = ipcp_res.peer_ip;
             }
-            let (interface_name, _ebpf_session, _kernel_session) = self
-                .setup_dataplane(&session, &disc_res, mac, ifindex, &lcp_res, &ipcp_res)
-                .await?;
+            let (interface_name, _kernel_session) =
+                self.setup_dataplane(&session, &lcp_res, &ipcp_res).await?;
 
             self.publish_connected_status(&interface_name, &disc_res, &lcp_res, &ipcp_res);
 
             info!(
                 interface = %interface_name,
-                dataplane = ?self.cfg.dataplane,
                 ipv4 = ?ipcp_res.local_ip,
                 peer = ?ipcp_res.peer_ip,
                 dns_count = ipcp_res.dns.len(),
@@ -1145,10 +1066,7 @@ impl AsyncService for PppoeService {
             return Ok(());
         }
 
-        if !self.is_inert()
-            && self.cfg.dataplane == PppoeDataplane::Kernel
-            && !Path::new("/dev/ppp").exists()
-        {
+        if !self.is_inert() && !Path::new("/dev/ppp").exists() {
             warn!(
                 service = "PPPoE",
                 "/dev/ppp device unavailable (ppp_generic kernel module missing). Disabling PPPoE service."
@@ -1157,21 +1075,6 @@ impl AsyncService for PppoeService {
                 .bus()
                 .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionDown {
                     reason: "/dev/ppp device unavailable".into(),
-                }));
-            ctx.set_service_state(Self::SERVICE_ID, ServiceState::Error);
-            return Ok(());
-        }
-
-        #[cfg(not(feature = "ebpf"))]
-        if !self.is_inert() && self.cfg.dataplane == PppoeDataplane::Ebpf {
-            warn!(
-                service = "PPPoE",
-                "eBPF dataplane requested but not compiled into this binary (compile with --features ebpf). Disabling PPPoE service."
-            );
-            let _ = ctx
-                .bus()
-                .publish(LanforgeEvent::Pppoe(PppoeEvent::SessionDown {
-                    reason: "eBPF dataplane not compiled in".into(),
                 }));
             ctx.set_service_state(Self::SERVICE_ID, ServiceState::Error);
             return Ok(());

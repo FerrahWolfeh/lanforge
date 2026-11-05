@@ -339,7 +339,7 @@ Represents the compiled feature flags and runtime enabled capabilities of the da
 }
 ```
 
-- **Cap Enum:** `dns`, `upstream_udp_tcp`, `upstream_dot`, `upstream_doq`, `upstream_doh`, `doh_downstream`, `dhcp_v4`, `dhcp_v6`, `ra`, `ndp_discovery`, `mdns_probe`, `uds`, `http`, `zstd`, `storage` (alias `redb`), `pppoe`, `tftp`, `firewall` (alias `nft`), `traffic` (alias `sqm`), `adblock`, `ebpf`, `webui`. (`upstream_do_t`/`_q`/`_h`, the spelling before 0.42.1, are still accepted on input.)
+- **Cap Enum:** `dns`, `upstream_udp_tcp`, `upstream_dot`, `upstream_doq`, `upstream_doh`, `doh_downstream`, `dhcp_v4`, `dhcp_v6`, `ra`, `ndp_discovery`, `mdns_probe`, `uds`, `http`, `zstd`, `storage` (alias `redb`), `pppoe`, `tftp`, `firewall` (alias `nft`), `traffic` (alias `sqm`), `adblock`, `webui`. (`upstream_do_t`/`_q`/`_h`, the spelling before 0.42.1, are still accepted on input.)
 
 ### ServiceState
 Represents the operating state of a managed background service:

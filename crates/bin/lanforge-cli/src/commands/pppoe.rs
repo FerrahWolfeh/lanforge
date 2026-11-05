@@ -5,7 +5,7 @@ use color_eyre::eyre::{bail, eyre};
 use colored::Colorize;
 use inquire::{Confirm, Password, Select, Text};
 
-use lanforge_types::network::pppoe::{AuthMethod, PppoeConfig, PppoeDataplane};
+use lanforge_types::network::pppoe::{AuthMethod, PppoeConfig};
 use lanforge_types::system::{PppoeSessionState, PppoeStatusResponse};
 
 use crate::client::LanforgeClient;
@@ -73,10 +73,6 @@ pub struct PppoeSetArgs {
     /// Authentication protocol (chap-md5, pap, none)
     #[arg(long)]
     pub auth: Option<String>,
-
-    /// Data plane implementation: 'kernel' (/dev/ppp) or 'ebpf' (Generic XDP + TC)
-    #[arg(long)]
-    pub dataplane: Option<String>,
 
     /// Maximum Receive Unit (`MRU`, default 1492)
     #[arg(long)]
@@ -214,15 +210,6 @@ fn render_pppoe_session_details(status: &PppoeStatusResponse) {
         "Interface:".dimmed(),
         format!("{iface} (via {physical})").white().bold()
     );
-
-    let dp_str = match status.dataplane {
-        Some(PppoeDataplane::Ebpf) => "eBPF Fast-Path (Generic XDP + TC) [EXPERIMENTAL]"
-            .yellow()
-            .bold()
-            .to_string(),
-        _ => "Linux Kernel (ppp_generic)".cyan().to_string(),
-    };
-    println!("    {:<24} {dp_str}", "Data Plane:".dimmed());
 
     let ip_str = status.local_ip.map_or_else(
         || "none".yellow().to_string(),
@@ -366,11 +353,6 @@ fn render_pppoe_config(cfg: &PppoeConfig, show_password: bool) {
     };
     println!("  Service Status:        {enabled_str}");
 
-    let dp_str = match cfg.dataplane {
-        PppoeDataplane::Ebpf => "eBPF (Generic XDP + TC) [EXPERIMENTAL]".yellow(),
-        PppoeDataplane::Kernel => "Kernel (ppp_generic)".cyan(),
-    };
-    println!("  Data Plane:            {dp_str}");
     println!("  Physical WAN Iface:    {}", cfg.wan_iface.white().bold());
     println!(
         "  Username:              {}",
@@ -429,7 +411,6 @@ async fn apply_config_set(
         || args.password.is_some()
         || args.wan_iface.is_some()
         || args.auth.is_some()
-        || args.dataplane.is_some()
         || args.mru.is_some()
         || args.service_name.is_some()
         || args.ac_name.is_some()
@@ -463,26 +444,6 @@ async fn apply_config_set(
     }
     if let Some(auth_str) = &args.auth {
         cfg.auth = parse_auth_method(auth_str)?;
-    }
-    if let Some(dp_str) = &args.dataplane {
-        let new_dp = parse_dataplane(dp_str)?;
-        if new_dp == PppoeDataplane::Ebpf && cfg.dataplane != PppoeDataplane::Ebpf && !printer.yes {
-            println!(
-                "{}",
-                "WARNING: eBPF mode for PPPoE is EXPERIMENTAL and may have driver quirks."
-                    .yellow()
-                    .bold()
-            );
-            let ok = Confirm::new("Enable experimental eBPF mode?")
-                .with_default(false)
-                .prompt()
-                .map_err(|e| eyre!("{e}"))?;
-            if !ok {
-                println!("Aborted: PPPoE configuration update cancelled.");
-                return Ok(());
-            }
-        }
-        cfg.dataplane = new_dp;
     }
     if let Some(mru) = args.mru {
         cfg.mru = mru;
@@ -637,16 +598,6 @@ pub fn parse_auth_method(s: &str) -> Result<AuthMethod> {
     }
 }
 
-pub fn parse_dataplane(s: &str) -> Result<PppoeDataplane> {
-    match s.to_ascii_lowercase().as_str() {
-        "kernel" | "linux" | "k" => Ok(PppoeDataplane::Kernel),
-        "ebpf" | "xdp" | "bpf" => Ok(PppoeDataplane::Ebpf),
-        other => {
-            bail!("Invalid dataplane '{other}'. Valid options: kernel, ebpf");
-        }
-    }
-}
-
 #[must_use]
 pub fn mask_password(pass: &str) -> String {
     if pass.is_empty() {
@@ -667,14 +618,6 @@ mod tests {
         assert_eq!(parse_auth_method("pap").unwrap(), AuthMethod::Pap);
         assert_eq!(parse_auth_method("none").unwrap(), AuthMethod::None);
         assert!(parse_auth_method("invalid").is_err());
-    }
-
-    #[test]
-    fn test_parse_dataplane() {
-        assert_eq!(parse_dataplane("kernel").unwrap(), PppoeDataplane::Kernel);
-        assert_eq!(parse_dataplane("ebpf").unwrap(), PppoeDataplane::Ebpf);
-        assert_eq!(parse_dataplane("xdp").unwrap(), PppoeDataplane::Ebpf);
-        assert!(parse_dataplane("unknown").is_err());
     }
 
     #[test]

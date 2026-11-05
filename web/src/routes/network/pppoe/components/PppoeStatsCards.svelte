@@ -12,19 +12,17 @@
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatCardFooterItem from "$lib/components/StatCardFooterItem.svelte";
 	import StatusBadge from "$lib/components/StatusBadge.svelte";
-	import type { PppoeStatusResponse, PppoeDataplane, PppoeAuthMethod, PppoeConfig } from "$lib/api/types";
+	import type { PppoeStatusResponse, PppoeAuthMethod, PppoeConfig } from "$lib/api/types";
 
 	let {
 		status = null,
 		config = null,
-		formDataplane = "kernel",
 		formWanIface = "eth1",
 		formAuth = "chap_md5",
 		formServiceName = "",
 	}: {
 		status?: PppoeStatusResponse | null;
 		config?: PppoeConfig | null;
-		formDataplane?: PppoeDataplane;
 		formWanIface?: string;
 		formAuth?: PppoeAuthMethod;
 		formServiceName?: string;
@@ -100,7 +98,6 @@
 
 		{#snippet footer()}
 			<StatCardFooterItem label="Uptime" value={formatUptime(status?.uptime_secs)} color={status?.state === "connected" ? "text-emerald-400" : "text-muted-foreground"} />
-			<StatCardFooterItem label="Dataplane" value={(status?.dataplane ?? formDataplane) === "ebpf" ? "eBPF Fast-Path" : "Linux Kernel"} color={(status?.dataplane ?? formDataplane) === "ebpf" ? "text-amber-400" : "text-foreground"} />
 		{/snippet}
 	</StatCard>
 

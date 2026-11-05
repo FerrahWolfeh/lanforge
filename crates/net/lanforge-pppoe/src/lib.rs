@@ -10,8 +10,6 @@ pub mod auth;
 pub mod backoff;
 pub mod config;
 pub mod discovery;
-#[cfg(feature = "ebpf")]
-pub mod ebpf;
 pub mod error;
 pub mod ipcp;
 pub mod keepalive;

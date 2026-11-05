@@ -1149,7 +1149,6 @@ export interface SetupResponse {
 // PPPoE
 // ---------------------------------------------------------------------------
 
-export type PppoeDataplane = 'kernel' | 'ebpf';
 export type PppoeAuthMethod = 'none' | 'pap' | 'chap_md5';
 export type PppoeSessionState =
 	| 'disconnected'
@@ -1184,7 +1183,6 @@ export interface PppoeNftablesConfig {
 
 export interface PppoeConfig {
 	enabled: boolean;
-	dataplane: PppoeDataplane;
 	wan_iface: string;
 	username: string;
 	password: string;
@@ -1204,7 +1202,6 @@ export interface PppoeConfig {
 
 export interface PppoeStatusResponse {
 	enabled: boolean;
-	dataplane?: PppoeDataplane | null;
 	state: PppoeSessionState;
 	interface: string | null;
 	wan_iface: string | null;

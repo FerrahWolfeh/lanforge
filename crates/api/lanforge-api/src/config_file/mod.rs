@@ -194,6 +194,20 @@ mod tests {
     }
 
     #[test]
+    fn the_removed_pppoe_dataplane_key_does_not_set_the_section_aside() {
+        // `dataplane` (kernel | ebpf) was removed with the eBPF dataplane: files that still carry
+        // it keep their WAN (the key is ignored).
+        for value in ["kernel", "ebpf"] {
+            let text =
+                format!("[pppoe]\nenabled = true\ndataplane = \"{value}\"\nwan_iface = \"wan0\"\n");
+            let (cfg, set_aside) = ConfigFile::parse_lenient(&text).unwrap();
+            assert!(set_aside.is_empty(), "{value}: {set_aside:?}");
+            assert!(cfg.pppoe.enabled);
+            assert_eq!(cfg.pppoe.wan_iface, "wan0");
+        }
+    }
+
+    #[test]
     fn errors_outside_file_owned_sections_still_fail() {
         assert!(ConfigFile::parse_lenient("[system]\niface = 3\n").is_err());
         assert!(ConfigFile::parse_lenient("[pppoe\n").is_err());

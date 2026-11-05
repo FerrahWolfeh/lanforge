@@ -99,7 +99,7 @@ graph TD
 | `lanforge-webui` | L2 | Embedded WebUI asset distribution crate serving the pre-built SvelteKit production static bundle. |
 | `lanforge-dhcp` | L2 | DHCPv4 (L2 raw sockets) and DHCPv6 (`IA_NA`/`IA_PD`) servers. |
 | `lanforge-ra` | L2 | ICMPv6 Router Advertisement daemon: SLAAC prefixes, RDNSS, DNSSL, prefix deprecation on renumbering. |
-| `lanforge-pppoe` | L2 | Native PPPoE WAN client with discovery, LCP/IPCP negotiation, kernel PPP binding, LCP keepalives and optional eBPF dataplane. |
+| `lanforge-pppoe` | L2 | Native PPPoE WAN client with discovery, LCP/IPCP negotiation, kernel PPP binding and LCP keepalives. |
 | `lanforge-nft` | L2 | Stateful Netlink/nftables firewall engine with atomic in-place rule updates (~5 ms) and lockdown on stop. |
 | `lanforge-traffic` | L2 | SQM bufferbloat control (CAKE / fq_codel), flow offload, NIC offloading tuning, and real-time telemetry. |
 | `lanforge-discovery` | L2 | Device discovery: Netlink neighbor tracking (ARP/NDP), interface address monitoring, active probing and mDNS hostname probing. |
