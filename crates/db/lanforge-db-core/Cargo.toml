@@ -22,3 +22,6 @@ serde = { workspace = true }
 uuid = { workspace = true }
 redb = { workspace = true, optional = true }
 postcard = { workspace = true, optional = true }
+
+[lints]
+workspace = true

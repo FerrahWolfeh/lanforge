@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! # Lanforge `nftables` Firewall & Router Orchestrator
 //!
 //! Declarative management of `table inet lanforge`, providing host protection,

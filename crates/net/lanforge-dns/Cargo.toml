@@ -21,13 +21,13 @@ serde = { workspace = true }
 hotpath = { workspace = true, optional = true }
 smallvec = { workspace = true }
 arc-swap = { workspace = true }
-tempfile = { workspace = true }
+tempfile = { workspace = true, optional = true }
 globset = { workspace = true }
 futures = { workspace = true }
 rustls = { workspace = true, optional = true }
-chrono = { workspace = true }
+chrono = { workspace = true, optional = true }
 bytes = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, optional = true }
 
 # Third party
 dashmap = { version = "6.1.0" }
@@ -79,10 +79,11 @@ adblock = [
     "dep:hyper-rustls",
     "dep:http-body-util",
     "dep:rustls",
-    "dep:rustls-pki-types",
-    "dep:webpki-roots",
     "dep:memmap2",
     "dep:fst",
+    "dep:chrono",
+    "dep:serde_json",
+    "dep:tempfile",
     "lanforge-core/adblock",
 ]
 dot = [
@@ -92,15 +93,12 @@ dot = [
     "dep:tokio-rustls",
     "dep:webpki-roots",
 ]
-doq = ["lanforge-crypto/tls", "dep:quinn", "dep:rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
+doq = ["lanforge-crypto/tls", "dep:quinn", "dep:rustls", "dep:webpki-roots"]
 doh-upstream = [
     "dep:hyper",
     "dep:hyper-util",
     "dep:hyper-rustls",
     "dep:http-body-util",
-    "dep:rustls",
-    "dep:rustls-pki-types",
-    "dep:webpki-roots",
 ]
 hotpath = ["dep:hotpath", "lanforge-core/hotpath"]
 hotpath-alloc = [
@@ -121,3 +119,6 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "time",
 ] }
+
+[lints]
+workspace = true

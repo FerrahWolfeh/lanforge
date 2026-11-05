@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! `lanforge-db-redb` — Embedded pure-Rust database backend for Lanforge using `redb`.
 
 pub mod device;

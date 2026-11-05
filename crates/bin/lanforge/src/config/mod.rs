@@ -646,6 +646,7 @@ mod search_domain_tests {
 /// One search-domain rule for every consumer: a section's own list, else the site's
 /// (`[system] search_domains`, else `lan`).
 #[cfg(all(test, feature = "dns", feature = "dhcp"))]
+#[allow(clippy::unwrap_used, reason = "test helper parses literal config")]
 mod site_domain_tests {
     use super::*;
     use clap::Parser;

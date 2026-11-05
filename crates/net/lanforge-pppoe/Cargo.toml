@@ -52,3 +52,6 @@ path = "tests/service_lifecycle.rs"
 [[test]]
 name = "auth_handshake"
 path = "tests/auth_handshake.rs"
+
+[lints]
+workspace = true

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test assertions and setup"
+)]
 use lanforge_pppoe::discovery::frame::{
     CODE_PADI, CODE_PADO, CODE_PADR, CODE_PADS, CODE_PADT, PppoeDiscoveryFrame, TAG_AC_COOKIE,
     TAG_AC_NAME, TAG_HOST_UNIQ, TAG_SERVICE_NAME, Tag,

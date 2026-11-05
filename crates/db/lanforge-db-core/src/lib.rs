@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 #![allow(clippy::type_complexity)]
 
 pub use lanforge_types::auth::{ApiScopes, ApiTokenEntry, UserEntry, UserInfo, UserRole};

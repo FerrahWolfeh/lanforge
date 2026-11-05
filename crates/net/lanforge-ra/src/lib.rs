@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! # Lanforge Router Advertisement Server
 //!
 //! `ICMPv6` Router Advertisement daemon for Lanforge.

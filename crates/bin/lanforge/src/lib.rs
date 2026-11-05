@@ -11,6 +11,8 @@ use dhcproto as _;
 use lanforge_api_dispatch as _;
 #[cfg(test)]
 use lanforge_transport as _;
+#[cfg(test)]
+use serde_json as _;
 
 pub mod app;
 pub mod bootstrap;

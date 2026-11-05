@@ -25,6 +25,8 @@ unwrap_used = "warn"
 clone_on_ref_ptr = "warn"
 needless_borrow = "warn"
 doc_markdown = "warn"
+undocumented_unsafe_blocks = "warn"
+multiple_unsafe_ops_per_block = "warn"
 
 [workspace.dependencies]
 # Actual lanforge stuff

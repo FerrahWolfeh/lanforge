@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Cryptographic primitives, password hashing, and security helpers for Lanforge.
 //!
 //! Serves as a foundational L1 crate isolating cryptographic algorithms

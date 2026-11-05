@@ -36,3 +36,6 @@ lanforge-dhcp = { workspace = true }
 lanforge-db = { workspace = true }
 tempfile = { workspace = true }
 
+
+[lints]
+workspace = true

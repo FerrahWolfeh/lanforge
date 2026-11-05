@@ -37,3 +37,6 @@ libc.workspace = true
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 smallvec = { workspace = true }
+
+[lints]
+workspace = true

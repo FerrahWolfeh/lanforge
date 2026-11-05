@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! # Lanforge DHCP
 //!
 //! `DHCPv4` and `DHCPv6` server implementations for Lanforge.

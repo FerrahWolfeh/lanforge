@@ -29,11 +29,8 @@ smallvec = { workspace = true }
 # Third party
 parking_lot.workspace = true
 
-
-[lints.clippy]
-nursery = "warn"
-all = "warn"
-pedantic = "warn"
-
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

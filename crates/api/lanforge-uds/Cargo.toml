@@ -34,3 +34,6 @@ hotpath = [
 
 [dev-dependencies]
 lanforge-db = { workspace = true }
+
+[lints]
+workspace = true

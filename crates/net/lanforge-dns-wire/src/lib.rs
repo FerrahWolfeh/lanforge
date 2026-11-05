@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Zero-allocation DNS wire parser for hot-path routing.
 //!
 //! Replaces full Hickory Message parsing for local/upstream routing decisions.

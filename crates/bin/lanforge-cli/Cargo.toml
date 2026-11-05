@@ -68,3 +68,6 @@ lanforge-core = { workspace = true, features = ["adblock"] }
 lanforge-uds = { workspace = true, features = ["adblock"] }
 lanforge-db = { workspace = true, features = ["adblock"] }
 tempfile = { workspace = true }
+
+[lints]
+workspace = true

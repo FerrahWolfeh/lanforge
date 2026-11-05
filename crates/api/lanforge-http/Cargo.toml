@@ -117,3 +117,6 @@ http-body-util = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 lanforge-db = { workspace = true }
 tempfile.workspace = true
+
+[lints]
+workspace = true

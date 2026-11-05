@@ -28,3 +28,6 @@ adblock = ["lanforge-types/adblock"]
 hotpath = ["dep:hotpath"]
 hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
 default = []
+
+[lints]
+workspace = true

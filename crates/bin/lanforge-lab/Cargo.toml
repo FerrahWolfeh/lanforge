@@ -41,3 +41,6 @@ dhcproto = "0.15.0"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true

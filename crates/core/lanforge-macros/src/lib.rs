@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Ident, ItemStruct, ItemTrait, LitStr, Meta, parse_macro_input};
