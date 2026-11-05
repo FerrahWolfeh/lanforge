@@ -1,25 +1,35 @@
-use crate::ClientContext;
+use std::fs;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use lanforge_api::api::{
     NetworkInterfaceInfo, Response, SetupPayload, SetupResponse, SetupStatusResponse,
     SetupWanConfig,
 };
+use lanforge_api::config_file::{
+    AdblockFile, AdblockSettings, ConfigFile, DhcpSettings, DnsFile, DnsSettings, FirewallFile,
+    NamedUpstream, RaFile, write_toml_atomically,
+};
 use lanforge_core::context::ConfigPatch;
-use lanforge_crypto::hash_password;
+use lanforge_crypto::{hash_password, stable_id_or_hash};
 use lanforge_db_core::Stores;
 use lanforge_types::auth::UserRole;
 use lanforge_types::device::Ipv6AddrOrSuffix;
 use lanforge_types::identifiers::MacAddr;
-use lanforge_types::network::dhcp::Dhcpv4Pool;
+use lanforge_types::network::dhcp::{Dhcpv4Pool, Dhcpv6Pool};
+use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::{AdblockDbConfig, AdblockSourceFormat, AdblockUrlKind};
 use lanforge_types::network::dns::upstream::{UpstreamProtocol, UpstreamTarget};
 use lanforge_types::network::firewall::{FirewallConfig, ZoneForwarding};
 use lanforge_types::network::pppoe::PppoeConfig;
+use lanforge_types::network::ra::{DnsslConfig, RAPrefix, RaServerConfig};
+use lanforge_types::network::{Ipv6Prefix, is_ula};
 use pnet::datalink::interfaces;
 use pnet::ipnetwork::IpNetwork;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{error, info};
+
+use crate::ClientContext;
 
 impl ClientContext {
     /// Inspects the host environment to report first-run readiness and discovered network interfaces.
@@ -61,11 +71,8 @@ impl ClientContext {
                     IpNetwork::V4(v4) if detected_subnet_mask.is_none() => {
                         detected_subnet_mask = Some(v4.mask());
                     }
-                    IpNetwork::V6(v6)
-                        if detected_ula_prefix.is_empty()
-                            && lanforge_types::network::is_ula(&v6.ip()) =>
-                    {
-                        let prefix = lanforge_types::network::Ipv6Prefix::from_addr(v6.ip());
+                    IpNetwork::V6(v6) if detected_ula_prefix.is_empty() && is_ula(&v6.ip()) => {
+                        let prefix = Ipv6Prefix::from_addr(v6.ip());
                         detected_ula_prefix = format!("{}/64", prefix.to_addr());
                     }
                     _ => {}
@@ -184,7 +191,7 @@ impl ClientContext {
         for path in hash_paths {
             if let Some(parent) = Path::new(path).parent()
                 && parent.exists()
-                && std::fs::write(path, format!("{password_hash}\n")).is_ok()
+                && fs::write(path, format!("{password_hash}\n")).is_ok()
             {
                 info!("Setup: wrote password hash to {path}");
                 break;
@@ -219,7 +226,7 @@ impl ClientContext {
             .as_deref()
             .unwrap_or("::100-::1fff");
         let (v6_start, v6_end) = parse_v6_pool_from_range(v6_range_str);
-        let v6_pool = lanforge_types::network::dhcp::Dhcpv6Pool {
+        let v6_pool = Dhcpv6Pool {
             name: Some("Primary LAN IPv6 Scope".to_string()),
             range_start: v6_start,
             range_end: v6_end,
@@ -233,23 +240,23 @@ impl ClientContext {
         if let Some(ref ra) = payload.ra {
             if ra.enabled {
                 if ra.auto_ula {
-                    prefixes.push(lanforge_types::network::ra::RAPrefix::ula_dynamic());
+                    prefixes.push(RAPrefix::ula_dynamic());
                 } else if ra.ula_enabled
                     && let Some(ref ula) = ra.ula_prefix
                 {
                     let raw_ula = ula.split('/').next().unwrap_or(ula);
-                    prefixes.push(lanforge_types::network::ra::RAPrefix::ula(raw_ula));
+                    prefixes.push(RAPrefix::ula(raw_ula));
                 }
                 if ra.auto_gua {
-                    prefixes.push(lanforge_types::network::ra::RAPrefix::gua_dynamic());
+                    prefixes.push(RAPrefix::gua_dynamic());
                 }
             }
         } else {
-            prefixes.push(lanforge_types::network::ra::RAPrefix::ula_dynamic());
-            prefixes.push(lanforge_types::network::ra::RAPrefix::gua_dynamic());
+            prefixes.push(RAPrefix::ula_dynamic());
+            prefixes.push(RAPrefix::gua_dynamic());
         }
 
-        let dnssl = vec![lanforge_types::network::ra::DnsslConfig {
+        let dnssl = vec![DnsslConfig {
             domains: vec![payload.domain_name.clone()],
             lifetime: Some(600),
         }];
@@ -263,7 +270,7 @@ impl ClientContext {
             .map_or((true, payload.dhcp_v6_enabled, true), |ra| {
                 (ra.enabled, ra.managed, ra.other_config)
             });
-        let ra = lanforge_types::network::ra::RaServerConfig {
+        let ra = RaServerConfig {
             enabled: ra_enabled,
             managed,
             other_config,
@@ -303,7 +310,7 @@ impl ClientContext {
 
         let mut adblock_sources = if payload.adblock_sources.is_empty() {
             vec![
-                lanforge_types::network::dns::AdblockUrlEntry {
+                AdblockUrlEntry {
                     id: None,
                     name: Some("StevenBlack Unified".to_string()),
                     url: "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
@@ -311,7 +318,7 @@ impl ClientContext {
                     kind: AdblockUrlKind::Blocklist,
                     format: AdblockSourceFormat::Hosts,
                 },
-                lanforge_types::network::dns::AdblockUrlEntry {
+                AdblockUrlEntry {
                     id: None,
                     name: Some("OISD Basic".to_string()),
                     url: "https://big.oisd.nl/domainswg".to_string(),
@@ -326,13 +333,13 @@ impl ClientContext {
         // source in the global layer.
         for entry in &mut adblock_sources {
             entry.id = None;
-            entry.name = Some(lanforge_crypto::stable_id_or_hash(
+            entry.name = Some(stable_id_or_hash(
                 entry.name.as_deref(),
                 entry.url.as_bytes(),
                 "src",
             ));
         }
-        let adblock = lanforge_api::config_file::AdblockSettings {
+        let adblock = AdblockSettings {
             config: AdblockDbConfig {
                 enabled: payload.adblock_enabled,
                 ..Default::default()
@@ -364,7 +371,7 @@ impl ClientContext {
         }
 
         // File-owned: written with the rest of the setup TOML below.
-        let dhcp = lanforge_api::config_file::DhcpSettings {
+        let dhcp = DhcpSettings {
             options: opts,
             v4_pools: vec![v4_pool],
             v6_pools: vec![v6_pool],
@@ -438,7 +445,7 @@ impl ClientContext {
         let target_path = self.resolve_config_path().unwrap_or_else(|| {
             let etc = PathBuf::from("/etc/lanforge/lanforge.toml");
             if etc.parent().is_some_and(|p| p.exists())
-                || std::fs::create_dir_all("/etc/lanforge").is_ok()
+                || fs::create_dir_all("/etc/lanforge").is_ok()
             {
                 etc
             } else {
@@ -455,9 +462,7 @@ impl ClientContext {
             &adblock,
         );
 
-        if let Err(e) =
-            lanforge_api::config_file::write_toml_atomically(&target_path, &toml_content)
-        {
+        if let Err(e) = write_toml_atomically(&target_path, &toml_content) {
             error!(
                 "Setup: Failed to write configuration to {}: {e}",
                 target_path.display()
@@ -539,12 +544,12 @@ fn setup_pppoe_config(payload: &SetupPayload) -> Option<PppoeConfig> {
 fn generate_setup_toml(
     payload: &SetupPayload,
     firewall: &FirewallConfig,
-    dhcp: &lanforge_api::config_file::DhcpSettings,
-    ra: &lanforge_types::network::ra::RaServerConfig,
+    dhcp: &DhcpSettings,
+    ra: &RaServerConfig,
     upstreams: &[UpstreamTarget],
-    adblock: &lanforge_api::config_file::AdblockSettings,
+    adblock: &AdblockSettings,
 ) -> String {
-    let mut cfg = lanforge_api::config_file::ConfigFile::default();
+    let mut cfg = ConfigFile::default();
     cfg.system.iface = payload.lan_iface.clone();
     cfg.system.search_domains = vec![payload.domain_name.clone()];
     cfg.system.debounce_secs = Some(2);
@@ -554,26 +559,25 @@ fn generate_setup_toml(
     cfg.set_dhcp_settings(dhcp);
 
     // RA: what setup applies.
-    cfg.ra = lanforge_api::config_file::RaFile::from_config(ra);
+    cfg.ra = RaFile::from_config(ra);
 
     // DNS: the upstreams setup applies.
-    cfg.dns =
-        lanforge_api::config_file::DnsFile::from_config(&lanforge_api::config_file::DnsSettings {
-            upstreams: upstreams
-                .iter()
-                .map(|target| lanforge_api::config_file::NamedUpstream {
-                    name: "default".to_string(),
-                    target: target.clone(),
-                })
-                .collect(),
-            ..Default::default()
-        });
+    cfg.dns = DnsFile::from_config(&DnsSettings {
+        upstreams: upstreams
+            .iter()
+            .map(|target| NamedUpstream {
+                name: "default".to_string(),
+                target: target.clone(),
+            })
+            .collect(),
+        ..Default::default()
+    });
 
     // DNS Adblock: what setup applies.
-    cfg.adblock = lanforge_api::config_file::AdblockFile::from_config(adblock);
+    cfg.adblock = AdblockFile::from_config(adblock);
 
     // Firewall: the same value the daemon applies (zones bound to the chosen interfaces).
-    cfg.firewall = lanforge_api::config_file::FirewallFile::from_config(firewall);
+    cfg.firewall = FirewallFile::from_config(firewall);
 
     // PPPoE: the same value the daemon applies, so the file holds every field.
     if let Some(pppoe) = setup_pppoe_config(payload) {
@@ -584,7 +588,7 @@ fn generate_setup_toml(
 }
 
 fn detect_system_gateway() -> Option<Ipv4Addr> {
-    let content = std::fs::read_to_string("/proc/net/route").ok()?;
+    let content = fs::read_to_string("/proc/net/route").ok()?;
     for line in content.lines().skip(1) {
         let fields: Vec<&str> = line.split_whitespace().collect();
         if fields.len() >= 4 {
@@ -604,7 +608,7 @@ fn detect_system_gateway() -> Option<Ipv4Addr> {
 
 fn detect_bus_type(iface_name: &str) -> String {
     let dev_path = format!("/sys/class/net/{iface_name}/device");
-    if let Ok(target) = std::fs::read_link(&dev_path) {
+    if let Ok(target) = fs::read_link(&dev_path) {
         let s = target.to_string_lossy();
         if s.contains("usb") {
             return "USB".to_string();
@@ -621,7 +625,7 @@ fn detect_bus_type(iface_name: &str) -> String {
 }
 
 fn is_carrier_up(iface_name: &str) -> bool {
-    std::fs::read_to_string(format!("/sys/class/net/{iface_name}/carrier"))
+    fs::read_to_string(format!("/sys/class/net/{iface_name}/carrier"))
         .map(|s| s.trim() == "1")
         .unwrap_or(false)
 }

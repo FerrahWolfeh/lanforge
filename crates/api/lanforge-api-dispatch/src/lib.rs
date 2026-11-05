@@ -8,22 +8,32 @@ use lanforge_dhcp as _;
 #[cfg(test)]
 use tempfile as _;
 
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+
 use lanforge_api::api::{
-    AdblockCheckResponse, AuthTokenResponse, DevicesResponse, DhcpOptionsResponse,
-    DhcpPoolsConfigResponse, DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockSourcesResponse,
+    AdblockCheckResponse, AuthTokenResponse, AuthTokensResponse, CreateUserPayload,
+    DeviceListQuery, DevicesResponse, DhcpOptionsResponse, DhcpPoolsConfigResponse,
+    DhcpPoolsResponse, DhcpReconcileResponse, DnsAdblockSourcesResponse, DnsAdblockStatusResponse,
     DnsAdblockUrlsResponse, DnsAllowlistResponse, DnsAnalyticsResponse, DnsCacheResponse,
     DnsCacheStatsExtResponse, DnsQueryLogResponse, DnsQueryResponse, DnsReverseResolversResponse,
     DnsRewritesResponse, DnsStatsResponse, DnsUpstreamModeResponse, DnsUpstreamsResponse,
     EventKind, HostConfigEntry, HostsResponse, LeasesResponse, Response, RpcCallError,
-    SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess, StatusResponse,
-    SystemConfigExport, SystemConfigImportResponse, TransientHostsResponse, WhoisResponse,
+    ServiceBannersResponse, SetupPayload, SetupResponse, SetupStatusResponse, SimpleSuccess,
+    StatusResponse, SystemConfigExport, SystemConfigImportResponse, TransientHostsResponse,
+    UserListResponse, UserResponse, WhoisResponse,
 };
 use lanforge_api::rpc::LanforgeRpc;
 use lanforge_core::context::LanforgeContext;
+use lanforge_types::auth::ApiScopes;
+use lanforge_types::events::TimedEvent;
 use lanforge_types::identifiers::MacAddr;
 use lanforge_types::network::dhcp::{DhcpOptionsConfig, Dhcpv4Pool, Dhcpv6Pool};
 use lanforge_types::network::dns::DnsRecordType;
-use lanforge_types::network::dns::adblock::{BlockingMode, RewriteRule, TimeOfDay};
+use lanforge_types::network::dns::adblock::{
+    AdblockSourceFormat, AdblockUrlKind, BlockingMode, RewriteRule, TimeOfDay,
+};
 use lanforge_types::network::dns::upstream::{UpstreamMode, UpstreamProtocol};
 use lanforge_types::network::firewall::{
     FirewallCommitRequest, FirewallCommitResponse, FirewallConfig, FirewallStatus,
@@ -33,12 +43,10 @@ use lanforge_types::network::pppoe::PppoeConfig;
 use lanforge_types::network::ra::RaServerConfig;
 use lanforge_types::network::traffic::TrafficTelemetryResponse;
 use lanforge_types::network::{QueryResult, TrafficConfig};
-use lanforge_types::system::{PppoeStatusResponse, RaStatusResponse, TrafficStatusResponse};
+use lanforge_types::system::{
+    PppoeStatusResponse, RaStatusResponse, ServiceAction, TrafficStatusResponse,
+};
 use lanforge_types::update::LeaseTarget;
-
-use std::net::{Ipv4Addr, Ipv6Addr};
-use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 
 /// Internal context for a specific client connection.
 ///
@@ -74,7 +82,7 @@ impl LanforgeRpc for ClientContext {
     async fn service_control(
         &self,
         id: String,
-        action: lanforge_types::system::ServiceAction,
+        action: ServiceAction,
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self.handle_service_control(id, action).await {
             Response::Success(s) => Ok(s),
@@ -82,9 +90,7 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn service_banners(
-        &self,
-    ) -> Result<lanforge_api::api::ServiceBannersResponse, RpcCallError> {
+    async fn service_banners(&self) -> Result<ServiceBannersResponse, RpcCallError> {
         match self.handle_service_banners().await {
             Response::ServiceBanners(s) => Ok(s),
             other => Err(Self::map_failure(other)),
@@ -93,7 +99,7 @@ impl LanforgeRpc for ClientContext {
 
     async fn list_devices(
         &self,
-        query: Box<lanforge_api::api::DeviceListQuery>,
+        query: Box<DeviceListQuery>,
     ) -> Result<DevicesResponse, RpcCallError> {
         match self
             .handle_devices(
@@ -313,7 +319,7 @@ impl LanforgeRpc for ClientContext {
 
     async fn dns_upstream_add(
         &self,
-        addr: std::net::SocketAddr,
+        addr: SocketAddr,
         protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> Result<SimpleSuccess, RpcCallError> {
@@ -325,7 +331,7 @@ impl LanforgeRpc for ClientContext {
 
     async fn dns_upstream_remove(
         &self,
-        addr: std::net::SocketAddr,
+        addr: SocketAddr,
         protocol: UpstreamProtocol,
         domain: Option<String>,
     ) -> Result<SimpleSuccess, RpcCallError> {
@@ -452,9 +458,7 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn dns_adblock_status(
-        &self,
-    ) -> Result<Box<lanforge_api::api::DnsAdblockStatusResponse>, RpcCallError> {
+    async fn dns_adblock_status(&self) -> Result<Box<DnsAdblockStatusResponse>, RpcCallError> {
         match self.handle_dns_adblock_status().await {
             Response::DnsAdblockStatus(r) => Ok(r),
             other => Err(Self::map_failure(other)),
@@ -537,8 +541,8 @@ impl LanforgeRpc for ClientContext {
     async fn dns_adblock_url_add(
         &self,
         url: String,
-        kind: lanforge_types::network::dns::adblock::AdblockUrlKind,
-        format: Option<lanforge_types::network::dns::adblock::AdblockSourceFormat>,
+        kind: AdblockUrlKind,
+        format: Option<AdblockSourceFormat>,
     ) -> Result<SimpleSuccess, RpcCallError> {
         match self
             .handle_dns_adblock_url_add(None, url, kind, format)
@@ -608,7 +612,7 @@ impl LanforgeRpc for ClientContext {
     async fn ak_generate(
         &self,
         name: String,
-        scopes: Option<lanforge_types::auth::ApiScopes>,
+        scopes: Option<ApiScopes>,
         expires_at: Option<i64>,
     ) -> Result<Box<AuthTokenResponse>, RpcCallError> {
         match self.handle_ak_generate(name, scopes, expires_at).await {
@@ -631,7 +635,7 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn ak_list(&self) -> Result<lanforge_api::api::AuthTokensResponse, RpcCallError> {
+    async fn ak_list(&self) -> Result<AuthTokensResponse, RpcCallError> {
         match self.handle_ak_list().await {
             Response::AuthTokens(r) => Ok(r),
             other => Err(Self::map_failure(other)),
@@ -769,8 +773,8 @@ impl LanforgeRpc for ClientContext {
 
     async fn user_create(
         &self,
-        payload: Box<lanforge_api::api::CreateUserPayload>,
-    ) -> Result<Box<lanforge_api::api::UserResponse>, RpcCallError> {
+        payload: Box<CreateUserPayload>,
+    ) -> Result<Box<UserResponse>, RpcCallError> {
         match self
             .handle_user_create(payload.username, payload.password, payload.role)
             .await
@@ -780,7 +784,7 @@ impl LanforgeRpc for ClientContext {
         }
     }
 
-    async fn user_list(&self) -> Result<lanforge_api::api::UserListResponse, RpcCallError> {
+    async fn user_list(&self) -> Result<UserListResponse, RpcCallError> {
         match self.handle_user_list().await {
             Response::UserList(r) => Ok(r),
             other => Err(Self::map_failure(other)),
@@ -931,7 +935,7 @@ impl ClientContext {
         }
     }
 
-    pub async fn get_log_history(&self, limit: usize) -> Vec<lanforge_types::events::TimedEvent> {
+    pub async fn get_log_history(&self, limit: usize) -> Vec<TimedEvent> {
         let Some(storage) = self.ctx.storage_handle() else {
             return Vec::new();
         };

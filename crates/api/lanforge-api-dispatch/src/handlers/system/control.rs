@@ -1,3 +1,6 @@
+use std::time::{Duration, Instant};
+use tokio::time::sleep;
+
 use crate::ClientContext;
 use lanforge_api::api::{Response, SimpleSuccess};
 use lanforge_api::config_file::SectionSet;
@@ -213,8 +216,7 @@ impl ClientContext {
                 .bus()
                 .publish(LanforgeEvent::Firewall(FirewallEvent::RulesetChanged));
 
-            let deadline = std::time::Instant::now()
-                + std::time::Duration::from_secs(u64::from(rollback_secs));
+            let deadline = Instant::now() + Duration::from_secs(u64::from(rollback_secs));
             let _ = self
                 .ctx
                 .set_firewall_transaction_rollback(&req.tx_id, deadline);
@@ -223,7 +225,7 @@ impl ClientContext {
             let ctx = self.ctx.clone();
             let tx_id = req.tx_id.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(u64::from(rollback_secs))).await;
+                sleep(Duration::from_secs(u64::from(rollback_secs))).await;
                 // If transaction is still active with this tx_id, rollback!
                 if let Some(current_staged) = ctx.get_staged_firewall_transaction()
                     && current_staged.tx_id == tx_id

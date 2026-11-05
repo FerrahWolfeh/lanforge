@@ -7,6 +7,9 @@
 //! interface name applies live; the rest take effect on the next start. An unreadable or
 //! invalid file applies nothing.
 
+use std::fs;
+use std::path::Path;
+
 use lanforge_api::api::{Response, SimpleSuccess};
 use lanforge_api::config_file::{
     ConfigFile, RaInputs, Section, effective_ra, log_issues, set_aside_issues,
@@ -24,7 +27,7 @@ impl ClientContext {
                 error: "Configuration file path could not be resolved".to_string(),
             };
         };
-        let content = match std::fs::read_to_string(&path) {
+        let content = match fs::read_to_string(&path) {
             Ok(c) => c,
             Err(e) => {
                 return Response::Error {
@@ -60,7 +63,7 @@ impl ClientContext {
     /// working configuration.
     fn reload_file_owned(
         &self,
-        path: &std::path::Path,
+        path: &Path,
         file: &ConfigFile,
         set_aside: &[(Section, String)],
         issues: &mut Vec<String>,

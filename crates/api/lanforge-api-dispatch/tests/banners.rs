@@ -10,7 +10,7 @@
 //! Service banners: lifecycle from the supervisor, summary from live context data.
 
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use lanforge_api_dispatch::ClientContext;
 use lanforge_core::bus::EventBus;
@@ -95,7 +95,7 @@ async fn pppoe_uptime_is_the_session_age() {
     ctx.set_service_state(ServiceId::Pppoe, ServiceState::Online);
     ctx.set_pppoe_status(Some(PppoeStatusResponse {
         state: PppoeSessionState::Connected,
-        connected_at: std::time::Instant::now().checked_sub(Duration::from_secs(5)),
+        connected_at: Instant::now().checked_sub(Duration::from_secs(5)),
         ..Default::default()
     }));
 
@@ -129,13 +129,14 @@ async fn pppoe_summary_names_the_state_in_words() {
 #[tokio::test]
 async fn stopped_firewall_says_what_it_left() {
     use lanforge_types::network::firewall::FirewallStopAction;
+    use lanforge_types::system::ServiceBanner;
 
     let ctx = LanforgeContext::new(Arc::new(EventBus::new()), State::new(), None);
     ctx.register_service(ServiceId::Nft, "Firewall");
     ctx.set_service_state(ServiceId::Nft, ServiceState::Inactive);
     ctx.set_service_detail(ServiceId::Nft, Some(StateDetail::AdminStopped));
     let client = ClientContext::new(ctx.clone());
-    let summary = |banners: Vec<lanforge_types::system::ServiceBanner>| {
+    let summary = |banners: Vec<ServiceBanner>| {
         banners
             .into_iter()
             .find(|b| b.id == ServiceId::Nft)

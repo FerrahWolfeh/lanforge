@@ -1,9 +1,12 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::ClientContext;
 use lanforge_api::api::{
-    DnsUpstreamConfig, ImportResult, ImportSection, Response, SystemConfigExport,
+    DnsUpstreamConfig, ExportedApiToken, ImportResult, ImportSection, Response, SystemConfigExport,
     SystemConfigImportResponse,
 };
-use lanforge_api::config_file::NamedUpstream;
+use lanforge_api::config_file::{NamedUpstream, SectionSet};
+use lanforge_core::context::ConfigPatch;
 use lanforge_db_core::Stores;
 use lanforge_types::network::dns::AdblockUrlEntry;
 use lanforge_types::network::dns::adblock::rules_file::RulesFile;
@@ -85,7 +88,7 @@ impl ClientContext {
                 Ok(tokens) => Some(
                     tokens
                         .into_iter()
-                        .map(|t| lanforge_api::api::ExportedApiToken {
+                        .map(|t| ExportedApiToken {
                             token: t.token,
                             name: t.name,
                             created_at: t.created_at,
@@ -388,8 +391,8 @@ impl ClientContext {
             let mut imported_tokens = 0;
             let mut tokens_success = true;
             let mut tokens_err = None;
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs() as i64;
             for t in tokens {
@@ -422,7 +425,7 @@ impl ClientContext {
         }
 
         // 8. Import Dynamic Configs
-        let mut patch = lanforge_core::context::ConfigPatch::new();
+        let mut patch = ConfigPatch::new();
 
         // File-owned: imported only if it reaches the config file. Overwrite clears the lists
         // the import does not carry.
@@ -469,10 +472,9 @@ impl ClientContext {
         }
         if let Some(pppoe_cfg) = pppoe_config {
             // File-owned: imported only if it reaches the config file.
-            match self
-                .persist_config_sections(lanforge_api::config_file::SectionSet::PPPOE, |file| {
-                    file.pppoe = (*pppoe_cfg).clone()
-                }) {
+            match self.persist_config_sections(SectionSet::PPPOE, |file| {
+                file.pppoe = (*pppoe_cfg).clone()
+            }) {
                 Ok(_) => {
                     patch = patch.with_pppoe(*pppoe_cfg);
                     results.push(ImportResult {
@@ -561,9 +563,8 @@ impl ClientContext {
         if let Some(tr) = traffic_config {
             // File-owned: imported only if it reaches the config file.
             match self
-                .persist_config_sections(lanforge_api::config_file::SectionSet::TRAFFIC, |file| {
-                    file.traffic = (*tr).clone()
-                }) {
+                .persist_config_sections(SectionSet::TRAFFIC, |file| file.traffic = (*tr).clone())
+            {
                 Ok(_) => {
                     patch = patch.with_traffic(*tr);
                     results.push(ImportResult {

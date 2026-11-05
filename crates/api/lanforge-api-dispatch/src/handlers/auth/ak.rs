@@ -1,8 +1,11 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use crate::ClientContext;
 use lanforge_api::api::{
     AuthTokenEntry, AuthTokenResponse, AuthTokensResponse, Response, SimpleSuccess,
 };
 use lanforge_db_core::Stores;
+use lanforge_types::auth::{ApiScope, ApiScopes};
 use rand::prelude::*;
 use tracing::error;
 
@@ -10,7 +13,7 @@ impl ClientContext {
     pub async fn handle_ak_generate(
         &self,
         name: String,
-        scopes: Option<lanforge_types::auth::ApiScopes>,
+        scopes: Option<ApiScopes>,
         expires_at: Option<i64>,
     ) -> Response {
         let Some(storage) = self.ctx.storage_handle() else {
@@ -22,12 +25,10 @@ impl ClientContext {
         let mut token_bytes = [0u8; 32];
         rand::rng().fill_bytes(&mut token_bytes);
         let token = format!("lf_ak_{}", hex::encode(token_bytes));
-        let scopes = scopes.unwrap_or_else(|| {
-            lanforge_types::auth::ApiScopes::from_slice(&[lanforge_types::auth::ApiScope::Admin])
-        });
+        let scopes = scopes.unwrap_or_else(|| ApiScopes::from_slice(&[ApiScope::Admin]));
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
 
